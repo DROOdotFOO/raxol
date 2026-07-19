@@ -440,6 +440,51 @@ defmodule Raxol.UI.ColorResolverTest do
     end
   end
 
+  # ---- A6: the fade/local-ground math operates in apparent-lightness
+  # space end-to-end, not nominal OKLCH L ----
+
+  describe "fade target is the LOCAL bg's apparent lightness, not its nominal L (A6)" do
+    test "a prominence:0.0 fg intent collapses to the bg's AL, not the bg's nominal L" do
+      # A tinted (saturated green) bg -- chosen so nominal L and apparent
+      # lightness genuinely differ, otherwise this test would pass by
+      # accident even with the pre-A6 bare-L behavior.
+      bg_hex = "#1a8f1a"
+      {bg_l, bg_c, bg_h} = Salience.hex_to_oklch(bg_hex)
+      bg_al = Salience.apparent_lightness(bg_l, bg_c, bg_h)
+
+      assert bg_c > 0.1
+      assert abs(bg_al - bg_l) > 0.01
+
+      fg_intent = %ColorIntent{
+        tier: :anchor,
+        c: 0.1,
+        h: 30,
+        prominence: 0.0,
+        floor: :none
+      }
+
+      cells = [{0, 0, "x", fg_intent, bg_hex, []}]
+
+      [{_, _, _, fg, bg, _}] =
+        ColorResolver.resolve_cells(cells, ground: @dark_ground)
+
+      # bg is a plain literal at full region prominence -> unchanged.
+      assert bg == bg_hex
+
+      fg_al = ap_lightness(fg)
+
+      # At prominence 0.0 the fade fully collapses onto the LOCAL ground --
+      # which must be the bg's apparent lightness, per the public
+      # `Salience.apparent_lightness/3` API, not a hand-computed value and
+      # not the bg's nominal L. Tolerance is loose enough to absorb 8-bit
+      # sRGB quantization from the intermediate hex round-trip (~1e-3),
+      # while staying an order of magnitude tighter than the AL/L gap
+      # itself (~0.017) this fixture was chosen to exhibit.
+      assert_in_delta fg_al, bg_al, 3.0e-3
+      assert abs(fg_al - bg_l) > 0.01
+    end
+  end
+
   # ---- {:fixed, color} escape hatch ----
 
   describe "{:fixed, color} escape hatch" do

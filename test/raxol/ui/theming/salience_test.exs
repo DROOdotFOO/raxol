@@ -100,6 +100,46 @@ defmodule Raxol.UI.Theming.SalienceTest do
     end
   end
 
+  describe "apparent_lightness_of_rgb/3 (A6)" do
+    test "matches apparent_lightness/3 of the same color's OKLCH decomposition" do
+      {r, g, b} = {0x1A, 0x8F, 0x1A}
+      {l, c, h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
+
+      assert_in_delta Salience.apparent_lightness_of_rgb(r, g, b),
+                      Salience.apparent_lightness(l, c, h),
+                      1.0e-12
+    end
+
+    # Regression: an achromatic color has chroma exactly 0 up to OKLab
+    # matrix floating-point rounding, so the H-K chroma term vanishes
+    # (`0.14 * 0 * hue_factor(h) = 0`) and apparent lightness collapses to
+    # nominal OKLCH `L` -- the pre-A6 behavior every existing bare-L caller
+    # relied on. This must hold exactly for any gray, not just one fixture.
+    test "achromatic color -> apparent lightness equals nominal L" do
+      for v <- [0, 30, 60, 90, 128, 160, 200, 230, 255] do
+        {nominal_l, chroma, _h} = Salience.rgb_to_oklch(v / 255, v / 255, v / 255)
+        assert_in_delta chroma, 0.0, 1.0e-6
+
+        # The H-K term is `0.14 * chroma * hue_factor(h)` -- chroma's own
+        # ~1e-8 floating-point residue (asserted above) propagates through
+        # at that same order of magnitude, so 1e-9 is too tight; 1e-7 is
+        # still four orders of magnitude below any real tinted-color AL/L
+        # gap (~0.01+, see the sibling test below).
+        assert_in_delta Salience.apparent_lightness_of_rgb(v, v, v),
+                        nominal_l,
+                        1.0e-7
+      end
+    end
+
+    test "a tinted color's apparent lightness differs from its nominal L" do
+      {r, g, b} = {0x1A, 0x8F, 0x1A}
+      {nominal_l, chroma, _h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
+
+      assert chroma > 0.1
+      assert Salience.apparent_lightness_of_rgb(r, g, b) > nominal_l
+    end
+  end
+
   describe "ground adaptation" do
     test "dark ground solves up, light ground solves down" do
       dark = Salience.tier_target(:baseline, 0.2, :auto)

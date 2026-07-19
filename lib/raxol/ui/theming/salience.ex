@@ -86,6 +86,29 @@ defmodule Raxol.UI.Theming.Salience do
   def apparent_lightness(l, c, h), do: l + @hk_k * c * hue_factor(h)
 
   @doc """
+  Perceived brightness (H-K apparent lightness) of a concrete sRGB color,
+  `0..255` per channel -- the same range `Raxol.Terminal.Capabilities`'
+  `background/0`/`foreground/0` readings and `hex_to_oklch/1`'s map clause
+  use. Converts to OKLCH (`rgb_to_oklch/3`) then folds in the H-K chroma
+  term (`apparent_lightness/3`).
+
+  **Use this, not nominal OKLCH `L`, whenever a real color becomes a
+  ground or bound** (a detected terminal background, a native foreground,
+  any other concrete color the solver treats as an endpoint) -- a tinted
+  color (a green terminal background, say) reads brighter than its bare
+  `L` suggests once its chroma is accounted for; nominal `L` alone
+  under-ranks it. An achromatic color (`C ≈ 0`, e.g. most real terminal
+  foregrounds) has apparent lightness equal to its nominal `L` by
+  construction (`0.14 * 0 * hue_factor(h) = 0`), so this is always safe to
+  use even when tint is unlikely.
+  """
+  @spec apparent_lightness_of_rgb(0..255, 0..255, 0..255) :: float()
+  def apparent_lightness_of_rgb(r, g, b) do
+    {l, c, h} = rgb_to_oklch(r / 255, g / 255, b / 255)
+    apparent_lightness(l, c, h)
+  end
+
+  @doc """
   Nominal OKLCH `L` that lands a `(C, h)` color on a target apparent
   lightness.
   """

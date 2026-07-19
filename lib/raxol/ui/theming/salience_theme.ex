@@ -16,7 +16,10 @@ defmodule Raxol.UI.Theming.SalienceTheme do
   `lib/raxol/ui/theming/palette.ex`'s convention). Fallback ladder, cheapest
   and most authoritative first:
 
-    1. Record `background/0` (`{r, g, b}` from OSC 11) → OKLCH `L`.
+    1. Record `background/0` (`{r, g, b}` from OSC 11) → H-K apparent
+       lightness (`Salience.apparent_lightness_of_rgb/3`, not nominal OKLCH
+       `L` -- a tinted background, e.g. a green terminal, reads brighter
+       than its bare `L` once chroma is folded in).
     2. Record `polarity_seed/0` (`$COLORFGBG`, `:dark` | `:light` | `nil`)
        → `Salience.reference_ground/0` for `:dark`, `@light_reference_ground`
        for `:light`.
@@ -55,14 +58,18 @@ defmodule Raxol.UI.Theming.SalienceTheme do
   def seeds, do: @seeds
 
   @doc """
-  Detected ground lightness: OKLCH `L` of the `Raxol.Terminal.Capabilities`
-  record's OSC 11 background reading, falling back through the ladder
-  documented in the moduledoc when a reading is unavailable.
+  Detected ground: H-K apparent lightness (`Salience.apparent_lightness_of_rgb/3`,
+  not nominal OKLCH `L`) of the `Raxol.Terminal.Capabilities` record's OSC 11
+  background reading, falling back through the ladder documented in the
+  moduledoc when a reading is unavailable. Using apparent lightness rather
+  than bare `L` matters for tinted backgrounds (a green-on-green terminal,
+  say) -- the ground the solver ranks tiers against is what a human
+  actually perceives as bright, not the nominal lightness coordinate.
   """
   @spec detect_ground() :: float()
   def detect_ground do
     case detect_ground_from_background() do
-      {:ok, l} -> l
+      {:ok, al} -> al
       :error -> detect_ground_from_polarity_seed()
     end
   end
@@ -70,8 +77,7 @@ defmodule Raxol.UI.Theming.SalienceTheme do
   defp detect_ground_from_background do
     with true <- Code.ensure_loaded?(Raxol.Terminal.Capabilities),
          {r, g, b} <- Raxol.Terminal.Capabilities.background() do
-      {l, _c, _h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
-      {:ok, l}
+      {:ok, Salience.apparent_lightness_of_rgb(r, g, b)}
     else
       _ -> :error
     end
@@ -92,28 +98,36 @@ defmodule Raxol.UI.Theming.SalienceTheme do
 
   @doc """
   Detected canvas polarity from the detected ground, using the same `0.5`
-  OKLCH-`L` hard cutoff `Ansi16Salience.polarity/1` uses (native-palette-
-  riding §5 / amendment A5) -- delegates to it rather than re-deriving the
-  threshold, so the two can never drift apart.
+  hard cutoff `Ansi16Salience.polarity/1` uses (native-palette-riding §5 /
+  amendment A5) -- delegates to it rather than re-deriving the threshold,
+  so the two can never drift apart. `detect_ground/0` feeds this apparent
+  lightness (not nominal `L`), which is the correct perceptual input for
+  the cutoff: polarity is a judgment about how bright the ground *looks*,
+  and a tinted background can sit on the opposite side of `0.5` from where
+  its nominal `L` alone would place it.
   """
   @spec detect_polarity() :: Ansi16Salience.polarity()
   def detect_polarity, do: Ansi16Salience.polarity(detect_ground())
 
   @doc """
-  Detected native foreground apparent lightness: OKLCH `L` of the
-  `Raxol.Terminal.Capabilities` record's OSC 10 foreground reading, or
-  `nil` when no record is cached or no foreground was reported.
+  Detected native foreground apparent lightness (H-K, via
+  `Salience.apparent_lightness_of_rgb/3`) of the `Raxol.Terminal.Capabilities`
+  record's OSC 10 foreground reading, or `nil` when no record is cached or
+  no foreground was reported.
 
-  OSC 10 foregrounds are typically near-achromatic (chroma ~0), so nominal
-  OKLCH `L` is used directly as apparent lightness -- the H-K chroma term
-  vanishes (`apparent_L = L + 0.14 * C * hue_factor(h)`, `C ≈ 0`).
+  OSC 10 foregrounds are typically near-achromatic (chroma ~0), in which
+  case apparent lightness collapses to nominal OKLCH `L` by construction --
+  the H-K chroma term vanishes (`apparent_L = L + 0.14 * C * hue_factor(h)`,
+  `C ≈ 0`). Routed through the shared apparent-lightness helper anyway (not
+  a bare `rgb_to_oklch/3` + `L` read) so a tinted foreground is handled
+  correctly too, and so this can't silently drift from `detect_ground/0`'s
+  treatment of the background.
   """
-  @spec detect_foreground_l() :: float() | nil
-  def detect_foreground_l do
+  @spec detect_foreground_al() :: float() | nil
+  def detect_foreground_al do
     with true <- Code.ensure_loaded?(Raxol.Terminal.Capabilities),
          {r, g, b} <- Raxol.Terminal.Capabilities.foreground() do
-      {l, _c, _h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
-      l
+      Salience.apparent_lightness_of_rgb(r, g, b)
     else
       _ -> nil
     end
@@ -128,7 +142,7 @@ defmodule Raxol.UI.Theming.SalienceTheme do
     * `:seeds` - seed table override (default: `seeds/0`)
     * `:id` / `:name` - theme identity (default `:salience`)
     * `:foreground_l` - native foreground apparent-lightness override
-      (default: `detect_foreground_l/0`). Amendment A1: when present and on
+      (default: `detect_foreground_al/0`). Amendment A1: when present and on
       the solving side of `ground` (a fg lighter than a dark ground when
       solving up, darker than a light ground when solving down -- anything
       else is nonsense and is ignored), headroom compression solves every
@@ -140,7 +154,7 @@ defmodule Raxol.UI.Theming.SalienceTheme do
   def build(opts \\ []) do
     ground = Keyword.get_lazy(opts, :ground, &detect_ground/0)
     seeds = Keyword.get(opts, :seeds, @seeds)
-    fg_al = Keyword.get_lazy(opts, :foreground_l, &detect_foreground_l/0)
+    fg_al = Keyword.get_lazy(opts, :foreground_l, &detect_foreground_al/0)
 
     solve_opts = [ground: ground] ++ far_bound_opt(ground, fg_al)
     palette = Salience.solve_palette(seeds, solve_opts)
