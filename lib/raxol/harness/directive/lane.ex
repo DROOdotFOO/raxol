@@ -40,10 +40,9 @@ defmodule Raxol.Harness.Directive.Lane do
   telemetry (measurements `%{system_time: integer()}`, metadata
   `%{kind: :lane, action: action(), pump: pid()}`).
 
-  **Status: SEAM — frozen ahead of its consumers** (A0). No
-  `HarnessApp` returns these yet and no `SessionPump` receives them;
-  the executor is deliberately thin (send + telemetry) and stays inert
-  until those units land against this shape.
+  **Status: LIVE.** `HarnessApp.Model.update/2` returns these from the
+  submit/steer/interrupt folds and `SessionPump`'s executor sends them
+  (send + telemetry, deliberately thin).
   """
 
   @enforce_keys [:pump, :action]

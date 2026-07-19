@@ -34,9 +34,8 @@ defmodule Raxol.UI.Components.Harness.MessageBlock do
   `Block.extract_content/2` via `BodyProvider`) for surfaces that read
   component state rather than sealed bytes.
 
-  The stable-prefix optimization (cache the parse of the durable prefix of
-  a streaming message and only re-parse the live tail) is a documented
-  follow-up seam in `MarkdownBody`, not implemented here.
+  Every render is a full re-parse of the block's text (the one streaming
+  path — see `MarkdownBody`'s byte-cap and provisional-close guarantees).
 
   Behavioral note: sanitization applies in BOTH modes, so even a `:sealed`
   render of control-char-bearing content is intentionally NOT

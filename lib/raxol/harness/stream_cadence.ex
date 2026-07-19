@@ -107,12 +107,12 @@ defmodule Raxol.Harness.StreamCadence do
   (`Raxol.Harness.CadencePolicy.max_consecutive_yields/0`) forces a
   flush through even under continuous input.
 
-  ## 5. Not wired yet
+  ## 5. Wiring
 
-  The live session loop that would own one of these servers, apply
-  `{:render_batch, batch}` to a live tail, and repaint the footer does
-  not exist yet. This module and the contract above ship standalone,
-  ahead of that wiring.
+  `Raxol.Harness.SessionPump` owns one of these servers per live
+  session: lane batches land here, the pump flushes `{:render_batch,
+  batch}` on cadence into the DeliveryShim, and the HarnessApp folds
+  them. The cadence, not the event rate, sets the repaint rate.
   """
 
   use Raxol.Core.Behaviours.BaseManager

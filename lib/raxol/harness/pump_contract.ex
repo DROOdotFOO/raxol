@@ -15,12 +15,12 @@ defmodule Raxol.Harness.PumpContract do
   `Raxol.Harness.Directive.Lane` and `Raxol.Harness.Directive.Editor`;
   `Raxol.Harness.Directive` is the constructor facade.
 
-  **Status: SEAM — frozen ahead of its consumers.** Neither
-  `SessionPump` nor `HarnessApp` exists yet; these constructors and
-  types are inert until the A-side (pump reshape) and U-side
-  (`HarnessApp.update/2`) units land against them. That is the point:
-  the shapes freeze FIRST so both sides build concurrently (spec §8,
-  "A0 … frozen on paper at Phase-0 time").
+  **Status: LIVE.** `Raxol.Harness.SessionPump` constructs these
+  messages on every stream batch and `Raxol.Harness.HarnessApp.update/2`
+  folds them — this is the production message vocabulary, not a frozen
+  seam. The shapes froze FIRST (spec §8, "A0 … frozen on paper at
+  Phase-0 time") so both sides built concurrently against them; both
+  have since landed.
 
   ## 1. Roles
 

@@ -9,10 +9,10 @@ defmodule Raxol.Harness.SessionPump do
   executing `Raxol.Harness.Directive.{Lane,Editor}` commands back out,
   and the sole tty bracket owner (alt-screen, editor handoff, teardown).
 
-  **Status: wired by U6.** `Raxol.Harness.Live` assembles the live stack:
+  **Status: the live stack.** `Raxol.Harness.Live` assembles it:
   this pump (with `:runtime_boot`) + `Lifecycle(environment: :harness)`
-  running `HarnessApp`. (The U6-d swap has since retired
-  `Raxol.Harness.LiveSessionDriver`.) Without
+  running `HarnessApp` — the production path, the legacy
+  driver/surface stack retired. Without
   `:runtime_boot`, the `:consumer` this pump feeds is a plain pid — a
   test process, or `Raxol.Harness.DeliveryShim` once the boot rewires it
   (that transport is deliberately NOT frozen, PumpContract §3). The shim

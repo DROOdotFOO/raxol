@@ -310,11 +310,11 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   defp submitting_lines(_model, _cw), do: []
 
-  # The footer preview channel (U6-shadow: surface.ex
-  # `pending_preview_lines/1` ported). Precedence mirrors the shelved
-  # surface: the trailing completed-but-unsealed block while one pends,
-  # else the live tail of a still-accumulating item. Suppressed under an
-  # open overlay (spec §5 law 3 / the suppressed-preview law).
+  # The footer preview channel (ported from the retired Surface engine's
+  # `pending_preview_lines/1`). Precedence mirrors that engine's: the
+  # trailing completed-but-unsealed block while one pends, else the live
+  # tail of a still-accumulating item. Suppressed under an open overlay
+  # (spec §5 law 3 / the suppressed-preview law).
   defp preview_lines(%{overlay: overlay}, _cw) when overlay != nil, do: []
 
   defp preview_lines(model, cw) do

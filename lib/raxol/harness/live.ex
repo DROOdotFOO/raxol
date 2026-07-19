@@ -1,6 +1,6 @@
 defmodule Raxol.Harness.Live do
   @moduledoc """
-  The U6 assembly: a live TEA harness session, wired end to end
+  The live assembly: a live TEA harness session, wired end to end
   (`docs/proposals/in-flight/harness-tea-migration.md` §8 "U6 live
   wiring"). One call boots the whole stack against a real
   `Raxol.Harness.SessionLane`:

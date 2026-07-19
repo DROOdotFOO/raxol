@@ -32,10 +32,10 @@ defmodule Raxol.Harness.Directive.Editor do
   telemetry (measurements `%{system_time: integer()}`, metadata
   `%{kind: :editor, action: :editor_bracket, pump: pid()}`).
 
-  **Status: SEAM — frozen ahead of its consumers** (A0). No
-  `HarnessApp` returns this yet and no `SessionPump` runs the bracket;
-  the executor is deliberately thin (send + telemetry) and stays inert
-  until those units land against this shape.
+  **Status: LIVE.** `HarnessApp.Model` returns this on the editor key
+  (Ctrl-E) and `SessionPump` runs the bracket (suspend paint, hand the
+  tty to $VISUAL/$EDITOR, resume with the edited draft — send +
+  telemetry, deliberately thin).
   """
 
   @enforce_keys [:pump]

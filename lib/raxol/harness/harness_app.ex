@@ -19,18 +19,17 @@ defmodule Raxol.Harness.HarnessApp do
       `Lifecycle(environment: :harness)` with this app as its `consumer`,
       feeds `{:batch, …}` / `{:key, …}` / `{:tick, …}` etc., and executes
       the returned directives against the real `SessionLane`. The pump
-      owns the tty, the alt-screen bracket, and the clock. **This wiring is
-      the U6 follow-up** — the framework seams it needs (Engine
-      suspend/resume, `lifecycle_stop`, the Dispatcher verbatim-consumer)
-      are not yet built (spec §9 risks 2/7; agent finding). `update/2` is
-      already live-ready: it returns directives addressed to `model.pump`.
+      owns the tty, the alt-screen bracket, and the clock. This wiring is
+      the production path (`mix raxol.harness`, assembled by
+      `Raxol.Harness.Live`); `update/2` returns directives addressed to
+      `model.pump`.
 
-    * **Fixture** — `Raxol.Harness.HarnessApp.FixtureDriver` (used by
-      `Raxol.Playground.Demos.HarnessAssembledDemo`) seeds the model from a
-      recorded session, paces `{:reveal}` / `{:tick}` over the held events,
-      and drives keys headlessly. The deterministic, testable half — shipped
-      here in full. `model.pump` is `nil`, so lane-crossing commands fold an
-      honest stub notice instead of a live directive.
+    * **Fixture** — a caller (e.g.
+      `Raxol.Playground.Demos.HarnessAssembledDemo` or a test) seeds the
+      model from a recorded session via `Model.build(events: …)` and paces
+      it with `reveal_all/1` / `{:tick, …}`. The deterministic, testable
+      half — shipped here in full. `model.pump` is `nil`, so lane-crossing
+      commands fold an honest stub notice instead of a live directive.
 
   ## Time-travel comes free
 

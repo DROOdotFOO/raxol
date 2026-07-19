@@ -76,14 +76,13 @@ defmodule Raxol.Harness.RecencyPolicy do
   an approval outranks its own ladder tier automatically, with no
   needs-input branch anywhere in this module.
 
-  Scope note: on today's sole wiring point (the fixture-replay
-  surface's seal path) this composition is dormant -- the block builder
-  constructs every block already `:sealed`, and the seal frontier holds
-  a live approval back from painting at all, so a live approval never
-  reaches the graded path there; it lives in the repaintable footer
-  instead. The floor composition is real and tested at the `Prominence`
-  layer, and engages the moment a live-rendering surface grades live
-  blocks.
+  Scope note: on today's wiring point (`HarnessApp.Model`'s seal path)
+  this composition is dormant -- the block builder constructs every block
+  already `:sealed`, and the seal frontier holds a live approval back from
+  painting at all, so a live approval never reaches the graded path
+  there; it lives in the repaintable footer instead. The floor
+  composition is real and tested at the `Prominence` layer, and engages
+  the moment a live-rendering surface grades live blocks.
 
   ## Coverage today (an honest scope note)
 

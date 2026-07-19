@@ -212,24 +212,25 @@ The UI capability floor (A1–A14) and how each maps to the protocol lives in
 reattach, status — each a baseline feature whose weak version is some
 harness's top complaint.
 
-**The live TUI chain (built, as of 2026-07-18 on `integration/harness-endgame`):**
+**The live TUI chain (as of 2026-07-20; the earlier LiveSessionDriver →
+Surface chain retired 2026-07-19 in favour of the TEA stack):**
 
 ```
 SessionLane (behaviour, main raxol — the seam raxol must not need raxol_agent for)
   ← Raxol.Agent.Harness.SessionLane (agent-side impl: SessionStreamer out, Command in)
-LiveSessionDriver (plain-process loop, NOT a GenServer — owner-consumption
-  contract: input messages received ahead of render batches)
-  ← linked forwarder owns subscribe/1, re-shapes {:session_event, ...}
-      through EventBoundary.normalize/1 (the security seam: live events are
-      untrusted input at the process boundary)
+SessionPump (the IO boundary: sole tty owner/writer, alt-screen bracket,
+  the clock; boots the Lifecycle itself via :runtime_boot)
+  ← lane events re-shaped through EventBoundary.normalize/1 (the security
+      seam: live events are untrusted input at the process boundary)
   → StreamCadence (decouples event rate from render cadence)
-  → Surface (pure new/update/render map machine; keymap-first input;
-      command_sink closure)
-  → back out: lane.interrupt / lane.steer; submit path: command_sink
-      %{type: :submit} → SessionLane.submit → SessionInbox {:start_turn}
-      → ToolExecutor.stream; approvals: approval_answer →
-      answer_permission → "approval_decision" wire → SessionInbox
-      resolve_decision → the parked gated_run await resumes
+  → DeliveryShim → Dispatcher {:harness, term} ingress → HarnessApp
+      (TEA: update/2 folds PumpContract messages, view/1 renders;
+      Model is the pure fold — projection, seal frontier, lifecycle belief)
+  → back out: Directive.Lane structs → pump executes lane.interrupt /
+      lane.steer / lane.submit against SessionLane; approvals resolve
+      through ChoicePrompt → approval_answer → answer_permission →
+      "approval_decision" wire → SessionInbox resolve_decision → the
+      parked gated_run await resumes
 StallDetector — pure observer over the stream; verdict + evidence surfaced
   to the human; deliberately never acts on the agent.
 ```

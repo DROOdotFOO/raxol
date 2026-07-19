@@ -23,8 +23,8 @@ defmodule Raxol.Playground.Demos.HarnessAssembledDemo do
   whole session at `init`, so a headless screenshot is stable without a
   timer). `model.pump` is `nil`: keys drive folds / jumps / the overlay
   picker, while lane-crossing keys (submit / steer / interrupt) fold their
-  honest fixture stubs. The live-pump swap (a `SessionPump`-fed run) is the
-  U6 follow-up (see `Raxol.Harness.HarnessApp`).
+  honest fixture stubs. The live counterpart (a `SessionPump`-fed run of
+  this same Model/View) is `mix raxol.harness` (see `Raxol.Harness.Live`).
   """
 
   use Raxol.Core.Runtime.Application

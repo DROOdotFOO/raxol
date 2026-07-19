@@ -1,14 +1,17 @@
 defmodule Raxol.UI.Harness.CommandRegistry do
   @moduledoc """
-  The harness slash-command vocabulary — ONE registry, three inlets.
+  The harness slash-command vocabulary — the typed inlet's registry.
 
-  Keys (`Raxol.UI.Harness.Keymap` chords), the command palette (browse),
-  and slash commands (typed) are three ways into the SAME command
-  vocabulary: `Raxol.Harness.HarnessApp.Model.dispatch_command/2`'s
-  `%{type:, payload:}` maps. This module is the typed inlet's source of
-  truth: what commands exist, what they claim to do, and how each one
-  runs — so `/help`, the autocomplete popup, and the executed behavior
-  can never drift from each other.
+  Slash commands (typed) and the autocomplete popup read THIS registry:
+  what commands exist, what they claim to do, and how each one runs — so
+  `/help`, the popup, and the executed behavior can never drift from each
+  other. Execution lands in `Raxol.Harness.HarnessApp.Model.dispatch_command/2`'s
+  `%{type:, payload:}` maps.
+
+  Scope note (honest): the command PALETTE does not read this registry
+  yet — `HarnessApp.Model.open_picker/1` feeds it a small hardcoded list.
+  Unifying the palette onto this vocabulary is a known follow-up; until
+  then the two inlets cover different command sets.
 
   ## Entry shape
 

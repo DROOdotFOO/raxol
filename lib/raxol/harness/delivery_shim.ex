@@ -1,6 +1,6 @@
 defmodule Raxol.Harness.DeliveryShim do
   @moduledoc """
-  The SessionPump's delivery shim into the Dispatcher (unit U6-c of the
+  The SessionPump's delivery shim into the Dispatcher (part of the
   harness TEA migration; `Raxol.Harness.PumpContract` §3 names this the
   "transport seam ... deliberately NOT frozen"). One job: every term the
   pump sends is cast into the Dispatcher through the right ingress —
@@ -9,7 +9,7 @@ defmodule Raxol.Harness.DeliveryShim do
       clause, into the system-event path): the Rendering Engine's size
       sync lives there, so resize must NOT use the verbatim seam — the
       one delivery exception PumpContract §3 freezes;
-    * every other term rides `{:dispatch, {:harness, term}}` (unit U6-a):
+    * every other term rides `{:dispatch, {:harness, term}}`:
       the verbatim ingress that reaches `HarnessApp.update/2` unwrapped.
 
   Ordering (PumpContract §2's end-to-end claim): the shim is the pump's

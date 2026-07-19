@@ -162,17 +162,13 @@ defmodule Raxol.UI.Components.Harness.MarkdownBody do
     if byte_size(text) > @render_byte_cap do
       fallback_view(text)
     else
-      # Pinned to the BUILTIN parser, not `MarkdownRenderer.render/2`. Every
-      # guarantee this module documents and tests -- stable-prefix
-      # immutability, the byte cap, mid-grapheme cut safety -- is stated
-      # against `render_with_builtin/2` as its oracle, and the other three
-      # render sites here already call it directly. `render/2` instead
-      # prefers EarmarkParser whenever that module happens to be loadable,
-      # which is true in :dev (ex_doc pulls it in transitively) but not in
-      # :test -- so this one call site silently swapped parsers in the
-      # environment the harness actually runs in, voiding the invariants the
-      # suite was proving. It is also the expensive path: earmark re-parses
-      # the whole buffer on every streaming delta.
+      # Pinned to `render_with_builtin/2` directly. Every guarantee this
+      # module documents and tests -- the byte cap, mid-grapheme cut
+      # safety, provisional-close behavior -- is stated against the
+      # builtin parser, which is also what `MarkdownRenderer.render/2`
+      # itself uses unconditionally (one parser, one behavior, everywhere
+      # -- see that module's own moduledoc for the Earmark divergence
+      # that retired the two-parser era).
       %{
         type: :column,
         gap: 0,
