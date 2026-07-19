@@ -1043,6 +1043,21 @@ defmodule Raxol.Playground.Catalog do
       rows = Composer.visual_lines(c, width)
       {row, col} = Composer.edit_point(c, width)  # -> root :cursor
       """
+    },
+    %{
+      name: "Harness Choice Prompt",
+      module: Demos.HarnessChoicePromptDemo,
+      category: :harness,
+      description:
+        "The chevron confirm/cancel pair plus a free-text third way: [enter]/[escape] hints while idle, hints yield when typing (Enter submits, Esc clears), arrows walk confirm/cancel/input text-first",
+      complexity: :advanced,
+      tags: ["harness", "choice", "confirm", "input", "cursor", "controlled"],
+      code_snippet: """
+      {:ok, p} = ChoicePrompt.init(id: "choice", width: 44)
+      {p, cmds} = ChoicePrompt.handle_event(key_event, p, %{})
+      # cmds: {:component_event, id, :confirm | :cancel | {:submit, text}}
+      ChoicePrompt.edit_point(p, 44)  # -> root :cursor (nil on option rows)
+      """
     }
   ]
 

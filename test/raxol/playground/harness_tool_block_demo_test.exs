@@ -194,7 +194,7 @@ defmodule Raxol.Playground.HarnessToolBlockDemoTest do
   end
 
   describe "alarm prominence (Block.render map -- the authoritative layer)" do
-    test "a failed tool header is non-dim; a successful one is dim" do
+    test "a failed tool header keeps alarm strength; a successful one drops to the faded machinery register" do
       id = start_headless()
       {:ok, %{blocks: blocks}} = Headless.get_model(id)
 
@@ -204,8 +204,16 @@ defmodule Raxol.Playground.HarnessToolBlockDemoTest do
       fail_header =
         Block.render(blocks.tool_fail, %{width: 76}) |> first_child_style()
 
-      assert ok_header == %{dim: true}
+      # Sealed successful machinery: dim + the register fade ramp (V's
+      # completed-phases ruling — :dim alone reads near-full-weight).
+      assert ok_header[:dim] == true
+
+      assert is_binary(ok_header[:fg]) and
+               String.starts_with?(ok_header[:fg], "#")
+
+      # A failed tool is signal, never machinery: no dim, no fade.
       refute Map.get(fail_header, :dim, false)
+      refute Map.has_key?(fail_header, :fg)
 
       Headless.stop(id)
     end
