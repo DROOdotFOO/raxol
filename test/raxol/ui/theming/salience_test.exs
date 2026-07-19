@@ -117,6 +117,18 @@ defmodule Raxol.UI.Theming.SalienceTest do
       assert_in_delta Salience.tier_target(:anchor, 0.2), 0.85, 1.0e-12
     end
 
+    test "ground exactly 0.5 resolves :auto to :down (hard-cutoff ruling, amendment A5)" do
+      # Same threshold Ansi16Salience.polarity/1 uses (`ground < 0.5` is the
+      # only test): at exactly 0.5, :auto must land on :down, not :up.
+      for tier <- Salience.tiers() do
+        assert Salience.tier_target(tier, 0.5, :auto) ==
+                 Salience.tier_target(tier, 0.5, :down)
+
+        refute Salience.tier_target(tier, 0.5, :auto) ==
+                 Salience.tier_target(tier, 0.5, :up)
+      end
+    end
+
     test "mid-gray ground compresses deltas but preserves tier ordering" do
       targets = Enum.map(Salience.tiers(), &Salience.tier_target(&1, 0.5, :up))
 
@@ -128,6 +140,51 @@ defmodule Raxol.UI.Theming.SalienceTest do
       hex = Salience.solve(:baseline, 0.022, 250, ground: 0.95)
       {l, _c, _h} = Salience.hex_to_oklch(hex)
       assert l < 0.95
+    end
+  end
+
+  describe "tier_target/4 :far_bound (amendment A1)" do
+    test "absent far_bound reproduces the pre-A1 targets exactly (regression)" do
+      for tier <- Salience.tiers(), ground <- [0.2, 0.5, 0.7, 0.95] do
+        assert Salience.tier_target(tier, ground, :auto, []) ==
+                 Salience.tier_target(tier, ground, :auto)
+
+        assert Salience.tier_target(tier, ground, :up, far_bound: nil) ==
+                 Salience.tier_target(tier, ground, :up)
+      end
+    end
+
+    test "solving up: far_bound tighter than 0.97 compresses the target" do
+      loose = Salience.tier_target(:anchor, 0.2, :up)
+      tight = Salience.tier_target(:anchor, 0.2, :up, far_bound: 0.6)
+
+      assert tight < loose
+      # never widens past the absolute displayable bound
+      assert tight <= 0.97 + 1.0e-12
+    end
+
+    test "solving down: far_bound tighter than 0.03 compresses the target" do
+      loose = Salience.tier_target(:anchor, 0.95, :down)
+      tight = Salience.tier_target(:anchor, 0.95, :down, far_bound: 0.4)
+
+      assert tight > loose
+      assert tight >= 0.03 - 1.0e-12
+    end
+
+    test "far_bound looser than the absolute bound is clamped, not honored" do
+      # min(@al_max, far_bound) when solving up: a far_bound above 0.97
+      # cannot widen past the displayable bound.
+      normal = Salience.tier_target(:anchor, 0.2, :up)
+      widened = Salience.tier_target(:anchor, 0.2, :up, far_bound: 1.5)
+
+      assert_in_delta normal, widened, 1.0e-12
+    end
+
+    test "compression preserves tier ordering under a tight far_bound" do
+      targets =
+        Enum.map(Salience.tiers(), &Salience.tier_target(&1, 0.2, :up, far_bound: 0.5))
+
+      assert targets == Enum.sort(targets)
     end
   end
 

@@ -18,9 +18,21 @@ defmodule Raxol.Terminal.Driver.BackgroundQuery do
   one public emit-gate render paths consult. `scan/1` keeps its original
   `{result, cleaned}` contract for the driver.
 
-  The detected background is stored in `:persistent_term` and readable via
-  `detected_background/0`; higher layers (e.g. salience theming) convert it
-  to a ground lightness.
+  `detected_background/0` is now a **delegating shim** over the unified
+  `Raxol.Terminal.Capabilities` session record (native-palette-riding, see
+  `docs/proposals/in-flight/native-palette-riding.md` §3/§7): it reads
+  `Capabilities.background/0` first, falling back to this module's own
+  `:persistent_term` cache (written by `store/1`) only when no
+  `Capabilities` record has been cached yet. `store/1` is unchanged and
+  still the entry point older callers use directly. The parse functions
+  (`parse_color/1` and friends) stay live -- `Raxol.Terminal.Capabilities`'s
+  own scanner/classifier path reuses them. **Retirement planned**: once
+  every caller reads `Capabilities.background/0` (or `ground/0`) directly,
+  this module's `:persistent_term` fallback and `store/1` go away and only
+  the parse helpers, if still needed, get a new home.
+
+  Higher layers (e.g. salience theming) convert the background to a ground
+  lightness -- see `Raxol.UI.Theming.SalienceTheme.detect_ground/0`.
   """
 
   alias Raxol.Terminal.Capabilities
@@ -81,9 +93,24 @@ defmodule Raxol.Terminal.Driver.BackgroundQuery do
   @spec store(rgb()) :: :ok
   def store({_r, _g, _b} = rgb), do: :persistent_term.put(@pt_key, rgb)
 
-  @doc "Returns the detected background color, if any."
+  @doc """
+  Returns the detected background color, if any.
+
+  Delegates to the unified `Capabilities` record when one has been cached
+  for the session; falls back to this module's own `:persistent_term`
+  cache (as written by `store/1`) only when no `Capabilities` record is
+  cached yet. See the moduledoc's retirement note.
+  """
   @spec detected_background() :: {:ok, rgb()} | :error
   def detected_background do
+    case Capabilities.cached() do
+      {:ok, %{background: {_, _, _} = rgb}} -> {:ok, rgb}
+      {:ok, %{background: nil}} -> :error
+      :error -> legacy_detected_background()
+    end
+  end
+
+  defp legacy_detected_background do
     case :persistent_term.get(@pt_key, :undefined) do
       :undefined -> :error
       rgb -> {:ok, rgb}

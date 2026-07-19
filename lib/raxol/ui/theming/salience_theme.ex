@@ -8,16 +8,33 @@ defmodule Raxol.UI.Theming.SalienceTheme do
   lightness of every color so each tier reads perceptually level on the
   detected ground. Works on dark and light terminals from one seed table.
 
-  Ground detection is optional: when `Raxol.Terminal.Driver.BackgroundQuery`
-  is loaded and has a reply, its OSC 11 background reading is used; otherwise
-  (including on this branch, which does not depend on that module) it falls
-  back to `Salience.reference_ground/0`.
+  Ground detection is optional and reads the unified
+  `Raxol.Terminal.Capabilities` session record (native-palette-riding, see
+  `docs/proposals/in-flight/native-palette-riding.md` §3/§7) via the guarded
+  cross-package pattern (`Code.ensure_loaded?/1` +
+  `@compile {:no_warn_undefined, ...}`, map-shape matching per
+  `lib/raxol/ui/theming/palette.ex`'s convention). Fallback ladder, cheapest
+  and most authoritative first:
+
+    1. Record `background/0` (`{r, g, b}` from OSC 11) → OKLCH `L`.
+    2. Record `polarity_seed/0` (`$COLORFGBG`, `:dark` | `:light` | `nil`)
+       → `Salience.reference_ground/0` for `:dark`, `@light_reference_ground`
+       for `:light`.
+    3. `Salience.reference_ground/0` (no terminal package, no record cached,
+       or no seed either — headless, LiveView, tests).
   """
 
+  alias Raxol.UI.Theming.Ansi16Salience
   alias Raxol.UI.Theming.Salience
   alias Raxol.UI.Theming.Theme
 
-  @compile {:no_warn_undefined, Raxol.Terminal.Driver.BackgroundQuery}
+  @compile {:no_warn_undefined, Raxol.Terminal.Capabilities}
+
+  # Documented light-canvas reference ground (amendment A1/§2 rung 2) used
+  # only when polarity_seed/0 says :light and no OSC 11 background reading
+  # is available. Mirrors reference_ground/0's role for :dark, just on the
+  # light side of the 0.5 cutoff.
+  @light_reference_ground 0.95
 
   # Semantic seed table. Hues follow the compensated-Darcula family:
   # orange 57 (warning), yellow 77 (emphasis), green 134 (success),
@@ -38,19 +55,67 @@ defmodule Raxol.UI.Theming.SalienceTheme do
   def seeds, do: @seeds
 
   @doc """
-  Detected ground lightness: OKLCH `L` of the OSC 11-reported terminal
-  background, or `Salience.reference_ground/0` when detection is
-  unavailable.
+  Detected ground lightness: OKLCH `L` of the `Raxol.Terminal.Capabilities`
+  record's OSC 11 background reading, falling back through the ladder
+  documented in the moduledoc when a reading is unavailable.
   """
   @spec detect_ground() :: float()
   def detect_ground do
-    with true <- Code.ensure_loaded?(Raxol.Terminal.Driver.BackgroundQuery),
-         {:ok, {r, g, b}} <-
-           Raxol.Terminal.Driver.BackgroundQuery.detected_background() do
+    case detect_ground_from_background() do
+      {:ok, l} -> l
+      :error -> detect_ground_from_polarity_seed()
+    end
+  end
+
+  defp detect_ground_from_background do
+    with true <- Code.ensure_loaded?(Raxol.Terminal.Capabilities),
+         {r, g, b} <- Raxol.Terminal.Capabilities.background() do
+      {l, _c, _h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
+      {:ok, l}
+    else
+      _ -> :error
+    end
+  end
+
+  defp detect_ground_from_polarity_seed do
+    with true <- Code.ensure_loaded?(Raxol.Terminal.Capabilities),
+         seed <- Raxol.Terminal.Capabilities.polarity_seed(),
+         true <- seed in [:dark, :light] do
+      seed_to_ground(seed)
+    else
+      _ -> Salience.reference_ground()
+    end
+  end
+
+  defp seed_to_ground(:dark), do: Salience.reference_ground()
+  defp seed_to_ground(:light), do: @light_reference_ground
+
+  @doc """
+  Detected canvas polarity from the detected ground, using the same `0.5`
+  OKLCH-`L` hard cutoff `Ansi16Salience.polarity/1` uses (native-palette-
+  riding §5 / amendment A5) -- delegates to it rather than re-deriving the
+  threshold, so the two can never drift apart.
+  """
+  @spec detect_polarity() :: Ansi16Salience.polarity()
+  def detect_polarity, do: Ansi16Salience.polarity(detect_ground())
+
+  @doc """
+  Detected native foreground apparent lightness: OKLCH `L` of the
+  `Raxol.Terminal.Capabilities` record's OSC 10 foreground reading, or
+  `nil` when no record is cached or no foreground was reported.
+
+  OSC 10 foregrounds are typically near-achromatic (chroma ~0), so nominal
+  OKLCH `L` is used directly as apparent lightness -- the H-K chroma term
+  vanishes (`apparent_L = L + 0.14 * C * hue_factor(h)`, `C ≈ 0`).
+  """
+  @spec detect_foreground_l() :: float() | nil
+  def detect_foreground_l do
+    with true <- Code.ensure_loaded?(Raxol.Terminal.Capabilities),
+         {r, g, b} <- Raxol.Terminal.Capabilities.foreground() do
       {l, _c, _h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
       l
     else
-      _ -> Salience.reference_ground()
+      _ -> nil
     end
   end
 
@@ -62,12 +127,23 @@ defmodule Raxol.UI.Theming.SalienceTheme do
     * `:ground` - ground lightness override (default: `detect_ground/0`)
     * `:seeds` - seed table override (default: `seeds/0`)
     * `:id` / `:name` - theme identity (default `:salience`)
+    * `:foreground_l` - native foreground apparent-lightness override
+      (default: `detect_foreground_l/0`). Amendment A1: when present and on
+      the solving side of `ground` (a fg lighter than a dark ground when
+      solving up, darker than a light ground when solving down -- anything
+      else is nonsense and is ignored), headroom compression solves every
+      tier toward the terminal's own foreground instead of the absolute
+      `0.97`/`0.03` displayable bound (`Salience.tier_target/4`'s
+      `:far_bound`).
   """
   @spec build(keyword()) :: Theme.t()
   def build(opts \\ []) do
     ground = Keyword.get_lazy(opts, :ground, &detect_ground/0)
     seeds = Keyword.get(opts, :seeds, @seeds)
-    palette = Salience.solve_palette(seeds, ground: ground)
+    fg_al = Keyword.get_lazy(opts, :foreground_l, &detect_foreground_l/0)
+
+    solve_opts = [ground: ground] ++ far_bound_opt(ground, fg_al)
+    palette = Salience.solve_palette(seeds, solve_opts)
 
     background = Salience.oklch_to_hex(ground, 0.0, 0.0)
 
@@ -114,4 +190,21 @@ defmodule Raxol.UI.Theming.SalienceTheme do
       }
     })
   end
+
+  # Amendment A1's nonsense-fg guard: a fg apparent lightness only bounds
+  # the solve when it sits on the *solving* side of ground -- the same
+  # `ground < 0.5` cutoff `Salience.tier_target/4`'s :auto polarity uses
+  # (solving up / lighter) vs its complement (solving down / darker). A fg
+  # darker than a dark ground (or lighter than a light ground) is not a
+  # usable far bound; fall through to the absolute 0.97/0.03 default by
+  # omitting :far_bound entirely.
+  defp far_bound_opt(ground, fg_al) when is_number(fg_al) do
+    cond do
+      ground < 0.5 and fg_al > ground -> [far_bound: fg_al]
+      ground >= 0.5 and fg_al < ground -> [far_bound: fg_al]
+      true -> []
+    end
+  end
+
+  defp far_bound_opt(_ground, _fg_al), do: []
 end

@@ -116,8 +116,9 @@ defmodule Raxol.UI.Theming.Salience do
   def solve(tier, c, h, opts \\ []) do
     ground = Keyword.get(opts, :ground, @reference_ground)
     polarity = Keyword.get(opts, :polarity, :auto)
+    far_bound = Keyword.get(opts, :far_bound)
 
-    target = tier_target(tier, ground, polarity)
+    target = tier_target(tier, ground, polarity, far_bound: far_bound)
     {l, c} = solve_lightness_for_achievable_chroma(target, c, h)
     oklch_to_hex(l, c, h)
   end
@@ -160,15 +161,30 @@ defmodule Raxol.UI.Theming.Salience do
   Target apparent lightness for a tier against a ground, with headroom
   compression: when the ground leaves less than the full delta range on the
   chosen side, all deltas scale down proportionally (ordering preserved).
+
+  ## Options
+
+    * `:far_bound` - overrides the absolute displayable-lightness bound
+      (`#{@al_max}` when solving up, `#{@al_min}` when solving down) that
+      headroom compression measures against. Native-palette-riding
+      amendment A1: when the terminal's own foreground apparent lightness
+      is known, headroom compresses toward *that* instead of the absolute
+      bound, so tiers stay inside the terminal-defined bg/fg range rather
+      than the full displayable gamut. `min(@al_max, far_bound)` when
+      solving up, `max(@al_min, far_bound)` when solving down -- the
+      override can only tighten the range, never widen past the
+      displayable bound. `nil` (default) reproduces the pre-A1 behavior
+      exactly.
   """
-  @spec tier_target(tier(), number(), polarity()) :: float()
-  def tier_target(tier, ground, polarity \\ :auto) do
+  @spec tier_target(tier(), number(), polarity(), keyword()) :: float()
+  def tier_target(tier, ground, polarity \\ :auto, opts \\ []) do
     sign = resolve_polarity(ground, polarity)
+    bound = resolve_bound(sign, Keyword.get(opts, :far_bound))
 
     headroom =
       case sign do
-        1 -> @al_max - ground
-        -1 -> ground - @al_min
+        1 -> bound - ground
+        -1 -> ground - bound
       end
 
     scale = min(1.0, max(0.0, headroom) / @max_delta)
@@ -178,6 +194,16 @@ defmodule Raxol.UI.Theming.Salience do
   defp resolve_polarity(_ground, :up), do: 1
   defp resolve_polarity(_ground, :down), do: -1
   defp resolve_polarity(ground, :auto), do: if(ground < 0.5, do: 1, else: -1)
+
+  defp resolve_bound(1, far_bound) when is_number(far_bound),
+    do: min(@al_max, far_bound)
+
+  defp resolve_bound(1, _far_bound), do: @al_max
+
+  defp resolve_bound(-1, far_bound) when is_number(far_bound),
+    do: max(@al_min, far_bound)
+
+  defp resolve_bound(-1, _far_bound), do: @al_min
 
   @doc """
   Solves a seed list into a palette map.
