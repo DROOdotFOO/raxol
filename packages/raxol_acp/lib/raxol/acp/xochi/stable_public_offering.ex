@@ -1,17 +1,18 @@
 defmodule Raxol.ACP.Xochi.StablePublicOffering do
   @moduledoc """
-  ACP offering for Xochi cross-chain stablecoin transfers with **public**
-  settlement (the payout lands in a wallet on the destination chain).
+  ACP offering for Xochi cross-chain stablecoin transfers with public
+  settlement: the payout lands in a wallet on the destination chain.
 
-  One of the split pair (see `Raxol.ACP.Xochi.StableStealthOffering`). Narrower
-  than the legacy `TransferOffering`: the requirement's `settlement_preference`
-  is fixed to `"public"`, and the deliverable omits the ERC-5564 announcement
-  fields. A requirement that declares a private/stealth tier is rejected before
-  escrow with `{:wrong_offering, :expected_public, "xochi_stable_stealth"}`, so a
-  buyer agent gets a focused, actionable error instead of an ambiguous failure.
+  One of the split pair (see `Raxol.ACP.Xochi.StableStealthOffering`). It is
+  narrower than the legacy `TransferOffering`: the requirement's
+  `settlement_preference` is fixed to `"public"`, and the deliverable omits the
+  ERC-5564 announcement fields. A requirement that declares a private or stealth
+  tier is rejected before escrow with
+  `{:wrong_offering, :expected_public, "xochi_stable_stealth"}`, so a buyer agent
+  gets a focused, actionable error instead of an ambiguous failure.
 
-  Validation and delivery are shared via `Raxol.ACP.Xochi.TransferCore`
-  (`:public` mode); settler config is the shared `:xochi_transfer_settler`.
+  Validation and delivery are shared via `Raxol.ACP.Xochi.TransferCore` in
+  `:public` mode; settler config is the shared `:xochi_transfer_settler`.
   """
 
   use Raxol.ACP.Offering,

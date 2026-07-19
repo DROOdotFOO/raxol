@@ -7,16 +7,17 @@ defmodule Raxol.ACP.Xochi.TransferCore do
   entry points take a `settlement_mode` so a thin offering module can layer a
   focused settlement gate on top of the common corridor rules:
 
-    - `:any`     -- no settlement gate (the legacy `TransferOffering` shim).
-    - `:public`  -- reject a requirement that declares a private/stealth tier.
-    - `:stealth` -- require a stealth tier, an Ethereum-L1 destination (stealth
-                    settles to a one-time ERC-5564 address on L1; cross-chain
-                    stealth is not live), and the ERC-5564 meta-address keys.
+    - `:any`: no settlement gate (the legacy `TransferOffering` shim).
+    - `:public`: reject a requirement that declares a private or stealth tier.
+    - `:stealth`: require a stealth tier, an Ethereum-L1 destination (stealth
+      settles to a one-time ERC-5564 address on L1; cross-chain stealth is not
+      live), and the ERC-5564 meta-address keys.
 
   raxol never inspects or re-signs the buyer's opaque signed intent, so the gate
   works on the declared requirement fields only. It keeps a wrong request out of
   escrow with a machine-readable reason; Riddler remains the source of truth at
-  fill.
+  fill. `describe_rejection/1` turns each of those reasons into a sentence a buyer
+  agent can act on.
   """
 
   alias Raxol.ACP.Xochi.CapacityLedger
@@ -59,6 +60,76 @@ defmodule Raxol.ACP.Xochi.TransferCore do
     with {:ok, settle} <- resolve_settler(),
          {:ok, deliverable} <- settle.(%{requirement: req}) do
       {:deliver, present(deliverable)}
+    end
+  end
+
+  @doc """
+  Human-readable explanation for a `{:reject, reason}` from `handle_request/3`.
+
+  Buyer agents get a machine-readable reason tuple back; this maps each one to a
+  sentence they can log or show, so a rejected job says what to fix (wrong
+  offering, closed corridor, over capacity) instead of an opaque atom.
+
+      iex> Raxol.ACP.Xochi.TransferCore.describe_rejection(:not_cross_chain)
+      "Source and destination chains are the same; this offering only settles cross-chain."
+  """
+  @spec describe_rejection(term()) :: String.t()
+  def describe_rejection(:malformed_requirement),
+    do:
+      "The requirement is missing corridor fields or a signed_intent bundle " <>
+        "(needs intent_id, quote_id, signature, nonce)."
+
+  def describe_rejection(:not_cross_chain),
+    do: "Source and destination chains are the same; this offering only settles cross-chain."
+
+  def describe_rejection(:non_positive_amount),
+    do: "amount_atomic must be a positive integer in token base units."
+
+  def describe_rejection({:wrong_offering, :expected_public, alt}),
+    do:
+      "This is the public offering, but the requirement asks for a stealth tier. Use \"#{alt}\"."
+
+  def describe_rejection({:wrong_offering, :expected_stealth, alt}),
+    do:
+      "This is the stealth offering, but the requirement asks for public settlement. Use \"#{alt}\"."
+
+  def describe_rejection({:stealth_requires_l1_destination, dst}),
+    do:
+      "Stealth settles on Ethereum L1, so dst_chain_id must be 1 (got #{dst}); " <>
+        "cross-chain stealth is not live."
+
+  def describe_rejection(:stealth_meta_address_required),
+    do: "Stealth needs a stealth_meta_address with 0x-hex spending_pub_key and viewing_pub_key."
+
+  def describe_rejection({:invalid_address, leg, chain, token}),
+    do: "The #{leg} address #{token} is not a valid address for chain #{chain}."
+
+  def describe_rejection({:unsupported_src_token, chain, token}),
+    do: "The solver cannot pull #{token_label(chain, token)} on chain #{chain}."
+
+  def describe_rejection({:unsupported_dst_token, chain, token}),
+    do: "The solver cannot deliver #{token_label(chain, token)} on chain #{chain}."
+
+  def describe_rejection({:unsupported_corridor, src, dst}),
+    do: "The #{src} -> #{dst} corridor is not on the allowlist."
+
+  def describe_rejection({:origin_closed, chain}),
+    do: "Chain #{chain} is closed for origin pulls right now."
+
+  def describe_rejection({:over_capacity, chain, token}),
+    do:
+      "The destination #{token_label(chain, token)} on chain #{chain} is at capacity; " <>
+        "try a smaller amount or another corridor."
+
+  def describe_rejection({:settler_not_configured, missing}),
+    do: "The settler is not configured (missing #{inspect(missing)})."
+
+  def describe_rejection(reason), do: "Request rejected: #{inspect(reason)}."
+
+  defp token_label(chain, token) do
+    case Assets.symbol_for(chain, token) do
+      symbol when is_binary(symbol) -> symbol
+      _ -> token
     end
   end
 

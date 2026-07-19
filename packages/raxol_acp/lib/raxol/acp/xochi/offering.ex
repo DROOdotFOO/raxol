@@ -2,26 +2,38 @@ defmodule Raxol.ACP.Xochi.Offering do
   @moduledoc """
   Xochi cross-chain intent offering schema for the Virtuals ACP marketplace.
 
-  Raxol sells this as a **pure storefront**: the buyer quotes and signs a Xochi
-  cross-chain intent against Xochi itself, then creates a **plain** ACP job
+  Raxol sells this as a pure storefront. The buyer quotes and signs a Xochi
+  cross-chain intent against Xochi itself, then creates a plain ACP job
   (hook = `address(0)`) whose budget is raxol's storefront fee. On funding, the
   storefront relays the buyer's pre-signed intent to Xochi (via
-  `Raxol.ACP.Xochi.Settler` -> `Raxol.Payments.Protocols.Xochi.execute_signed/2`)
+  `Raxol.ACP.Xochi.Settler` then `Raxol.Payments.Protocols.Xochi.execute_signed/2`)
   and polls it to settlement. raxol never signs the transfer and never touches
-  the transferred funds -- the transfer moves through Xochi off-escrow, so the
-  ACP core's platform/evaluator take never bites the transfer amount. raxol
-  earns the storefront fee: on `complete`, the provider nets `budget * 0.90`.
+  the transferred funds. The transfer moves through Xochi off-escrow, so the ACP
+  core's platform and evaluator take never bites the transfer amount. raxol earns
+  only the storefront fee: on `complete`, the provider nets `budget * 0.90`.
 
-  This module defines the offering's JSON schema (for marketplace registration),
-  the canonical request shape (which carries the buyer's signed intent bundle),
-  and the deliverable shape returned when the intent settles.
+  This module holds the offering's JSON schemas: the request shape (which carries
+  the buyer's signed intent bundle) and the deliverable shape returned when the
+  intent settles.
+
+  ## Which module to register
+
+  Register the focused pair, not this base module directly:
+
+    - `Raxol.ACP.Xochi.StablePublicOffering`  (name `xochi_stable_public`)
+    - `Raxol.ACP.Xochi.StableStealthOffering` (name `xochi_stable_stealth`)
+
+  Both share these schemas via the mode-specific `requirement_schema/1` and
+  `deliverable_schema/1`. `Raxol.ACP.Xochi.TransferOffering` (name
+  `xochi_cross_chain_transfer`) is the deprecated settlement-agnostic shim; it
+  uses the full `requirement_schema/0` and stays only until buyers migrate.
 
   ## Lifecycle
 
       job.created      -> buyer initiated a plain job, awaiting acceptance
       budget.set       -> storefront proposes budget = its fee (bps of transfer)
       job.funded       -> buyer escrowed the storefront fee
-      job.submitted    -> storefront relayed the buyer's signed intent; solver
+      job.submitted    -> storefront relayed the buyer's signed intent; the solver
                           fills cross-chain; deliverable = { intent_id,
                           settlement_tx_hash, receiving_tx_hash, status }
                           plus the ERC-5564 announcement ({ settlement_type,
@@ -29,25 +41,24 @@ defmodule Raxol.ACP.Xochi.Offering do
                           stealth settlement
       job.completed    -> buyer verifies dst_tx; provider nets budget*0.90
 
-  The deliverable surfaces both src and dst transaction hashes so the buyer (or
-  an evaluator agent) can verify the cross-chain settlement on-chain before
+  The deliverable carries both the source and destination transaction hashes, so
+  the buyer (or an evaluator agent) can verify the settlement on-chain before
   approving.
 
   ## Safety: the buyer signs, Riddler verifies
 
-  Because the buyer signs the EIP-712 intent (and any origin-pull authorization)
-  against Xochi, and Riddler verifies it against its own server-persisted quote,
-  neither raxol nor the buyer can forge the amount or route. raxol relays the
-  opaque bundle without inspecting or re-signing it, so the destination, privacy
-  tier, and route are whatever the buyer signed -- there is no same-owner or
-  public-only gate on raxol's side (there is nothing raxol could misroute).
+  The buyer signs the EIP-712 intent (and any origin-pull authorization) against
+  Xochi, and Riddler verifies it against its own server-persisted quote. Neither
+  raxol nor the buyer can forge the amount or route. raxol relays the opaque
+  bundle without inspecting or re-signing it, so the destination, privacy tier,
+  and route are whatever the buyer signed. There is no same-owner or public-only
+  gate on raxol's side, because there is nothing raxol could misroute.
 
   ## Marketplace registration
 
-  When registering the offering at https://app.virtuals.io/acp/new, the
-  `requirement_schema/0` and `deliverable_schema/0` JSON Schemas below
-  go into the `Job Offering` form. `request_schema/0` is what buyers
-  fill out when creating a job.
+  When registering at https://app.virtuals.io/acp/new, the mode-specific
+  `requirement_schema/1` and `deliverable_schema/1` go into the `Job Offering`
+  form. `offering_metadata/1` returns the full payload for the offerings API.
   """
 
   @doc """
@@ -173,8 +184,8 @@ defmodule Raxol.ACP.Xochi.Offering do
             "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
           "description" =>
             "Optional: the recipient the buyer signed into their Xochi intent, for " <>
-              "the buyer's / evaluator's audit trail. raxol does not use or enforce " <>
-              "it -- the destination is fixed by the buyer's signature."
+              "the buyer's or evaluator's audit trail. raxol does not use or enforce " <>
+              "it; the destination is fixed by the buyer's signature."
         },
         "slippage_bps" => %{
           "type" => "integer",
@@ -189,7 +200,7 @@ defmodule Raxol.ACP.Xochi.Offering do
           "default" => "public",
           "description" =>
             "Optional audit hint of the privacy tier the buyer signed. \"stealth\" " <>
-              "records an ERC-5564 stealth delivery -- the buyer signed the stealth " <>
+              "records an ERC-5564 stealth delivery: the buyer signed the stealth " <>
               "spending/viewing keys and an ephemeral recipient into their Xochi " <>
               "intent, so funds land at a stealth address they control. raxol relays " <>
               "whatever the buyer signed and does not gate on this."
@@ -380,14 +391,14 @@ defmodule Raxol.ACP.Xochi.Offering do
     }
   end
 
-  @doc "Default SLA in minutes -- max time from `job.funded` to `job.submitted`."
+  @doc "Default SLA in minutes: max time from `job.funded` to `job.submitted`."
   @spec sla_minutes() :: pos_integer()
   def sla_minutes, do: 10
 
   @doc """
-  Whether a given requirement payload is well-formed enough to relay. Cheap
-  shape check only -- confirms the corridor fields plus a `signed_intent` bundle
-  carrying at least `intent_id`, `quote_id`, `signature`, and `nonce`. Does not
+  Whether a given requirement payload is well-formed enough to relay. A cheap
+  shape check: it confirms the corridor fields plus a `signed_intent` bundle
+  carrying at least `intent_id`, `quote_id`, `signature`, and `nonce`. It does not
   verify the signature (Riddler does that against its persisted quote).
   """
   @spec valid_requirement?(map()) :: boolean()
