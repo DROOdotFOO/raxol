@@ -42,10 +42,13 @@ defmodule Mix.Tasks.Raxol.Harness do
 
   ## Options
 
-    * `--prompt TEXT` — send TEXT as the first turn, linger, then halt
+    * `--prompt TEXT`     — send TEXT as the first turn, linger, then halt
       (handy for smoke tests / recordings)
-    * `--yolo`        — disable the approval gate (consequential tools run
-      without asking)
+    * `--yolo`            — disable the approval gate (consequential tools
+      run without asking)
+    * `--demo-approval`   — mock backend scripts ONE `edit_file` tool call
+      against a temp file, so the whole approval surface (inline ± diff,
+      footer selector, y/n answer) can be exercised live with zero config
   """
 
   use Mix.Task
@@ -59,13 +62,19 @@ defmodule Mix.Tasks.Raxol.Harness do
     # runtime (Lifecycle via the pump), so only these leaf deps are started
     # explicitly. Log lines printed mid-raw-mode corrupt the frame, so Logger
     # stays at :error.
-    {prompt, yolo?} = parse_args(argv)
+    {prompt, yolo?, demo_approval?} = parse_args(argv)
 
     {:ok, _} = Application.ensure_all_started(:logger)
     Logger.configure(level: :error)
     {:ok, _} = Application.ensure_all_started(:telemetry)
 
-    {backend, backend_opts, label} = detect_backend()
+    {backend, backend_opts, label, demo_cleanup} =
+      if demo_approval? do
+        demo_approval_backend()
+      else
+        {b, o, l} = detect_backend()
+        {b, o, l, fn -> :ok end}
+      end
 
     if backend == Raxol.Agent.Backend.HTTP do
       {:ok, _} = Application.ensure_all_started(:req)
@@ -114,6 +123,7 @@ defmodule Mix.Tasks.Raxol.Harness do
     end
 
     wait_for_halt(pump, lifecycle, streamer)
+    demo_cleanup.()
   end
 
   # -- lifecycle ------------------------------------------------------------
@@ -166,9 +176,61 @@ defmodule Mix.Tasks.Raxol.Harness do
 
   defp parse_args(argv) do
     {opts, _rest, _invalid} =
-      OptionParser.parse(argv, strict: [prompt: :string, yolo: :boolean])
+      OptionParser.parse(argv,
+        strict: [prompt: :string, yolo: :boolean, demo_approval: :boolean]
+      )
 
-    {Keyword.get(opts, :prompt), Keyword.get(opts, :yolo, false)}
+    {Keyword.get(opts, :prompt), Keyword.get(opts, :yolo, false),
+     Keyword.get(opts, :demo_approval, false)}
+  end
+
+  # -- the approval demo (a scripted one-shot edit_file) --------------------
+
+  # Mock backend + `tool_calls_fn` (one-shot): the FIRST completion round
+  # returns a single `edit_file` call against a seeded demo file, every
+  # later round falls back to plain text. The approval gate is left ON, so
+  # the call escalates into the real `approval_requested` -> inline ± diff
+  # -> footer selector -> y/n path — the full surface, no provider needed.
+  #
+  # The demo file lives INSIDE the fs-action sandbox (cwd) — `Fs.resolve/1`
+  # rejects anything outside it, which would degrade the preview to an
+  # honest-but-ugly `target not located` hunk and refuse the apply. The
+  # task deletes the file after halt.
+  defp demo_approval_backend do
+    path = ".raxol-harness-demo-#{System.unique_integer([:positive])}.txt"
+
+    File.write!(path, "keep this line\nswap me out\nkeep this line too\n")
+    # Post-halt cleanup can be raced out by a hard PTY teardown; at_exit
+    # is the second net (best-effort — a SIGKILLed VM leaves the dotfile).
+    System.at_exit(fn _status -> File.rm(path) end)
+
+    {:ok, once} = Agent.start_link(fn -> :armed end)
+
+    tool_calls_fn = fn ->
+      Agent.get_and_update(once, fn
+        :armed ->
+          {[
+             %{
+               "id" => "demo-edit-1",
+               "name" => "edit_file",
+               "arguments" => %{
+                 "path" => path,
+                 "old_string" => "swap me out",
+                 "new_string" => "swapped in by the approval demo"
+               }
+             }
+           ], :spent}
+
+        :spent ->
+          {nil, :spent}
+      end)
+    end
+
+    {Raxol.Agent.Backend.Mock,
+     [
+       tool_calls_fn: tool_calls_fn,
+       response: "edit applied — approval demo complete."
+     ], "mock+demo-approval", fn -> File.rm(path) end}
   end
 
   # -- backend selection (the blessed ExecutorConfig + Selector path) -------
@@ -176,7 +238,11 @@ defmodule Mix.Tasks.Raxol.Harness do
   defp detect_backend do
     cond do
       System.get_env("LM_STUDIO") in ["true", "1"] ->
-        live_backend(:lm_studio, System.get_env("AI_MODEL") || "local-model", %{})
+        live_backend(
+          :lm_studio,
+          System.get_env("AI_MODEL") || "local-model",
+          %{}
+        )
 
       key = System.get_env("AI_API_KEY") ->
         live_backend(:openai, System.get_env("AI_MODEL") || "gpt-4o-mini", %{
@@ -216,7 +282,10 @@ defmodule Mix.Tasks.Raxol.Harness do
       url ->
         # Backend.HTTP's :openai provider appends /v1/chat/completions itself
         # -- strip a conventionally-supplied trailing /v1.
-        [base_url: url |> String.trim_trailing("/") |> String.trim_trailing("/v1")]
+        [
+          base_url:
+            url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
+        ]
     end
   end
 end
