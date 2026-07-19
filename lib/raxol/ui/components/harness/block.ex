@@ -106,35 +106,40 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   `content[:completion]` -- set by `Raxol.Harness.Projection.BlockBuilder.
   build_turn/3` on a turn's LAST block, only when that turn closed with a
-  final `turn_completed` -- is either:
+  final `turn_completed` -- has exactly one shape that renders anything:
+  `%{evidence: entries, total: n, type_counts: counts}` (plus an optional
+  `cross_turn_count`, see `BlockBuilder`'s moduledoc "Cross-turn
+  disclosure"), which renders:
 
-    * `%{evidence: :none}` -- no accepted refs: renders ONE line, the
-      LITERAL text `"no evidence provided"`, no glyph, no checkmark --
-      the absence is information, never blank.
-    * `%{evidence: entries, total: n, type_counts: counts}` (plus an
-      optional `cross_turn_count`, see `BlockBuilder`'s moduledoc "Cross-
-      turn disclosure") -- renders:
-      1. a summary line, `"N evidence refs: 2 tool results, 1 message"`
-         (`n`, pluralized, then `counts` -- `[%{type:, count:}]`, already
-         sorted descending by count -- joined `", "`, each phrase
-         pluralized by ITS OWN count), with a `" (M cross-turn)"` suffix
-         appended when `cross_turn_count` (`M`) is present;
-      2. up to `length(entries)` per-ref lines (`entries` is capped
-         upstream, see `BlockBuilder`), each `"· " <> label` (the label
-         already sanitized/clamped -- an unresolvable ref's label is the
-         literal `"unresolvable evidence ref"`, rendered exactly like any
-         other entry, never dropped), with a trailing literal
-         `" [cross-turn]"` when that entry carries `cross_turn: true`
-         (a ref the producer's own gate would never have accepted as
-         same-turn evidence -- shown, not hidden);
-      3. a trailing `"+N more"` line when `n` exceeds `length(entries)`,
-         itself suffixed `" (M cross-turn)"` when M of the hidden
-         (never-rendered) refs are cross-turn -- so the summary's
-         session-wide cross-turn tally is never left pointing at zero
-         visibly marked lines.
+    1. a summary line, `"N evidence refs: 2 tool results, 1 message"`
+       (`n`, pluralized, then `counts` -- `[%{type:, count:}]`, already
+       sorted descending by count -- joined `", "`, each phrase
+       pluralized by ITS OWN count), with a `" (M cross-turn)"` suffix
+       appended when `cross_turn_count` (`M`) is present;
+    2. up to `length(entries)` per-ref lines (`entries` is capped
+       upstream, see `BlockBuilder`), each `"· " <> label` (the label
+       already sanitized/clamped -- an unresolvable ref's label is the
+       literal `"unresolvable evidence ref"`, rendered exactly like any
+       other entry, never dropped), with a trailing literal
+       `" [cross-turn]"` when that entry carries `cross_turn: true`
+       (a ref the producer's own gate would never have accepted as
+       same-turn evidence -- shown, not hidden);
+    3. a trailing `"+N more"` line when `n` exceeds `length(entries)`,
+       itself suffixed `" (M cross-turn)"` when M of the hidden
+       (never-rendered) refs are cross-turn -- so the summary's
+       session-wide cross-turn tally is never left pointing at zero
+       visibly marked lines.
 
-  Key absent or unrecognised shape renders no row at all -- byte-identical
-  to a block that never went through the completion-evidence fold.
+  `%{evidence: :none}` (no accepted refs), the key absent, or any other
+  unrecognised shape all render NO row at all -- byte-identical to a
+  block that never went through the completion-evidence fold. This is a
+  deliberate choice for the absence case (V's ruling): the row used to
+  render the literal text `"no evidence provided"`, but the wire cannot
+  distinguish gate-rejected evidence, an honest no-citation "done", and a
+  plain greeting (see `BlockBuilder`'s moduledoc, "Known conflation") --
+  one line standing in for three different states read as noise in a
+  live session, so the absence arm now shows nothing rather than a
+  conflated alarm. Only a genuine evidence list still speaks.
   `completion_rows/2` is `Block`'s own render helper for this row, public
   so `Raxol.UI.Components.Harness.BlockBody`'s `:expanded` mount path
   (which otherwise bypasses this module's body entirely) can append the
@@ -684,7 +689,7 @@ defmodule Raxol.UI.Components.Harness.Block do
     # no fade), then thread it into every text-producing branch.
     fg = prominence_fg(block, context)
     inner = max(width - 2, 1)
-    tail = outcome_children(block, fg) ++ completion_rows(block, fg, context)
+    tail = outcome_children(block, fg) ++ completion_rows(block, fg)
 
     case block_shape(block, inner, width, context, fg) do
       {:gutter, gutter, gutter_style, rows} ->
@@ -759,7 +764,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       |> content_lines_view(inner, context, fg)
       |> trim_blank_edge_rows()
 
-    completion = completion_rows(block, fg, context)
+    completion = completion_rows(block, fg)
 
     node =
       Indication.bracket(
@@ -2249,49 +2254,26 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   @doc """
   Renders the completion-evidence row(s) for `block.content[:completion]`
-  (see the moduledoc's "The completion row" section) -- one line, styled
-  `%{dim: true}` faded to the same resolved `fg` the header/outcome rows
-  carry (`nil` when prominence is absent/neutral, matching every other
-  row's default). Public (unlike every other row helper in this module)
-  so `Raxol.UI.Components.Harness.BlockBody`'s `:expanded` mount path can
-  append the same row after a mounted real component's own view -- that
-  module bypasses this render entirely once expanded, so the row would
-  otherwise silently vanish for every kind except the plain-text fallback.
+  (see the moduledoc's "The completion row" section) -- one line per row,
+  styled `%{dim: true}` faded to the same resolved `fg` the header/outcome
+  rows carry (`nil` when prominence is absent/neutral, matching every
+  other row's default). Public (unlike every other row helper in this
+  module) so `Raxol.UI.Components.Harness.BlockBody`'s `:expanded` mount
+  path can append the same row after a mounted real component's own view
+  -- that module bypasses this render entirely once expanded, so the row
+  would otherwise silently vanish for every kind except the plain-text
+  fallback.
 
-  Returns `[]` when the key is absent or its shape isn't recognised --
+  Returns `[]` when the key is absent, `:none` (no accepted refs -- V's
+  ruling retired the absence row: it used to render the literal text
+  `"no evidence provided"`, but that one line conflated gate-rejected
+  evidence, an honest no-citation "done", and a plain greeting, and read
+  as noise in a live session), or its shape isn't otherwise recognised --
   byte-identical to a render that never carries a `:completion` key at
   all.
-
-  Suppression policy (V field ruling, 2026-07-17): the caller may pass a
-  render context carrying `turn_has_tools?: false` -- the Surface's own
-  window-derived "no tool ran in this turn" fact -- and the ABSENCE row
-  (only that row; evidence rows are never suppressed) renders as `[]`:
-  on a pure chat turn no evidence could ever have existed, so "no
-  evidence provided" is noise, not honesty. The policy lives HERE (the
-  render layer) and never in the projection: the attached
-  `%{evidence: :none}` marker is part of the offset-law-governed
-  transcript identity and stays unconditional there. Absent the flag
-  (or `turn_has_tools?: true`) the row renders -- fail-safe toward
-  showing the alarm.
   """
-  @spec completion_rows(t(), String.t() | nil, map()) :: [map()]
-  def completion_rows(block, fg \\ nil, context \\ %{})
-
-  def completion_rows(
-        %__MODULE__{content: %{completion: %{evidence: :none}}},
-        _fg,
-        %{turn_has_tools?: false}
-      ) do
-    []
-  end
-
-  def completion_rows(
-        %__MODULE__{content: %{completion: %{evidence: :none}}},
-        fg,
-        _context
-      ) do
-    [completion_text("no evidence provided", fg)]
-  end
+  @spec completion_rows(t(), String.t() | nil) :: [map()]
+  def completion_rows(block, fg \\ nil)
 
   def completion_rows(
         %__MODULE__{
@@ -2304,8 +2286,7 @@ defmodule Raxol.UI.Components.Harness.Block do
               } = completion
           }
         },
-        fg,
-        _context
+        fg
       )
       when is_list(entries) do
     cross_turn_count = Map.get(completion, :cross_turn_count)
@@ -2323,7 +2304,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       completion_more_row(total, entries, cross_turn_count, fg)
   end
 
-  def completion_rows(%__MODULE__{}, _fg, _context), do: []
+  def completion_rows(%__MODULE__{}, _fg), do: []
 
   defp completion_text(content, fg) do
     Components.text(content: content, style: apply_fg(%{dim: true}, fg))

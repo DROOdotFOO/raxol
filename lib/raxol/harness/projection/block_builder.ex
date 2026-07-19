@@ -226,18 +226,24 @@ defmodule Raxol.Harness.Projection.BlockBuilder do
   P-DET-04: two surfaces attaching at different offsets must converge to
   one transcript identity), and any window-dependent attach decision
   (e.g. "did this turn carry tool events?") diverges under a mid-turn
-  attach that cannot see the turn's earlier events. V's field ruling
-  (2026-07-17: "no evidence provided" on a pure chat turn is noise --
-  no tool ran, so no evidence could ever have existed) is therefore
-  implemented one layer up, at RENDER time: the Surface derives
-  `turn_has_tools?` from its own window and threads it into
-  `Block.completion_rows/3`, which suppresses the absence ROW (never
-  the attached marker) for tool-free turns. Identity untouched, display
-  de-noised; the row remains fail-safe-visible for any renderer that
-  does not pass the flag. The remaining conflated states (gate-rejected
-  vs cited-nothing on a tool-bearing turn) stay pending the
-  producer-side wire change (tracked cross-lane, not this module's
-  concern).
+  attach that cannot see the turn's earlier events. The marker attaches
+  identically regardless of which of the three states produced it --
+  this layer cannot and does not try to tell them apart.
+
+  V's ruling retired the absence ROW this marker used to drive (see
+  `Raxol.UI.Components.Harness.Block`'s moduledoc, "The completion
+  row"): the literal `"no evidence provided"` line conflated the same
+  three indistinguishable states into one line that read as noise in a
+  live session, so `Block.completion_rows/2` now renders nothing for
+  `%{evidence: :none}`, unconditionally -- superseding an earlier
+  render-time-only suppression (2026-07-17) that hid the row on
+  chat-only turns via a `turn_has_tools?` render-context flag and left
+  it standing on tool-bearing ones. Identity is untouched either way:
+  the marker attaches here exactly as it always has; only its render
+  changed. The remaining conflated states (gate-rejected vs
+  cited-nothing) stay pending the producer-side wire change (tracked
+  cross-lane, not this module's concern) -- moot for display now that
+  neither renders a row.
 
   ## Staleness under compaction
 

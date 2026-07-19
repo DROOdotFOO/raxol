@@ -446,7 +446,29 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   end
 
   describe "expanded render carries the completion row when the block has one" do
-    test "a block with content.completion gets the row appended after the mounted component's own view" do
+    test "a block with an evidence-present completion gets the row appended after the mounted component's own view" do
+      block = Block.from_events(:message, events(:message), fold: :expanded)
+
+      with_completion = %{
+        block
+        | content:
+            Map.put(block.content, :completion, %{
+              evidence: [
+                %{ref: 1, type: :tool_result, label: "mix_test — ok"}
+              ],
+              total: 1,
+              type_counts: [%{type: :tool_result, count: 1}]
+            })
+      }
+
+      rendered = BlockBody.render(with_completion, default_context())
+      texts = flat_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "mix_test")),
+             "expected the completion row to survive the expanded mount path, got: #{inspect(texts)}"
+    end
+
+    test "a block with content.completion == %{evidence: :none} renders byte-identical to the unwrapped mount (the absence arm is retired)" do
       block = Block.from_events(:message, events(:message), fold: :expanded)
 
       with_completion = %{
@@ -454,11 +476,21 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
         | content: Map.put(block.content, :completion, %{evidence: :none})
       }
 
-      rendered = BlockBody.render(with_completion, default_context())
-      texts = flat_texts(rendered)
+      assert Block.completion_rows(with_completion) == [],
+             "test premise: the absence arm renders no rows at all"
 
-      assert Enum.any?(texts, &(&1 == "no evidence provided")),
-             "expected the completion row to survive the expanded mount path, got: #{inspect(texts)}"
+      {:ok, unwrapped_view} =
+        Raxol.UI.Components.Harness.BodyProvider.mount(
+          with_completion.kind,
+          with_completion.content,
+          context: default_context(),
+          outcome: with_completion.outcome,
+          seal: with_completion.seal
+        )
+
+      assert strip_ids(BlockBody.render(with_completion, default_context())) ==
+               strip_ids(unwrapped_view),
+             "the absence arm must never trigger the completion-row wrapping column"
     end
 
     test "a block with no completion key renders byte-identical to the unwrapped mount" do

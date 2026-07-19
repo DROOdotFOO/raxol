@@ -170,7 +170,6 @@ defmodule Raxol.Harness.HarnessApp.View do
       height: transcript_h,
       anchor: model.scroll_anchor,
       width: cw,
-      source_events: model.projection.source_events,
       greeting?: model.greeting? and model.transcript_records == [],
       sigil: model.sigil,
       reply_sigil: model.reply_sigil,
@@ -354,7 +353,6 @@ defmodule Raxol.Harness.HarnessApp.View do
       |> Model.apply_fold_override(index, model.fold_overrides)
       |> BlockBody.render(%{
         width: cw,
-        turn_has_tools?: turn_has_tools?(block, model),
         # The footer live tail is the ONE place a resultless tool renders
         # `running…` (seal-on-result-only) -- but only while a result may
         # still arrive. After the reveal finishes, the preview shows the
@@ -417,43 +415,6 @@ defmodule Raxol.Harness.HarnessApp.View do
       end)
 
     Enum.reverse(kept)
-  end
-
-  # Ported verbatim from surface.ex turn_has_tools?/3 + block_turn_id/2 +
-  # event_item_type/1: whether the block's own turn carried tool activity
-  # (the compact tool header renders its receipt only when it did).
-  defp turn_has_tools?(block, model) do
-    events = model.projection.source_events
-
-    case block_turn_id(block, events) do
-      nil ->
-        true
-
-      turn_id ->
-        Enum.any?(events, fn event ->
-          Map.get(event, :turn_id) == turn_id and
-            event_item_type(event) in ["tool_use", "tool_result"]
-        end)
-    end
-  end
-
-  defp block_turn_id(block, events) do
-    refs = MapSet.new(block.event_refs || [])
-
-    Enum.find_value(events, fn event ->
-      if MapSet.member?(refs, Map.get(event, :id)),
-        do: Map.get(event, :turn_id)
-    end)
-  end
-
-  defp event_item_type(event) do
-    case Map.get(event, :payload) do
-      %{} = payload ->
-        Map.get(payload, "item_type") || Map.get(payload, :item_type)
-
-      _other ->
-        nil
-    end
   end
 
   # One blank row above the composer (surface.ex composer_sep,
@@ -603,7 +564,6 @@ defmodule Raxol.Harness.HarnessApp.View do
         Raxol.UI.Components.Harness.BlockBody.render(expanded, %{
           width: max(w - 4, 1),
           prominence: 1.0,
-          turn_has_tools?: true,
           scroll_top: exp.scroll_top
         })
     end

@@ -181,15 +181,17 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
     end
   end
 
-  # -- 2b. render-layer suppression (V field ruling) ------------------------
+  # -- 2b. render-layer: the absence row is retired (V ruling) -------------
 
-  describe "render: absence-row suppression (V field ruling, 2026-07-17)" do
-    # "no evidence provided" on a pure chat turn is noise -- no tool ran,
-    # so no evidence could ever have existed. The policy seat is
-    # `Block.completion_rows/3`: a render context with
-    # `turn_has_tools?: false` suppresses the ABSENCE row only; without
-    # the flag the row renders (fail-safe toward the alarm), and
-    # evidence rows are never suppressed.
+  describe "render: the absence row never renders (V ruling)" do
+    # "no evidence provided" conflated three indistinguishable states
+    # (gate-rejected evidence, an honest no-citation "done", a plain
+    # greeting) into one line, and read as noise in a live session. V
+    # ruled it out entirely -- not merely suppressed on chat-only turns
+    # (the 2026-07-17 render-context-flag ruling this supersedes):
+    # `Block.completion_rows/2` renders `[]` for `%{evidence: :none}`
+    # unconditionally, chat-only or tool-bearing. Evidence rows are
+    # unaffected.
 
     defp chat_absence_block do
       events =
@@ -202,29 +204,7 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       last_block(Projection.project(events))
     end
 
-    test "chat-only turn: the absence row is suppressed under turn_has_tools?: false" do
-      assert Block.completion_rows(chat_absence_block(), nil, %{
-               turn_has_tools?: false
-             }) == []
-    end
-
-    test "the folded/expanded render drops the row under the flag, keeps it without" do
-      block = chat_absence_block()
-
-      for fold <- [:folded, :expanded] do
-        with_flag =
-          flat_texts(
-            Block.render(%{block | fold: fold}, %{turn_has_tools?: false})
-          )
-
-        without_flag = flat_texts(Block.render(%{block | fold: fold}, %{}))
-
-        refute Enum.any?(with_flag, &(&1 == "no evidence provided"))
-        assert Enum.any?(without_flag, &(&1 == "no evidence provided"))
-      end
-    end
-
-    test "tool-bearing turn: turn_has_tools?: true keeps the absence row" do
+    defp tool_absence_block do
       events =
         List.flatten([
           loop(1, "t1", 100, :turn_started, %{}),
@@ -233,15 +213,37 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
           turn_completed(8, "t1", 400, %{})
         ])
 
-      block = last_block(Projection.project(events))
-
-      texts =
-        Block.render(block, %{turn_has_tools?: true}) |> flat_texts()
-
-      assert Enum.any?(texts, &(&1 == "no evidence provided"))
+      last_block(Projection.project(events))
     end
 
-    test "evidence rows are NEVER suppressed, whatever the flag says" do
+    test "chat-only turn: completion_rows/2 renders nothing" do
+      assert Block.completion_rows(chat_absence_block()) == []
+    end
+
+    test "tool-bearing turn: completion_rows/2 renders nothing" do
+      assert Block.completion_rows(tool_absence_block()) == []
+    end
+
+    test "a stale turn_has_tools?: true context (the retired force-show flag) still renders nothing" do
+      texts =
+        tool_absence_block()
+        |> Block.render(%{turn_has_tools?: true})
+        |> flat_texts()
+
+      refute Enum.any?(texts, &(&1 == "no evidence provided"))
+    end
+
+    test "folded and expanded render carry no absence text, chat-only or tool-bearing" do
+      for block <- [chat_absence_block(), tool_absence_block()],
+          fold <- [:folded, :expanded] do
+        texts = flat_texts(Block.render(%{block | fold: fold}, %{}))
+
+        refute Enum.any?(texts, &(&1 == "no evidence provided")),
+               "fold #{fold} rendered the retired absence text"
+      end
+    end
+
+    test "evidence rows still render" do
       events =
         List.flatten([
           loop(1, "t1", 100, :turn_started, %{}),
@@ -250,9 +252,7 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
         ])
 
       block = last_block(Projection.project(events))
-
-      texts =
-        Block.render(block, %{turn_has_tools?: false}) |> flat_texts()
+      texts = Block.render(block, %{}) |> flat_texts()
 
       assert Enum.any?(texts, &(&1 =~ "mix_test"))
     end
@@ -736,13 +736,14 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
 
   # -- 7. the honesty pin (non-negotiable) ---------------------------------
 
-  describe "the honesty pin: absence and unresolvable refs must render literal text, never blank or a checkmark" do
+  describe "the honesty pin: unresolvable refs render literal text; the absence arm renders nothing" do
     setup do
-      # Tool-bearing (evidence was possible) but refs-absent -- the one
-      # state where the absence row still exists post-V-ruling; the
-      # honesty pin (literal text, never blank or a checkmark) holds
-      # THERE. A chat-only turn now renders no completion row at all
-      # (see the absence-arm describe).
+      # Tool-bearing (evidence was possible) but refs-absent -- V's
+      # ruling retires the absence row here too, same as a chat-only
+      # turn (see the render-layer describe above): this renders no
+      # completion row at all now. The honesty pin (literal text, never
+      # blank or a checkmark) survives only for a RESOLVED evidence
+      # entry -- an unresolvable ref is still disclosed, never dropped.
       absence_events =
         List.flatten([
           loop(1, "t1", 100, :turn_started, %{}),
@@ -772,26 +773,26 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       }
     end
 
-    test "folded render of the absence arm contains the literal text \"no evidence provided\"",
+    test "folded render of the absence arm carries no completion row at all",
          %{
            absence_block: block
          } do
       folded = %{block | fold: :folded}
       texts = flat_texts(Block.render(folded, %{}))
 
-      assert Enum.any?(texts, &(&1 == "no evidence provided")),
-             "expected the literal absence text in folded render, got: #{inspect(texts)}"
+      refute Enum.any?(texts, &(&1 == "no evidence provided")),
+             "the retired absence text leaked into folded render, got: #{inspect(texts)}"
     end
 
-    test "expanded render of the absence arm contains the literal text \"no evidence provided\"",
+    test "expanded render of the absence arm carries no completion row at all",
          %{
            absence_block: block
          } do
       expanded = %{block | fold: :expanded}
       texts = flat_texts(Block.render(expanded, %{}))
 
-      assert Enum.any?(texts, &(&1 == "no evidence provided")),
-             "expected the literal absence text in expanded render, got: #{inspect(texts)}"
+      refute Enum.any?(texts, &(&1 == "no evidence provided")),
+             "the retired absence text leaked into expanded render, got: #{inspect(texts)}"
     end
 
     test "folded render of a dangling ref contains the literal text \"unresolvable evidence ref\"",
@@ -816,7 +817,7 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
              "expected the literal unresolvable text in expanded render, got: #{inspect(texts)}"
     end
 
-    test "the evidence arm and the absence arm render different completion rows",
+    test "the evidence arm renders a completion row; the absence arm renders none",
          %{
            absence_block: absence_block,
            evidence_block: evidence_block
@@ -824,10 +825,8 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
       absence_texts = flat_texts(Block.render(absence_block, %{}))
       evidence_texts = flat_texts(Block.render(evidence_block, %{}))
 
-      assert Enum.any?(absence_texts, &(&1 == "no evidence provided"))
-
-      refute Enum.any?(evidence_texts, &(&1 == "no evidence provided")),
-             "the evidence arm must never render the absence text"
+      refute Enum.any?(absence_texts, &(&1 == "no evidence provided")),
+             "the retired absence arm must never render the absence text"
 
       assert Enum.any?(evidence_texts, &(&1 =~ "mix_test"))
       refute evidence_texts == absence_texts
@@ -857,8 +856,9 @@ defmodule Raxol.Harness.CompletionEvidenceTest do
                type_counts: [%{type: :tool_result, count: 1}]
              } = t1_last.content.completion
 
-      # Projection-level: unconditional (offset law) -- t2's chat-only
-      # de-noising happens at render time, not here.
+      # Projection-level: unconditional (offset law) -- the absence row
+      # itself is retired at render time, whatever the turn shape, not
+      # here.
       assert t2_last.content.completion == %{evidence: :none}
     end
 

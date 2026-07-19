@@ -44,7 +44,6 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
        height: Map.get(props, :height, 0),
        anchor: Map.get(props, :anchor, :tail),
        width: Map.get(props, :width, 0),
-       source_events: Map.get(props, :source_events, []),
        greeting?: Map.get(props, :greeting?, false),
        # The mirrored dialogue pair (V's margin ruling): `sigil` echoes the
        # user, `reply_sigil` fronts expanded assistant messages. The host
@@ -279,7 +278,6 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
       BlockBody.render(block, %{
         width: body_width,
         prominence: prominence,
-        turn_has_tools?: turn_has_tools?(block, state.source_events),
         id: stable_block_id(block),
         selector_hosted?: state.selector_hosted?
       })
@@ -397,40 +395,6 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
     do: "block-" <> (refs |> Enum.map(&to_string/1) |> Enum.join("-"))
 
   defp stable_block_id(_block), do: "block-unknown"
-
-  # A turn carries tools if any event on the block's turn is a tool_use /
-  # tool_result (surface.ex:2733, ported).
-  defp turn_has_tools?(block, source_events) do
-    case block_turn_id(block, source_events) do
-      nil ->
-        true
-
-      turn_id ->
-        Enum.any?(source_events, fn event ->
-          Map.get(event, :turn_id) == turn_id and
-            event_item_type(event) in ["tool_use", "tool_result"]
-        end)
-    end
-  end
-
-  defp block_turn_id(%{event_refs: [ref | _]}, source_events) do
-    case Enum.find(source_events, &(Map.get(&1, :id) == ref)) do
-      nil -> nil
-      event -> Map.get(event, :turn_id)
-    end
-  end
-
-  defp block_turn_id(_block, _events), do: nil
-
-  defp event_item_type(event) do
-    case Map.get(event, :payload) do
-      %{} = payload ->
-        Map.get(payload, "item_type", Map.get(payload, :item_type))
-
-      _ ->
-        nil
-    end
-  end
 
   # ── element height estimate (rows) ──────────────────────────────────────
 
