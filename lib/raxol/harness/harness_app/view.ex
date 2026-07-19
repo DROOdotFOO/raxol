@@ -27,6 +27,7 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   alias Raxol.UI.Components.Harness.{
     BlockBody,
+    CommandAutocomplete,
     Composer,
     FooterStack,
     MemoryPanel,
@@ -73,8 +74,9 @@ defmodule Raxol.Harness.HarnessApp.View do
 
     case overlay_surface(model, cw) do
       nil ->
-        put_cursor(
-          base,
+        base
+        |> with_slash_popup(model, cw, groups, budget, transcript_h, inset)
+        |> put_cursor(
           cursor_decl(model, groups, budget, cw, transcript_h, inset)
         )
 
@@ -82,6 +84,49 @@ defmodule Raxol.Harness.HarnessApp.View do
         AbsoluteLayer.absolute_layer(base, [
           AbsoluteLayer.dialog_overlay(w, h, surface)
         ])
+    end
+  end
+
+  # ── the slash autocomplete popup ─────────────────────────────────────────
+  #
+  # A POPUP, not a dialog (V's contract): rendered on top of the existing
+  # layer via a plain positioned overlay — explicit background, NO global
+  # backdrop, and the cursor stays parked in the composer (focus never
+  # leaves the input; the popup's selection is a separate register).
+  # Anchored so its bottom edge sits directly above the composer row.
+  defp with_slash_popup(base, model, cw, groups, budget, transcript_h, inset) do
+    if Model.slash_active?(model) do
+      {:ok, popup} =
+        CommandAutocomplete.init(
+          id: "harness-slash-popup",
+          query: Model.slash_query(model),
+          width: min(cw, 48)
+        )
+
+      popup = %{popup | selected: model.slash_selected}
+
+      case CommandAutocomplete.height(popup) do
+        0 ->
+          base
+
+        height ->
+          composer_offset =
+            FooterStack.group_offset(groups, @drop_order, budget, :composer) ||
+              0
+
+          composer_row = transcript_h + composer_offset
+          y = max(composer_row - height, 0)
+
+          AbsoluteLayer.absolute_layer(base, [
+            AbsoluteLayer.overlay(
+              inset,
+              y,
+              CommandAutocomplete.render(popup, %{})
+            )
+          ])
+      end
+    else
+      base
     end
   end
 
@@ -183,7 +228,11 @@ defmodule Raxol.Harness.HarnessApp.View do
       divider: [],
       preview: preview_lines(model, cw),
       composer_sep: composer_sep_lines(model),
-      selector: selector_lines(model, cw),
+      # V's canonical footer: the autocomplete popup WINS over the choice
+      # selector while a slash draft is live ("even if there are choices,
+      # but we're focused on the input").
+      selector:
+        if(Model.slash_active?(model), do: [], else: selector_lines(model, cw)),
       composer: composer_lines(model, cw),
       notice: Notice.lines(model.stub_notice, cw)
     ]

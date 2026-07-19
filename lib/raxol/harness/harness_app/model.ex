@@ -46,7 +46,7 @@ defmodule Raxol.Harness.HarnessApp.Model do
   }
 
   alias Raxol.UI.Components.Harness.{Block, Composer, Picker}
-  alias Raxol.UI.Harness.{InputEvent, Keymap}
+  alias Raxol.UI.Harness.{CommandRegistry, InputEvent, Keymap}
 
   # -- geometry constants (mirror surface.ex:1285-1310) --------------------
   @margin_cols 2
@@ -120,6 +120,8 @@ defmodule Raxol.Harness.HarnessApp.Model do
             quit_armed?: false,
             steer_in_flight?: false,
             session_over?: false,
+            # slash-command popup selection (reset on every query change)
+            slash_selected: 0,
             # the sole lane client (pid) or nil in fixture mode
             pump: nil
 
@@ -839,10 +841,17 @@ defmodule Raxol.Harness.HarnessApp.Model do
     }
 
     cond do
-      quit_on_empty?(model, norm) -> quit(model)
-      second_ctrl_c?(model, norm) -> preserve_and_quit(model)
-      ctrl_c?(norm) -> {arm_quit(model), []}
-      true -> model |> disarm_quit() |> route_key(norm, component_event(raw_event))
+      quit_on_empty?(model, norm) ->
+        quit(model)
+
+      second_ctrl_c?(model, norm) ->
+        preserve_and_quit(model)
+
+      ctrl_c?(norm) ->
+        {arm_quit(model), []}
+
+      true ->
+        model |> disarm_quit() |> route_key(norm, component_event(raw_event))
     end
   end
 
@@ -855,7 +864,10 @@ defmodule Raxol.Harness.HarnessApp.Model do
   # anything else passes through untouched and the components' own total
   # fallbacks degrade on it.
   defp component_event(%Raxol.Core.Events.Event{} = event), do: event
-  defp component_event(%{raw: %Raxol.Core.Events.Event{} = original}), do: original
+
+  defp component_event(%{raw: %Raxol.Core.Events.Event{} = original}),
+    do: original
+
   defp component_event(other), do: other
 
   defp quit_on_empty?(model, norm),
@@ -904,10 +916,186 @@ defmodule Raxol.Harness.HarnessApp.Model do
     do: (Composer.value(model.composer) || "") |> String.trim() == ""
 
   defp route_key(model, norm, raw_event) do
-    case Keymap.resolve(norm, keymap_context(model)) do
-      :passthrough -> route_passthrough(model, norm, raw_event)
-      command -> dispatch_command(model, command)
+    if slash_active?(model) do
+      route_slash(model, norm, raw_event)
+    else
+      case Keymap.resolve(norm, keymap_context(model)) do
+        :passthrough -> route_passthrough(model, norm, raw_event)
+        command -> dispatch_command(model, command)
+      end
     end
+  end
+
+  # ── slash commands (the typed inlet into dispatch_command/2) ────────────
+  #
+  # A one-line draft starting with `/` (and no open overlay) is COMMAND
+  # MODE: the autocomplete popup shows the registry matches, Up/Down move
+  # its selection, Tab completes the draft, Enter executes the SELECTION
+  # (never submits the slash text as a prompt), Escape clears the draft.
+  # Everything else keeps editing the draft — the slash routing sits
+  # BEFORE the Keymap on purpose: Tab/Esc/Enter mean completion/clear/
+  # execute here, not steer/interrupt/submit.
+
+  @doc "True when the composer draft is a live slash command (popup showing)."
+  @spec slash_active?(t()) :: boolean()
+  def slash_active?(%{overlay: overlay}) when overlay != nil, do: false
+
+  def slash_active?(model),
+    do:
+      CommandRegistry.parse(Composer.value(model.composer) || "") != :not_slash
+
+  @doc "The name portion of the slash draft (the autocomplete query)."
+  @spec slash_query(t()) :: String.t()
+  def slash_query(model) do
+    case CommandRegistry.parse(Composer.value(model.composer) || "") do
+      {name, _args} -> name
+      :not_slash -> ""
+    end
+  end
+
+  defp route_slash(model, norm, raw_event) do
+    key = InputEvent.key(norm)
+
+    cond do
+      key == :up ->
+        {move_slash(model, -1), []}
+
+      key == :down ->
+        {move_slash(model, 1), []}
+
+      key == :tab ->
+        {complete_slash(model), []}
+
+      key == :enter and plain_mods?(norm) ->
+        execute_slash(model)
+
+      key == :escape ->
+        {clear_slash(model), []}
+
+      true ->
+        forward_slash_edit(model, raw_event)
+    end
+  end
+
+  defp plain_mods?(%{mods: mods}),
+    do: not (mods.shift or mods.alt or mods.ctrl or mods.meta)
+
+  defp plain_mods?(_norm), do: true
+
+  defp move_slash(model, delta) do
+    count = model |> slash_query() |> CommandRegistry.match() |> length()
+
+    selected =
+      if count == 0,
+        do: 0,
+        else: (model.slash_selected + delta) |> max(0) |> min(count - 1)
+
+    %{model | slash_selected: selected}
+  end
+
+  # Enter executes the SELECTED match (typed prefix + popup selection is
+  # the intent); args are whatever followed the typed name. No match →
+  # an honest refusal, and the draft stays for the operator to fix —
+  # slash text is never silently submitted as a prompt.
+  defp execute_slash(model) do
+    {name, args} =
+      case CommandRegistry.parse(Composer.value(model.composer) || "") do
+        {n, a} -> {n, a}
+        :not_slash -> {"", ""}
+      end
+
+    case selected_slash_entry(model) do
+      nil -> {put_lane_notice(model, "» no such command: /#{name}"), []}
+      entry -> run_slash(model, entry, args)
+    end
+  end
+
+  defp selected_slash_entry(model) do
+    entries = model |> slash_query() |> CommandRegistry.match()
+    Enum.at(entries, min(model.slash_selected, max(length(entries) - 1, 0)))
+  end
+
+  defp complete_slash(model) do
+    case selected_slash_entry(model) do
+      nil ->
+        model
+
+      %{name: name, args: args} ->
+        completed = "/" <> name <> if(args == :text, do: " ", else: "")
+
+        %{
+          model
+          | composer: Composer.set_value(model.composer, completed),
+            slash_selected: 0
+        }
+    end
+  end
+
+  defp clear_slash(model) do
+    %{
+      model
+      | composer: Composer.set_value(model.composer, ""),
+        slash_selected: 0
+    }
+  end
+
+  # Draft edits flow to the composer; a changed query resets the popup
+  # selection (the list under the cursor changed — a stale index would
+  # highlight a different command than the operator was pointing at).
+  defp forward_slash_edit(model, raw_event) do
+    before_query = slash_query(model)
+    {composer, _cmds} = Composer.handle_event(raw_event, model.composer, %{})
+    model = %{model | composer: composer}
+
+    if slash_query(model) == before_query,
+      do: {model, []},
+      else: {%{model | slash_selected: 0}, []}
+  end
+
+  # -- slash execution (the registry's :run vocabulary) --------------------
+
+  defp run_slash(model, %{run: {:dispatch, command}}, _args),
+    do: model |> clear_slash() |> dispatch_command(command)
+
+  defp run_slash(model, %{run: :quit}, _args), do: quit(clear_slash(model))
+
+  defp run_slash(model, %{run: :steer}, "") do
+    {put_lane_notice(model, "» /steer needs text — /steer <guidance>"), []}
+  end
+
+  defp run_slash(model, %{run: :steer}, args) do
+    if model.steer_in_flight? do
+      # The dispatch would refuse anyway; refusing BEFORE touching the
+      # composer keeps the typed command intact for a resend.
+      dispatch_command(model, %{type: :steer})
+    else
+      staged = %{model | composer: Composer.set_value(model.composer, args)}
+      {steered, directives} = dispatch_command(staged, %{type: :steer})
+      {clear_slash(steered), directives}
+    end
+  end
+
+  defp run_slash(model, %{run: :help}, _args) do
+    lines = [
+      "slash commands:"
+      | Enum.map(CommandRegistry.all(), fn entry ->
+          "  /" <> String.pad_trailing(entry.name, 12) <> entry.description
+        end)
+    ]
+
+    {model |> clear_slash() |> seal_lines(lines), []}
+  end
+
+  defp run_slash(model, %{run: :session}, _args) do
+    lines = [
+      "session:",
+      "  lane: " <> if(model.pump, do: "live", else: "fixture/stub"),
+      "  turn: #{model.current_turn_id || "—"}",
+      "  events: #{model.revealed}/#{length(model.events)}",
+      "  sealed records: #{length(model.transcript_records)}"
+    ]
+
+    {model |> clear_slash() |> seal_lines(lines), []}
   end
 
   defp keymap_context(model) do
