@@ -399,7 +399,7 @@ defmodule Raxol.UI.Layout.Engine do
   end
 
   # Process basic text/label (old format with :attrs)
-  def process_element(%{type: type, attrs: attrs} = _element, space, acc)
+  def process_element(%{type: type, attrs: attrs} = element, space, acc)
       when type in [:label, :text] do
     # Convert keyword list to map if needed
     attrs_map = convert_attrs_to_map(attrs)
@@ -407,16 +407,24 @@ defmodule Raxol.UI.Layout.Engine do
     # Create a text element at the given position
     style_map = style_to_map(Map.get(attrs_map, :style, %{}))
 
+    # Content may live in the attrs map (the old shape) OR at the element's
+    # top level (hybrid producers: `%{type: :text, content: c, attrs: %{...}}`).
+    # This clause matches on `:attrs` alone, so it MUST consult both — the
+    # top-level fallback is what keeps hybrid text from vanishing into "".
+    text =
+      Map.get(attrs_map, :content) || Map.get(attrs_map, :text) ||
+        Map.get(element, :content) || Map.get(element, :text) || ""
+
     text_element =
       %{
         type: :text,
         x: space.x,
         y: space.y,
-        text: Map.get(attrs_map, :content, Map.get(attrs_map, :text, "")),
-        fg: Map.get(attrs_map, :fg),
-        bg: Map.get(attrs_map, :bg),
+        text: text,
+        fg: Map.get(attrs_map, :fg) || Map.get(element, :fg),
+        bg: Map.get(attrs_map, :bg) || Map.get(element, :bg),
         style: style_map,
-        link: Map.get(attrs_map, :link),
+        link: Map.get(attrs_map, :link) || Map.get(element, :link),
         # Pass original attributes through, let Renderer handle styling
         attrs: Map.put(attrs_map, :original_type, type)
       }

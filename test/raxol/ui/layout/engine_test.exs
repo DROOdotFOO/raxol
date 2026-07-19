@@ -98,6 +98,27 @@ defmodule Raxol.UI.Layout.EngineTest do
       assert text_element.y == 0
     end
 
+    test "hybrid text (:content at top level, style in :attrs) keeps its content" do
+      # The harness widgets (TranscriptView markers/echoes, BlockBody rows)
+      # emit `%{type: :text, content: c, attrs: %{style: [...]}}`. The
+      # `:attrs` clause matches first, so it must fall back to the element's
+      # top-level :content — this pin is what keeps the whole harness
+      # transcript from laying out as empty strings (the blank-screen bug).
+      view = %{
+        type: :column,
+        children: [
+          %{type: :text, content: "hybrid survives", attrs: %{style: [:dim]}}
+        ]
+      }
+
+      result = Engine.apply_layout(view, %{width: 80, height: 24})
+
+      text_element = Enum.find(result, &(&1.type == :text))
+      assert text_element != nil
+      assert text_element.text == "hybrid survives"
+      assert text_element.style == %{dim: true}
+    end
+
     test "applies layout to a view with a panel" do
       view = %{
         type: :view,
