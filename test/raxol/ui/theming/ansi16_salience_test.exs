@@ -5,14 +5,20 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
 
   ## Why this module exists (measured on this codebase)
 
-  Naive nearest-RGB quantization (`Colors.find_closest_basic_color/1`) of
-  the solved salience palette collapses 8 of 11 harness-painted semantic
-  fields to a gray slot on the dark reference ground (success, accent,
-  emphasis, diff add/del, chrome, ...) and commits category lies on what
-  survives: on a light ground, solved `emphasis` lands on ANSI 1 (red) and
-  `foreground` on ANSI 6 (cyan). The dedicated role table below is the fix:
-  each semantic role is PINNED to a hue-preserving ANSI slot, polarity-aware,
-  and nearest-RGB is never consulted for semantic colors.
+  Naive nearest-color quantization (`Colors.find_closest_basic_color/1`,
+  OKLab ΔE as of native-palette-riding.md §6 -- squared-RGB Euclidean
+  before that) of the solved salience palette collapses 8 of 11
+  harness-painted semantic fields to a gray slot on the dark reference
+  ground (success, accent, emphasis, diff add/del, chrome, ...) and
+  commits category lies on what survives: on a light ground solved
+  `emphasis` lands on ANSI 1 (red) and `foreground` on ANSI 6 (cyan) --
+  both `:neutral`-category roles landing on a chromatic slot. (Squared-RGB
+  additionally mis-quantized dark-ground `error` to ANSI 3/yellow; OKLab
+  fixes that specific case, but not the light-ground neutral-role lies,
+  since neither metric has any notion of semantic category.) The
+  dedicated role table below is the fix: each semantic role is PINNED to
+  a hue-preserving ANSI slot, polarity-aware, and nearest-color
+  quantization is never consulted for semantic colors.
 
   ## The audit tripwires
 
@@ -482,7 +488,15 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
 
   # ---- why not nearest-RGB: the measured collapse this module prevents --
 
-  describe "naive nearest-RGB collapse (the failure mode this replaces)" do
+  describe "naive nearest-color collapse (the failure mode this replaces)" do
+    # `Colors.find_closest_basic_color/1` was squared-RGB Euclidean when
+    # this module's rationale was first measured; it is now OKLab ΔE
+    # (native-palette-riding.md §6). OKLab is perceptually accurate, but
+    # it is still metric-only quantization with no notion of semantic
+    # category, so the collapse/lie failure mode this module exists to
+    # prevent is unchanged in kind -- only the exact counts moved (the
+    # thresholds below were remeasured post-swap).
+
     # The harness constants painted outside the seed table:
     # Block/@chrome_fg and DiffViewer's diff palette bases.
     @harness_constants %{
@@ -491,11 +505,12 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
       diff_del: "#FF6762"
     }
 
-    test "nearest-RGB grays out most of the solved palette on dark ground" do
-      # Measured at design time: 8 of 11 fields -> gray on the dark
-      # reference ground (0.2). Asserted with slack (>= 6) so solver
-      # drift doesn't flake the tripwire; if this ever drops below 6 the
-      # naive path got dramatically better and the pin deserves a re-look.
+    test "nearest-color quantization grays out most of the solved palette on dark ground" do
+      # Measured post-OKLab-swap: 8 of 11 fields -> gray on the dark
+      # reference ground (0.2) -- unchanged from the pre-swap squared-RGB
+      # measurement. Asserted with slack (>= 6) so solver drift doesn't
+      # flake the tripwire; if this ever drops below 6 the naive path got
+      # dramatically better and the pin deserves a re-look.
       grays = naive_gray_count(0.2)
 
       assert grays >= 6,
@@ -503,32 +518,34 @@ defmodule Raxol.UI.Theming.Ansi16SalienceTest do
                "on dark ground; expected the collapse this module fixes"
     end
 
-    test "nearest-RGB grays out the light-ground palette too" do
-      # Measured at design time: 6 of 11 fields -> gray on light ground
-      # (0.97), including error and success themselves.
+    test "nearest-color quantization grays out the light-ground palette too" do
+      # Measured post-OKLab-swap: 4 of 11 fields -> gray on light ground
+      # (0.97) (down from 6 under squared-RGB -- OKLab is measurably
+      # better here, but still collapses over a third of the fields).
+      # Asserted with slack (>= 3).
       grays = naive_gray_count(0.97)
-      assert grays >= 5
+      assert grays >= 3
     end
 
-    test "nearest-RGB commits a category lie on the solved emphasis color (light ground)" do
-      # Measured at design time (post H-K sign-flip fix, which corrected
-      # `apparent_lightness`/`solve_lightness` -- see
-      # Raxol.UI.Theming.SalienceTest): solved error on dark ground now
-      # naive-quantizes to a genuine red slot, retiring it as a tripwire
-      # example. Solved emphasis on light ground still commits the
-      # documented category lie: it nearest-RGB-quantizes to ANSI 1 (red),
-      # not any neutral/warm slot -- emphasis's yellow-adjacent seed hue
-      # (h=77) has nothing to do with red.
-      palette = Salience.solve_palette(SalienceTheme.seeds(), ground: 0.97)
-      naive_slot = naive_slot(palette.emphasis)
+    test "nearest-color quantization commits a category lie on the solved foreground color" do
+      # Measured post-OKLab-swap: solved foreground on light ground
+      # (#404a54) nearest-color-quantizes to ANSI 6 (cyan) -- a chromatic
+      # slot -- even though `foreground`'s pinned category is `:neutral`.
+      # (OKLab did fix the lie this test used to demonstrate: solved
+      # `error` on dark ground now correctly lands on a red slot instead
+      # of ANSI 3/yellow. Hue confusion between neighboring palette
+      # entries persists for other roles regardless of metric quality,
+      # because nearest-color quantization has no notion of which roles
+      # are supposed to be neutral.)
+      solved = Salience.solve_palette(SalienceTheme.seeds(), ground: @light_ground)
+      naive_slot = naive_slot(solved.foreground)
 
-      assert naive_slot in [1, 9],
-             "solved emphasis no longer commits the documented category " <>
-               "lie (slot #{naive_slot}) -- re-evaluate whether the pinned " <>
-               "table is still needed"
+      refute naive_slot in @gray_slots,
+             "solved foreground now quantizes to a neutral slot (#{naive_slot}) -- " <>
+               "re-evaluate whether the pinned table is still needed"
 
       # The pinned path never lies:
-      refute Ansi16Salience.slot(:emphasis, :light, @full) in [1, 9]
+      assert Ansi16Salience.slot(:foreground, :light, @full) in @gray_slots
     end
 
     defp naive_gray_count(ground) do

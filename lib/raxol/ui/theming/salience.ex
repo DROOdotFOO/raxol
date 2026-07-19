@@ -272,6 +272,31 @@ defmodule Raxol.UI.Theming.Salience do
     {l, c, h}
   end
 
+  @doc """
+  Converts sRGB components in `0.0..1.0` to `{l, a, b}` OKLab (Cartesian).
+
+  This is the same transform as `rgb_to_oklch/3` up to the polar step --
+  provided separately (rather than deriving Cartesian from polar, or vice
+  versa) so callers that want Euclidean OKLab ΔE, e.g.
+  `Raxol.UI.Theming.Colors`'s nearest-palette-color quantizers, skip a
+  redundant `cos`/`sin` round-trip per comparison.
+  """
+  @spec rgb_to_oklab(number(), number(), number()) ::
+          {float(), float(), float()}
+  def rgb_to_oklab(r, g, b) do
+    [r, g, b] = Enum.map([r, g, b], &srgb_to_linear/1)
+
+    l_ = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+    m_ = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+    s_ = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+
+    l = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+    a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+    b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+
+    {l, a, b}
+  end
+
   defp shrink_chroma(l, c, h) when c > 0 do
     rgb = oklab_to_linear(l, c * :math.cos(h), c * :math.sin(h))
 

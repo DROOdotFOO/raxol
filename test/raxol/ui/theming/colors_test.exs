@@ -154,4 +154,116 @@ defmodule Raxol.UI.Theming.ColorsTest do
       assert Colors.blend(:red, :blue, 0.5) == "#800080"
     end
   end
+
+  # ---------------------------------------------------------------------
+  # OKLab ΔE nearest-color quantization
+  # (docs/proposals/in-flight/native-palette-riding.md §6)
+  #
+  # `find_closest_256_color/1` and `find_closest_basic_color/1` used to be
+  # squared-RGB Euclidean; they're now OKLab Euclidean distance, which is
+  # perceptually uniform. Squared-RGB's classic failure mode is picking a
+  # chromatic palette entry for an achromatic (gray) input because it
+  # doesn't distinguish lightness from hue/chroma.
+  # ---------------------------------------------------------------------
+
+  describe "find_closest_256_color/1 -- OKLab ΔE perceptual quantization" do
+    # The complete set of achromatic (r == g == b) indices in the internal
+    # 256-color palette: the 4 basic-palette grays (0 black, 7 silver, 8
+    # gray, 15 white), the 6 diagonal cells of the 6x6x6 color cube (16,
+    # 59, 102, 145, 188, 231 -- the "16/231" extremes plus their
+    # in-between diagonal steps), and the 24-step grayscale ramp
+    # (232..255). Any *other* index in 16..231 is a chromatic (non-gray)
+    # cube cell.
+    @achromatic_256_indices [0, 7, 8, 15, 16, 59, 102, 145, 188, 231] ++
+                               Enum.to_list(232..255)
+
+    test "pure grays never quantize to a chromatic cube entry (the classic RGB-distance failure)" do
+      for v <- [0, 1, 15, 40, 64, 90, 128, 160, 200, 230, 254, 255] do
+        idx = Colors.find_closest_256_color({v, v, v})
+
+        assert idx in @achromatic_256_indices,
+               "gray (#{v},#{v},#{v}) quantized to chromatic cube index #{idx}"
+      end
+    end
+
+    test "known fixtures: primaries/secondaries and grays land where expected" do
+      assert Colors.find_closest_256_color({0, 0, 0}) == 0
+      assert Colors.find_closest_256_color({255, 255, 255}) == 15
+      assert Colors.find_closest_256_color({255, 0, 0}) == 9
+      assert Colors.find_closest_256_color({0, 255, 0}) == 10
+      assert Colors.find_closest_256_color({0, 0, 255}) == 12
+      assert Colors.find_closest_256_color({128, 128, 128}) == 8
+    end
+
+    test "idempotence: a color that is already a palette entry maps to itself" do
+      # A distinctive 216-cube entry (r=3, g=1, b=4 steps -> index 134),
+      # not on the cube's gray diagonal and not duplicated elsewhere.
+      assert Colors.find_closest_256_color({175, 95, 215}) == 134
+      # A distinctive grayscale-ramp entry (level 108, not on the cube's
+      # gray diagonal, which only lands on levels {0, 95, 135, 175, 215,
+      # 255}).
+      assert Colors.find_closest_256_color({108, 108, 108}) == 242
+    end
+  end
+
+  describe "find_closest_basic_color/1 -- OKLab ΔE perceptual quantization" do
+    test "known fixtures: primaries/secondaries and pure black/white" do
+      assert Colors.find_closest_basic_color({0, 0, 0}) == 0
+      assert Colors.find_closest_basic_color({255, 255, 255}) == 15
+      assert Colors.find_closest_basic_color({255, 0, 0}) == 9
+      assert Colors.find_closest_basic_color({0, 255, 0}) == 10
+    end
+
+    test "idempotence: each of the 16 basic-palette colors maps to itself" do
+      for {idx, rgb} <- [
+            {0, {0, 0, 0}},
+            {1, {128, 0, 0}},
+            {2, {0, 128, 0}},
+            {3, {128, 128, 0}},
+            {4, {0, 0, 128}},
+            {5, {128, 0, 128}},
+            {6, {0, 128, 128}},
+            {7, {192, 192, 192}},
+            {8, {128, 128, 128}},
+            {9, {255, 0, 0}},
+            {10, {0, 255, 0}},
+            {11, {255, 255, 0}},
+            {12, {0, 0, 255}},
+            {13, {255, 0, 255}},
+            {14, {0, 255, 255}},
+            {15, {255, 255, 255}}
+          ] do
+        assert Colors.find_closest_basic_color(rgb) == idx
+      end
+    end
+
+    # KNOWN LIMITATION (surfaced, not fixed -- out of scope for a distance-
+    # metric swap): the ANSI16 neutral ramp has only 4 achromatic slots
+    # (0 black L=0, 8 gray L=0.6, 7 silver L=0.81, 15 white L=1.0 in
+    # OKLab), leaving a wide OKLab-lightness gap between black and gray
+    # that navy blue (slot 4, L=0.27) and maroon (slot 1, L=0.38) sit
+    # inside. Pure OKLab Euclidean ΔE has no notion that grayness should
+    # be preferred over hue proximity, so a real slice of the gray ramp
+    # (measured: sRGB v in 23..97, roughly 30% of 0..255) now quantizes to
+    # a *chromatic* slot instead of any gray slot -- squared-RGB never did
+    # this (verified: 0 misroutes across the full v in 0..255 sweep).
+    # `find_closest_basic_color/1` has no non-test callers today (semantic
+    # 16-color roles go through the pinned `Ansi16Salience` table, never
+    # this quantizer) so nothing live regresses, and `find_closest_256_color/1`
+    # doesn't have this problem (its grayscale ramp is dense enough that no
+    # gray value crosses over -- see the achromatic-cube test above).
+    # Flagged for V: the native-palette-riding.md renderer seam (§7) that
+    # will eventually call this quantizer for the "known-palette 16" rung
+    # should re-evaluate before wiring it live (e.g. a chroma-gate that
+    # restricts candidates to the 4 gray slots when the input is
+    # near-neutral).
+    test "PIN (known limitation): OKLab misroutes a slice of mid-gray onto navy/maroon/teal" do
+      for v <- [30, 50, 90] do
+        idx = Colors.find_closest_basic_color({v, v, v})
+
+        assert idx in [1, 4, 6],
+               "expected the known chromatic misroute for v=#{v}, got slot #{idx}"
+      end
+    end
+  end
 end

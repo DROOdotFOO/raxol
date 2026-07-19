@@ -14,6 +14,7 @@ defmodule Raxol.UI.Theming.Colors do
   """
 
   alias Raxol.Style.Colors.{Color, Utilities}
+  alias Raxol.UI.Theming.Salience
   # alias Raxol.UI.Theming.PaletteRegistry # Removed unused alias
 
   # Format: "#RRGGBB" or "#RRGGBBAA"
@@ -389,26 +390,48 @@ defmodule Raxol.UI.Theming.Colors do
 
   # --- Palette Generation --- #
 
+  # Perceptual nearest-color matching (see docs/proposals/in-flight/
+  # native-palette-riding.md §6): squared-RGB Euclidean over-weights green
+  # and under-weights blue, and (worse) fails to distinguish chroma from
+  # lightness, so pure grays can quantize to a chromatic cube entry instead
+  # of the gray ramp. OKLab Euclidean distance (ΔE) is the perceptually
+  # uniform metric; `Raxol.UI.Theming.Salience` already has the sRGB->OKLab
+  # machinery. Palette OKLab coordinates are precomputed at compile time
+  # (module attributes) since these quantizers run per distinct color per
+  # frame -- only the *input* color is converted to OKLab per call.
+  defp to_oklab({r, g, b}), do: Salience.rgb_to_oklab(r / 255, g / 255, b / 255)
+
   # Note: No @doc as it's private
-  defp color_distance_sq({r1, g1, b1}, {r2, g2, b2}) do
-    dr = r1 - r2
-    dg = g1 - g2
+  defp oklab_distance_sq({l1, a1, b1}, {l2, a2, b2}) do
+    dl = l1 - l2
+    da = a1 - a2
     db = b1 - b2
-    dr * dr + dg * dg + db * db
+    dl * dl + da * da + db * db
   end
+
+  @ansi_basic_colors_oklab (for {index, {r, g, b}} <- @ansi_basic_colors do
+                              {index, Salience.rgb_to_oklab(r / 255, g / 255, b / 255)}
+                            end)
+
+  @ansi_256_colors_oklab (for {index, {r, g, b}} <- @ansi_256_colors do
+                            {index, Salience.rgb_to_oklab(r / 255, g / 255, b / 255)}
+                          end)
 
   @doc """
   Finds the closest ANSI basic color index (0-15) to the given RGB color.
 
   For semantic salience roles (error, accent, success, ...), prefer
-  `Raxol.UI.Theming.Ansi16Salience` instead: nearest-RGB quantization
-  collapses most of the solved semantic palette onto the gray ramp.
+  `Raxol.UI.Theming.Ansi16Salience` instead: nearest-color quantization
+  (even the perceptual OKLab metric used here) still collapses most of the
+  solved semantic palette onto the gray ramp.
   """
   @spec find_closest_basic_color(color_rgb) :: 0..15
   def find_closest_basic_color(rgb) do
-    @ansi_basic_colors
-    |> Enum.min_by(fn {_index, ansi_rgb} ->
-      color_distance_sq(rgb, ansi_rgb)
+    target = to_oklab(rgb)
+
+    @ansi_basic_colors_oklab
+    |> Enum.min_by(fn {_index, ansi_oklab} ->
+      oklab_distance_sq(target, ansi_oklab)
     end)
     |> elem(0)
   end
@@ -418,9 +441,11 @@ defmodule Raxol.UI.Theming.Colors do
   """
   @spec find_closest_256_color(color_rgb) :: 0..255
   def find_closest_256_color(rgb) do
-    @ansi_256_colors
-    |> Enum.min_by(fn {_index, ansi_rgb} ->
-      color_distance_sq(rgb, ansi_rgb)
+    target = to_oklab(rgb)
+
+    @ansi_256_colors_oklab
+    |> Enum.min_by(fn {_index, ansi_oklab} ->
+      oklab_distance_sq(target, ansi_oklab)
     end)
     |> elem(0)
   end
@@ -457,7 +482,6 @@ defmodule Raxol.UI.Theming.Colors do
   def convert_to_palette(value, _palette_name), do: value
 
   # Additional color palettes
-  @xterm_colors @ansi_256_colors
 
   @linux_colors [
     # Linux console colors (16 colors)
@@ -518,6 +542,18 @@ defmodule Raxol.UI.Theming.Colors do
     {14, {97, 214, 214}},
     {15, {242, 242, 242}}
   ]
+
+  @linux_colors_oklab (for {index, {r, g, b}} <- @linux_colors do
+                         {index, Salience.rgb_to_oklab(r / 255, g / 255, b / 255)}
+                       end)
+
+  @mac_colors_oklab (for {index, {r, g, b}} <- @mac_colors do
+                       {index, Salience.rgb_to_oklab(r / 255, g / 255, b / 255)}
+                     end)
+
+  @windows_colors_oklab (for {index, {r, g, b}} <- @windows_colors do
+                            {index, Salience.rgb_to_oklab(r / 255, g / 255, b / 255)}
+                          end)
 
   # Custom palette registry
   # @custom_palettes %{}  # Removed unused module attribute
@@ -596,39 +632,52 @@ defmodule Raxol.UI.Theming.Colors do
   defp valid_palette_color?(_), do: false
 
   defp find_closest_palette_color(rgb, palette_name) do
+    target = to_oklab(rgb)
+
     palette_name
-    |> resolve_palette()
-    |> find_closest_in_palette(rgb)
+    |> resolve_palette_oklab()
+    |> find_closest_in_palette(target)
   end
 
-  defp resolve_palette(:xterm256), do: @ansi_256_colors
-  defp resolve_palette(:basic), do: @ansi_basic_colors
-  defp resolve_palette(:linux), do: @linux_colors
-  defp resolve_palette(:mac), do: @mac_colors
-  defp resolve_palette(:windows), do: @windows_colors
-  defp resolve_palette(:xterm), do: @xterm_colors
+  # Named/custom palettes are also nearest-color quantization (see §6
+  # above) so they share the OKLab metric. The four fixed palettes have
+  # their OKLab coordinates precomputed at compile time same as the
+  # 16/256 rungs; a registered custom palette is dynamic (runtime ETS
+  # lookup) so it's converted per call -- custom palettes are a cold path
+  # relative to the built-in rungs.
+  defp resolve_palette_oklab(:xterm256), do: @ansi_256_colors_oklab
+  defp resolve_palette_oklab(:basic), do: @ansi_basic_colors_oklab
+  defp resolve_palette_oklab(:linux), do: @linux_colors_oklab
+  defp resolve_palette_oklab(:mac), do: @mac_colors_oklab
+  defp resolve_palette_oklab(:windows), do: @windows_colors_oklab
+  defp resolve_palette_oklab(:xterm), do: @ansi_256_colors_oklab
 
-  defp resolve_palette(custom) when is_atom(custom) do
+  defp resolve_palette_oklab(custom) when is_atom(custom) do
     case Raxol.UI.Theming.PaletteRegistry.get(custom) do
-      {:ok, colors} -> colors
-      {:error, _} -> @ansi_256_colors
+      {:ok, colors} ->
+        Enum.map(colors, fn {index, rgb} -> {index, to_oklab(rgb)} end)
+
+      {:error, _} ->
+        @ansi_256_colors_oklab
     end
   end
 
-  defp resolve_palette(_), do: @ansi_256_colors
+  defp resolve_palette_oklab(_), do: @ansi_256_colors_oklab
 
-  defp find_closest_in_palette(palette, rgb) do
-    palette
-    |> Enum.min_by(fn {_index, palette_rgb} ->
-      color_distance_sq(rgb, palette_rgb)
+  defp find_closest_in_palette(palette_oklab, target_oklab) do
+    palette_oklab
+    |> Enum.min_by(fn {_index, palette_color_oklab} ->
+      oklab_distance_sq(target_oklab, palette_color_oklab)
     end)
     |> elem(0)
   end
 
   # --- Distance Calculation --- #
-
-  # Removed unused distance/2 function
-  # defp distance(c1, c2), do: :math.sqrt(color_distance_sq(c1, c2))
+  #
+  # `oklab_distance_sq/2` (defined above, next to the OKLab palette
+  # precomputation) is the sole distance function now; the old squared-RGB
+  # Euclidean `color_distance_sq/2` was removed in favor of OKLab ΔE (see
+  # docs/proposals/in-flight/native-palette-riding.md §6).
 
   @doc """
   Checks if two colors are accessible according to WCAG contrast requirements.
