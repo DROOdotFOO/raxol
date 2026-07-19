@@ -39,8 +39,8 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
       lines = sealed_lines(@v_input)
 
       assert lines == [
-               "  * read — file contents",
-               "  * write — create or overwrite files",
+               "  · read — file contents",
+               "  · write — create or overwrite files",
                ""
              ]
     end
@@ -62,7 +62,7 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
       # One physical line: bullet prefix, then the code span styled
       # inline (SGR fg for @code_style's :yellow), then the plain tail --
       # never three separate rows.
-      assert first =~ "  * "
+      assert first =~ "  · "
       assert first =~ "read"
       assert first =~ " — file contents"
       assert second =~ "write"
@@ -73,8 +73,8 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
              "code span not styled inline: #{inspect(first)}"
 
       # Plain-content geometry is identical to the plain path.
-      assert strip_sgr(first) == "  * read — file contents"
-      assert strip_sgr(second) == "  * write — create or overwrite files"
+      assert strip_sgr(first) == "  · read — file contents"
+      assert strip_sgr(second) == "  · write — create or overwrite files"
     end
   end
 
@@ -92,7 +92,7 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
     test "bold/italic/code mixes stay on one row" do
       lines = sealed_lines("* **bold** then _soft_ then `code` end\n")
 
-      assert lines == ["  * bold then soft then code end", ""]
+      assert lines == ["  · bold then soft then code end", ""]
     end
 
     test "nested list items are never split mid-item" do
@@ -122,7 +122,7 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
       [first | rest] = lines
       continuations = rest |> Enum.reject(&(&1 == ""))
 
-      assert first =~ ~r/^  \* cmd/
+      assert first =~ ~r/^  · cmd/
       assert continuations != [], "expected the long item to wrap"
 
       # Hang indent: every continuation line is indented to the text
@@ -166,8 +166,8 @@ defmodule Raxol.Harness.ViewTextMarkdownListTest do
       lines = ViewText.lines(final_view, @width, :plain)
 
       assert lines == [
-               "  * read — file contents",
-               "  * write — create or overwrite files",
+               "  · read — file contents",
+               "  · write — create or overwrite files",
                ""
              ]
     end

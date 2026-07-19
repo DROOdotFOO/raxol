@@ -1,33 +1,178 @@
 defmodule Raxol.Playground.Demos.MarkdownDemo do
   @moduledoc """
-  Playground demo: markdown rendering with raw toggle.
+  Playground demo: full Markdown feature surface via
+  `Raxol.UI.Components.MarkdownRenderer`.
 
-  Rendered mode delegates to `MarkdownRenderer` via `DemoHelpers.markdown/2`.
-  Overflowing lines fall back to greedy word-wrap with styling dropped
-  (span-aware wrapping is not implemented); raw mode shows literal source.
+  Rendered mode uses EarmarkParser (when loaded) + CodeBlock/SyntaxHighlighter
+  for fenced code. Raw mode shows the literal source. Cycle documents with
+  [n]/[p]; toggle raw with [r].
   """
   use Raxol.Core.Runtime.Application
 
   import Raxol.Playground.DemoHelpers, only: [effective_width: 2, markdown: 2]
 
-  @default_content_box_width 45
+  @default_content_box_width 56
   @border_and_padding_overhead 4
 
+  # One document per major feature cluster so the catalog can page through
+  # the full renderer surface without a single wall of text.
   @documents [
     %{
-      title: "Getting Started",
-      content:
-        "# Welcome\n\nThis is a *simple* demo.\n\n- Item one\n- Item two\n\nUse `mix run` to start."
+      title: "Feature catalog",
+      content: """
+      # Markdown feature catalog
+
+      Full surface of **MarkdownRenderer** — cycle docs with n / p.
+
+      | Feature | Status |
+      | --- | --- |
+      | Headings h1-h6 | yes |
+      | Bold / italic | yes |
+      | Inline code spans | yes |
+      | Fenced code + highlight | yes (CodeBlock) |
+      | Lists (ul/ol) | yes |
+      | Blockquotes | yes |
+      | Links | yes |
+      | Horizontal rules | yes |
+      | GFM tables | yes |
+      """
     },
     %{
-      title: "Features",
-      content:
-        "# Features\n\n- *Bold* rendering\n- `Code` highlighting\n- Simple lists\n\nSee `README.md` for details."
+      title: "Headings & emphasis",
+      content: """
+      # Heading 1
+      ## Heading 2
+      ### Heading 3
+      #### Heading 4
+
+      Paragraph with **bold**, *italic*, and ***both***.
+
+      Inline code: `Map.get/3` and `Enum.map/2`.
+
+      ---
+
+      A horizontal rule sits above this line.
+      """
     },
     %{
-      title: "API Reference",
-      content:
-        "# API\n\nCall `init/1` to start.\n\n- Returns *ok* tuple\n- Accepts a *context* map\n\n# Examples\n\nSee the `examples/` folder."
+      title: "Lists & quotes",
+      content: """
+      ## Unordered
+
+      - Alpha
+      - *Bravo* with emphasis
+      - Charlie with `inline`
+
+      ## Ordered
+
+      1. First step
+      2. Second step
+      3. Third step
+
+      ## Blockquote
+
+      > Quoted prose can carry **bold** and `code`.
+      > Second quoted line.
+      """
+    },
+    %{
+      title: "Links & table",
+      content: """
+      Read the [Raxol docs](https://raxol.io) and the [Hex package](https://hex.pm/packages/raxol).
+
+      | Framework | Language | Stars |
+      | --- | --- | ---: |
+      | Raxol | Elixir | 500 |
+      | Bubble Tea | Go | 39k |
+      | Ratatui | Rust | 19k |
+      """
+    },
+    %{
+      title: "Fenced code (highlighted)",
+      content: """
+      Elixir fence — token colors from `SyntaxHighlighter` / CodeBlock:
+
+      ```elixir
+      defmodule Greeter do
+        @moduledoc "Hello"
+
+        def greet(name) when is_binary(name) do
+          "Hello, \#{name}!"
+        end
+
+        def greet(_), do: :error
+      end
+      ```
+
+      Untagged fence (plain, still indented):
+
+      ```
+      plain line one
+      plain line two
+      ```
+
+      Tilde fence with language tag:
+
+      ~~~elixir
+      IO.puts(:ok)
+      ~~~
+      """
+    },
+    # Characters whose byte length, grapheme count and display width are
+    # three different numbers, in every placement at once. Two renderer
+    # bugs have already hidden in exactly this gap, so this doc is the
+    # eyeball counterpart to the unit tests: if a column is misaligned, a
+    # span is mis-coloured, or a line overflows the frame, it is visible
+    # here immediately.
+    %{
+      title: "Unicode & wide characters",
+      content: """
+      ## 日本語の見出し — CJK heading
+
+      Wide 日本語 runs, an em dash —, a ZWJ family 👨‍👩‍👧‍👦, a flag 🇯🇵 and a combining é all sit inline with **太字 bold**, *斜体 italic*, `コード code` and [リンク link](https://raxol.io) on one source line long enough to wrap several times.
+
+      日本語だけの段落は空白がないため、折り返しは表意文字の間で起こります。行はきちんと詰まっていなければならず、途中で文字が壊れてはいけません。
+
+      - 項目：全角文字を含む長い箇条書きの行で、折り返した続きが箇条書きの下に揃うことを確認します
+      - Emoji bullet 🎉 with `インライン` code
+      - Combining marks: éàü and ZWJ 👩‍💻 mid-sentence
+
+      > 引用文に **太字** と `コード` が入ります。全角の引用が折り返しても、行頭の罫線は揃ったままでなければなりません。
+
+      | 名前 | Width | 説明 |
+      | --- | ---: | :---: |
+      | 日本語 | 6 | 全角文字 |
+      | emoji 🎉 | 2 | ZWJ 👨‍👩‍👧‍👦 |
+      | ascii | 5 | narrow |
+
+      ```elixir
+      # 全角コメント — must survive byte-for-byte 👨‍👩‍👧‍👦
+      def greet(名前), do: "こんにちは、\#{名前}！"
+      ```
+      """
+    },
+    %{
+      title: "Mixed document",
+      content: """
+      # Getting started
+
+      Install with `mix deps.get`, then:
+
+      1. Write a TEA app
+      2. Call `Raxol.start_link/2`
+      3. Ship over SSH or MCP
+
+      > Prefer **structured** styles — never embed raw ANSI in View DSL strings.
+
+      ```elixir
+      def update({:key, k}, model), do: {model, []}
+      def view(model), do: text("hi")
+      ```
+
+      ---
+
+      See [examples/](https://github.com/raxol) for more.
+      """
     }
   ]
 
@@ -73,12 +218,17 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
 
     column style: %{gap: 1} do
       [
-        text("Markdown Demo", style: [:bold]),
-        divider(),
+        text("Markdown — Raxol.UI.Components.MarkdownRenderer", style: [:bold]),
+        text(
+          " fenced code → CodeBlock/SyntaxHighlighter · [r] raw source",
+          style: [:dim]
+        ),
+        text(""),
         row style: %{gap: 2} do
           [
             text(doc.title, style: [:bold]),
-            text("[#{mode_label}]", style: [:dim])
+            text("[#{mode_label}]", style: [:dim]),
+            text("#{model.current + 1}/#{length(@documents)}", style: [:dim])
           ]
         end,
         box style: %{
@@ -90,8 +240,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
             body
           end
         end,
-        divider(),
-        text("#{model.current + 1}/#{length(@documents)}"),
+        text(""),
         text("[n] next  [p] previous  [r] toggle raw/rendered", style: [:dim])
       ]
     end
