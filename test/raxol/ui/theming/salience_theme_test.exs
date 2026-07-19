@@ -28,9 +28,9 @@ defmodule Raxol.UI.Theming.SalienceThemeTest do
 
   test "reference ground reproduces darcula-family values" do
     theme = SalienceTheme.build(ground: 0.2)
-    assert hex(theme.colors.warning) == "#b96922"
-    assert hex(theme.colors.error) == "#ad3132"
-    assert hex(theme.colors.emphasis) == "#f5bd63"
+    assert hex(theme.colors.warning) == "#bb6b25"
+    assert hex(theme.colors.error) == "#af3434"
+    assert hex(theme.colors.emphasis) == "#f8bf66"
     assert hex(theme.colors.success) == "#728e60"
   end
 

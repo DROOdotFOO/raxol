@@ -1,6 +1,6 @@
 defmodule Raxol.UI.Theming.Salience do
   @moduledoc """
-  Salience-tier color solver: OKLCH colors leveled through a two-lobe
+  Salience-tier color solver: OKLCH colors leveled through a
   Helmholtz-Kohlrausch apparent-lightness model.
 
   Instead of hand-picking lightness per color, a palette is expressed as
@@ -10,7 +10,9 @@ defmodule Raxol.UI.Theming.Salience do
   brighter than their nominal OKLCH `L` suggests, since OKLab does not model
   H-K) so every color on one tier appears equally bright to the eye.
 
-  The two-lobe formulation:
+  The hue dependence of the effect (`hue_factor/1`) is a 3-harmonic Fourier
+  fit of the Nayatani (1997) VAC data — weakest near yellow, strongest near
+  purple — combined with chroma via:
 
       apparent_L = L + 0.14 * C * hue_factor(h)
 
@@ -63,18 +65,23 @@ defmodule Raxol.UI.Theming.Salience do
   def tier_delta(tier), do: Map.fetch!(@tier_deltas, tier)
 
   @doc """
-  Two-lobe H-K hue factor: warm cosine fundamental plus a Gaussian bump
-  around blue (h = 255), clamped to [0.3, 1.2].
+  H-K hue factor: a 3-harmonic Fourier fit of the Nayatani (1997)
+  VAC (visually-adjusted-contrast) hue dependence data (source: dappsnap
+  `delta-css` `foundation.css` `--🧮hue-factor`). `h` is in degrees;
+  intrinsically bounded to roughly `[0.45, 1.11]` across the hue circle
+  (minimum near yellow at h≈110, maximum near purple at h≈310), so no
+  clamp is applied.
   """
   @spec hue_factor(number()) :: float()
   def hue_factor(h) do
-    hn = h / 360
-    warm = :math.cos((hn - 30 / 360) * 2 * :math.pi()) * 0.45 + 0.75
-    blue = 0.25 * :math.exp(-:math.pow(abs(h - 255) / 35, 2))
-    min(1.2, max(0.3, warm + blue))
+    hr = h * :math.pi() / 180
+
+    0.77911 + 0.08091 * :math.cos(hr) - 0.13593 * :math.sin(hr) +
+      0.06202 * :math.cos(2 * hr) - 0.00365 * :math.sin(2 * hr) -
+      0.01415 * :math.cos(3 * hr) + 0.03377 * :math.sin(3 * hr)
   end
 
-  @doc "Apparent lightness of an OKLCH color under the two-lobe H-K model."
+  @doc "Apparent lightness of an OKLCH color under the H-K model."
   @spec apparent_lightness(number(), number(), number()) :: float()
   def apparent_lightness(l, c, h), do: l + @hk_k * c * hue_factor(h)
 
@@ -100,7 +107,7 @@ defmodule Raxol.UI.Theming.Salience do
   ## Examples
 
       iex> Raxol.UI.Theming.Salience.solve(:differentiate, 0.13, 57)
-      "#b96922"
+      "#bb6b25"
 
       iex> Raxol.UI.Theming.Salience.solve(:baseline, 0.0, 250)
       "#b4b4b4"

@@ -30,15 +30,15 @@ defmodule Raxol.UI.CellDimTest do
   describe "dark ground (default, no detection)" do
     test "pins the default-ground dim values" do
       assert CellDim.dim_color(:white) == {106, 106, 106}
-      assert CellDim.dim_color(:cyan) == {1, 100, 100}
+      assert CellDim.dim_color(:cyan) == {0, 99, 99}
       # unlisted atom resolves to mid-gray before dimming, not a crash
       assert CellDim.dim_color(:some_theme_color) == {66, 66, 66}
-      assert CellDim.dim_color({200, 100, 50}) == {106, 48, 18}
+      assert CellDim.dim_color({200, 100, 50}) == {106, 48, 19}
       assert CellDim.dim_color({0, 0, 0}) == {4, 4, 4}
       assert CellDim.dim_color({255, 255, 255}) == {116, 116, 116}
       assert CellDim.dim_color(nil) == nil
       assert CellDim.dim_color(42) == 42
-      assert CellDim.dim_color("#ff0000") == "#830000"
+      assert CellDim.dim_color("#ff0000") == "#840201"
 
       # :black is unpainted-bg sentinel -- pass through like nil, see @moduledoc.
       assert CellDim.dim_color(:black) == :black
@@ -149,8 +149,8 @@ defmodule Raxol.UI.CellDimTest do
       dimmed = CellDim.dim_cells(cells)
 
       assert [
-               {0, 0, "a", {106, 106, 106}, {106, 48, 18}, [:bold]},
-               {1, 0, "b", {106, 106, 106}, {106, 48, 18}, []},
+               {0, 0, "a", {106, 106, 106}, {106, 48, 19}, [:bold]},
+               {1, 0, "b", {106, 106, 106}, {106, 48, 19}, []},
                {2, 0, "c", nil, nil, []}
              ] = dimmed
     end
@@ -162,7 +162,7 @@ defmodule Raxol.UI.CellDimTest do
     test "bg :black sentinel passes through unchanged alongside a dimmed fg" do
       cells = [{0, 0, "a", :cyan, :black, []}]
 
-      assert [{0, 0, "a", {1, 100, 100}, :black, []}] =
+      assert [{0, 0, "a", {0, 99, 99}, :black, []}] =
                CellDim.dim_cells(cells)
     end
 

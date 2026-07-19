@@ -112,13 +112,13 @@ defmodule Raxol.CrossTerminal.ModalOverlayTest do
   describe "b. dim mechanics: behind-cells dim, dialog cells stay full color" do
     test "CellDim.dim_color maps atoms through H-K apparent-lightness compression toward ground" do
       assert CellDim.dim_color(:white) == {106, 106, 106}
-      assert CellDim.dim_color(:cyan) == {1, 100, 100}
+      assert CellDim.dim_color(:cyan) == {0, 99, 99}
       # unlisted atom resolves to mid-gray before dimming, not a crash
       assert CellDim.dim_color(:some_theme_color) == {66, 66, 66}
     end
 
     test "CellDim.dim_color pulls {r, g, b} tuples' apparent lightness toward ground and clamps" do
-      assert CellDim.dim_color({200, 100, 50}) == {106, 48, 18}
+      assert CellDim.dim_color({200, 100, 50}) == {106, 48, 19}
       assert CellDim.dim_color({0, 0, 0}) == {4, 4, 4}
       assert CellDim.dim_color({255, 255, 255}) == {116, 116, 116}
     end
@@ -126,7 +126,7 @@ defmodule Raxol.CrossTerminal.ModalOverlayTest do
     test "CellDim.dim_color leaves nil and integer/256-color values untouched; hex strings now dim too" do
       assert CellDim.dim_color(nil) == nil
       assert CellDim.dim_color(42) == 42
-      assert CellDim.dim_color("#ff0000") == "#830000"
+      assert CellDim.dim_color("#ff0000") == "#840201"
     end
 
     test "CellDim.dim_color leaves the bg :black default/unpainted sentinel untouched" do
@@ -135,7 +135,7 @@ defmodule Raxol.CrossTerminal.ModalOverlayTest do
 
     test "CellDim.dim_cells only touches fg/bg, not char/coords/attrs" do
       assert CellDim.dim_cells([{3, 4, "X", :white, {200, 100, 50}, [:bold]}]) ==
-               [{3, 4, "X", {106, 106, 106}, {106, 48, 18}, [:bold]}]
+               [{3, 4, "X", {106, 106, 106}, {106, 48, 19}, [:bold]}]
     end
 
     test "a background cell's painted colors are dimmed; the dialog's are not" do
@@ -151,7 +151,7 @@ defmodule Raxol.CrossTerminal.ModalOverlayTest do
         end)
 
       # background painted fg :white / bg {200,100,50} -> dimmed
-      assert by_char["F"] == {{106, 106, 106}, {106, 48, 18}}
+      assert by_char["F"] == {{106, 106, 106}, {106, 48, 19}}
       # dialog painted fg :cyan / bg {10,200,10} -- full color, untouched
       assert by_char["Z"] == {:cyan, {10, 200, 10}}
     end

@@ -5,22 +5,22 @@ defmodule Raxol.UI.Theming.SalienceTest do
 
   # Reference fixtures (compensated Darcula bake). Must reproduce byte-exact.
   @darcula_baked [
-    {:differentiate, 0.13, 57, "#b96922"},
-    {:anchor, 0.125, 77, "#f5bd63"},
+    {:differentiate, 0.13, 57, "#bb6b25"},
+    {:anchor, 0.125, 77, "#f8bf66"},
     {:baseline, 0.022, 250, "#a9b5c1"},
     {:differentiate, 0.075, 134, "#728e60"},
-    {:differentiate, 0.074, 242, "#5b8aad"},
+    {:differentiate, 0.074, 242, "#5b89ad"},
     {:differentiate, 0.086, 314, "#9673a7"},
     {:recede, 0.0, 140, "#717171"},
     {:recede, 0.09, 140, "#527c49"},
-    {:differentiate, 0.05, 57, "#9b7d67"},
+    {:differentiate, 0.05, 57, "#9c7e68"},
     {:recede, 0.0, 250, "#717171"},
-    {:recede, 0.04, 57, "#826a59"},
-    {:differentiate, 0.1, 57, "#ae7142"},
-    {:anchor, 0.14, 314, "#e5b3fe"},
-    {:recede, 0.03, 57, "#7e6c5f"},
+    {:recede, 0.04, 57, "#836b5a"},
+    {:differentiate, 0.1, 57, "#b07344"},
+    {:anchor, 0.14, 314, "#e5b2ff"},
+    {:recede, 0.03, 57, "#7f6d60"},
     {:baseline, 0.0, 250, "#b4b4b4"},
-    {:alarm, 0.16, 25, "#ad3132"}
+    {:alarm, 0.16, 25, "#af3434"}
   ]
 
   describe "darcula reference bake" do
@@ -33,26 +33,26 @@ defmodule Raxol.UI.Theming.SalienceTest do
   end
 
   describe "hue_factor/1" do
-    test "clamps to [0.3, 1.2]" do
+    test "stays within the fit's literature-derived bounds" do
       for h <- 0..359 do
         f = Salience.hue_factor(h)
-        assert f >= 0.3 and f <= 1.2
+        assert f >= 0.4 and f <= 1.15
       end
     end
 
-    test "blue bump peaks near h=255" do
-      assert Salience.hue_factor(255) > Salience.hue_factor(200)
+    test "yellow (h=110) is the weakest region, rising toward blue" do
+      # Nayatani (1997) VAC: the H-K effect is weakest near yellow and
+      # strengthens moving toward blue/purple.
+      assert Salience.hue_factor(110) < Salience.hue_factor(140)
+      assert Salience.hue_factor(140) < Salience.hue_factor(255)
+    end
 
-      # The single-cycle warm cosine (peak at h=30, trough at h=210) rises
-      # monotonically all the way from h=210 back to h=30/390, so
-      # hue_factor keeps climbing past h=255 toward magenta/red -- the
-      # Gaussian bump can't (and isn't meant to) beat that far-field trend.
-      # What it *does* do is add a local convex bump around h=255: the
-      # value there exceeds the straight-line interpolation between two
-      # neighbors symmetric around the bump's width (h=220, h=290).
-      low = Salience.hue_factor(220)
-      high = Salience.hue_factor(290)
-      assert Salience.hue_factor(255) > (low + high) / 2
+    test "purple (h=310) is at least as strong as blue (h=255)" do
+      assert Salience.hue_factor(310) >= Salience.hue_factor(255)
+    end
+
+    test "red (h=25) is stronger than green (h=140)" do
+      assert Salience.hue_factor(25) > Salience.hue_factor(140)
     end
   end
 
@@ -139,8 +139,8 @@ defmodule Raxol.UI.Theming.SalienceTest do
       ]
 
       assert Salience.solve_palette(seeds) == %{
-               keyword: "#b96922",
-               error: "#ad3132"
+               keyword: "#bb6b25",
+               error: "#af3434"
              }
     end
   end
