@@ -159,5 +159,30 @@ defmodule Raxol.Property.BoxBorderStyleTest do
         end
       end
     end
+
+    # region-prominence-propagation.md §3.1/§9 Phase 3: a border with no
+    # explicit color anywhere in the chain (no :border_fg/:fg/:foreground)
+    # must resolve to nil -- terminal default -- not a forced :white. See
+    # `Raxol.UI.BorderRenderer.resolve_colors/1`.
+    test "render_horizontal_line with no color attrs emits nil fg, not :white" do
+      style = %{}
+      cells = BorderRenderer.render_horizontal_line(0, 0, 10, "-", style, :default)
+
+      for {_x, _y, _char, cell_fg, _bg, _attrs} <- cells do
+        assert cell_fg == nil,
+               "attr-less border should resolve to nil (terminal default), got #{inspect(cell_fg)}"
+      end
+    end
+
+    test "render_box_borders with no color attrs emits nil fg, not :white" do
+      style = %{}
+      chars = BorderRenderer.get_border_chars(:single)
+      cells = BorderRenderer.render_box_borders(0, 0, 10, 5, chars, style)
+
+      for {_x, _y, _char, cell_fg, _bg, _attrs} <- cells do
+        assert cell_fg == nil,
+               "attr-less border should resolve to nil (terminal default), got #{inspect(cell_fg)}"
+      end
+    end
   end
 end

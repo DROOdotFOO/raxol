@@ -359,9 +359,21 @@ defmodule Raxol.UI.BorderRenderer do
   end
 
   defp resolve_colors(style) do
+    # nil, not :white -- region-prominence-propagation.md §3.1/§9 Phase 3.
+    # A border with no explicit color (no :border_fg/:fg/:foreground anywhere
+    # in the chain) resolves to nil, not a forced default: borders are chrome
+    # and must be at most as prominent as default text. By the time `style`
+    # reaches here it normally already carries an explicit `:fg`/`:foreground`
+    # key (even if its value is `nil` or a baseline `ColorIntent`), because
+    # `Raxol.UI.StyleProcessor.promote_colors/2` is the actual producer (case
+    # a stays nil for an unpainted bg, case b emits the baseline-tier
+    # ColorIntent when the element has a painted bg) -- so this default is a
+    # defensive fallback for style maps built outside that pipeline (e.g.
+    # tests calling `ElementRenderer.render_box/6` directly), not the
+    # primary site.
     fg =
       Map.get(style, :border_fg) || Map.get(style, :fg) ||
-        Map.get(style, :foreground, :white)
+        Map.get(style, :foreground)
 
     # nil, not :black -- an unpainted background must stay unpainted. The
     # renderer emits no SGR for a nil background, so the cell keeps the

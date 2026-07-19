@@ -29,6 +29,9 @@ defmodule Raxol.UI.BoxInteriorFillTest do
   defp bgs(cells),
     do: cells |> Enum.map(fn {_, _, _, _, bg, _} -> bg end) |> Enum.uniq()
 
+  defp fgs(cells),
+    do: cells |> Enum.map(fn {_, _, _, fg, _, _} -> fg end) |> Enum.uniq()
+
   test "a background fills the box, border included" do
     cells = box(%{border: :single, bg: :blue})
 
@@ -119,5 +122,30 @@ defmodule Raxol.UI.BoxInteriorFillTest do
              char == " " and bg == :blue
            end),
            "a box with no interior must not emit fill cells"
+  end
+
+  describe "border fg -- attr-less resolves to nil, not a forced :white" do
+    # region-prominence-propagation.md §3.1/§9 Phase 3: a border with no
+    # explicit color is chrome and must be at most as prominent as default
+    # text -- nil fg (terminal default shows through), never a forced
+    # :white. See `Raxol.UI.BorderRenderer.resolve_colors/1`.
+
+    test "an attr-less border has nil fg end-to-end" do
+      cells = box(%{border: :single})
+
+      assert fgs(ring(cells)) == [nil]
+    end
+
+    test "an explicitly-colored border is unchanged" do
+      cells = box(%{border: :single, fg: :green})
+
+      assert fgs(ring(cells)) == [:green]
+    end
+
+    test "an explicit border_fg wins over fg, unchanged" do
+      cells = box(%{border: :single, fg: :green, border_fg: :magenta})
+
+      assert fgs(ring(cells)) == [:magenta]
+    end
   end
 end
