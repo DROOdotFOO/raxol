@@ -5,7 +5,8 @@ defmodule Raxol.UI.Components.Harness.Notice do
   notice -- a refusal ("no block focused"), a degradation warning, a
   charged-minimum absence report -- as footer line elements.
 
-  This is the byte-for-byte re-hosting of `Raxol.Harness.Surface`'s
+  This is the byte-for-byte re-hosting of the retired
+  `Raxol.Harness.Surface`'s
   `notice_line/2`: `nil` renders nothing; a single string renders one
   physical row; a LIST of strings renders one row each, so a long first
   notice can never truncate away a later one (the degraded-resume warning

@@ -16,7 +16,7 @@ defmodule Raxol.UI.Components.Harness.StatusStrip do
   interaction (the strip is a read-only instrument -- the honest absence of
   an MCP action). The host owns the `status` map and the tick counter.
 
-  ## The visibility gate (ported from `Raxol.Harness.Surface`)
+  ## The visibility gate (ported from the retired `Raxol.Harness.Surface`)
 
   `visible?/1` and `live_turn?/1` are the byte-for-byte port of the
   surface's `strip_visible?/1` + `live_turn?/1`. The strip is a *grown
@@ -123,7 +123,8 @@ defmodule Raxol.UI.Components.Harness.StatusStrip do
 
   @doc """
   Whether the strip renders at all for `status` -- the grown-instrument
-  gate. Ported from `Raxol.Harness.Surface.strip_visible?/1`: an alerting
+  gate. Ported from the retired `Raxol.Harness.Surface.strip_visible?/1`:
+  an alerting
   stall, an approval wait, a live turn, or an animating activity. Public so
   a host can decide whether to allocate the strip's footer group.
   """

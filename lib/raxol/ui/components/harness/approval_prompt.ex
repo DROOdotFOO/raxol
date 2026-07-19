@@ -42,8 +42,9 @@ defmodule Raxol.UI.Components.Harness.ApprovalPrompt do
   Bubbler discards returned component state), so the decision rides the
   command channel and the owner's `update/2` applies it — resolving the
   hint against the block's real options and refusing honestly when it
-  cannot (`Raxol.Harness.Surface.resolve_approval_answer/2` on the live
-  path, the demo's update in the playground). Arrows and Enter are
+  cannot (the retired `Raxol.Harness.Surface.resolve_approval_answer/2`
+  on the old live path; `HarnessApp.Model` now, and the demo's update in
+  the playground). Arrows and Enter are
   no-ops here: the block form has no selection cursor. Frontier holds,
   `needs_input`, and the answer-key guard are Surface/model-level and
   deliberately NOT this component's business — it renders and emits.

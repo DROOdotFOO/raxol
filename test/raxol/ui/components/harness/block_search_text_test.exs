@@ -2,7 +2,7 @@ defmodule Raxol.UI.Components.Harness.BlockSearchTextTest do
   @moduledoc """
   `Raxol.UI.Components.Harness.Block.search_text/1` -- the per-block
   search corpus the transcript search picker
-  (`Raxol.Harness.Surface.open_search_picker/1`) filters over. Every
+  (the retired `Raxol.Harness.Surface.open_search_picker/1`) filters over. Every
   doc guarantee `search_text/1` states maps to a named test here: the
   `"<kind> · <summary>"` prefix, the per-kind body extension, that the
   body carries content `summary/1` never shows (full text vs.

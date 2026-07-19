@@ -1,7 +1,7 @@
 defmodule Raxol.Harness.SessionPump do
   @moduledoc """
   The byte-free IO boundary of the TEA harness — unit A0's A-side:
-  `Raxol.Harness.LiveSessionDriver` reshaped against the FROZEN
+  the retired `Raxol.Harness.LiveSessionDriver` reshaped against the FROZEN
   `Raxol.Harness.PumpContract`
   (`docs/proposals/in-flight/harness-tea-migration.md` §3). The pump is
   to the harness what `Raxol.Terminal.Driver` is to a normal app — the
@@ -11,8 +11,8 @@ defmodule Raxol.Harness.SessionPump do
 
   **Status: wired by U6.** `Raxol.Harness.Live` assembles the live stack:
   this pump (with `:runtime_boot`) + `Lifecycle(environment: :harness)`
-  running `HarnessApp`. `Raxol.Harness.LiveSessionDriver` stays untouched
-  and drives the OLD live demo until the U6-d swap. Without
+  running `HarnessApp`. (The U6-d swap has since retired
+  `Raxol.Harness.LiveSessionDriver`.) Without
   `:runtime_boot`, the `:consumer` this pump feeds is a plain pid — a
   test process, or `Raxol.Harness.DeliveryShim` once the boot rewires it
   (that transport is deliberately NOT frozen, PumpContract §3). The shim

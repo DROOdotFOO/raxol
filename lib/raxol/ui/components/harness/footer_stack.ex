@@ -23,11 +23,11 @@ defmodule Raxol.UI.Components.Harness.FooterStack do
   LaneNotice, Composer, Notice) to their line lists and hands the ordered
   keyword list in.
 
-  ## The fit law (ported verbatim from `Raxol.Harness.Surface`)
+  ## The fit law (ported verbatim from the retired `Raxol.Harness.Surface`)
 
   `fit/3` and `shed_overflow/3` are the byte-for-byte port of
-  `Surface.fit_footer_groups/3` + `Surface.shed_overflow/3` (the shelved
-  substrate keeps its own copy; this is the TEA seat). The contract:
+  `Surface.fit_footer_groups/3` + `Surface.shed_overflow/3` (the map-machine
+  substrate retired; this is the one seat now). The contract:
 
     * **Display order is preserved.** The group list is rendered top to
       bottom in the order given; the fit only ever *removes* rows, never

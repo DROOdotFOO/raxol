@@ -2,9 +2,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ViewportAuthority do
   @moduledoc """
   The FULL-VIEWPORT paint substrate: the alternate-screen, full-frame
   repaint sibling of `InlineAuthority` (append + pinned footer) and
-  `FlatAuthority` (append-only). Picked when `Raxol.Harness.Surface` runs
-  in `:full_viewport` mode (V's endgame pivot — "occupy the whole
-  viewport").
+  `FlatAuthority` (append-only). Picked when the harness runs in
+  `:full_viewport` mode (V's endgame pivot — "occupy the whole
+  viewport"): the retired `Raxol.Harness.Surface` first, now the TEA
+  stack (`Raxol.Harness.SessionPump` drives `enter/0`/`leave/0`).
 
   Where `InlineAuthority` writes the terminal's PRIMARY screen in place
   (a DECSTBM scroll region + print-once seals into native scrollback),

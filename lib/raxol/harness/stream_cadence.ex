@@ -12,7 +12,7 @@ defmodule Raxol.Harness.StreamCadence do
   second are normal. Painting on every delta floods the terminal
   (redundant repaints of the same live tail) and starves input handling
   in whatever process applies the paint. This module sits between that
-  producer and a `Raxol.Harness.Surface`-shaped consumer (apply deltas
+  producer and a `Raxol.Harness.HarnessApp`-shaped consumer (apply deltas
   to the live tail, repaint the footer): unbounded ingest via
   `ingest/2` (the GenServer mailbox is the buffer -- it never blocks
   the producer; load-shedding, not backpressure: excess above

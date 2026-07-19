@@ -249,7 +249,7 @@ defmodule Raxol.UI.Components.Harness.Composer do
   present, occupies row 0), 1-based display column.
 
   This is the terminal-cursor park target for an assembling surface
-  (`Raxol.Harness.Surface.paint_footer/1` -> `InlineAuthority`'s
+  (the retired `Raxol.Harness.Surface.paint_footer/1` -> `InlineAuthority`'s
   `:cursor` option): the native cursor sits where the next typed
   grapheme lands. The point is the LOGICAL cursor projected through the
   same `WrapMap` `render/2` derives its rows from -- exact for

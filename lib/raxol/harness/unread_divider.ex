@@ -7,14 +7,13 @@ defmodule Raxol.Harness.UnreadDivider do
   a full-width rule (`line/2`) in the repaintable footer LIVE region --
   never in sealed history. Every guarantee documented below corresponds
   to a named test in `test/harness/unread_divider_test.exs` (the policy
-  suite) or `test/harness/unread_divider_surface_test.exs` (the
-  `Raxol.Harness.Surface` integration).
+  suite). (The Surface integration suite retired with the map-machine.)
 
   ## Offsets, not clocks
 
   Every decision here is a pure function of caller-injected offsets --
-  `Raxol.Harness.Surface` feeds `length(model.projection.blocks)` at the
-  moment of each call. There is no wall clock, no timestamp, no gap
+  `Raxol.Harness.HarnessApp.Model` feeds `length(model.projection.blocks)`
+  at the moment of each call. There is no wall clock, no timestamp, no gap
   threshold anywhere in this module: stricter than `Raxol.Harness.StatusStrip`'s
   own injected-`now` convention, because this policy needs no notion of
   time at all, only "how many blocks have committed since a marked
@@ -86,8 +85,9 @@ defmodule Raxol.Harness.UnreadDivider do
       permanently as an under-count. Post-reconcile, an active span
       always satisfies `from < offset`, which restores `viewed/2`'s
       reachability (the highest navigable index, `offset - 1`, can
-      always reach the gate). `Raxol.Harness.Surface` threads this on
-      every `advance/2` (the only place its projection is rebuilt).
+      always reach the gate). `Raxol.Harness.HarnessApp.Model` threads
+      this on every `advance/2` (the only place its projection is
+      rebuilt).
     * **`divider/2`** is the read-only DISPLAY clamp: it paints `nil`
       when the offset no longer reaches past the boundary and a reduced
       count while the offset sits inside the span, so a stale or dipped
@@ -118,9 +118,9 @@ defmodule Raxol.Harness.UnreadDivider do
   ## Live-region only (the in-history divider is a deferred upgrade)
 
   This module has no opinion on WHERE its output is painted -- that is
-  `Raxol.Harness.Surface`'s job (see that module's "The unread divider"
-  moduledoc section), which renders `line/2`'s output exclusively inside
-  the repaintable footer viewport. An in-history divider (a marker
+  the host's job (the retired `Raxol.Harness.Surface` rendered `line/2`'s
+  output exclusively inside the repaintable footer viewport; the TEA
+  `HarnessApp` view owns that call now). An in-history divider (a marker
   embedded in sealed, scrolled-off content) would require a
   reflow-capable substrate this harness does not have -- `InlineAuthority`
   only ever seals once, never repaints history -- so it is out of scope
@@ -128,8 +128,8 @@ defmodule Raxol.Harness.UnreadDivider do
 
   ## The mode-1004 seam -- INERT at runtime until that unit lands
 
-  `Raxol.Harness.Surface.blur/1` / `Surface.focus/1` are the explicit
-  attention API a later focus-event unit (a real terminal-focus-in/out
+  The retired `Raxol.Harness.Surface.blur/1` / `Surface.focus/1` were the
+  explicit attention API a later focus-event unit (a real terminal-focus-in/out
   signal, mode 1004 in xterm's escape sequence vocabulary) wires
   directly. Be clear about what exists TODAY: `blur/1` has zero
   production callers -- `Raxol.Terminal.AdvancedFeatures.parse_focus_event/1`

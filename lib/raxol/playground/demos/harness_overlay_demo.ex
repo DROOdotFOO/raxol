@@ -5,11 +5,11 @@ defmodule Raxol.Playground.Demos.HarnessOverlayDemo do
 
   ## What this closes: the full-viewport overlay gap
 
-  On the shelved map-machine (`Raxol.Harness.Surface`), summoning an
-  overlay grows the inline DECSTBM footer via
+  On the retired map-machine (`Raxol.Harness.Surface`), summoning an
+  overlay grew the inline DECSTBM footer via
   `InlineAuthority.set_footer_rows/2`. The alternate-screen authority has
   no such mechanism, so `open_overlay/3`, `open_panel/3`, and
-  `expand_focused_diff/1` all REFUSE in `:full_viewport`
+  `expand_focused_diff/1` all REFUSED in `:full_viewport`
   (`surface.ex:3805/3936/4401`, each `{:error, :no_footer}`).
 
   Under the TEA pipeline there is no footer to grow: an overlay is just a

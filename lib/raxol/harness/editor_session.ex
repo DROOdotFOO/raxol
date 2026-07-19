@@ -34,9 +34,9 @@ defmodule Raxol.Harness.EditorSession do
   always quit the editor themselves. This deliberately leaves
   NON-interactive embedders (automation, agents, CI harnesses driving a
   pty) unprotected against a wedged editor by default: such embedders
-  MUST set a bound (via this option, or `Raxol.Harness.Surface`'s
-  `:editor_opts`), or a never-exiting editor blocks the calling loop
-  forever.
+  MUST set a bound (via this option, or the host's `:editor_opts` —
+  the retired `Raxol.Harness.Surface` forwarded one), or a never-exiting
+  editor blocks the calling loop forever.
 
   ## Outcomes
 
@@ -110,8 +110,8 @@ defmodule Raxol.Harness.EditorSession do
   emission is owned by the paint authority
   (`Raxol.UI.Rendering.PaintAuthority.InlineAuthority.reassert/1` over
   its `ScrollRegionManager` state -- the single-DECSTBM-owner rule): the
-  caller that owns the authority (`Raxol.Harness.Surface`'s edit-draft
-  dispatch) composes `resize |> reassert` on EVERY return from this
+  caller that owns the authority (the retired `Raxol.Harness.Surface`'s
+  edit-draft dispatch) composes `resize |> reassert` on EVERY return from this
   function -- ok, kept, or error -- so the pin is guaranteed
   belt-and-braces regardless of where a failure landed. Geometry is
   re-queried here (while still cooked, before re-entering raw mode) and

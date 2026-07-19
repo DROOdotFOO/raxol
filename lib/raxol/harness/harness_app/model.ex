@@ -1,6 +1,6 @@
 defmodule Raxol.Harness.HarnessApp.Model do
   @moduledoc """
-  The pure TEA model for `Raxol.Harness.HarnessApp` — today's
+  The pure TEA model for `Raxol.Harness.HarnessApp` — the retired
   `Raxol.Harness.Surface` map with the paint plumbing stripped out
   (`docs/proposals/in-flight/harness-tea-migration.md` §2). Every function
   here is a pure fold: it takes the model plus one datum and returns a new
@@ -132,6 +132,10 @@ defmodule Raxol.Harness.HarnessApp.Model do
             record_fold: %{},
             # click on the live reasoning preview toggles peek ⇄ expanded
             tail_expanded?: false,
+            # the pending left-button press site {x, y} — a click ACTS on
+            # RELEASE at the same cell, so a drag (a selection attempt)
+            # never toggles anything. See HarnessApp.handle_mouse/2.
+            mouse_press: nil,
             # the sole lane client (pid) or nil in fixture mode
             pump: nil
 
@@ -347,7 +351,7 @@ defmodule Raxol.Harness.HarnessApp.Model do
     end
   end
 
-  # ── frontier bookkeeping (surface.ex:2250-2316, pure) ────────────────────
+  # ── frontier bookkeeping (ported from the retired surface.ex:2250-2316, pure) ──
 
   @doc false
   @spec frontier_entries(t()) :: [SealFrontier.entry()]

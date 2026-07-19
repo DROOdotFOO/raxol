@@ -66,7 +66,8 @@ defmodule Raxol.Harness.Directive.Lane do
   @doc """
   Interrupt the RUNNING turn (fire-and-forget staged kill). `turn_id` is
   advisory attribution only — `nil` produces the empty payload, exactly
-  today's lane wire shape (`LiveSessionDriver.interrupt_payload/1`).
+  the retired driver's lane wire shape
+  (`LiveSessionDriver.interrupt_payload/1`).
   """
   @spec interrupt(pid(), term()) :: t()
   def interrupt(pump, turn_id \\ nil) when is_pid(pump) do

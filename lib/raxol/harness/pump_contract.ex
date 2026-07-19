@@ -5,7 +5,8 @@ defmodule Raxol.Harness.PumpContract do
   "A0", §9 risk 1). This module IS the contract: the typed vocabulary of
   every normalized message the pump feeds the Dispatcher (and therefore
   `HarnessApp.update/2`), plus the laws that bind both sides. The pump
-  reshape (`Raxol.Harness.LiveSessionDriver` → `SessionPump`, A-side) and
+  reshape (the retired `Raxol.Harness.LiveSessionDriver` → `SessionPump`,
+  A-side) and
   the TEA app (`HarnessApp`, U-side) build CONCURRENTLY against these
   shapes; neither may change a shape here without the other lane's
   agreement — that is what "frozen" means.
@@ -40,7 +41,7 @@ defmodule Raxol.Harness.PumpContract do
   The pump establishes order in its OWN mailbox with the input-first
   selective receive (`receive {:inline_input, _} after 0` — the owner
   half of `Raxol.Harness.StreamCadence`'s section-2 contract, exactly as
-  `LiveSessionDriver.loop/1` does today), and only then forwards. Because
+  the retired `LiveSessionDriver.loop/1` did), and only then forwards. Because
   the Dispatcher is a plain FIFO GenServer, it PRESERVES the pump's
   chosen order end-to-end.
 
@@ -153,7 +154,7 @@ defmodule Raxol.Harness.PumpContract do
   leaves the in-flight steer undisturbed. The falsifier home for the
   exactly-one/timeout/crash guarantees is the ported driver contract
   suite (spec §6: "driver contract tests → pump, same scripted fake
-  lane" — today's `live_session_driver_test.exs` steer sections).
+  lane" — the retired `live_session_driver_test.exs` steer sections).
 
   ## 7. Alt-screen and editor-bracket ownership (pump-owned bytes)
 

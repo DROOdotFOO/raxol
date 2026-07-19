@@ -315,10 +315,10 @@ defmodule Raxol.Harness.Surface.ViewText do
   already consumed every `\\n` as the line-split delimiter before this runs.
 
   Public: this is the ONE sanitize implementation every caller of untrusted
-  single-line content shares -- `add_lines/3` above, and
-  `Raxol.Harness.DiffExpansion`'s own per-row renderer, which needs this exact
-  trust-boundary sanitize WITHOUT `lines/3`'s view-tree flatten. See the
-  moduledoc's "trust boundary" section.
+  single-line content shares -- `add_lines/3` above (and, historically, the
+  retired `Raxol.Harness.DiffExpansion`'s per-row renderer, which needed this
+  exact trust-boundary sanitize WITHOUT `lines/3`'s view-tree flatten). See
+  the moduledoc's "trust boundary" section.
   """
   @spec sanitize_line(String.t()) :: String.t()
   def sanitize_line(text), do: sanitize(text)
@@ -347,8 +347,8 @@ defmodule Raxol.Harness.Surface.ViewText do
   `Raxol.Harness.StatusStrip`'s own truncation convention. Plain content
   only -- apply BEFORE any styling, never after (see the moduledoc's "Why
   truncate BEFORE styling"). Public for the same reason `sanitize_line/1`
-  is: `Raxol.Harness.DiffExpansion`'s per-row renderer reuses this exact
-  truncation instead of duplicating it.
+  is (the retired `Raxol.Harness.DiffExpansion`'s per-row renderer reused
+  this exact truncation instead of duplicating it).
   """
   @spec truncate(String.t(), non_neg_integer()) :: String.t()
   def truncate(_text, width) when width <= 0, do: ""

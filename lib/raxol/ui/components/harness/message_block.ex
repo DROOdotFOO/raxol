@@ -19,7 +19,8 @@ defmodule Raxol.UI.Components.Harness.MessageBlock do
     * `:assistant` -- unmarked prose after a blank turn-separator row
       (the machine's voice dominates the log and goes unmarked);
     * `:user` -- the composer's chevron sigil echoed into history,
-      `❯ text`, applied at `Raxol.Harness.Surface`'s margin/chevron seam
+      `❯ text`, applied at the surface layer's margin/chevron seam (the
+      retired `Raxol.Harness.Surface`)
       -- NOT here. The sigil is a per-capability decision (`unicode:
       :none` degrades it to `>`) owned by the surface, the echo must be
       byte-aligned with the composer's live prompt row (same sigil

@@ -314,8 +314,9 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   computation + styling extracted so it can be called from the harness
   block render / `Raxol.Harness.Surface.ViewText` row path WITHOUT dragging
   the Component runtime (or `render/2`'s NESTED gutter+content rows, which
-  `ViewText.lines/3` cannot flatten -- see
-  `Raxol.Harness.DiffExpansion`'s moduledoc) into the projection layer.
+  `ViewText.lines/3` cannot flatten -- the argument is recorded in the
+  retired `Raxol.Harness.DiffExpansion`'s moduledoc) into the projection
+  layer.
 
   Returns one FLAT `%{type: :row}` view node per physical diff line (plus a
   dim fold-marker row where a long unchanged run collapses), whose children

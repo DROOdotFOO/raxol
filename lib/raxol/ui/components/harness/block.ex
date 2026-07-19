@@ -236,7 +236,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   # an EXPANDED thought is bracketed `∵` (premises, first line) ... `∴`
   # (conclusion, last line), reading like an arrow through the reasoning.
   # The ACTIVE cycling set (`∴ ஃ ⁂ ⛬`) is the tick-clocked pulse and lives
-  # in `Raxol.Harness.Surface` (the animation clock is there). All are
+  # in `HarnessApp.Model`'s spinner frame (the animation clock lived in
+  # the retired `Raxol.Harness.Surface`). All are
   # width-1, text-presentation (see `glyph_inventory/0`).
   @reasoning_collapsed_glyph "⁖"
   @reasoning_open_glyph "∵"
@@ -454,8 +455,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   role normalization), `:assistant` for every other message and for
   every non-message kind (machinery has no speaker; the unmarked voice
   is the safe default). This is the one derivation the folded header
-  glyph and `Raxol.Harness.Surface`'s user-echo seam both read, so the
-  two can never disagree about who spoke.
+  glyph and the retired `Raxol.Harness.Surface`'s user-echo seam both
+  read, so the two can never disagree about who spoke.
   """
   @spec role(t()) :: :user | :assistant
   def role(%__MODULE__{kind: :message, content: %{role: :user}}), do: :user
@@ -857,15 +858,21 @@ defmodule Raxol.UI.Components.Harness.Block do
     )
   end
 
-  # The collapsed thought: `⁖ thinking` flush left, the honest quantity
-  # (`N lines · <duration>`) flush right -- a space-between register line
-  # so the eye reads the marker and the cost at the two edges. Duration is
-  # shown only when the block genuinely carries one (never fabricated).
+  # The thought header: `⁖ thinking` (collapsed) / `∵ thinking` (expanded
+  # -- the down-pointing dots ARE the expanded-start marker, V's icon-
+  # column convention: cell 1 is the indication column, the word starts
+  # at cell 3) flush left, the honest quantity (`N lines · <duration>`)
+  # flush right. Duration only when the block genuinely carries one.
   defp header_view(%__MODULE__{kind: :reasoning} = block, width, fg, _context) do
+    glyph =
+      if block.fold == :expanded,
+        do: @reasoning_open_glyph,
+        else: @reasoning_collapsed_glyph
+
     Components.text(
       content:
         justify_between(
-          "#{@reasoning_collapsed_glyph} thinking",
+          "#{glyph} thinking",
           reasoning_meta(block),
           max(width, 1)
         ),
@@ -995,7 +1002,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   # user's voice), a folded assistant message keeps `▸ » summary`. The
   # header itself stays at the ordinary margined header column -- only
   # the EXPANDED user echo's chevron enters the margin, and that happens
-  # at `Raxol.Harness.Surface`'s margin/chevron seam, never here.
+  # at the surface layer's margin/chevron seam (the retired
+  # `Raxol.Harness.Surface`), never here.
   defp glyph(%__MODULE__{kind: :message} = block) do
     case role(block) do
       :user -> "❯"
@@ -1275,8 +1283,8 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   @doc """
   The honest per-block search corpus: `"<kind> · <summary>"` (the same
-  shape `Raxol.Harness.Surface.open_jump_picker/1`'s labels already
-  use) followed by ` · ` plus the block's BODY text, when that body
+  shape the retired `Raxol.Harness.Surface.open_jump_picker/1`'s labels
+  used) followed by ` · ` plus the block's BODY text, when that body
   carries content beyond what `summary/1` already shows -- `summary/1`
   only ever surfaces line 1 of message-shaped content, or the header
   fields (name/args, path) for the other kinds.
@@ -1311,7 +1319,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   body field is `String.slice`d to `max_graphemes` (which walks at most
   `max_graphemes` graphemes and stops, never scanning the tail) BEFORE
   it is concatenated or joined, and the assembled corpus is clamped once
-  more. So a caller on a synchronous input path (see
+  more. So a caller on a synchronous input path (see the retired
   `Raxol.Harness.Surface.open_search_picker/1`) never pays O(body-size)
   to build a bounded label out of an unbounded, untrusted body -- the
   flatten/concat that used to run over the whole body now runs over at
@@ -1506,7 +1514,7 @@ defmodule Raxol.UI.Components.Harness.Block do
       end
 
     case kind do
-      :reasoning -> bracket_reasoning(body, fg)
+      :reasoning -> close_reasoning(body, fg)
       _message -> body
     end
   end
@@ -1522,18 +1530,57 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp content_lines_view(block, _width, _context, fg),
     do: plain_content_lines(block, fg)
 
-  # An EXPANDED thought is bracketed by the because/therefore arrows: `∵`
-  # opens (premises), `∴` closes (conclusion) -- reading like an arrow
-  # through the reasoning. Both dim (the low-prominence cognition register,
-  # matching the collapsed `⁖` header), each on its own line so the pair
-  # frames the body exactly the way a folded thought's `⁖` marks it.
-  defp bracket_reasoning(body, fg) do
-    marker = fn glyph ->
-      Components.text(content: glyph, style: apply_fg(%{dim: true}, fg))
-    end
+  # An EXPANDED thought reads like an arrow through the reasoning: the
+  # HEADER carries the opening `∵` (down-pointing dots = expanded start,
+  # `header_view/4`'s own glyph swap -- never a second lone-`∵` row), the
+  # body rows sit at cell 3 (one-cell gap off the cell-1 icon column,
+  # V's convention), and a bare `∴` (up-pointing = expanded end) closes.
+  # Edge-blank rows are trimmed -- an LLM thought regularly starts/ends
+  # with newline padding, and those blanks rendered as the "redundant
+  # spacing blocks" V flagged; interior blanks are content and stay.
+  defp close_reasoning(body, fg) do
+    closer =
+      Components.text(
+        content: @reasoning_close_glyph,
+        style: apply_fg(%{dim: true}, fg)
+      )
 
-    [marker.(@reasoning_open_glyph) | body] ++ [marker.(@reasoning_close_glyph)]
+    indented =
+      body
+      |> trim_blank_edge_rows()
+      |> Enum.map(&indent_reasoning_row/1)
+
+    indented ++ [closer]
   end
+
+  # Body rows are :text leaves on the plain path; the markdown path hands
+  # one column element -- shift it whole via a 2-cell row wrap so every
+  # rendered line lands at the content indent.
+  defp indent_reasoning_row(%{type: :text, content: content} = node)
+       when is_binary(content) do
+    %{node | content: "  " <> content}
+  end
+
+  defp indent_reasoning_row(node) do
+    Components.row(
+      gap: 0,
+      children: [Components.text(content: "  "), node]
+    )
+  end
+
+  defp trim_blank_edge_rows(rows) do
+    rows
+    |> Enum.drop_while(&blank_text_row?/1)
+    |> Enum.reverse()
+    |> Enum.drop_while(&blank_text_row?/1)
+    |> Enum.reverse()
+  end
+
+  defp blank_text_row?(%{type: :text, content: content})
+       when is_binary(content),
+       do: String.trim(content) == ""
+
+  defp blank_text_row?(_node), do: false
 
   # The Pierre diff rows for a proposed edit/write approval, or `[]` when
   # the approval carries no before/after image (bash and every other
@@ -1730,7 +1777,8 @@ defmodule Raxol.UI.Components.Harness.Block do
   # answer keys so the operator can see exactly what pressing each key
   # does. Numbered options are the producer's actual options (the ACP
   # `PermissionOption` list); the y/n aliases pick the first allow/deny
-  # option (see `Raxol.Harness.Surface`'s answer resolution).
+  # option (see the retired `Raxol.Harness.Surface`'s answer resolution;
+  # the TEA seat is `HarnessApp.Model`).
   # When the hosting view runs its own footer selector (the TEA harness:
   # `selector_hosted?: true` in the render context), the in-body option
   # list would say the same thing twice — the block keeps the QUESTION
@@ -1784,9 +1832,10 @@ defmodule Raxol.UI.Components.Harness.Block do
     end
   end
 
-  # An option's decision class from its ACP kind -- MUST agree with
-  # `Raxol.Harness.Surface`'s own `y`/`n` resolution (that module maps the
-  # same kinds), so the hint the operator reads matches the key they press.
+  # An option's decision class from its ACP kind -- MUST agree with the
+  # host's `y`/`n` resolution (the retired `Raxol.Harness.Surface` mapped
+  # the same kinds), so the hint the operator reads matches the key they
+  # press.
   defp option_decision(%{kind: kind}), do: kind_decision(kind)
   defp option_decision(%{"kind" => kind}), do: kind_decision(kind)
   defp option_decision(_option), do: nil

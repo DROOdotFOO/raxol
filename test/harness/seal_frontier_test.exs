@@ -489,10 +489,10 @@ defmodule Raxol.Harness.SealFrontierTest do
   # over-wide rows and permanently garbles the print-once copy in native
   # scrollback. That case needed the paint pipeline (width adoption + the
   # seal write), which this pure classifier deliberately has no access
-  # to, so it does NOT live here as a new test -- it lives in
-  # `test/harness/surface_seal_pipeline_test.exs` (describe "2. frame-order
-  # law"), driven end-to-end through `Raxol.Harness.Surface.advance/3`'s
-  # `:resize` option:
+  # to, so it does NOT live here as a new test -- it lived in the
+  # retired `test/harness/surface_seal_pipeline_test.exs` (describe "2.
+  # frame-order law"), driven end-to-end through the retired
+  # `Raxol.Harness.Surface.advance/3`'s `:resize` option:
   #
   #   test "a block finalizing on a shrink frame commits at the adopted
   #         width, not the stale one"

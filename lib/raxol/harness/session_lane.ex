@@ -131,7 +131,8 @@ defmodule Raxol.Harness.SessionLane do
   agent parked, blocking its turn task). `answer` carries `:request_id`
   (the correlation id echoed back so the agent matches the parked
   request), `:option_id` (the concrete `PermissionOption` the operator
-  chose -- the referent, resolved by `Raxol.Harness.Surface` from the
+  chose -- the referent, resolved by the harness (the retired
+  `Raxol.Harness.Surface`; now `HarnessApp`) from the
   live block's actual options), and `:decision` (`:allow`/`:deny`, a
   best-effort class hint for the caller's own notice).
 

@@ -380,7 +380,7 @@ defmodule Raxol.Terminal.ScrollRegionManager do
   Recomputes the region for a new `footer_rows`, holding `rows` (`H`)
   constant -- the counterpart to `resize/2`, which holds `footer_rows`
   constant and varies `rows`. This is the seam a footer-hosted overlay
-  (`Raxol.UI.Harness.OverlayPicker`, via
+  (the retired `Raxol.UI.Harness.OverlayPicker`, via
   `Raxol.UI.Rendering.PaintAuthority.InlineAuthority.set_footer_rows/2`)
   uses to grow or shrink the pinned footer viewport without a real
   terminal resize.

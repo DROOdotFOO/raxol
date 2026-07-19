@@ -27,10 +27,10 @@ defmodule Raxol.Harness.SealFrontier do
       scrollback this frame;
     * the footer/tail composition -- which blocks still render in the
       pinned live region (the trailing "pending" preview);
-    * the synchronized-output bracket decision -- `Raxol.Harness.Surface`'s
-      `seal_frame/3` reads the SAME `will_commit` projection, per-frame, to
-      decide whether this frame's seal + footer repaint needs wrapping in
-      a DEC 2026 bracket (see that module's moduledoc). The post-commit
+    * the synchronized-output bracket decision -- the retired
+      `Raxol.Harness.Surface`'s `seal_frame/3` read the SAME `will_commit`
+      projection, per-frame, to decide whether that frame's seal + footer
+      repaint needed wrapping in a DEC 2026 bracket. The post-commit
       viewport-sizing seam remains future work: this substrate's footer
       row count is geometry-fixed (never a function of post-seal state),
       so there is no viewport-sizing decision left to make here.
@@ -38,25 +38,29 @@ defmodule Raxol.Harness.SealFrontier do
   Consumers never inline their own walk over entries. The consumer table
   today:
 
-    * `Raxol.Harness.Surface.paint_pending_blocks/1` -- the one mutating
-      walk, via `commit_walk/5`.
-    * `Raxol.Harness.Surface`'s footer pending-preview (`pending_block/1`)
+    * `Raxol.Harness.HarnessApp.Model.seal_pending/1` -- the one mutating
+      walk, via `commit_walk/5`. (Retired: the map-machine
+      `Raxol.Harness.Surface.paint_pending_blocks/1`, same walk.)
+    * The footer pending-preview (`pending_block/1`, retired with
+      `Raxol.Harness.Surface`)
       -- reads the WALK's committed cursor (`painted_count`), not the
       scan: the scan is the pre-commit projection and consumes
       committable entries, so it would hide a block whose seal write was
       just refused. Cursor and scan agree on every successful frame (the
       scan/walk-agreement property below); on a refusal the cursor is
       the display-honest one.
-    * `Raxol.Harness.Surface`'s synchronized-output bracket gate
-      (`seal_frame/3`, via `frontier_scan/1`, itself `scan_frontier/3`)
+    * The retired `Raxol.Harness.Surface`'s synchronized-output bracket
+      gate (`seal_frame/3`, via `frontier_scan/1`, itself
+      `scan_frontier/3`)
       -- read-only, consulted BEFORE the commit pass to decide whether
       to open a bracket around it.
     * The keyframe/reflow gate is NOT a consumer, by construction: the
       reference design's resize path must pick its behavior on
       `will_commit` because its viewport height is a function of the
       post-commit tail, but this substrate's resize path
-      (`Raxol.Harness.Surface.resize/2` / the `advance/3` `:resize`
-      option) never seals and never sizes anything off frontier state --
+      (the retired `Raxol.Harness.Surface.resize/2` / the `advance/3`
+      `:resize` option) never seals and never sizes anything off frontier
+      state --
       the footer row count is geometry-fixed, and a combined
       resize+advance frame adopts geometry FIRST (the frame-order law),
       then lets the ordinary seal frame run. A future change that makes
@@ -67,8 +71,10 @@ defmodule Raxol.Harness.SealFrontier do
 
   Entries are projection-agnostic plain maps (`t:entry/0`) so this
   classifier stays decoupled from any one producer's data model. Today
-  `Raxol.Harness.Surface.frontier_entries/1` builds them from projection
-  blocks plus that module's own painted high-water mark. The live tail
+  `Raxol.Harness.HarnessApp.Model.frontier_entries/1` builds them from
+  projection blocks plus that model's own painted high-water mark (the
+  retired producer was `Raxol.Harness.Surface.frontier_entries/1`). The
+  live tail
   (still-streaming, not-yet-a-block items) never enters the entry list at
   all: a still-streaming item has no committable form until it completes
   into a block, so it is definitionally past the frontier already -- there
@@ -83,7 +89,8 @@ defmodule Raxol.Harness.SealFrontier do
        of turn state. The invariant behind the flag: the entry's rendered
        form can still change in response to user interaction, so committing
        it now (print-once) would freeze a form the user is about to change.
-       The sole producer today (`Raxol.Harness.Surface.frontier_entries/1`)
+       The sole producer today
+       (`Raxol.Harness.HarnessApp.Model.frontier_entries/1`)
        feeds it from BOTH known instances of that invariant: a live
        `:approval` block still waiting on the user's answer (the
        permission-prompt case -- per `Raxol.UI.Components.Harness.Block`'s
@@ -193,12 +200,11 @@ defmodule Raxol.Harness.SealFrontier do
   skipping past a block that was marked but never actually printed (which
   would make it vanish forever, since a print-once surface cannot re-emit
   a committed entry). This emit-then-mark contract is the seam a
-  write-confirming substrate builds on -- and that substrate now exists:
-  `Raxol.Harness.Surface.seal_block/2` emits through
-  `InlineAuthority.try_seal/2` (write -> confirm -> mark), and the
-  `{:error, :write_failed, _}` branch is exercised both by this module's
-  own corpus and end-to-end through a real failing device in
-  `test/harness/surface_seal_pipeline_test.exs`.
+  write-confirming substrate builds on -- and that substrate existed:
+  the retired `Raxol.Harness.Surface.seal_block/2` emitted through
+  `InlineAuthority.try_seal/2` (write -> confirm -> mark). The
+  `{:error, :write_failed, _}` branch is exercised by this module's own
+  corpus.
 
   ## The cursor
 
@@ -239,9 +245,10 @@ defmodule Raxol.Harness.SealFrontier do
   specific opinion about is to show it in full, not to guess at a
   collapse/truncate rule that might hide something that mattered.
 
-  NOT YET WIRED: no live seal path consults this policy today.
-  `Raxol.Harness.Surface`'s `seal_block/2` seals a block at its current
-  fold state, and the truncated tool-output rendering this table calls
+  NOT YET WIRED: no live seal path consults this policy today. The
+  retired `Raxol.Harness.Surface`'s `seal_block/2` sealed a block at its
+  current fold state, and the truncated tool-output rendering this table
+  calls
   for does not exist yet -- both are renderer-level work owned by the
   commit-cap / frame-order follow-up, which consumes this table rather
   than inventing its own. Until that lands, sealed tool output is NOT

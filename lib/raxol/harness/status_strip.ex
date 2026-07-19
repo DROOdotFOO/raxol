@@ -232,7 +232,8 @@ defmodule Raxol.Harness.StatusStrip do
   Never raises on missing keys -- an absent field renders NOTHING (the
   charged minimum), never a placeholder void or a misleadingly-valid
   default. A state with nothing true to say renders `[""]`; the
-  assembly layer's visibility gate (`strip_visible?` in
+  assembly layer's visibility gate (`StatusStrip.alerting?/1`, consulted
+  by the TEA `HarnessApp` view; `strip_visible?/1` in the retired
   `Raxol.Harness.Surface`) normally hides the strip before that case
   is reachable.
   """

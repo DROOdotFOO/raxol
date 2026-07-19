@@ -43,8 +43,9 @@ defmodule Raxol.Harness.RecencyPolicy do
   Prominence for a block is decided **exactly once, at the moment the
   block is painted/sealed**, and is never re-graded afterward -- the
   print-once history substrate this framework paints through cannot
-  repaint scrollback (see `Raxol.Harness.Surface`'s own "seal / seal-once"
-  glossary entry). A block sealed during its own turn seals at `1.0` and
+  repaint scrollback (see the retired `Raxol.Harness.Surface`'s "seal /
+  seal-once" glossary entry). A block sealed during its own turn seals at
+  `1.0` and
   does NOT fade when the next turn starts; it is not re-visited once
   painted.
 
@@ -55,9 +56,10 @@ defmodule Raxol.Harness.RecencyPolicy do
   afterward. This is the honest, substrate-constrained reading of the
   ratified "scoped by policy" clause: the policy grades a block once,
   when it is painted; there is no retroactive re-grading, and no
-  mechanism in this module (or its one caller,
-  `Raxol.Harness.Surface.render_block_lines/3`) ever asks "what would
-  this block's prominence be now?" for an already-sealed block.
+  mechanism in this module (or its callers — the retired
+  `Raxol.Harness.Surface.render_block_lines/3`, now
+  `Raxol.Harness.HarnessApp.Model.block_prominence/2`) ever asks "what
+  would this block's prominence be now?" for an already-sealed block.
 
   ## Composition with the needs-input floor
 
@@ -243,9 +245,9 @@ defmodule Raxol.Harness.RecencyPolicy do
   same defensive fallbacks, only the cost differs. This is the entry
   point a bulk paint should use: a full re-render, a reattach rebuild,
   or any pass that grades a whole projection at once. The incremental
-  seal path (`Raxol.Harness.Surface.render_block_lines/3`) keeps the
-  per-block form because its hold-back-one design seals a bounded
-  number of blocks per advance.
+  seal path (the retired `Raxol.Harness.Surface.render_block_lines/3`)
+  kept the per-block form because its hold-back-one design seals a
+  bounded number of blocks per advance.
   """
   @spec grade_blocks([map()], [map()]) :: [prominence()]
   def grade_blocks(blocks, events) when is_list(blocks) and is_list(events) do

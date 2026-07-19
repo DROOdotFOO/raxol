@@ -140,7 +140,8 @@ defmodule Raxol.Playground.Demos.HarnessToolBlockDemo do
   # One row per block, with the tool-grouping separator rule between
   # them: a blank row between neighbours EXCEPT when both are machinery
   # (tool_call/diff) -- a run of tools is one tight cluster (mirrors
-  # Raxol.Harness.Surface's seal-time `block_separator/2` law).
+  # the retired Raxol.Harness.Surface's seal-time `block_separator/2`
+  # law).
   defp transcript_rows(model) do
     @block_order
     |> Enum.map(fn key -> {key, Map.fetch!(model.blocks, key)} end)

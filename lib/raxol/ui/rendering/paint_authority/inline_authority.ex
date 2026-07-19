@@ -226,8 +226,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   ## Growing/shrinking the footer (overlay hosting)
 
   `set_footer_rows/2` is the seam a footer-hosted overlay
-  (`Raxol.UI.Harness.OverlayPicker`, assembled via
-  `Raxol.Harness.Surface.open_overlay/3`) uses to claim (or give back)
+  (the retired `Raxol.UI.Harness.OverlayPicker`, assembled via the
+  retired `Raxol.Harness.Surface.open_overlay/3`) used to claim (or give
+  back)
   rows from the footer viewport WITHOUT a real terminal resize --
   `rows`/`width` are unchanged, only the DECSTBM split point moves, via
   `ScrollRegionManager.set_footer_rows/2` (the `resize/2` counterpart
@@ -836,7 +837,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   This is the substrate half of the print-once safety property
   documented in `Raxol.Harness.SealFrontier.commit_walk/5`: a caller
-  (`Raxol.Harness.Surface.seal_block/2`) marks a block committed only
+  (the retired `Raxol.Harness.Surface.seal_block/2`) marks a block
+  committed only
   AFTER `try_seal/2` returns `{:ok, _}` -- never before. On `{:error,
   :write_failed, t}`, the ORIGINAL `t` (the one passed in, `next_row` not
   advanced) is returned, so a retry re-positions and re-writes from
@@ -875,7 +877,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   would strand the block if the device recovers on attempt N+1 -- but it
   is not silent: the harness consumer emits
   `[:raxol, :harness, :seal, :write_failed]` telemetry per refused write
-  (see `Raxol.Harness.Surface`), so a persistent refusal is observable
+  (emitted by the retired `Raxol.Harness.Surface`; no current consumer
+  re-emits it), so a persistent refusal is observable
   from the first frame.
 
   ## Partial-write honesty (and the scroll-boundary residual)
@@ -1023,8 +1026,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   dying mid-frame), the terminal is left frozen in synchronized mode --
   and a fire-and-forget close attempt would leave it that way until the
   process exits. The latch makes the owed close durable state:
-  `Raxol.Harness.Surface` calls this at the top of EVERY frame
-  (advance/tick/input/resize), so a dangling open heals at the first
+  the retired `Raxol.Harness.Surface` called this at the top of EVERY
+  frame (advance/tick/input/resize), so a dangling open heals at the
+  first
   frame after the device accepts a byte again. The residual window is
   therefore "until the next frame with a writable device" -- never
   "forever" -- and, since a refused SEAL write guarantees a retry frame,
@@ -1698,8 +1702,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   Grows or shrinks the footer viewport by `new_footer_rows` rows, WITHOUT
   a real terminal resize (`rows`/`width` unchanged) -- see the
   moduledoc's "Growing/shrinking the footer" section for the full
-  rationale. This is the seam `Raxol.Harness.Surface.open_overlay/3` and
-  `close_overlay/1` use to host `Raxol.UI.Harness.OverlayPicker`.
+  rationale. This is the seam the retired `Raxol.Harness.Surface.
+  open_overlay/3` and `close_overlay/1` used to host the retired
+  `Raxol.UI.Harness.OverlayPicker`.
 
   Returns `{:error, :degenerate}` (zero bytes) when the target
   `new_footer_rows` would leave history unable to keep its 2-row minimum
