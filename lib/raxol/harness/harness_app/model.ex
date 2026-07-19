@@ -48,7 +48,7 @@ defmodule Raxol.Harness.HarnessApp.Model do
   alias Raxol.UI.Components.Harness.{Block, ChoicePrompt, Composer, Picker}
   alias Raxol.UI.Harness.{CommandRegistry, InputEvent, Keymap}
 
-  # -- geometry constants (mirror surface.ex:1285-1310) --------------------
+  # -- geometry constants (ported from the retired Surface engine) ---------
   @margin_cols 2
   @sigil_cols 2
   @fv_frame_inset 1
@@ -415,7 +415,7 @@ defmodule Raxol.Harness.HarnessApp.Model do
     cost =
       last_turn_completed && payload_field(last_turn_completed, "cost", :cost)
 
-    {running_tool, last_item_type} = item_phase_inputs(last_loop)
+    {running_tool, last_item_type} = item_phase_inputs(last_loop, model)
 
     status =
       model.status
@@ -430,26 +430,51 @@ defmodule Raxol.Harness.HarnessApp.Model do
     %{model | status: status}
   end
 
-  defp item_phase_inputs(last_loop) do
-    if last_loop != nil and event_field(last_loop, :type) == :item_completed do
-      item_type =
-        case payload_field(last_loop, "item_type", :item_type) do
-          type when is_atom(type) and type != nil -> type
-          type when is_binary(type) -> Map.get(@item_type_atoms, type, type)
-          _other -> nil
-        end
+  defp item_phase_inputs(last_loop, model) do
+    case last_loop && event_field(last_loop, :type) do
+      :item_completed ->
+        item_type = payload_item_type(last_loop)
 
-      running_tool =
-        if item_type == :tool_use do
-          case payload_field(last_loop, "name", :name) do
-            name when is_binary(name) and name != "" -> name
-            _other -> nil
+        running_tool =
+          if item_type == :tool_use do
+            case payload_field(last_loop, "name", :name) do
+              name when is_binary(name) and name != "" -> name
+              _other -> nil
+            end
           end
-        end
 
-      {running_tool, item_type}
-    else
-      {nil, nil}
+        {running_tool, item_type}
+
+      :item_delta ->
+        # A delta's payload carries only item_id — its TYPE lives on the
+        # item's own start, which the projection tail already resolved
+        # ({turn_id, item_id} → %{item_type:}). Without this lookup every
+        # streaming delta reads type-unknown and the strip could only
+        # guess a word; with it, "responding" is claimable exactly when a
+        # MESSAGE is streaming (the strip's unknown default is the bare
+        # spinner — never a guessed word).
+        {nil, delta_item_type(last_loop, model)}
+
+      _other ->
+        {nil, nil}
+    end
+  end
+
+  defp payload_item_type(event) do
+    case payload_field(event, "item_type", :item_type) do
+      type when is_atom(type) and type != nil -> type
+      type when is_binary(type) -> Map.get(@item_type_atoms, type, type)
+      _other -> nil
+    end
+  end
+
+  defp delta_item_type(event, model) do
+    item_id = payload_field(event, "item_id", :item_id)
+    turn_id = event_field(event, :turn_id)
+
+    case model.projection && Map.get(model.projection.tail, {turn_id, item_id}) do
+      %{item_type: type} -> type
+      _absent -> nil
     end
   end
 
@@ -595,16 +620,200 @@ defmodule Raxol.Harness.HarnessApp.Model do
   defp final_turn_completed?(event),
     do: payload_field(event, "final", :final) != false
 
-  # Compaction is a live-session memory optimization (dropping already-
-  # sealed retired-turn events + reprojecting survivors). It is a NO-OP
-  # under fixture monotone growth (surface.ex:1709 comment) and is deferred
-  # to U6 with the live pump wiring — the non-compacting path is correct
-  # (indices stay monotone), only heavier for long live sessions.
-  @doc false
+  # Compaction is a live-session memory optimization: drop the already-
+  # sealed retired-turn events and reproject the survivors, so retention
+  # after a compacting bracket is O(size of the newest turns), not
+  # O(session). Ported from the retired Surface engine onto the same
+  # fields this model carries.
+  #
+  # Only a contiguous PREFIX of `model.events` is ever dropped, and only
+  # within the revealed range: the walk stops at the first event that is
+  # not a `:loop`-family event of a retired turn (meta-family events,
+  # id-less events, and the live turn all act as hard stops), which
+  # preserves the interior id/order structure of everything that survives.
+  #
+  # Bookkeeping shifted on commit: `revealed` (an event count from the
+  # head) drops by the dropped-event count; `painted_count`,
+  # `fold_overrides` keys, `focused_index`, and the `UnreadDivider`
+  # boundary/span (all positions in `projection.blocks`) shift down by
+  # the dropped-block count.
   @spec compact_sealed_turns(t()) :: t()
-  def compact_sealed_turns(model), do: model
+  def compact_sealed_turns(model) do
+    with false <- model.projection.damaged,
+         {k, dropped_ids} when k > 0 <- droppable_prefix(model),
+         :ok <- refs_clear?(model, k, dropped_ids),
+         {:ok, dropped_blocks} <- dropped_block_prefix(model, dropped_ids),
+         {:ok, projection} <- reproject_survivors(model, k, dropped_blocks) do
+      commit_compaction(model, k, dropped_blocks, projection)
+    else
+      _keep -> model
+    end
+  end
 
-  # ── stream lifecycle folds (surface.ex, minus paint) ─────────────────────
+  # The longest droppable prefix: `:loop` events with integer ids whose
+  # turn_id is retired. Anything else -- meta family, an id-less event, a
+  # live/kept turn -- stops the walk (fail-safe: prefix-only, so survivor
+  # order and interior gap structure are untouched).
+  defp droppable_prefix(model) do
+    revealed_events = Enum.take(model.events, model.revealed)
+    retired = retired_turn_ids(revealed_events)
+
+    revealed_events
+    |> Enum.reduce_while({0, MapSet.new()}, fn event, {k, ids} ->
+      id = Map.get(event, :id)
+
+      if Map.get(event, :family) == :loop and is_integer(id) and
+           MapSet.member?(retired, Map.get(event, :turn_id)) do
+        {:cont, {k + 1, MapSet.put(ids, id)}}
+      else
+        {:halt, {k, ids}}
+      end
+    end)
+  end
+
+  # Bracket-carrying turns in first-seen order, minus the newest one
+  # (kept so the status derivation's "last turn_completed" survives).
+  defp retired_turn_ids(revealed_events) do
+    {order, bracketed} =
+      Enum.reduce(revealed_events, {[], MapSet.new()}, fn event,
+                                                          {order, bracketed} ->
+        turn_id = Map.get(event, :turn_id)
+
+        if Map.get(event, :family) == :loop and not is_nil(turn_id) do
+          order = if turn_id in order, do: order, else: [turn_id | order]
+
+          bracketed =
+            if Map.get(event, :type) in [:turn_completed, :turn_canceled],
+              do: MapSet.put(bracketed, turn_id),
+              else: bracketed
+
+          {order, bracketed}
+        else
+          {order, bracketed}
+        end
+      end)
+
+    case order
+         |> Enum.reverse()
+         |> Enum.filter(&MapSet.member?(bracketed, &1)) do
+      [] -> MapSet.new()
+      completed -> completed |> List.delete_at(-1) |> MapSet.new()
+    end
+  end
+
+  # Veto: any surviving event whose payload cites a dropped id in `refs`
+  # (either key style) keeps everything -- an evidence ref must never be
+  # left dangling into a compacted region.
+  defp refs_clear?(model, k, dropped_ids) do
+    cited =
+      model.events
+      |> Enum.drop(k)
+      |> Enum.flat_map(fn event ->
+        case Map.get(event, :payload) do
+          %{} = payload ->
+            List.wrap(Map.get(payload, "refs") || Map.get(payload, :refs))
+
+          _other ->
+            []
+        end
+      end)
+
+    if Enum.any?(cited, &MapSet.member?(dropped_ids, &1)),
+      do: :veto,
+      else: :ok
+  end
+
+  # The dropped turns must account for exactly a leading run of SEALED
+  # blocks, and no surviving block may reference a dropped event id
+  # (a cross-turn evidence fold would show up here as an intersecting
+  # `event_refs`).
+  defp dropped_block_prefix(model, dropped_ids) do
+    {dropped_blocks, rest} =
+      Enum.split_while(model.projection.blocks, fn block ->
+        Enum.all?(block.event_refs, &MapSet.member?(dropped_ids, &1))
+      end)
+
+    survivors_clear? =
+      Enum.all?(rest, fn block ->
+        not Enum.any?(block.event_refs, &MapSet.member?(dropped_ids, &1))
+      end)
+
+    count = length(dropped_blocks)
+
+    if survivors_clear? and count <= model.painted_count,
+      do: {:ok, count},
+      else: :veto
+  end
+
+  # The referent check: the compacted prefix must project to EXACTLY the
+  # old projection minus the dropped sealed blocks. `==` on the block
+  # structs is a value comparison, so a detached (binary-copied) old
+  # block still matches its freshly rebuilt twin.
+  defp reproject_survivors(model, k, dropped_blocks) do
+    projection =
+      model.events
+      |> Enum.drop(k)
+      |> Enum.take(model.revealed - k)
+      |> Projection.project(fold_defaults: model.fold_defaults)
+
+    same? =
+      projection.blocks == Enum.drop(model.projection.blocks, dropped_blocks) and
+        projection.tail == model.projection.tail and
+        projection.damaged == model.projection.damaged
+
+    if same?, do: {:ok, projection}, else: :veto
+  end
+
+  defp commit_compaction(model, k, dropped_blocks, projection) do
+    %{
+      model
+      | events: Enum.drop(model.events, k),
+        revealed: model.revealed - k,
+        projection: projection,
+        painted_count: model.painted_count - dropped_blocks,
+        fold_overrides:
+          shift_fold_overrides(model.fold_overrides, dropped_blocks),
+        focused_index: shift_focus(model.focused_index, dropped_blocks),
+        unread: shift_unread(model.unread, dropped_blocks)
+    }
+  end
+
+  defp shift_fold_overrides(overrides, shift) do
+    for {index, fold} <- overrides,
+        is_integer(index),
+        index >= shift,
+        into: %{} do
+      {index - shift, fold}
+    end
+  end
+
+  defp shift_focus(nil, _shift), do: nil
+  defp shift_focus(index, shift), do: max(index - shift, 0)
+
+  # UnreadDivider positions are block-count offsets; shift them with the
+  # blocks. A span partially consumed by the drop keeps only its
+  # surviving extent; a fully consumed span retires.
+  defp shift_unread(unread, shift) do
+    unread
+    |> Map.update!(:boundary, fn
+      nil -> nil
+      boundary -> max(boundary - shift, 0)
+    end)
+    |> Map.update!(:span, fn
+      nil ->
+        nil
+
+      %{from: from, count: count} = span ->
+        shifted_from = max(from - shift, 0)
+        shifted_count = count + min(from - shift, 0)
+
+        if shifted_count > 0,
+          do: %{span | from: shifted_from, count: shifted_count},
+          else: nil
+    end)
+  end
+
+  # ── stream lifecycle folds (ported from the retired Surface engine) ──────
 
   @doc "Seals every still-held block (session/feed death): held tail lands in history."
   @spec close_stream(t()) :: t()

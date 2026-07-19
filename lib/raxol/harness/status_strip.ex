@@ -382,13 +382,15 @@ defmodule Raxol.Harness.StatusStrip do
   defp phase_word(:turn_completed, _last_item_type), do: nil
   defp phase_word(:turn_canceled, _last_item_type), do: nil
 
-  # A delta names the phase of the ITEM it belongs to: a streaming
-  # thought is "thinking", never "responding" (V's field report: the
-  # word flashed "responding" mid-thought on every reasoning delta).
-  defp phase_word(:item_delta, t) when t in [:reasoning, "reasoning"],
-    do: "thinking"
+  # A delta names the phase of the ITEM it belongs to — and claims a
+  # word ONLY on a positive type signal (V's ruling: never guess).
+  # A streaming MESSAGE is "responding"; a streaming thought carries no
+  # strip word (the ShadowStream tail already shows the live thinking);
+  # an unknown type is the bare braille spinner, never "responding".
+  defp phase_word(:item_delta, t) when t in [:message, "message"],
+    do: "responding"
 
-  defp phase_word(:item_delta, _last_item_type), do: "responding"
+  defp phase_word(:item_delta, _last_item_type), do: ""
   # The pre-stream WAIT (request in flight, nothing streamed yet): a bare
   # braille spinner + elapsed, no "thinking" word -- the live thinking display
   # is the ShadowStream in the tail, not a duplicate label here. (V, 2026-07-18)
@@ -412,7 +414,11 @@ defmodule Raxol.Harness.StatusStrip do
       # `running_tool` branch above owns the named case): a generic
       # word, never a raw event name and never a void.
       t when t in [:tool_use, "tool_use"] -> "running tool"
-      _other -> "responding"
+      t when t in [:message, "message"] -> "responding"
+      # Unknown item type: the bare braille spinner (V's ruling — a
+      # guessed word is worse than honest motion; "responding" was
+      # claiming turns that were reasoning or calling tools).
+      _other -> ""
     end
   end
 

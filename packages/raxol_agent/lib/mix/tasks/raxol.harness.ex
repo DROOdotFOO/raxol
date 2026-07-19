@@ -68,6 +68,20 @@ defmodule Mix.Tasks.Raxol.Harness do
     Logger.configure(level: :error)
     {:ok, _} = Application.ensure_all_started(:telemetry)
 
+    # Belt-and-braces terminal release (V's field report: mouse reporting
+    # survived a quit). The InlineDriver's own teardown owns the full
+    # sequence on every graceful path; this at_exit is the second net for
+    # the paths that never reach it — a ^C that lands as SIGINT while
+    # prim_tty has ISIG re-flipped (the BREAK-menu abort kills the VM
+    # mid-session, but abort DOES run at_exit handlers), a crashed pump,
+    # an init:stop unwind. Idempotent byte-wise: mode resets are set/reset
+    # DEC privates, and `stty sane` after a restored tty is a no-op in
+    # effect. SIGKILL still cleans nothing — nothing can.
+    System.at_exit(fn _status ->
+      IO.write(:stdio, "\e[?1000l\e[?1006l\e[?1003l\e[?2004l\e[?1004l")
+      Raxol.Terminal.Driver.Stty.sane!()
+    end)
+
     {backend, backend_opts, label, demo_cleanup} =
       if demo_approval? do
         demo_approval_backend()

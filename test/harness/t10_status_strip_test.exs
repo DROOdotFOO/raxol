@@ -29,8 +29,11 @@ defmodule Raxol.Harness.T10StatusStripTest do
 
   alias Raxol.Harness.StatusStrip
 
+  # A MESSAGE delta — the one positively-known streaming type that earns
+  # the "responding" word (an unknown-type delta is a bare spinner).
   @live_state %{
     turn_stage: :item_delta,
+    last_item_type: :message,
     now: 4_000,
     last_event_at: 0
   }
@@ -84,23 +87,25 @@ defmodule Raxol.Harness.T10StatusStripTest do
   end
 
   describe "ruling 2: operator phases, never raw event vocabulary" do
-    test "streaming maps to the STREAMING ITEM's phase: message → responding, reasoning → thinking" do
-      assert StatusStrip.phase_value(%{turn_stage: :item_delta}) == "responding"
+    test "streaming claims a word only on a POSITIVE type: message → responding, else bare spinner" do
+      # V's ruling: a guessed word is worse than honest motion — an
+      # unknown-type delta (deltas carry no item_type of their own; the
+      # model resolves it from the projection tail when it can) renders
+      # the bare braille spinner, never "responding".
+      assert StatusStrip.phase_value(%{turn_stage: :item_delta}) == ""
 
-      # V's field report: the word flashed "responding" mid-thought on
-      # every reasoning delta — a streaming thought is thinking.
+      assert StatusStrip.phase_value(%{
+               turn_stage: :item_delta,
+               last_item_type: :message
+             }) == "responding"
+
       assert StatusStrip.phase_value(%{
                turn_stage: :item_delta,
                last_item_type: :reasoning
-             }) == "thinking"
-
-      assert StatusStrip.phase_value(%{
-               turn_stage: :item_delta,
-               last_item_type: "reasoning"
-             }) == "thinking"
+             }) == ""
     end
 
-    test "a finished thought stays thinking — only a completed message earns responding" do
+    test "a finished thought stays thinking; only a completed MESSAGE earns responding; unknown is spinner" do
       assert StatusStrip.phase_value(%{
                turn_stage: :item_completed,
                last_item_type: :reasoning
@@ -110,6 +115,8 @@ defmodule Raxol.Harness.T10StatusStripTest do
                turn_stage: :item_completed,
                last_item_type: :message
              }) == "responding"
+
+      assert StatusStrip.phase_value(%{turn_stage: :item_completed}) == ""
     end
 
     test "turn_started is the bare-spinner wait; item_started maps to thinking" do
@@ -205,7 +212,12 @@ defmodule Raxol.Harness.T10StatusStripTest do
 
   describe "elapsed ticker (R11: injected now/last_event_at, no wall clock)" do
     test "advancing injected now advances the elapsed display deterministically" do
-      base = %{turn_stage: :item_delta, last_event_at: 0, now: nil}
+      base = %{
+        turn_stage: :item_delta,
+        last_item_type: :message,
+        last_event_at: 0,
+        now: nil
+      }
 
       assert StatusStrip.render(%{base | now: 0}, 200) == ["responding 0s"]
       assert StatusStrip.render(%{base | now: 3_000}, 200) == ["responding 3s"]
@@ -213,7 +225,12 @@ defmodule Raxol.Harness.T10StatusStripTest do
     end
 
     test "crossing warn_after_ms appends the slow marker" do
-      base = %{turn_stage: :item_delta, last_event_at: 0, now: nil}
+      base = %{
+        turn_stage: :item_delta,
+        last_item_type: :message,
+        last_event_at: 0,
+        now: nil
+      }
 
       assert StatusStrip.render(%{base | now: 14_999}, 200) ==
                ["responding 14s"]
@@ -240,6 +257,7 @@ defmodule Raxol.Harness.T10StatusStripTest do
     test "thresholds are overridable per-call" do
       state = %{
         turn_stage: :item_delta,
+        last_item_type: :message,
         last_event_at: 0,
         now: 5_000,
         warn_after_ms: 1_000,
@@ -250,15 +268,29 @@ defmodule Raxol.Harness.T10StatusStripTest do
     end
 
     test "either now or last_event_at absent renders the bare phase" do
-      only_now = %{turn_stage: :item_delta, now: 5_000}
-      only_last = %{turn_stage: :item_delta, last_event_at: 0}
+      only_now = %{
+        turn_stage: :item_delta,
+        last_item_type: :message,
+        now: 5_000
+      }
+
+      only_last = %{
+        turn_stage: :item_delta,
+        last_item_type: :message,
+        last_event_at: 0
+      }
 
       assert StatusStrip.render(only_now, 200) == ["responding"]
       assert StatusStrip.render(only_last, 200) == ["responding"]
     end
 
     test "minutes formatting pads seconds to two digits" do
-      state = %{turn_stage: :item_delta, last_event_at: 0, now: 65_000}
+      state = %{
+        turn_stage: :item_delta,
+        last_item_type: :message,
+        last_event_at: 0,
+        now: 65_000
+      }
 
       assert StatusStrip.render(state, 200) == ["HUNG responding 1m05s"]
     end
@@ -581,6 +613,7 @@ defmodule Raxol.Harness.T10StatusStripTest do
     test "with no activity flag (fixture/replay) the strip never animates" do
       state = %{
         turn_stage: :item_delta,
+        last_item_type: :message,
         now: 4_000,
         last_event_at: 0,
         spinner: @spin

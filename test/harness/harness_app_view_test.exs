@@ -241,6 +241,30 @@ defmodule Raxol.Harness.HarnessAppViewTest do
       refute text =~ "❮ …streaming…"
     end
 
+    test "a streaming REASONING delta resolves its type from the tail: bare spinner, never 'responding'" do
+      # The end-to-end half of V's ruling: delta payloads carry no
+      # item_type; Model.update_status resolves it from the projection
+      # tail, so the strip gets a POSITIVE :reasoning and yields the
+      # word entirely (the ShadowStream tail shows the live thinking).
+      model =
+        stream_model([
+          loop_ev(1, "t1", 100, :turn_started, %{}),
+          loop_ev(2, "t1", 110, :item_started, %{
+            "item_id" => "i1",
+            "item_type" => "reasoning"
+          }),
+          loop_ev(3, "t1", 120, :item_delta, %{
+            "item_id" => "i1",
+            "chunk" => "mid-thought"
+          })
+        ])
+
+      assert model.status.last_item_type == :reasoning
+      assert Raxol.Harness.StatusStrip.phase_value(model.status) == ""
+
+      refute flatten_text(View.render(model)) =~ "responding"
+    end
+
     test "streaming answer text keeps the plain » preview" do
       model =
         stream_model([
