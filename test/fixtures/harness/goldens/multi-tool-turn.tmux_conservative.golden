@@ -1,7 +1,7 @@
-[1;14r7[15;1H[K[1m❯[0m  8[15;3H[?25l7[15;1H[K[16;1H[K[1m❯[0m  8[16;3H[?25h[?25l7[15;1H[K thinking[16;1H[K [38;2;111;111;111mthinking[0m[17;1H[K[1m❯[0m  8[17;3H[?25h[?25l7[15;1H[K responding[16;1H[K ⁖ thinking                                  1 line · 100ms8[17;3H[?25h7[15;1H[K thinking8[17;3H7[1;1H [2m⁖ thinking                                  1 line · 100ms[0m
+[1;14r7[15;1H[K[1m❯[0m  8[15;3H[?25l7[15;1H[K[16;1H[K[1m❯[0m  8[16;3H[?25h[?25l7[15;1H[K thinking[16;1H[K [38;2;111;111;111mthinking[0m[17;1H[K[1m❯[0m  8[17;3H[?25h[?25l7[15;1H[K responding[16;1H[K ⁖ thinking                                  1 line · 100ms8[17;3H[?25h7[15;1H[K thinking8[17;3H7[1;1H [2;38;2;111;111;111m⁖ thinking                                  1 line · 100ms[0m
 8[?25l7[15;1H[K running list_dir[16;1H[K[2m⠴[0m⚙ list_dir path: .8[17;3H[?25h[?25l7[15;1H[K thinking[16;1H[K[2m⠦[0m⚙ list_dir path: .8[17;3H[?25h7[16;1H[K ⚙ list_dir path: . · ⚠︎ untrusted8[17;3H7[2;1H
- [2m⚙ list_dir path: . · ⚠︎ untrusted[0m
-8[?25l7[15;1H[K running read_file[16;1H[K[2m⠏[0m⚙ read_file path: mix.exs8[17;3H[?25h[?25l7[15;1H[K thinking[16;1H[K[2m⠋[0m⚙ read_file path: mix.exs8[17;3H[?25h7[16;1H[K ⚙ read_file path: mix.exs · ⚠︎ untrusted8[17;3H7[15;1H[K responding8[17;3H7[4;1H [2m⚙ read_file path: mix.exs · ⚠︎ untrusted[0m
+ [2;38;2;111;111;111m⚙ list_dir path: . · ⚠︎ untrusted[0m
+8[?25l7[15;1H[K running read_file[16;1H[K[2m⠏[0m⚙ read_file path: mix.exs8[17;3H[?25h[?25l7[15;1H[K thinking[16;1H[K[2m⠋[0m⚙ read_file path: mix.exs8[17;3H[?25h7[16;1H[K ⚙ read_file path: mix.exs · ⚠︎ untrusted8[17;3H7[15;1H[K responding8[17;3H7[4;1H [2;38;2;111;111;111m⚙ read_file path: mix.exs · ⚠︎ untrusted[0m
 87[16;1H[K Root has mix.exs, lib/, test/, README.md.8[17;3H7[5;1H
 [1m❮[0m Root has mix.exs, lib/, test/, README.md.
   [2mno evidence provided[0m

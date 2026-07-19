@@ -441,7 +441,11 @@ defmodule Raxol.Harness.HarnessApp.View do
     end
   end
 
-  # One blank row above the composer (surface.ex composer_sep, full-viewport).
+  # One blank row above the composer (surface.ex composer_sep,
+  # full-viewport) — suppressed while the greeting idles at the transcript
+  # bottom, so the greeting sits exactly ONE line above the chevron prompt
+  # (V's placement ruling), not two.
+  defp composer_sep_lines(%{greeting?: true, transcript_records: []}), do: []
   defp composer_sep_lines(_model), do: [%{type: :text, content: ""}]
 
   # The composer rows, chevron applied (surface.ex `chevron_lines/2` ported

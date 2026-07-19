@@ -227,18 +227,24 @@ defmodule Raxol.UI.Components.Harness.TranscriptView do
 
   defp blank, do: %{type: :text, content: ""}
 
-  defp greeting_rows(%{greeting?: true}, _width, height) do
-    top = div(max(height - 1, 0), 2)
+  # The greeting idles at the transcript BOTTOM (V's placement ruling: one
+  # line above the chevron prompt — the host suppresses the composer
+  # separator while it shows), at low prominence: it is a costume line,
+  # not content — dim + the same fade ramp sealed machinery uses.
+  @greeting_prominence 0.5
 
-    List.duplicate(blank(), top) ++
+  defp greeting_rows(%{greeting?: true}, _width, height) do
+    faded =
+      Raxol.UI.Harness.Prominence.resolve("#B4B4B4", @greeting_prominence)
+
+    List.duplicate(blank(), max(height - 1, 0)) ++
       [
         %{
           type: :text,
           content: "welcome back, operator",
-          attrs: %{style: [:dim]}
+          attrs: %{style: [:dim], fg: faded}
         }
-      ] ++
-      List.duplicate(blank(), max(height - top - 1, 0))
+      ]
   end
 
   defp greeting_rows(_state, _width, height),

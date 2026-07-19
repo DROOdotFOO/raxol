@@ -507,6 +507,52 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert style[:dim] == true
     end
 
+    test "SEALED machinery fades: a completed tool line carries the register fg ramp, not just :dim" do
+      # V's completed-phases ruling: :dim alone reads near-full-strength on
+      # many terminals; a sealed tool/reasoning line clamps to the machinery
+      # register prominence and picks up a real faded fg.
+      block =
+        Block.from_events(:tool_call, tool_events("read_file", %{}, "x"),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [{_content, style}] =
+               styled_texts(Block.render(block, %{width: 120}))
+
+      assert is_binary(style[:fg]) and String.starts_with?(style[:fg], "#"),
+             "sealed machinery must carry the faded register fg, got #{inspect(style)}"
+    end
+
+    test "a FAILED sealed tool keeps alarm prominence — no register fade" do
+      block =
+        Block.from_events(
+          :tool_call,
+          tool_events("run", %{}, "boom", %{exit_code: 1}),
+          fold: :folded,
+          seal: :sealed
+        )
+
+      assert [{_content, style}] =
+               styled_texts(Block.render(block, %{width: 120}))
+
+      refute Map.has_key?(style, :fg),
+             "a failed tool is signal, never faded machinery"
+    end
+
+    test "LIVE machinery keeps full prominence — the fade marks completion" do
+      block =
+        Block.from_events(:tool_call, tool_events("read_file", %{}, "x"),
+          fold: :folded,
+          seal: :live
+        )
+
+      assert [{_content, style}] =
+               styled_texts(Block.render(block, %{width: 120}))
+
+      refute Map.has_key?(style, :fg)
+    end
+
     test "the folded reasoning line is DIM (machinery register) and shows ⁖ + line count" do
       # A sealed reasoning block inherits the low-prominence cognition
       # register (V 2026-07-18): `⁖ thinking` flush left, the honest line

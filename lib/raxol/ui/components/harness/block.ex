@@ -882,8 +882,15 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp apply_fg(style, nil), do: style
   defp apply_fg(style, fg), do: Map.put(style, :fg, fg)
 
+  # The machinery register's prominence ceiling (V's completed-phases
+  # ruling): a SEALED tool/reasoning/diff line is subordinate machinery —
+  # it renders no brighter than one recency tier down, whatever the
+  # context grade says. `:dim` alone reads near-full-strength on many
+  # terminals; the fade ramp is the honest register signal.
+  @machinery_register_prominence 0.6
+
   defp prominence_fg(block, context) do
-    case Map.get(context, :prominence, 1.0) do
+    case effective_prominence(block, Map.get(context, :prominence, 1.0)) do
       p when is_number(p) and p >= 1.0 ->
         nil
 
@@ -894,6 +901,23 @@ defmodule Raxol.UI.Components.Harness.Block do
         nil
     end
   end
+
+  # A FAILED tool keeps alarm prominence (a fault is signal, not
+  # machinery noise — same rule as its `header_view/4` style); errors and
+  # approvals never clamp (alarm / needs-input registers). Live machinery
+  # keeps full prominence until it seals — the fade marks COMPLETION.
+  defp effective_prominence(
+         %__MODULE__{seal: :sealed, kind: kind} = block,
+         p
+       )
+       when kind in [:tool_call, :reasoning, :diff] and is_number(p) do
+    if kind == :tool_call and is_map(block.outcome) and
+         tool_failed?(block.outcome),
+       do: p,
+       else: min(p, @machinery_register_prominence)
+  end
+
+  defp effective_prominence(_block, p), do: p
 
   # Only pass `:ground` through when the caller actually supplied one --
   # `Prominence.resolve/3` defaults it lazily (OSC-11-detected, else the

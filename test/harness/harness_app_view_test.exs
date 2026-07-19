@@ -110,6 +110,51 @@ defmodule Raxol.Harness.HarnessAppViewTest do
     assert length(in_tree) < 40
   end
 
+  # ── the greeting placement (V's one-above-the-chevron ruling) ──────────
+
+  describe "the idle greeting" do
+    test "sits on the LAST transcript row and the composer separator yields — one line above the chevron" do
+      model = Model.build(width: 80, rows: 24, greeting?: true)
+      view = View.render(model)
+      [transcript, footer | _] = unframe(view).children
+
+      assert List.last(transcript.children).content ==
+               "welcome back, operator"
+
+      # separator suppressed: the footer's first fitted row IS the composer
+      # sigil row (a :row), not a blank spacer line
+      assert [first | _] = footer.children
+      refute match?(%{type: :text, content: ""}, first)
+    end
+
+    test "renders at low prominence: dim + a faded fg, never full-weight" do
+      model = Model.build(width: 80, rows: 24, greeting?: true)
+      view = View.render(model)
+      [transcript | _] = unframe(view).children
+      greeting = List.last(transcript.children)
+
+      assert greeting.attrs[:style] == [:dim]
+
+      assert is_binary(greeting.attrs[:fg]) and
+               String.starts_with?(greeting.attrs[:fg], "#")
+    end
+
+    test "the separator returns once history exists" do
+      model = %{
+        Model.build(width: 80, rows: 24, greeting?: true)
+        | transcript_records: [{:marker, "m"}]
+      }
+
+      view = View.render(model)
+      [_transcript, footer | _] = unframe(view).children
+
+      assert Enum.any?(
+               footer.children,
+               &match?(%{type: :text, content: ""}, &1)
+             )
+    end
+  end
+
   # ── the honest-notice fit law (law 3) ────────────────────────────────────
 
   test "a stub_notice survives a tight footer budget (protected channel, law 3)" do
