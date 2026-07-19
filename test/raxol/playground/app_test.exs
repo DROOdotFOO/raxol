@@ -53,10 +53,10 @@ defmodule Raxol.Playground.AppTest do
   describe "init/1" do
     test "initializes with components and first selected" do
       model = App.init(nil)
-      # 51 = 44 (through U1-c approval) + 1 (U3 overlay)
-      # + 3 (U2 footer_stack/status_strip/composer) + 1 (U4 assembled)
-      # + 1 (indication primitive).
-      assert length(model.components) == 51
+
+      assert length(model.components) ==
+               length(Raxol.Playground.Catalog.list_components())
+
       assert model.cursor == 0
       assert model.selected != nil
       assert model.focus == :sidebar
@@ -231,10 +231,9 @@ defmodule Raxol.Playground.AppTest do
       # After cycling through all categories, next press returns to nil
       {model, []} = App.update(key_event("f"), model)
       assert model.category_filter == nil
-      # 51 = 44 (through U1-c approval) + 1 (U3 overlay)
-      # + 3 (U2 footer_stack/status_strip/composer) + 1 (U4 assembled)
-      # + 1 (indication primitive).
-      assert length(model.components) == 51
+
+      assert length(model.components) ==
+               length(Raxol.Playground.Catalog.list_components())
     end
 
     test "f resets cursor to 0" do

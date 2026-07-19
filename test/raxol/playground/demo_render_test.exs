@@ -48,7 +48,7 @@ defmodule Raxol.Playground.DemoRenderTest do
   # "[o] open modal" is the footer, "Confirm Action" is the widget itself.
   @expected_text %{
     "Button" => ["Primary", "Secondary", "Reset"],
-    "TextInput" => ["Type here", "Length"],
+    "TextInput" => ["Type here", "already filled", "chars:"],
     "Checkbox" => [
       "Enable notifications",
       "Dark mode",
@@ -56,7 +56,7 @@ defmodule Raxol.Playground.DemoRenderTest do
       "Show line numbers",
       "Word wrap"
     ],
-    "TextArea" => ["Hello, world!", "Edit me with"],
+    "TextArea" => ["Hello, world!", "Edit me with arrows"],
     "Modal" => ["Confirm Action", "Are you sure", "Confirm", "Cancel"],
     "Tabs" => ["Overview", "Details", "Settings", "Help"],
     "Container" => ["Item 01", "Item 02"],
@@ -64,7 +64,10 @@ defmodule Raxol.Playground.DemoRenderTest do
     "RadioGroup" => ["Theme", "Size", "Speed"],
     "Menu" => ["File", "Edit", "View"],
     "Tree" => ["src", "lib"],
-    "Table" => ["Raxol", "Elixir"]
+    "Table" => ["Raxol", "Elixir"],
+    "PasswordField" => ["PasswordField", "interactive", "placeholder", "disabled"],
+    "CodeBlock" => ["defmodule", "Greeter"],
+    "StatusBar" => ["Mode", "NORMAL"]
   }
 
   # Per-demo key sequences to exercise state changes that reveal more
@@ -74,9 +77,13 @@ defmodule Raxol.Playground.DemoRenderTest do
   # Keys can be strings (single chars) or atoms (special keys).
   @key_drives %{
     "Modal" => ["o"],
-    "SelectList" => ["o"],
+    # SelectList is always-open; drive nav + select instead of invented "o" toggle
+    "SelectList" => [:down, :enter],
+    # open File submenu so child labels appear
     "Menu" => [:enter],
-    "Tree" => ["e"]
+    "Tree" => ["e"],
+    "Tabs" => ["l", "3"],
+    "Checkbox" => ["j", " "]
   }
 
   setup_all do

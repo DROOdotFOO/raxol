@@ -1,161 +1,186 @@
 defmodule Raxol.Playground.Demos.TreeDemo do
-  @moduledoc "Playground demo: expandable tree view with keyboard navigation."
+  @moduledoc """
+  Playground demo: `Raxol.UI.Components.Display.Tree` — the REAL tree view
+  with expand/collapse and keyboard navigation. Keys route through
+  `Tree.handle_event/3` (Event-shaped vocabulary, same as Viewport).
+
+  Component bindings:
+  - Up/Down (and j/k mapped here): move cursor through visible nodes
+  - Right / Enter / Space: expand or toggle; leaf fires on_select
+  - Left: collapse, or move to parent
+  - Home/End: first/last visible node
+
+  Demo-level chords (not in the component):
+  - [e] expand all directories
+  - [c] collapse all
+  """
   use Raxol.Core.Runtime.Application
+
+  alias Raxol.Core.Events.Event
   alias Raxol.Playground.DemoHelpers
+  alias Raxol.UI.Components.Display.Tree
 
-  @indent "  "
-
-  @tree [
+  @nodes [
     %{
-      name: "src",
+      id: :src,
+      label: "src",
       children: [
-        %{name: "app.ex", children: []},
+        %{id: :app_ex, label: "app.ex", children: [], data: nil},
         %{
-          name: "lib",
+          id: :lib,
+          label: "lib",
           children: [
-            %{name: "utils.ex", children: []},
-            %{name: "core.ex", children: []}
-          ]
+            %{id: :utils_ex, label: "utils.ex", children: [], data: nil},
+            %{id: :core_ex, label: "core.ex", children: [], data: nil}
+          ],
+          data: nil
         }
-      ]
+      ],
+      data: nil
     },
     %{
-      name: "test",
+      id: :test,
+      label: "test",
       children: [
-        %{name: "test_helper.exs", children: []}
-      ]
+        %{id: :test_helper, label: "test_helper.exs", children: [], data: nil}
+      ],
+      data: nil
     },
-    %{name: "mix.exs", children: []},
-    %{name: "README.md", children: []}
+    %{id: :mix_exs, label: "mix.exs", children: [], data: nil},
+    %{id: :readme, label: "README.md", children: [], data: nil}
   ]
 
   @impl true
   def init(_context) do
-    %{expanded: MapSet.new(), cursor: 0}
+    {:ok, tree} =
+      Tree.init(
+        id: :playground_tree,
+        nodes: @nodes,
+        expanded: MapSet.new(),
+        focused: true
+      )
+
+    %{tree: tree, event_log: [], last_select: nil}
   end
 
   @impl true
   def update(message, model) do
-    visible = flatten_visible(@tree, model.expanded)
-    apply_key(message, model, visible)
-  end
+    case message do
+      key_match("e") ->
+        expanded = all_branch_ids(@nodes)
+        tree = %{model.tree | expanded: expanded}
+        model = DemoHelpers.log_event(model, "expand all -> #{MapSet.size(expanded)} nodes")
+        {%{model | tree: tree}, []}
 
-  defp apply_key(key_match("j"), model, visible) do
-    max_idx = max(length(visible) - 1, 0)
-    {%{model | cursor: DemoHelpers.cursor_down(model.cursor, max_idx)}, []}
-  end
+      key_match("c") ->
+        tree = %{model.tree | expanded: MapSet.new(), cursor: first_id(@nodes)}
+        model = DemoHelpers.log_event(model, "collapse all")
+        {%{model | tree: tree}, []}
 
-  defp apply_key(key_match("k"), model, _visible) do
-    {%{model | cursor: DemoHelpers.cursor_up(model.cursor)}, []}
-  end
+      _ ->
+        case tree_event(message) do
+          nil ->
+            {model, []}
 
-  defp apply_key(key_match("l"), model, visible),
-    do: {expand_current(model, visible), []}
-
-  defp apply_key(key_match(:right), model, visible),
-    do: {expand_current(model, visible), []}
-
-  defp apply_key(key_match("h"), model, visible),
-    do: {collapse_current(model, visible), []}
-
-  defp apply_key(key_match(:left), model, visible),
-    do: {collapse_current(model, visible), []}
-
-  defp apply_key(key_match("e"), model, _visible) do
-    {%{model | expanded: all_dir_names(@tree)}, []}
-  end
-
-  defp apply_key(key_match("c"), model, _visible) do
-    {%{model | expanded: MapSet.new(), cursor: 0}, []}
-  end
-
-  defp apply_key(_message, model, _visible), do: {model, []}
-
-  @impl true
-  def view(model) do
-    visible = flatten_visible(@tree, model.expanded)
-    lines = Enum.map(Enum.with_index(visible), &render_node(&1, model))
-
-    column style: %{gap: 1} do
-      [
-        text("Tree Demo", style: [:bold]),
-        divider(),
-        column style: %{gap: 0} do
-          lines
-        end,
-        divider(),
-        text(
-          "Nodes: #{length(visible)}  Expanded: #{MapSet.size(model.expanded)}"
-        ),
-        text(
-          "[j/k] navigate  [h/l] collapse/expand  [e] expand all  [c] collapse all",
-          style: [:dim]
-        )
-      ]
+          {event, summary} ->
+            {tree, model} = apply_tree(model, event, summary)
+            {%{model | tree: tree}, []}
+        end
     end
   end
 
-  defp render_node({{node, depth, has_children}, idx}, model) do
-    indent = String.duplicate(@indent, depth)
-
-    prefix =
-      node_prefix(has_children, MapSet.member?(model.expanded, node.name))
-
-    style = if idx == model.cursor, do: [:bold], else: []
-    marker = if idx == model.cursor, do: "*", else: " "
-    text(marker <> indent <> prefix <> node.name, style: style)
+  # Map playground keys onto Tree's Event vocabulary. j/k are vim aliases
+  # for up/down; h/l for left/right expand/collapse.
+  defp tree_event(%Event{type: :key, data: data}) do
+    case data do
+      %{key: :char, char: "j"} -> {event(:down), "key j/down"}
+      %{key: :char, char: "k"} -> {event(:up), "key k/up"}
+      %{key: :char, char: "h"} -> {event(:left), "key h/left"}
+      %{key: :char, char: "l"} -> {event(:right), "key l/right"}
+      %{key: :down} -> {event(:down), "key :down"}
+      %{key: :up} -> {event(:up), "key :up"}
+      %{key: :left} -> {event(:left), "key :left"}
+      %{key: :right} -> {event(:right), "key :right"}
+      %{key: :enter} -> {event(:enter), "key :enter"}
+      %{key: :space} -> {event(:space), "key :space"}
+      %{key: :home} -> {event(:home), "key :home"}
+      %{key: :end} -> {event(:end), "key :end"}
+      _ -> nil
+    end
   end
 
-  defp node_prefix(true, true), do: "v "
-  defp node_prefix(true, false), do: "> "
-  defp node_prefix(false, _), do: "  "
+  defp tree_event(_other), do: nil
+
+  defp event(key), do: %Event{type: :key, data: %{key: key}}
+
+  defp apply_tree(model, event, summary) do
+    before = model.tree
+    {tree, _cmds} = Tree.handle_event(event, before, %{})
+
+    expanded_delta = MapSet.size(tree.expanded) - MapSet.size(before.expanded)
+
+    outcome =
+      "#{summary} -> cursor=#{inspect(tree.cursor)} " <>
+        "expanded=#{MapSet.size(tree.expanded)}" <>
+        if(expanded_delta != 0, do: " (#{fmt_delta(expanded_delta)})", else: "")
+
+    {tree, DemoHelpers.log_event(model, outcome)}
+  end
+
+  defp fmt_delta(n) when n > 0, do: "+#{n}"
+  defp fmt_delta(n), do: "#{n}"
+
+  @impl true
+  def view(model) do
+    tree = model.tree
+    visible = Tree.visible_nodes(tree)
+    cursor_label = cursor_label(tree)
+
+    column style: %{gap: 1} do
+      [
+        text("Tree — Raxol.UI.Components.Display.Tree", style: [:bold]),
+        text(" expand/collapse via Tree.handle_event (▶ / ▼ icons)", style: [:dim]),
+        text(""),
+        box style: %{border: :single, padding: 1, width: 40} do
+          Tree.render(tree, %{})
+        end,
+        text(""),
+        row style: %{gap: 2} do
+          [
+            text("Cursor: #{cursor_label}"),
+            text("Visible: #{length(visible)}"),
+            text("Expanded: #{MapSet.size(tree.expanded)}")
+          ]
+        end,
+        text(
+          " [j/k ↑↓] move  [h/l ←→] collapse/expand  [enter/space] toggle  [e] expand all  [c] collapse all",
+          style: [:dim]
+        ),
+        text("")
+      ] ++ DemoHelpers.event_log_lines(model)
+    end
+  end
 
   @impl true
   def subscribe(_model), do: []
 
-  defp flatten_visible(nodes, expanded) do
-    flatten_visible(nodes, expanded, 0)
-  end
+  defp cursor_label(%{cursor: nil}), do: "none"
 
-  defp flatten_visible(nodes, expanded, depth) do
-    Enum.flat_map(nodes, fn node ->
-      has_children = node.children != []
-      entry = {node, depth, has_children}
-
-      if has_children and MapSet.member?(expanded, node.name) do
-        [entry | flatten_visible(node.children, expanded, depth + 1)]
-      else
-        [entry]
-      end
-    end)
-  end
-
-  defp expand_current(model, visible) do
-    case Enum.at(visible, model.cursor) do
-      {node, _, true} ->
-        %{model | expanded: MapSet.put(model.expanded, node.name)}
-
-      _ ->
-        model
+  defp cursor_label(%{cursor: id, nodes: nodes}) do
+    case Tree.find_node(nodes, id) do
+      %{label: label} -> "#{label} (#{id})"
+      _ -> inspect(id)
     end
   end
 
-  defp collapse_current(model, visible) do
-    case Enum.at(visible, model.cursor) do
-      {node, _, true} ->
-        %{model | expanded: MapSet.delete(model.expanded, node.name)}
+  defp first_id([%{id: id} | _]), do: id
 
-      _ ->
-        model
-    end
-  end
-
-  defp all_dir_names(nodes) do
+  defp all_branch_ids(nodes) do
     Enum.reduce(nodes, MapSet.new(), fn node, acc ->
       if node.children != [] do
         acc
-        |> MapSet.put(node.name)
-        |> MapSet.union(all_dir_names(node.children))
+        |> MapSet.put(node.id)
+        |> MapSet.union(all_branch_ids(node.children))
       else
         acc
       end

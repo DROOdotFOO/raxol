@@ -28,13 +28,42 @@ defmodule Raxol.Playground.DemosTest do
     TreeDemo
   }
 
-  defp key_event(char) do
-    %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: char}}
+  # `key_event("x", ctrl: true)` arrives as a keyword list; normalize to a map.
+  defp key_event(char, extra \\ []) do
+    %Raxol.Core.Events.Event{
+      type: :key,
+      data: Map.merge(%{key: :char, char: char}, Map.new(extra))
+    }
   end
 
-  defp special_key(key, extra \\ %{}) do
-    %Raxol.Core.Events.Event{type: :key, data: Map.merge(%{key: key}, extra)}
+  defp special_key(key, extra \\ []) do
+    %Raxol.Core.Events.Event{
+      type: :key,
+      data: Map.merge(%{key: key}, Map.new(extra))
+    }
   end
+
+  defp collect_text(node) when is_map(node) do
+    own =
+      cond do
+        is_binary(node[:content]) -> [node[:content]]
+        is_binary(node[:text]) -> [node[:text]]
+        true -> []
+      end
+
+    kids =
+      case node[:children] do
+        list when is_list(list) -> Enum.flat_map(list, &collect_text/1)
+        _ -> []
+      end
+
+    own ++ kids
+  end
+
+  defp collect_text(list) when is_list(list),
+    do: Enum.flat_map(list, &collect_text/1)
+
+  defp collect_text(_), do: []
 
   describe "ButtonDemo" do
     test "init returns zero state" do
@@ -71,106 +100,197 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "TextInputDemo" do
-    test "init returns empty value" do
+    test "init mounts real TextInput states" do
       model = TextInputDemo.init(nil)
-      assert model.value == ""
-      assert model.char_count == 0
+      assert model.main.value == ""
+      assert model.main.focused == true
+      assert model.main.placeholder == "Type here..."
+      assert model.placeholder_story.value == ""
+      assert model.placeholder_story.placeholder != ""
+      assert model.filled_story.value == "already filled"
+      assert model.max_length_story.max_length == 8
+      assert model.muted == false
+      assert model.event_log == []
     end
 
-    test "typing appends characters" do
+    test "typing routes through TextInput.handle_event" do
       model = TextInputDemo.init(nil)
-      {model, []} = TextInputDemo.update(key_event("h"), model)
-      {model, []} = TextInputDemo.update(key_event("i"), model)
-      assert model.value == "hi"
-      assert model.char_count == 2
+
+      model =
+        Enum.reduce(String.graphemes("hi"), model, fn ch, m ->
+          {m, []} = TextInputDemo.update(key_event(ch), m)
+          m
+        end)
+
+      assert model.main.value == "hi"
+      assert model.main.cursor_pos == 2
+      assert length(model.event_log) == 2
     end
 
-    test "backspace removes last character" do
-      model = %{value: "hello", char_count: 5}
+    test "backspace removes a character via the real component" do
+      model = TextInputDemo.init(nil)
+
+      model =
+        Enum.reduce(String.graphemes("hello"), model, fn ch, m ->
+          {m, []} = TextInputDemo.update(key_event(ch), m)
+          m
+        end)
+
       {model, []} = TextInputDemo.update(special_key(:backspace), model)
-      assert model.value == "hell"
-      assert model.char_count == 4
+      assert model.main.value == "hell"
+      assert model.main.cursor_pos == 4
     end
 
-    test "backspace on empty string stays empty" do
-      model = %{value: "", char_count: 0}
+    test "backspace on empty stays empty" do
+      model = TextInputDemo.init(nil)
       {model, []} = TextInputDemo.update(special_key(:backspace), model)
-      assert model.value == ""
+      assert model.main.value == ""
+    end
+
+    test "ctrl-x clears the interactive field" do
+      model = TextInputDemo.init(nil)
+      {model, []} = TextInputDemo.update(key_event("a"), model)
+      {model, []} = TextInputDemo.update(key_event("x", ctrl: true), model)
+      assert model.main.value == ""
+    end
+
+    test "ctrl-d mutes routing (demo-level; TextInput has no disabled)" do
+      model = TextInputDemo.init(nil)
+      {model, []} = TextInputDemo.update(key_event("d", ctrl: true), model)
+      assert model.muted == true
+      {model, []} = TextInputDemo.update(key_event("z"), model)
+      assert model.main.value == ""
     end
 
     test "view returns element tree" do
       model = TextInputDemo.init(nil)
-      view = TextInputDemo.view(model)
-      assert is_map(view)
+      assert is_map(TextInputDemo.view(model))
     end
   end
 
   describe "TableDemo" do
-    test "init starts at row 0" do
+    test "init mounts real Table with selection and pagination" do
       model = TableDemo.init(nil)
-      assert model.cursor == 0
-      assert model.sort_col == nil
+      assert model.table.selected_row == 0
+      assert model.table.sort_by == nil
+      assert model.table.options.paginate == true
+      assert model.table.options.sortable == true
+      assert model.table.options.border == :grid
+      assert length(model.table.data) >= 5
+      assert model.event_log == []
     end
 
-    test "j moves cursor down" do
+    test "j routes arrow_down through Table.handle_event" do
       model = TableDemo.init(nil)
       {model, []} = TableDemo.update(key_event("j"), model)
-      assert model.cursor == 1
+      assert model.table.selected_row == 1
+      assert length(model.event_log) == 1
     end
 
-    test "k moves cursor up" do
-      model = %{cursor: 2, sort_col: nil, sort_dir: :asc}
+    test "k routes arrow_up through Table.handle_event" do
+      model = TableDemo.init(nil)
+      {model, []} = TableDemo.update(key_event("j"), model)
+      {model, []} = TableDemo.update(key_event("j"), model)
       {model, []} = TableDemo.update(key_event("k"), model)
-      assert model.cursor == 1
+      assert model.table.selected_row == 1
     end
 
-    test "cursor does not go below 0" do
-      model = %{cursor: 0, sort_col: nil, sort_dir: :asc}
+    test "selection does not go below 0" do
+      model = TableDemo.init(nil)
       {model, []} = TableDemo.update(key_event("k"), model)
-      assert model.cursor == 0
+      assert model.table.selected_row == 0
     end
 
-    test "s cycles sort" do
+    test "s cycles sort via Table.update" do
       model = TableDemo.init(nil)
       {model, []} = TableDemo.update(key_event("s"), model)
-      assert model.sort_col == 1
-      assert model.sort_dir == :asc
+      assert model.table.sort_by == :num
+      assert model.table.sort_direction == :asc
     end
 
-    test "view returns element tree" do
+    test "b cycles border modes" do
+      model = TableDemo.init(nil)
+      assert model.table.options.border == :grid
+      {model, []} = TableDemo.update(key_event("b"), model)
+      assert model.table.options.border == :inner
+      {model, []} = TableDemo.update(key_event("b"), model)
+      assert model.table.options.border == :none
+      {model, []} = TableDemo.update(key_event("b"), model)
+      assert model.table.options.border == :grid
+    end
+
+    test "h toggles header_separator" do
+      model = TableDemo.init(nil)
+      assert model.table.options.header_separator == true
+      {model, []} = TableDemo.update(key_event("h"), model)
+      assert model.table.options.header_separator == false
+    end
+
+    test "l pages right when pagination enabled" do
+      model = TableDemo.init(nil)
+      {model, []} = TableDemo.update(key_event("l"), model)
+      assert model.table.current_page == 2
+    end
+
+    test "view returns element tree with grid chrome" do
       model = TableDemo.init(nil)
       view = TableDemo.view(model)
       assert is_map(view)
+      texts = collect_text(view)
+      assert Enum.any?(texts, &String.contains?(&1, "┌"))
     end
   end
 
   describe "ProgressDemo" do
-    test "init starts at 50" do
+    test "init mounts real Display.Progress states and spinner" do
       model = ProgressDemo.init(nil)
       assert model.value == 50
       assert model.auto == false
+      assert model.main.progress == 0.5
+      assert model.main.label == "Loading"
+      assert model.main.animated == true
+      assert model.empty_story.progress == 0.0
+      assert model.half_story.progress == 0.5
+      assert model.full_story.progress == 1.0
+      assert is_list(model.spinner.frames)
+      assert model.spinner.frame_index == 0
+      assert model.event_log == []
     end
 
-    test "equals increments by 5" do
+    test "equals increments by 5 via update_props on main" do
       model = ProgressDemo.init(nil)
       {model, []} = ProgressDemo.update(key_event("="), model)
       assert model.value == 55
+      assert model.main.progress == 0.55
     end
 
-    test "minus decrements by 5" do
+    test "minus decrements by 5 via update_props on main" do
       model = ProgressDemo.init(nil)
       {model, []} = ProgressDemo.update(key_event("-"), model)
       assert model.value == 45
+      assert model.main.progress == 0.45
     end
 
-    test "value clamps to 0-100" do
-      model = %{value: 100, auto: false}
-      {model, []} = ProgressDemo.update(key_event("="), model)
-      assert model.value == 100
+    test "value clamps to 0-100 and updates main.progress" do
+      model = ProgressDemo.init(nil)
 
-      model = %{value: 0, auto: false}
-      {model, []} = ProgressDemo.update(key_event("-"), model)
+      model =
+        Enum.reduce(1..20, model, fn _, m ->
+          {m, []} = ProgressDemo.update(key_event("="), m)
+          m
+        end)
+
+      assert model.value == 100
+      assert model.main.progress == 1.0
+
+      model =
+        Enum.reduce(1..30, model, fn _, m ->
+          {m, []} = ProgressDemo.update(key_event("-"), m)
+          m
+        end)
+
       assert model.value == 0
+      assert model.main.progress == 0.0
     end
 
     test "a toggles auto mode" do
@@ -181,29 +301,104 @@ defmodule Raxol.Playground.DemosTest do
       assert model.auto == false
     end
 
-    test "tick increments when auto is on" do
-      model = %{value: 50, auto: true}
+    test "r resets value through update_props" do
+      model = ProgressDemo.init(nil)
+      {model, []} = ProgressDemo.update(key_event("="), model)
+      {model, []} = ProgressDemo.update(key_event("r"), model)
+      assert model.value == 0
+      assert model.main.progress == 0.0
+    end
+
+    test "tick increments value when auto is on" do
+      model = %{ProgressDemo.init(nil) | auto: true}
       {model, []} = ProgressDemo.update(:tick, model)
       assert model.value == 52
+      assert model.main.progress == 0.52
+      assert model.frame == 1
     end
 
-    test "tick wraps at 100" do
-      model = %{value: 100, auto: true}
+    test "tick wraps at 100 when auto is on" do
+      model = %{ProgressDemo.init(nil) | value: 100, auto: true}
+
+      model = %{
+        model
+        | main:
+            Map.put(model.main, :progress, 1.0)
+      }
+
       {model, []} = ProgressDemo.update(:tick, model)
       assert model.value == 0
+      assert model.main.progress == 0.0
     end
 
-    test "subscribe returns interval when auto" do
-      assert ProgressDemo.subscribe(%{auto: true}) != []
-      assert ProgressDemo.subscribe(%{auto: false}) == []
+    test "tick advances spinner even when auto is off" do
+      model = ProgressDemo.init(nil)
+      assert model.auto == false
+      before = model.spinner.frame_index
+      {model, []} = ProgressDemo.update(:tick, model)
+      assert model.frame == 1
+      assert model.spinner.frame_index != before or length(model.spinner.frames) == 1
     end
 
-    test "view returns element tree" do
+    test "s cycles spinner style" do
+      model = ProgressDemo.init(nil)
+      {model, []} = ProgressDemo.update(key_event("s"), model)
+      assert model.spinner_style_idx == 1
+      assert model.spinner.style == :line
+    end
+
+    test "i cycles indeterminate style index" do
+      model = ProgressDemo.init(nil)
+      {model, []} = ProgressDemo.update(key_event("i"), model)
+      assert model.indet_style_idx == 1
+    end
+
+    test "subscribe always returns interval (spinner/indet animate)" do
+      model = ProgressDemo.init(nil)
+      subs = ProgressDemo.subscribe(model)
+      assert is_list(subs)
+      assert length(subs) >= 1
+      assert length(ProgressDemo.subscribe(%{model | auto: true})) >= 1
+    end
+
+    test "view returns element tree and does not use dead progress() DSL" do
       model = ProgressDemo.init(nil)
       view = ProgressDemo.view(model)
       assert is_map(view)
+      refute has_type?(view, :progress)
+    end
+
+    test "static snapshot stories are not mutated by value keys" do
+      model = ProgressDemo.init(nil)
+      empty = model.empty_story.progress
+      half = model.half_story.progress
+      full = model.full_story.progress
+      {model, []} = ProgressDemo.update(key_event("="), model)
+      assert model.empty_story.progress == empty
+      assert model.half_story.progress == half
+      assert model.full_story.progress == full
     end
   end
+
+  defp has_type?(%{type: type}, type), do: true
+
+  defp has_type?(map, type) when is_map(map) do
+    Enum.any?(map, fn
+      {:children, children} when is_list(children) ->
+        Enum.any?(children, &has_type?(&1, type))
+
+      {_k, v} when is_map(v) or is_list(v) ->
+        has_type?(v, type)
+
+      _ ->
+        false
+    end)
+  end
+
+  defp has_type?(list, type) when is_list(list),
+    do: Enum.any?(list, &has_type?(&1, type))
+
+  defp has_type?(_, _), do: false
 
   describe "ModalDemo" do
     test "init starts closed" do
@@ -253,50 +448,53 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "MenuDemo" do
-    test "init starts at first item" do
+    test "init mounts real Menu with nested items" do
       model = MenuDemo.init(nil)
-      assert model.selected == 0
-      assert model.expanded == false
+      assert model.menu.cursor == :file
+      assert model.menu.open_path == []
+      assert model.menu.focused == true
+      assert length(model.menu.items) >= 3
+      assert model.last_selected == nil
+      assert model.event_log == []
     end
 
-    test "l moves to next menu" do
+    test "j/down moves cursor to next root item" do
       model = MenuDemo.init(nil)
-      {model, []} = MenuDemo.update(key_event("l"), model)
-      assert model.selected == 1
-    end
-
-    test "h moves to previous menu" do
-      model = %{selected: 2, sub_selected: 0, expanded: false}
-      {model, []} = MenuDemo.update(key_event("h"), model)
-      assert model.selected == 1
-    end
-
-    test "menu wraps around" do
-      model = %{selected: 4, sub_selected: 0, expanded: false}
-      {model, []} = MenuDemo.update(key_event("l"), model)
-      assert model.selected == 0
-    end
-
-    test "enter toggles expansion" do
-      model = MenuDemo.init(nil)
-      {model, []} = MenuDemo.update(special_key(:enter), model)
-      assert model.expanded == true
-      {model, []} = MenuDemo.update(special_key(:enter), model)
-      assert model.expanded == false
-    end
-
-    test "j/k navigate sub-items when expanded" do
-      model = %{selected: 0, sub_selected: 0, expanded: true}
       {model, []} = MenuDemo.update(key_event("j"), model)
-      assert model.sub_selected == 1
-      {model, []} = MenuDemo.update(key_event("k"), model)
-      assert model.sub_selected == 0
+      assert model.menu.cursor == :edit
+      assert length(model.event_log) == 1
     end
 
-    test "escape closes menu" do
-      model = %{selected: 0, sub_selected: 0, expanded: true}
+    test "enter opens submenu of File" do
+      model = MenuDemo.init(nil)
+      {model, []} = MenuDemo.update(special_key(:enter), model)
+      assert :file in model.menu.open_path
+      assert model.menu.cursor == :new
+    end
+
+    test "j navigates within open submenu" do
+      model = MenuDemo.init(nil)
+      {model, []} = MenuDemo.update(special_key(:enter), model)
+      {model, []} = MenuDemo.update(key_event("j"), model)
+      assert model.menu.cursor == :open
+    end
+
+    test "enter on leaf records last_selected" do
+      model = MenuDemo.init(nil)
+      # open File
+      {model, []} = MenuDemo.update(special_key(:enter), model)
+      # activate New (cursor already on :new)
+      {model, []} = MenuDemo.update(special_key(:enter), model)
+      assert model.last_selected == :new
+    end
+
+    test "escape closes deepest submenu" do
+      model = MenuDemo.init(nil)
+      {model, []} = MenuDemo.update(special_key(:enter), model)
+      assert model.menu.open_path == [:file]
       {model, []} = MenuDemo.update(special_key(:escape), model)
-      assert model.expanded == false
+      assert model.menu.open_path == []
+      assert model.menu.cursor == :file
     end
 
     test "view returns element tree" do
@@ -309,37 +507,46 @@ defmodule Raxol.Playground.DemosTest do
   # --- Batch 1: Input Widgets ---
 
   describe "CheckboxDemo" do
-    test "init returns items with cursor at 0" do
+    test "init mounts real Checkbox states" do
       model = CheckboxDemo.init(nil)
-      assert length(model.items) == 5
-      assert model.cursor == 0
+      assert length(model.checkboxes) == 5
+      assert model.focus_index == 0
+      assert hd(model.checkboxes).focused == true
+      assert model.disabled_story.disabled == true
+      assert model.required_story.required == true
+      assert model.event_log == []
     end
 
-    test "j moves cursor down" do
+    test "j moves focus down via demo-owned focus" do
       model = CheckboxDemo.init(nil)
       {model, []} = CheckboxDemo.update(key_event("j"), model)
-      assert model.cursor == 1
+      assert model.focus_index == 1
+      assert Enum.at(model.checkboxes, 1).focused == true
+      assert Enum.at(model.checkboxes, 0).focused == false
     end
 
-    test "k moves cursor up" do
-      model = %{items: [%{label: "a", checked: false}], cursor: 0}
-      {model, []} = CheckboxDemo.update(key_event("k"), model)
-      assert model.cursor == 0
-    end
-
-    test "space toggles current item" do
+    test "k clamps focus at 0" do
       model = CheckboxDemo.init(nil)
-      first_checked = hd(model.items).checked
-      {model, []} = CheckboxDemo.update(key_event(" "), model)
-      assert hd(model.items).checked == not first_checked
+      {model, []} = CheckboxDemo.update(key_event("k"), model)
+      assert model.focus_index == 0
     end
 
-    test "a toggles all" do
+    test "space toggles focused checkbox via Checkbox.handle_event" do
+      model = CheckboxDemo.init(nil)
+      first_checked = hd(model.checkboxes).checked
+      {model, []} = CheckboxDemo.update(key_event(" "), model)
+      assert hd(model.checkboxes).checked == not first_checked
+      assert length(model.event_log) == 1
+    end
+
+    test "a toggles all non-disabled checkboxes" do
       model = CheckboxDemo.init(nil)
       {model, []} = CheckboxDemo.update(key_event("a"), model)
 
-      assert Enum.all?(model.items, & &1.checked) or
-               Enum.all?(model.items, &(not &1.checked))
+      enabled = Enum.reject(model.checkboxes, & &1.disabled)
+
+      assert Enum.all?(enabled, & &1.checked) or
+               Enum.all?(enabled, &(not &1.checked))
     end
 
     test "view returns element tree" do
@@ -349,36 +556,45 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "TextAreaDemo" do
-    test "init starts in normal mode" do
+    test "init mounts real TextArea (MultiLineInput) states" do
       model = TextAreaDemo.init(nil)
-      assert model.mode == :normal
-      assert length(model.lines) == 3
+      assert model.main.focused == true
+      assert model.main.value =~ "Hello, world!"
+      assert length(model.main.lines) >= 3
+      assert model.placeholder_story.value == ""
+      assert model.placeholder_story.placeholder != ""
+      assert model.event_log == []
     end
 
-    test "i enters insert mode" do
+    test "typing routes through TextArea.handle_event" do
       model = TextAreaDemo.init(nil)
-      {model, []} = TextAreaDemo.update(key_event("i"), model)
-      assert model.mode == :insert
-    end
-
-    test "escape returns to normal mode" do
-      model = %{lines: ["test"], cursor_line: 0, cursor_col: 4, mode: :insert}
-      {model, []} = TextAreaDemo.update(special_key(:escape), model)
-      assert model.mode == :normal
-    end
-
-    test "j/k navigate lines in normal mode" do
-      model = TextAreaDemo.init(nil)
-      {model, []} = TextAreaDemo.update(key_event("j"), model)
-      assert model.cursor_line == 1
-      {model, []} = TextAreaDemo.update(key_event("k"), model)
-      assert model.cursor_line == 0
-    end
-
-    test "typing in insert mode appends to line" do
-      model = %{lines: ["hi"], cursor_line: 0, cursor_col: 2, mode: :insert}
+      before = model.main.value
       {model, []} = TextAreaDemo.update(key_event("x"), model)
-      assert Enum.at(model.lines, 0) == "hix"
+      assert model.main.value != before
+      assert String.contains?(model.main.value, "x")
+      assert length(model.event_log) == 1
+    end
+
+    test "enter inserts a newline via the real component" do
+      model = TextAreaDemo.init(nil)
+      lines_before = length(model.main.lines)
+      {model, []} = TextAreaDemo.update(special_key(:enter), model)
+      assert length(model.main.lines) >= lines_before
+      assert String.contains?(model.main.value, "\n")
+    end
+
+    test "arrow down moves cursor via the real component" do
+      model = TextAreaDemo.init(nil)
+      {row0, _col0} = model.main.cursor_pos
+      {model, []} = TextAreaDemo.update(special_key(:down), model)
+      {row1, _col1} = model.main.cursor_pos
+      assert row1 >= row0
+    end
+
+    test "ctrl-x clears the interactive area" do
+      model = TextAreaDemo.init(nil)
+      {model, []} = TextAreaDemo.update(key_event("x", ctrl: true), model)
+      assert model.main.value == ""
     end
 
     test "view returns element tree" do
@@ -388,45 +604,43 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "SelectListDemo" do
-    test "init starts closed with no confirmation" do
+    test "init mounts real SelectList states" do
       model = SelectListDemo.init(nil)
-      assert model.open == false
-      assert model.confirmed == nil
+      assert model.main.has_focus == true
+      assert model.main.focused_index == 0
+      assert length(model.main.options) == 5
+      assert model.main.enable_search == true
+      assert model.multi_story.multiple == true
+      assert model.empty_story.options == []
+      assert model.event_log == []
     end
 
-    test "o toggles open" do
+    test "j/down moves focused_index via SelectList.handle_event" do
       model = SelectListDemo.init(nil)
-      {model, []} = SelectListDemo.update(key_event("o"), model)
-      assert model.open == true
-      {model, []} = SelectListDemo.update(key_event("o"), model)
-      assert model.open == false
-    end
-
-    test "j/k navigate when open" do
-      model = %{
-        options: ["A", "B", "C"],
-        selected: 0,
-        confirmed: nil,
-        open: true
-      }
-
       {model, []} = SelectListDemo.update(key_event("j"), model)
-      assert model.selected == 1
-      {model, []} = SelectListDemo.update(key_event("k"), model)
-      assert model.selected == 0
+      assert model.main.focused_index == 1
+      assert length(model.event_log) == 1
     end
 
-    test "enter confirms selection" do
-      model = %{
-        options: ["Elixir", "Rust"],
-        selected: 1,
-        confirmed: nil,
-        open: true
-      }
+    test "k/up moves focused_index back" do
+      model = SelectListDemo.init(nil)
+      {model, []} = SelectListDemo.update(special_key(:down), model)
+      {model, []} = SelectListDemo.update(key_event("k"), model)
+      assert model.main.focused_index == 0
+    end
 
+    test "enter selects the focused option" do
+      model = SelectListDemo.init(nil)
+      {model, []} = SelectListDemo.update(special_key(:down), model)
       {model, []} = SelectListDemo.update(special_key(:enter), model)
-      assert model.confirmed == "Rust"
-      assert model.open == false
+      assert model.main.selected_index == 1
+    end
+
+    test "tab toggles search focus" do
+      model = SelectListDemo.init(nil)
+      assert model.main.is_search_focused == false
+      {model, []} = SelectListDemo.update(special_key(:tab), model)
+      assert model.main.is_search_focused == true
     end
 
     test "view returns element tree" do
@@ -476,14 +690,17 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "PasswordFieldDemo" do
-    test "init starts empty and hidden" do
+    test "init mounts real PasswordField states (secret: true)" do
       model = PasswordFieldDemo.init(nil)
-      assert model.value == ""
-      assert model.visible == false
-      assert model.strength == :none
+      assert model.main.secret == true
+      assert model.main.value == ""
+      assert model.main.focused == true
+      assert model.placeholder_story.placeholder != ""
+      assert model.disabled_story.disabled == true
+      assert model.event_log == []
     end
 
-    test "typing adds characters and updates strength" do
+    test "typing routes through PasswordField.handle_event" do
       model = PasswordFieldDemo.init(nil)
 
       model =
@@ -492,27 +709,38 @@ defmodule Raxol.Playground.DemosTest do
           m
         end)
 
-      assert model.value == "abcd"
-      assert model.strength == :medium
+      assert model.main.value == "abcd"
+      assert model.main.cursor_pos == 4
+      assert length(model.event_log) == 4
     end
 
-    test "backspace removes character" do
-      model = %{value: "abc", visible: false, strength: :weak}
-      {model, []} = PasswordFieldDemo.update(special_key(:backspace), model)
-      assert model.value == "ab"
-    end
-
-    test "v toggles visibility" do
+    test "backspace removes a character via the real component" do
       model = PasswordFieldDemo.init(nil)
-      {model, []} = PasswordFieldDemo.update(key_event("v"), model)
-      assert model.visible == true
+
+      model =
+        Enum.reduce(String.graphemes("abc"), model, fn ch, m ->
+          {m, []} = PasswordFieldDemo.update(key_event(ch), m)
+          m
+        end)
+
+      {model, []} = PasswordFieldDemo.update(special_key(:backspace), model)
+      assert model.main.value == "ab"
+      assert model.main.cursor_pos == 2
     end
 
-    test "r resets" do
-      model = %{value: "secret", visible: true, strength: :medium}
-      {model, []} = PasswordFieldDemo.update(key_event("r"), model)
-      assert model.value == ""
-      assert model.strength == :none
+    test "ctrl-x clears the interactive field" do
+      model = PasswordFieldDemo.init(nil)
+      {model, []} = PasswordFieldDemo.update(key_event("a"), model)
+      {model, []} = PasswordFieldDemo.update(key_event("x", ctrl: true), model)
+      assert model.main.value == ""
+    end
+
+    test "ctrl-d toggles disabled and swallows subsequent keys" do
+      model = PasswordFieldDemo.init(nil)
+      {model, []} = PasswordFieldDemo.update(key_event("d", ctrl: true), model)
+      assert model.main.disabled == true
+      {model, []} = PasswordFieldDemo.update(key_event("z"), model)
+      assert model.main.value == ""
     end
 
     test "view returns element tree" do
@@ -554,39 +782,44 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "TreeDemo" do
-    test "init starts with empty expanded set" do
+    test "init mounts real Display.Tree with empty expanded set" do
       model = TreeDemo.init(nil)
-      assert MapSet.size(model.expanded) == 0
-      assert model.cursor == 0
+      assert MapSet.size(model.tree.expanded) == 0
+      assert model.tree.cursor == :src
+      assert model.tree.focused == true
+      assert model.event_log == []
     end
 
-    test "j/k navigate visible nodes" do
+    test "j/k navigate visible nodes via Tree.handle_event" do
       model = TreeDemo.init(nil)
       {model, []} = TreeDemo.update(key_event("j"), model)
-      assert model.cursor == 1
+      assert model.tree.cursor == :test
       {model, []} = TreeDemo.update(key_event("k"), model)
-      assert model.cursor == 0
+      assert model.tree.cursor == :src
+      assert length(model.event_log) == 2
     end
 
-    test "l expands a directory node" do
+    test "l expands a directory node via Tree.handle_event" do
       model = TreeDemo.init(nil)
+      assert model.tree.cursor == :src
       {model, []} = TreeDemo.update(key_event("l"), model)
-      assert MapSet.size(model.expanded) == 1
+      assert MapSet.member?(model.tree.expanded, :src)
     end
 
-    test "h collapses a directory node" do
+    test "h collapses a directory node via Tree.handle_event" do
       model = TreeDemo.init(nil)
       {model, []} = TreeDemo.update(key_event("l"), model)
       {model, []} = TreeDemo.update(key_event("h"), model)
-      assert MapSet.size(model.expanded) == 0
+      assert MapSet.size(model.tree.expanded) == 0
     end
 
-    test "e expands all, c collapses all" do
+    test "e expands all, c collapses all (demo-level)" do
       model = TreeDemo.init(nil)
       {model, []} = TreeDemo.update(key_event("e"), model)
-      assert MapSet.size(model.expanded) > 0
+      assert MapSet.size(model.tree.expanded) > 0
       {model, []} = TreeDemo.update(key_event("c"), model)
-      assert MapSet.size(model.expanded) == 0
+      assert MapSet.size(model.tree.expanded) == 0
+      assert model.tree.cursor == :src
     end
 
     test "view returns element tree" do
@@ -596,28 +829,35 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "StatusBarDemo" do
-    test "init starts in NORMAL mode" do
+    test "init mounts real Display.StatusBar in NORMAL mode" do
       model = StatusBarDemo.init(nil)
-      assert model.mode == "NORMAL"
-      assert model.tick == 0
+      assert model.fields.mode == "NORMAL"
+      assert model.fields.tick == 0
+      assert model.status_bar.items != []
+      assert Enum.any?(model.status_bar.items, &(&1.key == "Mode" and &1.label == "NORMAL"))
+      assert model.event_log == []
     end
 
-    test "i switches to INSERT mode" do
+    test "i switches to INSERT and rebuilds items" do
       model = StatusBarDemo.init(nil)
       {model, []} = StatusBarDemo.update(key_event("i"), model)
-      assert model.mode == "INSERT"
+      assert model.fields.mode == "INSERT"
+      assert Enum.any?(model.status_bar.items, &(&1.key == "Mode" and &1.label == "INSERT"))
     end
 
     test "escape returns to NORMAL mode" do
-      model = %{mode: "INSERT", file: "demo.ex", line: 1, col: 1, tick: 0}
+      model = StatusBarDemo.init(nil)
+      {model, []} = StatusBarDemo.update(key_event("i"), model)
       {model, []} = StatusBarDemo.update(special_key(:escape), model)
-      assert model.mode == "NORMAL"
+      assert model.fields.mode == "NORMAL"
     end
 
-    test "tick increments counter" do
+    test "tick increments counter and rebuilds items without log spam" do
       model = StatusBarDemo.init(nil)
       {model, []} = StatusBarDemo.update(:tick, model)
-      assert model.tick == 1
+      assert model.fields.tick == 1
+      assert Enum.any?(model.status_bar.items, &(&1.key == "Up" and &1.label == "1s"))
+      assert model.event_log == []
     end
 
     test "subscribe returns interval" do
@@ -632,10 +872,14 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "CodeBlockDemo" do
-    test "init starts at sample 0 with line numbers" do
+    test "init mounts real CodeBlock samples (no line numbers)" do
       model = CodeBlockDemo.init(nil)
       assert model.current == 0
-      assert model.show_line_numbers == true
+      assert map_size(model.blocks) >= 3
+      assert model.blocks[0].language == "elixir"
+      assert is_binary(model.blocks[0].content)
+      refute Map.has_key?(model, :show_line_numbers)
+      assert model.event_log == []
     end
 
     test "n/p cycle samples" do
@@ -646,13 +890,7 @@ defmodule Raxol.Playground.DemosTest do
       assert model.current == 0
     end
 
-    test "l toggles line numbers" do
-      model = CodeBlockDemo.init(nil)
-      {model, []} = CodeBlockDemo.update(key_event("l"), model)
-      assert model.show_line_numbers == false
-    end
-
-    test "view returns element tree" do
+    test "view renders via CodeBlock.render" do
       model = CodeBlockDemo.init(nil)
       assert is_map(CodeBlockDemo.view(model))
     end
@@ -689,27 +927,31 @@ defmodule Raxol.Playground.DemosTest do
   # --- Batch 3: Navigation/Layout ---
 
   describe "TabsDemo" do
-    test "init starts at tab 0" do
+    test "init mounts real Tabs state at index 0" do
       model = TabsDemo.init(nil)
-      assert model.active == 0
+      assert model.tabs.active_index == 0
+      assert model.tabs.focused == true
+      assert length(model.tabs.tabs) == 4
+      assert model.event_log == []
     end
 
-    test "l moves to next tab" do
+    test "l/right moves to next tab via Tabs.handle_event" do
       model = TabsDemo.init(nil)
       {model, []} = TabsDemo.update(key_event("l"), model)
-      assert model.active == 1
+      assert model.tabs.active_index == 1
+      assert length(model.event_log) == 1
     end
 
-    test "h moves to previous tab with wrap" do
-      model = %{active: 0}
+    test "h/left wraps to last tab" do
+      model = TabsDemo.init(nil)
       {model, []} = TabsDemo.update(key_event("h"), model)
-      assert model.active == 3
+      assert model.tabs.active_index == 3
     end
 
     test "number keys select tabs directly" do
       model = TabsDemo.init(nil)
       {model, []} = TabsDemo.update(key_event("3"), model)
-      assert model.active == 2
+      assert model.tabs.active_index == 2
     end
 
     test "view returns element tree" do

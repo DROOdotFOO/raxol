@@ -27,48 +27,117 @@ defmodule Raxol.Playground.Catalog do
       complexity: :basic,
       tags: ["input", "interactive", "click"],
       code_snippet: """
-      button("Click Me", on_click: :clicked)
+      # View DSL button (wired via Bubbler on_click)
+      button("Primary [1]", id: "primary_btn", on_click: :primary)
       button("Submit", on_click: :submit, style: [:bold])
+
+      # or the Component form:
+      {:ok, btn} = Button.init(%{id: "ok", label: "OK", on_click: :ok})
+      Button.render(btn, %{})
       """
     },
     %{
       name: "TextInput",
       module: Demos.TextInputDemo,
       category: :input,
-      description: "Single-line text input with placeholder",
+      description:
+        "TextInput (Event-based single-line) — placeholder, max_length, " <>
+          "cursor nav; keys route through TextInput.handle_event. " <>
+          "No disabled (use TextField); PasswordField wraps TextField.",
       complexity: :basic,
-      tags: ["input", "form", "text"],
+      tags: ["input", "form", "text", "controlled"],
       code_snippet: """
-      text_input(value: model.name, placeholder: "Enter name...")
+      {:ok, field} =
+        TextInput.init(%{
+          id: "name",
+          placeholder: "Type here...",
+          focused: true,
+          max_length: 32
+        })
+
+      # playground keys use %{key: :char, char: ch}; TextInput wants key=char string
+      {field, _cmds} =
+        TextInput.handle_event(Event.key("a"), field, %{})
+      TextInput.render(field, %{})
       """
     },
     %{
       name: "Table",
       module: Demos.TableDemo,
       category: :display,
-      description: "Data table with sortable columns and row selection",
+      description:
+        "Stateful Table — fixed-width grid with border modes (:grid|:inner|:none), " <>
+          "sort, selection, pagination; keys route through Table.handle_event",
       complexity: :intermediate,
-      tags: ["data", "display", "sorting", "rows"],
+      tags: [
+        "data",
+        "display",
+        "sorting",
+        "rows",
+        "pagination",
+        "border",
+        "controlled"
+      ],
       code_snippet: """
-      table(
-        headers: ["Name", "Language", "Stars"],
-        rows: [
-          ["Raxol", "Elixir", "500"],
-          ["Ratatui", "Rust", "19k"],
-          ["Bubble Tea", "Go", "39k"]
-        ]
-      )
+      {:ok, table} =
+        Table.init(%{
+          id: :langs,
+          columns: [
+            %{id: :name, label: "Name", width: 12, align: :left},
+            %{id: :language, label: "Language", width: 10, align: :left},
+            %{id: :stars, label: "Stars", width: 6, align: :right}
+          ],
+          data: [%{name: "Raxol", language: "Elixir", stars: "500"}],
+          options: %{
+            border: :grid,            # :grid | :inner | :none
+            header_separator: true,   # only for :none
+            sortable: true,
+            paginate: true,
+            page_size: 4
+          }
+        })
+
+      Table.render(table, %{})
+      # :grid  -> full frame + rules
+      # :inner -> column/row rules, no outer frame
+      # :none  -> padded columns (+ optional header rule)
       """
     },
     %{
       name: "Progress",
       module: Demos.ProgressDemo,
       category: :feedback,
-      description: "Progress bar with value tracking",
-      complexity: :basic,
-      tags: ["feedback", "loading", "progress"],
+      description:
+        "Display.Progress (init/update_props/render) + Progress.Bar/Spinner/" <>
+          "Indeterminate/Circular stories — 0/half/full, auto-tick, never View DSL progress()",
+      complexity: :intermediate,
+      tags: [
+        "feedback",
+        "loading",
+        "progress",
+        "spinner",
+        "indeterminate",
+        "circular",
+        "controlled"
+      ],
       code_snippet: """
-      progress(value: 65, max: 100)
+      {:ok, bar} =
+        Display.Progress.init(%{
+          progress: 0.65,
+          width: 30,
+          show_percentage: true,
+          label: "Loading",
+          animated: true
+        })
+
+      {bar, []} = Display.Progress.update({:update_props, %{progress: 0.8}}, bar)
+      Display.Progress.render(bar, %{})
+
+      # String APIs used by harness meters / activity indicators:
+      Progress.Bar.bar(65, width: 20, style: :blocks)
+      Progress.Spinner.spinner("working", frame, type: :dots)
+      Progress.Indeterminate.indeterminate(frame, style: :wave, width: 24)
+      Progress.Circular.circular(65, size: :small)
       """
     },
     %{
@@ -79,8 +148,16 @@ defmodule Raxol.Playground.Catalog do
       complexity: :intermediate,
       tags: ["overlay", "dialog", "focus"],
       code_snippet: """
+      surface =
+        Modal.Rendering.dialog_surface(
+          40,
+          17,
+          %{border: :double, bg: {30, 30, 45}},
+          [dialog_content]
+        )
+
       overlays =
-        if model.show, do: [AbsoluteLayer.dialog_overlay(40, 17, dialog_box)], else: []
+        if model.show, do: [AbsoluteLayer.dialog_overlay(40, 17, surface)], else: []
 
       AbsoluteLayer.absolute_layer(background_view(model), overlays)
       """
@@ -89,14 +166,28 @@ defmodule Raxol.Playground.Catalog do
       name: "Menu",
       module: Demos.MenuDemo,
       category: :navigation,
-      description: "Selectable menu with keyboard navigation",
+      description:
+        "Nested menu (Menu component) — submenu chain, disabled skip, shortcuts; " <>
+          "keys route through Menu.handle_event",
       complexity: :intermediate,
-      tags: ["navigation", "keyboard", "selection"],
+      tags: ["navigation", "keyboard", "selection", "controlled"],
       code_snippet: """
-      list(
-        items: ["File", "Edit", "View", "Help"],
-        selected: model.selected
-      )
+      {:ok, menu} =
+        Menu.init(
+          id: "main-menu",
+          focused: true,
+          items: [
+            %{id: :file, label: "File", disabled: false, shortcut: nil,
+              children: [
+                %{id: :new, label: "New", disabled: false, shortcut: "Ctrl+N", children: []}
+              ]},
+            %{id: :edit, label: "Edit", disabled: false, shortcut: nil, children: []}
+          ]
+        )
+
+      {menu, _cmds} =
+        Menu.handle_event(%Event{type: :key, data: %{key: :down}}, menu, %{})
+      Menu.render(menu, %{})
       """
     },
     # --- Input widgets ---
@@ -104,47 +195,129 @@ defmodule Raxol.Playground.Catalog do
       name: "Checkbox",
       module: Demos.CheckboxDemo,
       category: :input,
-      description: "Toggle checkboxes with keyboard navigation",
+      description:
+        "Checkbox component — space/click toggle, disabled + required stories; " <>
+          "demo owns j/k focus across a list of mounted checkboxes",
       complexity: :basic,
-      tags: ["input", "form", "toggle"],
-      code_snippet: ~s'checkbox("Enable Feature", checked: true)'
+      tags: ["input", "form", "toggle", "controlled"],
+      code_snippet: """
+      {:ok, cb} =
+        Checkbox.init(
+          id: "feature",
+          label: "Enable Feature",
+          checked: true
+        )
+
+      {cb, _cmds} =
+        Checkbox.handle_event(%Event{type: :key, data: %{key: :space}}, cb, %{})
+      Checkbox.render(cb, %{})  # "[x] Enable Feature"
+      """
     },
     %{
       name: "TextArea",
       module: Demos.TextAreaDemo,
       category: :input,
-      description: "Multi-line text editor with insert/normal modes",
+      description:
+        "TextArea (thin MultiLineInput wrapper) — multi-line edit, wrap, " <>
+          "scroll, placeholder; keys route through TextArea.handle_event " <>
+          "(no vim modes)",
       complexity: :intermediate,
-      tags: ["input", "form", "text", "multiline"],
-      code_snippet: ~s'textarea(value: model.text, rows: 5)'
+      tags: ["input", "form", "text", "multiline", "controlled"],
+      code_snippet: """
+      # TextArea is a thin wrapper around MultiLineInput
+      {:ok, area} =
+        TextArea.init(%{
+          id: "notes",
+          value: "Hello, world!\\nEdit me with arrows",
+          width: 40,
+          height: 5,
+          focused: true,
+          placeholder: "Type multi-line notes..."
+        })
+
+      {area, _cmds} =
+        TextArea.handle_event(
+          %Event{type: :key, data: %{key: :char, char: "x"}},
+          area,
+          %{}
+        )
+      TextArea.render(area, %{})
+      """
     },
     %{
       name: "SelectList",
       module: Demos.SelectListDemo,
       category: :input,
-      description: "Dropdown select list with keyboard navigation",
+      description:
+        "SelectList component — always-open list with keyboard nav, multi-select, " <>
+          "and search toggle; keys route through SelectList.handle_event",
       complexity: :intermediate,
-      tags: ["input", "form", "dropdown", "select"],
-      code_snippet: ~s'select(options: ["Elixir", "Rust", "Go"], selected: 0)'
+      tags: ["input", "form", "select", "list", "controlled"],
+      code_snippet: """
+      {:ok, list} =
+        SelectList.init(%{
+          id: "lang",
+          options: [
+            {"Elixir", :elixir},
+            {"Rust", :rust},
+            {"Go", :go}
+          ],
+          has_focus: true,
+          enable_search: true,
+          max_height: 8
+        })
+
+      {list, _} =
+        SelectList.handle_event(%{type: :key, data: %{key: :down}}, list, %{})
+      SelectList.render(list, %{})
+      """
     },
     %{
       name: "RadioGroup",
       module: Demos.RadioGroupDemo,
       category: :input,
-      description: "Grouped radio buttons with tab switching",
+      description:
+        "Hand-rolled radio groups (no RadioGroup component yet) — demo model " <>
+          "drives (o)/( ) marks with j/k selection and h/l group switching",
       complexity: :intermediate,
-      tags: ["input", "form", "radio", "group"],
-      code_snippet:
-        ~s'radio_group(options: ["Light", "Dark", "Auto"], selected: 0)'
+      tags: ["input", "form", "radio", "group", "hand-rolled"],
+      code_snippet: """
+      # No Raxol.UI.Components.* RadioGroup yet — hand-roll from model state:
+      group = %{name: "Theme", options: ["Light", "Dark", "Auto"], selected: 0}
+
+      options =
+        Enum.with_index(group.options, fn opt, i ->
+          mark = if i == group.selected, do: "(o)", else: "( )"
+          text("  \#{mark} \#{opt}")
+        end)
+
+      column style: %{gap: 0} do
+        [text(group.name, style: [:bold]) | options]
+      end
+      """
     },
     %{
       name: "PasswordField",
       module: Demos.PasswordFieldDemo,
       category: :input,
-      description: "Password input with visibility toggle and strength meter",
+      description:
+        "Password field (TextField with secret: true) — • masking, placeholder, " <>
+          "cell-aware scroll, disabled state; keys route through PasswordField.handle_event",
       complexity: :basic,
-      tags: ["input", "form", "password", "security"],
-      code_snippet: ~s'text_input(value: model.password, type: :password)'
+      tags: ["input", "form", "password", "security", "controlled"],
+      code_snippet: """
+      {:ok, field} =
+        PasswordField.init(%{
+          id: "pw",
+          placeholder: "hunter2",
+          focused: true,
+          width: 24
+        })
+
+      # keys route through the real component (TextField shape: {:keypress, key, mods})
+      {field, _cmds} = PasswordField.handle_event({:keypress, "a", []}, field, %{})
+      PasswordField.render(field, %{})  # one • per grapheme
+      """
     },
     # --- Display widgets ---
     %{
@@ -164,41 +337,123 @@ defmodule Raxol.Playground.Catalog do
       """
     },
     %{
+      name: "HintDisplay",
+      module: Demos.HintDisplayDemo,
+      category: :feedback,
+      description:
+        "Contextual hints and tooltips (pure config + string render — styles, types, inline positions)",
+      complexity: :basic,
+      tags: ["feedback", "hint", "tooltip", "help", "display"],
+      code_snippet: """
+      config =
+        HintDisplay.init(style: :tooltip, max_width: 40, position: :below)
+        |> HintDisplay.register_hint("save-btn", "Persist the buffer", type: :info)
+
+      hint = HintDisplay.get_hint(config, "save-btn")
+      HintDisplay.render(hint, config)
+      # or: HintDisplay.render_inline("[Save]", "save-btn", config)
+      """
+    },
+    %{
       name: "Tree",
       module: Demos.TreeDemo,
       category: :display,
-      description: "Expandable tree view with keyboard navigation",
+      description:
+        "Display.Tree — expand/collapse hierarchy; keys route through Tree.handle_event",
       complexity: :intermediate,
-      tags: ["display", "tree", "hierarchy", "navigation"],
-      code_snippet: ~s'list(items: tree_nodes, style: %{indent: 2})'
+      tags: ["display", "tree", "hierarchy", "navigation", "controlled"],
+      code_snippet: """
+      {:ok, tree} =
+        Tree.init(
+          id: "fs",
+          focused: true,
+          indent_size: 2,
+          nodes: [
+            %{
+              id: :src,
+              label: "src",
+              children: [
+                %{id: :main, label: "main.ex", children: [], data: nil}
+              ],
+              data: nil
+            }
+          ]
+        )
+
+      {tree, _cmds} =
+        Tree.handle_event(%Event{type: :key, data: %{key: :right}}, tree, %{})
+      Tree.render(tree, %{})
+      """
     },
     %{
       name: "StatusBar",
       module: Demos.StatusBarDemo,
       category: :display,
-      description: "Status bar with live-updating fields",
+      description:
+        "Display.StatusBar — non-interactive key/label items with live-updating labels",
       complexity: :basic,
       tags: ["display", "status", "bar", "info"],
-      code_snippet:
-        ~s'row do [text(mode), spacer(), text(file), text(line)] end'
+      code_snippet: """
+      {:ok, bar} =
+        StatusBar.init(
+          id: "status",
+          separator: " │ ",
+          items: [
+            %{key: "Mode", label: "NORMAL"},
+            %{key: "File", label: "demo.ex"},
+            %{key: "Pos", label: "1:1"},
+            %{key: "Up", label: "0s"}
+          ]
+        )
+
+      StatusBar.render(bar, %{})
+      """
     },
     %{
       name: "CodeBlock",
       module: Demos.CodeBlockDemo,
       category: :display,
-      description: "Code display with line numbers and language samples",
+      description:
+        "CodeBlock — structured syntax tokens via Raxol.UI.SyntaxHighlighter " <>
+          "(same path as DiffViewer); theme :one_dark by default",
       complexity: :basic,
-      tags: ["display", "code", "syntax"],
-      code_snippet: ~s'box style: %{border: :single} do text(code) end'
+      tags: ["display", "code", "syntax", "makeup", "highlighter"],
+      code_snippet: """
+      {:ok, block} =
+        CodeBlock.init(%{
+          content: ~s[def greet(name), do: "Hello, \#{name}!"],
+          language: "elixir",
+          theme: :one_dark   # shared with DiffViewer
+        })
+
+      # column of rows of text spans with hex fg from Makeup tokens
+      CodeBlock.render(block, %{})
+      """
     },
     %{
       name: "Markdown",
       module: Demos.MarkdownDemo,
       category: :display,
-      description: "Simple markdown rendering with raw toggle",
+      description:
+        "Full Markdown surface (headings, emphasis, lists, quotes, links, " <>
+          "GFM tables, HR) — fenced code via CodeBlock/SyntaxHighlighter; raw toggle",
       complexity: :intermediate,
-      tags: ["display", "markdown", "text", "rendering"],
-      code_snippet: ~s'text(render_markdown(content))'
+      tags: ["display", "markdown", "text", "rendering", "code", "highlight"],
+      code_snippet: """
+      {:ok, state} =
+        MarkdownRenderer.init(%{
+          markdown_text: \"\"\"
+          # Title
+          ```elixir
+          def hello, do: :world
+          ```
+          \"\"\",
+          width: 48,
+          syntax_theme: :one_dark
+        })
+
+      MarkdownRenderer.render(state, %{})
+      """
     },
     %{
       name: "Harness Diff Viewer",
@@ -280,10 +535,28 @@ defmodule Raxol.Playground.Catalog do
       name: "Tabs",
       module: Demos.TabsDemo,
       category: :navigation,
-      description: "Tab bar with keyboard switching and content panels",
+      description:
+        "Tabs component — horizontal tab bar with ←/→, Home/End, 1-9; " <>
+          "content panels are parent-owned via active_index",
       complexity: :basic,
-      tags: ["navigation", "tabs", "panels"],
-      code_snippet: ~s'tabs(labels: ["Tab 1", "Tab 2"], active: model.tab)'
+      tags: ["navigation", "tabs", "panels", "controlled"],
+      code_snippet: """
+      {:ok, tabs} =
+        Tabs.init(
+          id: "main-tabs",
+          active_index: 0,
+          focused: true,
+          tabs: [
+            %{id: :overview, label: "Overview"},
+            %{id: :details, label: "Details"}
+          ]
+        )
+
+      {tabs, _cmds} =
+        Tabs.handle_event(%Event{type: :key, data: %{key: :right}}, tabs, %{})
+      Tabs.render(tabs, %{})
+      # parent switches content from tabs.active_index
+      """
     },
     %{
       name: "SplitPane",
@@ -306,10 +579,22 @@ defmodule Raxol.Playground.Catalog do
       name: "Container",
       module: Demos.ContainerDemo,
       category: :layout,
-      description: "Scrollable container with viewport controls",
+      description:
+        "Scrollable viewport container (Display.Viewport) with keyboard scroll controls",
       complexity: :basic,
       tags: ["layout", "container", "scroll", "viewport"],
-      code_snippet: ~s'container(children: items, scroll_offset: model.offset)'
+      code_snippet: """
+      {:ok, vp} =
+        Viewport.init(
+          id: "scroll",
+          children: items,
+          visible_height: 10,
+          scroll_top: 0,
+          show_scrollbar: true
+        )
+
+      Viewport.render(vp, %{})
+      """
     },
     # --- Chart/Visualization widgets ---
     %{
@@ -506,6 +791,26 @@ defmodule Raxol.Playground.Catalog do
 
       {:ok, s} = ActivityIndicator.init(state: :working, since_ms: 0, frame: 0)
       ActivityIndicator.render(s, %{})
+      """
+    },
+    %{
+      name: "Harness Notice",
+      module: Demos.HarnessNoticeDemo,
+      category: :harness,
+      description:
+        "Footer honest-report channels: Notice (refusal/degradation) + LaneNotice " <>
+          "(live-session status) — nil / string / multi-line / list vocabulary",
+      complexity: :basic,
+      tags: ["harness", "notice", "lane", "footer", "report", "controlled"],
+      code_snippet: """
+      {:ok, n} = Notice.init(id: "notice", notice: "no block focused", width: 40)
+      Notice.render(n, %{})
+
+      {:ok, l} = LaneNotice.init(id: "lane", notice: "interrupt sent", width: 40)
+      LaneNotice.render(l, %{})
+
+      # shared line vocabulary (nil → []; string → rows; list → flat concat)
+      Notice.lines(["degraded", "composer disabled"], 40)
       """
     },
     %{

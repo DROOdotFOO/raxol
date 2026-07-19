@@ -107,10 +107,9 @@ defmodule Raxol.Playground.SidebarScrollTest do
       sidebar = sidebar_text(text)
 
       assert sidebar =~ "▸ Button"
-      # 51 = 44 (through U1-c approval) + 1 (U3 overlay)
-      # + 3 (U2 footer_stack/status_strip/composer) + 1 (U4 assembled)
-      # + 1 (indication primitive).
-      assert sidebar =~ "51 widgets"
+
+      total = length(Raxol.Playground.Catalog.list_components())
+      assert sidebar =~ "#{total} widgets"
     end
 
     test "scrolling past the visible window keeps the marker on screen and scrolls the top items out",

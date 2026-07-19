@@ -1,5 +1,15 @@
 defmodule Raxol.Playground.Demos.RadioGroupDemo do
-  @moduledoc "Playground demo: grouped radio buttons with h/l switching."
+  @moduledoc """
+  Playground demo: hand-rolled radio-group *technique* — there is no
+  `Raxol.UI.Components.RadioGroup` (or similar) Component yet.
+
+  `Raxol.View.Components.radio_group/1` exists as a declarative view-node
+  shape (`type: :radio_group`), but this demo does not mount that node or
+  any component lifecycle. Selection lives in the TEA model; options render
+  as plain `text/1` rows with `(o)` / `( )` marks.
+
+  Keys: j/k move selection in the active group, h/l switch group focus.
+  """
   use Raxol.Core.Runtime.Application
 
   @impl true
@@ -57,7 +67,8 @@ defmodule Raxol.Playground.Demos.RadioGroupDemo do
 
     column style: %{gap: 1} do
       [
-        text("RadioGroup Demo", style: [:bold]),
+        text("Radio Group (technique) — no Component yet", style: [:bold]),
+        text(" hand-rolled TEA selection + (o)/( ) marks", style: [:dim]),
         divider(),
         row(style: %{gap: 4}, do: group_views),
         divider(),

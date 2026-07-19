@@ -1,160 +1,228 @@
 defmodule Raxol.Playground.Demos.MenuDemo do
-  @moduledoc "Playground demo: selectable menu with keyboard navigation."
+  @moduledoc """
+  Playground demo: `Raxol.UI.Components.Input.Menu` — the REAL component,
+  mounted controlled (state lives in this demo's model, every key routes
+  through `Menu.handle_event/3`).
+
+  Menu is a nested vertical menu: one open submenu chain at a time. Items
+  are `%{id, label, children, disabled, shortcut}`. Leaves fire
+  `on_select` without mutating state; parents open on Enter/Space/Right.
+
+  Stories shown: interactive nested menu (File → Recent → docs, Edit with
+  a disabled Redo), last-selected readout.
+
+  Contract warts: `Menu.init/1` takes a keyword list. Leaf activation
+  returns unchanged state (`{state, []}`) after calling `on_select` — the
+  demo therefore watches the cursor + key to log selections (callbacks
+  cannot update the TEA model). Disabled items are skipped in navigation.
+  """
   use Raxol.Core.Runtime.Application
+
+  alias Raxol.Core.Events.Event
   alias Raxol.Playground.DemoHelpers
-
-  @items ["File", "Edit", "View", "Tools", "Help"]
-  @info_box_width 35
-  @submenu_width 20
-
-  @sub_menus %{
-    "File" => ["New", "Open", "Save", "Save As", "Exit"],
-    "Edit" => ["Undo", "Redo", "Cut", "Copy", "Paste"],
-    "View" => ["Sidebar", "Terminal", "Minimap", "Fullscreen"],
-    "Tools" => ["Extensions", "Settings", "Keybindings"],
-    "Help" => ["About", "Docs", "Report Issue"]
-  }
+  alias Raxol.UI.Components.Input.Menu
 
   @impl true
   def init(_context) do
-    %{selected: 0, sub_selected: 0, expanded: false}
+    items = menu_items()
+
+    {:ok, menu} =
+      Menu.init(
+        id: "menu-main",
+        items: items,
+        focused: true
+      )
+
+    %{
+      menu: menu,
+      last_selected: nil,
+      event_log: []
+    }
+  end
+
+  defp menu_items do
+    [
+      %{
+        id: :file,
+        label: "File",
+        disabled: false,
+        shortcut: nil,
+        children: [
+          %{id: :new, label: "New", disabled: false, shortcut: "Ctrl+N", children: []},
+          %{id: :open, label: "Open", disabled: false, shortcut: "Ctrl+O", children: []},
+          %{
+            id: :recent,
+            label: "Recent",
+            disabled: false,
+            shortcut: nil,
+            children: [
+              %{id: :doc1, label: "doc1.txt", disabled: false, shortcut: nil, children: []},
+              %{id: :doc2, label: "doc2.txt", disabled: false, shortcut: nil, children: []}
+            ]
+          },
+          %{id: :exit, label: "Exit", disabled: false, shortcut: "Ctrl+Q", children: []}
+        ]
+      },
+      %{
+        id: :edit,
+        label: "Edit",
+        disabled: false,
+        shortcut: nil,
+        children: [
+          %{id: :undo, label: "Undo", disabled: false, shortcut: "Ctrl+Z", children: []},
+          %{id: :redo, label: "Redo", disabled: true, shortcut: "Ctrl+Y", children: []},
+          %{id: :cut, label: "Cut", disabled: false, shortcut: "Ctrl+X", children: []},
+          %{id: :copy, label: "Copy", disabled: false, shortcut: "Ctrl+C", children: []},
+          %{id: :paste, label: "Paste", disabled: false, shortcut: "Ctrl+V", children: []}
+        ]
+      },
+      %{
+        id: :view,
+        label: "View",
+        disabled: false,
+        shortcut: nil,
+        children: [
+          %{id: :sidebar, label: "Sidebar", disabled: false, shortcut: nil, children: []},
+          %{id: :terminal, label: "Terminal", disabled: false, shortcut: nil, children: []},
+          %{id: :minimap, label: "Minimap", disabled: false, shortcut: nil, children: []}
+        ]
+      },
+      %{
+        id: :help,
+        label: "Help",
+        disabled: false,
+        shortcut: nil,
+        children: [
+          %{id: :about, label: "About", disabled: false, shortcut: nil, children: []},
+          %{id: :docs, label: "Docs", disabled: false, shortcut: "F1", children: []}
+        ]
+      }
+    ]
   end
 
   @impl true
   def update(message, model) do
-    case message do
-      key_match("h") ->
-        {move_menu(model, -1), []}
+    case menu_event(message) do
+      nil ->
+        {model, []}
 
-      key_match(:left) ->
-        {move_menu(model, -1), []}
-
-      key_match("l") ->
-        {move_menu(model, 1), []}
-
-      key_match(:right) ->
-        {move_menu(model, 1), []}
-
-      key_match(:enter) ->
-        {%{model | expanded: not model.expanded, sub_selected: 0}, []}
-
-      _ ->
-        handle_sub_or_passthrough(message, model)
+      {event, summary} ->
+        apply_menu(model, event, summary)
     end
   end
 
-  defp handle_sub_or_passthrough(message, %{expanded: true} = model) do
-    case message do
-      key_match("j") -> {sub_menu_down(model), []}
-      key_match(:down) -> {sub_menu_down(model), []}
-      key_match("k") -> {sub_menu_up(model), []}
-      key_match(:up) -> {sub_menu_up(model), []}
-      key_match(:escape) -> {%{model | expanded: false}, []}
-      _ -> {model, []}
+  # Playground keys -> Menu's %Event{type: :key, data: %{key: ...}} vocabulary.
+  # Also accept vim-style hjkl as aliases for the real arrow keys.
+  defp menu_event(%Event{type: :key, data: data}) do
+    case data do
+      %{key: :down} -> {%Event{type: :key, data: %{key: :down}}, "key :down"}
+      %{key: :up} -> {%Event{type: :key, data: %{key: :up}}, "key :up"}
+      %{key: :left} -> {%Event{type: :key, data: %{key: :left}}, "key :left"}
+      %{key: :right} -> {%Event{type: :key, data: %{key: :right}}, "key :right"}
+      %{key: :enter} -> {%Event{type: :key, data: %{key: :enter}}, "key :enter"}
+      %{key: :space} -> {%Event{type: :key, data: %{key: :space}}, "key :space"}
+      %{key: :escape} -> {%Event{type: :key, data: %{key: :escape}}, "key :escape"}
+      %{key: :home} -> {%Event{type: :key, data: %{key: :home}}, "key :home"}
+      %{key: :end} -> {%Event{type: :key, data: %{key: :end}}, "key :end"}
+      %{key: :char, char: "j"} -> {%Event{type: :key, data: %{key: :down}}, "key j→:down"}
+      %{key: :char, char: "k"} -> {%Event{type: :key, data: %{key: :up}}, "key k→:up"}
+      %{key: :char, char: "h"} -> {%Event{type: :key, data: %{key: :left}}, "key h→:left"}
+      %{key: :char, char: "l"} -> {%Event{type: :key, data: %{key: :right}}, "key l→:right"}
+      %{key: :char, char: " "} -> {%Event{type: :key, data: %{key: :space}}, "key space"}
+      _ -> nil
     end
   end
 
-  defp handle_sub_or_passthrough(_message, model), do: {model, []}
+  defp menu_event(_other), do: nil
 
-  defp sub_menu_down(model) do
-    items = current_sub_items(model)
+  defp apply_menu(model, event, summary) do
+    before = model.menu
+    result = Menu.handle_event(event, before, %{})
+    menu = unwrap(result, before)
 
-    %{
+    {last_selected, select_note} = detect_select(before, menu, event)
+
+    outcome =
+      cond do
+        select_note != nil ->
+          "#{summary} -> select #{select_note}"
+
+        menu.cursor != before.cursor or menu.open_path != before.open_path ->
+          "#{summary} -> cursor=#{inspect(menu.cursor)} open=#{inspect(menu.open_path)}"
+
+        true ->
+          "#{summary} -> (no change) cursor=#{inspect(menu.cursor)}"
+      end
+
+    model =
       model
-      | sub_selected:
-          DemoHelpers.cursor_down(model.sub_selected, length(items) - 1)
-    }
+      |> Map.put(:menu, menu)
+      |> Map.put(:last_selected, last_selected || model.last_selected)
+      |> DemoHelpers.log_event(outcome)
+
+    {model, []}
   end
 
-  defp sub_menu_up(model) do
-    %{model | sub_selected: DemoHelpers.cursor_up(model.sub_selected)}
+  # Leaf activation does not mutate Menu state; infer selection from key + cursor.
+  defp detect_select(before, _after_menu, %Event{type: :key, data: %{key: key}})
+       when key in [:enter, :space] do
+    item = Menu.find_item(before.items, before.cursor)
+
+    cond do
+      is_nil(item) ->
+        {nil, nil}
+
+      Map.get(item, :disabled, false) ->
+        {nil, nil}
+
+      item.children == [] ->
+        {item.id, inspect(item.id)}
+
+      true ->
+        {nil, nil}
+    end
   end
+
+  defp detect_select(_before, _after, _event), do: {nil, nil}
+
+  defp unwrap({:noreply, state}, _fallback), do: state
+  defp unwrap({:ok, state}, _fallback), do: state
+  defp unwrap({:handled, state}, _fallback), do: state
+  defp unwrap({state, _cmds}, _fallback) when is_map(state), do: state
 
   @impl true
   def view(model) do
-    column style: %{gap: 1} do
+    last =
+      case model.last_selected do
+        nil -> "(none yet)"
+        id -> inspect(id)
+      end
+
+    column style: %{gap: 0} do
       [
-        text("Menu Demo", style: [:bold]),
-        divider(),
-        menu_bar(model),
-        if model.expanded do
-          sub_menu(model)
-        else
-          text("")
-        end,
-        divider(),
-        box style: %{border: :single, padding: 1, width: @info_box_width} do
-          column style: %{gap: 0} do
-            [
-              text("Menu: #{current_item(model)}", style: [:bold]),
-              if model.expanded do
-                text("Item: #{current_sub_item(model)}")
-              else
-                text("(press Enter to expand)")
-              end
-            ]
-          end
-        end,
-        text("[h/l] menu  [j/k] items  [Enter] expand  [Esc] close",
+        text("Menu — Raxol.UI.Components.Input.Menu", style: [:bold]),
+        text(
+          " (nested items, disabled skip, one open submenu chain)",
           style: [:dim]
-        )
-      ]
+        ),
+        text(""),
+        text(
+          " interactive (cursor=#{inspect(model.menu.cursor)} open=#{inspect(model.menu.open_path)}):",
+          style: [:dim]
+        ),
+        Menu.render(model.menu, %{}),
+        text(""),
+        text(" last selected: #{last}", style: [:bold]),
+        text(""),
+        text(
+          " [↑↓/jk] move  [→/l enter space] open/activate  [←/h esc] close  [home end] jump",
+          style: [:dim]
+        ),
+        text("")
+      ] ++ DemoHelpers.event_log_lines(model)
     end
   end
 
   @impl true
   def subscribe(_model), do: []
-
-  defp menu_bar(model) do
-    items =
-      @items
-      |> Enum.with_index()
-      |> Enum.map(fn {item, idx} ->
-        label = " #{item} "
-
-        if idx == model.selected do
-          text(label, style: [:bold, :underline])
-        else
-          text(label)
-        end
-      end)
-
-    row style: %{gap: 0} do
-      items
-    end
-  end
-
-  defp sub_menu(model) do
-    items = current_sub_items(model)
-
-    rendered =
-      items
-      |> Enum.with_index()
-      |> Enum.map(fn {item, idx} ->
-        prefix = DemoHelpers.cursor_prefix(idx, model.sub_selected)
-        style = if idx == model.sub_selected, do: [:bold], else: []
-        text(prefix <> item, style: style)
-      end)
-
-    box style: %{border: :single, padding: 1, width: @submenu_width} do
-      column style: %{gap: 0} do
-        rendered
-      end
-    end
-  end
-
-  defp current_item(model), do: Enum.at(@items, model.selected)
-
-  defp current_sub_items(model) do
-    Map.get(@sub_menus, current_item(model), [])
-  end
-
-  defp current_sub_item(model) do
-    Enum.at(current_sub_items(model), model.sub_selected, "")
-  end
-
-  defp move_menu(model, delta) do
-    new_idx = rem(model.selected + delta + length(@items), length(@items))
-    %{model | selected: new_idx, sub_selected: 0}
-  end
 end
