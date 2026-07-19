@@ -156,6 +156,11 @@ defmodule Raxol.Harness.HarnessApp do
   # -- anything else is ignored (never crash the fold on an unknown term) --
   def update(_message, model), do: {model, []}
 
+  # A click ACTS on RELEASE, and only when the release lands on the SAME
+  # cell the press did (V's selection ruling): press-drag-release is a
+  # selection attempt, not a click — it must never toggle the block under
+  # the pointer. The press only arms the site; all state change waits for
+  # the matching release.
   defp handle_mouse(
          %Event{
            type: :mouse,
@@ -164,7 +169,23 @@ defmodule Raxol.Harness.HarnessApp do
          model
        )
        when is_integer(x) and is_integer(y) do
-    {Model.click(model, View.hit_test(model, x, y)), []}
+    {%{model | mouse_press: {x, y}}, []}
+  end
+
+  defp handle_mouse(
+         %Event{
+           type: :mouse,
+           data: %{action: :release, x: x, y: y}
+         },
+         model
+       )
+       when is_integer(x) and is_integer(y) do
+    armed = model.mouse_press
+    model = %{model | mouse_press: nil}
+
+    if armed == {x, y},
+      do: {Model.click(model, View.hit_test(model, x, y)), []},
+      else: {model, []}
   end
 
   defp handle_mouse(_event, model), do: {model, []}

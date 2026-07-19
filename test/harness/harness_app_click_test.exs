@@ -55,11 +55,13 @@ defmodule Raxol.Harness.HarnessAppClickTest do
   # The LIVE wire shape: the pump normalizes every event, so a click
   # arrives as {:key, %{kind: :other, raw: %Event{type: :mouse}}} — the
   # envelope the first live defect hid behind (the bare-struct clause
-  # matched fixtures, never the pump).
-  defp click(model, x, y) do
+  # matched fixtures, never the pump). A click is PRESS + RELEASE on the
+  # same cell (release-at-same-cell is the acting edge — V's selection
+  # ruling: a drag must never toggle).
+  defp mouse(model, action, x, y) do
     event = %Event{
       type: :mouse,
-      data: %{action: :press, button: :left, x: x, y: y}
+      data: %{action: action, button: :left, x: x, y: y}
     }
 
     {m, []} =
@@ -69,6 +71,10 @@ defmodule Raxol.Harness.HarnessAppClickTest do
       )
 
     m
+  end
+
+  defp click(model, x, y) do
+    model |> mouse(:press, x, y) |> mouse(:release, x, y)
   end
 
   defp reasoning_row(model) do
@@ -137,21 +143,20 @@ defmodule Raxol.Harness.HarnessAppClickTest do
     assert screen_text(clicked) == screen_text(model)
   end
 
-  test "release and right-button events fold away silently" do
+  test "a bare release (no press), a press alone, and a right-button press all stay inert" do
     model = sealed_reasoning_model()
     row = reasoning_row(model)
 
-    {m1, []} =
-      HarnessApp.update(
-        {:key,
-         %Event{
-           type: :mouse,
-           data: %{action: :release, button: :left, x: 3, y: row}
-         }},
-        model
-      )
+    # release with no armed press: nothing
+    m1 = mouse(model, :release, 3, row)
+    assert m1.record_fold == %{}
 
-    {m2, []} =
+    # press alone arms but toggles nothing (the release is the acting edge)
+    m2 = mouse(model, :press, 3, row)
+    assert m2.record_fold == %{}
+    assert m2.mouse_press == {3, row}
+
+    {m3, []} =
       HarnessApp.update(
         {:key,
          %Event{
@@ -161,8 +166,21 @@ defmodule Raxol.Harness.HarnessAppClickTest do
         model
       )
 
-    assert m1.record_fold == %{}
-    assert m2.record_fold == %{}
+    assert m3.record_fold == %{}
+  end
+
+  test "press-drag-release (a selection attempt) never toggles — and disarms" do
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+
+    dragged = model |> mouse(:press, 3, row) |> mouse(:release, 20, row)
+    assert dragged.record_fold == %{}
+    assert dragged.mouse_press == nil
+    refute screen_text(dragged) =~ "SECRET-THOUGHT-LINE-1"
+
+    # a later clean click still works (the failed drag left no residue)
+    clicked = click(dragged, 3, reasoning_row(dragged))
+    assert screen_text(clicked) =~ "SECRET-THOUGHT-LINE-1"
   end
 
   test "a click on the streaming reasoning preview toggles peek ⇄ expanded" do

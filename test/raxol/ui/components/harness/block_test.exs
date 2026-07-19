@@ -748,14 +748,37 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert line =~ "3 lines"
       assert style[:dim] == true
 
-      # Expanded: the thought is bracketed by the because/therefore arrows
-      # (`∵` opens, `∴` closes) around the real body lines.
+      # Expanded (V's icon-column convention): the HEADER carries the
+      # opening `∵` (down-dots = expanded start — never a second lone-∵
+      # row), body rows sit at cell 3 ("  " indent off the cell-1 icon
+      # column), and a bare `∴` (up-dots = expanded end) closes.
       expanded = %{folded | fold: :expanded}
       texts = flat_texts(Block.render(expanded, %{width: 120}))
-      assert Enum.any?(texts, &(&1 == "first"))
-      assert Enum.any?(texts, &(&1 == "third"))
-      assert Enum.any?(texts, &(&1 == "∵"))
-      assert Enum.any?(texts, &(&1 == "∴"))
+      assert hd(texts) =~ "∵ thinking"
+      assert Enum.any?(texts, &(&1 == "  first"))
+      assert Enum.any?(texts, &(&1 == "  third"))
+      assert List.last(texts) == "∴"
+      refute Enum.any?(texts, &(&1 == "∵"))
+    end
+
+    test "an expanded thought trims edge-blank rows (the redundant spacing V flagged)" do
+      events = [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :reasoning, content: "\n\nreal thought\n\n"}
+        }
+      ]
+
+      block =
+        Block.from_events(:reasoning, events, fold: :expanded, seal: :sealed)
+
+      texts = flat_texts(Block.render(block, %{width: 120}))
+
+      assert Enum.any?(texts, &(&1 == "  real thought"))
+      # no blank rows between the header, the body, and the ∴ closer
+      refute Enum.any?(texts, &(String.trim(&1) == "" and &1 != ""))
+      assert Enum.filter(texts, &(String.trim(&1) == "")) == []
     end
 
     test "a diff block folds to a compact '± path · +N -M' line" do
