@@ -151,18 +151,28 @@ defmodule Raxol.Terminal.CharacterHandling do
   end
 
   def get_char_width(str) when is_binary(str) do
-    case String.to_charlist(str) do
-      # Variation Selector-16 forces EMOJI presentation on a base character
-      # that defaults to text presentation, and emoji presentation is two
-      # columns. This is why `❤` (U+2665, correctly 1) and `❤️` (the same
-      # base plus VS16, 2) must not measure the same -- ignoring the
-      # selector made every VS16 sequence, including keycaps like `1️⃣`,
-      # measure one column short. Checked before the first-codepoint
-      # lookup because the base codepoint alone cannot answer this.
-      codepoints when is_list(codepoints) and codepoints != [] ->
-        emoji_presentation_width(codepoints)
+    # Only the FIRST grapheme cluster decides this call's width. Splitting
+    # here (instead of `String.to_charlist/1` on the whole binary) matters
+    # for multi-grapheme input: a VS16 (or any other modifier) that
+    # belongs to a LATER grapheme must never leak into an earlier,
+    # unrelated character's width -- e.g. in "A❤️" the heart's VS16 used
+    # to widen the plain "A" to 2 because both graphemes' codepoints were
+    # flattened into one list before the VS16 scan.
+    case String.next_grapheme(str) do
+      {grapheme, _rest} ->
+        # Variation Selector-16 forces EMOJI presentation on a base
+        # character that defaults to text presentation, and emoji
+        # presentation is two columns. This is why `❤` (U+2665, correctly
+        # 1) and `❤️` (the same base plus VS16, 2) must not measure the
+        # same -- ignoring the selector made every VS16 sequence,
+        # including keycaps like `1️⃣`, measure one column short. Checked
+        # before the first-codepoint lookup because the base codepoint
+        # alone cannot answer this.
+        grapheme
+        |> String.to_charlist()
+        |> emoji_presentation_width()
 
-      [] ->
+      nil ->
         1
     end
   end

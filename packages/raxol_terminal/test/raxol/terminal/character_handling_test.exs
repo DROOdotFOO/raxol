@@ -157,6 +157,14 @@ defmodule Raxol.Terminal.CharacterHandlingTest do
       assert CharacterHandling.get_string_width("1️⃣") == 2
       assert CharacterHandling.get_string_width("#️⃣") == 2
     end
+
+    test "a VS16 later in the binary does not widen an earlier, unrelated grapheme" do
+      # get_char_width/1's binary clause used to flatten the WHOLE binary
+      # to a codepoint list before scanning for VS16, so a heart-with-VS16
+      # riding behind a plain "A" made the "A" measure 2 instead of 1: the
+      # selector belongs to the SECOND grapheme, not the first.
+      assert CharacterHandling.get_char_width("A❤️") == 1
+    end
   end
 
   # `split_at_width/2` used to walk codepoints, so it cut grapheme clusters
