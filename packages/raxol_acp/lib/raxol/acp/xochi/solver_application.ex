@@ -67,6 +67,14 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   @impl true
   def init(_opts) do
     chain = ACP.Chain.mainnet()
+
+    # Secret-handling invariant -- KEEP THIS if you reuse the solver pattern. The raw
+    # key exists only as this transient local; `JSONRPC.new/1` immediately wraps it in a
+    # `Raxol.ACP.Secret` before it enters the provider config. That wrapper redacts under
+    # `Inspect`, so the key never renders into an OTP/SASL crash report even though the
+    # provider is passed as a supervised child's start arg (a plain unwrapped key here
+    # WOULD leak on any boot-time child crash -- see Secret's moduledoc). Do not log or
+    # interpolate `private_key`; only `Secret.reveal/1` at a sign call site unwraps it.
     private_key = decode_pk!(System.fetch_env!("RAXOL_ACP_AGENT_PRIVATE_KEY"))
     rpc_url = System.get_env("RAXOL_ACP_RPC_URL", chain.rpc_url)
     server_url = chain.acp_server_url
