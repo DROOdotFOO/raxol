@@ -2,14 +2,16 @@ defmodule Raxol.ACP.Seller.Offerings do
   @moduledoc """
   Registers the seller's ACP offerings with `Raxol.ACP.Offering.Registry`.
 
-  Offerings come from `config :raxol_acp, :offerings` (default: the split
-  Xochi pair `StablePublicOffering` + `StableStealthOffering`, plus the
-  deprecated `TransferOffering` for one migration cycle).
+  Offerings come from `config :raxol_acp, :offerings` (default: the USDC-only
+  launch offering `UsdcPublicOffering`, the split Xochi pair
+  `StablePublicOffering` + `StableStealthOffering`, plus the deprecated
+  `TransferOffering` for one migration cycle).
   `Raxol.ACP.Seller.Supervisor` calls `register_all/0` on start; registration is
   idempotent.
   """
 
   @default [
+    Raxol.ACP.Xochi.UsdcPublicOffering,
     Raxol.ACP.Xochi.StablePublicOffering,
     Raxol.ACP.Xochi.StableStealthOffering,
     Raxol.ACP.Xochi.TransferOffering

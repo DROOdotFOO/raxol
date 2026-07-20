@@ -93,6 +93,10 @@ defmodule Raxol.ACP.Xochi.TransferCore do
     do:
       "This is the stealth offering, but the requirement asks for public settlement. Use \"#{alt}\"."
 
+  def describe_rejection({:wrong_offering, :expected_usdc, alt}),
+    do:
+      "This is the USDC-only offering, but a leg is not USDC. Use \"#{alt}\" for other stablecoins."
+
   def describe_rejection({:stealth_requires_l1_destination, dst}),
     do:
       "Stealth settles on Ethereum L1, so dst_chain_id must be 1 (got #{dst}); " <>

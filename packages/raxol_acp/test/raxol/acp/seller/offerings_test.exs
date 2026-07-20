@@ -3,7 +3,7 @@ defmodule Raxol.ACP.Seller.OfferingsTest do
 
   alias Raxol.ACP.Offering.Registry
   alias Raxol.ACP.Seller.Offerings
-  alias Raxol.ACP.Xochi.TransferOffering
+  alias Raxol.ACP.Xochi.{TransferOffering, UsdcPublicOffering}
 
   @offering "xochi_cross_chain_transfer"
 
@@ -23,6 +23,13 @@ defmodule Raxol.ACP.Seller.OfferingsTest do
 
       assert {:ok, spec} = Registry.lookup(@offering)
       assert spec.handler == TransferOffering
+    end
+
+    test "registers the USDC-only launch offering by default" do
+      assert :ok = Offerings.register_all()
+
+      assert {:ok, spec} = Registry.lookup("xochi_usdc_public")
+      assert spec.handler == UsdcPublicOffering
     end
 
     test "is idempotent across repeated calls" do
