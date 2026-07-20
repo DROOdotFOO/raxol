@@ -323,7 +323,11 @@ defmodule Raxol.AgentClientProtocol.Ext.Schema.SteerResponse do
     do: Map.put(ref_json(ref), "outcome", "duplicate")
 
   defp encode_result({:error, {:stale_turn, expected, actual}}),
-    do: %{"outcome" => "stale", "expectedTurnId" => expected, "actualTurnId" => actual}
+    do: %{
+      "outcome" => "stale",
+      "expectedTurnId" => json_turn_token(expected),
+      "actualTurnId" => json_turn_token(actual)
+    }
 
   defp encode_result({:error, :no_live_turn}), do: %{"outcome" => "no_live_turn"}
   defp encode_result({:error, :client_msg_id_reuse}), do: %{"outcome" => "client_msg_id_reuse"}
@@ -331,11 +335,31 @@ defmodule Raxol.AgentClientProtocol.Ext.Schema.SteerResponse do
 
   defp ref_json(ref) do
     %{
-      "turnId" => Map.get(ref, :turn_id),
+      "turnId" => ref |> Map.get(:turn_id) |> json_turn_token(),
       "offset" => Map.get(ref, :offset),
       "clientMsgId" => Map.get(ref, :client_msg_id)
     }
   end
+
+  # A turn token is USUALLY the session's integer turn ordinal, but a real
+  # `SteerAdapter` (e.g. the one closing over `Raxol.Agent.Steer` in the
+  # `raxol_agent` package) issues a CAS-swap token after every accept --
+  # `{:steered, cur, System.unique_integer(...)}`, a TUPLE -- as the new
+  # `turn_id`. That swapped value has nowhere legitimate to go (an accept's
+  # `ref` only ever carries the PRE-swap token, so no client can legitimately
+  # learn the swapped one), which means the very next steer against the same
+  # live turn ordinarily resolves `{:error, {:stale_turn, _, actual}}` with
+  # `actual` bound to that tuple -- an everyday interaction, not a hostile
+  # input. `Jason.Encoder` has no implementation for tuples, so handing one to
+  # `Jason.encode!` raw (via this struct's `Jason.Encoder` impl) raises
+  # `Protocol.UndefinedError` and crashes the reply. Keep the common
+  # integer/binary/nil shapes byte-identical on the wire; stringify anything
+  # else so `encode_result/1` stays total and the wire never carries a term
+  # JSON cannot represent.
+  defp json_turn_token(token) when is_integer(token) or is_binary(token) or is_nil(token),
+    do: token
+
+  defp json_turn_token(token), do: inspect(token)
 
   @spec from_json(map()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
