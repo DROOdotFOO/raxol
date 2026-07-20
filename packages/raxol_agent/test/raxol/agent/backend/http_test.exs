@@ -308,5 +308,65 @@ defmodule Raxol.Agent.Backend.HTTPTest do
     test "no tool-call fragments -> empty list" do
       assert [] = HTTP.accumulate_tool_calls([])
     end
+
+    test "two indexless complete single-call batches in separate chunks are NOT cross-merged" do
+      # No "index" key at all (a no-index provider) -- each batch is a
+      # complete, standalone call (id + name + full arguments in one
+      # shot). Before the fix, the position-within-batch fallback (`pos`)
+      # restarts at 0 for every single-fragment batch, so the second
+      # call's fragment silently overwrote the first's slot and only one
+      # call survived.
+      batches = [
+        [
+          %{
+            "id" => "c1",
+            "function" => %{"name" => "read_file", "arguments" => "{\"path\":\"a.txt\"}"}
+          }
+        ],
+        [
+          %{
+            "id" => "c2",
+            "function" => %{"name" => "list_dir", "arguments" => "{\"path\":\".\"}"}
+          }
+        ]
+      ]
+
+      result = HTTP.accumulate_tool_calls(batches)
+
+      assert length(result) == 2
+      assert %{"id" => "c1", "name" => "read_file", "arguments" => %{"path" => "a.txt"}} in result
+      assert %{"id" => "c2", "name" => "list_dir", "arguments" => %{"path" => "."}} in result
+    end
+
+    test "an indexless continuation fragment that repeats the id still merges into the same call" do
+      batches = [
+        [%{"id" => "c1", "function" => %{"name" => "edit_file", "arguments" => "{\"a\":"}}],
+        [%{"id" => "c1", "function" => %{"arguments" => "1}"}}]
+      ]
+
+      assert [%{"id" => "c1", "name" => "edit_file", "arguments" => %{"a" => 1}}] =
+               HTTP.accumulate_tool_calls(batches)
+    end
+
+    test "undecodable accumulated arguments surface an honest marker, never a silently laundered %{}" do
+      batches = [
+        [
+          %{
+            "index" => 0,
+            "id" => "c1",
+            "function" => %{"name" => "edit_file", "arguments" => "{not valid json"}
+          }
+        ]
+      ]
+
+      assert [%{"id" => "c1", "name" => "edit_file", "arguments" => %{}} = call] =
+               HTTP.accumulate_tool_calls(batches)
+
+      assert is_binary(call["arguments_error"])
+      assert call["arguments_error"] =~ "undecodable"
+
+      refute call["arguments_error"] =~ "not valid json",
+             "the marker must not leak the raw provider text"
+    end
   end
 end

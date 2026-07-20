@@ -303,10 +303,26 @@ defmodule Raxol.Agent.Stream do
         {[{:marker, text}], :running}
 
       {:done, response}, :running ->
+        # `run/2` is the single-completion path -- there is no tool-execution
+        # loop downstream of this stream (that is `react/2`). `Backend.HTTP`
+        # accumulates streamed `tool_calls` onto the done response even here
+        # (`finalize_tool_calls/1`); silently dropping them would strand a
+        # model's claimed tool call with zero receipt while the turn still
+        # reports a clean done -- a green-wash. Seal an honest
+        # `:tool_unexecuted` marker per call instead: the vocabulary already
+        # exists and `Contract.pump/3` already renders it as a visible ⚠
+        # message -- this is its producer on the streaming run/2 path. The
+        # `:done` payload's own shape is untouched (content/tool_results/usage)
+        # so nothing reading it directly is disturbed.
+        unexecuted_events =
+          response
+          |> Map.get(:tool_calls, [])
+          |> Enum.map(&unexecuted_tool_call_event/1)
+
         done_event =
           {:done, %{content: response.content, tool_results: [], usage: response.usage}}
 
-        {[done_event], :done}
+        {unexecuted_events ++ [done_event], :done}
 
       {:error, reason}, :running ->
         {[{:error, reason}], :done}
@@ -314,6 +330,13 @@ defmodule Raxol.Agent.Stream do
       _event, :done ->
         {:halt, :done}
     end)
+  end
+
+  defp unexecuted_tool_call_event(tool_call) do
+    name =
+      Map.get(tool_call, "name") || Map.get(tool_call, :name) || "unknown"
+
+    {:tool_unexecuted, %{name: name, reason: :no_tool_loop}}
   end
 
   defp sync_completion(backend, messages, backend_opts) do

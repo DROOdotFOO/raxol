@@ -247,6 +247,41 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
     end
   end
 
+  describe "parse_sse/2 CRLF line endings (real CRLF-speaking providers/proxies)" do
+    test "a data: [DONE] line terminated with \\r completes normally, no spurious unparseable marker" do
+      # The isolated defect: a "data: [DONE]" content line terminated with
+      # \r\n, followed by the record's blank-line separator. Before the
+      # fix, that trailing \r survives the "\n\n" split and breaks the
+      # exact-match `"data: [DONE]"` clause, falling through to
+      # `Jason.decode("[DONE]\r")` -- which fails and seals a bogus
+      # "unparseable response chunk" marker on every turn from a
+      # CRLF-speaking provider (a NEW regression, never a clean [DONE]).
+      raw = "data: [DONE]\r\n\n"
+
+      {events, buffer} = HTTP.parse_sse(raw, :openai)
+
+      assert events == [{:usage, %{}}]
+      assert buffer == ""
+
+      refute Enum.any?(events, &match?({:marker, _}, &1)),
+             "a CRLF [DONE] sentinel must not seal a bogus unparseable marker: #{inspect(events)}"
+    end
+
+    test "a fully CRLF-delimited stream frames its record boundary (does not buffer forever)" do
+      # Without CRLF-tolerant framing, "\r\n\r\n" never matches a literal
+      # "\n\n" split -- the whole chunk is kept as unparsed buffer forever
+      # and the answer never surfaces (empty content at :done).
+      raw =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n" <>
+          "data: [DONE]\r\n\r\n"
+
+      {events, buffer} = HTTP.parse_sse(raw, :openai)
+
+      assert events == [{:text_delta, "hi"}, {:usage, %{}}]
+      assert buffer == ""
+    end
+  end
+
   describe "parse_sse/2 no-regression for other providers" do
     test "anthropic content_block_delta still yields text" do
       raw = ~s(data: {"type":"content_block_delta","delta":{"text":"a"}}\n\n)

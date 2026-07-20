@@ -259,6 +259,21 @@ defmodule Raxol.Agent.Backend.HTTP do
   end
 
   def parse_sse(raw, provider) when provider in [:anthropic, :openai, :kimi] do
+    # Canonicalize CRLF line endings before framing. Some providers (or a
+    # proxy in front of them) speak `\r\n`: left alone, the double-newline
+    # record separator never matches a literal "\r\n\r\n" (no `"\n\n"`
+    # substring exists inside it), so the stream never frames a single
+    # event and just buffers forever -- the answer never surfaces. And when
+    # a boundary DOES happen to land such that a `\r` survives on its own
+    # line (e.g. a `"data: [DONE]\r"` line), the `"data: [DONE]"` exact
+    # match below misses it, falls through to `Jason.decode("[DONE]\r")`,
+    # and seals a bogus "unparseable response chunk" ⚠ marker on every
+    # single turn from that provider. Replacing every `\r\n` pair with `\n`
+    # up front fixes both: the separator normalizes to `"\n\n"`, and no
+    # line keeps a trailing `\r`. A lone `\r` not yet paired with its `\n`
+    # (split across a chunk boundary) is left untouched here and completes
+    # correctly once the rest of the pair arrives in the next chunk.
+    raw = String.replace(raw, "\r\n", "\n")
     parts = String.split(raw, "\n\n")
 
     case parts do
@@ -643,17 +658,21 @@ defmodule Raxol.Agent.Backend.HTTP do
     end)
   end
 
-  # Merge streamed tool-call fragments into the accumulator, keyed by the
-  # provider's `index` (falling back to list position for a full-message array
-  # with no index). `id`/`name` are taken from the first fragment that carries
-  # them; `function.arguments` string fragments are concatenated (a whole JSON
-  # string in one fragment is just the length-1 case). A fragment carrying
-  # `arguments` as an already-parsed map overrides the string buffer.
+  # Merge streamed tool-call fragments into the accumulator. Correlation
+  # priority: the provider's own `index` (unchanged) > a matching `id`
+  # already present in the accumulator (a same-call continuation from a
+  # no-index provider that still repeats the id) > a FRESH key strictly
+  # past every key already assigned (a new, complete fragment from a
+  # no-index provider — see `resolve_tool_call_index/3`). `id`/`name` are
+  # taken from the first fragment that carries them; `function.arguments`
+  # string fragments are concatenated (a whole JSON string in one fragment
+  # is just the length-1 case). A fragment carrying `arguments` as an
+  # already-parsed map overrides the string buffer.
   defp merge_tool_call_frags(acc, frags) when is_list(frags) do
     frags
     |> Enum.with_index()
     |> Enum.reduce(acc, fn {frag, pos}, acc ->
-      idx = frag["index"] || pos
+      idx = resolve_tool_call_index(acc, frag, pos)
       cur = Map.get(acc, idx, %{"id" => nil, "name" => nil, "args" => ""})
       fun = frag["function"] || %{}
 
@@ -679,6 +698,35 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   defp merge_tool_call_frags(acc, _frags), do: acc
 
+  # A provider that never sends `index` has no stable key across chunks: the
+  # position within any ONE `frags` batch (`pos`) always restarts at 0, so two
+  # SEPARATE complete fragments arriving in two different chunks both resolved
+  # to key 0 and the second silently overwrote (cross-merged into) the first.
+  # Falls back to `id` (a same-call continuation that still repeats it lands
+  # back on its own slot) and finally to a key strictly greater than every
+  # key already in the accumulator — new and distinct no matter how many
+  # earlier, unrelated calls have already been assigned.
+  defp resolve_tool_call_index(_acc, %{"index" => index}, _pos) when not is_nil(index),
+    do: index
+
+  defp resolve_tool_call_index(acc, %{"id" => id}, pos) when not is_nil(id) do
+    case find_tool_call_index_by_id(acc, id) do
+      nil -> next_tool_call_index(acc) + pos
+      existing -> existing
+    end
+  end
+
+  defp resolve_tool_call_index(acc, _frag, pos), do: next_tool_call_index(acc) + pos
+
+  defp find_tool_call_index_by_id(acc, id) do
+    Enum.find_value(acc, fn
+      {idx, %{"id" => ^id}} -> idx
+      _ -> nil
+    end)
+  end
+
+  defp next_tool_call_index(acc), do: Enum.max(Map.keys(acc), fn -> -1 end) + 1
+
   # Finalize the accumulator to the downstream tool_calls contract (index
   # order, arguments JSON-decoded), matching `parse_openai_tool_calls/1`.
   defp finalize_tool_calls(acc) when map_size(acc) == 0, do: []
@@ -686,28 +734,47 @@ defmodule Raxol.Agent.Backend.HTTP do
   defp finalize_tool_calls(acc) do
     acc
     |> Enum.sort_by(fn {idx, _} -> idx end)
-    |> Enum.map(fn {_idx, tc} ->
-      args =
-        case tc["args"] do
-          "" ->
-            %{}
-
-          s when is_binary(s) ->
-            case Jason.decode(s) do
-              {:ok, map} -> map
-              _ -> %{}
-            end
-
-          m when is_map(m) ->
-            m
-
-          _ ->
-            %{}
-        end
-
-      %{"id" => tc["id"], "name" => tc["name"], "arguments" => args}
-    end)
+    |> Enum.map(fn {_idx, tc} -> finalize_tool_call(tc) end)
   end
+
+  defp finalize_tool_call(tc) do
+    base = %{"id" => tc["id"], "name" => tc["name"]}
+
+    case decode_tool_args(tc["args"]) do
+      {:ok, args} ->
+        Map.put(base, "arguments", args)
+
+      {:error, marker} ->
+        # An accumulated `arguments` string that fails to decode is a real
+        # fidelity gap, not a zero-arg call: the model asked to invoke this
+        # tool with SOME payload, and silently substituting `%{}` would let
+        # it execute (or be reported as unexecuted) under the WRONG
+        # arguments with no trace anything went wrong. `arguments` stays
+        # map-shaped (so a consumer expecting a map is not broken) but an
+        # honest marker rides alongside it — never leaking the raw
+        # provider text, only its size, matching `unparseable_marker/2`'s
+        # keys-only discipline.
+        base
+        |> Map.put("arguments", %{})
+        |> Map.put("arguments_error", marker)
+    end
+  end
+
+  defp decode_tool_args(""), do: {:ok, %{}}
+  defp decode_tool_args(nil), do: {:ok, %{}}
+
+  defp decode_tool_args(s) when is_binary(s) do
+    case Jason.decode(s) do
+      {:ok, map} when is_map(map) ->
+        {:ok, map}
+
+      _ ->
+        {:error, "⚠ undecodable tool call arguments (#{byte_size(s)} bytes)"}
+    end
+  end
+
+  defp decode_tool_args(m) when is_map(m), do: {:ok, m}
+  defp decode_tool_args(_other), do: {:ok, %{}}
 
   @doc false
   # Test seam: fold a sequence of streamed tool-call fragment batches (one

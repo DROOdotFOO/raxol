@@ -165,6 +165,58 @@ defmodule Raxol.Agent.ContractTest do
       events = drain_events(session_id)
       assert Enum.any?(events, &(&1.type == :error))
     end
+
+    test "an error mid-stream seals whatever reasoning/answer text streamed before the halt (no dangling item_started)" do
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      stream = [
+        {:reasoning, "thinking"},
+        {:text_delta, "partial ans"},
+        {:error, :timeout}
+      ]
+
+      assert {:error, :timeout} = Contract.pump(session_id, stream, prompt: "q")
+
+      events = drain_events(session_id)
+
+      assert Enum.any?(events, &(&1.type == :error))
+
+      # No dangling item_started: every opened item (reasoning, message)
+      # has a matching item_completed in the drained journal.
+      started_ids =
+        for %Event{type: :item_started, payload: payload} <- events,
+            do: payload.item_id
+
+      completed_ids =
+        for %Event{type: :item_completed, payload: payload} <- events,
+            do: payload.item_id
+
+      assert started_ids != [], "expected at least one opened item in this witness"
+      assert Enum.sort(started_ids) == Enum.sort(completed_ids)
+
+      # The streamed reasoning and partial answer both survive replay,
+      # sealed as their own durable blocks rather than evaporating.
+      reasoning_seal =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :reasoning)
+        )
+
+      message_seal =
+        Enum.find(
+          events,
+          &(&1.type == :item_completed and &1.payload[:item_type] == :message)
+        )
+
+      assert reasoning_seal.payload.content == "thinking"
+      assert message_seal.payload.content == "partial ans"
+
+      # Reasoning sealed before the message (mirrors every other boundary),
+      # and the error event closes the run last.
+      assert reasoning_seal.id < message_seal.id
+      assert message_seal.id < Enum.find(events, &(&1.type == :error)).id
+    end
   end
 
   describe "streaming item lifecycle (item_started + item_id)" do

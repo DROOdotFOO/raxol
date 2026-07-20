@@ -311,6 +311,16 @@ defmodule Raxol.Agent.Contract do
         end
       )
 
+    # A stream that halts without ever reaching a `{:done, _}` or
+    # `{:error, _}` element (so `result` is still its `:no_result` init
+    # value) leaves the reduce above with no terminal arm to seal whatever
+    # was open. A no-op once `:done`/`:error` have already closed both (the
+    # common case) — closing here too costs nothing, and it means the
+    # producer never strands an item_started with no completion no matter
+    # how the enumerable ends.
+    final_acc = close_reasoning_item(session_id, turn_id, counter, final_acc)
+    final_acc = close_message_item(session_id, turn_id, counter, final_acc)
+
     final_acc.result
   end
 
@@ -485,11 +495,21 @@ defmodule Raxol.Agent.Contract do
         }
 
       {:error, reason} ->
-        emit_event(session_id, turn_id, counter, :error, :durable, %{
-          reason: reason
-        })
+        # A halted stream (backend error, timeout, dropped connection) must
+        # not leave a dangling item_started with no completion: whatever
+        # reasoning/answer text streamed before the halt is sealed FIRST
+        # (reasoning ahead of the message, mirroring every other boundary
+        # in this reduce), so the durable journal never loses an open item
+        # and the partial content survives replay instead of evaporating.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
+        acc = close_message_item(session_id, turn_id, counter, acc)
 
-        %{acc | result: {:error, reason}}
+        error_ev =
+          emit_event(session_id, turn_id, counter, :error, :durable, %{
+            reason: reason
+          })
+
+        %{acc | journal: acc.journal ++ [error_ev], result: {:error, reason}}
 
       _other ->
         acc
