@@ -23,12 +23,18 @@
 # ----------------------------------------------------------------------------------------
 #
 # Usage:
-#   ./scripts/deploy-raxol-solver.sh
+#   ./scripts/deploy-raxol-solver.sh [--yes]   # --yes / ASSUME_YES=1 skips the confirm prompt
 
 set -euo pipefail
-# A failed 'op read' inside a command substitution must abort the whole run rather than
-# silently seeding an empty secret. inherit_errexit propagates set -e into $( ... ).
-shopt -s inherit_errexit
+# NB: `inherit_errexit` is deliberately NOT used -- it needs bash >= 4.4 (macOS ships
+# 3.2), and it would NOT prevent an empty-secret seed anyway: a failed `op read` inside a
+# printf-arg substitution is masked (printf succeeds with an empty string). stage_secrets
+# resolves each secret into a CHECKED assignment instead.
+
+die() {
+  printf 'error: %s\n' "$1" >&2
+  exit 1
+}
 
 # Run from the repo root so `fly deploy -c fly.acp.toml` and the Docker build context resolve.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,6 +86,7 @@ require_app_exists() {
 preflight() {
   require_cmd op
   require_cmd fly
+  require_cmd jq
   require_op_signed_in
   require_app_exists
 }
@@ -90,13 +97,27 @@ preflight() {
 # resolved plaintext never lands in another process's command line; --stage defers the
 # rollout to the single `fly deploy` below. (XOCHI_BASE_URL / XOCHI_FEE_BPS / the enable
 # flag are NON-secret and live in fly.acp.toml [env].)
+#
+# Each op read is a discrete, CHECKED assignment before the printf -- not inlined as
+# `printf "KEY=$(op read ...)"`. A failed op read inside a printf-arg substitution is
+# masked (printf still succeeds with an empty string), so the inline form would silently
+# stage a BLANK secret (e.g. an empty private key). Assign-then-check catches both a
+# failed read and an empty value.
 stage_secrets() {
-  printf 'Staging %d secrets into fly app %q (out of argv)...\n' 4 "${APP}"
+  local pk evaluator auth rpc
+  pk="$(op read "${OP_AGENT_PRIVATE_KEY}")"    || die "op read failed for ${OP_AGENT_PRIVATE_KEY}"
+  evaluator="$(op read "${OP_AGENT_ADDRESS}")" || die "op read failed for ${OP_AGENT_ADDRESS}"
+  auth="$(op read "${OP_XOCHI_AUTH_TOKEN}")"   || die "op read failed for ${OP_XOCHI_AUTH_TOKEN}"
+  rpc="$(op read "${OP_BASE_RPC_URL}")"        || die "op read failed for ${OP_BASE_RPC_URL}"
+  [[ -n "${pk}" && -n "${evaluator}" && -n "${auth}" && -n "${rpc}" ]] \
+    || die "a resolved secret is empty; refusing to stage a blank secret"
+
+  printf 'Staging 4 secrets into fly app %q (out of argv)...\n' "${APP}"
   printf '%s\n' \
-    "RAXOL_ACP_AGENT_PRIVATE_KEY=$(op read "${OP_AGENT_PRIVATE_KEY}")" \
-    "RAXOL_ACP_EVALUATOR=$(op read "${OP_AGENT_ADDRESS}")" \
-    "XOCHI_AUTH_TOKEN=$(op read "${OP_XOCHI_AUTH_TOKEN}")" \
-    "RAXOL_ACP_RPC_URL=$(op read "${OP_BASE_RPC_URL}")" \
+    "RAXOL_ACP_AGENT_PRIVATE_KEY=${pk}" \
+    "RAXOL_ACP_EVALUATOR=${evaluator}" \
+    "XOCHI_AUTH_TOKEN=${auth}" \
+    "RAXOL_ACP_RPC_URL=${rpc}" \
     | fly secrets import --stage -a "${APP}"
 }
 
@@ -109,15 +130,38 @@ deploy_single_machine() {
 }
 
 # Enforce the single-machine invariant (one shared signing EOA + one SSE stream: a second
-# machine would race the wallet nonce). Then show the machine list for verification.
+# machine would race the wallet nonce). Scale to 1, then ASSERT exactly one started
+# machine and fail loudly otherwise -- never just print the list for a human to eyeball.
 enforce_single_machine() {
   fly scale count 1 -a "${APP}" --yes
-  printf 'Deployed machines (expect exactly one started):\n'
-  fly machines list -a "${APP}"
+  local started
+  started="$(fly machines list -a "${APP}" --json | jq '[.[] | select(.state == "started")] | length')" \
+    || die "could not list machines for ${APP}"
+  if [[ "${started}" != "1" ]]; then
+    fly machines list -a "${APP}" >&2
+    die "expected exactly 1 started machine, found ${started} -- a 2nd solver races the wallet nonce; scale back to 1"
+  fi
+  printf 'Verified: exactly one started machine.\n'
+}
+
+# Guard a live production deploy behind an interactive confirmation, unless --yes or
+# ASSUME_YES=1. This deploys a real signing solver; it must not happen by accident.
+confirm() {
+  [[ "${ASSUME_YES}" == "1" ]] && return 0
+  printf 'Deploy the PRODUCTION signing solver %q? [y/N] ' "${APP}"
+  local reply
+  read -r reply || die "aborted (no confirmation)"
+  [[ "${reply}" == "y" || "${reply}" == "Y" ]] || die "aborted by operator"
 }
 
 main() {
+  ASSUME_YES=0
+  local arg
+  for arg in "$@"; do
+    [[ "${arg}" == "--yes" || "${arg}" == "-y" ]] && ASSUME_YES=1
+  done
   preflight
+  confirm
   stage_secrets
   deploy_single_machine
   enforce_single_machine
