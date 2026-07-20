@@ -675,13 +675,24 @@ defmodule Raxol.Terminal.InlineDriver do
   end
 
   # Byte offset of the LAST paste-open that has no paste-close after it, or
-  # nil when every open is terminated (or there is no open). Only the final
-  # open can be unterminated -- an earlier open without a close would have
-  # consumed the bytes that a later open sits in.
+  # of a torn OPEN-MARKER PREFIX riding the very end of the buffer (the
+  # marker's own bytes split across a chunk boundary -- e.g. chunk1 ends
+  # "...\e[20", chunk2 begins "0~..."), or nil when neither applies (every
+  # open is terminated and the tail holds no such prefix). Only the final
+  # open (or trailing prefix) can be unterminated -- an earlier open
+  # without a close would have consumed the bytes that a later one sits
+  # in.
+  #
+  # `:binary.matches/2` only finds COMPLETE 6-byte markers, so a chunk
+  # boundary landing mid-marker (nothing looks like an open yet) used to
+  # fall straight to the `[] -> nil` branch and flow through unbuffered:
+  # the next chunk arrived with no memory of the split, the two marker
+  # halves never reunited, and whatever rode behind them (a pasted `\r`)
+  # parsed as an ordinary keystroke instead of paste content.
   defp unterminated_open(buffer) do
     case :binary.matches(buffer, @paste_open) do
       [] ->
-        nil
+        trailing_open_prefix(buffer)
 
       opens ->
         {open_pos, open_len} = List.last(opens)
@@ -690,10 +701,52 @@ defmodule Raxol.Terminal.InlineDriver do
 
         case :binary.match(tail, @paste_close) do
           :nomatch -> open_pos
-          _found -> nil
+          _found -> trailing_open_prefix(buffer)
         end
     end
   end
+
+  # Mirrors `Raxol.Terminal.InlineDriver.CursorReport.cpr_prefix?`'s
+  # split-chunk defense: search backward from the end for the last ESC
+  # within a bounded window (the open marker is `byte_size(@paste_open)`
+  # bytes, so any genuine partial prefix is within that many bytes of the
+  # tail), then check whether everything from that ESC onward is a
+  # PROPER prefix of the literal marker. Unlike CPR's variable-digit
+  # grammar, the open marker is a fixed literal, so the "grammar" here is
+  # just its own leading bytes -- see `paste_open_prefix?/1`.
+  defp trailing_open_prefix(buffer) do
+    size = byte_size(buffer)
+    window_start = max(size - byte_size(@paste_open), 0)
+
+    case last_esc_index(buffer, size - 1, window_start) do
+      nil ->
+        nil
+
+      idx ->
+        tail = binary_part(buffer, idx, size - idx)
+        if paste_open_prefix?(tail), do: idx, else: nil
+    end
+  end
+
+  defp last_esc_index(_buffer, i, window_start) when i < window_start, do: nil
+
+  defp last_esc_index(buffer, i, window_start) do
+    if :binary.at(buffer, i) == 0x1B do
+      i
+    else
+      last_esc_index(buffer, i - 1, window_start)
+    end
+  end
+
+  # A PROPER prefix of the literal open marker `\e[200~` (a full 6-byte
+  # match never reaches here -- `unterminated_open/1` already checked for
+  # a complete `:binary.matches/2` hit before falling here).
+  defp paste_open_prefix?(<<0x1B>>), do: true
+  defp paste_open_prefix?(<<0x1B, ?[>>), do: true
+  defp paste_open_prefix?(<<0x1B, ?[, ?2>>), do: true
+  defp paste_open_prefix?(<<0x1B, ?[, ?2, ?0>>), do: true
+  defp paste_open_prefix?(<<0x1B, ?[, ?2, ?0, ?0>>), do: true
+  defp paste_open_prefix?(_other), do: false
 
   defp notify_raw(nil, _data), do: :ok
 

@@ -492,6 +492,41 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
       GenServer.stop(pid)
     end
+
+    test "a torn OPEN marker split across chunks does not leak bytes or fire :enter",
+         %{pid: pid} do
+      # The open marker's OWN bytes are torn mid-sequence: chunk1 ends
+      # "...\e[20", chunk2 begins "0~...". Unbuffered, chunk1's tail is not
+      # a complete 6-byte marker at all, so `unterminated_open/1` saw zero
+      # opens and let it all through as raw keystrokes; chunk2 then arrived
+      # with no memory of the split, so "\e[200~" never re-formed and the
+      # embedded `\r` fired :enter (a spurious SUBMIT) with "rm -rf"
+      # following as ordinary keys a shell-like consumer would execute.
+      feed_chunk(pid, "x\e[20")
+      feed_chunk(pid, "0~evil\rrm -rf\e[201~")
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :key,
+                        data: %{char: "x"}
+                      }},
+                     1_000
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :paste,
+                        data: %{text: "evil\rrm -rf"}
+                      }},
+                     1_000
+
+      # No stray key events (in particular no spurious :enter) leaked from
+      # the paste body or the torn marker's bytes -- "x"'s event above is
+      # already consumed by the assert_receive, so this catches anything
+      # else.
+      refute_received {:inline_input, %Raxol.Core.Events.Event{type: :key}}
+
+      GenServer.stop(pid)
+    end
   end
 
   # ---------------------------------------------------------------------
