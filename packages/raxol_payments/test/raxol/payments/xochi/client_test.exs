@@ -29,6 +29,20 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       assert {"authorization", "Bearer legacy-jwt"} in downcase(headers)
     end
 
+    test "a Secret-wrapped auth_token is revealed into the Bearer header" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth_token: Raxol.Payments.Secret.new("wrapped-jwt"),
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Client.claim(config, @claim_params)
+      assert_receive {:req, _method, _path, headers, _body}
+      assert {"authorization", "Bearer wrapped-jwt"} in downcase(headers)
+      # The token never renders in the clear (redacted Inspect).
+      refute inspect(config.auth_token) =~ "wrapped-jwt"
+    end
+
     test "none mode sends no Authorization header" do
       assert {:ok, _} = Client.claim(config(auth: :none), @claim_params)
       assert_receive {:req, _method, _path, headers, _body}

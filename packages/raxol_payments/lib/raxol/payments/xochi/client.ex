@@ -69,7 +69,7 @@ defmodule Raxol.Payments.Xochi.Client do
   @type config :: %{
           :base_url => String.t(),
           optional(:auth) => auth(),
-          optional(:auth_token) => String.t(),
+          optional(:auth_token) => String.t() | Raxol.Payments.Secret.t(),
           optional(:req_options) => keyword()
         }
 
@@ -204,8 +204,12 @@ defmodule Raxol.Payments.Xochi.Client do
 
   # Explicit `:auth` wins; a bare legacy `:auth_token` maps to Member Bearer;
   # otherwise the request is anonymous (the worker answers 402 with a Guest
-  # invite).
+  # invite). A `Raxol.Payments.Secret`-wrapped token is revealed only here, so
+  # the token stays redacted in any config/state that a crash report might dump.
   defp auth_mode(%{auth: auth}), do: auth
+  defp auth_mode(%{auth_token: %Raxol.Payments.Secret{} = token}),
+    do: {:member, Raxol.Payments.Secret.reveal(token)}
+
   defp auth_mode(%{auth_token: token}) when is_binary(token), do: {:member, token}
   defp auth_mode(_), do: :none
 

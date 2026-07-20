@@ -45,8 +45,22 @@ defmodule Raxol.ACP.Xochi.IntentDeriver do
   defp ensure_config(%{base_url: _} = config), do: {:ok, config}
   defp ensure_config(_), do: {:error, :no_xochi_config}
 
+  # This fetch is on the accept hot path -- it runs synchronously inside the
+  # seller Queue / SolverAgent GenServer, so a slow Xochi would stall all job
+  # processing. Cap the wait so the block is bounded (the client default is 30s);
+  # a timeout fails the job closed rather than wedging the mailbox.
+  @accept_timeout_ms 5_000
+
   defp fetch(config, intent_id) do
-    case Xochi.get_intent(config, intent_id) do
+    bounded =
+      Map.update(
+        config,
+        :req_options,
+        [receive_timeout: @accept_timeout_ms],
+        &Keyword.put_new(&1, :receive_timeout, @accept_timeout_ms)
+      )
+
+    case Xochi.get_intent(bounded, intent_id) do
       {:ok, intent} -> {:ok, intent}
       {:error, {:http, 404, _}} -> {:reject, {:intent_not_found, intent_id}}
       {:error, reason} -> {:error, {:xochi_unreachable, reason}}
