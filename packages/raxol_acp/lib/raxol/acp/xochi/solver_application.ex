@@ -117,7 +117,10 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
          agent: agent_name(),
          provider: provider,
          wallet_address: wallet_address,
-         evaluator_address: System.fetch_env!("RAXOL_ACP_EVALUATOR"),
+         # Trusted-buyer mode: the evaluator (allowed to call complete/reject) defaults to
+         # the agent's OWN address. Legacy deploys may still pin it via RAXOL_ACP_EVALUATOR;
+         # delegated mode has no separate evaluator secret, so it falls back to the wallet.
+         evaluator_address: System.get_env("RAXOL_ACP_EVALUATOR", wallet_address),
          chain_id: @chain_id,
          acp_core_address: chain.acp_core_address,
          fee_bps: fee_bps(),

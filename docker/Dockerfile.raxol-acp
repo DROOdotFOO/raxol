@@ -32,6 +32,13 @@ ARG RUNNER_IMAGE=node:22-trixie-slim
 
 # --- Signing-sidecar deps: install node_modules in-container (never from the host) ---
 FROM ${NODE_IMAGE} AS sidecar-deps
+# python3 + toolchain: a transitive optional native module (utf-8-validate via the SDK's
+# websocket dep) has no prebuilt binary on some arches and falls back to node-gyp compile.
+# Installing the toolchain makes `npm ci` succeed on both amd64 and arm64. This stage is
+# discarded -- only node_modules is copied out -- so the tools never reach the final image.
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /sidecar
 COPY packages/raxol_acp/priv/signer_sidecar/package.json \
      packages/raxol_acp/priv/signer_sidecar/package-lock.json ./
