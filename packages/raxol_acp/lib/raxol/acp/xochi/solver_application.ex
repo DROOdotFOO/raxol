@@ -4,7 +4,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   against Virtuals, streams jobs, and settles each funded job by relaying the
   buyer's pre-signed Xochi intent.
 
-  Supervises four children (`:rest_for_one`, so an `Auth`/`Agent` crash restarts
+  Supervises five children (`:rest_for_one`, so an `Auth`/`Agent` crash restarts
   everything downstream):
 
     1. `Raxol.ACP.Auth` -- EIP-712 auth against the Virtuals server.
@@ -14,6 +14,8 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
        storefront relay `settle_fn` and submits the deliverable on-chain.
     4. an internal stream starter -- calls `Agent.start_stream/1` last, so the
        solver is subscribed before the first SSE event arrives.
+    5. `Raxol.ACP.Xochi.Heartbeat` -- periodic liveness log + telemetry, last so its
+       crash restarts nothing above it.
 
   The `settle_fn` is a pure relay (`Raxol.ACP.Xochi.Settler.build/1`, `:xochi_config`
   only): it never re-signs, so no signing wallet is wired here. raxol earns the
@@ -45,7 +47,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   use Supervisor
 
   alias Raxol.ACP
-  alias Raxol.ACP.Xochi.{Settler, SolverAgent}
+  alias Raxol.ACP.Xochi.{Heartbeat, Settler, SolverAgent}
 
   # Base mainnet. The storefront authenticates and submits on Base; the transferred
   # funds move across chains inside the buyer's Xochi intent, off the ACP ledger.
@@ -67,6 +69,14 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   @impl true
   def init(_opts) do
     chain = ACP.Chain.mainnet()
+
+    # Secret-handling invariant -- KEEP THIS if you reuse the solver pattern. The raw
+    # key exists only as this transient local; `JSONRPC.new/1` immediately wraps it in a
+    # `Raxol.ACP.Secret` before it enters the provider config. That wrapper redacts under
+    # `Inspect`, so the key never renders into an OTP/SASL crash report even though the
+    # provider is passed as a supervised child's start arg (a plain unwrapped key here
+    # WOULD leak on any boot-time child crash -- see Secret's moduledoc). Do not log or
+    # interpolate `private_key`; only `Secret.reveal/1` at a sign call site unwraps it.
     private_key = decode_pk!(System.fetch_env!("RAXOL_ACP_AGENT_PRIVATE_KEY"))
     rpc_url = System.get_env("RAXOL_ACP_RPC_URL", chain.rpc_url)
     server_url = chain.acp_server_url
@@ -122,7 +132,11 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
         id: :stream_starter,
         start: {Task, :start_link, [fn -> :ok = ACP.Agent.start_stream(agent_name()) end]},
         restart: :transient
-      }
+      },
+      # Liveness heartbeat -- last so a crash here restarts nothing above it under
+      # :rest_for_one. Emits a periodic log + telemetry event so external monitoring can
+      # tell a live-but-idle solver from a wedged one (no inbound port for a fly check).
+      {Heartbeat, name: heartbeat_name()}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)
@@ -133,6 +147,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   defp auth_name, do: Module.concat(__MODULE__, Auth)
   defp agent_name, do: Module.concat(__MODULE__, Agent)
   defp solver_name, do: Module.concat(__MODULE__, Solver)
+  defp heartbeat_name, do: Module.concat(__MODULE__, Heartbeat)
 
   defp decode_pk!("0x" <> hex), do: Base.decode16!(hex, case: :mixed)
   defp decode_pk!(hex), do: Base.decode16!(hex, case: :mixed)

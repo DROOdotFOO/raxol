@@ -10,8 +10,10 @@
 # Build from the repository root:
 #   docker build -f docker/Dockerfile.raxol-acp -t raxol-acp .
 #
-# Wallet-safe by construction: no private key is baked in or read at runtime; the
-# sidecar only reads balances/receipts over public RPC and never moves funds.
+# No private key is BAKED INTO the image. Wallet-safe only in the default accounting
+# mode, where the sidecar just reads balances/receipts over public RPC and never moves
+# funds. In solver mode (XOCHI_SOLVER_ENABLED=true) the release READS a real signing
+# key -- RAXOL_ACP_AGENT_PRIVATE_KEY -- from the runtime env (a fly secret) and signs tx.
 
 ARG ELIXIR_IMAGE=elixir:1.20.0-otp-29
 ARG RUNNER_IMAGE=debian:bookworm-slim
