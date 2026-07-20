@@ -47,7 +47,14 @@ defmodule Raxol.ACP.Agent do
 
   use GenServer
 
+  require Logger
+
   alias Raxol.ACP.{Event, JobApi, JobSession, Transport}
+
+  # Backoff before re-opening the SSE stream after it ends (server close or transport
+  # error). The stream is a long-lived connection that WILL drop in normal operation;
+  # the Agent owns reconnection (see Transport.SSE.stream_loop's contract).
+  @stream_reconnect_ms 2_000
 
   @type t :: %__MODULE__{
           provider: term(),
@@ -191,13 +198,7 @@ defmodule Raxol.ACP.Agent do
   def handle_call(:start_stream, _from, %{started?: true} = state), do: {:reply, :ok, state}
 
   def handle_call(:start_stream, _from, state) do
-    ctx = %{
-      owner: self(),
-      chain_ids: state.supported_chain_ids,
-      wallet_address: state.wallet_address
-    }
-
-    case Transport.connect(state.transport, ctx) do
+    case open_stream(state) do
       :ok -> {:reply, :ok, %{state | started?: true}}
       err -> {:reply, err, state}
     end
@@ -260,6 +261,45 @@ defmodule Raxol.ACP.Agent do
     }
 
     {:noreply, state}
+  end
+
+  # The SSE stream runs as a Task.async owned by this Agent (Transport.SSE.connect).
+  # When it ends -- the server closed the stream or a transport error occurred -- the
+  # Task delivers {ref, result}. Per the transport contract the Agent owns reconnection:
+  # flush the paired :DOWN, then re-open after a short backoff, rather than crash on the
+  # unhandled message. (Reconnect re-fetches the auth token via Transport.connect.)
+  def handle_info({ref, _result}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    Logger.info("ACP SSE stream ended; reconnecting in #{@stream_reconnect_ms}ms")
+    Process.send_after(self(), :reconnect_stream, @stream_reconnect_ms)
+    {:noreply, %{state | started?: false}}
+  end
+
+  # A reconnect is already-open (e.g. start_stream ran in the interim) -- nothing to do.
+  def handle_info(:reconnect_stream, %{started?: true} = state), do: {:noreply, state}
+
+  def handle_info(:reconnect_stream, state) do
+    case open_stream(state) do
+      :ok ->
+        {:noreply, %{state | started?: true}}
+
+      {:error, reason} ->
+        Logger.warning("ACP SSE reconnect failed (#{inspect(reason)}); retrying")
+        Process.send_after(self(), :reconnect_stream, @stream_reconnect_ms)
+        {:noreply, state}
+    end
+  end
+
+  # -- Stream --
+
+  defp open_stream(state) do
+    ctx = %{
+      owner: self(),
+      chain_ids: state.supported_chain_ids,
+      wallet_address: state.wallet_address
+    }
+
+    Transport.connect(state.transport, ctx)
   end
 
   # -- Routing --
