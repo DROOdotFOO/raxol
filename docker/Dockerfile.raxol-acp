@@ -21,13 +21,24 @@
 # secrets), never the image.
 
 ARG ELIXIR_IMAGE=elixir:1.20.0-otp-29
-ARG NODE_IMAGE=node:22-bookworm-slim
-# The runner is a Node image (same debian bookworm base) so `node` runs the signing
-# sidecar; the BEAM's own ERTS ships in the release.
-ARG RUNNER_IMAGE=node:22-bookworm-slim
+ARG NODE_IMAGE=node:22-trixie-slim
+# The runner is a Node image so `node` runs the signing sidecar; the BEAM's own ERTS
+# ships in the release. It MUST be Debian trixie to match ELIXIR_IMAGE's glibc: the
+# elixir:1.20-otp-29 builder is trixie (glibc 2.41) and compiles beam.smp against
+# GLIBC_2.38+, so a bookworm runner (glibc 2.36) fails at boot with
+# "libm.so.6: version `GLIBC_2.38' not found". Keep builder and runner on the same
+# Debian release.
+ARG RUNNER_IMAGE=node:22-trixie-slim
 
 # --- Signing-sidecar deps: install node_modules in-container (never from the host) ---
 FROM ${NODE_IMAGE} AS sidecar-deps
+# python3 + toolchain: a transitive optional native module (utf-8-validate via the SDK's
+# websocket dep) has no prebuilt binary on some arches and falls back to node-gyp compile.
+# Installing the toolchain makes `npm ci` succeed on both amd64 and arm64. This stage is
+# discarded -- only node_modules is copied out -- so the tools never reach the final image.
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /sidecar
 COPY packages/raxol_acp/priv/signer_sidecar/package.json \
      packages/raxol_acp/priv/signer_sidecar/package-lock.json ./

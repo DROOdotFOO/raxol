@@ -186,6 +186,15 @@ defmodule Raxol.ACP.Transport.SSE do
         url: url,
         method: :get,
         headers: headers,
+        # SSE is a long-lived stream. An idle provider (no jobs) receives no events for
+        # long stretches, so the default receive_timeout fires and drops a HEALTHY
+        # connection -- the reconnect churn we saw on fly. Wait generously between chunks
+        # (10 min, far longer than any server keepalive interval); a genuine drop
+        # surfaces as a transport ERROR (not a timeout) and the Agent reconnects, and a
+        # rare silent half-open still recovers within one window. Retries are the Agent's
+        # job, not Req's.
+        receive_timeout: 600_000,
+        retry: false,
         into: fn {:data, data}, {req, resp} ->
           handle_chunk(owner, data)
           {:cont, {req, resp}}
