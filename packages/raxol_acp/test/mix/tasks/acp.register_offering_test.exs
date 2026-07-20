@@ -32,14 +32,31 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
       assert payload["network"]["acpServerUrl"] == "https://api-dev.acp.virtuals.io"
     end
 
-    test "embeds the Xochi offering metadata verbatim" do
+    test "defaults to the USDC-only launch offering" do
       payload = RegisterOffering.build_payload(:mainnet)
 
-      assert payload["name"] == "xochi_cross_chain_transfer"
+      assert payload["name"] == "xochi_usdc_public"
       assert payload["hookKind"] == "none"
       assert payload["requiredFunds"] == true
       assert payload["slaMinutes"] == 10
       assert "payments" in payload["tags"]
+      assert "usdc" in payload["tags"]
+
+      # USDC launch offering pins both legs to the CCTP mesh.
+      props = payload["requirementSchema"]["properties"]
+      assert props["src_chain_id"]["enum"] == [1, 10, 137, 8453, 42_161]
+      assert props["dst_chain_id"]["enum"] == [1, 10, 137, 8453, 42_161]
+    end
+
+    test "--offering legacy emits the deprecated token-agnostic offering" do
+      payload = RegisterOffering.build_payload(:mainnet, :legacy)
+      assert payload["name"] == "xochi_cross_chain_transfer"
+    end
+
+    test "unknown --offering raises with a helpful message" do
+      assert_raise Mix.Error, ~r/unknown --offering/, fn ->
+        RegisterOffering.build_payload(:mainnet, :bogus)
+      end
     end
 
     test "requirement schema is JSON-Schema 2020-12 with the corridor + signed-intent fields" do
@@ -76,7 +93,7 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
       json = Jason.encode!(payload)
 
       assert {:ok, decoded} = Jason.decode(json)
-      assert decoded["name"] == "xochi_cross_chain_transfer"
+      assert decoded["name"] == "xochi_usdc_public"
     end
 
     test "unknown network raises with a helpful message" do

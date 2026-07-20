@@ -292,7 +292,7 @@ defmodule Raxol.ACP.Xochi.Offering do
   ERC-5564 `stealth_meta_address`. Built from `requirement_schema/0` so the two
   variants never drift from the shared corridor/intent fields.
   """
-  @spec requirement_schema(:public | :stealth) :: map()
+  @spec requirement_schema(:public | :usdc_public | :stealth) :: map()
   def requirement_schema(:public) do
     put_in(requirement_schema(), ["properties", "settlement_preference"], %{
       "type" => "string",
@@ -300,6 +300,23 @@ defmodule Raxol.ACP.Xochi.Offering do
       "default" => "public",
       "description" => "Public settlement: the payout lands in a wallet on the destination chain."
     })
+  end
+
+  # USDC-only public settlement: `:public` plus both legs pinned to the CCTP
+  # mesh. The chain enum derives from `Raxol.Payments.Assets.usdc_chains/0` so it
+  # cannot drift from the runtime USDC gate in `UsdcPublicOffering`.
+  def requirement_schema(:usdc_public) do
+    requirement_schema(:public)
+    |> put_in(["properties", "src_chain_id"], usdc_chain_prop("Source"))
+    |> put_in(["properties", "dst_chain_id"], usdc_chain_prop("Destination"))
+    |> put_in(
+      ["properties", "src_token", "description"],
+      "The USDC contract on src_chain_id. Only USDC is accepted; a non-USDC token is rejected before escrow."
+    )
+    |> put_in(
+      ["properties", "dst_token", "description"],
+      "The USDC contract on dst_chain_id. Only USDC is accepted; a non-USDC token is rejected before escrow."
+    )
   end
 
   def requirement_schema(:stealth) do
@@ -335,16 +352,28 @@ defmodule Raxol.ACP.Xochi.Offering do
     |> update_in(["required"], &(&1 ++ ["stealth_meta_address"]))
   end
 
+  defp usdc_chain_prop(role) do
+    %{
+      "type" => "integer",
+      "enum" => Raxol.Payments.Assets.usdc_chains(),
+      "description" =>
+        "#{role} chain. USDC settles across the CCTP mesh: " <>
+          "1 (Ethereum), 10 (OP), 137 (Polygon), 8453 (Base), 42161 (Arbitrum)."
+    }
+  end
+
   @doc """
   Deliverable schema narrowed to a settlement mode. `:public` drops the stealth
   announcement fields; `:stealth` promotes them to `required`.
   """
-  @spec deliverable_schema(:public | :stealth) :: map()
+  @spec deliverable_schema(:public | :usdc_public | :stealth) :: map()
   def deliverable_schema(:public) do
     update_in(deliverable_schema(), ["properties"], fn props ->
       Map.drop(props, ["settlement_type", "stealth_address", "ephemeral_pub_key", "view_tag"])
     end)
   end
+
+  def deliverable_schema(:usdc_public), do: deliverable_schema(:public)
 
   def deliverable_schema(:stealth) do
     update_in(deliverable_schema(), ["required"], fn required ->
@@ -352,8 +381,28 @@ defmodule Raxol.ACP.Xochi.Offering do
     end)
   end
 
-  @doc "Marketplace metadata for a mode-specific offering (`:public` | `:stealth`)."
-  @spec offering_metadata(:public | :stealth) :: map()
+  @doc "Marketplace metadata for a mode-specific offering (`:usdc_public` | `:public` | `:stealth`)."
+  @spec offering_metadata(:usdc_public | :public | :stealth) :: map()
+  def offering_metadata(:usdc_public) do
+    %{
+      name: "xochi_usdc_public",
+      display_name: "Xochi USDC Transfer (Public)",
+      description:
+        "USDC-only cross-chain settlement to a wallet on the destination chain, across " <>
+          "the CCTP mesh (Ethereum, Optimism, Polygon, Base, Arbitrum). The buyer signs a " <>
+          "Xochi intent, the storefront relays it and returns the settlement tx hashes; " <>
+          "the buyer escrows only the storefront fee (a plain job, no fund hook). Both " <>
+          "legs must be USDC; other stablecoins are rejected before escrow. Order size is " <>
+          "bounded (min 1 USDC, max 3,000 USDC).",
+      required_funds: true,
+      hook_kind: "none",
+      sla_minutes: 10,
+      requirement_schema: requirement_schema(:usdc_public),
+      deliverable_schema: deliverable_schema(:usdc_public),
+      tags: ["payments", "cross-chain", "stablecoin", "usdc", "xochi", "public"]
+    }
+  end
+
   def offering_metadata(:public) do
     %{
       name: "xochi_stable_public",
