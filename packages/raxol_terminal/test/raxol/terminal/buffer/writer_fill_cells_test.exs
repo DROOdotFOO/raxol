@@ -184,6 +184,26 @@ defmodule Raxol.Terminal.Buffer.WriterFillCellsTest do
     assert cell_at(filled, 2, 0).wide_placeholder == true
   end
 
+  # A wide write's own placeholder can land on a DIFFERENT pair's lead
+  # glyph, not just its placeholder (already covered by the test above).
+  # "日" at 0, "本" at 2, then a wide "月" at 1: "月" spans columns 1-2,
+  # so its placeholder at column 2 overwrites "本"'s lead glyph, orphaning
+  # "本"'s own placeholder at column 3.
+  test "a wide write landing on a neighbour pair's lead clears that whole pair" do
+    buffer = ScreenBuffer.new(6, 1)
+    cells = [{0, 0, "日", nil}, {2, 0, "本", nil}, {1, 0, "月", nil}]
+
+    filled = Writer.fill_cells(buffer, cells)
+    assert filled == oracle(buffer, cells)
+
+    assert cell_at(filled, 0, 0).char == " "
+    assert cell_at(filled, 0, 0).wide_placeholder == false
+    assert cell_at(filled, 1, 0).char == "月"
+    assert cell_at(filled, 2, 0).wide_placeholder == true
+    assert cell_at(filled, 3, 0).char == " "
+    assert cell_at(filled, 3, 0).wide_placeholder == false
+  end
+
   # --- bounds -------------------------------------------------------------
 
   test "writes beyond width or height are skipped" do

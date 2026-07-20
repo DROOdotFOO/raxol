@@ -437,5 +437,29 @@ defmodule Raxol.Terminal.RendererTest do
       assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
                10
     end
+
+    # A WIDE write's own placeholder can land on a NEIGHBOUR pair's LEAD
+    # (not just the neighbour's placeholder, already covered above).
+    # Writing "月" at column 1 spans columns 1-2: column 1 overlaps "日"'s
+    # placeholder (destroying "日", already handled) and column 2 overlaps
+    # "本"'s LEAD GLYPH -- destroying "本" too, but leaving its placeholder
+    # at column 3 dangling: still flagged, so the renderer drops it with
+    # no surviving glyph to account for the column, and the row painted
+    # one column short.
+    test "a wide write landing on a neighbour pair's lead clears that whole pair" do
+      buffer =
+        default_buffer(6, 1)
+        |> ScreenBuffer.write_string(0, 0, "日本")
+        |> ScreenBuffer.write_string(1, 0, "月")
+
+      row = Renderer.render_row(Renderer.new(buffer), 0)
+
+      assert Raxol.Terminal.CharacterHandling.get_string_width(visible(row)) ==
+               6
+
+      refute visible(row) =~ "日"
+      refute visible(row) =~ "本"
+      assert String.trim(visible(row)) == "月"
+    end
   end
 end
