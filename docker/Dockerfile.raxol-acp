@@ -21,10 +21,14 @@
 # secrets), never the image.
 
 ARG ELIXIR_IMAGE=elixir:1.20.0-otp-29
-ARG NODE_IMAGE=node:22-bookworm-slim
-# The runner is a Node image (same debian bookworm base) so `node` runs the signing
-# sidecar; the BEAM's own ERTS ships in the release.
-ARG RUNNER_IMAGE=node:22-bookworm-slim
+ARG NODE_IMAGE=node:22-trixie-slim
+# The runner is a Node image so `node` runs the signing sidecar; the BEAM's own ERTS
+# ships in the release. It MUST be Debian trixie to match ELIXIR_IMAGE's glibc: the
+# elixir:1.20-otp-29 builder is trixie (glibc 2.41) and compiles beam.smp against
+# GLIBC_2.38+, so a bookworm runner (glibc 2.36) fails at boot with
+# "libm.so.6: version `GLIBC_2.38' not found". Keep builder and runner on the same
+# Debian release.
+ARG RUNNER_IMAGE=node:22-trixie-slim
 
 # --- Signing-sidecar deps: install node_modules in-container (never from the host) ---
 FROM ${NODE_IMAGE} AS sidecar-deps

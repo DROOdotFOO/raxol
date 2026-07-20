@@ -35,7 +35,9 @@ defmodule Raxol.ACP.SignerSidecar do
   require Logger
 
   @default_port 4048
-  @default_health_timeout_ms 20_000
+  # Generous margin: on a cold, cpu-constrained VM the node process must spawn and
+  # `import` the acp-node-v2 SDK (~185 modules) before it answers /health.
+  @default_health_timeout_ms 30_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
