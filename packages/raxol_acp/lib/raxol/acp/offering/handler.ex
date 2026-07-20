@@ -6,6 +6,13 @@ defmodule Raxol.ACP.Offering.Handler do
   three callbacks corresponding to the points in the job lifecycle where
   the seller has to make a decision:
 
+  - `c:resolve_accept/2` -- *(optional)* runs at accept time BEFORE
+    `handle_request/2`, to derive authoritative request data and size the
+    job budget. An offering that settles through an external service (e.g.
+    Xochi) uses it to fetch the buyer's intent, replace the buyer-declared
+    corridor/amount with the authoritative values, and compute the budget as
+    a percentage of that amount -- instead of trusting the relayed request.
+    When absent, the seller runtime uses the offering's flat `price_usdc`.
   - `c:handle_request/2` -- the buyer has submitted a request. Decide
     whether to accept (entering `:negotiation`) or reject.
   - `c:handle_deliver/2` -- payment is escrowed (state has reached
@@ -39,6 +46,20 @@ defmodule Raxol.ACP.Offering.Handler do
   @type request :: map()
   @type deliverable :: map()
 
+  @doc """
+  Accept-time context, carrying the ACP `chain_id` and the Xochi client config
+  (`nil` when unconfigured). Passed to `resolve_accept/2`.
+  """
+  @type accept_ctx :: %{
+          required(:chain_id) => pos_integer(),
+          required(:xochi_config) => map() | nil
+        }
+
+  @callback resolve_accept(request(), accept_ctx()) ::
+              {:ok, request(), Raxol.ACP.AssetToken.t()}
+              | {:reject, term()}
+              | {:error, term()}
+
   @callback handle_request(request(), ctx()) ::
               {:accept, map()} | {:reject, term()}
 
@@ -48,5 +69,5 @@ defmodule Raxol.ACP.Offering.Handler do
   @callback handle_evaluate(deliverable(), ctx()) ::
               {:approve, map()} | {:reject, term()}
 
-  @optional_callbacks handle_evaluate: 2
+  @optional_callbacks handle_evaluate: 2, resolve_accept: 2
 end

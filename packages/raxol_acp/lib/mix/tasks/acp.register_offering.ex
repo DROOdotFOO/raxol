@@ -1,61 +1,67 @@
 defmodule Mix.Tasks.Acp.RegisterOffering do
   @moduledoc """
-  Generate the offering metadata to paste into the Virtuals ACP
-  marketplace UI at https://app.virtuals.io/acp/new (mainnet) or
-  https://app.virtuals.gg/acp/new (dev).
+  Generate the `offering.json` to register on the Virtuals ACP marketplace
+  (dashboard "Add Job", or the file uploader).
 
-  Output is a JSON document combining:
+  The uploader expects a top-level `jobs` array; each element is one offering
+  with these fields:
 
-  - `name`, `display_name`, `description`, `sla_minutes`, `tags`,
-    `hook_kind` from `Raxol.ACP.Xochi.Offering.offering_metadata/0`.
-  - JSON Schema 2020-12 documents for the requirement and deliverable
-    payloads.
-  - Network-specific contract addresses pulled from
-    `Raxol.ACP.Chain.mainnet/0` or `Raxol.ACP.Chain.sepolia/0`.
+  - `name` -- the offering id (`[a-z][a-z0-9_]*`).
+  - `description` -- human-readable summary shown to buyer agents.
+  - `price` -- the fee amount for the job, a number in USDC. This is the single
+    charge the buyer escrows (the job budget); raxol's runtime reads it as the
+    budget it proposes.
+  - `priceType` -- `"fixed"` (a flat USDC fee) or `"percentage"` (a commission on
+    funds moved through ACP, which requires `requiredFunds: true`).
+  - `slaMinutes` -- max minutes from `job.funded` to `job.submitted`.
+  - `requiredFunds` -- whether the buyer transfers capital through ACP. `false`
+    here: the buyer's funds move via their signed Xochi intent (off-ACP), so the
+    fee is a flat `"fixed"` price, not a percentage.
+  - `requirement` -- JSON Schema of the buyer's inputs.
+
+  Network/contract addresses and the deliverable schema are NOT part of the
+  Virtuals offering document -- they are configured on the agent / in raxol's own
+  runtime -- so they are deliberately omitted.
 
   ## Usage
 
-      mix acp.register_offering                            # usdc_public, mainnet, stdout
-      mix acp.register_offering --network sepolia
+      mix acp.register_offering                     # usdc_public, stdout
       mix acp.register_offering --offering stealth
-      mix acp.register_offering --out offering.json
-      mix acp.register_offering --pretty                   # indented JSON
+      mix acp.register_offering --pretty --out offering.json
 
   ## Options
 
   - `--offering` -- which offering to emit: `usdc_public` (default, the launch
     offering `xochi_usdc_public`), `public`, `stealth`, or `legacy` (the
     deprecated token-agnostic `xochi_cross_chain_transfer`).
-  - `--network` -- `mainnet` (default) or `sepolia`. Picks the contract
-    addresses + ACP server URL embedded in the output.
   - `--out PATH` -- write to a file instead of stdout.
   - `--pretty` -- emit pretty-printed JSON. Default is compact.
 
   ## Operator workflow
 
-  Paste the output into the Virtuals dashboard (Offerings -> New offering) after
-  registering the agent at `app.virtuals.io/acp/new`.
+  Paste the output into the Virtuals dashboard (Add Job), or upload the file,
+  after registering the agent. NOTE the `jobFee` unit: the dashboard's percentage
+  field is in PERCENT (0.08 = 0.08%); if a file-upload path ever reads it as a
+  0-1 fraction, `0.08` would mean 8% -- verify the fee reads as 0.08% after import.
   """
   use Mix.Task
 
-  alias Raxol.ACP.Chain
   alias Raxol.ACP.Xochi.Offering
 
-  @shortdoc "Generate Virtuals marketplace offering metadata"
+  @shortdoc "Generate a Virtuals ACP offering.json"
 
   @impl Mix.Task
   def run(args) do
     {opts, _, _} =
       OptionParser.parse(args,
-        strict: [network: :string, offering: :string, out: :string, pretty: :boolean]
+        strict: [offering: :string, out: :string, pretty: :boolean]
       )
 
-    network = opts |> Keyword.get(:network, "mainnet") |> String.to_atom()
     offering = opts |> Keyword.get(:offering, "usdc_public") |> String.to_atom()
     pretty? = Keyword.get(opts, :pretty, false)
     out = Keyword.get(opts, :out)
 
-    payload = build_payload(network, offering)
+    payload = build_payload(offering)
     json = if pretty?, do: Jason.encode!(payload, pretty: true), else: Jason.encode!(payload)
 
     case out do
@@ -64,43 +70,31 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
 
       path ->
         File.write!(path, json)
-        Mix.shell().info("Wrote offering metadata to #{path}")
+        Mix.shell().info("Wrote offering to #{path}")
     end
   end
 
   @doc false
-  def build_payload(network, offering \\ :usdc_public) do
+  def build_payload(offering \\ :usdc_public) do
+    # The Virtuals uploader validates a top-level `jobs` array; the six offering
+    # fields are unexpected at the document root and belong to a `jobs` element.
+    %{"jobs" => [build_offering(offering)]}
+  end
+
+  @doc false
+  def build_offering(offering) do
     meta = offering_metadata(offering)
-
-    chain_config =
-      case network do
-        :mainnet ->
-          Chain.mainnet()
-
-        :sepolia ->
-          Chain.sepolia()
-
-        other ->
-          Mix.raise("unknown --network #{inspect(other)}; expected :mainnet or :sepolia")
-      end
 
     %{
       "name" => meta.name,
-      "displayName" => meta.display_name,
       "description" => meta.description,
-      "requiredFunds" => meta.required_funds,
-      "hookKind" => meta.hook_kind,
+      "price" => meta.price_usdc,
+      "priceType" => meta.price_type,
       "slaMinutes" => meta.sla_minutes,
-      "tags" => meta.tags,
-      "requirementSchema" => meta.requirement_schema,
-      "deliverableSchema" => meta.deliverable_schema,
-      "network" => %{
-        "name" => chain_config.name,
-        "chainId" => chain_config.chain_id,
-        "acpCoreAddress" => chain_config.acp_core_address,
-        "fundTransferHookAddress" => chain_config.fund_transfer_hook_address,
-        "acpServerUrl" => chain_config.acp_server_url
-      }
+      "requiredFunds" => meta.required_funds,
+      # Virtuals wants a bare JSON Schema for `requirement`; drop the meta-schema
+      # URL so it is not flagged as an unexpected field on import.
+      "requirement" => Map.delete(meta.requirement_schema, "$schema")
     }
   end
 

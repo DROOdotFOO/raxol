@@ -55,6 +55,7 @@ defmodule Raxol.Payments.Xochi.Client do
     QuoteResponse,
     ExecuteRequest,
     ExecuteResponse,
+    Intent,
     IntentStatus
   }
 
@@ -68,7 +69,7 @@ defmodule Raxol.Payments.Xochi.Client do
   @type config :: %{
           :base_url => String.t(),
           optional(:auth) => auth(),
-          optional(:auth_token) => String.t(),
+          optional(:auth_token) => String.t() | Raxol.Payments.Secret.t(),
           optional(:req_options) => keyword()
         }
 
@@ -119,6 +120,22 @@ defmodule Raxol.Payments.Xochi.Client do
     |> build_req()
     |> Req.get(url: "/api/intent/#{intent_id}/status")
     |> handle_response(&IntentStatus.from_json/1)
+  end
+
+  @doc """
+  Get the persisted intent by ID (`GET /api/intent/:id`).
+
+  Returns the authoritative corridor and amounts written at quote time, so a
+  relayer can read what the buyer signed BEFORE settlement (`IntentStatus` from
+  `get_status/2` carries only tx/settlement state, no amounts). A not-yet-created
+  or unknown id yields `{:error, {:http, 404, _}}`.
+  """
+  @spec get_intent(config(), String.t()) :: {:ok, Intent.t()} | error()
+  def get_intent(config, intent_id) do
+    config
+    |> build_req()
+    |> Req.get(url: "/api/intent/#{intent_id}")
+    |> handle_response(&Intent.from_json/1)
   end
 
   @doc "Get intent history for a wallet."
@@ -187,8 +204,12 @@ defmodule Raxol.Payments.Xochi.Client do
 
   # Explicit `:auth` wins; a bare legacy `:auth_token` maps to Member Bearer;
   # otherwise the request is anonymous (the worker answers 402 with a Guest
-  # invite).
+  # invite). A `Raxol.Payments.Secret`-wrapped token is revealed only here, so
+  # the token stays redacted in any config/state that a crash report might dump.
   defp auth_mode(%{auth: auth}), do: auth
+  defp auth_mode(%{auth_token: %Raxol.Payments.Secret{} = token}),
+    do: {:member, Raxol.Payments.Secret.reveal(token)}
+
   defp auth_mode(%{auth_token: token}) when is_binary(token), do: {:member, token}
   defp auth_mode(_), do: :none
 

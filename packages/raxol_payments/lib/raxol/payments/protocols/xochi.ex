@@ -58,6 +58,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
   alias Raxol.Payments.Xochi.Schemas.{
     DepositRouteRequest,
     ExecuteRequest,
+    Intent,
     IntentStatus,
     QuoteRequest,
     QuoteResponse
@@ -102,6 +103,18 @@ defmodule Raxol.Payments.Protocols.Xochi do
           {:ok, QuoteResponse.t()} | {:error, term()}
   def get_quote(config, %QuoteRequest{} = request) do
     Client.get_quote(config, request)
+  end
+
+  @doc """
+  Fetch a persisted intent by id (`GET /api/intent/:id`).
+
+  Returns the authoritative corridor + amounts written at quote time, so a
+  storefront can read what the buyer signed before settlement rather than trust
+  a relayed, buyer-declared amount.
+  """
+  @spec get_intent(Client.config(), String.t()) :: {:ok, Intent.t()} | {:error, term()}
+  def get_intent(config, intent_id) when is_binary(intent_id) do
+    Client.get_intent(config, intent_id)
   end
 
   @doc """

@@ -55,8 +55,11 @@ defmodule Raxol.ACP.Offering do
 
   ## Optional `use` options
 
-  - `:price_usdc` -- price in USDC; binary, integer, or `Decimal`. Coerced
-    to `Decimal`.
+  - `:price_usdc` -- flat price in USDC; binary, integer, or `Decimal`. Coerced
+    to `Decimal`. Used when `:fee_bps` is not set.
+  - `:fee_bps` -- percentage fee in basis points (e.g. `10` = 0.10% = 10 bps),
+    charged on the request principal (`amount_atomic`) rather than a flat price.
+    When set, the job budget is `fee_bps` of the transfer, not `price_usdc`.
   - `:sla_minutes` -- service-level agreement (positive integer).
   - `:cluster` -- ACP cluster tag (e.g. `"on_chain"`, `"information"`).
   """
@@ -72,6 +75,7 @@ defmodule Raxol.ACP.Offering do
   defmacro __using__(opts) do
     name = Keyword.fetch!(opts, :name)
     price = Keyword.get(opts, :price_usdc)
+    fee_bps = Keyword.get(opts, :fee_bps)
     sla = Keyword.get(opts, :sla_minutes)
     cluster = Keyword.get(opts, :cluster)
 
@@ -81,6 +85,7 @@ defmodule Raxol.ACP.Offering do
 
       @offering_name unquote(name)
       @offering_price unquote(__MODULE__).__coerce_price__(unquote(price))
+      @offering_fee_bps unquote(fee_bps)
       @offering_sla_minutes unquote(sla)
       @offering_cluster unquote(cluster)
 
@@ -88,9 +93,13 @@ defmodule Raxol.ACP.Offering do
       @spec offering_name() :: String.t()
       def offering_name, do: @offering_name
 
-      @doc "Return the offering's USDC price as a Decimal, or `nil`."
+      @doc "Return the offering's flat USDC price as a Decimal, or `nil`."
       @spec price_usdc() :: Decimal.t() | nil
       def price_usdc, do: @offering_price
+
+      @doc "Return the offering's percentage fee in basis points, or `nil` for a flat price."
+      @spec fee_bps() :: non_neg_integer() | nil
+      def fee_bps, do: @offering_fee_bps
 
       @doc "Return the offering's SLA in minutes, or `nil`."
       @spec sla_minutes() :: pos_integer() | nil
@@ -110,6 +119,7 @@ defmodule Raxol.ACP.Offering do
           name: @offering_name,
           handler: __MODULE__,
           price_usdc: @offering_price,
+          fee_bps: @offering_fee_bps,
           sla_minutes: @offering_sla_minutes,
           cluster: @offering_cluster,
           requirements_schema: maybe_call(:requirements_schema),
