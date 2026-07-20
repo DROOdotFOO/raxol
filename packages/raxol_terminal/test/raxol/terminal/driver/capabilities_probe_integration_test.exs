@@ -193,4 +193,35 @@ defmodule Raxol.Terminal.Driver.CapabilitiesProbeIntegrationTest do
       GenServer.stop(driver_pid)
     end
   end
+
+  describe "post-finalize input routing (capabilities_probe retirement)" do
+    test "a lone ESC keystroke after finalize reaches input, not swallowed by a stale probe" do
+      driver_pid = start_driver_with_probe()
+
+      # Finalize via the DA1-only silence-guard path (mirrors the "silence
+      # guard" tests above): sentinel arrives, clock tick finalizes.
+      send(driver_pid, {:raw_input, "\e[?62;c"})
+      send(driver_pid, :capabilities_probe_clock)
+
+      assert_receive {:"$gen_cast",
+                       {:dispatch,
+                        %Event{
+                          type: :terminal_capabilities,
+                          data: %{capabilities: %Capabilities{}}
+                        }}}
+
+      # The probe is done; its job is over. A later, wholly unrelated lone
+      # ESC keystroke (its own chunk, no more bytes behind it -- exactly
+      # what a real read(2) delivers when a user taps Escape and pauses)
+      # must reach the key parser instead of being parked as a Probe
+      # "partial" and discarded on the next chunk.
+      send(driver_pid, {:raw_input, "\e"})
+
+      assert_receive {:"$gen_cast",
+                       {:dispatch, %Event{type: :key, data: %{key: :escape}}}}
+
+      assert Process.alive?(driver_pid)
+      GenServer.stop(driver_pid)
+    end
+  end
 end
