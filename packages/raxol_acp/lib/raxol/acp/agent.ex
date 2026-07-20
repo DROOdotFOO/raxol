@@ -316,9 +316,21 @@ defmodule Raxol.ACP.Agent do
 
   defp job_key(entry) do
     chain_id = entry["chainId"] || entry[:chainId] || entry["chain_id"] || entry[:chain_id]
-    job_id = entry["jobId"] || entry[:jobId] || entry["job_id"] || entry[:job_id]
-    {chain_id, job_id}
+    {chain_id, job_id_from(entry)}
   end
+
+  # The live ACP SSE carries the job id as `onChainJobId` (top-level and inside the
+  # nested `event` map); older/mock shapes use `jobId`/`job_id`. Accept all so a real
+  # `job.created` doesn't yield a nil id (which fails the JobSession registry :via guard).
+  defp job_id_from(entry) do
+    entry["jobId"] || entry[:jobId] || entry["job_id"] || entry[:job_id] ||
+      entry["onChainJobId"] || entry[:onChainJobId] || event_job_id(entry["event"] || entry[:event])
+  end
+
+  defp event_job_id(%{} = ev),
+    do: ev["onChainJobId"] || ev[:onChainJobId] || ev["jobId"] || ev[:jobId]
+
+  defp event_job_id(_), do: nil
 
   defp ensure_session(key, _entry, state) do
     case Map.fetch(state.sessions, key) do
