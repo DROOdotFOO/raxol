@@ -121,10 +121,16 @@ defmodule Raxol.MCP.ToolSynchronizer do
     resource_uris = register_session_resources(state)
 
     # No initial pull here: the session owner seeds the first view tree.
-    # Raxol.Headless forces one synchronous engine render right after this
-    # synchronizer starts, which re-emits [:raxol, :runtime,
-    # :view_tree_updated] into the freshly attached handler -- so derived
-    # tools never wait for an event-driven re-render.
+    # `Raxol.Headless.start/2` does NOT force a synchronous engine render on
+    # this path -- `create_session/5` starts the app, then this synchronizer,
+    # then returns; the only forced `:render_frame_sync` calls live inside the
+    # screenshot/buffer APIs (`screenshot/1`, `get_buffer/1`), not here. Cold-
+    # start tool derivation instead depends on a race between the telemetry
+    # handler attach above and the engine's OWN first render -- triggered by
+    # the app's normal boot, independent of this synchronizer -- which emits
+    # [:raxol, :runtime, :view_tree_updated] via `Engine.sync_dispatcher/3` on
+    # every cycle. Lose that race and there is no recovery here: derived tools
+    # simply wait for the next event-driven re-render.
     {:ok, %{state | current_resource_uris: resource_uris}}
   end
 
