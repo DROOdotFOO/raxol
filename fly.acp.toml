@@ -33,7 +33,11 @@
 #        (`fly deploy -c fly.acp.toml --ha=false`), then pin + verify:
 #            fly scale count 1 -a raxol-solver
 #            fly machines list -a raxol-solver   # expect exactly one started
-#        Never scale up (would race the wallet). deploy-raxol-solver.sh does this.
+#        Never scale up (would race the wallet). deploy-raxol-solver.sh asserts the
+#        count == 1 after deploy and fails otherwise -- but the toml cannot PREVENT a
+#        later out-of-band `fly scale count 2`. Enforce continuously out-of-band with a
+#        monitored machine-count check (ansible-riddler scripts/raxol-solver-fly.sh
+#        `guard` asserts exactly one started machine; run it on a cron + alert).
 #
 # 2. NO PUBLIC INBOUND. The solver is an OUTBOUND client only: ACP EIP-712 auth
 #    + SSE job stream + Base mainnet tx submission. It serves nothing. Hence NO
@@ -51,6 +55,12 @@
 app = 'raxol-solver'
 primary_region = 'sjc'
 kill_signal = 'SIGTERM'
+# Drain window before SIGKILL. After broadcasting a settlement tx the solver blocks in
+# RPC.await_receipt (up to ~30s); the fly default of 5s would SIGKILL the BEAM mid-await
+# on any deploy/reschedule -- the tx lands on-chain while the ACP job never records
+# completion -> stuck job / stranded funds (the class the axol drain gate prevents).
+# 60s >= receipt-await + margin, so an in-flight settlement finishes before shutdown.
+kill_timeout = '60s'
 
 [build]
   dockerfile = "docker/Dockerfile.raxol-acp"
@@ -62,7 +72,8 @@ kill_signal = 'SIGTERM'
 #   RAXOL_ACP_AGENT_PRIVATE_KEY  -- low-value agent signing EOA (NOT the inventory wallet)
 #   RAXOL_ACP_EVALUATOR          -- the agent's OWN address (trusted-buyer mode)
 #   XOCHI_AUTH_TOKEN             -- Xochi worker bearer token
-#   RAXOL_ACP_RPC_URL            -- private Base RPC; overrides the public default below
+#   RAXOL_ACP_RPC_URL            -- private Base RPC; REQUIRED (NOT defaulted here --
+#                                   runtime.exs fails the boot closed in solver mode if unset)
 [env]
   # Enables the SIGNING solver. config/runtime.exs (:prod) reads this exact var:
   #   config :raxol_acp, xochi_solver_enabled: System.get_env("XOCHI_SOLVER_ENABLED") == "true"
@@ -79,10 +90,11 @@ kill_signal = 'SIGTERM'
   # script. A change requires a redeploy (parsed via String.to_integer at boot).
   XOCHI_FEE_BPS = '8'
 
-  # Base mainnet RPC for auth + on-chain submit. Public default -- rate-limited and
-  # unsuitable for a production signing solver; the deploy script overrides it with a
-  # private endpoint via a RAXOL_ACP_RPC_URL secret (a secret set overrides this value).
-  RAXOL_ACP_RPC_URL = 'https://mainnet.base.org'
+  # RAXOL_ACP_RPC_URL is deliberately NOT defaulted here. A public-RPC default would let
+  # a misstaged secret silently run the signing solver on the rate-limited public Base
+  # endpoint -> 429 storms on nonce fetch + tx submit (the axol RPC-429 crashloop class).
+  # It is a REQUIRED secret (set by scripts/deploy-raxol-solver.sh from op://); solver
+  # mode in config/runtime.exs fails the boot CLOSED if it is unset.
 
 # Modest single VM: this is a lightweight outbound client (one SSE stream + one
 # signer), not a server. Shared CPU is plenty.

@@ -46,4 +46,15 @@ if config_env() == :prod do
     signing node must expose no cookie-reachable REPL.
     """
   end
+
+  # Solver mode signs real transactions; it must run on an explicitly-configured
+  # (private) Base RPC, never silently fall back to the rate-limited public endpoint
+  # (that path 429-storms nonce fetch + tx submit -- the axol RPC-429 crashloop class).
+  # Require RAXOL_ACP_RPC_URL rather than defaulting it; set it as a fly secret.
+  if solver_enabled? and String.trim(System.get_env("RAXOL_ACP_RPC_URL", "")) == "" do
+    raise """
+    raxol_acp solver mode requires RAXOL_ACP_RPC_URL (a private Base RPC). Refusing to \
+    boot on the public-RPC default -- set it as a fly secret (scripts/deploy-raxol-solver.sh).
+    """
+  end
 end
