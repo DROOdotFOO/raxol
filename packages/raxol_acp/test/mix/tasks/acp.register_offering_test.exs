@@ -3,70 +3,32 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
 
   alias Mix.Tasks.Acp.RegisterOffering
 
+  @virtuals_fields ~w(name description jobFee jobFeeType requiredFunds requirement)
+
   describe "build_payload/1" do
-    test "mainnet payload includes Base mainnet v2 addresses" do
-      payload = RegisterOffering.build_payload(:mainnet)
-
-      assert payload["network"]["chainId"] == 8453
-
-      assert payload["network"]["acpCoreAddress"] ==
-               "0x238E541BfefD82238730D00a2208E5497F1832E0"
-
-      assert payload["network"]["fundTransferHookAddress"] ==
-               "0x0EaD25150985Bce0B4925c54E4ee1D856381A86B"
-
-      assert payload["network"]["acpServerUrl"] == "https://api.acp.virtuals.io"
+    test "emits exactly the Virtuals offering fields, nothing else" do
+      payload = RegisterOffering.build_payload(:usdc_public)
+      assert MapSet.equal?(MapSet.new(Map.keys(payload)), MapSet.new(@virtuals_fields))
     end
 
-    test "sepolia payload includes Base Sepolia v2 addresses" do
-      payload = RegisterOffering.build_payload(:sepolia)
-
-      assert payload["network"]["chainId"] == 84_532
-
-      assert payload["network"]["acpCoreAddress"] ==
-               "0x0b93793923CD5De81850aF8604a233f3f24d461e"
-
-      assert payload["network"]["fundTransferHookAddress"] ==
-               "0xbbeC2c985F9483473B9e0Da0704395943034266B"
-
-      assert payload["network"]["acpServerUrl"] == "https://api-dev.acp.virtuals.io"
-    end
-
-    test "defaults to the USDC-only launch offering" do
-      payload = RegisterOffering.build_payload(:mainnet)
+    test "defaults to the USDC-only launch offering, 8 bps percentage, no funds" do
+      payload = RegisterOffering.build_payload()
 
       assert payload["name"] == "xochi_usdc_public"
-      assert payload["hookKind"] == "none"
-      assert payload["requiredFunds"] == true
-      assert payload["slaMinutes"] == 10
-      assert "payments" in payload["tags"]
-      assert "usdc" in payload["tags"]
-
-      # USDC launch offering pins both legs to the CCTP mesh.
-      props = payload["requirementSchema"]["properties"]
-      assert props["src_chain_id"]["enum"] == [1, 10, 137, 8453, 42_161]
-      assert props["dst_chain_id"]["enum"] == [1, 10, 137, 8453, 42_161]
+      assert payload["jobFeeType"] == "percentage"
+      # Percent units: 0.08 == 0.08% == 8 bps.
+      assert payload["jobFee"] == 0.08
+      assert payload["requiredFunds"] == false
     end
 
-    test "--offering legacy emits the deprecated token-agnostic offering" do
-      payload = RegisterOffering.build_payload(:mainnet, :legacy)
-      assert payload["name"] == "xochi_cross_chain_transfer"
-    end
+    test "requirement is a bare JSON Schema (no $schema URL) with the corridor fields" do
+      requirement = RegisterOffering.build_payload(:usdc_public)["requirement"]
 
-    test "unknown --offering raises with a helpful message" do
-      assert_raise Mix.Error, ~r/unknown --offering/, fn ->
-        RegisterOffering.build_payload(:mainnet, :bogus)
-      end
-    end
+      refute Map.has_key?(requirement, "$schema")
+      assert requirement["type"] == "object"
+      assert requirement["additionalProperties"] == false
 
-    test "requirement schema is JSON-Schema 2020-12 with the corridor + signed-intent fields" do
-      payload = RegisterOffering.build_payload(:mainnet)
-      schema = payload["requirementSchema"]
-
-      assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-      assert schema["additionalProperties"] == false
-
-      required = MapSet.new(schema["required"])
+      required = MapSet.new(requirement["required"])
 
       assert MapSet.equal?(
                required,
@@ -81,25 +43,28 @@ defmodule Mix.Tasks.Acp.RegisterOfferingTest do
              )
     end
 
-    test "deliverable schema bounds status to completed" do
-      payload = RegisterOffering.build_payload(:mainnet)
-      enum = payload["deliverableSchema"]["properties"]["status"]["enum"]
+    test "usdc offering pins both legs to the CCTP mesh" do
+      props = RegisterOffering.build_payload(:usdc_public)["requirement"]["properties"]
+      assert props["src_chain_id"]["enum"] == [1, 10, 137, 8453, 42_161]
+      assert props["dst_chain_id"]["enum"] == [1, 10, 137, 8453, 42_161]
+    end
 
-      assert enum == ["completed"]
+    test "--offering legacy emits the deprecated token-agnostic offering" do
+      payload = RegisterOffering.build_payload(:legacy)
+      assert payload["name"] == "xochi_cross_chain_transfer"
+      assert payload["requiredFunds"] == false
+    end
+
+    test "unknown --offering raises with a helpful message" do
+      assert_raise Mix.Error, ~r/unknown --offering/, fn ->
+        RegisterOffering.build_payload(:bogus)
+      end
     end
 
     test "payload round-trips through JSON" do
-      payload = RegisterOffering.build_payload(:mainnet)
-      json = Jason.encode!(payload)
-
-      assert {:ok, decoded} = Jason.decode(json)
+      payload = RegisterOffering.build_payload(:usdc_public)
+      assert {:ok, decoded} = Jason.decode(Jason.encode!(payload))
       assert decoded["name"] == "xochi_usdc_public"
-    end
-
-    test "unknown network raises with a helpful message" do
-      assert_raise Mix.Error, ~r/unknown --network/, fn ->
-        RegisterOffering.build_payload(:goerli)
-      end
     end
   end
 end

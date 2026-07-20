@@ -1,56 +1,10 @@
 {
-  "deliverableSchema": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "additionalProperties": false,
-    "properties": {
-      "amount_atomic": {
-        "description": "The transfer amount settled, in token base units (matches the requirement's amount_atomic; committed so the deliverable hash pins what was moved).",
-        "pattern": "^[0-9]+$",
-        "type": "string"
-      },
-      "intent_id": {
-        "description": "Xochi intent identifier returned by POST /xochi/quote.",
-        "type": "string"
-      },
-      "receiving_tx_hash": {
-        "description": "The destination-arrival transaction hash for a two-leg settlement. Absent (null) for an instant single-tx fill.",
-        "pattern": "^0x[0-9a-fA-F]{64}$",
-        "type": "string"
-      },
-      "settlement_tx_hash": {
-        "description": "The authoritative settlement transaction hash. For an instant fill this is the destination delivery; for a two-leg bridge it is the origin leg (with the destination arrival in receiving_tx_hash).",
-        "pattern": "^0x[0-9a-fA-F]{64}$",
-        "type": "string"
-      },
-      "status": {
-        "description": "Settlement lifecycle state; a delivered job is always completed.",
-        "enum": [
-          "completed"
-        ],
-        "type": "string"
-      }
-    },
-    "required": [
-      "intent_id",
-      "settlement_tx_hash",
-      "status"
-    ],
-    "type": "object"
-  },
   "description": "USDC-only cross-chain settlement to a wallet on the destination chain, across the CCTP mesh (Ethereum, Optimism, Polygon, Base, Arbitrum). The buyer signs a Xochi intent, the storefront relays it and returns the settlement tx hashes; the buyer escrows only the storefront fee (a plain job, no fund hook). Both legs must be USDC; other stablecoins are rejected before escrow. Order size is bounded (min 1 USDC, max 3,000 USDC).",
-  "displayName": "Xochi USDC Transfer (Public)",
-  "hookKind": "none",
+  "jobFee": 0.08,
+  "jobFeeType": "percentage",
   "name": "xochi_usdc_public",
-  "network": {
-    "acpCoreAddress": "0x238E541BfefD82238730D00a2208E5497F1832E0",
-    "acpServerUrl": "https://api.acp.virtuals.io",
-    "chainId": 8453,
-    "fundTransferHookAddress": "0x0EaD25150985Bce0B4925c54E4ee1D856381A86B",
-    "name": "Base Mainnet"
-  },
-  "requiredFunds": true,
-  "requirementSchema": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "requiredFunds": false,
+  "requirement": {
     "additionalProperties": false,
     "properties": {
       "amount_atomic": {
@@ -160,14 +114,5 @@
       "signed_intent"
     ],
     "type": "object"
-  },
-  "slaMinutes": 10,
-  "tags": [
-    "payments",
-    "cross-chain",
-    "stablecoin",
-    "usdc",
-    "xochi",
-    "public"
-  ]
+  }
 }

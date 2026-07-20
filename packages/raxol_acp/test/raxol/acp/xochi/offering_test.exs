@@ -8,7 +8,10 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       meta = Offering.offering_metadata()
 
       assert meta.name == "xochi_cross_chain_transfer"
-      assert meta.required_funds == true
+      # No funds move through ACP -- capital moves via the buyer's signed intent.
+      assert meta.required_funds == false
+      assert meta.job_fee_type == "percentage"
+      assert meta.job_fee == 0.08
       assert meta.hook_kind == "none"
       assert meta.sla_minutes == 10
       assert "payments" in meta.tags

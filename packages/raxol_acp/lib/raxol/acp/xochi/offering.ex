@@ -78,7 +78,12 @@ defmodule Raxol.ACP.Xochi.Offering do
           "the buyer escrows only the storefront fee (a plain job, no fund hook). " <>
           "The buyer may settle to a different recipient or an ERC-5564 stealth " <>
           "address by signing it into their intent; the storefront relays it verbatim.",
-      required_funds: true,
+      # No funds move through ACP: the buyer's capital moves via their signed Xochi
+      # intent (off-ACP), so the job takes no fund hook. The routing fee is a
+      # percentage of the principal the buyer moves (8 bps = 0.08 in percent units).
+      required_funds: false,
+      job_fee: 0.08,
+      job_fee_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(),
@@ -394,7 +399,9 @@ defmodule Raxol.ACP.Xochi.Offering do
           "the buyer escrows only the storefront fee (a plain job, no fund hook). Both " <>
           "legs must be USDC; other stablecoins are rejected before escrow. Order size is " <>
           "bounded (min 1 USDC, max 3,000 USDC).",
-      required_funds: true,
+      required_funds: false,
+      job_fee: 0.08,
+      job_fee_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(:usdc_public),
@@ -412,7 +419,9 @@ defmodule Raxol.ACP.Xochi.Offering do
           "buyer signs a Xochi intent, the storefront relays it and returns the " <>
           "settlement tx hashes; the buyer escrows only the storefront fee (a plain " <>
           "job, no fund hook).",
-      required_funds: true,
+      required_funds: false,
+      job_fee: 0.08,
+      job_fee_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(:public),
@@ -431,7 +440,9 @@ defmodule Raxol.ACP.Xochi.Offering do
           "(chain 1); cross-chain stealth is not yet live. The buyer signs a Xochi " <>
           "intent, the storefront relays it and returns the settlement tx hashes plus " <>
           "the stealth announcement for on-chain verification.",
-      required_funds: true,
+      required_funds: false,
+      job_fee: 0.08,
+      job_fee_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(:stealth),
