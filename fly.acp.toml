@@ -67,13 +67,16 @@ kill_timeout = '60s'
   ignorefile = ".dockerignore"
 
 # NON-SECRET env only. Secrets are seeded out-of-band from 1Password op:// refs by
-# scripts/deploy-raxol-solver.sh (`fly secrets import --stage`, applied by the
-# subsequent `fly deploy -c fly.acp.toml`). Required secrets:
-#   RAXOL_ACP_AGENT_PRIVATE_KEY  -- low-value agent signing EOA (NOT the inventory wallet)
-#   RAXOL_ACP_EVALUATOR          -- the agent's OWN address (trusted-buyer mode)
+# ansible-riddler scripts/raxol-solver-fly.sh (`fly secrets import --stage`, applied by
+# the subsequent `fly deploy -c fly.acp.toml`). Required secrets in DELEGATED mode (the
+# Virtuals-managed Privy+Alchemy agent wallet; the release holds NO key -- the Node
+# signing sidecar does):
+#   RAXOL_ACP_SIGNER_PRIVATE_KEY -- the P-256 authorization key (base64 PKCS#8, MIGH...)
+#   RAXOL_ACP_WALLET_ID          -- the Privy wallet id (also flips the release into
+#                                   delegated mode; see SolverApplication.build_provider/1)
+#   RAXOL_ACP_WALLET_ADDRESS     -- the managed agent wallet address (0x...)
 #   XOCHI_AUTH_TOKEN             -- Xochi worker bearer token
-#   RAXOL_ACP_RPC_URL            -- private Base RPC; REQUIRED (NOT defaulted here --
-#                                   runtime.exs fails the boot closed in solver mode if unset)
+# (Legacy local-EOA mode instead uses RAXOL_ACP_AGENT_PRIVATE_KEY + RAXOL_ACP_EVALUATOR.)
 [env]
   # Enables the SIGNING solver. config/runtime.exs (:prod) reads this exact var:
   #   config :raxol_acp, xochi_solver_enabled: System.get_env("XOCHI_SOLVER_ENABLED") == "true"
@@ -89,6 +92,15 @@ kill_timeout = '60s'
   # launch target is 8. Pinned here (non-secret) so the fee is independent of any
   # script. A change requires a redeploy (parsed via String.to_integer at boot).
   XOCHI_FEE_BPS = '10'
+
+  # --- Delegated (Privy + Alchemy managed wallet) signing config (non-secret) ---
+  # The Virtuals ACP server that proxies wallet signing to Privy; the sidecar signs its
+  # authorization requests against api.privy.io using PRIVY_APP_ID as the canonical
+  # request's app-id. Both are public constants from acp-node-v2 (prod values).
+  PRIVY_APP_ID = 'cltsev9j90f67yhyw4sngtrpv'
+  RAXOL_ACP_SERVER_URL = 'https://api.acp.virtuals.io'
+  # Localhost port the Node signing sidecar listens on; the release calls it there.
+  RAXOL_ACP_SIGNER_PORT = '4048'
 
   # RAXOL_ACP_RPC_URL is deliberately NOT defaulted here. A public-RPC default would let
   # a misstaged secret silently run the signing solver on the rate-limited public Base

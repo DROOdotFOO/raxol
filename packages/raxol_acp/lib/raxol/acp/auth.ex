@@ -204,7 +204,9 @@ defmodule Raxol.ACP.Auth do
     opts = [url: url, json: body] ++ state.req_options
 
     case Req.post(opts) do
-      {:ok, %Req.Response{status: 200, body: body}} ->
+      # The ACP server returns 201 Created for a fresh token (and 200 on some paths);
+      # accept any 2xx.
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         {:ok, body}
 
       {:ok, %Req.Response{status: status, body: body}} ->
