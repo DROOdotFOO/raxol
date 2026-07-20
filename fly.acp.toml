@@ -75,9 +75,10 @@ kill_signal = 'SIGTERM'
   XOCHI_BASE_URL = 'https://api.xochi.fi'
 
   # Storefront fee in basis points. SolverApplication defaults to 50 (0.5%); the
-  # launch target is 8. Pinned here (non-secret) so the fee is independent of any
-  # script. A change requires a redeploy (parsed via String.to_integer at boot).
-  XOCHI_FEE_BPS = '8'
+  # launch target is 10 (0.10%), matching the Virtuals offering (Price = 0.1%).
+  # Pinned here (non-secret) so the fee is independent of any script. A change
+  # requires a redeploy (parsed via String.to_integer at boot).
+  XOCHI_FEE_BPS = '10'
 
   # Base mainnet RPC for auth + on-chain submit. Public default -- rate-limited and
   # unsuitable for a production signing solver; the deploy script overrides it with a

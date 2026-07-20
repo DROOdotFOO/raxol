@@ -33,11 +33,12 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOffering do
 
   use Raxol.ACP.Offering,
     name: "xochi_usdc_public",
-    price_usdc: "0.25",
+    fee_bps: 10,
     sla_minutes: 10,
     cluster: "on_chain"
 
-  alias Raxol.ACP.Xochi.{Offering, TransferCore}
+  alias Raxol.ACP.AssetToken
+  alias Raxol.ACP.Xochi.{IntentDeriver, Offering, TransferCore}
   alias Raxol.Payments.Assets
 
   # USDC base units (6 decimals): 1 USDC and 3_000 USDC.
@@ -50,6 +51,27 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOffering do
   @impl true
   def deliverables_schema, do: Offering.deliverable_schema(:usdc_public)
 
+  @doc """
+  Accept-time derivation: read the buyer's intent from Xochi by `intent_id`,
+  replace the buyer-declared corridor/amount with the authoritative values, and
+  size the storefront fee as `fee_bps` of the authoritative principal.
+
+  raxol never trusts the relayed amount: the buyer signed one number against
+  Xochi and Riddler verifies the signature against that persisted quote, so the
+  `from_amount` on the `:quoted` intent is what settles. Fails closed -- a
+  missing intent id, no Xochi config, an unreachable/unknown intent, a
+  non-`:quoted` state, or a malformed amount all reject before any on-chain
+  write.
+  """
+  @impl true
+  def resolve_accept(req, %{chain_id: chain_id, xochi_config: xochi_config}) do
+    with {:ok, %{intent: intent, from_amount: principal}} <-
+           IntentDeriver.resolve(xochi_config, req) do
+      budget = AssetToken.usdc_from_raw(div(principal * fee_bps(), 10_000), chain_id)
+      {:ok, derive_corridor(req, intent), budget}
+    end
+  end
+
   @impl true
   def handle_request(req, ctx) do
     with :ok <- usdc_only(req),
@@ -60,6 +82,20 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOffering do
 
   @impl true
   def handle_deliver(req, ctx), do: TransferCore.handle_deliver(req, ctx)
+
+  # Overwrite the buyer-declared corridor/amount with Xochi's authoritative
+  # values so the downstream USDC + order-band gates and the deliverable run on
+  # what was actually signed. The opaque `signed_intent` and any settlement hint
+  # are left untouched.
+  defp derive_corridor(req, intent) do
+    Map.merge(req, %{
+      "src_chain_id" => intent.from_chain_id,
+      "dst_chain_id" => intent.to_chain_id,
+      "src_token" => intent.from_token,
+      "dst_token" => intent.to_token,
+      "amount_atomic" => intent.from_amount
+    })
+  end
 
   defp usdc_only(req) do
     if usdc_leg?(req["src_chain_id"], req["src_token"]) and

@@ -100,7 +100,14 @@ defmodule Raxol.ACP.Seller.Queue do
       chain_id: Application.get_env(:raxol_acp, :seller_chain_id, 8453),
       acp_core_address:
         Application.get_env(:raxol_acp, :seller_acp_core_address) ||
-          Chain.mainnet().acp_core_address
+          Chain.mainnet().acp_core_address,
+      # Xochi client config for accept-time intent derivation. Same source
+      # `TransferCore`/`Settler` read; nil when unconfigured (offerings that
+      # derive from Xochi then fail closed).
+      xochi_config:
+        :raxol_acp
+        |> Application.get_env(:xochi_transfer_settler, [])
+        |> Keyword.get(:xochi_config)
     }
   end
 
@@ -198,12 +205,15 @@ defmodule Raxol.ACP.Seller.Queue do
       {:ok, session} ->
         {:ok, spec} = OfferingRegistry.lookup(name)
         provider = build_provider(session, spec, event, defaults, job_id)
-        budget = AssetToken.usdc(spec.price_usdc, defaults.chain_id)
 
-        case Provider.accept_request(provider, request, budget) do
-          {:ok, _} ->
-            emit(:dispatched, %{type: :job_offered, job_id: job_id, offering: name})
-            put_job(state, job_id, %{provider: provider, request: request})
+        with {:ok, resolved_request, budget} <- resolve_accept(spec, request, defaults),
+             {:ok, _} <- Provider.accept_request(provider, resolved_request, budget) do
+          emit(:dispatched, %{type: :job_offered, job_id: job_id, offering: name})
+          put_job(state, job_id, %{provider: provider, request: resolved_request})
+        else
+          {:reject, reason} ->
+            JobSession.apply_event(session, :expired, %{rejected: reason})
+            drop(:job_offered, job_id, %{offering: name}, {:rejected, reason}, state)
 
           {:rejected, reason} ->
             JobSession.apply_event(session, :expired, %{rejected: reason})
@@ -215,6 +225,21 @@ defmodule Raxol.ACP.Seller.Queue do
 
       {:error, reason} ->
         drop(:job_offered, job_id, %{offering: name}, {:start_failed, reason}, state)
+    end
+  end
+
+  # Resolve the accept-time budget (and any request enrichment) for the offering.
+  # An offering that implements `resolve_accept/2` derives the authoritative
+  # corridor + amount (e.g. from Xochi) and sizes its own budget; otherwise the
+  # budget is the offering's flat `price_usdc`.
+  defp resolve_accept(spec, request, defaults) do
+    if function_exported?(spec.handler, :resolve_accept, 2) do
+      spec.handler.resolve_accept(request, %{
+        chain_id: defaults.chain_id,
+        xochi_config: defaults.xochi_config
+      })
+    else
+      {:ok, request, AssetToken.usdc(spec.price_usdc, defaults.chain_id)}
     end
   end
 

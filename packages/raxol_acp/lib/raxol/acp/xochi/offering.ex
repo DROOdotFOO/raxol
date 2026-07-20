@@ -79,11 +79,11 @@ defmodule Raxol.ACP.Xochi.Offering do
           "The buyer may settle to a different recipient or an ERC-5564 stealth " <>
           "address by signing it into their intent; the storefront relays it verbatim.",
       # No funds move through ACP: the buyer's capital moves via their signed Xochi
-      # intent (off-ACP), so the job takes no fund hook. The routing fee is a
-      # percentage of the principal the buyer moves (8 bps = 0.08 in percent units).
+      # intent (off-ACP), so the job takes no fund hook. The listed fee is a
+      # percentage (0.10 = 10 bps); price carries the value, not a USDC amount.
       required_funds: false,
-      job_fee: 0.08,
-      job_fee_type: "percentage",
+      price_usdc: 0.10,
+      price_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(),
@@ -92,20 +92,21 @@ defmodule Raxol.ACP.Xochi.Offering do
     }
   end
 
-  @doc "JSON Schema for what the buyer must send when initiating a job."
+  @doc """
+  JSON Schema for what the buyer must send when initiating a job.
+
+  Only `signed_intent` is required: the storefront reads the authoritative
+  corridor and amount from Xochi by the bundle's `intent_id` at accept time, so
+  the buyer no longer hand-carries (and cannot misstate) `src_chain_id`,
+  `dst_chain_id`, `src_token`, `dst_token`, or `amount_atomic`. Those remain as
+  optional audit hints; raxol derives and enforces the real values.
+  """
   @spec requirement_schema() :: map()
   def requirement_schema do
     %{
       "$schema" => "https://json-schema.org/draft/2020-12/schema",
       "type" => "object",
-      "required" => [
-        "src_chain_id",
-        "dst_chain_id",
-        "src_token",
-        "dst_token",
-        "amount_atomic",
-        "signed_intent"
-      ],
+      "required" => ["signed_intent"],
       "additionalProperties" => false,
       "properties" => %{
         "src_chain_id" => %{
@@ -138,13 +139,14 @@ defmodule Raxol.ACP.Xochi.Offering do
           "type" => "string",
           "pattern" => "^[0-9]+$",
           "description" =>
-            "Transfer size in token base units (USDC: 1 USDC = 1_000_000). Used to " <>
-              "size the storefront fee (bps of this) and to commit the deliverable " <>
-              "amount; the on-chain amount is fixed by the buyer's signed intent."
+            "Optional audit hint of the transfer size in token base units (USDC: " <>
+              "1 USDC = 1_000_000). raxol does not trust it: the authoritative amount " <>
+              "is read from Xochi by the signed intent's intent_id and is what sizes " <>
+              "the storefront fee and the deliverable."
         },
         "signed_intent" => %{
           "type" => "object",
-          "required" => ["intent_id", "quote_id", "signature", "nonce"],
+          "required" => ["intent_id", "quote_id", "signature", "nonce", "pull_signature"],
           "additionalProperties" => false,
           "description" =>
             "The buyer's pre-signed Xochi intent bundle. The buyer quotes and signs " <>
@@ -174,8 +176,9 @@ defmodule Raxol.ACP.Xochi.Offering do
               "type" => "string",
               "pattern" => "^0x[0-9a-fA-F]+$",
               "description" =>
-                "Optional ERC-3009/Permit2 origin-pull signature (absent for " <>
-                  "non-pulling methods)."
+                "ERC-3009 origin-pull signature. Required for USDC settlement: the " <>
+                  "solver pulls the origin funds with this authorization, so a bundle " <>
+                  "without it cannot settle."
             },
             "aztec_proof" => %{
               "type" => "string",
@@ -400,8 +403,8 @@ defmodule Raxol.ACP.Xochi.Offering do
           "legs must be USDC; other stablecoins are rejected before escrow. Order size is " <>
           "bounded (min 1 USDC, max 3,000 USDC).",
       required_funds: false,
-      job_fee: 0.08,
-      job_fee_type: "percentage",
+      price_usdc: 0.10,
+      price_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(:usdc_public),
@@ -420,8 +423,8 @@ defmodule Raxol.ACP.Xochi.Offering do
           "settlement tx hashes; the buyer escrows only the storefront fee (a plain " <>
           "job, no fund hook).",
       required_funds: false,
-      job_fee: 0.08,
-      job_fee_type: "percentage",
+      price_usdc: 0.10,
+      price_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(:public),
@@ -441,8 +444,8 @@ defmodule Raxol.ACP.Xochi.Offering do
           "intent, the storefront relays it and returns the settlement tx hashes plus " <>
           "the stealth announcement for on-chain verification.",
       required_funds: false,
-      job_fee: 0.08,
-      job_fee_type: "percentage",
+      price_usdc: 0.10,
+      price_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(:stealth),
@@ -457,21 +460,22 @@ defmodule Raxol.ACP.Xochi.Offering do
 
   @doc """
   Whether a given requirement payload is well-formed enough to relay. A cheap
-  shape check: it confirms the corridor fields plus a `signed_intent` bundle
-  carrying at least `intent_id`, `quote_id`, `signature`, and `nonce`. It does not
-  verify the signature (Riddler does that against its persisted quote).
+  shape check: it confirms a `signed_intent` bundle carrying at least
+  `intent_id`, `quote_id`, `signature`, `nonce`, and `pull_signature`. The
+  corridor (chains, tokens, amount) is NOT required here -- it is read
+  authoritatively from Xochi by the intent id (see
+  `Raxol.ACP.Xochi.IntentDeriver`). It does not verify the signature (Riddler
+  does that against its persisted quote).
   """
   @spec valid_requirement?(map()) :: boolean()
   def valid_requirement?(req) when is_map(req) do
-    required = ~w(src_chain_id dst_chain_id src_token dst_token amount_atomic signed_intent)
-
-    Enum.all?(required, &Map.has_key?(req, &1)) and valid_signed_intent?(req["signed_intent"])
+    valid_signed_intent?(req["signed_intent"])
   end
 
   def valid_requirement?(_), do: false
 
   defp valid_signed_intent?(bundle) when is_map(bundle) do
-    Enum.all?(~w(intent_id quote_id signature nonce), &Map.has_key?(bundle, &1))
+    Enum.all?(~w(intent_id quote_id signature nonce pull_signature), &Map.has_key?(bundle, &1))
   end
 
   defp valid_signed_intent?(_), do: false

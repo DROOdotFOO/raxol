@@ -41,11 +41,37 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
           wallet_address: @solver_wallet,
           evaluator_address: @evaluator,
           chain_id: 8453,
-          acp_core_address: @acp_core
+          acp_core_address: @acp_core,
+          xochi_config: xochi_stub()
         ],
         opts
       )
     )
+  end
+
+  # In-process Xochi stub for accept-time intent derivation: GET /api/intent/:id
+  # returns a `:quoted` intent carrying the authoritative `from_amount`. The
+  # budget is sized on THIS, never the requirement's declared `amount_atomic`.
+  defp xochi_stub(from_amount \\ "1000000", status \\ "quoted") do
+    plug = fn conn ->
+      body = %{
+        "id" => "xi_1",
+        "status" => status,
+        "from_chain_id" => 8453,
+        "to_chain_id" => 10,
+        "from_token" => "0x" <> String.duplicate("11", 20),
+        "to_token" => "0x" <> String.duplicate("22", 20),
+        "from_amount" => from_amount,
+        "to_amount" => from_amount,
+        "quote_id" => "xq_1"
+      }
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(body))
+    end
+
+    %{base_url: "https://api.xochi.fi", req_options: [plug: plug, retry: false]}
   end
 
   defp job_created_entry(opts \\ []) do
@@ -70,7 +96,8 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
           "intent_id" => "xi_1",
           "quote_id" => "xq_1",
           "signature" => "0x" <> String.duplicate("11", 65),
-          "nonce" => 7
+          "nonce" => 7,
+          "pull_signature" => "0x" <> String.duplicate("22", 65)
         }
       })
 
@@ -161,6 +188,49 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
       Process.sleep(60)
 
       assert %{{8453, "42"} => %{budget_atomic: 0}} = SolverAgent.sessions(solver)
+    end
+
+    test "sizes the fee on Xochi's amount, ignoring the declared amount_atomic", ctx do
+      # Buyer understates amount_atomic to 1 base unit; the stub intent carries
+      # the authoritative 1_000_000, so the fee is 0.5% of 1_000_000 = 5_000.
+      req =
+        requirement_message(
+          requirement: %{
+            "amount_atomic" => "1",
+            "signed_intent" => %{
+              "intent_id" => "xi_1",
+              "quote_id" => "xq_1",
+              "signature" => "0x" <> String.duplicate("11", 65),
+              "nonce" => 7,
+              "pull_signature" => "0x" <> String.duplicate("22", 65)
+            }
+          }
+        )
+
+      {:ok, solver} = start_solver([fee_bps: 50], ctx)
+      Agent.start_stream(ctx.agent)
+
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, req)
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => session} = SolverAgent.sessions(solver)
+      assert session.budget_atomic == 5_000
+      assert session.transfer_amount_atomic == 1_000_000
+    end
+
+    test "fails the job closed when the intent is not in the quoted state", ctx do
+      {:ok, solver} = start_solver([xochi_config: xochi_stub("1000000", "executing")], ctx)
+      Agent.start_stream(ctx.agent)
+
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
+      # No budget was proposed on-chain: the fee was never sized on an
+      # unresolved intent.
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
     end
 
     test "malformed requirement marks the session :failed", ctx do

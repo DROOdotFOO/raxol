@@ -3,20 +3,23 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
   Generate the `offering.json` to register on the Virtuals ACP marketplace
   (dashboard "Add Job", or the file uploader).
 
-  Output matches the Virtuals offering contract exactly -- a flat document with
-  only these fields:
+  The uploader expects a top-level `jobs` array; each element is one offering
+  with these fields:
 
   - `name` -- the offering id (`[a-z][a-z0-9_]*`).
   - `description` -- human-readable summary shown to buyer agents.
-  - `jobFee` -- for `percentage`, the fee in PERCENT units (e.g. `0.08` = 0.08%
-    = 8 bps), taken from the principal the buyer moves; for `fixed`, a flat USDC
-    amount.
-  - `jobFeeType` -- `"percentage"` or `"fixed"`.
+  - `price` -- the fee amount for the job, a number in USDC. This is the single
+    charge the buyer escrows (the job budget); raxol's runtime reads it as the
+    budget it proposes.
+  - `priceType` -- `"fixed"` (a flat USDC fee) or `"percentage"` (a commission on
+    funds moved through ACP, which requires `requiredFunds: true`).
+  - `slaMinutes` -- max minutes from `job.funded` to `job.submitted`.
   - `requiredFunds` -- whether the buyer transfers capital through ACP. `false`
-    here: the buyer's funds move via their signed Xochi intent (off-ACP).
+    here: the buyer's funds move via their signed Xochi intent (off-ACP), so the
+    fee is a flat `"fixed"` price, not a percentage.
   - `requirement` -- JSON Schema of the buyer's inputs.
 
-  Network/contract addresses, SLA, and the deliverable schema are NOT part of the
+  Network/contract addresses and the deliverable schema are NOT part of the
   Virtuals offering document -- they are configured on the agent / in raxol's own
   runtime -- so they are deliberately omitted.
 
@@ -73,13 +76,21 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
 
   @doc false
   def build_payload(offering \\ :usdc_public) do
+    # The Virtuals uploader validates a top-level `jobs` array; the six offering
+    # fields are unexpected at the document root and belong to a `jobs` element.
+    %{"jobs" => [build_offering(offering)]}
+  end
+
+  @doc false
+  def build_offering(offering) do
     meta = offering_metadata(offering)
 
     %{
       "name" => meta.name,
       "description" => meta.description,
-      "jobFee" => meta.job_fee,
-      "jobFeeType" => meta.job_fee_type,
+      "price" => meta.price_usdc,
+      "priceType" => meta.price_type,
+      "slaMinutes" => meta.sla_minutes,
       "requiredFunds" => meta.required_funds,
       # Virtuals wants a bare JSON Schema for `requirement`; drop the meta-schema
       # URL so it is not flagged as an unexpected field on import.

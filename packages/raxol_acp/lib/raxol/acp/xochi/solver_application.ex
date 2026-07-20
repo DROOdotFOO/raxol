@@ -87,13 +87,15 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
     api = ACP.JobApi.HTTP.new(auth: auth_name(), server_url: server_url, chain_ids: [@chain_id])
     transport = ACP.Transport.SSE.new(auth: auth_name(), server_url: server_url)
 
-    settle_fn =
-      Settler.build(
-        xochi_config: %{
-          base_url: System.fetch_env!("XOCHI_BASE_URL"),
-          auth_token: System.fetch_env!("XOCHI_AUTH_TOKEN")
-        }
-      )
+    # One Xochi client config, shared by the accept-time intent derivation (the
+    # SolverAgent reads the authoritative amount by intent id) and the settle
+    # relay. Without it on the agent, every job would fail closed at budget time.
+    xochi_config = %{
+      base_url: System.fetch_env!("XOCHI_BASE_URL"),
+      auth_token: System.fetch_env!("XOCHI_AUTH_TOKEN")
+    }
+
+    settle_fn = Settler.build(xochi_config: xochi_config)
 
     children = [
       Supervisor.child_spec(
@@ -122,6 +124,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
          acp_core_address: chain.acp_core_address,
          fee_bps: fee_bps(),
          settle_fn: settle_fn,
+         xochi_config: xochi_config,
          name: solver_name()},
         id: :solver
       ),
