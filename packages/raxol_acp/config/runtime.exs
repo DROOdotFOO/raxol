@@ -47,14 +47,23 @@ if config_env() == :prod do
     """
   end
 
-  # Solver mode signs real transactions; it must run on an explicitly-configured
-  # (private) Base RPC, never silently fall back to the rate-limited public endpoint
-  # (that path 429-storms nonce fetch + tx submit -- the axol RPC-429 crashloop class).
-  # Require RAXOL_ACP_RPC_URL rather than defaulting it; set it as a fly secret.
-  if solver_enabled? and String.trim(System.get_env("RAXOL_ACP_RPC_URL", "")) == "" do
+  # Legacy local-EOA solver mode signs+submits over Elixir JSON-RPC, so it must run on
+  # an explicitly-configured (private) Base RPC -- never silently fall back to the
+  # rate-limited public endpoint (that path 429-storms nonce fetch + tx submit -- the
+  # axol RPC-429 crashloop class). Require RAXOL_ACP_RPC_URL there.
+  #
+  # DELEGATED mode (RAXOL_ACP_WALLET_ID set: the Privy+Alchemy managed wallet) signs and
+  # submits through the Node sidecar / Virtuals+Alchemy, NOT Elixir RPC. Elixir RPC is
+  # used only for idempotent read calls, which tolerate a public endpoint -- so
+  # RAXOL_ACP_RPC_URL is optional there and this gate does not apply.
+  delegated_signing? = String.trim(System.get_env("RAXOL_ACP_WALLET_ID", "")) != ""
+
+  if solver_enabled? and not delegated_signing? and
+       String.trim(System.get_env("RAXOL_ACP_RPC_URL", "")) == "" do
     raise """
-    raxol_acp solver mode requires RAXOL_ACP_RPC_URL (a private Base RPC). Refusing to \
-    boot on the public-RPC default -- set it as a fly secret (scripts/deploy-raxol-solver.sh).
+    raxol_acp legacy-EOA solver mode requires RAXOL_ACP_RPC_URL (a private Base RPC). \
+    Refusing to boot on the public-RPC default -- set it as a fly secret. (Delegated \
+    mode, RAXOL_ACP_WALLET_ID set, does not need it.)
     """
   end
 end

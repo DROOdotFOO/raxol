@@ -70,21 +70,13 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   def init(_opts) do
     chain = ACP.Chain.mainnet()
 
-    # Secret-handling invariant -- KEEP THIS if you reuse the solver pattern. The raw
-    # key exists only as this transient local; `JSONRPC.new/1` immediately wraps it in a
-    # `Raxol.ACP.Secret` before it enters the provider config. That wrapper redacts under
-    # `Inspect`, so the key never renders into an OTP/SASL crash report even though the
-    # provider is passed as a supervised child's start arg (a plain unwrapped key here
-    # WOULD leak on any boot-time child crash -- see Secret's moduledoc). Do not log or
-    # interpolate `private_key`; only `Secret.reveal/1` at a sign call site unwraps it.
-    private_key = decode_pk!(System.fetch_env!("RAXOL_ACP_AGENT_PRIVATE_KEY"))
-    rpc_url = System.get_env("RAXOL_ACP_RPC_URL", chain.rpc_url)
     server_url = chain.acp_server_url
 
-    provider =
-      ACP.ProviderAdapter.JSONRPC.new(chains: %{@chain_id => rpc_url}, private_key: private_key)
-
-    wallet_address = ACP.ProviderAdapter.get_address(provider)
+    # Two signing substrates share this tree (see build_provider/1):
+    #   * delegated (Privy + Alchemy managed wallet) -- no local key; signs via the
+    #     Node signing sidecar. `sidecar_children` prepends its supervisor.
+    #   * legacy EOA -- holds a raw secp256k1 key and signs locally (JSONRPC).
+    {provider, wallet_address, sidecar_children} = build_provider(chain)
 
     api = ACP.JobApi.HTTP.new(auth: auth_name(), server_url: server_url, chain_ids: [@chain_id])
     transport = ACP.Transport.SSE.new(auth: auth_name(), server_url: server_url)
@@ -103,7 +95,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
 
     settle_fn = Settler.build(xochi_config: xochi_config)
 
-    children = [
+    children = sidecar_children ++ [
       Supervisor.child_spec(
         {ACP.Auth,
          provider: provider, server_url: server_url, chain_id: @chain_id, name: auth_name()},
@@ -147,6 +139,50 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)
+  end
+
+  # Delegated (Privy + Alchemy managed wallet) when a wallet id + address are set;
+  # otherwise the legacy local-EOA path. Delegated mode holds NO signing key in the
+  # BEAM -- the sidecar does, from its own env.
+  defp privy_mode? do
+    present?(System.get_env("RAXOL_ACP_WALLET_ID")) and
+      present?(System.get_env("RAXOL_ACP_WALLET_ADDRESS"))
+  end
+
+  defp present?(v), do: is_binary(v) and String.trim(v) != ""
+
+  defp build_provider(chain) do
+    rpc_url = System.get_env("RAXOL_ACP_RPC_URL", chain.rpc_url)
+
+    if privy_mode?() do
+      sidecar_url = Raxol.ACP.SignerSidecar.base_url([])
+      address = System.fetch_env!("RAXOL_ACP_WALLET_ADDRESS")
+
+      provider =
+        ACP.ProviderAdapter.Privy.new(
+          sidecar_url: sidecar_url,
+          address: address,
+          chains: %{@chain_id => rpc_url}
+        )
+
+      # Start the sidecar FIRST (its init blocks until GET /health is 200), so Auth and
+      # everything downstream only start once delegated signing is actually available.
+      {provider, address, [{Raxol.ACP.SignerSidecar, []}]}
+    else
+      # Secret-handling invariant -- KEEP THIS if you reuse the solver pattern. The raw
+      # key exists only as this transient local; `JSONRPC.new/1` immediately wraps it in a
+      # `Raxol.ACP.Secret` before it enters the provider config. That wrapper redacts under
+      # `Inspect`, so the key never renders into an OTP/SASL crash report even though the
+      # provider is passed as a supervised child's start arg (a plain unwrapped key here
+      # WOULD leak on any boot-time child crash -- see Secret's moduledoc). Do not log or
+      # interpolate `private_key`; only `Secret.reveal/1` at a sign call site unwraps it.
+      private_key = decode_pk!(System.fetch_env!("RAXOL_ACP_AGENT_PRIVATE_KEY"))
+
+      provider =
+        ACP.ProviderAdapter.JSONRPC.new(chains: %{@chain_id => rpc_url}, private_key: private_key)
+
+      {provider, ACP.ProviderAdapter.get_address(provider), []}
+    end
   end
 
   defp fee_bps, do: String.to_integer(System.get_env("XOCHI_FEE_BPS", "50"))
