@@ -76,17 +76,17 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOfferingTest do
       assert {:accept, ^r} = UsdcPublicOffering.handle_request(r, @ctx)
     end
 
-    test "rejects a non-USDC src leg, pointing at the broader stablecoin offering" do
+    test "rejects a non-USDC src leg with no fallback to an unready rail" do
       r = req(%{"src_token" => @usdt_base})
 
-      assert {:reject, {:wrong_offering, :expected_usdc, "xochi_stable_public"}} =
+      assert {:reject, {:wrong_offering, :expected_usdc}} =
                UsdcPublicOffering.handle_request(r, @ctx)
     end
 
     test "rejects a non-USDC dst leg too" do
       r = req(%{"dst_token" => @usdt_base})
 
-      assert {:reject, {:wrong_offering, :expected_usdc, "xochi_stable_public"}} =
+      assert {:reject, {:wrong_offering, :expected_usdc}} =
                UsdcPublicOffering.handle_request(r, @ctx)
     end
 
@@ -95,8 +95,33 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOfferingTest do
       # :unsupported_src_token -- the USDC check runs first.
       bogus = "0x" <> String.duplicate("ab", 20)
 
-      assert {:reject, {:wrong_offering, :expected_usdc, "xochi_stable_public"}} =
+      assert {:reject, {:wrong_offering, :expected_usdc}} =
                UsdcPublicOffering.handle_request(req(%{"src_token" => bogus}), @ctx)
+    end
+
+    test "rejects an order below the minimum (anti-spam)" do
+      # 0.50 USDC, under the 1 USDC floor.
+      r = req(%{"amount_atomic" => "500000"})
+
+      assert {:reject, {:order_below_min, 1_000_000}} =
+               UsdcPublicOffering.handle_request(r, @ctx)
+    end
+
+    test "rejects an order above the maximum ceiling" do
+      # 3_001 USDC, over the 3_000 USDC ceiling.
+      r = req(%{"amount_atomic" => "3001000000"})
+
+      assert {:reject, {:order_above_max, 3_000_000_000}} =
+               UsdcPublicOffering.handle_request(r, @ctx)
+    end
+
+    test "honors configured order-band overrides" do
+      Application.put_env(:raxol_acp, :usdc_public_min_atomic, 2_000_000)
+      on_exit(fn -> Application.delete_env(:raxol_acp, :usdc_public_min_atomic) end)
+
+      # 1.10 USDC now falls under the raised 2 USDC floor.
+      assert {:reject, {:order_below_min, 2_000_000}} =
+               UsdcPublicOffering.handle_request(req(%{}), @ctx)
     end
 
     test "shared guards still fire once both legs are USDC (same-chain corridor)" do
@@ -107,10 +132,16 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOfferingTest do
   end
 
   describe "describe_rejection/1" do
-    test "explains the :expected_usdc rejection and names the fallback offering" do
-      msg = TransferCore.describe_rejection({:wrong_offering, :expected_usdc, "xochi_stable_public"})
-      assert msg =~ "USDC-only"
-      assert msg =~ "xochi_stable_public"
+    test "explains the :expected_usdc rejection without pointing at an unready rail" do
+      msg = TransferCore.describe_rejection({:wrong_offering, :expected_usdc})
+      assert msg =~ "USDC only"
+      assert msg =~ "not settle-ready"
+      refute msg =~ "xochi_stable_public"
+    end
+
+    test "explains the order-band rejections" do
+      assert TransferCore.describe_rejection({:order_below_min, 1_000_000}) =~ "minimum"
+      assert TransferCore.describe_rejection({:order_above_max, 3_000_000_000}) =~ "maximum"
     end
   end
 end

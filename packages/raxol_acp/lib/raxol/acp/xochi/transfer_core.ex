@@ -93,9 +93,15 @@ defmodule Raxol.ACP.Xochi.TransferCore do
     do:
       "This is the stealth offering, but the requirement asks for public settlement. Use \"#{alt}\"."
 
-  def describe_rejection({:wrong_offering, :expected_usdc, alt}),
+  def describe_rejection({:wrong_offering, :expected_usdc}),
     do:
-      "This is the USDC-only offering, but a leg is not USDC. Use \"#{alt}\" for other stablecoins."
+      "This offering settles USDC only; a leg is not USDC. Other stablecoins are not settle-ready yet."
+
+  def describe_rejection({:order_below_min, min}),
+    do: "Order amount is below the minimum of #{min} base units."
+
+  def describe_rejection({:order_above_max, max}),
+    do: "Order amount exceeds the maximum of #{max} base units; use a smaller amount."
 
   def describe_rejection({:stealth_requires_l1_destination, dst}),
     do:

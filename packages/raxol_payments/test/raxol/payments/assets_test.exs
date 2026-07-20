@@ -235,4 +235,31 @@ defmodule Raxol.Payments.AssetsTest do
       refute Assets.usdc?(nil, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
     end
   end
+
+  describe "usdc_chains/0" do
+    test "returns the CCTP mesh, ascending" do
+      assert Assets.usdc_chains() == [1, 10, 137, 8453, 42_161]
+    end
+
+    test "every advertised chain actually recognizes a USDC contract" do
+      # Guards against the chain list drifting from usdc?/2.
+      for chain <- Assets.usdc_chains() do
+        assert Enum.any?(
+                 known_usdc_addresses(),
+                 &Assets.usdc?(chain, &1)
+               ),
+               "chain #{chain} advertised but no USDC contract recognized"
+      end
+    end
+  end
+
+  defp known_usdc_addresses do
+    [
+      "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+      "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+    ]
+  end
 end

@@ -19,9 +19,10 @@ defmodule Raxol.ACP.Seller.Supervisor do
   ## Offerings
 
   On start it registers the offerings in `config :raxol_acp, :offerings`
-  (default `[Raxol.ACP.Xochi.TransferOffering]`) with
-  `Raxol.ACP.Offering.Registry` via `Raxol.ACP.Seller.Offerings`, so incoming
-  jobs resolve to a handler. Registration is idempotent across restarts.
+  (fail-closed default `[Raxol.ACP.Xochi.UsdcPublicOffering]`; see
+  `Raxol.ACP.Seller.Offerings`) with `Raxol.ACP.Offering.Registry` via
+  `Raxol.ACP.Seller.Offerings`, so incoming jobs resolve to a handler.
+  Registration is idempotent across restarts.
 
   ## Liquidity gate
 
