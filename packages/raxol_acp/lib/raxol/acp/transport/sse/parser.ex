@@ -53,7 +53,7 @@ defmodule Raxol.ACP.Transport.SSE.Parser do
 
       json ->
         case Jason.decode(json) do
-          {:ok, value} when is_map(value) -> {:ok, value}
+          {:ok, value} when is_map(value) -> {:ok, normalize(value)}
           _ -> {:error, :invalid_json}
         end
     end
@@ -62,4 +62,33 @@ defmodule Raxol.ACP.Transport.SSE.Parser do
   defp extract_data_line("data: " <> rest), do: [rest]
   defp extract_data_line("data:" <> rest), do: [String.trim_leading(rest, " ")]
   defp extract_data_line(_), do: []
+
+  # Normalize the wire shape of an ACP SSE entry into the shape the Agent +
+  # SolverAgent consume. The Virtuals server sends system events as
+  # `%{"kind" => "system", "event" => %{"type" => "job.created", "provider" => ...,
+  # "onChainJobId" => ...}}`, but our dispatch matches `"event" => "job.created"`
+  # (a string) and reads top-level `jobId`/`provider`. So for system entries we hoist
+  # the nested event map's fields to the top level and replace `event` with its type
+  # string. Message entries already carry top-level `content`/`contentType`/`from`.
+  # Both get `jobId` lifted from `onChainJobId`. This is the single boundary where the
+  # wire shape meets our code (the gate drives the provider in-process and never hits
+  # this path, which is why the mismatch went unseen until a real marketplace job).
+  defp normalize(%{"kind" => "system", "event" => %{"type" => type} = ev} = entry) do
+    entry
+    |> Map.merge(ev)
+    |> Map.put("event", type)
+    |> Map.put("jobId", job_id(entry, ev))
+  end
+
+  defp normalize(%{} = entry) do
+    Map.put(entry, "jobId", job_id(entry, entry["event"]))
+  end
+
+  defp job_id(entry, ev) do
+    entry["jobId"] || entry["job_id"] || entry["onChainJobId"] ||
+      map_get(ev, "onChainJobId") || map_get(ev, "jobId")
+  end
+
+  defp map_get(%{} = m, k), do: m[k]
+  defp map_get(_, _), do: nil
 end
