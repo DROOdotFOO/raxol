@@ -55,6 +55,7 @@ defmodule Raxol.Payments.Xochi.Client do
     QuoteResponse,
     ExecuteRequest,
     ExecuteResponse,
+    Intent,
     IntentStatus
   }
 
@@ -119,6 +120,22 @@ defmodule Raxol.Payments.Xochi.Client do
     |> build_req()
     |> Req.get(url: "/api/intent/#{intent_id}/status")
     |> handle_response(&IntentStatus.from_json/1)
+  end
+
+  @doc """
+  Get the persisted intent by ID (`GET /api/intent/:id`).
+
+  Returns the authoritative corridor and amounts written at quote time, so a
+  relayer can read what the buyer signed BEFORE settlement (`IntentStatus` from
+  `get_status/2` carries only tx/settlement state, no amounts). A not-yet-created
+  or unknown id yields `{:error, {:http, 404, _}}`.
+  """
+  @spec get_intent(config(), String.t()) :: {:ok, Intent.t()} | error()
+  def get_intent(config, intent_id) do
+    config
+    |> build_req()
+    |> Req.get(url: "/api/intent/#{intent_id}")
+    |> handle_response(&Intent.from_json/1)
   end
 
   @doc "Get intent history for a wallet."
