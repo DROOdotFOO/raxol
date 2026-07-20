@@ -86,9 +86,9 @@ kill_timeout = '60s'
   XOCHI_BASE_URL = 'https://api.xochi.fi'
 
   # Storefront fee in basis points. SolverApplication defaults to 50 (0.5%); the
-  # launch target is 8. Pinned here (non-secret) so the fee is independent of any
-  # script. A change requires a redeploy (parsed via String.to_integer at boot).
-  XOCHI_FEE_BPS = '8'
+  # launch target is 10 (0.10%). Pinned here (non-secret) so the fee is independent
+  # of any script. A change requires a redeploy (parsed via String.to_integer at boot).
+  XOCHI_FEE_BPS = '10'
 
   # RAXOL_ACP_RPC_URL is deliberately NOT defaulted here. A public-RPC default would let
   # a misstaged secret silently run the signing solver on the rate-limited public Base
