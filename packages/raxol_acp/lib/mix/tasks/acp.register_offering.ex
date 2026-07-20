@@ -15,13 +15,17 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
 
   ## Usage
 
-      mix acp.register_offering                            # mainnet, stdout
+      mix acp.register_offering                            # usdc_public, mainnet, stdout
       mix acp.register_offering --network sepolia
+      mix acp.register_offering --offering stealth
       mix acp.register_offering --out offering.json
       mix acp.register_offering --pretty                   # indented JSON
 
   ## Options
 
+  - `--offering` -- which offering to emit: `usdc_public` (default, the launch
+    offering `xochi_usdc_public`), `public`, `stealth`, or `legacy` (the
+    deprecated token-agnostic `xochi_cross_chain_transfer`).
   - `--network` -- `mainnet` (default) or `sepolia`. Picks the contract
     addresses + ACP server URL embedded in the output.
   - `--out PATH` -- write to a file instead of stdout.
@@ -43,14 +47,15 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
   def run(args) do
     {opts, _, _} =
       OptionParser.parse(args,
-        strict: [network: :string, out: :string, pretty: :boolean]
+        strict: [network: :string, offering: :string, out: :string, pretty: :boolean]
       )
 
     network = opts |> Keyword.get(:network, "mainnet") |> String.to_atom()
+    offering = opts |> Keyword.get(:offering, "usdc_public") |> String.to_atom()
     pretty? = Keyword.get(opts, :pretty, false)
     out = Keyword.get(opts, :out)
 
-    payload = build_payload(network)
+    payload = build_payload(network, offering)
     json = if pretty?, do: Jason.encode!(payload, pretty: true), else: Jason.encode!(payload)
 
     case out do
@@ -64,8 +69,8 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
   end
 
   @doc false
-  def build_payload(network) do
-    meta = Offering.offering_metadata()
+  def build_payload(network, offering \\ :usdc_public) do
+    meta = offering_metadata(offering)
 
     chain_config =
       case network do
@@ -98,4 +103,15 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
       }
     }
   end
+
+  defp offering_metadata(:legacy), do: Offering.offering_metadata()
+
+  defp offering_metadata(mode) when mode in [:usdc_public, :public, :stealth],
+    do: Offering.offering_metadata(mode)
+
+  defp offering_metadata(other),
+    do:
+      Mix.raise(
+        "unknown --offering #{inspect(other)}; expected usdc_public, public, stealth, or legacy"
+      )
 end

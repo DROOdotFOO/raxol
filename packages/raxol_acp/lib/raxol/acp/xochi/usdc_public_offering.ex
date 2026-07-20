@@ -45,22 +45,10 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOffering do
   @default_max_atomic 3_000_000_000
 
   @impl true
-  def requirements_schema do
-    Offering.requirement_schema(:public)
-    |> put_in(["properties", "src_chain_id"], usdc_chain_prop("Source"))
-    |> put_in(["properties", "dst_chain_id"], usdc_chain_prop("Destination"))
-    |> put_in(
-      ["properties", "src_token", "description"],
-      "The USDC contract on src_chain_id. Only USDC is accepted; a non-USDC token is rejected before escrow."
-    )
-    |> put_in(
-      ["properties", "dst_token", "description"],
-      "The USDC contract on dst_chain_id. Only USDC is accepted; a non-USDC token is rejected before escrow."
-    )
-  end
+  def requirements_schema, do: Offering.requirement_schema(:usdc_public)
 
   @impl true
-  def deliverables_schema, do: Offering.deliverable_schema(:public)
+  def deliverables_schema, do: Offering.deliverable_schema(:usdc_public)
 
   @impl true
   def handle_request(req, ctx) do
@@ -106,16 +94,9 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOffering do
 
   defp parse_amount(_), do: :error
 
-  defp min_atomic, do: Application.get_env(:raxol_acp, :usdc_public_min_atomic, @default_min_atomic)
-  defp max_atomic, do: Application.get_env(:raxol_acp, :usdc_public_max_atomic, @default_max_atomic)
+  defp min_atomic,
+    do: Application.get_env(:raxol_acp, :usdc_public_min_atomic, @default_min_atomic)
 
-  defp usdc_chain_prop(role) do
-    %{
-      "type" => "integer",
-      "enum" => Assets.usdc_chains(),
-      "description" =>
-        "#{role} chain. USDC settles across the CCTP mesh: " <>
-          "1 (Ethereum), 10 (OP), 137 (Polygon), 8453 (Base), 42161 (Arbitrum)."
-    }
-  end
+  defp max_atomic,
+    do: Application.get_env(:raxol_acp, :usdc_public_max_atomic, @default_max_atomic)
 end
