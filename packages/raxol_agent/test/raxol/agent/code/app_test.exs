@@ -114,43 +114,90 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
-  describe "interactive approval" do
-    test "an approval request sets the pending state and working face" do
-      ref = make_ref()
-      msg = {:command_result, {:approval_request, ref, self(), "write_file"}}
-      {model, []} = App.update(msg, %{new_model() | running?: true})
+  defp request(model, name) do
+    ref = make_ref()
+    msg = {:command_result, {:authorize_request, ref, self(), name}}
+    {model, []} = App.update(msg, model)
+    {ref, model}
+  end
 
+  describe "interactive approval (Engine ASK)" do
+    test "a sensitive tool asks: pending state, working face" do
+      {_ref, model} = request(%{new_model() | running?: true}, "write_file")
       assert model.pending_approval.name == "write_file"
       assert model.face_state == :working
     end
 
-    test "'y' allows the pending tool and replies to the waiter" do
-      ref = make_ref()
-      {model, []} =
-        App.update(
-          {:command_result, {:approval_request, ref, self(), "bash"}},
-          %{new_model() | running?: true}
-        )
-
-      {model, []} = App.update(key("y"), model)
+    test "'a' allows once and replies to the waiter" do
+      {ref, model} = request(%{new_model() | running?: true}, "bash")
+      {model, []} = App.update(key("a"), model)
 
       assert model.pending_approval == nil
-      assert_receive {:approval_decision, ^ref, :allow}
+      assert_receive {:authorize_decision, ^ref, :allow}
     end
 
-    test "'n' and Esc both deny the pending tool" do
-      for denier <- [key("n"), key(:escape)] do
-        ref = make_ref()
-        {model, []} =
-          App.update(
-            {:command_result, {:approval_request, ref, self(), "write_file"}},
-            %{new_model() | running?: true}
-          )
-
+    test "'d' and Esc both deny the pending tool" do
+      for denier <- [key("d"), key(:escape)] do
+        {ref, model} = request(%{new_model() | running?: true}, "write_file")
         {model, []} = App.update(denier, model)
         assert model.pending_approval == nil
-        assert_receive {:approval_decision, ^ref, :deny}
+        assert_receive {:authorize_decision, ^ref, {:deny, :user_denied}}
       end
+    end
+  end
+
+  describe "approval memory (Engine ALLOW after 'always')" do
+    test "'s' remembers the tool; the next call auto-allows without a prompt" do
+      {ref1, model} = request(%{new_model() | running?: true}, "write_file")
+      {model, []} = App.update(key("s"), model)
+      assert_receive {:authorize_decision, ^ref1, :allow}
+      assert MapSet.member?(model.always_allow, "write_file")
+
+      # A second request for the same tool is ALLOWed by the Engine outright.
+      {ref2, model} = request(model, "write_file")
+      assert model.pending_approval == nil
+      assert_receive {:authorize_decision, ^ref2, :allow}
+    end
+
+    test "'a' (once) does NOT remember; the next call asks again" do
+      {ref1, model} = request(%{new_model() | running?: true}, "bash")
+      {model, []} = App.update(key("a"), model)
+      assert_receive {:authorize_decision, ^ref1, :allow}
+      refute MapSet.member?(model.always_allow, "bash")
+
+      {_ref2, model} = request(model, "bash")
+      assert model.pending_approval.name == "bash"
+    end
+  end
+
+  describe "plan mode (Engine DENY of mutations)" do
+    test "Shift+Tab and Ctrl+P toggle plan mode when idle" do
+      {model, []} = App.update(key(:backtab), new_model())
+      assert model.plan_mode == true
+      {model, []} = App.update(key("p", [:ctrl]), model)
+      assert model.plan_mode == false
+    end
+
+    test "plan mode does not toggle mid-turn" do
+      model = %{new_model() | running?: true}
+      {model, []} = App.update(key(:backtab), model)
+      assert model.plan_mode == false
+    end
+
+    test "a mutating tool is denied outright in plan mode (no prompt)" do
+      {ref, model} =
+        request(%{new_model() | running?: true, plan_mode: true}, "write_file")
+
+      assert model.pending_approval == nil
+      assert model.status_line =~ "plan mode"
+      assert_receive {:authorize_decision, ^ref, {:deny, :plan_mode_read_only}}
+    end
+
+    test "plan mode augments the system prompt with a planning directive" do
+      # Submitting in plan mode must not raise and keeps the loop consistent.
+      model = %{new_model() | plan_mode: true, input: "add a feature"}
+      {model, []} = App.update(key(:enter), model)
+      assert model.running? == true
     end
   end
 

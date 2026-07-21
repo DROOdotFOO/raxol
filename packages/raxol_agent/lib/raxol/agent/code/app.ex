@@ -21,26 +21,41 @@ defmodule Raxol.Agent.Code.App do
   projection source. Because `update/2` runs in the Dispatcher process,
   the worker's `send(app, ...)` lands where the app can fold it.
 
-  ## Tools and approval
+  ## Tools, authorization, and plan mode
 
   The agent gets the read-only fs tools plus the mutating coding tools
   (`write_file`/`edit_file`/`bash`), which are `sensitive`. A per-run
-  `:tool_authorizer` gates each sensitive call through an interactive
-  prompt: it sends `{:approval_request, ...}` to this app and BLOCKS the
-  react loop's process until the user answers `y`/`n`, so a write or a
-  shell command never runs unattended.
+  `:tool_authorizer` defers every sensitive call to this app, which runs
+  it through `Raxol.Agent.Authorization.Engine` (the ALLOW/ASK/DENY
+  reducer):
+
+    * **ALLOW** — the tool was previously approved "always" this session,
+      so it runs without prompting.
+    * **ASK** — an interactive prompt (allow once / always / deny) that
+      BLOCKS the react loop's process until the user answers, so a write
+      or a shell command never runs unattended.
+    * **DENY** — in **plan mode** any mutating tool is refused; the agent
+      can only read and propose.
+
+  **Plan mode** (toggle: Shift+Tab or Ctrl+P) swaps in a planning system
+  prompt and has the Engine deny mutations, so a turn researches and lays
+  out a plan without touching disk. Toggle it back off to execute.
 
   ## Keys
 
     * printable text → prompt buffer (when idle)
-    * Enter → submit the prompt / (when a tool is awaiting) ignored
-    * `y` / `n` → answer a pending approval
+    * Enter → submit the prompt
+    * `a` / `s` / `d` → answer a pending approval (allow once / always / deny)
+    * Shift+Tab or Ctrl+P → toggle plan mode
     * Esc → deny a pending approval, else interrupt a running turn
     * Ctrl+C → quit
   """
 
   use Raxol.Core.Runtime.Application
 
+  alias Raxol.Agent.Authorization.Engine
+  alias Raxol.Agent.Authorization.Policy
+  alias Raxol.Agent.Authorization.Verdict
   alias Raxol.Agent.Contract
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Harness.EventBoundary
@@ -68,6 +83,12 @@ defmodule Raxol.Agent.Code.App do
       session_id: nil,
       pending_approval: nil,
       status_line: nil,
+      # Authorization: plan mode + per-tool "always allow" memory. The Engine
+      # is the ALLOW/ASK/DENY decision core; per-tool memory is app state fed
+      # into the policy context (the Engine's own memory is per-policy).
+      plan_mode: false,
+      always_allow: MapSet.new(),
+      auth_state: Engine.new(),
       ascii: Keyword.get(options, :ascii, false),
       executor: Keyword.get(options, :executor),
       backend_opts: Keyword.get(options, :backend_opts, []),
@@ -103,12 +124,35 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # A sensitive tool call awaiting a verdict: run it through the Engine.
+  # ALLOW (remembered) and DENY (plan mode) answer immediately; ASK opens
+  # the interactive prompt.
   def update(
-        {:command_result, {:approval_request, ref, from, name}},
+        {:command_result, {:authorize_request, ref, from, name}},
         model
       ) do
-    approval = %{ref: ref, from: from, name: name}
-    {%{model | pending_approval: approval, face_state: :working}, []}
+    context = %{
+      tool: name,
+      mutating: true,
+      plan_mode: model.plan_mode,
+      always_allow: model.always_allow
+    }
+
+    decision = Engine.evaluate(auth_policies(), :tool_call, context, model.auth_state)
+
+    case decision.action do
+      :allow ->
+        send(from, {:authorize_decision, ref, :allow})
+        {model, []}
+
+      :deny ->
+        send(from, {:authorize_decision, ref, {:deny, decision.reason}})
+        {%{model | status_line: "denied in plan mode: #{name}"}, []}
+
+      :ask ->
+        approval = %{ref: ref, from: from, name: name}
+        {%{model | pending_approval: approval, face_state: :working}, []}
+    end
   end
 
   def update(_message, model), do: {model, []}
@@ -119,17 +163,25 @@ defmodule Raxol.Agent.Code.App do
     {model, [Directive.stop()]}
   end
 
+  # Ctrl+P toggles plan mode (Shift+Tab does too — see handle_key/2).
+  defp handle_shortcut(%{char: "p", mods: %{ctrl: true}}, model),
+    do: {maybe_toggle_plan_mode(model), []}
+
   defp handle_shortcut(_norm, model), do: {model, []}
 
-  # `y`/`n` answer a pending approval; otherwise printable text edits the
-  # prompt, but only when idle (no running turn, no pending approval).
+  # `a`/`s`/`d` (with `y`/`n` aliases) answer a pending approval; otherwise
+  # printable text edits the prompt, but only when idle.
   defp handle_char(char, %{pending_approval: %{}} = model)
-       when char in ["y", "Y"],
-       do: {decide_approval(model, :allow), []}
+       when char in ["a", "A", "y", "Y"],
+       do: {allow_once(model), []}
 
   defp handle_char(char, %{pending_approval: %{}} = model)
-       when char in ["n", "N"],
-       do: {decide_approval(model, :deny), []}
+       when char in ["s", "S"],
+       do: {allow_always(model), []}
+
+  defp handle_char(char, %{pending_approval: %{}} = model)
+       when char in ["d", "D", "n", "N"],
+       do: {deny_pending(model), []}
 
   defp handle_char(_char, %{pending_approval: %{}} = model), do: {model, []}
 
@@ -138,6 +190,9 @@ defmodule Raxol.Agent.Code.App do
   defp handle_char(char, model) do
     {%{model | input: model.input <> char}, []}
   end
+
+  # Shift+Tab toggles plan mode when idle.
+  defp handle_key(:backtab, model), do: {maybe_toggle_plan_mode(model), []}
 
   defp handle_key(:enter, %{pending_approval: %{}} = model), do: {model, []}
   defp handle_key(:enter, %{running?: true} = model), do: {model, []}
@@ -158,12 +213,18 @@ defmodule Raxol.Agent.Code.App do
 
   # Esc denies a pending approval first, then interrupts a running turn.
   defp handle_key(:escape, %{pending_approval: %{}} = model),
-    do: {decide_approval(model, :deny), []}
+    do: {deny_pending(model), []}
 
   defp handle_key(:escape, %{running?: true} = model),
     do: {interrupt(model), []}
 
   defp handle_key(_key, model), do: {model, []}
+
+  # Plan mode only toggles when idle — flipping it mid-turn or mid-approval
+  # would be surprising (the toolset/prompt are fixed at turn start).
+  defp maybe_toggle_plan_mode(%{running?: true} = model), do: model
+  defp maybe_toggle_plan_mode(%{pending_approval: %{}} = model), do: model
+  defp maybe_toggle_plan_mode(model), do: %{model | plan_mode: not model.plan_mode}
 
   # -- turn lifecycle ---------------------------------------------------------
 
@@ -174,9 +235,9 @@ defmodule Raxol.Agent.Code.App do
 
     opts = [
       backend_opts: model.backend_opts,
-      system_prompt: model.system,
+      system_prompt: system_prompt(model),
       actions: model.actions,
-      context: %{tool_authorizer: approval_authorizer(app)}
+      context: %{tool_authorizer: tool_authorizer(app)}
     ]
 
     opts = maybe_put(opts, :executor, model.executor)
@@ -229,7 +290,7 @@ defmodule Raxol.Agent.Code.App do
       Process.exit(model.worker, :kill)
     end
 
-    reply_pending(model, :deny)
+    reply_pending(model, {:deny, :interrupted})
 
     %{
       model
@@ -239,6 +300,18 @@ defmodule Raxol.Agent.Code.App do
         pending_approval: nil,
         status_line: "interrupted"
     }
+  end
+
+  defp system_prompt(%{plan_mode: true, system: system}),
+    do: system <> "\n\n" <> plan_directive()
+
+  defp system_prompt(%{system: system}), do: system
+
+  defp plan_directive do
+    "PLAN MODE: You are in read-only planning mode. Investigate with the " <>
+      "read-only tools (read_file, list_dir, grep, glob) and then propose a " <>
+      "concise, numbered plan. Do NOT call write_file, edit_file, or bash — " <>
+      "they are refused until the user leaves plan mode to execute."
   end
 
   # -- contract-event fold ----------------------------------------------------
@@ -296,20 +369,22 @@ defmodule Raxol.Agent.Code.App do
   defp item_type(payload) when is_map(payload),
     do: Map.get(payload, :item_type) || Map.get(payload, "item_type")
 
-  # -- approval ---------------------------------------------------------------
+  # -- authorization ----------------------------------------------------------
 
-  # Runs inside the react loop's process; blocks it until the app answers.
-  defp approval_authorizer(app) do
+  # The `:tool_authorizer`: runs inside the react loop's process and defers
+  # every sensitive tool call to the app for an Engine verdict, blocking until
+  # the app answers. Non-sensitive tools are allowed without a round-trip.
+  defp tool_authorizer(app) do
     fn module, _params, _context ->
       meta = module.__action_meta__()
 
       if Map.get(meta, :sensitive, false) do
         ref = make_ref()
-        send(app, {:command_result, {:approval_request, ref, self(), meta.name}})
+        send(app, {:command_result, {:authorize_request, ref, self(), meta.name}})
 
         receive do
-          {:approval_decision, ^ref, :allow} -> :ok
-          {:approval_decision, ^ref, :deny} -> {:deny, :user_denied}
+          {:authorize_decision, ^ref, :allow} -> :ok
+          {:authorize_decision, ^ref, {:deny, reason}} -> {:deny, reason}
         after
           @approval_timeout_ms -> {:deny, :approval_timeout}
         end
@@ -319,21 +394,54 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp decide_approval(%{pending_approval: %{}} = model, decision) do
-    reply_pending(model, decision)
-    face = if decision == :allow, do: :working, else: :thinking
-    %{model | pending_approval: nil, face_state: face}
+  # The ALLOW/ASK/DENY policy the Engine folds. Only sensitive (mutating)
+  # tools reach it — the closure allows the rest — so the `always_allow` and
+  # ASK arms already know the tool is mutating.
+  defp auth_policies do
+    [
+      Policy.new(
+        name: :coding_tools,
+        phases: [:tool_call],
+        scope: :session,
+        evaluate: fn ctx ->
+          cond do
+            ctx.plan_mode and ctx.mutating -> Verdict.deny(:plan_mode_read_only)
+            MapSet.member?(ctx.always_allow, ctx.tool) -> Verdict.allow()
+            true -> Verdict.ask("Allow #{ctx.tool}?")
+          end
+        end
+      )
+    ]
   end
 
-  defp decide_approval(model, _decision), do: model
+  defp allow_once(model) do
+    reply_pending(model, :allow)
+    %{model | pending_approval: nil, face_state: :working}
+  end
 
-  defp reply_pending(%{pending_approval: %{ref: ref, from: from}}, decision)
+  defp allow_always(%{pending_approval: %{name: name}} = model) do
+    reply_pending(model, :allow)
+
+    %{
+      model
+      | pending_approval: nil,
+        always_allow: MapSet.put(model.always_allow, name),
+        face_state: :working
+    }
+  end
+
+  defp deny_pending(model) do
+    reply_pending(model, {:deny, :user_denied})
+    %{model | pending_approval: nil, face_state: :thinking}
+  end
+
+  defp reply_pending(%{pending_approval: %{ref: ref, from: from}}, verdict)
        when is_pid(from) do
-    send(from, {:approval_decision, ref, decision})
+    send(from, {:authorize_decision, ref, verdict})
     :ok
   end
 
-  defp reply_pending(_model, _decision), do: :ok
+  defp reply_pending(_model, _verdict), do: :ok
 
   # -- view -------------------------------------------------------------------
 
@@ -369,24 +477,33 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp status_strip(model) do
-    face = AxolFace.glyph(model.face_state, model.face_frame, model.ascii)
+    face =
+      text(AxolFace.glyph(model.face_state, model.face_frame, model.ascii),
+        fg: AxolFace.color(model.face_state),
+        style: [:bold]
+      )
+
+    status = text(status_label(model), style: [:dim])
 
     row style: %{gap: 1} do
-      [
-        text(face, fg: AxolFace.color(model.face_state), style: [:bold]),
-        text(status_label(model), style: [:dim])
-      ]
+      [face] ++ plan_chip(model) ++ [status]
     end
   end
+
+  defp plan_chip(%{plan_mode: true}), do: [text("PLAN", fg: :yellow, style: [:bold])]
+  defp plan_chip(_model), do: []
 
   defp status_label(%{status_line: line}) when is_binary(line), do: line
   defp status_label(%{pending_approval: %{name: name}}), do: "awaiting approval: #{name}"
   defp status_label(%{running?: true}), do: "working…"
+  defp status_label(%{plan_mode: true}), do: "plan mode — read-only"
   defp status_label(_model), do: "ready"
 
   defp footer(%{pending_approval: %{name: name}}) do
     box style: %{border: :single, padding: 0} do
-      text("Allow #{name}? [y/N]  ·  Esc denies", fg: :yellow)
+      text("Allow #{name}?  [a]llow once · [s]always · [d]eny  ·  Esc denies",
+        fg: :yellow
+      )
     end
   end
 
