@@ -5,6 +5,7 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 ## Start Here
 
 - [Why OTP](WHY_OTP.md): why the BEAM runtime changes what's possible
+- [Philosophy](PHILOSOPHY.md): the one law behind every rendering decision -- what is shown must be a provable projection of what is, and the wrong thing must be unrepresentable
 - [Quickstart](getting-started/QUICKSTART.md): build your first terminal app
 - [Core Concepts](getting-started/CORE_CONCEPTS.md): architecture and design
 - [Component Gallery](getting-started/COMPONENT_GALLERY.md): all Components with examples

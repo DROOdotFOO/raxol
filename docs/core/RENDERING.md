@@ -111,6 +111,91 @@ by hand in a component, you are almost certainly in the wrong layer.
 
 ---
 
+## How a frame reaches the terminal
+
+The renderer diffs the grid and emits every frame — keyframe or diff — in one
+absolute-CUP vocabulary. `Raxol.Core.Runtime.Rendering.Backends.build_terminal_frame/4`
+holds the whole decision:
+
+- The previous frame is already in hand as `state.buffer`, so the grid is its
+  own diff basis. `keyframe?/3` is true on the first frame, on a `force_repaint`
+  (resume, resize), or when the dimensions change; otherwise the frame is a
+  diff.
+- A keyframe is a leading `\e[2J` followed by every row. A diff is only the rows
+  whose cells changed — `changed_rows/2` compares `prev.cells` against
+  `next.cells` row by row.
+- Either kind emits each row at its absolute position: `\e[y;1H\e[0m\e[2K` then
+  the row's bytes. There are no `\r\n` row-joins and no full-screen clear on the
+  common path.
+
+This is only safe because a row is a pure function of its own cells.
+`Raxol.Terminal.Renderer.render_row/2` carries no pen state from the row above —
+every run is `\e[0m`-terminated — so a row re-emitted in isolation is
+byte-identical to its slice of the full frame, and a diff never has to reason
+about what the row above left on the pen.
+
+Two consequences worth knowing:
+
+- A control byte or a standalone zero-width character in a cell is blanked at
+  the write boundary (`Backends.sanitize_char/1`). Under incremental rendering
+  nothing repaints a corrupted row, so an in-cell `\e`/`\n`/`\t` — which would
+  bleed onto the next row — must be made unrepresentable downstream. (A ZWJ
+  *inside* an emoji cluster is load-bearing and never reaches here alone, since
+  cells hold whole grapheme clusters.)
+- Style batching is on for this path (`Raxol.Terminal.Renderer.new/4` with
+  batching `true`): adjacent same-style cells merge into one SGR run,
+  round-trip-identical (each run still `\e[0m`-terminated) and far fewer bytes
+  on a styled UI.
+
+> **Proposed (not yet implemented).** A view could declare a cursor park at
+> the root of its element tree (a `Backends.declared_cursor/1` seam) so that
+> every frame kind ends with a park tail — DECTCEM show/hide plus an absolute
+> CUP — because the emitted rows moved the physical cursor and nothing else
+> puts it back. `build_terminal_frame/4` does not emit a park tail today; this
+> paragraph describes the intended design, not shipped behavior.
+
+---
+
+## Region prominence
+
+> **Proposed (not yet implemented).** This section describes an intended
+> design. None of the modules or functions named below
+> (`Raxol.UI.ColorResolver`, `Raxol.UI.ColorIntent`,
+> `Raxol.UI.RegionPolicy.region_prominence/4`,
+> `Raxol.UI.Layout.Engine.stamp_region_prominence/2`, `@region_gamma`) exist in
+> the codebase yet. Do not treat it as a reference to shipped behavior.
+
+Intent colors resolve to literals exactly once, at the render choke point:
+`Raxol.UI.ColorResolver` is the single whole-list pass that turns
+`Raxol.UI.ColorIntent` structs into concrete colors "as close to the terminal
+writer as this codebase gets". Focus-driven region dimming rides that same pass.
+
+- **The policy is pure.** `Raxol.UI.RegionPolicy.region_prominence/4` takes the
+  region paths present this frame, the focused path, and any mounted dimming
+  overlays, and returns `%{region_path => float}`. The focused region's whole
+  lineage — itself, its ancestors, and its descendants — stays at `1.0`, so a
+  focused input never dims its own panel; a peer region drops one ladder step
+  (`0.8`); each overlay multiplies everything outside its own subtree by `0.45`;
+  the product is floored at `0.4`, below which a region reads as a broken
+  terminal. With `focus: nil` and no overlays every region resolves to `1.0`, so
+  an app that never focuses a region and never opens an overlay renders
+  byte-identically to pre-region code.
+- **The engine wires it in.** `Raxol.UI.Layout.Engine.stamp_region_prominence/2`
+  stamps the resolved float on every positioned element — threading
+  `:focused_region` from the render context — as a transient marker the
+  `ColorResolver` reads and then strips. It is never a real cell attribute.
+- **The fade is closed-form.** Both foreground and background fade apparent
+  lightness toward the terminal ground and scale chroma by `p ** @region_gamma`,
+  where `@region_gamma = ln(0.65) / ln(0.45)`. That exponent is the exact solve
+  that reproduces the existing modal-dim look through the unified formula — the
+  modal dialog dim is just the `focus: nil`, single-overlay case of the general
+  policy.
+
+This is the same discipline as rule 3 above: prominence is granted by a solver
+against the user's real ground, never hand-set in a component.
+
+---
+
 ## Traps that have actually bitten us
 
 Each of these shipped. Each was invisible on an opaque black terminal with the

@@ -1,9 +1,7 @@
 # T0 verdict schema (`t0-verdict.json`)
 
 Date: 2026-07-15 · Status: **v1, matches the first real run**. Companion to
-`harness-ui-testing/01-t0-matrix.md` §7 (this is that schema, restated
-against the actual file `scripts/harness/t0/t0-verdict.json` produces) and
-to `t0-runbook.md` (how a human adds rows).
+the actual file `scripts/harness/t0/t0-verdict.json` produces, and to `t0-runbook.md` (how a human adds rows).
 
 ---
 

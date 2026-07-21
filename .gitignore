@@ -170,3 +170,6 @@ raxol-capabilities-items1-2.patch
 
 # Generated ACP offering metadata (regenerable via mix acp.register_offering)
 packages/raxol_acp/xochi-offering.json
+.idea/
+.ai/
+mise.local.toml
