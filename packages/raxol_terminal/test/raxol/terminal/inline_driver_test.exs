@@ -633,5 +633,145 @@ defmodule Raxol.Terminal.InlineDriverTest do
       assert Process.alive?(pid)
       GenServer.stop(pid)
     end
+
+    test "the wall-clock floor bounds stty re-asserts under a burst (no fork-per-chunk)",
+         %{sio: sio} do
+      # `isig_guard_every: 1` is due on every chunk, but a real (stty-forking)
+      # re-assert must not fire per byte: a fast paste / key-repeat delivers a
+      # burst of chunks, and forking a subprocess each one serializes input
+      # behind subprocess latency (and lets a flood amplify into unbounded
+      # spawns). With a large wall-clock floor, a 20-chunk burst re-asserts at
+      # most ONCE (the first), not 20 times. `isig_flags_reader: false` = ISIG
+      # reads on, so every guard that actually runs re-asserts.
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: true,
+          stty: InlineDriverMockStty,
+          install_reader?: false,
+          probe?: false,
+          isig_guard_every: 1,
+          isig_guard_interval_ms: 10_000,
+          isig_flags_reader: fn -> false end
+        )
+
+      feed(pid, 20)
+
+      # isig_report/1 is a GenServer call: it barriers behind all 20 chunks.
+      assert InlineDriver.isig_report(pid).reasserts <= 1
+
+      GenServer.stop(pid)
+    end
+
+    test "with the floor disabled (interval 0) the guard runs every chunk — pre-fix cost documented",
+         %{sio: sio} do
+      # The teeth for the test above: same burst, floor off, one fork PER chunk.
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: true,
+          stty: InlineDriverMockStty,
+          install_reader?: false,
+          probe?: false,
+          isig_guard_every: 1,
+          isig_guard_interval_ms: 0,
+          isig_flags_reader: fn -> false end
+        )
+
+      feed(pid, 5)
+
+      assert InlineDriver.isig_report(pid).reasserts == 5
+
+      GenServer.stop(pid)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # A held SHORT paste-open prefix (a lone ESC, or a torn `ESC[200~` head)
+  # is far more often the Escape key or a torn CSI than a real paste. It is
+  # buffered in `paste_pending` awaiting the marker's completion; without a
+  # deadline it stays hostage until the NEXT keystroke arrives, so `:escape`
+  # never fires on its own. The flush deadline releases it.
+  # ---------------------------------------------------------------------
+  describe "held paste-open prefix flush deadline" do
+    defp start_flush_driver(sio, flush_ms) do
+      {:ok, pid} =
+        InlineDriver.start_link(
+          device: sio,
+          subscriber: self(),
+          tty?: false,
+          stty_enabled?: false,
+          install_reader?: false,
+          probe?: false,
+          paste_flush_ms: flush_ms
+        )
+
+      pid
+    end
+
+    test "a lone ESC flushes to :escape after the deadline with no following keystroke",
+         %{sio: sio} do
+      pid = start_flush_driver(sio, 15)
+
+      feed_chunk(pid, "\e")
+
+      # Barrier: the ESC chunk is processed and held, nothing parsed yet.
+      :sys.get_state(pid)
+      refute_received {:inline_input, _}
+
+      # Fires on its own once the idle deadline elapses.
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :key,
+                        data: %{key: :escape}
+                      }},
+                     1_000
+
+      GenServer.stop(pid)
+    end
+
+    test "the held ESC fires exactly once (no stale-timer double-fire)",
+         %{sio: sio} do
+      pid = start_flush_driver(sio, 15)
+
+      feed_chunk(pid, "\e")
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{data: %{key: :escape}}},
+                     1_000
+
+      refute_receive {:inline_input, _}, 60
+
+      GenServer.stop(pid)
+    end
+
+    test "a genuine multi-chunk paste is never fragmented by the deadline",
+         %{sio: sio} do
+      # The open marker + content is longer than the marker, so it is NOT a
+      # flushable prefix: the deadline must leave the reassembly untouched
+      # even across a gap wider than the flush window.
+      pid = start_flush_driver(sio, 10)
+
+      feed_chunk(pid, "\e[200~hello")
+      # Wait well past the flush deadline before the close arrives.
+      Process.sleep(40)
+      feed_chunk(pid, "world\e[201~")
+
+      assert_receive {:inline_input,
+                      %Raxol.Core.Events.Event{
+                        type: :paste,
+                        data: %{text: "helloworld"}
+                      }},
+                     1_000
+
+      # No spurious :escape or key leaked from the held bytes.
+      refute_received {:inline_input, %Raxol.Core.Events.Event{type: :key}}
+
+      GenServer.stop(pid)
+    end
   end
 end

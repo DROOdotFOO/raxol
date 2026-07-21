@@ -380,4 +380,43 @@ defmodule Raxol.Terminal.Buffer.WriterFillCellsTest do
              "resolver mismatch in round #{round}"
     end
   end
+
+  # --- malformed coordinates are skipped, never crash the frame ----------
+  # A single write with a negative / non-integer coordinate is an extreme
+  # out-of-bounds cell. It must be skipped like any other out-of-bounds
+  # write -- NOT raise FunctionClauseError out of `group_by` (bad y) or the
+  # per-row fold (bad x) and abort the whole frame, taking every other
+  # cell in the batch down with it.
+  describe "malformed coordinates" do
+    for {label, bad} <- [
+          {"negative y", {2, -1, "Z", %{}}},
+          {"negative x", {-1, 2, "Z", %{}}},
+          {"non-integer y", {2, 1.5, "Z", %{}}},
+          {"non-integer x", {1.5, 2, "Z", %{}}},
+          {"nil y", {2, nil, "Z", %{}}},
+          {"nil x", {nil, 2, "Z", %{}}}
+        ] do
+      test "a cell with #{label} is skipped and the valid cells still apply" do
+        buffer = ScreenBuffer.new(10, 4)
+        good = [{3, 1, "A", %{foreground: :red}}, {0, 3, "B", %{}}]
+        cells = [unquote(Macro.escape(bad)) | good]
+
+        # No crash, and the result is exactly what dropping the bad cell gives.
+        assert Writer.fill_cells(buffer, cells) == Writer.fill_cells(buffer, good)
+      end
+    end
+
+    test "a batch of only malformed cells returns the buffer unchanged" do
+      buffer = ScreenBuffer.new(6, 3)
+
+      cells = [
+        {-1, 0, "A", %{}},
+        {0, -1, "B", %{}},
+        {2, 1.5, "C", %{}},
+        {nil, 0, "D", %{}}
+      ]
+
+      assert Writer.fill_cells(buffer, cells) == buffer
+    end
+  end
 end

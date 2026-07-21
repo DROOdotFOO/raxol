@@ -294,9 +294,16 @@ defmodule Raxol.Terminal.Buffer.Writer do
   def fill_cells(buffer, cells, style_resolver)
       when is_map(buffer) and is_list(cells) do
     by_row =
-      Enum.group_by(cells, fn {_x, y, _char, _style}
-                              when is_integer(y) and y >= 0 ->
-        y
+      Enum.group_by(cells, fn
+        {_x, y, _char, _style} when is_integer(y) and y >= 0 ->
+          y
+
+        # A negative / non-integer / malformed y is an extreme out-of-bounds
+        # write: bucket it under a sentinel key the row scan never looks up,
+        # so one bad coordinate is skipped like any other out-of-bounds cell
+        # instead of raising FunctionClauseError and aborting the whole frame.
+        _ ->
+          :__out_of_bounds__
       end)
 
     height = buffer.height
@@ -327,24 +334,30 @@ defmodule Raxol.Terminal.Buffer.Writer do
     original = List.to_tuple(row)
 
     {written, memo} =
-      Enum.reduce(row_cells, {%{}, memo}, fn {x, _y, char, style}, {written, memo}
-                                             when is_integer(x) and x >= 0 ->
-        case x < width do
-          true ->
-            write_into(
-              written,
-              memo,
-              original,
-              x,
-              char,
-              style,
-              width,
-              style_resolver
-            )
+      Enum.reduce(row_cells, {%{}, memo}, fn
+        {x, _y, char, style}, {written, memo}
+        when is_integer(x) and x >= 0 ->
+          case x < width do
+            true ->
+              write_into(
+                written,
+                memo,
+                original,
+                x,
+                char,
+                style,
+                width,
+                style_resolver
+              )
 
-          false ->
-            {written, memo}
-        end
+            false ->
+              {written, memo}
+          end
+
+        # Negative / non-integer / malformed x: skip this cell (same as an
+        # out-of-bounds write) rather than crashing the whole row's fold.
+        _cell, {written, memo} ->
+          {written, memo}
       end)
 
     case map_size(written) do

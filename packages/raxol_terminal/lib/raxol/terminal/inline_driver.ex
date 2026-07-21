@@ -142,6 +142,21 @@ defmodule Raxol.Terminal.InlineDriver do
   # one that never will, and the caller falls back honestly.
   @default_cursor_probe_budget_ms 300
   @isig_confirmations 3
+  # Default wall-clock floor between two real (stty-forking) isig guard
+  # passes on the live path. Well under a human keypress-to-keypress gap,
+  # so normal typing still re-asserts on the next key, but a burst/paste
+  # flood forks at most ~one stty per this window instead of one per byte.
+  @isig_guard_interval_ms 40
+  # Default idle deadline to flush a held short paste-open prefix (lone ESC
+  # / torn marker head) so the key fires without waiting for the next
+  # keystroke. Terminals stream a real bracketed paste as a sub-millisecond
+  # burst, so this gap never fragments a genuine paste.
+  @paste_flush_ms 40
+  # Bracketed-paste markers (`ESC[200~` open, `ESC[201~` close). Defined
+  # with the other module attributes so the paste-flush helpers above the
+  # reassembly code can read the open marker's length.
+  @paste_open <<27, 91, 50, 48, 48, 126>>
+  @paste_close <<27, 91, 50, 48, 49, 126>>
 
   defmodule State do
     @moduledoc false
@@ -157,12 +172,17 @@ defmodule Raxol.Terminal.InlineDriver do
               torn_down?: false,
               isig_guard_every: 0,
               isig_guard_count: 0,
+              isig_guard_interval_ms: 0,
+              isig_last_guard_ms: nil,
               isig_flags_reader: nil,
               isig_boot_confirmed?: false,
               isig_reasserts: 0,
               reader_mode: :prim_tty,
               reader_port: nil,
-              paste_pending: <<>>
+              paste_pending: <<>>,
+              paste_flush_ms: 0,
+              paste_flush_ref: nil,
+              paste_flush_token: 0
 
     @type t :: %__MODULE__{
             dispatcher_pid: pid() | nil,
@@ -177,6 +197,11 @@ defmodule Raxol.Terminal.InlineDriver do
             torn_down?: boolean(),
             isig_guard_every: non_neg_integer(),
             isig_guard_count: non_neg_integer(),
+            # Minimum wall-clock gap (ms) between two real stty-forking guard
+            # passes; bounds subprocess spawns under a burst/paste/key-repeat
+            # flood. `0` disables the throttle (guard runs every cadence hit).
+            isig_guard_interval_ms: non_neg_integer(),
+            isig_last_guard_ms: integer() | nil,
             isig_flags_reader: (-> boolean()) | nil,
             isig_boot_confirmed?: boolean(),
             isig_reasserts: non_neg_integer(),
@@ -184,7 +209,13 @@ defmodule Raxol.Terminal.InlineDriver do
             reader_port: port() | nil,
             # Held bytes of a bracketed paste whose `ESC[201~` close has not
             # arrived yet -- see `dispatch_input/2`'s reassembly note.
-            paste_pending: binary()
+            paste_pending: binary(),
+            # Flush deadline (ms) for a held short paste-open PREFIX (a lone
+            # ESC or torn marker head) that turns out not to be a paste; `0`
+            # disables. See `arm_paste_flush/1`.
+            paste_flush_ms: non_neg_integer(),
+            paste_flush_ref: reference() | nil,
+            paste_flush_token: non_neg_integer()
           }
   end
 
@@ -225,8 +256,37 @@ defmodule Raxol.Terminal.InlineDriver do
         if(install_reader? and stty_enabled?, do: 1, else: 0)
       )
 
+    # ...but "every chunk" must not mean "fork stty on every byte": a fast
+    # paste / held-key repeat delivers thousands of chunks in a burst, and
+    # forking a subprocess synchronously per chunk serializes input behind
+    # subprocess latency (and lets a hostile flood amplify into unbounded
+    # spawns). The wall-clock floor bounds real (stty-forking) guard passes
+    # to at most one per interval while still firing on the very next
+    # keypress under normal typing, where chunks arrive far apart. `0`
+    # disables the floor (test/readerless default).
+    isig_guard_interval_ms =
+      Keyword.get(
+        opts,
+        :isig_guard_interval_ms,
+        if(install_reader? and stty_enabled?, do: @isig_guard_interval_ms, else: 0)
+      )
+
     isig_flags_reader =
       Keyword.get(opts, :isig_flags_reader, &Stty.isig_off?/0)
+
+    # A held short paste-open prefix (a lone ESC, or a torn `ESC[200~` head
+    # riding a chunk boundary) is far more often the Escape key or a torn
+    # CSI than a real bracketed paste. Without a deadline it stays buffered
+    # until the NEXT keystroke arrives, so `:escape` never fires on its own.
+    # Flush the held prefix after this idle gap so the key fires promptly;
+    # a genuine paste (open marker + content, > marker length) is never
+    # subject to the flush. `0` disables (readerless/test default).
+    paste_flush_ms =
+      Keyword.get(
+        opts,
+        :paste_flush_ms,
+        if(install_reader?, do: @paste_flush_ms, else: 0)
+      )
 
     # Which stdin reader to arm (`install_reader?` true):
     #
@@ -259,8 +319,10 @@ defmodule Raxol.Terminal.InlineDriver do
       tty?: tty?,
       rows: rows,
       isig_guard_every: isig_guard_every,
+      isig_guard_interval_ms: isig_guard_interval_ms,
       isig_flags_reader: isig_flags_reader,
-      reader_mode: reader_mode
+      reader_mode: reader_mode,
+      paste_flush_ms: paste_flush_ms
     }
 
     state =
@@ -431,6 +493,24 @@ defmodule Raxol.Terminal.InlineDriver do
   def handle_manager_info({:EXIT, _pid, _reason}, state) do
     {:noreply, state}
   end
+
+  # The held short paste-open prefix idled past its flush deadline with no
+  # further input (a fresh chunk would have re-armed with a new token), so
+  # it was not a paste after all -- a lone ESC or a torn CSI/marker head.
+  # Parse the held bytes now so `:escape` (etc.) fires without waiting for
+  # the next keystroke. A stale token (superseded by later input) is
+  # ignored: its `paste_pending` has already moved on.
+  @impl true
+  def handle_manager_info({:paste_flush, token}, %State{paste_flush_token: token} = state) do
+    state.paste_pending
+    |> safe_parse()
+    |> Enum.each(&notify(state.subscriber, &1))
+
+    {:noreply, %{state | paste_pending: <<>>, paste_flush_ref: nil}}
+  end
+
+  @impl true
+  def handle_manager_info({:paste_flush, _stale}, state), do: {:noreply, state}
 
   @impl true
   def handle_manager_info(_other, state), do: {:noreply, state}
@@ -642,13 +722,55 @@ defmodule Raxol.Terminal.InlineDriver do
     |> safe_parse()
     |> Enum.each(&notify(state.subscriber, &1))
 
+    # Fresh input landed, so any previously-armed prefix flush is stale:
+    # re-arm from the new pending (a short held prefix -> a new deadline; a
+    # real paste-in-progress or an empty tail -> no timer).
+    state = arm_paste_flush(%{state | paste_pending: pending})
+
     # AFTER forwarding: the guard's stty spawn must never delay the
     # keystroke that carried us here -- it protects the NEXT one.
-    {:noreply, maybe_guard_isig(%{state | paste_pending: pending})}
+    {:noreply, maybe_guard_isig(state)}
   end
 
-  @paste_open <<27, 91, 50, 48, 48, 126>>
-  @paste_close <<27, 91, 50, 48, 49, 126>>
+  # A held tail that is only a SHORT paste-open prefix (<= the marker's own
+  # length: a lone ESC, `ESC[`, ... `ESC[200`) is much more likely the
+  # Escape key or a torn CSI than a real bracketed paste, which is an open
+  # marker FOLLOWED BY content (strictly longer). Arm an idle deadline so
+  # the prefix flushes and its key fires on its own; cancel any prior arm.
+  # A real paste-in-progress tail (longer than the marker) and an empty
+  # tail get no timer -- behaviour there is unchanged.
+  defp arm_paste_flush(state) do
+    state = cancel_paste_flush(state)
+
+    if state.paste_flush_ms > 0 and flushable_prefix?(state.paste_pending) do
+      token = state.paste_flush_token + 1
+
+      ref =
+        Process.send_after(self(), {:paste_flush, token}, state.paste_flush_ms)
+
+      %{state | paste_flush_ref: ref, paste_flush_token: token}
+    else
+      state
+    end
+  end
+
+  defp cancel_paste_flush(%State{paste_flush_ref: nil} = state), do: state
+
+  defp cancel_paste_flush(%State{paste_flush_ref: ref} = state) do
+    Process.cancel_timer(ref)
+    %{state | paste_flush_ref: nil}
+  end
+
+  # Only a STRICT prefix (1 .. marker length - 1 bytes) is ambiguous: a lone
+  # ESC or a torn `ESC[200~` head. A complete open marker (>= its own length)
+  # is a real paste starting -- leave it to the reassembly path / the
+  # @max_paste_buffer valve, never flush it.
+  defp flushable_prefix?(pending)
+       when byte_size(pending) > 0 and byte_size(pending) < byte_size(@paste_open),
+       do: true
+
+  defp flushable_prefix?(_pending), do: false
+
   # Safety valve: a terminal that opens a paste and never closes it (or a
   # multi-megabyte paste) must not pin memory unbounded. Past this, flush
   # what we have -- `InputParser`'s own open-without-close branch still
@@ -968,18 +1090,38 @@ defmodule Raxol.Terminal.InlineDriver do
   # best-effort janitorial work, counted in `isig_reasserts` and surfaced
   # only on request via `isig_report/1` (no live subscriber notice).
   # `0` disables.
+  #
+  # A wall-clock floor (`isig_guard_interval_ms`) sits on top of the chunk
+  # cadence: even once the cadence is due, a real (subprocess-forking) pass
+  # only runs if at least that many ms have elapsed since the last one, so
+  # a burst/paste/key-repeat flood cannot fork stty per byte. Normal typing
+  # (chunks far apart) is unaffected and still re-asserts on the next key.
   defp maybe_guard_isig(%State{isig_guard_every: every} = state)
        when is_integer(every) and every > 0 do
     count = state.isig_guard_count + 1
 
-    if count >= every do
-      guard_isig_now(%{state | isig_guard_count: 0})
+    if count >= every and guard_interval_elapsed?(state) do
+      guard_isig_now(%{state | isig_guard_count: 0, isig_last_guard_ms: now_ms()})
     else
       %{state | isig_guard_count: count}
     end
   end
 
   defp maybe_guard_isig(state), do: state
+
+  # No floor configured, or no guard has run yet -> the cadence hit stands.
+  defp guard_interval_elapsed?(%State{isig_guard_interval_ms: ms}) when ms <= 0,
+    do: true
+
+  defp guard_interval_elapsed?(%State{isig_last_guard_ms: nil}), do: true
+
+  defp guard_interval_elapsed?(%State{
+         isig_guard_interval_ms: ms,
+         isig_last_guard_ms: last
+       }),
+       do: now_ms() - last >= ms
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp guard_isig_now(state) do
     if state.isig_flags_reader.() do
