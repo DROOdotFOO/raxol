@@ -320,7 +320,12 @@ jobs:
       
       - name: Run property tests
         run: |
-          mix test test/property
+          # Run test/property by path, but still honor skip_on_ci: some
+          # properties are wall-clock timing assertions (e.g. parser
+          # sub-quadratic scaling) tagged skip_on_ci precisely because they
+          # flake on shared CI runners. By path alone they would run and
+          # flake; exclude them like every other CI lane.
+          mix test test/property --exclude skip_on_ci
         env:
           MIX_TEST_PARTITION: 3
       
