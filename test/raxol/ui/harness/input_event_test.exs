@@ -899,4 +899,87 @@ defmodule Raxol.UI.Harness.InputEventTest do
       refute String.contains?(norm.text, "\e")
     end
   end
+
+  describe "normalize/1 -- idempotence (the SessionPump contract)" do
+    # PumpContract §4: the live pump normalizes at its boundary, and
+    # HarnessApp.Model.handle_key/2 normalizes again for its own routing.
+    # A second pass must be a no-op -- before this property held, the
+    # second pass read mods as all-false (un-pressing Ctrl on every live
+    # chord) and buried the original Event one :raw level too deep for
+    # component dispatch.
+
+    test "a normalized char map passes through unchanged" do
+      norm = InputEvent.normalize(Event.key("x"))
+      assert InputEvent.normalize(norm) == norm
+      assert norm.raw != nil
+    end
+
+    test "ctrl chords survive the double pass (the quit-protocol bug)" do
+      norm =
+        InputEvent.normalize(%Event{
+          type: :key,
+          data: %{key: "c", state: :pressed, modifiers: [:ctrl]}
+        })
+
+      twice = InputEvent.normalize(norm)
+      assert twice.mods.ctrl == true
+      assert twice == norm
+    end
+
+    test "a normalized special key keeps its key atom and :raw Event" do
+      event = Event.key_event(:enter, :pressed, [])
+      norm = InputEvent.normalize(event)
+      twice = InputEvent.normalize(norm)
+
+      assert twice.kind == :key
+      assert twice.key == :enter
+      assert twice.raw == event
+    end
+
+    test "the paste shape is idempotent too" do
+      norm = InputEvent.normalize(Event.paste_event("hello", {0, 0}))
+      assert InputEvent.normalize(norm) == norm
+    end
+
+    # The fast path must recognize only GENUINELY-normalized events (the
+    # canonical four-key mods shape), never any map that merely carries a
+    # `kind` and some `mods` field. `mods: %{}` matches ANY map, so before
+    # this a crafted map short-circuited the normalizer and returned its
+    # unsanitized content verbatim.
+    test "a paste-shaped map with empty mods is NOT trusted verbatim -- it is re-sanitized" do
+      hostile = %{kind: :paste, text: "\e[2J\e]0;pwned\ahi", mods: %{}}
+
+      result = InputEvent.normalize(hostile)
+
+      # Fell through to real paste normalization: ESC/BEL control bytes are
+      # stripped, not passed through to an insertion sink.
+      refute result.text =~ "\e"
+      refute result.text =~ "\a"
+      assert result.text =~ "hi"
+    end
+
+    test "a partial-mods map is re-normalized to the canonical mods shape" do
+      partial = %{kind: :char, char: "a", mods: %{ctrl: true}}
+
+      result = InputEvent.normalize(partial)
+
+      # Not returned unchanged: mods is rebuilt to the full four-key shape
+      # so text?/1 and shortcut?/1 clause heads bind.
+      assert Map.keys(result.mods) |> Enum.sort() == [:alt, :ctrl, :meta, :shift]
+    end
+
+    test "a fully-canonical map (all four mods keys) still passes through unchanged" do
+      norm = %{
+        kind: :char,
+        char: "a",
+        key: nil,
+        text: nil,
+        mods: %{ctrl: false, alt: false, shift: false, meta: false},
+        state: nil,
+        raw: :original
+      }
+
+      assert InputEvent.normalize(norm) == norm
+    end
+  end
 end
