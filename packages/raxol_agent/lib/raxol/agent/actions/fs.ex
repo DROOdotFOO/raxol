@@ -61,35 +61,72 @@ defmodule Raxol.Agent.Actions.Fs do
       name: "read_file",
       description:
         "Read a text file (relative to the current working directory). " <>
-          "Returns at most the first 16KB.",
+          "Optionally read a line range with `offset` (1-based start line) " <>
+          "and `limit` (line count). Returns at most 256KB; `truncated` " <>
+          "flags when the content was longer.",
       schema: [
         input: [
-          path: [type: :string, required: true, description: "File to read"]
+          path: [type: :string, required: true, description: "File to read"],
+          offset: [
+            type: :integer,
+            description: "1-based line to start from (with `limit`)"
+          ],
+          limit: [
+            type: :integer,
+            description: "Number of lines to read from `offset`"
+          ]
         ],
         output: [
           path: [type: :string],
           content: [type: :string],
-          truncated: [type: :boolean]
+          truncated: [type: :boolean],
+          offset: [type: :integer],
+          line_count: [type: :integer]
         ]
       ]
 
-    @max_bytes 16_384
+    @max_bytes 262_144
 
     @impl true
-    def run(%{path: path}, _context) do
+    def run(%{path: path} = params, _context) do
       with {:ok, abs} <- Raxol.Agent.Actions.Fs.resolve(path),
            {:ok, content} <- File.read(abs) do
-        truncated = byte_size(content) > @max_bytes
-
-        {:ok,
-         %{
-           path: path,
-           content: binary_part(content, 0, min(byte_size(content), @max_bytes)),
-           truncated: truncated
-         }}
+        {:ok, slice(path, content, Map.get(params, :offset), Map.get(params, :limit))}
       else
         {:error, reason} -> {:error, reason}
       end
+    end
+
+    # Whole-file read: cap at @max_bytes.
+    defp slice(path, content, nil, nil) do
+      truncated = byte_size(content) > @max_bytes
+
+      %{
+        path: path,
+        content: binary_part(content, 0, min(byte_size(content), @max_bytes)),
+        truncated: truncated,
+        offset: 1,
+        line_count: content |> String.split("\n") |> length()
+      }
+    end
+
+    # Line-range read: 1-based `offset`, optional `limit` lines. A blank
+    # `limit` reads to end of file.
+    defp slice(path, content, offset, limit) do
+      start = max(offset || 1, 1)
+      lines = String.split(content, "\n")
+      dropped = Enum.drop(lines, start - 1)
+      taken = if is_integer(limit), do: Enum.take(dropped, limit), else: dropped
+      text = Enum.join(taken, "\n")
+      truncated = byte_size(text) > @max_bytes
+
+      %{
+        path: path,
+        content: binary_part(text, 0, min(byte_size(text), @max_bytes)),
+        truncated: truncated,
+        offset: start,
+        line_count: length(taken)
+      }
     end
   end
 
