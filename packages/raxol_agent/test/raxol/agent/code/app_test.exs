@@ -14,7 +14,16 @@ defmodule Raxol.Agent.Code.AppTest do
   end
 
   defp new_model(opts \\ []) do
-    App.init(%{options: Keyword.put_new(opts, :runner, stub_runner())})
+    opts =
+      opts
+      |> Keyword.put_new(:runner, stub_runner())
+      |> Keyword.put_new(:sessions_dir, tmp_dir())
+
+    App.init(%{options: opts})
+  end
+
+  defp tmp_dir do
+    Path.join(System.tmp_dir!(), "raxol-code-app-#{System.unique_integer([:positive])}")
   end
 
   defp key(k, mods \\ []), do: Event.key_event(k, :pressed, mods)
@@ -35,6 +44,8 @@ defmodule Raxol.Agent.Code.AppTest do
     {model, []} = App.update({:command_result, {:contract_event, event}}, model)
     model
   end
+
+  defp submit(model, text), do: App.update(key(:enter), %{model | input: text})
 
   describe "init/1" do
     test "starts idle with an empty prompt" do
@@ -222,7 +233,11 @@ defmodule Raxol.Agent.Code.AppTest do
       # the streamer, pumps Stream.react through Contract, and relays contract
       # events back here. `self()` is the app, so those events arrive as
       # {:command_result, _} messages we feed back into update/2.
-      model = App.init(%{options: [backend_opts: [response: "hello from mock"]]})
+      model =
+        App.init(%{
+          options: [backend_opts: [response: "hello from mock"], sessions_dir: tmp_dir()]
+        })
+
       model = %{model | input: "say hi"}
       {model, []} = App.update(key(:enter), model)
       assert model.running?
@@ -237,6 +252,13 @@ defmodule Raxol.Agent.Code.AppTest do
       assert Enum.any?(projection.blocks, fn block ->
                Raxol.UI.Components.Harness.Block.search_text(block) =~
                  "hello from mock"
+             end)
+
+      # Conversation memory: the turn is now in the message history.
+      assert %{role: :user, content: "say hi"} in model.messages
+
+      assert Enum.any?(model.messages, fn m ->
+               m.role == :assistant and m.content =~ "hello from mock"
              end)
     end
   end
@@ -270,6 +292,94 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.face_state == :done
       # The projection + Block.render path must not raise.
       assert %{} = App.view(model)
+    end
+  end
+
+  describe "conversation memory" do
+    test "a submitted prompt enters the message history" do
+      model = %{new_model() | input: "list files"}
+      {model, []} = App.update(key(:enter), model)
+      assert %{role: :user, content: "list files"} in model.messages
+    end
+
+    test "a completed turn appends the assistant reply and persists it" do
+      dir = tmp_dir()
+      model = App.init(%{options: [runner: stub_runner(), sessions_dir: dir]})
+      model = %{model | input: "hi"}
+      {model, []} = App.update(key(:enter), model)
+
+      model =
+        model
+        |> send_ev(ev(1, :turn_started, %{prompt: "hi"}))
+        |> send_ev(ev(2, :item_completed, %{item_id: "i1", item_type: :message, content: "done"}))
+        |> send_ev(ev(3, :turn_completed, %{final: true, usage: %{}}))
+
+      assert List.last(model.messages) == %{role: :assistant, content: "done"}
+      assert {:ok, saved} = Raxol.Agent.Code.Store.load(dir, model.session_key)
+      assert List.last(saved.messages) == %{role: :assistant, content: "done"}
+    end
+  end
+
+  describe "resume" do
+    test "init with a saved session_key reloads its messages" do
+      dir = tmp_dir()
+      msgs = [%{role: :user, content: "earlier"}, %{role: :assistant, content: "reply"}]
+      :ok = Raxol.Agent.Code.Store.save(dir, "sess-x", %{messages: msgs})
+
+      model =
+        App.init(%{
+          options: [runner: stub_runner(), sessions_dir: dir, session_key: "sess-x"]
+        })
+
+      assert model.messages == msgs
+      assert model.status_line =~ "resumed 2"
+    end
+
+    test "resuming a missing session starts fresh with a notice" do
+      model =
+        App.init(%{
+          options: [runner: stub_runner(), sessions_dir: tmp_dir(), session_key: "nope"]
+        })
+
+      assert model.messages == []
+      assert model.status_line =~ "not found"
+    end
+  end
+
+  describe "slash commands" do
+    test "/help shows a notice and does not start a turn" do
+      {model, []} = submit(new_model(), "/help")
+      assert model.notice =~ "/clear"
+      assert model.running? == false
+    end
+
+    test "/model sets the override" do
+      {model, []} = submit(new_model(), "/model gpt-4o")
+      assert model.model_override == "gpt-4o"
+      assert model.notice =~ "gpt-4o"
+    end
+
+    test "/plan toggles plan mode" do
+      {model, []} = submit(new_model(), "/plan")
+      assert model.plan_mode == true
+    end
+
+    test "/clear starts a fresh session" do
+      model = %{new_model() | messages: [%{role: :user, content: "x"}]}
+      previous_key = model.session_key
+      {model, []} = submit(model, "/clear")
+      assert model.messages == []
+      assert model.session_key != previous_key
+    end
+
+    test "/context reports stats" do
+      {model, []} = submit(new_model(), "/context")
+      assert model.notice =~ "messages: 0"
+    end
+
+    test "an unknown command reports itself" do
+      {model, []} = submit(new_model(), "/frobnicate")
+      assert model.notice =~ "unknown command"
     end
   end
 end

@@ -7,19 +7,29 @@ defmodule Mix.Tasks.Raxol.Code do
 
       mix raxol.code
       mix raxol.code --harness anthropic --model claude-sonnet-5
-      mix raxol.code --ascii            # ASCII-only face for legacy terminals
+      mix raxol.code --continue          # resume the most recent session
+      mix raxol.code --resume sess-123-4  # resume a specific session
+      mix raxol.code --sessions          # list saved sessions and exit
+      mix raxol.code --ascii             # ASCII-only face for legacy terminals
 
   It boots `Raxol.Agent.Code.App`, a TEA app that owns a coding loop over
   the harness contract: type a prompt, watch the agent stream reasoning,
   read files, and (with your per-call approval) write files and run shell
-  commands scoped to the current working directory.
+  commands scoped to the current working directory. The conversation is
+  persisted per session, so `--continue`/`--resume` reattach it.
 
   ## Keys
 
-    * type + Enter — send a prompt
-    * `y` / `n`     — answer a tool-approval prompt
+    * type + Enter — send a prompt (or a `/command`)
+    * `a` / `s` / `d` — answer a tool-approval prompt (once / always / deny)
+    * Shift+Tab / Ctrl+P — toggle plan mode
     * Esc           — deny a pending approval, else interrupt the turn
     * Ctrl+C        — quit
+
+  ## Slash commands
+
+  `/help` · `/clear` · `/model <name>` · `/plan` · `/compact` · `/context`
+  · `/sessions`
 
   ## Options
 
@@ -28,16 +38,24 @@ defmodule Mix.Tasks.Raxol.Code do
     * `--model`    — model override
     * `--base-url` — override the backend base URL
     * `--system`   — system prompt override
+    * `--continue` — resume the most recently updated session
+    * `--resume ID`— resume a specific session by id
+    * `--sessions` — print saved sessions and exit
     * `--ascii`    — ASCII-only face (no `≡`/`·`)
   """
 
   use Mix.Task
+
+  alias Raxol.Agent.Code.Store
 
   @switches [
     harness: :string,
     model: :string,
     base_url: :string,
     system: :string,
+    continue: :boolean,
+    resume: :string,
+    sessions: :boolean,
     ascii: :boolean
   ]
 
@@ -45,9 +63,23 @@ defmodule Mix.Tasks.Raxol.Code do
   def run(argv) do
     {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)
 
-    case invalid do
-      [] -> launch(opts)
-      _ -> usage_error("unknown options: #{inspect(invalid)}")
+    cond do
+      invalid != [] -> usage_error("unknown options: #{inspect(invalid)}")
+      Keyword.get(opts, :sessions, false) -> print_sessions()
+      true -> launch(opts)
+    end
+  end
+
+  defp print_sessions do
+    dir = Store.default_dir()
+
+    case Store.list(dir) do
+      [] ->
+        IO.puts("no saved sessions in #{dir}")
+
+      sessions ->
+        IO.puts("saved sessions in #{dir}:")
+        Enum.each(sessions, fn s -> IO.puts("  #{s.id}  (#{s.message_count} msgs)") end)
     end
   end
 
@@ -73,7 +105,17 @@ defmodule Mix.Tasks.Raxol.Code do
     |> put_if(:executor, executor)
     |> Keyword.put(:backend_opts, backend_opts)
     |> put_if(:system, Keyword.get(opts, :system))
+    |> put_if(:model, Keyword.get(opts, :model))
+    |> put_if(:session_key, resolve_session(opts))
     |> Keyword.put(:ascii, Keyword.get(opts, :ascii, false))
+  end
+
+  defp resolve_session(opts) do
+    cond do
+      key = Keyword.get(opts, :resume) -> key
+      Keyword.get(opts, :continue, false) -> Store.latest(Store.default_dir())
+      true -> nil
+    end
   end
 
   defp build_executor(opts) do

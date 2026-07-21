@@ -71,27 +71,37 @@ defmodule Raxol.Agent.Code.App do
   @impl true
   def init(context) do
     options = Map.get(context, :options, [])
+    {sessions_dir, session_key, messages, resume_notice} = init_session(options)
 
     %{
       input: "",
       # Normalized projection events (durable + ephemeral), arrival order.
       events: [],
+      # The LLM conversation carried across turns (persisted per session).
+      messages: messages,
+      # Assistant text accumulated during the in-flight turn.
+      turn_answer: "",
       face_state: :idle,
       face_frame: 0,
       running?: false,
       worker: nil,
       session_id: nil,
       pending_approval: nil,
-      status_line: nil,
+      status_line: resume_notice,
+      notice: nil,
       # Authorization: plan mode + per-tool "always allow" memory. The Engine
       # is the ALLOW/ASK/DENY decision core; per-tool memory is app state fed
       # into the policy context (the Engine's own memory is per-policy).
       plan_mode: false,
       always_allow: MapSet.new(),
       auth_state: Engine.new(),
+      # Session persistence.
+      session_key: session_key,
+      sessions_dir: sessions_dir,
       ascii: Keyword.get(options, :ascii, false),
       executor: Keyword.get(options, :executor),
       backend_opts: Keyword.get(options, :backend_opts, []),
+      model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
       actions: Keyword.get(options, :actions, default_actions()),
       # Injectable so tests drive the loop without spawning a real turn.
@@ -99,6 +109,31 @@ defmodule Raxol.Agent.Code.App do
       width: Map.get(context, :width, 80),
       height: Map.get(context, :height, 24)
     }
+  end
+
+  # Resolve the session to write to and any conversation to resume. A
+  # `:session_key` option (set by `--continue`/`--resume`) reattaches that
+  # session's messages; absent, a fresh session is minted.
+  defp init_session(options) do
+    dir = Keyword.get(options, :sessions_dir) || Raxol.Agent.Code.Store.default_dir()
+
+    case Keyword.get(options, :session_key) do
+      nil ->
+        {dir, mint_session_key(), [], nil}
+
+      key ->
+        case Raxol.Agent.Code.Store.load(dir, key) do
+          {:ok, %{messages: messages}} ->
+            {dir, key, messages, "resumed #{length(messages)} messages"}
+
+          {:error, _} ->
+            {dir, key, [], "session #{key} not found — starting fresh"}
+        end
+    end
+  end
+
+  defp mint_session_key do
+    "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
   end
 
   # -- update: keyboard -------------------------------------------------------
@@ -200,6 +235,7 @@ defmodule Raxol.Agent.Code.App do
   defp handle_key(:enter, model) do
     case String.trim(model.input) do
       "" -> {model, []}
+      "/" <> _ = command -> dispatch_slash(%{model | input: ""}, command)
       prompt -> {start_turn(model, prompt), []}
     end
   end
@@ -233,14 +269,18 @@ defmodule Raxol.Agent.Code.App do
     ensure_streamer!()
     app = self()
 
-    opts = [
-      backend_opts: model.backend_opts,
-      system_prompt: system_prompt(model),
-      actions: model.actions,
-      context: %{tool_authorizer: tool_authorizer(app)}
-    ]
+    messages = model.messages ++ [%{role: :user, content: prompt}]
 
-    opts = maybe_put(opts, :executor, model.executor)
+    opts =
+      [
+        backend_opts: model.backend_opts,
+        system_prompt: system_prompt(model),
+        actions: model.actions,
+        messages: messages,
+        context: %{tool_authorizer: tool_authorizer(app)}
+      ]
+      |> maybe_put(:executor, model.executor)
+      |> maybe_put(:model, model.model_override)
 
     worker = model.runner.(session_id, prompt, opts, app)
 
@@ -249,9 +289,12 @@ defmodule Raxol.Agent.Code.App do
       | running?: true,
         worker: worker,
         session_id: session_id,
+        messages: messages,
+        turn_answer: "",
         face_state: :thinking,
         face_frame: 0,
         status_line: nil,
+        notice: nil,
         input: ""
     }
   end
@@ -319,7 +362,7 @@ defmodule Raxol.Agent.Code.App do
   defp fold_event(event, normalized, model) do
     running? = model.running? and not terminal_event?(event)
 
-    %{
+    model = %{
       model
       | events: model.events ++ [normalized],
         face_state: face_for_event(event, model.face_state),
@@ -328,6 +371,58 @@ defmodule Raxol.Agent.Code.App do
         worker: if(running?, do: model.worker, else: nil),
         status_line: if(running?, do: model.status_line, else: nil)
     }
+
+    model
+    |> accumulate_answer(event)
+    |> finalize_turn(event)
+  end
+
+  # A completed message item is assistant answer text — accumulate it so the
+  # conversation memory gets the reply when the turn closes.
+  defp accumulate_answer(model, %{type: :item_completed, payload: payload}) do
+    case item_type(payload) do
+      :message ->
+        %{model | turn_answer: model.turn_answer <> to_string(payload_content(payload))}
+
+      _other ->
+        model
+    end
+  end
+
+  defp accumulate_answer(model, _event), do: model
+
+  # On a successful turn boundary, append the assistant reply to the
+  # conversation and persist it. An error turn persists without appending a
+  # (possibly partial) reply.
+  defp finalize_turn(model, %{type: :turn_completed, payload: payload}) do
+    if final?(payload) do
+      messages = append_assistant(model.messages, model.turn_answer)
+      persist(%{model | messages: messages, turn_answer: ""})
+    else
+      model
+    end
+  end
+
+  defp finalize_turn(model, %{type: :error}), do: persist(%{model | turn_answer: ""})
+  defp finalize_turn(model, _event), do: model
+
+  defp append_assistant(messages, answer) do
+    case String.trim(answer) do
+      "" -> messages
+      trimmed -> messages ++ [%{role: :assistant, content: trimmed}]
+    end
+  end
+
+  defp payload_content(payload),
+    do: Map.get(payload, :content) || Map.get(payload, "content") || ""
+
+  defp persist(model) do
+    case Raxol.Agent.Code.Store.save(model.sessions_dir, model.session_key, %{
+           messages: model.messages
+         }) do
+      :ok -> model
+      {:error, reason} -> %{model | status_line: "session save failed: #{inspect(reason)}"}
+    end
   end
 
   # Map a contract event to the face state it should show.
@@ -443,18 +538,124 @@ defmodule Raxol.Agent.Code.App do
 
   defp reply_pending(_model, _verdict), do: :ok
 
+  # -- slash commands ---------------------------------------------------------
+
+  defp dispatch_slash(model, command) do
+    {name, arg} = parse_command(command)
+
+    case name do
+      "help" -> {notice(model, help_text()), []}
+      "clear" -> {clear_session(model), []}
+      "plan" -> {maybe_toggle_plan_mode(model), []}
+      "model" -> {set_model(model, arg), []}
+      "context" -> {notice(model, context_text(model)), []}
+      "compact" -> {compact(model), []}
+      "sessions" -> {notice(model, sessions_text(model)), []}
+      other -> {notice(model, "unknown command: /#{other} — try /help"), []}
+    end
+  end
+
+  defp parse_command("/" <> rest) do
+    case String.split(String.trim(rest), " ", parts: 2) do
+      [name] -> {name, ""}
+      [name, arg] -> {name, String.trim(arg)}
+    end
+  end
+
+  defp notice(model, text), do: %{model | notice: text}
+
+  # A fresh session preserves the old file on disk and starts a new key, so
+  # clearing is never destructive to a prior conversation.
+  defp clear_session(model) do
+    %{
+      model
+      | messages: [],
+        events: [],
+        turn_answer: "",
+        face_state: :idle,
+        face_frame: 0,
+        session_key: mint_session_key(),
+        notice: "cleared — new session"
+    }
+  end
+
+  defp set_model(model, "") do
+    notice(model, "usage: /model <name>  (current: #{model.model_override || "default"})")
+  end
+
+  defp set_model(model, name) do
+    notice(%{model | model_override: name}, "model set to #{name}")
+  end
+
+  # Heuristic context shrink: keep the last few exchanges, replace the rest
+  # with a marker. Not a semantic summary — an honest size reducer.
+  defp compact(model) do
+    keep = 6
+    count = length(model.messages)
+
+    if count <= keep do
+      notice(model, "nothing to compact (#{count} messages)")
+    else
+      {older, recent} = Enum.split(model.messages, count - keep)
+      marker = %{role: :system, content: "[#{length(older)} earlier messages compacted]"}
+      model = persist(%{model | messages: [marker | recent]})
+      notice(model, "compacted #{length(older)} messages")
+    end
+  end
+
+  defp context_text(model) do
+    "messages: #{length(model.messages)} · events: #{length(model.events)} · " <>
+      "plan: #{if model.plan_mode, do: "on", else: "off"} · " <>
+      "model: #{model.model_override || "default"} · session: #{model.session_key}"
+  end
+
+  defp sessions_text(model) do
+    case Raxol.Agent.Code.Store.list(model.sessions_dir) do
+      [] ->
+        "no saved sessions"
+
+      sessions ->
+        sessions
+        |> Enum.take(10)
+        |> Enum.map_join("\n", fn s -> "#{s.id}  (#{s.message_count} msgs)" end)
+    end
+  end
+
+  defp help_text do
+    """
+    /help              this help
+    /clear             start a fresh session
+    /model <name>      switch model for the next turns
+    /plan              toggle plan mode
+    /compact           shrink the conversation history
+    /context           session stats
+    /sessions          list saved sessions
+    """
+    |> String.trim_trailing()
+  end
+
   # -- view -------------------------------------------------------------------
 
   @impl true
   def view(model) do
     column style: %{padding: 1, gap: 1} do
-      [
-        transcript(model),
-        status_strip(model),
-        footer(model)
-      ]
+      [transcript(model)] ++ notice_block(model) ++ [status_strip(model), footer(model)]
     end
   end
+
+  defp notice_block(%{notice: notice}) when is_binary(notice) do
+    lines = String.split(notice, "\n")
+
+    [
+      box style: %{border: :single, padding: 0} do
+        column style: %{gap: 0} do
+          Enum.map(lines, &text(&1, fg: :cyan))
+        end
+      end
+    ]
+  end
+
+  defp notice_block(_model), do: []
 
   defp transcript(model) do
     projection = Projection.project(model.events)
