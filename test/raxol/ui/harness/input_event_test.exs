@@ -940,5 +940,46 @@ defmodule Raxol.UI.Harness.InputEventTest do
       norm = InputEvent.normalize(Event.paste_event("hello", {0, 0}))
       assert InputEvent.normalize(norm) == norm
     end
+
+    # The fast path must recognize only GENUINELY-normalized events (the
+    # canonical four-key mods shape), never any map that merely carries a
+    # `kind` and some `mods` field. `mods: %{}` matches ANY map, so before
+    # this a crafted map short-circuited the normalizer and returned its
+    # unsanitized content verbatim.
+    test "a paste-shaped map with empty mods is NOT trusted verbatim -- it is re-sanitized" do
+      hostile = %{kind: :paste, text: "\e[2J\e]0;pwned\ahi", mods: %{}}
+
+      result = InputEvent.normalize(hostile)
+
+      # Fell through to real paste normalization: ESC/BEL control bytes are
+      # stripped, not passed through to an insertion sink.
+      refute result.text =~ "\e"
+      refute result.text =~ "\a"
+      assert result.text =~ "hi"
+    end
+
+    test "a partial-mods map is re-normalized to the canonical mods shape" do
+      partial = %{kind: :char, char: "a", mods: %{ctrl: true}}
+
+      result = InputEvent.normalize(partial)
+
+      # Not returned unchanged: mods is rebuilt to the full four-key shape
+      # so text?/1 and shortcut?/1 clause heads bind.
+      assert Map.keys(result.mods) |> Enum.sort() == [:alt, :ctrl, :meta, :shift]
+    end
+
+    test "a fully-canonical map (all four mods keys) still passes through unchanged" do
+      norm = %{
+        kind: :char,
+        char: "a",
+        key: nil,
+        text: nil,
+        mods: %{ctrl: false, alt: false, shift: false, meta: false},
+        state: nil,
+        raw: :original
+      }
+
+      assert InputEvent.normalize(norm) == norm
+    end
   end
 end

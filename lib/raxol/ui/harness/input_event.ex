@@ -175,6 +175,10 @@ defmodule Raxol.UI.Harness.InputEvent do
           shift: boolean(),
           meta: boolean()
         }
+  # Single source for the kind vocabulary: the `@type kind` below and the
+  # idempotence fast-path guard both derive from it, so a new kind cannot
+  # silently regress one without the other.
+  @kinds [:char, :key, :paste, :other]
   @type kind :: :char | :key | :paste | :other
   @type key_state :: :pressed | :released | :repeat | nil
 
@@ -214,8 +218,20 @@ defmodule Raxol.UI.Harness.InputEvent do
   `:raw` level deeper than component dispatch can find it.
   """
   @spec normalize(term()) :: t()
-  def normalize(%{kind: kind, mods: %{}} = already_normalized)
-      when kind in [:char, :key, :paste, :other],
+  # The fast-path matches the CANONICAL mods shape (all four boolean keys),
+  # not `mods: %{}` -- an empty-map pattern matches ANY map, which would let
+  # a map that merely carries a `kind` and some `mods` field (e.g. a
+  # `%{kind: :paste, text: "\e[2J...", mods: %{}}`) short-circuit the
+  # normalizer and return verbatim, bypassing paste ANSI/control-byte
+  # sanitization and char content validation. Requiring the full canonical
+  # mods shape means only genuinely-normalized events (the pump's own
+  # sanitized output) take the fast path; anything else -- empty, partial,
+  # or malformed mods -- falls through to real normalization.
+  def normalize(
+        %{kind: kind, mods: %{ctrl: _, alt: _, shift: _, meta: _}} =
+          already_normalized
+      )
+      when kind in @kinds,
       do: already_normalized
 
   def normalize(
