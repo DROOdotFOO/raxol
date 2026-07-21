@@ -53,7 +53,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
             height: non_neg_integer(),
             debug_mode: boolean(),
             plugin_manager: pid() | nil,
-            command_registry_table: atom() | nil,
+            command_registry_table: :ets.table() | nil,
             initial_commands: list(),
             dispatcher_pid: pid() | nil,
             driver_pid: pid() | nil,

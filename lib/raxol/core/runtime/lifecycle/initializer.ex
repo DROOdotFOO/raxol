@@ -4,7 +4,6 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   Extracted from Lifecycle to reduce file size.
   """
 
-  alias Raxol.Core.CompilerState
   alias Raxol.Core.Runtime.Events.Dispatcher
   alias Raxol.Core.Runtime.Log
   alias Raxol.Core.Runtime.Plugins.PluginManager, as: Manager
@@ -94,22 +93,25 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   # --- private ---
 
   defp initialize_registry_table(app_module) do
-    registry_table_name =
-      Module.concat(CommandRegistryTable, Atom.to_string(app_module))
+    # UNNAMED ETS table: `:ets.new/2` returns a fresh tid, so each session
+    # owns a distinct table. A `:named_table` keyed by app_module (via
+    # `CompilerState.ensure_table`, which is idempotent BY NAME) let a second
+    # session of the SAME module adopt the first's table -- so tearing one
+    # session down deleted the other's command registry (#566). Nothing looks
+    # the table up by name; it is only ever threaded through as
+    # `command_registry_table`, so dropping the global name is transparent to
+    # every consumer and never shares or clobbers another session's table.
+    #
+    # The concat is only a debug LABEL (bounded per-module, pre-existing) --
+    # without `:named_table` it registers no name, so no per-session atom is
+    # minted (the atom leak the Registry via-names elsewhere already avoid).
+    label = Module.concat(CommandRegistryTable, Atom.to_string(app_module))
 
-    case CompilerState.ensure_table(registry_table_name, [
-           :set,
-           :protected,
-           :named_table,
-           {:read_concurrency, true}
-         ]) do
-      :ok ->
-        {:ok, registry_table_name}
-
-      {:error, _reason} ->
-        {:error, :registry_table_creation_failed,
-         fn -> CompilerState.safe_delete_table(registry_table_name) end}
-    end
+    table = :ets.new(label, [:set, :protected, {:read_concurrency, true}])
+    {:ok, table}
+  rescue
+    ArgumentError ->
+      {:error, :registry_table_creation_failed, fn -> :ok end}
   end
 
   defp start_plugin_manager(_options, :agent), do: {:ok, nil}
