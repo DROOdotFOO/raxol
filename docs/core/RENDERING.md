@@ -114,7 +114,7 @@ by hand in a component, you are almost certainly in the wrong layer.
 ## How a frame reaches the terminal
 
 The renderer diffs the grid and emits every frame — keyframe or diff — in one
-absolute-CUP vocabulary. `Raxol.Core.Runtime.Rendering.Backends.build_terminal_frame/5`
+absolute-CUP vocabulary. `Raxol.Core.Runtime.Rendering.Backends.build_terminal_frame/4`
 holds the whole decision:
 
 - The previous frame is already in hand as `state.buffer`, so the grid is its
@@ -147,14 +147,23 @@ Two consequences worth knowing:
   round-trip-identical (each run still `\e[0m`-terminated) and far fewer bytes
   on a styled UI.
 
-A view may declare a cursor park at the root of its element tree
-(`Backends.declared_cursor/1`). When one is present, every frame kind ends with
-the park tail — DECTCEM show/hide plus an absolute CUP — because the emitted
-rows moved the physical cursor and nothing else puts it back.
+> **Proposed (not yet implemented).** A view could declare a cursor park at
+> the root of its element tree (a `Backends.declared_cursor/1` seam) so that
+> every frame kind ends with a park tail — DECTCEM show/hide plus an absolute
+> CUP — because the emitted rows moved the physical cursor and nothing else
+> puts it back. `build_terminal_frame/4` does not emit a park tail today; this
+> paragraph describes the intended design, not shipped behavior.
 
 ---
 
 ## Region prominence
+
+> **Proposed (not yet implemented).** This section describes an intended
+> design. None of the modules or functions named below
+> (`Raxol.UI.ColorResolver`, `Raxol.UI.ColorIntent`,
+> `Raxol.UI.RegionPolicy.region_prominence/4`,
+> `Raxol.UI.Layout.Engine.stamp_region_prominence/2`, `@region_gamma`) exist in
+> the codebase yet. Do not treat it as a reference to shipped behavior.
 
 Intent colors resolve to literals exactly once, at the render choke point:
 `Raxol.UI.ColorResolver` is the single whole-list pass that turns
