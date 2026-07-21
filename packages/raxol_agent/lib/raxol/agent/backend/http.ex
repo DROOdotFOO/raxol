@@ -706,8 +706,15 @@ defmodule Raxol.Agent.Backend.HTTP do
   # back on its own slot) and finally to a key strictly greater than every
   # key already in the accumulator — new and distinct no matter how many
   # earlier, unrelated calls have already been assigned.
-  defp resolve_tool_call_index(_acc, %{"index" => index}, _pos) when not is_nil(index),
-    do: index
+  # Only a non-negative INTEGER index is a usable key: it is provider
+  # (network) controlled, and a non-integer value (string/float/map from a
+  # buggy or hostile OpenAI-compatible endpoint) used verbatim as a key
+  # later crashes `next_tool_call_index/1` with an ArithmeticError
+  # (`<non-number> + 1`), killing the whole streaming turn. Anything else
+  # falls through to id-based / positional resolution.
+  defp resolve_tool_call_index(_acc, %{"index" => index}, _pos)
+       when is_integer(index) and index >= 0,
+       do: index
 
   defp resolve_tool_call_index(acc, %{"id" => id}, pos) when not is_nil(id) do
     case find_tool_call_index_by_id(acc, id) do

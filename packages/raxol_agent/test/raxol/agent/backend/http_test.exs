@@ -368,5 +368,52 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       refute call["arguments_error"] =~ "not valid json",
              "the marker must not leak the raw provider text"
     end
+
+    test "a non-integer provider index is ignored, never crashes the turn (ArithmeticError DoS)" do
+      # `index` is provider (network) controlled. A buggy/hostile
+      # OpenAI-compatible endpoint sending it as a string/float/map used to
+      # land it verbatim as an accumulator key, so `next_tool_call_index/1`
+      # later did `<non-number> + 1` and crashed the whole streaming turn.
+      # The bad index must be ignored and the call resolved by id/position.
+      for bad_index <- ["0", 1.5, %{"x" => 1}, [1], true] do
+        batches = [
+          [
+            %{
+              "index" => bad_index,
+              "id" => "c1",
+              "function" => %{"name" => "read_file", "arguments" => "{\"path\":\"a.txt\"}"}
+            }
+          ],
+          [
+            %{
+              "index" => bad_index,
+              "id" => "c2",
+              "function" => %{"name" => "list_dir", "arguments" => "{\"path\":\".\"}"}
+            }
+          ]
+        ]
+
+        result = HTTP.accumulate_tool_calls(batches)
+
+        # No crash; both distinct calls survive (resolved by id, not the
+        # garbage index that would have cross-merged or blown up).
+        assert length(result) == 2, "bad index #{inspect(bad_index)} did not resolve to 2 calls"
+        assert Enum.find(result, &(&1["id"] == "c1"))["name"] == "read_file"
+        assert Enum.find(result, &(&1["id"] == "c2"))["name"] == "list_dir"
+      end
+    end
+
+    test "a valid integer index still keys the accumulator after the guard" do
+      # Regression guard: the tightened guard must not reject legitimate
+      # integer indices (the normal streaming path).
+      batches = [
+        [%{"index" => 0, "id" => "c1", "function" => %{"name" => "a", "arguments" => "{}"}}],
+        [%{"index" => 1, "id" => "c2", "function" => %{"name" => "b", "arguments" => "{}"}}],
+        [%{"index" => 0, "function" => %{"arguments" => ""}}]
+      ]
+
+      result = HTTP.accumulate_tool_calls(batches)
+      assert length(result) == 2
+    end
   end
 end
