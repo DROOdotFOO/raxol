@@ -294,4 +294,64 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
       assert events == [{:text_delta, "o"}]
     end
   end
+
+  describe "blocking tool_calls honesty (parity with streaming)" do
+    test "undecodable arguments surface an honest marker, never a silent %{} (#652)" do
+      # The blocking parse must match the streaming path: a tool_call whose
+      # arguments string is not valid JSON keeps a map-shaped `%{}` but rides
+      # an `arguments_error` alongside, so the tool is never invoked under
+      # silently-empty args. Previously the blocking path coerced to `%{}`
+      # with no trace.
+      body = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "tool_calls" => [
+                %{
+                  "id" => "c1",
+                  "function" => %{
+                    "name" => "edit_file",
+                    "arguments" => "{not valid json"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+
+      assert {:ok, %{tool_calls: [call]}} = complete_stub(body, provider: :openai, api_key: "test")
+
+      assert call["arguments"] == %{}
+      assert is_binary(call["arguments_error"])
+      assert call["arguments_error"] =~ "undecodable"
+
+      # The marker never leaks the raw provider text.
+      refute call["arguments_error"] =~ "not valid json"
+    end
+
+    test "valid arguments still decode to a map with no error marker" do
+      body = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "tool_calls" => [
+                %{
+                  "id" => "c2",
+                  "function" => %{
+                    "name" => "read_file",
+                    "arguments" => ~s({"path":"a.txt"})
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+
+      assert {:ok, %{tool_calls: [call]}} = complete_stub(body, provider: :openai, api_key: "test")
+      assert call["arguments"] == %{"path" => "a.txt"}
+      refute Map.has_key?(call, "arguments_error")
+    end
+  end
 end

@@ -122,6 +122,44 @@ defmodule Raxol.Agent.ContractTest do
       assert_receive {:rejected_evidence, %{reason: {:mutation_echo, _}}}
     end
 
+    test "a tool_result seals an open message first, so text across the boundary is not fused (#652)" do
+      session_id = "contract-test-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      # A message opens, a tool_result arrives while it is still open, then
+      # more answer text follows. The pre-boundary text must seal as its OWN
+      # message item before the tool_result item, and the post-boundary text
+      # must open a FRESH message -- not re-enter the still-open one and fuse
+      # both text runs into a single block across the tool_result.
+      stream = [
+        {:text_delta, "before "},
+        {:tool_result, %{name: "run_tests", result: "ok"}},
+        {:text_delta, "after"},
+        {:done, %{content: "after"}}
+      ]
+
+      assert {:ok, _} = Contract.pump(session_id, stream, prompt: "p")
+
+      events = drain_events(session_id)
+
+      message_contents =
+        for %Event{type: :item_completed, payload: %{item_type: :message, content: c}} <-
+              events,
+            do: c
+
+      # TWO distinct message items, not one fused message.
+      assert message_contents == ["before ", "after"]
+
+      # The pre-boundary message seals BEFORE the tool_result item opens.
+      boundary =
+        for %Event{type: t, payload: %{item_type: it}} <- events,
+            t in [:item_started, :item_completed],
+            do: {t, it}
+
+      assert Enum.find_index(boundary, &(&1 == {:item_completed, :message})) <
+               Enum.find_index(boundary, &(&1 == {:item_started, :tool_result}))
+    end
+
     test "a zero-tool turn closes ungated (parked policy) and emits done-gate telemetry" do
       session_id = "contract-test-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(session_id)

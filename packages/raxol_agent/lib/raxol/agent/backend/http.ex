@@ -364,9 +364,9 @@ defmodule Raxol.Agent.Backend.HTTP do
     tool_calls = msg["tool_calls"]
 
     []
-    |> maybe_append(reasoning && {:reasoning_delta, reasoning})
-    |> maybe_append(text != "" && {:text_delta, text})
-    |> maybe_append(
+    |> maybe_prepend(reasoning && {:reasoning_delta, reasoning})
+    |> maybe_prepend(text != "" && {:text_delta, text})
+    |> maybe_prepend(
       # RAW tool-call fragments -- the stream accumulates them by index
       # (`merge_tool_call_frags/2`), because OpenAI-compatible providers
       # (incl. LongCat) stream `delta.tool_calls[]` incrementally: the id +
@@ -377,7 +377,8 @@ defmodule Raxol.Agent.Backend.HTTP do
       # the degenerate one-fragment case, so this handles both.
       is_list(tool_calls) and tool_calls != [] and {:tool_call_delta, tool_calls}
     )
-    |> maybe_append(finish == "length" && {:marker, truncation_marker(choice)})
+    |> maybe_prepend(finish == "length" && {:marker, truncation_marker(choice)})
+    |> Enum.reverse()
   end
 
   # A trailing usage-only chunk (some providers emit `{"usage": {...}}` with an
@@ -389,8 +390,10 @@ defmodule Raxol.Agent.Backend.HTTP do
   # a fidelity gap -- skipped (never dumped). Only a JSON DECODE failure marks.
   defp openai_stream_events(_other), do: []
 
-  defp maybe_append(events, falsy) when falsy in [nil, false], do: events
-  defp maybe_append(events, event), do: events ++ [event]
+  # Prepend (O(1)) each present event, so the caller reverses ONCE to restore
+  # emission order -- rather than `events ++ [event]` per step.
+  defp maybe_prepend(events, falsy) when falsy in [nil, false], do: events
+  defp maybe_prepend(events, event), do: [event | events]
 
   # -- Request building -------------------------------------------------------
 
@@ -590,18 +593,16 @@ defmodule Raxol.Agent.Backend.HTTP do
     reasoning = choice_reasoning(msg)
     finish = finish_reason(choice)
 
-    cond do
-      finish == "length" and blank?(content) ->
-        {:error, truncation_marker(body)}
-
-      true ->
-        {:ok,
-         %{
-           content: content,
-           usage: Map.get(body, "usage", %{}),
-           metadata: openai_metadata(body, finish)
-         }
-         |> put_reasoning(reasoning)}
+    if finish == "length" and blank?(content) do
+      {:error, truncation_marker(body)}
+    else
+      {:ok,
+       %{
+         content: content,
+         usage: Map.get(body, "usage", %{}),
+         metadata: openai_metadata(body, finish)
+       }
+       |> put_reasoning(reasoning)}
     end
   end
 
@@ -635,27 +636,33 @@ defmodule Raxol.Agent.Backend.HTTP do
   # the identical shape -- a tool call must round-trip the stream unchanged.
   defp parse_openai_tool_calls(tool_calls) when is_list(tool_calls) do
     Enum.map(tool_calls, fn tc ->
-      args =
-        case get_in(tc, ["function", "arguments"]) do
-          s when is_binary(s) ->
-            case Jason.decode(s) do
-              {:ok, map} -> map
-              _ -> %{}
-            end
-
-          map when is_map(map) ->
-            map
-
-          _ ->
-            %{}
-        end
-
-      %{
-        "id" => tc["id"],
-        "name" => get_in(tc, ["function", "name"]),
-        "arguments" => args
-      }
+      build_tool_call(
+        tc["id"],
+        get_in(tc, ["function", "name"]),
+        get_in(tc, ["function", "arguments"])
+      )
     end)
+  end
+
+  # Build the downstream tool-call contract from id/name/raw arguments, shared
+  # by the blocking (`parse_openai_tool_calls`) and streaming
+  # (`finalize_tool_call`) paths so BOTH surface the identical honesty marker.
+  # Undecodable arguments never silently become `%{}`: `arguments` stays
+  # map-shaped `%{}` (a consumer expecting a map is not broken) but an
+  # `arguments_error` rides alongside, so a tool is never executed -- or
+  # reported unexecuted -- under wrong/empty args with no trace.
+  defp build_tool_call(id, name, raw_args) do
+    base = %{"id" => id, "name" => name}
+
+    case decode_tool_args(raw_args) do
+      {:ok, args} ->
+        Map.put(base, "arguments", args)
+
+      {:error, marker} ->
+        base
+        |> Map.put("arguments", %{})
+        |> Map.put("arguments_error", marker)
+    end
   end
 
   # Merge streamed tool-call fragments into the accumulator. Correlation
@@ -679,7 +686,7 @@ defmodule Raxol.Agent.Backend.HTTP do
       args =
         case fun["arguments"] do
           s when is_binary(s) ->
-            (if is_binary(cur["args"]), do: cur["args"], else: "") <> s
+            if(is_binary(cur["args"]), do: cur["args"], else: "") <> s
 
           m when is_map(m) ->
             m
@@ -744,27 +751,13 @@ defmodule Raxol.Agent.Backend.HTTP do
     |> Enum.map(fn {_idx, tc} -> finalize_tool_call(tc) end)
   end
 
+  # The accumulated `args` string can fail to decode -- a real fidelity gap,
+  # not a zero-arg call. `build_tool_call/3` attaches the honest
+  # `arguments_error` marker (never leaking the raw text, matching
+  # `unparseable_marker/2`'s keys-only discipline), identically to the
+  # blocking path.
   defp finalize_tool_call(tc) do
-    base = %{"id" => tc["id"], "name" => tc["name"]}
-
-    case decode_tool_args(tc["args"]) do
-      {:ok, args} ->
-        Map.put(base, "arguments", args)
-
-      {:error, marker} ->
-        # An accumulated `arguments` string that fails to decode is a real
-        # fidelity gap, not a zero-arg call: the model asked to invoke this
-        # tool with SOME payload, and silently substituting `%{}` would let
-        # it execute (or be reported as unexecuted) under the WRONG
-        # arguments with no trace anything went wrong. `arguments` stays
-        # map-shaped (so a consumer expecting a map is not broken) but an
-        # honest marker rides alongside it — never leaking the raw
-        # provider text, only its size, matching `unparseable_marker/2`'s
-        # keys-only discipline.
-        base
-        |> Map.put("arguments", %{})
-        |> Map.put("arguments_error", marker)
-    end
+    build_tool_call(tc["id"], tc["name"], tc["args"])
   end
 
   defp decode_tool_args(""), do: {:ok, %{}}

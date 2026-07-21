@@ -324,6 +324,19 @@ defmodule Raxol.Agent.Contract do
     final_acc.result
   end
 
+  # Seal any open reasoning-then-message item before a tool/approval
+  # boundary, so pre-boundary text becomes its own block (ordered ahead of
+  # the boundary item) and a LATER text_delta opens a FRESH message instead
+  # of re-entering the still-open one and fusing across the boundary. Both
+  # closes are no-ops when nothing is open (the common tool_use-then-result
+  # path, where tool_use already sealed), so this is safe to apply at every
+  # boundary arm and only changes behavior for a producer that reaches a
+  # tool_result/approval/tool_unexecuted with a message still open.
+  defp seal_open_items(session_id, turn_id, counter, acc) do
+    acc = close_reasoning_item(session_id, turn_id, counter, acc)
+    close_message_item(session_id, turn_id, counter, acc)
+  end
+
   defp handle_stream_event(session_id, turn_id, counter, event, acc) do
     case event do
       # Chain-of-thought / thinking text. Reasoning gets the SAME item
@@ -348,8 +361,7 @@ defmodule Raxol.Agent.Contract do
         # items) rather than leaking it into the final answer's item.
         # Any open reasoning (think→tool, no intervening answer text)
         # seals first as its own ∴ block, ahead of the tool.
-        acc = close_reasoning_item(session_id, turn_id, counter, acc)
-        acc = close_message_item(session_id, turn_id, counter, acc)
+        acc = seal_open_items(session_id, turn_id, counter, acc)
 
         complete_item(session_id, turn_id, counter, acc, :tool_use, %{
           name: name,
@@ -358,6 +370,11 @@ defmodule Raxol.Agent.Contract do
         })
 
       {:tool_result, %{name: name} = tool_result} ->
+        # Seal an open message/reasoning first (symmetric with :tool_use), so
+        # a result arriving with a message still open does not later fuse
+        # pre- and post-result text into one block across the boundary.
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         complete_item(
           session_id,
           turn_id,
@@ -373,6 +390,8 @@ defmodule Raxol.Agent.Contract do
       # `approval_decided` answer — into ONE approval block that holds the
       # seal frontier between the tool_use and its result (correct ordering).
       {:approval_requested, payload} when is_map(payload) ->
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         ev =
           emit_event(
             session_id,
@@ -383,9 +402,11 @@ defmodule Raxol.Agent.Contract do
             payload
           )
 
-        %{acc | journal: acc.journal ++ [ev]}
+        %{acc | journal: [ev | acc.journal]}
 
       {:approval_decided, payload} when is_map(payload) ->
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         ev =
           emit_event(
             session_id,
@@ -396,13 +417,15 @@ defmodule Raxol.Agent.Contract do
             payload
           )
 
-        %{acc | journal: acc.journal ++ [ev]}
+        %{acc | journal: [ev | acc.journal]}
 
       # The honesty marker: a tool call the model made that produced no
       # receipt. A claim of action with zero receipts is NEVER silent — it
       # seals a visible ⚠ message item into the transcript (full item
       # lifecycle, like every other completed item).
       {:tool_unexecuted, payload} when is_map(payload) ->
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         complete_item(session_id, turn_id, counter, acc, :message, %{
           content: tool_unexecuted_marker(payload)
         })
@@ -440,7 +463,7 @@ defmodule Raxol.Agent.Contract do
             final: false
           })
 
-        %{acc | journal: acc.journal ++ [ev]}
+        %{acc | journal: [ev | acc.journal]}
 
       {:done, %{content: content} = info} ->
         # A pure-thinking tail (reasoning with no answer text) seals as
@@ -473,10 +496,15 @@ defmodule Raxol.Agent.Contract do
                   %{item_id: item_id, item_type: :message, content: content}
                 )
 
-              acc.journal ++ [message_ev]
+              [message_ev | acc.journal]
           end
 
-        refs = DoneGate.evidence_refs(journal, turn_id)
+        # The journal accumulates newest-first (prepend); DoneGate consumes it
+        # chronologically, so reverse ONCE here at the single read site. This
+        # is the exact list the append form produced, so evidence offsets on
+        # the wire are unchanged.
+        chronological = Enum.reverse(journal)
+        refs = DoneGate.evidence_refs(chronological, turn_id)
 
         final_ev =
           emit_event(
@@ -485,13 +513,13 @@ defmodule Raxol.Agent.Contract do
             counter,
             :turn_completed,
             :durable,
-            gated_done_payload(journal, turn_id, refs, info)
+            gated_done_payload(chronological, turn_id, refs, info)
           )
 
         %{
           acc
           | result: {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
-            journal: journal ++ [final_ev]
+            journal: [final_ev | journal]
         }
 
       {:error, reason} ->
@@ -509,7 +537,7 @@ defmodule Raxol.Agent.Contract do
             reason: reason
           })
 
-        %{acc | journal: acc.journal ++ [error_ev], result: {:error, reason}}
+        %{acc | journal: [error_ev | acc.journal], result: {:error, reason}}
 
       _other ->
         acc
@@ -575,7 +603,7 @@ defmodule Raxol.Agent.Contract do
         chunk: content
       })
 
-      %{acc | journal: acc.journal ++ [started_ev], msg_item: item_id}
+      %{acc | journal: [started_ev | acc.journal], msg_item: item_id}
     end
   end
 
@@ -611,7 +639,7 @@ defmodule Raxol.Agent.Contract do
         content: content
       })
 
-    %{acc | journal: acc.journal ++ [ev], msg_item: nil, msg_chunks: []}
+    %{acc | journal: [ev | acc.journal], msg_item: nil, msg_chunks: []}
   end
 
   # -- reasoning item lifecycle ---------------------------------------------
@@ -661,7 +689,7 @@ defmodule Raxol.Agent.Contract do
         thought: true
       })
 
-      %{acc | journal: acc.journal ++ [started_ev], reasoning_item: item_id}
+      %{acc | journal: [started_ev | acc.journal], reasoning_item: item_id}
     end
   end
 
@@ -699,13 +727,14 @@ defmodule Raxol.Agent.Contract do
 
     %{
       acc
-      | journal: acc.journal ++ [ev],
+      | journal: [ev | acc.journal],
         reasoning_item: nil,
         reasoning_chunks: []
     }
   end
 
-  defp blank?(text), do: String.trim(text) == ""
+  defp blank?(nil), do: true
+  defp blank?(text) when is_binary(text), do: String.trim(text) == ""
 
   # The done site's item resolution: reuse the open streamed item when
   # there is one (its deltas ARE this message); otherwise open a fresh
@@ -735,7 +764,7 @@ defmodule Raxol.Agent.Contract do
           item_type: :message
         })
 
-      {item_id, %{acc | journal: acc.journal ++ [ev]}}
+      {item_id, %{acc | journal: [ev | acc.journal]}}
     end
   end
 
@@ -767,7 +796,9 @@ defmodule Raxol.Agent.Contract do
         Map.merge(%{item_id: item_id, item_type: item_type}, extra)
       )
 
-    %{acc | journal: acc.journal ++ [started_ev, completed_ev]}
+    # Prepend newest-first: completed follows started chronologically, so it
+    # sits ahead of started in the reverse-ordered journal.
+    %{acc | journal: [completed_ev, started_ev | acc.journal]}
   end
 
   # Consult the evidence gate on the real done path in observe-only mode (see
@@ -931,7 +962,7 @@ defmodule Raxol.Agent.Contract do
   # inspecting an arbitrary term into the transcript).
   defp result_summary(%{entries: entries}) when is_list(entries) do
     n = length(entries)
-    preview = entries |> Enum.take(20) |> Enum.map_join(", ", &to_string/1)
+    preview = entries |> Enum.take(20) |> Enum.map_join(", ", &display_entry/1)
     count = "#{n} #{plural(n, "entry", "entries")}"
     if preview == "", do: count, else: count <> ": " <> preview
   end
@@ -955,6 +986,14 @@ defmodule Raxol.Agent.Contract do
     do: "#{byte_size(out)} bytes" <> result_excerpt(out)
 
   defp result_summary(_result), do: nil
+
+  # A list entry may be any term. `to_string/1` raises Protocol.UndefinedError
+  # on a map/tuple/keyword -- inside pump's reduce that crashes the whole turn
+  # rather than degrading to an honest summary. Stringify scalars directly and
+  # `inspect/1` everything else.
+  defp display_entry(e) when is_binary(e), do: e
+  defp display_entry(e) when is_atom(e) or is_number(e), do: to_string(e)
+  defp display_entry(e), do: inspect(e)
 
   defp result_excerpt(""), do: ""
 
