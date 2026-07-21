@@ -345,6 +345,30 @@ defmodule Raxol.MCP.StructuredScreenshotTest do
     end
   end
 
+  describe "absolute_layer descent (harness U3 overlay seam)" do
+    test "summarizes the flow child and each overlay element" do
+      tree = %{
+        type: :absolute_layer,
+        flow_child: %{type: :column, id: "bg", children: [%{type: :text, content: "x"}]},
+        overlays: [
+          %{
+            x: 0,
+            y: 0,
+            dialog: true,
+            element: %{type: :column, id: "overlay-picker", children: []}
+          }
+        ]
+      }
+
+      [summary] = StructuredScreenshot.from_view_tree(tree)
+
+      assert summary.type == :absolute_layer
+      ids = Enum.map(summary.children, & &1.id)
+      assert "bg" in ids
+      assert "overlay-picker" in ids
+    end
+  end
+
   describe "to_json/1" do
     test "serializes summaries to JSON string" do
       summaries = [%{type: :button, id: "btn", children: []}]

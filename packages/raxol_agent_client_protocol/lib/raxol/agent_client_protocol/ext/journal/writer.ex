@@ -254,11 +254,9 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       session_id: Keyword.fetch!(opts, :session_id),
       journal: Keyword.fetch!(opts, :journal),
       session_meta: Keyword.get(opts, :session_meta, %{}),
-      subscriber_credit:
-        Keyword.get(opts, :subscriber_credit, @default_subscriber_credit),
+      subscriber_credit: Keyword.get(opts, :subscriber_credit, @default_subscriber_credit),
       dead_publish_phantom: Keyword.get(opts, :__dead_publish_phantom__, false),
-      dead_bootstrap_after_op:
-        Keyword.get(opts, :__dead_bootstrap_after_op__, false)
+      dead_bootstrap_after_op: Keyword.get(opts, :__dead_bootstrap_after_op__, false)
     }
 
     # Bootstrap is LAZY (R-C14-lazy): it runs as the Writer's first action for
@@ -280,8 +278,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
       ref = Process.monitor(pid)
       sub = %{pid: pid, credit: state.subscriber_credit, sent_hi: 0}
 
-      {:reply, :ok,
-       %{state | subscribers: Map.put(state.subscribers, ref, sub)}}
+      {:reply, :ok, %{state | subscribers: Map.put(state.subscribers, ref, sub)}}
     end
   end
 
@@ -381,8 +378,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
   # -- Append + latch ---------------------------------------------------------
 
   @spec do_append(t(), String.t(), map(), String.t(), pid()) ::
-          {{:ok, Record.t()} | {:error, :turn_in_flight | :not_turn_holder},
-           t()}
+          {{:ok, Record.t()} | {:error, :turn_in_flight | :not_turn_holder}, t()}
   defp do_append(
          %__MODULE__{turn: turn} = state,
          @turn_started_kind,
@@ -510,7 +506,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.Writer do
   # The correct publish: send the durable, read-visible record to every
   # subscriber. When the dead publish-phantom knob is set, additionally deliver a
   # phantom record with an offset one beyond the store max that was NEVER
-  # appended — the N-JS7 "publish-ahead / crash-before-append" realization:
+  # appended — the "publish-ahead / crash-before-append" realization:
   # a delivered live offset with no durable backing, which breaks closure
   # (delivered ⊄ durable).
   @spec publish_all(t(), Record.t()) :: t()
