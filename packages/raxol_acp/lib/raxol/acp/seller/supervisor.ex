@@ -62,13 +62,37 @@ defmodule Raxol.ACP.Seller.Supervisor do
 
     children =
       capacity_gate_children() ++
+        console_children() ++
+        checkpoint_owner_children() ++
         [
           Raxol.ACP.Seller.Queue,
           backend_module,
+          Raxol.ACP.Seller.Resync,
           Raxol.ACP.Seller.Runtime
         ]
 
     Supervisor.init(children, strategy: :rest_for_one)
+  end
+
+  # The `{:ets, name}` checkpoint form needs a supervisor-level table owner so
+  # the idempotency records survive Queue/session crashes; started ahead of the
+  # Queue for the same reason as the capacity gate. `Owner.init/1` returns
+  # `:ignore` for other checkpoint configs, so it is safe to gate on shape.
+  defp checkpoint_owner_children do
+    case Application.get_env(:raxol_acp, :checkpoint) do
+      {:ets, _name} -> [Raxol.ACP.Checkpoint.Owner]
+      _ -> []
+    end
+  end
+
+  # Like the capacity gate: the console bench-slot ledger starts ahead of the
+  # Queue so a listener crash never resets in-flight bench reservations. Only
+  # started when the console offering is actually configured, so other sellers
+  # pay nothing for it.
+  defp console_children do
+    if Raxol.ACP.Console.AgentOffering in Raxol.ACP.Seller.Offerings.configured(),
+      do: [Raxol.ACP.Console.BenchSlots],
+      else: []
   end
 
   # The liquidity gate is optional and isolated (its own `:one_for_one`

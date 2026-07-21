@@ -97,6 +97,8 @@ defmodule Raxol.ACP.Seller.Queue do
       seller_address: Application.get_env(:raxol_acp, :seller_address),
       max_active_jobs: Application.get_env(:raxol_acp, :seller_max_active_jobs, 100),
       provider_adapter: Application.get_env(:raxol_acp, :seller_provider_adapter),
+      checkpoint: Raxol.ACP.Checkpoint.store(),
+      job_api: seller_job_api(),
       chain_id: Application.get_env(:raxol_acp, :seller_chain_id, 8453),
       acp_core_address:
         Application.get_env(:raxol_acp, :seller_acp_core_address) ||
@@ -146,7 +148,7 @@ defmodule Raxol.ACP.Seller.Queue do
     end
   end
 
-  defp handle_event(%{type: :payment_received, job_id: job_id} = event, state, _defaults) do
+  defp handle_event(%{type: :payment_received, job_id: job_id} = event, state, defaults) do
     with_job(:payment_received, job_id, state, fn %{provider: provider, request: request} ->
       # Only mirror `:funded` on the actual funding transition. Mirroring it
       # unconditionally would regress an already-`:submitted` session back to
@@ -158,8 +160,12 @@ defmodule Raxol.ACP.Seller.Queue do
       end
 
       case Provider.deliver(provider, request) do
-        {:ok, _} -> dispatched(:payment_received, job_id, state)
-        {:error, reason} -> drop(:payment_received, job_id, %{}, {:handler_error, reason}, state)
+        {:ok, result} ->
+          maybe_post_deliverable(defaults, job_id, result)
+          dispatched(:payment_received, job_id, state)
+
+        {:error, reason} ->
+          drop(:payment_received, job_id, %{}, {:handler_error, reason}, state)
       end
     end)
   end
@@ -169,6 +175,7 @@ defmodule Raxol.ACP.Seller.Queue do
       # External evaluator approved on-chain; mirror the terminal status. The
       # session stops itself; drop our context.
       JobSession.apply_event(provider.session, :completed, %{approval: Map.get(event, :payload)})
+      Provider.cleanup(provider)
       _ = dispatched(:approval_received, job_id, state)
       drop_job(state, job_id)
     end)
@@ -178,6 +185,7 @@ defmodule Raxol.ACP.Seller.Queue do
     with_job(:job_expired, job_id, state, fn %{provider: provider} ->
       reason = Map.get(event, :reason, "expired")
       JobSession.apply_event(provider.session, :expired, %{reason: inspect(reason)})
+      Provider.cleanup(provider)
       _ = dispatched(:job_expired, job_id, state)
       drop_job(state, job_id)
     end)
@@ -206,16 +214,31 @@ defmodule Raxol.ACP.Seller.Queue do
         {:ok, spec} = OfferingRegistry.lookup(name)
         provider = build_provider(session, spec, event, defaults, job_id)
 
-        with {:ok, resolved_request, budget} <- resolve_accept(spec, request, defaults),
-             {:ok, _} <- Provider.accept_request(provider, resolved_request, budget) do
-          emit(:dispatched, %{type: :job_offered, job_id: job_id, offering: name})
-          put_job(state, job_id, %{provider: provider, request: resolved_request})
-        else
-          {:reject, reason} ->
-            JobSession.apply_event(session, :expired, %{rejected: reason})
-            drop(:job_offered, job_id, %{offering: name}, {:rejected, reason}, state)
+        case resolve_accept(spec, request, defaults) do
+          {:ok, resolved_request, budget} ->
+            case Provider.accept_request(provider, resolved_request, budget) do
+              {:ok, _} ->
+                emit(:dispatched, %{type: :job_offered, job_id: job_id, offering: name})
+                put_job(state, job_id, %{provider: provider, request: resolved_request})
 
-          {:rejected, reason} ->
+              # Mid-flight adoption: the session already reflects a later phase
+              # (Queue crash lost its tracking, or a Resync rehydrated the
+              # session), so there is nothing to accept -- but the Queue must
+              # re-track the job so payment / approval / expiry events route to
+              # it instead of dropping `:job_not_running`.
+              {:error, {:cannot_accept, status}} when status in [:funded, :submitted] ->
+                emit(:dispatched, %{type: :job_offered, job_id: job_id, offering: name})
+                put_job(state, job_id, %{provider: provider, request: resolved_request})
+
+              {:rejected, reason} ->
+                JobSession.apply_event(session, :expired, %{rejected: reason})
+                drop(:job_offered, job_id, %{offering: name}, {:rejected, reason}, state)
+
+              {:error, reason} ->
+                drop(:job_offered, job_id, %{offering: name}, {:handler_error, reason}, state)
+            end
+
+          {:reject, reason} ->
             JobSession.apply_event(session, :expired, %{rejected: reason})
             drop(:job_offered, job_id, %{offering: name}, {:rejected, reason}, state)
 
@@ -269,6 +292,7 @@ defmodule Raxol.ACP.Seller.Queue do
       session: session,
       handler: spec.handler,
       adapter: defaults.provider_adapter,
+      checkpoint: defaults.checkpoint,
       chain_id: defaults.chain_id,
       acp_core_address: defaults.acp_core_address,
       job_id: parse_job_id(job_id),
@@ -297,6 +321,33 @@ defmodule Raxol.ACP.Seller.Queue do
   defp within_capacity?(%{max_active_jobs: max}) do
     DynamicSupervisor.count_children(JobSession.Supervisor).active < max
   end
+
+  # Optional off-chain JobApi, built per dispatch from `:seller_job_api_opts`
+  # (forwarded to `Raxol.ACP.JobApi.HTTP.new/1`: `auth:`, `server_url:`,
+  # `chain_ids:`). nil disables OOB deliverable posting here and resync boot
+  # drain in `Raxol.ACP.Seller.Resync`.
+  defp seller_job_api do
+    case Application.get_env(:raxol_acp, :seller_job_api_opts) do
+      nil -> nil
+      opts when is_list(opts) -> Raxol.ACP.JobApi.HTTP.new(opts)
+    end
+  end
+
+  # Post the deliverable body out-of-band so the evaluator can verify it
+  # against the on-chain hash. Best-effort: the submit already committed, so an
+  # OOB failure is telemetry (`:oob_post_failed`), not a dispatch failure --
+  # and a resumed replay carries the same pinned deliverable, so a retry of the
+  # payment event re-posts idempotently.
+  defp maybe_post_deliverable(%{job_api: nil}, _job_id, _result), do: :ok
+
+  defp maybe_post_deliverable(%{job_api: api} = defaults, job_id, %{deliverable: deliverable}) do
+    case Raxol.ACP.JobApi.post_deliverable(api, defaults.chain_id, job_id, deliverable) do
+      :ok -> :ok
+      {:error, reason} -> emit(:oob_post_failed, %{job_id: job_id, reason: reason})
+    end
+  end
+
+  defp maybe_post_deliverable(_defaults, _job_id, _result), do: :ok
 
   defp put_job(state, job_id, ctx), do: %{state | jobs: Map.put(state.jobs, job_id, ctx)}
   defp drop_job(state, job_id), do: %{state | jobs: Map.delete(state.jobs, job_id)}

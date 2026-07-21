@@ -24,10 +24,29 @@ defmodule Raxol.ACP.JobSession.Provider do
   A `Provider` is a plain struct built with `new/1`; its functions are pure
   orchestration over the session and the adapter (no process of its own -- a
   runtime such as the seller `Queue` calls them).
+
+  ## Crash-resume (checkpointing)
+
+  The status guards above make re-drives idempotent while the session process
+  survives. Across a BEAM restart the session is gone, so the guards alone
+  cannot stop a re-driven `deliver` from re-running a (nondeterministic,
+  inference-heavy) handler and submitting a *different* hash than an in-flight
+  first attempt. When a `:checkpoint` store is injected (see
+  `Raxol.ACP.Checkpoint`), `deliver/2` therefore pins the encoded deliverable
+  and its keccak **before** signing, reuses the pinned bytes on any replay, and
+  records the tx hash after the write -- so across a crash at any point exactly
+  one deliverable hash can ever reach the chain, and a duplicate submit of that
+  same hash reverts harmlessly on the phase guard. `accept_request/3` records
+  its `setBudget` tx the same way so an API-lagged resync cannot re-sign it.
+  With `require_checkpoint: true` and no store configured, both fund-adjacent
+  writes fail closed with `{:error, :checkpoint_required}` before invoking the
+  handler. Records use string keys and pre-encoded JSON so they survive
+  JSON-round-tripping stores byte-identically.
   """
 
   alias Raxol.ACP.{AssetToken, HookClient, JobSession}
   alias Raxol.ACP.JobSession.HandlerSeam
+  alias Raxol.Payments.Checkpoint
 
   @enforce_keys [:session, :handler, :adapter, :chain_id, :acp_core_address, :job_id]
   defstruct [
@@ -38,7 +57,8 @@ defmodule Raxol.ACP.JobSession.Provider do
     :acp_core_address,
     :job_id,
     buyer: nil,
-    seller: nil
+    seller: nil,
+    checkpoint: nil
   ]
 
   @type t :: %__MODULE__{
@@ -49,7 +69,8 @@ defmodule Raxol.ACP.JobSession.Provider do
           acp_core_address: String.t(),
           job_id: non_neg_integer(),
           buyer: String.t() | nil,
-          seller: String.t() | nil
+          seller: String.t() | nil,
+          checkpoint: Checkpoint.store() | nil
         }
 
   @type ok(status) ::
@@ -89,30 +110,49 @@ defmodule Raxol.ACP.JobSession.Provider do
     # on-chain event -- a re-accept must not re-invoke the handler or re-write
     # `setBudget`. Only `:open` runs the write.
     case safe_status(p.session) do
-      :open -> do_accept_request(p, request, budget)
+      :open -> accept_from_open(p, request, budget)
       :budget_set -> {:ok, %{status: :budget_set, idempotent: true}}
       other -> {:error, {:cannot_accept, other}}
     end
   end
 
-  defp do_accept_request(p, request, budget) do
-    case HandlerSeam.invoke(p.handler, :request, request, ctx(p)) do
-      {:accept, response} ->
-        with {:ok, tx} <-
-               HookClient.set_budget(
-                 p.adapter,
-                 p.chain_id,
-                 p.acp_core_address,
-                 p.job_id,
-                 budget.raw_amount
-               ),
-             {:ok, :budget_set} <-
-               JobSession.apply_event(p.session, :budget_set, %{tx_hash: tx}) do
-          {:ok, %{status: :budget_set, tx_hash: tx, response: response}}
+  # A rebuilt/lagging session can read `:open` while the `setBudget` tx already
+  # landed pre-crash. The accept checkpoint records the tx after the write; on
+  # a hit we mirror and return instead of re-invoking the handler or re-signing.
+  defp accept_from_open(p, request, budget) do
+    case ck_fetch(p, :accept) do
+      {:ok, %{"tx_hash" => tx}} when is_binary(tx) ->
+        with {:ok, :budget_set} <-
+               JobSession.apply_event(p.session, :budget_set, %{tx_hash: tx, resumed: true}) do
+          {:ok, %{status: :budget_set, tx_hash: tx, resumed: true}}
         end
 
-      {:reject, reason} ->
-        {:rejected, reason}
+      _ ->
+        do_accept_request(p, request, budget)
+    end
+  end
+
+  defp do_accept_request(p, request, budget) do
+    with :ok <- ensure_checkpoint(p) do
+      case HandlerSeam.invoke(p.handler, :request, request, ctx(p)) do
+        {:accept, response} ->
+          with {:ok, tx} <-
+                 HookClient.set_budget(
+                   p.adapter,
+                   p.chain_id,
+                   p.acp_core_address,
+                   p.job_id,
+                   budget.raw_amount
+                 ),
+               :ok = ck_put(p, :accept, %{"tx_hash" => tx}),
+               {:ok, :budget_set} <-
+                 JobSession.apply_event(p.session, :budget_set, %{tx_hash: tx}) do
+            {:ok, %{status: :budget_set, tx_hash: tx, response: response}}
+          end
+
+        {:reject, reason} ->
+          {:rejected, reason}
+      end
     end
   end
 
@@ -148,25 +188,66 @@ defmodule Raxol.ACP.JobSession.Provider do
   end
 
   defp do_deliver(p, request) do
+    with :ok <- ensure_checkpoint(p) do
+      case ck_fetch(p, :submit) do
+        # The write committed pre-crash but the mirror (or the API the session
+        # was rehydrated from) lagged: mirror and return, no handler, no tx.
+        {:ok, %{"tx_hash" => tx} = rec} when is_binary(tx) ->
+          with {:ok, :submitted} <-
+                 JobSession.apply_event(p.session, :submitted, %{tx_hash: tx, resumed: true}) do
+            {:ok, %{status: :submitted, tx_hash: tx, deliverable: pinned(rec), resumed: true}}
+          end
+
+        # The handler ran pre-crash but the write did not commit: reuse the
+        # pinned bytes so the exact same hash is (re)submitted.
+        {:ok, rec} ->
+          sign_submit(p, rec)
+
+        :error ->
+          run_handler_and_submit(p, request)
+      end
+    end
+  end
+
+  defp run_handler_and_submit(p, request) do
     case HandlerSeam.invoke(p.handler, :deliver, request, ctx(p)) do
       {:deliver, deliverable} ->
-        with {:ok, tx} <-
-               HookClient.submit(
-                 p.adapter,
-                 p.chain_id,
-                 p.acp_core_address,
-                 p.job_id,
-                 deliverable_hash(deliverable)
-               ),
-             {:ok, :submitted} <-
-               JobSession.apply_event(p.session, :submitted, %{tx_hash: tx}) do
-          {:ok, %{status: :submitted, tx_hash: tx, deliverable: deliverable}}
-        end
+        json = Jason.encode!(deliverable)
+        hash_hex = json |> ExKeccak.hash_256() |> Base.encode16(case: :lower)
+        rec = %{"deliverable_json" => json, "hash_hex" => hash_hex}
+        # Pin BEFORE signing: from here on, only these bytes can ever be
+        # submitted for this job, however many times we crash and replay.
+        :ok = ck_put(p, :submit, rec)
+        # Return the handler's own deliverable term on the fresh path; a resumed
+        # sign returns the decoded pinned form (the JSON bytes are identical).
+        sign_submit(p, rec, deliverable)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  # Resume (pinned-but-unsigned) path: only the pinned bytes survived the crash.
+  defp sign_submit(p, %{"deliverable_json" => json} = rec),
+    do: sign_submit(p, rec, Jason.decode!(json))
+
+  defp sign_submit(p, %{"hash_hex" => hash_hex} = rec, deliverable) do
+    with {:ok, tx} <-
+           HookClient.submit(
+             p.adapter,
+             p.chain_id,
+             p.acp_core_address,
+             p.job_id,
+             Base.decode16!(hash_hex, case: :lower)
+           ),
+         :ok = ck_put(p, :submit, Map.put(rec, "tx_hash", tx)),
+         {:ok, :submitted} <-
+           JobSession.apply_event(p.session, :submitted, %{tx_hash: tx}) do
+      {:ok, %{status: :submitted, tx_hash: tx, deliverable: deliverable}}
+    end
+  end
+
+  defp pinned(%{"deliverable_json" => json}), do: Jason.decode!(json)
 
   @doc """
   Evaluate a submitted deliverable, when this provider is also the evaluator.
@@ -187,6 +268,17 @@ defmodule Raxol.ACP.JobSession.Provider do
     end
   end
 
+  @doc """
+  Drop this job's checkpoint records. Call once the job reaches a terminal
+  status through an *external* path (evaluator approval, expiry) -- the
+  `evaluate/2` terminals clean up on their own. Safe with no store configured.
+  """
+  @spec cleanup(t()) :: :ok
+  def cleanup(%__MODULE__{} = p) do
+    :ok = Checkpoint.delete(p.checkpoint, ck_key(p, :accept))
+    :ok = Checkpoint.delete(p.checkpoint, ck_key(p, :submit))
+  end
+
   # -- Internals --
 
   defp finalize_evaluation(p, deliverable, :completed, info) do
@@ -199,6 +291,7 @@ defmodule Raxol.ACP.JobSession.Provider do
              deliverable_hash(deliverable)
            ),
          {:ok, :completed} <- JobSession.apply_event(p.session, :completed, %{tx_hash: tx}) do
+      cleanup(p)
       {:ok, %{status: :completed, tx_hash: tx, info: info}}
     end
   end
@@ -213,9 +306,26 @@ defmodule Raxol.ACP.JobSession.Provider do
              deliverable_hash(deliverable)
            ),
          {:ok, :rejected} <- JobSession.apply_event(p.session, :rejected, %{tx_hash: tx}) do
+      cleanup(p)
       {:ok, %{status: :rejected, tx_hash: tx, info: info}}
     end
   end
+
+  # -- Checkpoint plumbing --
+
+  # Fail closed on fund-adjacent writes: with `require_checkpoint: true` and no
+  # injected store, refuse before invoking the handler or touching the chain.
+  defp ensure_checkpoint(%{checkpoint: nil}) do
+    if Raxol.ACP.Checkpoint.required?(), do: {:error, :checkpoint_required}, else: :ok
+  end
+
+  defp ensure_checkpoint(_p), do: :ok
+
+  defp ck_key(p, step), do: Raxol.ACP.Checkpoint.key(p.chain_id, p.job_id, step)
+
+  defp ck_fetch(p, step), do: Checkpoint.fetch(p.checkpoint, ck_key(p, step))
+
+  defp ck_put(p, step, record), do: Checkpoint.put(p.checkpoint, ck_key(p, step), record)
 
   # Handler ctx: the job id plus the parties and current status, matching the
   # v1 `Job.Server` ctx shape so offering handlers are unchanged.
