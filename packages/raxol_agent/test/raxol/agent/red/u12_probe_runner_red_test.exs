@@ -1,9 +1,9 @@
 defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
   @moduledoc """
   U12-R — permanent failing-first RED suite for the probe Runner interface
-  (`harness-freeze-contracts.md` §3, roadmap D2: in-BEAM supervised pool).
-  Authored BEFORE the implementation exists (the red-first fan-out against
-  docs PR #569).
+  (roadmap D2: in-BEAM supervised pool). Authored BEFORE the
+  implementation exists, as a red-first fan-out against the frozen
+  contract.
 
   ## What U12 is
 
@@ -54,7 +54,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
   ## Mergeability discipline
 
-  GRADUATED (2026-07-16): the Runner Pool impl lands these all GREEN, so the
+  GRADUATED: the Runner Pool impl lands these all GREEN, so the
   `@moduletag :harness_red` gate was removed and the suite now runs in CI. It
   was authored red-first (excluded via `:harness_red` in `test_helper.exs`)
   and stayed red until the impl existed; graduation followed the N-U12.3
@@ -89,7 +89,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     %{
       session_id: Keyword.get(opts, :session_id, "u12-red"),
       tip_offset: Keyword.get(opts, :tip_offset, 41),
-      prefix_ref: Keyword.get(opts, :prefix_ref, {:captured, L.primary_prefix()}),
+      prefix_ref:
+        Keyword.get(opts, :prefix_ref, {:captured, L.primary_prefix()}),
       taint: Keyword.get(opts, :taint, :trusted),
       budget_scope: Keyword.get(opts, :budget_scope, :session_then_run),
       read_set: Keyword.get(opts, :read_set, [])
@@ -105,7 +106,12 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
   end
 
   defp submit_opts(rig, context) do
-    [emit: L.emit_fun(rig.bus), provider: rig.provider, budget: rig.budget, context: context]
+    [
+      emit: L.emit_fun(rig.bus),
+      provider: rig.provider,
+      budget: rig.budget,
+      context: context
+    ]
   end
 
   # Terminals are asynchronous — poll the bus fold until every submitted run
@@ -147,7 +153,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       rig = rig()
 
       {micros, result} =
-        :timer.tc(fn -> Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx())) end)
+        :timer.tc(fn ->
+          Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+        end)
 
       assert {:ok, run_id} = result
       assert is_binary(run_id)
@@ -177,10 +185,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # Cap 0 ⇒ every reserve refused at the submit-time budget check.
       rig = rig(cap: 0)
 
-      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
 
-      # AMENDED — ratified by V, 2026-07-16 (do not re-litigate).
-      #
       # The contradiction: the original N-U12.3 read the bus IMMEDIATELY after
       # submit and asserted `lifecycle_complete/2`, which requires exactly one
       # terminal per run. On a budget-refused (cap:0) run the immediate read sees
@@ -191,7 +198,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # (a parked run sheds to :exhausted only after park_timeout_ms) and test
       # ~315 (a max_parked-refused run is :exhausted and was NEVER :parked).
       #
-      # The ruling: genuine held bounded parking (ratified F5) means a parked run
+      # Genuine held bounded parking (ratified F5) means a parked run
       # legitimately has NO terminal until it sheds (TTL/pressure) or executes.
       # The lifecycle-completeness law it pins — every submitted run terminates,
       # even when parked — REMAINS in force, but ASYNCHRONOUSLY. So AWAIT the
@@ -200,13 +207,14 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # fold sees openings:1/terminals:0) rather than hanging. Tests ~298/~315 are
       # untouched; all three laws (lifecycle-completeness, over-cap exhaustion,
       # parked≠exhausted-lie) still hold — only the timing assumption changed.
-      # Rationale: F5 genuine-parking (harness-freeze-contracts.md §3.1 Budget).
+      # Rationale: F5 genuine-parking (the frozen Budget contour).
       park_ttl = CacheRideProbe.spec().park_timeout_ms
       events = await_terminals(rig.bus, [run_id], park_ttl + 2_000)
 
       assert Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :parked)
+               &(&1.kind == :probe_run and &1.run_id == run_id and
+                   &1.status == :parked)
              ),
              "budget-refused submit must PARK (probe_run{status: :parked}), got #{inspect(events)}"
 
@@ -224,14 +232,16 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # real shed; a genuinely-dropped run still fails (bounded await).
       rig = rig(cap: 0)
 
-      assert {:ok, run_id} = Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
 
       park_ttl = ShortParkProbe.spec().park_timeout_ms
       events = await_terminals(rig.bus, [run_id], park_ttl + 2_000)
 
       assert Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :parked)
+               &(&1.kind == :probe_run and &1.run_id == run_id and
+                   &1.status == :parked)
              ),
              "budget-refused submit must PARK, got #{inspect(events)}"
 
@@ -250,17 +260,26 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
           {micros, result} =
             :timer.tc(fn ->
-              Runner.submit("u12-red-#{i}", CacheRideProbe, submit_opts(rig, ctx()))
+              Runner.submit(
+                "u12-red-#{i}",
+                CacheRideProbe,
+                submit_opts(rig, ctx())
+              )
             end)
 
-          assert micros < 50_000, "seed=#{@seed}: submit ##{i} blocked for #{micros}µs"
+          assert micros < 50_000,
+                 "seed=#{@seed}: submit ##{i} blocked for #{micros}µs"
+
           result
         end
 
       assert Enum.all?(results, &match?({:ok, _}, &1)),
              "seed=#{@seed}: submit failed under saturation: #{inspect(results)}"
 
-      assert results |> Enum.map(fn {:ok, id} -> id end) |> Enum.uniq() |> length() == n,
+      assert results
+             |> Enum.map(fn {:ok, id} -> id end)
+             |> Enum.uniq()
+             |> length() == n,
              "seed=#{@seed}: run_ids must be unique"
     end
   end
@@ -279,7 +298,13 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
         event -> L.emit(rig.bus, event)
       end
 
-      opts = [emit: raising_emit, provider: rig.provider, budget: rig.budget, context: ctx()]
+      opts = [
+        emit: raising_emit,
+        provider: rig.provider,
+        budget: rig.budget,
+        context: ctx()
+      ]
+
       assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, opts)
 
       events = await_terminals(rig.bus, [run_id])
@@ -294,7 +319,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       refute Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :completed)
+               &(&1.kind == :probe_run and &1.run_id == run_id and
+                   &1.status == :completed)
              ),
              "a swallowed emit would have let the run complete as if journaled"
 
@@ -337,7 +363,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     test "kill/1 yields the :killed terminal exactly once; status reports it; no post-kill emission (N-U12.7)" do
       rig = rig()
 
-      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+
       assert :ok = Runner.kill(run_id)
 
       events = await_terminals(rig.bus, [run_id])
@@ -361,7 +389,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # run B would be refused (park). Killing A must return the headroom.
       rig = rig(cap: 100)
 
-      assert {:ok, a} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      assert {:ok, a} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+
       # A is running and holds the reserve.
       assert L.reserved(rig.budget) == 100
       assert :ok = Runner.kill(a)
@@ -369,12 +399,15 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       assert L.reserved(rig.budget) == 0
 
       # B now fits: it RUNS (a :started opening), never parks on a phantom reserve.
-      assert {:ok, b} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      assert {:ok, b} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+
       events = await_terminals(rig.bus, [b])
 
       refute Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == b and &1.status == :parked)
+               &(&1.kind == :probe_run and &1.run_id == b and
+                   &1.status == :parked)
              ),
              "B was refused a reserve that kill should have released: #{inspect(events)}"
 
@@ -391,12 +424,19 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       rig = rig(cap: 1_000)
 
       for _round <- 1..3 do
-        assert {:ok, run_id} = Runner.submit("u12-red", MultiCallProbe, submit_opts(rig, ctx()))
+        assert {:ok, run_id} =
+                 Runner.submit(
+                   "u12-red",
+                   MultiCallProbe,
+                   submit_opts(rig, ctx())
+                 )
+
         events = await_terminals(rig.bus, [run_id])
 
         assert Enum.any?(
                  events,
-                 &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :completed)
+                 &(&1.kind == :probe_run and &1.run_id == run_id and
+                     &1.status == :completed)
                ),
                "expected the multi-call run to complete, got #{inspect(events)}"
 
@@ -414,7 +454,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       probe = SlowMultiCallProbe
       max_calls = probe.spec().max_calls
 
-      assert {:ok, run_id} = Runner.submit("u12-red", probe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", probe, submit_opts(rig, ctx()))
 
       # Past the 25ms grace + the initial checkpoint, so the run is in its
       # multi-call loop with call 1 in flight — NOT killed at the checkpoint.
@@ -495,13 +536,18 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     test "journal order per provider call is reserve → call → settle; never a call without a prior same-run reserve" do
       rig = rig()
 
-      assert {:ok, run_id} = Runner.submit("u12-red", MultiCallProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", MultiCallProbe, submit_opts(rig, ctx()))
+
       events = await_terminals(rig.bus, [run_id])
 
       assert L.reserve_before_call(events) == :ok
       calls = Enum.count(events, &(&1.kind == :call))
       reserves = Enum.count(events, &(&1.kind == :reserve))
-      assert calls > 0, "the probe made no provider calls — the contour is vacuous"
+
+      assert calls > 0,
+             "the probe made no provider calls — the contour is vacuous"
+
       assert reserves >= calls
       assert L.fail_closed(L.provider_calls(rig.provider), calls) == :ok
     end
@@ -510,12 +556,15 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # Cap fits exactly one 100-token reserve; MultiCallProbe wants two calls.
       rig = rig(cap: 100)
 
-      assert {:ok, run_id} = Runner.submit("u12-red", MultiCallProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", MultiCallProbe, submit_opts(rig, ctx()))
+
       events = await_terminals(rig.bus, [run_id])
 
       assert Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :exhausted)
+               &(&1.kind == :probe_run and &1.run_id == run_id and
+                   &1.status == :exhausted)
              ),
              "mid-run refusal must terminate :exhausted, got #{inspect(events)}"
 
@@ -527,7 +576,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       rig = rig()
       max_calls = CacheRideProbe.spec().max_calls
 
-      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+
       _events = await_terminals(rig.bus, [run_id])
 
       assert L.leash_enforced(L.provider_calls(rig.provider), max_calls) == :ok
@@ -536,11 +587,16 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     test "the terminal charge carries the frozen split shape (cached dividend visible)" do
       rig = rig()
 
-      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+
       events = await_terminals(rig.bus, [run_id])
 
       terminal =
-        Enum.find(events, &(&1.kind == :probe_run and &1.status in L.terminal_statuses()))
+        Enum.find(
+          events,
+          &(&1.kind == :probe_run and &1.status in L.terminal_statuses())
+        )
 
       assert %{
                prompt_tokens: p,
@@ -561,7 +617,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       rig = rig(cap: 100)
       timeout_ms = HangingProbe.spec().timeout_ms
 
-      assert {:ok, run_id} = Runner.submit("u12-red", HangingProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", HangingProbe, submit_opts(rig, ctx()))
+
       # It reserved at submit and is now hung.
       assert L.reserved(rig.budget) == 100
 
@@ -589,14 +647,16 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     test "a parked run past park_timeout_ms sheds to the :exhausted terminal — parking is never indefinite" do
       rig = rig(cap: 0)
 
-      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
 
       park_ttl = CacheRideProbe.spec().park_timeout_ms
       events = await_terminals(rig.bus, [run_id], park_ttl + 2_000)
 
       assert Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :exhausted)
+               &(&1.kind == :probe_run and &1.run_id == run_id and
+                   &1.status == :exhausted)
              ),
              "over-TTL parked run must terminate :exhausted, got #{inspect(events)}"
 
@@ -608,14 +668,16 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # shed lands sub-second. Same law: parking is never indefinite.
       rig = rig(cap: 0)
 
-      assert {:ok, run_id} = Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
 
       park_ttl = ShortParkProbe.spec().park_timeout_ms
       events = await_terminals(rig.bus, [run_id], park_ttl + 2_000)
 
       assert Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :exhausted and
+               &(&1.kind == :probe_run and &1.run_id == run_id and
+                   &1.status == :exhausted and
                    &1.reason == :park_timeout)
              ),
              "over-TTL parked run must terminate :exhausted (reason :park_timeout), got #{inspect(events)}"
@@ -634,7 +696,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
           Process.sleep(:rand.uniform(2) - 1)
 
           assert {:ok, run_id} =
-                   Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(tip_offset: i))),
+                   Runner.submit(
+                     "u12-red",
+                     CacheRideProbe,
+                     submit_opts(rig, ctx(tip_offset: i))
+                   ),
                  "seed=#{@seed}: submit ##{i} must still return ok past max_parked (N-U12.3)"
 
           run_id
@@ -645,19 +711,23 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # The parked set never grows past the cap.
       assert L.bounded_parking(events, max_parked) == :ok, "seed=#{@seed}"
 
-      # AMENDED (adversarial-review #7, 2026-07-16): the OVER-CAP-refused runs are
-      # identified by their :exhausted `reason: :max_parked` — NOT by "any
-      # :exhausted run". The contract (§3.1 Budget / N-U12.10) says pressure
-      # relief also sheds the OLDEST HELD parked runs to :exhausted (reason
-      # :pressure); those legitimately WERE :parked. The original refute iterated
-      # every :exhausted run and would have wrongly flagged a pressure-evicted
-      # parked run. The LAW it pins — a max_parked-REFUSED run is :exhausted and
-      # was NEVER :parked (parking precedence, §3.3) — is unchanged; only the
-      # set it applies to is scoped to the refused runs. (Fix #7 also changed
-      # pressure-eviction from the frozen-but-wrong :timeout to :exhausted and
-      # from nuke-all to shed-oldest-one-per-overflow.)
+      # The OVER-CAP-refused runs are identified by their :exhausted
+      # `reason: :max_parked` — NOT by "any :exhausted run". The contract
+      # (Budget / N-U12.10) says pressure relief also sheds the OLDEST HELD
+      # parked runs to :exhausted (reason :pressure); those legitimately WERE
+      # :parked. Iterating every :exhausted run would wrongly flag a
+      # pressure-evicted parked run. The LAW this pins — a max_parked-REFUSED
+      # run is :exhausted and was NEVER :parked (parking precedence) — holds
+      # regardless; only the set it applies to is scoped to the refused runs.
+      # (Pressure-eviction is :exhausted, never :timeout, and sheds the
+      # oldest one per overflow, never nukes all.)
       refused =
-        for %{kind: :probe_run, run_id: id, status: :exhausted, reason: :max_parked} <- events,
+        for %{
+              kind: :probe_run,
+              run_id: id,
+              status: :exhausted,
+              reason: :max_parked
+            } <- events,
             into: MapSet.new(),
             do: id
 
@@ -669,7 +739,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       for run_id <- refused do
         refute Enum.any?(
                  events,
-                 &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :parked)
+                 &(&1.kind == :probe_run and &1.run_id == run_id and
+                     &1.status == :parked)
                ),
                "seed=#{@seed}: a max_parked-refused run must NEVER be :parked (§3.3 parking precedence)"
       end
@@ -687,7 +758,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       parked =
         for i <- 1..max_parked do
           assert {:ok, id} =
-                   Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx(tip_offset: i)))
+                   Runner.submit(
+                     "u12-red",
+                     ShortParkProbe,
+                     submit_opts(rig, ctx(tip_offset: i))
+                   )
 
           id
         end
@@ -698,7 +773,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       for id <- parked do
         assert Enum.any?(
                  evs0,
-                 &(&1.kind == :probe_run and &1.run_id == id and &1.status == :parked)
+                 &(&1.kind == :probe_run and &1.run_id == id and
+                     &1.status == :parked)
                )
 
         refute Enum.any?(
@@ -711,7 +787,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # ONE over-cap submit → it goes :exhausted (never parked) and schedules a
       # SINGLE pressure-shed of the oldest held run.
       assert {:ok, over} =
-               Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx(tip_offset: 99)))
+               Runner.submit(
+                 "u12-red",
+                 ShortParkProbe,
+                 submit_opts(rig, ctx(tip_offset: 99))
+               )
 
       # Wait for the single pressure-shed (@pressure_shed_ms ~40ms) but well
       # inside the 300ms park TTL so survivors are shed by PRESSURE, not TTL.
@@ -721,13 +801,19 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # The over-cap run: :exhausted, reason :max_parked, never :parked.
       assert Enum.any?(
                events,
-               &(&1.kind == :probe_run and &1.run_id == over and &1.status == :exhausted and
+               &(&1.kind == :probe_run and &1.run_id == over and
+                   &1.status == :exhausted and
                    &1.reason == :max_parked)
              )
 
       # Exactly ONE parked run was pressure-evicted (:exhausted, reason :pressure).
       pressure_shed =
-        for %{kind: :probe_run, run_id: id, status: :exhausted, reason: :pressure} <- events,
+        for %{
+              kind: :probe_run,
+              run_id: id,
+              status: :exhausted,
+              reason: :pressure
+            } <- events,
             id in parked,
             into: MapSet.new(),
             do: id
@@ -761,11 +847,13 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       # "no shed after kill" wait is sub-second, not the 10s production TTL.
       rig = rig(cap: 0)
 
-      assert {:ok, run_id} = Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", ShortParkProbe, submit_opts(rig, ctx()))
 
       assert Enum.any?(
                L.events(rig.bus),
-               &(&1.kind == :probe_run and &1.run_id == run_id and &1.status == :parked)
+               &(&1.kind == :probe_run and &1.run_id == run_id and
+                   &1.status == :parked)
              ),
              "expected the run to park before kill: #{inspect(L.events(rig.bus))}"
 
@@ -797,7 +885,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       submitted =
         for _ <- 1..3 do
           assert {:ok, run_id} =
-                   Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, context))
+                   Runner.submit(
+                     "u12-red",
+                     CacheRideProbe,
+                     submit_opts(rig, context)
+                   )
 
           run_id
         end
@@ -805,7 +897,8 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       _events = await_terminals(rig.bus, submitted)
       captures = L.captures(rig.provider)
 
-      assert length(captures) >= 3, "expected ≥3 captured requests, got #{length(captures)}"
+      assert length(captures) >= 3,
+             "expected ≥3 captured requests, got #{length(captures)}"
 
       # All prefixes byte-equal to the primary's captured request bytes...
       assert L.prefix_identity(captures, L.primary_prefix()) == :ok
@@ -822,7 +915,12 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
   describe "P-U12.4 isolation" do
     test "killing/crashing a subset of concurrent probes leaves the primary event trace identical to the no-probes run" do
       # Baseline: the primary trace with NO probes.
-      baseline = [:turn_started, :item_started, :item_completed, :turn_completed]
+      baseline = [
+        :turn_started,
+        :item_started,
+        :item_completed,
+        :turn_completed
+      ]
 
       rig = rig()
       # The primary loop writes its trace through the same bus (the projection
@@ -832,7 +930,11 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       submitted =
         for i <- 1..4 do
           assert {:ok, run_id} =
-                   Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(tip_offset: i)))
+                   Runner.submit(
+                     "u12-red",
+                     CacheRideProbe,
+                     submit_opts(rig, ctx(tip_offset: i))
+                   )
 
           run_id
         end
@@ -854,21 +956,30 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     test "a probe drafting a family: :loop event is rejected WHOLE — :error terminal with :family_violation, zero drafted events (N-U12.1)" do
       rig = rig()
 
-      assert {:ok, run_id} = Runner.submit("u12-red", LoopDraftProbe, submit_opts(rig, ctx()))
+      assert {:ok, run_id} =
+               Runner.submit("u12-red", LoopDraftProbe, submit_opts(rig, ctx()))
+
       events = await_terminals(rig.bus, [run_id])
 
       terminal =
         Enum.find(
           events,
-          &(&1.kind == :probe_run and &1.run_id == run_id and &1.status in L.terminal_statuses())
+          &(&1.kind == :probe_run and &1.run_id == run_id and
+              &1.status in L.terminal_statuses())
         )
 
-      assert terminal, "no terminal for the loop-drafting run: #{inspect(events)}"
+      assert terminal,
+             "no terminal for the loop-drafting run: #{inspect(events)}"
+
       assert terminal.status == :error
       assert terminal.reason == :family_violation
 
       # The WHOLE result is rejected — zero drafted events emitted.
-      assert Enum.count(events, &(&1.kind == :meta_result and &1.run_id == run_id)) == 0
+      assert Enum.count(
+               events,
+               &(&1.kind == :meta_result and &1.run_id == run_id)
+             ) == 0
+
       assert L.family_isolation(events) == :ok
     end
   end
@@ -878,12 +989,19 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       rig = rig()
 
       assert {:ok, run_id} =
-               Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx(taint: :trusted)))
+               Runner.submit(
+                 "u12-red",
+                 CacheRideProbe,
+                 submit_opts(rig, ctx(taint: :trusted))
+               )
 
       events = await_terminals(rig.bus, [run_id])
 
       results = Enum.filter(events, &(&1.kind == :meta_result))
-      assert results != [], "no result events — the provenance contour is vacuous"
+
+      assert results != [],
+             "no result events — the provenance contour is vacuous"
+
       assert L.provenance_stamped(events, :probe_c1_gate, :trusted) == :ok
     end
 
@@ -891,12 +1009,18 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       rig = rig()
 
       assert {:ok, run_id} =
-               Runner.submit("u12-red", TaintedTrustProbe, submit_opts(rig, ctx(taint: :tainted)))
+               Runner.submit(
+                 "u12-red",
+                 TaintedTrustProbe,
+                 submit_opts(rig, ctx(taint: :tainted))
+               )
 
       events = await_terminals(rig.bus, [run_id])
 
       results = Enum.filter(events, &(&1.kind == :meta_result))
-      assert results != [], "no result events — the taint-override contour is vacuous"
+
+      assert results != [],
+             "no result events — the taint-override contour is vacuous"
 
       # The Runner overrides the probe's :trusted draft: the algebra is Runner-owned.
       assert L.provenance_stamped(events, :probe_c1_gate, :tainted) == :ok
@@ -913,11 +1037,17 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       assert UnregisteredSourceProbe.interned_source() == :probe_notreal
 
       assert {:ok, run_id} =
-               Runner.submit("u12-red", UnregisteredSourceProbe, submit_opts(rig, ctx()))
+               Runner.submit(
+                 "u12-red",
+                 UnregisteredSourceProbe,
+                 submit_opts(rig, ctx())
+               )
 
       events = await_terminals(rig.bus, [run_id])
       results = Enum.filter(events, &(&1.kind == :meta_result))
-      assert results != [], "no result events — the provenance-source contour is vacuous"
+
+      assert results != [],
+             "no result events — the provenance-source contour is vacuous"
 
       assert Enum.all?(results, &(&1.source == :probe_unregistered)),
              "an unregistered probe id must stamp :probe_unregistered, got #{inspect(results)}"
@@ -939,11 +1069,19 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       context = ctx(taint: :trusted, tip_offset: 20, read_set: [tainted_leaf])
 
-      assert {:ok, run_id} = Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, context))
+      assert {:ok, run_id} =
+               Runner.submit(
+                 "u12-red",
+                 CacheRideProbe,
+                 submit_opts(rig, context)
+               )
+
       events = await_terminals(rig.bus, [run_id])
 
       results = Enum.filter(events, &(&1.kind == :meta_result))
-      assert results != [], "no result events — the refs-taint contour is vacuous"
+
+      assert results != [],
+             "no result events — the refs-taint contour is vacuous"
 
       # Expected trust is :tainted because ref 20 is tainted (tainted_refs [20]).
       assert L.provenance_stamped(events, :probe_c1_gate, :trusted, [20]) == :ok
@@ -959,7 +1097,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       submitted =
         for probe <- [CacheRideProbe, MultiCallProbe] do
-          assert {:ok, run_id} = Runner.submit("u12-red", probe, submit_opts(rig, ctx()))
+          assert {:ok, run_id} =
+                   Runner.submit("u12-red", probe, submit_opts(rig, ctx()))
+
           run_id
         end
 
@@ -968,7 +1108,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
 
       for %{kind: :probe_run, status: s, fingerprint: fp} <- events,
           s in L.terminal_statuses() do
-        assert %{provider: p, name: n, params_hash: h, params_inline: inline} = fp
+        assert %{provider: p, name: n, params_hash: h, params_inline: inline} =
+                 fp
+
         assert is_binary(p) and is_binary(n) and is_binary(h) and is_map(inline)
       end
     end
@@ -979,7 +1121,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
   @moduledoc """
   Negative controls for U12-R (meta-invariant m4). NO `:harness_red` tag — these
   RUN IN CI and must stay GREEN. Each dead injector is a one-mutation wrong
-  Runner implementation (§3.3, one per N-U12.x); its matching checker MUST flag
+  Runner implementation (one per N-U12.x); its matching checker MUST flag
   it. A final pair proves the checkers pass a well-formed trace (the controls
   are not vacuously red) and that the m1 fired-counter itself catches a dead
   injector (dumping the seed-reproducible schedule, m2).
@@ -1023,7 +1165,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     FamilyCheckRemovedRunner.run(rig, "r1")
     events = L.events(rig.bus)
 
-    assert {:error, {:family_violation_emitted, "r1", :loop}} = L.family_isolation(events)
+    assert {:error, {:family_violation_emitted, "r1", :loop}} =
+             L.family_isolation(events)
+
     L.assert_all_fired!(rig.fireset, [:family_check_removed])
   end
 
@@ -1038,9 +1182,13 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
              L.reserve_before_call(events)
 
     assert kinds == [:call, :settle]
+
     # The provider WAS invoked with zero reserves — the stub counter has the proof.
     assert L.provider_calls(rig.provider) == 1
-    assert {:error, {:provider_calls, 1, 0}} = L.fail_closed(L.provider_calls(rig.provider), 0)
+
+    assert {:error, {:provider_calls, 1, 0}} =
+             L.fail_closed(L.provider_calls(rig.provider), 0)
+
     L.assert_all_fired!(rig.fireset, [:settle_only])
   end
 
@@ -1086,7 +1234,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
 
     # The 1-byte divergence is NAMED: the offset points at the first divergent
     # byte (the collapsed double space inside "hi  there").
-    expected = L.first_divergent_offset(L.primary_prefix(), L.reserialized_prefix())
+    expected =
+      L.first_divergent_offset(L.primary_prefix(), L.reserialized_prefix())
+
     assert offset == expected
     assert offset > 0
 
@@ -1172,7 +1322,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     UnboundedParkingRunner.run(rig, run_ids)
     events = L.events(rig.bus)
 
-    assert {:error, {:parked_overflow, peak, ^max_parked}} = L.bounded_parking(events, max_parked)
+    assert {:error, {:parked_overflow, peak, ^max_parked}} =
+             L.bounded_parking(events, max_parked)
+
     assert peak == n, "seed=#{@seed}: schedule=#{inspect(run_ids)}"
     L.assert_all_fired!(rig.fireset, [:unbounded_parking])
   end
@@ -1199,7 +1351,9 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     NoFingerprintRunner.run(rig, "r1")
     events = L.events(rig.bus)
 
-    assert {:error, {:missing_fingerprint, "r1"}} = L.fingerprint_present(events)
+    assert {:error, {:missing_fingerprint, "r1"}} =
+             L.fingerprint_present(events)
+
     L.assert_all_fired!(rig.fireset, [:no_fingerprint])
   end
 
@@ -1210,13 +1364,20 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     run_budget = L.new_budget(0)
 
     SessionLeakRunner.run(
-      %{bus: rig.bus, session_budget: session_budget, budget: run_budget, fireset: rig.fireset},
+      %{
+        bus: rig.bus,
+        session_budget: session_budget,
+        budget: run_budget,
+        fireset: rig.fireset
+      },
       "r1"
     )
 
     # The session reservation leaked: reserved stayed at 100 instead of rolling
     # back to 0.
-    assert {:error, {:session_leaked, 100, 0}} = L.budget_conserved(session_budget, 0)
+    assert {:error, {:session_leaked, 100, 0}} =
+             L.budget_conserved(session_budget, 0)
+
     L.assert_all_fired!(rig.fireset, [:session_leak])
   end
 
@@ -1230,7 +1391,10 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     assert L.reserve_before_call(events) == :ok
     assert L.fail_closed(L.provider_calls(rig.provider), 1) == :ok
     assert L.leash_enforced(L.provider_calls(rig.provider), 1) == :ok
-    assert L.prefix_identity(L.captures(rig.provider), L.primary_prefix()) == :ok
+
+    assert L.prefix_identity(L.captures(rig.provider), L.primary_prefix()) ==
+             :ok
+
     assert L.family_isolation(events) == :ok
     assert L.provenance_stamped(events, :probe_c1_gate, :trusted) == :ok
     assert L.output_atomic(events) == :ok
@@ -1244,6 +1408,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerControlsTest do
     events = L.events(rig.bus)
 
     assert L.provenance_stamped(events, :probe_c1_gate, :tainted) == :ok
+
     # And the trusted expectation FAILS against it — the checker discriminates.
     assert {:error, {:trust_not_absorbed, "r1", :tainted, :trusted}} =
              L.provenance_stamped(events, :probe_c1_gate, :trusted)

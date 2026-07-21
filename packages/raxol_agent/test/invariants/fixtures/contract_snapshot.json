@@ -34,6 +34,7 @@
     "tier": ["ephemeral", "durable"],
     "type": [
       "turn_started",
+      "item_started",
       "item_delta",
       "item_completed",
       "turn_completed",
@@ -44,6 +45,7 @@
   },
   "event_types": {
     "turn_started": { "tier": "durable" },
+    "item_started": { "tier": "durable" },
     "item_delta": { "tier": "ephemeral" },
     "item_completed": { "tier": "durable" },
     "turn_completed": { "tier": "durable" },
@@ -60,15 +62,16 @@
   "producers": {
     "pump": {
       "turn_started": { "payload_required": ["prompt"] },
-      "item_delta": { "payload_required": ["chunk"] },
+      "item_started": { "payload_required": ["item_id", "item_type"] },
+      "item_delta": { "payload_required": ["item_id", "chunk"] },
       "item_completed.message": {
-        "payload_required": ["item_type", "content"]
+        "payload_required": ["item_id", "item_type", "content"]
       },
       "item_completed.tool_use": {
-        "payload_required": ["item_type", "name", "arguments", "call_id"]
+        "payload_required": ["item_id", "item_type", "name", "arguments", "call_id"]
       },
       "item_completed.tool_result": {
-        "payload_required": ["item_type", "name", "result"]
+        "payload_required": ["item_id", "item_type", "name", "result"]
       },
       "turn_completed": { "payload_required": ["usage", "final"] },
       "error": { "payload_required": ["reason"] }

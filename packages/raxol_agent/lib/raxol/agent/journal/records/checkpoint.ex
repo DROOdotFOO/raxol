@@ -7,7 +7,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   `<session>/snapshots/<sha256-hex>.json`; the `checkpoint` record carries only
   the pointer + hash + the conversational tip it was taken at. It is appended
   through the **same single Writer** as every other record, consuming exactly one
-  offset from the one id space (JS-FREEZE §1.1 — the offset law; N-JS6
+  offset from the one id space (JS-FREEZE §1.1 — the offset law;
   single-counter lockstep).
 
   This module is the **enabler skeleton** for the permanent U9-R red suite: the
@@ -16,10 +16,6 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   Both entry points return `{:error, :not_implemented}` until U9 lands — the red
   suite (`@moduletag :harness_red`, excluded from CI) asserts the *correct*
   behaviour and is therefore RED against this skeleton by construction.
-
-  See `docs/proposals/in-flight/harness-freeze-contracts.md` §1.1 (checkpoint
-  record — frozen fields, the offset law, the turn-boundary rule, the
-  conversational tip) and §1.2/§1.3 (P-JS1/P-JS4 + N-JS1/N-JS2/N-JS3/N-JS6).
 
   ## Write discipline (frozen — JS-FREEZE §1.1)
 
@@ -30,15 +26,15 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
     * `snapshot_hash` = lowercase-hex `sha256` of the snapshot file bytes; it is
       verified at restore. A missing file → `{:error, :snapshot_missing}`; a
       hash mismatch → `{:error, :snapshot_corrupt}` — and in **both** cases the
-      journal stays `:ok` and nothing is deleted (N-JS3).
+      journal stays `:ok` and nothing is deleted.
     * `snapshot_ref: nil` is a legal tip-only pointer (OQ-JS1 RULED LEGAL);
       restore then falls back to a full `fold(0..tip_offset)`.
     * `tip_offset` is frozen at write time and validated at write time: the
       record it names MUST satisfy `conversational?/1` on the checkpoint's own
-      branch, else `{:error, :invalid_tip}` and **nothing is appended** (N-JS1).
+      branch, else `{:error, :invalid_tip}` and **nothing is appended**.
     * A checkpoint MUST NOT be appended mid-turn (between `turn_started` and its
       close) nor mid-reserve (between a spend-gate reserve and its terminal),
-      else `{:error, :mid_turn}` / `{:error, :mid_reserve}` (N-JS2).
+      else `{:error, :mid_turn}` / `{:error, :mid_reserve}`.
     * FI-10: the record body carries **no model content** — pointer + hash only.
       Snapshot-content sanitization + MS secret exclusion bind to the MS codec,
       which is not yet landed: the interim surrogate codec typed-rejects any
@@ -119,7 +115,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   from `tip_offset` — equal to a full fold over the persistent slice (P-JS4). A
   missing/corrupt snapshot surfaces
   `{:error, :snapshot_missing | :snapshot_corrupt}` with the journal left `:ok`
-  and nothing deleted (N-JS3). A tip-only checkpoint (`snapshot_ref: nil`) falls
+  and nothing deleted. A tip-only checkpoint (`snapshot_ref: nil`) falls
   back to a full `fold(0..tip_offset)`.
   """
   @callback restore(journal :: term(), opts :: keyword()) ::
@@ -135,7 +131,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   `@ref_re` path-traversal reject ⇒ `:malformed_pointer`; snapshot size ceiling,
   depth-bounded decode, `$s` deref-gadget guard ⇒ `:snapshot_corrupt`; hash
   verify ⇒ `:snapshot_corrupt`; absent file ⇒ `:snapshot_missing`) — the journal
-  stays `:ok` and nothing is deleted on any failure (N-JS3). `restore/2` is
+  stays `:ok` and nothing is deleted on any failure. `restore/2` is
   exactly `restore_checkpoint/3` applied to the newest checkpoint.
   """
   @callback restore_checkpoint(

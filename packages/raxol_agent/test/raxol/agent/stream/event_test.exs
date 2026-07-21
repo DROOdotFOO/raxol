@@ -9,6 +9,11 @@ defmodule Raxol.Agent.Stream.EventTest do
                Event.from_tuple({:text_delta, "hi"})
     end
 
+    test "lifts reasoning" do
+      assert %Event.Reasoning{text: "thinking"} =
+               Event.from_tuple({:reasoning, "thinking"})
+    end
+
     test "lifts tool_use with full info" do
       info = %{name: "linear_graphql", arguments: %{q: 1}, id: "call_1"}
 
@@ -58,6 +63,13 @@ defmodule Raxol.Agent.Stream.EventTest do
       payload = Event.to_payload(%Event.TextDelta{text: "hello"})
       assert payload.event == :text_delta
       assert payload.message == "hello"
+      assert %DateTime{} = payload.timestamp
+    end
+
+    test "Reasoning payload carries the text as message under the :reasoning event" do
+      payload = Event.to_payload(%Event.Reasoning{text: "hmm"})
+      assert payload.event == :reasoning
+      assert payload.message == "hmm"
       assert %DateTime{} = payload.timestamp
     end
 

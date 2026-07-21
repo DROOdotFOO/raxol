@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Invariants.PendingInvariantsTest do
   @moduledoc """
-  Tier-2 invariant SKELETONS (docs/proposals/in-flight/harness-invariants.md,
-  "Tier 2 — write now as @tag-pending, activate with their units").
+  Tier-2 invariant SKELETONS: written now as `@tag :pending_unit`, activated
+  when their named unit lands.
 
   Every test here is `@tag :pending_unit` and excluded in `test_helper.exs` —
   visible in the suite (counted as excluded), never run, never silently green.

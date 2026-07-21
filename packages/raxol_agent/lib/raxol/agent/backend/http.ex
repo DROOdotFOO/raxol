@@ -34,7 +34,12 @@ defmodule Raxol.Agent.Backend.HTTP do
   @behaviour Raxol.Agent.AIBackend
 
   @default_timeout Raxol.Core.Defaults.health_check_interval_ms()
-  @default_max_tokens 1_024
+  # A reasoning model (LongCat / DeepSeek-style) spends completion tokens on a
+  # hidden reasoning channel BEFORE the answer. The old 1024 cap truncated such
+  # turns mid-reasoning -- `finish_reason: length` with an EMPTY answer. 4096
+  # leaves room for reasoning + answer; `AI_MAX_TOKENS` overrides at the
+  # deployment boundary, an explicit `:max_tokens` opt overrides per call.
+  @default_max_tokens 4_096
   @anthropic_api_version "2023-06-01"
   @default_ollama_port "11434"
 
@@ -46,12 +51,29 @@ defmodule Raxol.Agent.Backend.HTTP do
 
     {url, headers, body} = build_request(provider, messages, opts)
 
-    case do_request(url, headers, body, timeout, plugins) do
-      {:ok, response_body} ->
-        {:ok, parse_response(provider, response_body)}
+    # `parse_response/2` returns `{:ok, response} | {:error, reason}`: an
+    # unparseable body or an empty length-truncated turn is an honest error,
+    # NOT assistant prose (the "cannot lie at the wire boundary" rule). The
+    # with-chain surfaces either the transport error or the parse error.
+    with {:ok, response_body} <- do_request(url, headers, body, timeout, plugins),
+         {:ok, parsed} <- parse_response(provider, response_body) do
+      {:ok, parsed}
+    end
+  end
 
-      {:error, _} = error ->
-        error
+  # The per-call token budget. Precedence: explicit `:max_tokens` opt >
+  # `AI_MAX_TOKENS` env > `@default_max_tokens`. Read at request-build time so a
+  # deployment can raise the ceiling for reasoning models without code changes.
+  defp default_max_tokens do
+    case System.get_env("AI_MAX_TOKENS") do
+      nil ->
+        @default_max_tokens
+
+      raw ->
+        case Integer.parse(String.trim(raw)) do
+          {n, _} when n > 0 -> n
+          _ -> @default_max_tokens
+        end
     end
   end
 
@@ -92,7 +114,8 @@ defmodule Raxol.Agent.Backend.HTTP do
               buffer: "",
               provider: provider,
               content: "",
-              usage: %{}
+              usage: %{},
+              tool_calls_acc: %{}
             }
           end,
           &stream_next/1,
@@ -146,10 +169,25 @@ defmodule Raxol.Agent.Backend.HTTP do
       {:sse_data, ^ref, data} ->
         {events, new_buffer} = parse_sse(buffer <> data, provider)
 
-        chunks = for {:text_delta, text} <- events, do: {:chunk, text}
+        # Preserve arrival order and interleaving: text deltas become
+        # `{:chunk, _}` (the answer), reasoning deltas become
+        # `{:reasoning, _}` (chain-of-thought), honest `:marker`s (unparseable
+        # chunk / truncation) ride their own channel; only text feeds the
+        # accumulated `content` — neither reasoning nor markers are the answer.
+        out =
+          Enum.flat_map(events, fn
+            {:text_delta, text} -> [{:chunk, text}]
+            {:reasoning_delta, text} -> [{:reasoning, text}]
+            {:marker, text} -> [{:marker, text}]
+            _ -> []
+          end)
 
         new_content =
-          state.content <> Enum.map_join(chunks, "", fn {:chunk, t} -> t end)
+          state.content <>
+            Enum.map_join(out, "", fn
+              {:chunk, t} -> t
+              _reasoning -> ""
+            end)
 
         new_usage =
           case Enum.find(events, &match?({:usage, _}, &1)) do
@@ -157,7 +195,20 @@ defmodule Raxol.Agent.Backend.HTTP do
             nil -> state.usage
           end
 
-        {chunks, %{state | buffer: new_buffer, content: new_content, usage: new_usage}}
+        new_acc =
+          Enum.reduce(events, state.tool_calls_acc, fn
+            {:tool_call_delta, frags}, acc -> merge_tool_call_frags(acc, frags)
+            _other, acc -> acc
+          end)
+
+        {out,
+         %{
+           state
+           | buffer: new_buffer,
+             content: new_content,
+             usage: new_usage,
+             tool_calls_acc: new_acc
+         }}
 
       {:sse_error, ^ref, error} ->
         {[{:error, error}], %{state | buffer: :halt}}
@@ -168,6 +219,7 @@ defmodule Raxol.Agent.Backend.HTTP do
            %{
              content: state.content,
              usage: state.usage,
+             tool_calls: finalize_tool_calls(state.tool_calls_acc),
              metadata: %{
                backend: :http,
                provider: state.provider,
@@ -184,7 +236,11 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   # -- SSE parsing -------------------------------------------------------------
 
-  defp parse_sse(raw, :ollama) do
+  @doc false
+  # Exposed for unit tests: parse a raw SSE buffer for `provider` into
+  # `{events, leftover_buffer}`. Events are `{:text_delta, t}`,
+  # `{:reasoning_delta, t}`, `{:usage, u}`, or `{:marker, t}`.
+  def parse_sse(raw, :ollama) do
     lines = String.split(raw, "\n")
     {complete, [buffer]} = Enum.split(lines, -1)
 
@@ -202,7 +258,22 @@ defmodule Raxol.Agent.Backend.HTTP do
     {events, buffer}
   end
 
-  defp parse_sse(raw, provider) when provider in [:anthropic, :openai, :kimi] do
+  def parse_sse(raw, provider) when provider in [:anthropic, :openai, :kimi] do
+    # Canonicalize CRLF line endings before framing. Some providers (or a
+    # proxy in front of them) speak `\r\n`: left alone, the double-newline
+    # record separator never matches a literal "\r\n\r\n" (no `"\n\n"`
+    # substring exists inside it), so the stream never frames a single
+    # event and just buffers forever -- the answer never surfaces. And when
+    # a boundary DOES happen to land such that a `\r` survives on its own
+    # line (e.g. a `"data: [DONE]\r"` line), the `"data: [DONE]"` exact
+    # match below misses it, falls through to `Jason.decode("[DONE]\r")`,
+    # and seals a bogus "unparseable response chunk" ⚠ marker on every
+    # single turn from that provider. Replacing every `\r\n` pair with `\n`
+    # up front fixes both: the separator normalizes to `"\n\n"`, and no
+    # line keeps a trailing `\r`. A lone `\r` not yet paired with its `\n`
+    # (split across a chunk boundary) is left untouched here and completes
+    # correctly once the rest of the pair arrives in the next chunk.
+    raw = String.replace(raw, "\r\n", "\n")
     parts = String.split(raw, "\n\n")
 
     case parts do
@@ -230,6 +301,13 @@ defmodule Raxol.Agent.Backend.HTTP do
     with "data: " <> json <- data_line,
          {:ok, parsed} <- Jason.decode(json) do
       case parsed do
+        # Extended-thinking blocks stream as `thinking_delta` (the thought)
+        # then `signature_delta` (the crypto signature, not shown). Surface
+        # the thought as reasoning; ignore the signature.
+        %{"type" => "content_block_delta", "delta" => %{"thinking" => text}}
+        when is_binary(text) ->
+          [{:reasoning_delta, text}]
+
         %{"type" => "content_block_delta", "delta" => %{"text" => text}} ->
           [{:text_delta, text}]
 
@@ -254,24 +332,68 @@ defmodule Raxol.Agent.Backend.HTTP do
       |> Enum.find(&String.starts_with?(&1, "data: "))
 
     case data_line do
-      "data: " <> data ->
-        if data == "[DONE]" do
-          [{:usage, %{}}]
-        else
-          case Jason.decode(data) do
-            {:ok, %{"choices" => [%{"delta" => %{"content" => text}} | _]}}
-            when is_binary(text) ->
-              [{:text_delta, text}]
+      "data: [DONE]" ->
+        [{:usage, %{}}]
 
-            _ ->
-              []
-          end
+      "data: " <> data ->
+        case Jason.decode(data) do
+          {:ok, decoded} -> openai_stream_events(decoded)
+          # A `data:` line that IS present but is not valid JSON is a genuine
+          # fidelity gap -- an honest marker, never a silently dropped chunk.
+          {:error, _} -> [{:marker, "⚠ unparseable response chunk"}]
         end
 
       _ ->
+        # No `data:` line (SSE comment / keep-alive / blank) -- correctly
+        # skipped, not a parse failure.
         []
     end
   end
+
+  # A streaming chunk -> ordered SSE events. Handles BOTH the streaming
+  # (`delta`) and full-message (`message`, LongCat) shapes -- the delta-only
+  # parser missed LongCat, which emits `delta: null` + a full `message`.
+  # Reasoning rides its own channel (`reasoning`/`reasoning_content`), and a
+  # `finish_reason: length` chunk (either key variant) emits an honest
+  # truncation marker. A content-less chunk (role-only opener) yields nothing.
+  defp openai_stream_events(%{"choices" => [choice | _]}) when is_map(choice) do
+    msg = choice_message(choice)
+    reasoning = choice_reasoning(msg)
+    text = choice_text(msg)
+    finish = finish_reason(choice)
+    tool_calls = msg["tool_calls"]
+
+    []
+    |> maybe_prepend(reasoning && {:reasoning_delta, reasoning})
+    |> maybe_prepend(text != "" && {:text_delta, text})
+    |> maybe_prepend(
+      # RAW tool-call fragments -- the stream accumulates them by index
+      # (`merge_tool_call_frags/2`), because OpenAI-compatible providers
+      # (incl. LongCat) stream `delta.tool_calls[]` incrementally: the id +
+      # `function.name` arrive on the first fragment for an index, the
+      # `function.arguments` as string fragments across later chunks. Reading
+      # the whole array per chunk + last-wins loses the name (the final
+      # fragment is args-only). A single full-message tool_calls array is just
+      # the degenerate one-fragment case, so this handles both.
+      is_list(tool_calls) and tool_calls != [] and {:tool_call_delta, tool_calls}
+    )
+    |> maybe_prepend(finish == "length" && {:marker, truncation_marker(choice)})
+    |> Enum.reverse()
+  end
+
+  # A trailing usage-only chunk (some providers emit `{"usage": {...}}` with an
+  # empty `choices` at stream end) carries token accounting, nothing to render.
+  defp openai_stream_events(%{"usage" => usage}) when is_map(usage),
+    do: [{:usage, usage}]
+
+  # A well-formed JSON object in an unrecognized shape is benign protocol, not
+  # a fidelity gap -- skipped (never dumped). Only a JSON DECODE failure marks.
+  defp openai_stream_events(_other), do: []
+
+  # Prepend (O(1)) each present event, so the caller reverses ONCE to restore
+  # emission order -- rather than `events ++ [event]` per step.
+  defp maybe_prepend(events, falsy) when falsy in [nil, false], do: events
+  defp maybe_prepend(events, event), do: [event | events]
 
   # -- Request building -------------------------------------------------------
 
@@ -293,7 +415,7 @@ defmodule Raxol.Agent.Backend.HTTP do
 
     body = %{
       model: model,
-      max_tokens: Keyword.get(opts, :max_tokens, @default_max_tokens),
+      max_tokens: Keyword.get(opts, :max_tokens, default_max_tokens()),
       messages: Enum.map(chat_msgs, &format_message/1)
     }
 
@@ -322,7 +444,7 @@ defmodule Raxol.Agent.Backend.HTTP do
     body = %{
       model: model,
       messages: Enum.map(messages, &format_message/1),
-      max_tokens: Keyword.get(opts, :max_tokens, @default_max_tokens)
+      max_tokens: Keyword.get(opts, :max_tokens, default_max_tokens())
     }
 
     body = maybe_add_tools(:openai, body, opts)
@@ -347,7 +469,7 @@ defmodule Raxol.Agent.Backend.HTTP do
     body = %{
       model: model,
       messages: Enum.map(messages, &format_message/1),
-      max_tokens: Keyword.get(opts, :max_tokens, @default_max_tokens)
+      max_tokens: Keyword.get(opts, :max_tokens, default_max_tokens())
     }
 
     {url, headers, body}
@@ -380,6 +502,10 @@ defmodule Raxol.Agent.Backend.HTTP do
   end
 
   # -- Response parsing -------------------------------------------------------
+  #
+  # Every clause returns `{:ok, response} | {:error, reason}`. There is NO
+  # clause that dumps a raw map into `content` -- an unrecognized body is an
+  # honest `{:error, marker}` (see the fall-through), never assistant prose.
 
   # Anthropic tool_use response: stop_reason "tool_use" with tool_use content blocks
   defp parse_response(
@@ -404,123 +530,356 @@ defmodule Raxol.Agent.Backend.HTTP do
         _ -> nil
       end)
 
-    %{
-      content: text,
-      tool_calls: tool_calls,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :anthropic,
-        model: Map.get(body, "model"),
-        stop_reason: "tool_use"
-      }
-    }
+    {:ok,
+     %{
+       content: text,
+       tool_calls: tool_calls,
+       usage: Map.get(body, "usage", %{}),
+       metadata: %{
+         backend: :http,
+         provider: :anthropic,
+         model: Map.get(body, "model"),
+         stop_reason: "tool_use"
+       }
+     }}
   end
 
   defp parse_response(
          :anthropic,
          %{"content" => [%{"text" => text} | _]} = body
        ) do
-    %{
-      content: text,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :anthropic,
-        model: Map.get(body, "model"),
-        stop_reason: Map.get(body, "stop_reason")
-      }
-    }
+    {:ok,
+     %{
+       content: text,
+       usage: Map.get(body, "usage", %{}),
+       metadata: %{
+         backend: :http,
+         provider: :anthropic,
+         model: Map.get(body, "model"),
+         stop_reason: Map.get(body, "stop_reason")
+       }
+     }}
   end
 
   # OpenAI tool_calls response
   defp parse_response(
          :openai,
-         %{"choices" => [%{"message" => %{"tool_calls" => tool_calls}} | _]} = body
+         %{"choices" => [%{"message" => %{"tool_calls" => tool_calls}} | _]} =
+           body
        )
        when is_list(tool_calls) and tool_calls != [] do
-    parsed_calls =
-      Enum.map(tool_calls, fn tc ->
-        args =
-          case tc["function"]["arguments"] do
-            s when is_binary(s) ->
-              case Jason.decode(s) do
-                {:ok, map} -> map
-                _ -> %{}
-              end
+    msg = choice_message(hd(body["choices"]))
 
-            map when is_map(map) ->
-              map
-
-            _ ->
-              %{}
-          end
-
-        %{
-          "id" => tc["id"],
-          "name" => tc["function"]["name"],
-          "arguments" => args
-        }
-      end)
-
-    content = get_in(body, ["choices", Access.at(0), "message", "content"]) || ""
-
-    %{
-      content: content,
-      tool_calls: parsed_calls,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :openai,
-        model: Map.get(body, "model")
-      }
-    }
+    {:ok,
+     %{
+       content: choice_text(msg),
+       tool_calls: parse_openai_tool_calls(tool_calls),
+       usage: Map.get(body, "usage", %{}),
+       metadata: %{backend: :http, provider: :openai, model: Map.get(body, "model")}
+     }
+     |> put_reasoning(choice_reasoning(msg))}
   end
 
-  defp parse_response(
-         :openai,
-         %{"choices" => [%{"message" => %{"content" => text}} | _]} = body
-       ) do
-    %{
-      content: text,
-      usage: Map.get(body, "usage", %{}),
-      metadata: %{
-        backend: :http,
-        provider: :openai,
-        model: Map.get(body, "model")
-      }
-    }
+  # OpenAI-compatible content response. One clause covers standard OpenAI
+  # (`message.content`), LongCat's full-message shape, and the reasoning
+  # channel (`reasoning`/`reasoning_content`). The `finish_reason` variant
+  # (`finish_reason` OR the underscore-less `finishreason`) drives honest
+  # truncation: a length-capped turn with an EMPTY answer is an error marker,
+  # never a clean (blank) completion.
+  defp parse_response(:openai, %{"choices" => [choice | _]} = body)
+       when is_map(choice) do
+    msg = choice_message(choice)
+    content = choice_text(msg)
+    reasoning = choice_reasoning(msg)
+    finish = finish_reason(choice)
+
+    if finish == "length" and blank?(content) do
+      {:error, truncation_marker(body)}
+    else
+      {:ok,
+       %{
+         content: content,
+         usage: Map.get(body, "usage", %{}),
+         metadata: openai_metadata(body, finish)
+       }
+       |> put_reasoning(reasoning)}
+    end
   end
 
   defp parse_response(:kimi, body), do: parse_response(:openai, body)
 
   defp parse_response(:ollama, %{"message" => %{"content" => text}} = body) do
-    %{
-      content: text,
-      usage: %{},
-      metadata: %{
-        backend: :http,
-        provider: :ollama,
-        model: Map.get(body, "model"),
-        eval_duration: Map.get(body, "eval_duration")
-      }
-    }
+    {:ok,
+     %{
+       content: text,
+       usage: %{},
+       metadata: %{
+         backend: :http,
+         provider: :ollama,
+         model: Map.get(body, "model"),
+         eval_duration: Map.get(body, "eval_duration")
+       }
+     }}
   end
 
-  defp parse_response(_provider, body) do
-    %{
-      content: inspect(body),
-      usage: %{},
-      metadata: %{backend: :http, raw: true}
-    }
+  # The honest fall-through: a body no clause could parse is an ERROR marker,
+  # never `inspect(body)` painted as the assistant's answer. The shape hint
+  # (top-level keys only, never values) rides under `RAXOL_DEBUG` so a raw
+  # payload -- possibly carrying secrets -- is never leaked into a transcript.
+  defp parse_response(provider, body) do
+    {:error, unparseable_marker(provider, body)}
   end
+
+  # Normalize an OpenAI-shape `tool_calls` list to the downstream contract
+  # (STRING keys `"id"/"name"/"arguments"`, arguments JSON-decoded). Shared
+  # by the blocking `parse_response/2` and the streaming path so both surface
+  # the identical shape -- a tool call must round-trip the stream unchanged.
+  defp parse_openai_tool_calls(tool_calls) when is_list(tool_calls) do
+    Enum.map(tool_calls, fn tc ->
+      build_tool_call(
+        tc["id"],
+        get_in(tc, ["function", "name"]),
+        get_in(tc, ["function", "arguments"])
+      )
+    end)
+  end
+
+  # Build the downstream tool-call contract from id/name/raw arguments, shared
+  # by the blocking (`parse_openai_tool_calls`) and streaming
+  # (`finalize_tool_call`) paths so BOTH surface the identical honesty marker.
+  # Undecodable arguments never silently become `%{}`: `arguments` stays
+  # map-shaped `%{}` (a consumer expecting a map is not broken) but an
+  # `arguments_error` rides alongside, so a tool is never executed -- or
+  # reported unexecuted -- under wrong/empty args with no trace.
+  defp build_tool_call(id, name, raw_args) do
+    base = %{"id" => id, "name" => name}
+
+    case decode_tool_args(raw_args) do
+      {:ok, args} ->
+        Map.put(base, "arguments", args)
+
+      {:error, marker} ->
+        base
+        |> Map.put("arguments", %{})
+        |> Map.put("arguments_error", marker)
+    end
+  end
+
+  # Merge streamed tool-call fragments into the accumulator. Correlation
+  # priority: the provider's own `index` (unchanged) > a matching `id`
+  # already present in the accumulator (a same-call continuation from a
+  # no-index provider that still repeats the id) > a FRESH key strictly
+  # past every key already assigned (a new, complete fragment from a
+  # no-index provider — see `resolve_tool_call_index/3`). `id`/`name` are
+  # taken from the first fragment that carries them; `function.arguments`
+  # string fragments are concatenated (a whole JSON string in one fragment
+  # is just the length-1 case). A fragment carrying `arguments` as an
+  # already-parsed map overrides the string buffer.
+  defp merge_tool_call_frags(acc, frags) when is_list(frags) do
+    frags
+    |> Enum.with_index()
+    |> Enum.reduce(acc, fn {frag, pos}, acc ->
+      idx = resolve_tool_call_index(acc, frag, pos)
+      cur = Map.get(acc, idx, %{"id" => nil, "name" => nil, "args" => ""})
+      fun = frag["function"] || %{}
+
+      args =
+        case fun["arguments"] do
+          s when is_binary(s) ->
+            if(is_binary(cur["args"]), do: cur["args"], else: "") <> s
+
+          m when is_map(m) ->
+            m
+
+          _ ->
+            cur["args"]
+        end
+
+      Map.put(acc, idx, %{
+        "id" => frag["id"] || cur["id"],
+        "name" => fun["name"] || cur["name"],
+        "args" => args
+      })
+    end)
+  end
+
+  defp merge_tool_call_frags(acc, _frags), do: acc
+
+  # A provider that never sends `index` has no stable key across chunks: the
+  # position within any ONE `frags` batch (`pos`) always restarts at 0, so two
+  # SEPARATE complete fragments arriving in two different chunks both resolved
+  # to key 0 and the second silently overwrote (cross-merged into) the first.
+  # Falls back to `id` (a same-call continuation that still repeats it lands
+  # back on its own slot) and finally to a key strictly greater than every
+  # key already in the accumulator — new and distinct no matter how many
+  # earlier, unrelated calls have already been assigned.
+  # Only a non-negative INTEGER index is a usable key: it is provider
+  # (network) controlled, and a non-integer value (string/float/map from a
+  # buggy or hostile OpenAI-compatible endpoint) used verbatim as a key
+  # later crashes `next_tool_call_index/1` with an ArithmeticError
+  # (`<non-number> + 1`), killing the whole streaming turn. Anything else
+  # falls through to id-based / positional resolution.
+  defp resolve_tool_call_index(_acc, %{"index" => index}, _pos)
+       when is_integer(index) and index >= 0,
+       do: index
+
+  defp resolve_tool_call_index(acc, %{"id" => id}, pos) when not is_nil(id) do
+    case find_tool_call_index_by_id(acc, id) do
+      nil -> next_tool_call_index(acc) + pos
+      existing -> existing
+    end
+  end
+
+  defp resolve_tool_call_index(acc, _frag, pos), do: next_tool_call_index(acc) + pos
+
+  defp find_tool_call_index_by_id(acc, id) do
+    Enum.find_value(acc, fn
+      {idx, %{"id" => ^id}} -> idx
+      _ -> nil
+    end)
+  end
+
+  defp next_tool_call_index(acc), do: Enum.max(Map.keys(acc), fn -> -1 end) + 1
+
+  # Finalize the accumulator to the downstream tool_calls contract (index
+  # order, arguments JSON-decoded), matching `parse_openai_tool_calls/1`.
+  defp finalize_tool_calls(acc) when map_size(acc) == 0, do: []
+
+  defp finalize_tool_calls(acc) do
+    acc
+    |> Enum.sort_by(fn {idx, _} -> idx end)
+    |> Enum.map(fn {_idx, tc} -> finalize_tool_call(tc) end)
+  end
+
+  # The accumulated `args` string can fail to decode -- a real fidelity gap,
+  # not a zero-arg call. `build_tool_call/3` attaches the honest
+  # `arguments_error` marker (never leaking the raw text, matching
+  # `unparseable_marker/2`'s keys-only discipline), identically to the
+  # blocking path.
+  defp finalize_tool_call(tc) do
+    build_tool_call(tc["id"], tc["name"], tc["args"])
+  end
+
+  defp decode_tool_args(""), do: {:ok, %{}}
+  defp decode_tool_args(nil), do: {:ok, %{}}
+
+  defp decode_tool_args(s) when is_binary(s) do
+    case Jason.decode(s) do
+      {:ok, map} when is_map(map) ->
+        {:ok, map}
+
+      _ ->
+        {:error, "⚠ undecodable tool call arguments (#{byte_size(s)} bytes)"}
+    end
+  end
+
+  defp decode_tool_args(m) when is_map(m), do: {:ok, m}
+  defp decode_tool_args(_other), do: {:ok, %{}}
+
+  @doc false
+  # Test seam: fold a sequence of streamed tool-call fragment batches (one
+  # list per SSE chunk) into the finalized tool_calls, exactly as
+  # `stream_next/1` accumulates them across chunks. Lets the incremental
+  # merge be pinned without a live HTTP stream.
+  @spec accumulate_tool_calls([list()]) :: [map()]
+  def accumulate_tool_calls(frag_batches) do
+    frag_batches
+    |> Enum.reduce(%{}, fn frags, acc -> merge_tool_call_frags(acc, frags) end)
+    |> finalize_tool_calls()
+  end
+
+  # -- OpenAI-compatible field extraction (shared by complete + stream) --------
+
+  # The content-bearing sub-object: a non-streaming/full-message chunk carries
+  # `message`; a streaming chunk carries `delta`. LongCat emits `message` even
+  # on the SSE path, which the delta-only parser missed.
+  defp choice_message(%{"message" => msg}) when is_map(msg), do: msg
+  defp choice_message(%{"delta" => delta}) when is_map(delta), do: delta
+  defp choice_message(_choice), do: %{}
+
+  defp choice_text(%{"content" => t}) when is_binary(t), do: t
+  defp choice_text(_msg), do: ""
+
+  # The separate reasoning channel: `reasoning` (OpenRouter) or
+  # `reasoning_content` (DeepSeek / LongCat); nil when absent/blank.
+  defp choice_reasoning(%{"reasoning_content" => t}) when is_binary(t) and t != "", do: t
+  defp choice_reasoning(%{"reasoning" => t}) when is_binary(t) and t != "", do: t
+  defp choice_reasoning(_msg), do: nil
+
+  # Tolerate the wire-key variant: LongCat sends `finishreason` (no
+  # underscore) where OpenAI sends `finish_reason`.
+  defp finish_reason(choice) when is_map(choice),
+    do: Map.get(choice, "finish_reason") || Map.get(choice, "finishreason")
+
+  defp finish_reason(_choice), do: nil
+
+  defp openai_metadata(body, finish) do
+    meta = %{backend: :http, provider: :openai, model: Map.get(body, "model")}
+
+    case finish do
+      # A length-truncated round that still carried SOME answer text stays a
+      # {:ok, _} (partial answer preserved) but rides the honest marker in
+      # metadata — the non-streaming complete/2 loop has no other channel to
+      # disclose the truncation ALONGSIDE the partial answer. (An EMPTY
+      # length-truncated round is handled earlier as {:error, marker}.)
+      "length" ->
+        Map.merge(meta, %{
+          finish_reason: :length,
+          truncated: true,
+          marker: truncation_marker(body)
+        })
+
+      nil ->
+        meta
+
+      other ->
+        Map.put(meta, :finish_reason, other)
+    end
+  end
+
+  defp put_reasoning(response, nil), do: response
+  defp put_reasoning(response, reasoning), do: Map.put(response, :reasoning, reasoning)
+
+  defp blank?(s) when is_binary(s), do: String.trim(s) == ""
+  defp blank?(_), do: false
+
+  # An honest, human-readable truncation marker; the token count is the honest
+  # quantity when the response carried usage.
+  defp truncation_marker(source) do
+    tokens =
+      get_in(source, ["usage", "completion_tokens"]) ||
+        get_in(source, ["usage", "total_tokens"])
+
+    suffix = if is_integer(tokens), do: " (#{tokens} tokens)", else: ""
+    "⚠ response truncated — hit token limit#{suffix}; raise AI_MAX_TOKENS"
+  end
+
+  defp unparseable_marker(provider, body) do
+    base = "⚠ unparseable response from #{provider}"
+    if debug?(), do: base <> " — keys: #{shape_hint(body)}", else: base
+  end
+
+  # Keys only -- never values, never `inspect(body)` -- so the hint can never
+  # reintroduce the `%{...}` dump the fall-through exists to prevent.
+  defp shape_hint(body) when is_map(body),
+    do: body |> Map.keys() |> Enum.map_join(", ", &to_string/1)
+
+  defp shape_hint(body) when is_list(body), do: "list"
+  defp shape_hint(_body), do: "scalar"
+
+  defp debug?, do: System.get_env("RAXOL_DEBUG") in ["1", "true", "yes"]
 
   # -- Helpers ----------------------------------------------------------------
 
   defp do_request(url, headers, body, timeout, plugins) do
     if Code.ensure_loaded?(Req) do
       req =
-        Req.new(url: url, json: body, headers: headers, receive_timeout: timeout)
+        Req.new(
+          url: url,
+          json: body,
+          headers: headers,
+          receive_timeout: timeout
+        )
         |> apply_plugins(plugins)
 
       case Req.post(req) do

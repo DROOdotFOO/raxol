@@ -1,7 +1,6 @@
 defmodule Raxol.Agent.Invariants.FaultJournal do
   @moduledoc """
-  Fault-injection harness for the invariant suite (see
-  `docs/proposals/in-flight/harness-invariants.md`, meta-invariants section).
+  Fault-injection harness for the invariant suite.
 
   Instruments the REAL `Raxol.Agent.Journal.FileStore` (no mock journal — the
   code under test is the production storage path) with five named fault sites:
@@ -113,7 +112,9 @@ defmodule Raxol.Agent.Invariants.FaultJournal do
   """
   def inject_append_fail(harness, writer, scratch_dir) do
     %{io: original} = :sys.get_state(writer)
-    scratch = Path.join(scratch_dir, "dead_fd_#{System.unique_integer([:positive])}")
+
+    scratch =
+      Path.join(scratch_dir, "dead_fd_#{System.unique_integer([:positive])}")
 
     :sys.replace_state(writer, fn state ->
       {:ok, dead} = :file.open(scratch, [:write, :raw, :binary])

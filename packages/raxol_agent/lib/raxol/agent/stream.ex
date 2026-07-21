@@ -32,6 +32,9 @@ defmodule Raxol.Agent.Stream do
   ## Event Types
 
   - `{:text_delta, text}` -- streaming text chunk from LLM
+  - `{:reasoning, text}` -- streaming chain-of-thought / thinking chunk
+    (Anthropic thinking blocks, OpenAI reasoning); distinct from the
+    answer text so the contract can seal it as its own reasoning block
   - `{:tool_use, %{name, arguments, id}}` -- LLM requesting a tool call
   - `{:tool_result, %{name, result}}` -- result from executing a tool
   - `{:turn_complete, %{content, usage, iteration}}` -- end of one ReAct turn
@@ -49,7 +52,12 @@ defmodule Raxol.Agent.Stream do
   - `:backend_opts` -- keyword list passed to backend (api_key, model, etc.);
     merged over the executor's resolved opts
   - `:model` -- per-request model override (wins over `:executor`/`:backend_opts`)
-  - `:system_prompt` -- system message prepended to conversation
+  - `:system_prompt` -- system message (binary) prepended to the conversation.
+    Applies to every entry form -- string prompts, pre-built `:messages`, and
+    message-list prompts -- unless the list already carries an explicit
+    system message (which then wins; never duplicated). Source specs like
+    `:bonded` are resolved upstream by `Raxol.Agent.SystemPrompt`; this layer
+    takes resolved text only, so no file I/O happens per turn.
   - `:messages` -- pre-built message list (overrides prompt)
   - `:stream` -- whether to use streaming backend (default: `true`)
 
@@ -63,6 +71,7 @@ defmodule Raxol.Agent.Stream do
 
   @type event ::
           {:text_delta, String.t()}
+          | {:reasoning, String.t()}
           | {:tool_use, tool_use()}
           | {:tool_result, tool_result()}
           | {:turn_complete, turn_info()}
@@ -280,11 +289,40 @@ defmodule Raxol.Agent.Stream do
       {:chunk, text}, :running ->
         {[{:text_delta, text}], :running}
 
+      # Reasoning/thinking tokens the backend surfaced (Anthropic thinking
+      # blocks, OpenAI reasoning). Forwarded as a distinct event so the
+      # contract can give reasoning its own durable item lifecycle rather
+      # than folding it into the answer text — see `Contract.pump/3`.
+      {:reasoning, text}, :running ->
+        {[{:reasoning, text}], :running}
+
+      # An honest wire-boundary marker (unparseable chunk / length
+      # truncation) surfaced by `Backend.HTTP`. Non-fatal: forwarded without
+      # halting the turn, so a single bad chunk never kills the stream.
+      {:marker, text}, :running ->
+        {[{:marker, text}], :running}
+
       {:done, response}, :running ->
+        # `run/2` is the single-completion path -- there is no tool-execution
+        # loop downstream of this stream (that is `react/2`). `Backend.HTTP`
+        # accumulates streamed `tool_calls` onto the done response even here
+        # (`finalize_tool_calls/1`); silently dropping them would strand a
+        # model's claimed tool call with zero receipt while the turn still
+        # reports a clean done -- a green-wash. Seal an honest
+        # `:tool_unexecuted` marker per call instead: the vocabulary already
+        # exists and `Contract.pump/3` already renders it as a visible ⚠
+        # message -- this is its producer on the streaming run/2 path. The
+        # `:done` payload's own shape is untouched (content/tool_results/usage)
+        # so nothing reading it directly is disturbed.
+        unexecuted_events =
+          response
+          |> Map.get(:tool_calls, [])
+          |> Enum.map(&unexecuted_tool_call_event/1)
+
         done_event =
           {:done, %{content: response.content, tool_results: [], usage: response.usage}}
 
-        {[done_event], :done}
+        {unexecuted_events ++ [done_event], :done}
 
       {:error, reason}, :running ->
         {[{:error, reason}], :done}
@@ -292,6 +330,13 @@ defmodule Raxol.Agent.Stream do
       _event, :done ->
         {:halt, :done}
     end)
+  end
+
+  defp unexecuted_tool_call_event(tool_call) do
+    name =
+      Map.get(tool_call, "name") || Map.get(tool_call, :name) || "unknown"
+
+    {:tool_unexecuted, %{name: name, reason: :no_tool_loop}}
   end
 
   defp sync_completion(backend, messages, backend_opts) do
@@ -511,7 +556,8 @@ defmodule Raxol.Agent.Stream do
   # so they need the Action modules in their opts to build the MCP config.
   defp maybe_inject_actions(backend_opts, backend, opts) do
     with true <- Raxol.Agent.AIBackend.handles_tools_internally?(backend),
-         actions when is_list(actions) and actions != [] <- Keyword.get(opts, :actions) do
+         actions when is_list(actions) and actions != [] <-
+           Keyword.get(opts, :actions) do
       Keyword.put_new(backend_opts, :actions, actions)
     else
       _ -> backend_opts
@@ -536,26 +582,44 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp maybe_override_model(backend_opts, nil), do: backend_opts
-  defp maybe_override_model(backend_opts, model), do: Keyword.put(backend_opts, :model, model)
+
+  defp maybe_override_model(backend_opts, model),
+    do: Keyword.put(backend_opts, :model, model)
 
   # -- Private: Message Building ----------------------------------------------
 
   defp build_messages(prompt, opts) when is_binary(prompt) do
     case Keyword.get(opts, :messages) do
       nil ->
-        base = [%{role: :user, content: prompt}]
-
-        case Keyword.get(opts, :system_prompt) do
-          nil -> base
-          sys -> [%{role: :system, content: sys} | base]
-        end
+        apply_system_prompt([%{role: :user, content: prompt}], opts)
 
       messages when is_list(messages) ->
-        messages
+        apply_system_prompt(messages, opts)
     end
   end
 
-  defp build_messages(messages, _opts) when is_list(messages), do: messages
+  defp build_messages(messages, opts) when is_list(messages),
+    do: apply_system_prompt(messages, opts)
+
+  # `:system_prompt` applies to EVERY message-entry form -- a system prompt
+  # silently dropped because the caller happened to pass a pre-built list is
+  # a trust bug (the operator believes a prompt governs the turn while the
+  # backend never saw it). An explicit system message already present in the
+  # list wins: the list is the more specific artifact, and we never inject a
+  # duplicate.
+  defp apply_system_prompt(messages, opts) do
+    case Keyword.get(opts, :system_prompt) do
+      nil ->
+        messages
+
+      sys when is_binary(sys) ->
+        if Enum.any?(messages, &(Map.get(&1, :role) == :system)) do
+          messages
+        else
+          [%{role: :system, content: sys} | messages]
+        end
+    end
+  end
 
   defp maybe_enrich_memory(messages, context) do
     Raxol.Agent.Memory.Manager.enrich_messages(
@@ -566,7 +630,10 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp maybe_enrich_user_context(messages, context) do
-    Raxol.Agent.Memory.Manager.enrich_user_context(messages, Map.get(context, :user_context))
+    Raxol.Agent.Memory.Manager.enrich_user_context(
+      messages,
+      Map.get(context, :user_context)
+    )
   end
 
   defp last_user_content(messages) do

@@ -1,19 +1,20 @@
 defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
   @moduledoc """
   Tier-1 invariant I4 — turn attribution under GENERATED overlapping async
-  turns (docs/proposals/in-flight/harness-invariants.md).
+  turns (see `docs/harness/architecture.md`'s "Journal and projection"
+  section for the turn-bucketing model).
 
-  The known hole (grok brief §2 #5): a single-threaded sequential-turn
-  generator never fires the emit-time-stamp bug, making the property vacuous.
-  Every generated schedule here is async-crossing BY CONSTRUCTION (m5): each
-  parked async delta is released only after at least one LATER turn has started
-  AND completed, so a `state.turn_id` read at emit time would stamp nil or the
+  The known hole: a single-threaded sequential-turn generator never fires
+  the emit-time-stamp bug, making the property vacuous. Every generated
+  schedule here is async-crossing BY CONSTRUCTION (m5): each parked async
+  delta is released only after at least one LATER turn has started AND
+  completed, so a `state.turn_id` read at emit time would stamp nil or the
   wrong turn. The property: every event carries nil or its ORIGINATING turn's
   id — never a neighbor's.
 
-  Green as of 4c8cedfc (the snapshot-into-command-context fix): the dispatcher
-  snapshots the minting turn's id into the command context at dispatch and the
-  executor echoes it back as `{:command_result, msg, %{turn_id: ...}}`.
+  The dispatcher snapshots the minting turn's id into the command context
+  at dispatch and the executor echoes it back as
+  `{:command_result, msg, %{turn_id: ...}}`, which is what keeps this green.
   """
   use ExUnit.Case, async: false
   use ExUnitProperties
@@ -55,7 +56,9 @@ defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
   setup do
     FaultJournal.ensure_registry(:duplicate, EmitBus.registry_name())
 
-    FaultJournal.ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
+    FaultJournal.ensure_running(
+      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
+    )
 
     FaultJournal.ensure_running(
       {DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one}
@@ -113,7 +116,9 @@ defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
           end
 
         parked_ids = Enum.map(parked, fn {_, id, _} -> id end)
-        assert Enum.uniq(parked_ids ++ trailing_turn_ids) == parked_ids ++ trailing_turn_ids
+
+        assert Enum.uniq(parked_ids ++ trailing_turn_ids) ==
+                 parked_ids ++ trailing_turn_ids
 
         # Phase 3 — release the parked tasks in a generated order; every late
         # delta must be stamped with its ORIGINATING turn's id — not a trailing
@@ -125,7 +130,9 @@ defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
           delta = await_type!(session_id, :item_delta)
 
           assert delta.tier == :ephemeral
-          assert delta_tag(delta) == tag, "delta correlation broke — wrong chunk arrived"
+
+          assert delta_tag(delta) == tag,
+                 "delta correlation broke — wrong chunk arrived"
 
           assert delta.turn_id == turn_id,
                  "delta for #{tag} (originating turn #{inspect(turn_id)}) was stamped " <>
@@ -202,7 +209,8 @@ defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
   # The async chunk rides the command_result fold: payload %{message:
   # {:command_result, {:chunk, tag}}} (the ephemeral leg is not sanitized, so
   # the tuple survives intact).
-  defp delta_tag(%Event{payload: %{message: {:command_result, {:chunk, tag}}}}), do: tag
+  defp delta_tag(%Event{payload: %{message: {:command_result, {:chunk, tag}}}}),
+    do: tag
 
   defp delta_tag(%Event{payload: payload}),
     do: flunk("unexpected delta payload: #{inspect(payload)}")
@@ -219,7 +227,10 @@ defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
 
   defp dispatcher(sess) do
     %{lifecycle_pid: lifecycle_pid} = :sys.get_state(sess)
-    %{dispatcher_pid: dispatcher_pid} = GenServer.call(lifecycle_pid, :get_full_state)
+
+    %{dispatcher_pid: dispatcher_pid} =
+      GenServer.call(lifecycle_pid, :get_full_state)
+
     dispatcher_pid
   end
 

@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Journal.FileStore.Reader do
   @moduledoc """
-  Tolerant replay of a session's JSONL journal segments (harness-spec-backend
-  §4, component 2 — the Reader).
+  Tolerant replay of a session's JSONL journal segments (see
+  `docs/harness/architecture.md`, "Journal and projection").
 
   Segments are replayed in ascending order into an ordered record stream. Two
   failure policies, per the spec:

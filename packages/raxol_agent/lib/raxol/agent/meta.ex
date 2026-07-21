@@ -1,8 +1,9 @@
 defmodule Raxol.Agent.Meta do
   @moduledoc """
   The U11 meta-event family seam — producer-strict emit + reader-tolerant
-  decode, plus the provenance / taint / actor / fingerprint folds
-  (`docs/proposals/in-flight/harness-freeze-contracts.md` §2, FI-5).
+  decode, plus the provenance / taint / actor / fingerprint folds (see
+  `docs/harness/architecture.md`, "The event contract", on the `:loop`/`:meta`
+  family split; FI-5).
 
   `Raxol.Agent.Meta.Registry` carries the frozen v1 type table as data; this
   module is the algebra that consumes it. Every fold derives from the journal
@@ -233,8 +234,7 @@ defmodule Raxol.Agent.Meta do
         {tainted?, pure?, cache} =
           record
           |> refs()
-          |> Enum.reduce_while({false, true, cache}, fn ref,
-                                                        {_t, pure?, cache} ->
+          |> Enum.reduce_while({false, true, cache}, fn ref, {_t, pure?, cache} ->
             case Map.get(idx, ref) do
               nil ->
                 {:cont, {false, pure?, cache}}

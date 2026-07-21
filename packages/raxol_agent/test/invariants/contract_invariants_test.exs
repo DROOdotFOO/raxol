@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   @moduledoc """
-  Tier-1 invariant I9 — the contract only grows, DEEP
-  (docs/proposals/in-flight/harness-invariants.md).
+  Tier-1 invariant I9 — the contract only grows, DEEP (see
+  `docs/harness/architecture.md`'s "The contract only grows" rule).
 
   `fixtures/contract_snapshot.json` is the checked-in floor: per-type payload
   shapes, enum values, field requiredness, tier assignments, and the neutral →
@@ -28,13 +28,18 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   alias Raxol.Core.Runtime.EmitBus
 
   @fixtures Path.join(__DIR__, "fixtures")
-  @snapshot @fixtures |> Path.join("contract_snapshot.json") |> File.read!() |> Jason.decode!()
+  @snapshot @fixtures
+            |> Path.join("contract_snapshot.json")
+            |> File.read!()
+            |> Jason.decode!()
   @golden Path.join(@fixtures, "golden/v1.0.0/golden-v1")
 
   setup do
     FaultJournal.ensure_registry(:duplicate, EmitBus.registry_name())
 
-    FaultJournal.ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
+    FaultJournal.ensure_running(
+      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
+    )
 
     # pump/3 emits into the NAMED SessionStreamer.
     start_supervised!(Raxol.Agent.SessionStreamer)
@@ -56,7 +61,9 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
   describe "I9 — envelope" do
     test "every snapshotted envelope field still exists on Contract.Event (removal/rename breaks the contract)" do
-      struct_keys = %Event{} |> Map.from_struct() |> Map.keys() |> MapSet.new(&to_string/1)
+      struct_keys =
+        %Event{} |> Map.from_struct() |> Map.keys() |> MapSet.new(&to_string/1)
+
       required = MapSet.new(@snapshot["envelope"]["required"])
 
       missing = MapSet.difference(required, struct_keys)
@@ -77,13 +84,17 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
     test "every snapshotted tier and family enum value is still accepted by the neutral seam" do
       for tier <- @snapshot["enums"]["tier"] do
         # EmitBus.build guards the tier — a removed enum value raises here.
-        event = EmitBus.build("s", :app_update, String.to_existing_atom(tier), %{})
+        event =
+          EmitBus.build("s", :app_update, String.to_existing_atom(tier), %{})
+
         assert to_string(event.tier) == tier
       end
 
       for family <- @snapshot["enums"]["family"] do
         event =
-          EmitBus.build("s", :app_update, :durable, %{}, family: String.to_existing_atom(family))
+          EmitBus.build("s", :app_update, :durable, %{},
+            family: String.to_existing_atom(family)
+          )
 
         assert to_string(event.family) == family
       end
@@ -101,13 +112,16 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
       stream = [
         {:text_delta, "chunk one"},
-        {:tool_use, %{name: "read_file", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_use,
+         %{name: "read_file", arguments: %{path: "/x"}, id: "call-1"}},
         {:tool_result, %{name: "read_file", result: "contents"}},
         {:turn_complete, %{iteration: 1, usage: %{input_tokens: 1}}},
         {:done, %{content: "final answer", usage: %{output_tokens: 2}}}
       ]
 
-      task = Task.async(fn -> Contract.pump(session_id, stream, prompt: "p") end)
+      task =
+        Task.async(fn -> Contract.pump(session_id, stream, prompt: "p") end)
+
       assert {:ok, %{content: "final answer"}} = Task.await(task)
 
       events = collect_events(session_id)
@@ -118,7 +132,8 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       seen_types = events |> Enum.map(&to_string(&1.type)) |> MapSet.new()
 
       for type <- @snapshot["enums"]["type"], type != "error" do
-        assert type in seen_types, "pump can no longer produce #{type} — event-type removal"
+        assert type in seen_types,
+               "pump can no longer produce #{type} — event-type removal"
       end
 
       # Tier assignment per snapshot (tier flips break replay semantics).
@@ -134,7 +149,8 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
             do: to_string(it)
 
       for it <- @snapshot["enums"]["item_type"] do
-        assert it in seen_item_types, "item_completed lost item_type variant #{it}"
+        assert it in seen_item_types,
+               "item_completed lost item_type variant #{it}"
       end
 
       # Required payload fields per producer shape (removal / rename /
@@ -164,7 +180,11 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       session_id = "inv-contract-pumperr-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(session_id)
 
-      task = Task.async(fn -> Contract.pump(session_id, [{:error, :kaboom}], prompt: "p") end)
+      task =
+        Task.async(fn ->
+          Contract.pump(session_id, [{:error, :kaboom}], prompt: "p")
+        end)
+
       assert {:error, :kaboom} = Task.await(task)
 
       events = collect_events(session_id)
@@ -183,7 +203,8 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   # ===========================================================================
 
   describe "I9 — dispatcher/bridge producer" do
-    test "the neutral→contract mapping and journal record shape match the snapshot", %{base: base} do
+    test "the neutral→contract mapping and journal record shape match the snapshot",
+         %{base: base} do
       session_id = "inv-contract-bridge-#{System.unique_integer([:positive])}"
       {:ok, streamer} = SessionStreamer.start_link(name: nil)
 
@@ -220,7 +241,11 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
           payload = Map.fetch!(neutral_payloads, neutral)
 
-          EmitBus.publish(EmitBus.build(session_id, neutral_type, tier, payload, turn_id: "t1"))
+          EmitBus.publish(
+            EmitBus.build(session_id, neutral_type, tier, payload,
+              turn_id: "t1"
+            )
+          )
 
           ev = await_event!(session_id)
 
@@ -269,13 +294,19 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       :ok = SessionStreamer.subscribe(session_id, streamer)
 
       # Open, then kill the writer to force the append-failure signal.
-      EmitBus.publish(EmitBus.build(session_id, :turn_started, :durable, %{message: "p"}))
+      EmitBus.publish(
+        EmitBus.build(session_id, :turn_started, :durable, %{message: "p"})
+      )
+
       _started = await_event!(session_id)
 
       %{journal: %FileStore{writer: writer}} = :sys.get_state(bridge)
       GenServer.stop(writer)
 
-      EmitBus.publish(EmitBus.build(session_id, :app_update, :durable, %{message: "lost"}))
+      EmitBus.publish(
+        EmitBus.build(session_id, :app_update, :durable, %{message: "lost"})
+      )
+
       failure = await_event!(session_id)
 
       spec = @snapshot["producers"]["bridge_failure_signal"]
@@ -286,7 +317,9 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
         assert Map.has_key?(failure.payload, String.to_existing_atom(field))
       end
 
-      assert to_string(failure.payload.reason) in @snapshot["enums"]["journal_failure_reason"]
+      assert to_string(failure.payload.reason) in @snapshot["enums"][
+               "journal_failure_reason"
+             ]
 
       GenServer.stop(bridge)
       GenServer.stop(streamer)
@@ -308,7 +341,10 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       assert FileStore.status(j) == :ok
 
       n = length(records)
-      assert n == 8, "golden corpus changed size — regenerate deliberately, never accidentally"
+
+      assert n == 8,
+             "golden corpus changed size — regenerate deliberately, never accidentally"
+
       assert Enum.map(records, & &1["id"]) == Enum.to_list(1..n)
 
       for record <- records do
@@ -325,10 +361,14 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       end
 
       # Every event type present in the corpus (so a future upcast that drops a
-      # type cannot pass by luck).
+      # type cannot pass by luck). Exemptions: item_delta is ephemeral (never
+      # journaled), and item_started postdates the v1.0.0 corpus (pump grew
+      # the item lifecycle in 2026-07; grow-only, so a journal written before
+      # the growth stays valid history -- the grandfather clause).
       corpus_types = records |> Enum.map(& &1["type"]) |> MapSet.new()
 
-      for type <- @snapshot["enums"]["type"], type != "item_delta" do
+      for type <- @snapshot["enums"]["type"],
+          type not in ["item_delta", "item_started"] do
         assert type in corpus_types, "golden corpus is missing #{type}"
       end
 
@@ -347,7 +387,8 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
   defp collect_events(session_id, acc \\ []) do
     receive do
-      {:session_event, ^session_id, %Event{} = ev} -> collect_events(session_id, acc ++ [ev])
+      {:session_event, ^session_id, %Event{} = ev} ->
+        collect_events(session_id, acc ++ [ev])
     after
       200 -> acc
     end

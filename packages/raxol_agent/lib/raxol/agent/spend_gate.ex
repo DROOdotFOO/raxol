@@ -11,8 +11,8 @@ defmodule Raxol.Agent.SpendGate do
     * **`cost_ref` ↔ journal tie.** The gate emits its reserve/call/settle
       records through the injected `context.emit` sink; binding that sink to the
       real durable per-session journal (`family: :meta` records carrying
-      `cost_ref`, per `harness-freeze-contracts.md` §2.1) is U7-I wiring, not
-      done here.
+      `cost_ref`; see `docs/harness/architecture.md`, "The safety substrate")
+      is U7-I wiring, not done here.
     * **Budget-side release on settle.** `settle/3` records the authoritative
       `actual`; the refund of `estimate - actual` is *derivable* from the
       `(reserve, settle)` pair. Wiring that release back to the real
@@ -57,9 +57,10 @@ defmodule Raxol.Agent.SpendGate do
         reason: atom() | nil}
 
   In production the sink is wired to the per-session journal (the durable
-  reserve/call/settle records — likely `family: :meta` with a `cost_ref`, per
-  `harness-freeze-contracts.md` §2.1); in the red suite it is an in-memory
-  recorder the checkers fold. Binding `emit` to the real journal is U7
+  reserve/call/settle records — likely `family: :meta` with a `cost_ref`; see
+  `docs/harness/architecture.md`, "The safety substrate"); in the red suite it
+  is an in-memory recorder the checkers fold. Binding `emit` to the real
+  journal is U7
   implementation work, not part of this skeleton.
 
   **A real `emit` failure is never swallowed.** The fold is the accounting, so

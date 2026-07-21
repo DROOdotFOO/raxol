@@ -1,13 +1,11 @@
 # U21-R — evidence-gated-done suite (FI-6). Authored failing-first, now GREEN.
 #
-# Authored BEFORE the implementation existed, against the roadmap disposition
-# (docs/proposals/in-flight/harness-roadmap.md §U21 + FI-6) and the freeze
-# contracts' Event vocabulary, so the reds pin the contract instead of being
-# fitted to it. U21 has since LANDED: `Raxol.Agent.DoneGate.gate/3` implements
-# the gate, the `:harness_red` tag was removed, and these reds now run GREEN in
-# CI against the real gate.
-#
-# Part of the red-first fan-out authored against docs PR #569.
+# Authored BEFORE the implementation existed, against the roadmap
+# disposition (U21 + FI-6) and the freeze contracts' Event vocabulary, so
+# the reds pin the contract instead of being fitted to it. U21 has since
+# LANDED: `Raxol.Agent.DoneGate.gate/3` implements the gate, the
+# `:harness_red` tag was removed, and these reds now run GREEN in CI
+# against the real gate.
 #
 # ## What U21 gates
 #
@@ -27,7 +25,7 @@
 #
 # EVERY completed `:tool_use` is a mutation. The real producer
 # (`Raxol.Agent.Contract.pump/3`) stamps no effect metadata on tool calls, and
-# the frozen effect taxonomy (harness-freeze-contracts.md §5.2) contains only
+# the frozen effect taxonomy (§5.2 of the frozen contract) contains only
 # effect-BEARING classes and rules that effect enforcement is structural,
 # never self-reported. So an absent `effect_class` resolves toward "is a
 # mutation", and a stamped `mutating: false` (the `destructiveHint`-is-a-lie
@@ -47,12 +45,11 @@
 #   (severity High/Medium/Low + index), kept so each fix stays traceable to
 #   the finding it closes. "U21-R2 #N" / "U21-R3" — fixes from review rounds
 #   2 and 3 of the same PR.
-# §0 / §5.2 — sections of docs/proposals/in-flight/harness-freeze-contracts.md
-#   (§0 clause 7 is the decision-time-fold law; §5.2 the effect taxonomy).
-# meta-inv N — the red-suite meta-invariants in
-#   docs/proposals/in-flight/harness-invariants.md.
-# FI-6 — the roadmap future-invariant this unit implements
-#   (docs/proposals/in-flight/harness-roadmap.md §U21).
+# §0 / §5.2 — sections of the frozen contract (§0 clause 7 is the
+#   decision-time-fold law; §5.2 the effect taxonomy).
+# meta-inv N — the red-suite meta-invariants shared across the U-series
+#   red suites.
+# FI-6 — the roadmap future-invariant this unit implements (U21).
 #
 # ## Layout
 #
@@ -340,7 +337,9 @@ defmodule Raxol.Agent.Red.U21.Injector do
            Build.ev(
              9_999,
              :turn_completed,
-             %{final: true, refs: refs, usage: %{}}, turn_id: turn_id)}
+             %{final: true, refs: refs, usage: %{}},
+             turn_id: turn_id
+           )}
 
         err ->
           err
@@ -1185,9 +1184,10 @@ defmodule Raxol.Agent.Red.U21RealProducerRegressionTest do
   # Drew's round-3 failure scenario, produced for real: run tests (pass), THEN
   # edit code, then try to cite the pre-edit test run as evidence.
   #
-  # Journal produced (all durable): 1 turn_started, 2 tool_use(run_tests),
-  # 3 tool_result(run_tests), 4 tool_use(fs_write), 5 tool_result(fs_write),
-  # 6 message, 7 turn_completed{final: true}.
+  # Journal produced (all durable; every item carries its item_started
+  # sibling): 1 turn_started, 2/3 tool_use(run_tests), 4/5
+  # tool_result(run_tests), 6/7 tool_use(fs_write), 8/9
+  # tool_result(fs_write), 10/11 message, 12 turn_completed{final: true}.
   defp real_journal do
     session_id = "u21-real-#{System.unique_integer([:positive])}"
     :ok = SessionStreamer.subscribe(session_id)
@@ -1225,18 +1225,18 @@ defmodule Raxol.Agent.Red.U21RealProducerRegressionTest do
 
   test "stale evidence predating a real (unstamped) tool_use mutation is rejected" do
     # Pre-fix, `last_mutation` was nil on this journal (no stamped fields), so
-    # the pre-edit test run at offset 3 wrongly satisfied the done.
+    # the pre-edit test run at offset 5 wrongly satisfied the done.
     {journal, turn} = real_journal()
 
-    assert DoneGate.gate(journal, turn, [3]) == {:error, {:stale_evidence, 3}}
+    assert DoneGate.gate(journal, turn, [5]) == {:error, {:stale_evidence, 5}}
   end
 
   test "the last mutation's own echo in a real journal cannot green-light the done" do
-    # Offset 5 is fs_write's own tool_result — it postdates the mutation at 4
+    # Offset 9 is fs_write's own tool_result — it postdates the mutation at 7
     # trivially and verifies nothing.
     {journal, turn} = real_journal()
 
-    assert DoneGate.gate(journal, turn, [5]) == {:error, {:mutation_echo, 5}}
+    assert DoneGate.gate(journal, turn, [9]) == {:error, {:mutation_echo, 9}}
   end
 
   test "fail-closed: no offset in a real v0 journal is acceptable evidence" do

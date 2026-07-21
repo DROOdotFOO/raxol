@@ -2,10 +2,9 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   @moduledoc """
   U11-R — permanent **failing-first** red suite for the meta event family +
   provenance/taint contract (FI-5), authored BEFORE `Raxol.Agent.Meta` is
-  implemented. See `docs/proposals/in-flight/harness-freeze-contracts.md` §2 and
-  docs PR #569.
+  implemented, against the frozen contract's meta-event vocabulary.
 
-  Every test here pins one frozen contour of §2 against the REAL seam
+  Every test here pins one frozen contour against the REAL seam
   (`Raxol.Agent.Meta` / `Raxol.Agent.Fingerprint`), which returns
   `:not_implemented` until U11-I lands — so the suite is RED by construction and
   goes green only when the real algebra is implemented. Each assertion asserts a
@@ -21,7 +20,7 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   lifted the day the implementation made every contour pass. The negative
   controls stay in CI to guarantee the reds keep their teeth.
 
-  Contour map (freeze §2.2/§2.3):
+  Contour map:
     producer-strict seam ....... N-U11.1, N-U11.2, N-U11.4, N-U11.10
     reader-tolerant seam ....... N-U11.6, P-JS6-class tolerance
     taint algebra .............. P-U11.3, N-U11.3, N-U11.5, OQ-U11.3
@@ -75,7 +74,7 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   end
 
   # ===========================================================================
-  # Producer-strict seam (§2.1 decode/validation seam; N-U11.1/2/4/10)
+  # Producer-strict seam (decode/validation seam; N-U11.1/2/4/10)
   # ===========================================================================
 
   describe "producer-strict seam — validate/1" do
@@ -153,7 +152,7 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
   end
 
   # ===========================================================================
-  # Reader-tolerant seam (§2.1; N-U11.6)
+  # Reader-tolerant seam (N-U11.6)
   # ===========================================================================
 
   describe "reader-tolerant seam — decode/1 + typed-fold skipping" do
@@ -163,7 +162,9 @@ defmodule Raxol.Agent.Red.U11MetaFamilyRedTest do
            seed: seed
          } do
       unknown =
-        Gen.rec(1, :meta, :from_the_future_v9, %{refs: [], note: "later"}, source: "probe_x")
+        Gen.rec(1, :meta, :from_the_future_v9, %{refs: [], note: "later"},
+          source: "probe_x"
+        )
 
       {[readback], _session} = seed_journal!(base, [unknown])
 

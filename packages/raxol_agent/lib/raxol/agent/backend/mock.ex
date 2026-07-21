@@ -28,7 +28,7 @@ defmodule Raxol.Agent.Backend.Mock do
 
     case Keyword.get(opts, :error) do
       nil ->
-        case Keyword.get(opts, :tool_calls) do
+        case resolve_tool_calls(opts) do
           nil ->
             content = resolve_response(messages, opts)
 
@@ -90,6 +90,17 @@ defmodule Raxol.Agent.Backend.Mock do
       {fun, _} when is_function(fun, 0) -> fun.()
       {_, response} when not is_nil(response) -> response
       _ -> "Mock response"
+    end
+  end
+
+  # `tool_calls:` is static (every round replays it); `tool_calls_fn:` is
+  # the dynamic variant -- a 0-arity fun consulted per round, so a test or
+  # demo can script a ONE-SHOT tool call (return the list once, nil after)
+  # without the caller looping through the same call forever.
+  defp resolve_tool_calls(opts) do
+    case {Keyword.get(opts, :tool_calls_fn), Keyword.get(opts, :tool_calls)} do
+      {fun, _} when is_function(fun, 0) -> fun.()
+      {_, tool_calls} -> tool_calls
     end
   end
 
