@@ -89,52 +89,56 @@ defmodule Raxol.Terminal.CharacterHandling do
     # `get_char_width/1`.
   ]
 
+  # East Asian Wide + Fullwidth ranges, plus the hand-maintained
+  # `@emoji_presentation_ranges`, assembled ONCE at compile time. This used to
+  # be rebuilt (list literal `++ @emoji_presentation_ranges`) on every
+  # `wide_char?/1` call -- i.e. per grapheme on the measurement hot path.
+  @wide_ranges [
+                 # CJK Unified Ideographs
+                 {0x4E00, 0x9FFF},
+                 # CJK Unified Ideographs Extension A
+                 {0x3400, 0x4DBF},
+                 # CJK Unified Ideographs Extension B
+                 {0x20000, 0x2A6DF},
+                 # CJK Unified Ideographs Extension C
+                 {0x2A700, 0x2B73F},
+                 # CJK Unified Ideographs Extension D
+                 {0x2B740, 0x2B81F},
+                 # CJK Unified Ideographs Extension E
+                 {0x2B820, 0x2CEAF},
+                 # CJK Unified Ideographs Extension F
+                 {0x2CEB0, 0x2EBEF},
+                 # CJK Unified Ideographs Extension G
+                 {0x30000, 0x3134F},
+                 # CJK Compatibility Ideographs
+                 {0xF900, 0xFAFF},
+                 # CJK Symbols and Punctuation (ideographic space, 、。「」...)
+                 {0x3000, 0x303E},
+                 # Hiragana + Katakana (incl. the ー prolonged sound mark). Kana
+                 # are East Asian Wide just like Han -- this range was missing,
+                 # so kana measured 1 cell and every downstream layout budget
+                 # drifted (caught by the harness diff viewer's unicode fixture).
+                 {0x3041, 0x30FF},
+                 # Katakana Phonetic Extensions
+                 {0x31F0, 0x31FF},
+                 # Hangul Syllables
+                 {0xAC00, 0xD7AF},
+                 # Fullwidth ASCII variants
+                 {0xFF01, 0xFF60},
+                 # Fullwidth symbols
+                 {0xFFE0, 0xFFE6},
+                 # Miscellaneous Symbols and Pictographs. Everything
+                 # emoji-presentation BELOW this block lives in
+                 # @emoji_presentation_ranges instead.
+                 {0x1F300, 0x1FAFF}
+               ] ++ @emoji_presentation_ranges
+
   @doc """
   Determines if a character is a wide character (takes up two cells).
   """
   @spec wide_char?(char()) :: boolean()
   def wide_char?(char) do
-    wide_ranges =
-      [
-        # CJK Unified Ideographs
-        {0x4E00, 0x9FFF},
-        # CJK Unified Ideographs Extension A
-        {0x3400, 0x4DBF},
-        # CJK Unified Ideographs Extension B
-        {0x20000, 0x2A6DF},
-        # CJK Unified Ideographs Extension C
-        {0x2A700, 0x2B73F},
-        # CJK Unified Ideographs Extension D
-        {0x2B740, 0x2B81F},
-        # CJK Unified Ideographs Extension E
-        {0x2B820, 0x2CEAF},
-        # CJK Unified Ideographs Extension F
-        {0x2CEB0, 0x2EBEF},
-        # CJK Unified Ideographs Extension G
-        {0x30000, 0x3134F},
-        # CJK Compatibility Ideographs
-        {0xF900, 0xFAFF},
-        # CJK Symbols and Punctuation (ideographic space, 、。「」...)
-        {0x3000, 0x303E},
-        # Hiragana + Katakana (incl. the ー prolonged sound mark). Kana are
-        # East Asian Wide just like Han -- this range was missing, so kana
-        # measured 1 cell and every downstream layout budget drifted
-        # (caught by the harness diff viewer's unicode fixture).
-        {0x3041, 0x30FF},
-        # Katakana Phonetic Extensions
-        {0x31F0, 0x31FF},
-        # Hangul Syllables
-        {0xAC00, 0xD7AF},
-        # Fullwidth ASCII variants
-        {0xFF01, 0xFF60},
-        # Fullwidth symbols
-        {0xFFE0, 0xFFE6},
-        # Miscellaneous Symbols and Pictographs. Everything emoji-presentation
-        # BELOW this block lives in @emoji_presentation_ranges instead.
-        {0x1F300, 0x1FAFF}
-      ] ++ @emoji_presentation_ranges
-
-    Enum.any?(wide_ranges, fn {start, finish} ->
+    Enum.any?(@wide_ranges, fn {start, finish} ->
       char >= start and char <= finish
     end)
   end

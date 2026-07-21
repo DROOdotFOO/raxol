@@ -142,6 +142,12 @@ defmodule Raxol.Terminal.InlineDriver do
   # one that never will, and the caller falls back honestly.
   @default_cursor_probe_budget_ms 300
   @isig_confirmations 3
+  # Boot-time verify-then-assert `-isig` budget (see reassert_raw_until_isig_off/1):
+  # at most @isig_reassert_attempts passes, each spaced @isig_reassert_interval_ms
+  # apart. The product is the ~3s boot-window liveness bound named in one place
+  # instead of being the accident of two uncoupled inline literals.
+  @isig_reassert_attempts 60
+  @isig_reassert_interval_ms 50
   # Default wall-clock floor between two real (stty-forking) isig guard
   # passes on the live path. Well under a human keypress-to-keypress gap,
   # so normal typing still re-asserts on the next key, but a burst/paste
@@ -368,34 +374,7 @@ defmodule Raxol.Terminal.InlineDriver do
 
     state =
       if install_reader? do
-        state = start_stdin_reader(state)
-
-        # Re-assert raw termios AFTER the reader is armed: user_drv's
-        # `{:start_shell, %{input: :raw}}` makes prim_tty re-initialize
-        # the termios with ITS raw settings, which keep ISIG ENABLED --
-        # silently clobbering the `-isig` this module's moduledoc
-        # promises. With ISIG back on, ^C becomes SIGINT (the VM BREAK
-        # menu printed over the frame, or a silent drop under +Bi)
-        # instead of byte 0x03 to the subscriber, so ^C no longer exits
-        # cleanly through this driver. prim_tty applies its termios
-        # ASYNCHRONOUSLY after the call returns, so a single immediate
-        # re-assert loses the race: verify-then-assert with a bounded
-        # budget instead, reading the LIVE flags (the referent, not this
-        # module's own bookkeeping) until `-isig` sticks. The outcome is
-        # RECORDED (isig_boot_confirmed?) for `isig_report/1`, and the
-        # event-clocked guard (maybe_guard_isig/1) keeps watching from
-        # here on -- nothing is ever written to the tty on the give-up
-        # path (no bytes may leak into the claimed frame); an embedder's
-        # probe (the live demo's boot POST line) is the honest reporting
-        # channel.
-        if state.stty_enabled? do
-          confirmed? =
-            reassert_raw_until_isig_off(state.stty_module) == :confirmed
-
-          %{state | isig_boot_confirmed?: confirmed?}
-        else
-          state
-        end
+        state |> start_stdin_reader() |> maybe_confirm_isig_boot()
       else
         state
       end
@@ -426,6 +405,29 @@ defmodule Raxol.Terminal.InlineDriver do
       )
 
       :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
+  # Re-assert raw termios AFTER the reader is armed: user_drv's
+  # `{:start_shell, %{input: :raw}}` makes prim_tty re-initialize the termios
+  # with ITS raw settings, which keep ISIG ENABLED -- silently clobbering the
+  # `-isig` this module's moduledoc promises. With ISIG back on, ^C becomes
+  # SIGINT (the VM BREAK menu printed over the frame, or a silent drop under
+  # +Bi) instead of byte 0x03 to the subscriber, so ^C no longer exits cleanly
+  # through this driver. prim_tty applies its termios ASYNCHRONOUSLY after the
+  # call returns, so a single immediate re-assert loses the race:
+  # verify-then-assert with a bounded budget instead, reading the LIVE flags
+  # (the referent, not this module's own bookkeeping) until `-isig` sticks. The
+  # outcome is RECORDED (isig_boot_confirmed?) for `isig_report/1`, and the
+  # event-clocked guard (maybe_guard_isig/1) keeps watching from here on --
+  # nothing is ever written to the tty on the give-up path (no bytes may leak
+  # into the claimed frame); an embedder's probe (the live demo's boot POST
+  # line) is the honest reporting channel. A stty-disabled reader has no
+  # termios to re-assert, so it passes through unchanged.
+  defp maybe_confirm_isig_boot(%{stty_enabled?: false} = state), do: state
+
+  defp maybe_confirm_isig_boot(state) do
+    confirmed? = reassert_raw_until_isig_off(state.stty_module) == :confirmed
+    %{state | isig_boot_confirmed?: confirmed?}
   end
 
   @impl true
@@ -627,18 +629,31 @@ defmodule Raxol.Terminal.InlineDriver do
   # handle_manager_call, so the reader's trace/port messages land in
   # this process's mailbox and the selective receive picks them up.
   defp cursor_probe_loop(buffer, deadline, state) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+    now = System.monotonic_time(:millisecond)
 
-    receive do
-      {:trace, _reader, :send, {_ref, {:data, data}}, _to} ->
-        cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
+    # Check the deadline BEFORE the receive. `receive ... after 0` loses to any
+    # already-queued matching message, so a sustained input flood keeps
+    # matching the two clauses and starves the `after`, wedging the probe past
+    # its deadline (init-time availability DoS -- the moduledoc's claim that
+    # re-deriving `remaining` bounds this is false while messages keep
+    # arriving). The explicit pre-check bounds the loop by the deadline
+    # regardless of mailbox pressure; leftover input stays queued for the
+    # driver's normal dispatch after init.
+    if now >= deadline do
+      forward_probe_leftover(buffer, state)
+      {:error, :timeout}
+    else
+      receive do
+        {:trace, _reader, :send, {_ref, {:data, data}}, _to} ->
+          cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
 
-      {port, {:data, data}} when is_port(port) ->
-        cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
-    after
-      remaining ->
-        forward_probe_leftover(buffer, state)
-        {:error, :timeout}
+        {port, {:data, data}} when is_port(port) ->
+          cursor_probe_ingest(buffer, to_binary_data(data), deadline, state)
+      after
+        deadline - now ->
+          forward_probe_leftover(buffer, state)
+          {:error, :timeout}
+      end
     end
   end
 
@@ -949,23 +964,39 @@ defmodule Raxol.Terminal.InlineDriver do
         caps
 
       :pending ->
-        remaining = max(probe.deadline - System.monotonic_time(:millisecond), 0)
+        now = System.monotonic_time(:millisecond)
 
-        receive do
-          {:trace, _reader, :send, {_ref, {:data, data}}, _to} ->
-            step_probe_input(probe, device, subscriber, to_binary_data(data))
+        # Deadline check BEFORE the receive -- see cursor_probe_loop/3: a
+        # sustained input flood keeps matching the receive clauses and starves
+        # `after`, so relying on it to fire at the deadline wedges the probe.
+        # Once the deadline has passed, advance the probe's clock directly
+        # (which terminates it) rather than entering a starvable receive.
+        if now >= probe.deadline do
+          advance_probe_clock(probe, device, subscriber, now)
+        else
+          receive do
+            {:trace, _reader, :send, {_ref, {:data, data}}, _to} ->
+              step_probe_input(probe, device, subscriber, to_binary_data(data))
 
-          {port, {:data, data}} when is_port(port) ->
-            step_probe_input(probe, device, subscriber, to_binary_data(data))
-        after
-          remaining ->
-            {probe, actions} =
-              Probe.step(probe, {:clock, System.monotonic_time(:millisecond)})
-
-            run_probe_actions(actions, device, subscriber)
-            probe_loop(probe, device, subscriber)
+            {port, {:data, data}} when is_port(port) ->
+              step_probe_input(probe, device, subscriber, to_binary_data(data))
+          after
+            probe.deadline - now ->
+              advance_probe_clock(
+                probe,
+                device,
+                subscriber,
+                System.monotonic_time(:millisecond)
+              )
+          end
         end
     end
+  end
+
+  defp advance_probe_clock(probe, device, subscriber, now) do
+    {probe, actions} = Probe.step(probe, {:clock, now})
+    run_probe_actions(actions, device, subscriber)
+    probe_loop(probe, device, subscriber)
   end
 
   defp step_probe_input(probe, device, subscriber, binary) do
@@ -1060,7 +1091,7 @@ defmodule Raxol.Terminal.InlineDriver do
   # the result is recorded for `isig_report/1` and the embedder's probe
   # (the live demo's boot POST termios line) is the honest reporting
   # channel.
-  defp reassert_raw_until_isig_off(stty_module, attempts \\ 60) do
+  defp reassert_raw_until_isig_off(stty_module, attempts \\ @isig_reassert_attempts) do
     do_reassert_isig(stty_module, attempts, 0)
   end
 
@@ -1078,7 +1109,7 @@ defmodule Raxol.Terminal.InlineDriver do
         0
       end
 
-    Process.sleep(50)
+    Process.sleep(@isig_reassert_interval_ms)
     do_reassert_isig(stty_module, attempts - 1, confirmed)
   end
 
