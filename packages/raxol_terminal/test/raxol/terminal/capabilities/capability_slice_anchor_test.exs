@@ -1,14 +1,14 @@
 defmodule Raxol.Terminal.Capabilities.CapabilitySliceAnchorTest do
   @moduledoc """
-  T1 fail-first anchor (harness-ui-roadmap §4, suite 04: "env-sniff vs
-  DECRQM (hardcoded false)").
+  T1 fail-first anchor: "env-sniff vs DECRQM."
 
   Mode-2026 (synchronized output) support must be decided by parsing a
   DECRQM reply (`CSI ? 2026 ; Ps $ y`) off the wire -- never by
-  `$TERM_PROGRAM` sniffing. Today `advanced_features.ex` sniffs
-  `$TERM_PROGRAM` and its `query_synchronized_output_support/0` is
-  hardcoded `false`; no DECRQM reply parser exists anywhere. These tests
-  are red on master and go green with the T1 capability slice.
+  `$TERM_PROGRAM` sniffing. `advanced_features.ex`'s legacy
+  `supports_synchronized_output?/0` still sniffs `$TERM_PROGRAM` as a
+  fallback; the T1 capability slice (`Raxol.Terminal.Capabilities.Probe`)
+  is the real DECRQM reply parser these tests pin, and they run GREEN
+  against it.
   """
   use ExUnit.Case, async: true
 

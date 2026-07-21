@@ -58,6 +58,9 @@ defmodule Raxol.Terminal.ScreenBuffer.WriteOps do
     end
   end
 
+  def fill_cells(buffer, cells, style_resolver \\ nil),
+    do: Writer.fill_cells(buffer, cells, style_resolver)
+
   def write_string(buffer, x, y, string),
     do: write_string(buffer, x, y, string, nil)
 

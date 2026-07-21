@@ -34,6 +34,10 @@ defmodule Raxol.Terminal.Capabilities.Classifier do
     {grapheme_2027, _} = decide_mode(acc.mode, 2027)
     {truecolor, truecolor_source} = decide_truecolor(acc, env)
     {identity, identity_source} = decide_identity(acc)
+    {background, background_source} = decide_background(acc)
+    {foreground, foreground_source} = decide_foreground(acc)
+    {color_depth, color_depth_source} = decide_color_depth(acc, env)
+    {polarity_seed, polarity_seed_source} = decide_polarity_seed(env)
 
     %Capabilities{
       identity: identity,
@@ -52,13 +56,21 @@ defmodule Raxol.Terminal.Capabilities.Classifier do
       cell_px: acc.cell_px,
       styled_underline: Map.has_key?(acc.xtgettcap, "Smulx"),
       multiplexer: multiplexer,
+      background: background,
+      foreground: foreground,
+      color_depth: color_depth,
+      polarity_seed: polarity_seed,
       source: %{
         identity: identity_source,
         sync_output: sync_source,
         in_band_resize: resize_source,
         lr_margins: lr_source,
         theme_events: theme_source,
-        truecolor: truecolor_source
+        truecolor: truecolor_source,
+        background: background_source,
+        foreground: foreground_source,
+        color_depth: color_depth_source,
+        polarity_seed: polarity_seed_source
       }
     }
     |> QuirkTable.apply(acc, env, opts)
@@ -81,6 +93,54 @@ defmodule Raxol.Terminal.Capabilities.Classifier do
       Map.has_key?(acc.xtgettcap, "RGB") -> {true, :xtgettcap}
       Map.get(env, "COLORTERM") in @truecolor_env -> {true, :env}
       true -> {false, :default}
+    end
+  end
+
+  # ---- native-palette-riding detection seam (doc §2/§7, amendment A1) ----
+  #
+  # Wire bytes + env seed only -- no color science here (that's main
+  # raxol's Salience module, doc amendment A3). background/foreground are
+  # the raw OSC 11/10 replies; color_depth is the env+probe ladder from
+  # §2 rungs 0/1/4; polarity_seed is the $COLORFGBG fallback (rung 2),
+  # used downstream only when OSC 11 stays silent.
+
+  defp decide_background(%{osc11: {:ok, rgb}}), do: {rgb, :osc11}
+  defp decide_background(_acc), do: {nil, :default}
+
+  defp decide_foreground(%{osc10: {:ok, rgb}}), do: {rgb, :osc10}
+  defp decide_foreground(_acc), do: {nil, :default}
+
+  # Rung 0 (NO_COLOR, absolute) > rung 4 (XTGETTCAP RGB, probed) > rung 1
+  # seed ($COLORTERM) > $TERM *-256color > Core floor (:ansi16). Same
+  # XTGETTCAP-over-COLORTERM priority as `decide_truecolor/2` (doc §1
+  # provenance corollary), reused verbatim.
+  defp decide_color_depth(acc, env) do
+    cond do
+      present?(env, "NO_COLOR") -> {:none, :no_color}
+      Map.has_key?(acc.xtgettcap, "RGB") -> {:truecolor, :xtgettcap}
+      Map.get(env, "COLORTERM") in @truecolor_env -> {:truecolor, :colorterm}
+      term_256color?(env) -> {:ansi256, :term}
+      true -> {:ansi16, :default}
+    end
+  end
+
+  defp term_256color?(env), do: String.ends_with?(Map.get(env, "TERM") || "", "-256color")
+
+  # $COLORFGBG "fg;bg" (konsole/rxvt family); urxvt sometimes emits a
+  # 3-field form -- bg is always the LAST field. bg ∈ {0..6, 8} -> dark;
+  # {7, 15} -> light; 9-14 or malformed -> nil (seed only, not a ground).
+  defp decide_polarity_seed(env) do
+    case Map.get(env, "COLORFGBG") do
+      raw when raw in [nil, ""] -> {nil, :default}
+      raw -> {polarity_from_colorfgbg(raw), :colorfgbg}
+    end
+  end
+
+  defp polarity_from_colorfgbg(raw) do
+    case raw |> String.split(";") |> List.last() |> then(&Integer.parse/1) do
+      {bg, ""} when bg in [0, 1, 2, 3, 4, 5, 6, 8] -> :dark
+      {bg, ""} when bg in [7, 15] -> :light
+      _ -> nil
     end
   end
 

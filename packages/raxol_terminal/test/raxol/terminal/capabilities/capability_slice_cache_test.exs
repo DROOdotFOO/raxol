@@ -52,6 +52,45 @@ defmodule Raxol.Terminal.Capabilities.CapabilitySliceCacheTest do
     end
   end
 
+  describe "native-palette-riding readers: nil-safe when no record cached" do
+    test "background/0, foreground/0, polarity_seed/0 are nil with no record" do
+      assert Capabilities.cached() == :error
+      assert Capabilities.background() == nil
+      assert Capabilities.foreground() == nil
+      assert Capabilities.polarity_seed() == nil
+    end
+
+    test "color_depth/0 floors to :ansi16 with no record (the Core floor)" do
+      assert Capabilities.cached() == :error
+      assert Capabilities.color_depth() == :ansi16
+    end
+  end
+
+  describe "native-palette-riding readers: reflect the cached record" do
+    test "readers surface the classified wire facts verbatim" do
+      caps = %Capabilities{
+        background: {30, 30, 30},
+        foreground: {240, 240, 240},
+        color_depth: :truecolor,
+        polarity_seed: :dark
+      }
+
+      assert Capabilities.cache(caps) == :ok
+      assert Capabilities.background() == {30, 30, 30}
+      assert Capabilities.foreground() == {240, 240, 240}
+      assert Capabilities.color_depth() == :truecolor
+      assert Capabilities.polarity_seed() == :dark
+    end
+
+    test "a cached record with silent OSC 10/11 surfaces nil colors" do
+      caps = %Capabilities{color_depth: :ansi256, polarity_seed: :light}
+      assert Capabilities.cache(caps) == :ok
+      assert Capabilities.background() == nil
+      assert Capabilities.foreground() == nil
+      assert Capabilities.polarity_seed() == :light
+    end
+  end
+
   describe "batched write (T1 extension of the existing driver query)" do
     test "query includes DECRQM 2026 with the DA1 sentinel LAST" do
       query = BackgroundQuery.query_sequence()

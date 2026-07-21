@@ -199,6 +199,7 @@ defmodule Raxol.Terminal.Renderer do
     # wrapped in a single OSC 8 open/close pair, while SGR styling is free to
     # vary within the link. Runs with no hyperlink render exactly as before.
     row
+    |> drop_wide_placeholders()
     |> Enum.chunk_by(&cell_hyperlink/1)
     |> Enum.map_join("", fn chunk ->
       chunk
@@ -227,6 +228,26 @@ defmodule Raxol.Terminal.Renderer do
 
   defp apply_sgr("", content), do: content
   defp apply_sgr(prefix, content), do: prefix <> content <> @ansi_reset
+
+  # A wide character occupies TWO buffer columns: the glyph in the first and
+  # a `wide_placeholder` cell in the second. The terminal advances the cursor
+  # by two columns when it draws the glyph itself, so emitting the
+  # placeholder's `" "` as well spends a third column -- every CJK/emoji
+  # character rendered as glyph-then-gap, each one shoving the rest of the
+  # line further right until it overran its container's frame. Tables were
+  # the loudest symptom (columns sized in display width, painted at
+  # 1.5x), but it applied to every wide character anywhere on screen.
+  #
+  # The placeholder is a real buffer cell -- it must keep occupying its
+  # column for hit-testing, diffing and cursor math. It just must never be
+  # WRITTEN. `Cell.new_wide_placeholder/1` has always flagged it; nothing
+  # in the render path had ever read the flag.
+  defp drop_wide_placeholders(row) do
+    Enum.reject(row, &wide_placeholder?/1)
+  end
+
+  defp wide_placeholder?(%{wide_placeholder: true}), do: true
+  defp wide_placeholder?(_cell), do: false
 
   defp cell_hyperlink(cell), do: hyperlink_url(cell.style)
 

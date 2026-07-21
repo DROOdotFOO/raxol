@@ -103,10 +103,11 @@ defmodule Raxol.UI.TextLayout.PrettyTest do
       width = 10
 
       assert Pretty.wrap(text, width) == [
-               "日本語のテキス",
-               "トです今日はとて",
-               "も良い天気です",
-               "ね"
+               "日本語のテ",
+               "キストです",
+               "今日はとて",
+               "も良い天気",
+               "ですね"
              ]
     end
 

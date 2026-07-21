@@ -9,42 +9,136 @@ defmodule Raxol.Terminal.CharacterHandling do
   - Supporting Unicode character properties
   """
 
+  # Codepoints with Unicode's Emoji_Presentation=Yes that fall BELOW the
+  # {0x1F300, 0x1FAFF} block -- the pre-Unicode-6 pictographs, plus the
+  # enclosed alphanumerics and regional indicators. Terminals draw these two
+  # columns wide, but the block-shaped ranges above all start at 0x1F300, so
+  # every one of them measured 1 and silently overflowed its container.
+  #
+  # This is deliberately NOT "all of U+2600..27BF": that block mixes
+  # emoji-presentation characters (2 columns: U+2705 ✅, U+274C ❌) with
+  # text-presentation ones (1 column: U+2713 ✓, U+2600 ☀ bare). Widening the
+  # whole block would fix the first group by breaking the second. Only
+  # Emoji_Presentation=Yes subranges are listed.
+  #
+  # Maintaining this by hand is the same fragile pattern that hid the flag
+  # bug; a future pass should derive it from Unicode data instead.
+  @emoji_presentation_ranges [
+    # Watch, hourglass
+    {0x231A, 0x231B},
+    # Fast-forward / rewind, alarm clock, hourglass flowing
+    {0x23E9, 0x23EC},
+    {0x23F0, 0x23F0},
+    {0x23F3, 0x23F3},
+    # Small squares
+    {0x25FD, 0x25FE},
+    # Umbrella with rain, hot beverage
+    {0x2614, 0x2615},
+    # Zodiac
+    {0x2648, 0x2653},
+    # Wheelchair, anchor, high voltage
+    {0x267F, 0x267F},
+    {0x2693, 0x2693},
+    {0x26A1, 0x26A1},
+    # Circles
+    {0x26AA, 0x26AB},
+    # Sports
+    {0x26BD, 0x26BE},
+    {0x26C4, 0x26C5},
+    {0x26CE, 0x26CE},
+    # No entry, church, fountain, tent, fuel pump
+    {0x26D4, 0x26D4},
+    {0x26EA, 0x26EA},
+    {0x26F2, 0x26F3},
+    {0x26F5, 0x26F5},
+    {0x26FA, 0x26FA},
+    {0x26FD, 0x26FD},
+    # Check mark button, raised fist / hand
+    {0x2705, 0x2705},
+    {0x270A, 0x270B},
+    # Sparkles, cross mark, cross mark button
+    {0x2728, 0x2728},
+    {0x274C, 0x274C},
+    {0x274E, 0x274E},
+    # Question / exclamation marks
+    {0x2753, 0x2755},
+    {0x2757, 0x2757},
+    # Heavy plus / minus / division
+    {0x2795, 0x2797},
+    # Curly loops
+    {0x27B0, 0x27B0},
+    {0x27BF, 0x27BF},
+    # Large squares, star, circle
+    {0x2B1B, 0x2B1C},
+    {0x2B50, 0x2B50},
+    {0x2B55, 0x2B55},
+    # Mahjong red dragon, playing card black joker
+    {0x1F004, 0x1F004},
+    {0x1F0CF, 0x1F0CF},
+    # Enclosed alphanumerics (negative squared letters, CJK ideographs)
+    {0x1F18E, 0x1F18E},
+    {0x1F191, 0x1F19A},
+    {0x1F201, 0x1F201},
+    {0x1F21A, 0x1F21A},
+    {0x1F22F, 0x1F22F},
+    {0x1F232, 0x1F236},
+    {0x1F238, 0x1F23A},
+    {0x1F250, 0x1F251}
+    # Regional indicators are deliberately ABSENT: a lone one is a narrow
+    # letter tile, and a PAIR is a flag recognised as a grapheme in
+    # `get_char_width/1`.
+  ]
+
+  # East Asian Wide + Fullwidth ranges, plus the hand-maintained
+  # `@emoji_presentation_ranges`, assembled ONCE at compile time. This used to
+  # be rebuilt (list literal `++ @emoji_presentation_ranges`) on every
+  # `wide_char?/1` call -- i.e. per grapheme on the measurement hot path.
+  @wide_ranges [
+                 # CJK Unified Ideographs
+                 {0x4E00, 0x9FFF},
+                 # CJK Unified Ideographs Extension A
+                 {0x3400, 0x4DBF},
+                 # CJK Unified Ideographs Extension B
+                 {0x20000, 0x2A6DF},
+                 # CJK Unified Ideographs Extension C
+                 {0x2A700, 0x2B73F},
+                 # CJK Unified Ideographs Extension D
+                 {0x2B740, 0x2B81F},
+                 # CJK Unified Ideographs Extension E
+                 {0x2B820, 0x2CEAF},
+                 # CJK Unified Ideographs Extension F
+                 {0x2CEB0, 0x2EBEF},
+                 # CJK Unified Ideographs Extension G
+                 {0x30000, 0x3134F},
+                 # CJK Compatibility Ideographs
+                 {0xF900, 0xFAFF},
+                 # CJK Symbols and Punctuation (ideographic space, 、。「」...)
+                 {0x3000, 0x303E},
+                 # Hiragana + Katakana (incl. the ー prolonged sound mark). Kana
+                 # are East Asian Wide just like Han -- this range was missing,
+                 # so kana measured 1 cell and every downstream layout budget
+                 # drifted (caught by the harness diff viewer's unicode fixture).
+                 {0x3041, 0x30FF},
+                 # Katakana Phonetic Extensions
+                 {0x31F0, 0x31FF},
+                 # Hangul Syllables
+                 {0xAC00, 0xD7AF},
+                 # Fullwidth ASCII variants
+                 {0xFF01, 0xFF60},
+                 # Fullwidth symbols
+                 {0xFFE0, 0xFFE6},
+                 # Miscellaneous Symbols and Pictographs. Everything
+                 # emoji-presentation BELOW this block lives in
+                 # @emoji_presentation_ranges instead.
+                 {0x1F300, 0x1FAFF}
+               ] ++ @emoji_presentation_ranges
 
   @doc """
   Determines if a character is a wide character (takes up two cells).
   """
   @spec wide_char?(char()) :: boolean()
   def wide_char?(char) do
-    wide_ranges = [
-      # CJK Unified Ideographs
-      {0x4E00, 0x9FFF},
-      # CJK Unified Ideographs Extension A
-      {0x3400, 0x4DBF},
-      # CJK Unified Ideographs Extension B
-      {0x20000, 0x2A6DF},
-      # CJK Unified Ideographs Extension C
-      {0x2A700, 0x2B73F},
-      # CJK Unified Ideographs Extension D
-      {0x2B740, 0x2B81F},
-      # CJK Unified Ideographs Extension E
-      {0x2B820, 0x2CEAF},
-      # CJK Unified Ideographs Extension F
-      {0x2CEB0, 0x2EBEF},
-      # CJK Unified Ideographs Extension G
-      {0x30000, 0x3134F},
-      # CJK Compatibility Ideographs
-      {0xF900, 0xFAFF},
-      # Hangul Syllables
-      {0xAC00, 0xD7AF},
-      # Fullwidth ASCII variants
-      {0xFF01, 0xFF60},
-      # Fullwidth symbols
-      {0xFFE0, 0xFFE6},
-      # Miscellaneous Symbols and Pictographs
-      {0x1F300, 0x1FAFF}
-    ]
-
-    Enum.any?(wide_ranges, fn {start, finish} ->
+    Enum.any?(@wide_ranges, fn {start, finish} ->
       char >= start and char <= finish
     end)
   end
@@ -61,11 +155,53 @@ defmodule Raxol.Terminal.CharacterHandling do
   end
 
   def get_char_width(str) when is_binary(str) do
-    case String.to_charlist(str) do
-      [cp | _] -> get_char_width(cp)
-      [] -> 1
+    # Only the FIRST grapheme cluster decides this call's width. Splitting
+    # here (instead of `String.to_charlist/1` on the whole binary) matters
+    # for multi-grapheme input: a VS16 (or any other modifier) that
+    # belongs to a LATER grapheme must never leak into an earlier,
+    # unrelated character's width -- e.g. in "A❤️" the heart's VS16 used
+    # to widen the plain "A" to 2 because both graphemes' codepoints were
+    # flattened into one list before the VS16 scan.
+    case String.next_grapheme(str) do
+      {grapheme, _rest} ->
+        # Variation Selector-16 forces EMOJI presentation on a base
+        # character that defaults to text presentation, and emoji
+        # presentation is two columns. This is why `❤` (U+2665, correctly
+        # 1) and `❤️` (the same base plus VS16, 2) must not measure the
+        # same -- ignoring the selector made every VS16 sequence,
+        # including keycaps like `1️⃣`, measure one column short. Checked
+        # before the first-codepoint lookup because the base codepoint
+        # alone cannot answer this.
+        grapheme
+        |> String.to_charlist()
+        |> emoji_presentation_width()
+
+      nil ->
+        1
     end
   end
+
+  # A flag is a PAIR of regional indicators (U+1F1E6..U+1F1FF) that Unicode
+  # groups into one grapheme and terminals draw two columns wide. The pair
+  # sits below the {0x1F300, 0x1FAFF} emoji range, so falling through to the
+  # first-codepoint lookup measured a flag as ONE column: every line
+  # containing one overflowed its container, pushing the frame border out.
+  #
+  # A LONE regional indicator is deliberately still 1 -- on its own it
+  # renders as a narrow letter tile, not a flag.
+  defp emoji_presentation_width([a, b | _] = codepoints) do
+    cond do
+      regional_indicator?(a) and regional_indicator?(b) -> 2
+      variation_selector_16?(codepoints) -> 2
+      true -> get_char_width(a)
+    end
+  end
+
+  defp emoji_presentation_width([cp | _]), do: get_char_width(cp)
+
+  defp variation_selector_16?(codepoints), do: 0xFE0F in codepoints
+
+  defp regional_indicator?(cp), do: cp >= 0x1F1E6 and cp <= 0x1F1FF
 
   @doc """
   Determines if a character is a combining character.
@@ -208,33 +344,35 @@ defmodule Raxol.Terminal.CharacterHandling do
   @spec split_at_width(String.t(), non_neg_integer()) ::
           {String.t(), String.t()}
   def split_at_width(string, width) do
-    {before_text, remaining} = do_split_at_width(string, width, 0, "")
-    {before_text, remaining}
+    do_split_at_width(string, width)
   end
 
-  defp do_split_at_width("", _width, _current_width, acc) do
-    {acc, ""}
-  end
+  # Walks GRAPHEMES, not codepoints. Splitting per codepoint cut clusters in
+  # half: a flag became two lone regional indicators, a ZWJ family left a
+  # dangling joiner at the head of the right side, a combining mark was
+  # orphaned from its base, and VS16 was stripped from its base -- which
+  # silently changed the left side's width from 2 to 1, so the two halves no
+  # longer summed to the original and the caller's layout budget drifted.
+  #
+  # Width is a property of the cluster (see `get_char_width/1`'s binary
+  # clause), so it can only be spent one cluster at a time.
+  defp do_split_at_width(text, width) do
+    text
+    |> String.graphemes()
+    |> Enum.reduce_while({"", "", 0}, fn grapheme, {left, _right, used} ->
+      grapheme_width = get_char_width(grapheme)
 
-  defp do_split_at_width(
-         <<char::utf8, rest::binary>>,
-         width,
-         current_width,
-         acc
-       ) do
-    char_width = get_char_width(char)
+      case used + grapheme_width <= width do
+        true -> {:cont, {left <> grapheme, "", used + grapheme_width}}
+        false -> {:halt, {left, :rest, used}}
+      end
+    end)
+    |> case do
+      {left, :rest, _used} ->
+        {left, binary_part(text, byte_size(left), byte_size(text) - byte_size(left))}
 
-    case current_width + char_width <= width do
-      true ->
-        do_split_at_width(
-          rest,
-          width,
-          current_width + char_width,
-          acc <> <<char::utf8>>
-        )
-
-      false ->
-        {acc, <<char::utf8, rest::binary>>}
+      {left, _right, _used} ->
+        {left, ""}
     end
   end
 end

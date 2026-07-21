@@ -158,6 +158,126 @@ defmodule Raxol.Terminal.Capabilities.CapabilitySliceClassifierMatrixTest do
     end
   end
 
+  describe "native-palette-riding: background/foreground (osc11/osc10 no longer discarded)" do
+    test "OSC 11 populates background with :osc11 provenance" do
+      caps = classify("\e]11;rgb:2020/2020/2020\a\e[?62;c", %{})
+      assert caps.background == {32, 32, 32}
+      assert caps.source.background == :osc11
+    end
+
+    test "OSC 10 populates foreground with :osc10 provenance" do
+      caps = classify("\e]10;rgb:f0f0/f0f0/f0f0\a\e[?62;c", %{})
+      assert caps.foreground == {240, 240, 240}
+      assert caps.source.foreground == :osc10
+    end
+
+    test "silence on both leaves background/foreground nil with :default provenance" do
+      caps = classify("\e[?62;c", %{})
+      assert caps.background == nil
+      assert caps.foreground == nil
+      assert caps.source.background == :default
+      assert caps.source.foreground == :default
+    end
+
+    test "an invalid OSC 11/10 reply is never mistaken for a color" do
+      caps = classify("\e]11;garbage\a\e]10;garbage\a\e[?62;c", %{})
+      assert caps.background == nil
+      assert caps.foreground == nil
+    end
+  end
+
+  describe "native-palette-riding: color_depth ladder" do
+    test "$NO_COLOR non-empty wins over everything else" do
+      reply = "\eP1+r524742=382f382f38\e\\\e[?62;c"
+
+      env = %{
+        "NO_COLOR" => "1",
+        "COLORTERM" => "truecolor",
+        "TERM" => "xterm-256color"
+      }
+
+      caps = classify(reply, env)
+      assert caps.color_depth == :none
+      assert caps.source.color_depth == :no_color
+    end
+
+    test "an empty $NO_COLOR is treated as unset (per the standard)" do
+      caps = classify("\e[?62;c", %{"NO_COLOR" => "", "COLORTERM" => "truecolor"})
+      assert caps.color_depth == :truecolor
+      assert caps.source.color_depth == :colorterm
+    end
+
+    test "XTGETTCAP RGB outranks $COLORTERM" do
+      # 524742 = hex("RGB")
+      reply = "\eP1+r524742=382f382f38\e\\\e[?62;c"
+      caps = classify(reply, %{"COLORTERM" => "truecolor"})
+      assert caps.color_depth == :truecolor
+      assert caps.source.color_depth == :xtgettcap
+    end
+
+    test "$COLORTERM=24bit alone seeds truecolor" do
+      caps = classify("\e[?62;c", %{"COLORTERM" => "24bit"})
+      assert caps.color_depth == :truecolor
+      assert caps.source.color_depth == :colorterm
+    end
+
+    test "$TERM=*-256color with no truecolor signal -> :ansi256" do
+      caps = classify("\e[?62;c", %{"TERM" => "xterm-256color"})
+      assert caps.color_depth == :ansi256
+      assert caps.source.color_depth == :term
+    end
+
+    test "no signal at all floors to :ansi16" do
+      caps = classify("\e[?62;c", %{"TERM" => "xterm"})
+      assert caps.color_depth == :ansi16
+      assert caps.source.color_depth == :default
+    end
+  end
+
+  describe "native-palette-riding: $COLORFGBG polarity seed" do
+    test "2-field form: bg in {0..6,8} -> :dark" do
+      caps = classify("\e[?62;c", %{"COLORFGBG" => "15;0"})
+      assert caps.polarity_seed == :dark
+      assert caps.source.polarity_seed == :colorfgbg
+    end
+
+    test "2-field form: bg in {7,15} -> :light" do
+      caps = classify("\e[?62;c", %{"COLORFGBG" => "0;15"})
+      assert caps.polarity_seed == :light
+      assert caps.source.polarity_seed == :colorfgbg
+    end
+
+    test "urxvt 3-field form takes the LAST field as bg" do
+      caps = classify("\e[?62;c", %{"COLORFGBG" => "15;default;0"})
+      assert caps.polarity_seed == :dark
+      assert caps.source.polarity_seed == :colorfgbg
+    end
+
+    test "bg in the 9-14 dead zone -> nil (still :colorfgbg provenance)" do
+      caps = classify("\e[?62;c", %{"COLORFGBG" => "0;12"})
+      assert caps.polarity_seed == nil
+      assert caps.source.polarity_seed == :colorfgbg
+    end
+
+    test "malformed (non-numeric) bg field -> nil, never crashes" do
+      caps = classify("\e[?62;c", %{"COLORFGBG" => "default;default"})
+      assert caps.polarity_seed == nil
+      assert caps.source.polarity_seed == :colorfgbg
+    end
+
+    test "unset $COLORFGBG -> nil with :default provenance" do
+      caps = classify("\e[?62;c", %{})
+      assert caps.polarity_seed == nil
+      assert caps.source.polarity_seed == :default
+    end
+
+    test "empty $COLORFGBG is treated as unset" do
+      caps = classify("\e[?62;c", %{"COLORFGBG" => ""})
+      assert caps.polarity_seed == nil
+      assert caps.source.polarity_seed == :default
+    end
+  end
+
   describe "mode 2027 -> unicode axis" do
     test "2027 supported flips grapheme_width to :mode_2027" do
       caps = classify("\e[?2027;1$y\e[?62;c", %{})

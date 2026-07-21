@@ -107,7 +107,7 @@ defmodule Raxol.Terminal.Emulator.BufferOperations do
 
   @doc """
   Feeds rows evicted by a scroll-region scroll into the scrollback buffer
-  (`docs/proposals/in-flight/harness-ui-roadmap.md` unit TE).
+  (unit TE).
 
   Eviction rule: a TOP-ANCHORED scroll region -- `region_top == 0` (screen
   row 1), including the full-screen case where no explicit region is set --

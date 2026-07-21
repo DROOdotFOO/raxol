@@ -203,5 +203,27 @@ defmodule Raxol.Terminal.Emulator.StateStackTest do
                Enum.all?(row, &(&1.char == " "))
              end)
     end
+
+    test ~c"DECRC does not restore DECSTBM margins (ESC 7 / CSI r / ESC 8)" do
+      # Per VT100/VT510 and xterm, the DECSC/DECRC saved state covers
+      # cursor position, SGR attributes, charsets, and origin mode --
+      # NEVER the scroll region. A DECSTBM emitted INSIDE a save/restore
+      # bracket must survive the DECRC (the adaptive-pin transition in
+      # the inline harness emits exactly this shape: region set inside
+      # the seal path's \e7...\e8 bracket). This emulator used to
+      # round-trip scroll_region through the state stack, silently
+      # un-setting the freshly-claimed region on restore.
+      emulator = Emulator.new(80, 24)
+
+      {emulator, ""} = Emulator.process_input(emulator, "\e7\e[1;8r\e8")
+
+      # Wire 1;8 is internal {0, 7}.
+      assert Emulator.get_scroll_region(emulator) == {0, 7}
+
+      # And the restored region actually scrolls at its boundary: a
+      # line feed on the region's bottom row scrolls the region.
+      {emulator, ""} = Emulator.process_input(emulator, "\e[8;1Hbottom\r\n")
+      assert Emulator.get_scroll_region(emulator) == {0, 7}
+    end
   end
 end
