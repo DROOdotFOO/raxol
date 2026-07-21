@@ -39,6 +39,7 @@ defmodule Raxol.MCP.TreeWalker do
   behaviour still derives nothing, and a non-atom marker is ignored.
   """
 
+  alias Raxol.MCP.NodeChildren
   alias Raxol.MCP.ToolProvider
 
   # Widget type atoms -> module names. These are in main raxol, so we use
@@ -119,12 +120,12 @@ defmodule Raxol.MCP.TreeWalker do
         derive_widget_tools(node, type, id, context, type_map)
       end
 
-    children_acc = do_walk(child_nodes(node), context, type_map, acc)
+    children_acc = do_walk(NodeChildren.child_nodes(node), context, type_map, acc)
     widget_tools ++ children_acc
   end
 
   defp do_walk(%{children: _} = node, context, type_map, acc) do
-    do_walk(child_nodes(node), context, type_map, acc)
+    do_walk(NodeChildren.child_nodes(node), context, type_map, acc)
   end
 
   # An `:absolute_layer` (Raxol.UI.Components.AbsoluteLayer) parents its
@@ -134,52 +135,14 @@ defmodule Raxol.MCP.TreeWalker do
   # (pickers, panels, dialogs) would derive zero tools. Walk into both so an
   # overlay Component's stamped root is reached exactly as a flow child's is.
   defp do_walk(%{flow_child: _} = node, context, type_map, acc) do
-    do_walk(child_nodes(node), context, type_map, acc)
+    do_walk(NodeChildren.child_nodes(node), context, type_map, acc)
   end
 
   defp do_walk(%{overlays: _} = node, context, type_map, acc) do
-    do_walk(child_nodes(node), context, type_map, acc)
+    do_walk(NodeChildren.child_nodes(node), context, type_map, acc)
   end
 
   defp do_walk(_node, _context, _type_map, acc), do: acc
-
-  # The View DSL allows :children to be a list or a single element map
-  # (e.g. a box whose do-block is one column). Mirror the Bubbler's
-  # path-finding, which treats both shapes as first-class. An
-  # `:absolute_layer` also contributes its flow child + overlay elements
-  # (see the flow_child/overlays clauses above).
-  defp child_nodes(node) do
-    direct =
-      case Map.get(node, :children) do
-        kids when is_list(kids) -> kids
-        kid when is_map(kid) -> [kid]
-        _ -> []
-      end
-
-    direct ++ absolute_layer_children(node)
-  end
-
-  # The `:absolute_layer` overlay wiring: the flow child plus each
-  # overlay's `:element`. Absent on ordinary nodes (both default to []), so
-  # this is a no-op everywhere except an absolute layer.
-  defp absolute_layer_children(node) do
-    flow =
-      case Map.get(node, :flow_child) do
-        child when is_map(child) -> [child]
-        _ -> []
-      end
-
-    overlay_elements =
-      node
-      |> Map.get(:overlays, [])
-      |> List.wrap()
-      |> Enum.flat_map(fn
-        %{element: element} when is_map(element) -> [element]
-        _ -> []
-      end)
-
-    flow ++ overlay_elements
-  end
 
   defp derive_widget_tools(node, type, id, context, type_map) do
     case resolve_module(node, type, type_map) do
