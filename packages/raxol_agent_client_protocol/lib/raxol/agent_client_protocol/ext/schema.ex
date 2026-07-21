@@ -29,6 +29,15 @@ defmodule Raxol.AgentClientProtocol.Ext.Schema do
   @spec str(term()) :: {:ok, String.t()} | :error
   def str(v) when is_binary(v), do: {:ok, v}
   def str(_), do: :error
+
+  @doc false
+  # Optional string: an absent/null field decodes to nil (the encoder emits
+  # nil for it too), a binary decodes as-is, any other type is an error.
+  # Keeps `to_json` its own inverse for nil-valued optional string fields.
+  @spec opt_str(term()) :: {:ok, String.t() | nil} | :error
+  def opt_str(nil), do: {:ok, nil}
+  def opt_str(v) when is_binary(v), do: {:ok, v}
+  def opt_str(_), do: :error
 end
 
 defmodule Raxol.AgentClientProtocol.Ext.Schema.SessionRecordNotification do
@@ -261,8 +270,12 @@ defmodule Raxol.AgentClientProtocol.Ext.Schema.SteerRequest do
 
   @spec from_json(map()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
+    # `text` is optional (the type, `new/4`, and `to_json` all treat nil as
+    # valid), so decode it with `opt_str` -- using `str` here rejected a
+    # legitimate text-less steer that `to_json` itself emits, breaking the
+    # encode/decode round-trip.
     with {:ok, sid} <- Schema.str(Map.get(map, "sessionId")),
-         {:ok, text} <- Schema.str(Map.get(map, "text")),
+         {:ok, text} <- Schema.opt_str(Map.get(map, "text")),
          expected when not is_nil(expected) <- Map.get(map, "expectedTurnId") do
       {:ok, new(sid, text, expected, Map.get(map, "clientMsgId"))}
     else

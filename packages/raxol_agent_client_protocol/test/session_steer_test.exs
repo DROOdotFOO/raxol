@@ -359,6 +359,33 @@ defmodule Raxol.AgentClientProtocol.SessionSteerTest do
                SteerRequest.from_json(%{"sessionId" => "s1", "text" => "hi"})
     end
 
+    test "SteerRequest with nil text round-trips (to_json is its own inverse)" do
+      # `text` is optional (type/new/to_json all allow nil); a text-less
+      # steer the module serializes itself must decode back, not be rejected
+      # as malformed.
+      req = SteerRequest.new("s1", nil, 7, "m1")
+
+      assert {:ok, decoded} = SteerRequest.from_json(SteerRequest.to_json(req))
+      assert decoded == req
+      assert decoded.text == nil
+    end
+
+    test "SteerRequest with absent text key decodes to nil text" do
+      assert {:ok, req} =
+               SteerRequest.from_json(%{"sessionId" => "s1", "expectedTurnId" => 2})
+
+      assert req.text == nil
+    end
+
+    test "SteerRequest with a non-string text is still rejected" do
+      assert {:error, {:invalid_steer_request, _}} =
+               SteerRequest.from_json(%{
+                 "sessionId" => "s1",
+                 "text" => 123,
+                 "expectedTurnId" => 2
+               })
+    end
+
     test "result_marker points a pending _raxol/session.steer response at SteerResponse" do
       assert Router.result_marker("_raxol/session.steer") == {:decode, SteerResponse}
     end
