@@ -34,6 +34,7 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
     "PHILOSOPHY.md",
     "PACKAGES.md",
     "features",
+    "reference",
     "core",
     "cookbook",
     "adr/README.md"
@@ -149,6 +150,8 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
     Feature docs:
 
     #{features}
+
+    Tool/action catalog (every LLM-callable tool, with its parameters and authorization tier): #{blob}/reference/TOOL_CATALOG.md
 
     API reference (per package): https://hexdocs.pm/raxol
     """

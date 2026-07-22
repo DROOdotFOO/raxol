@@ -73,6 +73,8 @@ Feature docs:
 - Time-Travel Debugging: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/TIME_TRAVEL_DEBUGGING.md
 - Watch Surface: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/WATCH.md
 
+Tool/action catalog (every LLM-callable tool, with its parameters and authorization tier): https://github.com/DROOdotFOO/raxol/blob/master/docs/reference/TOOL_CATALOG.md
+
 API reference (per package): https://hexdocs.pm/raxol
 
 ## MCP integration

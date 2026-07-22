@@ -47,6 +47,7 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 
 - [Architecture](core/ARCHITECTURE.md)
 - [Buffer API](core/BUFFER_API.md)
+- [Tool/Action Catalog](reference/TOOL_CATALOG.md): every LLM-callable tool, generated
 - [Architecture Decisions](adr/)
 - [Plugin Development](plugins/)
 - [Benchmarks](bench/)
