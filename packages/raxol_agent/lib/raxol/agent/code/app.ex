@@ -72,6 +72,9 @@ defmodule Raxol.Agent.Code.App do
   def init(context) do
     options = Map.get(context, :options, [])
     {sessions_dir, session_key, messages, resume_notice} = init_session(options)
+    cwd = Keyword.get(options, :cwd) || Raxol.Agent.Actions.Fs.working_dir()
+    {hooks, hooks_note} = load_hooks(cwd)
+    {mcp_servers, mcp_note} = load_mcp(cwd)
 
     %{
       input: "",
@@ -87,7 +90,7 @@ defmodule Raxol.Agent.Code.App do
       worker: nil,
       session_id: nil,
       pending_approval: nil,
-      status_line: resume_notice,
+      status_line: combine_notes([resume_notice, hooks_note, mcp_note]),
       notice: nil,
       # Authorization: plan mode + per-tool "always allow" memory. The Engine
       # is the ALLOW/ASK/DENY decision core; per-tool memory is app state fed
@@ -98,6 +101,10 @@ defmodule Raxol.Agent.Code.App do
       # Session persistence.
       session_key: session_key,
       sessions_dir: sessions_dir,
+      # Delegation + config (Phase 5).
+      cwd: cwd,
+      hooks: hooks,
+      mcp_servers: mcp_servers,
       ascii: Keyword.get(options, :ascii, false),
       executor: Keyword.get(options, :executor),
       backend_opts: Keyword.get(options, :backend_opts, []),
@@ -134,6 +141,30 @@ defmodule Raxol.Agent.Code.App do
 
   defp mint_session_key do
     "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
+  end
+
+  defp load_hooks(cwd) do
+    case Raxol.Agent.Code.Hooks.load(cwd) do
+      {:ok, config} -> {config, "#{Raxol.Agent.Code.Hooks.count(config)} hooks"}
+      :none -> {nil, nil}
+      {:error, reason} -> {nil, "hooks config error: #{inspect(reason)}"}
+    end
+  end
+
+  defp load_mcp(cwd) do
+    case Raxol.Agent.Code.McpConfig.load(cwd) do
+      {:ok, []} -> {[], nil}
+      {:ok, servers} -> {servers, "#{length(servers)} MCP servers"}
+      :none -> {[], nil}
+      {:error, reason} -> {[], "mcp config error: #{inspect(reason)}"}
+    end
+  end
+
+  defp combine_notes(notes) do
+    case Enum.reject(notes, &is_nil/1) do
+      [] -> nil
+      list -> Enum.join(list, " · ")
+    end
   end
 
   # -- update: keyboard -------------------------------------------------------
@@ -277,7 +308,7 @@ defmodule Raxol.Agent.Code.App do
         system_prompt: system_prompt(model),
         actions: model.actions,
         messages: messages,
-        context: %{tool_authorizer: tool_authorizer(app)}
+        context: run_context(model, app)
       ]
       |> maybe_put(:executor, model.executor)
       |> maybe_put(:model, model.model_override)
@@ -345,6 +376,37 @@ defmodule Raxol.Agent.Code.App do
     }
   end
 
+  # The run context: the human-in-the-loop authorizer, the sub-agent backend
+  # (for the `task` tool), and any settings-file tool-call hooks.
+  defp run_context(model, app) do
+    %{
+      tool_authorizer: tool_authorizer(app),
+      subagent: %{
+        executor: model.executor,
+        backend_opts: model.backend_opts,
+        model: model.model_override
+      }
+    }
+    |> maybe_add_hooks(model)
+  end
+
+  defp maybe_add_hooks(context, %{hooks: nil}), do: context
+
+  defp maybe_add_hooks(context, %{hooks: config, cwd: cwd}) do
+    Map.merge(context, %{
+      tool_call_hooks: [Raxol.Agent.Code.Hooks],
+      code_hooks: config,
+      hook_cwd: cwd
+    })
+  end
+
+  defp run_stop_hooks(%{hooks: nil}), do: :ok
+
+  defp run_stop_hooks(%{hooks: config, cwd: cwd}) do
+    spawn(fn -> Raxol.Agent.Code.Hooks.run_stop(config, cwd) end)
+    :ok
+  end
+
   defp system_prompt(%{plan_mode: true, system: system}),
     do: system <> "\n\n" <> plan_directive()
 
@@ -397,6 +459,7 @@ defmodule Raxol.Agent.Code.App do
   defp finalize_turn(model, %{type: :turn_completed, payload: payload}) do
     if final?(payload) do
       messages = append_assistant(model.messages, model.turn_answer)
+      run_stop_hooks(model)
       persist(%{model | messages: messages, turn_answer: ""})
     else
       model
@@ -551,8 +614,25 @@ defmodule Raxol.Agent.Code.App do
       "context" -> {notice(model, context_text(model)), []}
       "compact" -> {compact(model), []}
       "sessions" -> {notice(model, sessions_text(model)), []}
+      "mcp" -> {notice(model, mcp_text(model)), []}
+      "hooks" -> {notice(model, hooks_text(model)), []}
       other -> {notice(model, "unknown command: /#{other} — try /help"), []}
     end
+  end
+
+  defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
+
+  defp mcp_text(%{mcp_servers: servers}) do
+    Enum.map_join(servers, "\n", fn s ->
+      "#{s.name}  →  #{s.command} #{Enum.join(s.args, " ")}"
+    end)
+  end
+
+  defp hooks_text(%{hooks: nil}), do: "no hooks configured (.raxol/hooks.json)"
+
+  defp hooks_text(%{hooks: config}) do
+    "pre_tool_use: #{length(config.pre)} · post_tool_use: #{length(config.post)} · " <>
+      "stop: #{length(config.stop)}"
   end
 
   defp parse_command("/" <> rest) do
@@ -630,6 +710,8 @@ defmodule Raxol.Agent.Code.App do
     /compact           shrink the conversation history
     /context           session stats
     /sessions          list saved sessions
+    /mcp               list configured MCP servers
+    /hooks             show configured lifecycle hooks
     """
     |> String.trim_trailing()
   end
@@ -728,7 +810,9 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp default_actions do
-    Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all()
+    Raxol.Agent.Actions.Fs.all() ++
+      Raxol.Agent.Actions.Code.all() ++
+      Raxol.Agent.Actions.Task.all()
   end
 
   defp default_system do

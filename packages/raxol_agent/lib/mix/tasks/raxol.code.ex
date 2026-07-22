@@ -29,7 +29,15 @@ defmodule Mix.Tasks.Raxol.Code do
   ## Slash commands
 
   `/help` · `/clear` · `/model <name>` · `/plan` · `/compact` · `/context`
-  · `/sessions`
+  · `/sessions` · `/mcp` · `/hooks`
+
+  ## Delegation, hooks, external config
+
+  The agent can delegate a focused subtask to a read-only sub-agent via the
+  `task` tool. A `.raxol/hooks.json` in the working directory declares
+  shell commands to run before/after tool calls and at turn end (a
+  non-zero pre-tool hook vetoes the tool). A `.mcp.json` declares external
+  MCP servers, surfaced by `/mcp` (live tool-bridging is a follow-up).
 
   ## Options
 

@@ -47,6 +47,18 @@ defmodule Raxol.Agent.Code.AppTest do
 
   defp submit(model, text), do: App.update(key(:enter), %{model | input: text})
 
+  defp config_cwd(files) do
+    dir = tmp_dir()
+
+    Enum.each(files, fn {rel, content} ->
+      path = Path.join(dir, rel)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, content)
+    end)
+
+    dir
+  end
+
   describe "init/1" do
     test "starts idle with an empty prompt" do
       model = new_model()
@@ -380,6 +392,67 @@ defmodule Raxol.Agent.Code.AppTest do
     test "an unknown command reports itself" do
       {model, []} = submit(new_model(), "/frobnicate")
       assert model.notice =~ "unknown command"
+    end
+  end
+
+  describe "delegation + config (Phase 5)" do
+    test "init loads .raxol/hooks.json and .mcp.json from cwd" do
+      dir =
+        config_cwd(%{
+          ".raxol/hooks.json" => Jason.encode!(%{"stop" => ["true"]}),
+          ".mcp.json" =>
+            Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}})
+        })
+
+      model = App.init(%{options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]})
+
+      assert model.hooks.stop == ["true"]
+      assert [%{name: "fs"}] = model.mcp_servers
+      assert model.status_line =~ "hooks"
+      assert model.status_line =~ "MCP"
+    end
+
+    test "a turn's run context carries the toolset, sub-agent config, and hooks" do
+      parent = self()
+
+      runner = fn _sid, _prompt, opts, _app ->
+        send(parent, {:opts, opts})
+        spawn(fn -> Process.sleep(60_000) end)
+      end
+
+      dir =
+        config_cwd(%{
+          ".raxol/hooks.json" =>
+            Jason.encode!(%{"pre_tool_use" => [%{"match" => "*", "command" => "true"}]})
+        })
+
+      model = App.init(%{options: [runner: runner, sessions_dir: tmp_dir(), cwd: dir]})
+      {_model, []} = App.update(key(:enter), %{model | input: "go"})
+
+      assert_receive {:opts, opts}
+      context = Keyword.fetch!(opts, :context)
+      assert Map.has_key?(context, :subagent)
+      assert context.tool_call_hooks == [Raxol.Agent.Code.Hooks]
+
+      names = Enum.map(Keyword.fetch!(opts, :actions), & &1.__action_meta__().name)
+      assert "task" in names
+    end
+
+    test "/hooks and /mcp report the loaded configuration" do
+      dir =
+        config_cwd(%{
+          ".raxol/hooks.json" => Jason.encode!(%{"stop" => ["true"]}),
+          ".mcp.json" =>
+            Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}})
+        })
+
+      model = App.init(%{options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]})
+
+      {model, []} = submit(model, "/hooks")
+      assert model.notice =~ "stop: 1"
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "fs"
     end
   end
 end

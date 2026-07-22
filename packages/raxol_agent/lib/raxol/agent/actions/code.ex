@@ -412,21 +412,28 @@ defmodule Raxol.Agent.Actions.Code do
 
   @doc """
   Run `command` via `/bin/sh -c` in `cd`, returning `{combined_output,
-  exit_status}`. On timeout the port is closed and `exit_status` is
-  `:timeout`.
+  exit_status}`. `env` adds environment variables (`{name, value}`
+  strings). On timeout the port is closed and `exit_status` is `:timeout`.
   """
-  @spec run_shell(String.t(), String.t(), pos_integer()) :: {binary(), integer() | :timeout}
-  def run_shell(command, cd, timeout) do
-    port =
-      Port.open({:spawn_executable, "/bin/sh"}, [
-        :binary,
-        :exit_status,
-        :use_stdio,
-        :stderr_to_stdout,
-        {:args, ["-c", command]},
-        {:cd, cd}
-      ])
+  @spec run_shell(String.t(), String.t(), pos_integer(), [{String.t(), String.t()}]) ::
+          {binary(), integer() | :timeout}
+  def run_shell(command, cd, timeout, env \\ []) do
+    charlist_env =
+      Enum.map(env, fn {k, v} ->
+        {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
+      end)
 
+    base = [
+      :binary,
+      :exit_status,
+      :use_stdio,
+      :stderr_to_stdout,
+      {:args, ["-c", command]},
+      {:cd, cd}
+    ]
+
+    port_opts = if charlist_env == [], do: base, else: base ++ [{:env, charlist_env}]
+    port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
     collect_port(port, [], timeout)
   end
 
