@@ -19,6 +19,10 @@ defmodule Raxol.ACP.Offering.Handler do
     `:transaction`); produce the deliverable.
   - `c:handle_evaluate/2` -- *(optional)* used only when this seller
     also acts as evaluator. The default lets the buyer act as evaluator.
+  - `c:handle_release/2` -- *(optional)* the seller runtime calls this when an
+    accepted job ends WITHOUT delivering (rejected after accept, or expired), so
+    the offering can free any resource it reserved at accept time (e.g. a bench
+    slot). Must be idempotent; a delivered job frees its own resources.
 
   Implementing modules typically `use Raxol.ACP.Offering` rather than
   declaring `@behaviour` directly. The DSL injects this behaviour plus
@@ -69,5 +73,7 @@ defmodule Raxol.ACP.Offering.Handler do
   @callback handle_evaluate(deliverable(), ctx()) ::
               {:approve, map()} | {:reject, term()}
 
-  @optional_callbacks handle_evaluate: 2, resolve_accept: 2
+  @callback handle_release(request(), ctx()) :: :ok
+
+  @optional_callbacks handle_evaluate: 2, resolve_accept: 2, handle_release: 2
 end
