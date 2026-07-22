@@ -204,7 +204,10 @@ defmodule Raxol.ACP.Seller.Queue do
   end
 
   defp handle_event(event, state, _defaults) do
-    drop(Map.get(event, :type), Map.get(event, :job_id), %{}, :malformed, state)
+    # Reached only when `event` has no `:type` key (all typed clauses above are
+    # exhausted), so the type is nil by construction -- pass it explicitly rather
+    # than a `Map.get` the compiler knows can only return nil here.
+    drop(nil, Map.get(event, :job_id), %{}, :malformed, state)
   end
 
   # -- job_offered --
