@@ -144,7 +144,11 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
   # unloaded; the earlier 5_000/10 budget flaked only under deliberate
   # 15-core `yes`-burner saturation, the signature of scheduling latency,
   # never a logic error -- the same assertions pass given the schedulers.)
-  defp eventually(fun, timeout \\ 15_000, interval \\ 50) do
+  # Raised 15_000 -> 30_000 after the 15s ceiling still timed out on real
+  # shared GitHub runners (macOS/Windows) under whole-suite contention; a green
+  # poll returns immediately, so the higher ceiling only costs wall-clock on a
+  # genuine failure, never on a passing run.
+  defp eventually(fun, timeout \\ 30_000, interval \\ 50) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_eventually(fun, deadline, interval, timeout)
   end
@@ -554,10 +558,15 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
 
       assert_receive {:steer_dispatched, _request}, 2_000
 
-      # The queued-steer banner IS present right after Tab (Surface's own
-      # command_sink path sets it) -- before asserting it is gone.
+      # The queued-steer banner is rendered right after Tab (Surface's own
+      # command_sink path sets it). Assert it against the CUMULATIVE output, not
+      # the current footer frame: the stale-turn rejection clears the banner, and
+      # under CI load that clear can land between two 50ms polls -- so a
+      # current-frame check races the clear and flakes. `strip_ansi(raw)` is
+      # append-only, so once the banner is rendered the match is stable. The
+      # `refute footer_text` below still proves it was cleared from the frame.
       eventually(fn ->
-        footer_text(raw(device)) =~ "steer queued for next boundary"
+        strip_ansi(raw(device)) =~ "steer queued for next boundary"
       end)
 
       eventually(fn -> strip_ansi(raw(device)) =~ "NOT delivered" end)
