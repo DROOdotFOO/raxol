@@ -356,6 +356,33 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.messages == []
       assert model.status_line =~ "not found"
     end
+
+    test "resuming rebuilds the visual transcript from persisted events" do
+      dir = tmp_dir()
+
+      # A turn that persists its durable events on completion.
+      model = App.init(%{options: [runner: stub_runner(), sessions_dir: dir]})
+      {model, []} = App.update(key(:enter), %{model | input: "hi"})
+
+      model =
+        model
+        |> send_ev(ev(1, :turn_started, %{prompt: "hi"}))
+        |> send_ev(ev(2, :item_started, %{item_id: "i1", item_type: :message}))
+        |> send_ev(ev(3, :item_completed, %{item_id: "i1", item_type: :message, content: "restored answer"}))
+        |> send_ev(ev(4, :turn_completed, %{final: true, usage: %{}}))
+
+      key = model.session_key
+
+      # A fresh app resumes that session id.
+      resumed =
+        App.init(%{options: [runner: stub_runner(), sessions_dir: dir, session_key: key]})
+
+      assert resumed.events != []
+      blocks = Raxol.Harness.Projection.project(resumed.events).blocks
+      assert Enum.any?(blocks, &(Raxol.UI.Components.Harness.Block.search_text(&1) =~ "restored answer"))
+      # And the resumed model renders.
+      assert %{} = App.view(resumed)
+    end
   end
 
   describe "slash commands" do

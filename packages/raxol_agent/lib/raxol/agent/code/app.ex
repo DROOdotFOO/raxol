@@ -71,7 +71,7 @@ defmodule Raxol.Agent.Code.App do
   @impl true
   def init(context) do
     options = Map.get(context, :options, [])
-    {sessions_dir, session_key, messages, resume_notice} = init_session(options)
+    {sessions_dir, session_key, messages, events, resume_notice} = init_session(options)
     cwd = Keyword.get(options, :cwd) || Raxol.Agent.Actions.Fs.working_dir()
     {hooks, hooks_note} = load_hooks(cwd)
     {mcp_servers, mcp_note} = load_mcp(cwd)
@@ -79,7 +79,8 @@ defmodule Raxol.Agent.Code.App do
     %{
       input: "",
       # Normalized projection events (durable + ephemeral), arrival order.
-      events: [],
+      # Seeded from a resumed session so the transcript rebuilds immediately.
+      events: events,
       # The LLM conversation carried across turns (persisted per session).
       messages: messages,
       # Assistant text accumulated during the in-flight turn.
@@ -126,15 +127,15 @@ defmodule Raxol.Agent.Code.App do
 
     case Keyword.get(options, :session_key) do
       nil ->
-        {dir, mint_session_key(), [], nil}
+        {dir, mint_session_key(), [], [], nil}
 
       key ->
         case Raxol.Agent.Code.Store.load(dir, key) do
-          {:ok, %{messages: messages}} ->
-            {dir, key, messages, "resumed #{length(messages)} messages"}
+          {:ok, %{messages: messages, events: events}} ->
+            {dir, key, messages, events, "resumed #{length(messages)} messages"}
 
           {:error, _} ->
-            {dir, key, [], "session #{key} not found — starting fresh"}
+            {dir, key, [], [], "session #{key} not found — starting fresh"}
         end
     end
   end
@@ -481,12 +482,17 @@ defmodule Raxol.Agent.Code.App do
 
   defp persist(model) do
     case Raxol.Agent.Code.Store.save(model.sessions_dir, model.session_key, %{
-           messages: model.messages
+           messages: model.messages,
+           events: durable_events(model.events)
          }) do
       :ok -> model
       {:error, reason} -> %{model | status_line: "session save failed: #{inspect(reason)}"}
     end
   end
+
+  # Only durable events rebuild the transcript on resume; ephemeral deltas are
+  # live-render-only and never persisted.
+  defp durable_events(events), do: Enum.filter(events, &(&1.tier == :durable))
 
   # Map a contract event to the face state it should show.
   defp face_for_event(%{type: :turn_started}, _current), do: :thinking

@@ -15,8 +15,9 @@ defmodule Mix.Tasks.Raxol.Code do
   It boots `Raxol.Agent.Code.App`, a TEA app that owns a coding loop over
   the harness contract: type a prompt, watch the agent stream reasoning,
   read files, and (with your per-call approval) write files and run shell
-  commands scoped to the current working directory. The conversation is
-  persisted per session, so `--continue`/`--resume` reattach it.
+  commands scoped to the current working directory. The conversation and
+  its transcript are persisted per session, so `--continue`/`--resume`
+  restore both the model context and the scrollback.
 
   ## Keys
 

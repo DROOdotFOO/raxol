@@ -4,17 +4,15 @@ defmodule Raxol.Agent.Code.Store do
   session under a base directory, so a conversation survives across runs
   and `--continue` / `--resume` can reattach it.
 
-  A saved session is the LLM conversation (`messages`) plus a little
-  metadata (`updated_at`, `cwd`). Only the three known roles
-  (`:user`/`:assistant`/`:system`) round-trip; an unknown role on read is
-  dropped rather than minting an atom from disk. The session id is only
-  ever used as a filename via `Path.basename/1`, so a crafted id can never
-  escape the base directory.
-
-  This is the conversation-continuity layer. Reconstructing the visual
-  transcript (folded projection blocks) from a durable event journal is a
-  separate, heavier concern left for later; resuming the conversation is
-  what makes the assistant useful across runs.
+  A saved session is the LLM conversation (`messages`), the durable
+  contract `events` (so `--resume` can rebuild the visual transcript, not
+  just the model context), and a little metadata (`updated_at`, `cwd`).
+  Only the three known roles (`:user`/`:assistant`/`:system`) round-trip;
+  an unknown role on read is dropped rather than minting an atom from disk.
+  Events are decoded back into projection shape by
+  `Raxol.Agent.Code.EventCodec` (fixed vocabularies, no atom minting from
+  disk). The session id is only ever used as a filename via
+  `Path.basename/1`, so a crafted id can never escape the base directory.
   """
 
   @role_to_string %{user: "user", assistant: "assistant", system: "system"}
@@ -25,7 +23,8 @@ defmodule Raxol.Agent.Code.Store do
           id: String.t(),
           updated_at: integer(),
           cwd: String.t(),
-          messages: [message()]
+          messages: [message()],
+          events: [map()]
         }
 
   @doc "The default sessions directory (`$RAXOL_CODE_SESSIONS` or `~/.raxol/code_sessions`)."
@@ -48,7 +47,10 @@ defmodule Raxol.Agent.Code.Store do
           "id" => session_key,
           "updated_at" => System.system_time(:second),
           "cwd" => Map.get(attrs, :cwd, ""),
-          "messages" => attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1)
+          "messages" => attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1),
+          # Durable projection events, stored as-is (already JSON-encodable);
+          # EventCodec decodes them back to projection shape on load.
+          "events" => Map.get(attrs, :events, [])
         }
 
       File.write(path(dir, session_key), Jason.encode!(data))
@@ -69,7 +71,8 @@ defmodule Raxol.Agent.Code.Store do
            json
            |> Map.get("messages", [])
            |> Enum.map(&decode_message/1)
-           |> Enum.reject(&is_nil/1)
+           |> Enum.reject(&is_nil/1),
+         events: Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
        }}
     else
       _ -> {:error, :not_found}

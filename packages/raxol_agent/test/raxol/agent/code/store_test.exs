@@ -22,6 +22,26 @@ defmodule Raxol.Agent.Code.StoreTest do
     assert session.id == "s1"
   end
 
+  test "persists and reloads durable events in projection shape", %{dir: dir} do
+    events = [
+      %{
+        id: 1,
+        turn_id: "t1",
+        ts: 1,
+        family: :loop,
+        type: :turn_completed,
+        tier: :durable,
+        scope: :session,
+        provenance: %{source: :primary, trust: :trusted},
+        payload: %{"final" => true}
+      }
+    ]
+
+    assert :ok = Store.save(dir, "s3", %{messages: [], events: events})
+    assert {:ok, session} = Store.load(dir, "s3")
+    assert [%{id: 1, type: :turn_completed, tier: :durable}] = session.events
+  end
+
   test "an unknown role is dropped on load (no atom minted from disk)", %{dir: dir} do
     File.mkdir_p!(dir)
 
