@@ -811,13 +811,36 @@ defmodule Raxol.UI.ColorResolver do
     region_dim_rgb(r, g, b, p, ground)
   end
 
+  # `Salience.hex_to_oklch/1` is total only over plain 6-digit hex (its
+  # only clauses are a `%{r,g,b}` map and an exact 6-byte binary after the
+  # leading `#` is stripped) -- it has no clause for the 3-digit shorthand
+  # or `"#RRGGBBAA"` alpha shapes this codebase's style maps ship (see
+  # `literal_ref/1`'s comment, the other caller that already rescues this),
+  # and a syntactically-6-char but non-hex string (`"#gggggg"`) raises from
+  # `String.to_integer/2` inside it. A cell's region prominence is decided
+  # by which regions are mounted this frame, never by what shape of hex a
+  # producer painted -- so a fg/bg literal reaching this dimming stage must
+  # degrade the same way `literal_ref/1` already does for the identical
+  # input space: an unparseable hex passes through UNDIMMED rather than
+  # crashing the whole `resolve_cells/2` pass.
   defp region_dim_literal("#" <> _ = hex, p, ground) do
-    {l, c, h} = Salience.hex_to_oklch(hex)
-    {new_l, new_c, new_h} = region_dim_oklch(l, c, h, p, ground)
-    Salience.oklch_to_hex(new_l, new_c, new_h)
+    case safe_hex_to_oklch(hex) do
+      {:ok, {l, c, h}} ->
+        {new_l, new_c, new_h} = region_dim_oklch(l, c, h, p, ground)
+        Salience.oklch_to_hex(new_l, new_c, new_h)
+
+      :error ->
+        hex
+    end
   end
 
   defp region_dim_literal(other, _p, _ground), do: other
+
+  defp safe_hex_to_oklch(hex) do
+    {:ok, Salience.hex_to_oklch(hex)}
+  rescue
+    _ -> :error
+  end
 
   defp region_dim_rgb(r, g, b, p, ground) do
     {l, c, h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)

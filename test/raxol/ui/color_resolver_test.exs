@@ -483,6 +483,41 @@ defmodule Raxol.UI.ColorResolverTest do
     Salience.apparent_lightness(l, c, h)
   end
 
+  # ---- region-dim literal degradation on non-6-digit-hex shapes ----
+
+  describe "region-dim degrades non-6-digit hex literals instead of crashing" do
+    test "a 3-digit shorthand hex fg under a de-prominent region passes through undimmed" do
+      cells = [{0, 0, "x", "#abc", nil, [{:region_prominence, 0.45}]}]
+
+      assert [{_, _, _, "#abc", nil, []}] =
+               ColorResolver.resolve_cells(cells, ground: @dark_ground)
+    end
+
+    test "an 8-digit alpha hex bg under a de-prominent region passes through undimmed" do
+      cells = [{0, 0, "x", nil, "#11223344", [{:region_prominence, 0.45}]}]
+
+      assert [{_, _, _, nil, "#11223344", []}] =
+               ColorResolver.resolve_cells(cells, ground: @dark_ground)
+    end
+
+    test "a syntactically-6-char but non-hex fg under a de-prominent region passes through undimmed" do
+      cells = [{0, 0, "x", "#gggggg", nil, [{:region_prominence, 0.45}]}]
+
+      assert [{_, _, _, "#gggggg", nil, []}] =
+               ColorResolver.resolve_cells(cells, ground: @dark_ground)
+    end
+
+    test "a valid 6-digit hex literal still dims normally under a de-prominent region" do
+      cells = [{0, 0, "x", "#ffffff", nil, [{:region_prominence, 0.45}]}]
+
+      [{_, _, _, fg, _, _}] =
+        ColorResolver.resolve_cells(cells, ground: @dark_ground)
+
+      assert fg != "#ffffff"
+      assert is_binary(fg)
+    end
+  end
+
   # ---- grid-bg fg floor ----
 
   describe "grid-bg fg floor" do
