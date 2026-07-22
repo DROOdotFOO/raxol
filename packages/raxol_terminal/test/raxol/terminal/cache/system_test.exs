@@ -15,8 +15,13 @@ defmodule Raxol.Terminal.Cache.SystemTest do
     {:ok, pid} = System.start_link(name: cache_system_name)
 
     on_exit(fn ->
-      if Process.alive?(pid) do
-        GenServer.stop(pid)
+      # The server may already be dying (linked to the test process) when
+      # teardown runs; GenServer.stop then exits with :shutdown. Swallow it --
+      # teardown only needs the process gone.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
       end
     end)
 
@@ -132,7 +137,8 @@ defmodule Raxol.Terminal.Cache.SystemTest do
       result5 = System.get("key5", namespace: :general)
 
       # At least key1 should be evicted (oldest, never accessed after initial insert)
-      assert {:error, :not_found} = result1, "key1 should have been evicted (oldest)"
+      assert {:error, :not_found} = result1,
+             "key1 should have been evicted (oldest)"
 
       # key5 should definitely be present (just added)
       assert {:ok, _} = result5, "key5 should be present (just added)"

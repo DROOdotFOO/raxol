@@ -23,8 +23,11 @@ defmodule Raxol.Terminal.Plugin.UnifiedPluginTest do
       # Always restore the theme file after each test
       File.write!(theme_file, original_content)
 
-      if Process.alive?(pid) do
-        GenServer.stop(pid)
+      # Server may be mid-shutdown at teardown; swallow the stop's :exit.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
       end
     end)
 
@@ -235,7 +238,10 @@ defmodule Raxol.Terminal.Plugin.UnifiedPluginTest do
       # Verify both plugins are active
       assert {:ok, base_state} = PluginServer.get_plugin_state(base_id)
       assert base_state.status == :active
-      assert {:ok, dependent_state} = PluginServer.get_plugin_state(dependent_id)
+
+      assert {:ok, dependent_state} =
+               PluginServer.get_plugin_state(dependent_id)
+
       assert dependent_state.status == :active
     end
   end
@@ -338,7 +344,8 @@ defmodule Raxol.Terminal.Plugin.UnifiedPluginTest do
 
       try do
         # Attempt to reload - should fail
-        assert {:error, :reload_failed, _state} = PluginServer.reload_plugin(plugin_id)
+        assert {:error, :reload_failed, _state} =
+                 PluginServer.reload_plugin(plugin_id)
 
         # Verify plugin is in error state
         assert {:ok, plugin_state} = PluginServer.get_plugin_state(plugin_id)

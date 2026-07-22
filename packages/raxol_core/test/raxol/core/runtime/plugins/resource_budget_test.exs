@@ -11,7 +11,12 @@ defmodule Raxol.Core.Runtime.Plugins.ResourceBudgetTest do
     {:ok, pid} = ResourceBudget.start_link(interval_ms: 60_000)
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      # Server may be mid-shutdown at teardown; swallow the stop's :exit.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
     end)
 
     :ok
