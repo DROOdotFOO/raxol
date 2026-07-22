@@ -16,12 +16,12 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ContentGuard do
 
   ## The allowlist grammar
 
-  Scanning byte-by-byte (UTF-8 multi-byte sequences pass through as
-  opaque bytes -- nothing here decodes or re-encodes text, it only ever
-  recognizes ASCII control structure):
+  ASCII control structure is recognized byte-wise; the ONLY decode is at
+  the `>= 0x80` boundary, by code point, to catch C1 controls (below) --
+  every other multi-byte UTF-8 sequence is re-emitted intact:
 
-    * **Printable ASCII** (`0x20..0x7E`) and any byte `>= 0x80`
-      (UTF-8 lead/continuation bytes) -- passed through unchanged.
+    * **Printable ASCII** (`0x20..0x7E`) and legitimate multi-byte UTF-8
+      (code points `>= 0xA0`) -- passed through unchanged.
     * **`\\t`, `\\r`, `\\n`** -- passed through unchanged (the C0 controls a
       line of legitimate content actually needs).
     * **SGR (`CSI ... m`)** -- e.g. `\\e[1;31m`, `\\e[0m` -- passed through
@@ -30,6 +30,12 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ContentGuard do
     * **Every other C0 control byte** (`0x00..0x1F` except the three
       above) and **DEL** (`0x7F`) -- stripped silently. These carry no
       printable residue worth preserving.
+    * **C1 control code points** (`U+0080..U+009F`) -- stripped, whether a
+      raw single byte (`0x9B` = 8-bit CSI, `0x9D` = OSC, `0x90` = DCS, ...)
+      or the UTF-8 form (`0xC2 0x80..0xC2 0x9F`); a lone invalid high byte
+      is dropped too. These are the 8-bit siblings of the ESC-led sequences
+      below -- a byte-wise `>= 0x80` pass-through would let them through raw
+      and reopen the injection class from the C1 side (#616).
     * **Any other ESC (`0x1B`)-led sequence** -- a non-SGR CSI (cursor
       moves, erases, ...), OSC (`\\e]...`), DCS (`\\eP...`), or a bare/
       truncated ESC with no recognized introducer at all -- has ONLY its
