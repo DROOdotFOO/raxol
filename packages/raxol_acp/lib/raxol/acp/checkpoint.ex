@@ -31,6 +31,12 @@ defmodule Raxol.ACP.Checkpoint do
   Keys are `derive_key([chain_id, job_id, step])` with step ∈ `:accept` |
   `:submit`, so a job's records are addressable from nothing but its identity —
   exactly what a cold resync has.
+
+  Durability, explicitly: the `{:ets, name}` form does NOT survive a BEAM restart
+  on its own. The full "resume across restarts" guarantee holds only when it is
+  paired with `Raxol.ACP.Seller.Resync` (which re-reads the authoritative phase
+  from the job API) OR when a durable `{module, handle}` backend is configured.
+  A production seller should set `require_checkpoint: true` and use one of those.
   """
 
   alias Raxol.Payments.Checkpoint

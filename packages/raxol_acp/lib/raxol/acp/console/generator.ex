@@ -25,6 +25,11 @@ defmodule Raxol.ACP.Console.Generator do
 
   alias Raxol.ACP.Console.{Inference, Spec}
 
+  # A skill name becomes a path segment (`skills/<name>/SKILL.md`), so it is
+  # constrained to a safe, single-segment slug -- never `..`, `/`, or absolute.
+  # Untrusted model output (steerable by buyer input) must not choose a file path.
+  @skill_name ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
+
   @type package :: %{
           runtime: :hermes | :openclaw,
           files: %{String.t() => binary()},
@@ -157,8 +162,11 @@ defmodule Raxol.ACP.Console.Generator do
     |> Map.get("skills", [])
     |> List.wrap()
     |> Enum.reduce_while({:ok, []}, fn
-      %{"name" => n, "skill_md" => md}, {:ok, acc} when is_binary(n) and is_binary(md) ->
-        {:cont, {:ok, [%{"name" => n, "skill_md" => md} | acc]}}
+      %{"name" => n, "skill_md" => md}, {:ok, acc}
+      when is_binary(n) and is_binary(md) ->
+        if Regex.match?(@skill_name, n),
+          do: {:cont, {:ok, [%{"name" => n, "skill_md" => md} | acc]}},
+          else: {:halt, {:error, {:generation_unsafe_skill_name, n}}}
 
       s, _acc ->
         {:halt, {:error, {:generation_bad_skill, s}}}

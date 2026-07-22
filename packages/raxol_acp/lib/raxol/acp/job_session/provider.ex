@@ -279,6 +279,21 @@ defmodule Raxol.ACP.JobSession.Provider do
     :ok = Checkpoint.delete(p.checkpoint, ck_key(p, :submit))
   end
 
+  @doc """
+  Notify the offering that an accepted job ended without delivering, so it can
+  free anything reserved at accept time (optional `handle_release/2`). Called by
+  the seller runtime on the reject-after-accept and expiry paths; a no-op when
+  the offering does not implement the callback.
+  """
+  @spec release(t(), map()) :: :ok
+  def release(%__MODULE__{} = p, request) do
+    if function_exported?(p.handler, :handle_release, 2) do
+      _ = p.handler.handle_release(request, ctx(p))
+    end
+
+    :ok
+  end
+
   # -- Internals --
 
   defp finalize_evaluation(p, deliverable, :completed, info) do

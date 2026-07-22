@@ -91,6 +91,18 @@ defmodule Raxol.ACP.Console.DeliveryTest do
       assert {:reject, {:invalid_requirement, "purpose", :missing}} =
                AgentOffering.handle_request(Map.delete(@request, "purpose"), @ctx)
     end
+
+    test "handle_release frees a reserved bench slot (no leak on non-delivery)" do
+      start_supervised!({BenchSlots, max: 1})
+
+      assert {:accept, _} = AgentOffering.handle_request(@request, @ctx)
+      other = %{@ctx | job_id: "job-console-rel"}
+      assert {:reject, :at_bench_capacity} = AgentOffering.handle_request(@request, other)
+
+      # the accepted job ends without delivering -> release its slot
+      assert :ok = AgentOffering.handle_release(@request, @ctx)
+      assert {:accept, _} = AgentOffering.handle_request(@request, other)
+    end
   end
 
   describe "Delivery.run/2" do
@@ -141,6 +153,27 @@ defmodule Raxol.ACP.Console.DeliveryTest do
     test "a malformed generation envelope blocks delivery" do
       Application.put_env(:raxol_acp, :console_inference_static, "not json at all")
       assert {:error, {:generation_not_json, _}} = Delivery.run(@request, @ctx)
+    end
+
+    test "a skill name that would escape the package dir is rejected before any write" do
+      evil =
+        Jason.encode!(%{
+          "soul_md" =>
+            "# Scout\n\nIdentity: a watcher.\nPurpose: summarize.\nBoundaries: read-only.\n",
+          "agents_md" => "# Agents\n",
+          "tasks" => [],
+          "skills" => [
+            %{
+              "name" => "../../../../etc/evil",
+              "skill_md" => "---\nname: x\ndescription: y\n---\n"
+            }
+          ]
+        })
+
+      Application.put_env(:raxol_acp, :console_inference_static, evil)
+
+      assert {:error, {:generation_unsafe_skill_name, "../../../../etc/evil"}} =
+               Delivery.run(@request, @ctx)
     end
   end
 end

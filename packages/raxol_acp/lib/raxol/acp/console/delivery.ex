@@ -70,13 +70,30 @@ defmodule Raxol.ACP.Console.Delivery do
     Enum.reduce_while(files, {:ok, dir}, fn {rel, bytes}, {:ok, dir} ->
       path = Path.join(dir, rel)
 
-      with :ok <- File.mkdir_p(Path.dirname(path)),
-           :ok <- File.write(path, bytes) do
-        {:cont, {:ok, dir}}
-      else
-        {:error, reason} -> {:halt, {:error, {:materialize, rel, reason}}}
+      # Enforce that every key stays inside `dir`. The Generator already
+      # constrains its own keys, but materialize is the actual filesystem write,
+      # so it fails closed on any `..`/absolute path from any source rather than
+      # trusting the caller (defense in depth against a package-slip escape).
+      cond do
+        not safe_rel?(rel) ->
+          {:halt, {:error, {:unsafe_path, rel}}}
+
+        true ->
+          with :ok <- File.mkdir_p(Path.dirname(path)),
+               :ok <- File.write(path, bytes) do
+            {:cont, {:ok, dir}}
+          else
+            {:error, reason} -> {:halt, {:error, {:materialize, rel, reason}}}
+          end
       end
     end)
+  end
+
+  # A package-relative path is safe only when it is a non-empty, relative path
+  # with no `..` segment -- so `Path.join(dir, rel)` can never escape `dir`.
+  defp safe_rel?(rel) do
+    rel = to_string(rel)
+    rel != "" and not String.starts_with?(rel, "/") and ".." not in Path.split(rel)
   end
 
   defp maybe_bench(_dir, %Spec{validation: :package_only}), do: {:ok, nil}

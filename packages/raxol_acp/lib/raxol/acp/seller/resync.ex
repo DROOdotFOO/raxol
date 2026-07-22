@@ -37,10 +37,12 @@ defmodule Raxol.ACP.Seller.Resync do
   ## Phase mapping
 
   Accepts the v2 names (`open`, `budget_set`, `funded`, `submitted`,
-  `completed`, `rejected`, `expired`), the acp-node-v2 aliases (`request`,
-  `negotiation`, `transaction`, `evaluation`) in any case/camelCase, and the
-  numeric enum 0..6 in that order. Unknown phases skip the job with telemetry
-  rather than acting on a state we do not understand.
+  `completed`, `rejected`, `expired`) and the acp-node-v2 aliases (`request`,
+  `negotiation`, `transaction`, `evaluation`) in any case/camelCase. A numeric
+  phase is skipped, not mapped: the integer enum order is not pinned here, so
+  acting on a guessed mapping could re-drive the wrong phase. Unknown or numeric
+  phases skip the job with telemetry rather than acting on a state we do not
+  understand.
   """
 
   use GenServer
@@ -241,10 +243,13 @@ defmodule Raxol.ACP.Seller.Resync do
     end
   end
 
-  @phase_by_index [:open, :budget_set, :funded, :submitted, :completed, :rejected, :expired]
-
   defp phase(nil), do: {:skip, :no_phase}
-  defp phase(n) when is_integer(n) and n in 0..6, do: {:ok, Enum.at(@phase_by_index, n)}
+
+  # Numeric phases are NOT mapped positionally. The on-chain / API integer enum
+  # order is not pinned in this package, so guessing it risks acting on the wrong
+  # phase (e.g. treating `funded` as `submitted` and re-arming a delivery). Skip
+  # loudly until a dry-run confirms the encoding; string phases are unambiguous.
+  defp phase(n) when is_integer(n), do: {:skip, {:ambiguous_numeric_phase, n}}
 
   defp phase(s) when is_binary(s) do
     case s |> Macro.underscore() |> String.downcase() do

@@ -182,9 +182,12 @@ defmodule Raxol.ACP.Seller.Queue do
   end
 
   defp handle_event(%{type: :job_expired, job_id: job_id} = event, state, _defaults) do
-    with_job(:job_expired, job_id, state, fn %{provider: provider} ->
+    with_job(:job_expired, job_id, state, fn %{provider: provider} = job ->
       reason = Map.get(event, :reason, "expired")
       JobSession.apply_event(provider.session, :expired, %{reason: inspect(reason)})
+      # Free resources reserved at accept (e.g. a bench slot): the job ended
+      # without delivering, so nothing else will release them.
+      Provider.release(provider, Map.get(job, :request, %{}))
       Provider.cleanup(provider)
       _ = dispatched(:job_expired, job_id, state)
       drop_job(state, job_id)
@@ -234,7 +237,11 @@ defmodule Raxol.ACP.Seller.Queue do
                 JobSession.apply_event(session, :expired, %{rejected: reason})
                 drop(:job_offered, job_id, %{offering: name}, {:rejected, reason}, state)
 
+              # The handler accepted (and may have reserved resources) but the
+              # on-chain setBudget failed: release before dropping so an accept
+              # reservation does not leak on a write failure.
               {:error, reason} ->
+                Provider.release(provider, resolved_request)
                 drop(:job_offered, job_id, %{offering: name}, {:handler_error, reason}, state)
             end
 
@@ -262,7 +269,12 @@ defmodule Raxol.ACP.Seller.Queue do
         xochi_config: defaults.xochi_config
       })
     else
-      {:ok, request, AssetToken.usdc(spec.price_usdc, defaults.chain_id)}
+      # An offering with no flat price and no resolve_accept cannot be priced.
+      # Fall back to a zero budget instead of crashing the shared Queue on
+      # `AssetToken.usdc(nil, _)` -- handle_request still runs, so a reject-only
+      # offering rejects cleanly and a nil-price accept surfaces a visible zero
+      # budget rather than taking down job processing for every other offering.
+      {:ok, request, AssetToken.usdc(spec.price_usdc || 0, defaults.chain_id)}
     end
   end
 

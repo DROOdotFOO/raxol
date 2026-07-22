@@ -95,6 +95,12 @@ defmodule Raxol.ACP.Console.AgentOffering do
   @impl true
   def handle_deliver(request, ctx), do: Delivery.run(request, ctx)
 
+  # An accepted job that never delivers (rejected after accept, or expired) must
+  # give its bench slot back here -- otherwise the pre-escrow reservation leaks
+  # until the TTL sweep. Idempotent, and a no-op for package_only jobs.
+  @impl true
+  def handle_release(_request, ctx), do: BenchSlots.release(ctx.job_id)
+
   defp reserve_bench(%Spec{validation: :package_only}, _job_id), do: :ok
   defp reserve_bench(%Spec{validation: :bench_validated}, job_id), do: bench_result(job_id)
 

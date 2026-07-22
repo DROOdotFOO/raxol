@@ -204,12 +204,15 @@ defmodule Raxol.ACP.Seller.ResyncRecoveryTest do
     eventually(fn -> status(job) == :gone end)
   end
 
-  test "unknown phases and foreign chains are skipped, not acted on" do
-    assert {:ok, %{skipped: 2, adopted: 0, redelivered: 0}} =
+  test "unknown, numeric, and foreign-chain phases are skipped, not acted on" do
+    # x3 carries a numeric phase: the integer enum order is not pinned, so it is
+    # skipped (fail closed) rather than positionally mapped to a guessed phase.
+    assert {:ok, %{skipped: 3, adopted: 0, redelivered: 0}} =
              Resync.run(
                api([
                  %{"id" => "x1", "phase" => "haggling", "chainId" => @chain},
-                 %{"id" => "x2", "phase" => "funded", "chainId" => 1}
+                 %{"id" => "x2", "phase" => "funded", "chainId" => 1},
+                 %{"id" => "x3", "phase" => 2, "chainId" => @chain}
                ])
              )
   end

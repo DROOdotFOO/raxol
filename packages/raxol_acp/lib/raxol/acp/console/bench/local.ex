@@ -69,6 +69,42 @@ defmodule Raxol.ACP.Console.Bench.Local do
       {~c"RAXOL_BENCH_TASK", to_charlist(first_task(pkg_dir))}
     ]
 
+    case open_port(exe, args, env) do
+      {:error, reason} ->
+        # A missing/non-executable wrapper is an operator misconfig; fail the
+        # bench with a typed error rather than crashing the job session.
+        {:error, {:bench_spawn_failed, check, reason}}
+
+      {:ok, port} ->
+        timeout = Keyword.get(cfg, :timeout_ms, 120_000)
+
+        case collect(port, "", timeout) do
+          {:ok, 0, out} ->
+            entry = "== #{check} ==\n#{out}\n"
+
+            run_checks(
+              rest,
+              exe,
+              args,
+              pkg_dir,
+              cfg,
+              [{check, :ok} | done],
+              cap(transcript <> entry)
+            )
+
+          {:ok, status, out} ->
+            {:error, {:bench_failed, check, status, String.slice(out, -500..-1//1)}}
+
+          :timeout ->
+            Port.close(port)
+            {:error, {:bench_timeout, check}}
+        end
+    end
+  end
+
+  # Port.open/2 raises (e.g. :enoent) when the wrapper is missing or not
+  # executable; contain that so the pipeline sees a normal error.
+  defp open_port(exe, args, env) do
     port =
       Port.open({:spawn_executable, exe}, [
         :binary,
@@ -78,20 +114,11 @@ defmodule Raxol.ACP.Console.Bench.Local do
         env: env
       ])
 
-    timeout = Keyword.get(cfg, :timeout_ms, 120_000)
-
-    case collect(port, "", timeout) do
-      {:ok, 0, out} ->
-        entry = "== #{check} ==\n#{out}\n"
-        run_checks(rest, exe, args, pkg_dir, cfg, [{check, :ok} | done], cap(transcript <> entry))
-
-      {:ok, status, out} ->
-        {:error, {:bench_failed, check, status, String.slice(out, -500..-1//1)}}
-
-      :timeout ->
-        Port.close(port)
-        {:error, {:bench_timeout, check}}
-    end
+    {:ok, port}
+  rescue
+    # `rescue` catches the `:error`-class raise from open_port (e.g. :enoent for
+    # a missing wrapper) as an ErlangError, so no separate `catch` is needed.
+    e -> {:error, Exception.message(e)}
   end
 
   defp collect(port, acc, timeout) do
