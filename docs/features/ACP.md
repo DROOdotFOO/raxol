@@ -4,6 +4,12 @@
 
 Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_acp/`.
 
+> **Two protocols share the letters "ACP".** This page is the **Agent Commerce Protocol**
+> (`Raxol.ACP`, on-chain payments for selling agent services). It is unrelated to the
+> [Editor Agent Client Protocol](EDITOR_ACP.md) (`Raxol.AgentClientProtocol`, the JSON-RPC
+> protocol between a code editor and an AI coding agent). Different acronym expansion,
+> different domain.
+
 ## Job Lifecycle
 
 Every job is a state machine. One supervised `Raxol.ACP.JobSession` runs per active job, registered by `{chain_id, job_id}`:
