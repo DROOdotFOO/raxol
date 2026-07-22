@@ -189,7 +189,7 @@ mix run --no-halt
 
 That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
 
-Try `mix raxol.playground` for an interactive catalog of 30 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
+Try `mix raxol.playground` for an interactive catalog of 40 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
 
 **Next steps:**
 

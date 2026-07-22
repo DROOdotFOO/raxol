@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-18. First of the Hermes-extraction Tier 2 ADRs (research deliverable at
+Accepted, 2026-07-22 (execution backends implemented in `Raxol.Agent.Backend.{Native,ClaudeCode,Cursor}` + `Raxol.Agent.NativeHarness`; serverless hibernation deferred). Originally proposed 2026-06-18. First of the Hermes-extraction Tier 2 ADRs (research deliverable at
 `~/Desktop/hermes-extraction-report.md`, item H2.1). Hermes is the benchmark agent this work targets.
 Builds on ADR-0020 (the `Raxol.Agent.Sandbox` protocol and the `CommandHook`/`ThreadLog` seams) and
 the omnigent item-log (`Raxol.Agent.Conversation.{Store,Log}`).

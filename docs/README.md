@@ -57,7 +57,7 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 ## Examples
 
 - [Examples Learning Path](../examples/README.md): runnable examples, beginner to advanced
-- `mix raxol.playground`: interactive Component catalog with 30 demos
+- `mix raxol.playground`: interactive Component catalog with 40 demos
 
 ## Resources
 

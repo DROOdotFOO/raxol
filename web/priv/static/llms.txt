@@ -5,7 +5,7 @@
 ## Quick start
 
     ssh -p 2222 playground@raxol.io    # zero install
-    {:raxol, "~> 2.5"}                 # add to mix.exs
+    {:raxol, "~> 2.6"}                 # add to mix.exs
 
 ## Capability summary
 
