@@ -1,34 +1,79 @@
 # Raxol
 
-> Multi-surface runtime for Elixir on OTP. One TEA module renders to terminal, browser (LiveView), SSH, MCP, Telegram, watch, and speech surfaces.
+> Multi-surface runtime for Elixir on OTP. One TEA module renders to a terminal, a browser (LiveView), an SSH session, MCP, Telegram, a watch, and speech. Agents get memory, self-improvement, tools, and agentic commerce.
 
 ## Quick start
 
     ssh -p 2222 playground@raxol.io    # zero install
-    {:raxol, "~> 2.5"}                 # add to mix.exs
+    {:raxol, "~> 2.6"}                 # add to mix.exs
 
 ## Capability summary
 
-Raxol is an Elixir framework built on OTP. It uses The Elm Architecture (TEA): init/1, update/2, view/1. The same module renders to seven surfaces without modification.
+Raxol is an Elixir framework built on OTP. It uses The Elm Architecture (TEA): init/1, update/2, view/1. The same module renders to these surfaces without modification: terminal, liveview, ssh, mcp, telegram, watch, speech.
 
-Surfaces: terminal (termbox2 NIF), browser (Phoenix LiveView), SSH (Erlang :ssh), MCP (stdio JSON-RPC), Telegram (per-chat sessions), watch (APNS/FCM push), speech (TTS/STT).
+Agent framework: TEA agents (message-driven) and Process agents (tick-driven), teams with coordinator/worker supervision, reasoning strategies (Direct, ReAct), a Turn driver that wires memory and skills and self-improvement, and a native multi-vendor harness (Claude Code, Cursor) that serves Raxol tools over MCP. Backends: Anthropic, OpenAI, Ollama, Kimi, Groq, LLM7, OpenRouter, Lumo, Mock.
 
-Agent framework: TEA agents (message-driven) and Process agents (tick-driven). Teams with coordinator/worker supervision. Strategies: Direct (sequential) and ReAct (LLM reasoning loop). Backends: Anthropic, OpenAI, Ollama, Kimi, Groq, LLM7, OpenRouter, Lumo, Mock.
+Agent learning: a provider-stack memory layer, full-text session recall, a dialectic user model, an after-turn self-improvement loop, and agent-authored skills in the agentskills.io SKILL.md format.
 
-Agent payments: x402 (HTTP 402 micropayments), MPP (Stripe/Tempo), Xochi (cross-chain intent settlement with stealth addresses). SpendingPolicy + Ledger for per-request/session/lifetime limits.
+Agent commerce: autonomous payments (x402, MPP, Xochi cross-chain), spending limits, stealth and shielded settlement, and ZKSAR trust attestations. No other agent runtime ships this.
 
-MCP tools: auto-derived from widget tree via ToolProvider behaviour. Built-in headless tools: raxol_start, raxol_screenshot, raxol_send_key, raxol_get_model, raxol_stop, raxol_list.
+Governance: an ALLOW/ASK/DENY authorization engine gates every tool call, and a durable conversation item-log records what the agent did.
 
-OTP gives: crash isolation per component, hot code reload, distributed clustering (CRDTs, gossip/DNS/Tailscale discovery), time-travel debugging.
+## Surfaces
 
-## Structured endpoints
+- terminal (termbox2 NIF, raxol_terminal)
+- liveview (Phoenix PubSub, raxol_liveview)
+- ssh (Erlang :ssh, raxol (built-in))
+- mcp (stdio JSON-RPC, raxol_mcp)
+- telegram (Telegex HTTP, raxol_telegram)
+- watch (APNS/FCM push, raxol_watch)
+- speech (TTS/STT (say/Whisper), raxol_speech)
 
-- Skill file: https://raxol.io/skill.md
-- Capability manifest: https://raxol.io/.well-known/raxol.json
-- Capabilities API: https://raxol.io/api/capabilities
-- Docs: https://hexdocs.pm/raxol
-- GitHub: https://github.com/DROOdotFOO/raxol
-- Hex: https://hex.pm/packages/raxol
+## Packages
+
+- raxol `{:raxol, "~> 2.6"}`: Full framework
+- raxol_agent `{:raxol_agent, "~> 2.6"}`: AI agents
+- raxol_mcp `{:raxol_mcp, "~> 2.6"}`: MCP server
+- raxol_payments `{:raxol_payments, "~> 0.1"}`: Agent commerce
+- raxol_liveview `{:raxol_liveview, "~> 2.6"}`: LiveView bridge
+- raxol_sensor `{:raxol_sensor, "~> 2.6"}`: Sensor fusion
+- raxol_terminal `{:raxol_terminal, "~> 2.6"}`: Terminal emulation
+- raxol_core `{:raxol_core, "~> 2.6"}`: Behaviours, events
+- raxol_plugin `{:raxol_plugin, "~> 2.6"}`: Plugin SDK
+- raxol_speech `{:raxol_speech, "~> 0.2"}`: TTS/STT
+- raxol_telegram `{:raxol_telegram, "~> 0.2"}`: Telegram bot
+- raxol_watch `{:raxol_watch, "~> 0.2"}`: Push notifications
+
+## Documentation
+
+Full text of every doc, concatenated for single-fetch ingestion: https://raxol.io/llms-full.txt
+
+Feature docs:
+
+- Agent Commerce Protocol (ACP): https://github.com/DROOdotFOO/raxol/blob/master/docs/features/ACP.md
+- Adaptive UI: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/ADAPTIVE_UI.md
+- Agentic Commerce: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENTIC_COMMERCE.md
+- Agent Framework: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/AGENT_FRAMEWORK.md
+- Coding Agent (`mix raxol.code`): https://github.com/DROOdotFOO/raxol/blob/master/docs/features/CODING_AGENT.md
+- Cursor Effects: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/CURSOR_EFFECTS.md
+- Distributed Swarm: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/DISTRIBUTED_SWARM.md
+- Editor Agent Client Protocol: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/EDITOR_ACP.md
+- Virtual File System: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/FILESYSTEM.md
+- Unified Messaging Gateway: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/GATEWAY.md
+- MCP as a Rendering Target: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/MCP.md
+- Memory: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/MEMORY.md
+- Plugin SDK: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/PLUGIN_SDK.md
+- Recording & Replay: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/RECORDING_REPLAY.md
+- REPL: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/REPL.md
+- Self-Improvement: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/SELF_IMPROVEMENT.md
+- Sensor Fusion: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/SENSOR_FUSION.md
+- Speech Surface: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/SPEECH.md
+- Symphony: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/SYMPHONY.md
+- Telegram Surface: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/TELEGRAM.md
+- Time-Travel Debugging: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/TIME_TRAVEL_DEBUGGING.md
+- Watch Surface: https://github.com/DROOdotFOO/raxol/blob/master/docs/features/WATCH.md
+
+API reference (per package): https://hexdocs.pm/raxol
 
 ## MCP integration
 
@@ -42,17 +87,14 @@ OTP gives: crash isolation per component, hot code reload, distributed clusterin
       }
     }
 
-## Packages
+Built-in headless tools: raxol_start, raxol_screenshot, raxol_send_key, raxol_get_model, raxol_stop, raxol_list.
 
-- raxol: Full framework, TEA runtime, rendering, widgets, effects
-- raxol_agent: AI agents, teams, strategies, LLM streaming
-- raxol_mcp: MCP server, tool derivation from widgets
-- raxol_payments: x402, MPP, Xochi cross-chain, spending controls
-- raxol_liveview: LiveView bridge, TerminalBridge, TEALive
-- raxol_sensor: Sensor fusion (zero dependencies)
-- raxol_terminal: VT100/ANSI emulation, screen buffer, termbox2 NIF
-- raxol_core: Behaviours, events, config, accessibility, plugins
-- raxol_plugin: Plugin SDK, generator, testing utils
-- raxol_speech: TTS/STT, voice commands
-- raxol_telegram: Telegram bot surface
-- raxol_watch: APNS/FCM push notifications
+## Structured endpoints
+
+- Documentation (full text): https://raxol.io/llms-full.txt
+- Skill file: https://raxol.io/skill.md
+- Capability manifest: https://raxol.io/.well-known/raxol.json
+- Capabilities API: https://raxol.io/api/capabilities
+- API docs: https://hexdocs.pm/raxol
+- GitHub: https://github.com/DROOdotFOO/raxol
+- Hex: https://hex.pm/packages/raxol

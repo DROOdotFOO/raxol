@@ -23,15 +23,15 @@ defmodule RaxolPlayground.Capabilities do
   ]
 
   @packages [
-    %{name: "raxol", version: "~> 2.5", purpose: "Full framework"},
-    %{name: "raxol_agent", version: "~> 2.5", purpose: "AI agents"},
-    %{name: "raxol_mcp", version: "~> 2.5", purpose: "MCP server"},
+    %{name: "raxol", version: "~> 2.6", purpose: "Full framework"},
+    %{name: "raxol_agent", version: "~> 2.6", purpose: "AI agents"},
+    %{name: "raxol_mcp", version: "~> 2.6", purpose: "MCP server"},
     %{name: "raxol_payments", version: "~> 0.1", purpose: "Agent commerce"},
-    %{name: "raxol_liveview", version: "~> 2.5", purpose: "LiveView bridge"},
-    %{name: "raxol_sensor", version: "~> 2.5", purpose: "Sensor fusion"},
-    %{name: "raxol_terminal", version: "~> 2.5", purpose: "Terminal emulation"},
-    %{name: "raxol_core", version: "~> 2.5", purpose: "Behaviours, events"},
-    %{name: "raxol_plugin", version: "~> 2.5", purpose: "Plugin SDK"},
+    %{name: "raxol_liveview", version: "~> 2.6", purpose: "LiveView bridge"},
+    %{name: "raxol_sensor", version: "~> 2.6", purpose: "Sensor fusion"},
+    %{name: "raxol_terminal", version: "~> 2.6", purpose: "Terminal emulation"},
+    %{name: "raxol_core", version: "~> 2.6", purpose: "Behaviours, events"},
+    %{name: "raxol_plugin", version: "~> 2.6", purpose: "Plugin SDK"},
     %{name: "raxol_speech", version: "~> 0.2", purpose: "TTS/STT"},
     %{name: "raxol_telegram", version: "~> 0.2", purpose: "Telegram bot"},
     %{name: "raxol_watch", version: "~> 0.2", purpose: "Push notifications"}
@@ -83,7 +83,7 @@ defmodule RaxolPlayground.Capabilities do
 
   @doc """
   Packages with a ready-to-paste `mix.exs` dep tuple attached, e.g.
-  `{:raxol, "~> 2.5"}`. Used by the manifest and capabilities endpoints.
+  `{:raxol, "~> 2.6"}`. Used by the manifest and capabilities endpoints.
   """
   @spec package_specs() :: [map()]
   def package_specs do

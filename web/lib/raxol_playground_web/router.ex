@@ -15,6 +15,7 @@ defmodule RaxolPlaygroundWeb.Router do
     get("/health", HealthController, :check)
     get("/skill.md", SkillController, :show)
     get("/llms.txt", CapabilitiesController, :llms_txt)
+    get("/llms-full.txt", CapabilitiesController, :llms_full)
     get("/.well-known/raxol.json", CapabilitiesController, :manifest)
     get("/api/capabilities", CapabilitiesController, :capabilities)
   end
