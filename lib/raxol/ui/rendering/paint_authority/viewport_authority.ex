@@ -1,0 +1,203 @@
+defmodule Raxol.UI.Rendering.PaintAuthority.ViewportAuthority do
+  @moduledoc """
+  The FULL-VIEWPORT paint substrate: the alternate-screen, full-frame
+  repaint sibling of `InlineAuthority` (append + pinned footer) and
+  `FlatAuthority` (append-only). Picked when the harness runs in
+  `:full_viewport` mode ("occupy the whole viewport"), driven by the TEA
+  stack (`Raxol.Harness.SessionPump` drives `enter/0`/`leave/0`).
+
+  Where `InlineAuthority` writes the terminal's PRIMARY screen in place
+  (a DECSTBM scroll region + print-once seals into native scrollback),
+  this authority claims the ALTERNATE screen buffer (`\\e[?1049h`) and
+  repaints the WHOLE frame on every event: the caller hands it one
+  already-styled, already-width-truncated string per physical row (the
+  same `Raxol.Harness.Surface.ViewText` row vocabulary the inline path
+  hands `InlineAuthority.repaint/3`), and this module positions each row
+  with an absolute CUP and paints it. The session owns its own virtual
+  scrollback; nothing lands in the terminal's native scrollback, and the
+  primary screen is restored byte-for-byte on teardown (`\\e[?1049l`).
+  This is a deliberate tradeoff, not a permanent commitment: a full repaint
+  every event trades incremental efficiency for simplicity, and a later
+  pass could return to inline-style diffing if that balance shifts.
+
+  ## Why a full repaint, not a diff (the honest v1)
+
+  The harness's row vocabulary is already STYLED STRINGS — one SGR-wrapped
+  `String.t()` per row out of `ViewText.lines/3` — not the styled CELL
+  grid `Raxol.Core.Renderer.render_diff/2` / `Raxol.Terminal.ScreenBuffer`
+  consume. Routing these rows back through a cell buffer would mean parsing
+  the SGR runs into `Style` structs and re-emitting them, a lossy
+  round-trip that buys nothing for a v1. So this authority repaints every
+  row of the frame each paint, exactly the per-row vocabulary
+  `Raxol.Core.Runtime.Rendering.Backends.emit_rows/2` uses for real
+  full-screen apps (`CUP;1H` → `\\e[0m\\e[2K` → the row's ANSI), wrapped in
+  a DEC 2026 synchronized-update bracket (`\\e[?2026h`/`l`) so the
+  whole-frame rewrite presents atomically and never tears. A row-level
+  diff (skip rows byte-identical to the last frame) is an obvious later
+  optimization the retained `last_rows` already enables; it is NOT needed
+  for correctness and is deliberately out of this v1.
+
+  ## The wire vocabulary lives in `Dialect`; the alt-screen bytes live here
+
+  Cursor positioning, hide/show, and the sync bracket come from the shared
+  `Raxol.UI.Rendering.PaintAuthority.Dialect` (the harness's single wire
+  home). The alternate-screen enter/leave bytes are NOT in `Dialect` (it
+  is footer/inline-region oriented and deliberately carries no `1049`),
+  so they live here as pinned module attributes — the same discipline
+  `Raxol.Terminal.InlineDriver.Sequences` uses for the inline profile's
+  bytes. They match the framework's own full-screen driver
+  (`Raxol.Terminal.Driver` init/teardown) and
+  `Raxol.Terminal.ANSI.Utils.Emitter.alternate_buffer_on/off`.
+
+  ## Enter / leave asymmetry (the teardown-ordering law)
+
+    * **Enter** (`new/3`) writes `\\e[?1049h` (alt screen) + `\\e[2J`
+      (clear it) + `\\e[?25l` (hide cursor) + `\\e[?7l` (autowrap OFF — a
+      full-width row must never wrap into the next). Done at construction,
+      inside the driver process, before the first frame.
+    * **Leave** (`leave/0`, a pure constant) writes `\\e[?7h` (autowrap
+      back on) + `\\e[?25h` (cursor back) + `\\e[?1049l` (leave alt, primary
+      screen restored with its saved cursor). This must be emitted as the
+      LAST paint byte of the session — AFTER the input driver
+      (`Raxol.Terminal.InlineDriver`) has torn down — or that driver's
+      own bottom-park (`\\e[rows;1H\\r\\n`) would scroll the freshly-restored
+      PRIMARY screen. The embedder owns emitting `leave/0` last; see the
+      live demo's teardown. `teardown/1` writes it to the authority's own
+      device for callers that own the ordering themselves.
+
+  Raw mode, `-isig`, bracketed paste, and input parsing all stay
+  `InlineDriver`'s job exactly as in inline mode — this authority only
+  owns the SCREEN, never the tty's input side.
+  """
+
+  alias Raxol.UI.Rendering.PaintAuthority.Dialect
+
+  # Alt-screen enter: enter the alternate buffer, clear it, hide the
+  # cursor, and turn autowrap OFF (a full-width painted row must not wrap
+  # into the row below). Mirrors `Raxol.Terminal.Driver`'s init trio plus
+  # an explicit clear (the alt buffer may carry stale content from a prior
+  # crashed session).
+  @enter "\e[?1049h\e[2J\e[?25l\e[?7l"
+
+  # Alt-screen leave: autowrap back on, cursor back on, leave the
+  # alternate buffer (primary screen restored with its saved cursor).
+  # Ordering mirrors `TermboxLifecycle.cleanup_terminal/1` (autowrap
+  # restored BEFORE the `?1049l` exit).
+  @leave "\e[?7h\e[?25h\e[?1049l"
+
+  # Per-row lead: SGR reset then erase-line, so a row inherits no pen
+  # state from the frame it overwrites. Matches `Backends.emit_rows/2`.
+  @row_lead "\e[0m\e[2K"
+
+  @enforce_keys [:device, :width, :height]
+  defstruct device: nil, width: nil, height: nil, last_rows: nil
+
+  @type t :: %__MODULE__{
+          device: IO.device(),
+          width: pos_integer(),
+          height: pos_integer(),
+          last_rows: [String.t()] | nil
+        }
+
+  @doc "The alt-screen ENTER byte sequence (pure). See the moduledoc."
+  @spec enter() :: binary()
+  def enter, do: @enter
+
+  @doc "The alt-screen LEAVE byte sequence (pure). See the moduledoc."
+  @spec leave() :: binary()
+  def leave, do: @leave
+
+  @doc """
+  Builds a new full-viewport authority and ENTERS the alternate screen
+  (writes `enter/0` to `device`). The first frame is painted by the
+  caller's subsequent `repaint/3`.
+  """
+  @spec new(IO.device(), pos_integer(), pos_integer()) :: t()
+  def new(device, width, height)
+      when is_integer(width) and width > 0 and is_integer(height) and
+             height > 0 do
+    IO.write(device, @enter)
+    %__MODULE__{device: device, width: width, height: height, last_rows: nil}
+  end
+
+  @doc """
+  Repaints the WHOLE frame. `rows` is one already-styled, already-width-
+  truncated string per physical row (top-to-bottom); it is taken/padded to
+  exactly `height` rows so every screen row is addressed. Options:
+
+    * `:cursor` — `{row, col}` (1-based, absolute) to park a VISIBLE
+      cursor at (the composer edit point), or `nil` to leave the cursor
+      HIDDEN (no composer on screen). Defaults to `nil`.
+
+  The whole burst is wrapped in a DEC 2026 synchronized-update bracket so
+  it presents atomically. Returns the authority with `last_rows` updated
+  (the retained frame a future row-diff optimization would compare
+  against).
+  """
+  @spec repaint(t(), [String.t()], keyword()) :: t()
+  def repaint(t, rows, opts \\ [])
+
+  def repaint(%__MODULE__{} = t, rows, opts) when is_list(rows) do
+    cursor = Keyword.get(opts, :cursor)
+    padded = pad_rows(rows, t.height)
+
+    body =
+      padded
+      |> Enum.with_index()
+      |> Enum.map(fn {line, idx} -> row_bytes(idx + 1, line) end)
+
+    iodata = [
+      Dialect.sync_begin(),
+      Dialect.cursor_hide(),
+      body,
+      cursor_tail(cursor),
+      Dialect.sync_end()
+    ]
+
+    IO.write(t.device, iodata)
+    %{t | last_rows: padded}
+  end
+
+  @doc """
+  Adopts a new geometry. Writes no bytes — a full repaint follows from the
+  caller (a resize is a full reflow in this mode, which is exactly the
+  pivot's win). Clears `last_rows` so the next `repaint/3` can never be
+  mistaken for unchanged against a stale-geometry frame.
+  """
+  @spec resize(t(), pos_integer(), pos_integer()) :: t()
+  def resize(%__MODULE__{} = t, width, height)
+      when is_integer(width) and width > 0 and is_integer(height) and
+             height > 0 do
+    %{t | width: width, height: height, last_rows: nil}
+  end
+
+  @doc """
+  Leaves the alternate screen (writes `leave/0` to the authority's own
+  device). Only for callers that own the teardown ordering themselves;
+  the live demo instead emits `leave/0` as its very last byte, AFTER the
+  input driver's teardown (see the moduledoc's teardown-ordering law).
+  """
+  @spec teardown(t()) :: t()
+  def teardown(%__MODULE__{device: device} = t) do
+    IO.write(device, @leave)
+    t
+  end
+
+  # -- internals ----------------------------------------------------------
+
+  defp row_bytes(row, line), do: [Dialect.cursor_position(row), @row_lead, line]
+
+  defp cursor_tail(nil), do: Dialect.cursor_hide()
+
+  defp cursor_tail({row, col})
+       when is_integer(row) and row >= 1 and is_integer(col) and col >= 1,
+       do: [Dialect.cursor_position(row, col), Dialect.cursor_show()]
+
+  # Take at most `height` rows, then pad the tail with blank rows so every
+  # physical screen row is addressed (no stale content survives beneath a
+  # short frame).
+  defp pad_rows(rows, height) do
+    taken = Enum.take(rows, height)
+    taken ++ List.duplicate("", max(height - length(taken), 0))
+  end
+end
