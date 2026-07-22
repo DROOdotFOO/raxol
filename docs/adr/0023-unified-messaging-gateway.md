@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-17. Third and last of the Hermes-extraction Tier 1 ADRs
+Accepted, 2026-07-22 (implemented as the `raxol_gateway` package). Originally proposed 2026-06-17. Third and last of the Hermes-extraction Tier 1 ADRs
 (`~/Desktop/hermes-extraction-report.md`, item H1.4). Companion to ADR-0021 (self-improving agents)
 and ADR-0022 (memory). Builds on the existing surface packages (`raxol_telegram`, `raxol_watch`,
 `raxol_speech`), the shared `Raxol.Core.Events.Event`, the `Lifecycle` environment system, the

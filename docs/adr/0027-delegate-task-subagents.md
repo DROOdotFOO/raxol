@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
+Accepted, 2026-07-22 (implemented in `Raxol.Agent.Actions.Task` via `run_subagent/3`). Originally proposed 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
 H2.4). Refines the deferred omnigent T2.1 ("sub-agents are async tools + auto-wake") into a clean
 summary-only contract. Builds on `Raxol.Agent.Session`, `Raxol.Agent.Team`, the omnigent item-log
 (`Raxol.Agent.Conversation.Log`), and `Raxol.Agent.Turn` (ADR-0021's wiring).

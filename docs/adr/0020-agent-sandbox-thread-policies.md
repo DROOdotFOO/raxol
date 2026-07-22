@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-16. Symmetric to ADR-0019 (Workflow concurrency) for the agent stack: ADR-0019 scopes the runtime-side parallel-branch primitive, this ADR scopes the agent-side isolation + audit + policy primitive. Together they frame the next 3-6 months of substrate work. Builds on ADR-0012 (MCP as rendering target), ADR-0017 (paused-run query), ADR-0018 (operator-flow contract), and Phase 24F (Command struct deletion, leaving Directive as the canonical effect shape).
+Accepted, 2026-07-22 (implemented in `Raxol.Agent.Sandbox`, `Raxol.Agent.ThreadLog`, and `Raxol.Agent.Policy`). Originally proposed 2026-06-16. Symmetric to ADR-0019 (Workflow concurrency) for the agent stack: ADR-0019 scopes the runtime-side parallel-branch primitive, this ADR scopes the agent-side isolation + audit + policy primitive. Together they frame the next 3-6 months of substrate work. Builds on ADR-0012 (MCP as rendering target), ADR-0017 (paused-run query), ADR-0018 (operator-flow contract), and Phase 24F (Command struct deletion, leaving Directive as the canonical effect shape).
 
 ## Context
 
