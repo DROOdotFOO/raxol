@@ -518,6 +518,42 @@ defmodule Raxol.UI.ColorResolverTest do
     end
   end
 
+  # ---- ansi256/ansi16 downgrade on a malformed 6-char hex literal ----
+
+  describe "capability-tier downgrade degrades a malformed hex instead of crashing" do
+    test "a syntactically-6-char but non-hex literal passes through unchanged at :ansi256" do
+      cells = [{0, 0, "x", "#gggggg", nil, []}]
+
+      assert [{_, _, _, "#gggggg", nil, []}] =
+               ColorResolver.resolve_cells(cells,
+                 ground: @dark_ground,
+                 color_depth: :ansi256
+               )
+    end
+
+    test "a syntactically-6-char but non-hex literal passes through unchanged at :ansi16" do
+      cells = [{0, 0, "x", "#gggggg", nil, []}]
+
+      assert [{_, _, _, "#gggggg", nil, []}] =
+               ColorResolver.resolve_cells(cells,
+                 ground: @dark_ground,
+                 color_depth: :ansi16
+               )
+    end
+
+    test "a valid hex literal still quantizes normally at :ansi256" do
+      cells = [{0, 0, "x", "#c1712c", nil, []}]
+
+      [{_, _, _, fg, _, _}] =
+        ColorResolver.resolve_cells(cells,
+          ground: @dark_ground,
+          color_depth: :ansi256
+        )
+
+      assert fg == Colors.find_closest_256_color({0xC1, 0x71, 0x2C})
+    end
+  end
+
   # ---- grid-bg fg floor ----
 
   describe "grid-bg fg floor" do

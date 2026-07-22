@@ -677,13 +677,29 @@ defmodule Raxol.UI.ColorResolver do
   # integer, or any other literal shape) returns `nil` so the caller
   # passes it through unchanged -- it is already a discrete-palette
   # literal with nothing to quantize.
-  defp rgb_of("#" <> hex_digits = full) when byte_size(hex_digits) == 6,
-    do: Colors.hex_to_rgb(full)
+  # The length guard alone doesn't prove `hex_digits` is actually hex --
+  # `"#gggggg"` is 6 bytes but not a valid hex triplet, and
+  # `Colors.hex_to_rgb/1` -> `Color.from_hex/1` returns `{:error,
+  # :invalid_hex}` (a plain tuple, not a `%Color{}`) for it, which would
+  # crash on the `color.r` field access one level down. Validating the
+  # digits here keeps that malformed-input case on the same "pass through
+  # unchanged" contract every other clause in this function already gives
+  # a non-requantizable shape.
+  defp rgb_of("#" <> hex_digits = full) when byte_size(hex_digits) == 6 do
+    if valid_hex?(hex_digits), do: Colors.hex_to_rgb(full), else: nil
+  end
 
   defp rgb_of({r, g, b}) when is_integer(r) and is_integer(g) and is_integer(b),
     do: {r, g, b}
 
   defp rgb_of(_other), do: nil
+
+  defp valid_hex?(digits) do
+    case Integer.parse(digits, 16) do
+      {_int, ""} -> true
+      _ -> false
+    end
+  end
 
   # --- output-contrast floor clamp, adapted from
   # `Prominence.clamp_to_floor/7` -- the same bisection-along-the-fade-line
