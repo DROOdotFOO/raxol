@@ -111,6 +111,16 @@ defmodule Raxol.Agent.Code.App do
       auth_state: Engine.new(),
       ascii: Keyword.get(options, :ascii, false),
       executor: Keyword.get(options, :executor),
+      # How the provider was resolved: `:ready` / `{:ready, harness, source}`
+      # start straight into the loop; `{:no_key, harness}` / `:no_provider`
+      # open on the setup panel and gate turns until `/login` connects one.
+      provider_status: Keyword.get(options, :provider_status, :ready),
+      # The most recent `/login` validation token; a ping result is applied
+      # only when its ref still matches (a re-login supersedes an in-flight
+      # check). Injectable so tests drive validation without a network call.
+      login_ref: nil,
+      login_validator:
+        Keyword.get(options, :login_validator, &__MODULE__.default_login_validator/3),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -225,6 +235,16 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # An async `/login` validation ping result. Applied only when its ref still
+  # matches the latest login (a newer `/login` supersedes an in-flight check).
+  def update({:command_result, {:login_validation, ref, harness, result}}, model) do
+    if ref == model.login_ref do
+      {%{model | status_line: validation_status(harness, result), login_ref: nil}, []}
+    else
+      {model, []}
+    end
+  end
+
   def update(_message, model), do: {model, []}
 
   # -- key handlers -----------------------------------------------------------
@@ -271,7 +291,7 @@ defmodule Raxol.Agent.Code.App do
     case String.trim(model.input) do
       "" -> {model, []}
       "/" <> _ = command -> dispatch_slash(%{model | input: ""}, command)
-      prompt -> {start_turn(model, prompt), []}
+      prompt -> {submit_prompt(model, prompt), []}
     end
   end
 
@@ -290,6 +310,21 @@ defmodule Raxol.Agent.Code.App do
     do: {interrupt(model), []}
 
   defp handle_key(_key, model), do: {model, []}
+
+  # A prompt only starts a turn once a provider is connected; otherwise the
+  # input is kept and a hint steers the user to `/login` (slash commands still
+  # run, so `/login` itself is always reachable).
+  defp submit_prompt(model, prompt) do
+    if provider_ready?(model) do
+      start_turn(model, prompt)
+    else
+      notice(model, provider_setup_hint(model))
+    end
+  end
+
+  defp provider_ready?(%{provider_status: :ready}), do: true
+  defp provider_ready?(%{provider_status: {:ready, _harness, _source}}), do: true
+  defp provider_ready?(_model), do: false
 
   # Plan mode only toggles when idle — flipping it mid-turn or mid-approval
   # would be surprising (the toolset/prompt are fixed at turn start).
@@ -626,6 +661,7 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp apply_command("help", _arg, model), do: {notice(model, help_text()), []}
+  defp apply_command("login", arg, model), do: {login(model, arg), []}
   defp apply_command("clear", _arg, model), do: {clear_session(model), []}
   defp apply_command("plan", _arg, model), do: {maybe_toggle_plan_mode(model), []}
   defp apply_command("model", arg, model), do: {set_model(model, arg), []}
@@ -651,6 +687,201 @@ defmodule Raxol.Agent.Code.App do
   defp hooks_text(%{hooks: config}) do
     "pre_tool_use: #{length(config.pre)} · post_tool_use: #{length(config.post)} · " <>
       "stop: #{length(config.stop)}"
+  end
+
+  # -- /login: connect a provider --------------------------------------------
+
+  # `/login`                         -> status + usage
+  # `/login <provider>`              -> connect via op/env (or keyless local)
+  # `/login <provider> op://ref`     -> store the 1Password reference + connect
+  # `/login <provider> <key>`        -> session-only key (never persisted)
+  # a trailing token is taken as a model override.
+  defp login(model, arg) do
+    case String.split(String.trim(arg), ~r/\s+/, trim: true) do
+      [] -> notice(model, login_status_text())
+      [provider] -> login_provider(model, provider, nil, nil)
+      [provider, secret] -> login_provider(model, provider, secret, nil)
+      [provider, secret, model_name | _] -> login_provider(model, provider, secret, model_name)
+    end
+  end
+
+  defp login_provider(model, provider_str, secret, model_name) do
+    case Raxol.Agent.Backend.Resolver.harness_from_string(provider_str) do
+      {:ok, harness} -> connect(model, harness, secret, model_name)
+      :error -> notice(model, "unknown provider: #{provider_str}\n\n" <> login_status_text())
+    end
+  end
+
+  # An op:// reference is stored (so it survives relaunch) then resolved; a raw
+  # key stays in memory for this session only; no secret connects via op/env.
+  defp connect(model, harness, "op://" <> _ = ref, model_name) do
+    case Raxol.Agent.Backend.Credentials.put(harness, put_model([op_ref: ref], model_name)) do
+      :ok -> resolve_and_connect(model, harness, [], "op reference stored")
+      {:error, reason} -> notice(model, "could not store reference: #{inspect(reason)}")
+    end
+  end
+
+  defp connect(model, harness, secret, model_name) when is_binary(secret) do
+    resolve_and_connect(
+      model,
+      harness,
+      put_model([api_key: secret], model_name),
+      "session key — not persisted"
+    )
+  end
+
+  defp connect(model, harness, nil, model_name) do
+    resolve_and_connect(model, harness, put_model([], model_name), nil)
+  end
+
+  defp resolve_and_connect(model, harness, extra_opts, note) do
+    opts = Keyword.put(extra_opts, :harness, harness)
+
+    case Raxol.Agent.Backend.Resolver.resolve(opts) do
+      {:ok, executor, source} ->
+        # Fire a cheap, async validation ping; its result arrives as a
+        # `{:login_validation, ...}` message and updates the status line. The
+        # connection is marked ready immediately either way — validation only
+        # annotates it, so a slow or offline check never blocks the TUI.
+        ref = start_login_validation(model, executor)
+
+        %{
+          model
+          | executor: executor,
+            provider_status: {:ready, harness, source},
+            model_override: executor.model || model.model_override,
+            login_ref: ref
+        }
+        |> notice(connect_note(harness, source, note))
+        |> put_status("connected to #{harness} — validating credential…")
+
+      {:no_key, ^harness} ->
+        notice(
+          model,
+          "no credential found for #{harness}. Supply one:\n" <>
+            "  /login #{harness} op://Vault/Item/field   (1Password)\n" <>
+            "  /login #{harness} <api-key>               (this session only)"
+        )
+
+      :no_provider ->
+        notice(model, "could not resolve a provider for #{harness}")
+    end
+  end
+
+  defp put_model(opts, nil), do: opts
+  defp put_model(opts, ""), do: opts
+  defp put_model(opts, model_name), do: Keyword.put(opts, :model, model_name)
+
+  defp connect_note(harness, source, nil), do: "connected to #{harness} (via #{source})"
+
+  defp connect_note(harness, source, note),
+    do: "connected to #{harness} (via #{source}) — #{note}"
+
+  defp put_status(model, text), do: %{model | status_line: text}
+
+  # Kick off the injectable validator, returning the ref that stamps its
+  # result. `self()` here is the app process, so the ping's reply message lands
+  # where `update/2` can fold it.
+  defp start_login_validation(model, executor) do
+    ref = make_ref()
+    model.login_validator.(executor, ref, self())
+    ref
+  end
+
+  @doc false
+  # The default validator: a cheap, single-token completion against the freshly
+  # resolved backend, off the app process so a hung endpoint never blocks the
+  # TUI. The normalized outcome rides back as a `:login_validation` message.
+  def default_login_validator(executor, ref, app) do
+    spawn(fn ->
+      result =
+        try do
+          do_validate_ping(executor)
+        rescue
+          _ -> :unreachable
+        catch
+          _, _ -> :unreachable
+        end
+
+      send(app, {:command_result, {:login_validation, ref, executor.harness, result}})
+    end)
+
+    :ok
+  end
+
+  defp do_validate_ping(executor) do
+    case Raxol.Agent.Backend.Selector.select(executor) do
+      {:ok, backend, opts} ->
+        ping_opts = opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
+        interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
+
+      {:error, reason} ->
+        {:select_error, reason}
+    end
+  end
+
+  @doc false
+  # Classify a backend `complete/2` return by what it says about the credential.
+  # Auth is the question: a 401/403 rejects; a reachable endpoint that answered
+  # (even a truncated/unparseable body) authorized the request, so it is valid.
+  def interpret_ping({:ok, _response}), do: :valid
+
+  def interpret_ping({:error, {:http_error, status, _body}}) when status in [401, 403],
+    do: {:rejected, status}
+
+  def interpret_ping({:error, {:http_error, status, _body}}), do: {:reachable_error, status}
+  def interpret_ping({:error, {:request_failed, _reason}}), do: :unreachable
+  def interpret_ping({:error, :req_not_available}), do: :req_unavailable
+  def interpret_ping({:error, _marker}), do: :valid
+
+  defp validation_status(harness, :valid), do: "#{harness} credential validated ●"
+
+  defp validation_status(harness, {:rejected, status}),
+    do: "#{harness} key rejected (HTTP #{status}) — check /login"
+
+  defp validation_status(harness, :unreachable),
+    do: "#{harness} endpoint unreachable — is it running?"
+
+  defp validation_status(harness, {:reachable_error, status}),
+    do: "#{harness} reachable but returned HTTP #{status}"
+
+  defp validation_status(harness, {:select_error, reason}),
+    do: "#{harness} cannot validate: #{inspect(reason)}"
+
+  defp validation_status(harness, :req_unavailable),
+    do: "#{harness} connected (Req unavailable, validation skipped)"
+
+  defp validation_status(harness, _other), do: "#{harness} connected"
+
+  defp login_status_text do
+    rows =
+      Raxol.Agent.Backend.Resolver.status()
+      |> Enum.map_join("\n", fn s ->
+        mark = if s.available?, do: "●", else: "○"
+        src = if s.source, do: " (#{s.source})", else: ""
+        "  #{mark} #{s.harness}#{src}"
+      end)
+
+    """
+    Connect a provider with /login:
+      /login anthropic op://Vault/Anthropic/key   1Password reference (persisted)
+      /login openai sk-...                         session key (not saved)
+      /login lm_studio                             local server (no key)
+
+    ● connected  ○ not connected
+    #{rows}
+    """
+    |> String.trim_trailing()
+  end
+
+  # Shown on the setup panel and as the hint when a prompt is sent with no
+  # provider connected.
+  defp provider_setup_hint(%{provider_status: {:no_key, harness}}) do
+    "harness #{harness} was selected but no key resolved.\n\n" <> login_status_text()
+  end
+
+  defp provider_setup_hint(_model) do
+    "No LLM provider connected.\n\n" <> login_status_text()
   end
 
   defp parse_command("/" <> rest) do
@@ -722,6 +953,7 @@ defmodule Raxol.Agent.Code.App do
   defp help_text do
     """
     /help              this help
+    /login [provider]  connect an LLM provider (op ref, key, or local)
     /clear             start a fresh session
     /model <name>      switch model for the next turns
     /plan              toggle plan mode
@@ -739,8 +971,31 @@ defmodule Raxol.Agent.Code.App do
   @impl true
   def view(model) do
     column style: %{padding: 1, gap: 1} do
-      [transcript(model), notice_block(model), status_strip(model), footer(model)]
+      [
+        transcript(model),
+        setup_block(model),
+        notice_block(model),
+        status_strip(model),
+        footer(model)
+      ]
       |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  # The onboarding panel: shown until a provider is connected, so the TUI
+  # opens on "connect a provider" instead of failing an invisible request.
+  defp setup_block(model) do
+    if provider_ready?(model) do
+      nil
+    else
+      lines = String.split(provider_setup_hint(model), "\n")
+
+      box style: %{border: :single, padding: 0} do
+        column style: %{gap: 0} do
+          [text("connect a provider to begin", fg: :yellow, style: [:bold])] ++
+            Enum.map(lines, &text(&1, fg: :cyan))
+        end
+      end
     end
   end
 
@@ -795,6 +1050,8 @@ defmodule Raxol.Agent.Code.App do
 
   defp status_label(%{status_line: line}) when is_binary(line), do: line
   defp status_label(%{pending_approval: %{name: name}}), do: "awaiting approval: #{name}"
+  defp status_label(%{provider_status: {:no_key, harness}}), do: "no key for #{harness} — /login"
+  defp status_label(%{provider_status: :no_provider}), do: "no provider — /login"
   defp status_label(%{running?: true}), do: "working…"
   defp status_label(%{plan_mode: true}), do: "plan mode — read-only"
   defp status_label(_model), do: "ready"

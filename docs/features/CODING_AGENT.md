@@ -31,12 +31,48 @@ The `bin/raxol-code` shim runs the task from the package while keeping the calle
 directory as the agent's workspace (the file and shell tools are scoped to it via
 `RAXOL_CLI_CWD`). It `exec`s `mix` so the full-screen UI inherits the real terminal.
 
+## Connecting a provider
+
+With no `--harness`, the agent auto-detects a provider through the shared
+`Raxol.Agent.Backend.Resolver`, in this precedence order:
+
+1. an explicit `--api-key` (or an `:api_key` opt),
+2. a 1Password reference stored by `/login` (resolved through the `op` CLI),
+3. a provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `KIMI_API_KEY`, `OPENROUTER_API_KEY`, `LONGCAT_API_KEY`, ...),
+4. the generic `AI_API_KEY` (plus optional `AI_BASE_URL` / `AI_MODEL`) for any OpenAI-compatible endpoint.
+
+If nothing resolves, the TUI opens on a setup panel instead of failing against
+a placeholder endpoint. Run `/login` to connect one live. The preferred path
+is a 1Password reference (no plaintext key on disk):
+
+```
+/login                                          # show connection status
+/login anthropic op://Vault/Anthropic/key       # store a 1Password reference (persisted)
+/login openai sk-...                             # a session-only key (never written)
+/login lm_studio                                 # a local server, no key
+```
+
+On connect, `/login` fires a cheap, async validation ping (a single-token
+completion) against the resolved backend and reports the outcome in the status
+line: `validated`, `key rejected (HTTP 401)`, or `endpoint unreachable`. The
+check runs off the UI process, so a slow or offline endpoint never blocks the
+TUI, and the connection is usable immediately regardless.
+
+Stored references live in `~/.raxol/providers.json` (override with
+`$RAXOL_PROVIDERS`), owner-readable only. That file holds `op://` references,
+models, and base URLs, never raw keys. Zero-config env usage still works: set
+`ANTHROPIC_API_KEY` (or another provider var) and launch.
+
+Supported providers: `anthropic`, `openai`, `kimi`, `openrouter`, `longcat`,
+`lumo`, `ollama`, `lm_studio`, `llm7`, `mock`.
+
 ## Flags
 
 | Flag | Effect |
 |------|--------|
-| `--harness NAME` | Backend harness, default `lm_studio`. Validated against `Backend.Selector.supported_harnesses/0`. |
+| `--harness NAME` | Pin a backend harness (auto-detected if omitted). Validated against `Backend.Selector.supported_harnesses/0`. |
 | `--model NAME` | Model override. |
+| `--api-key KEY` | API key for the selected harness (else resolved from op/env). |
 | `--base-url URL` | Override the backend base URL. |
 | `--system TEXT` | System-prompt override. |
 | `--continue` | Resume the most recently updated session. |
@@ -73,6 +109,7 @@ Typing, Enter, plan-mode toggles, and backspace are accepted only when the agent
 | Command | What it does |
 |---------|--------------|
 | `/help` | Show help |
+| `/login [provider]` | Connect an LLM provider (1Password reference, session key, or local server) |
 | `/clear` | Start a new session (the old file stays on disk) |
 | `/model <name>` | Switch model for the next turns (bare `/model` shows current) |
 | `/plan` | Toggle plan mode |

@@ -29,8 +29,8 @@ defmodule Mix.Tasks.Raxol.Code do
 
   ## Slash commands
 
-  `/help` · `/clear` · `/model <name>` · `/plan` · `/compact` · `/context`
-  · `/sessions` · `/mcp` · `/hooks`
+  `/help` · `/login [provider]` · `/clear` · `/model <name>` · `/plan` ·
+  `/compact` · `/context` · `/sessions` · `/mcp` · `/hooks`
 
   ## Delegation, hooks, external config
 
@@ -40,11 +40,24 @@ defmodule Mix.Tasks.Raxol.Code do
   non-zero pre-tool hook vetoes the tool). A `.mcp.json` declares external
   MCP servers, surfaced by `/mcp` (live tool-bridging is a follow-up).
 
+  ## Providers
+
+  With no `--harness`, the agent auto-detects a provider from your
+  environment via `Raxol.Agent.Backend.Resolver`: a 1Password reference
+  stored by `/login` (read through the `op` CLI), then a provider env var
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...), then the generic
+  `AI_API_KEY`/`AI_BASE_URL` pair. If nothing resolves, the TUI opens on a
+  setup panel — run `/login` to connect a provider instead of failing
+  against a placeholder endpoint. `--harness NAME` pins a provider and
+  resolves that one's credential; `--api-key` supplies a key inline.
+
   ## Options
 
-    * `--harness`  — backend harness atom (default `lm_studio`; also
-      `anthropic`, `openai`, `ollama`, ... see `Backend.Selector`)
+    * `--harness`  — backend harness (auto-detected if omitted; also
+      `anthropic`, `openai`, `kimi`, `ollama`, `lm_studio`, ... see
+      `Backend.Resolver`)
     * `--model`    — model override
+    * `--api-key`  — API key for the selected harness (else op/env)
     * `--base-url` — override the backend base URL
     * `--system`   — system prompt override
     * `--continue` — resume the most recently updated session
@@ -60,6 +73,7 @@ defmodule Mix.Tasks.Raxol.Code do
   @switches [
     harness: :string,
     model: :string,
+    api_key: :string,
     base_url: :string,
     system: :string,
     continue: :boolean,
@@ -104,19 +118,41 @@ defmodule Mix.Tasks.Raxol.Code do
   end
 
   defp app_opts(opts) do
-    executor = build_executor(opts)
-
-    backend_opts =
-      []
-      |> maybe_put(:base_url, Keyword.get(opts, :base_url))
+    resolution = Raxol.Agent.Backend.Resolver.resolve(resolver_opts(opts))
 
     []
-    |> put_if(:executor, executor)
-    |> Keyword.put(:backend_opts, backend_opts)
     |> put_if(:system, Keyword.get(opts, :system))
     |> put_if(:model, Keyword.get(opts, :model))
     |> put_if(:session_key, resolve_session(opts))
     |> Keyword.put(:ascii, Keyword.get(opts, :ascii, false))
+    |> apply_resolution(resolution)
+  end
+
+  # The resolver inputs: an optional validated `--harness`, plus any inline
+  # `--model`/`--api-key`/`--base-url` overrides.
+  defp resolver_opts(opts) do
+    []
+    |> maybe_put(:harness, validated_harness(opts))
+    |> maybe_put(:model, Keyword.get(opts, :model))
+    |> maybe_put(:api_key, Keyword.get(opts, :api_key))
+    |> maybe_put(:base_url, Keyword.get(opts, :base_url))
+  end
+
+  # `{:ok, executor, source}` wires the executor and records how it was found;
+  # `{:no_key, harness}` and `:no_provider` open the App on its setup panel
+  # (no executor) so the user can `/login` rather than hit a crash.
+  defp apply_resolution(app_opts, {:ok, executor, source}) do
+    app_opts
+    |> Keyword.put(:executor, executor)
+    |> Keyword.put(:provider_status, {:ready, executor.harness, source})
+  end
+
+  defp apply_resolution(app_opts, {:no_key, harness}) do
+    Keyword.put(app_opts, :provider_status, {:no_key, harness})
+  end
+
+  defp apply_resolution(app_opts, :no_provider) do
+    Keyword.put(app_opts, :provider_status, :no_provider)
   end
 
   defp resolve_session(opts) do
@@ -127,22 +163,22 @@ defmodule Mix.Tasks.Raxol.Code do
     end
   end
 
-  defp build_executor(opts) do
-    harness_name = Keyword.get(opts, :harness, "lm_studio")
-    supported = Raxol.Agent.Backend.Selector.supported_harnesses()
+  # Validate an explicit `--harness` against the supported set, returning the
+  # atom (or `nil` when omitted, which asks the resolver to auto-detect).
+  defp validated_harness(opts) do
+    case Keyword.get(opts, :harness) do
+      nil ->
+        nil
 
-    harness =
-      Enum.find(supported, &(Atom.to_string(&1) == harness_name)) ||
-        usage_error(
-          "unknown harness #{inspect(harness_name)}; supported: " <>
-            Enum.map_join(supported, ", ", &Atom.to_string/1)
-        )
+      name ->
+        supported = Raxol.Agent.Backend.Selector.supported_harnesses()
 
-    attrs =
-      [harness: harness]
-      |> maybe_put(:model, Keyword.get(opts, :model))
-
-    Raxol.Agent.ExecutorConfig.new(attrs)
+        Enum.find(supported, &(Atom.to_string(&1) == name)) ||
+          usage_error(
+            "unknown harness #{inspect(name)}; supported: " <>
+              Enum.map_join(supported, ", ", &Atom.to_string/1)
+          )
+    end
   end
 
   defp usage_error(message) do
