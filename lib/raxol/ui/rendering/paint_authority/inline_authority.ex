@@ -698,6 +698,35 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   `\\t`/`\\r`/`\\n`, neutralizing everything else. See that module's
   moduledoc for the exact grammar and the "visible-honest" neutralization
   rationale.
+
+  ## Caller contract: line width (NOT enforced here, unlike the newline check)
+
+  Autowrap (DECAWM) is never turned off on the inline path -- unlike
+  `ViewportAuthority.enter/0`'s `\\e[?7l`, `init_bytes/0` and `@modes_off`
+  in `Raxol.Terminal.InlineDriver.Sequences` carry no `?7l`, and teardown
+  re-enables `?7h` -- so a real terminal is free to wrap any physical
+  line wider than its column count onto the row below. `count_lines/1`
+  (which drives every `next_row` advance below) counts `\\r\\n`
+  boundaries in `iodata`, NOT physical rows a wrapping terminal actually
+  consumes: a line wider than the authority's `width` occupies MORE
+  physical rows than `count_lines/1` credits it, so `next_row`
+  under-counts against reality and the NEXT seal's `:fill_down` CUP lands
+  on the wrapped tail of THIS seal's last line instead of a blank row --
+  a seal-once (immutable-prefix) violation despite every byte this
+  module itself wrote being correct. Exactly the same failure shape the
+  footer section above documents for `repaint/2`/`keyframe/2`, and the
+  same fix: it is the CALLER's responsibility to display-width-truncate
+  every line to `width` (via `Raxol.UI.TextMeasure`, never
+  `String.length/1`) before it ever reaches `seal/2`. `ContentGuard`
+  guards against malicious CONTROL BYTES, not against width -- an
+  all-printable, perfectly sanitized line can still be too wide, and
+  neither `seal/2` nor `count_lines/1` can detect that after the fact
+  (SGR runs inflate a raw byte-width measurement without inflating the
+  terminal's actual column consumption, so there is no cheap assertion
+  to add here short of a full ANSI-aware wrap simulator; see
+  `test/harness/inline_authority_seal_width_test.exs` for a VT-replay
+  regression that pins this exact failure mode against a real emulator
+  so the contract cannot silently rot).
   """
   @spec seal(t(), iodata()) :: t()
   def seal(%__MODULE__{} = t, iodata) do
@@ -1107,6 +1136,12 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     bottom = ScrollRegionManager.history_bottom(region)
     device = region.device
 
+    # `next_row` advances by `count_lines/1` below (a `\r\n` count), which
+    # is only correct because the CALLER already display-width-truncated
+    # every line to `width` -- see `seal/2`'s "Caller contract: line
+    # width" doc section for the full corruption mechanism an untruncated,
+    # autowrap-wrapped line would cause here.
+    #
     # One CUP, then the content. `:fill_down` (default): the next
     # unfilled history row, clamped to the region bottom once full.
     # `:scroll_entry` (chat semantics, see the `entry_mode` typedoc):
@@ -1958,6 +1993,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   def degenerate?(%__MODULE__{region: region}),
     do: ScrollRegionManager.degenerate?(region)
 
+  # Counts LOGICAL lines (`\n` boundaries), not physical rows a real
+  # terminal consumes -- correct only under the caller's width-truncation
+  # contract documented on `seal/2`. Every `next_row` advance in this
+  # module is downstream of this count.
   defp count_lines(iodata) do
     iodata
     |> IO.iodata_to_binary()
