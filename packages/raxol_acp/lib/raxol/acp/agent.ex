@@ -324,7 +324,8 @@ defmodule Raxol.ACP.Agent do
   # `job.created` doesn't yield a nil id (which fails the JobSession registry :via guard).
   defp job_id_from(entry) do
     entry["jobId"] || entry[:jobId] || entry["job_id"] || entry[:job_id] ||
-      entry["onChainJobId"] || entry[:onChainJobId] || event_job_id(entry["event"] || entry[:event])
+      entry["onChainJobId"] || entry[:onChainJobId] ||
+      event_job_id(entry["event"] || entry[:event])
   end
 
   defp event_job_id(%{} = ev),
