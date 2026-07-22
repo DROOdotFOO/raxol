@@ -156,6 +156,25 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
                t =~ "Sub" and s[:bold] == true and s[:fg] == :cyan
              end)
     end
+
+    for level <- 4..6 do
+      hashes = String.duplicate("#", level)
+
+      test "renders h#{level} (#{hashes}) with bold cyan style, not literal hashes" do
+        result = render_md(unquote(hashes) <> " Heading #{unquote(level)}")
+        assert full_text(result) =~ "Heading #{unquote(level)}"
+
+        assert Enum.any?(leaves(result), fn {t, s} ->
+                 t =~ "Heading" and s[:bold] == true and s[:fg] == :cyan
+               end)
+      end
+    end
+
+    test "more than 6 hashes is not a heading (falls through to plain text)" do
+      result = render_md("####### Seven hashes")
+      refute Enum.any?(leaves(result), fn {_t, s} -> s[:fg] == :cyan end)
+      assert full_text(result) =~ "####### Seven hashes"
+    end
   end
 
   describe "inline formatting (fitting lines -> styled spans)" do
@@ -229,6 +248,39 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
       result = render_md("a * b")
       assert full_text(result) == "a * b"
     end
+
+    test "intraword underscores in a snake_case identifier are not deleted" do
+      # CommonMark: `_..._` emphasis does not fire intraword (flanked by
+      # alphanumerics on both sides) -- `*` is exempt from this rule, `_`
+      # is not. Regression guard: this used to match `_user_` as italic,
+      # silently deleting both underscores ("getuserid").
+      result = render_md("get_user_id")
+      assert full_text(result) == "get_user_id"
+      refute Enum.any?(leaves(result), fn {_t, s} -> s[:italic] end)
+    end
+
+    test "underscore emphasis still fires when flanked by whitespace" do
+      result = render_md("get_user_id and _emphasis_ here")
+      assert full_text(result) == "get_user_id and emphasis here"
+
+      assert {"emphasis", %{italic: true}} =
+               Enum.find(leaves(result), &(elem(&1, 0) == "emphasis"))
+    end
+
+    test "double and triple underscore emphasis also respect the intraword rule" do
+      result = render_md("a__b__c and __bold__ and a___b___c and ___both___")
+      full = full_text(result)
+      assert full =~ "a__b__c"
+      assert full =~ "a___b___c"
+      assert full =~ "bold"
+      assert full =~ "both"
+
+      assert Enum.any?(leaves(result), fn {t, s} -> t == "bold" and s[:bold] end)
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t == "both" and s[:bold] and s[:italic]
+             end)
+    end
   end
 
   describe "inline formatting (overflowing lines -> wrapped, marker-free)" do
@@ -268,6 +320,27 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
 
       assert [first | _rest] = lines
       assert String.starts_with?(first, "  1. ")
+    end
+
+    test "a double space inside a wrapped bold span doesn't drop its style" do
+      # `:pretty` collapses every whitespace run to a single space in the
+      # lines it returns; a wrapped output line is relocated in the
+      # ORIGINAL (uncollapsed) text via an exact byte search, so a double
+      # space anywhere in the source used to make that search miss and
+      # the whole wrapped line fall back to unstyled (text kept, style
+      # lost).
+      long =
+        "**one two  three four five six seven eight nine ten eleven twelve**"
+
+      result = render_md(long, %{width: 20})
+      lines = line_strings(result)
+
+      assert length(lines) > 1
+      assert full_text(result) =~ "two  three" or full_text(result) =~ "two three"
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               s[:bold] == true and String.contains?(t, "two")
+             end)
     end
   end
 
@@ -536,6 +609,50 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
       assert Enum.at(lines, 1) =~ "yes"
     end
 
+    test "table cell elements carry a map style, not Table's internal atom-list style" do
+      # Regression guard: `Table.render/2` builds its cells through
+      # `Raxol.Core.Renderer.View.text/2`, whose `style:` is an atom LIST
+      # (e.g. `[:bold]`), not the `%{bold: true}` map every other element
+      # this module emits uses. Splicing that raw shape into this
+      # module's own tree crashed `Harness.Surface`'s `ViewText.lines/3`
+      # bridge (`Map.get([:bold], :bold, nil)` -> `BadMapError`) the first
+      # time a real session rendered a GFM table.
+      md = """
+      | a | b |
+      | --- | --- |
+      | x | y |
+      """
+
+      result = render_md(md, %{width: 40})
+
+      table_text_elements =
+        result
+        |> children()
+        |> Enum.filter(&(&1[:type] == :text and is_binary(&1[:content])))
+
+      assert table_text_elements != []
+
+      assert Enum.all?(table_text_elements, fn el ->
+               is_map(el.style)
+             end)
+    end
+
+    test "a snake_case identifier in a cell keeps its underscores" do
+      # Regression guard: `table_cell_text/1` parses cell markup through
+      # the same `builtin_segments/1` every other line uses; before the
+      # intraword-emphasis guard, "foo_bar_baz" matched `_bar_` as italic
+      # and the Table component (plain-string cells, no styled spans)
+      # rendered the survivor as "foobarbaz".
+      md = """
+      | name | status |
+      | --- | --- |
+      | foo_bar_baz | ok |
+      """
+
+      [_header, row] = table_lines(render_md(md, %{width: 40}))
+      assert row =~ "foo_bar_baz"
+    end
+
     # `take_table_rows/4` used to require a leading "|" unconditionally, so
     # a valid pipe-less table rendered its header and then dropped every
     # body row out of the table as raw prose.
@@ -761,6 +878,56 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
 
       assert length(widths) == 1,
              "table rows disagreed on width: #{inspect(lines)}"
+    end
+  end
+
+  # SECURITY: this module's contract is "callers may pass untrusted text"
+  # (see moduledoc), so it must not rely on a caller having pre-sanitized
+  # -- an embedded ANSI/OSC control sequence must never reach
+  # `Components.text()`, where it would be indistinguishable from a real
+  # cursor-move/screen-clear/title-write escape.
+  describe "control-byte sanitization at this module's own boundary" do
+    test "ESC-based ANSI sequences are stripped from prose" do
+      result = render_md("hi \e[31mRED\e[0m bye")
+      text = full_text(result)
+
+      refute text =~ "\e"
+      assert text =~ "hi"
+      assert text =~ "RED"
+      assert text =~ "bye"
+    end
+
+    test "an OSC title-set sequence (ESC ] 0 ; ... BEL) is stripped" do
+      result = render_md("hi \e]0;pwn\a bye")
+      text = full_text(result)
+
+      refute text =~ "\e"
+      refute text =~ "\a"
+      assert text =~ "hi"
+      assert text =~ "bye"
+    end
+
+    test "control bytes are stripped from a table cell" do
+      md = """
+      | name | note |
+      | --- | --- |
+      | ok | hi\e[31mRED\e[0mbye |
+      """
+
+      [_header, row] = table_lines(render_md(md, %{width: 60}))
+      refute row =~ "\e"
+      assert row =~ "RED"
+    end
+
+    test "assorted C0 controls and DEL are stripped, \\n and \\t are kept" do
+      result = render_md("a\x00b\x01c\x02\nd\te\x7ff")
+      text = full_text(result)
+
+      assert Enum.all?(String.to_charlist(text), fn cp ->
+               cp >= 0x20 or cp in [?\n, ?\t]
+             end)
+
+      refute text =~ "\x7f"
     end
   end
 end
