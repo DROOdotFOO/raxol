@@ -180,4 +180,28 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       assert Enum.any?(providers, &(&1.harness == :lm_studio and &1.keyless? == true))
     end
   end
+
+  describe "diagnostics/0" do
+    test "reports the op state and a provider list" do
+      diag = Resolver.diagnostics()
+      assert diag.op in [:absent, :not_signed_in, :ok]
+      assert Enum.any?(diag.providers, &(&1.harness == :anthropic))
+    end
+
+    test "notes an env var that is set but empty" do
+      System.put_env("OPENAI_API_KEY", "")
+      diag = Resolver.diagnostics()
+      openai = Enum.find(diag.providers, &(&1.harness == :openai))
+      refute openai.available?
+      assert openai.note =~ "set but empty"
+    end
+
+    test "an available provider carries no note" do
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
+      diag = Resolver.diagnostics()
+      anthropic = Enum.find(diag.providers, &(&1.harness == :anthropic))
+      assert anthropic.available?
+      assert anthropic.note == nil
+    end
+  end
 end

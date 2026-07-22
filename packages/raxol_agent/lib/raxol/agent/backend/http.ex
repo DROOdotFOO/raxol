@@ -82,6 +82,85 @@ defmodule Raxol.Agent.Backend.HTTP do
     Code.ensure_loaded?(Req)
   end
 
+  @doc """
+  Cheap credential check via the provider's model-list endpoint.
+
+  Unlike a completion, listing models costs no tokens, so this is the
+  preferred `/login` validation for the hosted providers. Returns:
+
+    * `:valid`                    — a 2xx (authorized),
+    * `{:rejected, status}`       — 401/403 (bad key),
+    * `{:reachable_error, status}`— reachable but another status,
+    * `:unreachable`              — transport failure,
+    * `:unsupported`             — no known model-list endpoint for this
+      provider (the caller should fall back to a completion ping).
+  """
+  @spec check_auth(keyword()) ::
+          :valid
+          | {:rejected, non_neg_integer()}
+          | {:reachable_error, non_neg_integer()}
+          | :unreachable
+          | :unsupported
+  def check_auth(opts) do
+    if available?() do
+      opts |> detect_provider() |> models_request(opts) |> run_auth_check(opts)
+    else
+      :unsupported
+    end
+  end
+
+  defp run_auth_check(:unsupported, _opts), do: :unsupported
+
+  defp run_auth_check({url, headers}, opts) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+
+    req = Req.new(url: url, headers: headers, receive_timeout: timeout)
+
+    case Req.get(req) do
+      {:ok, %{status: status}} -> interpret_models_status(status)
+      {:error, _reason} -> :unreachable
+    end
+  rescue
+    _ -> :unreachable
+  end
+
+  @doc false
+  def interpret_models_status(status) when status in 200..299, do: :valid
+  def interpret_models_status(status) when status in [401, 403], do: {:rejected, status}
+  def interpret_models_status(status) when is_integer(status), do: {:reachable_error, status}
+
+  defp models_request(:anthropic, opts) do
+    case Keyword.get(opts, :api_key) do
+      key when is_binary(key) ->
+        base = Keyword.get(opts, :base_url, "https://api.anthropic.com")
+        {"#{base}/v1/models", [{"x-api-key", key}, {"anthropic-version", @anthropic_api_version}]}
+
+      _no_key ->
+        :unsupported
+    end
+  end
+
+  defp models_request(:openai, opts), do: bearer_models_request(opts, "https://api.openai.com")
+  defp models_request(:kimi, opts), do: bearer_models_request(opts, "https://api.moonshot.ai")
+
+  defp models_request(:ollama, opts) do
+    base = Keyword.get(opts, :base_url, "http://localhost:#{@default_ollama_port}")
+    {"#{base}/api/tags", []}
+  end
+
+  defp models_request(_provider, _opts), do: :unsupported
+
+  defp bearer_models_request(opts, default_base) do
+    case Keyword.get(opts, :api_key) do
+      key when is_binary(key) ->
+        base = Keyword.get(opts, :base_url, default_base)
+        {"#{base}/v1/models", [{"authorization", "Bearer #{key}"}]}
+
+      _no_key ->
+        :unsupported
+    end
+  end
+
   @impl true
   def name, do: "HTTP Backend"
 

@@ -41,22 +41,36 @@ With no `--harness`, the agent auto-detects a provider through the shared
 3. a provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `KIMI_API_KEY`, `OPENROUTER_API_KEY`, `LONGCAT_API_KEY`, ...),
 4. the generic `AI_API_KEY` (plus optional `AI_BASE_URL` / `AI_MODEL`) for any OpenAI-compatible endpoint.
 
-If nothing resolves, the TUI opens on a setup panel instead of failing against
-a placeholder endpoint. Run `/login` to connect one live. The preferred path
-is a 1Password reference (no plaintext key on disk):
+If nothing resolves, the TUI opens on an interactive setup wizard instead of
+failing against a placeholder endpoint:
+
+- a selectable provider list (`↑`/`↓` to move, `Enter` to connect, `Esc` to
+  dismiss), each row marked connected (`●`) or not (`○`) with an actionable
+  note when detection has a problem (a stored reference that needs
+  `op signin`, or an env var that is set but empty);
+- picking a keyed provider opens a masked credential entry: paste an `op://`
+  reference (shown in the clear, stored) or an API key (masked). After a raw
+  key connects, the wizard offers to save it to 1Password so no plaintext
+  persists;
+- picking a local provider (`lm_studio`, `ollama`) connects with no key.
+
+The `/login` text command remains for scripted/power use (it works alongside
+the wizard):
 
 ```
-/login                                          # show connection status
+/login                                          # open the wizard
 /login anthropic op://Vault/Anthropic/key       # store a 1Password reference (persisted)
 /login openai sk-...                             # a session-only key (never written)
 /login lm_studio                                 # a local server, no key
 ```
 
-On connect, `/login` fires a cheap, async validation ping (a single-token
-completion) against the resolved backend and reports the outcome in the status
-line: `validated`, `key rejected (HTTP 401)`, or `endpoint unreachable`. The
-check runs off the UI process, so a slow or offline endpoint never blocks the
-TUI, and the connection is usable immediately regardless.
+On connect (and once at launch for an auto-detected provider), the agent fires
+a cheap, async validation ping and reports the outcome in the status line:
+`validated`, `key rejected (HTTP 401)`, or `endpoint unreachable`. It prefers
+the provider's token-free model-list endpoint (`GET /v1/models`), falling back
+to a single-token completion only when that is unavailable. The check runs off
+the UI process, so a slow or offline endpoint never blocks the TUI, and the
+connection is usable immediately regardless.
 
 Stored references live in `~/.raxol/providers.json` (override with
 `$RAXOL_PROVIDERS`), owner-readable only. That file holds `op://` references,

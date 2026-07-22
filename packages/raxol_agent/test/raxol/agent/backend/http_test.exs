@@ -416,4 +416,40 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       assert length(result) == 2
     end
   end
+
+  describe "interpret_models_status/1" do
+    test "a 2xx is valid" do
+      assert HTTP.interpret_models_status(200) == :valid
+      assert HTTP.interpret_models_status(204) == :valid
+    end
+
+    test "401/403 mean the key was rejected" do
+      assert HTTP.interpret_models_status(401) == {:rejected, 401}
+      assert HTTP.interpret_models_status(403) == {:rejected, 403}
+    end
+
+    test "another status is reachable-but-errored" do
+      assert HTTP.interpret_models_status(404) == {:reachable_error, 404}
+      assert HTTP.interpret_models_status(500) == {:reachable_error, 500}
+    end
+  end
+
+  describe "check_auth/1" do
+    test "an unknown provider (no model-list endpoint) is unsupported" do
+      assert HTTP.check_auth(provider: :lumo, api_key: "x") == :unsupported
+    end
+
+    test "a keyed provider with no key is unsupported" do
+      assert HTTP.check_auth(provider: :openai) == :unsupported
+    end
+
+    test "an unreachable endpoint reports unreachable, not a crash" do
+      assert HTTP.check_auth(
+               provider: :openai,
+               api_key: "x",
+               base_url: "http://127.0.0.1:19876",
+               timeout: 100
+             ) == :unreachable
+    end
+  end
 end
