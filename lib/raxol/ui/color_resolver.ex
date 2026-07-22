@@ -301,9 +301,11 @@ defmodule Raxol.UI.ColorResolver do
     ground = Keyword.get_lazy(opts, :ground, &SalienceTheme.detect_ground/0)
     color_depth = Keyword.get_lazy(opts, :color_depth, &default_color_depth/0)
 
-    {resolved, _grid} =
-      Enum.map_reduce(cells, %{}, fn cell, grid ->
-        resolve_cell(cell, grid, ground, color_depth)
+    # `cache` rides alongside the paint-order `grid` in the same fold --
+    # see `resolve_fg/7`'s intent clause for what it memoizes and why.
+    {resolved, {_grid, _cache}} =
+      Enum.map_reduce(cells, {%{}, %{}}, fn cell, {grid, cache} ->
+        resolve_cell(cell, grid, cache, ground, color_depth)
       end)
 
     enforce_resolved!(resolved)
@@ -353,7 +355,13 @@ defmodule Raxol.UI.ColorResolver do
 
   # --- the whole-list fold ---
 
-  defp resolve_cell({x, y, char, fg, bg, attrs}, grid, ground, color_depth) do
+  defp resolve_cell(
+         {x, y, char, fg, bg, attrs},
+         grid,
+         cache,
+         ground,
+         color_depth
+       ) do
     region_p = clamp01(region_prominence_of(attrs))
     clean_attrs = strip_region_marker(attrs)
 
@@ -395,15 +403,23 @@ defmodule Raxol.UI.ColorResolver do
         {nil, nil}
       end
 
-    fg_resolved =
-      resolve_fg(fg, local_al, local_bg_hex, ground, region_p, color_depth)
+    {fg_resolved, cache} =
+      resolve_fg(
+        fg,
+        local_al,
+        local_bg_hex,
+        ground,
+        region_p,
+        color_depth,
+        cache
+      )
 
     grid =
       if is_nil(bg_resolved),
         do: grid,
         else: Map.put(grid, {x, y}, bg_resolved)
 
-    {{x, y, char, fg_resolved, bg_resolved, clean_attrs}, grid}
+    {{x, y, char, fg_resolved, bg_resolved, clean_attrs}, {grid, cache}}
   end
 
   # The only two producers of a real intent are this function and
@@ -500,9 +516,10 @@ defmodule Raxol.UI.ColorResolver do
          _local_bg_hex,
          _ground,
          _region_p,
-         _color_depth
+         _color_depth,
+         cache
        ),
-       do: nil
+       do: {nil, cache}
 
   defp resolve_fg(
          {:fixed, color},
@@ -510,9 +527,10 @@ defmodule Raxol.UI.ColorResolver do
          _local_bg_hex,
          ground,
          _region_p,
-         color_depth
+         color_depth,
+         cache
        ),
-       do: downgrade_color(color, nil, 1.0, color_depth, ground)
+       do: {downgrade_color(color, nil, 1.0, color_depth, ground), cache}
 
   defp resolve_fg(
          %ColorIntent{} = intent,
@@ -520,7 +538,8 @@ defmodule Raxol.UI.ColorResolver do
          local_bg_hex,
          ground,
          region_p,
-         color_depth
+         color_depth,
+         cache
        ) do
     tier = intent.tier || :baseline
     c = intent.c || 0.0
@@ -537,33 +556,57 @@ defmodule Raxol.UI.ColorResolver do
     own_p = clamp01(intent.prominence || 1.0)
     effective_p = clamp01(own_p * region_p)
 
-    # The full-strength (t = 1.0) target -- solved once against the LOCAL
-    # ground (this cell's own resolved bg apparent lightness, or the frame
-    # ground when nothing local painted).
-    target_hex = Salience.solve(tier, c, h, ground: local_al, polarity: :auto)
+    # Every determinant of this clause's output, gathered as a memo key:
+    # `resolve_cells/2`'s attr-less default (`grid_bg_floor_fg/3` /
+    # `StyleProcessor.default_fg_intent/2`) promotes huge numbers of
+    # otherwise-unpainted cells to the SAME baseline-tier, `:text`-floored
+    # intent every frame -- a uniform screen re-solves the identical
+    # `Salience.solve/4` + bisection pipeline once per cell with nothing
+    # cached. `local_bg_hex`/`ground` must both be in the key (not just
+    # `local_al`): `against_hex` in the floor clamp below reads
+    # `local_bg_hex || ground_hex(ground)`, and `ground` alone also feeds
+    # `downgrade_color/5`'s ANSI16 polarity -- two cells sharing every OTHER
+    # field but differing in either would wrongly collapse onto one
+    # cached result without them.
+    key =
+      {tier, c, h, intent.role, intent.floor, local_al, local_bg_hex, ground,
+       effective_p, color_depth}
 
-    faded_hex =
-      if effective_p >= 1.0,
-        do: target_hex,
-        else: Prominence.fade(target_hex, effective_p, local_al)
+    case Map.fetch(cache, key) do
+      {:ok, resolved} ->
+        {resolved, cache}
 
-    against_hex = local_bg_hex || ground_hex(ground)
+      :error ->
+        # The full-strength (t = 1.0) target -- solved once against the
+        # LOCAL ground (this cell's own resolved bg apparent lightness, or
+        # the frame ground when nothing local painted).
+        target_hex =
+          Salience.solve(tier, c, h, ground: local_al, polarity: :auto)
 
-    # The floor clamp runs against the FULLY composed effective_p -- a
-    # region dim can never push an already-floored color back under its
-    # floor, because the floor check happens after this composition, not
-    # before it.
-    resolved =
-      clamp_output(
-        faded_hex,
-        target_hex,
-        local_al,
-        against_hex,
-        effective_p,
-        intent.floor
-      )
+        faded_hex =
+          if effective_p >= 1.0,
+            do: target_hex,
+            else: Prominence.fade(target_hex, effective_p, local_al)
 
-    downgrade_color(resolved, intent.role, effective_p, color_depth, ground)
+        against_hex = local_bg_hex || ground_hex(ground)
+
+        # The floor clamp runs against the FULLY composed effective_p -- a
+        # region dim can never push an already-floored color back under
+        # its floor, because the floor check happens after this
+        # composition, not before it.
+        resolved =
+          faded_hex
+          |> clamp_output(
+            target_hex,
+            local_al,
+            against_hex,
+            effective_p,
+            intent.floor
+          )
+          |> downgrade_color(intent.role, effective_p, color_depth, ground)
+
+        {resolved, Map.put(cache, key, resolved)}
+    end
   end
 
   defp resolve_fg(
@@ -572,11 +615,15 @@ defmodule Raxol.UI.ColorResolver do
          _local_bg_hex,
          ground,
          region_p,
-         color_depth
+         color_depth,
+         cache
        ) do
-    literal
-    |> region_dim_fg(region_p, ground)
-    |> downgrade_color(nil, 1.0, color_depth, ground)
+    resolved =
+      literal
+      |> region_dim_fg(region_p, ground)
+      |> downgrade_color(nil, 1.0, color_depth, ground)
+
+    {resolved, cache}
   end
 
   # --- capability-tier downgrade ---

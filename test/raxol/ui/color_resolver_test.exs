@@ -608,6 +608,54 @@ defmodule Raxol.UI.ColorResolverTest do
     end
   end
 
+  # ---- fg intent resolution memoization (hot-path reuse, not reimplementation) ----
+
+  describe "fg intent resolution memoization" do
+    test "cells sharing every resolution determinant reuse the identical output term" do
+      intent = %ColorIntent{tier: :baseline, c: 0.0, h: nil, floor: :text}
+      cells = for i <- 0..9, do: {i, 0, "x", intent, nil, []}
+
+      resolved = ColorResolver.resolve_cells(cells, ground: @dark_ground)
+      fgs = Enum.map(resolved, fn {_, _, _, fg, _, _} -> fg end)
+      [first | rest] = fgs
+
+      assert Enum.all?(fgs, &(&1 == first))
+
+      assert Enum.all?(rest, &:erts_debug.same(&1, first)),
+             "expected the memoized fg resolution to reuse the identical " <>
+               "output term across cells sharing every determinant, not " <>
+               "just an equal value"
+    end
+
+    test "cells with the same tier/c/h but different local grounds still resolve distinctly" do
+      intent = %ColorIntent{tier: :baseline, c: 0.0, h: nil, floor: :text}
+
+      cells = [
+        {0, 0, "a", intent, "#101010", []},
+        {1, 0, "b", intent, "#f5f5f5", []}
+      ]
+
+      [{_, _, _, fg_on_dark_chip, _, _}, {_, _, _, fg_on_light_chip, _, _}] =
+        ColorResolver.resolve_cells(cells, ground: @dark_ground)
+
+      refute fg_on_dark_chip == fg_on_light_chip
+    end
+
+    test "cells with the same tier/c/h but different region prominence still resolve distinctly" do
+      base = %ColorIntent{tier: :baseline, c: 0.1, h: 57}
+
+      cells = [
+        {0, 0, "a", base, nil, []},
+        {1, 0, "b", base, nil, [{:region_prominence, 0.4}]}
+      ]
+
+      [{_, _, _, fg_full, _, _}, {_, _, _, fg_dimmed, _, _}] =
+        ColorResolver.resolve_cells(cells, ground: @dark_ground)
+
+      refute fg_full == fg_dimmed
+    end
+  end
+
   # ---- grid-bg fg floor ----
 
   describe "grid-bg fg floor" do
