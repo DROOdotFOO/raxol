@@ -2,9 +2,26 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ViewportAuthority do
   @moduledoc """
   The FULL-VIEWPORT paint substrate: the alternate-screen, full-frame
   repaint sibling of `InlineAuthority` (append + pinned footer) and
-  `FlatAuthority` (append-only). Picked when the harness runs in
-  `:full_viewport` mode ("occupy the whole viewport"), driven by the TEA
-  stack (`Raxol.Harness.SessionPump` drives `enter/0`/`leave/0`).
+  `FlatAuthority` (append-only).
+
+  ## STATUS: staged, not wired (read this before trusting the paragraph above)
+
+  This module is NOT reachable from any real session today.
+  `Raxol.UI.Rendering.PaintAuthority.ModeSelect.select/3` — the harness's
+  only mode-pick seam — returns exactly `:inline_log | :tmux_conservative
+  | :flat`; there is no `:full_viewport` candidate anywhere in that
+  ladder. There is also no `Raxol.Harness.SessionPump` module in this
+  repo — the TEA-driven pump this moduledoc used to claim would call
+  `enter/0`/`leave/0` does not exist yet. Outside `test/harness/
+  viewport_authority_test.exs`, this module has zero callers. Treat every
+  "driven by"/"picked when" sentence below as the INTENDED future
+  integration this substrate was built FOR, not a description of
+  anything wired on `master` today. Wiring it in is later campaign work
+  (a `:full_viewport` `ModeSelect` candidate + a real pump); until that
+  lands, this file is dead code on purpose, kept green by its own test
+  suite so the wiring wave has a correct substrate to attach to. Do not
+  go looking for the pump or the mode candidate — file the wiring work
+  instead of assuming this doc is out of date.
 
   Where `InlineAuthority` writes the terminal's PRIMARY screen in place
   (a DECSTBM scroll region + print-once seals into native scrollback),
