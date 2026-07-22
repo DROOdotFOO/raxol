@@ -21,8 +21,12 @@ defmodule Mix.Tasks.Raxol.P do
       `item_completed{tool_use/tool_result/message}`, `turn_completed`,
       `error`. `2>events.jsonl` captures a machine-readable trace.
 
-  The agent gets read-only fs tools (`list_dir`, `read_file`, `file_stat`)
-  scoped under the current working directory.
+  The agent gets read-only tools scoped under the current working
+  directory: `list_dir`, `read_file`, `file_stat`, `grep`, `glob`. Pass
+  `--write` to also expose the mutating coding tools (`write_file`,
+  `edit_file`, `bash`) — these are `sensitive` and denied by default, so
+  the flag installs an allow-all tool authorizer for this (unattended)
+  run.
 
   ## Options
 
@@ -32,6 +36,7 @@ defmodule Mix.Tasks.Raxol.P do
     * `--base-url` — override the backend base URL
     * `--system`   — system prompt override
     * `--timeout`  — per-run timeout in seconds (default 180)
+    * `--write`    — expose write_file/edit_file/bash (opt-in; unattended)
     * `--no-tools` — plain completion, no tool loop
 
   ## Exit codes
@@ -52,6 +57,7 @@ defmodule Mix.Tasks.Raxol.P do
     base_url: :string,
     system: :string,
     timeout: :integer,
+    write: :boolean,
     tools: :boolean
   ]
 
@@ -157,13 +163,30 @@ defmodule Mix.Tasks.Raxol.P do
           "files when the question is about them. Be concise."
       )
 
+    write? = Keyword.get(opts, :write, false)
+
     [
       executor: executor,
       backend_opts: backend_opts,
       system_prompt: system,
-      actions: Raxol.Agent.Actions.Fs.all()
-    ]
+      actions: actions_for(write?)
+    ] ++ context_for(write?)
   end
+
+  # Read-only by default (fs read tools + grep/glob). `--write` adds the
+  # mutating coding tools (write_file/edit_file/bash), which are `sensitive`
+  # and denied under the default policy — so it also installs an allow-all
+  # authorizer to actually let them run in this unattended headless flow.
+  defp actions_for(false),
+    do: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.read_only()
+
+  defp actions_for(true),
+    do: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all()
+
+  defp context_for(false), do: []
+
+  defp context_for(true),
+    do: [context: %{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()}]
 
   defp maybe_put(kw, _key, nil), do: kw
   defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
