@@ -776,7 +776,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     iodata =
       rows
       |> Enum.filter(&(is_integer(&1) and &1 >= 1 and &1 <= screen_rows))
-      |> Enum.map(&[Dialect.cursor_position(&1), "\e[K"])
+      |> Enum.map(&[Dialect.cursor_position(&1), Dialect.erase_line()])
 
     case iodata do
       [] ->
@@ -1156,7 +1156,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     Enum.each(top..(top + count - 1)//1, fn row ->
       if row <= rows do
         IO.write(device, Dialect.cursor_position(row))
-        IO.write(device, "\e[K")
+        IO.write(device, Dialect.erase_line())
       end
     end)
 
@@ -1526,7 +1526,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   def footer_row_count(%__MODULE__{region: region}),
     do: Range.size(ScrollRegionManager.footer_range(region))
 
-  defp footer_row_bytes(row, line), do: [cup(row), "\e[K", line]
+  defp footer_row_bytes(row, line),
+    do: [Dialect.cursor_position(row), Dialect.erase_line(), line]
 
   defp pad_rows(lines, count) do
     lines |> Enum.take(count) |> pad_tail(count)
@@ -1881,7 +1882,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
       Enum.each((old_bottom + 1)..new_bottom//1, fn row ->
         IO.write(device, Dialect.cursor_position(row))
-        IO.write(device, "\e[K")
+        IO.write(device, Dialect.erase_line())
       end)
 
       inner
@@ -1956,8 +1957,6 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   @spec degenerate?(t()) :: boolean()
   def degenerate?(%__MODULE__{region: region}),
     do: ScrollRegionManager.degenerate?(region)
-
-  defp cup(row), do: "\e[#{row};1H"
 
   defp count_lines(iodata) do
     iodata

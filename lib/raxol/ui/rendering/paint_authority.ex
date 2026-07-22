@@ -151,6 +151,16 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
     @doc "DEC 2026 synchronized-update end: `CSI ? 2026 l`. See `sync_begin/0`."
     @spec sync_end() :: binary()
     def sync_end, do: "\e[?2026l"
+
+    @doc """
+    Erase in Line (EL), default parameter (cursor to end of line): `CSI K`.
+    The single byte-builder for "clear the row the cursor is currently on"
+    -- callers that used to hand-roll the `"\\e[K"` literal at each footer/
+    transient emit site route through this instead, same single-home rule
+    as `cursor_position/1`.
+    """
+    @spec erase_line() :: binary()
+    def erase_line, do: "\e[K"
   end
 
   defmodule IOAuthority do
