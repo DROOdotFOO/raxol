@@ -29,11 +29,13 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
   # or a directory) relative to the repo `docs/` root. Directories expand to
   # their `*.md` files sorted by name; a README inside a directory sorts first.
   @full_order [
-    "getting-started/QUICKSTART.md",
-    "getting-started/CORE_CONCEPTS.md",
+    "getting-started",
+    "WHY_OTP.md",
+    "WHY_RAXOL.md",
     "PHILOSOPHY.md",
     "PACKAGES.md",
     "features",
+    "guides",
     "reference",
     "core",
     "cookbook",
@@ -146,6 +148,8 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
     ## Documentation
 
     Full text of every doc, concatenated for single-fetch ingestion: https://raxol.io/llms-full.txt
+
+    Start here: #{blob}/getting-started/BUILD_AN_AGENT.md (build an agent), #{blob}/WHY_RAXOL.md (why Raxol vs Python agent stacks).
 
     Feature docs:
 

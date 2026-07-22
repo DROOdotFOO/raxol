@@ -48,6 +48,8 @@ Governance: an ALLOW/ASK/DENY authorization engine gates every tool call, and a 
 
 Full text of every doc, concatenated for single-fetch ingestion: https://raxol.io/llms-full.txt
 
+Start here: https://github.com/DROOdotFOO/raxol/blob/master/docs/getting-started/BUILD_AN_AGENT.md (build an agent), https://github.com/DROOdotFOO/raxol/blob/master/docs/WHY_RAXOL.md (why Raxol vs Python agent stacks).
+
 Feature docs:
 
 - Agent Commerce Protocol (ACP): https://github.com/DROOdotFOO/raxol/blob/master/docs/features/ACP.md
