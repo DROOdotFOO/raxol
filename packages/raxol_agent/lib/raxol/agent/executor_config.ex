@@ -34,6 +34,7 @@ defmodule Raxol.Agent.ExecutorConfig do
           | :lm_studio
           | :llm7
           | :openrouter
+          | :longcat
           | :lumo
           | :mock
           | :claude_native

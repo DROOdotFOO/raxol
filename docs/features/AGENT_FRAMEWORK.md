@@ -145,12 +145,14 @@ When `view/1` returns `nil` (the default), no rendering happens. The agent is a 
 # {:error, "message"}
 ```
 
-Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, and OpenRouter.
+Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, OpenRouter, and Meituan's LongCat.
 Provider is auto-detected from `:base_url` or set via `:provider`.
 
 Without an explicit `:provider`, detection matches the `:base_url`: `anthropic` picks Anthropic, `ollama` (or the default Ollama port) picks Ollama, `moonshot` picks Kimi, and anything else is treated as OpenAI-compatible. The `FREE_AI=true` / `AI_API_KEY` backend switch is a convention of the example agents under `examples/agents/`, not the `Backend.HTTP` layer.
 
 The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI-compatible aggregator. It attaches app-attribution headers (HTTP-Referer, X-OpenRouter-Title, X-OpenRouter-Categories) so Raxol's usage appears on openrouter.ai/rankings. Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
+
+The `:longcat` harness targets Meituan's LongCat (`https://api.longcat.chat/openai`, model `LongCat-2.0`), also OpenAI-compatible. It rides the `:openai` request/SSE path, which already handles LongCat's non-standard frames (a full `message` chunk instead of `delta`, the `reasoning_content` channel, and the underscore-less `finishreason` key). Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
 
 ## Examples
 
