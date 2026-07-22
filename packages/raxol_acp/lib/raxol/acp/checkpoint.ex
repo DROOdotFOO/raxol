@@ -55,10 +55,25 @@ defmodule Raxol.ACP.Checkpoint do
   @spec required?() :: boolean()
   def required?, do: Application.get_env(:raxol_acp, :require_checkpoint, false)
 
-  @doc "Stable idempotency key for one lifecycle step of one job."
+  @doc "Stable idempotency key for one lifecycle step of one seller job."
   @spec key(pos_integer(), term(), :accept | :submit) :: String.t()
   def key(chain_id, job_id, step) when step in [:accept, :submit],
     do: Checkpoint.derive_key([chain_id, job_id, step])
+
+  @doc """
+  Stable idempotency key for one buyer purchase.
+
+  Unlike the seller (which keys by `job_id`, an id that already exists on the
+  incoming event), the buyer ORIGINATES the job, so `job_id` does not exist
+  until `create_job` lands and its `JobCreated` log is decoded. The buyer
+  therefore keys the whole reserve -> create -> fund progression by a single
+  client-minted `request_key` that exists before any side effect. The record
+  stored under this key accretes a `"phase"` field (see
+  `Raxol.ACP.JobSession.Client`) rather than using per-step keys.
+  """
+  @spec buyer_key(pos_integer(), String.t()) :: String.t()
+  def buyer_key(chain_id, request_key) when is_binary(request_key),
+    do: Checkpoint.derive_key([chain_id, :buyer, request_key])
 
   defmodule Owner do
     @moduledoc """
