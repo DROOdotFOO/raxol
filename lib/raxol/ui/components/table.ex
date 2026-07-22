@@ -260,7 +260,13 @@ defmodule Raxol.UI.Components.Table do
     body_rows = body_row_strings(paginated_data, state.columns, widths)
 
     table_lines =
-      build_table_lines(mode, header_separator?(state, mode), widths, header_cells, body_rows)
+      build_table_lines(
+        mode,
+        header_separator?(state, mode),
+        widths,
+        header_cells,
+        body_rows
+      )
 
     line_elements =
       Enum.map(table_lines, fn
@@ -756,7 +762,8 @@ defmodule Raxol.UI.Components.Table do
   end
 
   # Fixed-width pad/truncate — no +1 fudge. Column widths are the law.
-  defp pad_content(content, width, alignment) when is_integer(width) and width > 0 do
+  defp pad_content(content, width, alignment)
+       when is_integer(width) and width > 0 do
     content_str = to_string(content)
     content_length = Raxol.UI.TextMeasure.display_width(content_str)
 

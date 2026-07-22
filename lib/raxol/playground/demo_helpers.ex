@@ -26,7 +26,8 @@ defmodule Raxol.Playground.DemoHelpers do
       |> DemoHelpers.log_event("focus -> focused=true")
   """
   @spec log_event(map(), String.t(), pos_integer()) :: map()
-  def log_event(model, entry, limit \\ @default_log_limit) when is_binary(entry) do
+  def log_event(model, entry, limit \\ @default_log_limit)
+      when is_binary(entry) do
     log = [entry | Map.get(model, :event_log, [])] |> Enum.take(limit)
     Map.put(model, :event_log, log)
   end

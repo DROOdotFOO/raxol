@@ -32,7 +32,9 @@ defmodule Raxol.View.Components do
     # put OSC-8 targets on the style map; layout/renderer read both). The
     # fg/bg fallthrough reads style as a MAP only — the legacy atom-list
     # form (`style: [:bold]`) passes through to the element untouched.
-    link = Map.get(opts, :link) || style_get(style, :link) || style_get(style, :hyperlink)
+    link =
+      Map.get(opts, :link) || style_get(style, :link) ||
+        style_get(style, :hyperlink)
 
     %{
       type: :text,

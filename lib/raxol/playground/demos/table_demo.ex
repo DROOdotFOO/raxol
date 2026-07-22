@@ -73,7 +73,13 @@ defmodule Raxol.Playground.Demos.TableDemo do
 
       key_match("h") ->
         table = toggle_header_sep(model.table)
-        model = DemoHelpers.log_event(model, "header_separator=#{table.options.header_separator}")
+
+        model =
+          DemoHelpers.log_event(
+            model,
+            "header_separator=#{table.options.header_separator}"
+          )
+
         {%{model | table: table}, []}
 
       _ ->
