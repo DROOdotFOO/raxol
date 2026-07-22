@@ -238,8 +238,7 @@ defmodule Raxol.MixProject do
       {:makeup_elixir, "~> 1.0.1"},
       # Optional: 205 more syntect syntaxes (python, go, rust, yaml, bash,
       # markdown, ...), auto-registered into Makeup.Registry on start.
-      # Precompiled NIF; harness degrades to plain text without it. See
-      # docs/proposals/in-flight/shiki-elixir-analysis.md.
+      # Precompiled NIF; harness degrades to plain text without it.
       {:makeup_syntect, "~> 0.1", optional: true},
       # System clipboard access
       {:clipboard, "~> 0.2.1"},
