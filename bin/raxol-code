@@ -1,0 +1,39 @@
+#!/bin/sh
+# raxol-code — interactive coding agent TUI (the axol face) from any dir.
+#
+#   raxol-code
+#   raxol-code --continue            # resume the most recent session
+#   raxol-code --resume sess-123-4   # resume a specific session
+#   raxol-code --sessions            # list saved sessions and exit
+#   raxol-code --harness anthropic --model claude-sonnet-5
+#   raxol-code --ascii               # ASCII-only face for legacy terminals
+#
+# mix raxol.code lives in the raxol_agent package. Main raxol does not
+# depend on raxol_agent (the dep runs the other way), so `mix raxol.code`
+# at the repo root can't find the task. This shim runs it from the package
+# while keeping the CALLER's cwd as the agent's working directory (the
+# fs/shell tools are scoped to it via RAXOL_CLI_CWD). It execs mix so the
+# full-screen UI inherits this shell's controlling terminal -- the driver
+# gates on isatty(stdout), which System.cmd-style pipes would fail.
+# Requires deps compiled once: (cd packages/raxol_agent && mix deps.get)
+
+set -e
+
+# shellcheck disable=SC1007  # CDPATH= is an intentional env prefix for a safe cd
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(dirname -- "$SCRIPT_DIR")
+CALLER_CWD=$(pwd)
+
+cd "$REPO_ROOT/packages/raxol_agent"
+
+# Compile quietly first so build chatter doesn't flash before the UI takes
+# the alternate screen. MAKEFLAGS=-s silences the termbox2 NIF make check.
+MAKEFLAGS=-s mix compile >/dev/null 2>&1 || {
+  echo "raxol-code: compile failed; run (cd packages/raxol_agent && mix compile) for details" >&2
+  exit 70
+}
+
+# RAXOL_CLI_CWD scopes the fs/shell tools to where the user invoked this.
+# exec hands mix this shell's terminal so isatty(stdout) holds and the TUI
+# initializes.
+exec env MAKEFLAGS=-s RAXOL_CLI_CWD="$CALLER_CWD" mix raxol.code "$@"

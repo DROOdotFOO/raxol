@@ -13,6 +13,7 @@ defmodule RaxolPlaygroundWeb.CapabilitiesController do
   alias RaxolPlayground.Capabilities
 
   @llms_txt_path Path.join(:code.priv_dir(:raxol_playground), "static/llms.txt")
+  @llms_full_path Path.join(:code.priv_dir(:raxol_playground), "static/llms-full.txt")
 
   def manifest(conn, _params) do
     json(conn, %{
@@ -42,11 +43,15 @@ defmodule RaxolPlaygroundWeb.CapabilitiesController do
     })
   end
 
-  def llms_txt(conn, _params) do
+  def llms_txt(conn, _params), do: serve_text(conn, @llms_txt_path, "llms.txt")
+
+  def llms_full(conn, _params), do: serve_text(conn, @llms_full_path, "llms-full.txt")
+
+  defp serve_text(conn, path, name) do
     content =
-      case File.read(@llms_txt_path) do
+      case File.read(path) do
         {:ok, data} -> data
-        {:error, _} -> "# Raxol\n\nllms.txt not found."
+        {:error, _} -> "# Raxol\n\n#{name} not found. Run `mix raxol.docs.llms`."
       end
 
     conn
