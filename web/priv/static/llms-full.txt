@@ -4,236 +4,889 @@ This file concatenates the Raxol documentation for single-fetch ingestion by
 an agent. The curated, linked index is at https://raxol.io/llms.txt. Sources
 live at https://github.com/DROOdotFOO/raxol/tree/master/docs.
 
-<!-- docs/getting-started/QUICKSTART.md -->
+<!-- docs/getting-started/BUILD_AN_AGENT.md -->
 
-# Quickstart Guide
+# Build Your First Agent
 
-Let's build a raxol app. By the end of this page you'll have a working counter running in your terminal.
+The [Quickstart](QUICKSTART.md) builds a terminal app. This one builds an autonomous
+agent: a program an LLM drives, with tools, memory, and a learning loop. Same TEA model,
+same OTP supervision. The "user" is a model issuing tool calls instead of a keyboard.
 
-What you'll learn:
+By the end you will have an agent that reasons on a real model, calls tools you define,
+remembers across sessions, and improves itself after each turn.
 
-- The four callbacks every Raxol app implements
-- How to handle keyboard input and button clicks
-- How the View DSL builds layouts
+## 1. A message-driven agent
 
-## Install
-
-Generate a new project:
-
-```bash
-mix raxol.new my_app
-cd my_app
-mix deps.get
-```
-
-Or add to an existing project:
+An agent is a `use Raxol.Agent` module. At its simplest it processes messages and returns
+commands, with no LLM at all:
 
 ```elixir
-# mix.exs
-def deps do
-  [{:raxol, "~> 2.6"}]
-end
-```
+defmodule MyAgent do
+  use Raxol.Agent
 
-## Your First App
+  def init(_ctx), do: %{findings: []}
 
-Every Raxol app follows The Elm Architecture (TEA) with four callbacks:
-
-```elixir
-defmodule MyApp do
-  use Raxol.Core.Runtime.Application
-
-  # 1. Initialize state
-  @impl true
-  def init(_context) do
-    %{count: 0}
+  def update({:agent_message, _from, {:analyze, file}}, model) do
+    {model, [shell("wc -l #{file}")]}
   end
 
-  # 2. Handle messages
-  @impl true
-  def update(message, model) do
-    case message do
-      :increment ->
-        {%{model | count: model.count + 1}, []}
-
-      :decrement ->
-        {%{model | count: model.count - 1}, []}
-
-      # Keyboard events
-      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "="}} ->
-        {%{model | count: model.count + 1}, []}
-
-      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "-"}} ->
-        {%{model | count: model.count - 1}, []}
-
-      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
-        {model, [Directive.stop()]}
-
-      _ ->
-        {model, []}
-    end
+  def update({:command_result, {:shell_result, %{output: out}}}, model) do
+    {%{model | findings: [out | model.findings]}, []}
   end
-
-  # 3. Render UI from state
-  @impl true
-  def view(model) do
-    column style: %{padding: 1, gap: 1, align_items: :center} do
-      [
-        text("My Counter", style: [:bold]),
-        box style: %{border: :single, padding: 1, width: 20, justify_content: :center} do
-          text("Count: #{model.count}", style: [:bold])
-        end,
-        row style: %{gap: 1} do
-          [
-            button("=", on_click: :increment),
-            button("-", on_click: :decrement)
-          ]
-        end,
-        text("Press =/- or click buttons. q to quit.", style: [:dim])
-      ]
-    end
-  end
-
-  # 4. Subscriptions (optional)
-  @impl true
-  def subscribe(_model), do: []
 end
 
-# Start the app
-{:ok, pid} = Raxol.start_link(MyApp, [])
-ref = Process.monitor(pid)
-receive do
-  {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-end
+{:ok, _} = Raxol.Agent.Session.start_link(app_module: MyAgent, id: :my_agent)
+Raxol.Agent.Session.send_message(:my_agent, {:analyze, "lib/raxol.ex"})
 ```
 
-**What's happening here?**
+This is a headless OTP process (`view/1` defaults to `nil`). See the
+[Agent Framework](../features/AGENT_FRAMEWORK.md) for sessions, teams, and messaging.
 
-- `init/1` returns a plain map, which is your entire app state
-- `update/2` pattern-matches on messages and returns `{new_state, commands}`. The empty list `[]` means "no side effects"
-- `view/1` builds the UI from state using the View DSL macros (`column`, `row`, `box`)
-- `Directive.stop()` tells the runtime to shut down (the `Directive` alias comes from `use Raxol.Core.Runtime.Application`)
+## 2. Give it tools
 
-Save as `lib/my_app.ex` and run:
-
-```bash
-mix run lib/my_app.ex
-```
-
-## How It Works
-
-```
-                +---> view(model) ---> Terminal
-                |
-init(context) --+--> model
-                |
-                +---> update(message, model) --+
-                      ^                        |
-                      |    {new_model, cmds}   |
-                      +------------------------+
-```
-
-1. `init/1` sets up your initial state (the "model")
-2. `view/1` renders the UI; it's called after every state change
-3. `update/2` handles messages (keyboard events, button clicks, timers)
-4. `subscribe/1` sets up recurring events (timers, external data)
-
-State flows in one direction. Views are pure functions of state. Side effects go through commands.
-
-## View DSL
-
-The View DSL provides macros for building layouts:
+A tool is a `use Raxol.Agent.Action` module: a name, a description, a validated input
+schema, and a `run/2`. The framework turns it into an LLM tool definition and dispatches
+calls to it.
 
 ```elixir
-# Layout containers
-column style: %{gap: 1} do ... end    # Vertical stack
-row style: %{gap: 2} do ... end        # Horizontal stack
+defmodule Tools.CountLines do
+  use Raxol.Agent.Action,
+    name: "count_lines",
+    description: "Count the lines in a file.",
+    schema: [input: [path: [type: :string, required: true, description: "File path"]]]
 
-# Components
-text("Hello", style: [:bold])          # Text with styling
-button("Click", on_click: :msg)        # Clickable button
-text_input(value: v, placeholder: "")  # Text input
-progress(value: 65, max: 100)          # Progress bar
-
-# Containers
-box style: %{border: :single, padding: 1} do ... end  # Bordered box
-
-# Utilities
-divider()                              # Horizontal line
-spacer()                               # Flexible space
+  def run(%{path: path}, _context) do
+    {:ok, %{lines: path |> File.read!() |> String.split("\n") |> length()}}
+  end
+end
 ```
 
-## Adding Live Updates
-
-Use `subscribe/1` to get periodic messages:
+Declare which tools an agent may call with `available_actions/0`. Raxol ships a full
+toolset already (file read/write, shell, grep, glob, memory, skills); the
+[Tool Catalog](../reference/TOOL_CATALOG.md) lists every built-in tool and its
+authorization tier.
 
 ```elixir
-@impl true
-def subscribe(_model) do
-  [subscribe_interval(1000, :tick)]  # Send :tick every second
-end
+defmodule MyAgent do
+  use Raxol.Agent
 
-@impl true
-def update(:tick, model) do
-  {%{model | uptime: model.uptime + 1}, []}
+  def available_actions do
+    [Tools.CountLines | Raxol.Agent.Actions.Fs.all()]
+  end
 end
 ```
 
-## OTP Supervision
+Sensitive tools (writing files, running shell commands) are denied by default and gated
+through the [ALLOW/ASK/DENY authorization engine](../features/AGENT_FRAMEWORK.md#authorization-allowaskdeny).
+The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval UX.
 
-Use `--sup` when generating to get a proper OTP application:
+## 3. Reason on a real model
 
-```bash
-mix raxol.new my_app --sup
+Pick a backend with `ExecutorConfig` and `Backend.Selector`, then drive a turn with
+`Raxol.Agent.Turn`, which runs the reasoning loop and records the conversation:
+
+```elixir
+{:ok, log} = Raxol.Agent.Conversation.Log.start_link(name: MyLog)
+
+{:ok, backend, backend_opts} =
+  Raxol.Agent.Backend.Selector.select(
+    Raxol.Agent.ExecutorConfig.new(
+      harness: :anthropic,
+      model: "claude-sonnet-5",
+      auth: %{api_key: System.fetch_env!("ANTHROPIC_API_KEY")}
+    )
+  )
+
+{:ok, items} =
+  Raxol.Agent.Turn.run(MyAgent, "how many lines are in mix.exs?",
+    backend: backend,
+    backend_opts: backend_opts,
+    log: MyLog,
+    conversation_id: "session-1",
+    agent_id: "my-agent"
+  )
 ```
 
-This generates an Application module with a supervision tree. Run with:
+The harness atom selects the provider: `:anthropic`, `:openai`, `:ollama`, `:lm_studio`,
+`:claude_native` (Claude Code), `:cursor`, and more. See
+[Agent Framework](../features/AGENT_FRAMEWORK.md#native-multi-vendor-harness).
 
-```bash
-mix run --no-halt
+## 4. Memory, skills, and self-improvement
+
+These are opt-in callbacks on the agent module. Turn wires them into every turn:
+
+```elixir
+defmodule MyAgent do
+  use Raxol.Agent
+
+  # Recall facts across sessions, and search prior conversation history.
+  def memory_providers, do: [Raxol.Agent.Memory.Store.Ets]
+
+  # Author and reuse SKILL.md procedures.
+  def skills_provider, do: Raxol.Agent.Skills.Store
+
+  # After each successful turn, review it on a cheap model and write down
+  # what was learned (durable memory + new skills).
+  def self_improve, do: %{enabled: true, model: "claude-haiku-4-5", min_tool_calls: 5}
+
+  def available_actions, do: Raxol.Agent.Actions.Fs.all()
+end
 ```
 
-## What You Just Built
+Setting `memory_providers/0` and `skills_provider/0` auto-exposes the memory and skills
+tools. `self_improve/0` runs a background reviewer after each turn (isolated, so a review
+crash never touches the turn). Nothing else changes: the same `Turn.run/3` call now
+recalls memory, offers skills, and learns.
 
-That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
+- [Memory](../features/MEMORY.md): the provider stack, session search, and user model.
+- [Self-Improvement](../features/SELF_IMPROVEMENT.md): the after-turn loop and the Curator.
+- [Skill Authoring](../guides/SKILL_AUTHORING.md): how to write a `SKILL.md`.
 
-Try `mix raxol.playground` for an interactive catalog of 30 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
+## 5. Run a complete example
 
-**Next steps:**
-
-- [Component Gallery](COMPONENT_GALLERY.md): All Components with examples
-- [Core Concepts](CORE_CONCEPTS.md): Buffers, rendering pipeline, and how it all fits together
-- [Building Apps](../cookbook/BUILDING_APPS.md): Patterns for real apps (state machines, scrollable lists, keyboard shortcuts)
-
-### Explore Further
-
-Features worth exploring:
-
-**SSH App Serving**: Serve your app over SSH. Each connection gets its own process:
+A full, runnable tool-using agent (with a Mock backend so it works without an API key):
 
 ```bash
-mix run examples/ssh/ssh_counter.exs
-# Then: ssh localhost -p 2222
+cd packages/raxol_agent
+mix run examples/agents/react_agent.exs                        # Mock backend
+ANTHROPIC_API_KEY=sk-ant-... mix run examples/agents/react_agent.exs   # real model
 ```
 
-**Hot Code Reload**: Edit your view function while the app is running:
+For an interactive coding agent you can talk to right now, see the
+[Coding Agent](../features/CODING_AGENT.md) (`mix raxol.code`).
+
+## Where next
+
+- [Agent Framework](../features/AGENT_FRAMEWORK.md): teams, the native harness, the item-log, the tunnel.
+- [Agentic Commerce](../features/AGENTIC_COMMERCE.md): give the agent a wallet and spending limits.
+- [Why Raxol](../WHY_RAXOL.md): why an OTP runtime is the right substrate for agents.
+
+
+<!-- docs/getting-started/COMPONENT_GALLERY.md -->
+
+# Component Gallery
+
+All Components are available via the View DSL after `use Raxol.Core.Runtime.Application`. Layout containers (`column`, `row`, `box`) use `do` block syntax. Everything else is a plain function call.
+
+To see them all running: `mix raxol.playground` (interactive demos across all categories).
+
+---
+
+## Layout
+
+Layout Components arrange children on screen. These are the skeleton of every Raxol UI.
+
+### column
+
+Vertical stack. Children are arranged top-to-bottom.
+
+```elixir
+column style: %{gap: 1, padding: 1, align_items: :center} do
+  [
+    text("Header", style: [:bold]),
+    divider(),
+    text("Body content"),
+    spacer(),
+    text("Footer", style: [:dim])
+  ]
+end
+```
+
+Style options: `gap`, `padding`, `align_items` (`:start`, `:center`, `:end`, `:stretch`), `flex`, `width`, `height`.
+
+### row
+
+Horizontal stack. Children are arranged left-to-right.
+
+```elixir
+row style: %{gap: 2, align_items: :center} do
+  [
+    text("Status:"),
+    text("Online", style: %{fg: :green, bold: true}),
+    spacer(),
+    button("Refresh", on_click: :refresh)
+  ]
+end
+```
+
+Same style options as `column`. Use `spacer()` to push items apart.
+
+### box
+
+Container with optional border and padding. Good for grouping related content.
+
+```elixir
+box style: %{border: :single, padding: 1, width: 40} do
+  column style: %{gap: 1} do
+    [
+      text("User Profile", style: [:bold]),
+      text("Name: #{model.name}"),
+      text("Email: #{model.email}")
+    ]
+  end
+end
+```
+
+Border styles: `:none`, `:single`, `:double`, `:rounded`, `:bold`, `:dashed`.
+
+### spacer
+
+Flexible space that fills available room. Useful for pushing items to opposite ends of a row or column.
+
+```elixir
+row do
+  [text("Left"), spacer(), text("Right")]
+end
+```
+
+Options: `size` (integer, default 1), `direction` (`:vertical` or `:horizontal`).
+
+### divider
+
+Horizontal line separator.
+
+```elixir
+column do
+  [text("Section A"), divider(), text("Section B")]
+end
+```
+
+Options: `char` (string, default `"-"`), `style`.
+
+### split_pane
+
+Resizable split layout with two panes.
+
+```elixir
+split_pane(
+  direction: :horizontal,
+  ratio: {1, 2},
+  min_size: 10,
+  children: [left_panel, right_panel]
+)
+```
+
+Options: `direction` (`:horizontal` or `:vertical`), `ratio` (tuple, default `{1, 1}`), `min_size` (integer, default 5).
+
+---
+
+## Text & Display
+
+Components for showing information to the user. These are all display-only, with no user interaction.
+
+### text
+
+Styled text content. The most basic Component.
+
+```elixir
+# Style atoms
+text("Bold text", style: [:bold])
+text("Dimmed", style: [:dim])
+text("Warning", style: [:bold, :underline])
+
+# Color via style map
+text("Error", style: %{fg: :red, bold: true})
+text("Success", style: %{fg: :green, bg: :black})
+
+# fg/bg also work as keyword opts
+text("Custom", fg: :cyan, bg: :blue)
+```
+
+Style atoms: `:bold`, `:dim`, `:italic`, `:underline`, `:strikethrough`, `:reverse`.
+
+Colors: `:black`, `:red`, `:green`, `:yellow`, `:blue`, `:magenta`, `:cyan`, `:white`, plus RGB tuples `{r, g, b}` and hex strings `"#ff6600"`. Auto-downsampled to whatever the terminal supports.
+
+### label
+
+Alias for text with an explicit `content` key.
+
+```elixir
+label(content: "Field name:", style: %{bold: true})
+```
+
+### progress
+
+Progress bar indicator.
+
+```elixir
+progress(value: 65, max: 100)
+```
+
+The underlying component module (`Raxol.UI.Components.Display.Progress`) supports more options when used directly: `show_percentage`, `label`, `animated`, `width`.
+
+### list
+
+Render a list of items, with optional selection highlighting.
+
+```elixir
+list(items: ["Elixir", "Rust", "Go", "Zig"])
+list(items: model.todos, selected: model.selected_index)
+```
+
+### table
+
+Tabular data display with headers.
+
+```elixir
+table(
+  headers: ["Name", "Role", "Status"],
+  rows: [
+    ["Alice", "Admin", "Active"],
+    ["Bob", "User", "Idle"],
+    ["Carol", "User", "Active"]
+  ]
+)
+```
+
+The component module (`Raxol.UI.Components.Table`) supports much more when used directly: `column_widths` (`:auto` or explicit list), `border_style`, `sortable`, `filterable`, `selectable`, `striped`, `alignments`. Handles keyboard navigation for row selection.
+
+### tree
+
+Hierarchical tree view with expand/collapse. Component module only (not available as a View DSL function).
+
+```elixir
+alias Raxol.UI.Components.Display.Tree
+
+nodes = [
+  %{id: "src", label: "src/", children: [
+    %{id: "lib", label: "lib/", children: [
+      %{id: "app", label: "app.ex", children: []}
+    ]},
+    %{id: "test", label: "test/", children: []}
+  ]}
+]
+
+# In init/1:
+{:ok, tree_state} = Tree.init(%{id: "file_tree", nodes: nodes})
+
+# In view/1 (render the tree state):
+Tree.render(model.tree_state, context)
+```
+
+Keyboard: Up/Down (navigate), Right (expand), Left (collapse/go to parent), Enter/Space (select), Home/End (jump).
+
+Options: `indent_size`, `on_select`, `on_expand`, `on_collapse`.
+
+### viewport
+
+Scrollable container for content larger than the visible area. Component module only.
+
+```elixir
+alias Raxol.UI.Components.Display.Viewport
+
+{:ok, vp} = Viewport.init(%{
+  id: "log_view",
+  children: log_lines,
+  visible_height: 20,
+  show_scrollbar: true
+})
+
+# Scroll programmatically:
+vp = Viewport.update({:scroll_by, 5}, vp)
+vp = Viewport.update({:scroll_to, 0}, vp)
+```
+
+### status_bar
+
+Fixed status bar for key-value display. Component module only.
+
+```elixir
+alias Raxol.UI.Components.Display.StatusBar
+
+{:ok, bar} = StatusBar.init(%{
+  id: "status",
+  items: [
+    %{key: "branch", label: "main"},
+    %{key: "tests", label: "5484 passing"},
+    %{key: "mode", label: "INSERT"}
+  ],
+  separator: " | "
+})
+```
+
+### code_block
+
+Syntax-highlighted code display. Uses Makeup for Elixir highlighting, falls back to plain text for other languages. Component module only.
+
+```elixir
+alias Raxol.UI.Components.CodeBlock
+
+{:ok, block} = CodeBlock.init(%{
+  content: ~s|defmodule Hello do\n  def world, do: :ok\nend|,
+  language: "elixir"
+})
+```
+
+### markdown_renderer
+
+Renders markdown text with terminal formatting. Supports headings, bold, italic, inline code, lists, and blockquotes. Component module only.
+
+```elixir
+alias Raxol.UI.Components.MarkdownRenderer
+
+{:ok, md} = MarkdownRenderer.init(%{
+  markdown_text: "# Hello\n\nThis is **bold** and *italic*.\n\n- Item one\n- Item two",
+  width: 60
+})
+```
+
+Uses EarmarkParser when available, falls back to regex-based parsing.
+
+### image
+
+Inline terminal image display. Supports Kitty, iTerm2, and Sixel protocols.
+
+```elixir
+image(src: "logo.png", width: 30, height: 15)
+image(src: raw_png_binary, protocol: :kitty, preserve_aspect: true)
+```
+
+Options: `protocol` (`:kitty`, `:iterm2`, `:sixel`, auto-detected if omitted), `preserve_aspect` (default true).
+
+---
+
+## Input
+
+Components that accept user interaction. These handle keyboard events and fire callbacks.
+
+### button
+
+Clickable button that sends a message to `update/2` on press.
+
+```elixir
+button("Save", on_click: :save)
+button("Delete", on_click: {:delete, item.id})
+```
+
+The component module (`Raxol.UI.Components.Input.Button`) supports: `role` (`:primary`, `:secondary`, `:danger`, `:success`), `disabled`, `shortcut`, `tooltip`.
+
+Keyboard: Enter or Space to activate.
+
+### text_input
+
+Single-line text input field.
+
+```elixir
+text_input(value: model.name, placeholder: "Enter name...")
+```
+
+The component module (`Raxol.UI.Components.Input.TextInput`) supports: `on_change`, `on_submit`, `on_cancel`, `mask_char` (for passwords), `max_length`, `validator` (function).
+
+### textarea
+
+Multi-line text area.
+
+```elixir
+textarea(
+  value: model.notes,
+  placeholder: "Write something...",
+  rows: 8
+)
+```
+
+For the full-featured editor with undo/redo, selection, and text wrapping, use the `MultiLineInput` component module directly.
+
+### checkbox
+
+Toggle checkbox.
+
+```elixir
+checkbox(checked: model.agreed, label: "I agree to the terms")
+```
+
+The component module (`Raxol.UI.Components.Input.Checkbox`) supports: `on_toggle`, `disabled`, `required`, `tooltip`.
+
+Keyboard: Space or Enter to toggle.
+
+### radio_group
+
+Radio button group for single selection from a set of options.
+
+```elixir
+radio_group(
+  options: ["Small", "Medium", "Large"],
+  selected: model.size
+)
+```
+
+Options: `on_change`.
+
+### select / select_list
+
+Dropdown selection. The DSL `select/1` creates a simple dropdown. The component module (`Raxol.UI.Components.Input.SelectList`) is a full-featured scrollable list with search, pagination, and multi-select.
+
+```elixir
+# Simple DSL dropdown
+select(
+  options: ["Elixir", "Rust", "Go"],
+  selected: model.language,
+  placeholder: "Pick a language..."
+)
+```
+
+```elixir
+# Full component with search and multi-select
+alias Raxol.UI.Components.Input.SelectList
+
+{:ok, sl} = SelectList.init(%{
+  id: "lang_picker",
+  options: [{"Elixir", :elixir}, {"Rust", :rust}, {"Go", :go}],
+  enable_search: true,
+  multiple: true,
+  max_height: 10,
+  on_select: :language_selected
+})
+```
+
+Keyboard: Up/Down (navigate), Enter (select), PageUp/PageDown, Home/End, type to search.
+
+### tabs
+
+Tab navigation bar.
+
+```elixir
+tabs(tabs: ["Overview", "Details", "Settings"], active: model.active_tab)
+```
+
+The component module (`Raxol.UI.Components.Input.Tabs`) supports: `on_change`, keyboard Left/Right (with wrap), Home/End, 1-9 (direct select).
+
+### menu
+
+Nested dropdown/context menu with submenus. Component module only.
+
+```elixir
+alias Raxol.UI.Components.Input.Menu
+
+items = [
+  %{id: :file, label: "File", children: [
+    %{id: :new, label: "New", shortcut: "Ctrl+N"},
+    %{id: :open, label: "Open", shortcut: "Ctrl+O"},
+    %{id: :save, label: "Save", shortcut: "Ctrl+S", disabled: true}
+  ]},
+  %{id: :edit, label: "Edit", children: [
+    %{id: :undo, label: "Undo", shortcut: "Ctrl+Z"},
+    %{id: :redo, label: "Redo", shortcut: "Ctrl+Y"}
+  ]}
+]
+
+{:ok, menu} = Menu.init(%{id: "main_menu", items: items, on_select: :menu_action})
+```
+
+Keyboard: Up/Down (skip disabled items), Right (open submenu), Left (close submenu), Enter (select), Escape (close).
+
+### multi_line_input
+
+Full text editor with undo/redo, selection, and word wrapping. Component module only.
+
+```elixir
+alias Raxol.UI.Components.Input.MultiLineInput
+
+{:ok, editor} = MultiLineInput.init(%{
+  id: "code_editor",
+  value: "defmodule Hello do\n  def world, do: :ok\nend",
+  width: 60,
+  height: 20,
+  wrap: :word
+})
+```
+
+Options: `wrap` (`:none`, `:char`, `:word`), `on_change`, `on_submit`.
+
+Features: cursor movement, shift-select, undo/redo history, line wrapping.
+
+---
+
+## Overlay
+
+Components that float above the main content.
+
+### modal
+
+Modal dialog that overlays the current view.
+
+```elixir
+# Simple alert
+modal(visible: model.show_confirm, title: "Confirm", content: text("Delete this item?"))
+```
+
+The component module (`Raxol.UI.Components.Modal`) supports multiple types:
+
+```elixir
+alias Raxol.UI.Components.Modal
+
+# Alert with buttons
+{:ok, m} = Modal.init(%{
+  id: "confirm",
+  type: :alert,
+  title: "Delete Item",
+  content: "This cannot be undone.",
+  buttons: [
+    %{label: "Cancel", action: :cancel},
+    %{label: "Delete", action: :delete}
+  ]
+})
+
+# Prompt with input
+{:ok, m} = Modal.init(%{
+  id: "rename",
+  type: :prompt,
+  title: "Rename",
+  input_value: model.current_name
+})
+
+# Form with validation
+{:ok, m} = Modal.init(%{
+  id: "settings",
+  type: :form,
+  title: "Settings",
+  fields: [%{name: "timeout", label: "Timeout (ms)"}],
+  validate: &validate_settings/1
+})
+```
+
+---
+
+## Progress Indicators
+
+Show how far along something is, or that work is happening.
+
+### progress (DSL)
+
+Standard horizontal progress bar. This is the DSL entry point.
+
+```elixir
+progress(value: 65, max: 100)
+```
+
+### Progress.Bar, Progress.Spinner, Progress.Circular
+
+Component modules for more control. Not separate DSL functions.
+
+```elixir
+# Animated bar with percentage label
+alias Raxol.UI.Components.Display.Progress
+
+{:ok, bar} = Progress.init(%{
+  id: "upload",
+  progress: 0.65,
+  width: 40,
+  show_percentage: true,
+  label: "Uploading...",
+  animated: true
+})
+```
+
+```elixir
+# Spinner (stateless utility, call each frame)
+alias Raxol.UI.Components.Progress.Spinner
+
+# Available styles: :dots, :line, :circle, :arrow, :bounce,
+#                   :pulse, :wave, :dots3, :square, :flip
+frame = Spinner.spinner("Loading...", 0, type: :dots)
+```
+
+| Module              | Use case                                                  |
+| ------------------- | --------------------------------------------------------- |
+| `Progress.Bar`      | Determinate progress with known completion                |
+| `Progress.Spinner`  | Indeterminate: something is happening, unknown duration   |
+| `Progress.Circular` | Circular/ring-style progress indicator                    |
+
+---
+
+## Charts
+
+Streaming data visualization. All chart functions render braille or block characters and compose naturally in `view/1`.
+
+### sparkline
+
+Minimal inline chart: a line with no axes or legend.
+
+```elixir
+sparkline(data: model.cpu_history, width: 30, height: 3, color: :green)
+```
+
+### line_chart
+
+Braille line chart with multi-series support.
+
+```elixir
+line_chart(
+  series: [
+    %{name: "CPU", data: model.cpu_history, color: :cyan},
+    %{name: "Memory", data: model.mem_history, color: :magenta}
+  ],
+  width: 60,
+  height: 15,
+  show_axes: true,
+  show_legend: true
+)
+```
+
+### bar_chart
+
+Block-character bar chart. Vertical or horizontal, grouped multi-series.
+
+```elixir
+bar_chart(
+  series: [
+    %{name: "Q1", data: [42, 67, 55], color: :blue},
+    %{name: "Q2", data: [50, 72, 61], color: :green}
+  ],
+  width: 50,
+  height: 12,
+  orientation: :vertical,
+  show_values: true,
+  show_legend: true
+)
+```
+
+Options: `bar_gap` (gap within group), `group_gap` (gap between groups).
+
+### scatter_chart
+
+Braille 2D scatter plot.
+
+```elixir
+scatter_chart(
+  series: [
+    %{name: "Cluster A", data: [{1.2, 3.4}, {2.1, 4.5}, {1.8, 3.9}], color: :cyan},
+    %{name: "Cluster B", data: [{5.0, 1.2}, {4.8, 1.5}, {5.3, 0.9}], color: :yellow}
+  ],
+  width: 50,
+  height: 15,
+  show_axes: true,
+  x_range: {0, 7},
+  y_range: {0, 6}
+)
+```
+
+### heatmap
+
+2D grid with color intensity.
+
+```elixir
+heatmap(
+  data: [
+    [0.1, 0.4, 0.9, 0.6],
+    [0.3, 0.8, 0.5, 0.2],
+    [0.7, 0.2, 0.3, 0.8]
+  ],
+  width: 40,
+  height: 6,
+  color_scale: :warm,
+  show_values: true
+)
+```
+
+Color scales: `:warm` (yellow -> red), `:cool` (cyan -> blue), `:diverging` (blue -> white -> red), or a custom `fn(value, min, max) -> {r, g, b}`.
+
+---
+
+## Advanced
+
+### process_component
+
+Run any component in its own supervised process for crash isolation. If it crashes, it restarts automatically without affecting the rest of the app.
+
+```elixir
+# In your view:
+process_component(MyExpensiveComponent, %{path: "/var/log"})
+```
+
+### focus_ring
+
+Visual focus indicator for accessibility. Highlights the currently focused component.
+
+Component module: `Raxol.UI.Components.FocusRing`
+
+Options: `color`, `width`, `offset`, `style` (`:solid`), `components` (list of component IDs to track).
+
+---
+
+## Using Components Directly
+
+The View DSL functions cover most needs. When you need full control (handling events, managing component state, accessing all options) use the component modules directly:
+
+```elixir
+alias Raxol.UI.Components.Input.TextInput
+
+# Initialize with full options
+{:ok, state} = TextInput.init(%{
+  id: "search",
+  value: "",
+  placeholder: "Search...",
+  max_length: 100,
+  on_submit: :do_search
+})
+
+# Handle an event
+state = TextInput.handle_event(event, state, context)
+
+# Render
+rendered = TextInput.render(state, context)
+```
+
+All component modules follow the same pattern: `init/1` -> `handle_event/3` -> `render/2`.
+
+---
+
+## Quick Reference
+
+| Component     | DSL function      | Module path            | Interactive? |
+| ------------- | ----------------- | ---------------------- | ------------ |
+| column        | `column do`       | --                     | No           |
+| row           | `row do`          | --                     | No           |
+| box           | `box do`          | --                     | No           |
+| spacer        | `spacer/1`        | --                     | No           |
+| divider       | `divider/1`       | --                     | No           |
+| split_pane    | `split_pane/1`    | `UI.Layout.SplitPane`  | No           |
+| text          | `text/1`          | --                     | No           |
+| label         | `label/1`         | --                     | No           |
+| list          | `list/1`          | --                     | No           |
+| progress      | `progress/1`      | `Display.Progress`     | No           |
+| table         | `table/1`         | `Table`                | Yes          |
+| tree          | --                | `Display.Tree`         | Yes          |
+| viewport      | --                | `Display.Viewport`     | Yes          |
+| status_bar    | --                | `Display.StatusBar`    | No           |
+| code_block    | --                | `CodeBlock`            | No           |
+| markdown      | --                | `MarkdownRenderer`     | No           |
+| image         | `image/1`         | --                     | No           |
+| button        | `button/1`        | `Input.Button`         | Yes          |
+| text_input    | `text_input/1`    | `Input.TextInput`      | Yes          |
+| textarea      | `textarea/1`      | `Input.MultiLineInput` | Yes          |
+| checkbox      | `checkbox/1`      | `Input.Checkbox`       | Yes          |
+| radio_group   | `radio_group/1`   | --                     | Yes          |
+| select        | `select/1`        | `Input.SelectList`     | Yes          |
+| tabs          | `tabs/1`          | `Input.Tabs`           | Yes          |
+| menu          | --                | `Input.Menu`           | Yes          |
+| modal         | `modal/1`         | `Modal`                | Yes          |
+| sparkline     | `sparkline/1`     | --                     | No           |
+| line_chart    | `line_chart/1`    | --                     | No           |
+| bar_chart     | `bar_chart/1`     | --                     | No           |
+| scatter_chart | `scatter_chart/1` | --                     | No           |
+| heatmap       | `heatmap/1`       | --                     | No           |
+| spinner       | --                | `Progress.Spinner`     | No           |
+| focus_ring    | --                | `FocusRing`            | No           |
+
+All component module paths are under `Raxol.UI.Components.*`.
+
+---
+
+## Running Examples
 
 ```bash
-iex -S mix run examples/dev/hot_reload_demo.exs
-# Edit the view/1 function and save; UI updates automatically
+# Interactive playground with all demos
+mix raxol.playground
+
+# Flagship demo (dashboard, sparklines, live stats)
+mix run examples/demo.exs
+
+# Simple starting point
+mix run examples/getting_started/counter.exs
+
+# Full Component showcase
+mix run examples/apps/showcase_app.exs
 ```
-
-**Crash Isolation**: Components run in separate processes. One crash doesn't take down the app:
-
-```bash
-mix run examples/components/process_component_demo.exs
-```
-
-Working examples to study:
-
-- `examples/getting_started/counter.exs`: the counter from this page
-- `examples/demo.exs`: flagship demo with dashboard, sparklines, live stats
-- `examples/getting_started/todo_app.exs`: a keyboard-driven todo list app
 
 
 <!-- docs/getting-started/CORE_CONCEPTS.md -->
@@ -523,6 +1176,411 @@ MyCustomRenderer.render(output)
 - [Architecture](../core/ARCHITECTURE.md) - Implementation details
 
 For a full working example showing dashboard layout, live stats, and OTP differentiators, see `examples/demo.exs`.
+
+
+<!-- docs/getting-started/QUICKSTART.md -->
+
+# Quickstart Guide
+
+Let's build a raxol app. By the end of this page you'll have a working counter running in your terminal.
+
+What you'll learn:
+
+- The four callbacks every Raxol app implements
+- How to handle keyboard input and button clicks
+- How the View DSL builds layouts
+
+## Install
+
+Generate a new project:
+
+```bash
+mix raxol.new my_app
+cd my_app
+mix deps.get
+```
+
+Or add to an existing project:
+
+```elixir
+# mix.exs
+def deps do
+  [{:raxol, "~> 2.6"}]
+end
+```
+
+## Your First App
+
+Every Raxol app follows The Elm Architecture (TEA) with four callbacks:
+
+```elixir
+defmodule MyApp do
+  use Raxol.Core.Runtime.Application
+
+  # 1. Initialize state
+  @impl true
+  def init(_context) do
+    %{count: 0}
+  end
+
+  # 2. Handle messages
+  @impl true
+  def update(message, model) do
+    case message do
+      :increment ->
+        {%{model | count: model.count + 1}, []}
+
+      :decrement ->
+        {%{model | count: model.count - 1}, []}
+
+      # Keyboard events
+      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "="}} ->
+        {%{model | count: model.count + 1}, []}
+
+      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "-"}} ->
+        {%{model | count: model.count - 1}, []}
+
+      %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: "q"}} ->
+        {model, [Directive.stop()]}
+
+      _ ->
+        {model, []}
+    end
+  end
+
+  # 3. Render UI from state
+  @impl true
+  def view(model) do
+    column style: %{padding: 1, gap: 1, align_items: :center} do
+      [
+        text("My Counter", style: [:bold]),
+        box style: %{border: :single, padding: 1, width: 20, justify_content: :center} do
+          text("Count: #{model.count}", style: [:bold])
+        end,
+        row style: %{gap: 1} do
+          [
+            button("=", on_click: :increment),
+            button("-", on_click: :decrement)
+          ]
+        end,
+        text("Press =/- or click buttons. q to quit.", style: [:dim])
+      ]
+    end
+  end
+
+  # 4. Subscriptions (optional)
+  @impl true
+  def subscribe(_model), do: []
+end
+
+# Start the app
+{:ok, pid} = Raxol.start_link(MyApp, [])
+ref = Process.monitor(pid)
+receive do
+  {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+end
+```
+
+**What's happening here?**
+
+- `init/1` returns a plain map, which is your entire app state
+- `update/2` pattern-matches on messages and returns `{new_state, commands}`. The empty list `[]` means "no side effects"
+- `view/1` builds the UI from state using the View DSL macros (`column`, `row`, `box`)
+- `Directive.stop()` tells the runtime to shut down (the `Directive` alias comes from `use Raxol.Core.Runtime.Application`)
+
+Save as `lib/my_app.ex` and run:
+
+```bash
+mix run lib/my_app.ex
+```
+
+## How It Works
+
+```
+                +---> view(model) ---> Terminal
+                |
+init(context) --+--> model
+                |
+                +---> update(message, model) --+
+                      ^                        |
+                      |    {new_model, cmds}   |
+                      +------------------------+
+```
+
+1. `init/1` sets up your initial state (the "model")
+2. `view/1` renders the UI; it's called after every state change
+3. `update/2` handles messages (keyboard events, button clicks, timers)
+4. `subscribe/1` sets up recurring events (timers, external data)
+
+State flows in one direction. Views are pure functions of state. Side effects go through commands.
+
+## View DSL
+
+The View DSL provides macros for building layouts:
+
+```elixir
+# Layout containers
+column style: %{gap: 1} do ... end    # Vertical stack
+row style: %{gap: 2} do ... end        # Horizontal stack
+
+# Components
+text("Hello", style: [:bold])          # Text with styling
+button("Click", on_click: :msg)        # Clickable button
+text_input(value: v, placeholder: "")  # Text input
+progress(value: 65, max: 100)          # Progress bar
+
+# Containers
+box style: %{border: :single, padding: 1} do ... end  # Bordered box
+
+# Utilities
+divider()                              # Horizontal line
+spacer()                               # Flexible space
+```
+
+## Adding Live Updates
+
+Use `subscribe/1` to get periodic messages:
+
+```elixir
+@impl true
+def subscribe(_model) do
+  [subscribe_interval(1000, :tick)]  # Send :tick every second
+end
+
+@impl true
+def update(:tick, model) do
+  {%{model | uptime: model.uptime + 1}, []}
+end
+```
+
+## OTP Supervision
+
+Use `--sup` when generating to get a proper OTP application:
+
+```bash
+mix raxol.new my_app --sup
+```
+
+This generates an Application module with a supervision tree. Run with:
+
+```bash
+mix run --no-halt
+```
+
+## What You Just Built
+
+That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
+
+Try `mix raxol.playground` for an interactive catalog of 30 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
+
+**Next steps:**
+
+- [Component Gallery](COMPONENT_GALLERY.md): All Components with examples
+- [Core Concepts](CORE_CONCEPTS.md): Buffers, rendering pipeline, and how it all fits together
+- [Building Apps](../cookbook/BUILDING_APPS.md): Patterns for real apps (state machines, scrollable lists, keyboard shortcuts)
+
+### Explore Further
+
+Features worth exploring:
+
+**SSH App Serving**: Serve your app over SSH. Each connection gets its own process:
+
+```bash
+mix run examples/ssh/ssh_counter.exs
+# Then: ssh localhost -p 2222
+```
+
+**Hot Code Reload**: Edit your view function while the app is running:
+
+```bash
+iex -S mix run examples/dev/hot_reload_demo.exs
+# Edit the view/1 function and save; UI updates automatically
+```
+
+**Crash Isolation**: Components run in separate processes. One crash doesn't take down the app:
+
+```bash
+mix run examples/components/process_component_demo.exs
+```
+
+Working examples to study:
+
+- `examples/getting_started/counter.exs`: the counter from this page
+- `examples/demo.exs`: flagship demo with dashboard, sparklines, live stats
+- `examples/getting_started/todo_app.exs`: a keyboard-driven todo list app
+
+
+<!-- docs/WHY_OTP.md -->
+
+# Why OTP for multi-surface apps
+
+Most UI frameworks implement crash recovery with try/catch, state management with global stores, concurrency with goroutines or async/await, distribution with gRPC. Raxol gets all of that from OTP.
+
+## The Natural Mapping
+
+| OTP concept   | TUI equivalent            | What you get                                                     |
+| ------------- | ------------------------- | ---------------------------------------------------------------- |
+| GenServer     | Elm update loop           | `init/1 -> update/2 -> view/1`, managed by the runtime           |
+| Process       | Component                 | Each Component can run in its own process                        |
+| Supervisor    | Crash recovery            | A Component crashes, it restarts. The rest of the UI doesn't notice |
+| Hot code swap | Live reload               | Change `view/1`, save, running app updates. No restart           |
+| `:ssh`        | SSH serving               | Built into Erlang. No dep, no daemon, just `:ssh.daemon`         |
+| `libcluster`  | Node discovery            | Gossip, DNS, Tailscale. Nodes find each other automatically      |
+| `send/2`      | Inter-component messaging | No event bus library. Just processes sending messages            |
+| ETS           | State management          | Fast shared state without serialization overhead                 |
+
+These aren't analogies. They're the actual implementations.
+
+## What This Means in Practice
+
+### Crash isolation
+
+In Ratatui or Bubble Tea, if a component panics, your whole app dies. In Raxol:
+
+```elixir
+process_component(UnstableWidget, %{path: "/dev/random"})
+```
+
+The supervisor restarts the component and renders the next frame. OTP was built for this.
+
+### Hot reload
+
+Erlang's code server supports hot swapping at the module level. Save a file, and the running app picks up the new `view/1` on the next render cycle. No reconnection, no state loss. Same mechanism that lets telecom switches upgrade without dropping calls.
+
+### SSH serving
+
+Erlang ships with a full SSH server. Raxol wraps it:
+
+```elixir
+Raxol.SSH.serve(MyApp, port: 2222)
+```
+
+Each connection gets its own Lifecycle process with its own state. The whole thing is 4 modules, ~400 lines, because the hard part is in Erlang's `:ssh`.
+
+Textual added SSH in 2024 via `textual-serve`, wrapping an external library. Bubble Tea and Ratatui have community wrappers.
+
+### Distribution
+
+BEAM was designed for distributed systems. Raxol's swarm module builds on that:
+
+```elixir
+Raxol.Swarm.Discovery.start_link(strategy: :tailscale, node_basename: "raxol")
+Raxol.Swarm.TacticalOverlay.update_entity(:unit_1, %{position: {10.0, 20.0, 0.0}})
+```
+
+Nodes are BEAM nodes. Messages are Erlang messages. CRDTs merge with pure functions.
+
+### Three rendering targets
+
+A TEA module is `init/1`, `update/2`, `view/1`. The rendering target is a runtime decision:
+
+- **Terminal**: Lifecycle renders to a screen buffer, diffs, writes ANSI
+- **Browser**: `Raxol.LiveView.TEALive` hosts the same module in Phoenix, bridges events
+- **SSH**: `Raxol.SSH.Session` wraps Lifecycle per-connection
+
+One app, three outputs.
+
+### AI agents
+
+An agent is a TEA module where input comes from LLMs. Same `init/update/view`, same supervision. The framework is ~300 lines because most of it is OTP:
+
+- `Agent.Session` is a GenServer wrapping Lifecycle
+- `Agent.Team` is a Supervisor
+- `Agent.Comm` is `GenServer.call`/`cast` with Registry lookups
+- `Agent.Backend.HTTP` is `Stream.resource` over SSE
+
+Agents are processes. Teams are supervision trees.
+
+## The Tradeoff
+
+Raxol is slower per-operation than Rust (Ratatui) or Go (Bubble Tea). Buffer creation is 25us vs 0.5us. But a full frame still completes in 2.1ms, leaving 87% of the 60fps budget for your code.
+
+You give up raw microbenchmark speed. You get process isolation, hot reload, distribution, SSH, and multi-target rendering. For anything that has to keep running while you change it, that's a good trade.
+
+## Further Reading
+
+- [Architecture](core/ARCHITECTURE.md): how the render pipeline works
+- [Agent Framework](features/AGENT_FRAMEWORK.md): AI agents as TEA apps
+- [Distributed Swarm](features/DISTRIBUTED_SWARM.md): CRDTs and node discovery
+- [SSH Deployment](cookbook/SSH_DEPLOYMENT.md): serving apps over SSH
+
+
+<!-- docs/WHY_RAXOL.md -->
+
+# Why Raxol
+
+Most agent runtimes are a Python process wrapped around a model. Raxol is an OTP runtime.
+That difference decides what an agent can survive, how many can run at once, where they can
+render, and what they can safely be allowed to do.
+
+For the TUI-framework comparison (Bubble Tea, Ratatui, Textual), see [Why OTP](WHY_OTP.md).
+This page is about agents.
+
+## The runtime
+
+| | Hermes | Omnigent | Raxol |
+|-|--------|----------|-------|
+| Substrate | one Python process per agent | subprocess per conversation (FastAPI) | millions of supervised BEAM processes |
+| Concurrency | ThreadPoolExecutor, app-level retry to dodge the convoy effect | per-conversation processes | preemptive scheduling, mailbox serialization |
+| State on crash | SQLite file (single process) | external store | supervision trees restart with state intact |
+| Surfaces | chat platforms (bridges) | editor harnesses | terminal, browser, SSH, MCP, Telegram, watch, speech from one module |
+| Payments | none | none | wallets, spend limits, cross-chain settlement |
+
+The BEAM was built for systems that cannot go down, cannot lose state, and hot-swap code
+while running. An agent runtime wants exactly those properties. When a background reviewer
+crashes, the turn is unaffected because it runs in an isolated process. When a node
+restarts, an agent's memory and skills survive because they are backed by a supervision tree
+and durable stores, not held in one process. When you want a thousand agents, you spawn a
+thousand lightweight processes, not a thousand OS threads.
+
+## Four things Raxol does that the others do not
+
+### Governed execution (ALLOW / ASK / DENY)
+
+Every tool call passes through an [authorization engine](features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
+that returns allow, ask, or deny, with per-scope approval memory. This is stronger than a
+binary approve/deny prompt: an agent can be allowed to read anywhere, asked before writing,
+and denied the shell entirely, declaratively. The [Coding Agent](features/CODING_AGENT.md)
+runs every mutating action through it, and the [Tool Catalog](reference/TOOL_CATALOG.md)
+marks which tools are gated.
+
+### One app, every surface
+
+The same TEA module renders to a terminal, a LiveView, an SSH session, an agent over MCP, a
+watch, and a chat, through one OTP fan-out. Competitors integrate each platform separately;
+Raxol projects one running module. See [Surfaces](guides/SURFACES.md).
+
+### A learning loop backed by supervision
+
+Raxol has an after-turn [self-improvement](features/SELF_IMPROVEMENT.md) loop, agent-authored
+skills, a provider-stack [memory](features/MEMORY.md) layer, and a dialectic user model, the
+same capabilities Hermes markets as its differentiator. The difference is the substrate: the
+reviewer is an isolated Task, skills are on-disk `SKILL.md` files with DETS telemetry
+replayed on boot, and every Curator pass is reversible. A learning loop that cannot lose
+state because it is backed by OTP supervision is a stronger claim than one backed by a
+single-process database.
+
+### Agentic commerce
+
+Raxol agents can pay and be paid: wallets, ledger-enforced spending limits, transparent
+HTTP 402 auto-pay, cross-chain settlement, stealth and shielded transfers, and ZKSAR trust
+attestations. See [Agentic Commerce](features/AGENTIC_COMMERCE.md) and the
+[Agent Commerce Protocol](features/ACP.md). Neither Hermes nor Omnigent has any of this, and
+it is not a feature they can add without a runtime for it.
+
+## What Raxol is not
+
+Raxol is younger than its competitors in raw tool count and hosted polish. If your only need
+is a single Python agent calling a large catalog of built-in tools on one machine, a Python
+harness will get you there with less Elixir. Raxol earns its keep when you want agents that
+survive crashes, run by the thousand, render to more than a chat window, are governed rather
+than trusted, or move money. Those are BEAM problems, and Raxol is the runtime for them.
+
+## See also
+
+- [Why OTP](WHY_OTP.md): the TUI-framework comparison.
+- [Philosophy](PHILOSOPHY.md): the design principles behind the runtime.
+- [Build Your First Agent](getting-started/BUILD_AN_AGENT.md): put the runtime to work.
 
 
 <!-- docs/PHILOSOPHY.md -->
@@ -3962,6 +5020,188 @@ Devices don't expire automatically. Hook `unregister/1` into your auth layer whe
 
 - [Telegram](TELEGRAM.md): interactive messaging surface
 - [Speech](SPEECH.md): the other accessibility-driven surface
+
+
+<!-- docs/guides/SKILL_AUTHORING.md -->
+
+# Skill Authoring
+
+A skill is procedural memory: a reusable `SKILL.md` file that teaches an agent how to do
+something. Raxol uses the [agentskills.io](https://agentskills.io) `SKILL.md` format, so a
+skill you write here sits alongside the ones under `~/.agents/skills` and is portable to
+other tools that speak the same format.
+
+Agents author skills on their own (the [self-improvement](../features/SELF_IMPROVEMENT.md)
+reviewer writes them after a successful turn), and you can author them by hand. This guide
+is the hand-authoring contract.
+
+## The format
+
+A `SKILL.md` is YAML frontmatter followed by a markdown body:
+
+```markdown
+---
+name: git-bisect-a-regression
+description: Find the commit that introduced a bug using git bisect.
+version: "1"
+category: git
+---
+
+# Git bisect a regression
+
+Use this when a test passed at some older commit and fails now.
+
+1. `git bisect start`
+2. `git bisect bad` at the current (broken) commit.
+3. `git bisect good <known-good-sha>`.
+4. For each commit git checks out, run the failing test and mark
+   `git bisect good` or `git bisect bad`.
+5. When git prints the first bad commit, run `git bisect reset`.
+
+Keep the working tree clean before you start; stash or commit first.
+```
+
+### Frontmatter fields
+
+| Field | Required | Notes |
+|-------|:---:|-------|
+| `name` | yes | A kebab-case identifier, unique within a store. |
+| `description` | no | One line. This is what an agent sees in `skills_list` before opening the skill. |
+| `version` | no | A string. |
+| `category` | no | Groups the skill on disk (`<root>/<category>/<name>/`). |
+| `created_by` | no | `agent` or `user`. Set automatically; only agent-authored skills are curated. |
+
+Any other frontmatter key is preserved under the skill's metadata, so fields another tool
+depends on survive a round trip. Nothing from a `SKILL.md` is ever turned into an atom.
+
+### Body
+
+Write the body for the reader that will act on it: an LLM with tools. Be concrete and
+procedural. State the trigger ("use this when..."), then the steps, then the caveats. Keep
+it focused on one task; a skill that tries to cover everything gets opened for nothing.
+
+## Where skills live
+
+`Raxol.Agent.Skills.Store` reads from two places:
+
+- **Managed root** (writable, default `~/.raxol/skills`): skills the agent or you author
+  here. New skills are written here.
+- **External dirs** (read-only, default `~/.agents/skills`): shared skills. A managed skill
+  wins over an external one of the same name.
+
+Skill content is re-read from disk on every boot, so disk is the source of truth. Usage
+telemetry (how often a skill is used and viewed, its lifecycle state) is persisted
+separately and survives restarts.
+
+## Authoring from an agent
+
+The three skills tools let an agent manage its own procedures:
+
+| Tool | Purpose |
+|------|---------|
+| `skills_list` | List skills as metadata only (the cheap disclosure level). |
+| `skill_view` | Read a skill's body, or one supporting file inside its directory. |
+| `skill_manage` | Create, patch, or delete a skill. |
+
+A supporting-file read through `skill_view` is path-guarded: absolute paths and `..` are
+rejected, so a skill cannot read outside its own directory.
+
+## Curation
+
+Agent-authored skills are aged by the [Curator](../features/SELF_IMPROVEMENT.md#curator):
+`active` to `stale` (default 30 idle days) to `archived` (default 90). Pin a skill to
+protect it from aging, and note that user-authored and external skills are never curated.
+Every Curator pass writes a backup first and is reversible.
+
+## The safety dimension
+
+A skill in Raxol carries more than instructions. When a skill's steps call tools, those
+calls run under the same [ALLOW/ASK/DENY authorization](../features/AGENT_FRAMEWORK.md#authorization-allowaskdeny)
+as any other tool call, and across whichever [surface](SURFACES.md) the agent is running
+on. A skill cannot smuggle in a privileged action: writing a file or running a shell
+command from inside a skill is still a sensitive tool call, still gated, still auditable in
+the [conversation item-log](../features/AGENT_FRAMEWORK.md#conversation-item-log).
+
+## See also
+
+- [Self-Improvement](../features/SELF_IMPROVEMENT.md): how agents author and curate skills.
+- [Build Your First Agent](../getting-started/BUILD_AN_AGENT.md): enabling the skills store.
+- [Tool Catalog](../reference/TOOL_CATALOG.md): the built-in tools skills can drive.
+
+
+<!-- docs/guides/SURFACES.md -->
+
+# Surfaces: Write Once, Render Everywhere
+
+One TEA module renders to many surfaces without modification. The same `init/update/view`
+that draws a terminal UI also serves a browser, an SSH session, an agent over MCP, a
+Telegram chat, a watch, and a speech interface. You write the application once; Raxol
+projects it.
+
+```
+                          +---> Terminal   (termbox2 NIF)
+                          |
+                          +---> Browser    (Phoenix LiveView)
+                          |
+  TEA module (GenServer) -+---> SSH         (Erlang :ssh)
+                          |
+                          +---> Agent (MCP) (auto-derived tools)
+                          |
+                          +---> Telegram / Watch / Speech
+```
+
+## The surfaces
+
+| Surface | Package | What it is |
+|---------|---------|-----------|
+| Terminal | `raxol_terminal` | The native TUI, over the termbox2 NIF (Windows falls back to a pure-Elixir driver). |
+| Browser | `raxol_liveview` | The same component tree as a Phoenix LiveView, cells mapped to DOM. |
+| SSH | `raxol` (built-in) | The TUI served over `:ssh`; each connection is its own session. |
+| Agent (MCP) | `raxol_mcp` | Every interactive component auto-derives MCP tools; an LLM drives the same UI a human does. |
+| Telegram | `raxol_telegram` | A TEA app as a bot: per-chat sessions, inline keyboards. |
+| Watch | `raxol_watch` | Glanceable summaries and tap-to-action from accessibility events, over APNS/FCM. |
+| Speech | `raxol_speech` | TTS announcements and Whisper STT with voice commands. |
+
+Each surface has its own feature doc: [MCP](../features/MCP.md), [Telegram](../features/TELEGRAM.md),
+[Watch](../features/WATCH.md), [Speech](../features/SPEECH.md). The
+[Unified Messaging Gateway](../features/GATEWAY.md) connects many chat platforms through one
+adapter contract.
+
+## One fan-out, not N adapters
+
+The reason this holds together is architectural. A Raxol app is one OTP process publishing
+its state; each surface is a subscriber that projects that state its own way. Adding a
+surface adds a subscriber, not a rewrite. The terminal, the LiveView, and the SSH session
+can render the same running module at the same time, each staying in sync through
+Phoenix.PubSub.
+
+That is a different model from a chat bot framework, where each platform is a separate
+integration that reimplements the conversation. Here the conversation, the state, and the
+view logic live once in the TEA module; the surfaces are projections of it. A watch shows a
+summary of the same model the terminal draws in full; an agent reads the same component tree
+a human clicks.
+
+## Animation across surfaces
+
+A `view/1` can declare animation intent (`animate(element, property: :opacity, to: 1.0,
+duration: 300)`). Surfaces that can accelerate it do (LiveView emits CSS transitions);
+surfaces that cannot compute frames server-side (the terminal). The same declaration, honored
+differently per surface, with `prefers-reduced-motion` respected. Hints are declarative
+metadata, never imperative commands.
+
+## The agent surface is first-class
+
+The MCP surface is not a bolt-on. Component types implement a `ToolProvider` behaviour, so
+the framework derives an agent's toolset from the same component tree it renders for a human,
+and a focus lens narrows it to the roughly 15 relevant tools per interaction. An LLM
+`type_into` a field and `click` a button through the exact structure a person sees. See
+[MCP as a Rendering Target](../features/MCP.md).
+
+## See also
+
+- [Why Raxol](../WHY_RAXOL.md): why one OTP runtime beats per-platform integrations.
+- [Core Concepts](../getting-started/CORE_CONCEPTS.md): the TEA model the surfaces project.
+- [Build Your First Agent](../getting-started/BUILD_AN_AGENT.md): the agent surface in practice.
 
 
 <!-- docs/reference/TOOL_CATALOG.md -->
