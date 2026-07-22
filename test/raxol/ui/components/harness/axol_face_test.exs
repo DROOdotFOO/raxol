@@ -10,6 +10,7 @@ defmodule Raxol.UI.Components.Harness.AxolFaceTest do
     test "every face is exactly four display columns wide" do
       for state <- AxolFace.states(), ascii? <- [false, true], frame <- 0..5 do
         glyph = AxolFace.glyph(state, frame, ascii?)
+
         assert Raxol.UI.TextMeasure.display_width(glyph) == 4,
                "#{state}/#{ascii?}/#{frame} = #{inspect(glyph)} not 4 cols"
       end

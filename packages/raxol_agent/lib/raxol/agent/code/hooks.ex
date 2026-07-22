@@ -120,7 +120,9 @@ defmodule Raxol.Agent.Code.Hooks do
   Run a config's `stop` commands in `cwd`, returning a receipt per command.
   Driven by the surface at turn end (not part of the tool-call pipeline).
   """
-  @spec run_stop(config(), String.t()) :: [%{command: String.t(), exit_status: integer() | :timeout}]
+  @spec run_stop(config(), String.t()) :: [
+          %{command: String.t(), exit_status: integer() | :timeout}
+        ]
   def run_stop(%{stop: commands}, cwd) do
     Enum.map(commands, fn command ->
       {_out, status} = Code.run_shell(command, cwd, @hook_timeout_ms, env(nil))

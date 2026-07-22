@@ -114,7 +114,12 @@ defmodule Raxol.Agent.Code.AppTest do
       model = send_ev(model, ev(1, :turn_started, %{prompt: "x"}))
       assert model.face_state == :thinking
 
-      model = send_ev(model, ev(2, :item_completed, %{item_id: "i1", item_type: :tool_use, name: "grep"}))
+      model =
+        send_ev(
+          model,
+          ev(2, :item_completed, %{item_id: "i1", item_type: :tool_use, name: "grep"})
+        )
+
       assert model.face_state == :working
 
       model = send_ev(model, ev(3, :turn_completed, %{final: true, usage: %{}}))
@@ -298,7 +303,9 @@ defmodule Raxol.Agent.Code.AppTest do
         |> then(&%{&1 | running?: true})
         |> send_ev(ev(1, :turn_started, %{prompt: "hi"}))
         |> send_ev(ev(2, :item_started, %{item_id: "i1", item_type: :message}))
-        |> send_ev(ev(3, :item_completed, %{item_id: "i1", item_type: :message, content: "hello there"}))
+        |> send_ev(
+          ev(3, :item_completed, %{item_id: "i1", item_type: :message, content: "hello there"})
+        )
         |> send_ev(ev(4, :turn_completed, %{final: true, usage: %{}}))
 
       assert model.face_state == :done
@@ -368,7 +375,9 @@ defmodule Raxol.Agent.Code.AppTest do
         model
         |> send_ev(ev(1, :turn_started, %{prompt: "hi"}))
         |> send_ev(ev(2, :item_started, %{item_id: "i1", item_type: :message}))
-        |> send_ev(ev(3, :item_completed, %{item_id: "i1", item_type: :message, content: "restored answer"}))
+        |> send_ev(
+          ev(3, :item_completed, %{item_id: "i1", item_type: :message, content: "restored answer"})
+        )
         |> send_ev(ev(4, :turn_completed, %{final: true, usage: %{}}))
 
       key = model.session_key
@@ -379,7 +388,12 @@ defmodule Raxol.Agent.Code.AppTest do
 
       assert resumed.events != []
       blocks = Raxol.Harness.Projection.project(resumed.events).blocks
-      assert Enum.any?(blocks, &(Raxol.UI.Components.Harness.Block.search_text(&1) =~ "restored answer"))
+
+      assert Enum.any?(
+               blocks,
+               &(Raxol.UI.Components.Harness.Block.search_text(&1) =~ "restored answer")
+             )
+
       # And the resumed model renders.
       assert %{} = App.view(resumed)
     end

@@ -89,27 +89,7 @@ defmodule Raxol.Agent.Actions.Code do
       overwrite = Map.get(params, :overwrite, false)
 
       with {:ok, abs} <- Fs.resolve(path) do
-        exists = File.regular?(abs)
-
-        cond do
-          exists and not overwrite ->
-            {:error, :file_exists}
-
-          true ->
-            old = if exists, do: File.read!(abs), else: ""
-            :ok = File.mkdir_p(Path.dirname(abs))
-
-            case File.write(abs, content) do
-              :ok ->
-                {:ok,
-                 Raxol.Agent.Actions.Code.diff_result(path, old, content, %{
-                   created: not exists
-                 })}
-
-              {:error, reason} ->
-                {:error, reason}
-            end
-        end
+        Raxol.Agent.Actions.Code.write_file(abs, path, content, overwrite)
       end
     end
   end
@@ -158,13 +138,14 @@ defmodule Raxol.Agent.Actions.Code do
       with :ok <- reject_noop(old_string, new_string),
            {:ok, abs} <- Fs.resolve(path),
            {:ok, content} <- File.read(abs),
-           {:ok, count} <- match_count(content, old_string, replace_all),
-           updated = apply_replacement(content, old_string, new_string, replace_all),
-           :ok <- File.write(abs, updated) do
-        {:ok,
-         Raxol.Agent.Actions.Code.diff_result(path, content, updated, %{
-           replacements: count
-         })}
+           {:ok, count} <- match_count(content, old_string, replace_all) do
+        Raxol.Agent.Actions.Code.write_edit(
+          abs,
+          path,
+          content,
+          {old_string, new_string, replace_all},
+          count
+        )
       end
     end
 
@@ -182,12 +163,6 @@ defmodule Raxol.Agent.Actions.Code do
     defp count_occurrences(content, needle) do
       content |> String.split(needle) |> length() |> Kernel.-(1)
     end
-
-    defp apply_replacement(content, old_string, new_string, true),
-      do: String.replace(content, old_string, new_string)
-
-    defp apply_replacement(content, old_string, new_string, false),
-      do: String.replace(content, old_string, new_string, global: false)
   end
 
   defmodule Bash do
@@ -355,6 +330,47 @@ defmodule Raxol.Agent.Actions.Code do
   @spec all() :: [module()]
   def all, do: [Write, Edit, Bash, Grep, Glob]
 
+  @doc false
+  @spec write_file(String.t(), String.t(), String.t(), boolean()) ::
+          {:ok, map()} | {:error, term()}
+  def write_file(abs, path, content, overwrite) do
+    exists = File.regular?(abs)
+
+    if exists and not overwrite do
+      {:error, :file_exists}
+    else
+      persist_file(abs, path, content, exists)
+    end
+  end
+
+  defp persist_file(abs, path, content, exists) do
+    old = if exists, do: File.read!(abs), else: ""
+    :ok = File.mkdir_p(Path.dirname(abs))
+
+    case File.write(abs, content) do
+      :ok -> {:ok, diff_result(path, old, content, %{created: not exists})}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc false
+  @spec write_edit(
+          String.t(),
+          String.t(),
+          String.t(),
+          {String.t(), String.t(), boolean()},
+          integer()
+        ) ::
+          {:ok, map()} | {:error, term()}
+  def write_edit(abs, path, content, {old_string, new_string, replace_all}, count) do
+    updated = String.replace(content, old_string, new_string, global: replace_all)
+
+    case File.write(abs, updated) do
+      :ok -> {:ok, diff_result(path, content, updated, %{replacements: count})}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc """
   The read-only, non-sensitive subset (`grep`, `glob`). Safe to expose
   without a `:tool_authorizer` opt-in, unlike the mutating actions.
@@ -432,7 +448,7 @@ defmodule Raxol.Agent.Actions.Code do
       {:cd, cd}
     ]
 
-    port_opts = if charlist_env == [], do: base, else: base ++ [{:env, charlist_env}]
+    port_opts = if charlist_env == [], do: base, else: [{:env, charlist_env} | base]
     port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
     collect_port(port, [], timeout)
   end
@@ -525,21 +541,20 @@ defmodule Raxol.Agent.Actions.Code do
 
   defp scan_file(abs_path, regex, cwd) do
     case File.read(abs_path) do
-      {:ok, content} ->
-        if String.valid?(content) do
-          rel = Path.relative_to(abs_path, cwd)
+      {:ok, content} -> scan_content(content, regex, Path.relative_to(abs_path, cwd))
+      {:error, _} -> []
+    end
+  end
 
-          content
-          |> String.split("\n")
-          |> Enum.with_index(1)
-          |> Enum.filter(fn {line, _} -> Regex.match?(regex, line) end)
-          |> Enum.map(fn {line, n} -> %{path: rel, line: n, text: line} end)
-        else
-          []
-        end
-
-      {:error, _} ->
-        []
+  defp scan_content(content, regex, rel) do
+    if String.valid?(content) do
+      content
+      |> String.split("\n")
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {line, _} -> Regex.match?(regex, line) end)
+      |> Enum.map(fn {line, n} -> %{path: rel, line: n, text: line} end)
+    else
+      []
     end
   end
 
@@ -552,23 +567,20 @@ defmodule Raxol.Agent.Actions.Code do
 
   defp do_walk(path, acc, budget) do
     cond do
-      File.regular?(path) ->
-        {[path | acc], budget - 1}
+      File.regular?(path) -> {[path | acc], budget - 1}
+      File.dir?(path) and not pruned?(path) -> walk_dir(path, acc, budget)
+      true -> {acc, budget}
+    end
+  end
 
-      File.dir?(path) and not pruned?(path) ->
-        path
-        |> File.ls()
-        |> case do
-          {:ok, entries} ->
-            Enum.reduce(entries, {acc, budget}, fn entry, {a, b} ->
-              do_walk(Path.join(path, entry), a, b)
-            end)
+  defp walk_dir(path, acc, budget) do
+    case File.ls(path) do
+      {:ok, entries} ->
+        Enum.reduce(entries, {acc, budget}, fn entry, {a, b} ->
+          do_walk(Path.join(path, entry), a, b)
+        end)
 
-          {:error, _} ->
-            {acc, budget}
-        end
-
-      true ->
+      {:error, _} ->
         {acc, budget}
     end
   end

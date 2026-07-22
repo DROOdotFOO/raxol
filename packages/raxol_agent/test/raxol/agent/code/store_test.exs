@@ -65,7 +65,10 @@ defmodule Raxol.Agent.Code.StoreTest do
 
   test "latest and list order by most-recently-updated", %{dir: dir} do
     Store.save(dir, "old", %{messages: [%{role: :user, content: "a"}]})
-    Store.save(dir, "new", %{messages: [%{role: :user, content: "b"}, %{role: :assistant, content: "c"}]})
+
+    Store.save(dir, "new", %{
+      messages: [%{role: :user, content: "b"}, %{role: :assistant, content: "c"}]
+    })
 
     listed = Store.list(dir)
     assert Enum.map(listed, & &1.id) |> Enum.sort() == ["new", "old"]

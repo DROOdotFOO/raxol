@@ -76,14 +76,25 @@ defmodule Raxol.Agent.Code.App do
     {hooks, hooks_note} = load_hooks(cwd)
     {mcp_servers, mcp_note} = load_mcp(cwd)
 
+    Map.merge(config(options, context), %{
+      # Seeded from a resumed session so the transcript + conversation
+      # rebuild immediately; a fresh session starts these empty.
+      events: events,
+      messages: messages,
+      status_line: combine_notes([resume_notice, hooks_note, mcp_note]),
+      session_key: session_key,
+      sessions_dir: sessions_dir,
+      cwd: cwd,
+      hooks: hooks,
+      mcp_servers: mcp_servers
+    })
+  end
+
+  # Static + option-derived fields; the session and loaded config are merged
+  # over these in init/1.
+  defp config(options, context) do
     %{
       input: "",
-      # Normalized projection events (durable + ephemeral), arrival order.
-      # Seeded from a resumed session so the transcript rebuilds immediately.
-      events: events,
-      # The LLM conversation carried across turns (persisted per session).
-      messages: messages,
-      # Assistant text accumulated during the in-flight turn.
       turn_answer: "",
       face_state: :idle,
       face_frame: 0,
@@ -91,7 +102,6 @@ defmodule Raxol.Agent.Code.App do
       worker: nil,
       session_id: nil,
       pending_approval: nil,
-      status_line: combine_notes([resume_notice, hooks_note, mcp_note]),
       notice: nil,
       # Authorization: plan mode + per-tool "always allow" memory. The Engine
       # is the ALLOW/ASK/DENY decision core; per-tool memory is app state fed
@@ -99,13 +109,6 @@ defmodule Raxol.Agent.Code.App do
       plan_mode: false,
       always_allow: MapSet.new(),
       auth_state: Engine.new(),
-      # Session persistence.
-      session_key: session_key,
-      sessions_dir: sessions_dir,
-      # Delegation + config (Phase 5).
-      cwd: cwd,
-      hooks: hooks,
-      mcp_servers: mcp_servers,
       ascii: Keyword.get(options, :ascii, false),
       executor: Keyword.get(options, :executor),
       backend_opts: Keyword.get(options, :backend_opts, []),
@@ -301,6 +304,7 @@ defmodule Raxol.Agent.Code.App do
     ensure_streamer!()
     app = self()
 
+    # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
     messages = model.messages ++ [%{role: :user, content: prompt}]
 
     opts =
@@ -425,9 +429,12 @@ defmodule Raxol.Agent.Code.App do
   defp fold_event(event, normalized, model) do
     running? = model.running? and not terminal_event?(event)
 
+    # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
+    events = model.events ++ [normalized]
+
     model = %{
       model
-      | events: model.events ++ [normalized],
+      | events: events,
         face_state: face_for_event(event, model.face_state),
         face_frame: model.face_frame + 1,
         running?: running?,
@@ -472,8 +479,12 @@ defmodule Raxol.Agent.Code.App do
 
   defp append_assistant(messages, answer) do
     case String.trim(answer) do
-      "" -> messages
-      trimmed -> messages ++ [%{role: :assistant, content: trimmed}]
+      "" ->
+        messages
+
+      trimmed ->
+        # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
+        messages ++ [%{role: :assistant, content: trimmed}]
     end
   end
 
@@ -611,20 +622,21 @@ defmodule Raxol.Agent.Code.App do
 
   defp dispatch_slash(model, command) do
     {name, arg} = parse_command(command)
-
-    case name do
-      "help" -> {notice(model, help_text()), []}
-      "clear" -> {clear_session(model), []}
-      "plan" -> {maybe_toggle_plan_mode(model), []}
-      "model" -> {set_model(model, arg), []}
-      "context" -> {notice(model, context_text(model)), []}
-      "compact" -> {compact(model), []}
-      "sessions" -> {notice(model, sessions_text(model)), []}
-      "mcp" -> {notice(model, mcp_text(model)), []}
-      "hooks" -> {notice(model, hooks_text(model)), []}
-      other -> {notice(model, "unknown command: /#{other} — try /help"), []}
-    end
+    apply_command(name, arg, model)
   end
+
+  defp apply_command("help", _arg, model), do: {notice(model, help_text()), []}
+  defp apply_command("clear", _arg, model), do: {clear_session(model), []}
+  defp apply_command("plan", _arg, model), do: {maybe_toggle_plan_mode(model), []}
+  defp apply_command("model", arg, model), do: {set_model(model, arg), []}
+  defp apply_command("context", _arg, model), do: {notice(model, context_text(model)), []}
+  defp apply_command("compact", _arg, model), do: {compact(model), []}
+  defp apply_command("sessions", _arg, model), do: {notice(model, sessions_text(model)), []}
+  defp apply_command("mcp", _arg, model), do: {notice(model, mcp_text(model)), []}
+  defp apply_command("hooks", _arg, model), do: {notice(model, hooks_text(model)), []}
+
+  defp apply_command(other, _arg, model),
+    do: {notice(model, "unknown command: /#{other} — try /help"), []}
 
   defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
 
@@ -727,23 +739,22 @@ defmodule Raxol.Agent.Code.App do
   @impl true
   def view(model) do
     column style: %{padding: 1, gap: 1} do
-      [transcript(model)] ++ notice_block(model) ++ [status_strip(model), footer(model)]
+      [transcript(model), notice_block(model), status_strip(model), footer(model)]
+      |> Enum.reject(&is_nil/1)
     end
   end
 
   defp notice_block(%{notice: notice}) when is_binary(notice) do
     lines = String.split(notice, "\n")
 
-    [
-      box style: %{border: :single, padding: 0} do
-        column style: %{gap: 0} do
-          Enum.map(lines, &text(&1, fg: :cyan))
-        end
+    box style: %{border: :single, padding: 0} do
+      column style: %{gap: 0} do
+        Enum.map(lines, &text(&1, fg: :cyan))
       end
-    ]
+    end
   end
 
-  defp notice_block(_model), do: []
+  defp notice_block(_model), do: nil
 
   defp transcript(model) do
     projection = Projection.project(model.events)
@@ -775,12 +786,12 @@ defmodule Raxol.Agent.Code.App do
     status = text(status_label(model), style: [:dim])
 
     row style: %{gap: 1} do
-      [face] ++ plan_chip(model) ++ [status]
+      [face, plan_chip(model), status] |> Enum.reject(&is_nil/1)
     end
   end
 
-  defp plan_chip(%{plan_mode: true}), do: [text("PLAN", fg: :yellow, style: [:bold])]
-  defp plan_chip(_model), do: []
+  defp plan_chip(%{plan_mode: true}), do: text("PLAN", fg: :yellow, style: [:bold])
+  defp plan_chip(_model), do: nil
 
   defp status_label(%{status_line: line}) when is_binary(line), do: line
   defp status_label(%{pending_approval: %{name: name}}), do: "awaiting approval: #{name}"

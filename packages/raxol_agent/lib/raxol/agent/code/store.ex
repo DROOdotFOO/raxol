@@ -62,21 +62,24 @@ defmodule Raxol.Agent.Code.Store do
   def load(dir, session_key) do
     with {:ok, binary} <- File.read(path(dir, session_key)),
          {:ok, json} when is_map(json) <- Jason.decode(binary) do
-      {:ok,
-       %{
-         id: Map.get(json, "id", session_key),
-         updated_at: Map.get(json, "updated_at", 0),
-         cwd: Map.get(json, "cwd", ""),
-         messages:
-           json
-           |> Map.get("messages", [])
-           |> Enum.map(&decode_message/1)
-           |> Enum.reject(&is_nil/1),
-         events: Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
-       }}
+      {:ok, build_session(json, session_key)}
     else
       _ -> {:error, :not_found}
     end
+  end
+
+  defp build_session(json, session_key) do
+    %{
+      id: Map.get(json, "id", session_key),
+      updated_at: Map.get(json, "updated_at", 0),
+      cwd: Map.get(json, "cwd", ""),
+      messages:
+        json
+        |> Map.get("messages", [])
+        |> Enum.map(&decode_message/1)
+        |> Enum.reject(&is_nil/1),
+      events: Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
+    }
   end
 
   @doc "The most recently updated session id, or `nil` if none exist."
@@ -89,7 +92,9 @@ defmodule Raxol.Agent.Code.Store do
   end
 
   @doc "Saved sessions, most-recently-updated first: `%{id, updated_at, message_count}`."
-  @spec list(String.t()) :: [%{id: String.t(), updated_at: integer(), message_count: non_neg_integer()}]
+  @spec list(String.t()) :: [
+          %{id: String.t(), updated_at: integer(), message_count: non_neg_integer()}
+        ]
   def list(dir) do
     case File.ls(dir) do
       {:ok, files} ->
