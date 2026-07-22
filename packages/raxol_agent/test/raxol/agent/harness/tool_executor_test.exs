@@ -683,6 +683,141 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
     end
   end
 
+  describe "gate?: true with no :await_decision wired -- must fail CLOSED, never auto-allow" do
+    test "a consequential tool is denied, not silently auto-approved", %{tmp: tmp} do
+      path = Path.join(tmp, "code.ex")
+      File.write!(path, "old\n")
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "write_file",
+                 "arguments" => %{"path" => "code.ex", "content" => "new\n"},
+                 "id" => "w1"
+               }
+             ]},
+            {:content, "ok"}
+          ],
+          actions: Workspace.all()
+          # gate?: true (default), NO :await_decision opt -- the fail-open
+          # trap: a caller that turns the gate on and forgets to wire an
+          # answerer must not get silent auto-approval of `write_file`.
+        )
+
+      assert {:tool_result, %{name: "write_file", result: {:error, {:denied, _}}}} =
+               Enum.find(events, &match?({:tool_result, _}, &1))
+
+      # The write must NOT have happened.
+      assert File.read!(path) == "old\n"
+    end
+
+    test "the same tool is auto-allowed under gate?: false (--yolo), where the default is unreachable anyway",
+         %{tmp: tmp} do
+      path = Path.join(tmp, "code.ex")
+      File.write!(path, "old\n")
+
+      events =
+        run(
+          [
+            {:tool_calls,
+             [
+               %{
+                 "name" => "write_file",
+                 "arguments" => %{"path" => "code.ex", "content" => "new\n"},
+                 "id" => "w1"
+               }
+             ]},
+            {:content, "ok"}
+          ],
+          actions: Workspace.all(),
+          gate?: false
+        )
+
+      refute :approval_requested in types(events)
+      assert File.read!(path) == "new\n"
+    end
+  end
+
+  describe "stream cleanup terminates a parked loop instead of leaking it" do
+    test "an early-halted consumption kills the spawned loop even though it is blocked in await_decision",
+         %{tmp: tmp} do
+      path = Path.join(tmp, "code.ex")
+      File.write!(path, "old\n")
+
+      agent =
+        script([
+          {:tool_calls,
+           [
+             %{
+               "name" => "write_file",
+               "arguments" => %{"path" => "code.ex", "content" => "new\n"},
+               "id" => "w1"
+             }
+           ]}
+        ])
+
+      before_pids = MapSet.new(Process.list())
+
+      stream =
+        ToolExecutor.stream("do it",
+          backend: ScriptBackend,
+          backend_opts: [script: agent],
+          actions: Workspace.all(),
+          # The operator never answers -- the loop parks here, mirroring a
+          # real parked `GenServer.call` that outlives the consumer.
+          await_decision: fn _rid, _meta -> Process.sleep(:infinity) end
+        )
+
+      [loop_pid] =
+        MapSet.difference(MapSet.new(Process.list()), before_pids) |> MapSet.to_list()
+
+      assert Process.alive?(loop_pid)
+
+      # Consume only the tool_use + approval_requested events, then stop --
+      # `Stream.resource`'s cleanup fun must run and reap the parked loop.
+      events = Enum.take(stream, 2)
+      assert :tool_use in types(events)
+
+      assert eventually(fn -> not Process.alive?(loop_pid) end),
+             "loop process #{inspect(loop_pid)} still alive after cleanup -- " <>
+               "Process.exit(pid, :normal) from another process is a no-op " <>
+               "on a non-trapping process"
+
+      # The write must never have happened (denied via cleanup, not applied).
+      assert File.read!(path) == "old\n"
+    end
+
+    defp eventually(fun, budget_ms \\ 1_000)
+    defp eventually(_fun, budget_ms) when budget_ms <= 0, do: false
+
+    defp eventually(fun, budget_ms) do
+      if fun.() do
+        true
+      else
+        Process.sleep(20)
+        eventually(fun, budget_ms - 20)
+      end
+    end
+  end
+
+  describe "dispatch_response tolerates a malformed response (no :content, empty tool_calls)" do
+    test "a response with tool_calls: [] and no :content does not crash the loop" do
+      events =
+        run(
+          [
+            {:response, %{tool_calls: [], usage: %{}}}
+          ],
+          actions: [],
+          gate?: false
+        )
+
+      assert :done in types(events)
+    end
+  end
+
   # RED-FIRST: reasoning is invisible on the LIVE harness path. The loop
   # drives `complete/2`, which (since the LongCat wire fix) exposes
   # `response.reasoning` — but the loop never surfaced it, so the model's

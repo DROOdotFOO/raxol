@@ -224,6 +224,39 @@ defmodule Raxol.Agent.Actions.WorkspaceTest do
     test "rejects a pattern escaping cwd" do
       assert {:error, :outside_cwd} = Glob.call(%{pattern: "../*"})
     end
+
+    test "a symlinked directory pointing outside the sandbox does not disclose its filenames",
+         %{tmp: tmp} do
+      outside =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-ws-glob-outside-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.txt"), "top secret")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      link = Path.join(tmp, "escape_dir")
+      File.ln_s!(outside, link)
+
+      # The pattern is lexically INSIDE cwd (`escape_dir/*` never contains a
+      # literal `../`), so the first gate lets it through -- but the walk
+      # follows the symlink onto `outside`. The realpath re-check on each
+      # match must strip it back out before it ever reaches the model.
+      assert {:ok, res} = Glob.call(%{pattern: "escape_dir/*"})
+      refute Enum.any?(res.matches, &String.contains?(&1, "secret"))
+      assert res.matches == []
+    end
+
+    test "a symlink chain that stays inside the sandbox is unaffected", %{tmp: tmp} do
+      File.mkdir_p!(Path.join(tmp, "sub"))
+      File.write!(Path.join(tmp, "sub/inside.ex"), "")
+      File.ln_s!(Path.join(tmp, "sub"), Path.join(tmp, "inside_link"))
+
+      assert {:ok, res} = Glob.call(%{pattern: "inside_link/*"})
+      assert "inside_link/inside.ex" in res.matches
+    end
   end
 
   describe "grep (read-only)" do

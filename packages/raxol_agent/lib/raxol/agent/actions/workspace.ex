@@ -5,11 +5,19 @@ defmodule Raxol.Agent.Actions.Workspace do
   The read-only siblings live in `Raxol.Agent.Actions.Fs` (`list_dir`,
   `read_file`, `file_stat`); this module adds the CONSEQUENTIAL surface
   (`write_file`, `edit_file`) plus two read-only search tools (`glob`,
-  `grep`). Every path is expanded and confined to the working directory
-  by the SAME `Raxol.Agent.Actions.Fs.resolve/1` gate the read-only
-  actions use — `../` escapes and absolute paths outside cwd are rejected
-  with `:outside_cwd`, so a prompt-injected path can never write outside
-  the sandbox.
+  `grep`). `write_file`, `edit_file`, and `grep` route every path through
+  `Raxol.Agent.Actions.Fs.resolve/1` — `../` escapes and absolute paths
+  outside cwd are rejected with `:outside_cwd`, containment decided on the
+  REALPATH of both sides so a symlink inside cwd pointing outside it cannot
+  hide an escape. `glob` cannot funnel through `resolve/1` the same way (a
+  wildcard pattern has no single target path to resolve before the
+  filesystem walk); instead it checks the PATTERN lexically up front (so a
+  literal `../` is rejected before any walk), then re-checks every
+  individual match against `Raxol.Agent.Actions.Fs.outside_cwd?/1` — the
+  same realpath-based containment decision `resolve/1` makes — before it is
+  surfaced, so a pre-existing symlink `Path.wildcard/1` follows partway
+  through the pattern (e.g. `deps`, `_build`, `node_modules/.bin`) cannot
+  disclose filenames outside the sandbox.
 
   ## Consequentiality is a HARNESS decision, not an Action flag
 
@@ -132,14 +140,24 @@ defmodule Raxol.Agent.Actions.Workspace do
     @impl true
     def run(%{pattern: pattern}, _context) do
       cwd = Fs.working_dir()
-      # Confine: a pattern that would reach outside cwd is rejected before
-      # any filesystem walk. Path.wildcard expands from cwd.
+      # First gate: reject a pattern that would reach outside cwd LEXICALLY
+      # (a literal `../`) before any filesystem walk. Path.wildcard expands
+      # from cwd.
       abs_pattern = Path.expand(pattern, cwd)
 
       if abs_pattern == cwd or String.starts_with?(abs_pattern, cwd <> "/") do
         all =
           abs_pattern
           |> Path.wildcard()
+          # Second gate: the pattern itself was lexically inside cwd, but
+          # `Path.wildcard/1` follows symlinks while expanding `*`/`**`
+          # components -- a symlink anywhere along a matched path can still
+          # resolve outside the sandbox even though its own name does not
+          # lexically leave cwd. Re-check every match with the SAME
+          # realpath-based containment `Fs.resolve/1` uses (via
+          # `Fs.outside_cwd?/1`) before it is ever surfaced, so a symlinked
+          # subtree cannot disclose filenames outside cwd.
+          |> Enum.reject(&Fs.outside_cwd?/1)
           |> Enum.map(&Path.relative_to(&1, cwd))
           |> Enum.sort()
 
