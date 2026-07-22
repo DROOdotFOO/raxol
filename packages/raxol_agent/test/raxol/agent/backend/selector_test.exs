@@ -32,6 +32,15 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       assert opts[:base_url] == "https://api.llm7.io"
     end
 
+    test "resolves longcat to the HTTP backend with a base_url and model default" do
+      cfg = ExecutorConfig.new(harness: :longcat)
+      assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+      assert opts[:provider] == :openai
+      # Base URL stops at "/openai"; build_request appends "/v1/chat/completions".
+      assert opts[:base_url] == "https://api.longcat.chat/openai"
+      assert opts[:model] == "LongCat-2.0"
+    end
+
     test "resolves openrouter to the HTTP backend with attribution headers" do
       cfg = ExecutorConfig.new(harness: :openrouter)
       assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)

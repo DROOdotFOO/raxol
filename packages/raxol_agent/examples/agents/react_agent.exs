@@ -15,6 +15,7 @@
 #
 # Default: mock (no API key needed)
 # Real AI: ANTHROPIC_API_KEY=sk-ant-... mix run examples/agents/react_agent.exs
+#           LONGCAT_API_KEY=... mix run examples/agents/react_agent.exs
 #           AI_API_KEY=sk-... mix run examples/agents/react_agent.exs
 #
 # Controls:
@@ -122,6 +123,14 @@ defmodule ReactExample.Config do
          api_key: key,
          base_url: "https://api.anthropic.com",
          model: System.get_env("ANTHROPIC_MODEL") || "claude-haiku-3-5-20241022",
+         max_tokens: 512}
+
+      key = System.get_env("LONGCAT_API_KEY") ->
+        {Raxol.Agent.Backend.HTTP,
+         provider: :openai,
+         api_key: key,
+         base_url: "https://api.longcat.chat/openai",
+         model: System.get_env("LONGCAT_MODEL") || "LongCat-2.0",
          max_tokens: 512}
 
       key = System.get_env("AI_API_KEY") ->
