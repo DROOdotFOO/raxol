@@ -9,6 +9,17 @@ defmodule Raxol.UI.ColorResolver do
   See `docs/core/RENDERING.md`'s "Region prominence" section for the model
   this implements.
 
+  ## Test-ID legend
+
+  Comments and tests below cite short IDs (`RP-N-02`, `RP-P-01`, `F2`, `A6`,
+  ...) rather than re-deriving each contract inline: `RP-` is the region-
+  prominence spec `docs/core/RENDERING.md` numbers negative (`N`, a
+  falsifier -- something that must NOT happen) and positive (`P`, a
+  guarantee) assertions under; bare letter+digit IDs (`F2`, `A6`) are that
+  same document's numbered functional/architectural requirements. Each ID
+  maps to one `test/raxol/ui/*.exs` `describe`/test name carrying it, which
+  is the authoritative expansion of what the ID claims.
+
   `Raxol.UI.Layout.Engine`'s `stamp_region_prominence/2` stamps a
   per-element `region_prominence` float -- computed by
   `Raxol.UI.RegionPolicy.region_prominence/4` from the region paths present
