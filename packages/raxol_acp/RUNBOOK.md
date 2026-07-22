@@ -100,11 +100,63 @@ tolerant and skips anything unrecognized):
 Kill the BEAM mid-flight (between funded -> submit -> complete) and restart: with
 `checkpoint` + `Resync` wired, it must resume without a second submit or charge.
 
-## 6. Promote to mainnet
+## 6. Buy side (autonomous buyer)
 
-Flip the table in section 2 to the mainnet column: `seller_chain_id: 8453`,
-`api.acp.virtuals.io`, canonical USDC (drop the `chain_overrides` block), and a
-durable checkpoint store. Re-run section 3 with the mainnet dashboard.
+The buyer is the mirror of the seller: it discovers an offering, funds a job
+within spend limits, evaluates the deliverable, and survives crashes without
+double-spending. It is opt-in via `buyer_enabled: true`. Copy the keys you need
+from `config/buyer.example.exs`.
+
+### 6a. Configure
+
+Set at minimum `buyer_provider_adapter` (the signing adapter), `buyer_address`,
+`buyer_chain_id: 84_532`, a `buyer_ledger` + `buyer_spending_policy` (the spend
+gate fails closed in production with no policy), and `buyer_job_api_opts` (for
+discovery + resync). Set `checkpoint` + `require_checkpoint: true` for crash
+safety. The `Buyer.Runtime` subscribes to `buyer_backend` for this buyer's job
+lifecycle events; the backend process is started by the host app (for the
+offline rehearsal, the shared `Seller.Backend.InMemory`).
+
+### 6b. Offline rehearsal (no funds, no network)
+
+Drive a purchase through the driver against mocks:
+
+    intent = %{
+      offering: "custom_console_agent",
+      provider: seller_wallet,
+      amount: Raxol.ACP.AssetToken.usdc(10, 84_532)
+    }
+    {:ok, job_id} = Raxol.ACP.Buyer.Planner.buy(intent)
+
+with `buyer_provider_adapter` = `ProviderAdapter.Mock` and
+`buyer_job_id_resolver` = `JobIdResolver.Mock`. The buyer reserves, writes
+`createJob`, resolves the job_id, and tracks the job; dispatching a `:budget_set`
+then a `:submitted` event drives `fund` -> evaluate -> `complete`. This is what
+`test/raxol/acp/buyer/queue_test.exs` exercises.
+
+### 6c. Live dry-run on Sepolia (operator)
+
+With `buyer_enabled: true` and a funded second wallet, `Buyer.Planner.buy/1`
+originates a real job against the registered offering. **Confirm during the run**
+(the reason `buyer_job_id_resolver` is a seam):
+
+1. The `JobCreated` event signature / indexed `jobId` position the
+   `JobIdResolver.Receipt` decodes -- override `event_signature`/`topic_index`
+   in config if they differ from the placeholder.
+2. That `createJob`'s `description` round-trips on-chain and is readable via
+   `get_active_jobs` -- the crash reconcile-by-tag path depends on it.
+3. The job-id form matches across the receipt, the REST API, and session keys.
+
+Kill the BEAM mid-flight (between reserve -> create -> fund) and restart: with
+`checkpoint` wired, `buy/1` resumes from the recorded phase -- exactly one
+`createJob` (reconciled by the request tag) and one `fund`, budget reserved once.
+
+## 7. Promote to mainnet
+
+Flip the table in section 2 to the mainnet column: `seller_chain_id: 8453`
+(and `buyer_chain_id: 8453`), `api.acp.virtuals.io`, canonical USDC (drop the
+`chain_overrides` block), and a durable checkpoint store. Re-run section 3 with
+the mainnet dashboard.
 
 ## Notes
 

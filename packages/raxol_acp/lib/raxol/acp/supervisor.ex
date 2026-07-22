@@ -21,6 +21,9 @@ defmodule Raxol.ACP.Supervisor do
   - `Raxol.ACP.Seller.Supervisor` -- only when
     `config :raxol_acp, seller_enabled: true`. Owns the Backend, the
     Queue, and the Runtime. Buyer-only deployments leave it off.
+  - `Raxol.ACP.Buyer.Supervisor` -- only when
+    `config :raxol_acp, buyer_enabled: true`. Owns the buyer Queue,
+    Resync, and Runtime. Seller-only deployments leave it off.
   """
 
   use Supervisor
@@ -39,14 +42,7 @@ defmodule Raxol.ACP.Supervisor do
       Raxol.ACP.JobSession.Supervisor
     ]
 
-    children =
-      if Application.get_env(:raxol_acp, :seller_enabled, false) do
-        base ++ [Raxol.ACP.Seller.Supervisor]
-      else
-        base
-      end
-
-    children = children ++ accounting_children()
+    children = base ++ seller_children() ++ buyer_children() ++ accounting_children()
 
     Supervisor.init(children,
       strategy: :rest_for_one,
@@ -72,6 +68,18 @@ defmodule Raxol.ACP.Supervisor do
       {:ok, n} -> {Raxol.ACP.Wallet.NonceServer, [initial_nonce: n]}
       :error -> Raxol.ACP.Wallet.NonceServer
     end
+  end
+
+  defp seller_children do
+    if Application.get_env(:raxol_acp, :seller_enabled, false),
+      do: [Raxol.ACP.Seller.Supervisor],
+      else: []
+  end
+
+  defp buyer_children do
+    if Application.get_env(:raxol_acp, :buyer_enabled, false),
+      do: [Raxol.ACP.Buyer.Supervisor],
+      else: []
   end
 
   # Settlement accounting + rebalance advisor (recommend-only). Off unless
