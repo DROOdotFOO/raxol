@@ -211,8 +211,7 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
     test "a tool_call already terminal emits the pair immediately", ctx do
       update!(
         ctx.adapter,
-        {:tool_call,
-         %{tool_call_id: "call-2", title: "rm", status: :failed, raw_input: %{}}}
+        {:tool_call, %{tool_call_id: "call-2", title: "rm", status: :failed, raw_input: %{}}}
       )
 
       assert %{payload: %{item_type: :tool_use, name: "rm"}} =
@@ -226,8 +225,7 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
          ctx do
       update!(
         ctx.adapter,
-        {:tool_call_update,
-         %{tool_call_id: "ghost-1", fields: %{status: :completed}}}
+        {:tool_call_update, %{tool_call_id: "ghost-1", fields: %{status: :completed}}}
       )
 
       # Name falls back to the id; nothing crashes, nothing is silently lost.
@@ -511,6 +509,75 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
 
       assert %{payload: %{item_type: :message, content: "fresh"}} =
                next_event(ctx.session_id)
+    end
+  end
+
+  # -- 5a. turn-bracket discipline (out-of-bracket / overlapping frames) -------
+
+  describe "turn-bracket discipline" do
+    test "a second begin_turn while a turn is open closes the abandoned turn with turn_canceled{reason: superseded}, not a silent overwrite",
+         ctx do
+      turn_1 = begin!(ctx, "p1")
+
+      # Accumulate some unsealed message text into turn 1's buffer — the
+      # exact state the prior code silently discarded with no bracket.
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("half")})
+      assert %{type: :item_delta} = next_event(ctx.session_id)
+
+      # A second session/prompt dispatched before finish_turn/2 closed the
+      # first — the overlapping-turn race the review flagged.
+      {:ok, turn_2} = AcpStreamAdapter.begin_turn(ctx.adapter, "p2")
+      refute turn_2 == turn_1
+
+      abandoned = ctx.session_id |> next_event() |> assert_boundary_clean()
+      assert %{type: :turn_canceled, tier: :durable, turn_id: ^turn_1} = abandoned
+      assert abandoned.payload == %{reason: :superseded}
+
+      # Turn 2 opens clean: turn_started, then its own user echo — no bleed
+      # from turn 1's abandoned "half" buffer.
+      assert %{type: :turn_started, turn_id: ^turn_2} = next_event(ctx.session_id)
+      assert %{type: :item_started} = next_event(ctx.session_id)
+
+      assert %{type: :item_completed, payload: %{role: :user, content: "p2"}} =
+               next_event(ctx.session_id)
+
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("fresh")})
+      assert %{payload: %{chunk: "fresh"}} = next_event(ctx.session_id)
+
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+      assert %{type: :item_started} = next_event(ctx.session_id)
+
+      # Turn 1's "half" never resurfaces — only turn 2's own text seals.
+      assert %{payload: %{item_type: :message, content: "fresh"}} =
+               next_event(ctx.session_id)
+    end
+
+    test "an update arriving after finish_turn (turn_id already reset) is dropped, never attributed to no turn",
+         ctx do
+      _turn_id = begin!(ctx, "p1")
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+      assert %{type: :turn_completed} = next_event(ctx.session_id)
+
+      # A trailing/reordered frame for the already-closed turn: dropped, not
+      # processed as an ephemeral item_delta attributed to turn_id: nil.
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("late")})
+      refute_event(ctx.session_id)
+
+      # The adapter is still alive and correctly resumes on the NEXT turn.
+      _turn_2 = begin!(ctx, "p2")
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("on time")})
+      assert %{payload: %{chunk: "on time"}} = next_event(ctx.session_id)
+    end
+
+    test "an update before the very first begin_turn is still processed (the mapping-table tests' standalone convention)",
+         ctx do
+      # Documents the deliberate scope boundary: pre-first-turn processing
+      # stays permissive because the mapping-table suite (see the tests
+      # above, e.g. "agent_message_chunk maps to an ephemeral item_delta")
+      # exercises the ACP->contract mapping standalone, with no begin_turn
+      # at all.
+      update!(ctx.adapter, {:agent_message_chunk, text_chunk("standalone")})
+      assert %{payload: %{chunk: "standalone"}} = next_event(ctx.session_id)
     end
   end
 

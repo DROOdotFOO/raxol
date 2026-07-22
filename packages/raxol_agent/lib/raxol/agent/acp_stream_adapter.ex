@@ -129,7 +129,8 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     pending_tools: %{},
     unmapped: %{},
     message_buf: [],
-    reasoning_buf: []
+    reasoning_buf: [],
+    turn_seen: false
   ]
 
   @type t :: %__MODULE__{
@@ -142,7 +143,8 @@ defmodule Raxol.Agent.AcpStreamAdapter do
           pending_tools: %{optional(String.t()) => map()},
           unmapped: %{optional(String.t()) => pos_integer()},
           message_buf: [String.t()],
-          reasoning_buf: [String.t()]
+          reasoning_buf: [String.t()],
+          turn_seen: boolean()
         }
 
   # -- client API -------------------------------------------------------------
@@ -237,11 +239,13 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:begin_turn, prompt}, _from, state) do
+    state = close_abandoned_turn(state)
     turn_id = "turn-#{System.unique_integer([:positive])}"
 
     state = %{
       state
       | turn_id: turn_id,
+        turn_seen: true,
         pending_tools: %{},
         message_buf: [],
         reasoning_item: nil,
@@ -281,6 +285,39 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     {:reply, state.unmapped, state}
   end
 
+  # A `begin_turn` while a turn is already open (the embedder dispatched a
+  # second `session/prompt` before calling `finish_turn/2` on the first) used
+  # to silently overwrite `turn_id`/the buffers with no closing bracket ever
+  # emitted for the abandoned turn — its reasoning/message state simply
+  # vanished from the transcript. Closed the same honest way a real
+  # cancellation is: the `:turn_canceled` bracket (never a fabricated
+  # completion), reason `:superseded` distinguishing it from an ACP-driven
+  # `:cancelled`. Mirrors `close_turn(state, %{stop_reason: :cancelled})`:
+  # any open reasoning seals first, but the accumulated (never-sealed)
+  # assistant text is NOT sealed as a message — an abandoned turn carries no
+  # trailing output, same as a canceled one. A no-op when no turn is open.
+  defp close_abandoned_turn(%{turn_id: nil} = state), do: state
+
+  defp close_abandoned_turn(state) do
+    state
+    |> seal_reasoning()
+    |> emit(:turn_canceled, :durable, %{reason: :superseded})
+  end
+
+  # An ACP `session/update` outside any turn bracket — before the FIRST
+  # `begin_turn` ever, or after a `finish_turn` reset `turn_id` to `nil` (a
+  # trailing/reordered frame the transport delivered late) — has no turn to
+  # attribute itself to: processing it anyway would accumulate into
+  # `message_buf`/`reasoning_buf` under no owning turn, emit an ephemeral
+  # event attributed to `turn_id: nil`, and then have that accumulation
+  # silently wiped by the NEXT `begin_turn` with no trace. Dropped instead,
+  # but ONLY once a turn has been seen at least once (`turn_seen`): the
+  # acceptance suite's mapping-table tests deliberately drive raw updates
+  # standalone, with no `begin_turn` at all, to test the ACP->contract
+  # mapping in isolation — that pre-first-turn window stays permissive.
+  defp out_of_bracket?(%{turn_id: nil, turn_seen: true}), do: true
+  defp out_of_bracket?(_state), do: false
+
   # The user echo: ONE durable :message item — an item_started/
   # item_completed bracket with a per-turn item_id (the projection's
   # BlockBuilder groups by item_id and flags a completion without its
@@ -307,7 +344,11 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:acp_session_update, _acp_session_id, update}, state) do
-    {:noreply, apply_update(state, update)}
+    if out_of_bracket?(state) do
+      {:noreply, state}
+    else
+      {:noreply, apply_update(state, update)}
+    end
   end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
