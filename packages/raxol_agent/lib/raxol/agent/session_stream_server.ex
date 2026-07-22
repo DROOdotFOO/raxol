@@ -45,6 +45,9 @@ if Code.ensure_loaded?(Plug.Router) do
 
     use Plug.Router
 
+    alias Raxol.Agent.Contract
+    alias Raxol.Agent.Contract.Event
+
     plug(:match)
 
     plug(Plug.Parsers,
@@ -207,6 +210,21 @@ if Code.ensure_loaded?(Plug.Router) do
       :turn_complete,
       :done
     ]
+
+    # The contract-envelope producer path (`Raxol.Agent.Contract.pump/3`,
+    # `Raxol.Agent.EmitBridge`, `Raxol.Agent.AcpStreamAdapter`) emits
+    # `%Event{}` structs through the SAME `SessionStreamer.emit/3` channel the
+    # legacy tuple producers use — the SSE surface must speak both vocabularies
+    # or a contract-backed session renders as a wall of `event: unknown`
+    # frames (the bug this clause closes). The wire event name is the
+    # contract `type` verbatim (`"turn_started"`, `"item_delta"`, …); the
+    # payload is sanitized the same way `Contract.encode_line/1` sanitizes a
+    # durable record, so a payload carrying a non-JSON-encodable term (an
+    # error reason tuple, a struct) degrades to `inspect/1` text instead of
+    # crashing `Jason.encode/1` mid-stream.
+    defp serialize_event(%Event{type: type, payload: payload}) do
+      {Atom.to_string(type), Contract.sanitize_payload(payload)}
+    end
 
     defp serialize_event({:text_delta, text}), do: {"text_delta", %{text: text}}
     defp serialize_event({:reasoning, text}), do: {"reasoning", %{text: text}}

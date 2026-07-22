@@ -2,6 +2,7 @@ defmodule Raxol.Agent.SessionStreamServerTest do
   use ExUnit.Case, async: true
   use Plug.Test
 
+  alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.SessionStreamServer
   alias Raxol.Agent.SessionStreamer
 
@@ -120,6 +121,52 @@ defmodule Raxol.Agent.SessionStreamServerTest do
       assert "turn_complete" in event_types
       assert "done" in event_types
       assert "error" in event_types
+    end
+
+    test "a contract %Event{} (the ACP-adapter / EmitBridge producer path) serializes by its own type, never falls to unknown",
+         %{streamer: streamer} do
+      event = %Event{
+        id: 1,
+        session_id: "acp_test",
+        turn_id: "turn-1",
+        ts: System.system_time(:microsecond),
+        family: :loop,
+        type: :item_delta,
+        tier: :ephemeral,
+        payload: %{chunk: "hi"}
+      }
+
+      SessionStreamer.emit("acp_test", event, streamer)
+      Process.sleep(50)
+
+      conn = conn(:get, "/sessions/acp_test/history") |> call(streamer)
+      body = Jason.decode!(conn.resp_body)
+
+      assert [%{"event" => "item_delta", "data" => %{"chunk" => "hi"}}] =
+               body["events"]
+    end
+
+    test "a contract %Event{} payload carrying a non-JSON-encodable term degrades to text instead of crashing the encoder",
+         %{streamer: streamer} do
+      event = %Event{
+        id: 2,
+        session_id: "acp_test_err",
+        turn_id: "turn-1",
+        ts: System.system_time(:microsecond),
+        family: :loop,
+        type: :error,
+        tier: :durable,
+        payload: %{reason: {:tool_failed, :enoent}}
+      }
+
+      SessionStreamer.emit("acp_test_err", event, streamer)
+      Process.sleep(50)
+
+      conn = conn(:get, "/sessions/acp_test_err/history") |> call(streamer)
+      body = Jason.decode!(conn.resp_body)
+
+      assert [%{"event" => "error", "data" => data}] = body["events"]
+      assert data["reason"] =~ "tool_failed"
     end
   end
 end

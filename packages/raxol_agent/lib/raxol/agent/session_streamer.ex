@@ -37,6 +37,15 @@ defmodule Raxol.Agent.SessionStreamer do
 
   use Raxol.Core.Behaviours.BaseManager
 
+  @typedoc """
+  Two producer vocabularies share this channel: the legacy tuple shape
+  documented below (the original `Raxol.Agent.Stream`-mirroring producers),
+  and `Raxol.Agent.Contract.Event.t()` (the harness contract's typed
+  envelope — `Contract.pump/3`, `Raxol.Agent.EmitBridge`,
+  `Raxol.Agent.AcpStreamAdapter`). Both flow through `emit/3` and
+  `history/2` unchanged; `Raxol.Agent.SessionStreamServer.serialize_event/1`
+  has a clause for each.
+  """
   @type event ::
           {:text_delta, String.t()}
           | {:tool_use, map()}
@@ -45,6 +54,7 @@ defmodule Raxol.Agent.SessionStreamer do
           | {:turn_complete, map()}
           | {:done, map()}
           | {:error, term()}
+          | Raxol.Agent.Contract.Event.t()
 
   @type session_id :: term()
 
