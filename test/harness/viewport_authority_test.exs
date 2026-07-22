@@ -115,6 +115,54 @@ defmodule Raxol.Harness.ViewportAuthorityTest do
     end
   end
 
+  describe "repaint/3 -- content is not trusted (ContentGuard)" do
+    test "neutralizes an embedded alt-screen-leave / CUP / DECSTBM sequence, SGR passes through" do
+      {authority, dev} = fresh(40, 3)
+
+      # A caller row carrying: an alt-screen LEAVE (would exit the frame
+      # mid-repaint), a stray absolute CUP (would reposition a later row
+      # in the same burst), and a DECSTBM set (would carve an unintended
+      # scroll region) -- exactly the injection class ContentGuard exists
+      # to stop. SGR (`\e[1;31m`/`\e[0m`) is legitimate styling and must
+      # survive verbatim.
+      malicious =
+        "safe\e[?1049linjected\e[2;3Hmore\e[1;5rtail\e[1;31mstyled\e[0m"
+
+      {_authority, out} =
+        capture_on(dev, fn ->
+          ViewportAuthority.repaint(authority, [malicious])
+        end)
+
+      # The dangerous sequences never reach the device as live ESC-led
+      # bytes...
+      refute out =~ "\e[?1049l"
+      refute out =~ "\e[2;3H"
+      refute out =~ "\e[1;5r"
+
+      # ...but their printable residue is the honest, visible record of
+      # what was stopped (only the leading ESC is stripped).
+      assert out =~ "[?1049l"
+      assert out =~ "[2;3H"
+      assert out =~ "[1;5r"
+
+      # SGR is the renderer's own styling vocabulary and is untouched.
+      assert out =~ "\e[1;31mstyled\e[0m"
+    end
+
+    test "sanitizes before recording last_rows (the retained diff frame is never raw)" do
+      {authority, dev} = fresh(40, 1)
+
+      {authority, _out} =
+        capture_on(dev, fn ->
+          ViewportAuthority.repaint(authority, ["\e[2Jwiped"])
+        end)
+
+      assert [row1] = authority.last_rows
+      refute row1 =~ "\e[2J"
+      assert row1 =~ "[2Jwiped"
+    end
+  end
+
   describe "teardown/1" do
     test "writes the leave sequence to the device" do
       {authority, dev} = fresh(3, 2)
