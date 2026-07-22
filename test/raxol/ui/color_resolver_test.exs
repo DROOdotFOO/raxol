@@ -554,6 +554,60 @@ defmodule Raxol.UI.ColorResolverTest do
     end
   end
 
+  # ---- ansi16 role-pin falls back for a role outside Ansi16Salience's closed set ----
+
+  describe "ansi16 role-pin falls back to role-less quantize for an unrecognized role" do
+    test "an unrecognized role does not crash and matches the role-less quantize result" do
+      unrecognized = %ColorIntent{
+        tier: :alarm,
+        c: 0.15,
+        h: 20,
+        role: :highlight
+      }
+
+      roleless = %ColorIntent{tier: :alarm, c: 0.15, h: 20, role: nil}
+
+      [{_, _, _, unrecognized_fg, _, _}] =
+        ColorResolver.resolve_cells([{0, 0, "x", unrecognized, nil, []}],
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      [{_, _, _, roleless_fg, _, _}] =
+        ColorResolver.resolve_cells([{0, 0, "x", roleless, nil, []}],
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      assert unrecognized_fg == roleless_fg
+    end
+
+    test "a recognized role still pins via Ansi16Salience, not the role-less path" do
+      recognized = %ColorIntent{tier: :alarm, c: 0.15, h: 20, role: :error}
+      roleless = %ColorIntent{tier: :alarm, c: 0.15, h: 20, role: nil}
+
+      [{_, _, _, recognized_fg, _, _}] =
+        ColorResolver.resolve_cells([{0, 0, "x", recognized, nil, []}],
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      [{_, _, _, roleless_fg, _, _}] =
+        ColorResolver.resolve_cells([{0, 0, "x", roleless, nil, []}],
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      assert recognized_fg ==
+               Map.fetch!(
+                 @ansi16_atoms,
+                 Ansi16Salience.slot(:error, :dark, 1.0)
+               )
+
+      refute recognized_fg == roleless_fg
+    end
+  end
+
   # ---- grid-bg fg floor ----
 
   describe "grid-bg fg floor" do

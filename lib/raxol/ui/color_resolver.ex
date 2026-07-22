@@ -636,12 +636,24 @@ defmodule Raxol.UI.ColorResolver do
   # user's slot 1 could be any hue), so semantic colors are PINNED by
   # category + polarity + prominence-bucket instead of measured by
   # distance. `Ansi16Salience.slot/3` intentionally has no clause for a
-  # role outside its closed `roles/0` set -- raises rather than guessing,
-  # matching that module's own documented fail-loud contract.
-  defp ansi16_slot(_rgb, role, effective_p, ground) when not is_nil(role) do
-    polarity = Ansi16Salience.polarity(ground)
-    slot = Ansi16Salience.slot(role, polarity, effective_p)
-    ansi16_atom(slot)
+  # role outside its closed `roles/0` set -- it raises rather than
+  # guessing a slot, matching that module's own documented fail-loud
+  # contract for a role IT knows about but was asked to render wrong.
+  # `ColorIntent.role` is typed as a bare `atom()`, though, not
+  # `Ansi16Salience.role()` -- a role this codebase hasn't wired into the
+  # table yet (or a producer typo) is a normal, expected input at this
+  # resolver choke point, not a violation of that contract. The resolver's
+  # own contract (RP-N-03: "never a crashed render") wins here: an
+  # unrecognized role falls back to the role-less nearest-color quantize
+  # path instead of propagating the raise.
+  defp ansi16_slot(rgb, role, effective_p, ground) when not is_nil(role) do
+    if role in Ansi16Salience.roles() do
+      polarity = Ansi16Salience.polarity(ground)
+      slot = Ansi16Salience.slot(role, polarity, effective_p)
+      ansi16_atom(slot)
+    else
+      ansi16_slot(rgb, nil, effective_p, ground)
+    end
   end
 
   # Role-less: the chroma gate (see `@ansi16_gray_chroma_gate`'s comment
