@@ -77,7 +77,10 @@ defmodule Raxol.ACP.SignerSidecar do
 
     state = %{port: port, base_url: base_url(opts)}
 
-    case await_health(state.base_url, Keyword.get(opts, :health_timeout_ms, @default_health_timeout_ms)) do
+    case await_health(
+           state.base_url,
+           Keyword.get(opts, :health_timeout_ms, @default_health_timeout_ms)
+         ) do
       :ok ->
         Logger.info("signer sidecar healthy at #{state.base_url}")
         {:ok, state}

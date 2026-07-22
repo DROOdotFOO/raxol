@@ -353,7 +353,8 @@ defmodule Raxol.ACP.JobSession do
   defp action_to_tool(:submit), do: :submit
   defp action_to_tool(:complete), do: :complete
   defp action_to_tool(:reject), do: :reject
-  defp action_to_tool(:expire), do: nil
+  # No `:expire` clause: `check_role/3` handles `:expire` before it ever reaches
+  # here (expiry bypasses role gating), so the clause would be dead code.
 
   defp resolve_next_status(action) do
     case Status.target_status(action) do

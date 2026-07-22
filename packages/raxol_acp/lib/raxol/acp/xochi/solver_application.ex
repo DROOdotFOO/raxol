@@ -95,51 +95,55 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
 
     settle_fn = Settler.build(xochi_config: xochi_config)
 
-    children = sidecar_children ++ [
-      Supervisor.child_spec(
-        {ACP.Auth,
-         provider: provider, server_url: server_url, chain_id: @chain_id, name: auth_name()},
-        id: :auth
-      ),
-      Supervisor.child_spec(
-        {ACP.Agent,
-         provider: provider,
-         transport: transport,
-         api: api,
-         wallet_address: wallet_address,
-         supported_chain_ids: [@chain_id],
-         default_role: :provider,
-         name: agent_name()},
-        id: :agent
-      ),
-      Supervisor.child_spec(
-        {SolverAgent,
-         agent: agent_name(),
-         provider: provider,
-         wallet_address: wallet_address,
-         # Trusted-buyer mode: the evaluator (allowed to call complete/reject) defaults to
-         # the agent's OWN address. Legacy deploys may still pin it via RAXOL_ACP_EVALUATOR;
-         # delegated mode has no separate evaluator secret, so it falls back to the wallet.
-         evaluator_address: System.get_env("RAXOL_ACP_EVALUATOR", wallet_address),
-         chain_id: @chain_id,
-         acp_core_address: chain.acp_core_address,
-         fee_bps: fee_bps(),
-         settle_fn: settle_fn,
-         xochi_config: xochi_config,
-         name: solver_name()},
-        id: :solver
-      ),
-      # Start the SSE stream last, after the solver has subscribed.
-      %{
-        id: :stream_starter,
-        start: {Task, :start_link, [fn -> :ok = ACP.Agent.start_stream(agent_name()) end]},
-        restart: :transient
-      },
-      # Liveness heartbeat -- last so a crash here restarts nothing above it under
-      # :rest_for_one. Emits a periodic log + telemetry event so external monitoring can
-      # tell a live-but-idle solver from a wedged one (no inbound port for a fly check).
-      {Heartbeat, name: heartbeat_name()}
-    ]
+    children =
+      sidecar_children ++
+        [
+          Supervisor.child_spec(
+            {ACP.Auth,
+             provider: provider, server_url: server_url, chain_id: @chain_id, name: auth_name()},
+            id: :auth
+          ),
+          Supervisor.child_spec(
+            {ACP.Agent,
+             provider: provider,
+             transport: transport,
+             api: api,
+             wallet_address: wallet_address,
+             supported_chain_ids: [@chain_id],
+             default_role: :provider,
+             name: agent_name()},
+            id: :agent
+          ),
+          Supervisor.child_spec(
+            {
+              SolverAgent,
+              # Trusted-buyer mode: the evaluator (allowed to call complete/reject) defaults to
+              # the agent's OWN address. Legacy deploys may still pin it via RAXOL_ACP_EVALUATOR;
+              # delegated mode has no separate evaluator secret, so it falls back to the wallet.
+              agent: agent_name(),
+              provider: provider,
+              wallet_address: wallet_address,
+              evaluator_address: System.get_env("RAXOL_ACP_EVALUATOR", wallet_address),
+              chain_id: @chain_id,
+              acp_core_address: chain.acp_core_address,
+              fee_bps: fee_bps(),
+              settle_fn: settle_fn,
+              xochi_config: xochi_config,
+              name: solver_name()
+            },
+            id: :solver
+          ),
+          # Start the SSE stream last, after the solver has subscribed.
+          %{
+            id: :stream_starter,
+            start: {Task, :start_link, [fn -> :ok = ACP.Agent.start_stream(agent_name()) end]},
+            restart: :transient
+          },
+          # Liveness heartbeat -- last so a crash here restarts nothing above it under
+          # :rest_for_one. Emits a periodic log + telemetry event so external monitoring can
+          # tell a live-but-idle solver from a wedged one (no inbound port for a fly check).
+          {Heartbeat, name: heartbeat_name()}
+        ]
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
