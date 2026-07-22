@@ -6,6 +6,53 @@ defmodule Raxol.Playground.DemoHelpers do
   across demos while keeping demos self-contained and readable.
   """
 
+  import Raxol.Core.Renderer.View, only: [text: 2]
+
+  @default_log_limit 8
+
+  @doc """
+  Prepend an entry to the demo's event log (newest-first), trimming to `limit`.
+
+  The event log is the storybook "actions panel": every demo that mounts a
+  real component records the events it routes and the outcomes it observes,
+  rendered at the bottom of the demo via `event_log_lines/2`. Entries are
+  plain strings built by the demo (it knows how to summarize its own events),
+  stored in the model's `:event_log` field.
+
+  ## Examples
+
+      model
+      |> DemoHelpers.log_event("key \\"a\\" -> len=4 cursor=4")
+      |> DemoHelpers.log_event("focus -> focused=true")
+  """
+  @spec log_event(map(), String.t(), pos_integer()) :: map()
+  def log_event(model, entry, limit \\ @default_log_limit) when is_binary(entry) do
+    log = [entry | Map.get(model, :event_log, [])] |> Enum.take(limit)
+    Map.put(model, :event_log, log)
+  end
+
+  @doc """
+  Renders the demo's event log as a titled block of dim text lines,
+  newest first. Returns `[element]` for splicing into a column's children.
+
+  Options: `:title` (default `"events"`), `:empty` (text shown when no
+  entries yet, default `"(no events yet — interact above)"`).
+  """
+  @spec event_log_lines(map(), keyword()) :: [map()]
+  def event_log_lines(model, opts \\ []) do
+    title = Keyword.get(opts, :title, "events")
+    empty = Keyword.get(opts, :empty, "(no events yet — interact above)")
+    log = Map.get(model, :event_log, [])
+
+    entries =
+      case log do
+        [] -> [text("   #{empty}", style: [:dim])]
+        _ -> Enum.map(log, fn entry -> text("   " <> entry, style: [:dim]) end)
+      end
+
+    [text(" #{title} (newest first):", style: [:bold, :dim])] ++ entries
+  end
+
   @doc """
   Moves a cursor index down (increment), clamped to `max_index`.
   """

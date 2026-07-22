@@ -27,13 +27,21 @@ defmodule Raxol.View.Components do
   end
 
   def text(%{content: content} = opts) do
+    style = Map.get(opts, :style, %{})
+    # Allow link on the element top-level OR inside style (markdown segments
+    # put OSC-8 targets on the style map; layout/renderer read both). The
+    # fg/bg fallthrough reads style as a MAP only — the legacy atom-list
+    # form (`style: [:bold]`) passes through to the element untouched.
+    link = Map.get(opts, :link) || style_get(style, :link) || style_get(style, :hyperlink)
+
     %{
       type: :text,
       content: content,
-      fg: Map.get(opts, :fg),
-      bg: Map.get(opts, :bg),
-      style: Map.get(opts, :style, %{}),
-      id: Map.get(opts, :id)
+      fg: Map.get(opts, :fg) || style_get(style, :fg),
+      bg: Map.get(opts, :bg) || style_get(style, :bg),
+      style: style,
+      id: Map.get(opts, :id),
+      link: link
     }
   end
 
@@ -44,6 +52,11 @@ defmodule Raxol.View.Components do
       style: %{}
     }
   end
+
+  # fg/bg/link fallthrough source: a style MAP only. The atom-list style
+  # form (`[:bold, :reverse]`) carries no keyed values to fall through.
+  defp style_get(style, key) when is_map(style), do: Map.get(style, key)
+  defp style_get(_style, _key), do: nil
 
   @doc """
   Creates a box component.

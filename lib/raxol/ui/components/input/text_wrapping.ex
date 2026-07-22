@@ -1,35 +1,46 @@
 defmodule Raxol.UI.Components.Input.TextWrapping do
   @moduledoc """
   Utility functions for text wrapping.
+
+  `width` is always a DISPLAY-COLUMN budget, never a grapheme count. These
+  two are equal only for ASCII: a CJK ideograph or emoji is one grapheme and
+  two columns, so counting graphemes against a column budget overflows the
+  line by up to 2x. Measurement goes through `Raxol.UI.TextMeasure`, the
+  repo-wide facade (see its "three units" note).
   """
 
-  @doc """
-  Wraps a single line of text by character count using recursion.
+  alias Raxol.UI.TextMeasure
 
-  Handles multi-byte characters correctly.
+  @doc """
+  Wraps a single line of text to a display-column budget.
+
+  Chunks are cut on grapheme-cluster boundaries and never exceed `width`
+  display columns. A cluster wider than the whole budget is emitted alone on
+  its own line rather than being split in half.
   """
   def wrap_line_by_char(line, width)
       when is_binary(line) and is_integer(width) and width > 0 do
-    do_wrap_char(String.graphemes(line), width, [])
+    do_wrap_char(line, width, [])
   end
 
-  # Recursive helper for wrap_line_by_char
-  # Base case: No more graphemes left, accumulator is empty (empty input)
-  defp do_wrap_char([], _width, []) do
-    [""]
+  defp do_wrap_char("", _width, []), do: [""]
+
+  defp do_wrap_char("", _width, acc), do: Enum.reverse(acc)
+
+  defp do_wrap_char(text, width, acc) do
+    {chunk, rest} = take_columns(text, width)
+    do_wrap_char(rest, width, [chunk | acc])
   end
 
-  # Base case: No more graphemes left, return reversed accumulator
-  defp do_wrap_char([], _width, acc) do
-    Enum.reverse(acc)
-  end
-
-  # Recursive step
-  defp do_wrap_char(graphemes, width, acc) do
-    chunk_graphemes = Enum.take(graphemes, width)
-    rest_graphemes = Enum.drop(graphemes, width)
-    chunk_string = Enum.join(chunk_graphemes)
-    do_wrap_char(rest_graphemes, width, [chunk_string | acc])
+  # `split_at_display_width/2` cuts on cluster boundaries, so a 2-column
+  # cluster does not fit in a 1-column budget and comes back as `{"", text}`.
+  # Taking one whole cluster in that case is what keeps this terminating --
+  # and overflowing by one column beats looping forever or halving a glyph.
+  defp take_columns(text, width) do
+    case TextMeasure.split_at_display_width(text, width) do
+      {"", rest} when rest != "" -> String.next_grapheme(text)
+      {chunk, rest} -> {chunk, rest}
+    end
   end
 
   @doc """
@@ -71,8 +82,8 @@ defmodule Raxol.UI.Components.Input.TextWrapping do
   end
 
   defp categorize_word_fit(word, new_line, width) do
-    word_length = String.length(word)
-    new_line_length = String.length(new_line)
+    word_length = TextMeasure.display_width(word)
+    new_line_length = TextMeasure.display_width(new_line)
 
     case {word_length > width, new_line_length <= width} do
       {true, _} -> :word_too_long

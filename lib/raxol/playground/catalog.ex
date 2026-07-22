@@ -46,18 +46,42 @@ defmodule Raxol.Playground.Catalog do
       name: "Table",
       module: Demos.TableDemo,
       category: :display,
-      description: "Data table with sortable columns and row selection",
+      description:
+        "Stateful Table — fixed-width grid with border modes (:grid|:inner|:none), " <>
+          "sort, selection, pagination; keys route through Table.handle_event",
       complexity: :intermediate,
-      tags: ["data", "display", "sorting", "rows"],
+      tags: [
+        "data",
+        "display",
+        "sorting",
+        "rows",
+        "pagination",
+        "border",
+        "controlled"
+      ],
       code_snippet: """
-      table(
-        headers: ["Name", "Language", "Stars"],
-        rows: [
-          ["Raxol", "Elixir", "500"],
-          ["Ratatui", "Rust", "19k"],
-          ["Bubble Tea", "Go", "39k"]
-        ]
-      )
+      {:ok, table} =
+        Table.init(%{
+          id: :langs,
+          columns: [
+            %{id: :name, label: "Name", width: 12, align: :left},
+            %{id: :language, label: "Language", width: 10, align: :left},
+            %{id: :stars, label: "Stars", width: 6, align: :right}
+          ],
+          data: [%{name: "Raxol", language: "Elixir", stars: "500"}],
+          options: %{
+            border: :grid,            # :grid | :inner | :none
+            header_separator: true,   # only for :none
+            sortable: true,
+            paginate: true,
+            page_size: 4
+          }
+        })
+
+      Table.render(table, %{})
+      # :grid  -> full frame + rules
+      # :inner -> column/row rules, no outer frame
+      # :none  -> padded columns (+ optional header rule)
       """
     },
     %{
@@ -186,19 +210,47 @@ defmodule Raxol.Playground.Catalog do
       name: "CodeBlock",
       module: Demos.CodeBlockDemo,
       category: :display,
-      description: "Code display with line numbers and language samples",
+      description:
+        "CodeBlock — structured syntax tokens via Raxol.UI.SyntaxHighlighter " <>
+          "(same path as DiffViewer); theme :one_dark by default",
       complexity: :basic,
-      tags: ["display", "code", "syntax"],
-      code_snippet: ~s'box style: %{border: :single} do text(code) end'
+      tags: ["display", "code", "syntax", "makeup", "highlighter"],
+      code_snippet: """
+      {:ok, block} =
+        CodeBlock.init(%{
+          content: ~s[def greet(name), do: "Hello, \#{name}!"],
+          language: "elixir",
+          theme: :one_dark   # shared with DiffViewer
+        })
+
+      # column of rows of text spans with hex fg from Makeup tokens
+      CodeBlock.render(block, %{})
+      """
     },
     %{
       name: "Markdown",
       module: Demos.MarkdownDemo,
       category: :display,
-      description: "Simple markdown rendering with raw toggle",
+      description:
+        "Full Markdown surface (headings, emphasis, lists, quotes, links, " <>
+          "GFM tables, HR) — fenced code via CodeBlock/SyntaxHighlighter; raw toggle",
       complexity: :intermediate,
-      tags: ["display", "markdown", "text", "rendering"],
-      code_snippet: ~s'text(render_markdown(content))'
+      tags: ["display", "markdown", "text", "rendering", "code", "highlight"],
+      code_snippet: """
+      {:ok, state} =
+        MarkdownRenderer.init(%{
+          markdown_text: \"\"\"
+          # Title
+          ```elixir
+          def hello, do: :world
+          ```
+          \"\"\",
+          width: 48,
+          syntax_theme: :one_dark
+        })
+
+      MarkdownRenderer.render(state, %{})
+      """
     },
     %{
       name: "Harness Diff Viewer",

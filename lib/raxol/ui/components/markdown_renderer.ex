@@ -2,44 +2,64 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   @moduledoc """
   Renders Markdown text into styled Raxol elements for terminal display.
 
-  Supports headings, bold, italic, code spans, code blocks, lists,
-  blockquotes, horizontal rules, and links. Uses EarmarkParser when
-  available, falls back to a built-in regex parser.
+  Supports headings, bold, italic, code spans, fenced code blocks
+  (``` / ~~~), lists (ul/ol), blockquotes, horizontal rules, links, and
+  GFM tables. Parsing is the built-in regex parser, unconditionally.
 
-  Inline styling does not survive a wrap boundary: a line that overflows
-  `width` falls back to plain, unstyled wrapped text, though wrapped
-  output never leaks literal Markdown marker characters.
+  There used to be a second, preferred path here: `EarmarkParser` whenever
+  `Code.ensure_loaded?/1` found it. That made the parser depend on which
+  environment the code ran in -- `ex_doc` pulls EarmarkParser into `:dev`
+  transitively, so `mix raxol.playground` parsed with Earmark while the
+  test suite parsed with the builtin and proved nothing about it. The
+  divergences that hid there: no GFM table support at all (tables rendered
+  as a vertical list of one cell per line), and any fence whose info string
+  had more than one word (```` ```elixir title=demo ````) parsed as an
+  inline code span instead of a code block, losing both the language label
+  and syntax highlighting. It was also ~30x slower on the streaming suite,
+  which matters because `Harness.MarkdownBody` re-parses the whole buffer
+  on every delta -- and that module states all of its stable-prefix,
+  byte-cap and mid-grapheme-cut guarantees against the BUILTIN parser as
+  its oracle, so the swap silently voided them in the one environment the
+  harness actually runs in. One parser, one behavior, everywhere.
 
-  A fenced code block's info string (the language tag after ```` ``` ````
-  or `~~~`, e.g. `elixir` in ` ```elixir `) renders as a dim label line
-  above the code body. This is display-only -- no syntax highlighting is
-  performed, and none is planned as part of this label. The label plus
-  the plain `@code_style` code body is the seam a future highlighter
-  would slot into, not something this module implements itself.
+  Overflowing lines wrap through the shared `TextLayout.wrap/4` `:pretty`
+  engine (Knuth-Plass), and inline styling survives the break: the wrapped
+  line boundaries are applied back to the original styled segments, so a
+  span split across two lines keeps its style on both halves.
+
+  Fenced code blocks reuse `Raxol.UI.Components.CodeBlock.render_lines/3`
+  (the same `SyntaxHighlighter` path as DiffViewer). The fence info string
+  selects the lexer but is not displayed. Pass `:syntax_theme` (default
+  `:one_dark`) to pick a Makeup style.
 
   Trust note: a new output surface added to a shared component inherits
   the component's OWN trust contract, not the calling path's. This
   module's contract is "callers may pass untrusted text", and it has
   direct callers with no sanitizer in front (the harness path's
   `Harness.MarkdownBody` pre-strips control bytes, but e.g. the
-  playground's `DemoHelpers.markdown/2` does not) -- so the label is
-  control/ESC-sanitized and length-clamped here, at the boundary that
-  produces it, regardless of which caller supplied the input.
+  playground's `DemoHelpers.markdown/2` does not).
   """
   use Raxol.UI.Components.Base.Component
 
+  alias Raxol.UI.Components.CodeBlock
+  alias Raxol.UI.Components.Table
   alias Raxol.UI.TextLayout
   alias Raxol.UI.TextMeasure
   alias Raxol.View.Components
 
   @default_width Raxol.Core.Defaults.terminal_width()
+  @default_syntax_theme :one_dark
   @heading_style %{bold: true, fg: :cyan}
-  @hr_style %{fg: :white}
+  @hr_style %{fg: :dim}
   @code_style %{fg: :yellow}
   @blockquote_style %{fg: :green}
-  @hr_width 40
-  @ul_prefix "  * "
-  @blockquote_prefix "| "
+  @link_style %{fg: :cyan, underline: true}
+  # Middle dot, not "*" -- the asterisk is the SOURCE marker; echoing it
+  # back reads as unparsed markup rather than as a rendered bullet.
+  @ul_prefix "  · "
+  @blockquote_prefix "│ "
+  # Leading indent on every fenced-code body line.
+  @code_indent "  "
   # GFM tables never shrink a column to zero width. Below this floor columns stop shrinking:
   # cells are clipped to the floor with an ellipsis and the row as a whole
   # is then wider than `width`, so the layout wraps/overflows that line
@@ -48,12 +68,21 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   @min_col_width 3
 
   @spec init(map()) ::
-          {:ok, %{markdown_text: String.t(), width: non_neg_integer()}}
+          {:ok,
+           %{
+             markdown_text: String.t(),
+             width: non_neg_integer(),
+             syntax_theme: atom() | term()
+           }}
   @impl true
   def init(props) do
     state =
       Map.merge(
-        %{markdown_text: "", width: @default_width},
+        %{
+          markdown_text: "",
+          width: @default_width,
+          syntax_theme: @default_syntax_theme
+        },
         props
       )
 
@@ -77,263 +106,41 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   def render(state, _context) do
     markdown_text = state[:markdown_text] || ""
     width = state[:width] || Raxol.Core.Defaults.terminal_width()
+    theme = state[:syntax_theme] || @default_syntax_theme
 
-    elements =
-      if Code.ensure_loaded?(EarmarkParser) do
-        render_with_earmark(markdown_text, width)
-      else
-        render_with_builtin(markdown_text, width)
-      end
+    elements = render_with_builtin(markdown_text, width, theme)
 
     # gap: 0 — block spacing is expressed by explicit blank-line elements;
     # the :column dialect default (gap 1) would double every gap.
     %{type: :column, children: elements, style: %{}, gap: 0}
   end
 
-  # --- Earmark-based rendering ---
-
-  defp render_with_earmark(markdown_text, width) do
-    # credo:disable-for-next-line Credo.Check.Refactor.Apply
-    case apply(EarmarkParser, :as_ast, [markdown_text]) do
-      {:ok, ast, _} -> Enum.flat_map(ast, &ast_node_to_elements(&1, width))
-      _ -> render_with_builtin(markdown_text, width)
-    end
+  defp hr_element(width) do
+    # Continuous box-drawing rule, full content width (not ASCII hyphens).
+    Components.text(
+      content: String.duplicate("─", max(width, 1)),
+      style: @hr_style
+    )
   end
 
-  defp ast_node_to_elements(node, _width) when is_binary(node) do
-    [Components.text(content: node)]
-  end
-
-  defp ast_node_to_elements({"h1", _attrs, children, _meta}, width) do
-    text = extract_text(children)
-
-    [
-      Components.text(content: ""),
-      Components.text(content: "# " <> text, style: @heading_style),
-      Components.text(
-        content: String.duplicate("=", min(String.length(text) + 2, width))
-      ),
-      Components.text(content: "")
-    ]
-  end
-
-  defp ast_node_to_elements({"h2", _attrs, children, _meta}, width) do
-    text = extract_text(children)
-
-    [
-      Components.text(content: ""),
-      Components.text(content: "## " <> text, style: @heading_style),
-      Components.text(
-        content: String.duplicate("-", min(String.length(text) + 3, width))
-      ),
-      Components.text(content: "")
-    ]
-  end
-
-  defp ast_node_to_elements({"h" <> level, _attrs, children, _meta}, _width)
-       when level in ["3", "4", "5", "6"] do
-    text = extract_text(children)
-    prefix = String.duplicate("#", String.to_integer(level)) <> " "
-
-    [
-      Components.text(content: ""),
-      Components.text(content: prefix <> text, style: @heading_style),
-      Components.text(content: "")
-    ]
-  end
-
-  defp ast_node_to_elements({"p", _attrs, children, _meta}, width) do
-    lines = render_segments_line(inline_segments(children), width)
-    lines ++ [Components.text(content: "")]
-  end
-
-  defp ast_node_to_elements({"ul", _attrs, children, _meta}, width) do
-    items =
-      Enum.flat_map(children, fn
-        {"li", _, li_children, _} ->
-          render_segments_line(inline_segments(li_children), width, @ul_prefix)
-
-        other ->
-          ast_node_to_elements(other, width)
-      end)
-
-    # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
-    items ++ [Components.text(content: "")]
-  end
-
-  defp ast_node_to_elements({"ol", _attrs, children, _meta}, width) do
-    items =
-      children
-      |> Enum.with_index(1)
-      |> Enum.flat_map(fn
-        {{"li", _, li_children, _}, idx} ->
-          render_segments_line(
-            inline_segments(li_children),
-            width,
-            "  #{idx}. "
-          )
-
-        {other, _idx} ->
-          ast_node_to_elements(other, width)
-      end)
-
-    # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
-    items ++ [Components.text(content: "")]
-  end
-
-  defp ast_node_to_elements({"pre", _attrs, children, _meta}, _width) do
-    code_text = extract_code_text(children)
-    lang = pre_code_language(children)
-    fenced_code_elements(code_text, lang)
-  end
-
-  defp ast_node_to_elements({"blockquote", _attrs, children, _meta}, width) do
-    inner = Enum.flat_map(children, &ast_node_to_elements(&1, width))
-
-    Enum.map(inner, fn el ->
-      content = el[:content] || ""
-
-      if content == "" do
-        el
-      else
-        %{
-          el
-          | content: @blockquote_prefix <> content,
-            style: Map.merge(el[:style] || %{}, @blockquote_style)
-        }
-      end
-    end)
-  end
-
-  defp ast_node_to_elements({"hr", _attrs, _children, _meta}, width) do
-    [
-      Components.text(content: ""),
-      Components.text(
-        content: String.duplicate("-", min(@hr_width, width)),
-        style: @hr_style
-      ),
-      Components.text(content: "")
-    ]
-  end
-
-  defp ast_node_to_elements({_tag, _attrs, children, _meta}, width) do
-    Enum.flat_map(children, &ast_node_to_elements(&1, width))
-  end
-
-  defp ast_node_to_elements(_, _width), do: []
-
-  defp extract_text(children) when is_list(children) do
-    Enum.map_join(children, "", fn
-      text when is_binary(text) -> text
-      {_tag, _attrs, inner, _meta} -> extract_text(inner)
-    end)
-  end
-
-  defp extract_text(text) when is_binary(text), do: text
-  defp extract_text(_), do: ""
-
-  @doc """
-  Flattens Earmark AST inline children (`strong`/`em`/`code`/`a`/text
-  nodes) into a list of `{text, style}` segments, merging styles across
-  nesting (e.g. bold inside italic yields `%{bold: true, italic: true}`).
-
-  Empty-text nodes are dropped. Unknown tags recurse into their children
-  without adding style, so unsupported inline markup degrades to plain
-  text rather than being silently dropped.
-  """
-  @spec inline_segments(list() | String.t()) :: [{String.t(), map()}]
-  def inline_segments(children) when is_list(children) do
-    Enum.flat_map(children, &inline_segment_node(&1, %{}))
-  end
-
-  def inline_segments(text) when is_binary(text) do
-    if text == "", do: [], else: [{text, %{}}]
-  end
-
-  def inline_segments(_), do: []
-
-  defp inline_segment_node(text, style) when is_binary(text) do
-    if text == "", do: [], else: [{text, style}]
-  end
-
-  defp inline_segment_node({"strong", _, inner, _}, style) do
-    merged = Map.put(style, :bold, true)
-    Enum.flat_map(inner, &inline_segment_node(&1, merged))
-  end
-
-  defp inline_segment_node({"em", _, inner, _}, style) do
-    merged = Map.put(style, :italic, true)
-    Enum.flat_map(inner, &inline_segment_node(&1, merged))
-  end
-
-  defp inline_segment_node({"code", _, inner, _}, style) do
-    text = extract_text(inner)
-    merged = Map.merge(style, @code_style)
-    if text == "", do: [], else: [{text, merged}]
-  end
-
-  defp inline_segment_node({"a", attrs, inner, _}, style) do
-    href =
-      Enum.find_value(attrs, "", fn {k, v} -> if k == "href", do: v end)
-
-    text = extract_text(inner) <> " (" <> href <> ")"
-    if text == "", do: [], else: [{text, style}]
-  end
-
-  defp inline_segment_node({_tag, _, inner, _}, style) do
-    Enum.flat_map(inner, &inline_segment_node(&1, style))
-  end
-
-  defp inline_segment_node(_, _style), do: []
-
-  defp extract_code_text(children) when is_list(children) do
-    Enum.map_join(children, "", fn
-      text when is_binary(text) -> text
-      {"code", _, inner, _} -> extract_text(inner)
-      {_tag, _, inner, _} -> extract_code_text(inner)
-    end)
-  end
-
-  # Earmark wraps a fenced code block's language tag in the inner `code`
-  # node's `class` attr (`language-elixir` per the CommonMark convention,
-  # though a bare `elixir` is accepted too via `code_language_from_attrs/1`).
-  defp pre_code_language(children) when is_list(children) do
-    Enum.find_value(children, fn
-      {"code", attrs, _inner, _meta} -> code_language_from_attrs(attrs)
-      _other -> nil
-    end)
-  end
-
-  defp pre_code_language(_children), do: nil
-
-  @doc false
-  @spec code_language_from_attrs(list()) :: String.t() | nil
-  def code_language_from_attrs(attrs) when is_list(attrs) do
-    case List.keyfind(attrs, "class", 0) do
-      {"class", value} -> lang_word(value)
-      nil -> nil
-    end
-  end
-
-  def code_language_from_attrs(_attrs), do: nil
-
-  # The info string is UNTRUSTED input reaching a NEW output surface (the
-  # label line), so it is made safe here, at this module's own boundary --
-  # not on any particular calling path (see the moduledoc's trust note):
-  # all C0 controls, DEL, and C1 bytes are stripped BEFORE word extraction
-  # (`~r/\s+/` does not treat ESC as whitespace, so `elixir\e[2J` would
-  # otherwise survive as one "word" and smuggle a live escape sequence
-  # into `text()`), and the surviving word is clamped so a pathological
-  # no-whitespace info string can never become an unbounded label line.
+  # The info string is UNTRUSTED input (see the moduledoc's trust note),
+  # so it is made safe here, at this module's own boundary rather than on
+  # any particular calling path: all C0 controls, DEL, and C1 bytes are
+  # stripped BEFORE word extraction (`~r/\s+/` does not treat ESC as
+  # whitespace, so `elixir\e[2J` would otherwise survive as one "word"),
+  # and the surviving word is clamped. It no longer reaches a text
+  # surface -- it only picks the highlighter's lexer -- but it is still
+  # sanitized at the source so that reintroducing a visible label, or a
+  # lexer registry that echoes unknown names, cannot resurrect the hole.
   @info_string_control_chars ~r/[\x00-\x1F\x7F\x{0080}-\x{009F}]/u
   @max_lang_label_width 32
 
-  # The displayed language tag is the first whitespace-separated word of
-  # the sanitized info string, an optional Earmark "language-" class
-  # prefix stripped first (a no-op when there is none, e.g. a bare fence
-  # info string like `elixir title=demo`). Absent/blank/sanitized-to-empty
-  # input yields `nil`, not an empty string -- keeping the "no label" case
-  # as a single value simplifies callers.
+  # The language tag is the first whitespace-separated word of the
+  # sanitized info string, a "language-" class prefix stripped first (a
+  # no-op when there is none, e.g. a bare fence info string like `elixir
+  # title=demo`). Absent/blank/sanitized-to-empty input yields `nil`, not
+  # an empty string -- keeping the "no language" case as a single value
+  # simplifies callers.
   defp lang_word(value) do
     value
     |> to_string()
@@ -354,11 +161,12 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   #
   # `[{text, style}, ...]` segments render as: a plain `text` element when
   # unstyled; a `:row` of styled spans when styled and the full line fits
-  # `width`; otherwise word-wrapped plain text (styling does not survive a
-  # wrap boundary, but markers never leak since segment parsing already
-  # consumed them).
+  # `width`; otherwise one styled `:row` per wrapped line (see
+  # `soft_wrap_segments/2` -- styles survive the break).
 
-  defp render_segments_line(segments, width, prefix \\ "") do
+  defp render_segments_line(segments, width, prefix \\ "", prefix_style \\ %{})
+
+  defp render_segments_line(segments, width, prefix, prefix_style) do
     segments = Enum.reject(segments, fn {text, _style} -> text == "" end)
     plain_text = Enum.map_join(segments, "", &elem(&1, 0))
     full_text = prefix <> plain_text
@@ -368,28 +176,33 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
         [Components.text(content: "")]
 
       TextMeasure.display_width(full_text) <= width and
-          plain_segments?(segments) ->
+        plain_segments?(segments) and map_size(prefix_style) == 0 ->
         [Components.text(content: full_text)]
 
       TextMeasure.display_width(full_text) <= width ->
-        [inline_row(prefix, segments)]
+        [inline_row(prefix, segments, prefix_style)]
 
       true ->
-        wrap_plain_lines(prefix, plain_text, width)
+        # Segment-aware wrap keeps bold/code/link styles across soft breaks.
+        wrap_segments(prefix, prefix_style, segments, width)
     end
   end
 
   defp plain_segments?(segments) do
-    Enum.all?(segments, fn {_text, style} -> style == %{} end)
+    Enum.all?(segments, fn {_text, style} ->
+      style == %{} or map_size(style) == 0
+    end)
   end
 
-  defp inline_row(prefix, segments) do
+  defp inline_row(prefix, segments, prefix_style) do
     spans = Enum.map(segments, &segment_text/1)
 
     children =
-      if prefix == "",
-        do: spans,
-        else: [Components.text(content: prefix) | spans]
+      if prefix == "" do
+        spans
+      else
+        [Components.text(content: prefix, style: prefix_style) | spans]
+      end
 
     Components.row(gap: 0, children: children)
   end
@@ -398,42 +211,142 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     Components.text(content: text)
   end
 
-  defp segment_text({text, style}),
-    do: Components.text(content: text, style: style)
+  defp segment_text({text, style}) do
+    # Promote :link onto the element so LayoutEngine/OSC-8 pick it up;
+    # keep underline + color in the style map for paint.
+    Components.text(content: text, style: style, link: Map.get(style, :link))
+  end
 
-  defp wrap_plain_lines(prefix, text, width) do
-    # Wrap to width minus the prefix (e.g. a list marker), or every line
-    # after the first would exceed `width` once the prefix is prepended.
-    # Continuation lines get the same amount of blank indent so wrapped
-    # text lines up under the first line's text, not the marker.
+  # Soft-wrap a segment list, re-emitting a row per visual line. The first
+  # line carries `prefix`; continuations re-use the same prefix when it is
+  # a blockquote gutter, otherwise a same-width blank indent (lists).
+  defp wrap_segments(prefix, prefix_style, segments, width) do
     prefix_width = TextMeasure.display_width(prefix)
-    indent = String.duplicate(" ", prefix_width)
     wrap_width = max(width - prefix_width, 1)
+    cont_prefix = continuation_prefix(prefix, prefix_style)
 
-    case TextLayout.wrap(text, wrap_width, :normal) do
-      [] ->
-        [Components.text(content: prefix)]
+    segments
+    |> soft_wrap_segments(wrap_width)
+    |> Enum.with_index()
+    |> Enum.map(fn {line_segs, idx} ->
+      p = if idx == 0, do: prefix, else: cont_prefix
 
-      [first | rest] ->
-        [
-          Components.text(content: prefix <> first)
-          | Enum.map(rest, &Components.text(content: indent <> &1))
-        ]
+      ps =
+        if idx == 0 or blockquote_prefix?(prefix), do: prefix_style, else: %{}
+
+      inline_row(p, line_segs, ps)
+    end)
+  end
+
+  defp blockquote_prefix?(prefix), do: prefix == @blockquote_prefix
+
+  defp continuation_prefix(prefix, _prefix_style) do
+    if blockquote_prefix?(prefix) do
+      prefix
+    else
+      String.duplicate(" ", TextMeasure.display_width(prefix))
     end
+  end
+
+  # Wraps a `{text, style}` segment list into lines of at most `wrap_width`
+  # display cells, delegating the break-point choice to the shared
+  # `TextLayout.wrap/4` `:pretty` engine (Knuth-Plass) that every other
+  # wrapped text in the UI uses.
+  #
+  # This used to pick breaks itself, and its unit of breaking was the
+  # SEGMENT, not the word: a segment that didn't fit the remaining budget
+  # moved whole to the next line, and only a segment wider than the entire
+  # line was split at all. So one long unstyled run after a styled span --
+  # `> Prefer **structured** styles — never embed raw ANSI...` -- emitted
+  # "Prefer structured" / the entire rest of the sentence overflowing its
+  # line / a lone trailing ".". Words were never a break candidate, so no
+  # amount of width made it wrap sensibly.
+  #
+  # Delegating means measuring is no longer this module's job either
+  # (Pretty force-splits a word wider than the line itself). Styles are
+  # re-attached afterwards by slicing the ORIGINAL segments along the
+  # returned line boundaries, so a break inside a styled span keeps that
+  # span's style on both halves.
+  defp soft_wrap_segments(segments, wrap_width) do
+    plain = Enum.map_join(segments, "", &elem(&1, 0))
+
+    plain
+    |> TextLayout.wrap(wrap_width, :normal, :pretty)
+    |> reslice_segments(segments, plain)
+  end
+
+  defp reslice_segments(lines, segments, plain) do
+    {rows, _cursor} =
+      Enum.map_reduce(lines, 0, fn line, cursor ->
+        case line_span(plain, line, cursor) do
+          {start, len} -> {slice_segments(segments, start, len), start + len}
+          # The wrapper is not supposed to emit a line that isn't a
+          # substring of its input, but if it ever does, the text still
+          # reaches the screen -- unstyled rather than dropped.
+          nil -> {[{line, %{}}], cursor}
+        end
+      end)
+
+    Enum.reject(rows, &(&1 == []))
+  end
+
+  # Locates `line` in `plain` at or after `cursor`, in BYTES (the offsets
+  # feed `binary_part/3` below). Searching forward from a cursor rather
+  # than from 0 is what keeps a line that repeats earlier in the paragraph
+  # from re-matching the earlier copy.
+  defp line_span(_plain, "", cursor), do: {cursor, 0}
+
+  defp line_span(plain, line, cursor) do
+    rest = TextMeasure.slice_bytes(plain, {cursor, byte_size(plain) - cursor})
+
+    case :binary.match(rest, line) do
+      {offset, len} -> {cursor + offset, len}
+      :nomatch -> nil
+    end
+  end
+
+  # Cuts the byte range [start, start + len) out of the segment list,
+  # preserving each segment's style on whatever part of it survives.
+  defp slice_segments(segments, start, len) do
+    stop = start + len
+
+    {pieces, _offset} =
+      Enum.flat_map_reduce(segments, 0, fn {text, style}, offset ->
+        size = byte_size(text)
+        from = max(start, offset)
+        to = min(stop, offset + size)
+
+        piece =
+          if to > from do
+            [{TextMeasure.slice_bytes(text, {from - offset, to - from}), style}]
+          else
+            []
+          end
+
+        {piece, offset + size}
+      end)
+
+    pieces
   end
 
   # --- Built-in regex-based rendering (no deps) ---
 
   @doc false
   @spec render_with_builtin(String.t(), non_neg_integer()) :: [map()]
-  def render_with_builtin(markdown_text, width) do
+  def render_with_builtin(markdown_text, width),
+    do: render_with_builtin(markdown_text, width, @default_syntax_theme)
+
+  @doc false
+  @spec render_with_builtin(String.t(), non_neg_integer(), atom() | term()) ::
+          [map()]
+  def render_with_builtin(markdown_text, width, theme) do
     markdown_text
     |> String.split("\n")
-    |> parse_blocks(width, [])
+    |> parse_blocks(width, theme, [])
     |> Enum.reverse()
   end
 
-  defp parse_blocks([], _width, acc), do: acc
+  defp parse_blocks([], _width, _theme, acc), do: acc
 
   # Fenced code block. GFM allows either ```` ``` ```` or `~~~` as the
   # fence marker; a fence only closes on a line using the SAME marker it
@@ -443,12 +356,12 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   # line is the info string -- its first word (if any) becomes the
   # displayed language label; the rest (e.g. a `title=demo` attribute) is
   # discarded, same as it always was before labels existed.
-  defp parse_blocks(["```" <> info | rest], width, acc) do
-    parse_fenced_block("```", lang_word(info), rest, width, acc)
+  defp parse_blocks(["```" <> info | rest], width, theme, acc) do
+    parse_fenced_block("```", lang_word(info), rest, width, theme, acc)
   end
 
-  defp parse_blocks(["~~~" <> info | rest], width, acc) do
-    parse_fenced_block("~~~", lang_word(info), rest, width, acc)
+  defp parse_blocks(["~~~" <> info | rest], width, theme, acc) do
+    parse_fenced_block("~~~", lang_word(info), rest, width, theme, acc)
   end
 
   # GFM table: a header row immediately followed by a separator-shaped row
@@ -460,76 +373,64 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   # partial-separator DOES render -- a premature but well-formed frame
   # (header + separator, body rows fill in as they stream). That is the
   # intended benign streaming behavior, never a zero-width collapse.
-  defp parse_blocks([header, sep | rest], width, acc) do
+  defp parse_blocks([header, sep | rest], width, theme, acc) do
     if table_row?(header) and separator_row?(sep) do
       header_cells = split_table_row(header)
-      {row_lines, remaining} = take_table_rows(rest, [], length(header_cells))
+
+      {row_lines, remaining} =
+        take_table_rows(rest, [], length(header_cells), leading_pipe?(header))
+
       body_rows = Enum.map(row_lines, &split_table_row/1)
-      table_elements = render_table_rows(header_cells, body_rows, width)
-      parse_blocks(remaining, width, Enum.reverse(table_elements) ++ acc)
+      aligns = separator_aligns(sep)
+      table_elements = render_table_rows(header_cells, body_rows, width, aligns)
+      parse_blocks(remaining, width, theme, Enum.reverse(table_elements) ++ acc)
     else
       elements = parse_line(header, width)
-      parse_blocks([sep | rest], width, Enum.reverse(elements) ++ acc)
+      parse_blocks([sep | rest], width, theme, Enum.reverse(elements) ++ acc)
     end
   end
 
-  defp parse_blocks([line | rest], width, acc) do
+  defp parse_blocks([line | rest], width, theme, acc) do
     elements = parse_line(line, width)
-    parse_blocks(rest, width, Enum.reverse(elements) ++ acc)
+    parse_blocks(rest, width, theme, Enum.reverse(elements) ++ acc)
   end
 
-  defp parse_line("# " <> text, _width) do
-    [
-      Components.text(
-        content: "# " <> strip_inline(text),
-        style: @heading_style
-      )
-    ]
+  defp parse_line("# " <> text, width) do
+    render_heading_line("# ", text, width)
   end
 
-  defp parse_line("## " <> text, _width) do
-    [
-      Components.text(
-        content: "## " <> strip_inline(text),
-        style: @heading_style
-      )
-    ]
+  defp parse_line("## " <> text, width) do
+    render_heading_line("## ", text, width)
   end
 
-  defp parse_line("### " <> text, _width) do
-    [
-      Components.text(
-        content: "### " <> strip_inline(text),
-        style: @heading_style
-      )
-    ]
+  defp parse_line("### " <> text, width) do
+    render_heading_line("### ", text, width)
   end
 
-  defp parse_line("---" <> _, width) do
-    [
-      Components.text(
-        content: String.duplicate("-", min(@hr_width, width)),
-        style: @hr_style
-      )
-    ]
+  # Thematic break — continuous box-drawing rule, full content width.
+  defp parse_line("---" <> rest, width) do
+    if String.trim(rest) == "" or String.match?(rest, ~r/^-+\s*$/) do
+      [hr_element(width)]
+    else
+      render_segments_line(builtin_segments("---" <> rest), width)
+    end
   end
 
-  defp parse_line("***" <> _, width) do
-    [
-      Components.text(
-        content: String.duplicate("-", min(@hr_width, width)),
-        style: @hr_style
-      )
-    ]
+  defp parse_line("***" <> rest, width) do
+    if String.trim(rest) == "" or String.match?(rest, ~r/^\*+\s*$/) do
+      [hr_element(width)]
+    else
+      render_segments_line(builtin_segments("***" <> rest), width)
+    end
   end
 
-  defp parse_line("> " <> text, _width) do
-    [
-      Components.text(
-        content: @blockquote_prefix <> strip_inline(text),
-        style: @blockquote_style
-      )
-    ]
+  defp parse_line("> " <> text, width) do
+    segments =
+      text
+      |> builtin_segments()
+      |> Enum.map(fn {t, s} -> {t, Map.merge(@blockquote_style, s)} end)
+
+    render_segments_line(segments, width, @blockquote_prefix, @blockquote_style)
   end
 
   defp parse_line("- " <> text, width) do
@@ -551,20 +452,29 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     end
   end
 
-  defp strip_inline(text) do
-    text
-    |> String.replace(~r/\*\*(.+?)\*\*/, "*\\1*")
-    |> String.replace(~r/__(.+?)__/, "*\\1*")
-    |> String.replace(~r/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/, "_\\1_")
-    |> String.replace(~r/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/, "_\\1_")
-    |> String.replace(~r/\[(.+?)\]\((.+?)\)/, "\\1 (\\2)")
+  defp render_heading_line(prefix, text, width) do
+    segments =
+      text
+      |> builtin_segments()
+      |> Enum.map(fn {t, s} -> {t, Map.merge(@heading_style, s)} end)
+
+    # Heading lines also get the underline chrome for h1/h2 in Earmark;
+    # builtin path keeps a single styled line (prefix + body).
+    render_segments_line(segments, width, prefix, @heading_style)
   end
 
-  # `builtin_segments/1` mirrors `inline_segments/1` for the built-in
-  # (non-Earmark) path. Match precedence follows alternation order: code
-  # span, then bold, then em, then links. Unmatched markers pass through
-  # as literal text.
-  @builtin_pattern ~r/`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_|\[([^\]]+)\]\(([^)]+)\)/
+  # Inline markup scanner. Match precedence follows alternation order:
+  # code span, then bold+italic, then bold, then italic, then links.
+  # Unmatched markers pass through as literal text.
+  #
+  # The triple-marker alternatives MUST precede the double ones. Each
+  # emphasis body is `[^*]+` / `[^_]+`, which cannot cross its own marker
+  # character, so on `***both***` the `\*\*(...)\*\*` alternative fails at
+  # offset 0 (the third `*` is not a body character) and `:re` retries one
+  # character in, where it happily matches `**both**` -- yielding a bold
+  # "both" wrapped in two literal leftover asterisks. Matching the triple
+  # form first is what makes `***x***` bold+italic instead.
+  @builtin_pattern ~r/`([^`]+)`|\*\*\*([^*]+)\*\*\*|___([^_]+)___|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_|\[([^\]]+)\]\(([^)]+)\)/
 
   defp builtin_segments(text) do
     scan_builtin_segments(text, [])
@@ -578,8 +488,22 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
         Enum.reverse([{text, %{}} | acc])
 
       [{whole_start, whole_len} | groups] ->
-        before = String.slice(text, 0, whole_start)
-        rest = String.slice(text, (whole_start + whole_len)..-1//1)
+        # BYTE offsets, not grapheme offsets -- `:re` counts bytes, so these
+        # must be cut with `binary_part/3`. `String.slice/3` counts
+        # graphemes, and any multibyte character earlier in the line (an em
+        # dash, "—", is 3 bytes / 1 grapheme) desynchronized the two by the
+        # excess byte count: the cut landed mid-word, so a span lost leading
+        # characters, its markers survived into the visible text, and its
+        # color started partway through the word.
+        before = TextMeasure.slice_bytes(text, {0, whole_start})
+        after_start = whole_start + whole_len
+
+        rest =
+          TextMeasure.slice_bytes(
+            text,
+            {after_start, byte_size(text) - after_start}
+          )
+
         {seg_text, style} = classify_builtin_match(text, groups)
 
         acc = if before == "", do: acc, else: [{before, %{}} | acc]
@@ -592,14 +516,20 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   # `Regex.run/3` with `return: :index` trims trailing non-participating
   # capture groups from the result (an Erlang `:re` quirk), so the groups
   # list length varies depending on which alternative matched -- pad it
-  # back out to the full 7-group shape before pattern matching.
+  # back out to the full 9-group shape before pattern matching.
   defp classify_builtin_match(text, groups) do
-    padded = groups ++ List.duplicate({-1, 0}, 7 - length(groups))
-    [code, bold1, bold2, em1, em2, link_text, link_url] = padded
+    padded = groups ++ List.duplicate({-1, 0}, 9 - length(groups))
+    [code, tri1, tri2, bold1, bold2, em1, em2, link_text, link_url] = padded
 
     cond do
       code != {-1, 0} ->
         {slice_group(text, code), @code_style}
+
+      tri1 != {-1, 0} ->
+        {slice_group(text, tri1), %{bold: true, italic: true}}
+
+      tri2 != {-1, 0} ->
+        {slice_group(text, tri2), %{bold: true, italic: true}}
 
       bold1 != {-1, 0} ->
         {slice_group(text, bold1), %{bold: true}}
@@ -616,51 +546,59 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
       true ->
         link = slice_group(text, link_text)
         url = slice_group(text, link_url)
-        {link <> " (" <> url <> ")", %{}}
+        label = if link == "", do: url, else: link
+        {label, Map.put(@link_style, :link, url)}
     end
   end
 
-  defp slice_group(text, {start, len}), do: String.slice(text, start, len)
+  # Byte offsets from `:re` -- see `TextMeasure`'s "three units" note.
+  defp slice_group(text, span), do: TextMeasure.slice_bytes(text, span)
 
-  defp parse_fenced_block(marker, lang, rest, width, acc) do
+  defp parse_fenced_block(marker, lang, rest, width, theme, acc) do
     {code_lines, remaining} = take_until_fence(rest, marker, [])
     code_text = Enum.join(code_lines, "\n")
-    elements = fenced_code_elements(code_text, lang)
+    elements = fenced_code_elements(code_text, lang, theme)
 
     # Same reverse-then-cons convention every other `parse_blocks` clause
     # uses (`acc` is fully reversed once at the very end, in
     # `render_with_builtin/2`) -- pushing this block's elements on
     # pre-reversed keeps them in correct reading order after that final
     # reversal, exactly like a single `parse_line/2` result would be.
-    parse_blocks(remaining, width, Enum.reverse(elements) ++ acc)
+    parse_blocks(remaining, width, theme, Enum.reverse(elements) ++ acc)
   end
 
-  # Shared by both the Earmark AST path (`ast_node_to_elements/2` for
-  # `"pre"`) and this builtin path, so the two parsers can't drift on how
-  # the language label sits relative to the surrounding blank lines and
-  # code body: blank, optional dim label, code lines, blank. `lang` is
-  # `nil` (or an empty/absent tag) -> no label line at all, not an empty one.
-  defp fenced_code_elements(code_text, lang) do
+  # Fence block shape: blank, code lines (one row element each from
+  # CodeBlock/SyntaxHighlighter), blank.
+  #
+  # The info string selects the highlighter's lexer but is NOT displayed --
+  # there used to be a dim label line above the body carrying the language
+  # name. The token colors already say what the language is, and the label
+  # spent a line of vertical budget restating the fence's own source text.
+  #
+  # Shape law (MarkdownBody streaming): one element per source code line
+  # so stable-prefix freezes stay line-granular. Do not collapse into a
+  # single column element.
+  defp fenced_code_elements(code_text, lang, theme) do
+    language = lang || "text"
+
     code_elements =
       code_text
-      |> String.split("\n")
-      |> Enum.map(fn line ->
-        Components.text(content: "  " <> line, style: @code_style)
-      end)
+      |> CodeBlock.render_lines(language, theme)
+      |> Enum.map(&indent_code_row/1)
 
     blank = Components.text(content: "")
 
-    Enum.concat([[blank], code_label_elements(lang), code_elements, [blank]])
+    Enum.concat([[blank], code_elements, [blank]])
   end
 
-  # `lang` is always `lang_word/1`'s output here: `nil` or a non-empty,
-  # sanitized, clamped word -- there is deliberately no `""` clause, since
-  # `lang_word/1` maps every empty/blank/sanitized-away case to `nil`.
-  defp code_label_elements(nil), do: []
-
-  defp code_label_elements(lang) do
-    [Components.text(content: "  " <> lang, style: %{dim: true})]
+  # Leading two-space gutter on every code body line (matches the pre-
+  # highlighter indent so MarkdownBody phantom/"  " shape stays stable).
+  defp indent_code_row(%{type: :row, children: children} = row)
+       when is_list(children) do
+    %{row | children: [Components.text(content: @code_indent) | children]}
   end
+
+  defp indent_code_row(other), do: other
 
   defp take_until_fence([], _marker, acc), do: {Enum.reverse(acc), []}
 
@@ -704,53 +642,135 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     |> String.trim()
     |> String.trim("|")
     |> String.split("|")
-    |> Enum.map(&String.trim/1)
+    |> Enum.map(&table_cell_text/1)
   end
 
-  # Consumes subsequent lines that still look like a row of THIS table: a
-  # leading "|" (the header/separator convention every existing table in
-  # this codebase follows) AND the same number of cells as the header. A
-  # blank line, a non-tabular line, or a "|"-containing line that doesn't
-  # match that shape (ordinary prose that happens to contain a stray "|"
-  # -- cell count alone isn't enough to rule this out for a 2-column
-  # table, where any single stray "|" trivially produces 2 cells) stops
-  # the row and is left in `remaining` for normal block parsing -- GFM
-  # tables don't span a blank/non-tabular-shaped line.
-  defp take_table_rows([line | rest], acc, col_count) do
-    if table_row_shaped?(line, col_count) do
-      take_table_rows(rest, [line | acc], col_count)
+  # Table cells hold inline Markdown like any other text, but the Table
+  # component lays out plain strings -- it has no styled-span cell. So the
+  # markers are consumed (`builtin_segments/1`, the same parse every other
+  # line gets) and only the visible text is kept: `**A**` -> `A`,
+  # `[foo](url)` -> `foo`. Emphasis is lost, but the alternative is worse
+  # than lost styling -- the raw markers would render literally AND be
+  # counted by `markdown_column_widths/2`, so every column would also be
+  # mis-sized by the width of its own markup.
+  defp table_cell_text(cell) do
+    cell
+    |> String.trim()
+    |> builtin_segments()
+    |> Enum.map_join("", &elem(&1, 0))
+  end
+
+  # GFM alignment, read off the separator row: `:---` left, `---:` right,
+  # `:---:` center. A cell with neither colon is `:left`, matching the
+  # default `render_table_rows/4` falls back to for a short/absent list.
+  defp separator_aligns(sep) do
+    sep
+    |> String.trim()
+    |> String.trim("|")
+    |> String.split("|")
+    |> Enum.map(fn cell ->
+      trimmed = String.trim(cell)
+
+      case {String.starts_with?(trimmed, ":"), String.ends_with?(trimmed, ":")} do
+        {true, true} -> :center
+        {false, true} -> :right
+        _ -> :left
+      end
+    end)
+  end
+
+  # Consumes subsequent lines that still look like a row of THIS table:
+  # the same number of cells as the header, AND the same leading-"|"
+  # convention the header itself used. A blank line, a non-tabular line, or
+  # a "|"-containing line that doesn't match that shape stops the row and
+  # is left in `remaining` for normal block parsing -- GFM tables don't
+  # span a blank/non-tabular-shaped line.
+  #
+  # The leading-"|" test is taken FROM THE HEADER rather than hardcoded to
+  # `true`. Requiring it unconditionally silently dropped every body row of
+  # a perfectly valid pipe-less table (`Name | Qty` / `--- | ---` / `foo |
+  # 1`, a shape LLMs emit constantly): the header still matched, so a
+  # header-only table rendered and the rows fell out below it as raw prose
+  # lines. Deriving it keeps the original guard exactly as strong for
+  # pipe-delimited tables -- where a stray "|" in prose would otherwise be
+  # enough to extend a 2-column table, since cell count alone can't rule
+  # that out -- while letting the pipe-less form absorb its own rows.
+  defp take_table_rows([line | rest], acc, col_count, leading_pipe?) do
+    if table_row_shaped?(line, col_count, leading_pipe?) do
+      take_table_rows(rest, [line | acc], col_count, leading_pipe?)
     else
       {Enum.reverse(acc), [line | rest]}
     end
   end
 
-  defp take_table_rows([], acc, _col_count), do: {Enum.reverse(acc), []}
+  defp take_table_rows([], acc, _col_count, _leading_pipe?),
+    do: {Enum.reverse(acc), []}
 
-  defp table_row_shaped?(line, col_count) do
-    table_row?(line) and String.starts_with?(String.trim(line), "|") and
+  defp table_row_shaped?(line, col_count, leading_pipe?) do
+    table_row?(line) and
+      leading_pipe?(line) == leading_pipe? and
       length(split_table_row(line)) == col_count
   end
 
-  defp render_table_rows([], [], _width), do: []
+  defp leading_pipe?(line), do: String.starts_with?(String.trim(line), "|")
 
-  defp render_table_rows(header_cells, body_rows, width) do
+  defp render_table_rows([], [], _width, _aligns), do: []
+
+  defp render_table_rows(header_cells, body_rows, width, aligns) do
     col_count =
       Enum.max([length(header_cells) | Enum.map(body_rows, &length/1)])
 
     header = pad_row(header_cells, col_count)
     rows = Enum.map(body_rows, &pad_row(&1, col_count))
 
-    natural_widths = column_widths([header | rows], col_count)
+    natural_widths = markdown_column_widths([header | rows], col_count)
     final_widths = fit_widths(natural_widths, width, col_count)
 
-    header_row = table_row_text(header, final_widths)
-    separator_row = table_separator_text(final_widths)
-    body_texts = Enum.map(rows, &table_row_text(&1, final_widths))
+    columns =
+      header
+      |> Enum.zip(final_widths)
+      |> Enum.with_index()
+      |> Enum.map(fn {{label, w}, i} ->
+        %{
+          id: :"md_col_#{i}",
+          label: label,
+          width: max(w, @min_col_width),
+          align: Enum.at(aligns, i) || :left
+        }
+      end)
 
-    Enum.concat([header_row, separator_row | body_texts], [
-      Components.text(content: "")
-    ])
+    data =
+      Enum.map(rows, fn row ->
+        row
+        |> Enum.with_index()
+        |> Map.new(fn {cell, i} -> {:"md_col_#{i}", cell} end)
+      end)
+
+    {:ok, table} =
+      Table.init(%{
+        id: :markdown_table,
+        columns: columns,
+        data: data,
+        options: %{
+          border: :inner,
+          header_separator: true,
+          paginate: false,
+          sortable: false,
+          searchable: false
+        }
+      })
+
+    rendered = Table.render(table, %{available_width: max(width, 1)})
+    line_elements = table_line_children(rendered)
+
+    line_elements ++ [Components.text(content: "")]
   end
+
+  defp table_line_children(%{children: [body | _]}) when is_map(body) do
+    Map.get(body, :children, [])
+  end
+
+  defp table_line_children(_), do: []
 
   defp pad_row(cells, col_count) do
     cells
@@ -758,24 +778,25 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     |> Enum.take(col_count)
   end
 
-  defp column_widths(rows, col_count) do
+  defp markdown_column_widths(rows, col_count) do
     for i <- 0..(col_count - 1) do
       rows
       |> Enum.map(fn row ->
         row |> Enum.at(i, "") |> TextMeasure.display_width()
       end)
       |> Enum.max()
-      |> max(@min_col_width)
+      # +2 for Table's cell gutters so labels aren't clipped
+      |> Kernel.+(2)
+      |> max(@min_col_width + 2)
     end
   end
 
   # Shrinks natural column widths to fit `width` when possible; below the
-  # `@min_col_width` floor it stops shrinking and accepts a row wider than
-  # `width` (the documented "scrollable" degradation) rather than crush
-  # any column to zero.
+  # min floor it stops shrinking and accepts a row wider than `width`.
   defp fit_widths(widths, width, col_count) do
-    overhead = 3 * col_count + 1
-    budget = width - overhead
+    # :inner border: sum(widths) + (n-1) separators, no outer frame.
+    overhead = max(col_count - 1, 0)
+    budget = max(width - overhead, col_count * @min_col_width)
     total = Enum.sum(widths)
 
     cond do
@@ -793,29 +814,5 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   defp shrink_proportionally(widths, budget) do
     total = Enum.sum(widths)
     Enum.map(widths, fn w -> max(@min_col_width, div(w * budget, total)) end)
-  end
-
-  defp table_row_text(cells, widths) do
-    cells_str =
-      cells
-      |> Enum.zip(widths)
-      |> Enum.map_join(" | ", fn {cell, w} -> pad_cell(cell, w) end)
-
-    Components.text(content: "| " <> cells_str <> " |")
-  end
-
-  defp table_separator_text(widths) do
-    seps = Enum.map_join(widths, "-|-", &String.duplicate("-", &1))
-    Components.text(content: "|-" <> seps <> "-|", style: @hr_style)
-  end
-
-  defp pad_cell(text, width) do
-    display_w = TextMeasure.display_width(text)
-
-    cond do
-      display_w == width -> text
-      display_w < width -> text <> String.duplicate(" ", width - display_w)
-      true -> TextLayout.truncate(text, width, :ellipsis)
-    end
   end
 end
