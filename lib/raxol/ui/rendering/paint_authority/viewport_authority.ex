@@ -104,6 +104,26 @@ defmodule Raxol.UI.Rendering.PaintAuthority.ViewportAuthority do
   this repaint path as an expected reuser. SGR passes through verbatim
   (styled rows are unaffected); everything else is neutralized per that
   module's grammar.
+
+  ## The sync bracket and `?7l` are unconditional here (not capability-gated)
+
+  `InlineAuthority.sync_open/1` gates the DEC 2026 bracket on a
+  measured `sync_output?` capability (never emitting a presentation-only
+  control sequence on a guess -- see that module's moduledoc). `enter/0`
+  and `repaint/3` deliberately do NOT follow that discipline: they always
+  wrap in `\\e[?2026h`/`l` and always send `\\e[?7l`. This is a
+  considered asymmetry, not an oversight, because this authority's OWN
+  entry condition already gates on a stronger fact than `sync_output?`
+  alone -- claiming the alternate screen buffer (`\\e[?1049h`) is itself
+  reserved for full-screen-capable terminals, and every terminal that
+  advertises alt-screen support in the wild also tolerates an unknown
+  DEC private mode (2026 or otherwise) as a silent no-op per ECMA-48/
+  DEC's own forward-compatibility convention for unrecognized `h`/`l`
+  parameters -- unlike the inline path, which runs on terminals that may
+  not have any alt-screen capability signal to key off of at all. Revisit
+  this if a real terminal is ever measured to mishandle an unrecognized
+  private mode inside the alternate buffer; until then, gating here would
+  add an unmeasured capability dependency this v1 does not need.
   """
 
   alias Raxol.UI.Rendering.PaintAuthority.{ContentGuard, Dialect}
