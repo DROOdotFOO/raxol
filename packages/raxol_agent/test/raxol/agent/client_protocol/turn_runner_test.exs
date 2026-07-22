@@ -368,6 +368,45 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     refute Process.alive?(pump)
   end
 
+  # -- 3b. interrupt-failure telemetry --------------------------------------------
+
+  test "a failing interrupt still completes the cancel honestly, and fires a distinguishable telemetry event" do
+    test_pid = self()
+    handler_id = "turn-runner-interrupt-failed-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:raxol, :agent, :acp_turn_runner, :interrupt_failed],
+      fn _event, _measurements, metadata, _config ->
+        send(test_pid, {:telemetry_interrupt_failed, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    runner =
+      TurnRunner.new(
+        backend: GatedBackend,
+        backend_opts: [owner: self()],
+        interrupt: fn _tool_ref, _sink, _opts -> {:error, :boom} end
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id)
+
+    assert_receive {:backend_up, pump}, 2_000
+    cancel!(session)
+
+    assert_receive {:telemetry_interrupt_failed, %{stage: :error, detail: :boom}},
+                   2_000
+
+    # The failure is measurable, but the cancel sequence still completes:
+    # exactly one cancelled reply, the pump still dead.
+    assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :cancelled}}}, 2_000
+    refute Process.alive?(pump)
+  end
+
   # -- 4. kill-complete fence -----------------------------------------------------
 
   test "cancel mid-tool: fence tool_call_update with _meta rider precedes the cancelled reply" do

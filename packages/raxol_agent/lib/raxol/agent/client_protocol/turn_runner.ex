@@ -465,6 +465,21 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     end
   end
 
+  # Deliberately catches broadly (`rescue` + `catch :exit`, not just
+  # `:error`/`:throw`): this runs on the cancel path, and the whole point of
+  # that path (see moduledoc) is that it MUST reach the kill-complete fence
+  # and `{:stop, :cancelled}` no matter what the injected `:interrupt`
+  # implementation does — letting a raise/throw/exit from a THIRD-PARTY
+  # double propagate here would abort the cancel sequence itself, stranding
+  # the Session's drain gate with no cancelled reply ever rendered (worse
+  # than a swallowed exception: an actual hang). What review flagged as
+  # "hides real defects" is answered by telemetry, not by narrowing the
+  # catch: every failure branch below fires
+  # `[:raxol, :agent, :acp_turn_runner, :interrupt_failed]` with a `:stage`
+  # tag distinguishing exactly which branch fired (`:rescue`, `:catch`,
+  # `:sink_failure`, `:error`) — a genuine defect in a production
+  # `Raxol.Agent.Interrupt` impl is now a measurable signal, not silence,
+  # while the cancel sequence still completes honestly either way.
   defp run_interrupt(state) do
     tool_ref = build_tool_ref(state)
     sink = Keyword.get(state.opts, :interrupt_sink, &default_sink/2)
@@ -477,20 +492,32 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       {:error, {:sink_failure, error, outcome}} ->
         # The kill already happened; the outcome still carries the OS truth.
         Logger.warning("acp turn_runner: interrupt sink failure: #{inspect(error)}")
+        interrupt_failure_telemetry(:sink_failure, error)
         outcome
 
       {:error, reason} ->
         Logger.warning("acp turn_runner: interrupt failed: #{inspect(reason)}")
+        interrupt_failure_telemetry(:error, reason)
         nil
     end
   rescue
     error ->
       Logger.warning("acp turn_runner: interrupt raised: #{inspect(error)}")
+      interrupt_failure_telemetry(:rescue, error)
       nil
   catch
     kind, value ->
       Logger.warning("acp turn_runner: interrupt threw: #{inspect({kind, value})}")
+      interrupt_failure_telemetry(:catch, {kind, value})
       nil
+  end
+
+  defp interrupt_failure_telemetry(stage, detail) do
+    :telemetry.execute(
+      [:raxol, :agent, :acp_turn_runner, :interrupt_failed],
+      %{},
+      %{stage: stage, detail: detail}
+    )
   end
 
   defp do_interrupt(impl, tool_ref, sink, opts) when is_function(impl, 3),
