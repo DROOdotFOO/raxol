@@ -80,4 +80,42 @@ defmodule Raxol.Agent.ExecutorConfigTest do
       refute Keyword.has_key?(opts, :string_key)
     end
   end
+
+  # Regression guard for the session-key-to-disk leak class: a session-only key
+  # lives in `auth` (e.g. `/login openai sk-...` in the coding TUI). If the
+  # snapshot codec is ever wired to persist an agent model, `auth` must be
+  # redacted, never serialized. Removing the @derive (undeclared -> dropped
+  # whole) or moving `:auth` into `persist:` would regress this.
+  describe "snapshot redaction" do
+    alias Raxol.Agent.Snapshot
+
+    @secret "sk-SECRET-do-not-persist-1234"
+
+    test "dumping the struct redacts auth and keeps the routing fields" do
+      cfg = ExecutorConfig.new(harness: :openai, model: "gpt-x", auth: %{api_key: @secret})
+
+      {:ok, envelope} = Snapshot.dump(cfg)
+
+      refute Jason.encode!(envelope) =~ @secret
+      assert Enum.any?(envelope.redacted, &(&1["path"] == ["auth"]))
+
+      {:ok, restored} = Snapshot.load(envelope)
+      assert restored.harness == :openai
+      assert restored.model == "gpt-x"
+      # The secret comes back at its struct default, never the real value.
+      assert restored.auth == %{}
+    end
+
+    test "a model embedding an executor never leaks the key into the envelope" do
+      model = %{
+        input: "hello",
+        executor: ExecutorConfig.new(harness: :openai, auth: %{api_key: @secret})
+      }
+
+      {:ok, envelope} = Snapshot.dump(model)
+
+      refute Jason.encode!(envelope) =~ @secret
+      assert Enum.any?(envelope.redacted, &(&1["path"] == ["executor", "auth"]))
+    end
+  end
 end
