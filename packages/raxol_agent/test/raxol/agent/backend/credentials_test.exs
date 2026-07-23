@@ -102,4 +102,32 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       end
     end
   end
+
+  describe "op_status/0" do
+    test "returns one of the three known states" do
+      assert Credentials.op_status() in [:absent, :not_signed_in, :ok]
+    end
+
+    test "is :absent exactly when op is unavailable" do
+      if Credentials.op_available?() do
+        assert Credentials.op_status() in [:ok, :not_signed_in]
+      else
+        assert Credentials.op_status() == :absent
+      end
+    end
+  end
+
+  describe "create_item/3" do
+    test "refuses an empty key" do
+      assert {:error, :empty_key} = Credentials.create_item(:openai, "")
+    end
+
+    test "errors when op is unavailable rather than raising" do
+      # Deterministic only without op; with op present a live create would
+      # mutate a real vault, so we do not exercise the success path here.
+      unless Credentials.op_available?() do
+        assert {:error, :op_unavailable} = Credentials.create_item(:openai, "sk-x")
+      end
+    end
+  end
 end

@@ -152,6 +152,56 @@ defmodule Raxol.Agent.Backend.Resolver do
     Enum.map(@providers, &%{harness: &1.harness, label: &1.label, keyless?: &1.keyless})
   end
 
+  @doc """
+  Detection diagnostics for the setup panel: the `op` CLI state plus, per
+  provider, an actionable `note` when it is unavailable (a stored `op://`
+  reference that needs `op signin`, or an env var that is set but empty).
+
+  Returns `%{op: op_status, providers: [%{harness, label, keyless?,
+  available?, source, note}]}`. Probing may shell out to `op` for stored
+  references, so treat it as a point-in-time snapshot.
+  """
+  @spec diagnostics() :: %{op: atom(), providers: [map()]}
+  def diagnostics do
+    op = Credentials.op_status()
+    %{op: op, providers: Enum.map(@providers, &provider_diag(&1, op))}
+  end
+
+  defp provider_diag(spec, op) do
+    {available?, source} =
+      case detect_available(spec, []) do
+        {:ok, _config, src} -> {true, src}
+        _ -> {false, nil}
+      end
+
+    %{
+      harness: spec.harness,
+      label: spec.label,
+      keyless?: spec.keyless,
+      available?: available?,
+      source: source,
+      note: diag_note(spec, available?, op)
+    }
+  end
+
+  defp diag_note(_spec, true, _op), do: nil
+
+  defp diag_note(spec, false, op) do
+    cond do
+      op_ref(spec.harness) && op != :ok -> op_hint(op)
+      empty_env_key(spec) -> "#{empty_env_key(spec)} is set but empty"
+      true -> nil
+    end
+  end
+
+  defp op_hint(:not_signed_in), do: "op reference stored, run `op signin`"
+  defp op_hint(:absent), do: "op reference stored, but the `op` CLI is not installed"
+  defp op_hint(_status), do: nil
+
+  defp empty_env_key(%{env_keys: keys}) do
+    Enum.find(keys, fn key -> System.get_env(key) == "" end)
+  end
+
   @doc "Map a harness string to its known atom without minting new atoms."
   @spec harness_from_string(String.t()) :: {:ok, atom()} | :error
   def harness_from_string(str) when is_binary(str) do

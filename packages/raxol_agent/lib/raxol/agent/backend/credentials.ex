@@ -146,6 +146,95 @@ defmodule Raxol.Agent.Backend.Credentials do
   def op_available?, do: not is_nil(System.find_executable("op"))
 
   @doc """
+  The 1Password CLI availability + auth state.
+
+    * `:absent`         — the `op` binary is not on PATH.
+    * `:not_signed_in`  — `op` is installed but no account session is active.
+    * `:ok`             — `op` is installed and signed in.
+
+  Used by the resolver's diagnostics so a stored `op://` reference that fails
+  to resolve can say *why* (needs `op signin`) instead of silently falling
+  through to env vars.
+  """
+  @spec op_status() :: :absent | :not_signed_in | :ok
+  def op_status do
+    cond do
+      not op_available?() -> :absent
+      match?({_out, 0}, System.cmd("op", ["whoami"], stderr_to_stdout: true)) -> :ok
+      true -> :not_signed_in
+    end
+  end
+
+  @doc """
+  Create a 1Password item holding `key` and return its `op://...` reference.
+
+  The secret is written to a `0600` temp template and passed to
+  `op item create` via `--template` (never on argv, so it can't leak to the
+  process list), then the temp file is removed. The vault defaults to
+  `$RAXOL_OP_VAULT` or `Private`. Returns `{:ok, ref}` or `{:error, reason}`.
+  """
+  @spec create_item(atom() | String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def create_item(harness, key, opts \\ [])
+
+  def create_item(harness, key, opts) when is_binary(key) and key != "" do
+    if op_available?() do
+      do_create_item(harness, key, opts)
+    else
+      {:error, :op_unavailable}
+    end
+  end
+
+  def create_item(_harness, _key, _opts), do: {:error, :empty_key}
+
+  defp do_create_item(harness, key, opts) do
+    vault = Keyword.get(opts, :vault) || System.get_env("RAXOL_OP_VAULT") || "Private"
+    template = op_template(harness, key)
+    path = Path.join(System.tmp_dir!(), "raxol-op-#{System.unique_integer([:positive])}.json")
+
+    with :ok <- File.write(path, template),
+         _ <- File.chmod(path, 0o600) do
+      try do
+        run_op_create(path, vault)
+      after
+        File.rm(path)
+      end
+    end
+  end
+
+  defp run_op_create(template_path, vault) do
+    args = ["item", "create", "--template", template_path, "--vault", vault, "--format", "json"]
+
+    case System.cmd("op", args, stderr_to_stdout: true) do
+      {out, 0} -> created_ref(out, vault)
+      {out, code} -> {:error, {:op_create_failed, code, String.trim(out)}}
+    end
+  end
+
+  defp op_template(harness, key) do
+    Jason.encode!(%{
+      "title" => "Raxol #{harness} API key",
+      "category" => "API_CREDENTIAL",
+      "fields" => [
+        %{"id" => "credential", "type" => "CONCEALED", "label" => "credential", "value" => key}
+      ]
+    })
+  end
+
+  defp created_ref(out, vault) do
+    case Jason.decode(out) do
+      {:ok, %{"id" => id, "vault" => %{"name" => vname}}} ->
+        {:ok, "op://#{vname}/#{id}/credential"}
+
+      {:ok, %{"id" => id}} ->
+        {:ok, "op://#{vault}/#{id}/credential"}
+
+      _ ->
+        {:error, :op_create_unparsable}
+    end
+  end
+
+  @doc """
   Resolve a `op://...` reference to its secret via the 1Password CLI.
 
   Returns `{:ok, secret}` (trimmed), or `{:error, reason}` when `op` is

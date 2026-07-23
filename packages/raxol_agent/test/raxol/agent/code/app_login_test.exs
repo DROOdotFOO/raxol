@@ -102,10 +102,10 @@ defmodule Raxol.Agent.Code.AppLoginTest do
   end
 
   describe "/login" do
-    test "with no argument shows connection status" do
+    test "with no argument opens the browse wizard" do
       model = new_model(:no_provider) |> type("/login")
-      assert model.notice =~ "Connect a provider"
-      assert model.notice =~ "anthropic"
+      assert %{step: :browse, entries: entries} = model.wizard
+      assert Enum.any?(entries, &(&1.harness == :anthropic))
     end
 
     test "connects a keyless local provider" do

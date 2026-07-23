@@ -76,7 +76,8 @@ defmodule Raxol.Agent.Code.App do
     {hooks, hooks_note} = load_hooks(cwd)
     {mcp_servers, mcp_note} = load_mcp(cwd)
 
-    Map.merge(config(options, context), %{
+    config(options, context)
+    |> Map.merge(%{
       # Seeded from a resumed session so the transcript + conversation
       # rebuild immediately; a fresh session starts these empty.
       events: events,
@@ -88,7 +89,23 @@ defmodule Raxol.Agent.Code.App do
       hooks: hooks,
       mcp_servers: mcp_servers
     })
+    |> maybe_open_initial_wizard()
+    |> maybe_arm_launch_validation()
   end
+
+  # No provider connected at boot -> open the onboarding wizard on its
+  # selectable provider list.
+  defp maybe_open_initial_wizard(model) do
+    if provider_ready?(model), do: model, else: open_browse(model)
+  end
+
+  # A provider connected at boot (auto-detected or --harness) -> validate it on
+  # the first update, so a stale key surfaces before the first prompt.
+  defp maybe_arm_launch_validation(%{executor: %{} = executor} = model) do
+    if provider_ready?(model), do: %{model | pending_validation: executor}, else: model
+  end
+
+  defp maybe_arm_launch_validation(model), do: model
 
   # Static + option-derived fields; the session and loaded config are merged
   # over these in init/1.
@@ -121,6 +138,16 @@ defmodule Raxol.Agent.Code.App do
       login_ref: nil,
       login_validator:
         Keyword.get(options, :login_validator, &__MODULE__.default_login_validator/3),
+      # The onboarding wizard overlay: nil (connected), or a step map
+      # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
+      # save-to-1Password prompt). Set in init when no provider is connected.
+      wizard: nil,
+      # An executor armed in init to validate on the first update (which runs
+      # in the dispatcher, so the ping's reply lands where update can fold it).
+      pending_validation: nil,
+      # Injectable so the save-to-1Password flow is testable without mutating a
+      # real vault; the default shells out to `op item create`.
+      op_saver: Keyword.get(options, :op_saver, &__MODULE__.default_op_saver/2),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -185,9 +212,13 @@ defmodule Raxol.Agent.Code.App do
 
   @impl true
   def update(%Raxol.Core.Events.Event{} = event, model) do
+    model = maybe_launch_validation(model)
     norm = InputEvent.normalize(event)
 
     cond do
+      # The credential/save steps are modal: they own the keyboard so a pasted
+      # key never leaks into the prompt buffer or a slash command.
+      modal_wizard?(model) -> handle_wizard(norm, model)
       InputEvent.shortcut?(norm) -> handle_shortcut(norm, model)
       InputEvent.text?(norm) -> handle_char(InputEvent.printable_char(norm), model)
       key = InputEvent.key(norm) -> handle_key(key, model)
@@ -247,6 +278,23 @@ defmodule Raxol.Agent.Code.App do
 
   def update(_message, model), do: {model, []}
 
+  # Fire the armed launch validation on the first update (dispatcher process).
+  defp maybe_launch_validation(%{pending_validation: nil} = model), do: model
+
+  defp maybe_launch_validation(%{pending_validation: executor} = model) do
+    ref = start_login_validation(model, executor)
+
+    %{
+      model
+      | pending_validation: nil,
+        login_ref: ref,
+        status_line: "validating #{executor.harness} credential…"
+    }
+  end
+
+  defp modal_wizard?(%{wizard: %{step: step}}) when step in [:credential, :confirm_save], do: true
+  defp modal_wizard?(_model), do: false
+
   # -- key handlers -----------------------------------------------------------
 
   defp handle_shortcut(%{char: "c", mods: %{ctrl: true}}, model) do
@@ -287,9 +335,15 @@ defmodule Raxol.Agent.Code.App do
   defp handle_key(:enter, %{pending_approval: %{}} = model), do: {model, []}
   defp handle_key(:enter, %{running?: true} = model), do: {model, []}
 
+  # In browse mode, ↑/↓ move the provider cursor; Enter on an empty prompt
+  # selects it. A typed prompt or slash command still takes precedence (so the
+  # `/login <provider> ...` text path stays reachable alongside the wizard).
+  defp handle_key(:up, %{wizard: %{step: :browse}} = model), do: {wizard_move(model, -1), []}
+  defp handle_key(:down, %{wizard: %{step: :browse}} = model), do: {wizard_move(model, +1), []}
+
   defp handle_key(:enter, model) do
     case String.trim(model.input) do
-      "" -> {model, []}
+      "" -> {maybe_wizard_select(model), []}
       "/" <> _ = command -> dispatch_slash(%{model | input: ""}, command)
       prompt -> {submit_prompt(model, prompt), []}
     end
@@ -308,6 +362,11 @@ defmodule Raxol.Agent.Code.App do
 
   defp handle_key(:escape, %{running?: true} = model),
     do: {interrupt(model), []}
+
+  # Esc closes the browse list (reopen with /login); the modal steps handle
+  # their own Esc in handle_wizard/2.
+  defp handle_key(:escape, %{wizard: %{step: :browse}} = model),
+    do: {close_wizard(model), []}
 
   defp handle_key(_key, model), do: {model, []}
 
@@ -698,7 +757,7 @@ defmodule Raxol.Agent.Code.App do
   # a trailing token is taken as a model override.
   defp login(model, arg) do
     case String.split(String.trim(arg), ~r/\s+/, trim: true) do
-      [] -> notice(model, login_status_text())
+      [] -> open_browse(model)
       [provider] -> login_provider(model, provider, nil, nil)
       [provider, secret] -> login_provider(model, provider, secret, nil)
       [provider, secret, model_name | _] -> login_provider(model, provider, secret, model_name)
@@ -750,7 +809,8 @@ defmodule Raxol.Agent.Code.App do
           | executor: executor,
             provider_status: {:ready, harness, source},
             model_override: executor.model || model.model_override,
-            login_ref: ref
+            login_ref: ref,
+            wizard: nil
         }
         |> notice(connect_note(harness, source, note))
         |> put_status("connected to #{harness} — validating credential…")
@@ -811,13 +871,27 @@ defmodule Raxol.Agent.Code.App do
 
   defp do_validate_ping(executor) do
     case Raxol.Agent.Backend.Selector.select(executor) do
-      {:ok, backend, opts} ->
-        ping_opts = opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
-        interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
-
-      {:error, reason} ->
-        {:select_error, reason}
+      {:ok, backend, opts} -> validate_backend(backend, opts)
+      {:error, reason} -> {:select_error, reason}
     end
+  end
+
+  # Prefer the token-free model-list auth check for the HTTP backend; only an
+  # ambiguous result (unsupported endpoint, or reachable-but-odd-status) falls
+  # back to the authoritative single-token completion ping.
+  defp validate_backend(Raxol.Agent.Backend.HTTP = backend, opts) do
+    case Raxol.Agent.Backend.HTTP.check_auth(opts) do
+      :unsupported -> ping_completion(backend, opts)
+      {:reachable_error, _status} -> ping_completion(backend, opts)
+      verdict -> verdict
+    end
+  end
+
+  defp validate_backend(backend, opts), do: ping_completion(backend, opts)
+
+  defp ping_completion(backend, opts) do
+    ping_opts = opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
+    interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
   end
 
   @doc false
@@ -852,6 +926,137 @@ defmodule Raxol.Agent.Code.App do
     do: "#{harness} connected (Req unavailable, validation skipped)"
 
   defp validation_status(harness, _other), do: "#{harness} connected"
+
+  # -- onboarding wizard ------------------------------------------------------
+
+  defp open_browse(model) do
+    entries = browse_entries()
+    cursor = default_cursor(entries)
+    %{model | wizard: %{step: :browse, cursor: cursor, entries: entries}, notice: nil}
+  end
+
+  # Provider rows for the list, carrying the diagnostics so the panel can show
+  # availability + an actionable note per provider.
+  defp browse_entries, do: Raxol.Agent.Backend.Resolver.diagnostics().providers
+
+  # Start the cursor on the first available provider, else the top.
+  defp default_cursor(entries) do
+    case Enum.find_index(entries, & &1.available?) do
+      nil -> 0
+      idx -> idx
+    end
+  end
+
+  defp wizard_move(%{wizard: %{entries: entries, cursor: cursor} = wizard} = model, delta) do
+    max = max(length(entries) - 1, 0)
+    next = min(max, max(0, cursor + delta))
+    %{model | wizard: %{wizard | cursor: next}}
+  end
+
+  defp maybe_wizard_select(%{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model) do
+    case Enum.at(entries, cursor) do
+      nil -> model
+      entry -> select_provider(model, entry.harness, entry.keyless?)
+    end
+  end
+
+  defp maybe_wizard_select(model), do: model
+
+  # A keyless provider connects immediately; a keyed one opens masked entry.
+  defp select_provider(model, harness, true) do
+    model |> connect(harness, nil, nil) |> close_wizard_if_ready()
+  end
+
+  defp select_provider(model, harness, false) do
+    %{
+      model
+      | wizard: %{step: :credential, harness: harness, buffer: ""},
+        notice:
+          "#{harness}: paste an op:// reference (saved) or an API key (Enter to submit, Esc to cancel)"
+    }
+  end
+
+  defp close_wizard(model), do: %{model | wizard: nil}
+
+  defp close_wizard_if_ready(model) do
+    if provider_ready?(model), do: close_wizard(model), else: model
+  end
+
+  # -- wizard: modal steps (own the keyboard) ---------------------------------
+
+  defp handle_wizard(norm, %{wizard: %{step: :credential}} = model) do
+    cond do
+      InputEvent.text?(norm) -> {append_credential(model, InputEvent.printable_char(norm)), []}
+      InputEvent.key(norm) == :enter -> {submit_credential(model), []}
+      InputEvent.key(norm) == :backspace -> {backspace_credential(model), []}
+      InputEvent.key(norm) == :escape -> {open_browse(model), []}
+      true -> {model, []}
+    end
+  end
+
+  defp handle_wizard(norm, %{wizard: %{step: :confirm_save}} = model) do
+    cond do
+      InputEvent.printable_char(norm) in ["y", "Y"] -> {save_key_to_op(model), []}
+      InputEvent.printable_char(norm) in ["n", "N"] -> {decline_save(model), []}
+      InputEvent.key(norm) == :escape -> {decline_save(model), []}
+      true -> {model, []}
+    end
+  end
+
+  defp append_credential(%{wizard: wizard} = model, char),
+    do: %{model | wizard: %{wizard | buffer: wizard.buffer <> char}}
+
+  defp backspace_credential(%{wizard: %{buffer: buffer} = wizard} = model),
+    do: %{model | wizard: %{wizard | buffer: String.slice(buffer, 0..-2//1)}}
+
+  # An op:// reference stores + connects; a raw key connects for this session
+  # and (if op is available) offers to save it to 1Password.
+  defp submit_credential(%{wizard: %{harness: harness, buffer: buffer}} = model) do
+    trimmed = String.trim(buffer)
+
+    cond do
+      trimmed == "" ->
+        model
+
+      String.starts_with?(trimmed, "op://") ->
+        model |> connect(harness, trimmed, nil) |> close_wizard_if_ready()
+
+      true ->
+        model |> connect(harness, trimmed, nil) |> maybe_offer_save(harness, trimmed)
+    end
+  end
+
+  defp maybe_offer_save(model, harness, key) do
+    if Raxol.Agent.Backend.Credentials.op_available?() do
+      %{
+        model
+        | wizard: %{step: :confirm_save, harness: harness, key: key},
+          notice: "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
+      }
+    else
+      close_wizard(model)
+    end
+  end
+
+  defp save_key_to_op(%{wizard: %{harness: harness, key: key}} = model) do
+    case model.op_saver.(harness, key) do
+      {:ok, ref} ->
+        _ = Raxol.Agent.Backend.Credentials.put(harness, op_ref: ref)
+        model |> close_wizard() |> notice("saved #{harness} key to 1Password (#{ref})")
+
+      {:error, reason} ->
+        model
+        |> close_wizard()
+        |> notice("could not save to 1Password: #{inspect(reason)} — key kept for this session")
+    end
+  end
+
+  defp decline_save(%{wizard: %{harness: harness}} = model),
+    do: model |> close_wizard() |> notice("#{harness} key kept for this session only")
+
+  @doc false
+  def default_op_saver(harness, key),
+    do: Raxol.Agent.Backend.Credentials.create_item(harness, key)
 
   defp login_status_text do
     rows =
@@ -982,19 +1187,76 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  # The onboarding panel: shown until a provider is connected, so the TUI
-  # opens on "connect a provider" instead of failing an invisible request.
-  defp setup_block(model) do
-    if provider_ready?(model) do
-      nil
-    else
-      lines = String.split(provider_setup_hint(model), "\n")
+  # The onboarding panel: the wizard when one is open, else a static hint when
+  # unconnected, else nothing. Keeps the TUI on "connect a provider" instead of
+  # failing an invisible request.
+  defp setup_block(%{wizard: %{step: :browse} = wizard}), do: browse_panel(wizard)
+  defp setup_block(%{wizard: %{step: :credential} = wizard}), do: credential_panel(wizard)
+  defp setup_block(%{wizard: %{step: :confirm_save} = wizard}), do: confirm_save_panel(wizard)
 
-      box style: %{border: :single, padding: 0} do
-        column style: %{gap: 0} do
-          [text("connect a provider to begin", fg: :yellow, style: [:bold])] ++
-            Enum.map(lines, &text(&1, fg: :cyan))
-        end
+  defp setup_block(model) do
+    if provider_ready?(model), do: nil, else: hint_panel(model)
+  end
+
+  defp browse_panel(%{entries: entries, cursor: cursor}) do
+    rows =
+      entries
+      |> Enum.with_index()
+      |> Enum.map(fn {entry, index} -> provider_row(entry, index == cursor) end)
+
+    box style: %{border: :single, padding: 0} do
+      column style: %{gap: 0} do
+        [
+          text("connect a provider  (↑↓ move · Enter connect · Esc cancel)",
+            fg: :yellow,
+            style: [:bold]
+          )
+        ] ++ rows
+      end
+    end
+  end
+
+  defp provider_row(entry, selected?) do
+    marker = if selected?, do: "▸", else: " "
+    avail = if entry.available?, do: "●", else: "○"
+    note = if entry.note, do: "  #{entry.note}", else: ""
+    fg = if selected?, do: :cyan, else: :white
+    style = if selected?, do: [:bold], else: []
+    text("#{marker} #{avail} #{entry.label}#{note}", fg: fg, style: style)
+  end
+
+  defp credential_panel(%{harness: harness, buffer: buffer}) do
+    shown =
+      if String.starts_with?(buffer, "op://"),
+        do: buffer,
+        else: String.duplicate("•", String.length(buffer))
+
+    box style: %{border: :single, padding: 0} do
+      column style: %{gap: 0} do
+        [
+          text("connect #{harness}", fg: :yellow, style: [:bold]),
+          text("credential: #{shown}▌", fg: :cyan),
+          text("op:// reference is stored; a raw key can be saved to 1Password", style: [:dim])
+        ]
+      end
+    end
+  end
+
+  defp confirm_save_panel(%{harness: harness}) do
+    box style: %{border: :single, padding: 0} do
+      text("Save #{harness} key to 1Password?  [y] yes   [n] keep for this session",
+        fg: :yellow
+      )
+    end
+  end
+
+  defp hint_panel(model) do
+    lines = String.split(provider_setup_hint(model), "\n")
+
+    box style: %{border: :single, padding: 0} do
+      column style: %{gap: 0} do
+        [text("connect a provider to begin", fg: :yellow, style: [:bold])] ++
+          Enum.map(lines, &text(&1, fg: :cyan))
       end
     end
   end
