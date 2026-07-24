@@ -135,14 +135,14 @@ Calculates minimal updates between two buffers. Returns a list of operation tupl
 
 - `{:move, x, y}` - Move cursor to position
 - `{:write, text, style}` - Write text with style
-- `{:clear_line, y}` - Clear line at y
+- `{:clear_line, y}` - Clear line at y, emitted when a changed row becomes entirely blank (spaces with no visible style and no hyperlink)
 
 ```elixir
 diff = Renderer.render_diff(old_buffer, new_buffer)
 IO.write(Renderer.apply_diff(diff))
 ```
 
-Only generates updates for changed cells. Batches consecutive changes into single writes. < 2ms for 80x24 buffer.
+Only generates updates for changed cells. Batches consecutive changes into single writes; a row that goes fully blank collapses to a single `{:clear_line, y}`. < 2ms for 80x24 buffer.
 
 ### apply_diff/1
 
