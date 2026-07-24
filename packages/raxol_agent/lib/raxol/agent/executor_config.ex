@@ -54,6 +54,7 @@ defmodule Raxol.Agent.ExecutorConfig do
 
   Recognized keys: `:backend` (required; `:harness` is a deprecated alias),
   `:model`, `:auth`, `:opts`. The backend value is required and must be an atom.
+  If both `:backend` and `:harness` are given, `:backend` wins.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) when is_list(attrs), do: new(Map.new(attrs))

@@ -137,15 +137,13 @@ defmodule Mix.Tasks.Raxol.P do
   end
 
   defp build_stream_opts(_prompt, opts) do
-    backend_name = backend_opt(opts)
-    supported = Raxol.Agent.Backend.Selector.supported_backends()
-
+    # raxol.p reserves stderr for the JSONL event stream, so pass prog: nil to
+    # suppress the plain-text deprecation notice that would corrupt it.
     backend =
-      Enum.find(supported, &(Atom.to_string(&1) == backend_name)) ||
-        usage_error(
-          "unknown backend #{inspect(backend_name)}; supported: " <>
-            Enum.map_join(supported, ", ", &Atom.to_string/1)
-        )
+      case Raxol.Agent.Backend.Cli.resolve(opts, nil) do
+        {:ok, backend} -> backend
+        {:error, message} -> usage_error(message)
+      end
 
     executor_attrs =
       [backend: backend]
@@ -193,21 +191,6 @@ defmodule Mix.Tasks.Raxol.P do
 
   defp maybe_put(kw, _key, nil), do: kw
   defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
-
-  # `--backend` is canonical; `--harness` is the deprecated alias.
-  defp backend_opt(opts) do
-    case {Keyword.get(opts, :backend), Keyword.get(opts, :harness)} do
-      {nil, nil} ->
-        "lm_studio"
-
-      {nil, legacy} ->
-        IO.puts(:stderr, "raxol.p: --harness is deprecated; use --backend")
-        legacy
-
-      {name, _} ->
-        name
-    end
-  end
 
   # -- Event consumption: contract events in, stdout/stderr out --------------
 

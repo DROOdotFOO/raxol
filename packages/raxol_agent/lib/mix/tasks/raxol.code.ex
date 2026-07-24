@@ -131,36 +131,17 @@ defmodule Mix.Tasks.Raxol.Code do
   end
 
   defp build_executor(opts) do
-    backend_name = backend_opt(opts)
-    supported = Raxol.Agent.Backend.Selector.supported_backends()
-
     backend =
-      Enum.find(supported, &(Atom.to_string(&1) == backend_name)) ||
-        usage_error(
-          "unknown backend #{inspect(backend_name)}; supported: " <>
-            Enum.map_join(supported, ", ", &Atom.to_string/1)
-        )
+      case Raxol.Agent.Backend.Cli.resolve(opts, "raxol.code") do
+        {:ok, backend} -> backend
+        {:error, message} -> usage_error(message)
+      end
 
     attrs =
       [backend: backend]
       |> maybe_put(:model, Keyword.get(opts, :model))
 
     Raxol.Agent.ExecutorConfig.new(attrs)
-  end
-
-  # `--backend` is canonical; `--harness` is the deprecated alias.
-  defp backend_opt(opts) do
-    case {Keyword.get(opts, :backend), Keyword.get(opts, :harness)} do
-      {nil, nil} ->
-        "lm_studio"
-
-      {nil, legacy} ->
-        IO.puts(:stderr, "raxol.code: --harness is deprecated; use --backend")
-        legacy
-
-      {name, _} ->
-        name
-    end
   end
 
   defp usage_error(message) do
