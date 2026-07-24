@@ -71,7 +71,12 @@ defmodule Raxol.UI.SyntaxHighlighter do
           [[token()]]
   def highlight_lines(source, language, theme \\ @default_theme)
 
-  def highlight_lines("", _language, _theme), do: []
+  # `String.split("", "\n")` is `[""]` -- one empty line, not zero -- so the
+  # documented "outer list has length(String.split(source, "\n")) entries"
+  # invariant requires a single empty-token line here, not an empty list.
+  # Delegating to `plain_lines/1` keeps the empty-line token shape in one
+  # place (and a lexer on "" can legitimately yield no tokens at all).
+  def highlight_lines("", _language, _theme), do: plain_lines("")
 
   def highlight_lines(source, nil, _theme) when is_binary(source),
     do: plain_lines(source)
