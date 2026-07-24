@@ -42,8 +42,9 @@ defmodule Raxol.Gateway.Session do
   def route(server), do: GenServer.call(server, :route)
 
   @doc "The session's stable conversation id."
-  @spec conversation_id(GenServer.server()) :: String.t()
-  def conversation_id(server), do: GenServer.call(server, :conversation_id)
+  @spec conversation_id(GenServer.server(), timeout()) :: String.t()
+  def conversation_id(server, timeout \\ 5_000),
+    do: GenServer.call(server, :conversation_id, timeout)
 
   @impl true
   def init(opts) do
