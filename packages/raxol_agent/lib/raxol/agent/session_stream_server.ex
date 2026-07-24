@@ -45,6 +45,9 @@ if Code.ensure_loaded?(Plug.Router) do
 
     use Plug.Router
 
+    alias Raxol.Agent.Contract
+    alias Raxol.Agent.Contract.Event
+
     plug(:match)
 
     plug(Plug.Parsers,
@@ -100,7 +103,10 @@ if Code.ensure_loaded?(Plug.Router) do
           %{event: event_type, data: data}
         end)
 
-      send_json(conn, 200, %{session_id: to_string(session_id), events: json_events})
+      send_json(conn, 200, %{
+        session_id: to_string(session_id),
+        events: json_events
+      })
     end
 
     get "/sessions/:id" do
@@ -180,7 +186,11 @@ if Code.ensure_loaded?(Plug.Router) do
             status = Raxol.Agent.Process.get_status(pid)
 
             {:ok,
-             %{id: to_string(session_id), status: to_string(status.status), pid: inspect(pid)}}
+             %{
+               id: to_string(session_id),
+               status: to_string(status.status),
+               pid: inspect(pid)
+             }}
           catch
             :exit, _ -> {:error, :not_found}
           end
@@ -193,10 +203,34 @@ if Code.ensure_loaded?(Plug.Router) do
       end
     end
 
-    @passthrough_events [:tool_use, :tool_result, :state_change, :turn_complete, :done]
+    @passthrough_events [
+      :tool_use,
+      :tool_result,
+      :state_change,
+      :turn_complete,
+      :done
+    ]
+
+    # The contract-envelope producer path (`Raxol.Agent.Contract.pump/3`,
+    # `Raxol.Agent.EmitBridge`, `Raxol.Agent.AcpStreamAdapter`) emits
+    # `%Event{}` structs through the SAME `SessionStreamer.emit/3` channel the
+    # legacy tuple producers use — the SSE surface must speak both vocabularies
+    # or a contract-backed session renders as a wall of `event: unknown`
+    # frames (the bug this clause closes). The wire event name is the
+    # contract `type` verbatim (`"turn_started"`, `"item_delta"`, …); the
+    # payload is sanitized the same way `Contract.encode_line/1` sanitizes a
+    # durable record, so a payload carrying a non-JSON-encodable term (an
+    # error reason tuple, a struct) degrades to `inspect/1` text instead of
+    # crashing `Jason.encode/1` mid-stream.
+    defp serialize_event(%Event{type: type, payload: payload}) do
+      {Atom.to_string(type), Contract.sanitize_payload(payload)}
+    end
 
     defp serialize_event({:text_delta, text}), do: {"text_delta", %{text: text}}
-    defp serialize_event({:error, reason}), do: {"error", %{reason: inspect(reason)}}
+    defp serialize_event({:reasoning, text}), do: {"reasoning", %{text: text}}
+
+    defp serialize_event({:error, reason}),
+      do: {"error", %{reason: inspect(reason)}}
 
     defp serialize_event({type, info}) when type in @passthrough_events do
       {Atom.to_string(type), info}
