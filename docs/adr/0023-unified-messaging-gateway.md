@@ -23,6 +23,10 @@ four-mode `Delivery` router (decision item 4), and `SessionRouter.handoff/3` (re
 `conversation_id` so history follows). Still to do: the concrete platform adapters (Telegram refactor,
 Discord, ...) and the `Lifecycle`-backed handler.
 
+2026-07-24: the `Adapter` contract is frozen (five callbacks; additions must be optional callbacks),
+and the first production handler landed: `Handler.Agent`, backed by `Raxol.Agent.Stream` with
+environment-resolved credentials (`auto_provider`). The `Lifecycle`-backed TEA handler remains open.
+
 ## Context
 
 Raxol reaches chat platforms through separate, bespoke surface packages with no shared contract and

@@ -90,8 +90,18 @@ defmodule Raxol.Gateway.SessionRouterTest do
   test "a session stops on idle timeout", %{router: r} do
     {:ok, pid} = SessionRouter.start_session(r, route(1))
     ref = Process.monitor(pid)
-    send(pid, :idle_timeout)
+    %{idle_ref: idle_ref} = :sys.get_state(pid)
+    send(pid, {:idle_timeout, idle_ref})
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
+  test "a stale idle timeout from a superseded timer is ignored", %{router: r} do
+    {:ok, pid} = SessionRouter.start_session(r, route(1))
+    ref = Process.monitor(pid)
+    send(pid, {:idle_timeout, make_ref()})
+    # The session must survive the stale message; a sync call proves liveness.
+    assert %Route{} = Raxol.Gateway.Session.route(pid)
+    refute_received {:DOWN, ^ref, :process, ^pid, _}
   end
 
   @tag max_sessions: 1
