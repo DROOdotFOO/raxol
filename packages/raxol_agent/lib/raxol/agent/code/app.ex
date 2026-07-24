@@ -147,6 +147,17 @@ defmodule Raxol.Agent.Code.App do
           :login_validator,
           &__MODULE__.default_login_validator/3
         ),
+      # `/model` with no arg fetches the connected provider's model list off
+      # the app process; the result rides back as a `:models_list` message
+      # matched by this ref. Injectable so tests drive it without a network
+      # call, mirroring `:login_validator`.
+      models_ref: nil,
+      models_fetcher:
+        Keyword.get(
+          options,
+          :models_fetcher,
+          &__MODULE__.default_models_fetcher/3
+        ),
       # The onboarding wizard overlay: nil (connected), or a step map
       # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
       # save-to-1Password prompt). Set in init when no provider is connected.
@@ -304,6 +315,14 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # An async `/model` model-list fetch result. Applied only when its ref still
+  # matches the latest fetch (a newer `/model` supersedes an in-flight one).
+  def update({:command_result, {:models_list, ref, result}}, model) do
+    if ref == model.models_ref,
+      do: {apply_models_result(model, result), []},
+      else: {model, []}
+  end
+
   def update(_message, model), do: {model, []}
 
   # Fire the armed launch validation on the first update (dispatcher process).
@@ -368,11 +387,13 @@ defmodule Raxol.Agent.Code.App do
   # In browse mode, ↑/↓ move the provider cursor; Enter on an empty prompt
   # selects it. A typed prompt or slash command still takes precedence (so the
   # `/login <provider> ...` text path stays reachable alongside the wizard).
-  defp handle_key(:up, %{wizard: %{step: :browse}} = model),
-    do: {wizard_move(model, -1), []}
+  defp handle_key(:up, %{wizard: %{step: step}} = model)
+       when step in [:browse, :models],
+       do: {wizard_move(model, -1), []}
 
-  defp handle_key(:down, %{wizard: %{step: :browse}} = model),
-    do: {wizard_move(model, +1), []}
+  defp handle_key(:down, %{wizard: %{step: step}} = model)
+       when step in [:browse, :models],
+       do: {wizard_move(model, +1), []}
 
   defp handle_key(:enter, model) do
     case String.trim(model.input) do
@@ -396,10 +417,11 @@ defmodule Raxol.Agent.Code.App do
   defp handle_key(:escape, %{running?: true} = model),
     do: {interrupt(model), []}
 
-  # Esc closes the browse list (reopen with /login); the modal steps handle
-  # their own Esc in handle_wizard/2.
-  defp handle_key(:escape, %{wizard: %{step: :browse}} = model),
-    do: {close_wizard(model), []}
+  # Esc closes the browse/model list (reopen with /login or /model); the modal
+  # steps handle their own Esc in handle_wizard/2.
+  defp handle_key(:escape, %{wizard: %{step: step}} = model)
+       when step in [:browse, :models],
+       do: {close_wizard(model), []}
 
   defp handle_key(_key, model), do: {model, []}
 
@@ -1115,6 +1137,21 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  defp maybe_wizard_select(
+         %{wizard: %{step: :models, entries: entries, cursor: cursor}} = model
+       ) do
+    case Enum.at(entries, cursor) do
+      nil ->
+        model
+
+      entry ->
+        notice(
+          %{model | model_override: entry.model, wizard: nil},
+          "model set to #{entry.model}"
+        )
+    end
+  end
+
   defp maybe_wizard_select(model), do: model
 
   # A keyless provider connects immediately; a keyed one opens masked entry.
@@ -1296,15 +1333,94 @@ defmodule Raxol.Agent.Code.App do
     }
   end
 
-  defp set_model(model, "") do
-    notice(
-      model,
-      "usage: /model <name>  (current: #{model.model_override || "default"})"
-    )
+  # `/model` with no arg on a connected provider fetches its model list and
+  # opens a selectable picker; otherwise it just shows the current model.
+  defp set_model(%{executor: %{}} = model, "") do
+    if provider_ready?(model),
+      do: open_model_picker(model),
+      else: model_usage(model)
   end
+
+  defp set_model(model, ""), do: model_usage(model)
 
   defp set_model(model, name) do
     notice(%{model | model_override: name}, "model set to #{name}")
+  end
+
+  defp model_usage(model),
+    do:
+      notice(
+        model,
+        "usage: /model <name>  (current: #{model.model_override || "default"})"
+      )
+
+  defp open_model_picker(model) do
+    ref = make_ref()
+    model.models_fetcher.(models_fetch_opts(model), ref, self())
+    %{model | models_ref: ref} |> put_status("fetching models…")
+  end
+
+  # The connected executor's backend opts, with `:provider` pinned so the
+  # model-list endpoint is chosen by the actual backend, not a URL guess.
+  defp models_fetch_opts(%{executor: executor}) do
+    executor
+    |> Raxol.Agent.ExecutorConfig.to_backend_opts()
+    |> Keyword.put(:provider, executor.backend)
+  end
+
+  @doc false
+  # Default fetcher: list the provider's models off the app process (so a slow
+  # endpoint never blocks the TUI); the outcome rides back as a `:models_list`
+  # message `update/2` folds.
+  def default_models_fetcher(opts, ref, app) do
+    spawn(fn ->
+      result = Raxol.Agent.Backend.HTTP.list_models(opts)
+      send(app, {:command_result, {:models_list, ref, result}})
+    end)
+  end
+
+  defp apply_models_result(model, {:ok, [_ | _] = ids}) do
+    entries = Enum.map(ids, &%{model: &1, label: &1})
+
+    %{
+      model
+      | models_ref: nil,
+        status_line: nil,
+        wizard: %{
+          step: :models,
+          entries: entries,
+          cursor: model_cursor(entries, model.model_override)
+        }
+    }
+  end
+
+  defp apply_models_result(model, {:ok, []}),
+    do:
+      notice(
+        %{model | models_ref: nil, status_line: nil},
+        "no models returned — usage: /model <name>"
+      )
+
+  defp apply_models_result(model, :unsupported),
+    do:
+      notice(
+        %{model | models_ref: nil, status_line: nil},
+        "model listing unavailable for this provider — usage: /model <name>"
+      )
+
+  defp apply_models_result(model, {:error, _reason}),
+    do:
+      notice(
+        %{model | models_ref: nil, status_line: nil},
+        "couldn't fetch models — usage: /model <name>"
+      )
+
+  # Start the cursor on the current model when it's in the list, else the top.
+  defp model_cursor(entries, current) do
+    case Enum.find_index(entries, &(&1.model == current)) do
+      nil -> 0
+      index -> index
+    end
   end
 
   # Heuristic context shrink: keep the last few exchanges, replace the rest
@@ -1351,7 +1467,7 @@ defmodule Raxol.Agent.Code.App do
     /help              this help
     /login [provider]  connect an LLM provider (op ref, key, or local)
     /clear             start a fresh session
-    /model <name>      switch model for the next turns
+    /model [name]      switch model (no name = pick from the provider's list)
     /plan              toggle plan mode
     /compact           shrink the conversation history
     /context           session stats
@@ -1390,8 +1506,36 @@ defmodule Raxol.Agent.Code.App do
   defp setup_block(%{wizard: %{step: :confirm_save} = wizard}),
     do: confirm_save_panel(wizard)
 
+  defp setup_block(%{wizard: %{step: :models} = wizard}),
+    do: models_panel(wizard)
+
   defp setup_block(model) do
     if provider_ready?(model), do: nil, else: hint_panel(model)
+  end
+
+  defp models_panel(%{entries: entries, cursor: cursor}) do
+    rows =
+      entries
+      |> Enum.with_index()
+      |> Enum.map(fn {entry, index} -> model_row(entry, index == cursor) end)
+
+    box style: %{border: :single, padding: 0} do
+      column style: %{gap: 0} do
+        [
+          text("pick a model  (↑↓ move · Enter select · Esc cancel)",
+            fg: :yellow,
+            style: [:bold]
+          )
+        ] ++ rows
+      end
+    end
+  end
+
+  defp model_row(entry, selected?) do
+    marker = if selected?, do: "▸", else: " "
+    fg = if selected?, do: :cyan, else: :white
+    style = if selected?, do: [:bold], else: []
+    text("#{marker} #{entry.label}", fg: fg, style: style)
   end
 
   defp browse_panel(%{entries: entries, cursor: cursor}) do

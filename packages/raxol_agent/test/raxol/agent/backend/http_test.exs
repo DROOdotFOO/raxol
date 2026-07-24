@@ -3,6 +3,34 @@ defmodule Raxol.Agent.Backend.HTTPTest do
 
   alias Raxol.Agent.Backend.HTTP
 
+  describe "parse_models/2" do
+    test "OpenAI-compatible /v1/models: extracts data[].id" do
+      body = %{
+        "object" => "list",
+        "data" => [%{"id" => "gpt-4o"}, %{"id" => "gpt-4o-mini"}]
+      }
+
+      assert HTTP.parse_models(:openai, body) == ["gpt-4o", "gpt-4o-mini"]
+    end
+
+    test "Ollama /api/tags: extracts models[].name" do
+      body = %{"models" => [%{"name" => "llama3.2"}, %{"name" => "qwen2.5"}]}
+      assert HTTP.parse_models(:ollama, body) == ["llama3.2", "qwen2.5"]
+    end
+
+    test "skips non-string / malformed entries" do
+      assert HTTP.parse_models(:openai, %{
+               "data" => [%{"id" => 1}, %{"id" => "ok"}, %{}]
+             }) ==
+               ["ok"]
+    end
+
+    test "an unrecognized body shape yields an empty list, never a crash" do
+      assert HTTP.parse_models(:openai, %{"unexpected" => true}) == []
+      assert HTTP.parse_models(:ollama, "not a map") == []
+    end
+  end
+
   describe "complete/2" do
     test "accepts req_plugins option" do
       # Plugin that records it was called
@@ -276,16 +304,36 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       # with last-wins loses the name (the final fragment is args-only) --
       # the :missing_tool_name bug. Accumulation by index fixes it.
       batches = [
-        [%{"index" => 0, "id" => "c1", "function" => %{"name" => "edit_file", "arguments" => ""}}],
-        [%{"index" => 0, "function" => %{"arguments" => "{\"path\":\"mix.exs\","}}],
-        [%{"index" => 0, "function" => %{"arguments" => "\"old\":\"a\",\"new\":\"b\"}"}}]
+        [
+          %{
+            "index" => 0,
+            "id" => "c1",
+            "function" => %{"name" => "edit_file", "arguments" => ""}
+          }
+        ],
+        [
+          %{
+            "index" => 0,
+            "function" => %{"arguments" => "{\"path\":\"mix.exs\","}
+          }
+        ],
+        [
+          %{
+            "index" => 0,
+            "function" => %{"arguments" => "\"old\":\"a\",\"new\":\"b\"}"}
+          }
+        ]
       ]
 
       assert [
                %{
                  "id" => "c1",
                  "name" => "edit_file",
-                 "arguments" => %{"path" => "mix.exs", "old" => "a", "new" => "b"}
+                 "arguments" => %{
+                   "path" => "mix.exs",
+                   "old" => "a",
+                   "new" => "b"
+                 }
                }
              ] = HTTP.accumulate_tool_calls(batches)
     end
@@ -296,12 +344,21 @@ defmodule Raxol.Agent.Backend.HTTPTest do
           %{
             "index" => 0,
             "id" => "c9",
-            "function" => %{"name" => "read_file", "arguments" => "{\"path\":\"a.txt\"}"}
+            "function" => %{
+              "name" => "read_file",
+              "arguments" => "{\"path\":\"a.txt\"}"
+            }
           }
         ]
       ]
 
-      assert [%{"id" => "c9", "name" => "read_file", "arguments" => %{"path" => "a.txt"}}] =
+      assert [
+               %{
+                 "id" => "c9",
+                 "name" => "read_file",
+                 "arguments" => %{"path" => "a.txt"}
+               }
+             ] =
                HTTP.accumulate_tool_calls(batches)
     end
 
@@ -320,13 +377,19 @@ defmodule Raxol.Agent.Backend.HTTPTest do
         [
           %{
             "id" => "c1",
-            "function" => %{"name" => "read_file", "arguments" => "{\"path\":\"a.txt\"}"}
+            "function" => %{
+              "name" => "read_file",
+              "arguments" => "{\"path\":\"a.txt\"}"
+            }
           }
         ],
         [
           %{
             "id" => "c2",
-            "function" => %{"name" => "list_dir", "arguments" => "{\"path\":\".\"}"}
+            "function" => %{
+              "name" => "list_dir",
+              "arguments" => "{\"path\":\".\"}"
+            }
           }
         ]
       ]
@@ -334,17 +397,38 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       result = HTTP.accumulate_tool_calls(batches)
 
       assert length(result) == 2
-      assert %{"id" => "c1", "name" => "read_file", "arguments" => %{"path" => "a.txt"}} in result
-      assert %{"id" => "c2", "name" => "list_dir", "arguments" => %{"path" => "."}} in result
+
+      assert %{
+               "id" => "c1",
+               "name" => "read_file",
+               "arguments" => %{"path" => "a.txt"}
+             } in result
+
+      assert %{
+               "id" => "c2",
+               "name" => "list_dir",
+               "arguments" => %{"path" => "."}
+             } in result
     end
 
     test "an indexless continuation fragment that repeats the id still merges into the same call" do
       batches = [
-        [%{"id" => "c1", "function" => %{"name" => "edit_file", "arguments" => "{\"a\":"}}],
+        [
+          %{
+            "id" => "c1",
+            "function" => %{"name" => "edit_file", "arguments" => "{\"a\":"}
+          }
+        ],
         [%{"id" => "c1", "function" => %{"arguments" => "1}"}}]
       ]
 
-      assert [%{"id" => "c1", "name" => "edit_file", "arguments" => %{"a" => 1}}] =
+      assert [
+               %{
+                 "id" => "c1",
+                 "name" => "edit_file",
+                 "arguments" => %{"a" => 1}
+               }
+             ] =
                HTTP.accumulate_tool_calls(batches)
     end
 
@@ -354,7 +438,10 @@ defmodule Raxol.Agent.Backend.HTTPTest do
           %{
             "index" => 0,
             "id" => "c1",
-            "function" => %{"name" => "edit_file", "arguments" => "{not valid json"}
+            "function" => %{
+              "name" => "edit_file",
+              "arguments" => "{not valid json"
+            }
           }
         ]
       ]
@@ -381,14 +468,20 @@ defmodule Raxol.Agent.Backend.HTTPTest do
             %{
               "index" => bad_index,
               "id" => "c1",
-              "function" => %{"name" => "read_file", "arguments" => "{\"path\":\"a.txt\"}"}
+              "function" => %{
+                "name" => "read_file",
+                "arguments" => "{\"path\":\"a.txt\"}"
+              }
             }
           ],
           [
             %{
               "index" => bad_index,
               "id" => "c2",
-              "function" => %{"name" => "list_dir", "arguments" => "{\"path\":\".\"}"}
+              "function" => %{
+                "name" => "list_dir",
+                "arguments" => "{\"path\":\".\"}"
+              }
             }
           ]
         ]
@@ -397,7 +490,9 @@ defmodule Raxol.Agent.Backend.HTTPTest do
 
         # No crash; both distinct calls survive (resolved by id, not the
         # garbage index that would have cross-merged or blown up).
-        assert length(result) == 2, "bad index #{inspect(bad_index)} did not resolve to 2 calls"
+        assert length(result) == 2,
+               "bad index #{inspect(bad_index)} did not resolve to 2 calls"
+
         assert Enum.find(result, &(&1["id"] == "c1"))["name"] == "read_file"
         assert Enum.find(result, &(&1["id"] == "c2"))["name"] == "list_dir"
       end
@@ -407,8 +502,20 @@ defmodule Raxol.Agent.Backend.HTTPTest do
       # Regression guard: the tightened guard must not reject legitimate
       # integer indices (the normal streaming path).
       batches = [
-        [%{"index" => 0, "id" => "c1", "function" => %{"name" => "a", "arguments" => "{}"}}],
-        [%{"index" => 1, "id" => "c2", "function" => %{"name" => "b", "arguments" => "{}"}}],
+        [
+          %{
+            "index" => 0,
+            "id" => "c1",
+            "function" => %{"name" => "a", "arguments" => "{}"}
+          }
+        ],
+        [
+          %{
+            "index" => 1,
+            "id" => "c2",
+            "function" => %{"name" => "b", "arguments" => "{}"}
+          }
+        ],
         [%{"index" => 0, "function" => %{"arguments" => ""}}]
       ]
 

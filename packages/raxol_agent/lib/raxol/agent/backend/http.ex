@@ -55,7 +55,8 @@ defmodule Raxol.Agent.Backend.HTTP do
     # unparseable body or an empty length-truncated turn is an honest error,
     # NOT assistant prose (the "cannot lie at the wire boundary" rule). The
     # with-chain surfaces either the transport error or the parse error.
-    with {:ok, response_body} <- do_request(url, headers, body, timeout, plugins),
+    with {:ok, response_body} <-
+           do_request(url, headers, body, timeout, plugins),
          {:ok, parsed} <- parse_response(provider, response_body) do
       {:ok, parsed}
     end
@@ -126,25 +127,89 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   @doc false
   def interpret_models_status(status) when status in 200..299, do: :valid
-  def interpret_models_status(status) when status in [401, 403], do: {:rejected, status}
-  def interpret_models_status(status) when is_integer(status), do: {:reachable_error, status}
+
+  def interpret_models_status(status) when status in [401, 403],
+    do: {:rejected, status}
+
+  def interpret_models_status(status) when is_integer(status),
+    do: {:reachable_error, status}
+
+  @doc """
+  List a provider's available model ids via the SAME model-list endpoint
+  `check_auth/1` uses (so it costs no tokens and reuses the auth plumbing).
+
+  Returns `{:ok, ids}` (a possibly-empty list of model-id strings),
+  `{:error, reason}` (transport failure or non-2xx), or `:unsupported` (no
+  known model-list endpoint for this provider — the caller should fall back
+  to typing a model name).
+  """
+  @spec list_models(keyword()) ::
+          {:ok, [String.t()]} | {:error, term()} | :unsupported
+  def list_models(opts) do
+    if available?() do
+      provider = detect_provider(opts)
+      provider |> models_request(opts) |> fetch_models(provider, opts)
+    else
+      :unsupported
+    end
+  end
+
+  defp fetch_models(:unsupported, _provider, _opts), do: :unsupported
+
+  defp fetch_models({url, headers}, provider, opts) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    req = Req.new(url: url, headers: headers, receive_timeout: timeout)
+
+    case Req.get(req) do
+      {:ok, %{status: status, body: body}} when status in 200..299 ->
+        {:ok, parse_models(provider, body)}
+
+      {:ok, %{status: status}} ->
+        {:error, {:http_error, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    _ -> {:error, :request_failed}
+  end
+
+  @doc false
+  # Extract model-id strings from a model-list response body. Public for
+  # testing the two response shapes without a live endpoint.
+  # Ollama `/api/tags`: `%{"models" => [%{"name" => id}, ...]}`.
+  def parse_models(:ollama, %{"models" => models}) when is_list(models),
+    do: for(%{"name" => name} <- models, is_binary(name), do: name)
+
+  # OpenAI-compatible `/v1/models`: `%{"data" => [%{"id" => id}, ...]}`.
+  def parse_models(_provider, %{"data" => data}) when is_list(data),
+    do: for(%{"id" => id} <- data, is_binary(id), do: id)
+
+  def parse_models(_provider, _body), do: []
 
   defp models_request(:anthropic, opts) do
     case Keyword.get(opts, :api_key) do
       key when is_binary(key) ->
         base = Keyword.get(opts, :base_url, "https://api.anthropic.com")
-        {"#{base}/v1/models", [{"x-api-key", key}, {"anthropic-version", @anthropic_api_version}]}
+
+        {"#{base}/v1/models",
+         [{"x-api-key", key}, {"anthropic-version", @anthropic_api_version}]}
 
       _no_key ->
         :unsupported
     end
   end
 
-  defp models_request(:openai, opts), do: bearer_models_request(opts, "https://api.openai.com")
-  defp models_request(:kimi, opts), do: bearer_models_request(opts, "https://api.moonshot.ai")
+  defp models_request(:openai, opts),
+    do: bearer_models_request(opts, "https://api.openai.com")
+
+  defp models_request(:kimi, opts),
+    do: bearer_models_request(opts, "https://api.moonshot.ai")
 
   defp models_request(:ollama, opts) do
-    base = Keyword.get(opts, :base_url, "http://localhost:#{@default_ollama_port}")
+    base =
+      Keyword.get(opts, :base_url, "http://localhost:#{@default_ollama_port}")
+
     {"#{base}/api/tags", []}
   end
 
@@ -454,7 +519,8 @@ defmodule Raxol.Agent.Backend.HTTP do
       # the whole array per chunk + last-wins loses the name (the final
       # fragment is args-only). A single full-message tool_calls array is just
       # the degenerate one-fragment case, so this handles both.
-      is_list(tool_calls) and tool_calls != [] and {:tool_call_delta, tool_calls}
+      is_list(tool_calls) and tool_calls != [] and
+        {:tool_call_delta, tool_calls}
     )
     |> maybe_prepend(finish == "length" && {:marker, truncation_marker(choice)})
     |> Enum.reverse()
@@ -654,7 +720,11 @@ defmodule Raxol.Agent.Backend.HTTP do
        content: choice_text(msg),
        tool_calls: parse_openai_tool_calls(tool_calls),
        usage: Map.get(body, "usage", %{}),
-       metadata: %{backend: :http, provider: :openai, model: Map.get(body, "model")}
+       metadata: %{
+         backend: :http,
+         provider: :openai,
+         model: Map.get(body, "model")
+       }
      }
      |> put_reasoning(choice_reasoning(msg))}
   end
@@ -809,7 +879,8 @@ defmodule Raxol.Agent.Backend.HTTP do
     end
   end
 
-  defp resolve_tool_call_index(acc, _frag, pos), do: next_tool_call_index(acc) + pos
+  defp resolve_tool_call_index(acc, _frag, pos),
+    do: next_tool_call_index(acc) + pos
 
   defp find_tool_call_index_by_id(acc, id) do
     Enum.find_value(acc, fn
@@ -881,8 +952,12 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   # The separate reasoning channel: `reasoning` (OpenRouter) or
   # `reasoning_content` (DeepSeek / LongCat); nil when absent/blank.
-  defp choice_reasoning(%{"reasoning_content" => t}) when is_binary(t) and t != "", do: t
-  defp choice_reasoning(%{"reasoning" => t}) when is_binary(t) and t != "", do: t
+  defp choice_reasoning(%{"reasoning_content" => t})
+       when is_binary(t) and t != "", do: t
+
+  defp choice_reasoning(%{"reasoning" => t}) when is_binary(t) and t != "",
+    do: t
+
   defp choice_reasoning(_msg), do: nil
 
   # Tolerate the wire-key variant: LongCat sends `finishreason` (no
@@ -917,7 +992,9 @@ defmodule Raxol.Agent.Backend.HTTP do
   end
 
   defp put_reasoning(response, nil), do: response
-  defp put_reasoning(response, reasoning), do: Map.put(response, :reasoning, reasoning)
+
+  defp put_reasoning(response, reasoning),
+    do: Map.put(response, :reasoning, reasoning)
 
   defp blank?(s) when is_binary(s), do: String.trim(s) == ""
   defp blank?(_), do: false
