@@ -25,8 +25,6 @@ defmodule Raxol.Telegram.RichMessage.Sender do
 
   alias Raxol.Telegram.{HTTP, RichMessage}
 
-  require Logger
-
   @type send_opts :: [
           bot_token: String.t(),
           api_base: String.t(),
