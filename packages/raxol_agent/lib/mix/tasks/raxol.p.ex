@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Raxol.P do
   Run one agent turn headlessly — the `raxol -p` surface.
 
       mix raxol.p "what's inside my cwd"
-      mix raxol.p --harness lm_studio --model qwen2.5-7b-instruct "summarize mix.exs"
+      mix raxol.p --backend lm_studio --model qwen2.5-7b-instruct "summarize mix.exs"
       bin/raxol -p "what's inside my cwd"        # repo-root wrapper
 
   ## What it does
@@ -30,8 +30,9 @@ defmodule Mix.Tasks.Raxol.P do
 
   ## Options
 
-    * `--harness`  — backend harness atom (default `lm_studio`; also
-      `anthropic`, `openai`, `ollama`, ... see `Backend.Selector`)
+    * `--backend`  — LLM backend atom (default `lm_studio`; also
+      `anthropic`, `openai`, `ollama`, ... see `Backend.Selector`).
+      `--harness` is accepted as a deprecated alias.
     * `--model`    — model override (LM Studio uses its loaded model)
     * `--base-url` — override the backend base URL
     * `--system`   — system prompt override
@@ -52,6 +53,8 @@ defmodule Mix.Tasks.Raxol.P do
   @default_timeout_s 180
 
   @switches [
+    backend: :string,
+    # `--harness` is a deprecated alias for `--backend`.
     harness: :string,
     model: :string,
     base_url: :string,
@@ -134,18 +137,18 @@ defmodule Mix.Tasks.Raxol.P do
   end
 
   defp build_stream_opts(_prompt, opts) do
-    harness_name = Keyword.get(opts, :harness, "lm_studio")
-    supported = Raxol.Agent.Backend.Selector.supported_harnesses()
+    backend_name = backend_opt(opts)
+    supported = Raxol.Agent.Backend.Selector.supported_backends()
 
-    harness =
-      Enum.find(supported, &(Atom.to_string(&1) == harness_name)) ||
+    backend =
+      Enum.find(supported, &(Atom.to_string(&1) == backend_name)) ||
         usage_error(
-          "unknown harness #{inspect(harness_name)}; supported: " <>
+          "unknown backend #{inspect(backend_name)}; supported: " <>
             Enum.map_join(supported, ", ", &Atom.to_string/1)
         )
 
     executor_attrs =
-      [harness: harness]
+      [backend: backend]
       |> maybe_put(:model, Keyword.get(opts, :model))
 
     executor = Raxol.Agent.ExecutorConfig.new(executor_attrs)
@@ -190,6 +193,21 @@ defmodule Mix.Tasks.Raxol.P do
 
   defp maybe_put(kw, _key, nil), do: kw
   defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
+
+  # `--backend` is canonical; `--harness` is the deprecated alias.
+  defp backend_opt(opts) do
+    case {Keyword.get(opts, :backend), Keyword.get(opts, :harness)} do
+      {nil, nil} ->
+        "lm_studio"
+
+      {nil, legacy} ->
+        IO.puts(:stderr, "raxol.p: --harness is deprecated; use --backend")
+        legacy
+
+      {name, _} ->
+        name
+    end
+  end
 
   # -- Event consumption: contract events in, stdout/stderr out --------------
 

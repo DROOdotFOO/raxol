@@ -30,6 +30,8 @@ Raxol ships as a main package plus 15 focused subsystems. Use the main `raxol` p
 | `raxol_symphony` (0.2.0, pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
 | `raxol_gateway` (pre-alpha)                                | `path: "packages/raxol_gateway"`  | Unified messaging gateway (multi-platform) |
 
+The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (`Raxol.Harness.*`, agent-session core + contract, in main `raxol`) -> the product surfaces `mix raxol.code` (interactive) and `mix raxol.p` (headless), both in `raxol_agent` -> `raxol_symphony`, which orchestrates many agent runs above them. The Harness is the engine, not a separate product; `mix raxol.harness.*` are only its golden/fixture test tasks.
+
 ## Surfaces
 
 | Package                                                    | Hex                           | What                                        |

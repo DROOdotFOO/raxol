@@ -1,8 +1,8 @@
 defmodule Raxol.Agent.ExecutorConfig do
   @moduledoc """
-  Explicit `{harness, model, auth}` configuration for an agent executor.
+  Explicit `{backend, model, auth}` configuration for an agent executor.
 
-  This is the front door for selecting where an agent's turns run. A `harness`
+  This is the front door for selecting where an agent's turns run. A `backend`
   names the runtime/vendor (`:anthropic`, `:openai`, `:lumo`, ...); `model` and
   `auth` say which model behind it and with what credentials. This replaces the
   implicit `base_url` substring detection in `Raxol.Agent.Backend.HTTP` with a
@@ -13,20 +13,22 @@ defmodule Raxol.Agent.ExecutorConfig do
   flatten itself into the keyword list backends already consume
   (`to_backend_opts/1`).
 
+  `:backend` is the canonical key; `:harness` is accepted as a deprecated alias.
+
   ## Examples
 
-      iex> Raxol.Agent.ExecutorConfig.new(harness: :anthropic, model: "claude-opus-4-8")
-      %Raxol.Agent.ExecutorConfig{harness: :anthropic, model: "claude-opus-4-8", auth: %{}, opts: []}
+      iex> Raxol.Agent.ExecutorConfig.new(backend: :anthropic, model: "claude-opus-4-8")
+      %Raxol.Agent.ExecutorConfig{backend: :anthropic, model: "claude-opus-4-8", auth: %{}, opts: []}
 
-      iex> cfg = Raxol.Agent.ExecutorConfig.new(harness: :openai, model: "gpt-5", auth: %{api_key: "sk-x"})
+      iex> cfg = Raxol.Agent.ExecutorConfig.new(backend: :openai, model: "gpt-5", auth: %{api_key: "sk-x"})
       iex> Raxol.Agent.ExecutorConfig.to_backend_opts(cfg)
       [model: "gpt-5", api_key: "sk-x"]
   """
 
-  @enforce_keys [:harness]
-  defstruct harness: nil, model: nil, auth: %{}, opts: []
+  @enforce_keys [:backend]
+  defstruct backend: nil, model: nil, auth: %{}, opts: []
 
-  @type harness ::
+  @type backend ::
           :anthropic
           | :openai
           | :kimi
@@ -41,7 +43,7 @@ defmodule Raxol.Agent.ExecutorConfig do
           | :cursor
 
   @type t :: %__MODULE__{
-          harness: harness(),
+          backend: backend(),
           model: String.t() | nil,
           auth: map(),
           opts: keyword()
@@ -50,15 +52,21 @@ defmodule Raxol.Agent.ExecutorConfig do
   @doc """
   Build an `ExecutorConfig` from a keyword list or map.
 
-  Recognized keys: `:harness` (required), `:model`, `:auth`, `:opts`. The
-  `:harness` value is required and must be an atom.
+  Recognized keys: `:backend` (required; `:harness` is a deprecated alias),
+  `:model`, `:auth`, `:opts`. The backend value is required and must be an atom.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) when is_list(attrs), do: new(Map.new(attrs))
 
-  def new(%{harness: harness} = attrs) when is_atom(harness) and not is_nil(harness) do
+  def new(%{backend: backend} = attrs) when is_atom(backend) and not is_nil(backend),
+    do: build(backend, attrs)
+
+  def new(%{harness: backend} = attrs) when is_atom(backend) and not is_nil(backend),
+    do: build(backend, attrs)
+
+  defp build(backend, attrs) do
     %__MODULE__{
-      harness: harness,
+      backend: backend,
       model: Map.get(attrs, :model),
       auth: Map.get(attrs, :auth, %{}),
       opts: Map.get(attrs, :opts, [])

@@ -8,7 +8,7 @@ defmodule Raxol.Agent.ExecutorConfigTest do
       cfg = ExecutorConfig.new(harness: :anthropic, model: "claude-opus-4-8")
 
       assert %ExecutorConfig{
-               harness: :anthropic,
+               backend: :anthropic,
                model: "claude-opus-4-8",
                auth: %{},
                opts: []
@@ -18,7 +18,7 @@ defmodule Raxol.Agent.ExecutorConfigTest do
     test "builds from a map" do
       cfg = ExecutorConfig.new(%{harness: :openai, auth: %{api_key: "sk-x"}})
 
-      assert cfg.harness == :openai
+      assert cfg.backend == :openai
       assert cfg.auth == %{api_key: "sk-x"}
     end
 

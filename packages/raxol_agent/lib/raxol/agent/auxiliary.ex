@@ -15,15 +15,15 @@ defmodule Raxol.Agent.Auxiliary do
   ordered list of other slot names or `:default`):
 
       auxiliary: %{
-        curation:    %{harness: :anthropic, model: "claude-haiku-4-5", fallback: [:default]},
-        user_model:  %{harness: :anthropic, model: "claude-haiku-4-5"},
-        title:       %{harness: :openai,    model: "gpt-5-mini"},
-        default_aux: %{harness: :anthropic, model: "claude-haiku-4-5"}
+        curation:    %{backend: :anthropic, model: "claude-haiku-4-5", fallback: [:default]},
+        user_model:  %{backend: :anthropic, model: "claude-haiku-4-5"},
+        title:       %{backend: :openai,    model: "gpt-5-mini"},
+        default_aux: %{backend: :anthropic, model: "claude-haiku-4-5"}
       }
 
   `default_aux` is the catch-all auxiliary slot. `:default` refers to the agent's
-  primary executor, passed as `:default`. A slot accepts `:backend` as an alias
-  for `:harness`.
+  primary executor, passed as `:default`. A slot's backend key is `:backend`;
+  `:harness` is accepted as a deprecated alias.
 
   ## Precedence
 
@@ -155,21 +155,21 @@ defmodule Raxol.Agent.Auxiliary do
     case Keyword.get(opts, :default) do
       %ExecutorConfig{} = config -> config
       attrs when is_list(attrs) or is_map(attrs) -> ExecutorConfig.new(attrs)
-      _ -> ExecutorConfig.new(harness: :mock)
+      _ -> ExecutorConfig.new(backend: :mock)
     end
   end
 
   defp to_config(%ExecutorConfig{} = config), do: config
 
   defp to_config(slot) when is_map(slot) do
-    case Map.get(slot, :harness) || Map.get(slot, :backend) do
+    case Map.get(slot, :backend) || Map.get(slot, :harness) do
       nil ->
         raise ArgumentError,
-              "auxiliary slot requires :harness (or :backend), got: #{inspect(slot)}"
+              "auxiliary slot requires :backend (or :harness), got: #{inspect(slot)}"
 
-      harness ->
+      backend ->
         ExecutorConfig.new(%{
-          harness: harness,
+          backend: backend,
           model: Map.get(slot, :model),
           auth: Map.get(slot, :auth, %{}),
           opts: Map.get(slot, :opts, [])

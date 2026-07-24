@@ -95,18 +95,18 @@ defmodule Raxol.Agent.Backend.SelectorTest do
 
     test "codex is reserved (served by the symphony app-server runner)" do
       cfg = ExecutorConfig.new(harness: :codex)
-      assert {:error, {:harness_not_implemented, :codex}} = Selector.select(cfg)
+      assert {:error, {:backend_not_implemented, :codex}} = Selector.select(cfg)
     end
 
-    test "unknown harness returns an error" do
+    test "unknown backend returns an error" do
       cfg = ExecutorConfig.new(harness: :nonsense)
-      assert {:error, {:unknown_harness, :nonsense}} = Selector.select(cfg)
+      assert {:error, {:unknown_backend, :nonsense}} = Selector.select(cfg)
     end
   end
 
-  describe "supported_harnesses/0" do
-    test "lists the resolvable harnesses" do
-      supported = Selector.supported_harnesses()
+  describe "supported_backends/0" do
+    test "lists the resolvable backends" do
+      supported = Selector.supported_backends()
       assert :anthropic in supported
       assert :mock in supported
       refute :codex in supported

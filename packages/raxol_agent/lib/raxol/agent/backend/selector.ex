@@ -3,18 +3,18 @@ defmodule Raxol.Agent.Backend.Selector do
   Resolve a `Raxol.Agent.ExecutorConfig` to a concrete backend module + options.
 
   This is the explicit replacement for `Raxol.Agent.Backend.HTTP`'s implicit
-  `base_url` substring detection: a named harness maps to a backend module and a
+  `base_url` substring detection: a named backend maps to a backend module and a
   set of default options (provider hint, base URL), which are merged with the
   config's own model/auth/opts.
 
-  Native CLI harnesses (`:claude_native`, `:codex`, `:cursor`) are reserved for
+  Native CLI backends (`:claude_native`, `:codex`, `:cursor`) are reserved for
   the future "vendor owns the loop" path and currently resolve to an error.
   """
 
   alias Raxol.Agent.ExecutorConfig
 
-  # harness => {backend_module, default_opts}
-  @harness_table %{
+  # backend => {backend_module, default_opts}
+  @backend_table %{
     anthropic: {Raxol.Agent.Backend.HTTP, [provider: :anthropic]},
     openai: {Raxol.Agent.Backend.HTTP, [provider: :openai]},
     kimi: {Raxol.Agent.Backend.HTTP, [provider: :kimi]},
@@ -46,7 +46,7 @@ defmodule Raxol.Agent.Backend.Selector do
        ]},
     lumo: {Raxol.Agent.Backend.Lumo, []},
     mock: {Raxol.Agent.Backend.Mock, []},
-    # Native harnesses: the CLI owns its loop; Raxol tools are injected over MCP.
+    # Native backends: the CLI owns its loop; Raxol tools are injected over MCP.
     claude_native: {Raxol.Agent.Backend.ClaudeCode, []},
     cursor: {Raxol.Agent.Backend.Cursor, []}
   }
@@ -54,35 +54,40 @@ defmodule Raxol.Agent.Backend.Selector do
   # Codex speaks a stateful `app-server` JSON-RPC protocol (not the stream-json
   # NDJSON interface the native backends share); it is served by
   # `Raxol.Symphony.Runners.Codex` rather than an agent backend here.
-  @reserved_harnesses [:codex]
+  @reserved_backends [:codex]
 
   @doc """
   Resolve an executor config to `{:ok, backend_module, backend_opts}`.
 
-  The returned `backend_opts` are the harness defaults merged with the config's
+  The returned `backend_opts` are the backend defaults merged with the config's
   flattened `model`/`auth`/`opts` (config values win on conflict). Returns
-  `{:error, {:harness_not_implemented, harness}}` for reserved native harnesses
-  and `{:error, {:unknown_harness, harness}}` otherwise.
+  `{:error, {:backend_not_implemented, backend}}` for reserved native backends
+  and `{:error, {:unknown_backend, backend}}` otherwise.
   """
   @spec select(ExecutorConfig.t()) ::
           {:ok, module(), keyword()} | {:error, term()}
-  def select(%ExecutorConfig{harness: harness} = config) do
-    case Map.fetch(@harness_table, harness) do
-      {:ok, {backend, defaults}} ->
+  def select(%ExecutorConfig{backend: backend} = config) do
+    case Map.fetch(@backend_table, backend) do
+      {:ok, {module, defaults}} ->
         opts = Keyword.merge(defaults, ExecutorConfig.to_backend_opts(config))
-        {:ok, backend, opts}
+        {:ok, module, opts}
 
       :error ->
-        {:error, reason_for(harness)}
+        {:error, reason_for(backend)}
     end
   end
 
-  @doc "List the harness atoms this selector can resolve to a backend."
-  @spec supported_harnesses() :: [ExecutorConfig.harness()]
-  def supported_harnesses, do: Map.keys(@harness_table)
+  @doc "List the backend atoms this selector can resolve to a backend module."
+  @spec supported_backends() :: [ExecutorConfig.backend()]
+  def supported_backends, do: Map.keys(@backend_table)
 
-  defp reason_for(harness) when harness in @reserved_harnesses,
-    do: {:harness_not_implemented, harness}
+  @doc false
+  @deprecated "Use supported_backends/0"
+  @spec supported_harnesses() :: [ExecutorConfig.backend()]
+  def supported_harnesses, do: supported_backends()
 
-  defp reason_for(harness), do: {:unknown_harness, harness}
+  defp reason_for(backend) when backend in @reserved_backends,
+    do: {:backend_not_implemented, backend}
+
+  defp reason_for(backend), do: {:unknown_backend, backend}
 end

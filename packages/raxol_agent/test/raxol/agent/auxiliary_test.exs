@@ -17,19 +17,19 @@ defmodule Raxol.Agent.AuxiliaryTest do
     test "returns the slot's ExecutorConfig for a configured task kind" do
       config = Auxiliary.resolve(:curation, auxiliary: @aux, default: primary())
 
-      assert %ExecutorConfig{harness: :anthropic, model: "claude-haiku-4-5"} = config
+      assert %ExecutorConfig{backend: :anthropic, model: "claude-haiku-4-5"} = config
     end
 
     test "accepts :backend as an alias for :harness" do
       config = Auxiliary.resolve(:title, auxiliary: @aux, default: primary())
 
-      assert %ExecutorConfig{harness: :openai, model: "gpt-5-mini"} = config
+      assert %ExecutorConfig{backend: :openai, model: "gpt-5-mini"} = config
     end
 
     test "an unknown task kind falls back to default_aux" do
       config = Auxiliary.resolve(:compression, auxiliary: @aux, default: primary())
 
-      assert %ExecutorConfig{harness: :anthropic, model: "claude-haiku-4-5"} = config
+      assert %ExecutorConfig{backend: :anthropic, model: "claude-haiku-4-5"} = config
     end
 
     test "an unknown task kind with no default_aux falls back to the primary executor" do
@@ -44,13 +44,13 @@ defmodule Raxol.Agent.AuxiliaryTest do
     end
 
     test "with neither auxiliary nor default, resolves to a mock config" do
-      assert %ExecutorConfig{harness: :mock} = Auxiliary.resolve(:curation, [])
+      assert %ExecutorConfig{backend: :mock} = Auxiliary.resolve(:curation, [])
     end
 
     test "a malformed slot (no harness/backend) raises a clear error" do
       aux = %{curation: %{model: "x"}}
 
-      assert_raise ArgumentError, ~r/requires :harness/, fn ->
+      assert_raise ArgumentError, ~r/requires :backend/, fn ->
         Auxiliary.resolve(:curation, auxiliary: aux, default: primary())
       end
     end
@@ -60,7 +60,7 @@ defmodule Raxol.Agent.AuxiliaryTest do
     test "appends the slot's :default fallback and terminates at the primary executor" do
       chain = Auxiliary.resolve_chain(:curation, auxiliary: @aux, default: primary())
 
-      assert [%ExecutorConfig{harness: :anthropic}, %ExecutorConfig{harness: :openai}] = chain
+      assert [%ExecutorConfig{backend: :anthropic}, %ExecutorConfig{backend: :openai}] = chain
       assert List.last(chain) == primary()
     end
 
@@ -100,7 +100,7 @@ defmodule Raxol.Agent.AuxiliaryTest do
 
     test "falls through to the fallback when the primary is unavailable" do
       # Mark the :anthropic primary unavailable; the walk degrades to :default.
-      available? = fn %ExecutorConfig{harness: harness} -> harness != :anthropic end
+      available? = fn %ExecutorConfig{backend: backend} -> backend != :anthropic end
 
       assert {:ok, Raxol.Agent.Backend.HTTP, opts} =
                Auxiliary.select(:curation,

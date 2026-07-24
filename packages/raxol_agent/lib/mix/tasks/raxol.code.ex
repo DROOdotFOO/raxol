@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Raxol.Code do
   `mix raxol.code` surface, wearing the axol face `≡··≡`.
 
       mix raxol.code
-      mix raxol.code --harness anthropic --model claude-sonnet-5
+      mix raxol.code --backend anthropic --model claude-sonnet-5
       mix raxol.code --continue          # resume the most recent session
       mix raxol.code --resume sess-123-4  # resume a specific session
       mix raxol.code --sessions          # list saved sessions and exit
@@ -42,8 +42,9 @@ defmodule Mix.Tasks.Raxol.Code do
 
   ## Options
 
-    * `--harness`  — backend harness atom (default `lm_studio`; also
-      `anthropic`, `openai`, `ollama`, ... see `Backend.Selector`)
+    * `--backend`  — LLM backend atom (default `lm_studio`; also
+      `anthropic`, `openai`, `ollama`, ... see `Backend.Selector`).
+      `--harness` is accepted as a deprecated alias.
     * `--model`    — model override
     * `--base-url` — override the backend base URL
     * `--system`   — system prompt override
@@ -58,6 +59,8 @@ defmodule Mix.Tasks.Raxol.Code do
   alias Raxol.Agent.Code.Store
 
   @switches [
+    backend: :string,
+    # `--harness` is a deprecated alias for `--backend`.
     harness: :string,
     model: :string,
     base_url: :string,
@@ -128,21 +131,36 @@ defmodule Mix.Tasks.Raxol.Code do
   end
 
   defp build_executor(opts) do
-    harness_name = Keyword.get(opts, :harness, "lm_studio")
-    supported = Raxol.Agent.Backend.Selector.supported_harnesses()
+    backend_name = backend_opt(opts)
+    supported = Raxol.Agent.Backend.Selector.supported_backends()
 
-    harness =
-      Enum.find(supported, &(Atom.to_string(&1) == harness_name)) ||
+    backend =
+      Enum.find(supported, &(Atom.to_string(&1) == backend_name)) ||
         usage_error(
-          "unknown harness #{inspect(harness_name)}; supported: " <>
+          "unknown backend #{inspect(backend_name)}; supported: " <>
             Enum.map_join(supported, ", ", &Atom.to_string/1)
         )
 
     attrs =
-      [harness: harness]
+      [backend: backend]
       |> maybe_put(:model, Keyword.get(opts, :model))
 
     Raxol.Agent.ExecutorConfig.new(attrs)
+  end
+
+  # `--backend` is canonical; `--harness` is the deprecated alias.
+  defp backend_opt(opts) do
+    case {Keyword.get(opts, :backend), Keyword.get(opts, :harness)} do
+      {nil, nil} ->
+        "lm_studio"
+
+      {nil, legacy} ->
+        IO.puts(:stderr, "raxol.code: --harness is deprecated; use --backend")
+        legacy
+
+      {name, _} ->
+        name
+    end
   end
 
   defp usage_error(message) do

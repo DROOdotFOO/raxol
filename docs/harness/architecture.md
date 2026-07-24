@@ -7,6 +7,19 @@ attach, detach, and reattach are all replay from an offset, so the local view
 is a throwaway materialization. Kill a surface and respawn it and it shows the
 same truth, because the truth was never in the surface.
 
+## Where this sits
+
+The harness is the **engine**, not a product you run directly (there is no
+`mix raxol.harness` — the `raxol.harness.*.bless` tasks only regenerate this
+engine's golden/fixture test snapshots). The products are the surfaces built on
+the contract: `mix raxol.code` is the interactive coding-agent TUI and
+`mix raxol.p` is its headless twin, both in the `raxol_agent` package. Above
+them, `raxol_symphony` orchestrates many such agent runs. The same contract also
+lets the engine drive *external* agent CLIs — `Raxol.Agent.Backend.ClaudeCode`
+and `Raxol.Agent.Backend.Cursor` wrap `claude` / `cursor` as harness sessions.
+"Harness" here is the session engine; it is unrelated to the `--backend` flag
+(which picks an LLM backend) and to the FATE render-determinism suite.
+
 ## The event contract
 
 Events flow core → surface; commands flow surface → core.
