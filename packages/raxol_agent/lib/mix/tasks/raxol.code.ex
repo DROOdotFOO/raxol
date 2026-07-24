@@ -29,7 +29,7 @@ defmodule Mix.Tasks.Raxol.Code do
 
   ## Slash commands
 
-  `/help` · `/login [provider]` · `/clear` · `/model <name>` · `/plan` ·
+  `/help` · `/login [provider]` · `/clear` · `/model [name]` · `/plan` ·
   `/compact` · `/context` · `/sessions` · `/mcp` · `/hooks`
 
   ## Delegation, hooks, external config

@@ -210,6 +210,155 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
+  alias Raxol.Agent.ExecutorConfig
+
+  defp connected_model(opts \\ []) do
+    fetcher =
+      Keyword.get(opts, :models_fetcher, fn _opts, _ref, _app -> :ok end)
+
+    new_model(
+      executor: ExecutorConfig.new(backend: :openai, model: "gpt-4o"),
+      provider_status: {:ready, :openai, :env},
+      # A connected provider has a current model (set on connect from the
+      # executor); reflected here so the picker cursor has something to land on.
+      model: "gpt-4o",
+      models_fetcher: fetcher
+    )
+  end
+
+  defp slash(model, command),
+    do:
+      App.update(Event.key_event(:enter, :pressed, []), %{
+        model
+        | input: command
+      })
+
+  describe "/model picker" do
+    test "/model with no arg on a connected provider kicks off a fetch" do
+      test_pid = self()
+
+      model =
+        connected_model(
+          models_fetcher: fn opts, ref, _app ->
+            send(test_pid, {:fetched, opts, ref})
+          end
+        )
+
+      {model, []} = slash(model, "/model")
+
+      assert model.models_ref != nil
+      assert model.status_line == "fetching models…"
+      # opts carry the connected provider so the right endpoint is chosen.
+      assert_received {:fetched, opts, ref}
+      assert opts[:provider] == :openai
+      assert ref == model.models_ref
+    end
+
+    test "a model-list result opens a selectable picker, cursor on the current model" do
+      model = connected_model()
+      {model, []} = slash(model, "/model")
+      ref = model.models_ref
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:models_list, ref, {:ok, ["gpt-4o-mini", "gpt-4o"]}}},
+          model
+        )
+
+      assert model.wizard.step == :models
+
+      assert Enum.map(model.wizard.entries, & &1.model) == [
+               "gpt-4o-mini",
+               "gpt-4o"
+             ]
+
+      # cursor lands on the current model_override ("gpt-4o", index 1)
+      assert model.wizard.cursor == 1
+      assert model.models_ref == nil
+    end
+
+    test "arrow keys move and Enter selects a model, closing the picker" do
+      model = connected_model()
+      {model, []} = slash(model, "/model")
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:models_list, model.models_ref, {:ok, ["a", "b", "c"]}}},
+          model
+        )
+
+      # cursor starts at 0 ("gpt-4o" not in list); down twice -> "c"
+      {model, []} = App.update(key(:down), model)
+      {model, []} = App.update(key(:down), model)
+      {model, []} = App.update(key(:enter), model)
+
+      assert model.model_override == "c"
+      assert model.wizard == nil
+      assert model.notice =~ "model set to c"
+    end
+
+    test "Esc cancels the picker without changing the model" do
+      model = connected_model()
+      {model, []} = slash(model, "/model")
+
+      {model, []} =
+        App.update(
+          {:command_result, {:models_list, model.models_ref, {:ok, ["x"]}}},
+          model
+        )
+
+      {model, []} = App.update(key(:escape), model)
+      assert model.wizard == nil
+      assert model.model_override == "gpt-4o"
+    end
+
+    test "an empty / unsupported / errored list falls back to the usage notice" do
+      for result <- [{:ok, []}, :unsupported, {:error, :request_failed}] do
+        model = connected_model()
+        {model, []} = slash(model, "/model")
+
+        {model, []} =
+          App.update(
+            {:command_result, {:models_list, model.models_ref, result}},
+            model
+          )
+
+        assert model.wizard == nil
+        assert model.notice =~ "/model <name>"
+      end
+    end
+
+    test "/model <name> still sets the model directly (no fetch)" do
+      test_pid = self()
+
+      model =
+        connected_model(
+          models_fetcher: fn _o, _r, _a -> send(test_pid, :fetched) end
+        )
+
+      {model, []} = slash(model, "/model claude-sonnet-5")
+
+      assert model.model_override == "claude-sonnet-5"
+      refute_received :fetched
+    end
+
+    test "a stale models_list result (superseded ref) is ignored" do
+      model = connected_model()
+      {model, []} = slash(model, "/model")
+
+      {model, []} =
+        App.update(
+          {:command_result, {:models_list, make_ref(), {:ok, ["z"]}}},
+          model
+        )
+
+      # the stale ref did not open a picker
+      assert model.wizard == nil
+    end
+  end
+
   defp request(model, name) do
     ref = make_ref()
     msg = {:command_result, {:authorize_request, ref, self(), name}}
