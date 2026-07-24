@@ -58,10 +58,12 @@ defmodule Raxol.Harness.WrapCorpusTest do
       assert TextLayout.wrap("ab😊", 3, :pre_wrap) == ["ab", "😊"]
     end
 
-    test "known divergence: :normal mode fits by char count, not cell width" do
-      # Pinned intentional divergence (see TextLayout moduledoc): :normal
-      # delegates to the char-count word wrapper, so 10 cells "fit" width 9.
-      assert TextLayout.wrap("hello 你好", 9, :normal) == ["hello 你好"]
+    test ":normal mode fits by display cells too (the old char-count divergence is fixed)" do
+      # This pin used to hold the char-count divergence; f99c152ba made
+      # `TextWrapping.wrap_line_by_word/2` measure in display columns, so
+      # :normal is now CJK-width-safe like :pre_wrap. 10 cells at width 9
+      # must wrap (and :normal collapses the boundary space).
+      assert TextLayout.wrap("hello 你好", 9, :normal) == ["hello", "你好"]
     end
   end
 

@@ -42,8 +42,10 @@ defmodule Raxol.UI.Components.Input.MultiLineInput.EventHandlerTest do
     test ~c"handles character input event" do
       state = create_state(["abc"], {0, 3})
       event = Event.key("a")
-      # Update assertion to match actual handler behavior
-      assert {:update, {:input, "a"}, state} ==
+      # Chars route through the safe {:clipboard_content, _} insertion
+      # path -- {:input, binary} raises downstream (TextHelper.insert_char
+      # expects an integer codepoint); see EventHandler's dispatch comment.
+      assert {:update, {:clipboard_content, "a"}, state} ==
                EventHandler.handle_event(event, state)
     end
 

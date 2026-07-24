@@ -524,10 +524,21 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
              end),
              "the **run** emphasis must render as a bold span"
 
-      assert Enum.any?(leaves, fn {content, style} ->
-               content =~ "defmodule" and style[:fg] == :yellow
+      code_leaves =
+        Enum.filter(leaves, fn {content, _style} -> content =~ "defmodule" end)
+
+      assert code_leaves != [], "fenced code content must render"
+
+      # Fenced code renders through the CodeBlock/SyntaxHighlighter lane:
+      # token fg is a Makeup theme hex when highlighting is active, or
+      # UNSET when the highlighter degrades — an attr-less cell inherits
+      # the terminal's own default fg at the ColorResolver choke point.
+      # Pin the lane, never a literal hue.
+      assert Enum.all?(code_leaves, fn {_content, style} ->
+               is_nil(style[:fg]) or
+                 (is_binary(style[:fg]) and String.starts_with?(style[:fg], "#"))
              end),
-             "fenced code lines must render with the code accent"
+             "fenced code must render theme tokens or inherit, not a literal hue"
 
       refute Enum.any?(texts, &(&1 =~ "\e"))
       refute Enum.any?(texts, &(&1 =~ "```"))

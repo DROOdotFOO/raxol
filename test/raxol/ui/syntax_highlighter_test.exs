@@ -77,9 +77,13 @@ defmodule Raxol.UI.SyntaxHighlighterTest do
              ]
     end
 
-    test "empty source returns no lines" do
-      assert SyntaxHighlighter.highlight_lines("", "elixir") == []
-      assert SyntaxHighlighter.highlight_lines("", nil) == []
+    test "empty source returns one empty line, matching String.split(\"\", \"\\n\")" do
+      empty_line = [[%{text: "", fg: nil, styles: []}]]
+      assert SyntaxHighlighter.highlight_lines("", "elixir") == empty_line
+      assert SyntaxHighlighter.highlight_lines("", nil) == empty_line
+
+      assert length(SyntaxHighlighter.highlight_lines("", "elixir")) ==
+               length(String.split("", "\n"))
     end
 
     test "line count matches String.split(source, \"\\n\") even across a multi-line heredoc" do

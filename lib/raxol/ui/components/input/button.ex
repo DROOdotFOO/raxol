@@ -250,14 +250,13 @@ defmodule Raxol.UI.Components.Input.Button do
 
   @impl Raxol.MCP.ToolProvider
   def mcp_tools(%{attrs: %{disabled: true}}), do: []
+  def mcp_tools(%{disabled: true}), do: []
 
   def mcp_tools(state) do
-    label = get_in(state, [:attrs, :label]) || "Button"
-
     [
       %{
         name: "click",
-        description: "Click the '#{label}' button",
+        description: "Click the '#{tool_label(state)}' button",
         inputSchema: %{type: "object", properties: %{}}
       }
     ]
@@ -266,13 +265,16 @@ defmodule Raxol.UI.Components.Input.Button do
   @impl Raxol.MCP.ToolProvider
   def handle_tool_call("click", _args, context) do
     widget = context.widget_state
-    label = get_in(widget, [:attrs, :label]) || "Button"
+    label = tool_label(widget)
 
-    case get_in(widget, [:attrs, :disabled]) do
+    case get_in(widget, [:attrs, :disabled]) || widget[:disabled] do
       true ->
         {:error, "Button '#{label}' is disabled"}
 
       _ ->
+        # The targeted click Event is resolved by the Dispatcher through the
+        # Bubbler at this widget, so the node's :on_click message is
+        # dispatched exactly as for a real click.
         {:ok, "Clicked '#{label}'",
          [
            %Raxol.Core.Events.Event{
@@ -285,6 +287,12 @@ defmodule Raxol.UI.Components.Input.Button do
 
   def handle_tool_call(action, _args, _ctx),
     do: {:error, "Unknown action: #{action}"}
+
+  # The label lives at attrs.label on Component-tree nodes and at :text on
+  # View-DSL nodes (`button("Save", id: "save_btn", on_click: :save)`).
+  defp tool_label(node) do
+    get_in(node, [:attrs, :label]) || node[:text] || node[:label] || "Button"
+  end
 
   @impl Raxol.Core.Accessibility.Provider
   def a11y_node(node) do

@@ -1,34 +1,93 @@
 defmodule Raxol.UI.Components.CodeBlock do
   @moduledoc """
-  Renders a block of code with syntax highlighting.
+  Renders a block of code with **structured** syntax highlighting for the
+  terminal.
 
-  Uses Makeup for tokenization when available, with graceful fallback to
-  plain text when Makeup is not loaded.
+  Reuses `Raxol.UI.SyntaxHighlighter` — the same Makeup-backed, token-based
+  path that Pierre-style diffs (`Harness.DiffViewer`) use. Tokens carry
+  hex `fg` + font styles and are painted as styled `text/1` spans; raw
+  ANSI is never embedded (only applied at the final Terminal.Renderer).
+
+  The previous implementation called `Makeup.highlight_inner_html/2` and
+  then stripped the HTML tags, which discarded every color. That path is
+  gone.
+
+  ## Props
+
+    * `:content` (string) — source code (default `""`)
+    * `:language` (string) — language name or extension for
+      `Makeup.Registry` (e.g. `"elixir"`, `"ex"`, `"python"`). Unknown
+      languages degrade to unstyled plain text, never raise.
+    * `:theme` (atom | `%Makeup.Styles.HTML.Style{}`) — Makeup style
+      (default `:one_dark`, same as DiffViewer)
   """
   use Raxol.UI.Components.Base.Component
 
-  @doc """
-  Renders the code block.
+  alias Raxol.UI.SyntaxHighlighter
+  alias Raxol.View.Components
 
-  Props:
-    * `content` (required): The source code string.
-    * `language` (optional): The language name (e.g., "elixir"). Defaults to "text".
+  @default_theme :one_dark
+
+  @doc """
+  Highlights `source` and returns one row element per line (token spans).
+
+  Public so other renderers (e.g. `MarkdownRenderer` fenced blocks) can
+  reuse the exact CodeBlock line shape without nesting a full column.
+  Empty lines yield a single empty text cell so vertical spacing holds.
   """
-  @spec render(map(), map()) :: any()
+  @spec render_lines(String.t(), String.t() | nil, atom() | term()) :: [map()]
+  def render_lines(source, language \\ "text", theme \\ @default_theme)
+
+  def render_lines(source, language, theme) when is_binary(source) do
+    lang = language || "text"
+
+    source
+    |> SyntaxHighlighter.highlight_lines(lang, theme)
+    |> Enum.map(&line_row/1)
+  end
+
+  @doc """
+  Renders the code block as a column of token-span rows.
+  """
+  @spec render(map(), map()) :: map()
   @impl true
   def render(state, _context) do
+    source = state[:content] || ""
     language = state[:language] || "text"
-    code_content = state[:content] || ""
+    theme = state[:theme] || @default_theme
 
-    if Code.ensure_loaded?(Makeup) do
-      lexer_opt = lexer_for_language(language)
-      opts = if lexer_opt, do: [lexer: lexer_opt], else: []
+    Components.column(
+      gap: 0,
+      children: render_lines(source, language, theme)
+    )
+  end
 
-      highlighted = Makeup.highlight_inner_html(code_content, opts)
-      Raxol.View.Components.text(content: strip_html_tags(highlighted))
-    else
-      Raxol.View.Components.text(content: code_content)
-    end
+  defp line_row([]) do
+    # Empty source line — preserve vertical spacing with a blank cell.
+    Components.row(gap: 0, children: [Components.text(content: "")])
+  end
+
+  defp line_row(tokens) do
+    spans =
+      Enum.map(tokens, fn token ->
+        Components.text(
+          content: token.text,
+          style: token_style(token)
+        )
+      end)
+
+    Components.row(gap: 0, children: spans)
+  end
+
+  defp token_style(%{fg: fg, styles: styles}) do
+    base = if is_binary(fg), do: %{fg: fg}, else: %{}
+
+    Enum.reduce(styles || [], base, fn
+      :bold, acc -> Map.put(acc, :bold, true)
+      :italic, acc -> Map.put(acc, :italic, true)
+      :underline, acc -> Map.put(acc, :underline, true)
+      _, acc -> acc
+    end)
   end
 
   @doc "Initializes the component state from props."
@@ -41,37 +100,16 @@ defmodule Raxol.UI.Components.CodeBlock do
   @impl true
   def update(_message, state), do: state
 
-  @doc """
-  Mount hook - called when component is mounted.
-  No special setup needed for CodeBlock.
-  """
+  @doc "Handles events for the component. No events are handled by default."
+  @spec handle_event(term(), map(), map()) :: {map(), list()}
+  @impl true
+  def handle_event(_event, state, _context), do: {state, []}
+
   @impl true
   @spec mount(map()) :: {map(), list()}
   def mount(state), do: {state, []}
 
-  @doc """
-  Unmount hook - called when component is unmounted.
-  No cleanup needed for CodeBlock.
-  """
   @impl true
   @spec unmount(map()) :: map()
   def unmount(state), do: state
-
-  @lexer_map %{
-    "elixir" => Makeup.Lexers.ElixirLexer,
-    "ex" => Makeup.Lexers.ElixirLexer
-  }
-
-  defp lexer_for_language(language) do
-    Map.get(@lexer_map, String.downcase(language))
-  end
-
-  defp strip_html_tags(html) do
-    html
-    |> String.replace(~r/<[^>]+>/, "")
-    |> String.replace("&lt;", "<")
-    |> String.replace("&gt;", ">")
-    |> String.replace("&amp;", "&")
-    |> String.replace("&quot;", "\"")
-  end
 end
