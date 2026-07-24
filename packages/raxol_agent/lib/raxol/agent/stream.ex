@@ -49,6 +49,13 @@ defmodule Raxol.Agent.Stream do
     (takes precedence over `:backend`)
   - `:backend` -- AIBackend module (default: `Raxol.Agent.Backend.Mock`); ignored
     when `:executor` is given
+  - `:auto_provider` -- when `true` and no `:executor` is given, resolve one from
+    the environment via `Raxol.Agent.Backend.Resolver` (the same op-ref ->
+    provider-env -> `AI_API_KEY` onboarding the coding TUI and `mix raxol.setup`
+    use). An optional `:provider` pins a specific one. Falls through to
+    `:backend`/Mock when nothing resolves, so it never crashes an unconfigured
+    caller. This is how a headless/embedded agent surface gets the same
+    credential story without hand-rolling a resolver call.
   - `:backend_opts` -- keyword list passed to backend (api_key, model, etc.);
     merged over the executor's resolved opts
   - `:model` -- per-request model override (wins over `:executor`/`:backend_opts`)
@@ -320,7 +327,8 @@ defmodule Raxol.Agent.Stream do
           |> Enum.map(&unexecuted_tool_call_event/1)
 
         done_event =
-          {:done, %{content: response.content, tool_results: [], usage: response.usage}}
+          {:done,
+           %{content: response.content, tool_results: [], usage: response.usage}}
 
         {unexecuted_events ++ [done_event], :done}
 
@@ -565,7 +573,7 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp backend_from_opts(opts) do
-    case Keyword.get(opts, :executor) do
+    case Keyword.get(opts, :executor) || resolve_executor(opts) do
       %Raxol.Agent.ExecutorConfig{} = executor ->
         case Raxol.Agent.Backend.Selector.select(executor) do
           {:ok, backend, executor_opts} -> {backend, executor_opts}
@@ -574,6 +582,33 @@ defmodule Raxol.Agent.Stream do
 
       _ ->
         {fallback_backend(opts), []}
+    end
+  end
+
+  @doc false
+  # Opt-in environment/1Password onboarding for any programmatic agent surface.
+  # With `auto_provider: true` and no explicit `:executor`, resolve one through
+  # the shared `Raxol.Agent.Backend.Resolver` — the SAME op-ref -> provider-env
+  # (`ANTHROPIC_API_KEY`, ...) -> `AI_API_KEY`/`AI_BASE_URL` precedence the coding
+  # TUI and `mix raxol.setup` use — so a surface gets the same credential story
+  # for free instead of hand-rolling a resolver call. A resolution that finds no
+  # credential returns `nil`, so `backend_from_opts/1` falls through to
+  # `:backend`/Mock and the opt never crashes a caller with no provider set up.
+  def resolve_executor(opts) do
+    if Keyword.get(opts, :auto_provider, false) do
+      resolver_opts =
+        [
+          harness: Keyword.get(opts, :provider),
+          model: Keyword.get(opts, :model),
+          api_key: Keyword.get(opts, :api_key),
+          base_url: Keyword.get(opts, :base_url)
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+      case Raxol.Agent.Backend.Resolver.resolve(resolver_opts) do
+        {:ok, executor, _source} -> executor
+        _ -> nil
+      end
     end
   end
 
