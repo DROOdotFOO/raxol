@@ -38,7 +38,10 @@ defmodule Mix.Tasks.Raxol.Code do
   `task` tool. A `.raxol/hooks.json` in the working directory declares
   shell commands to run before/after tool calls and at turn end (a
   non-zero pre-tool hook vetoes the tool). A `.mcp.json` declares external
-  MCP servers, surfaced by `/mcp` (live tool-bridging is a follow-up).
+  MCP servers, surfaced by `/mcp` (live tool-bridging is a follow-up). A
+  `.raxol/config.json` pins a default `provider`/`model` for the repo
+  (references only, never a raw key), used when no `--backend`/`--model` flag
+  is given — see `Raxol.Agent.Code.ProjectConfig`.
 
   ## Providers
 
@@ -123,26 +126,36 @@ defmodule Mix.Tasks.Raxol.Code do
   end
 
   defp app_opts(opts) do
-    resolution = Raxol.Agent.Backend.Resolver.resolve(resolver_opts(opts))
+    project = Raxol.Agent.Code.ProjectConfig.load(File.cwd!())
+
+    resolution =
+      Raxol.Agent.Backend.Resolver.resolve(resolver_opts(opts, project))
 
     []
     |> put_if(:system, Keyword.get(opts, :system))
-    |> put_if(:model, Keyword.get(opts, :model))
+    |> put_if(:model, Keyword.get(opts, :model) || Map.get(project, :model))
     |> put_if(:session_key, resolve_session(opts))
     |> Keyword.put(:ascii, Keyword.get(opts, :ascii, false))
     |> apply_resolution(resolution)
   end
 
-  # The resolver inputs: an optional validated `--backend`, plus any inline
-  # `--model`/`--api-key`/`--base-url` overrides. The resolver's own input key
+  # The resolver inputs, in precedence order explicit flag > `.raxol/config.json`
+  # pin > env auto-detect: a `--backend`/`--model`/`--base-url` wins, else the
+  # per-repo pin, else the resolver auto-detects. The resolver's own input key
   # stays `:harness` (its internal provider vocabulary); only the user-facing
   # flag is renamed.
-  defp resolver_opts(opts) do
+  defp resolver_opts(opts, project) do
     []
-    |> maybe_put(:harness, validated_backend(opts))
-    |> maybe_put(:model, Keyword.get(opts, :model))
+    |> maybe_put(
+      :harness,
+      validated_backend(opts) || Map.get(project, :provider)
+    )
+    |> maybe_put(:model, Keyword.get(opts, :model) || Map.get(project, :model))
     |> maybe_put(:api_key, Keyword.get(opts, :api_key))
-    |> maybe_put(:base_url, Keyword.get(opts, :base_url))
+    |> maybe_put(
+      :base_url,
+      Keyword.get(opts, :base_url) || Map.get(project, :base_url)
+    )
   end
 
   # `{:ok, executor, source}` wires the executor and records how it was found;
