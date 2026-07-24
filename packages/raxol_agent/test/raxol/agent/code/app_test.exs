@@ -23,7 +23,10 @@ defmodule Raxol.Agent.Code.AppTest do
   end
 
   defp tmp_dir do
-    Path.join(System.tmp_dir!(), "raxol-code-app-#{System.unique_integer([:positive])}")
+    Path.join(
+      System.tmp_dir!(),
+      "raxol-code-app-#{System.unique_integer([:positive])}"
+    )
   end
 
   defp key(k, mods \\ []), do: Event.key_event(k, :pressed, mods)
@@ -117,7 +120,11 @@ defmodule Raxol.Agent.Code.AppTest do
       model =
         send_ev(
           model,
-          ev(2, :item_completed, %{item_id: "i1", item_type: :tool_use, name: "grep"})
+          ev(2, :item_completed, %{
+            item_id: "i1",
+            item_type: :tool_use,
+            name: "grep"
+          })
         )
 
       assert model.face_state == :working
@@ -134,10 +141,71 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.running? == false
     end
 
+    test "a mid-session 401 routes back to onboarding, preserving the conversation" do
+      model =
+        %{
+          new_model(provider_status: {:ready, :anthropic, :env})
+          | running?: true,
+            messages: [%{role: :user, content: "hi"}]
+        }
+
+      model = send_ev(model, ev(9, :error, %{reason: {:http_error, 401, ""}}))
+
+      # Routed back to onboarding (setup panel + gate), not the bare error face.
+      assert model.provider_status == {:no_key, :anthropic}
+      assert model.notice =~ "/login"
+      # The conversation survives so /login reconnects and continues.
+      assert model.messages == [%{role: :user, content: "hi"}]
+
+      # A further prompt is now gated on reconnect, never starting a turn.
+      {gated, []} = submit(model, "again")
+      refute gated.running?
+    end
+
+    test "the streaming auth-error shape (\"HTTP 403\") also routes back to onboarding" do
+      model = %{
+        new_model(provider_status: {:ready, :openai, :env})
+        | running?: true
+      }
+
+      model = send_ev(model, ev(9, :error, %{reason: "HTTP 403"}))
+      assert model.provider_status == {:no_key, :openai}
+    end
+
+    test "a non-auth error keeps the provider connected" do
+      model = %{
+        new_model(provider_status: {:ready, :anthropic, :env})
+        | running?: true
+      }
+
+      model = send_ev(model, ev(9, :error, %{reason: :boom}))
+      assert model.provider_status == {:ready, :anthropic, :env}
+      assert model.face_state == :error
+    end
+
+    test "auth_rejected?/1 recognizes both the structured and streaming shapes" do
+      assert App.auth_rejected?({:http_error, 401, ""})
+      assert App.auth_rejected?({:http_error, 403, "body"})
+      assert App.auth_rejected?("HTTP 401")
+      refute App.auth_rejected?({:http_error, 500, ""})
+      refute App.auth_rejected?("HTTP 500")
+      refute App.auth_rejected?(:boom)
+    end
+
     test "malformed contract events are dropped, not folded" do
       model = new_model()
-      bad = %Contract.Event{id: -1, ts: 0, type: :turn_started, tier: :durable, payload: %{}}
-      {model2, []} = App.update({:command_result, {:contract_event, bad}}, model)
+
+      bad = %Contract.Event{
+        id: -1,
+        ts: 0,
+        type: :turn_started,
+        tier: :durable,
+        payload: %{}
+      }
+
+      {model2, []} =
+        App.update({:command_result, {:contract_event, bad}}, model)
+
       assert model2.events == []
     end
   end
@@ -252,7 +320,10 @@ defmodule Raxol.Agent.Code.AppTest do
       # {:command_result, _} messages we feed back into update/2.
       model =
         App.init(%{
-          options: [backend_opts: [response: "hello from mock"], sessions_dir: tmp_dir()]
+          options: [
+            backend_opts: [response: "hello from mock"],
+            sessions_dir: tmp_dir()
+          ]
         })
 
       model = %{model | input: "say hi"}
@@ -304,7 +375,11 @@ defmodule Raxol.Agent.Code.AppTest do
         |> send_ev(ev(1, :turn_started, %{prompt: "hi"}))
         |> send_ev(ev(2, :item_started, %{item_id: "i1", item_type: :message}))
         |> send_ev(
-          ev(3, :item_completed, %{item_id: "i1", item_type: :message, content: "hello there"})
+          ev(3, :item_completed, %{
+            item_id: "i1",
+            item_type: :message,
+            content: "hello there"
+          })
         )
         |> send_ev(ev(4, :turn_completed, %{final: true, usage: %{}}))
 
@@ -330,7 +405,13 @@ defmodule Raxol.Agent.Code.AppTest do
       model =
         model
         |> send_ev(ev(1, :turn_started, %{prompt: "hi"}))
-        |> send_ev(ev(2, :item_completed, %{item_id: "i1", item_type: :message, content: "done"}))
+        |> send_ev(
+          ev(2, :item_completed, %{
+            item_id: "i1",
+            item_type: :message,
+            content: "done"
+          })
+        )
         |> send_ev(ev(3, :turn_completed, %{final: true, usage: %{}}))
 
       assert List.last(model.messages) == %{role: :assistant, content: "done"}
@@ -342,12 +423,21 @@ defmodule Raxol.Agent.Code.AppTest do
   describe "resume" do
     test "init with a saved session_key reloads its messages" do
       dir = tmp_dir()
-      msgs = [%{role: :user, content: "earlier"}, %{role: :assistant, content: "reply"}]
+
+      msgs = [
+        %{role: :user, content: "earlier"},
+        %{role: :assistant, content: "reply"}
+      ]
+
       :ok = Raxol.Agent.Code.Store.save(dir, "sess-x", %{messages: msgs})
 
       model =
         App.init(%{
-          options: [runner: stub_runner(), sessions_dir: dir, session_key: "sess-x"]
+          options: [
+            runner: stub_runner(),
+            sessions_dir: dir,
+            session_key: "sess-x"
+          ]
         })
 
       assert model.messages == msgs
@@ -357,7 +447,11 @@ defmodule Raxol.Agent.Code.AppTest do
     test "resuming a missing session starts fresh with a notice" do
       model =
         App.init(%{
-          options: [runner: stub_runner(), sessions_dir: tmp_dir(), session_key: "nope"]
+          options: [
+            runner: stub_runner(),
+            sessions_dir: tmp_dir(),
+            session_key: "nope"
+          ]
         })
 
       assert model.messages == []
@@ -376,7 +470,11 @@ defmodule Raxol.Agent.Code.AppTest do
         |> send_ev(ev(1, :turn_started, %{prompt: "hi"}))
         |> send_ev(ev(2, :item_started, %{item_id: "i1", item_type: :message}))
         |> send_ev(
-          ev(3, :item_completed, %{item_id: "i1", item_type: :message, content: "restored answer"})
+          ev(3, :item_completed, %{
+            item_id: "i1",
+            item_type: :message,
+            content: "restored answer"
+          })
         )
         |> send_ev(ev(4, :turn_completed, %{final: true, usage: %{}}))
 
@@ -384,14 +482,17 @@ defmodule Raxol.Agent.Code.AppTest do
 
       # A fresh app resumes that session id.
       resumed =
-        App.init(%{options: [runner: stub_runner(), sessions_dir: dir, session_key: key]})
+        App.init(%{
+          options: [runner: stub_runner(), sessions_dir: dir, session_key: key]
+        })
 
       assert resumed.events != []
       blocks = Raxol.Harness.Projection.project(resumed.events).blocks
 
       assert Enum.any?(
                blocks,
-               &(Raxol.UI.Components.Harness.Block.search_text(&1) =~ "restored answer")
+               &(Raxol.UI.Components.Harness.Block.search_text(&1) =~
+                   "restored answer")
              )
 
       # And the resumed model renders.
@@ -442,10 +543,15 @@ defmodule Raxol.Agent.Code.AppTest do
         config_cwd(%{
           ".raxol/hooks.json" => Jason.encode!(%{"stop" => ["true"]}),
           ".mcp.json" =>
-            Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}})
+            Jason.encode!(%{
+              "mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}
+            })
         })
 
-      model = App.init(%{options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]})
+      model =
+        App.init(%{
+          options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]
+        })
 
       assert model.hooks.stop == ["true"]
       assert [%{name: "fs"}] = model.mcp_servers
@@ -464,10 +570,16 @@ defmodule Raxol.Agent.Code.AppTest do
       dir =
         config_cwd(%{
           ".raxol/hooks.json" =>
-            Jason.encode!(%{"pre_tool_use" => [%{"match" => "*", "command" => "true"}]})
+            Jason.encode!(%{
+              "pre_tool_use" => [%{"match" => "*", "command" => "true"}]
+            })
         })
 
-      model = App.init(%{options: [runner: runner, sessions_dir: tmp_dir(), cwd: dir]})
+      model =
+        App.init(%{
+          options: [runner: runner, sessions_dir: tmp_dir(), cwd: dir]
+        })
+
       {_model, []} = App.update(key(:enter), %{model | input: "go"})
 
       assert_receive {:opts, opts}
@@ -475,7 +587,9 @@ defmodule Raxol.Agent.Code.AppTest do
       assert Map.has_key?(context, :subagent)
       assert context.tool_call_hooks == [Raxol.Agent.Code.Hooks]
 
-      names = Enum.map(Keyword.fetch!(opts, :actions), & &1.__action_meta__().name)
+      names =
+        Enum.map(Keyword.fetch!(opts, :actions), & &1.__action_meta__().name)
+
       assert "task" in names
     end
 
@@ -484,10 +598,15 @@ defmodule Raxol.Agent.Code.AppTest do
         config_cwd(%{
           ".raxol/hooks.json" => Jason.encode!(%{"stop" => ["true"]}),
           ".mcp.json" =>
-            Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}})
+            Jason.encode!(%{
+              "mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}
+            })
         })
 
-      model = App.init(%{options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]})
+      model =
+        App.init(%{
+          options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]
+        })
 
       {model, []} = submit(model, "/hooks")
       assert model.notice =~ "stop: 1"

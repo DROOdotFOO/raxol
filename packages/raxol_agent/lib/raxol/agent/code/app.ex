@@ -612,10 +612,45 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp finalize_turn(model, %{type: :error}),
-    do: persist(%{model | turn_answer: ""})
+  defp finalize_turn(model, %{type: :error} = event) do
+    model = persist(%{model | turn_answer: ""})
+
+    # A credential rejected mid-session (revoked/expired key) routes back to
+    # onboarding instead of leaving the bare error face. The conversation is
+    # preserved (messages are untouched here), so `/login` reconnects and the
+    # user continues where they left off.
+    if auth_rejected?(error_reason(event)),
+      do: to_reauth(model),
+      else: model
+  end
 
   defp finalize_turn(model, _event), do: model
+
+  defp error_reason(%{payload: payload}) when is_map(payload),
+    do: Map.get(payload, :reason) || Map.get(payload, "reason")
+
+  defp error_reason(_event), do: nil
+
+  # Flip the provider back to its unconnected state so the setup panel shows
+  # and `submit_prompt/2` gates further turns until `/login` reconnects.
+  defp to_reauth(model) do
+    backend = current_backend(model)
+
+    %{
+      model
+      | provider_status: {:no_key, backend},
+        notice: "auth failed for #{backend} — run /login to reconnect"
+    }
+  end
+
+  defp current_backend(%{provider_status: {:ready, backend, _source}}),
+    do: backend
+
+  defp current_backend(%{executor: %{backend: backend}})
+       when not is_nil(backend),
+       do: backend
+
+  defp current_backend(_model), do: :unknown
 
   defp append_assistant(messages, answer) do
     case String.trim(answer) do
@@ -992,16 +1027,30 @@ defmodule Raxol.Agent.Code.App do
   # (even a truncated/unparseable body) authorized the request, so it is valid.
   def interpret_ping({:ok, _response}), do: :valid
 
-  def interpret_ping({:error, {:http_error, status, _body}})
-      when status in [401, 403],
-      do: {:rejected, status}
-
-  def interpret_ping({:error, {:http_error, status, _body}}),
-    do: {:reachable_error, status}
+  def interpret_ping({:error, {:http_error, status, _body} = reason}) do
+    if auth_rejected?(reason),
+      do: {:rejected, status},
+      else: {:reachable_error, status}
+  end
 
   def interpret_ping({:error, {:request_failed, _reason}}), do: :unreachable
   def interpret_ping({:error, :req_not_available}), do: :req_unavailable
   def interpret_ping({:error, _marker}), do: :valid
+
+  @doc false
+  # Shared credential-rejection classifier for a backend error term — used by
+  # both the `/login` ping (interpret_ping/1) and the mid-turn error fold
+  # (finalize_turn on a contract `:error` event). Recognizes the structured
+  # `complete/2` shape (`{:http_error, 401|403, _}`) and the streaming shape
+  # (the "HTTP 401"/"HTTP 403" string `Backend.HTTP.stream/2` surfaces as its
+  # error element).
+  def auth_rejected?({:http_error, status, _body}) when status in [401, 403],
+    do: true
+
+  def auth_rejected?(reason) when is_binary(reason),
+    do: reason =~ ~r/\bHTTP (401|403)\b/
+
+  def auth_rejected?(_reason), do: false
 
   defp validation_status(harness, :valid),
     do: "#{harness} credential validated ●"
