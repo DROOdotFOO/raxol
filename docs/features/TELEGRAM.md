@@ -167,8 +167,22 @@ Raxol.Telegram.RichMessage.Sender.send(chat_id, msg,
 
 The same `:api_base` option works on `Raxol.Telegram.Poll.send_poll/4` and `Raxol.Telegram.Guardian.apply_decision/3` (shared `HTTP` transport).
 
+## As a Gateway Adapter
+
+`Raxol.Telegram.GatewayAdapter` puts Telegram behind the frozen
+`Raxol.Gateway.Adapter` contract (requires the optional `raxol_gateway`
+dependency): text messages normalize to the gateway's `%{text: binary}` event
+shape, replies go out as plain-text `sendMessage` calls chunked at Telegram's
+4096 UTF-16-code-unit limit. `Raxol.Telegram.UpdatePoller` is the matching
+update feed: a supervised `getUpdates` long-poll loop with exponential backoff
+and a sink-agnostic `:on_update` function, so it drives either the gateway
+router or `Bot.handle_update/2`. Callbacks, keyboards, and media stay on the
+TEA surface (this package's `Session`); the gateway path is text-first. See
+[Gateway](GATEWAY.md) for the full wiring example.
+
 ## See Also
 
+- [Gateway](GATEWAY.md): multi-platform gateway; Telegram is the first adapter behind the frozen contract
 - [Watch](WATCH.md): another push surface for mobile
 - [Agent Framework](AGENT_FRAMEWORK.md): if your bot is an agent, use this stack
 - [ADR-0014](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0014-telegram-ai-guardian.md): full Guardian design rationale
