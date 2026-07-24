@@ -97,7 +97,10 @@ defmodule Raxol.Telegram.PollTest do
 
     test "accepts exactly 2 options" do
       capture = capturing_post()
-      assert {:ok, _} = Poll.send_poll(42, "Q", ["a", "b"], bot_token: "t", post_fn: capture.post_fn)
+
+      assert {:ok, _} =
+               Poll.send_poll(42, "Q", ["a", "b"], bot_token: "t", post_fn: capture.post_fn)
+
       assert capture.received_url.() =~ "sendPoll"
     end
 
@@ -113,8 +116,7 @@ defmodule Raxol.Telegram.PollTest do
     test "builds chat_id, question, options array" do
       capture = capturing_post()
 
-      Poll.send_poll(42, "Pick one",
-        ["Yes", Poll.link_option("Read more", "https://x")],
+      Poll.send_poll(42, "Pick one", ["Yes", Poll.link_option("Read more", "https://x")],
         bot_token: "t",
         post_fn: capture.post_fn
       )
@@ -236,8 +238,7 @@ defmodule Raxol.Telegram.PollTest do
     test "the full body serializes to valid JSON without losing structure" do
       capture = capturing_post()
 
-      Poll.send_poll(42, "Q?",
-        ["plain", Poll.link_option("link", "https://x")],
+      Poll.send_poll(42, "Q?", ["plain", Poll.link_option("link", "https://x")],
         type: "quiz",
         correct_option_id: 0,
         bot_token: "t",
