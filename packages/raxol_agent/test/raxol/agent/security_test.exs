@@ -189,8 +189,10 @@ defmodule Raxol.Agent.SecurityTest do
     end
 
     defp call_server(conn, streamer) do
-      conn = Plug.Conn.put_private(conn, :streamer, streamer)
-      SessionStreamServer.call(conn, SessionStreamServer.init([]))
+      conn
+      |> Plug.Conn.put_private(:streamer, streamer)
+      |> Plug.Conn.put_private(:session_stream_require_auth, false)
+      |> SessionStreamServer.call(SessionStreamServer.init([]))
     end
 
     test "numeric session id is parsed as integer", %{streamer: streamer} do
