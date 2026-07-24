@@ -9,9 +9,10 @@ defmodule Raxol.UI.Theming.Ansi16Salience do
   salience palette (`Raxol.UI.Theming.Colors.find_closest_basic_color/1`)
   collapses most semantic fields onto the gray ramp: measured on this
   codebase, 8 of the 11 harness-painted fields (success, accent, emphasis,
-  diff add/del, chrome, ...) gray out on the dark reference ground, and the
-  survivors lie about their hue -- solved `error` nearest-RGB-quantizes to
-  ANSI 3 (yellow), not any red slot. Averaging RGB channels down to 16 flat
+  diff add/del, chrome, ...) gray out on the dark reference ground, and some
+  survivors lie about their hue -- on a light ground, solved `emphasis`
+  nearest-RGB-quantizes to ANSI 1 (red) and `foreground` to ANSI 6 (cyan),
+  neither a neutral/warm slot. Averaging RGB channels down to 16 flat
   swatches erases the hue information that carries semantic meaning.
 
   This module replaces that lossy path for semantic colors. Instead of
