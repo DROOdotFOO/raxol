@@ -21,8 +21,37 @@ tree: you wire the supervisor yourself.
 | `normalize_event/1` | Translate a raw platform event to `{:ok, Route.t(), event}` or `:ignore` |
 | `send_message/3` | Send a rendered reply to a route |
 
+The contract is frozen (ADR-0023): additions must be optional callbacks, and existing
+callbacks do not change shape.
+
 `Raxol.Gateway.Adapter.InMemory` is a reference adapter (platform `:in_memory`) that forwards
 outbound messages to a sink pid; it drives the full inbound to outbound path in tests.
+
+## Agent-backed handler
+
+`Raxol.Gateway.Handler.Agent` turns any chat into an agent conversation: each inbound
+`%{text: text}` event runs one synchronous turn through `Raxol.Agent.Stream` and replies
+with the collected answer. It requires the optional `raxol_agent` dependency.
+
+```elixir
+Raxol.Gateway.Supervisor.start_link(
+  handler:
+    {Raxol.Gateway.Handler.Agent,
+     [
+       system_prompt: "You are a helpful assistant.",
+       # No backend pinned: auto_provider resolves credentials from the
+       # environment (1Password ref -> provider env vars -> AI_API_KEY).
+       agent_opts: []
+     ]},
+  adapter: {MyAdapter, conn}
+)
+```
+
+Per-chat history is kept in the handler state (capped by `:max_history`, default 40
+messages) and, when the session has a `:log`, also recorded to the conversation log. A
+failed turn logs the full reason and replies with a short error message. Turns run
+synchronously inside the per-chat session process, so set `:idle_timeout` comfortably
+above the longest expected turn.
 
 ## Routing and sessions
 
@@ -98,9 +127,10 @@ route = Raxol.Gateway.Route.new(%{platform: :in_memory, chat_type: :dm, chat_id:
 ## Status
 
 The gateway core (adapter contract, routing, sessions, pairing, delivery, handoff) is
-complete. Two pieces are deferred: concrete platform adapters (Telegram, Discord, and so on;
-only `Adapter.InMemory` ships today), and a `Lifecycle`-backed handler that runs a full TEA
-app under `environment: :gateway`. Any module satisfying the two `Handler` callbacks works in
+complete, the adapter contract is frozen, and `Handler.Agent` (agent-backed conversations)
+ships. Still deferred: concrete platform adapters (Telegram, Discord, and so on; only
+`Adapter.InMemory` ships today) and a `Lifecycle`-backed handler that runs a full TEA app
+under `environment: :gateway`. Any module satisfying the two `Handler` callbacks works in
 the meantime. See `docs/adr/0023-unified-messaging-gateway.md`.
 
 ## See also

@@ -42,8 +42,9 @@ defmodule Raxol.Gateway.Session do
   def route(server), do: GenServer.call(server, :route)
 
   @doc "The session's stable conversation id."
-  @spec conversation_id(GenServer.server()) :: String.t()
-  def conversation_id(server), do: GenServer.call(server, :conversation_id)
+  @spec conversation_id(GenServer.server(), timeout()) :: String.t()
+  def conversation_id(server, timeout \\ 5_000),
+    do: GenServer.call(server, :conversation_id, timeout)
 
   @impl true
   def init(opts) do
@@ -60,7 +61,8 @@ defmodule Raxol.Gateway.Session do
           idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
           conversation_id: Keyword.get(opts, :conversation_id) || Route.key(route),
           log: Keyword.get(opts, :log),
-          timer: nil
+          timer: nil,
+          idle_ref: nil
         }
 
         {:ok, arm_timer(state)}
@@ -90,7 +92,13 @@ defmodule Raxol.Gateway.Session do
   end
 
   @impl true
-  def handle_info(:idle_timeout, state), do: {:stop, :normal, state}
+  def handle_info({:idle_timeout, ref}, %{idle_ref: ref} = state),
+    do: {:stop, :normal, state}
+
+  # A stale idle message: the timer fired while a long handler turn blocked the
+  # mailbox and arm_timer/1 has since re-armed. Cancelling alone cannot prevent
+  # this (the message may already be queued), so only the current ref stops.
+  def handle_info({:idle_timeout, _stale}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp record(%{log: nil}, _item), do: :ok
@@ -102,6 +110,8 @@ defmodule Raxol.Gateway.Session do
 
   defp arm_timer(state) do
     if state.timer, do: Process.cancel_timer(state.timer)
-    %{state | timer: Process.send_after(self(), :idle_timeout, state.idle_timeout)}
+    ref = make_ref()
+    timer = Process.send_after(self(), {:idle_timeout, ref}, state.idle_timeout)
+    %{state | timer: timer, idle_ref: ref}
   end
 end
