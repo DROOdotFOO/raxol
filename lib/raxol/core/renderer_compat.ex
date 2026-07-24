@@ -60,6 +60,11 @@ defmodule Raxol.Core.Renderer do
   - `{:clear_line, y}` - Clear line at y, emitted when a changed row becomes
     entirely blank (spaces with no visible style and no hyperlink)
 
+  Note: `apply_diff/1` renders `:clear_line` as `ESC[2K`, which erases the
+  entire physical terminal row. Buffers narrower than the terminal that share
+  rows with unmanaged content should not rely on the diff staying inside the
+  buffer's width when a row goes blank.
+
   ## Example
 
       old_buffer = Raxol.Core.Buffer.create_blank_buffer(20, 5)
@@ -160,12 +165,14 @@ defmodule Raxol.Core.Renderer do
 
   # A row is blank when every cell renders as an unstyled space: clear_line
   # erases with the default background, so any visible style or hyperlink
-  # disqualifies the row.
+  # disqualifies the row. Non-map styles (set_cell has no style guard) fall
+  # through to non-blank so this fast path never crashes on shapes the diff
+  # path itself tolerates.
   defp blank_row?(cells) do
     Enum.all?(cells, &blank_cell?/1)
   end
 
-  defp blank_cell?(%{char: " ", style: style}) do
+  defp blank_cell?(%{char: " ", style: style}) when is_map(style) do
     Style.to_ansi(style) == "" and Map.get(style, :hyperlink) in [nil, ""]
   end
 

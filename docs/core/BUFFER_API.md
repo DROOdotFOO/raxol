@@ -135,7 +135,7 @@ Calculates minimal updates between two buffers. Returns a list of operation tupl
 
 - `{:move, x, y}` - Move cursor to position
 - `{:write, text, style}` - Write text with style
-- `{:clear_line, y}` - Clear line at y, emitted when a changed row becomes entirely blank (spaces with no visible style and no hyperlink)
+- `{:clear_line, y}` - Clear line at y, emitted when a changed row becomes entirely blank (spaces with no visible style and no hyperlink). Rendered as `ESC[2K`, which erases the entire physical terminal row - buffers narrower than the terminal should not rely on the diff staying inside the buffer's width when a row goes blank.
 
 ```elixir
 diff = Renderer.render_diff(old_buffer, new_buffer)

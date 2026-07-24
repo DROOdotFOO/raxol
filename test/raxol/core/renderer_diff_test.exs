@@ -83,6 +83,18 @@ defmodule Raxol.Core.RendererDiffTest do
       assert Enum.any?(ops, &match?({:write, "    ", ^style}, &1))
     end
 
+    test "space cells with a non-map style never crash the blank scan" do
+      # set_cell/5 has no guard on style, so nil styles are reachable via the
+      # public API; the fast path must fall through, not raise.
+      old = Buffer.set_cell(blank(), 3, 1, " ", nil)
+      new = Buffer.set_cell(blank(), 3, 1, " ", nil)
+
+      assert Renderer.render_diff(old, new) == []
+      # The nil-style cell is not blank (unknown style), so a diff to a truly
+      # blank row is a changed-row-to-blank: clear_line, no crash.
+      assert Renderer.render_diff(old, blank()) == [{:clear_line, 1}]
+    end
+
     test "row going from blank to text emits writes, not clear_line" do
       old = blank()
       new = Buffer.write_at(blank(), 2, 1, "hi")
