@@ -113,7 +113,8 @@ defmodule Raxol.Agent.Auxiliary do
     whether a config's backend is usable (e.g. has credentials). Defaults to a
     structural check that the harness resolves to a backend module.
   """
-  @spec select(task_kind(), keyword()) :: {:ok, module(), keyword()} | {:error, term()}
+  @spec select(task_kind(), keyword()) ::
+          {:ok, module(), keyword()} | {:error, term()}
   def select(task_kind, opts \\ []) when is_atom(task_kind) do
     available? = Keyword.get(opts, :available?, &available?/1)
 
@@ -177,7 +178,8 @@ defmodule Raxol.Agent.Auxiliary do
     end
   end
 
-  defp available?(config), do: match?({:ok, _module, _opts}, Selector.select(config))
+  defp available?(config),
+    do: match?({:ok, _module, _opts}, Selector.select(config))
 
   defp dedup(configs) do
     configs

@@ -61,7 +61,11 @@ defmodule Raxol.Agent.Backend.Cli do
     do: IO.puts(:stderr, "#{prog}: --harness is deprecated; use --backend")
 
   defp maybe_warn(:both, prog),
-    do: IO.puts(:stderr, "#{prog}: both --backend and --harness given; using --backend")
+    do:
+      IO.puts(
+        :stderr,
+        "#{prog}: both --backend and --harness given; using --backend"
+      )
 
   defp maybe_warn(_status, _prog), do: :ok
 end

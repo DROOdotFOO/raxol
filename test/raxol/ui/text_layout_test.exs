@@ -24,11 +24,22 @@ defmodule Raxol.UI.TextLayoutTest do
              ) == ["supercalif", "ragilistic", "expialidoc", "ious"]
     end
 
-    test "CJK: fit-check is character-count based, not display-width based (known divergence)" do
-      # 5 graphemes passes the <=6 length check despite a display width of
-      # 10 -- pre-existing behavior preserved bit-for-bit.
+    # BEHAVIOR CHANGE: this used to pin the divergence rather than the
+    # correct answer -- "5 graphemes passes the <=6 length check despite a
+    # display width of 10 -- pre-existing behavior preserved bit-for-bit."
+    # That is the bug: `width` is a display-COLUMN budget, so a 10-column run
+    # placed on a 6-column line overflowed it by 4, and a wide-character
+    # paragraph ran past its container by up to 2x. The fit check now
+    # measures columns via `Raxol.UI.TextMeasure`.
+    test "CJK: the fit-check is display-width based" do
       assert TextWrapping.wrap_line_by_word("中文字符串 test", 6) ==
-               ["中文字符串", "test"]
+               ["中文字", "符串", "test"]
+
+      # The point of the change, stated as the invariant rather than a
+      # golden string: nothing exceeds the budget.
+      for line <- TextWrapping.wrap_line_by_word("中文字符串 test", 6) do
+        assert Raxol.UI.TextMeasure.display_width(line) <= 6
+      end
     end
 
     test "trailing spaces are trimmed off the final line" do

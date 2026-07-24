@@ -11,7 +11,12 @@ defmodule Raxol.Terminal.Theme.ThemeServerTest do
       )
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+      # Server may be mid-shutdown at teardown; swallow the stop's :exit.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+      catch
+        :exit, _ -> :ok
+      end
     end)
 
     %{pid: pid}

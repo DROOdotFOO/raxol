@@ -112,4 +112,57 @@ defmodule Raxol.UI.TextMeasureTest do
       assert x2 == 3
     end
   end
+
+  # Erlang's `:re` and `:binary.match/2` report BYTE offsets; `String.*`
+  # counts graphemes; the screen counts display cells. Three different
+  # numbers for the same position, equal only for pure ASCII.
+  describe "byte-offset conversions" do
+    # "e" <> U+0301 -- a base character plus a combining mark, so 2
+    # graphemes, 3 bytes, 1 display cell.
+    @combining "e\u0301"
+
+    test "slice_bytes/2 cuts at byte offsets, unlike String.slice/3" do
+      text = "prose — tail"
+      # The em dash is 3 bytes / 1 grapheme, so the byte offset of "tail"
+      # is 2 higher than its grapheme index.
+      {start, len} = :binary.match(text, "tail")
+
+      assert TextMeasure.slice_bytes(text, {start, len}) == "tail"
+      refute String.slice(text, start, len) == "tail"
+    end
+
+    test "slice_bytes/2 clamps instead of raising on out-of-range offsets" do
+      assert TextMeasure.slice_bytes("abc", {0, 99}) == "abc"
+      assert TextMeasure.slice_bytes("abc", {99, 3}) == ""
+      assert TextMeasure.slice_bytes("abc", {-5, 2}) == "ab"
+      # A non-participating regex capture group.
+      assert TextMeasure.slice_bytes("abc", {-1, 0}) == ""
+    end
+
+    test "byte_offset_to_column/2 answers in display cells" do
+      text = "日本語abc"
+      {start, _len} = :binary.match(text, "abc")
+
+      # 3 ideographs: 9 bytes, 3 graphemes, 6 columns.
+      assert start == 9
+      assert TextMeasure.byte_offset_to_column(text, start) == 6
+      assert TextMeasure.byte_offset_to_index(text, start) == 3
+    end
+
+    test "byte_offset_to_column/2 counts a combining mark as zero-width" do
+      text = @combining <> "x"
+      {start, _len} = :binary.match(text, "x")
+
+      assert TextMeasure.byte_offset_to_column(text, start) ==
+               TextMeasure.display_width(@combining)
+    end
+
+    test "offset zero and end-of-string are the identity cases" do
+      text = "日本語"
+
+      assert TextMeasure.byte_offset_to_column(text, 0) == 0
+      assert TextMeasure.byte_offset_to_column(text, byte_size(text)) == 6
+      assert TextMeasure.byte_offset_to_index(text, byte_size(text)) == 3
+    end
+  end
 end

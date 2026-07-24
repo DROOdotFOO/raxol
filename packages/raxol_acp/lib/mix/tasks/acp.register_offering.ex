@@ -32,7 +32,8 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
   ## Options
 
   - `--offering` -- which offering to emit: `usdc_public` (default, the launch
-    offering `xochi_usdc_public`), `public`, `stealth`, or `legacy` (the
+    offering `xochi_usdc_public`), `public`, `stealth`, `console` (the
+    `custom_console_agent` package-delivery offering), or `legacy` (the
     deprecated token-agnostic `xochi_cross_chain_transfer`).
   - `--out PATH` -- write to a file instead of stdout.
   - `--pretty` -- emit pretty-printed JSON. Default is compact.
@@ -103,9 +104,26 @@ defmodule Mix.Tasks.Acp.RegisterOffering do
   defp offering_metadata(mode) when mode in [:usdc_public, :public, :stealth],
     do: Offering.offering_metadata(mode)
 
+  defp offering_metadata(:console) do
+    %{
+      name: Raxol.ACP.Console.AgentOffering.offering_name(),
+      description:
+        "A custom autonomous agent for your Virtuals Console, delivered as a " <>
+          "validated soul.md + scheduled-tasks package for Hermes or OpenClaw, " <>
+          "bench-tested on the open-source runtime with evidence. Deploy it to " <>
+          "your own Console in three clicks; your wallet, signers, and ACP " <>
+          "identity are preserved.",
+      price_usdc: Decimal.to_float(Raxol.ACP.Console.AgentOffering.price_usdc()),
+      price_type: "fixed",
+      sla_minutes: Raxol.ACP.Console.AgentOffering.sla_minutes(),
+      required_funds: false,
+      requirement_schema: Raxol.ACP.Console.Spec.requirement_schema()
+    }
+  end
+
   defp offering_metadata(other),
     do:
       Mix.raise(
-        "unknown --offering #{inspect(other)}; expected usdc_public, public, stealth, or legacy"
+        "unknown --offering #{inspect(other)}; expected usdc_public, public, stealth, console, or legacy"
       )
 end

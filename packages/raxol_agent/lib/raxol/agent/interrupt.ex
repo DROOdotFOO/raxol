@@ -326,6 +326,32 @@ defmodule Raxol.Agent.Interrupt do
   @spec default_grace_ms() :: pos_integer()
   def default_grace_ms, do: @default_grace_ms
 
+  @doc """
+  Best-effort synchronous OS-level kill of `os_pid`'s process group, with NO
+  staging, sink, or turn semantics — for a caller with no journal/turn context
+  that still needs the effectiveness law `interrupt/3` implements (e.g. a
+  shell wall-clock timeout: there is no operator interrupt to journal, but the
+  OS process — and anything it forked — must not be left running detached
+  just because the BEAM side gave up waiting on it).
+
+  Returns the same `{disposition, confirmed?, os_pid}` shape the internal
+  hard-kill produces:
+
+    * `:killed`   — the group SIGKILL landed; group death OS-confirmed.
+    * `:failed`   — the kill signal itself did not land, or the kill path
+      threw.
+    * `:degraded` — no safe process group to signal; a best-effort per-pid
+      sweep of the enumerated subtree was attempted instead (never a group
+      kill, so `confirmed?` stays `false`).
+    * `:noop`     — `os_pid` is `nil` (nothing to kill).
+
+  Never raises: an OS-level failure mid-kill is reported as `:failed`, not a
+  crash (same guard `hard_kill/1` uses internally).
+  """
+  @spec kill_os_pid(non_neg_integer() | nil) ::
+          {:killed | :failed | :degraded | :noop, boolean(), non_neg_integer() | nil}
+  def kill_os_pid(os_pid), do: hard_kill(%{os_pid: os_pid})
+
   # --- staging internals -----------------------------------------------------
 
   # Emit one staged event through the durable sink, threading actor attribution

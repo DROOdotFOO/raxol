@@ -9,7 +9,7 @@ defmodule Mix.Tasks.T0.Ringb do
   `append_result.sh`, and prints the D-PA resolver's output.
 
   This retires the manual "Ring B" half of
-  `docs/proposals/in-flight/t0-runbook.md` for every terminal with a
+  `docs/proposals/t0-runbook.md` for every terminal with a
   scriptable capture API. Ghostty has neither a `get-text` CLI nor a
   `get text`/`contents`/`history` AppleScript command (confirmed via
   `sdef`) — it is recorded as a documented skip (screenshot residual),

@@ -2,9 +2,9 @@ defmodule Raxol.UI.SyntaxHighlighter do
   @moduledoc """
   Structured-token syntax highlighting for terminal rendering.
 
-  Per `docs/proposals/in-flight/shiki-elixir-analysis.md`: components in
-  this codebase emit styled spans (`text(content, fg:, style:)`) -- raw
-  ANSI is only ever applied at the final `Terminal.Renderer` stage. A
+  Components in this codebase emit styled spans (`text(content, fg:,
+  style:)`) -- raw ANSI is only ever applied at the final
+  `Terminal.Renderer` stage. A
   highlighter here must therefore yield **structured tokens**
   (`%{text:, fg:, styles:}`), never a pre-rendered ANSI/HTML string. That
   ruled out a Shiki port (Oniguruma/TextMate semantics don't translate to
@@ -71,7 +71,12 @@ defmodule Raxol.UI.SyntaxHighlighter do
           [[token()]]
   def highlight_lines(source, language, theme \\ @default_theme)
 
-  def highlight_lines("", _language, _theme), do: []
+  # `String.split("", "\n")` is `[""]` -- one empty line, not zero -- so the
+  # documented "outer list has length(String.split(source, "\n")) entries"
+  # invariant requires a single empty-token line here, not an empty list.
+  # Delegating to `plain_lines/1` keeps the empty-line token shape in one
+  # place (and a lexer on "" can legitimately yield no tokens at all).
+  def highlight_lines("", _language, _theme), do: plain_lines("")
 
   def highlight_lines(source, nil, _theme) when is_binary(source),
     do: plain_lines(source)
@@ -95,6 +100,16 @@ defmodule Raxol.UI.SyntaxHighlighter do
       {:ok, entry} -> {:ok, entry}
       :error -> Registry.fetch_lexer_by_extension(name)
     end
+  rescue
+    # `Code.ensure_loaded?(Makeup)` only proves the MODULE is loadable, not
+    # that its lexer registry is populated. Makeup stores that registry in
+    # `Application.get_env(:makeup, ...)` and fills it only when the Makeup
+    # application starts and each lexer self-registers. In a headless/:agent
+    # environment that app boot is skipped, so `get_env` returns nil and
+    # Makeup's own `Map.fetch(nil, name)` raises BadMapError. A missing
+    # highlighter must degrade to plain source, never crash the diff (and the
+    # whole block) render -- the same contract `highlight_with_lexer/4` keeps.
+    _ -> :error
   end
 
   defp highlight_with_lexer(source, lexer, opts, theme) do

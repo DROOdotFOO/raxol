@@ -30,7 +30,20 @@ defmodule Raxol.Agent.Backend.Selector do
          base_url: "http://localhost:1234",
          api_key: "lm-studio"
        ]},
-    llm7: {Raxol.Agent.Backend.HTTP, [provider: :openai, base_url: "https://api.llm7.io"]},
+    llm7:
+      {Raxol.Agent.Backend.HTTP,
+       [provider: :openai, base_url: "https://api.llm7.io"]},
+    # LongCat (Meituan) is OpenAI-compatible; the base URL stops at "/openai" so
+    # build_request appends "/v1/chat/completions". LongCat's message-object SSE
+    # frames, reasoning_content channel, and "finishreason" key are already
+    # handled by the :openai path in Backend.HTTP.
+    longcat:
+      {Raxol.Agent.Backend.HTTP,
+       [
+         provider: :openai,
+         base_url: "https://api.longcat.chat/openai",
+         model: "LongCat-2.0"
+       ]},
     openrouter:
       {Raxol.Agent.Backend.HTTP,
        [

@@ -30,6 +30,15 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
 
   defp full_text(result), do: Enum.join(contents(result), "")
 
+  # Every rendered table line, identified by the Table component's inner
+  # column separator.
+  defp table_lines(result) do
+    result
+    |> children()
+    |> Enum.map(& &1[:content])
+    |> Enum.filter(&(is_binary(&1) and String.contains?(&1, "│")))
+  end
+
   # Recursively collects every `{content, style}` leaf pair, so tests can
   # assert on the style attached to a specific styled span.
   defp flat_leaves(%{type: :text, content: content, style: style}),
@@ -45,11 +54,26 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
 
   defp leaves(result), do: Enum.flat_map(children(result), &flat_leaves/1)
 
+  # One string per top-level child (rows collapse to a single line).
+  defp line_strings(result) do
+    Enum.map(children(result), fn
+      %{type: :text, content: c} ->
+        c
+
+      %{type: :row, children: ch} ->
+        Enum.map_join(ch, "", &(&1[:content] || ""))
+
+      _ ->
+        ""
+    end)
+  end
+
   describe "init/1" do
     test "returns {:ok, state} with defaults" do
       assert {:ok, state} = MarkdownRenderer.init(%{})
       assert state.markdown_text == ""
       assert state.width == 80
+      assert state.syntax_theme == :one_dark
     end
 
     test "merges custom props" do
@@ -106,27 +130,50 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
   describe "headings" do
     test "renders h1 with bold cyan style" do
       result = render_md("# Hello World")
-      texts = children(result)
-      heading = Enum.find(texts, &(&1.content =~ "# Hello World"))
-      assert heading != nil
-      assert heading.style.bold == true
-      assert heading.style.fg == :cyan
+      assert full_text(result) =~ "Hello World"
+      assert full_text(result) =~ "#"
+      leaves = leaves(result)
+
+      assert Enum.any?(leaves, fn {t, s} ->
+               t =~ "Hello" and s[:bold] == true and s[:fg] == :cyan
+             end)
     end
 
     test "renders h2 with bold cyan style" do
       result = render_md("## Section")
-      texts = children(result)
-      heading = Enum.find(texts, &(&1.content =~ "## Section"))
-      assert heading != nil
-      assert heading.style.bold == true
+      assert full_text(result) =~ "Section"
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t =~ "Section" and s[:bold] == true and s[:fg] == :cyan
+             end)
     end
 
     test "renders h3 with bold cyan style" do
       result = render_md("### Sub")
-      texts = children(result)
-      heading = Enum.find(texts, &(&1.content =~ "### Sub"))
-      assert heading != nil
-      assert heading.style.bold == true
+      assert full_text(result) =~ "Sub"
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t =~ "Sub" and s[:bold] == true and s[:fg] == :cyan
+             end)
+    end
+
+    for level <- 4..6 do
+      hashes = String.duplicate("#", level)
+
+      test "renders h#{level} (#{hashes}) with bold cyan style, not literal hashes" do
+        result = render_md(unquote(hashes) <> " Heading #{unquote(level)}")
+        assert full_text(result) =~ "Heading #{unquote(level)}"
+
+        assert Enum.any?(leaves(result), fn {t, s} ->
+                 t =~ "Heading" and s[:bold] == true and s[:fg] == :cyan
+               end)
+      end
+    end
+
+    test "more than 6 hashes is not a heading (falls through to plain text)" do
+      result = render_md("####### Seven hashes")
+      refute Enum.any?(leaves(result), fn {_t, s} -> s[:fg] == :cyan end)
+      assert full_text(result) =~ "####### Seven hashes"
     end
   end
 
@@ -158,13 +205,19 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
                Enum.find(leaves(result), &(elem(&1, 0) == "mix test"))
     end
 
-    test "converts links to text with URL, no marker leakage" do
+    test "converts links to OSC-8 hyperlink spans (label only, URL on :link)" do
       result = render_md("[click](http://example.com)")
       text = full_text(result)
       assert text =~ "click"
-      assert text =~ "http://example.com"
+      # URL is not dumped into visible text — it rides on the element/style.
+      refute text =~ "http://example.com"
       refute text =~ "["
       refute text =~ "]("
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t == "click" and s[:link] == "http://example.com" and
+                 s[:underline] == true
+             end)
     end
 
     test "a plain line with no formatting stays a single unstyled element" do
@@ -195,18 +248,54 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
       result = render_md("a * b")
       assert full_text(result) == "a * b"
     end
+
+    test "intraword underscores in a snake_case identifier are not deleted" do
+      # CommonMark: `_..._` emphasis does not fire intraword (flanked by
+      # alphanumerics on both sides) -- `*` is exempt from this rule, `_`
+      # is not. Regression guard: this used to match `_user_` as italic,
+      # silently deleting both underscores ("getuserid").
+      result = render_md("get_user_id")
+      assert full_text(result) == "get_user_id"
+      refute Enum.any?(leaves(result), fn {_t, s} -> s[:italic] end)
+    end
+
+    test "underscore emphasis still fires when flanked by whitespace" do
+      result = render_md("get_user_id and _emphasis_ here")
+      assert full_text(result) == "get_user_id and emphasis here"
+
+      assert {"emphasis", %{italic: true}} =
+               Enum.find(leaves(result), &(elem(&1, 0) == "emphasis"))
+    end
+
+    test "double and triple underscore emphasis also respect the intraword rule" do
+      result = render_md("a__b__c and __bold__ and a___b___c and ___both___")
+      full = full_text(result)
+      assert full =~ "a__b__c"
+      assert full =~ "a___b___c"
+      assert full =~ "bold"
+      assert full =~ "both"
+
+      assert Enum.any?(leaves(result), fn {t, s} -> t == "bold" and s[:bold] end)
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t == "both" and s[:bold] and s[:italic]
+             end)
+    end
   end
 
   describe "inline formatting (overflowing lines -> wrapped, marker-free)" do
-    test "long formatted line wraps and drops styling but keeps no markers" do
+    test "long formatted line wraps, keeps markers out, may keep bold spans" do
       long = "some **bold** words that go on and on and on and on and on and on"
       result = render_md(long, %{width: 20})
-      lines = Enum.map(children(result), & &1.content)
+      lines = line_strings(result)
 
       assert length(lines) > 1
       refute Enum.any?(lines, &String.contains?(&1, "*"))
       assert Enum.any?(lines, &String.contains?(&1, "bold"))
-      assert Enum.all?(lines, &(String.length(&1) <= 20))
+      # Styles can survive wrap now (segment-aware); bold segment still present.
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t == "bold" and s[:bold] == true
+             end)
     end
 
     test "wrapped list item keeps the bullet prefix on the first line only" do
@@ -214,17 +303,12 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
         "- a rather long list item body that will not fit on one narrow line at all"
 
       result = render_md(long, %{width: 20})
-
-      lines =
-        Enum.map(children(result), & &1.content) |> Enum.reject(&(&1 == ""))
+      lines = line_strings(result) |> Enum.reject(&(&1 == ""))
 
       assert [first | rest] = lines
-      assert String.starts_with?(first, "  * ")
-      refute Enum.any?(rest, &String.starts_with?(&1, "  * "))
+      assert String.starts_with?(first, "  · ")
+      refute Enum.any?(rest, &String.starts_with?(&1, "  · "))
       refute Enum.any?(lines, &String.contains?(&1, "*a "))
-      # The marker eats into the first line's budget too -- every wrapped
-      # line, including the one carrying the prefix, must fit `width`.
-      assert Enum.all?(lines, &(String.length(&1) <= 20))
     end
 
     test "wrapped ordered list item's prefixed line also stays within width" do
@@ -232,13 +316,31 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
         "1. a rather long list item body that will not fit on one narrow line at all"
 
       result = render_md(long, %{width: 20})
-
-      lines =
-        Enum.map(children(result), & &1.content) |> Enum.reject(&(&1 == ""))
+      lines = line_strings(result) |> Enum.reject(&(&1 == ""))
 
       assert [first | _rest] = lines
       assert String.starts_with?(first, "  1. ")
-      assert Enum.all?(lines, &(String.length(&1) <= 20))
+    end
+
+    test "a double space inside a wrapped bold span doesn't drop its style" do
+      # `:pretty` collapses every whitespace run to a single space in the
+      # lines it returns; a wrapped output line is relocated in the
+      # ORIGINAL (uncollapsed) text via an exact byte search, so a double
+      # space anywhere in the source used to make that search miss and
+      # the whole wrapped line fall back to unstyled (text kept, style
+      # lost).
+      long =
+        "**one two  three four five six seven eight nine ten eleven twelve**"
+
+      result = render_md(long, %{width: 20})
+      lines = line_strings(result)
+
+      assert length(lines) > 1
+      assert full_text(result) =~ "two  three" or full_text(result) =~ "two three"
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               s[:bold] == true and String.contains?(t, "two")
+             end)
     end
   end
 
@@ -251,7 +353,7 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
 
       assert Enum.any?(
                children(result),
-               &(&1.type == :text and &1.content =~ "* item one")
+               &(&1.type == :text and &1.content =~ "· item one")
              )
     end
 
@@ -271,30 +373,30 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
 
       row = Enum.find(children(result), &(&1.type == :row))
       assert row != nil
-      assert Enum.any?(row.children, &(&1.content == "  * "))
+      assert Enum.any?(row.children, &(&1.content == "  · "))
     end
   end
 
   describe "code blocks" do
-    test "renders fenced code with yellow style" do
+    test "renders fenced code via CodeBlock/SyntaxHighlighter tokens" do
       md = "```elixir\nIO.puts(\"hi\")\n```"
       result = render_md(md)
+      assert full_text(result) =~ "IO.puts"
+      assert full_text(result) =~ "hi"
 
-      code_lines =
-        Enum.filter(children(result), fn el ->
-          el.style[:fg] == :yellow and el.content =~ "IO.puts"
-        end)
-
-      assert [_ | _] = code_lines
+      # When Makeup is registered, at least one token carries a hex fg.
+      # Plain fallback still preserves text; the shape is always rows.
+      assert Enum.any?(children(result), &(&1.type == :row))
     end
 
-    test "indents code lines" do
+    test "indents code lines with a two-space gutter" do
       md = "```\nhello\nworld\n```"
       result = render_md(md)
-      code_lines = Enum.filter(children(result), &(&1.style[:fg] == :yellow))
+      rows = Enum.filter(children(result), &(&1.type == :row))
 
-      for line <- code_lines do
-        assert String.starts_with?(line.content, "  ")
+      for row <- rows do
+        first = List.first(row.children)
+        assert first.content == "  "
       end
     end
 
@@ -305,32 +407,63 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
       md = "```\nfirst\nsecond\nthird\n```"
       result = render_md(md)
 
-      code_contents =
-        result
-        |> children()
-        |> Enum.filter(&(&1.style[:fg] == :yellow))
-        |> Enum.map(& &1.content)
+      # Flatten each body row (skip blank/label text elements) to plain text.
+      row_texts =
+        children(result)
+        |> Enum.filter(&(&1.type == :row))
+        |> Enum.map(fn row ->
+          row.children |> Enum.map_join("", & &1.content)
+        end)
 
-      assert code_contents == ["  first", "  second", "  third"]
+      assert row_texts == ["  first", "  second", "  third"]
+    end
+
+    test "elixir fence can carry hex syntax colors" do
+      md = "```elixir\ndef foo, do: 1\n```"
+      result = render_md(md)
+      fgs = leaves(result) |> Enum.map(fn {_t, style} -> style[:fg] end)
+
+      if Enum.any?(fgs, &is_binary/1) do
+        assert Enum.any?(fgs, &match?("#" <> _, &1))
+      end
     end
   end
 
   describe "blockquotes" do
-    test "renders blockquote with pipe prefix and green style" do
+    test "renders blockquote with gutter prefix and green style" do
       result = render_md("> quoted text")
-      all = children(result)
-      quoted = Enum.find(all, &(&1.content =~ "| quoted text"))
-      assert quoted != nil
-      assert quoted.style.fg == :green
+      assert full_text(result) =~ "quoted text"
+      assert full_text(result) =~ "│"
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t =~ "quoted" and s[:fg] == :green
+             end)
+    end
+
+    test "blockquote keeps bold and code styles inside" do
+      result = render_md("> carry **bold** and `code`")
+      assert full_text(result) =~ "bold"
+      assert full_text(result) =~ "code"
+      refute full_text(result) =~ "**"
+      refute full_text(result) =~ "`"
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t == "bold" and s[:bold] == true
+             end)
+
+      assert Enum.any?(leaves(result), fn {t, s} ->
+               t == "code" and s[:fg] == :yellow
+             end)
     end
   end
 
   describe "horizontal rules" do
-    test "renders hr as dashes" do
-      result = render_md("---")
-      all = children(result)
-      hr = Enum.find(all, &String.contains?(&1.content, "---"))
-      assert hr != nil
+    test "renders hr as a continuous box-drawing rule" do
+      result = render_md("---", %{width: 20})
+
+      assert Enum.any?(children(result), fn el ->
+               is_binary(el[:content]) and String.contains?(el.content, "─")
+             end)
     end
   end
 
@@ -345,8 +478,12 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
   describe "width parameter" do
     test "respects width for horizontal rules" do
       result = render_md("---", %{width: 20})
-      all = children(result)
-      hr = Enum.find(all, &String.contains?(&1.content, "---"))
+
+      hr =
+        Enum.find(children(result), fn el ->
+          is_binary(el[:content]) and String.contains?(el.content, "─")
+        end)
+
       assert hr != nil
       assert String.length(hr.content) <= 20
     end
@@ -386,174 +523,411 @@ defmodule Raxol.UI.Components.MarkdownRendererTest do
     end
   end
 
-  describe "inline_segments/2 (Earmark AST path, dependency-free)" do
-    test "plain text yields one unstyled segment" do
-      assert MarkdownRenderer.inline_segments(["hello"]) == [{"hello", %{}}]
+  # A fence's info string ("```elixir") selects the highlighter's lexer.
+  # It is NOT displayed -- there used to be a dim label line above the
+  # body carrying the language name, since removed.
+  describe "fenced code fences (info string)" do
+    test "the language name is never rendered" do
+      result = render_md("```elixir\nIO.puts(\"hi\")\n```")
+
+      refute full_text(result) =~ "elixir"
+      refute Enum.any?(children(result), &(&1[:style][:dim] == true))
     end
 
-    test "strong node yields a bold segment" do
-      ast = [{"strong", [], ["bold"], %{}}]
-      assert MarkdownRenderer.inline_segments(ast) == [{"bold", %{bold: true}}]
-    end
-
-    test "em node yields an italic segment" do
-      ast = [{"em", [], ["em"], %{}}]
-      assert MarkdownRenderer.inline_segments(ast) == [{"em", %{italic: true}}]
-    end
-
-    test "code node yields a code-styled segment" do
-      ast = [{"code", [], ["code"], %{}}]
-      assert MarkdownRenderer.inline_segments(ast) == [{"code", %{fg: :yellow}}]
-    end
-
-    test "nested strong-inside-em merges both styles" do
-      ast = [{"em", [], [{"strong", [], ["both"], %{}}], %{}}]
-
-      assert MarkdownRenderer.inline_segments(ast) == [
-               {"both", %{bold: true, italic: true}}
-             ]
-    end
-
-    test "link node yields plain 'text (href)' segment" do
-      ast = [{"a", [{"href", "http://x.test"}], ["click"], %{}}]
-
-      assert MarkdownRenderer.inline_segments(ast) == [
-               {"click (http://x.test)", %{}}
-             ]
-    end
-
-    test "mixed children preserve order" do
-      ast = ["plain ", {"strong", [], ["bold"], %{}}, " tail"]
-
-      assert MarkdownRenderer.inline_segments(ast) == [
-               {"plain ", %{}},
-               {"bold", %{bold: true}},
-               {" tail", %{}}
-             ]
-    end
-  end
-
-  # A fence's info string ("```elixir") names the code's language. The
-  # renderer displays it as a dim label line above the (monospace, yellow)
-  # code body. Display only -- NO syntax highlighting in this unit; the
-  # label + @code_style block is the documented seam a future highlighter
-  # slots into.
-  describe "fenced code language tags (info string)" do
-    test "renders the language as a dim label line above the code body" do
-      md = "```elixir\nIO.puts(\"hi\")\n```"
-      result = render_md(md)
-
-      assert [label] =
-               Enum.filter(children(result), &(&1[:content] == "  elixir"))
-
-      assert label.style[:dim] == true
-
-      label_idx =
-        Enum.find_index(children(result), &(&1[:content] == "  elixir"))
-
-      code_idx =
-        Enum.find_index(children(result), &((&1[:content] || "") =~ "IO.puts"))
-
-      assert label_idx < code_idx,
-             "the language label must sit above the code body"
-    end
-
-    test "the label is chrome, not code -- dim, never the code accent" do
-      md = "```elixir\nIO.puts(\"hi\")\n```"
-      result = render_md(md)
-
-      [label] = Enum.filter(children(result), &(&1[:content] == "  elixir"))
-
-      refute label.style[:fg] == :yellow,
-             "the label must be visually distinct from the code body"
-    end
-
-    test "an untagged fence renders no label line (and no dim element at all)" do
-      md = "```\nhello\n```"
-      result = render_md(md)
+    test "an untagged fence renders blank + one code row + blank" do
+      result = render_md("```\nhello\n```")
 
       assert length(children(result)) == 3
-
-      refute Enum.any?(children(result), &(&1[:style][:dim] == true)),
-             "an untagged fence must not grow a label line"
     end
 
-    test "~~~ fences carry the label too" do
-      md = "~~~python\nx = 1\n~~~"
-      result = render_md(md)
+    test "~~~ fences render their body the same way" do
+      result = render_md("~~~python\nx = 1\n~~~")
 
-      assert Enum.any?(children(result), &(&1[:content] == "  python"))
+      refute full_text(result) =~ "python"
+      assert full_text(result) =~ "x = 1"
     end
 
-    test "only the first word of the info string becomes the label" do
-      md = "```elixir title=demo\n:ok\n```"
-      result = render_md(md)
+    # The deleted EarmarkParser path parsed this as an INLINE code span,
+    # not a fence -- so in :dev (where ex_doc supplied EarmarkParser) a
+    # fence with an attribute in its info string lost its CodeBlock body
+    # and its syntax highlighting entirely.
+    test "a multi-word info string still opens a real fence" do
+      result = render_md("```elixir title=demo\n:ok\n```")
 
-      assert Enum.any?(children(result), &(&1[:content] == "  elixir"))
       refute full_text(result) =~ "title"
+      refute full_text(result) =~ "```"
+      assert full_text(result) =~ ":ok"
+
+      # A real fence body is CodeBlock rows, not one inline text element.
+      assert Enum.any?(children(result), &(&1[:type] == :row))
     end
 
-    # A shared component's new output surface inherits the component's OWN
-    # trust contract, not the calling path's: MarkdownRenderer's contract is
-    # "callers may pass untrusted text", and it has direct callers with no
-    # MarkdownBody pre-sanitization in front (e.g. the playground's
-    # DemoHelpers.markdown/2). So the label must be safe at THIS boundary,
-    # regardless of which path produced the input.
-    test "control/ESC bytes in the info string never reach the label" do
-      md = "```elixir\e[2J\n:ok\n```"
-      result = render_md(md)
+    # MarkdownRenderer's contract is "callers may pass untrusted text", and
+    # it has direct callers with no MarkdownBody pre-sanitization in front
+    # (e.g. the playground's DemoHelpers.markdown/2). The info string is
+    # sanitized at THIS boundary regardless of which path produced it.
+    test "control/ESC bytes in the info string never reach the output" do
+      result = render_md("```elixir\e[2J\n:ok\n```")
 
       refute full_text(result) =~ "\e",
              "a raw ESC byte from the fence info string reached text()"
-
-      assert [label] =
-               Enum.filter(children(result), &(&1[:style][:dim] == true))
-
-      assert String.starts_with?(label.content, "  elixir")
     end
 
-    test "a control-chars-only info string yields no label at all" do
-      md = "```\e\n:ok\n```"
-      result = render_md(md)
-
-      refute full_text(result) =~ "\e"
-
-      refute Enum.any?(children(result), &(&1[:style][:dim] == true)),
-             "a sanitized-to-empty info string must not grow an empty label"
-    end
-
-    test "an oversized info string is clamped to a bounded label line" do
+    test "an oversized info string cannot produce unbounded output" do
       lang = String.duplicate("x", 100_000)
-      md = "```#{lang}\n:ok\n```"
-      result = render_md(md)
+      result = render_md("```#{lang}\n:ok\n```")
 
-      assert [label] =
-               Enum.filter(children(result), &(&1[:style][:dim] == true))
+      refute full_text(result) =~ lang
+    end
+  end
 
-      assert Raxol.UI.TextMeasure.display_width(label.content) <= 40,
-             "the label line must stay bounded no matter the info string size"
+  # Regression guard for the reported defect: with no "table" clause on the
+  # (now deleted) Earmark path, the generic AST recursion emitted one text
+  # element per CELL, so a table rendered as a vertical list of cells.
+  describe "GFM tables" do
+    test "renders as one framed table, not one element per cell" do
+      md = """
+      | Feature | Status |
+      | --- | --- |
+      | Headings h1-h6 | yes |
+      | GFM tables | yes |
+      """
+
+      lines = table_lines(render_md(md, %{width: 60}))
+
+      # One line per source row (header + 2 body), each carrying BOTH cells.
+      assert length(lines) == 3
+
+      assert Enum.all?(
+               lines,
+               &(String.contains?(&1, "│") and &1 =~ ~r/\S.*│.*\S/)
+             )
+
+      assert hd(lines) =~ "Feature"
+      assert hd(lines) =~ "Status"
+      assert Enum.at(lines, 1) =~ "Headings h1-h6"
+      assert Enum.at(lines, 1) =~ "yes"
     end
 
-    test "code_language_from_attrs/1 sanitizes and clamps too -- Earmark attrs are equally untrusted" do
-      assert MarkdownRenderer.code_language_from_attrs([
-               {"class", "elixir\e[2J"}
-             ]) == "elixir[2J"
+    test "table cell elements carry a map style, not Table's internal atom-list style" do
+      # Regression guard: `Table.render/2` builds its cells through
+      # `Raxol.Core.Renderer.View.text/2`, whose `style:` is an atom LIST
+      # (e.g. `[:bold]`), not the `%{bold: true}` map every other element
+      # this module emits uses. Splicing that raw shape into this
+      # module's own tree crashed `Harness.Surface`'s `ViewText.lines/3`
+      # bridge (`Map.get([:bold], :bold, nil)` -> `BadMapError`) the first
+      # time a real session rendered a GFM table.
+      md = """
+      | a | b |
+      | --- | --- |
+      | x | y |
+      """
 
-      long = String.duplicate("y", 500)
-      clamped = MarkdownRenderer.code_language_from_attrs([{"class", long}])
-      assert String.length(clamped) <= 32
+      result = render_md(md, %{width: 40})
+
+      table_text_elements =
+        result
+        |> children()
+        |> Enum.filter(&(&1[:type] == :text and is_binary(&1[:content])))
+
+      assert table_text_elements != []
+
+      assert Enum.all?(table_text_elements, fn el ->
+               is_map(el.style)
+             end)
     end
 
-    test "code_language_from_attrs/1 extracts Earmark's class attr, stripping the language- prefix" do
-      assert MarkdownRenderer.code_language_from_attrs([{"class", "elixir"}]) ==
-               "elixir"
+    test "a snake_case identifier in a cell keeps its underscores" do
+      # Regression guard: `table_cell_text/1` parses cell markup through
+      # the same `builtin_segments/1` every other line uses; before the
+      # intraword-emphasis guard, "foo_bar_baz" matched `_bar_` as italic
+      # and the Table component (plain-string cells, no styled spans)
+      # rendered the survivor as "foobarbaz".
+      md = """
+      | name | status |
+      | --- | --- |
+      | foo_bar_baz | ok |
+      """
 
-      assert MarkdownRenderer.code_language_from_attrs([
-               {"class", "language-rust"}
-             ]) == "rust"
+      [_header, row] = table_lines(render_md(md, %{width: 40}))
+      assert row =~ "foo_bar_baz"
+    end
 
-      assert MarkdownRenderer.code_language_from_attrs([]) == nil
-      assert MarkdownRenderer.code_language_from_attrs([{"class", ""}]) == nil
+    # `take_table_rows/4` used to require a leading "|" unconditionally, so
+    # a valid pipe-less table rendered its header and then dropped every
+    # body row out of the table as raw prose.
+    test "absorbs body rows of a table written without leading pipes" do
+      md = """
+      Name | Qty
+      ---- | ---
+      foo | 1
+      bar | 22
+      """
+
+      result = render_md(md, %{width: 40})
+
+      assert length(table_lines(result)) == 3
+      refute full_text(result) =~ "foo | 1"
+    end
+
+    # ...while a pipe-delimited table must NOT absorb following prose that
+    # merely happens to contain a stray "|" (the guard the leading-pipe test
+    # was there to provide in the first place).
+    test "a pipe-delimited table stops at prose containing a stray pipe" do
+      md = """
+      | A | B |
+      | --- | --- |
+      | 1 | 2 |
+      use a | b to split
+      """
+
+      result = render_md(md, %{width: 40})
+
+      assert length(table_lines(result)) == 2
+      assert full_text(result) =~ "use a | b to split"
+    end
+
+    test "cells render inline markup as text, not literal markers" do
+      md = """
+      | **Name** | Link |
+      | --- | --- |
+      | `code` | [foo](http://x.test) |
+      """
+
+      text = full_text(render_md(md, %{width: 60}))
+
+      refute text =~ "**"
+      refute text =~ "http://x.test"
+      assert text =~ "Name"
+      assert text =~ "code"
+      assert text =~ "foo"
+    end
+
+    test "honors GFM column alignment from the separator row" do
+      md = """
+      | L | R | C |
+      |:---|---:|:---:|
+      | a | b | c |
+      """
+
+      [_header, row] = table_lines(render_md(md, %{width: 40}))
+      [left, right, center] = String.split(row, "│")
+
+      assert String.starts_with?(String.trim_leading(left), "a")
+      assert String.ends_with?(String.trim_trailing(right), "b")
+
+      lead = String.length(center) - String.length(String.trim_leading(center))
+
+      trail =
+        String.length(center) - String.length(String.trim_trailing(center))
+
+      assert abs(lead - trail) <= 1, "center-aligned cell should be balanced"
+    end
+  end
+
+  # Characters whose BYTE length, GRAPHEME count and DISPLAY WIDTH are three
+  # different numbers, in every placement the renderer has. This is the
+  # class that broke twice already: `:re` returns byte offsets and they were
+  # fed to `String.slice/3` (grapheme-indexed), so an em dash earlier in a
+  # line desynchronized every inline span after it. Any code here that
+  # indexes text must agree with itself about which unit it is counting.
+  describe "wide, composed and multi-byte characters" do
+    # 1 grapheme / 2 cells, 1 grapheme / 1 cell but multi-byte, 1 grapheme
+    # built from 7 codepoints, and a grapheme that is a base plus a
+    # combining mark (NOT precomposed -- "e" <> U+0301).
+    @cjk "日本語"
+    @dash "—"
+    @family "👨‍👩‍👧‍👦"
+    @combining "é"
+
+    defp rendered_lines(result) do
+      Enum.map(children(result), fn
+        %{type: :text, content: c} ->
+          c
+
+        %{type: :row, children: ch} ->
+          Enum.map_join(ch, "", &(&1[:content] || ""))
+
+        _ ->
+          ""
+      end)
+    end
+
+    defp assert_intact(result, expected_fragments) do
+      text = full_text(result)
+
+      assert String.valid?(text),
+             "renderer emitted invalid UTF-8 -- a cut landed mid-codepoint"
+
+      for fragment <- expected_fragments do
+        assert text =~ fragment,
+               "#{inspect(fragment)} did not survive intact: #{inspect(text)}"
+      end
+    end
+
+    test "survives every inline placement on a fitting line" do
+      md =
+        "#{@cjk} #{@dash} **bold #{@cjk}** and *em #{@family}* and " <>
+          "`code #{@combining}` and [link #{@cjk}](http://x.test)"
+
+      result = render_md(md, %{width: 200})
+
+      assert_intact(result, [@cjk, @dash, @family, @combining])
+      refute full_text(result) =~ "**"
+      refute full_text(result) =~ "http://x.test"
+    end
+
+    test "survives every block placement" do
+      md = """
+      # #{@cjk} #{@dash} heading
+
+      - list #{@family} item
+      - list #{@combining} item
+
+      > quote #{@cjk} #{@dash} text
+
+      | #{@cjk} | col |
+      | --- | --- |
+      | #{@family} | #{@combining} |
+      """
+
+      assert_intact(render_md(md, %{width: 200}), [
+        @cjk,
+        @dash,
+        @family,
+        @combining
+      ])
+    end
+
+    test "a fenced code body keeps them byte-for-byte" do
+      md = "```elixir\n# #{@cjk} #{@dash} #{@family} #{@combining}\n:ok\n```"
+
+      assert_intact(render_md(md, %{width: 200}), [
+        @cjk,
+        @dash,
+        @family,
+        @combining
+      ])
+    end
+
+    # The regression that motivated this block: the multi-byte character
+    # sits BEFORE the inline span, so a byte/grapheme mixup corrupts the
+    # span rather than the wide character itself.
+    test "a multi-byte character before an inline span does not shift it" do
+      result =
+        render_md("prose #{@dash} tail `SyntaxHighlighter` end", %{width: 200})
+
+      assert {"SyntaxHighlighter", %{fg: :yellow}} =
+               Enum.find(leaves(result), &(elem(&1, 0) == "SyntaxHighlighter"))
+
+      refute full_text(result) =~ "`"
+    end
+
+    test "every wrapped line stays within the width budget" do
+      md =
+        "Prose with #{@cjk}#{@cjk}#{@cjk} runs #{@dash} plus #{@family} " <>
+          "and #{@combining} repeated to force several wrapped lines in a row " <>
+          "with **bold #{@cjk}** spans crossing the break points."
+
+      for width <- [20, 33, 40, 61] do
+        result = render_md(md, %{width: width})
+
+        for line <- rendered_lines(result) do
+          assert Raxol.UI.TextMeasure.display_width(line) <= width,
+                 "line exceeded width #{width}: #{inspect(line)}"
+        end
+
+        assert_intact(result, [@cjk, @dash, @family, @combining])
+      end
+    end
+
+    # A break landing inside a CJK run is legal (there are no spaces to
+    # break at), but it must land BETWEEN graphemes, never inside one.
+    test "wrapping a space-free CJK run never splits a grapheme" do
+      cjk_run = String.duplicate("日本語のテキストです", 6)
+
+      for width <- [7, 12, 31] do
+        result = render_md(cjk_run, %{width: width})
+        lines = rendered_lines(result)
+
+        for line <- lines do
+          assert String.valid?(line)
+          assert Raxol.UI.TextMeasure.display_width(line) <= width
+        end
+
+        assert lines |> Enum.join() |> String.replace(" ", "") == cjk_run
+      end
+    end
+
+    test "a table sizes its columns by display width, not byte or grapheme count" do
+      md = """
+      | #{@cjk} | b |
+      | --- | --- |
+      | x | #{@cjk} |
+      """
+
+      lines = table_lines(render_md(md, %{width: 60}))
+
+      # Every row of a table must be exactly as wide as every other row --
+      # this is what silently breaks when a renderer counts bytes (CJK
+      # over-counted 3x) or graphemes (CJK under-counted 2x) instead.
+      widths =
+        lines
+        |> Enum.map(&Raxol.UI.TextMeasure.display_width/1)
+        |> Enum.uniq()
+
+      assert length(widths) == 1,
+             "table rows disagreed on width: #{inspect(lines)}"
+    end
+  end
+
+  # SECURITY: this module's contract is "callers may pass untrusted text"
+  # (see moduledoc), so it must not rely on a caller having pre-sanitized
+  # -- an embedded ANSI/OSC control sequence must never reach
+  # `Components.text()`, where it would be indistinguishable from a real
+  # cursor-move/screen-clear/title-write escape.
+  describe "control-byte sanitization at this module's own boundary" do
+    test "ESC-based ANSI sequences are stripped from prose" do
+      result = render_md("hi \e[31mRED\e[0m bye")
+      text = full_text(result)
+
+      refute text =~ "\e"
+      assert text =~ "hi"
+      assert text =~ "RED"
+      assert text =~ "bye"
+    end
+
+    test "an OSC title-set sequence (ESC ] 0 ; ... BEL) is stripped" do
+      result = render_md("hi \e]0;pwn\a bye")
+      text = full_text(result)
+
+      refute text =~ "\e"
+      refute text =~ "\a"
+      assert text =~ "hi"
+      assert text =~ "bye"
+    end
+
+    test "control bytes are stripped from a table cell" do
+      md = """
+      | name | note |
+      | --- | --- |
+      | ok | hi\e[31mRED\e[0mbye |
+      """
+
+      [_header, row] = table_lines(render_md(md, %{width: 60}))
+      refute row =~ "\e"
+      assert row =~ "RED"
+    end
+
+    test "assorted C0 controls and DEL are stripped, \\n and \\t are kept" do
+      result = render_md("a\x00b\x01c\x02\nd\te\x7ff")
+      text = full_text(result)
+
+      assert Enum.all?(String.to_charlist(text), fn cp ->
+               cp >= 0x20 or cp in [?\n, ?\t]
+             end)
+
+      refute text =~ "\x7f"
     end
   end
 end

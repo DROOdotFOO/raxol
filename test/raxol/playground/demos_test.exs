@@ -36,6 +36,28 @@ defmodule Raxol.Playground.DemosTest do
     %Raxol.Core.Events.Event{type: :key, data: Map.merge(%{key: key}, extra)}
   end
 
+  defp collect_text(node) when is_map(node) do
+    own =
+      cond do
+        is_binary(node[:content]) -> [node[:content]]
+        is_binary(node[:text]) -> [node[:text]]
+        true -> []
+      end
+
+    kids =
+      case node[:children] do
+        list when is_list(list) -> Enum.flat_map(list, &collect_text/1)
+        _ -> []
+      end
+
+    own ++ kids
+  end
+
+  defp collect_text(list) when is_list(list),
+    do: Enum.flat_map(list, &collect_text/1)
+
+  defp collect_text(_), do: []
+
   describe "ButtonDemo" do
     test "init returns zero state" do
       model = ButtonDemo.init(nil)
@@ -106,41 +128,75 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "TableDemo" do
-    test "init starts at row 0" do
+    test "init mounts real Table with selection and pagination" do
       model = TableDemo.init(nil)
-      assert model.cursor == 0
-      assert model.sort_col == nil
+      assert model.table.selected_row == 0
+      assert model.table.sort_by == nil
+      assert model.table.options.paginate == true
+      assert model.table.options.sortable == true
+      assert model.table.options.border == :grid
+      assert length(model.table.data) >= 5
+      assert model.event_log == []
     end
 
-    test "j moves cursor down" do
+    test "j routes arrow_down through Table.handle_event" do
       model = TableDemo.init(nil)
       {model, []} = TableDemo.update(key_event("j"), model)
-      assert model.cursor == 1
+      assert model.table.selected_row == 1
+      assert length(model.event_log) == 1
     end
 
-    test "k moves cursor up" do
-      model = %{cursor: 2, sort_col: nil, sort_dir: :asc}
+    test "k routes arrow_up through Table.handle_event" do
+      model = TableDemo.init(nil)
+      {model, []} = TableDemo.update(key_event("j"), model)
+      {model, []} = TableDemo.update(key_event("j"), model)
       {model, []} = TableDemo.update(key_event("k"), model)
-      assert model.cursor == 1
+      assert model.table.selected_row == 1
     end
 
-    test "cursor does not go below 0" do
-      model = %{cursor: 0, sort_col: nil, sort_dir: :asc}
+    test "selection does not go below 0" do
+      model = TableDemo.init(nil)
       {model, []} = TableDemo.update(key_event("k"), model)
-      assert model.cursor == 0
+      assert model.table.selected_row == 0
     end
 
-    test "s cycles sort" do
+    test "s cycles sort via Table.update" do
       model = TableDemo.init(nil)
       {model, []} = TableDemo.update(key_event("s"), model)
-      assert model.sort_col == 1
-      assert model.sort_dir == :asc
+      assert model.table.sort_by == :num
+      assert model.table.sort_direction == :asc
     end
 
-    test "view returns element tree" do
+    test "b cycles border modes" do
+      model = TableDemo.init(nil)
+      assert model.table.options.border == :grid
+      {model, []} = TableDemo.update(key_event("b"), model)
+      assert model.table.options.border == :inner
+      {model, []} = TableDemo.update(key_event("b"), model)
+      assert model.table.options.border == :none
+      {model, []} = TableDemo.update(key_event("b"), model)
+      assert model.table.options.border == :grid
+    end
+
+    test "h toggles header_separator" do
+      model = TableDemo.init(nil)
+      assert model.table.options.header_separator == true
+      {model, []} = TableDemo.update(key_event("h"), model)
+      assert model.table.options.header_separator == false
+    end
+
+    test "l pages right when pagination enabled" do
+      model = TableDemo.init(nil)
+      {model, []} = TableDemo.update(key_event("l"), model)
+      assert model.table.current_page == 2
+    end
+
+    test "view returns element tree with grid chrome" do
       model = TableDemo.init(nil)
       view = TableDemo.view(model)
       assert is_map(view)
+      texts = collect_text(view)
+      assert Enum.any?(texts, &String.contains?(&1, "┌"))
     end
   end
 
@@ -632,10 +688,14 @@ defmodule Raxol.Playground.DemosTest do
   end
 
   describe "CodeBlockDemo" do
-    test "init starts at sample 0 with line numbers" do
+    test "init mounts real CodeBlock samples (no line numbers)" do
       model = CodeBlockDemo.init(nil)
       assert model.current == 0
-      assert model.show_line_numbers == true
+      assert map_size(model.blocks) >= 3
+      assert model.blocks[0].language == "elixir"
+      assert is_binary(model.blocks[0].content)
+      refute Map.has_key?(model, :show_line_numbers)
+      assert model.event_log == []
     end
 
     test "n/p cycle samples" do
@@ -646,13 +706,7 @@ defmodule Raxol.Playground.DemosTest do
       assert model.current == 0
     end
 
-    test "l toggles line numbers" do
-      model = CodeBlockDemo.init(nil)
-      {model, []} = CodeBlockDemo.update(key_event("l"), model)
-      assert model.show_line_numbers == false
-    end
-
-    test "view returns element tree" do
+    test "view renders via CodeBlock.render" do
       model = CodeBlockDemo.init(nil)
       assert is_map(CodeBlockDemo.view(model))
     end

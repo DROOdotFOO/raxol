@@ -43,6 +43,7 @@ defmodule Mix.Tasks.Raxol.Mutation do
   """
 
   alias Raxol.Core.Runtime.Log
+  alias Raxol.UI.TextMeasure
 
   @switches [
     target: :string,
@@ -290,7 +291,10 @@ defmodule Mix.Tasks.Raxol.Mutation do
           %{
             file: file_path,
             type: type,
-            original: String.slice(content, start, length),
+            # BYTE offset from `return: :index` -- `String.slice/3` counts
+            # graphemes, so any non-ASCII earlier in the source file made
+            # `original` a mis-cut (possibly mid-character) fragment.
+            original: TextMeasure.slice_bytes(content, {start, length}),
             mutated: replacement,
             position: start,
             content:

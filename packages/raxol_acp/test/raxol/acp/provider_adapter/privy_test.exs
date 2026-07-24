@@ -126,7 +126,9 @@ defmodule Raxol.ACP.ProviderAdapter.PrivyTest do
   describe "read callbacks" do
     test "reject an unsupported chain before any network call" do
       adapter = Privy.new(sidecar_url: "http://x", address: @addr, chains: %{8453 => "u"})
-      assert {:error, {:unsupported_chain, 10}} = Privy.get_transaction_receipt(adapter, 10, "0xh")
+
+      assert {:error, {:unsupported_chain, 10}} =
+               Privy.get_transaction_receipt(adapter, 10, "0xh")
     end
   end
 end

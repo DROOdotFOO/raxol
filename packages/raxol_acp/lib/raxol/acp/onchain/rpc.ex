@@ -310,11 +310,14 @@ defmodule Raxol.ACP.Onchain.RPC do
       {:ok, %Req.Response{status: 200, body: %{"error" => err}}} ->
         {:error, {:rpc_error, normalize_error(err)}}
 
+      # A 200 whose body carries neither "result" nor "error" is malformed.
+      # This must precede the generic status clause below, which would otherwise
+      # match every 200 and leave this unreachable.
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        {:error, {:malformed_response, body}}
+
       {:ok, %Req.Response{status: status, body: body}} ->
         {:error, {:transport, {:http_status, status, body}}}
-
-      {:ok, %Req.Response{} = resp} ->
-        {:error, {:malformed_response, resp.body}}
 
       {:error, reason} ->
         {:error, {:transport, reason}}

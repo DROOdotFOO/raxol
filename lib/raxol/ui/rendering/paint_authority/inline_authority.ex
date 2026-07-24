@@ -48,8 +48,13 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   a different, also-invalid violation class) to prove `SealOracle`
   catches a real immutable-prefix violation instead of rubber-stamping
   every input. It does not reproduce, and was never meant to reproduce,
-  the filler bug described above. There is no code path in this module
-  that CUPs to any row other than `min(next_row, history_bottom)`.
+  the filler bug described above. A pinned seal CUPs to exactly one
+  row: `min(next_row, history_bottom)` under `:fill_down` (the default
+  described above), or `history_bottom` itself under `:scroll_entry`
+  (chat semantics -- see the `entry_mode` typedoc; the front-loaded
+  filler that mode admits into scrollback is its DOCUMENTED, bounded
+  dirty-scrollback cost, and its oracle accounting offsets the fixed
+  junk prefix instead of relying on fill-down's zero-filler property).
 
   ## The cursor-ownership protocol
 
@@ -220,10 +225,9 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   ## Growing/shrinking the footer (overlay hosting)
 
-  `set_footer_rows/2` is the seam a footer-hosted overlay
-  (`Raxol.UI.Harness.OverlayPicker`, assembled via
-  `Raxol.Harness.Surface.open_overlay/3`) uses to claim (or give back)
-  rows from the footer viewport WITHOUT a real terminal resize --
+  `set_footer_rows/2` is the seam a footer-hosted overlay uses to claim
+  (or give back) rows from the footer viewport WITHOUT a real terminal
+  resize --
   `rows`/`width` are unchanged, only the DECSTBM split point moves, via
   `ScrollRegionManager.set_footer_rows/2` (the `resize/2` counterpart
   that holds `rows` constant and varies `footer_rows` instead).
@@ -257,6 +261,61 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   content is fully re-rendered at its new (smaller) position.
 
   Neither direction ever emits `\e[2J`/`\e[3J`.
+
+  ## The adaptive pin (FOOTER-FOLLOWS-CONTENT)
+
+  The guiding principle (see `docs/PHILOSOPHY.md`: "We are a guest in the
+  user's terminal, not an occupier"): the harness must not claim the
+  whole screen on an empty session. `new/5`'s `pin: :adaptive` option
+  starts this authority in a FLOATING state instead of pinning at boot:
+
+    * **No scroll region is set while floating** — the terminal keeps
+      its full-screen default. This is the load-bearing model choice:
+      sealed rows are written by plain fill-down native flow (the same
+      `next_row` cursor as the pinned model), so when they eventually
+      scroll they scroll NATIVELY into the terminal's own scrollback —
+      no DECSTBM geometry to fight, no bytes to justify on boot.
+    * **The footer paints directly below the last content row** — at
+      absolute rows `next_row..(next_row + footer_rows - 1)` (the top of
+      the screen on boot). `next_row` is the single source of truth for
+      the floating position; every footer paint site derives it through
+      `footer_top/1`.
+    * **A floating seal** first EL-clears the footer rows it converts to
+      content (the footer is repaintable — erasing is legal; sealed
+      content carries no EL of its own), writes the content once, and
+      latches `needs_keyframe` so the frame's trailing footer paint
+      re-renders at the new position — the footer migrates down by
+      exactly the sealed row count.
+    * **The float->pin transition is ONE-WAY per session** and fires the
+      moment content reaches the pinned footer position (`next_row >
+      history_bottom` after a seal, a seal too large to fit above the
+      floating footer, a resize-shrink past the content, or a footer
+      grow the floating window cannot host). The transition erases the
+      floating footer (targeted EL), scrolls just enough rows into
+      native scrollback via plain `\\n` at the screen bottom (native
+      flow — never a repaint) to restore the pinned append invariant,
+      and claims the region with ONE DECSTBM write (the honest
+      full-screen release on degenerate geometry). Not one already-
+      emitted content byte is rewritten. From then on the authority is
+      byte-for-byte today's pinned model.
+    * **While floating, `resize/3`/`set_footer_rows/2`/`reassert/1`
+      never emit region bytes** — geometry updates go through
+      `ScrollRegionManager.plan/3` (the pure constructor); only the
+      transition emits.
+
+  The default is `pin: :immediate` — exactly today's pinned-from-boot
+  model, byte-identical, so every existing byte-golden suite and fixture
+  stays valid unchanged. Demos opt into `:adaptive`.
+
+  **GUEST-BOOT** (`:boot_cursor`, layered on `:adaptive`): instead of
+  starting the float at row 1 of a pushed-blank screen, start it at the
+  DSR-probed row where the user's shell left the cursor — the float
+  begins mid-screen under the prompt, or (prompt at/near the bottom, the
+  normal shell) construction rides the SAME one-way transition into the
+  pinned model immediately, scrolling the shell's own history up via
+  plain `\\n`s exactly like any program printing N lines. See `new/5`'s
+  `:boot_cursor` doc for the full contract; enforced by
+  `test/harness/guest_boot_test.exs`.
 
   ## Synchronized output (DEC private mode 2026)
 
@@ -296,8 +355,66 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     footer_lines: [],
     needs_keyframe: false,
     sync_output?: false,
-    sync_close_pending?: false
+    sync_close_pending?: false,
+    cursor_park: nil,
+    pin_state: :pinned,
+    entry_mode: :fill_down
   ]
+
+  @type cursor_park :: {pos_integer(), pos_integer()} | nil
+
+  @typedoc """
+  The footer-placement state machine (FOOTER-FOLLOWS-CONTENT):
+
+    * `:pinned` -- today's model: DECSTBM active, footer at the bottom
+      `footer_rows` rows of the screen. The only state a `pin: :immediate`
+      (default) authority ever inhabits.
+    * `:floating` -- the adaptive-pin boot state (`pin: :adaptive`): NO
+      scroll region is set (the whole screen keeps the terminal's
+      default full-screen scrolling), and the footer is painted at
+      absolute rows directly below the last content row --
+      `next_row..(next_row + footer_rows - 1)`. `next_row` is the single
+      source of truth for the floating footer's position (deliberately
+      not a second `{:floating, content_rows}` copy, which could only
+      drift from it).
+
+  The float->pin transition is ONE-WAY per session (content only grows)
+  and fires the moment content reaches the pinned footer position -- see
+  the moduledoc's "The adaptive pin" section.
+  """
+  @type pin_state :: :pinned | :floating
+
+  @typedoc """
+  How a PINNED seal enters the history region (chat
+  semantics -- the conversation sticks to the bottom):
+
+    * `:fill_down` -- today's default and every byte-golden world's
+      model: a seal CUPs to `min(next_row, history_bottom)` and fills
+      downward; the region scrolls only once full. This is the
+      load-bearing model for oracle high-water accounting on streams
+      that boot over a blank region (see the moduledoc's "Seal-once, by
+      construction" section).
+    * `:scroll_entry` -- sealed content enters at the region's BOTTOM
+      row from the first seal on: the seal CUPs to `history_bottom` and
+      every `\\r\\n` is an index-at-region-boundary scroll. In the
+      under-filled phase (`next_row < history_bottom` -- a guest boot
+      pinned mid-screen) the rows above (shell content, then blanks)
+      scroll up and evict into native scrollback: shell content
+      preserved in order, blank rows evicted as blanks -- the
+      documented dirty-scrollback cost, bounded by ONE screenful (the
+      `history_bottom - 1` rows that sat above the entry row at the
+      first seal). Sealed bytes are still never re-addressed: the
+      terminal relocates rows; this module rewrites nothing. After the
+      first scroll-entry seal `next_row == history_bottom` and every
+      subsequent seal is byte-identical to `:fill_down`'s own steady
+      state (the two modes only ever diverge while under-filled).
+
+  The guest bottom-pin boot (`:boot_cursor` + `:guest_placement`
+  `:bottom_pin`) sets `:scroll_entry` automatically -- input at the
+  screen bottom implies content enters there too. Floating seals ignore
+  this (the floating footer is content-anchored by construction).
+  """
+  @type entry_mode :: :fill_down | :scroll_entry
 
   @type t :: %__MODULE__{
           region: ScrollRegionManager.t(),
@@ -308,7 +425,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
           footer_lines: [binary()],
           needs_keyframe: boolean(),
           sync_output?: boolean(),
-          sync_close_pending?: boolean()
+          sync_close_pending?: boolean(),
+          cursor_park: cursor_park(),
+          pin_state: pin_state(),
+          entry_mode: entry_mode()
         }
 
   @doc """
@@ -325,6 +445,48 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
       (`Raxol.Terminal.Capabilities.cached/0`) if present, else `nil`.
       Tests should pass this explicitly rather than relying on the
       process-global `:persistent_term` cache.
+    * `:pin` — `:immediate` (default) pins the footer at the screen
+      bottom from the first byte, exactly today's model
+      (`ScrollRegionManager.start/3`'s single DECSTBM write).
+      `:adaptive` starts FLOATING instead: ZERO bytes are written at
+      construction (`ScrollRegionManager.plan/3`, the pure geometry
+      record), the footer paints directly below the last content row
+      (the top of the screen on boot), and the authority transitions
+      one-way to the pinned model the moment content reaches the pinned
+      footer position — see the moduledoc's "The adaptive pin" section.
+      The default is deliberately `:immediate` so every existing
+      byte-golden world stays reachable unchanged; demos opt in.
+    * `:boot_cursor` — GUEST-BOOT placement: `{row, col}` (1-based), the
+      DSR-probed position where the user's shell left the cursor
+      (`Raxol.Terminal.InlineDriver.probe_cursor/2` is the shipped
+      prober). Requires `pin: :adaptive` (raises `ArgumentError`
+      otherwise — a pinned boot homes the cursor via DECSTBM and has no
+      placement to inherit). The floating footer starts at the probed
+      row instead of row 1, so on a real shell the surface begins
+      exactly where the prompt stopped. When the probe row sits too low
+      for the footer to float above the pinned split
+      (`row > history_bottom` — the normal near-bottom shell prompt),
+      construction takes the SCROLL-ENTRY path: the same one-way
+      float->pin transition a seal would fire — plain `\\n`s at the
+      screen bottom scroll the shell's own history up honestly (exactly
+      what any program printing N lines does), one region write claims
+      the pin, and the surface is bottom-anchored from the first frame.
+      Shell content is never repainted: every byte this path emits
+      addresses the probe row or below. A `col > 1` probe reply means
+      the shell left an unterminated line on the probe row; boot
+      advances past it with one native `\\r\\n` (which scrolls honestly
+      when the probe row is the bottom row) rather than overwriting it.
+      Placement is only honest if nothing wrote to the device between
+      the probe reply and this call. Default `nil` — byte-identical to
+      today's boot.
+    * `:entry` — how a PINNED seal enters the history region (see the
+      `entry_mode` typedoc): `:fill_down` (default — every byte-golden
+      world) or `:scroll_entry` (chat semantics — sealed content enters
+      at the region bottom and scrolls upward; the under-filled void
+      between conversation and footer becomes unrepresentable). The
+      guest bottom-pin boot sets `:scroll_entry` itself; this option is
+      for pinned-from-boot embedders that want chat entry too (the
+      demos' probe-failed fallback).
   """
   @spec new(
           IO.device(),
@@ -342,17 +504,143 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         :error -> cached_caps()
       end
 
+    pin = Keyword.get(opts, :pin, :immediate)
+    boot_cursor = validate_boot_cursor!(pin, Keyword.get(opts, :boot_cursor))
+    entry_mode = validate_entry_mode!(Keyword.get(opts, :entry, :fill_down))
+
+    guest_placement =
+      validate_guest_placement!(
+        Keyword.get(opts, :guest_placement, :bottom_pin)
+      )
+
+    {region, pin_state} =
+      case pin do
+        :immediate ->
+          {ScrollRegionManager.start(device, rows, footer_rows), :pinned}
+
+        :adaptive ->
+          {ScrollRegionManager.plan(device, rows, footer_rows), :floating}
+      end
+
     %__MODULE__{
-      region: ScrollRegionManager.start(device, rows, footer_rows),
+      region: region,
       width: width,
       reflow_capable?: reflow_capable?(caps),
       next_row: 1,
+      pin_state: pin_state,
+      entry_mode: entry_mode,
       # Strict struct match, mirroring `reflow_capable?/1`'s own idiom: a
       # stray plain map carrying a `sync_output: true` key must never
       # enable emission -- only the probe-built capability record may.
       sync_output?: match?(%Capabilities{sync_output: true}, caps)
     }
+    |> boot_at_cursor(boot_cursor, guest_placement)
   end
+
+  defp validate_entry_mode!(mode) when mode in [:fill_down, :scroll_entry],
+    do: mode
+
+  defp validate_entry_mode!(other) do
+    raise ArgumentError,
+          "InlineAuthority.new/5's :entry must be :fill_down (default -- " <>
+            "every byte-golden world's model) or :scroll_entry (chat " <>
+            "semantics: pinned seals enter at the region bottom); got " <>
+            inspect(other)
+  end
+
+  defp validate_guest_placement!(placement)
+       when placement in [:bottom_pin, :float],
+       do: placement
+
+  defp validate_guest_placement!(other) do
+    raise ArgumentError,
+          "InlineAuthority.new/5's :guest_placement must be :bottom_pin " <>
+            "(default -- V ruling: input at the screen bottom from frame " <>
+            "one) or :float (the legacy float-at-probe-row placement); " <>
+            "got #{inspect(other)}"
+  end
+
+  defp validate_boot_cursor!(_pin, nil), do: nil
+
+  defp validate_boot_cursor!(:adaptive, {row, col})
+       when is_integer(row) and row >= 1 and is_integer(col) and col >= 1,
+       do: {row, col}
+
+  defp validate_boot_cursor!(pin, other) do
+    raise ArgumentError,
+          "InlineAuthority.new/5's :boot_cursor requires pin: :adaptive and " <>
+            "a 1-based {row, col} tuple (guest boot inherits the shell's " <>
+            "cursor into the FLOATING model; a pin: :immediate boot homes " <>
+            "the cursor via DECSTBM and has no placement to inherit); got " <>
+            "pin: #{inspect(pin)}, boot_cursor: #{inspect(other)}"
+  end
+
+  # GUEST-BOOT placement (see `new/5`'s `:boot_cursor` doc). Runs at
+  # construction, after the floating state is built with the default
+  # `next_row: 1`.
+  defp boot_at_cursor(t, nil, _placement), do: t
+
+  defp boot_at_cursor(%__MODULE__{region: region} = t, {row, col}, placement) do
+    rows = ScrollRegionManager.rows(region)
+    # A CPR past the physical screen is a device lie -- clamp to the
+    # referent (the screen the region math runs against).
+    row = min(row, rows)
+
+    row =
+      if col > 1 do
+        # The shell left an unterminated line on the probe row (a prompt
+        # printed without a trailing newline). That line is shell
+        # content: advance past it with native flow -- one plain `\r\n`,
+        # which scrolls honestly when the probe row IS the bottom row --
+        # never overwrite it.
+        IO.write(region.device, "\r\n")
+        min(row + 1, rows)
+      else
+        row
+      end
+
+    t = %{t | next_row: row}
+
+    cond do
+      row > ScrollRegionManager.history_bottom(region) ->
+        # SCROLL-ENTRY BOOT: the floating window cannot exist below the
+        # prompt (prompt at/near the screen bottom). The existing
+        # one-way transition does exactly the honest thing: plain
+        # `\n`s at the physical bottom scroll the shell's own history
+        # up by `row - history_bottom` rows (native flow, never a
+        # repaint), one region write claims the pin, and the surface is
+        # bottom-anchored from the first frame with `next_row` directly
+        # above the pinned footer.
+        t |> chat_entry(placement) |> transition_to_pin()
+
+      placement == :float ->
+        # LEGACY float-at-probe-row (opt-in via `guest_placement:
+        # :float`): the footer floats mid-screen under the prompt. This is
+        # no longer the default -- a fresh screen puts the input at the
+        # TOP -- but the placement stays reachable for embedders that want
+        # shell-join over bottom anchoring.
+        t
+
+      true ->
+        # DEFAULT: input at the SCREEN BOTTOM always, superseding
+        # shell-join. Pin from frame one via the same transition -- with
+        # the probe row at or above the history bottom this emits zero
+        # scroll newlines (nothing below the prompt to push) and one
+        # region write; shell content above the probe row is preserved
+        # untouched, and the footer (and chevron) sits at the true
+        # bottom. Sealed content enters at the region bottom too
+        # (`chat_entry/2` -> `:scroll_entry`): the first seal must not
+        # hop back up to the probe row and fill downward into a void.
+        t |> chat_entry(placement) |> transition_to_pin()
+    end
+  end
+
+  # The bottom-pin guest placement implies chat entry semantics: input
+  # at the screen bottom AND content entering there. The legacy `:float`
+  # placement keeps whatever `:entry` the caller chose (shell-join
+  # semantics fill down from the prompt by design).
+  defp chat_entry(t, :bottom_pin), do: %{t | entry_mode: :scroll_entry}
+  defp chat_entry(t, _placement), do: t
 
   defp cached_caps do
     case Capabilities.cached() do
@@ -410,11 +698,128 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   `\\t`/`\\r`/`\\n`, neutralizing everything else. See that module's
   moduledoc for the exact grammar and the "visible-honest" neutralization
   rationale.
+
+  ## Caller contract: line width (NOT enforced here, unlike the newline check)
+
+  Autowrap (DECAWM) is never turned off on the inline path -- unlike
+  `ViewportAuthority.enter/0`'s `\\e[?7l`, `init_bytes/0` and `@modes_off`
+  in `Raxol.Terminal.InlineDriver.Sequences` carry no `?7l`, and teardown
+  re-enables `?7h` -- so a real terminal is free to wrap any physical
+  line wider than its column count onto the row below. `count_lines/1`
+  (which drives every `next_row` advance below) counts `\\r\\n`
+  boundaries in `iodata`, NOT physical rows a wrapping terminal actually
+  consumes: a line wider than the authority's `width` occupies MORE
+  physical rows than `count_lines/1` credits it, so `next_row`
+  under-counts against reality and the NEXT seal's `:fill_down` CUP lands
+  on the wrapped tail of THIS seal's last line instead of a blank row --
+  a seal-once (immutable-prefix) violation despite every byte this
+  module itself wrote being correct. Exactly the same failure shape the
+  footer section above documents for `repaint/2`/`keyframe/2`, and the
+  same fix: it is the CALLER's responsibility to display-width-truncate
+  every line to `width` (via `Raxol.UI.TextMeasure`, never
+  `String.length/1`) before it ever reaches `seal/2`. `ContentGuard`
+  guards against malicious CONTROL BYTES, not against width -- an
+  all-printable, perfectly sanitized line can still be too wide, and
+  neither `seal/2` nor `count_lines/1` can detect that after the fact
+  (SGR runs inflate a raw byte-width measurement without inflating the
+  terminal's actual column consumption, so there is no cheap assertion
+  to add here short of a full ANSI-aware wrap simulator; see
+  `test/harness/inline_authority_seal_width_test.exs` for a VT-replay
+  regression that pins this exact failure mode against a real emulator
+  so the contract cannot silently rot).
   """
   @spec seal(t(), iodata()) :: t()
   def seal(%__MODULE__{} = t, iodata) do
     sanitized = validate_seal_iodata!(iodata)
     with_cursor(t, :history, fn inner -> append_sealed(inner, sanitized) end)
+  end
+
+  # --- Transient region elements (the boot greeting) ----------------------
+
+  @doc """
+  The UNCLAIMED history span -- the rows between the append point
+  (`next_row`) and the history bottom that hold no sealed content and no
+  shell content (guest boot never claims rows ABOVE the probed cursor;
+  everything from `next_row` down to the split is this surface's own
+  blank space). `{:ok, {from, to}}` inclusive, or `:none` when nothing
+  is unclaimed (e.g. a floating footer sitting flush on the planned
+  split). This is the placement referent for transient elements like
+  the boot greeting: they may only ever exist where neither print-once
+  history nor the user's shell has any bytes.
+  """
+  @spec unclaimed_span(t()) :: {:ok, {pos_integer(), pos_integer()}} | :none
+  def unclaimed_span(%__MODULE__{pin_state: :floating, region: region} = t) do
+    # While floating, the footer paints AT next_row -- the unclaimed
+    # space starts below it.
+    from = t.next_row + footer_row_count(t)
+    to = ScrollRegionManager.history_bottom(region)
+    if from <= to, do: {:ok, {from, to}}, else: :none
+  end
+
+  def unclaimed_span(%__MODULE__{region: region} = t) do
+    to = ScrollRegionManager.history_bottom(region)
+    if t.next_row <= to, do: {:ok, {t.next_row, to}}, else: :none
+  end
+
+  @doc """
+  Paints one TRANSIENT line at an absolute `{row, col}` inside the
+  unclaimed span (see `unclaimed_span/1` -- the caller owns the
+  placement decision; this function only refuses off-screen rows).
+  Cursor save/restore bracketed, content routed through
+  `ContentGuard.sanitize_line/1` like every other emitted line. NO
+  bookkeeping changes: a transient element is not history (`next_row`
+  does not move), not footer (no repaint diff state), and the caller is
+  responsible for erasing it (`erase_transient/2`) before sealed
+  content can ever reach its rows -- the boot greeting's first-seal
+  erase law.
+  """
+  @spec paint_transient(t(), pos_integer(), pos_integer(), iodata()) :: t()
+  def paint_transient(%__MODULE__{region: region} = t, row, col, content)
+      when is_integer(row) and row >= 1 and is_integer(col) and col >= 1 do
+    if row <= ScrollRegionManager.rows(region) do
+      sanitized = ContentGuard.sanitize_line(IO.iodata_to_binary(content))
+
+      IO.write(region.device, [
+        Dialect.cursor_save(),
+        Dialect.cursor_position(row, col),
+        sanitized,
+        Dialect.cursor_restore()
+      ])
+    end
+
+    t
+  end
+
+  @doc """
+  Erases transient rows (targeted EL per row, never `\\e[2J`), cursor
+  save/restore bracketed. The boot greeting's exit: called by the
+  assembly layer immediately BEFORE the first seal's bytes, in the same
+  frame, so the greeting vanishes exactly when real content arrives and
+  never coexists with (or enters) sealed history.
+  """
+  @spec erase_transient(t(), [pos_integer()]) :: t()
+  def erase_transient(%__MODULE__{region: region} = t, rows)
+      when is_list(rows) do
+    screen_rows = ScrollRegionManager.rows(region)
+
+    iodata =
+      rows
+      |> Enum.filter(&(is_integer(&1) and &1 >= 1 and &1 <= screen_rows))
+      |> Enum.map(&[Dialect.cursor_position(&1), Dialect.erase_line()])
+
+    case iodata do
+      [] ->
+        t
+
+      _some ->
+        IO.write(region.device, [
+          Dialect.cursor_save(),
+          iodata,
+          Dialect.cursor_restore()
+        ])
+
+        t
+    end
   end
 
   # Shared by `seal/2` and `try_seal/2`: enforce the `\r\n`-terminated
@@ -458,7 +863,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
   This is the substrate half of the print-once safety property
   documented in `Raxol.Harness.SealFrontier.commit_walk/5`: a caller
-  (`Raxol.Harness.Surface.seal_block/2`) marks a block committed only
+  marks a block committed only
   AFTER `try_seal/2` returns `{:ok, _}` -- never before. On `{:error,
   :write_failed, t}`, the ORIGINAL `t` (the one passed in, `next_row` not
   advanced) is returned, so a retry re-positions and re-writes from
@@ -495,10 +900,11 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   A refusing-but-alive device CAN loop indefinitely (each frame retries,
   each retry may be refused again). That loop is deliberate -- a bound
   would strand the block if the device recovers on attempt N+1 -- but it
-  is not silent: the harness consumer emits
-  `[:raxol, :harness, :seal, :write_failed]` telemetry per refused write
-  (see `Raxol.Harness.Surface`), so a persistent refusal is observable
-  from the first frame.
+  is not silent: `Raxol.Harness.SealFrontier.commit_walk/5` halts on
+  `{:error, :write_failed, _}` and retries that same entry on the next
+  pass rather than silently skipping past it, so a persistent refusal is
+  observable from the first frame rather than vanishing into a retry loop
+  no caller can see.
 
   ## Partial-write honesty (and the scroll-boundary residual)
 
@@ -644,9 +1050,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   OPEN and then refuses the close write (transient `enospc`, a device
   dying mid-frame), the terminal is left frozen in synchronized mode --
   and a fire-and-forget close attempt would leave it that way until the
-  process exits. The latch makes the owed close durable state:
-  `Raxol.Harness.Surface` calls this at the top of EVERY frame
-  (advance/tick/input/resize), so a dangling open heals at the first
+  process exits. The latch makes the owed close durable state: calling
+  this at the top of every frame (advance/tick/input/resize) means a
+  dangling open heals at the
+  first
   frame after the device accepts a byte again. The residual window is
   therefore "until the next frame with a writable device" -- never
   "forever" -- and, since a refused SEAL write guarantees a retry frame,
@@ -690,23 +1097,179 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   end
 
   @impl true
+  def append_sealed(
+        %__MODULE__{pin_state: :floating, region: region, next_row: next_row} =
+          t,
+        iodata
+      ) do
+    bottom = ScrollRegionManager.history_bottom(region)
+    lines = count_lines(iodata)
+
+    if next_row + lines - 1 > bottom do
+      # The block cannot fit above the pinned footer position: pin FIRST
+      # (erase the floating footer, claim the region), then seal through
+      # the pinned path -- the region's own index-at-boundary scroll
+      # absorbs the overflow, and no sealed row is ever overwritten.
+      t
+      |> transition_to_pin()
+      |> append_sealed(iodata)
+    else
+      # The rows this seal converts from footer to content still hold
+      # footer glyphs (the footer is repaintable -- erasing is legal);
+      # sealed content carries no EL of its own, so a targeted EL per
+      # converted row is what keeps footer residue out of print-once
+      # history. Rows past the converted range stay footer-owned and are
+      # re-cleared by the keyframe the latch below forces.
+      t
+      |> erase_rows(next_row, min(lines, footer_row_count(t)))
+      |> write_content(iodata)
+      |> Map.put(:next_row, next_row + lines)
+      # The footer's floating position IS next_row -- every floating seal
+      # moves it, so the next repaint must be a full keyframe at the new
+      # position, never a positionally-stale diff.
+      |> Map.put(:needs_keyframe, true)
+      |> maybe_transition_after_seal(bottom)
+    end
+  end
+
   def append_sealed(%__MODULE__{region: region, next_row: next_row} = t, iodata) do
     bottom = ScrollRegionManager.history_bottom(region)
     device = region.device
-    target_row = min(next_row, bottom)
 
-    # One CUP to the next unfilled history row (or the bottom row, once
-    # full) then the content. Every `\r\n` inside `iodata` that lands ON
-    # the bottom row is an index-at-region-boundary: the DECSTBM region
-    # scrolls up (oldest history row evicted toward scrollback), the
-    # cursor stays on that same bottom row. No other code path in this
-    # module ever addresses any other row.
+    # `next_row` advances by `count_lines/1` below (a `\r\n` count), which
+    # is only correct because the CALLER already display-width-truncated
+    # every line to `width` -- see `seal/2`'s "Caller contract: line
+    # width" doc section for the full corruption mechanism an untruncated,
+    # autowrap-wrapped line would cause here.
+    #
+    # One CUP, then the content. `:fill_down` (default): the next
+    # unfilled history row, clamped to the region bottom once full.
+    # `:scroll_entry` (chat semantics, see the `entry_mode` typedoc):
+    # ALWAYS the region bottom -- while under-filled the rows above
+    # (shell content, blanks) scroll up honestly instead of content
+    # filling down into a void; once `next_row` reaches the bottom the
+    # two modes are the same CUP by arithmetic. Every `\r\n` inside
+    # `iodata` that lands ON the bottom row is an
+    # index-at-region-boundary: the DECSTBM region scrolls up (oldest
+    # history row evicted toward scrollback), the cursor stays on that
+    # same bottom row. No pinned code path ever addresses a row above
+    # its target.
+    target_row =
+      case t.entry_mode do
+        :scroll_entry -> bottom
+        :fill_down -> min(next_row, bottom)
+      end
+
     IO.write(device, Dialect.cursor_position(target_row))
     IO.write(device, iodata)
 
     lines_written = count_lines(iodata)
     %{t | next_row: min(target_row + lines_written, bottom)}
   end
+
+  # -- the adaptive pin (FOOTER-FOLLOWS-CONTENT) ---------------------------
+  #
+  # The floating half of the pin-state machine. While floating there is
+  # NO scroll region (the terminal keeps its full-screen default), the
+  # footer paints at absolute rows next_row..(next_row + N - 1), and
+  # every geometry change is pure state (`ScrollRegionManager.plan/3`,
+  # zero bytes). The one-way transition below is the only producer of
+  # region bytes on the adaptive path.
+
+  defp write_content(%__MODULE__{region: region} = t, iodata) do
+    IO.write(region.device, Dialect.cursor_position(t.next_row))
+    IO.write(region.device, iodata)
+    t
+  end
+
+  # Targeted EL per row (never `\e[2J`), clamped to the physical screen.
+  # Only ever aimed at footer-owned rows -- the repaintable zone.
+  defp erase_rows(%__MODULE__{region: region} = t, top, count) do
+    rows = ScrollRegionManager.rows(region)
+    device = region.device
+
+    Enum.each(top..(top + count - 1)//1, fn row ->
+      if row <= rows do
+        IO.write(device, Dialect.cursor_position(row))
+        IO.write(device, Dialect.erase_line())
+      end
+    end)
+
+    t
+  end
+
+  # Eager pin: the moment a floating seal leaves next_row past the
+  # history bottom, the footer sits exactly on the pinned rows -- content
+  # has reached it. Pin now (one-way), inside the same seal (and thus the
+  # same frame/sync bracket the caller opened).
+  defp maybe_transition_after_seal(%__MODULE__{next_row: next_row} = t, bottom)
+       when next_row > bottom,
+       do: transition_to_pin(t)
+
+  defp maybe_transition_after_seal(t, _bottom), do: t
+
+  # The ONE-WAY float->pin transition, byte-clean by construction:
+  #
+  #   1. erase the floating footer's rows (targeted EL -- the footer is
+  #      repaintable; sealed content above is never addressed);
+  #   2. full-screen scroll (plain `\n` at the physical bottom row -- no
+  #      region is active while floating, so the terminal's own native
+  #      scroll evicts the oldest content rows into native scrollback,
+  #      never a repaint) by exactly the rows needed to restore the
+  #      pinned append invariant (row `next_row` blank, `next_row <=
+  #      history_bottom`) -- zero on the pre-seal path, one on the eager
+  #      path;
+  #   3. claim the region: `ScrollRegionManager.reassert/1` on the
+  #      planned state -- ONE region write (`CSI 1;(H-N) r`, or the
+  #      honest full-screen release on a degenerate geometry, exactly
+  #      like `start/3` would emit there);
+  #   4. latch `needs_keyframe` so the next footer paint fully re-renders
+  #      at the pinned position.
+  #
+  # No content byte is ever rewritten: step 1 touches footer rows only,
+  # step 2 scrolls (the terminal moves rows; this process repaints
+  # nothing), step 3 is a control sequence. Pinned by the emulator-replay
+  # (SealOracle O2) transition tests in test/harness/adaptive_pin_test.exs.
+  defp transition_to_pin(t), do: transition_to_pin(t, nil)
+
+  defp transition_to_pin(%__MODULE__{region: region} = t, target_footer_rows) do
+    device = region.device
+    rows = ScrollRegionManager.rows(region)
+    footer_rows = target_footer_rows || ScrollRegionManager.footer_rows(region)
+    new_bottom = ScrollRegionManager.history_bottom(rows, footer_rows)
+
+    t = erase_rows(t, t.next_row, footer_row_count(t))
+
+    scroll = max(t.next_row - new_bottom, 0)
+
+    if scroll > 0 do
+      IO.write(device, Dialect.cursor_position(rows))
+      IO.write(device, String.duplicate("\n", scroll))
+    end
+
+    new_region =
+      device
+      |> ScrollRegionManager.plan(rows, footer_rows)
+      |> ScrollRegionManager.reassert()
+
+    %{
+      t
+      | region: new_region,
+        pin_state: :pinned,
+        next_row: t.next_row |> Kernel.-(scroll) |> min(new_bottom) |> max(1),
+        needs_keyframe: true
+    }
+  end
+
+  # The footer's current top row -- the ONE derivation every footer paint
+  # (repaint diff, keyframe, cursor park) addresses through. Pinned: the
+  # row after the DECSTBM split. Floating: directly below the last
+  # content row (`next_row` -- the single source of truth for the
+  # floating position).
+  defp footer_top(%__MODULE__{pin_state: :floating, next_row: next_row}),
+    do: next_row
+
+  defp footer_top(t), do: region_top(t) + 1
 
   @impl true
   def repaint_footer(%__MODULE__{region: region} = t, iodata) do
@@ -774,36 +1337,71 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   process -- when that flag is set (a prior geometry-changing `resize/3`):
   see the moduledoc's "`needs_keyframe` latch" section for why a diff-only
   repaint is not safe to trust immediately after a resize.
+
+  ## The `:cursor` option (the park protocol)
+
+  `cursor: {row_offset, col}` (0-based row offset from the footer's top
+  row, 1-based column) declares where the terminal's VISIBLE cursor
+  belongs after this paint -- the composer's edit point, for the
+  assembled harness. Without it, nothing ever positions the visible
+  cursor: `ScrollRegionManager.start/3`'s DECSTBM set homes it to (1,1)
+  as a documented VT100 side effect, and every `with_cursor/3` bracket
+  faithfully restores it there -- a blinking box parked at the top-left
+  for the whole session (the live-demo defect this closes).
+
+  Contract:
+
+    * any paint that emitted rows ends its byte tail with the park CUP
+      (`Dialect.cursor_position/2`, clamped inside the footer range and
+      the authority width);
+    * a frame with NO row changes emits the park CUP alone -- and only
+      when the park actually moved (the zero-byte no-op property is
+      unchanged for a fully-unchanged frame);
+    * a MULTI-row paint is a burst: wrapped in `Dialect.cursor_hide/0`
+      ... `Dialect.cursor_show/0` so the parked cursor never visibly
+      hops row to row mid-rewrite -- UNLESS the frame is already inside
+      an open DEC 2026 bracket (`sync_close_pending?`), which makes
+      intermediate states invisible without hiding;
+    * omitting `:cursor` (every pre-existing 2-arity caller) is
+      byte-identical to the pre-park behavior -- strictly opt-in.
   """
-  @spec repaint(t(), [binary()]) :: t()
-  def repaint(%__MODULE__{needs_keyframe: true} = t, new_lines)
+  @spec repaint(t(), [binary()], keyword()) :: t()
+  def repaint(t, new_lines, opts \\ [])
+
+  def repaint(%__MODULE__{needs_keyframe: true} = t, new_lines, opts)
       when is_list(new_lines) do
-    keyframe(t, new_lines)
+    keyframe(t, new_lines, opts)
   end
 
-  def repaint(%__MODULE__{footer_lines: old_lines} = t, new_lines)
+  def repaint(%__MODULE__{footer_lines: old_lines} = t, new_lines, opts)
       when is_list(new_lines) do
     count = footer_row_count(t)
     padded_new = sanitize_and_pad(new_lines, count)
     padded_old = pad_rows(old_lines, count)
+    cursor = Keyword.get(opts, :cursor)
 
     case footer_diff(padded_old, padded_new) do
-      [] -> %{t | footer_lines: padded_new}
-      changes -> emit_footer_diff(t, changes, padded_new)
+      [] -> %{t | footer_lines: padded_new} |> park_if_moved(cursor)
+      changes -> emit_footer_diff(t, changes, padded_new, cursor)
     end
   end
 
-  defp emit_footer_diff(t, changes, padded_new) do
-    footer_top = region_top(t) + 1
+  defp emit_footer_diff(t, changes, padded_new, cursor) do
+    footer_top = footer_top(t)
 
     iodata =
       Enum.map(changes, fn {idx, line} ->
         footer_row_bytes(footer_top + idx, line)
       end)
 
+    burst? = burst?(t, length(changes), cursor)
+
     t
+    |> burst_hide(burst?)
     |> with_cursor(:footer, fn inner -> repaint_footer(inner, iodata) end)
     |> Map.put(:footer_lines, padded_new)
+    |> park(cursor)
+    |> burst_show(burst?)
   end
 
   @doc """
@@ -823,20 +1421,27 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   zero addressed rows would be a byte-for-byte no-op wrapped in
   ceremony; on a geometry that can't show a footer at all, emitting
   nothing is the honest behavior.
+
+  Accepts the same `:cursor` park option as `repaint/3` (see that doc's
+  "park protocol" section); a keyframe always re-emits the park when one
+  is given, since the screen state it recovers from (post-resize,
+  post-editor-resume) says nothing about where the cursor was left.
   """
-  @spec keyframe(t(), [binary()]) :: t()
-  def keyframe(%__MODULE__{} = t, new_lines) when is_list(new_lines) do
+  @spec keyframe(t(), [binary()], keyword()) :: t()
+  def keyframe(t, new_lines, opts \\ [])
+
+  def keyframe(%__MODULE__{} = t, new_lines, opts) when is_list(new_lines) do
     count = footer_row_count(t)
     padded_new = sanitize_and_pad(new_lines, count)
 
     case count do
       0 -> %{t | footer_lines: padded_new, needs_keyframe: false}
-      _ -> emit_footer_keyframe(t, padded_new)
+      _ -> emit_footer_keyframe(t, padded_new, Keyword.get(opts, :cursor))
     end
   end
 
-  defp emit_footer_keyframe(t, padded_new) do
-    footer_top = region_top(t) + 1
+  defp emit_footer_keyframe(t, padded_new, cursor) do
+    footer_top = footer_top(t)
 
     iodata =
       padded_new
@@ -845,10 +1450,83 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
         footer_row_bytes(footer_top + idx, line)
       end)
 
+    burst? = burst?(t, length(padded_new), cursor)
+
     t
+    |> burst_hide(burst?)
     |> with_cursor(:footer, fn inner -> keyframe_footer(inner, iodata) end)
     |> Map.put(:footer_lines, padded_new)
     |> Map.put(:needs_keyframe, false)
+    |> park(cursor)
+    |> burst_show(burst?)
+  end
+
+  # -- the cursor park (see repaint/3's "park protocol" doc section) ------
+
+  # A burst is >= 2 rows rewritten in one paint, WITH a park in play --
+  # hide/show are part of the park protocol only, so cursor-less
+  # (2-arity) callers stay byte-identical to the pre-park behavior.
+  # Hiding is also skipped inside an open DEC 2026 bracket
+  # (`sync_close_pending?` is set from open until an accepted close):
+  # synchronized frames present atomically, so the intermediate cursor
+  # positions are never visible anyway.
+  defp burst?(_t, _emitted_rows, nil), do: false
+
+  defp burst?(t, emitted_rows, _cursor),
+    do: emitted_rows > 1 and not t.sync_close_pending?
+
+  defp burst_hide(t, false), do: t
+
+  defp burst_hide(%__MODULE__{region: region} = t, true) do
+    IO.write(region.device, Dialect.cursor_hide())
+    t
+  end
+
+  defp burst_show(t, false), do: t
+
+  defp burst_show(%__MODULE__{region: region} = t, true) do
+    IO.write(region.device, Dialect.cursor_show())
+    t
+  end
+
+  # Unconditional park after a paint that emitted rows: the rows moved
+  # the physical cursor, so the park CUP is what puts it back at the edit
+  # point (the `\e8` restore alone would land on the PREVIOUS park).
+  defp park(t, nil), do: t
+
+  defp park(%__MODULE__{region: region} = t, {row_offset, col}) do
+    if footer_row_count(t) == 0 do
+      # Degenerate geometry: no footer rows exist to park inside -- same
+      # honest nothing `keyframe/3` already emits there.
+      t
+    else
+      {row, col} = clamp_park(t, row_offset, col)
+      IO.write(region.device, Dialect.cursor_position(row, col))
+      %{t | cursor_park: {row, col}}
+    end
+  end
+
+  # The no-row-change path: the physical cursor is already ON the stored
+  # park (nothing moved it), so only an actually-moved park emits -- this
+  # is what keeps the fully-unchanged frame at zero bytes.
+  defp park_if_moved(t, nil), do: t
+
+  defp park_if_moved(t, {row_offset, col}) do
+    if footer_row_count(t) > 0 and
+         clamp_park(t, row_offset, col) != t.cursor_park do
+      park(t, {row_offset, col})
+    else
+      t
+    end
+  end
+
+  # The park may never leave the footer range (the same confinement every
+  # repaint CUP already honors) nor the column budget.
+  defp clamp_park(t, row_offset, col) do
+    count = footer_row_count(t)
+    footer_top = footer_top(t)
+    row = footer_top + min(max(row_offset, 0), max(count - 1, 0))
+    {row, col |> max(1) |> min(t.width)}
   end
 
   # Common entry sanitization for both repaint/2 and keyframe/2: every
@@ -861,12 +1539,30 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
     |> pad_rows(count)
   end
 
-  @doc "The current footer row count -- the size of `ScrollRegionManager.footer_range/1`, never a hand-maintained constant."
+  @doc """
+  The current footer row count. Pinned: the size of
+  `ScrollRegionManager.footer_range/1`, never a hand-maintained constant.
+  Floating: the requested `footer_rows`, clamped to the rows physically
+  below the content (`rows - next_row + 1`) -- the screen-bottom clamp;
+  at rest the floating invariant (`next_row <= history_bottom`) makes the
+  clamp a no-op, but a degenerate geometry (footer taller than the
+  screen) honestly reports only the rows that exist.
+  """
   @spec footer_row_count(t()) :: non_neg_integer()
+  def footer_row_count(
+        %__MODULE__{pin_state: :floating, region: region, next_row: next_row} =
+          _t
+      ) do
+    rows = ScrollRegionManager.rows(region)
+    requested = ScrollRegionManager.footer_rows(region)
+    requested |> min(rows - next_row + 1) |> max(0)
+  end
+
   def footer_row_count(%__MODULE__{region: region}),
     do: Range.size(ScrollRegionManager.footer_range(region))
 
-  defp footer_row_bytes(row, line), do: [cup(row), "\e[K", line]
+  defp footer_row_bytes(row, line),
+    do: [Dialect.cursor_position(row), Dialect.erase_line(), line]
 
   defp pad_rows(lines, count) do
     lines |> Enum.take(count) |> pad_tail(count)
@@ -945,6 +1641,42 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   reflow-capable subset.
   """
   @impl true
+  def resize(
+        %__MODULE__{pin_state: :floating, region: region, next_row: next_row} =
+          t,
+        width,
+        height
+      ) do
+    # FLOATING: no region is claimed, so a resize is pure geometry state
+    # (`ScrollRegionManager.plan/3`) -- ZERO region bytes, ever. The
+    # footer is anchored to content (`next_row`), not the screen bottom,
+    # so a row-count change does not move it; the keyframe latch below
+    # still fires on any change (same both-axes rationale as the pinned
+    # clause) so the next paint fully re-renders at the current width.
+    footer_rows = ScrollRegionManager.footer_rows(region)
+    new_region = ScrollRegionManager.plan(region.device, height, footer_rows)
+
+    changed? =
+      ScrollRegionManager.geometry_changed?(region, new_region) or
+        t.width != width
+
+    t = %{
+      t
+      | region: new_region,
+        width: width,
+        needs_keyframe: t.needs_keyframe or changed?
+    }
+
+    # A shrink that leaves the floating footer past the pinned position
+    # (content no longer fits above it) transitions honestly at the NEW
+    # geometry -- the same one-way pin a seal would have triggered.
+    if next_row > ScrollRegionManager.history_bottom(new_region) do
+      transition_to_pin(t)
+    else
+      t
+    end
+  end
+
   def resize(%__MODULE__{region: region, next_row: next_row} = t, width, height) do
     old_region = region
     new_region = ScrollRegionManager.resize(region, height)
@@ -1002,8 +1734,8 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   Grows or shrinks the footer viewport by `new_footer_rows` rows, WITHOUT
   a real terminal resize (`rows`/`width` unchanged) -- see the
   moduledoc's "Growing/shrinking the footer" section for the full
-  rationale. This is the seam `Raxol.Harness.Surface.open_overlay/3` and
-  `close_overlay/1` use to host `Raxol.UI.Harness.OverlayPicker`.
+  rationale. This is the seam a footer-hosted overlay uses to claim or
+  release rows.
 
   Returns `{:error, :degenerate}` (zero bytes) when the target
   `new_footer_rows` would leave history unable to keep its 2-row minimum
@@ -1020,6 +1752,61 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   """
   @spec set_footer_rows(t(), non_neg_integer()) ::
           {:ok, t()} | {:error, :degenerate}
+  def set_footer_rows(
+        %__MODULE__{pin_state: :floating, region: region} = t,
+        new_footer_rows
+      )
+      when is_integer(new_footer_rows) and new_footer_rows >= 0 do
+    rows = ScrollRegionManager.rows(region)
+    old_footer_rows = ScrollRegionManager.footer_rows(region)
+
+    cond do
+      new_footer_rows == old_footer_rows ->
+        {:ok, t}
+
+      # The SAME refusal surface as the pinned clause below, on purpose:
+      # a floating footer could physically host a claim the pinned model
+      # cannot (there is no 2-row history minimum below little content),
+      # but admitting it would create a state the one-way transition can
+      # never legally pin -- a temporary overlay must never unpin (or
+      # un-pinnable) the live footer. Uniform refusal, zero bytes.
+      ScrollRegionManager.degenerate?(rows, new_footer_rows) ->
+        {:error, :degenerate}
+
+      # The grown/shrunk footer still fits below the content: pure
+      # geometry (plan/3, zero region bytes). A GROW claims blank rows
+      # below the current footer (nothing below it has ever been painted
+      # while floating -- cheaper than the pinned clause's scroll-up); a
+      # SHRINK explicitly clears the vacated rows (still footer-owned,
+      # about to be orphaned above nothing -- same rationale as the
+      # pinned clause). Either way the keyframe latch re-renders the
+      # footer at its new size.
+      t.next_row + new_footer_rows - 1 <= rows ->
+        t =
+          if new_footer_rows < old_footer_rows do
+            erase_rows(
+              t,
+              t.next_row + new_footer_rows,
+              old_footer_rows - new_footer_rows
+            )
+          else
+            t
+          end
+
+        new_region =
+          ScrollRegionManager.plan(region.device, rows, new_footer_rows)
+
+        {:ok, %{t | region: new_region, needs_keyframe: true}}
+
+      # The claim no longer fits below the content: pin at the new split
+      # (the same one-way transition a seal would have triggered), which
+      # scrolls just enough content into native scrollback to host it --
+      # never paints over a sealed row.
+      true ->
+        {:ok, transition_to_pin(t, new_footer_rows)}
+    end
+  end
+
   def set_footer_rows(%__MODULE__{region: region} = t, new_footer_rows)
       when is_integer(new_footer_rows) and new_footer_rows >= 0 do
     rows = ScrollRegionManager.rows(region)
@@ -1130,7 +1917,7 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
 
       Enum.each((old_bottom + 1)..new_bottom//1, fn row ->
         IO.write(device, Dialect.cursor_position(row))
-        IO.write(device, "\e[K")
+        IO.write(device, Dialect.erase_line())
       end)
 
       inner
@@ -1177,6 +1964,15 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   untouched by construction.
   """
   @spec reassert(t()) :: t()
+  def reassert(%__MODULE__{pin_state: :floating} = t) do
+    # FLOATING: there is no pin to re-assert -- the suspend released a
+    # region this authority never claimed, and emitting one here would
+    # silently pin as a side effect of an editor round-trip. The keyframe
+    # latch alone is the honest resume: the editor scribbled the screen,
+    # so the next footer paint fully re-renders at the floating position.
+    %{t | needs_keyframe: true}
+  end
+
   def reassert(%__MODULE__{region: region} = t) do
     %{t | region: ScrollRegionManager.reassert(region), needs_keyframe: true}
   end
@@ -1197,8 +1993,10 @@ defmodule Raxol.UI.Rendering.PaintAuthority.InlineAuthority do
   def degenerate?(%__MODULE__{region: region}),
     do: ScrollRegionManager.degenerate?(region)
 
-  defp cup(row), do: "\e[#{row};1H"
-
+  # Counts LOGICAL lines (`\n` boundaries), not physical rows a real
+  # terminal consumes -- correct only under the caller's width-truncation
+  # contract documented on `seal/2`. Every `next_row` advance in this
+  # module is downstream of this count.
   defp count_lines(iodata) do
     iodata
     |> IO.iodata_to_binary()

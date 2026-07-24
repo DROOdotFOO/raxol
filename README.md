@@ -21,7 +21,7 @@ Your application is a single [TEA](https://guide.elm-lang.org/architecture/) mod
 
 The interesting part is the runtime. Your app gets crash isolation per Component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured Component trees instead of scraping pixels. Those are BEAM properties, from a VM built for systems that can't go down, can't lose state, and hot-swap code while running.
 
-Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module. See [Why OTP](docs/WHY_OTP.md) for the full comparison.
+Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module. See [Why OTP](docs/WHY_OTP.md) for the framework comparison, and [Why Raxol](docs/WHY_RAXOL.md) for how the runtime compares to Python agent stacks like Hermes and Omnigent.
 
 ## Built with Raxol
 
@@ -46,7 +46,7 @@ session
 |> stop_session()
 ```
 
-`mix mcp.server` starts the MCP server on stdio for Claude Code integration.
+`mix mcp.server` starts the MCP server on stdio for Claude Code integration, and `mix raxol.code` is an interactive terminal coding agent (the axol face) with every tool call gated by an ALLOW/ASK/DENY authorization engine. See the [Coding Agent](docs/features/CODING_AGENT.md).
 
 **Code** is the coding-agent product, in two surfaces: `mix raxol.code` is the interactive terminal TUI (the axol face `≡··≡`), and `mix raxol.p` is its headless twin (prompt in on argv, answer to stdout, contract events to stderr) for pipes and CI. Every mutating tool call is gated by an ALLOW/ASK/DENY authorization engine.
 
@@ -56,7 +56,7 @@ The agent subsystems ship as standalone packages:
 
 - **Pay** ([`raxol_payments`](docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).
 - **Earn** (`raxol_acp`): the sell side. Declare an offering, implement two callbacks, and a buyer agent discovers it, escrows funds, and settles on-chain through the [Virtuals](https://virtuals.io) ACP job lifecycle (request, negotiation, transaction, evaluation, completed), one supervised process per job. Pre-alpha.
-- **Improve** ([`raxol_agent`](docs/features/AGENT_FRAMEWORK.md)): a solved task becomes a reusable `SKILL.md`. A background reviewer runs on a cheap model after each turn, writing durable memory and new skills without spending the live turn's latency or context.
+- **Improve** ([`raxol_agent`](docs/features/SELF_IMPROVEMENT.md)): a solved task becomes a reusable `SKILL.md`. A background reviewer runs on a cheap model after each turn, writing durable memory and new skills without spending the live turn's latency or context.
 - **Reach** (`raxol_gateway`): one adapter contract to many chat platforms, process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
 - **Orchestrate** (`raxol_symphony`): an OTP port of [OpenAI Symphony](https://github.com/openai/symphony) that polls a tracker, isolates each issue in its own workspace, and runs a coding agent, feeding six surfaces (terminal, LiveView, MCP, Telegram, Watch, JSON API) from one snapshot.
 - **Bridge** (`raxol_agent_client_protocol`): Elixir/OTP implementation of the [Agent Client Protocol](https://agentclientprotocol.com) — the JSON-RPC 2.0 wire protocol between code editors and AI coding agents (the protocol Zed and a growing ecosystem speak). Bidirectional agent/client roles, pluggable transports (stdio, in-process), and durable resumable sessions (offset-based reattach/replay) as a vendor extension. Zero raxol-internal deps. Pre-alpha.
@@ -87,7 +87,7 @@ nix develop github:DROOdotFOO/raxol   # dev shell with elixir, erlang, NIF + spe
 ```bash
 git clone https://github.com/DROOdotFOO/raxol.git
 cd raxol && mix deps.get
-mix raxol.playground          # 30 live demos, browse/search/filter
+mix raxol.playground          # 40 live demos, browse/search/filter
 ```
 
 The flagship demo is a live BEAM dashboard with scheduler utilization, memory sparklines, and a process table:

@@ -291,7 +291,11 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
             base = base_fees |> List.last() |> Hex.decode_quantity!()
 
             prio =
-              reward |> List.first() |> List.first() |> Hex.decode_quantity!() |> max(1_000_000_000)
+              reward
+              |> List.first()
+              |> List.first()
+              |> Hex.decode_quantity!()
+              |> max(1_000_000_000)
 
             {:ok, %{max_priority_fee_per_gas: prio, max_fee_per_gas: base * 2 + prio}}
 

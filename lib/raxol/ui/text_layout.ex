@@ -14,10 +14,10 @@ defmodule Raxol.UI.TextLayout do
   | `:pre_line` | preserve  | collapse               | yes              |
 
   `:normal` delegates to `TextWrapping.wrap_line_by_word/2` and is
-  deliberately bit-identical to it, including its character-count-based
-  (not display-width) line-fit check — so `:normal` is not CJK-width-safe.
-  This is an intentionally preserved divergence; the other four modes are
-  display-width safe via `Raxol.UI.TextMeasure`.
+  deliberately bit-identical to it. Since f99c152ba that wrapper measures
+  in display columns (`Raxol.UI.TextMeasure`), so all five modes are
+  CJK-width-safe; the old character-count divergence is gone (pinned by
+  `Raxol.Harness.WrapCorpusTest`).
 
   Word-vs-character break granularity (CSS `word-break`/`overflow-wrap`) is
   a separate axis not modeled here; see

@@ -262,4 +262,86 @@ defmodule Raxol.UI.TextLayout.PrettyTest do
       assert length(pretty_lines) <= length(greedy_lines) + 1
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Above-ceiling paragraphs (`@max_dp_breaks`): the DP's O(m^2) cost is
+  # replaced with an O(m) greedy pack. A single newline-free CJK line is
+  # the case that actually occurs in practice (every ideograph is its own
+  # breakable token, so `m` tracks the grapheme count) -- regression guard
+  # for the quadratic-wrap-on-the-streaming-hot-path finding.
+  # ---------------------------------------------------------------------
+
+  describe "above-ceiling paragraphs (greedy fallback)" do
+    test "a very long newline-free CJK line completes fast and respects width" do
+      # ~2000 ideographs, single paragraph, no spaces at all -- well above
+      # `@max_dp_breaks` (600), so this exercises the O(m) greedy path.
+      # Before the ceiling existed this shape of input drove `run_dp`'s
+      # O(m^2) cost into the billions of iterations for realistic
+      # streamed-markdown sizes (~85k graphemes); 2000 is already enough
+      # to time out the O(m^2) DP in a test run, so a generous wall-clock
+      # bound here is a real regression guard, not a tautology.
+      text = String.duplicate("日", 2000)
+      width = 40
+
+      {elapsed_us, lines} = :timer.tc(fn -> Pretty.wrap(text, width) end)
+
+      assert elapsed_us < 2_000_000,
+             "greedy fallback took #{elapsed_us}us, expected well under 2s"
+
+      assert Enum.all?(lines, &(TextMeasure.display_width(&1) <= width))
+      assert Enum.join(lines) == text
+    end
+
+    test "mixed word/CJK content above the ceiling still packs correctly" do
+      words = for i <- 1..300, do: "word#{i}"
+      cjk = String.duplicate("字", 800)
+      text = Enum.join(words, " ") <> " " <> cjk
+      width = 20
+
+      lines = Pretty.wrap(text, width)
+
+      assert Enum.all?(lines, &(TextMeasure.display_width(&1) <= width))
+
+      # No content lost or duplicated: stripping the (now soft) line
+      # breaks and the space the wrapper may have dropped at a wrap point
+      # reconstructs the same grapheme sequence, in order.
+      reconstructed = Enum.join(lines)
+      original_no_space = String.replace(text, " ", "")
+      assert String.replace(reconstructed, " ", "") == original_no_space
+    end
+
+    property "greedy fallback: every line fits within width" do
+      check all(
+              width <- StreamData.integer(3..20),
+              word_count <- StreamData.integer(700..900),
+              max_runs: 20
+            ) do
+        words = for i <- 1..word_count, do: "w#{rem(i, 9)}"
+        text = Enum.join(words, " ")
+        lines = Pretty.wrap(text, width)
+
+        assert Enum.all?(lines, fn line ->
+                 TextMeasure.display_width(line) <= width
+               end)
+      end
+    end
+
+    property "greedy fallback: output reconstructs the input words in order" do
+      check all(
+              width <- StreamData.integer(3..20),
+              word_count <- StreamData.integer(700..900),
+              max_runs: 20
+            ) do
+        words = for i <- 1..word_count, do: "w#{rem(i, 9)}"
+        text = Enum.join(words, " ")
+        lines = Pretty.wrap(text, width)
+
+        reconstructed =
+          lines
+          |> Enum.flat_map(&String.split(&1, " ", trim: true))
+
+        assert reconstructed == words
+      end
+    end
+  end
 end

@@ -104,7 +104,7 @@ defmodule Raxol.UI.Components.Input.SelectList do
           :visible_height => integer() | nil,
           :last_key_time => integer() | nil,
           :search_buffer => String.t(),
-          :search_timer => integer() | nil,
+          :search_timer => reference() | nil,
           :on_focus => (integer() -> any()) | nil
         }
 
@@ -178,10 +178,10 @@ defmodule Raxol.UI.Components.Input.SelectList do
     # Cancel any existing timer
     _ = cancel_timer_if_present(state.search_timer)
 
-    # Schedule new search
-    timer_id = System.unique_integer([:positive])
-
-    _ =
+    # Schedule new search, keeping the real timer reference so it can
+    # actually be cancelled later (Process.cancel_timer/1 requires a
+    # reference, not an arbitrary id)
+    timer_ref =
       Process.send_after(
         self(),
         {:apply_search, search_text},
@@ -189,7 +189,7 @@ defmodule Raxol.UI.Components.Input.SelectList do
       )
 
     # Update buffer immediately
-    {%{state | search_buffer: search_text, search_timer: timer_id}, nil}
+    {%{state | search_buffer: search_text, search_timer: timer_ref}, nil}
   end
 
   def update({:apply_search, search_text}, state) do
@@ -527,9 +527,11 @@ defmodule Raxol.UI.Components.Input.SelectList do
 
   defp cancel_timer_if_present(nil), do: :ok
 
-  defp cancel_timer_if_present(timer_id) do
-    Process.cancel_timer(timer_id)
+  defp cancel_timer_if_present(timer_ref) when is_reference(timer_ref) do
+    Process.cancel_timer(timer_ref)
   end
+
+  defp cancel_timer_if_present(_invalid), do: :ok
 
   defp trigger_focus_callback_if_needed(true, %{on_focus: callback} = state)
        when is_function(callback) do

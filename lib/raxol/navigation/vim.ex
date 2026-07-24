@@ -29,6 +29,7 @@ defmodule Raxol.Navigation.Vim do
   """
 
   alias Raxol.Core.Buffer
+  alias Raxol.UI.TextMeasure
 
   @type position :: {non_neg_integer(), non_neg_integer()}
   @type mode :: :normal | :search | :visual
@@ -444,13 +445,21 @@ defmodule Raxol.Navigation.Vim do
     Enum.map_join(cells, "", & &1.char)
   end
 
+  # `return: :index` gives BYTE offsets, but the caller uses these as `x`
+  # cursor positions into `Core.Buffer`, which stores one cell per GRAPHEME
+  # (so `x` is a grapheme index -- the same unit `line_end/1` and
+  # `word_backward/1` derive from `String.length/1`). Returning the raw
+  # byte offset put the cursor past the match on any line containing a
+  # multi-byte character, and further past it with each additional one.
   defp find_in_line(text, pattern) do
     case Regex.scan(~r/#{Regex.escape(pattern)}/, text, return: :index) do
       [] ->
         []
 
       matches ->
-        Enum.map(matches, fn [{start, _length}] -> start end)
+        Enum.map(matches, fn [{start, _length}] ->
+          TextMeasure.byte_offset_to_index(text, start)
+        end)
     end
   end
 

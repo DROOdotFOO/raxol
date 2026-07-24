@@ -15,6 +15,7 @@
 #
 # Default: mock (no API key needed)
 # Real AI: ANTHROPIC_API_KEY=sk-ant-... mix run examples/agents/react_agent.exs
+#           LONGCAT_API_KEY=... mix run examples/agents/react_agent.exs
 #           AI_API_KEY=sk-... mix run examples/agents/react_agent.exs
 #
 # Controls:
@@ -114,25 +115,17 @@ end
 defmodule ReactExample.Config do
   @moduledoc false
 
+  # Resolve the backend through the shared `Backend.Resolver` — the same
+  # env/op/precedence path `mix raxol.code` uses — so this example never
+  # re-implements provider detection. Falls back to the Mock backend (which
+  # simulates the tool calls below) when nothing resolves.
   def detect_backend do
-    cond do
-      key = System.get_env("ANTHROPIC_API_KEY") ->
-        {Raxol.Agent.Backend.HTTP,
-         provider: :anthropic,
-         api_key: key,
-         base_url: "https://api.anthropic.com",
-         model: System.get_env("ANTHROPIC_MODEL") || "claude-haiku-3-5-20241022",
-         max_tokens: 512}
+    case Raxol.Agent.Backend.Resolver.resolve() do
+      {:ok, executor, _source} ->
+        {:ok, backend, opts} = Raxol.Agent.Backend.Selector.select(executor)
+        {backend, Keyword.put_new(opts, :max_tokens, 512)}
 
-      key = System.get_env("AI_API_KEY") ->
-        {Raxol.Agent.Backend.HTTP,
-         provider: :openai,
-         api_key: key,
-         base_url: System.get_env("AI_BASE_URL") || "https://api.openai.com",
-         model: System.get_env("AI_MODEL") || "gpt-4o-mini",
-         max_tokens: 512}
-
-      true ->
+      _no_provider ->
         {Raxol.Agent.Backend.Mock, []}
     end
   end

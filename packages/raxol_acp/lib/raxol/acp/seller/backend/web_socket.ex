@@ -54,8 +54,6 @@ defmodule Raxol.ACP.Seller.Backend.WebSocket do
   alias Raxol.ACP.Chain
   alias Raxol.ACP.Seller.Backend.WebSocket.Connection
 
-  require Logger
-
   @fallback_url "https://acpx.virtuals.io"
 
   defstruct subscribers: %{},

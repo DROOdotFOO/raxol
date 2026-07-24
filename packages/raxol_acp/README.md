@@ -53,6 +53,14 @@ See `Raxol.ACP.Supervisor` for the supervision tree. Subsystems:
 
 `handle_request/2` accepts a job only for a corridor it can settle now, so a customer is rejected before escrow rather than after a failed settlement: the live capability matrix, per-order caps (`:destination_caps`), closed origins (`:closed_origins`), and a rolling aggregate reservation (`Raxol.ACP.Xochi.CapacityLedger`, opt-in via `capacity_gate_enabled: true`). `mix raxol_acp.derive_caps` derives the config from the solver's on-chain balances and `Raxol.ACP.Xochi.CapacityRefresher` refreshes it periodically. See `config/destination_caps.example.exs` and `docs/features/ACP.md`.
 
+## Second offering: Custom Console Agent
+
+`Raxol.ACP.Console.AgentOffering` (`custom_console_agent`) sells a validated, deployment-ready Virtuals Console agent package as a **plain job** (`requiredFunds: false`, no escrowed principal, no corridor liquidity). The buyer sends a spec (purpose, runtime, persona, scheduled tasks, skills); the deliverable is a `soul.md` + `tasks.json` (+ `AGENTS.md`, `skills/`) package for **Hermes** or **OpenClaw**, statically validated and -- by default -- bench-validated on the actual open-source runtime with the transcript shipped as evidence. Generation runs on wallet-funded Virtuals compute.
+
+Crash-recovery (M1) is wired end to end: `JobSession.Provider` pins the encoded deliverable + keccak in a `Raxol.Payments.Checkpoint` store **before** signing, and `Raxol.ACP.Seller.Resync` drains `get_active_jobs` on boot/reconnect and re-drives interrupted jobs through the Queue's idempotent dispatch, so a BEAM restart resumes rather than double-submitting (**exactly-once-effective, at-least-once-attempted**). Enable with `require_checkpoint: true` in production.
+
+Config surface: `config/console_offering.example.exs`. Base Sepolia go-live: `RUNBOOK.md`. Emit the marketplace document with `mix acp.register_offering --offering console`.
+
 ## Dependencies
 
 - `raxol_payments` for wallet signing (`Raxol.Payments.EIP712`, `Raxol.Payments.Wallet`) and Xochi cross-chain settlement

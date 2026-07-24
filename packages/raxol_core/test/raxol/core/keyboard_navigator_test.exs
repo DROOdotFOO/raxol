@@ -11,7 +11,12 @@ defmodule Raxol.Core.KeyboardNavigatorTest do
       NavigatorServer.start_link(name: name, config: %{})
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      # Server may be mid-shutdown at teardown; swallow the stop's :exit.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
     end)
 
     %{server: name}
@@ -49,7 +54,16 @@ defmodule Raxol.Core.KeyboardNavigatorTest do
 
     test "overwrites existing position", %{server: server} do
       NavigatorServer.register_component_position(server, "btn1", 0, 0, 10, 10)
-      NavigatorServer.register_component_position(server, "btn1", 50, 50, 20, 20)
+
+      NavigatorServer.register_component_position(
+        server,
+        "btn1",
+        50,
+        50,
+        20,
+        20
+      )
+
       spatial_map = NavigatorServer.get_spatial_map(server)
       assert spatial_map["btn1"].x == 50
     end

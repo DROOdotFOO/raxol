@@ -25,6 +25,13 @@ defmodule Raxol.Agent.ExecutorConfig do
       [model: "gpt-5", api_key: "sk-x"]
   """
 
+  # Snapshot safety: `auth` holds the API credential, so it is redacted from any
+  # durable snapshot while the routing fields persist. Left undeclared this
+  # struct would be dropped whole by the codec; declaring the slice makes the
+  # secret boundary explicit and keeps a session key out of a checkpoint on
+  # disk. See `Raxol.Agent.Snapshot.Persist`.
+  @derive {Raxol.Agent.Snapshot.Persist,
+           persist: [:backend, :model, :opts], redact: [:auth]}
   @enforce_keys [:backend]
   defstruct backend: nil, model: nil, auth: %{}, opts: []
 
@@ -36,6 +43,7 @@ defmodule Raxol.Agent.ExecutorConfig do
           | :lm_studio
           | :llm7
           | :openrouter
+          | :longcat
           | :lumo
           | :mock
           | :claude_native
@@ -59,11 +67,13 @@ defmodule Raxol.Agent.ExecutorConfig do
   @spec new(keyword() | map()) :: t()
   def new(attrs) when is_list(attrs), do: new(Map.new(attrs))
 
-  def new(%{backend: backend} = attrs) when is_atom(backend) and not is_nil(backend),
-    do: build(backend, attrs)
+  def new(%{backend: backend} = attrs)
+      when is_atom(backend) and not is_nil(backend),
+      do: build(backend, attrs)
 
-  def new(%{harness: backend} = attrs) when is_atom(backend) and not is_nil(backend),
-    do: build(backend, attrs)
+  def new(%{harness: backend} = attrs)
+      when is_atom(backend) and not is_nil(backend),
+      do: build(backend, attrs)
 
   defp build(backend, attrs) do
     %__MODULE__{

@@ -24,6 +24,7 @@
 # LLM reasoning: mock by default (high-quality canned reasoning, no network). Toggle
 # a live model:
 #   FREE_AI=true mix run examples/agents/zero_system.exs              # LLM7.io, no key
+#   LONGCAT_API_KEY=... mix run examples/agents/zero_system.exs        # Meituan LongCat
 #   AI_API_KEY=sk-... AI_BASE_URL=https://api.openai.com/v1 AI_MODEL=gpt-4o-mini mix run ...
 #
 # Usage:
@@ -57,6 +58,12 @@ defmodule ZeroSystem.LLM do
          base: "https://api.llm7.io/v1",
          key: "unused",
          model: System.get_env("AI_MODEL") || "gpt-4o-mini"}
+
+      key = System.get_env("LONGCAT_API_KEY") ->
+        {:live,
+         base: "https://api.longcat.chat/openai/v1",
+         key: key,
+         model: System.get_env("LONGCAT_MODEL") || "LongCat-2.0"}
 
       key = System.get_env("AI_API_KEY") ->
         {:live,

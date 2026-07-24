@@ -449,8 +449,11 @@ defmodule Raxol.UI.Components.Input.TextField do
 
     cursor_style = %{
       text_decoration: [:underline],
-      color: merged_style.color || "#fff",
-      background: merged_style.background || "#000"
+      # Map.get — merged_style is often a plain %{} (no theme color keys);
+      # map.color would raise KeyError and take down any host that mounts
+      # a focused TextField without a full theme (playground, headless).
+      color: Map.get(merged_style, :color) || "#fff",
+      background: Map.get(merged_style, :background) || "#000"
     }
 
     [

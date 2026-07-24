@@ -16,9 +16,11 @@ defmodule Raxol.Terminal.Sync.SyncServerTest do
       )
 
     on_exit(fn ->
-      case Process.alive?(pid) do
-        true -> GenServer.stop(pid)
-        false -> :ok
+      # Server may be mid-shutdown at teardown; swallow the stop's :exit.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
       end
     end)
 
@@ -113,7 +115,6 @@ defmodule Raxol.Terminal.Sync.SyncServerTest do
 
       assert resolved.value == "new"
     end
-
   end
 
   describe "error handling" do

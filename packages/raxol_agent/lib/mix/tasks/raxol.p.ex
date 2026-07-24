@@ -130,9 +130,14 @@ defmodule Mix.Tasks.Raxol.P do
   # its first live consumer); start it idempotently.
   defp ensure_streamer! do
     case SessionStreamer.start_link([]) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> raise "cannot start SessionStreamer: #{inspect(reason)}"
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        raise "cannot start SessionStreamer: #{inspect(reason)}"
     end
   end
 
@@ -230,7 +235,10 @@ defmodule Mix.Tasks.Raxol.P do
   end
 
   defp render_stdout(
-         %{type: :item_completed, payload: %{item_type: :message, content: content}},
+         %{
+           type: :item_completed,
+           payload: %{item_type: :message, content: content}
+         },
          %{wrote_stdout: false} = state
        ) do
     IO.write(content)
