@@ -132,7 +132,10 @@ defmodule Raxol.Agent.Actions.Code do
       ]
 
     @impl true
-    def run(%{path: path, old_string: old_string, new_string: new_string} = params, _context) do
+    def run(
+          %{path: path, old_string: old_string, new_string: new_string} = params,
+          _context
+        ) do
       replace_all = Map.get(params, :replace_all, false)
 
       with :ok <- reject_noop(old_string, new_string),
@@ -205,7 +208,9 @@ defmodule Raxol.Agent.Actions.Code do
 
       with :ok <- Raxol.Agent.Actions.Code.sandbox_allow(context, command),
            {:ok, cd} <- resolve_cd(Map.get(params, :cd)) do
-        {output, status} = Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
+        {output, status} =
+          Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
+
         {truncated, output} = Raxol.Agent.Actions.Code.truncate_output(output)
 
         {:ok,
@@ -320,9 +325,12 @@ defmodule Raxol.Agent.Actions.Code do
       end
     end
 
-    defp under?(abs, cwd), do: abs == cwd or String.starts_with?(abs, cwd <> "/")
+    defp under?(abs, cwd),
+      do: abs == cwd or String.starts_with?(abs, cwd <> "/")
 
-    defp cap(list, max) when length(list) > max, do: {true, Enum.take(list, max)}
+    defp cap(list, max) when length(list) > max,
+      do: {true, Enum.take(list, max)}
+
     defp cap(list, _max), do: {false, list}
   end
 
@@ -362,8 +370,15 @@ defmodule Raxol.Agent.Actions.Code do
           integer()
         ) ::
           {:ok, map()} | {:error, term()}
-  def write_edit(abs, path, content, {old_string, new_string, replace_all}, count) do
-    updated = String.replace(content, old_string, new_string, global: replace_all)
+  def write_edit(
+        abs,
+        path,
+        content,
+        {old_string, new_string, replace_all},
+        count
+      ) do
+    updated =
+      String.replace(content, old_string, new_string, global: replace_all)
 
     case File.write(abs, updated) do
       :ok -> {:ok, diff_result(path, content, updated, %{replacements: count})}
@@ -429,9 +444,12 @@ defmodule Raxol.Agent.Actions.Code do
   @doc """
   Run `command` via `/bin/sh -c` in `cd`, returning `{combined_output,
   exit_status}`. `env` adds environment variables (`{name, value}`
-  strings). On timeout the port is closed and `exit_status` is `:timeout`.
+  strings). On timeout the spawned OS process group is SIGKILLed (so no
+  child is orphaned), the port is closed, and `exit_status` is `:timeout`.
   """
-  @spec run_shell(String.t(), String.t(), pos_integer(), [{String.t(), String.t()}]) ::
+  @spec run_shell(String.t(), String.t(), pos_integer(), [
+          {String.t(), String.t()}
+        ]) ::
           {binary(), integer() | :timeout}
   def run_shell(command, cd, timeout, env \\ []) do
     charlist_env =
@@ -448,22 +466,37 @@ defmodule Raxol.Agent.Actions.Code do
       {:cd, cd}
     ]
 
-    port_opts = if charlist_env == [], do: base, else: [{:env, charlist_env} | base]
+    port_opts =
+      if charlist_env == [], do: base, else: [{:env, charlist_env} | base]
+
     port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
-    collect_port(port, [], timeout)
+    collect_port(port, port_os_pid(port), [], timeout)
   end
 
-  defp collect_port(port, acc, timeout) do
+  defp collect_port(port, os_pid, acc, timeout) do
     receive do
       {^port, {:data, data}} ->
-        collect_port(port, [data | acc], timeout)
+        collect_port(port, os_pid, [data | acc], timeout)
 
       {^port, {:exit_status, status}} ->
         {acc |> Enum.reverse() |> IO.iodata_to_binary(), status}
     after
       timeout ->
+        # A wall-clock timeout means the caller stopped waiting -- but "stopped
+        # waiting" must not leave the OS process running unattended. Fire the
+        # same process-group SIGKILL `Raxol.Agent.Interrupt` uses so a rogue
+        # `sleep 600` (and every child it spawned) is actually dead, not
+        # orphaned; `Port.close/1` alone leaves the OS process alive.
+        Raxol.Agent.Interrupt.kill_os_pid(os_pid)
         Port.close(port)
         {acc |> Enum.reverse() |> IO.iodata_to_binary(), :timeout}
+    end
+  end
+
+  defp port_os_pid(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} -> os_pid
+      _ -> nil
     end
   end
 
@@ -541,8 +574,11 @@ defmodule Raxol.Agent.Actions.Code do
 
   defp scan_file(abs_path, regex, cwd) do
     case File.read(abs_path) do
-      {:ok, content} -> scan_content(content, regex, Path.relative_to(abs_path, cwd))
-      {:error, _} -> []
+      {:ok, content} ->
+        scan_content(content, regex, Path.relative_to(abs_path, cwd))
+
+      {:error, _} ->
+        []
     end
   end
 
@@ -590,7 +626,9 @@ defmodule Raxol.Agent.Actions.Code do
     String.starts_with?(base, ".") or base in @grep_pruned_dirs
   end
 
-  defp cap_matches(list, max) when length(list) > max, do: {true, Enum.take(list, max)}
+  defp cap_matches(list, max) when length(list) > max,
+    do: {true, Enum.take(list, max)}
+
   defp cap_matches(list, _max), do: {false, list}
 
   @doc """

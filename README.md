@@ -48,6 +48,10 @@ session
 
 `mix mcp.server` starts the MCP server on stdio for Claude Code integration, and `mix raxol.code` is an interactive terminal coding agent (the axol face) with every tool call gated by an ALLOW/ASK/DENY authorization engine. See the [Coding Agent](docs/features/CODING_AGENT.md).
 
+**Code** is the coding-agent product, in two surfaces: `mix raxol.code` is the interactive terminal TUI (the axol face `≡··≡`), and `mix raxol.p` is its headless twin (prompt in on argv, answer to stdout, contract events to stderr) for pipes and CI. Every mutating tool call is gated by an ALLOW/ASK/DENY authorization engine.
+
+Both surfaces sit on the **Harness** — the agent-session engine (`Raxol.Harness.*`): a durable event journal, a typed event/command contract, and pure replay-from-offset surfaces, with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
+
 The agent subsystems ship as standalone packages:
 
 - **Pay** ([`raxol_payments`](docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).

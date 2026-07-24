@@ -105,7 +105,8 @@ defmodule Raxol.Agent.Actions.Fs do
 
       with {:ok, abs} <- resolver.(path),
            {:ok, content} <- File.read(abs) do
-        {:ok, slice(path, content, Map.get(params, :offset), Map.get(params, :limit))}
+        {:ok,
+         slice(path, content, Map.get(params, :offset), Map.get(params, :limit))}
       else
         {:error, reason} -> {:error, reason}
       end

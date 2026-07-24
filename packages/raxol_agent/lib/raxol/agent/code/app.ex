@@ -71,7 +71,10 @@ defmodule Raxol.Agent.Code.App do
   @impl true
   def init(context) do
     options = Map.get(context, :options, [])
-    {sessions_dir, session_key, messages, events, resume_notice} = init_session(options)
+
+    {sessions_dir, session_key, messages, events, resume_notice} =
+      init_session(options)
+
     cwd = Keyword.get(options, :cwd) || Raxol.Agent.Actions.Fs.working_dir()
     {hooks, hooks_note} = load_hooks(cwd)
     {mcp_servers, mcp_note} = load_mcp(cwd)
@@ -102,7 +105,9 @@ defmodule Raxol.Agent.Code.App do
   # A provider connected at boot (auto-detected or --harness) -> validate it on
   # the first update, so a stale key surfaces before the first prompt.
   defp maybe_arm_launch_validation(%{executor: %{} = executor} = model) do
-    if provider_ready?(model), do: %{model | pending_validation: executor}, else: model
+    if provider_ready?(model),
+      do: %{model | pending_validation: executor},
+      else: model
   end
 
   defp maybe_arm_launch_validation(model), do: model
@@ -137,7 +142,11 @@ defmodule Raxol.Agent.Code.App do
       # check). Injectable so tests drive validation without a network call.
       login_ref: nil,
       login_validator:
-        Keyword.get(options, :login_validator, &__MODULE__.default_login_validator/3),
+        Keyword.get(
+          options,
+          :login_validator,
+          &__MODULE__.default_login_validator/3
+        ),
       # The onboarding wizard overlay: nil (connected), or a step map
       # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
       # save-to-1Password prompt). Set in init when no provider is connected.
@@ -163,7 +172,9 @@ defmodule Raxol.Agent.Code.App do
   # `:session_key` option (set by `--continue`/`--resume`) reattaches that
   # session's messages; absent, a fresh session is minted.
   defp init_session(options) do
-    dir = Keyword.get(options, :sessions_dir) || Raxol.Agent.Code.Store.default_dir()
+    dir =
+      Keyword.get(options, :sessions_dir) ||
+        Raxol.Agent.Code.Store.default_dir()
 
     case Keyword.get(options, :session_key) do
       nil ->
@@ -218,11 +229,20 @@ defmodule Raxol.Agent.Code.App do
     cond do
       # The credential/save steps are modal: they own the keyboard so a pasted
       # key never leaks into the prompt buffer or a slash command.
-      modal_wizard?(model) -> handle_wizard(norm, model)
-      InputEvent.shortcut?(norm) -> handle_shortcut(norm, model)
-      InputEvent.text?(norm) -> handle_char(InputEvent.printable_char(norm), model)
-      key = InputEvent.key(norm) -> handle_key(key, model)
-      true -> {model, []}
+      modal_wizard?(model) ->
+        handle_wizard(norm, model)
+
+      InputEvent.shortcut?(norm) ->
+        handle_shortcut(norm, model)
+
+      InputEvent.text?(norm) ->
+        handle_char(InputEvent.printable_char(norm), model)
+
+      key = InputEvent.key(norm) ->
+        handle_key(key, model)
+
+      true ->
+        {model, []}
     end
   end
 
@@ -249,7 +269,8 @@ defmodule Raxol.Agent.Code.App do
       always_allow: model.always_allow
     }
 
-    decision = Engine.evaluate(auth_policies(), :tool_call, context, model.auth_state)
+    decision =
+      Engine.evaluate(auth_policies(), :tool_call, context, model.auth_state)
 
     case decision.action do
       :allow ->
@@ -268,9 +289,16 @@ defmodule Raxol.Agent.Code.App do
 
   # An async `/login` validation ping result. Applied only when its ref still
   # matches the latest login (a newer `/login` supersedes an in-flight check).
-  def update({:command_result, {:login_validation, ref, harness, result}}, model) do
+  def update(
+        {:command_result, {:login_validation, ref, harness, result}},
+        model
+      ) do
     if ref == model.login_ref do
-      {%{model | status_line: validation_status(harness, result), login_ref: nil}, []}
+      {%{
+         model
+         | status_line: validation_status(harness, result),
+           login_ref: nil
+       }, []}
     else
       {model, []}
     end
@@ -288,11 +316,13 @@ defmodule Raxol.Agent.Code.App do
       model
       | pending_validation: nil,
         login_ref: ref,
-        status_line: "validating #{executor.harness} credential…"
+        status_line: "validating #{executor.backend} credential…"
     }
   end
 
-  defp modal_wizard?(%{wizard: %{step: step}}) when step in [:credential, :confirm_save], do: true
+  defp modal_wizard?(%{wizard: %{step: step}})
+       when step in [:credential, :confirm_save], do: true
+
   defp modal_wizard?(_model), do: false
 
   # -- key handlers -----------------------------------------------------------
@@ -338,8 +368,11 @@ defmodule Raxol.Agent.Code.App do
   # In browse mode, ↑/↓ move the provider cursor; Enter on an empty prompt
   # selects it. A typed prompt or slash command still takes precedence (so the
   # `/login <provider> ...` text path stays reachable alongside the wizard).
-  defp handle_key(:up, %{wizard: %{step: :browse}} = model), do: {wizard_move(model, -1), []}
-  defp handle_key(:down, %{wizard: %{step: :browse}} = model), do: {wizard_move(model, +1), []}
+  defp handle_key(:up, %{wizard: %{step: :browse}} = model),
+    do: {wizard_move(model, -1), []}
+
+  defp handle_key(:down, %{wizard: %{step: :browse}} = model),
+    do: {wizard_move(model, +1), []}
 
   defp handle_key(:enter, model) do
     case String.trim(model.input) do
@@ -382,14 +415,19 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp provider_ready?(%{provider_status: :ready}), do: true
-  defp provider_ready?(%{provider_status: {:ready, _harness, _source}}), do: true
+
+  defp provider_ready?(%{provider_status: {:ready, _harness, _source}}),
+    do: true
+
   defp provider_ready?(_model), do: false
 
   # Plan mode only toggles when idle — flipping it mid-turn or mid-approval
   # would be surprising (the toolset/prompt are fixed at turn start).
   defp maybe_toggle_plan_mode(%{running?: true} = model), do: model
   defp maybe_toggle_plan_mode(%{pending_approval: %{}} = model), do: model
-  defp maybe_toggle_plan_mode(model), do: %{model | plan_mode: not model.plan_mode}
+
+  defp maybe_toggle_plan_mode(model),
+    do: %{model | plan_mode: not model.plan_mode}
 
   # -- turn lifecycle ---------------------------------------------------------
 
@@ -441,7 +479,9 @@ defmodule Raxol.Agent.Code.App do
       SessionStreamer.subscribe(session_id)
 
       Task.async(fn ->
-        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts), prompt: prompt)
+        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts),
+          prompt: prompt
+        )
       end)
 
       relay(session_id, app)
@@ -546,7 +586,11 @@ defmodule Raxol.Agent.Code.App do
   defp accumulate_answer(model, %{type: :item_completed, payload: payload}) do
     case item_type(payload) do
       :message ->
-        %{model | turn_answer: model.turn_answer <> to_string(payload_content(payload))}
+        %{
+          model
+          | turn_answer:
+              model.turn_answer <> to_string(payload_content(payload))
+        }
 
       _other ->
         model
@@ -568,7 +612,9 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp finalize_turn(model, %{type: :error}), do: persist(%{model | turn_answer: ""})
+  defp finalize_turn(model, %{type: :error}),
+    do: persist(%{model | turn_answer: ""})
+
   defp finalize_turn(model, _event), do: model
 
   defp append_assistant(messages, answer) do
@@ -590,8 +636,11 @@ defmodule Raxol.Agent.Code.App do
            messages: model.messages,
            events: durable_events(model.events)
          }) do
-      :ok -> model
-      {:error, reason} -> %{model | status_line: "session save failed: #{inspect(reason)}"}
+      :ok ->
+        model
+
+      {:error, reason} ->
+        %{model | status_line: "session save failed: #{inspect(reason)}"}
     end
   end
 
@@ -649,7 +698,11 @@ defmodule Raxol.Agent.Code.App do
 
       if Map.get(meta, :sensitive, false) do
         ref = make_ref()
-        send(app, {:command_result, {:authorize_request, ref, self(), meta.name}})
+
+        send(
+          app,
+          {:command_result, {:authorize_request, ref, self(), meta.name}}
+        )
 
         receive do
           {:authorize_decision, ^ref, :allow} -> :ok
@@ -722,13 +775,25 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("help", _arg, model), do: {notice(model, help_text()), []}
   defp apply_command("login", arg, model), do: {login(model, arg), []}
   defp apply_command("clear", _arg, model), do: {clear_session(model), []}
-  defp apply_command("plan", _arg, model), do: {maybe_toggle_plan_mode(model), []}
+
+  defp apply_command("plan", _arg, model),
+    do: {maybe_toggle_plan_mode(model), []}
+
   defp apply_command("model", arg, model), do: {set_model(model, arg), []}
-  defp apply_command("context", _arg, model), do: {notice(model, context_text(model)), []}
+
+  defp apply_command("context", _arg, model),
+    do: {notice(model, context_text(model)), []}
+
   defp apply_command("compact", _arg, model), do: {compact(model), []}
-  defp apply_command("sessions", _arg, model), do: {notice(model, sessions_text(model)), []}
-  defp apply_command("mcp", _arg, model), do: {notice(model, mcp_text(model)), []}
-  defp apply_command("hooks", _arg, model), do: {notice(model, hooks_text(model)), []}
+
+  defp apply_command("sessions", _arg, model),
+    do: {notice(model, sessions_text(model)), []}
+
+  defp apply_command("mcp", _arg, model),
+    do: {notice(model, mcp_text(model)), []}
+
+  defp apply_command("hooks", _arg, model),
+    do: {notice(model, hooks_text(model)), []}
 
   defp apply_command(other, _arg, model),
     do: {notice(model, "unknown command: /#{other} — try /help"), []}
@@ -757,26 +822,45 @@ defmodule Raxol.Agent.Code.App do
   # a trailing token is taken as a model override.
   defp login(model, arg) do
     case String.split(String.trim(arg), ~r/\s+/, trim: true) do
-      [] -> open_browse(model)
-      [provider] -> login_provider(model, provider, nil, nil)
-      [provider, secret] -> login_provider(model, provider, secret, nil)
-      [provider, secret, model_name | _] -> login_provider(model, provider, secret, model_name)
+      [] ->
+        open_browse(model)
+
+      [provider] ->
+        login_provider(model, provider, nil, nil)
+
+      [provider, secret] ->
+        login_provider(model, provider, secret, nil)
+
+      [provider, secret, model_name | _] ->
+        login_provider(model, provider, secret, model_name)
     end
   end
 
   defp login_provider(model, provider_str, secret, model_name) do
     case Raxol.Agent.Backend.Resolver.harness_from_string(provider_str) do
-      {:ok, harness} -> connect(model, harness, secret, model_name)
-      :error -> notice(model, "unknown provider: #{provider_str}\n\n" <> login_status_text())
+      {:ok, harness} ->
+        connect(model, harness, secret, model_name)
+
+      :error ->
+        notice(
+          model,
+          "unknown provider: #{provider_str}\n\n" <> login_status_text()
+        )
     end
   end
 
   # An op:// reference is stored (so it survives relaunch) then resolved; a raw
   # key stays in memory for this session only; no secret connects via op/env.
   defp connect(model, harness, "op://" <> _ = ref, model_name) do
-    case Raxol.Agent.Backend.Credentials.put(harness, put_model([op_ref: ref], model_name)) do
-      :ok -> resolve_and_connect(model, harness, [], "op reference stored")
-      {:error, reason} -> notice(model, "could not store reference: #{inspect(reason)}")
+    case Raxol.Agent.Backend.Credentials.put(
+           harness,
+           put_model([op_ref: ref], model_name)
+         ) do
+      :ok ->
+        resolve_and_connect(model, harness, [], "op reference stored")
+
+      {:error, reason} ->
+        notice(model, "could not store reference: #{inspect(reason)}")
     end
   end
 
@@ -832,7 +916,8 @@ defmodule Raxol.Agent.Code.App do
   defp put_model(opts, ""), do: opts
   defp put_model(opts, model_name), do: Keyword.put(opts, :model, model_name)
 
-  defp connect_note(harness, source, nil), do: "connected to #{harness} (via #{source})"
+  defp connect_note(harness, source, nil),
+    do: "connected to #{harness} (via #{source})"
 
   defp connect_note(harness, source, note),
     do: "connected to #{harness} (via #{source}) — #{note}"
@@ -863,7 +948,10 @@ defmodule Raxol.Agent.Code.App do
           _, _ -> :unreachable
         end
 
-      send(app, {:command_result, {:login_validation, ref, executor.harness, result}})
+      send(
+        app,
+        {:command_result, {:login_validation, ref, executor.backend, result}}
+      )
     end)
 
     :ok
@@ -890,8 +978,12 @@ defmodule Raxol.Agent.Code.App do
   defp validate_backend(backend, opts), do: ping_completion(backend, opts)
 
   defp ping_completion(backend, opts) do
-    ping_opts = opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
-    interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
+    ping_opts =
+      opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
+
+    interpret_ping(
+      backend.complete([%{role: :user, content: "ping"}], ping_opts)
+    )
   end
 
   @doc false
@@ -900,15 +992,19 @@ defmodule Raxol.Agent.Code.App do
   # (even a truncated/unparseable body) authorized the request, so it is valid.
   def interpret_ping({:ok, _response}), do: :valid
 
-  def interpret_ping({:error, {:http_error, status, _body}}) when status in [401, 403],
-    do: {:rejected, status}
+  def interpret_ping({:error, {:http_error, status, _body}})
+      when status in [401, 403],
+      do: {:rejected, status}
 
-  def interpret_ping({:error, {:http_error, status, _body}}), do: {:reachable_error, status}
+  def interpret_ping({:error, {:http_error, status, _body}}),
+    do: {:reachable_error, status}
+
   def interpret_ping({:error, {:request_failed, _reason}}), do: :unreachable
   def interpret_ping({:error, :req_not_available}), do: :req_unavailable
   def interpret_ping({:error, _marker}), do: :valid
 
-  defp validation_status(harness, :valid), do: "#{harness} credential validated ●"
+  defp validation_status(harness, :valid),
+    do: "#{harness} credential validated ●"
 
   defp validation_status(harness, {:rejected, status}),
     do: "#{harness} key rejected (HTTP #{status}) — check /login"
@@ -932,7 +1028,12 @@ defmodule Raxol.Agent.Code.App do
   defp open_browse(model) do
     entries = browse_entries()
     cursor = default_cursor(entries)
-    %{model | wizard: %{step: :browse, cursor: cursor, entries: entries}, notice: nil}
+
+    %{
+      model
+      | wizard: %{step: :browse, cursor: cursor, entries: entries},
+        notice: nil
+    }
   end
 
   # Provider rows for the list, carrying the diagnostics so the panel can show
@@ -947,13 +1048,18 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp wizard_move(%{wizard: %{entries: entries, cursor: cursor} = wizard} = model, delta) do
+  defp wizard_move(
+         %{wizard: %{entries: entries, cursor: cursor} = wizard} = model,
+         delta
+       ) do
     max = max(length(entries) - 1, 0)
     next = min(max, max(0, cursor + delta))
     %{model | wizard: %{wizard | cursor: next}}
   end
 
-  defp maybe_wizard_select(%{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model) do
+  defp maybe_wizard_select(
+         %{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model
+       ) do
     case Enum.at(entries, cursor) do
       nil -> model
       entry -> select_provider(model, entry.harness, entry.keyless?)
@@ -986,20 +1092,36 @@ defmodule Raxol.Agent.Code.App do
 
   defp handle_wizard(norm, %{wizard: %{step: :credential}} = model) do
     cond do
-      InputEvent.text?(norm) -> {append_credential(model, InputEvent.printable_char(norm)), []}
-      InputEvent.key(norm) == :enter -> {submit_credential(model), []}
-      InputEvent.key(norm) == :backspace -> {backspace_credential(model), []}
-      InputEvent.key(norm) == :escape -> {open_browse(model), []}
-      true -> {model, []}
+      InputEvent.text?(norm) ->
+        {append_credential(model, InputEvent.printable_char(norm)), []}
+
+      InputEvent.key(norm) == :enter ->
+        {submit_credential(model), []}
+
+      InputEvent.key(norm) == :backspace ->
+        {backspace_credential(model), []}
+
+      InputEvent.key(norm) == :escape ->
+        {open_browse(model), []}
+
+      true ->
+        {model, []}
     end
   end
 
   defp handle_wizard(norm, %{wizard: %{step: :confirm_save}} = model) do
     cond do
-      InputEvent.printable_char(norm) in ["y", "Y"] -> {save_key_to_op(model), []}
-      InputEvent.printable_char(norm) in ["n", "N"] -> {decline_save(model), []}
-      InputEvent.key(norm) == :escape -> {decline_save(model), []}
-      true -> {model, []}
+      InputEvent.printable_char(norm) in ["y", "Y"] ->
+        {save_key_to_op(model), []}
+
+      InputEvent.printable_char(norm) in ["n", "N"] ->
+        {decline_save(model), []}
+
+      InputEvent.key(norm) == :escape ->
+        {decline_save(model), []}
+
+      true ->
+        {model, []}
     end
   end
 
@@ -1022,7 +1144,9 @@ defmodule Raxol.Agent.Code.App do
         model |> connect(harness, trimmed, nil) |> close_wizard_if_ready()
 
       true ->
-        model |> connect(harness, trimmed, nil) |> maybe_offer_save(harness, trimmed)
+        model
+        |> connect(harness, trimmed, nil)
+        |> maybe_offer_save(harness, trimmed)
     end
   end
 
@@ -1031,7 +1155,8 @@ defmodule Raxol.Agent.Code.App do
       %{
         model
         | wizard: %{step: :confirm_save, harness: harness, key: key},
-          notice: "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
+          notice:
+            "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
       }
     else
       close_wizard(model)
@@ -1042,17 +1167,25 @@ defmodule Raxol.Agent.Code.App do
     case model.op_saver.(harness, key) do
       {:ok, ref} ->
         _ = Raxol.Agent.Backend.Credentials.put(harness, op_ref: ref)
-        model |> close_wizard() |> notice("saved #{harness} key to 1Password (#{ref})")
+
+        model
+        |> close_wizard()
+        |> notice("saved #{harness} key to 1Password (#{ref})")
 
       {:error, reason} ->
         model
         |> close_wizard()
-        |> notice("could not save to 1Password: #{inspect(reason)} — key kept for this session")
+        |> notice(
+          "could not save to 1Password: #{inspect(reason)} — key kept for this session"
+        )
     end
   end
 
   defp decline_save(%{wizard: %{harness: harness}} = model),
-    do: model |> close_wizard() |> notice("#{harness} key kept for this session only")
+    do:
+      model
+      |> close_wizard()
+      |> notice("#{harness} key kept for this session only")
 
   @doc false
   def default_op_saver(harness, key),
@@ -1082,7 +1215,8 @@ defmodule Raxol.Agent.Code.App do
   # Shown on the setup panel and as the hint when a prompt is sent with no
   # provider connected.
   defp provider_setup_hint(%{provider_status: {:no_key, harness}}) do
-    "harness #{harness} was selected but no key resolved.\n\n" <> login_status_text()
+    "harness #{harness} was selected but no key resolved.\n\n" <>
+      login_status_text()
   end
 
   defp provider_setup_hint(_model) do
@@ -1114,7 +1248,10 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp set_model(model, "") do
-    notice(model, "usage: /model <name>  (current: #{model.model_override || "default"})")
+    notice(
+      model,
+      "usage: /model <name>  (current: #{model.model_override || "default"})"
+    )
   end
 
   defp set_model(model, name) do
@@ -1131,7 +1268,12 @@ defmodule Raxol.Agent.Code.App do
       notice(model, "nothing to compact (#{count} messages)")
     else
       {older, recent} = Enum.split(model.messages, count - keep)
-      marker = %{role: :system, content: "[#{length(older)} earlier messages compacted]"}
+
+      marker = %{
+        role: :system,
+        content: "[#{length(older)} earlier messages compacted]"
+      }
+
       model = persist(%{model | messages: [marker | recent]})
       notice(model, "compacted #{length(older)} messages")
     end
@@ -1190,9 +1332,14 @@ defmodule Raxol.Agent.Code.App do
   # The onboarding panel: the wizard when one is open, else a static hint when
   # unconnected, else nothing. Keeps the TUI on "connect a provider" instead of
   # failing an invisible request.
-  defp setup_block(%{wizard: %{step: :browse} = wizard}), do: browse_panel(wizard)
-  defp setup_block(%{wizard: %{step: :credential} = wizard}), do: credential_panel(wizard)
-  defp setup_block(%{wizard: %{step: :confirm_save} = wizard}), do: confirm_save_panel(wizard)
+  defp setup_block(%{wizard: %{step: :browse} = wizard}),
+    do: browse_panel(wizard)
+
+  defp setup_block(%{wizard: %{step: :credential} = wizard}),
+    do: credential_panel(wizard)
+
+  defp setup_block(%{wizard: %{step: :confirm_save} = wizard}),
+    do: confirm_save_panel(wizard)
 
   defp setup_block(model) do
     if provider_ready?(model), do: nil, else: hint_panel(model)
@@ -1236,7 +1383,9 @@ defmodule Raxol.Agent.Code.App do
         [
           text("connect #{harness}", fg: :yellow, style: [:bold]),
           text("credential: #{shown}▌", fg: :cyan),
-          text("op:// reference is stored; a raw key can be saved to 1Password", style: [:dim])
+          text("op:// reference is stored; a raw key can be saved to 1Password",
+            style: [:dim]
+          )
         ]
       end
     end
@@ -1244,7 +1393,8 @@ defmodule Raxol.Agent.Code.App do
 
   defp confirm_save_panel(%{harness: harness}) do
     box style: %{border: :single, padding: 0} do
-      text("Save #{harness} key to 1Password?  [y] yes   [n] keep for this session",
+      text(
+        "Save #{harness} key to 1Password?  [y] yes   [n] keep for this session",
         fg: :yellow
       )
     end
@@ -1307,13 +1457,22 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp plan_chip(%{plan_mode: true}), do: text("PLAN", fg: :yellow, style: [:bold])
+  defp plan_chip(%{plan_mode: true}),
+    do: text("PLAN", fg: :yellow, style: [:bold])
+
   defp plan_chip(_model), do: nil
 
   defp status_label(%{status_line: line}) when is_binary(line), do: line
-  defp status_label(%{pending_approval: %{name: name}}), do: "awaiting approval: #{name}"
-  defp status_label(%{provider_status: {:no_key, harness}}), do: "no key for #{harness} — /login"
-  defp status_label(%{provider_status: :no_provider}), do: "no provider — /login"
+
+  defp status_label(%{pending_approval: %{name: name}}),
+    do: "awaiting approval: #{name}"
+
+  defp status_label(%{provider_status: {:no_key, harness}}),
+    do: "no key for #{harness} — /login"
+
+  defp status_label(%{provider_status: :no_provider}),
+    do: "no provider — /login"
+
   defp status_label(%{running?: true}), do: "working…"
   defp status_label(%{plan_mode: true}), do: "plan mode — read-only"
   defp status_label(_model), do: "ready"
@@ -1339,9 +1498,14 @@ defmodule Raxol.Agent.Code.App do
 
   defp ensure_streamer! do
     case SessionStreamer.start_link([]) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> raise "cannot start SessionStreamer: #{inspect(reason)}"
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        raise "cannot start SessionStreamer: #{inspect(reason)}"
     end
   end
 

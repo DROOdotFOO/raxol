@@ -8,7 +8,7 @@ defmodule Raxol.Agent.ExecutorConfigTest do
       cfg = ExecutorConfig.new(harness: :anthropic, model: "claude-opus-4-8")
 
       assert %ExecutorConfig{
-               harness: :anthropic,
+               backend: :anthropic,
                model: "claude-opus-4-8",
                auth: %{},
                opts: []
@@ -18,7 +18,7 @@ defmodule Raxol.Agent.ExecutorConfigTest do
     test "builds from a map" do
       cfg = ExecutorConfig.new(%{harness: :openai, auth: %{api_key: "sk-x"}})
 
-      assert cfg.harness == :openai
+      assert cfg.backend == :openai
       assert cfg.auth == %{api_key: "sk-x"}
     end
 
@@ -32,13 +32,17 @@ defmodule Raxol.Agent.ExecutorConfigTest do
 
     test "requires a non-nil atom harness" do
       assert_raise FunctionClauseError, fn -> ExecutorConfig.new(model: "x") end
-      assert_raise FunctionClauseError, fn -> ExecutorConfig.new(harness: nil) end
+
+      assert_raise FunctionClauseError, fn ->
+        ExecutorConfig.new(harness: nil)
+      end
     end
   end
 
   describe "from_keyword/1" do
     test "is an alias for new/1" do
-      assert ExecutorConfig.from_keyword(harness: :mock) == ExecutorConfig.new(harness: :mock)
+      assert ExecutorConfig.from_keyword(harness: :mock) ==
+               ExecutorConfig.new(harness: :mock)
     end
   end
 
@@ -54,7 +58,13 @@ defmodule Raxol.Agent.ExecutorConfigTest do
     end
 
     test "flattens auth map into keyword opts" do
-      cfg = ExecutorConfig.new(harness: :openai, model: "gpt-5", auth: %{api_key: "sk-x"})
+      cfg =
+        ExecutorConfig.new(
+          harness: :openai,
+          model: "gpt-5",
+          auth: %{api_key: "sk-x"}
+        )
+
       opts = ExecutorConfig.to_backend_opts(cfg)
 
       assert opts[:model] == "gpt-5"
@@ -69,11 +79,17 @@ defmodule Raxol.Agent.ExecutorConfigTest do
           opts: [base_url: "https://from-opts"]
         )
 
-      assert ExecutorConfig.to_backend_opts(cfg)[:base_url] == "https://from-opts"
+      assert ExecutorConfig.to_backend_opts(cfg)[:base_url] ==
+               "https://from-opts"
     end
 
     test "ignores non-atom auth keys" do
-      cfg = ExecutorConfig.new(harness: :openai, auth: %{"string_key" => "v", api_key: "sk-x"})
+      cfg =
+        ExecutorConfig.new(
+          harness: :openai,
+          auth: %{"string_key" => "v", api_key: "sk-x"}
+        )
+
       opts = ExecutorConfig.to_backend_opts(cfg)
 
       assert opts[:api_key] == "sk-x"
@@ -92,7 +108,12 @@ defmodule Raxol.Agent.ExecutorConfigTest do
     @secret "sk-SECRET-do-not-persist-1234"
 
     test "dumping the struct redacts auth and keeps the routing fields" do
-      cfg = ExecutorConfig.new(harness: :openai, model: "gpt-x", auth: %{api_key: @secret})
+      cfg =
+        ExecutorConfig.new(
+          harness: :openai,
+          model: "gpt-x",
+          auth: %{api_key: @secret}
+        )
 
       {:ok, envelope} = Snapshot.dump(cfg)
 
@@ -100,7 +121,7 @@ defmodule Raxol.Agent.ExecutorConfigTest do
       assert Enum.any?(envelope.redacted, &(&1["path"] == ["auth"]))
 
       {:ok, restored} = Snapshot.load(envelope)
-      assert restored.harness == :openai
+      assert restored.backend == :openai
       assert restored.model == "gpt-x"
       # The secret comes back at its struct default, never the real value.
       assert restored.auth == %{}
@@ -109,7 +130,8 @@ defmodule Raxol.Agent.ExecutorConfigTest do
     test "a model embedding an executor never leaks the key into the envelope" do
       model = %{
         input: "hello",
-        executor: ExecutorConfig.new(harness: :openai, auth: %{api_key: @secret})
+        executor:
+          ExecutorConfig.new(harness: :openai, auth: %{api_key: @secret})
       }
 
       {:ok, envelope} = Snapshot.dump(model)

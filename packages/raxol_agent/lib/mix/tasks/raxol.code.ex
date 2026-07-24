@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Raxol.Code do
   `mix raxol.code` surface, wearing the axol face `≡··≡`.
 
       mix raxol.code
-      mix raxol.code --harness anthropic --model claude-sonnet-5
+      mix raxol.code --backend anthropic --model claude-sonnet-5
       mix raxol.code --continue          # resume the most recent session
       mix raxol.code --resume sess-123-4  # resume a specific session
       mix raxol.code --sessions          # list saved sessions and exit
@@ -42,22 +42,22 @@ defmodule Mix.Tasks.Raxol.Code do
 
   ## Providers
 
-  With no `--harness`, the agent auto-detects a provider from your
+  With no `--backend`, the agent auto-detects a provider from your
   environment via `Raxol.Agent.Backend.Resolver`: a 1Password reference
   stored by `/login` (read through the `op` CLI), then a provider env var
   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...), then the generic
   `AI_API_KEY`/`AI_BASE_URL` pair. If nothing resolves, the TUI opens on a
   setup panel — run `/login` to connect a provider instead of failing
-  against a placeholder endpoint. `--harness NAME` pins a provider and
+  against a placeholder endpoint. `--backend NAME` pins a provider and
   resolves that one's credential; `--api-key` supplies a key inline.
 
   ## Options
 
-    * `--harness`  — backend harness (auto-detected if omitted; also
+    * `--backend`  — LLM backend (auto-detected if omitted; also
       `anthropic`, `openai`, `kimi`, `ollama`, `lm_studio`, ... see
-      `Backend.Resolver`)
+      `Backend.Resolver`). `--harness` is accepted as a deprecated alias.
     * `--model`    — model override
-    * `--api-key`  — API key for the selected harness (else op/env)
+    * `--api-key`  — API key for the selected backend (else op/env)
     * `--base-url` — override the backend base URL
     * `--system`   — system prompt override
     * `--continue` — resume the most recently updated session
@@ -71,6 +71,8 @@ defmodule Mix.Tasks.Raxol.Code do
   alias Raxol.Agent.Code.Store
 
   @switches [
+    backend: :string,
+    # `--harness` is a deprecated alias for `--backend`.
     harness: :string,
     model: :string,
     api_key: :string,
@@ -102,7 +104,10 @@ defmodule Mix.Tasks.Raxol.Code do
 
       sessions ->
         IO.puts("saved sessions in #{dir}:")
-        Enum.each(sessions, fn s -> IO.puts("  #{s.id}  (#{s.message_count} msgs)") end)
+
+        Enum.each(sessions, fn s ->
+          IO.puts("  #{s.id}  (#{s.message_count} msgs)")
+        end)
     end
   end
 
@@ -128,11 +133,13 @@ defmodule Mix.Tasks.Raxol.Code do
     |> apply_resolution(resolution)
   end
 
-  # The resolver inputs: an optional validated `--harness`, plus any inline
-  # `--model`/`--api-key`/`--base-url` overrides.
+  # The resolver inputs: an optional validated `--backend`, plus any inline
+  # `--model`/`--api-key`/`--base-url` overrides. The resolver's own input key
+  # stays `:harness` (its internal provider vocabulary); only the user-facing
+  # flag is renamed.
   defp resolver_opts(opts) do
     []
-    |> maybe_put(:harness, validated_harness(opts))
+    |> maybe_put(:harness, validated_backend(opts))
     |> maybe_put(:model, Keyword.get(opts, :model))
     |> maybe_put(:api_key, Keyword.get(opts, :api_key))
     |> maybe_put(:base_url, Keyword.get(opts, :base_url))
@@ -144,7 +151,7 @@ defmodule Mix.Tasks.Raxol.Code do
   defp apply_resolution(app_opts, {:ok, executor, source}) do
     app_opts
     |> Keyword.put(:executor, executor)
-    |> Keyword.put(:provider_status, {:ready, executor.harness, source})
+    |> Keyword.put(:provider_status, {:ready, executor.backend, source})
   end
 
   defp apply_resolution(app_opts, {:no_key, harness}) do
@@ -163,21 +170,45 @@ defmodule Mix.Tasks.Raxol.Code do
     end
   end
 
-  # Validate an explicit `--harness` against the supported set, returning the
+  # Validate an explicit `--backend` against the supported set, returning the
   # atom (or `nil` when omitted, which asks the resolver to auto-detect).
-  defp validated_harness(opts) do
-    case Keyword.get(opts, :harness) do
+  defp validated_backend(opts) do
+    case backend_flag(opts) do
       nil ->
         nil
 
       name ->
-        supported = Raxol.Agent.Backend.Selector.supported_harnesses()
+        supported = Raxol.Agent.Backend.Selector.supported_backends()
 
         Enum.find(supported, &(Atom.to_string(&1) == name)) ||
           usage_error(
-            "unknown harness #{inspect(name)}; supported: " <>
+            "unknown backend #{inspect(name)}; supported: " <>
               Enum.map_join(supported, ", ", &Atom.to_string/1)
           )
+    end
+  end
+
+  # `--backend` is canonical; `--harness` is the deprecated alias (a stderr
+  # notice is printed, and `--backend` wins if both are given).
+  defp backend_flag(opts) do
+    case {Keyword.get(opts, :backend), Keyword.get(opts, :harness)} do
+      {nil, nil} ->
+        nil
+
+      {nil, legacy} ->
+        IO.puts(:stderr, "raxol.code: --harness is deprecated; use --backend")
+        legacy
+
+      {name, nil} ->
+        name
+
+      {name, _both} ->
+        IO.puts(
+          :stderr,
+          "raxol.code: both --backend and --harness given; using --backend"
+        )
+
+        name
     end
   end
 

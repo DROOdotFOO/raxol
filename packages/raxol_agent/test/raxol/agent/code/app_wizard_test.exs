@@ -48,7 +48,7 @@ defmodule Raxol.Agent.Code.AppWizardTest do
     fn executor, ref, app ->
       send(
         app,
-        {:command_result, {:login_validation, ref, executor.harness, result}}
+        {:command_result, {:login_validation, ref, executor.backend, result}}
       )
 
       :ok
@@ -195,7 +195,9 @@ defmodule Raxol.Agent.Code.AppWizardTest do
 
     test "y saves the key via the op saver and stores the returned reference" do
       model =
-        new_model(op_saver: fn _h, _k -> {:ok, "op://Vault/OpenAI/credential"} end)
+        new_model(
+          op_saver: fn _h, _k -> {:ok, "op://Vault/OpenAI/credential"} end
+        )
         |> to_confirm_save(:openai, "sk-raw")
 
       model = press(model, "y")
@@ -247,7 +249,8 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       assert model.pending_validation == nil
       assert is_reference(model.login_ref)
 
-      assert_receive {:command_result, {:login_validation, ref, :openai, :valid}} = msg
+      assert_receive {:command_result,
+                      {:login_validation, ref, :openai, :valid}} = msg
 
       assert ref == model.login_ref
 

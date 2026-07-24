@@ -3,7 +3,7 @@ defmodule Raxol.Agent.Backend.Cursor do
   AIBackend wrapping the Cursor agent CLI (`cursor-agent`) as a native harness.
 
   The CLI owns its agent loop; Raxol tools are injected over MCP. Selected via
-  `harness: :cursor` in a `Raxol.Agent.ExecutorConfig`. See
+  `backend: :cursor` in a `Raxol.Agent.ExecutorConfig`. See
   `Raxol.Agent.Backend.Native` for options and `Raxol.Agent.Harness.Cursor` for
   the driver.
   """

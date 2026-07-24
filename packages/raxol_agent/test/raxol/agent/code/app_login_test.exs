@@ -17,7 +17,10 @@ defmodule Raxol.Agent.Code.AppLoginTest do
     Enum.each(@managed_env, &System.delete_env/1)
 
     store =
-      Path.join(System.tmp_dir!(), "raxol-applogin-#{System.unique_integer([:positive])}.json")
+      Path.join(
+        System.tmp_dir!(),
+        "raxol-applogin-#{System.unique_integer([:positive])}.json"
+      )
 
     prev_store = System.get_env("RAXOL_PROVIDERS")
     System.put_env("RAXOL_PROVIDERS", store)
@@ -39,7 +42,9 @@ defmodule Raxol.Agent.Code.AppLoginTest do
   end
 
   defp stub_runner do
-    fn _session_id, _prompt, _opts, _app -> spawn(fn -> Process.sleep(60_000) end) end
+    fn _session_id, _prompt, _opts, _app ->
+      spawn(fn -> Process.sleep(60_000) end)
+    end
   end
 
   # A no-op validator by default so connect tests never touch the network;
@@ -48,7 +53,11 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
   defp validator_sending(result) do
     fn executor, ref, app ->
-      send(app, {:command_result, {:login_validation, ref, executor.harness, result}})
+      send(
+        app,
+        {:command_result, {:login_validation, ref, executor.backend, result}}
+      )
+
       :ok
     end
   end
@@ -59,7 +68,10 @@ defmodule Raxol.Agent.Code.AppLoginTest do
         runner: stub_runner(),
         login_validator: noop_validator(),
         cwd:
-          Path.join(System.tmp_dir!(), "raxol-applogin-cwd-#{System.unique_integer([:positive])}"),
+          Path.join(
+            System.tmp_dir!(),
+            "raxol-applogin-cwd-#{System.unique_integer([:positive])}"
+          ),
         sessions_dir:
           Path.join(
             System.tmp_dir!(),
@@ -112,7 +124,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
       model = new_model(:no_provider) |> type("/login lm_studio")
 
       assert {:ready, :lm_studio, _source} = model.provider_status
-      assert model.executor.harness == :lm_studio
+      assert model.executor.backend == :lm_studio
       assert model.notice =~ "connected to lm_studio"
     end
 
@@ -128,11 +140,16 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
     test "stores an op reference (falling through to env keeps it deterministic)" do
       System.put_env("ANTHROPIC_API_KEY", "sk-env")
-      model = new_model(:no_provider) |> type("/login anthropic op://Vault/Anthropic/key")
+
+      model =
+        new_model(:no_provider)
+        |> type("/login anthropic op://Vault/Anthropic/key")
 
       # The reference is persisted regardless of whether op or the env key
       # ultimately supplied the secret.
-      assert {:ok, %{op_ref: "op://Vault/Anthropic/key"}} = Credentials.fetch(:anthropic)
+      assert {:ok, %{op_ref: "op://Vault/Anthropic/key"}} =
+               Credentials.fetch(:anthropic)
+
       assert {:ready, :anthropic, _source} = model.provider_status
     end
 
@@ -158,17 +175,22 @@ defmodule Raxol.Agent.Code.AppLoginTest do
   describe "/login validation" do
     test "connecting shows a validating status and stamps a login ref" do
       model =
-        new_model(:no_provider, login_validator: noop_validator()) |> type("/login lm_studio")
+        new_model(:no_provider, login_validator: noop_validator())
+        |> type("/login lm_studio")
 
       assert model.status_line =~ "validating"
       assert is_reference(model.login_ref)
     end
 
     test "a validated credential updates the status line" do
-      model = new_model(:no_provider, login_validator: validator_sending(:valid))
+      model =
+        new_model(:no_provider, login_validator: validator_sending(:valid))
+
       model = type(model, "/login openai sk-good")
 
-      assert_receive {:command_result, {:login_validation, ref, :openai, :valid}} = msg
+      assert_receive {:command_result,
+                      {:login_validation, ref, :openai, :valid}} = msg
+
       assert ref == model.login_ref
 
       {model, []} = App.update(msg, model)
@@ -177,20 +199,33 @@ defmodule Raxol.Agent.Code.AppLoginTest do
     end
 
     test "a rejected key surfaces the HTTP status" do
-      model = new_model(:no_provider, login_validator: validator_sending({:rejected, 401}))
+      model =
+        new_model(:no_provider,
+          login_validator: validator_sending({:rejected, 401})
+        )
+
       model = type(model, "/login openai sk-bad")
 
-      assert_receive {:command_result, {:login_validation, _ref, :openai, {:rejected, 401}}} = msg
+      assert_receive {:command_result,
+                      {:login_validation, _ref, :openai, {:rejected, 401}}} =
+                       msg
+
       {model, []} = App.update(msg, model)
       assert model.status_line =~ "rejected"
       assert model.status_line =~ "401"
     end
 
     test "an unreachable local server is reported" do
-      model = new_model(:no_provider, login_validator: validator_sending(:unreachable))
+      model =
+        new_model(:no_provider,
+          login_validator: validator_sending(:unreachable)
+        )
+
       model = type(model, "/login lm_studio")
 
-      assert_receive {:command_result, {:login_validation, _ref, :lm_studio, :unreachable}} = msg
+      assert_receive {:command_result,
+                      {:login_validation, _ref, :lm_studio, :unreachable}} = msg
+
       {model, []} = App.update(msg, model)
       assert model.status_line =~ "unreachable"
     end
@@ -204,7 +239,8 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
       {model, []} =
         App.update(
-          {:command_result, {:login_validation, stale, :openai, {:rejected, 401}}},
+          {:command_result,
+           {:login_validation, stale, :openai, {:rejected, 401}}},
           model
         )
 
@@ -219,16 +255,21 @@ defmodule Raxol.Agent.Code.AppLoginTest do
     end
 
     test "401/403 mean the key was rejected" do
-      assert App.interpret_ping({:error, {:http_error, 401, "no"}}) == {:rejected, 401}
-      assert App.interpret_ping({:error, {:http_error, 403, "no"}}) == {:rejected, 403}
+      assert App.interpret_ping({:error, {:http_error, 401, "no"}}) ==
+               {:rejected, 401}
+
+      assert App.interpret_ping({:error, {:http_error, 403, "no"}}) ==
+               {:rejected, 403}
     end
 
     test "a transport failure is unreachable" do
-      assert App.interpret_ping({:error, {:request_failed, :econnrefused}}) == :unreachable
+      assert App.interpret_ping({:error, {:request_failed, :econnrefused}}) ==
+               :unreachable
     end
 
     test "another HTTP status is reachable-but-errored" do
-      assert App.interpret_ping({:error, {:http_error, 500, ""}}) == {:reachable_error, 500}
+      assert App.interpret_ping({:error, {:http_error, 500, ""}}) ==
+               {:reachable_error, 500}
     end
 
     test "a content-level marker still means the key is valid (auth succeeded)" do

@@ -21,7 +21,10 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     Enum.each(@managed_env, &System.delete_env/1)
 
     store =
-      Path.join(System.tmp_dir!(), "raxol-resolver-#{System.unique_integer([:positive])}.json")
+      Path.join(
+        System.tmp_dir!(),
+        "raxol-resolver-#{System.unique_integer([:positive])}.json"
+      )
 
     prev_store = System.get_env("RAXOL_PROVIDERS")
     System.put_env("RAXOL_PROVIDERS", store)
@@ -50,7 +53,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     test "a provider env key is detected" do
       System.put_env("ANTHROPIC_API_KEY", "sk-ant")
       assert {:ok, config, :env} = Resolver.resolve()
-      assert config.harness == :anthropic
+      assert config.backend == :anthropic
       assert config.auth == %{api_key: "sk-ant"}
     end
 
@@ -58,7 +61,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       System.put_env("OPENAI_API_KEY", "sk-oai")
       System.put_env("KIMI_API_KEY", "sk-kimi")
       # openai precedes kimi in the registry.
-      assert {:ok, %{harness: :openai}, :env} = Resolver.resolve()
+      assert {:ok, %{backend: :openai}, :env} = Resolver.resolve()
     end
 
     test "the generic AI_API_KEY maps onto :openai with its base URL" do
@@ -67,7 +70,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       System.put_env("AI_MODEL", "some-model")
 
       assert {:ok, config, :generic} = Resolver.resolve()
-      assert config.harness == :openai
+      assert config.backend == :openai
       assert config.auth == %{api_key: "sk-generic"}
       assert config.model == "some-model"
       assert config.opts[:base_url] == "https://example.test"
@@ -76,13 +79,13 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     test "a keyed provider outranks the generic escape hatch" do
       System.put_env("ANTHROPIC_API_KEY", "sk-ant")
       System.put_env("AI_API_KEY", "sk-generic")
-      assert {:ok, %{harness: :anthropic}, :env} = Resolver.resolve()
+      assert {:ok, %{backend: :anthropic}, :env} = Resolver.resolve()
     end
 
     test "a stored keyless provider is auto-selected as :configured" do
       Credentials.put(:lm_studio, base_url: "http://localhost:1234")
       assert {:ok, config, :configured} = Resolver.resolve()
-      assert config.harness == :lm_studio
+      assert config.backend == :lm_studio
       assert config.auth == %{}
     end
   end
@@ -91,13 +94,16 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     test "resolves the named provider's env key" do
       System.put_env("OPENAI_API_KEY", "sk-oai")
       assert {:ok, config, :env} = Resolver.resolve(harness: :openai)
-      assert config.harness == :openai
+      assert config.backend == :openai
       assert config.auth == %{api_key: "sk-oai"}
     end
 
     test "an explicit api_key opt wins over the env key" do
       System.put_env("OPENAI_API_KEY", "sk-env")
-      assert {:ok, config, :explicit} = Resolver.resolve(harness: :openai, api_key: "sk-opt")
+
+      assert {:ok, config, :explicit} =
+               Resolver.resolve(harness: :openai, api_key: "sk-opt")
+
       assert config.auth == %{api_key: "sk-opt"}
     end
 
@@ -107,7 +113,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
 
     test "a keyless provider needs no key" do
       assert {:ok, config, :explicit} = Resolver.resolve(harness: :lm_studio)
-      assert config.harness == :lm_studio
+      assert config.backend == :lm_studio
       assert config.auth == %{}
     end
 
@@ -124,7 +130,10 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       Credentials.put(:anthropic, op_ref: "op://v/i/f", model: "stored-model")
       System.put_env("ANTHROPIC_MODEL", "env-model")
       System.put_env("ANTHROPIC_API_KEY", "sk-ant")
-      assert {:ok, config, _} = Resolver.resolve(harness: :anthropic, model: "opt-model")
+
+      assert {:ok, config, _} =
+               Resolver.resolve(harness: :anthropic, model: "opt-model")
+
       assert config.model == "opt-model"
     end
 
@@ -176,8 +185,16 @@ defmodule Raxol.Agent.Backend.ResolverTest do
 
     test "providers/0 lists harness + keyless flag" do
       providers = Resolver.providers()
-      assert Enum.any?(providers, &(&1.harness == :anthropic and &1.keyless? == false))
-      assert Enum.any?(providers, &(&1.harness == :lm_studio and &1.keyless? == true))
+
+      assert Enum.any?(
+               providers,
+               &(&1.harness == :anthropic and &1.keyless? == false)
+             )
+
+      assert Enum.any?(
+               providers,
+               &(&1.harness == :lm_studio and &1.keyless? == true)
+             )
     end
   end
 
