@@ -37,6 +37,10 @@ defmodule RaxolGateway.MixProject do
       # Per-chat durable history (optional -- only needed to record turns).
       raxol_dep(:raxol_agent, "~> 2.6", "../raxol_agent", optional: true),
 
+      # Voice transcription (optional -- Pipeline.Transcribe's default
+      # :recognize_fn; without it voice events are dropped with a warning).
+      raxol_dep(:raxol_speech, "~> 0.2", "../raxol_speech", optional: true),
+
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},

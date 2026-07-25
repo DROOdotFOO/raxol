@@ -14,14 +14,18 @@ defmodule Raxol.Telegram.HTTP do
     * `:timeout`: receive timeout in ms (default 10,000)
     * `:post_fn`: 2-arity `(url, req_opts) -> {:ok, resp} | {:error, term}`
       override for tests or alternative HTTP clients
+    * `:get_fn`: same shape, for `download_file/2`'s file GET
 
   ## Return shape
 
     * `{:ok, result}` when Bot API returns `200 OK` with `"ok": true`
     * `{:error, :no_bot_token}` when neither opts nor app env carries one
     * `{:error, {:bot_api_error, status_or_code, body_or_desc}}` for API failures
-    * `{:error, :req_not_available}` when `Req` is missing and no `:post_fn`
+    * `{:error, :req_not_available}` when `Req` is missing and no `:post_fn`/`:get_fn`
     * `{:error, {:http_error, reason}}` for transport failures
+
+  Download URLs embed the bot token (`/file/bot<token>/...`), so neither the
+  URL nor the raw request may appear in logs or error terms.
   """
 
   @compile {:no_warn_undefined, [Req]}
@@ -33,7 +37,8 @@ defmodule Raxol.Telegram.HTTP do
           bot_token: String.t(),
           api_base: String.t(),
           timeout: pos_integer(),
-          post_fn: (String.t(), keyword() -> {:ok, map()} | {:error, term()})
+          post_fn: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
+          get_fn: (String.t(), keyword() -> {:ok, map()} | {:error, term()})
         ]
 
   @doc """
@@ -51,6 +56,26 @@ defmodule Raxol.Telegram.HTTP do
       post_fn = Keyword.get(opts, :post_fn, &default_post/2)
 
       classify(post_fn.(url, json: body, receive_timeout: timeout))
+    end
+  end
+
+  @doc """
+  Downloads the file behind a Bot API `file_id`.
+
+  Resolves the server path with `getFile`, then GETs
+  `<base>/file/bot<token>/<file_path>` and returns the raw bytes. The Bot
+  API caps `getFile` at 20MB; larger files fail with a `:bot_api_error`.
+  """
+  @spec download_file(String.t(), post_opts()) :: {:ok, binary()} | {:error, term()}
+  def download_file(file_id, opts \\ []) when is_binary(file_id) do
+    with {:ok, result} <- post("getFile", %{file_id: file_id}, opts),
+         {:ok, path} <- file_path(result),
+         {:ok, token} <- fetch_token(opts) do
+      url = "#{fetch_base(opts)}/file/bot#{token}/#{path}"
+      timeout = Keyword.get(opts, :timeout, @default_timeout)
+      get_fn = Keyword.get(opts, :get_fn, &default_get/2)
+
+      classify_download(get_fn.(url, receive_timeout: timeout))
     end
   end
 
@@ -87,9 +112,35 @@ defmodule Raxol.Telegram.HTTP do
   defp classify({:error, reason}),
     do: {:error, {:http_error, reason}}
 
+  defp file_path(%{"file_path" => path}) when is_binary(path) and path != "", do: {:ok, path}
+  defp file_path(_result), do: {:error, :no_file_path}
+
+  defp classify_download({:ok, %{status: 200, body: body}}) when is_binary(body),
+    do: {:ok, body}
+
+  defp classify_download({:ok, %{status: 200}}),
+    do: {:error, :unexpected_download_body}
+
+  defp classify_download({:ok, %{status: status}}),
+    do: {:error, {:download_status, status}}
+
+  defp classify_download({:error, :req_not_available}),
+    do: {:error, :req_not_available}
+
+  defp classify_download({:error, reason}),
+    do: {:error, {:http_error, reason}}
+
   defp default_post(url, opts) do
     if Code.ensure_loaded?(Req) do
       Req.post(url, opts)
+    else
+      {:error, :req_not_available}
+    end
+  end
+
+  defp default_get(url, opts) do
+    if Code.ensure_loaded?(Req) do
+      Req.get(url, opts)
     else
       {:error, :req_not_available}
     end

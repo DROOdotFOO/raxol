@@ -89,6 +89,51 @@ failed turn logs the full reason and replies with a short error message. Turns r
 synchronously inside the per-chat session process, so set `:idle_timeout` comfortably
 above the longest expected turn.
 
+## Voice notes
+
+`Raxol.Gateway.Pipeline.Transcribe` is a feed-loop stage that turns a voice media event
+(`%{media: %{kind: :voice, ref: ..., ...}}`, what `Raxol.Telegram.GatewayAdapter` emits
+for `message.voice` updates) into the ordinary `%{text: transcript}` event before it is
+routed. It runs in the feed loop rather than the session so the conversation log records
+the transcript (a session logs each inbound event before its handler runs) and so STT
+never blocks a per-chat mailbox. Non-voice events pass through untouched.
+
+```elixir
+{:ok, conn} = Raxol.Telegram.GatewayAdapter.connect(bot_token: token)
+
+Raxol.Telegram.UpdatePoller.start_link(
+  conn: conn,
+  on_update: fn raw ->
+    with {:ok, route, event} <- Raxol.Telegram.GatewayAdapter.normalize_event(raw),
+         :allow <- Raxol.Gateway.Pairing.authorize(Raxol.Gateway.Pairing, route),
+         {:ok, event} <-
+           Raxol.Gateway.Pipeline.Transcribe.run(event,
+             fetch_fn: fn media -> Raxol.Telegram.GatewayAdapter.fetch_media(conn, media) end
+           ) do
+      Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event)
+    else
+      :ignore -> :ok
+      :deny -> :ok
+    end
+  end
+)
+```
+
+The three stages are injectable functions: `:fetch_fn` (platform download, here
+`fetch_media/2` = Bot API `getFile` + file GET), `:convert_fn` (default: ffmpeg via a
+temporary file, `-f f32le -ac 1 -ar 16000`, executable allowlisted), and `:recognize_fn`
+(default: `Raxol.Speech.Recognizer.recognize/1` from the optional `raxol_speech`
+dependency). The stage fails open per event: any failure (STT missing, download or
+conversion error, empty transcript) drops that one voice note with a warning and
+`[:raxol_gateway, :transcribe, :error]` telemetry; text traffic is never affected. Audio
+bytes and transcripts stay out of the logs, as does the download URL (it embeds the bot
+token).
+
+Mind the cold start: the first recognition after boot pays the XLA graph compile, which
+can take minutes on CPU. Give the Recognizer a generous `:recognize_timeout_ms` (via
+`Raxol.Speech.Supervisor`'s `:recognizer_opts`) or warm it up front, otherwise every
+cold call times out, aborts the compile, and the next call starts over.
+
 ## Routing and sessions
 
 `Raxol.Gateway.Route` (`platform`, `chat_type`, `chat_id`, optional `user_id`) identifies a
@@ -164,13 +209,13 @@ route = Raxol.Gateway.Route.new(%{platform: :in_memory, chat_type: :dm, chat_id:
 
 The gateway core (adapter contract, routing, sessions, pairing, delivery, handoff) is
 complete, the adapter contract is frozen, `Handler.Agent` (agent-backed conversations)
-ships, and Telegram is the first platform behind the frozen contract
-(`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text messages this
-slice - keyboards, callbacks, and media are still the TEA surface's domain). Still
-deferred: Discord and Email adapters, voice transcription, and a `Lifecycle`-backed
-handler that runs a full TEA app under `environment: :gateway`. Any module satisfying the
-two `Handler` callbacks works in the meantime. See
-`docs/adr/0023-unified-messaging-gateway.md`.
+ships, Telegram is the first platform behind the frozen contract
+(`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text and voice notes -
+keyboards, callbacks, and other media are still the TEA surface's domain), and voice
+notes transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: Discord
+and Email adapters, and a `Lifecycle`-backed handler that runs a full TEA app under
+`environment: :gateway`. Any module satisfying the two `Handler` callbacks works in the
+meantime. See `docs/adr/0023-unified-messaging-gateway.md`.
 
 ## See also
 
