@@ -33,9 +33,14 @@ defmodule RaxolGateway.MixProject do
     [
       raxol_dep(:raxol_core, "~> 2.6", "../raxol_core"),
       {:telemetry, "~> 1.3"},
+      {:jason, "~> 1.4"},
 
       # Per-chat durable history (optional -- only needed to record turns).
       raxol_dep(:raxol_agent, "~> 2.6", "../raxol_agent", optional: true),
+
+      # Discord adapter (optional -- gateway socket + REST sender).
+      {:mint_web_socket, "~> 1.0", optional: true},
+      {:req, "~> 0.5", optional: true},
 
       # Voice transcription (optional -- Pipeline.Transcribe's default
       # :recognize_fn; without it voice events are dropped with a warning).

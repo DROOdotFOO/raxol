@@ -30,6 +30,7 @@ Shipping adapters:
 |---------|----------|---------|
 | `Raxol.Gateway.Adapter.InMemory` | `:in_memory` (reference; sink pid) | raxol_gateway |
 | `Raxol.Telegram.GatewayAdapter` | `:telegram` (text messages, chunked plain-text sends) | raxol_telegram |
+| `Raxol.Gateway.Adapter.Discord` | `:discord` (MESSAGE_CREATE text, chunked plain-text sends) | raxol_gateway |
 
 A full Telegram wiring pairs the adapter with `Raxol.Telegram.UpdatePoller` (getUpdates
 long polling) feeding `normalize_event/1` into the router:
@@ -54,6 +55,43 @@ Raxol.Telegram.UpdatePoller.start_link(
         # Log rejects (rate limit, max sessions): the poller advances its
         # offset regardless, so a silent drop is permanent loss.
         {:error, reason} -> Logger.warning("update rejected: #{inspect(reason)}")
+      end
+    else
+      :ignore -> :ok
+      :deny -> :ok
+    end
+  end
+)
+```
+
+The Discord wiring is the same shape with the roles renamed: the feed is
+`Raxol.Gateway.Adapter.Discord.GatewaySocket` (one Gateway v10 WebSocket with
+client heartbeats, identify/resume, and exponential reconnect; requires the
+optional `mint_web_socket` dependency), whose `:on_event` passes raw dispatch
+frames through `Raxol.Gateway.Adapter.Discord.normalize_event/1`. Replies go
+out over REST (`POST /channels/:id/messages`, optional `req` dependency),
+chunked at Discord's 2000 code points. Guild messages route as
+`chat_type: :guild`, DMs as `:dm`; bot-authored messages never normalize, so
+two agents cannot loop each other. Note the MESSAGE_CONTENT intent is
+privileged: enable it in the Discord developer portal or guild message
+content arrives empty.
+
+```elixir
+{:ok, conn} = Raxol.Gateway.Adapter.Discord.connect(bot_token: token)
+
+Raxol.Gateway.Supervisor.start_link(
+  handler: {Raxol.Gateway.Handler.Agent, [system_prompt: "..."]},
+  adapter: {Raxol.Gateway.Adapter.Discord, conn}
+)
+
+Raxol.Gateway.Adapter.Discord.GatewaySocket.start_link(
+  token: token,
+  on_event: fn frame ->
+    with {:ok, route, event} <- Raxol.Gateway.Adapter.Discord.normalize_event(frame),
+         :allow <- Raxol.Gateway.Pairing.authorize(Raxol.Gateway.Pairing, route) do
+      case Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event) do
+        :ok -> :ok
+        {:error, reason} -> Logger.warning("dispatch rejected: #{inspect(reason)}")
       end
     else
       :ignore -> :ok
@@ -214,11 +252,12 @@ route = Raxol.Gateway.Route.new(%{platform: :in_memory, chat_type: :dm, chat_id:
 
 The gateway core (adapter contract, routing, sessions, pairing, delivery, handoff) is
 complete, the adapter contract is frozen, `Handler.Agent` (agent-backed conversations)
-ships, Telegram is the first platform behind the frozen contract
+ships, and two platforms sit behind the frozen contract: Telegram
 (`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text and voice notes -
-keyboards, callbacks, and other media are still the TEA surface's domain), and voice
-notes transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: Discord
-and Email adapters, and a `Lifecycle`-backed handler that runs a full TEA app under
+keyboards, callbacks, and other media are still the TEA surface's domain) and Discord
+(`Raxol.Gateway.Adapter.Discord` + its `GatewaySocket`; text-only this slice). Voice
+notes transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: an Email
+adapter, and a `Lifecycle`-backed handler that runs a full TEA app under
 `environment: :gateway`. Any module satisfying the two `Handler` callbacks works in the
 meantime. See `docs/adr/0023-unified-messaging-gateway.md`.
 
