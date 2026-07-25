@@ -28,6 +28,7 @@ defmodule Raxol.Agent.Scheduler.Fire do
       appended to.
   """
 
+  alias Raxol.Agent.Actions.Cronjob
   alias Raxol.Agent.Skills
   alias Raxol.Agent.Stream
 
@@ -63,10 +64,28 @@ defmodule Raxol.Agent.Scheduler.Fire do
 
     react_opts =
       run_opts
-      |> Keyword.put(:actions, actions)
+      |> Keyword.put(:actions, guard_context_actions(actions, run_opts))
       |> Keyword.put(:context, context)
 
     Stream.react(prompt, react_opts)
+  end
+
+  # The cronjob action's recursion guard lives in its `run/2` and reads
+  # `context[:in_cron]`. A native (vendor-owns-loop) backend runs its own tool
+  # loop and executes tools out-of-process over MCP, where that context never
+  # arrives -- so the guard would silently not fire and a scheduled agent could
+  # schedule, trigger, or re-arm more cron work. There is nothing to thread the
+  # guard onto on that path, so fail closed: withhold the cronjob action entirely
+  # rather than expose unpoliced schedule-more-work capability to a fresh fire.
+  # The framework path enforces the guard in-process and keeps the action, which
+  # is why this only strips when the resolved backend is native (checked lazily,
+  # after the cheap membership test, so the common no-cronjob fire pays nothing).
+  defp guard_context_actions(actions, run_opts) do
+    if Cronjob in actions and Stream.native_tool_loop?(run_opts) do
+      Enum.reject(actions, &(&1 == Cronjob))
+    else
+      actions
+    end
   end
 
   defp normalize({:ok, %{content: content}}) when is_binary(content), do: {:ok, content}

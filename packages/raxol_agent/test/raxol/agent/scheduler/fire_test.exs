@@ -28,6 +28,36 @@ defmodule Raxol.Agent.Scheduler.FireTest.CapturingBackend do
   def capabilities, do: [:completion, :tool_use]
 end
 
+defmodule Raxol.Agent.Scheduler.FireTest.NativeCapturingBackend do
+  @moduledoc """
+  A native (vendor-owns-loop) AIBackend that records the actions injected into
+  its opts, so a fire can assert which tools reached the out-of-process loop.
+  """
+  @behaviour Raxol.Agent.AIBackend
+
+  @impl true
+  def stream(_messages, opts) do
+    send(Keyword.fetch!(opts, :collector), {:native_actions, Keyword.get(opts, :actions)})
+    response = %{content: "ok", usage: %{}, metadata: %{backend: :native_capturing}}
+    {:ok, [{:chunk, "ok"}, {:done, response}]}
+  end
+
+  @impl true
+  def complete(messages, opts) do
+    {:ok, _events} = stream(messages, opts)
+    {:ok, %{content: "ok", usage: %{}, metadata: %{backend: :native_capturing}}}
+  end
+
+  @impl true
+  def available?, do: true
+  @impl true
+  def name, do: "Native Capturing Backend"
+  @impl true
+  def capabilities, do: [:completion, :streaming, :tool_use]
+  @impl true
+  def handles_tools_internally?, do: true
+end
+
 defmodule Raxol.Agent.Scheduler.FireTest.RecordContext do
   @moduledoc "An action that reports the run context's in_cron flag to a collector."
   use Raxol.Agent.Action,
@@ -45,8 +75,10 @@ end
 defmodule Raxol.Agent.Scheduler.FireTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.Actions.Cronjob
   alias Raxol.Agent.Scheduler.Fire
   alias Raxol.Agent.Scheduler.FireTest.CapturingBackend
+  alias Raxol.Agent.Scheduler.FireTest.NativeCapturingBackend
   alias Raxol.Agent.Scheduler.FireTest.RecordContext
   alias Raxol.Agent.Skills
 
@@ -129,6 +161,35 @@ defmodule Raxol.Agent.Scheduler.FireTest do
 
       assert {:ok, "done"} = Fire.run(%{prompt: "p", skills: []}, opts)
       assert_receive {:in_cron, true}
+    end
+  end
+
+  describe "run/2 with a native (vendor-owns-loop) backend" do
+    # A native backend executes tools out-of-process over MCP, where the
+    # in_cron context never arrives, so the cronjob recursion guard cannot fire.
+    # Fire withholds the cronjob action from that path (fail closed) rather than
+    # hand a fresh fire unpoliced schedule-more-work capability.
+    test "withholds the cronjob action from the injected toolset" do
+      opts = [
+        actions: [Cronjob],
+        agent_opts: [backend: NativeCapturingBackend, backend_opts: [collector: self()]]
+      ]
+
+      assert {:ok, "ok"} = Fire.run(%{prompt: "p", skills: []}, opts)
+      assert_receive {:native_actions, injected}
+      assert Cronjob not in (injected || [])
+    end
+
+    test "keeps non-guarded actions while stripping cronjob" do
+      opts = [
+        actions: [Cronjob, RecordContext],
+        agent_opts: [backend: NativeCapturingBackend, backend_opts: [collector: self()]]
+      ]
+
+      assert {:ok, "ok"} = Fire.run(%{prompt: "p", skills: []}, opts)
+      assert_receive {:native_actions, injected}
+      assert RecordContext in injected
+      assert Cronjob not in injected
     end
   end
 
