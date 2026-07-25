@@ -6,25 +6,31 @@ defmodule Raxol.Telegram.UpdatePoller do
   Not to be confused with `Raxol.Telegram.Poll` (Telegram poll/vote message
   builders). This module is the update *feed*: the stateful loop that turns
   the Bot API into a stream of raw update maps. It is sink-agnostic - the
-  `:on_update` function decides what an update means, so the same poller
-  drives `Raxol.Telegram.Bot.handle_update/2` or a gateway wiring:
+  `:on_update` function decides what an update means. Note the key shapes:
+  raw `getUpdates` JSON is string-keyed, which `Raxol.Telegram.GatewayAdapter`
+  accepts directly; `Raxol.Telegram.Bot.handle_update/2` matches Telegex's
+  atom-keyed structs, so a Bot-driving `:on_update` must decode updates into
+  Telegex types first.
+
+  A gateway wiring - authorize BEFORE routing (the adapter is a pure
+  translator and checks nothing), and never drop a reject silently (the
+  poller advances the offset regardless, so an unlogged reject is permanent
+  loss):
 
       {:ok, conn} = Raxol.Telegram.GatewayAdapter.connect(bot_token: token)
 
       Raxol.Telegram.UpdatePoller.start_link(
         conn: conn,
         on_update: fn raw ->
-          case Raxol.Telegram.GatewayAdapter.normalize_event(raw) do
-            {:ok, route, event} ->
-              case Raxol.Gateway.SessionRouter.route(MyRouter, route, event) do
-                :ok -> :ok
-                # Never drop silently: the poller advances the offset
-                # regardless, so an unlogged reject is permanent loss.
-                {:error, reason} -> Logger.warning("update rejected: \#{inspect(reason)}")
-              end
-
-            :ignore ->
-              :ok
+          with {:ok, route, event} <- Raxol.Telegram.GatewayAdapter.normalize_event(raw),
+               :allow <- Raxol.Gateway.Pairing.authorize(MyPairing, route) do
+            case Raxol.Gateway.SessionRouter.route(MyRouter, route, event) do
+              :ok -> :ok
+              {:error, reason} -> Logger.warning("update rejected: \#{inspect(reason)}")
+            end
+          else
+            :ignore -> :ok
+            :deny -> Logger.info("unauthorized telegram chat denied")
           end
         end
       )
@@ -100,6 +106,16 @@ defmodule Raxol.Telegram.UpdatePoller do
   end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  # Crash and termination reports must never dump the state: :conn carries
+  # the bot token.
+  @impl GenServer
+  def format_status(status) do
+    Map.update(status, :state, nil, fn
+      %{conn: _conn} = state -> %{state | conn: :redacted}
+      other -> other
+    end)
+  end
 
   defp poll_body(state) do
     body = %{timeout: state.poll_timeout_s, allowed_updates: state.allowed_updates}
