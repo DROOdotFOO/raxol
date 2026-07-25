@@ -71,6 +71,31 @@ defmodule Raxol.Telegram.GatewayIntegrationTest do
     assert body == %{chat_id: 42, text: "echo: hi"}
   end
 
+  test "a voice update round-trips through Transcribe to a sendMessage reply", %{router: r} do
+    raw = %{
+      message: %{
+        voice: %{file_id: "vf-1", duration: 2, mime_type: "audio/ogg"},
+        chat: %{id: 42, type: "private"},
+        from: %{id: 7}
+      }
+    }
+
+    assert {:ok, route, event} = GatewayAdapter.normalize_event(raw)
+
+    assert {:ok, event} =
+             Raxol.Gateway.Pipeline.Transcribe.run(event,
+               fetch_fn: fn %{ref: "vf-1"} -> {:ok, "OGG"} end,
+               convert_fn: fn "OGG" -> {:ok, "PCM"} end,
+               recognize_fn: fn "PCM" -> {:ok, "hello from voice"} end
+             )
+
+    assert :ok = SessionRouter.route(r, route, event)
+
+    assert_receive {:posted, url, body}
+    assert String.ends_with?(url, "/sendMessage")
+    assert body == %{chat_id: 42, text: "echo: hello from voice"}
+  end
+
   test "an ignored update never reaches the router" do
     assert GatewayAdapter.normalize_event(%{callback_query: %{data: "key:enter"}}) == :ignore
   end

@@ -19,6 +19,10 @@ unified session keying, and DM pairing authorization.
   authorization check order.
 - `Raxol.Gateway.Delivery` -- the four outbound destinations (direct, home,
   cross-platform, explicit target string).
+- `Raxol.Gateway.Pipeline.Transcribe` -- feed-loop stage that turns a
+  `%{media: %{kind: :voice, ...}}` event into `%{text: transcript}` before
+  routing (injectable fetch/convert/recognize; ffmpeg + the optional
+  `raxol_speech` Recognizer by default; failures drop the one event, loudly).
 - `Raxol.Gateway.Supervisor` -- the daemon that ties them together.
 
 A session optionally records each turn to a `:log` (any

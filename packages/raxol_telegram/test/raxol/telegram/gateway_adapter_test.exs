@@ -111,6 +111,88 @@ defmodule Raxol.Telegram.GatewayAdapterTest do
         assert GatewayAdapter.normalize_event(raw) == :ignore
       end
     end
+
+    test "voice note with atom keys normalizes to a media event" do
+      raw = %{
+        message: %{
+          voice: %{file_id: "vf-1", duration: 3, mime_type: "audio/ogg", file_size: 512},
+          chat: %{id: 42, type: "private"},
+          from: %{id: 7}
+        }
+      }
+
+      assert {:ok, route, %{media: media}} = GatewayAdapter.normalize_event(raw)
+      assert route.platform == :telegram
+      assert route.chat_id == 42
+      assert route.user_id == 7
+
+      assert media == %{
+               kind: :voice,
+               ref: "vf-1",
+               mime: "audio/ogg",
+               duration_s: 3,
+               size_bytes: 512
+             }
+    end
+
+    test "string-keyed voice note carries nil for absent metadata" do
+      raw = %{
+        "message" => %{
+          "voice" => %{"file_id" => "vf-2", "duration" => 1},
+          "chat" => %{"id" => 9, "type" => "group"},
+          "from" => %{"id" => 3}
+        }
+      }
+
+      assert {:ok, route, %{media: media}} = GatewayAdapter.normalize_event(raw)
+      assert route.chat_type == :group
+      assert route.user_id == 3
+      assert media == %{kind: :voice, ref: "vf-2", mime: nil, duration_s: 1, size_bytes: nil}
+    end
+
+    test "voice notes without a usable file_id or chat type are ignored" do
+      ignored = [
+        %{message: %{voice: %{duration: 2}, chat: %{id: 1, type: "private"}}},
+        %{message: %{voice: %{file_id: ""}, chat: %{id: 1, type: "private"}}},
+        %{
+          "message" => %{
+            "voice" => %{"file_id" => "v"},
+            "chat" => %{"id" => 1, "type" => "weird"}
+          }
+        }
+      ]
+
+      for raw <- ignored do
+        assert GatewayAdapter.normalize_event(raw) == :ignore
+      end
+    end
+  end
+
+  describe "fetch_media/2" do
+    test "downloads the bytes behind the media ref" do
+      test_pid = self()
+
+      post_fn = fn _url, _req_opts ->
+        {:ok, %{status: 200, body: %{"ok" => true, "result" => %{"file_path" => "voice/v.oga"}}}}
+      end
+
+      get_fn = fn url, _req_opts ->
+        send(test_pid, {:got, url})
+        {:ok, %{status: 200, body: "OGGBYTES"}}
+      end
+
+      conn = [bot_token: "tok", post_fn: post_fn, get_fn: get_fn]
+
+      assert {:ok, "OGGBYTES"} = GatewayAdapter.fetch_media(conn, %{kind: :voice, ref: "vf-1"})
+      assert_received {:got, "https://api.telegram.org/file/bottok/voice/v.oga"}
+    end
+
+    test "a media map without a binary ref is rejected" do
+      assert {:error, :unsupported_media} =
+               GatewayAdapter.fetch_media([], %{kind: :voice, ref: nil})
+
+      assert {:error, :unsupported_media} = GatewayAdapter.fetch_media([], %{})
+    end
   end
 
   describe "send_message/3" do
