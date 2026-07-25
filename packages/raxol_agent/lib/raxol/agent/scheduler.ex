@@ -13,8 +13,7 @@ defmodule Raxol.Agent.Scheduler do
   passed fires once, promptly.
 
   The BEAM owns the scheduling; there is no OS cron daemon. This is a single-node
-  scheduler -- a clustered variant sharded across the swarm is out of scope
-  (ADR-0025).
+  scheduler: a clustered variant sharded across the swarm is out of scope.
 
   ## Firing
 
