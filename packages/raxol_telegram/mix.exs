@@ -46,6 +46,11 @@ defmodule RaxolTelegram.MixProject do
       # Telegram Bot API (optional -- only needed at runtime with a bot token)
       {:telegex, "~> 1.8", optional: true, runtime: false},
 
+      # Gateway behaviour (optional -- GatewayAdapter compiles only when present).
+      # raxol_gateway is pre-alpha and not yet on Hex: the next Hex publish of
+      # raxol_telegram requires publishing raxol_gateway first.
+      raxol_dep(:raxol_gateway, "~> 0.1", "../raxol_gateway", optional: true),
+
       # JSON processing
       {:jason, "~> 1.4"},
 
@@ -61,13 +66,22 @@ defmodule RaxolTelegram.MixProject do
     ]
   end
 
-  defp raxol_dep(name, version, path) do
-    if System.get_env("HEX_BUILD") || !File.dir?(path) do
-      {name, version}
-    else
-      {name, version, path: path, override: true}
-    end
+  defp raxol_dep(name, version, path, opts \\ []) do
+    base =
+      if System.get_env("HEX_BUILD") || !File.dir?(path) do
+        {name, version}
+      else
+        {name, version, [path: path, override: true]}
+      end
+
+    apply_opts(base, opts)
   end
+
+  defp apply_opts(dep, []), do: dep
+  defp apply_opts({name, version}, opts), do: {name, version, opts}
+
+  defp apply_opts({name, version, dep_opts}, opts),
+    do: {name, version, Keyword.merge(dep_opts, opts)}
 
   defp description do
     """
