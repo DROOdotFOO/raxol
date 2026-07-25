@@ -128,6 +128,29 @@ failed turn logs the full reason and replies with a short error message. Turns r
 synchronously inside the per-chat session process, so set `:idle_timeout` comfortably
 above the longest expected turn.
 
+## TEA app handler
+
+`Raxol.Gateway.Handler.Lifecycle` runs a full TEA app per chat under
+`environment: :gateway` (a first-class Lifecycle environment: no terminal driver, no
+plugin manager, unnamed processes, so any number of chats can run the same app module
+concurrently). Each inbound `%{text: t}` event becomes a Raxol event (char key or paste,
+mirroring the Telegram input adapter), and the reply is the app's next rendered frame as
+plain text. Requires the optional `raxol` dependency.
+
+```elixir
+Raxol.Gateway.Supervisor.start_link(
+  handler: {Raxol.Gateway.Handler.Lifecycle, [app_module: MyTeaApp, width: 60, height: 16]},
+  adapter: {MyAdapter, conn}
+)
+```
+
+Turns are collected deterministically (event fold barrier, then a synchronous engine
+render), and `:event_fn` / `:format_fn` are injectable for custom event mapping or frame
+formatting. Frames the app renders between turns are discarded -- a chat surface replies
+to messages; spontaneous pushes are `Raxol.Gateway.Delivery`'s job. The handler's
+`terminate/2` (a new optional `Handler` callback the session invokes on clean stops)
+stops the per-chat Lifecycle so it cannot outlive its chat.
+
 ## Voice notes
 
 `Raxol.Gateway.Pipeline.Transcribe` is a feed-loop stage that turns a voice media event
@@ -190,8 +213,9 @@ agent:main:{platform}:{chat_type}:{chat_id}
 `Raxol.Gateway.SessionRouter` (a `BaseManager` GenServer) starts one `Raxol.Gateway.Session`
 process per chat under a `DynamicSupervisor`, keyed by that string, with an idle timeout
 (default 10 minutes), a per-key start cooldown (default 5 seconds), and a max-session bound
-(default 1000). Sessions run a `Raxol.Gateway.Handler` (a two-callback behaviour: `init/2`
-and `handle_event/2`). Each inbound event and each reply can be recorded to an optional log
+(default 1000). Sessions run a `Raxol.Gateway.Handler` (`init/2` and `handle_event/2`,
+plus an optional `terminate/2` invoked on clean session stops for handlers that own
+linked processes). Each inbound event and each reply can be recorded to an optional log
 keyed by a stable `conversation_id`.
 
 ## Pairing and authorization
@@ -280,15 +304,15 @@ route = Raxol.Gateway.Route.new(%{platform: :in_memory, chat_type: :dm, chat_id:
 
 The gateway core (adapter contract, routing, sessions, pairing, delivery, handoff) is
 complete, the adapter contract is frozen, `Handler.Agent` (agent-backed conversations)
-ships, and three platforms sit behind the frozen contract: Telegram
+and `Handler.Lifecycle` (a full TEA app per chat under `environment: :gateway`) ship,
+and three platforms sit behind the frozen contract: Telegram
 (`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text and voice notes -
 keyboards, callbacks, and other media are still the TEA surface's domain), Discord
 (`Raxol.Gateway.Adapter.Discord` + its `GatewaySocket`; text-only this slice), and
 Email (`Raxol.Gateway.Adapter.Email`; outbound-only SMTP delivery). Voice notes
-transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: inbound email,
-and a `Lifecycle`-backed handler that runs a full TEA app under
-`environment: :gateway`. Any module satisfying the two `Handler` callbacks works in the
-meantime. See `docs/adr/0023-unified-messaging-gateway.md`.
+transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: inbound email.
+Any module satisfying the `Handler` callbacks works alongside the shipped handlers. See
+`docs/adr/0023-unified-messaging-gateway.md`.
 
 ## See also
 

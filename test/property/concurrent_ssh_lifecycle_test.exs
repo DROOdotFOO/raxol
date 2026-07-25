@@ -95,7 +95,9 @@ defmodule Raxol.Property.ConcurrentSshLifecycleTest do
     test "Initializer dispatcher_opts list includes :ssh" do
       source = File.read!(@initializer_path)
 
-      assert source =~ ~r/environment in \[:agent, :liveview, :ssh\]/,
+      # Match membership, not the exact literal: the multi-instance list also
+      # carries :telegram/:gateway and may grow further.
+      assert source =~ ~r/environment in \[[^\]]*:ssh[^\]]*\]/,
              "initializer.ex must keep :ssh in the Dispatcher [name: nil] list. " <>
                "Without it, concurrent :ssh Lifecycles collide on the registered " <>
                "Dispatcher name (regression of #228)."

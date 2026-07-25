@@ -178,22 +178,41 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   defp fill_element_coords(_, acc), do: acc
 
   @doc """
-  Renders cells to a Telegram chat via an io_writer function.
+  Renders cells to any io_writer-backed message surface.
 
-  Converts the buffer to plain text (no ANSI) and delivers it to
-  the session's io_writer callback, which sends/edits the Telegram message.
+  Applies the cells to the buffer and delivers
+  `%{buffer: buffer, view_tree: tree}` to the state's io_writer callback;
+  the session owning the writer formats it for its platform (e.g. the
+  Telegram session extracts Button elements into inline keyboards). Used by
+  the `:telegram` and `:gateway` environments.
   """
-  @spec render_to_telegram(list(), map()) :: {:ok, map()}
-  def render_to_telegram(cells, state) do
+  @spec render_to_io_writer(list(), map(), term()) :: {:ok, map()}
+  def render_to_io_writer(cells, state, view \\ nil) do
     updated_buffer = apply_cells_to_buffer(cells, state)
 
-    # Deliver buffer to io_writer -- the Session will format for Telegram
+    # The engine passes the app's view tree explicitly: its %Engine.State{}
+    # struct carries no :view_tree field, and structs do not implement the
+    # Access behaviour (the old state[:view_tree] raised on every
+    # engine-driven render). Map.get serves map-state callers that carry one.
     if is_function(state.io_writer, 1) do
-      state.io_writer.(%{buffer: updated_buffer, view_tree: state[:view_tree]})
+      state.io_writer.(%{
+        buffer: updated_buffer,
+        view_tree: view || Map.get(state, :view_tree)
+      })
     end
 
     {:ok, %{state | buffer: updated_buffer}}
   end
+
+  @doc """
+  Renders cells to a Telegram chat via an io_writer function.
+
+  Delegates to `render_to_io_writer/3`; the Telegram session formats the
+  delivered buffer + view tree into a message and keyboard.
+  """
+  @spec render_to_telegram(list(), map(), term()) :: {:ok, map()}
+  def render_to_telegram(cells, state, view \\ nil),
+    do: render_to_io_writer(cells, state, view)
 
   @doc """
   Renders cells to an SSH channel via an io_writer function.

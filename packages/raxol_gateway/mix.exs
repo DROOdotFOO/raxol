@@ -38,6 +38,10 @@ defmodule RaxolGateway.MixProject do
       # Per-chat durable history (optional -- only needed to record turns).
       raxol_dep(:raxol_agent, "~> 2.6", "../raxol_agent", optional: true),
 
+      # TEA runtime (optional -- only Handler.Lifecycle needs it; the path
+      # points at the repo root, which carries the :gateway environment).
+      raxol_dep(:raxol, "~> 2.6", "../..", optional: true),
+
       # Email adapter (optional -- SMTP submission + MIME composition).
       {:gen_smtp, "~> 1.2", optional: true},
 

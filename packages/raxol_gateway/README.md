@@ -11,7 +11,11 @@ unified session keying, and DM pairing authorization.
 - `Raxol.Gateway.Adapter` -- the behaviour every platform implements
   (`connect`/`disconnect`/`platform`/`normalize_event`/`send_message`).
   `Raxol.Gateway.Adapter.InMemory` is a reference adapter for tests.
-- `Raxol.Gateway.Handler` -- the per-chat behaviour a session runs.
+- `Raxol.Gateway.Handler` -- the per-chat behaviour a session runs
+  (`init/2`, `handle_event/2`, optional `terminate/2` on clean stops).
+- `Raxol.Gateway.Handler.Lifecycle` -- a full TEA app per chat under
+  `environment: :gateway` (needs the optional `raxol` dependency; no driver,
+  no plugin manager, unnamed processes, so one app module serves many chats).
 - `Raxol.Gateway.Session` -- one process per chat, with an idle timeout.
 - `Raxol.Gateway.SessionRouter` -- starts and routes to sessions, keyed by
   `Route.key/1`, with the idle-timeout, cooldown, and max-session limits.
@@ -41,5 +45,5 @@ same history.
 - Email: `Raxol.Gateway.Adapter.Email` (outbound-only SMTP submission via
   optional `gen_smtp`; inbound is a follow-up).
 
-The `Lifecycle`-backed handler is a follow-up; see
+Inbound email is the remaining follow-up; see
 `docs/adr/0023-unified-messaging-gateway.md`.

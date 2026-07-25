@@ -505,53 +505,66 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       "Rendering Engine: Sending final cells to backend: #{state.environment}"
     )
 
-    case state.environment do
-      :terminal ->
-        Backends.render_to_terminal(final_cells, state)
+    render_backend(
+      state.environment,
+      final_cells,
+      state,
+      positioned_elements,
+      view
+    )
+  end
 
-      :vscode ->
-        Backends.render_to_vscode(final_cells, state)
+  defp render_backend(:terminal, final_cells, state, _positioned, _view),
+    do: Backends.render_to_terminal(final_cells, state)
 
-      :liveview ->
-        a11y_map = Raxol.Core.Accessibility.Projection.by_id(view)
+  defp render_backend(:vscode, final_cells, state, _positioned, _view),
+    do: Backends.render_to_vscode(final_cells, state)
 
-        Backends.render_to_liveview(
-          final_cells,
-          state,
-          positioned_elements,
-          a11y_map
-        )
+  defp render_backend(:liveview, final_cells, state, positioned_elements, view) do
+    a11y_map = Raxol.Core.Accessibility.Projection.by_id(view)
 
-      :ssh ->
-        Backends.render_to_ssh(final_cells, state)
+    Backends.render_to_liveview(
+      final_cells,
+      state,
+      positioned_elements,
+      a11y_map
+    )
+  end
 
-      :telegram ->
-        Backends.render_to_telegram(final_cells, state)
+  defp render_backend(:ssh, final_cells, state, _positioned, _view),
+    do: Backends.render_to_ssh(final_cells, state)
 
-      :agent ->
-        # Agent environment: buffer maintained for inspection, no output written
-        updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)
-        {:ok, %{state | buffer: updated_buffer}}
+  defp render_backend(:telegram, final_cells, state, _positioned, view),
+    do: Backends.render_to_telegram(final_cells, state, view)
 
-      :inline ->
-        # T2d: the inline driver profile has no renderer of its own yet --
-        # T2b (printed-history append) and T2c (pinned viewport) own that
-        # emit vocabulary. Until they land, buffer is maintained for
-        # inspection only, mirroring :agent, so registering the atom here
-        # doesn't silently fall into `:unknown_environment` below.
-        updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)
-        {:ok, %{state | buffer: updated_buffer}}
+  defp render_backend(:gateway, final_cells, state, _positioned, view),
+    do: Backends.render_to_io_writer(final_cells, state, view)
 
-      other ->
-        Raxol.Core.Runtime.Log.error_with_stacktrace(
-          "Unknown rendering environment",
-          other,
-          nil,
-          %{module: __MODULE__, state: state}
-        )
+  # Agent environment: buffer maintained for inspection, no output written
+  defp render_backend(:agent, final_cells, state, _positioned, _view) do
+    updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)
+    {:ok, %{state | buffer: updated_buffer}}
+  end
 
-        {:error, :unknown_environment}
-    end
+  # T2d: the inline driver profile has no renderer of its own yet --
+  # T2b (printed-history append) and T2c (pinned viewport) own that
+  # emit vocabulary. Until they land, buffer is maintained for
+  # inspection only, mirroring :agent, so registering the atom here
+  # doesn't silently fall into `:unknown_environment` below.
+  defp render_backend(:inline, final_cells, state, _positioned, _view) do
+    updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)
+    {:ok, %{state | buffer: updated_buffer}}
+  end
+
+  defp render_backend(other, _final_cells, state, _positioned, _view) do
+    Raxol.Core.Runtime.Log.error_with_stacktrace(
+      "Unknown rendering environment",
+      other,
+      nil,
+      %{module: __MODULE__, state: state}
+    )
+
+    {:error, :unknown_environment}
   end
 
   # --- Process Component Resolution ---
