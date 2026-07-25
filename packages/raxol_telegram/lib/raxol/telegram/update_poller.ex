@@ -46,12 +46,22 @@ defmodule Raxol.Telegram.UpdatePoller do
       (default 30). The HTTP receive timeout is always set strictly above
       it, otherwise every quiet cycle would transport-timeout.
     * `:allowed_updates` - `getUpdates` filter (default `["message"]`)
+    * `:dets_path` - file path for durable offset storage; falls back to
+      `Application.get_env(:raxol_telegram, :update_poller_dets_path)`.
+      Unset means the offset lives in memory only.
+    * `:dets_name` - DETS table name for the offset file (default
+      `Raxol.Telegram.UpdatePoller.Offset`). Give each poller its own name
+      when running several durable pollers in one node.
     * `:name` - optional registered name
 
   ## Semantics
 
-  The update offset is in-memory only: a restart re-reads pending updates
-  from Telegram, so consumers may see a redelivered update after a crash.
+  The update offset is in-memory by default: a restart re-reads pending
+  updates from Telegram, so consumers may see a redelivered update after a
+  crash. With `:dets_path` set, the offset is checkpointed to disk after
+  each non-empty batch and reloaded on restart, shrinking redelivery to at
+  most the last unsynced write window. Redelivery is possible either way;
+  consumers that need exactly-once must dedup on `update_id`.
   Transport or Bot API errors back off exponentially (1s doubling, capped at
   30s) and reset on the next success. Errors are logged with the method name
   and classified reason only - never the request URL, which embeds the bot
@@ -63,6 +73,7 @@ defmodule Raxol.Telegram.UpdatePoller do
   require Logger
 
   alias Raxol.Core.ErrorHandling
+  alias Raxol.Core.Stores.Dets
   alias Raxol.Telegram.HTTP
 
   @default_poll_timeout_s 30
@@ -70,15 +81,26 @@ defmodule Raxol.Telegram.UpdatePoller do
   @receive_timeout_margin_ms 5_000
   @backoff_base_ms 1_000
   @backoff_cap_ms 30_000
+  @offset_key :offset
 
   @impl true
   def init_manager(opts) do
+    dets = open_offset_store(opts)
+
+    # terminate/2 (which syncs and closes the DETS file) only runs on a
+    # supervisor shutdown when the process traps exits; without persistence
+    # the default no-cleanup exit path stays.
+    if dets, do: Process.flag(:trap_exit, true)
+
     state = %{
       conn: Keyword.get(opts, :conn, []),
       on_update: Keyword.fetch!(opts, :on_update),
-      poll_timeout_s: Keyword.get(opts, :poll_timeout_s, @default_poll_timeout_s),
-      allowed_updates: Keyword.get(opts, :allowed_updates, @default_allowed_updates),
-      offset: nil,
+      poll_timeout_s:
+        Keyword.get(opts, :poll_timeout_s, @default_poll_timeout_s),
+      allowed_updates:
+        Keyword.get(opts, :allowed_updates, @default_allowed_updates),
+      offset: load_offset(dets),
+      dets: dets,
       failures: 0,
       timer: nil
     }
@@ -93,7 +115,10 @@ defmodule Raxol.Telegram.UpdatePoller do
 
     case HTTP.post("getUpdates", poll_body(state), poll_opts(state)) do
       {:ok, updates} when is_list(updates) ->
-        offset = Enum.reduce(updates, state.offset, &deliver(&1, &2, state.on_update))
+        offset =
+          Enum.reduce(updates, state.offset, &deliver(&1, &2, state.on_update))
+
+        persist_offset(state, offset)
         send(self(), :poll)
         {:noreply, %{state | offset: offset, failures: 0}}
 
@@ -117,8 +142,42 @@ defmodule Raxol.Telegram.UpdatePoller do
     end)
   end
 
+  @impl GenServer
+  def terminate(_reason, state) do
+    Dets.close(state.dets)
+    :ok
+  end
+
+  defp open_offset_store(opts) do
+    case Dets.resolve_path(opts, :raxol_telegram, :update_poller_dets_path) do
+      nil ->
+        nil
+
+      path ->
+        name = Keyword.get(opts, :dets_name, __MODULE__.Offset)
+        Dets.open!(name, path, fn _record -> :ok end)
+    end
+  end
+
+  # A foreign or corrupted record must not poison poll_body: anything but a
+  # positive integer restarts from Telegram's pending queue.
+  defp load_offset(dets) do
+    case Dets.get(dets, @offset_key) do
+      offset when is_integer(offset) and offset > 0 -> offset
+      _other -> nil
+    end
+  end
+
+  defp persist_offset(%{offset: same}, same), do: :ok
+
+  defp persist_offset(state, offset),
+    do: Dets.put(state.dets, @offset_key, offset)
+
   defp poll_body(state) do
-    body = %{timeout: state.poll_timeout_s, allowed_updates: state.allowed_updates}
+    body = %{
+      timeout: state.poll_timeout_s,
+      allowed_updates: state.allowed_updates
+    }
 
     case state.offset do
       nil -> body
@@ -164,7 +223,9 @@ defmodule Raxol.Telegram.UpdatePoller do
 
   defp backoff(state, reason) do
     failures = state.failures + 1
-    delay = min(@backoff_base_ms * Integer.pow(2, failures - 1), @backoff_cap_ms)
+
+    delay =
+      min(@backoff_base_ms * Integer.pow(2, failures - 1), @backoff_cap_ms)
 
     Logger.warning(
       "update_poller getUpdates failed (attempt #{failures}, retry in #{delay}ms): " <>
