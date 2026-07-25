@@ -27,8 +27,12 @@ stable `conversation_id`. `SessionRouter.handoff/3` rebinds a conversation to
 another platform's route, reusing that `conversation_id` so the log resumes the
 same history.
 
-## Not yet implemented
+## Platform adapters
 
-The concrete platform adapters (Telegram, Discord, ...) and the
-`Lifecycle`-backed handler are follow-ups; see
+- Telegram: `Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`
+  (in the raxol_telegram package).
+- Email: `Raxol.Gateway.Adapter.Email` (outbound-only SMTP submission via
+  optional `gen_smtp`; inbound is a follow-up).
+
+A Discord adapter and the `Lifecycle`-backed handler are follow-ups; see
 `docs/adr/0023-unified-messaging-gateway.md`.
