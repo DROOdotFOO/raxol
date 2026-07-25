@@ -178,22 +178,38 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
   defp fill_element_coords(_, acc), do: acc
 
   @doc """
-  Renders cells to a Telegram chat via an io_writer function.
+  Renders cells to any io_writer-backed message surface.
 
-  Converts the buffer to plain text (no ANSI) and delivers it to
-  the session's io_writer callback, which sends/edits the Telegram message.
+  Applies the cells to the buffer and delivers
+  `%{buffer: buffer, view_tree: tree}` to the state's io_writer callback;
+  the session owning the writer formats it for its platform. Used by the
+  `:telegram` and `:gateway` environments.
   """
-  @spec render_to_telegram(list(), map()) :: {:ok, map()}
-  def render_to_telegram(cells, state) do
+  @spec render_to_io_writer(list(), map()) :: {:ok, map()}
+  def render_to_io_writer(cells, state) do
     updated_buffer = apply_cells_to_buffer(cells, state)
 
-    # Deliver buffer to io_writer -- the Session will format for Telegram
+    # Map.get, not Access: the engine passes its %Engine.State{} struct here,
+    # and structs do not implement the Access behaviour (state[:view_tree]
+    # raised on every engine-driven render).
     if is_function(state.io_writer, 1) do
-      state.io_writer.(%{buffer: updated_buffer, view_tree: state[:view_tree]})
+      state.io_writer.(%{
+        buffer: updated_buffer,
+        view_tree: Map.get(state, :view_tree)
+      })
     end
 
     {:ok, %{state | buffer: updated_buffer}}
   end
+
+  @doc """
+  Renders cells to a Telegram chat via an io_writer function.
+
+  Delegates to `render_to_io_writer/2`; the Telegram session formats the
+  delivered buffer into a message.
+  """
+  @spec render_to_telegram(list(), map()) :: {:ok, map()}
+  def render_to_telegram(cells, state), do: render_to_io_writer(cells, state)
 
   @doc """
   Renders cells to an SSH channel via an io_writer function.

@@ -101,6 +101,21 @@ defmodule Raxol.Gateway.Session do
   def handle_info({:idle_timeout, _stale}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
 
+  # Runs on clean stops (idle timeout, explicit stop). A handler owning
+  # linked processes needs this: the session's :normal exit does not
+  # propagate over links, so without teardown they would leak.
+  @impl true
+  def terminate(reason, state) do
+    if function_exported?(state.handler_mod, :terminate, 2) do
+      # A raising teardown must not turn a clean stop into a crash report.
+      Raxol.Core.ErrorHandling.safe_call(fn ->
+        state.handler_mod.terminate(reason, state.handler_state)
+      end)
+    end
+
+    :ok
+  end
+
   defp record(%{log: nil}, _item), do: :ok
 
   defp record(%{log: {mod, server}, conversation_id: conversation_id}, item) do

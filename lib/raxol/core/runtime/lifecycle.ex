@@ -108,8 +108,11 @@ defmodule Raxol.Core.Runtime.Lifecycle do
       when is_atom(app_module) and is_list(options) do
     environment = Keyword.get(options, :environment, :terminal)
 
+    # Multi-instance environments must not fall back to the derived
+    # per-app-module name: two concurrent chats/sessions of the same app
+    # would collide on it.
     name_option =
-      if environment in [:liveview, :agent] do
+      if environment in [:liveview, :agent, :telegram, :gateway] do
         Keyword.get(options, :name)
       else
         Keyword.get(options, :name, derive_process_name(app_module))

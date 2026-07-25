@@ -528,6 +528,9 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
       :telegram ->
         Backends.render_to_telegram(final_cells, state)
 
+      :gateway ->
+        Backends.render_to_io_writer(final_cells, state)
+
       :agent ->
         # Agent environment: buffer maintained for inspection, no output written
         updated_buffer = Backends.apply_cells_to_buffer(final_cells, state)

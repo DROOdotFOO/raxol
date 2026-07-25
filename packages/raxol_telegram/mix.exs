@@ -41,7 +41,9 @@ defmodule RaxolTelegram.MixProject do
       # Main raxol (Lifecycle runtime -- required for Session to start TEA apps)
       # Optional at compile time; Session guards with Code.ensure_loaded? at runtime.
       # Consumer apps must include :raxol in their deps for sessions to work.
-      {:raxol, "~> 2.6", optional: true},
+      # Path locally (matching raxol_gateway's spec, which points Handler.Lifecycle
+      # at the repo root); hex under HEX_BUILD.
+      raxol_dep(:raxol, "~> 2.6", "../..", optional: true),
 
       # Telegram Bot API (optional -- only needed at runtime with a bot token)
       {:telegex, "~> 1.8", optional: true, runtime: false},

@@ -116,6 +116,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
 
   defp start_plugin_manager(_options, :agent), do: {:ok, nil}
   defp start_plugin_manager(_options, :liveview), do: {:ok, nil}
+  defp start_plugin_manager(_options, :gateway), do: {:ok, nil}
 
   defp start_plugin_manager(options, _environment) do
     plugin_manager_opts = Keyword.get(options, :plugin_manager_opts, [])
@@ -221,12 +222,13 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
 
     environment = Keyword.get(options, :environment, :terminal)
 
-    # :ssh is multi-instance (one Lifecycle per channel). Without [name: nil]
-    # the second concurrent SSH session collides on the registered Dispatcher
-    # name. Callers always reach the Dispatcher via state.dispatcher_pid, so
-    # dropping the registered name is safe.
+    # :ssh, :telegram, and :gateway are multi-instance (one Lifecycle per
+    # channel/chat). Without [name: nil] the second concurrent session
+    # collides on the registered Dispatcher name. Callers always reach the
+    # Dispatcher via state.dispatcher_pid, so dropping the registered name
+    # is safe.
     dispatcher_opts =
-      if environment in [:agent, :liveview, :ssh],
+      if environment in [:agent, :liveview, :ssh, :telegram, :gateway],
         do: [name: nil],
         else: []
 
@@ -249,6 +251,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
   defp maybe_start_driver(_dispatcher_pid, :liveview, _options), do: {:ok, nil}
   defp maybe_start_driver(_dispatcher_pid, :ssh, _options), do: {:ok, nil}
   defp maybe_start_driver(_dispatcher_pid, :agent, _options), do: {:ok, nil}
+  defp maybe_start_driver(_dispatcher_pid, :gateway, _options), do: {:ok, nil}
 
   # T2d: the inline driver profile (no alt-screen, no termbox ownership).
   # A sibling of the default branch below, not a replacement -- see
