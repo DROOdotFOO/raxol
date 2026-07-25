@@ -41,7 +41,19 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
     * `:max_bytes` - drop audio larger than this before converting (default
       20MB, the Bot API `getFile` ceiling). Checked against the media's
       `:size_bytes` metadata before fetching and against the fetched binary.
+    * `:max_duration_s` - drop voice notes longer than this (default 300,
+      matching the raxol_speech Listener's recording cap). Checked against
+      the media's `:duration_s` metadata before fetching, enforced in the
+      default converter (ffmpeg `-t`), and re-checked against the decoded
+      PCM size. `:max_bytes` alone cannot bound the decode: f32le mono
+      16kHz is 64000 bytes/s, so a low-bitrate note under the compressed
+      ceiling would otherwise expand without limit in memory.
     * `:ffmpeg_path`, `:cmd_fn`, `:tmp_dir` - see `convert_with_ffmpeg/2`.
+
+  A stage function that raises or exits (e.g. a recognizer process dying
+  mid-call) is caught and handled as that stage's failure; only a shape
+  summary of the crash reaches the log and telemetry, never the arguments
+  (a `GenServer.call` exit term embeds the full audio binary).
 
   ## Failure mode
 
@@ -67,9 +79,14 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
 
   require Logger
 
+  alias Raxol.Core.ErrorHandling
+
   # The Bot API refuses getFile downloads above 20MB; other platforms get
   # the same ceiling as a sane default.
   @default_max_bytes 20 * 1024 * 1024
+  @default_max_duration_s 5 * 60
+  # f32le mono at 16kHz: 4 bytes x 16000 samples per second.
+  @pcm_bytes_per_second 4 * 16_000
   @allowed_convert_binaries ~w(ffmpeg)
   @ffmpeg_output_args ~w(-f f32le -ac 1 -ar 16000 pipe:1)
 
@@ -110,7 +127,8 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
   `System.cmd/3` cannot feed stdin, so the input bytes go through a
   temporary file (deleted afterwards, success or not):
 
-      ffmpeg -hide_banner -loglevel error -i <tmp> -f f32le -ac 1 -ar 16000 pipe:1
+      ffmpeg -hide_banner -loglevel error -i <tmp> -t <max_duration_s> \
+        -f f32le -ac 1 -ar 16000 pipe:1
 
   ## Options
 
@@ -120,6 +138,9 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
       override for tests (default `System.cmd/3`)
     * `:tmp_dir` - where the temporary input file goes (default
       `System.tmp_dir!()`)
+    * `:max_duration_s` - decode at most this many seconds (`-t`, default
+      300), bounding the PCM held in memory regardless of how small the
+      compressed input is
   """
   @spec convert_with_ffmpeg(binary(), keyword()) :: {:ok, binary()} | {:error, term()}
   def convert_with_ffmpeg(bytes, opts \\ []) when is_binary(bytes) do
@@ -133,8 +154,9 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
     with :ok <- check_declared_size(media, max_bytes),
+         :ok <- check_declared_duration(media, max_duration_s(opts)),
          {:ok, fetch_fn} <- fetch_fn(opts) do
-      validate_fetched(fetch_fn.(media), max_bytes)
+      validate_fetched(call_stage(fetch_fn, media), max_bytes)
     end
   end
 
@@ -143,6 +165,14 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
        do: {:error, :fetch, :too_large}
 
   defp check_declared_size(_media, _max_bytes), do: :ok
+
+  defp check_declared_duration(%{duration_s: duration}, max_duration_s)
+       when is_number(duration) and duration > max_duration_s,
+       do: {:error, :fetch, :too_long}
+
+  defp check_declared_duration(_media, _max_duration_s), do: :ok
+
+  defp max_duration_s(opts), do: Keyword.get(opts, :max_duration_s, @default_max_duration_s)
 
   defp fetch_fn(opts) do
     case Keyword.get(opts, :fetch_fn) do
@@ -163,19 +193,29 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
 
   defp convert(bytes, opts) do
     convert_fn = Keyword.get(opts, :convert_fn, &convert_with_ffmpeg(&1, opts))
+    # One second of slack over the -t cap: raw f32le with -t is exact, but a
+    # custom convert_fn only promises the contractual 64000 bytes/s rate.
+    max_pcm_bytes = (max_duration_s(opts) + 1) * @pcm_bytes_per_second
 
-    case convert_fn.(bytes) do
-      {:ok, pcm} when is_binary(pcm) and pcm != <<>> -> {:ok, pcm}
-      {:ok, <<>>} -> {:error, :convert, :empty_output}
-      {:ok, _other} -> {:error, :convert, :invalid_convert_result}
-      {:error, reason} -> {:error, :convert, reason}
-    end
+    validate_converted(call_stage(convert_fn, bytes), max_pcm_bytes)
   end
+
+  defp validate_converted({:ok, pcm}, max_pcm_bytes)
+       when is_binary(pcm) and byte_size(pcm) > max_pcm_bytes,
+       do: {:error, :convert, :pcm_too_large}
+
+  defp validate_converted({:ok, <<>>}, _max_pcm_bytes), do: {:error, :convert, :empty_output}
+  defp validate_converted({:ok, pcm}, _max_pcm_bytes) when is_binary(pcm), do: {:ok, pcm}
+
+  defp validate_converted({:ok, _other}, _max_pcm_bytes),
+    do: {:error, :convert, :invalid_convert_result}
+
+  defp validate_converted({:error, reason}, _max_pcm_bytes), do: {:error, :convert, reason}
 
   defp recognize(pcm, opts) do
     recognize_fn = Keyword.get(opts, :recognize_fn, &default_recognize/1)
 
-    case recognize_fn.(pcm) do
+    case call_stage(recognize_fn, pcm) do
       {:ok, text} when is_binary(text) ->
         case String.trim(text) do
           "" -> {:error, :recognize, :empty_transcript}
@@ -189,6 +229,30 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
         {:error, :recognize, reason}
     end
   end
+
+  # A stage fn that raises or exits (a recognizer process dying between the
+  # whereis check and the call, a fetch fn crashing on a malformed ref) must
+  # land on the documented fail-open path, not crash the feed loop.
+  defp call_stage(fun, arg) do
+    case ErrorHandling.safe_call(fn -> fun.(arg) end) do
+      {:ok, result} -> result
+      {:error, crash} -> {:error, {:crashed, summarize_crash(crash)}}
+    end
+  end
+
+  # Crash terms can embed the stage argument (a GenServer.call exit carries
+  # the full request, i.e. the audio binary); keep only the shape so drop/2's
+  # log line and telemetry metadata stay small and content-free.
+  defp summarize_crash(%{__struct__: mod}), do: mod
+  defp summarize_crash({:exit, reason}), do: {:exit, summarize_crash(reason)}
+  defp summarize_crash({:throw, _value}), do: :throw
+
+  defp summarize_crash({kind, {m, f, args}})
+       when is_atom(m) and is_atom(f) and is_list(args),
+       do: {kind, {m, f, length(args)}}
+
+  defp summarize_crash(reason) when is_atom(reason), do: reason
+  defp summarize_crash(_other), do: :crash
 
   defp default_recognize(pcm) do
     cond do
@@ -219,9 +283,15 @@ defmodule Raxol.Gateway.Pipeline.Transcribe do
     tmp =
       Path.join(tmp_dir, "raxol_transcribe_#{System.unique_integer([:positive])}.audio")
 
+    duration_cap = ["-t", Integer.to_string(max_duration_s(opts))]
+
     with :ok <- File.write(tmp, bytes) do
       try do
-        case cmd_fn.(path, ~w(-hide_banner -loglevel error -i) ++ [tmp] ++ @ffmpeg_output_args) do
+        args =
+          ~w(-hide_banner -loglevel error -i) ++
+            [tmp] ++ duration_cap ++ @ffmpeg_output_args
+
+        case cmd_fn.(path, args) do
           {pcm, 0} -> {:ok, pcm}
           {_out, status} -> {:error, {:ffmpeg_exit, status}}
         end

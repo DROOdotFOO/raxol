@@ -159,6 +159,46 @@ defmodule Raxol.Gateway.Pipeline.TranscribeTest do
 
       assert_received {:telemetry, _, _, %{stage: :recognize, reason: :recognizer_not_running}}
     end
+
+    test "oversized duration_s metadata skips the fetch entirely" do
+      assert Transcribe.run(
+               %{media: %{kind: :voice, ref: "long", duration_s: 11}},
+               max_duration_s: 10,
+               fetch_fn: fn _ -> raise "must not fetch" end
+             ) == :ignore
+
+      assert_received {:telemetry, _, _, %{stage: :fetch, reason: :too_long}}
+    end
+
+    test "PCM beyond the duration budget drops the event" do
+      # No duration metadata, so only the decoded size can catch it:
+      # max_duration_s: 1 allows (1 + 1) * 64_000 bytes of slack-included PCM.
+      assert Transcribe.run(
+               %{media: %{kind: :voice, ref: "lied-about-length"}},
+               max_duration_s: 1,
+               fetch_fn: fn _ -> {:ok, "OGG1"} end,
+               convert_fn: fn _ -> {:ok, :binary.copy(<<0>>, 130_000)} end
+             ) == :ignore
+
+      assert_received {:telemetry, _, _, %{stage: :convert, reason: :pcm_too_large}}
+    end
+
+    test "a raising stage fn lands on the fail-open path with a content-free reason" do
+      assert Transcribe.run(@voice, fetch_fn: fn _ -> raise "boom" end) == :ignore
+
+      assert_received {:telemetry, _, _, %{stage: :fetch, reason: {:crashed, RuntimeError}}}
+    end
+
+    test "an exiting stage fn lands on the fail-open path" do
+      assert Transcribe.run(@voice,
+               fetch_fn: fn _ -> {:ok, "OGG1"} end,
+               convert_fn: fn _ -> {:ok, "PCM1"} end,
+               recognize_fn: fn _ -> exit(:recognizer_died) end
+             ) == :ignore
+
+      assert_received {:telemetry, _, _,
+                       %{stage: :recognize, reason: {:crashed, {:exit, :recognizer_died}}}}
+    end
   end
 
   describe "convert_with_ffmpeg/2" do
@@ -192,9 +232,43 @@ defmodule Raxol.Gateway.Pipeline.TranscribeTest do
       assert Enum.take(args, 4) == ["-hide_banner", "-loglevel", "error", "-i"]
 
       assert args -- ["-hide_banner", "-loglevel", "error", "-i", input] ==
-               ["-f", "f32le", "-ac", "1", "-ar", "16000", "pipe:1"]
+               ["-t", "300", "-f", "f32le", "-ac", "1", "-ar", "16000", "pipe:1"]
 
       refute File.exists?(input)
+    end
+
+    test "run/2 forwards ffmpeg options to the default converter", %{tmp_dir: tmp_dir} do
+      ffmpeg = fake_ffmpeg!(tmp_dir)
+      test_pid = self()
+
+      cmd_fn = fn path, args ->
+        send(test_pid, {:cmd, path, args})
+        {"PCMOUT", 0}
+      end
+
+      assert {:ok, %{text: "from voice", source: :voice}} =
+               Transcribe.run(@voice,
+                 fetch_fn: fn _ -> {:ok, "OGGBYTES"} end,
+                 recognize_fn: fn "PCMOUT" -> {:ok, "from voice"} end,
+                 ffmpeg_path: ffmpeg,
+                 cmd_fn: cmd_fn,
+                 tmp_dir: tmp_dir,
+                 max_duration_s: 42
+               )
+
+      assert_received {:cmd, ^ffmpeg, args}
+
+      assert Enum.take(args, -9) == [
+               "-t",
+               "42",
+               "-f",
+               "f32le",
+               "-ac",
+               "1",
+               "-ar",
+               "16000",
+               "pipe:1"
+             ]
     end
 
     test "cleans up the temp file when ffmpeg fails", %{tmp_dir: tmp_dir} do

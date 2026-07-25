@@ -71,7 +71,10 @@ defmodule Raxol.Telegram.HTTP do
     with {:ok, result} <- post("getFile", %{file_id: file_id}, opts),
          {:ok, path} <- file_path(result),
          {:ok, token} <- fetch_token(opts) do
-      url = "#{fetch_base(opts)}/file/bot#{token}/#{path}"
+      # Percent-encode the server-supplied path: an invalid request target
+      # would otherwise surface a transport error embedding the full URL --
+      # token included.
+      url = "#{fetch_base(opts)}/file/bot#{token}/#{URI.encode(path)}"
       timeout = Keyword.get(opts, :timeout, @default_timeout)
       get_fn = Keyword.get(opts, :get_fn, &default_get/2)
 
@@ -128,7 +131,15 @@ defmodule Raxol.Telegram.HTTP do
     do: {:error, :req_not_available}
 
   defp classify_download({:error, reason}),
-    do: {:error, {:http_error, reason}}
+    do: {:error, {:http_error, redact_transport_reason(reason)}}
+
+  # A transport error can embed the request target -- which carries the bot
+  # token -- e.g. Mint's {:invalid_request_target, "/file/bot<token>/..."}.
+  # Only a token-free summary may leave this module.
+  defp redact_transport_reason(%{reason: nested}) when is_atom(nested), do: nested
+  defp redact_transport_reason(%{__struct__: mod}), do: mod
+  defp redact_transport_reason(reason) when is_atom(reason), do: reason
+  defp redact_transport_reason(_reason), do: :transport_error
 
   defp default_post(url, opts) do
     if Code.ensure_loaded?(Req) do

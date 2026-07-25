@@ -110,7 +110,12 @@ Raxol.Telegram.UpdatePoller.start_link(
            Raxol.Gateway.Pipeline.Transcribe.run(event,
              fetch_fn: fn media -> Raxol.Telegram.GatewayAdapter.fetch_media(conn, media) end
            ) do
-      Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event)
+      case Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event) do
+        :ok -> :ok
+        # Log rejects: the poller advances its offset regardless, so a
+        # silent drop is permanent loss.
+        {:error, reason} -> Logger.warning("update rejected: #{inspect(reason)}")
+      end
     else
       :ignore -> :ok
       :deny -> :ok

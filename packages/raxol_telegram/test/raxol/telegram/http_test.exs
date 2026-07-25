@@ -92,6 +92,55 @@ defmodule Raxol.Telegram.HTTPTest do
       assert {:error, {:http_error, :timeout}} = HTTP.download_file("f", opts)
     end
 
+    test "a URL-hostile file_path is percent-encoded before the GET" do
+      test_pid = self()
+
+      post_fn = fn _url, _req_opts ->
+        {:ok,
+         %{
+           status: 200,
+           body: %{"ok" => true, "result" => %{"file_path" => "voice/has space.oga"}}
+         }}
+      end
+
+      get_fn = fn url, _req_opts ->
+        send(test_pid, {:downloaded, url})
+        {:ok, %{status: 200, body: "X"}}
+      end
+
+      assert {:ok, "X"} =
+               HTTP.download_file("f", bot_token: "test-token", post_fn: post_fn, get_fn: get_fn)
+
+      assert_received {:downloaded, url}
+      assert url == "https://api.telegram.org/file/bottest-token/voice/has%20space.oga"
+    end
+
+    test "a transport error reason embedding the URL is redacted to a token-free term" do
+      # Mint's invalid_request_target carries the full path -- token included.
+      leaky = {:invalid_request_target, "/file/bottest-token/voice/x y.oga"}
+      opts = download_opts({:error, leaky})
+
+      result = HTTP.download_file("f", opts)
+
+      assert result == {:error, {:http_error, :transport_error}}
+      refute inspect(result) =~ "test-token"
+    end
+
+    test "a struct transport error is summarized without its fields" do
+      opts = download_opts({:error, %URI{path: "/file/bottest-token/x"}})
+
+      result = HTTP.download_file("f", opts)
+
+      assert result == {:error, {:http_error, URI}}
+      refute inspect(result) =~ "test-token"
+    end
+
+    test "a struct error with an atom reason keeps that reason" do
+      opts = download_opts({:error, %{__struct__: SomeTransportError, reason: :econnrefused}})
+
+      assert {:error, {:http_error, :econnrefused}} = HTTP.download_file("f", opts)
+    end
+
     test "fails fast without a token, before any request" do
       assert {:error, :no_bot_token} =
                HTTP.download_file("f",
