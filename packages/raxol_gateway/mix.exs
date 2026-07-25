@@ -38,6 +38,9 @@ defmodule RaxolGateway.MixProject do
       # Per-chat durable history (optional -- only needed to record turns).
       raxol_dep(:raxol_agent, "~> 2.6", "../raxol_agent", optional: true),
 
+      # Email adapter (optional -- SMTP submission + MIME composition).
+      {:gen_smtp, "~> 1.2", optional: true},
+
       # Discord adapter (optional -- gateway socket + REST sender).
       {:mint_web_socket, "~> 1.0", optional: true},
       {:req, "~> 0.5", optional: true},

@@ -38,6 +38,8 @@ same history.
 - Discord: `Raxol.Gateway.Adapter.Discord` (REST sends, optional `req`) +
   `Raxol.Gateway.Adapter.Discord.GatewaySocket` (Gateway v10 WebSocket feed,
   optional `mint_web_socket`).
+- Email: `Raxol.Gateway.Adapter.Email` (outbound-only SMTP submission via
+  optional `gen_smtp`; inbound is a follow-up).
 
-Both are text-only for now. An Email adapter and the `Lifecycle`-backed
-handler are follow-ups; see `docs/adr/0023-unified-messaging-gateway.md`.
+The `Lifecycle`-backed handler is a follow-up; see
+`docs/adr/0023-unified-messaging-gateway.md`.

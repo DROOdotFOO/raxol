@@ -31,6 +31,7 @@ Shipping adapters:
 | `Raxol.Gateway.Adapter.InMemory` | `:in_memory` (reference; sink pid) | raxol_gateway |
 | `Raxol.Telegram.GatewayAdapter` | `:telegram` (text messages, chunked plain-text sends) | raxol_telegram |
 | `Raxol.Gateway.Adapter.Discord` | `:discord` (MESSAGE_CREATE text, chunked plain-text sends) | raxol_gateway |
+| `Raxol.Gateway.Adapter.Email` | `:email` (outbound-only SMTP; inbound is a follow-up) | raxol_gateway |
 
 A full Telegram wiring pairs the adapter with `Raxol.Telegram.UpdatePoller` (getUpdates
 long polling) feeding `normalize_event/1` into the router:
@@ -215,6 +216,33 @@ decides `authorize/2` in this order:
 - `{:target, "platform:chat_id"}`: an explicit target string. The platform is matched against
   connected adapters by string comparison, never turned into an atom from input.
 
+### Email as a delivery target
+
+`Raxol.Gateway.Adapter.Email` is outbound-only this slice, which is exactly what the
+`{:home, route}` mode wants: cron and background results land in a mailbox with no
+platform approval process. It needs the optional `gen_smtp` dependency;
+`normalize_event/1` always returns `:ignore` (inbound email is a separate follow-up), and
+a route addresses a mailbox directly:
+
+```elixir
+{:ok, conn} =
+  Raxol.Gateway.Adapter.Email.connect(
+    relay: "smtp.example.com",
+    port: 587,
+    tls: :always,
+    username: "bot@example.com",
+    password: System.fetch_env!("SMTP_PASSWORD"),
+    from: "bot@example.com",
+    subject: "Nightly digest"
+  )
+
+route = Raxol.Gateway.Route.new(%{platform: :email, chat_type: :dm, chat_id: "ops@example.com"})
+:ok = Raxol.Gateway.Adapter.Email.send_message(conn, route, rendered_report)
+```
+
+The rendered reply becomes a text/plain MIME message (utf-8, quoted-printable); nothing
+is chunked, since email has no chat-style length limit.
+
 ## Handoff
 
 `SessionRouter.handoff(server, from_key, to_route)` rebinds a conversation to another
@@ -252,12 +280,13 @@ route = Raxol.Gateway.Route.new(%{platform: :in_memory, chat_type: :dm, chat_id:
 
 The gateway core (adapter contract, routing, sessions, pairing, delivery, handoff) is
 complete, the adapter contract is frozen, `Handler.Agent` (agent-backed conversations)
-ships, and two platforms sit behind the frozen contract: Telegram
+ships, and three platforms sit behind the frozen contract: Telegram
 (`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text and voice notes -
-keyboards, callbacks, and other media are still the TEA surface's domain) and Discord
-(`Raxol.Gateway.Adapter.Discord` + its `GatewaySocket`; text-only this slice). Voice
-notes transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: an Email
-adapter, and a `Lifecycle`-backed handler that runs a full TEA app under
+keyboards, callbacks, and other media are still the TEA surface's domain), Discord
+(`Raxol.Gateway.Adapter.Discord` + its `GatewaySocket`; text-only this slice), and
+Email (`Raxol.Gateway.Adapter.Email`; outbound-only SMTP delivery). Voice notes
+transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: inbound email,
+and a `Lifecycle`-backed handler that runs a full TEA app under
 `environment: :gateway`. Any module satisfying the two `Handler` callbacks works in the
 meantime. See `docs/adr/0023-unified-messaging-gateway.md`.
 
