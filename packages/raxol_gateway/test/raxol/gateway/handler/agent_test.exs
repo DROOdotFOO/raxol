@@ -8,18 +8,32 @@ defmodule Raxol.Gateway.Handler.AgentTest do
 
   @route Route.new(%{platform: :in_memory, chat_type: :dm, chat_id: "1"})
 
-  defp init!(opts \\ []) do
+  defp init!(opts) do
     {:ok, state} = Handler.Agent.init(@route, opts)
     state
   end
 
   defp mock_opts(backend_opts) do
-    [agent_opts: [backend: Raxol.Agent.Backend.Mock, backend_opts: backend_opts]]
+    [
+      agent_opts: [
+        backend: Raxol.Agent.Backend.Mock,
+        backend_opts: backend_opts
+      ]
+    ]
   end
 
   # Tests that leave auto_provider on inject :resolve_probe so init never
   # touches real credential resolution (which may shell out to op).
   defp resolved_probe, do: [resolve_probe: fn _opts -> :resolved end]
+
+  # Deterministic clock: the test owns time via an :atomics cell.
+  defp throttled_state(clock, backend_opts, throttle_opts) do
+    opts =
+      mock_opts(backend_opts) ++
+        [now_fn: fn -> :atomics.get(clock, 1) end] ++ throttle_opts
+
+    init!(opts)
+  end
 
   describe "init/2" do
     test "defaults: empty history, max_history 40, no system prompt" do
@@ -31,7 +45,8 @@ defmodule Raxol.Gateway.Handler.AgentTest do
     end
 
     test "adds auto_provider: true when no backend or executor is pinned" do
-      state = init!(Keyword.put(resolved_probe(), :agent_opts, model: "some-model"))
+      state =
+        init!(Keyword.put(resolved_probe(), :agent_opts, model: "some-model"))
 
       assert Keyword.get(state.agent_opts, :auto_provider) == true
     end
@@ -80,7 +95,8 @@ defmodule Raxol.Gateway.Handler.AgentTest do
     test "replies with the agent's answer and records both turns" do
       state = init!(mock_opts(response: "pong"))
 
-      assert {:reply, "pong", state} = Handler.Agent.handle_event(%{text: "ping"}, state)
+      assert {:reply, "pong", state} =
+               Handler.Agent.handle_event(%{text: "ping"}, state)
 
       assert state.messages == [
                %{role: :user, content: "ping"},
@@ -98,8 +114,11 @@ defmodule Raxol.Gateway.Handler.AgentTest do
 
       state = init!(mock_opts(response_fn: response_fn))
 
-      {:reply, "answer-1", state} = Handler.Agent.handle_event(%{text: "one"}, state)
-      {:reply, "answer-2", state} = Handler.Agent.handle_event(%{text: "two"}, state)
+      {:reply, "answer-1", state} =
+        Handler.Agent.handle_event(%{text: "one"}, state)
+
+      {:reply, "answer-2", state} =
+        Handler.Agent.handle_event(%{text: "two"}, state)
 
       assert state.messages == [
                %{role: :user, content: "one"},
@@ -114,7 +133,9 @@ defmodule Raxol.Gateway.Handler.AgentTest do
 
       state =
         Enum.reduce(1..3, state, fn n, acc ->
-          {:reply, "r", acc} = Handler.Agent.handle_event(%{text: "msg-#{n}"}, acc)
+          {:reply, "r", acc} =
+            Handler.Agent.handle_event(%{text: "msg-#{n}"}, acc)
+
           acc
         end)
 
@@ -133,7 +154,9 @@ defmodule Raxol.Gateway.Handler.AgentTest do
 
       log =
         capture_log(fn ->
-          assert {:reply, reply, state} = Handler.Agent.handle_event(%{text: "hi"}, state)
+          assert {:reply, reply, state} =
+                   Handler.Agent.handle_event(%{text: "hi"}, state)
+
           assert reply =~ "Agent error"
           assert state.messages == [%{role: :user, content: "hi"}]
         end)
@@ -162,12 +185,91 @@ defmodule Raxol.Gateway.Handler.AgentTest do
 
       log =
         capture_log(fn ->
-          assert {:reply, reply, state} = Handler.Agent.handle_event(%{text: "hi"}, state)
+          assert {:reply, reply, state} =
+                   Handler.Agent.handle_event(%{text: "hi"}, state)
+
           assert reply =~ "Agent error"
           assert state.messages == [%{role: :user, content: "hi"}]
         end)
 
       assert log =~ "boom"
+    end
+  end
+
+  describe "per-chat turn throttle" do
+    test "no throttle by default" do
+      state = init!(mock_opts(response: "r"))
+      assert state.throttle == nil
+    end
+
+    test "denies over-cap turns without a backend call or history writes" do
+      clock = :atomics.new(1, [])
+      calls = :counters.new(1, [])
+
+      response_fn = fn ->
+        :counters.add(calls, 1, 1)
+        "ok"
+      end
+
+      state =
+        throttled_state(clock, [response_fn: response_fn],
+          max_turns_per_window: 2,
+          window_ms: 1_000
+        )
+
+      {:reply, "ok", state} = Handler.Agent.handle_event(%{text: "one"}, state)
+      {:reply, "ok", state} = Handler.Agent.handle_event(%{text: "two"}, state)
+
+      assert {:reply, denied, denied_state} =
+               Handler.Agent.handle_event(%{text: "three"}, state)
+
+      assert denied =~ "Rate limited"
+      assert :counters.get(calls, 1) == 2
+      assert denied_state.messages == state.messages
+    end
+
+    test "a new window resets the counter" do
+      clock = :atomics.new(1, [])
+
+      state =
+        throttled_state(clock, [response: "ok"],
+          max_turns_per_window: 1,
+          window_ms: 1_000
+        )
+
+      {:reply, "ok", state} = Handler.Agent.handle_event(%{text: "one"}, state)
+
+      {:reply, denied, state} =
+        Handler.Agent.handle_event(%{text: "two"}, state)
+
+      assert denied =~ "Rate limited"
+
+      :atomics.put(clock, 1, 1_000)
+
+      assert {:reply, "ok", _state} =
+               Handler.Agent.handle_event(%{text: "three"}, state)
+    end
+
+    test "a failed backend turn still counts against the window" do
+      clock = :atomics.new(1, [])
+
+      state =
+        throttled_state(clock, [error: :boom],
+          max_turns_per_window: 1,
+          window_ms: 1_000
+        )
+
+      capture_log(fn ->
+        {:reply, first, state} =
+          Handler.Agent.handle_event(%{text: "one"}, state)
+
+        assert first =~ "Agent error"
+
+        {:reply, denied, _state} =
+          Handler.Agent.handle_event(%{text: "two"}, state)
+
+        assert denied =~ "Rate limited"
+      end)
     end
   end
 
