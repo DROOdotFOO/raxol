@@ -589,7 +589,10 @@ defmodule Raxol.Agent.Scheduler do
 
   defp generate_id, do: "job_" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
 
-  defp default_runner(_job), do: {:error, :no_runner_configured}
+  # A fresh, history-free agent turn per fire (skills injected from the store).
+  # Callers wire a configured runner via `:runner` (a backend/actions/skills
+  # server); the default runs with environment auto-resolution.
+  defp default_runner(job), do: Raxol.Agent.Scheduler.Fire.run(job)
 
   defp default_deliver(target, _output) do
     Logger.debug(fn -> "scheduler: no deliver configured for target #{inspect(target)}" end)
