@@ -19,6 +19,10 @@ unified session keying, and DM pairing authorization.
   authorization check order.
 - `Raxol.Gateway.Delivery` -- the four outbound destinations (direct, home,
   cross-platform, explicit target string).
+- `Raxol.Gateway.Pipeline.Transcribe` -- feed-loop stage that turns a
+  `%{media: %{kind: :voice, ...}}` event into `%{text: transcript}` before
+  routing (injectable fetch/convert/recognize; ffmpeg + the optional
+  `raxol_speech` Recognizer by default; failures drop the one event, loudly).
 - `Raxol.Gateway.Supervisor` -- the daemon that ties them together.
 
 A session optionally records each turn to a `:log` (any
@@ -31,8 +35,11 @@ same history.
 
 - Telegram: `Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`
   (in the raxol_telegram package).
+- Discord: `Raxol.Gateway.Adapter.Discord` (REST sends, optional `req`) +
+  `Raxol.Gateway.Adapter.Discord.GatewaySocket` (Gateway v10 WebSocket feed,
+  optional `mint_web_socket`).
 - Email: `Raxol.Gateway.Adapter.Email` (outbound-only SMTP submission via
   optional `gen_smtp`; inbound is a follow-up).
 
-A Discord adapter and the `Lifecycle`-backed handler are follow-ups; see
+The `Lifecycle`-backed handler is a follow-up; see
 `docs/adr/0023-unified-messaging-gateway.md`.

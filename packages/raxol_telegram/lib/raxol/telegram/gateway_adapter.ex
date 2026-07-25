@@ -8,8 +8,10 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
 
     Owns only platform I/O and translation: text messages normalize to the
     gateway's `%{text: binary}` event shape (what `Raxol.Gateway.Handler.Agent`
-    consumes), and rendered replies go out as plain-text `sendMessage` calls
-    through `Raxol.Telegram.HTTP`.
+    consumes), voice notes to `%{media: %{kind: :voice, ref: file_id, ...}}`
+    (what `Raxol.Gateway.Pipeline.Transcribe` consumes, with `fetch_media/2`
+    as its `:fetch_fn`), and rendered replies go out as plain-text
+    `sendMessage` calls through `Raxol.Telegram.HTTP`.
 
     Deliberately out of scope here:
 
@@ -18,7 +20,10 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
       * Authorization: `normalize_event/1` is a pure translator; check
         `allowed_chat_ids` / `Raxol.Gateway.Pairing.authorize/2` in the feed
         loop before routing.
-      * Non-text updates (callbacks, media, voice, join requests): `:ignore`
+      * Transcription: a voice note normalizes to an opaque media reference;
+        turning it into text is `Raxol.Gateway.Pipeline.Transcribe`'s job in
+        the feed loop.
+      * Other non-text updates (callbacks, photos, join requests): `:ignore`
         for now; commands pass through as ordinary text.
 
     ## Connection
@@ -87,20 +92,53 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
     def platform, do: :telegram
 
     @impl true
-    @spec normalize_event(term()) :: {:ok, Route.t(), %{text: String.t()}} | :ignore
+    @spec normalize_event(term()) ::
+            {:ok, Route.t(), %{text: String.t()} | %{media: map()}} | :ignore
     def normalize_event(%{message: %{text: text, chat: %{id: chat_id, type: type}} = msg})
         when is_binary(text) and text != "" do
-      build_event(text, chat_id, type, atom_user_id(msg))
+      build_event(%{text: text}, chat_id, type, atom_user_id(msg))
     end
 
     def normalize_event(%{
           "message" => %{"text" => text, "chat" => %{"id" => chat_id, "type" => type}} = msg
         })
         when is_binary(text) and text != "" do
-      build_event(text, chat_id, type, string_user_id(msg))
+      build_event(%{text: text}, chat_id, type, string_user_id(msg))
+    end
+
+    def normalize_event(%{
+          message: %{voice: %{file_id: file_id} = voice, chat: %{id: chat_id, type: type}} = msg
+        })
+        when is_binary(file_id) and file_id != "" do
+      build_event(%{media: voice_media(voice)}, chat_id, type, atom_user_id(msg))
+    end
+
+    def normalize_event(%{
+          "message" =>
+            %{
+              "voice" => %{"file_id" => file_id} = voice,
+              "chat" => %{"id" => chat_id, "type" => type}
+            } =
+              msg
+        })
+        when is_binary(file_id) and file_id != "" do
+      build_event(%{media: voice_media(voice)}, chat_id, type, string_user_id(msg))
     end
 
     def normalize_event(_raw), do: :ignore
+
+    @doc """
+    Downloads the audio behind a normalized voice event's media `:ref`.
+
+    Wire it as `Raxol.Gateway.Pipeline.Transcribe`'s `:fetch_fn`:
+
+        fetch_fn: fn media -> Raxol.Telegram.GatewayAdapter.fetch_media(conn, media) end
+    """
+    @spec fetch_media(keyword(), map()) :: {:ok, binary()} | {:error, term()}
+    def fetch_media(conn, %{ref: file_id}) when is_binary(file_id),
+      do: HTTP.download_file(file_id, conn)
+
+    def fetch_media(_conn, _media), do: {:error, :unsupported_media}
 
     @impl true
     @spec send_message(keyword(), Route.t() | map(), term()) :: :ok | {:error, term()}
@@ -135,7 +173,7 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
       end
     end
 
-    defp build_event(text, chat_id, type, user_id) do
+    defp build_event(event, chat_id, type, user_id) do
       case Map.fetch(@chat_types, type) do
         {:ok, chat_type} ->
           route =
@@ -146,11 +184,23 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
               user_id: user_id
             })
 
-          {:ok, route, %{text: text}}
+          {:ok, route, event}
 
         :error ->
           :ignore
       end
+    end
+
+    # Map.get (not Access, which raises on Telegex structs) returns nil for
+    # the other key style, so one helper serves both update shapes.
+    defp voice_media(voice) do
+      %{
+        kind: :voice,
+        ref: Map.get(voice, :file_id) || Map.get(voice, "file_id"),
+        mime: Map.get(voice, :mime_type) || Map.get(voice, "mime_type"),
+        duration_s: Map.get(voice, :duration) || Map.get(voice, "duration"),
+        size_bytes: Map.get(voice, :file_size) || Map.get(voice, "file_size")
+      }
     end
 
     defp atom_user_id(%{from: %{id: id}}), do: id
