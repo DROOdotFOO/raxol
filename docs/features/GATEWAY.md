@@ -45,13 +45,19 @@ Raxol.Gateway.Supervisor.start_link(
 Raxol.Telegram.UpdatePoller.start_link(
   conn: conn,
   on_update: fn raw ->
-    with {:ok, route, event} <- Raxol.Telegram.GatewayAdapter.normalize_event(raw) do
+    # Authorize BEFORE routing: the adapter is a pure translator and checks
+    # nothing, and Handler.Agent runs a paid backend call per text event.
+    with {:ok, route, event} <- Raxol.Telegram.GatewayAdapter.normalize_event(raw),
+         :allow <- Raxol.Gateway.Pairing.authorize(Raxol.Gateway.Pairing, route) do
       case Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event) do
         :ok -> :ok
         # Log rejects (rate limit, max sessions): the poller advances its
         # offset regardless, so a silent drop is permanent loss.
         {:error, reason} -> Logger.warning("update rejected: #{inspect(reason)}")
       end
+    else
+      :ignore -> :ok
+      :deny -> :ok
     end
   end
 )

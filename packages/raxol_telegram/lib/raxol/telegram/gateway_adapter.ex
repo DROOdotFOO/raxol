@@ -52,10 +52,27 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
     @max_message_utf16_units 4096
 
     @impl true
-    @spec connect(keyword() | map()) :: {:ok, keyword()} | {:error, :no_bot_token}
-    def connect(config) do
-      opts = Keyword.new(config)
+    @spec connect(keyword() | map()) ::
+            {:ok, keyword()} | {:error, :no_bot_token | :invalid_config}
+    def connect(config) when is_list(config) do
+      if Keyword.keyword?(config) do
+        validate_conn(config)
+      else
+        {:error, :invalid_config}
+      end
+    end
 
+    def connect(config) when is_map(config) do
+      if Enum.all?(Map.keys(config), &is_atom/1) do
+        config |> Keyword.new() |> validate_conn()
+      else
+        {:error, :invalid_config}
+      end
+    end
+
+    def connect(_config), do: {:error, :invalid_config}
+
+    defp validate_conn(opts) do
       with {:ok, _token} <- HTTP.fetch_token(opts) do
         {:ok, opts}
       end
@@ -88,19 +105,25 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
     @impl true
     @spec send_message(keyword(), Route.t() | map(), term()) :: :ok | {:error, term()}
     def send_message(conn, %{chat_id: chat_id}, rendered) when is_binary(rendered) do
-      if String.trim(rendered) == "" do
-        :ok
-      else
-        rendered
-        |> chunk_text(@max_message_utf16_units)
-        |> send_chunks(conn, chat_id)
+      cond do
+        not String.valid?(rendered) -> {:error, :invalid_encoding}
+        String.trim(rendered) == "" -> :ok
+        true -> rendered |> chunk_text(@max_message_utf16_units) |> send_chunks(conn, chat_id)
       end
     end
 
     def send_message(_conn, _route, _rendered), do: {:error, :unsupported_rendered}
 
     defp send_chunks(chunks, conn, chat_id) do
-      Enum.reduce_while(chunks, :ok, fn chunk, :ok ->
+      Enum.reduce_while(chunks, :ok, fn chunk, :ok -> send_chunk(chunk, conn, chat_id) end)
+    end
+
+    # Telegram rejects whitespace-only messages with a 400 that would halt the
+    # remaining chunks; a boundary landing inside a whitespace run is skipped.
+    defp send_chunk(chunk, conn, chat_id) do
+      if String.trim(chunk) == "" do
+        {:cont, :ok}
+      else
         case HTTP.post("sendMessage", %{chat_id: chat_id, text: chunk}, conn) do
           {:ok, _result} ->
             {:cont, :ok}
@@ -109,7 +132,7 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
             emit_error("sendMessage", reason)
             {:halt, {:error, reason}}
         end
-      end)
+      end
     end
 
     defp build_event(text, chat_id, type, user_id) do
@@ -137,22 +160,35 @@ if Code.ensure_loaded?(Raxol.Gateway.Adapter) do
     defp string_user_id(_msg), do: nil
 
     # Telegram counts UTF-16 code units, not graphemes; a grapheme is split
-    # never, a message at the unit budget always.
+    # never, a message at the unit budget always. The one exception: a single
+    # pathological grapheme cluster larger than the whole budget (combining
+    # mark floods) is pre-split at codepoint level so no chunk can exceed it.
     defp chunk_text(text, max_units) do
       {chunks, last, _units} =
         text
         |> String.graphemes()
-        |> Enum.reduce({[], [], 0}, fn grapheme, {chunks, current, units} ->
-          grapheme_units = utf16_units(grapheme)
-
-          if units + grapheme_units > max_units and current != [] do
-            {[finish_chunk(current) | chunks], [grapheme], grapheme_units}
-          else
-            {chunks, [grapheme | current], units + grapheme_units}
-          end
-        end)
+        |> Enum.flat_map(&split_oversized(&1, max_units))
+        |> Enum.reduce({[], [], 0}, &accumulate_grapheme(&1, &2, max_units))
 
       [finish_chunk(last) | chunks] |> Enum.reverse()
+    end
+
+    defp accumulate_grapheme(grapheme, {chunks, current, units}, max_units) do
+      grapheme_units = utf16_units(grapheme)
+
+      if units + grapheme_units > max_units and current != [] do
+        {[finish_chunk(current) | chunks], [grapheme], grapheme_units}
+      else
+        {chunks, [grapheme | current], units + grapheme_units}
+      end
+    end
+
+    defp split_oversized(grapheme, max_units) do
+      if utf16_units(grapheme) > max_units do
+        String.codepoints(grapheme)
+      else
+        [grapheme]
+      end
     end
 
     defp finish_chunk(reversed_graphemes) do

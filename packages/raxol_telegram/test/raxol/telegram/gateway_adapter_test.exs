@@ -42,6 +42,17 @@ defmodule Raxol.Telegram.GatewayAdapterTest do
     test "connect fails fast without a token" do
       assert {:error, :no_bot_token} = GatewayAdapter.connect([])
     end
+
+    test "connect rejects non-keyword and string-keyed configs" do
+      assert {:error, :invalid_config} = GatewayAdapter.connect(%{"bot_token" => "t"})
+      assert {:error, :invalid_config} = GatewayAdapter.connect([1, 2])
+      assert {:error, :invalid_config} = GatewayAdapter.connect("token")
+    end
+
+    test "connect accepts an atom-keyed map" do
+      assert {:ok, conn} = GatewayAdapter.connect(%{bot_token: "t"})
+      assert conn[:bot_token] == "t"
+    end
   end
 
   describe "normalize_event/1" do
@@ -176,6 +187,64 @@ defmodule Raxol.Telegram.GatewayAdapterTest do
     test "non-binary rendered is rejected" do
       assert {:error, :unsupported_rendered} =
                GatewayAdapter.send_message(capture_conn(), %{chat_id: 1}, {:tuple, "x"})
+    end
+
+    test "invalid UTF-8 is rejected with an error tuple, not a raise" do
+      conn = capture_conn()
+
+      assert {:error, :invalid_encoding} =
+               GatewayAdapter.send_message(conn, %{chat_id: 1}, <<0xFF, 0xFE, "x">>)
+
+      refute_receive {:posted, _, _}, 50
+    end
+
+    test "a whitespace-only chunk is skipped, later chunks still send" do
+      conn = capture_conn()
+      # 4090 'a's, then >4096 spaces (forcing an all-whitespace middle
+      # chunk), then a trailing word that must still be delivered.
+      text = String.duplicate("a", 4090) <> String.duplicate(" ", 4200) <> "tail"
+
+      assert :ok = GatewayAdapter.send_message(conn, %{chat_id: 1}, text)
+
+      posted =
+        for _ <- 1..2 do
+          assert_receive {:posted, _, %{text: chunk}}
+          chunk
+        end
+
+      refute_receive {:posted, _, _}, 50
+      assert Enum.all?(posted, &(String.trim(&1) != ""))
+      assert List.last(posted) =~ "tail"
+    end
+
+    test "a single oversized grapheme cluster is split rather than sent over-limit" do
+      conn = capture_conn()
+      # 3000 combining acute accents on one base char: one grapheme cluster
+      # of ~3001 UTF-16 units with a 2048-unit budget in a small helper run.
+      zalgo = "a" <> String.duplicate("́", 5000)
+
+      assert :ok = GatewayAdapter.send_message(conn, %{chat_id: 1}, zalgo)
+
+      chunks = collect_chunks()
+      assert length(chunks) > 1
+
+      for chunk <- chunks do
+        units =
+          chunk
+          |> :unicode.characters_to_binary(:utf8, {:utf16, :big})
+          |> byte_size()
+          |> div(2)
+
+        assert units <= 4096
+      end
+    end
+  end
+
+  defp collect_chunks(acc \\ []) do
+    receive do
+      {:posted, _, %{text: chunk}} -> collect_chunks([chunk | acc])
+    after
+      50 -> Enum.reverse(acc)
     end
   end
 end
