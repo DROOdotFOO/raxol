@@ -44,7 +44,7 @@ jobs:
       LANG: C.UTF-8
       # SKIP_TERMBOX2_TESTS is intentionally unset so the NIF suite runs for real.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `script` (from util-linux in the devShell) allocates a controlling
       # pseudo-terminal. It wraps the whole `mix test`, not just the run: the
