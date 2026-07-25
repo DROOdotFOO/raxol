@@ -4,7 +4,12 @@ defmodule Raxol.Core.Stores.DetsTest do
   alias Raxol.Core.Stores.Dets
 
   setup do
-    dir = Path.join(System.tmp_dir!(), "core_stores_dets_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "core_stores_dets_#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir}
@@ -12,7 +17,11 @@ defmodule Raxol.Core.Stores.DetsTest do
 
   describe "resolve_path/3" do
     test "prefers an explicit :dets_path option" do
-      assert Dets.resolve_path([dets_path: "/tmp/explicit.dets"], :raxol_core, :unused) ==
+      assert Dets.resolve_path(
+               [dets_path: "/tmp/explicit.dets"],
+               :raxol_core,
+               :unused
+             ) ==
                "/tmp/explicit.dets"
     end
 
@@ -41,7 +50,9 @@ defmodule Raxol.Core.Stores.DetsTest do
       assert :ok = Dets.close(handle)
 
       collected = :ets.new(:collect, [:set, :public])
-      reopened = Dets.open!(name, path, fn {k, v} -> :ets.insert(collected, {k, v}) end)
+
+      reopened =
+        Dets.open!(name, path, fn {k, v} -> :ets.insert(collected, {k, v}) end)
 
       assert :ets.lookup(collected, "k1") == [{"k1", %{v: 1}}]
       assert :ets.lookup(collected, "k2") == [{"k2", %{v: 2}}]
@@ -60,7 +71,12 @@ defmodule Raxol.Core.Stores.DetsTest do
       Dets.close(handle)
 
       after_delete = :ets.new(:after_delete, [:set, :public])
-      h2 = Dets.open!(name, path, fn {k, v} -> :ets.insert(after_delete, {k, v}) end)
+
+      h2 =
+        Dets.open!(name, path, fn {k, v} ->
+          :ets.insert(after_delete, {k, v})
+        end)
+
       assert :ets.lookup(after_delete, "a") == []
       assert :ets.lookup(after_delete, "b") == [{"b", 2}]
 
@@ -68,7 +84,10 @@ defmodule Raxol.Core.Stores.DetsTest do
       Dets.close(h2)
 
       after_clear = :ets.new(:after_clear, [:set, :public])
-      h3 = Dets.open!(name, path, fn {k, v} -> :ets.insert(after_clear, {k, v}) end)
+
+      h3 =
+        Dets.open!(name, path, fn {k, v} -> :ets.insert(after_clear, {k, v}) end)
+
       assert :ets.tab2list(after_clear) == []
       Dets.close(h3)
     end
@@ -83,12 +102,33 @@ defmodule Raxol.Core.Stores.DetsTest do
     end
   end
 
+  describe "get/3" do
+    test "reads a stored record and falls back to the default", %{dir: dir} do
+      path = Path.join(dir, "store.dets")
+      name = :"core_stores_dets_get_#{System.unique_integer([:positive])}"
+
+      handle = Dets.open!(name, path, fn _ -> :ok end)
+      Dets.put(handle, :offset, 42)
+
+      assert Dets.get(handle, :offset) == 42
+      assert Dets.get(handle, :absent) == nil
+      assert Dets.get(handle, :absent, :fallback) == :fallback
+
+      Dets.close(handle)
+    end
+  end
+
   describe "nil handle is a no-op" do
     test "put/delete/clear/close all return :ok with no handle" do
       assert :ok = Dets.put(nil, "k", 1)
       assert :ok = Dets.delete(nil, "k")
       assert :ok = Dets.clear(nil)
       assert :ok = Dets.close(nil)
+    end
+
+    test "get returns the default with no handle" do
+      assert Dets.get(nil, "k") == nil
+      assert Dets.get(nil, "k", 7) == 7
     end
   end
 end
