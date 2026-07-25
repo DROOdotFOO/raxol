@@ -81,7 +81,7 @@ defmodule Raxol.Core.Runtime.Lifecycle.MultiInstanceEnvironmentTest do
     end
   end
 
-  describe "Backends.render_to_io_writer/2" do
+  describe "Backends.render_to_io_writer/3" do
     test "delivers the buffer to the io_writer" do
       test_pid = self()
 
@@ -99,6 +99,51 @@ defmodule Raxol.Core.Runtime.Lifecycle.MultiInstanceEnvironmentTest do
       assert buffer == new_state.buffer
     end
 
+    test "delivers an explicitly passed view tree" do
+      test_pid = self()
+
+      state = %{
+        width: 10,
+        height: 3,
+        buffer: nil,
+        io_writer: fn data -> send(test_pid, {:frame, data}) end
+      }
+
+      view = %{type: :button, id: "ok", content: "OK"}
+
+      assert {:ok, _} =
+               Backends.render_to_io_writer([{0, 0, "x", :white, :black, []}], state, view)
+
+      assert_received {:frame, %{view_tree: ^view}}
+    end
+
+    test "accepts the engine's struct state (Access-on-struct regression)" do
+      # The engine passes %Engine.State{}, which does not implement Access;
+      # the old state[:view_tree] raised UndefinedFunctionError here. A plain
+      # map cannot reproduce that, so this case pins the struct path.
+      test_pid = self()
+
+      state =
+        struct(Raxol.Core.Runtime.Rendering.Engine.State,
+          width: 10,
+          height: 3,
+          buffer: nil,
+          io_writer: fn data -> send(test_pid, {:frame, data}) end
+        )
+
+      view = %{type: :text, content: "hi"}
+
+      assert {:ok, _} =
+               Backends.render_to_io_writer([{0, 0, "h", :white, :black, []}], state, view)
+
+      assert_received {:frame, %{buffer: _, view_tree: ^view}}
+
+      assert {:ok, _} =
+               Backends.render_to_io_writer([{0, 0, "h", :white, :black, []}], state)
+
+      assert_received {:frame, %{view_tree: nil}}
+    end
+
     test "render_to_telegram delegates to the same path" do
       test_pid = self()
 
@@ -111,8 +156,8 @@ defmodule Raxol.Core.Runtime.Lifecycle.MultiInstanceEnvironmentTest do
 
       cells = [{0, 0, "x", :white, :black, []}]
 
-      assert {:ok, _} = Backends.render_to_telegram(cells, state)
-      assert_received {:frame, %{buffer: _}}
+      assert {:ok, _} = Backends.render_to_telegram(cells, state, %{type: :row})
+      assert_received {:frame, %{buffer: _, view_tree: %{type: :row}}}
     end
 
     test "a missing io_writer does not crash" do

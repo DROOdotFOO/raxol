@@ -10,9 +10,11 @@ defmodule Raxol.Gateway.Handler do
   `environment: :gateway`) ship with the package.
 
   The optional `terminate/2` runs when the session stops cleanly (idle
-  timeout, explicit stop) -- the hook for a handler that owns linked
-  processes, since a session's `:normal` exit does not propagate over
-  links. It is best-effort: a killed session never reaches it.
+  timeout, `SessionRouter.stop_session/2`, supervisor shutdown, explicit
+  stop; the session traps exits so supervisor-driven stops reach it) -- the
+  hook for a handler that owns linked processes, since a session's `:normal`
+  exit does not propagate over links. It is best-effort: a brutally killed
+  session never reaches it.
   """
 
   alias Raxol.Gateway.Route

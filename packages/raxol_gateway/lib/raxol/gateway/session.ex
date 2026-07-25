@@ -51,6 +51,13 @@ defmodule Raxol.Gateway.Session do
     route = Keyword.fetch!(opts, :route)
     {handler_mod, handler_opts} = Keyword.fetch!(opts, :handler)
 
+    # Trap exits so terminate/2 -- and with it the handler's optional
+    # terminate -- also runs on supervisor-driven stops: the router's
+    # stop_session goes through DynamicSupervisor.terminate_child, which
+    # delivers exit(:shutdown) and would otherwise kill the session with no
+    # teardown at all.
+    Process.flag(:trap_exit, true)
+
     case handler_mod.init(route, handler_opts) do
       {:ok, handler_state} ->
         state = %{
@@ -99,9 +106,16 @@ defmodule Raxol.Gateway.Session do
   # mailbox and arm_timer/1 has since re-armed. Cancelling alone cannot prevent
   # this (the message may already be queued), so only the current ref stops.
   def handle_info({:idle_timeout, _stale}, state), do: {:noreply, state}
+
+  # Trapping exits means a crashed handler-owned linked process (e.g. the
+  # Handler.Lifecycle per-chat app) arrives here instead of killing the
+  # session outright; stop with the same reason so the chat is not a zombie.
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+  def handle_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
   def handle_info(_msg, state), do: {:noreply, state}
 
-  # Runs on clean stops (idle timeout, explicit stop). A handler owning
+  # Runs on clean stops (idle timeout, router stop_session, supervisor
+  # shutdown, explicit stop); only a brutal kill skips it. A handler owning
   # linked processes needs this: the session's :normal exit does not
   # propagate over links, so without teardown they would leak.
   @impl true
