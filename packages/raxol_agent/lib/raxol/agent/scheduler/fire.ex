@@ -64,7 +64,7 @@ defmodule Raxol.Agent.Scheduler.Fire do
 
     react_opts =
       run_opts
-      |> Keyword.put(:actions, guard_context_actions(actions, run_opts))
+      |> Keyword.put(:actions, guard_cronjob_action(actions, run_opts))
       |> Keyword.put(:context, context)
 
     Stream.react(prompt, react_opts)
@@ -78,9 +78,14 @@ defmodule Raxol.Agent.Scheduler.Fire do
   # guard onto on that path, so fail closed: withhold the cronjob action entirely
   # rather than expose unpoliced schedule-more-work capability to a fresh fire.
   # The framework path enforces the guard in-process and keeps the action, which
-  # is why this only strips when the resolved backend is native (checked lazily,
-  # after the cheap membership test, so the common no-cronjob fire pays nothing).
-  defp guard_context_actions(actions, run_opts) do
+  # is why this only strips when the resolved backend is native. This guards ONE
+  # action by name; a second context-guarded action (e.g. #726's authorizer /
+  # hooks / owner enforcement over the native MCP path) needs its own clause here,
+  # it is not covered by adding this action to some list. `native_tool_loop?/1`
+  # re-resolves the backend (a second resolve if the turn also auto-provisions),
+  # but only after the cheap `Cronjob in actions` membership test, so the common
+  # no-cronjob fire never resolves twice and pays nothing.
+  defp guard_cronjob_action(actions, run_opts) do
     if Cronjob in actions and Stream.native_tool_loop?(run_opts) do
       Enum.reject(actions, &(&1 == Cronjob))
     else
