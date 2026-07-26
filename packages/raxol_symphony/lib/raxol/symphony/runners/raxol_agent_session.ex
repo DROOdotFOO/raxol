@@ -116,21 +116,27 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
       reads the entry and **deletes it on that read**, so a continued
       issue oscillates between one and zero rows.
     * **Terminal flush.** `flush_prompt_cache/2` deletes an issue's row
-      by `issue.id`. The orchestrator calls it when an issue leaves the
-      run set (reached a terminal state, or was dropped), which reclaims
-      the single row a one-shot issue (completes on first dispatch, no
-      continuation reads it) or an odd-length continuation chain leaves
-      behind. Because the key is `issue.id` alone, this works even
-      though the issue's content (and thus its fingerprint) has changed
-      by the time it is observed terminal.
+      by `issue.id`. The orchestrator calls it at *every* site an issue
+      leaves the run set for good: a retry that finds it terminal, gone,
+      or no longer active; a user `stop_run` (whether it was running or
+      paused); and a reconcile-kill. This reclaims the single row a
+      one-shot issue (completes on first dispatch, no continuation reads
+      it), or an odd-length continuation chain, leaves behind. Because
+      the key is `issue.id` alone, this works even though the issue's
+      content (and thus its fingerprint) has changed by the time it is
+      observed terminal.
 
-  Together these keep the live-entry count at `O(issues currently
-  in-flight)`, not `O(issues ever processed)`. The TTL is only a
-  backstop for the edge exits the orchestrator does not route through
-  `flush_prompt_cache/2`; it is not the primary bound, because
-  `Cache.Ets` expires lazily (only a same-key `get` reclaims a stale
-  entry) and a row whose issue has moved on is never `get` again. There
-  is no background sweeper.
+  Together these give a true `O(issues currently in-flight)` bound, not
+  `O(issues ever processed)`: every path that drops an issue's claim also
+  flushes its row (the shared `remove_running` helper is *not* flushed
+  in-place, because the stall path reuses it before re-dispatching; the
+  terminal callers flush at their own call sites instead), so no row
+  outlives the run that wrote it. The TTL is therefore not a correctness
+  backstop for that bound -- a row whose issue has moved on is never
+  `get` again, so `Cache.Ets`'s lazy expiry (only a same-key `get`
+  reclaims a stale entry) could not fire for it in any case. The TTL's
+  sole job is to cap the staleness of a row that is rewritten in place
+  while its issue is still in-flight. There is no background sweeper.
 
   ### Relationship to `PromptBuilder`'s template memo
 
@@ -153,8 +159,6 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   """
 
   @behaviour Raxol.Symphony.Runner
-
-  require Logger
 
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Runner}
 

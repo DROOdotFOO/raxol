@@ -182,9 +182,11 @@ defmodule Raxol.Symphony.Orchestrator do
         Process.demonitor(entry.worker_ref, [:flush])
         Process.exit(entry.worker_pid, :kill)
 
+        # Terminal: the user stopped the run, it is not re-dispatched.
         new_state =
           state
           |> remove_running(issue_id, :stopped_by_user)
+          |> reclaim_prompt_cache(issue_id)
           |> notify_listeners(:worker_stopped)
 
         {:reply, :ok, new_state}
@@ -192,10 +194,12 @@ defmodule Raxol.Symphony.Orchestrator do
       Map.has_key?(state.paused, issue_id) ->
         forget_paused(state.paused_saver, issue_id)
 
+        # Terminal: a paused run stopped by the user does not resume.
         new_state =
           state
           |> Map.put(:paused, Map.delete(state.paused, issue_id))
           |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
+          |> reclaim_prompt_cache(issue_id)
           |> notify_listeners(:worker_stopped)
 
         {:reply, :ok, new_state}
@@ -814,8 +818,10 @@ defmodule Raxol.Symphony.Orchestrator do
           "symphony.orchestrator.worker_stopped_by_user issue=#{entry.issue.identifier}"
         )
 
+        # Terminal: user stop, no re-dispatch -- reclaim any cache row.
         state
         |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
+        |> reclaim_prompt_cache(issue_id)
         |> notify_listeners(:worker_stopped)
 
       other ->
@@ -1112,10 +1118,21 @@ defmodule Raxol.Symphony.Orchestrator do
   # active): drop the claim AND flush any prompt-cache row it left behind. The
   # session runner's `prompt_cache` writes a row on every fresh dispatch; a
   # one-shot issue (or an odd-length continuation chain) leaves one unread row
-  # that only this terminal flush reclaims. No-op unless `prompt_cache` is set.
+  # that only this terminal flush reclaims.
   defp release_issue(%State{} = state, issue_id) do
+    state
+    |> reclaim_prompt_cache(issue_id)
+    |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
+  end
+
+  # Flush the prompt-cache row an issue may have left behind. Pipeable; a no-op
+  # unless the session runner's `prompt_cache` is configured. Call this ONLY at
+  # genuinely-terminal release sites (the same `issue.id` is NOT about to be
+  # re-dispatched) -- flushing on a continuation/retry path would just force a
+  # needless re-render on the next dispatch.
+  defp reclaim_prompt_cache(%State{} = state, issue_id) do
     RaxolAgentSession.flush_prompt_cache(state.config, issue_id)
-    %{state | claimed: MapSet.delete(state.claimed, issue_id)}
+    state
   end
 
   defp requeue_retry(%State{} = state, issue_id, retry_entry) do
@@ -1228,6 +1245,10 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
+  # Reconcile-kill: the tracker reports this issue terminal or no longer
+  # active, so the run is torn down for good and is NOT re-dispatched. Flush
+  # its prompt-cache row here (not in the shared `remove_running`, which the
+  # stall path also uses before a re-dispatch retry).
   defp terminate_running(%State{} = state, issue_id, entry, clean_workspace?) do
     Process.demonitor(entry.worker_ref, [:flush])
     Process.exit(entry.worker_pid, :kill)
@@ -1237,7 +1258,9 @@ defmodule Raxol.Symphony.Orchestrator do
       Workspace.remove(state.config, entry.workspace_path)
     end
 
-    %{state | claimed: MapSet.delete(state.claimed, issue_id)}
+    state
+    |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
+    |> reclaim_prompt_cache(issue_id)
   end
 
   # -- Run events -------------------------------------------------------------
