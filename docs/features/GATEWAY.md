@@ -31,7 +31,7 @@ Shipping adapters:
 | `Raxol.Gateway.Adapter.InMemory` | `:in_memory` (reference; sink pid) | raxol_gateway |
 | `Raxol.Telegram.GatewayAdapter` | `:telegram` (text messages, chunked plain-text sends) | raxol_telegram |
 | `Raxol.Gateway.Adapter.Discord` | `:discord` (MESSAGE_CREATE text, chunked plain-text sends) | raxol_gateway |
-| `Raxol.Gateway.Adapter.Email` | `:email` (outbound-only SMTP; inbound is a follow-up) | raxol_gateway |
+| `Raxol.Gateway.Adapter.Email` | `:email` (bidirectional: SMTP send + RFC822 inbound; transport injected) | raxol_gateway |
 
 A full Telegram wiring pairs the adapter with `Raxol.Telegram.UpdatePoller` (getUpdates
 long polling) feeding `normalize_event/1` into the router:
@@ -242,10 +242,9 @@ decides `authorize/2` in this order:
 
 ### Email as a delivery target
 
-`Raxol.Gateway.Adapter.Email` is outbound-only this slice, which is exactly what the
+`Raxol.Gateway.Adapter.Email` handles both directions. Outbound is what the
 `{:home, route}` mode wants: cron and background results land in a mailbox with no
-platform approval process. It needs the optional `gen_smtp` dependency;
-`normalize_event/1` always returns `:ignore` (inbound email is a separate follow-up), and
+platform approval process. It needs the optional `gen_smtp` dependency, and
 a route addresses a mailbox directly:
 
 ```elixir
@@ -266,6 +265,53 @@ route = Raxol.Gateway.Route.new(%{platform: :email, chat_type: :dm, chat_id: "op
 
 The rendered reply becomes a text/plain MIME message (utf-8, quoted-printable); nothing
 is chunked, since email has no chat-style length limit.
+
+### Email as a conversational surface
+
+Inbound email makes an email thread a per-chat session like any other platform.
+`normalize_event/1` parses a raw RFC822 message (`:mimemail.decode`, never raising) into
+`{:ok, route, %{text: body}}`: it routes on the normalized sender address
+(`chat_type: :dm`, `chat_id` lower-cased with the display name stripped), takes the first
+`text/plain` part with quoted history trimmed, and surfaces `Message-ID`/`In-Reply-To`/
+`References`/`Subject` under the event's `:email` key. Non-mail, unparseable, or
+sender-less input returns `:ignore`.
+
+The transport that pulls mail off a mailbox is injected, not bundled, because `gen_smtp`
+only speaks SMTP and the mailbox a deployment reads (IMAP, POP3, the Gmail API, or an SMTP
+listener) is its choice. `Raxol.Gateway.Adapter.Email.Inbox` is the sink-agnostic poll
+feed (mirroring `Raxol.Telegram.UpdatePoller`): an injectable `:fetch_fn` cursor loop with
+exponential backoff and credential-redacted status. `Raxol.Gateway.Adapter.Email.ThreadStore`
+is a capped per-conversation store the wiring records inbound `Message-ID`s into and the
+adapter reads back through `conn`'s `:thread_lookup`, so outbound replies set
+`In-Reply-To`/`References`/`Re:` headers and mail clients keep the conversation together
+(the frozen `send_message/3` has no per-send channel for the reply id).
+
+```elixir
+{:ok, store} = Raxol.Gateway.Adapter.Email.ThreadStore.start_link(name: MyThreads)
+
+{:ok, conn} =
+  Raxol.Gateway.Adapter.Email.connect(
+    relay: "smtp.example.com",
+    from: "bot@example.com",
+    thread_lookup: Raxol.Gateway.Adapter.Email.ThreadStore.thread_lookup_fn(store)
+  )
+
+Raxol.Gateway.Adapter.Email.Inbox.start_link(
+  fetch_fn: fn cursor -> MyMailbox.fetch_since(cursor) end,
+  on_message: fn raw ->
+    case Raxol.Gateway.Adapter.Email.normalize_event(raw) do
+      {:ok, route, event} ->
+        with :allow <- Raxol.Gateway.Pairing.authorize(MyPairing, route) do
+          Raxol.Gateway.Adapter.Email.ThreadStore.record_event(store, route, event)
+          Raxol.Gateway.SessionRouter.route(MyRouter, route, event)
+        end
+
+      :ignore ->
+        :ok
+    end
+  end
+)
+```
 
 ## Handoff
 
@@ -309,8 +355,10 @@ and three platforms sit behind the frozen contract: Telegram
 (`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text and voice notes -
 keyboards, callbacks, and other media are still the TEA surface's domain), Discord
 (`Raxol.Gateway.Adapter.Discord` + its `GatewaySocket`; text-only this slice), and
-Email (`Raxol.Gateway.Adapter.Email`; outbound-only SMTP delivery). Voice notes
-transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deferred: inbound email.
+Email (`Raxol.Gateway.Adapter.Email`; bidirectional SMTP send + RFC822 inbound via
+`Email.Inbox` + `Email.ThreadStore`, with the mailbox transport injected). Voice notes
+transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deployment-supplied: the
+concrete inbound-email transport (IMAP/POP/Gmail).
 Any module satisfying the `Handler` callbacks works alongside the shipped handlers. See
 `docs/adr/0023-unified-messaging-gateway.md`.
 

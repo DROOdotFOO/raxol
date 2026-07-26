@@ -44,11 +44,136 @@ defmodule Raxol.Gateway.Adapter.EmailTest do
     end
   end
 
-  test "platform/0, disconnect/1, and inbound is a follow-up" do
+  test "platform/0 and disconnect/1" do
     assert Email.platform() == :email
     assert Email.disconnect([]) == :ok
-    assert Email.normalize_event(%{any: "thing"}) == :ignore
-    assert Email.normalize_event("raw") == :ignore
+  end
+
+  describe "normalize_event/1 (inbound)" do
+    test "maps a plain-text message to a dm route and text event" do
+      raw =
+        raw_mail(
+          [
+            {"From", "bob@x.com"},
+            {"To", "bot@example.com"},
+            {"Subject", "hi"},
+            {"Message-ID", "<m1@x.com>"}
+          ],
+          "hello there"
+        )
+
+      assert {:ok, route, event} = Email.normalize_event(raw)
+      assert %Route{platform: :email, chat_type: :dm, chat_id: "bob@x.com"} = route
+      assert route.user_id == "bob@x.com"
+      assert event.text == "hello there"
+    end
+
+    test "strips the display name and lower-cases the sender address" do
+      raw = raw_mail([{"From", "Bob Smith <Bob@X.COM>"}, {"To", "bot@x"}], "hi")
+      assert {:ok, %Route{chat_id: "bob@x.com"}, _event} = Email.normalize_event(raw)
+    end
+
+    test "picks the text/plain part out of a multipart/alternative message" do
+      raw =
+        raw_multipart(
+          [{"From", "a@x.com"}, {"To", "bot@x"}, {"Subject", "Re: s"}],
+          "the plain part",
+          "<p>the html part</p>"
+        )
+
+      assert {:ok, _route, %{text: "the plain part"}} = Email.normalize_event(raw)
+    end
+
+    test "trims quoted history below the reply" do
+      raw =
+        raw_mail(
+          [{"From", "a@x.com"}, {"To", "bot@x"}],
+          "Yes, ship it.\r\n\r\nOn Mon, Alice wrote:\r\n> old quoted line"
+        )
+
+      assert {:ok, _route, %{text: "Yes, ship it."}} = Email.normalize_event(raw)
+    end
+
+    test "surfaces threading metadata under :email" do
+      raw =
+        raw_mail(
+          [
+            {"From", "Bob <bob@x.com>"},
+            {"To", "bot@x"},
+            {"Subject", "Re: hi"},
+            {"Message-ID", "<m1@x.com>"},
+            {"In-Reply-To", "<p0@x.com>"},
+            {"References", "<r0@x.com> <p0@x.com>"}
+          ],
+          "body"
+        )
+
+      assert {:ok, _route, %{email: meta}} = Email.normalize_event(raw)
+      assert meta.message_id == "<m1@x.com>"
+      assert meta.in_reply_to == "<p0@x.com>"
+      assert meta.references == ["<r0@x.com>", "<p0@x.com>"]
+      assert meta.subject == "Re: hi"
+      assert meta.from == "bob@x.com"
+    end
+
+    test "accepts a %{rfc822: raw} envelope" do
+      raw = raw_mail([{"From", "a@x.com"}, {"To", "bot@x"}], "hi")
+      assert {:ok, %Route{chat_id: "a@x.com"}, _event} = Email.normalize_event(%{rfc822: raw})
+    end
+
+    test "non-mail, unparseable, and sender-less input are ignored" do
+      assert Email.normalize_event(%{any: "thing"}) == :ignore
+      assert Email.normalize_event("raw") == :ignore
+      assert Email.normalize_event(<<0xFF, 0xFE>>) == :ignore
+      assert Email.normalize_event(raw_mail([{"To", "bot@x"}], "no sender")) == :ignore
+    end
+  end
+
+  describe "send_message/3 (threading)" do
+    test "sets In-Reply-To, References, and a Re: subject from thread_lookup" do
+      thread = %{message_id: "<m1@x.com>", references: ["<r0@x.com>"], subject: "status"}
+      conn = capture_conn(self(), thread_lookup: fn _route -> thread end)
+
+      assert :ok = Email.send_message(conn, @route, "reply body")
+      assert_receive {:smtp_send, {_from, _to, mime}, _relay}
+      headers = decoded_headers(mime)
+
+      assert headers["In-Reply-To"] == "<m1@x.com>"
+      assert headers["References"] == "<r0@x.com> <m1@x.com>"
+      assert headers["Subject"] == "Re: status"
+      assert headers["Message-ID"] =~ ~r/^<.+>$/
+    end
+
+    test "does not double the Re: prefix on an already-Re: subject" do
+      conn =
+        capture_conn(self(),
+          thread_lookup: fn _route -> %{message_id: "<m@x>", subject: "Re: hi"} end
+        )
+
+      assert :ok = Email.send_message(conn, @route, "body")
+      assert_receive {:smtp_send, {_from, _to, mime}, _relay}
+      assert decoded_headers(mime)["Subject"] == "Re: hi"
+    end
+
+    test "without a thread, carries only a generated Message-ID and the default subject" do
+      conn = capture_conn(self())
+
+      assert :ok = Email.send_message(conn, @route, "body")
+      assert_receive {:smtp_send, {_from, _to, mime}, _relay}
+      headers = decoded_headers(mime)
+
+      assert headers["Subject"] == "Raxol Gateway"
+      assert headers["Message-ID"] =~ ~r/^<.+>$/
+      refute Map.has_key?(headers, "In-Reply-To")
+    end
+
+    test "message_id_fn overrides the generated Message-ID" do
+      conn = capture_conn(self(), message_id_fn: fn -> "<fixed@raxol.io>" end)
+
+      assert :ok = Email.send_message(conn, @route, "body")
+      assert_receive {:smtp_send, {_from, _to, mime}, _relay}
+      assert decoded_headers(mime)["Message-ID"] == "<fixed@raxol.io>"
+    end
   end
 
   describe "send_message/3" do
@@ -172,5 +297,44 @@ defmodule Raxol.Gateway.Adapter.EmailTest do
       assert {:error, :unsupported_rendered} =
                Email.send_message(conn, @route, {:view, []})
     end
+  end
+
+  # -- helpers ----------------------------------------------------------------
+
+  defp raw_mail(headers, body) do
+    lines = Enum.map(headers, fn {k, v} -> "#{k}: #{v}" end)
+    Enum.join(lines ++ ["", body], "\r\n") <> "\r\n"
+  end
+
+  defp raw_multipart(headers, plain, html) do
+    boundary = "BOUND"
+
+    all_headers =
+      headers ++
+        [
+          {"MIME-Version", "1.0"},
+          {"Content-Type", ~s(multipart/alternative; boundary="#{boundary}")}
+        ]
+
+    header_lines = Enum.map(all_headers, fn {k, v} -> "#{k}: #{v}" end)
+
+    parts = [
+      "--#{boundary}",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      plain,
+      "--#{boundary}",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      html,
+      "--#{boundary}--"
+    ]
+
+    Enum.join(header_lines ++ [""] ++ parts, "\r\n") <> "\r\n"
+  end
+
+  defp decoded_headers(mime) do
+    {_type, _sub, headers, _params, _body} = :mimemail.decode(mime, [])
+    Map.new(headers)
   end
 end
