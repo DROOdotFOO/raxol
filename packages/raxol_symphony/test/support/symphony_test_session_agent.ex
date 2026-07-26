@@ -23,6 +23,33 @@ defmodule Raxol.Symphony.TestSupport.SessionAgentSucceed do
   def view(_model), do: %{type: :text, content: "ok"}
 end
 
+defmodule Raxol.Symphony.TestSupport.SessionAgentEcho do
+  @moduledoc """
+  TEA agent that echoes the seed prompt back in a `:turn_complete`
+  event (surfaced to the runner's parent as a `:run_event`) before
+  `:done`. Used to prove which rendered prompt the cache served.
+  """
+
+  def init(_args), do: {%{}, []}
+
+  def update({:agent_message, _, {:symphony_start, payload}}, model) do
+    if Code.ensure_loaded?(Raxol.Agent.SessionStreamer) do
+      Raxol.Agent.SessionStreamer.emit(
+        payload.session_id,
+        {:turn_complete, %{prompt: payload.prompt}}
+      )
+
+      Raxol.Agent.SessionStreamer.emit(payload.session_id, {:done, %{result: :ok}})
+    end
+
+    {model, []}
+  end
+
+  def update(_msg, model), do: {model, []}
+
+  def view(_model), do: %{type: :text, content: "echo"}
+end
+
 defmodule Raxol.Symphony.TestSupport.SessionAgentErrors do
   @moduledoc """
   TEA agent module that emits a `:error` event on `:symphony_start`.

@@ -133,6 +133,75 @@ defmodule Raxol.Symphony.OrchestratorPausedGcTest do
       refute File.dir?(workspace_path)
     end
 
+    test "flushes the abandoned run's prompt-cache row, so it does not leak", %{
+      saver: {MemorySaver, cfg} = saver,
+      workspace_root: workspace_root
+    } do
+      MemorySaver.ensure_table(cfg)
+
+      # Opt-in prompt cache wired under runner.agent, as a live run would have.
+      cache_table = :"symphony_gc_prompt_#{:erlang.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        if :ets.whereis(cache_table) != :undefined, do: :ets.delete(cache_table)
+      end)
+
+      cache = {Raxol.Agent.Cache.Ets, %{table: cache_table}}
+
+      cached_config =
+        Config.from_workflow(%{
+          config: %{
+            tracker: %{
+              kind: "memory",
+              active_states: ["Todo", "In Progress"],
+              terminal_states: ["Done", "Cancelled"]
+            },
+            workspace: %{root: workspace_root},
+            polling: %{interval_ms: 60_000},
+            agent: %{max_concurrent_agents: 3, max_retry_backoff_ms: 60_000},
+            codex: %{stall_timeout_ms: 0},
+            runner: %{kind: "noop", agent: %{prompt_cache: cache}}
+          },
+          prompt_template: ""
+        })
+
+      # Seed the row a live dispatch of this issue would have written, keyed on
+      # the stable issue id ({:prompt, "a"}).
+      :ok = Raxol.Agent.Cache.put(cache, {:prompt, "a"}, {"fp", "MT-1"}, 60_000)
+      assert :ets.info(cache_table, :size) == 1
+
+      {:ok, %{path: workspace_path}} = Workspace.ensure(cached_config, "MT-1")
+
+      stale = System.system_time(:millisecond) - :timer.hours(24 * 8)
+
+      entry = %{
+        issue: issue("a", "MT-1", "Todo"),
+        attempt: 1,
+        workspace_path: workspace_path,
+        interrupt_reason: :awaiting_buyer_payment,
+        resume_token: :tok,
+        paused_at: System.monotonic_time(:millisecond),
+        paused_at_system: stale,
+        last_event: nil,
+        last_message: nil,
+        turn_count: 2,
+        tokens: %{input_tokens: 0, output_tokens: 0, total_tokens: 0}
+      }
+
+      :ok = MemorySaver.put(cfg, "a", entry)
+
+      orch = start_orchestrator(cached_config, saver, [])
+      assert Orchestrator.snapshot(orch).counts.paused == 1
+
+      :ok = Orchestrator.tick_now(orch)
+
+      # The abandoned paused run was GC'd past its TTL...
+      assert Orchestrator.snapshot(orch).counts.paused == 0
+      # ...and the paused-GC path flushed its prompt-cache row, so the terminal
+      # claim-drop leaves no orphaned entry (O(in-flight) bound holds here too).
+      assert :ets.info(cache_table, :size) == 0
+    end
+
     test "keeps a recently paused entry", %{config: config, saver: {MemorySaver, cfg} = saver} do
       MemorySaver.ensure_table(cfg)
 

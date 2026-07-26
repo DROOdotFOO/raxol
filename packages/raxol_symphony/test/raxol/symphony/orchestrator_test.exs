@@ -51,6 +51,53 @@ defmodule Raxol.Symphony.OrchestratorTest do
     pid
   end
 
+  # An isolated ETS-backed prompt cache, mirroring the session-runner harness.
+  defp ets_cache_adapter do
+    table = :"orch_prompt_cache_test_#{:erlang.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+    end)
+
+    {Raxol.Agent.Cache.Ets, %{table: table}}
+  end
+
+  # A config whose session runner has `prompt_cache` wired, so the
+  # orchestrator's terminal flush actually reclaims rows. Dispatch still runs
+  # through the Noop runner (via `runner_module:`), which never writes the
+  # cache -- so the row is seeded directly, standing in for what a real
+  # `RaxolAgentSession` dispatch would have left behind.
+  defp cache_config(adapter) do
+    Config.from_workflow(%{
+      config: %{
+        tracker: %{
+          kind: "memory",
+          active_states: ["Todo", "In Progress"],
+          terminal_states: ["Done", "Cancelled"]
+        },
+        polling: %{interval_ms: 60_000},
+        agent: %{max_concurrent_agents: 3, max_retry_backoff_ms: 60_000},
+        codex: %{stall_timeout_ms: 0},
+        runner: %{kind: "noop", agent: %{prompt_cache: adapter}}
+      },
+      prompt_template: ""
+    })
+  end
+
+  defp seed_prompt_row(adapter, issue_id) do
+    :ok =
+      Raxol.Agent.Cache.put(
+        adapter,
+        {:prompt, issue_id},
+        {<<0>>, "SEEDED"},
+        60_000
+      )
+  end
+
+  defp cache_size({_module, %{table: table}}) do
+    if :ets.whereis(table) == :undefined, do: 0, else: :ets.info(table, :size)
+  end
+
   defp wait_until(timeout_ms \\ 1_000, fun) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(deadline, fun)
@@ -317,6 +364,90 @@ defmodule Raxol.Symphony.OrchestratorTest do
       [paused] = Orchestrator.snapshot(pid).paused
       assert paused.turn_count == 1
       assert paused.tokens.total_tokens == 30
+    end
+  end
+
+  # Each terminal release site must flush the issue's prompt-cache row so a
+  # bounded (per-issue, single-slot) cache never leaks one permanent resident
+  # row per stopped/reconciled issue. The row is seeded directly here because
+  # dispatch goes through the Noop runner, which never writes the cache; the
+  # seed stands in for the row a real `RaxolAgentSession` dispatch leaves.
+  describe "prompt-cache flush on terminal exits" do
+    test "stop_run of a running issue reclaims its cache row" do
+      adapter = ets_cache_adapter()
+      config = cache_config(adapter)
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+      Noop.Director.set("MT-1", :stall)
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+      assert Orchestrator.snapshot(pid).counts.running == 1
+
+      seed_prompt_row(adapter, "a")
+      assert cache_size(adapter) == 1
+
+      assert :ok = Orchestrator.stop_run(pid, "a")
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.running == 0 end)
+
+      assert cache_size(adapter) == 0
+    end
+
+    test "stop_run of a paused issue reclaims its cache row" do
+      adapter = ets_cache_adapter()
+      config = cache_config(adapter)
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+      Noop.Director.set("MT-1", {:pause, :awaiting_review, %{pr: 7}})
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.paused == 1 end)
+
+      seed_prompt_row(adapter, "a")
+      assert cache_size(adapter) == 1
+
+      assert :ok = Orchestrator.stop_run(pid, "a")
+
+      assert cache_size(adapter) == 0
+      assert Orchestrator.snapshot(pid).counts.paused == 0
+    end
+
+    test "reconcile-kill of a now-terminal issue reclaims its cache row" do
+      adapter = ets_cache_adapter()
+      config = cache_config(adapter)
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+      Noop.Director.set("MT-1", :stall)
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+      assert Orchestrator.snapshot(pid).counts.running == 1
+
+      seed_prompt_row(adapter, "a")
+      assert cache_size(adapter) == 1
+
+      # Tracker goes terminal -> reconcile terminates the run (terminate_running).
+      Memory.transition("a", "Done")
+      :ok = Orchestrator.tick_now(pid)
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.running == 0 end)
+
+      assert cache_size(adapter) == 0
+    end
+
+    test "a normal exit (continuation) does NOT flush -- the row is re-used" do
+      adapter = ets_cache_adapter()
+      config = cache_config(adapter)
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+      Noop.Director.set("MT-1", {:succeed_after, 20})
+
+      seed_prompt_row(adapter, "a")
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+
+      # Worker exits :normal -> continuation retry, issue stays active (Todo),
+      # so the same issue.id is re-dispatched. The terminal flush must NOT run.
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.retrying == 1 end)
+
+      assert cache_size(adapter) == 1
     end
   end
 end
