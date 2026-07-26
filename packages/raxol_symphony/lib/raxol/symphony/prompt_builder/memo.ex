@@ -24,6 +24,11 @@ defmodule Raxol.Symphony.PromptBuilder.Memo do
 
   @empty_memo %{map: %{}, order: []}
 
+  # Short write-path deadline: a wedged singleton (mailbox backup during a
+  # global-GC storm) must never stall a prompt build. On timeout the write
+  # degrades to a no-op, identical in cost to a cache miss (re-parse next call).
+  @write_timeout_ms 1_000
+
   @doc """
   Serialize a bounded FIFO insert of `parsed` under `template` into the
   `:persistent_term` memo at `key`, capped at `max` entries.
@@ -31,12 +36,25 @@ defmodule Raxol.Symphony.PromptBuilder.Memo do
   A no-op (no write, so no needless global GC) when `template` is already
   memoized -- which is what keeps two concurrent writers of the same new
   template from appending it to `order` twice.
+
+  The memo is a pure performance cache: a write is always best-effort. If the
+  single-writer is absent, dies mid-call (TOCTOU `:noproc`), or wedges past
+  `@write_timeout_ms` (`:timeout`), the write degrades to a silent no-op --
+  the caller's parse result is unaffected, the memo simply is not updated this
+  time and the template re-parses on the next call. A memo write failure must
+  never propagate out of `Raxol.Symphony.PromptBuilder.build/2`.
   """
   @spec memoize(term(), pos_integer(), binary(), term()) :: :ok
   def memoize(key, max, template, parsed)
       when is_integer(max) and max > 0 and is_binary(template) do
     ensure_started()
-    GenServer.call(__MODULE__, {:memoize, key, max, template, parsed})
+    GenServer.call(__MODULE__, {:memoize, key, max, template, parsed}, @write_timeout_ms)
+  catch
+    # A broken/absent/wedged writer degrades to a best-effort no-op. Exit
+    # shapes: `:noproc` (orphan died between `whereis` and `call`, or was never
+    # started), `:timeout` (call deadline), and the `{reason, {GenServer, :call, _}}`
+    # wrappers `GenServer.call` raises for a crash mid-call.
+    :exit, _reason -> :ok
   end
 
   @impl true

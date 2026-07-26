@@ -10,6 +10,7 @@ defmodule Raxol.Symphony.PromptBuilderMemoTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Symphony.{Issue, PromptBuilder}
+  alias Raxol.Symphony.PromptBuilder.Memo
 
   @memo_key {PromptBuilder, :parsed_templates}
   @max_memoized 16
@@ -129,5 +130,94 @@ defmodule Raxol.Symphony.PromptBuilderMemoTest do
     assert map_size(m.map) == 1
     assert length(m.order) == 1
     assert m.order == Map.keys(m.map)
+  end
+
+  describe "a broken memo writer degrades to a best-effort no-op" do
+    test "build renders correctly when the writer has been killed (it restarts)" do
+      kill_memo()
+      refute Process.whereis(Memo)
+
+      template = "K {{ issue.identifier }}"
+      assert {:ok, "K MT-1"} = PromptBuilder.build(issue(), template)
+      # The absent writer was lazily restarted and the write went through.
+      assert Map.has_key?(memo().map, template)
+    end
+
+    test "a writer that dies mid-call never crashes build; re-parse is identical" do
+      install_standin_writer(:crash_on_call)
+
+      template = "C {{ issue.identifier }}"
+
+      # First build: the writer crashes on the `GenServer.call`. build/2 must
+      # NOT crash/exit -- the parse result is returned, the write is a no-op.
+      assert {:ok, "C MT-1"} = PromptBuilder.build(issue(), template)
+      assert memo().map == %{}
+
+      # The crashing stand-in died on that one call, so the next build lazily
+      # starts the real writer. Output is identical (re-parsed), now memoized.
+      assert {:ok, "C MT-1"} = PromptBuilder.build(issue(), template)
+      assert Map.has_key?(memo().map, template)
+    end
+
+    test "a wedged writer cannot stall build past the write deadline" do
+      install_standin_writer(:never_reply)
+
+      template = "W {{ issue.identifier }}"
+
+      {micros, result} =
+        :timer.tc(fn -> PromptBuilder.build(issue(), template) end)
+
+      # Returns the correct prompt despite the wedged singleton, and the 1s
+      # write deadline means it never blocks for the old 5s GenServer default.
+      assert {:ok, "W MT-1"} = result
+      assert micros < 3_000_000
+      # The write timed out, so it was a silent no-op: nothing memoized.
+      assert memo().map == %{}
+    end
+  end
+
+  # Kill the (possibly running) singleton writer and wait for the name to free.
+  defp kill_memo do
+    case Process.whereis(Memo) do
+      nil ->
+        :ok
+
+      pid ->
+        ref = Process.monitor(pid)
+        Process.exit(pid, :kill)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _} -> :ok
+        after
+          1_000 -> :ok
+        end
+    end
+  end
+
+  # Register a fake process under the writer's name so `ensure_started` finds a
+  # live pid (skips the real start) but the `GenServer.call` into it fails --
+  # exercising the try/catch :exit no-op. Killed on test exit.
+  defp install_standin_writer(:crash_on_call) do
+    install_standin(fn ->
+      receive do
+        {:"$gen_call", _from, _req} -> exit(:writer_died_mid_call)
+      end
+    end)
+  end
+
+  defp install_standin_writer(:never_reply) do
+    install_standin(fn -> Process.sleep(:infinity) end)
+  end
+
+  defp install_standin(fun) do
+    kill_memo()
+    pid = spawn(fun)
+    Process.register(pid, Memo)
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: Process.exit(pid, :kill)
+    end)
+
+    pid
   end
 end
