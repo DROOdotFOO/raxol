@@ -90,4 +90,82 @@ defmodule Raxol.Symphony.Worker.HostPoolTest do
       assert HostPool.free_count(pool) == 1
     end
   end
+
+  describe "reconcile/2 (config hot-reload)" do
+    test "nil pool gains slots for newly-configured hosts" do
+      pool = HostPool.reconcile(nil, specs(2))
+      assert HostPool.size(pool) == 2
+      assert HostPool.free_count(pool) == 2
+    end
+
+    test "an added host becomes a fresh free slot, busy slots untouched" do
+      pool = HostPool.new(specs(2))
+      {:ok, claimed, pool} = HostPool.claim(pool)
+
+      pool = HostPool.reconcile(pool, specs(3))
+
+      assert HostPool.size(pool) == 3
+      assert HostPool.busy_count(pool) == 1
+      assert HostPool.free_count(pool) == 2
+      # The claimed host is still held (busy), not re-freed by the reconcile.
+      assert HostSpec.id(claimed) in HostPool.host_ids(pool)
+      assert HostPool.draining_count(pool) == 0
+    end
+
+    test "a removed free host disappears from the pool" do
+      pool = HostPool.new(specs(3))
+      pool = HostPool.reconcile(pool, specs(2))
+
+      assert HostPool.size(pool) == 2
+      assert HostPool.host_ids(pool) == ["build-1", "build-2"]
+    end
+
+    test "a removed busy host is marked draining, kept out of allocation" do
+      [s1, s2] = specs(2)
+      pool = HostPool.new([s1, s2])
+      {:ok, ^s1, pool} = HostPool.claim(pool)
+
+      # build-1 is busy; drop it from config, keep build-2.
+      pool = HostPool.reconcile(pool, [s2])
+
+      assert HostPool.size(pool) == 2
+      assert HostPool.draining_count(pool) == 1
+      assert HostPool.busy_count(pool) == 1
+      assert HostPool.free_count(pool) == 1
+
+      # The draining host is not handed out; only the surviving free slot is.
+      {:ok, ^s2, pool} = HostPool.claim(pool)
+      assert HostPool.claim(pool) == :none_free
+    end
+
+    test "releasing a draining slot drops it entirely" do
+      [s1, s2] = specs(2)
+      pool = HostPool.new([s1, s2])
+      {:ok, ^s1, pool} = HostPool.claim(pool)
+      pool = HostPool.reconcile(pool, [s2])
+      assert HostPool.draining_count(pool) == 1
+
+      pool = HostPool.release(pool, s1)
+      assert HostPool.size(pool) == 1
+      assert HostPool.draining_count(pool) == 0
+      assert HostPool.host_ids(pool) == ["build-2"]
+    end
+
+    test "re-adding a still-draining host un-drains it" do
+      [s1, s2] = specs(2)
+      pool = HostPool.new([s1, s2])
+      {:ok, ^s1, pool} = HostPool.claim(pool)
+      pool = HostPool.reconcile(pool, [s2])
+      assert HostPool.draining_count(pool) == 1
+
+      pool = HostPool.reconcile(pool, [s1, s2])
+      assert HostPool.draining_count(pool) == 0
+      assert HostPool.busy_count(pool) == 1
+    end
+
+    test "reconcile to an empty desired set drops free slots to nil" do
+      pool = HostPool.new(specs(2))
+      assert HostPool.reconcile(pool, []) == nil
+    end
+  end
 end

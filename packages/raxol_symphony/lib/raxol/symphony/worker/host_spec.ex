@@ -23,15 +23,46 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   """
 
   @enforce_keys [:host]
-  defstruct [:host, :user, :port, :identity_file, :workspace_root]
+  defstruct [
+    :host,
+    :user,
+    :port,
+    :identity_file,
+    :workspace_root,
+    known_hosts: nil,
+    strict_host_key_checking: :accept_new
+  ]
+
+  @typedoc """
+  `StrictHostKeyChecking` policy for the eventual `ssh` invocation. Defaults
+  to `:accept_new` (trust-on-first-use, current behavior); `:yes` forces a
+  pre-seeded `known_hosts`, `:no` disables the check entirely.
+  """
+  @type host_key_mode :: :yes | :accept_new | :no
 
   @type t :: %__MODULE__{
           host: binary(),
           user: binary() | nil,
           port: pos_integer() | nil,
           identity_file: binary() | nil,
-          workspace_root: binary() | nil
+          workspace_root: binary() | nil,
+          known_hosts: binary() | nil,
+          strict_host_key_checking: host_key_mode()
         }
+
+  # Accepted `StrictHostKeyChecking` inputs -> canonical atom. Wire values
+  # arrive as strings (YAML front matter) or atoms (directly-built config);
+  # this whitelist maps them WITHOUT `String.to_atom/1`. Anything absent
+  # resolves to the `:invalid` sentinel, which `validate/2` rejects.
+  @host_key_modes %{
+    "yes" => :yes,
+    "accept_new" => :accept_new,
+    "accept-new" => :accept_new,
+    "no" => :no,
+    :yes => :yes,
+    :accept_new => :accept_new,
+    :no => :no
+  }
 
   @doc """
   Normalize a raw `ssh_hosts` entry into a `%HostSpec{}`.
@@ -62,7 +93,9 @@ defmodule Raxol.Symphony.Worker.HostSpec do
             user: string_or_nil(fetch(raw, :user)),
             port: positive_int_or_nil(fetch(raw, :port)),
             identity_file: string_or_nil(fetch(raw, :identity_file)),
-            workspace_root: string_or_nil(fetch(raw, :workspace_root))
+            workspace_root: string_or_nil(fetch(raw, :workspace_root)),
+            known_hosts: string_or_nil(fetch(raw, :known_hosts)),
+            strict_host_key_checking: host_key_mode(fetch(raw, :strict_host_key_checking))
           },
           raw
         )
@@ -93,9 +126,11 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   # BEFORE the value can reach an `ssh` invocation (transport, issue #743).
   @token_re ~r/\A[A-Za-z0-9_][A-Za-z0-9._-]*\z/
 
-  # Optional path fields become `ssh -i <file>` / a remote workspace root.
-  # Allow ordinary path characters; reject whitespace + shell metacharacters.
-  @path_re ~r/\A[A-Za-z0-9._\-\/~]+\z/
+  # Optional path fields become `ssh -i <file>` / `-o UserKnownHostsFile=...`
+  # / a remote workspace root. Allow ordinary path characters but forbid a
+  # leading `-` (matching @token_re) so a path can never be read as an `ssh`
+  # flag. Reject whitespace + shell metacharacters throughout.
+  @path_re ~r/\A[A-Za-z0-9._\/~][A-Za-z0-9._\-\/~]*\z/
 
   # Reject any spec whose host/user/path fields carry characters that could
   # break out of a later `ssh` command. This is the single validation point
@@ -115,10 +150,22 @@ defmodule Raxol.Symphony.Worker.HostSpec do
       not safe_optional_path?(spec.workspace_root) ->
         {:error, {:invalid_ssh_host, raw}}
 
+      not safe_optional_path?(spec.known_hosts) ->
+        {:error, {:invalid_ssh_host, raw}}
+
+      not valid_host_key_mode?(spec.strict_host_key_checking) ->
+        {:error, {:invalid_ssh_host, raw}}
+
       true ->
         {:ok, spec}
     end
   end
+
+  defp host_key_mode(nil), do: :accept_new
+  defp host_key_mode(value), do: Map.get(@host_key_modes, value, :invalid)
+
+  defp valid_host_key_mode?(mode) when mode in [:yes, :accept_new, :no], do: true
+  defp valid_host_key_mode?(_mode), do: false
 
   defp safe_token?(value) when is_binary(value),
     do: Regex.match?(@token_re, value)

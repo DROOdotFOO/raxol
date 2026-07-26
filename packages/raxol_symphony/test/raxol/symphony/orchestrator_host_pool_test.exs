@@ -11,7 +11,7 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
   """
   use ExUnit.Case, async: false
 
-  alias Raxol.Symphony.{Config, Issue, Orchestrator}
+  alias Raxol.Symphony.{Config, Issue, Orchestrator, WorkflowStore}
   alias Raxol.Symphony.Runners.Noop
   alias Raxol.Symphony.Trackers.Memory
 
@@ -103,5 +103,74 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
     refilled = Orchestrator.snapshot(pid)
     assert refilled.counts.running == 2
     assert refilled.hosts == %{total: 2, free: 0, busy: 2}
+  end
+
+  test "a host added by config hot-reload becomes an available slot on the next tick" do
+    put_three_stalled()
+
+    dir = Path.join(System.tmp_dir!(), "sym_hp_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "WORKFLOW.md")
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    File.write!(path, workflow_md(["ci@build-1"]))
+    store = start_supervised!({WorkflowStore, path: path, watch?: false})
+
+    pid = start_orchestrator_with_store(store)
+    :ok = Orchestrator.tick_now(pid)
+
+    # One host gates the three issues to a single worker.
+    assert Orchestrator.snapshot(pid).hosts == %{total: 1, free: 0, busy: 1}
+
+    # Add a second host and reload the store; the next tick reconciles the
+    # pool to two slots and fills the newly-added one.
+    File.write!(path, workflow_md(["ci@build-1", "ci@build-2"]))
+    {:ok, _config} = WorkflowStore.reload(store)
+
+    :ok = Orchestrator.tick_now(pid)
+    snap = Orchestrator.snapshot(pid)
+    assert snap.hosts == %{total: 2, free: 0, busy: 2}
+    assert snap.counts.running == 2
+  end
+
+  defp start_orchestrator_with_store(store) do
+    {:ok, pid} =
+      start_supervised(
+        {Orchestrator,
+         workflow_store: store, runner_module: Noop, auto_start_tick: false, name: nil},
+        id: {Orchestrator, make_ref()}
+      )
+
+    pid
+  end
+
+  defp workflow_md(ssh_hosts) do
+    hosts_yaml = Enum.map_join(ssh_hosts, "\n", &"    - #{&1}")
+
+    """
+    ---
+    tracker:
+      kind: memory
+      active_states:
+        - Todo
+        - In Progress
+      terminal_states:
+        - Done
+        - Cancelled
+    polling:
+      interval_ms: 60000
+    agent:
+      max_concurrent_agents: 10
+      max_retry_backoff_ms: 60000
+    codex:
+      stall_timeout_ms: 0
+    runner:
+      kind: raxol_agent
+    worker:
+      ssh_hosts:
+    #{hosts_yaml}
+    ---
+    prompt
+    """
   end
 end

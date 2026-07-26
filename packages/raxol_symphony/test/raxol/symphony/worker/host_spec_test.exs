@@ -48,8 +48,7 @@ defmodule Raxol.Symphony.Worker.HostSpecTest do
     end
 
     test "blank/absent optional fields normalize to nil" do
-      assert {:ok,
-              %HostSpec{host: "h", user: nil, port: nil, identity_file: nil}} =
+      assert {:ok, %HostSpec{host: "h", user: nil, port: nil, identity_file: nil}} =
                HostSpec.normalize(%{
                  host: "h",
                  user: "",
@@ -118,6 +117,75 @@ defmodule Raxol.Symphony.Worker.HostSpecTest do
                  identity_file: "~/.ssh/id_ci",
                  workspace_root: "/var/lib/symphony"
                })
+    end
+
+    test "a leading-dash path can never be read as an ssh flag" do
+      for field <- [:identity_file, :workspace_root, :known_hosts] do
+        assert {:error, {:invalid_ssh_host, _}} =
+                 HostSpec.normalize(%{:host => "ok", field => "-Fmalicious"}),
+               "expected leading-dash #{field} to be rejected"
+      end
+    end
+  end
+
+  describe "host-key policy" do
+    test "defaults to accept_new with no known_hosts (current behavior)" do
+      assert {:ok, %HostSpec{strict_host_key_checking: :accept_new, known_hosts: nil}} =
+               HostSpec.normalize("build-1")
+
+      assert {:ok, %HostSpec{strict_host_key_checking: :accept_new}} =
+               HostSpec.normalize(%HostSpec{host: "build-1"})
+    end
+
+    test "accepts the three valid modes from string and atom inputs" do
+      for {input, mode} <- [
+            {"yes", :yes},
+            {"accept_new", :accept_new},
+            {"accept-new", :accept_new},
+            {"no", :no},
+            {:yes, :yes},
+            {:no, :no}
+          ] do
+        assert {:ok, %HostSpec{strict_host_key_checking: ^mode}} =
+                 HostSpec.normalize(%{host: "h", strict_host_key_checking: input}),
+               "expected #{inspect(input)} -> #{inspect(mode)}"
+      end
+    end
+
+    test "carries a known_hosts path through" do
+      assert {:ok,
+              %HostSpec{
+                strict_host_key_checking: :yes,
+                known_hosts: "/etc/ssh/known_hosts"
+              }} =
+               HostSpec.normalize(%{
+                 host: "h",
+                 strict_host_key_checking: "yes",
+                 known_hosts: "/etc/ssh/known_hosts"
+               })
+    end
+
+    test "rejects an unknown mode from map input and a directly-built struct" do
+      assert {:error, {:invalid_ssh_host, _}} =
+               HostSpec.normalize(%{host: "h", strict_host_key_checking: "maybe"})
+
+      assert {:error, {:invalid_ssh_host, _}} =
+               HostSpec.normalize(%HostSpec{host: "h", strict_host_key_checking: :bogus})
+    end
+
+    test "host-key fields are not part of id/1" do
+      base = HostSpec.id(%HostSpec{host: "h", user: "u", port: 22})
+
+      hardened =
+        HostSpec.id(%HostSpec{
+          host: "h",
+          user: "u",
+          port: 22,
+          strict_host_key_checking: :yes,
+          known_hosts: "/etc/ssh/known_hosts"
+        })
+
+      assert base == hardened
     end
   end
 

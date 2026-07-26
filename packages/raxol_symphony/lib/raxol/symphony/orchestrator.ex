@@ -308,6 +308,7 @@ defmodule Raxol.Symphony.Orchestrator do
     case preflight(state) do
       {:ok, state} ->
         state
+        |> reconcile_host_pool()
         |> reconcile()
         |> dispatch_candidates()
         |> notify_listeners(:tick_completed)
@@ -461,7 +462,11 @@ defmodule Raxol.Symphony.Orchestrator do
   # -- Host pool (issue #742) -------------------------------------------------
 
   # nil pool = no `worker.ssh_hosts` configured -> local dispatch, no gating.
-  defp build_host_pool(config) do
+  defp build_host_pool(config), do: config |> desired_host_specs() |> HostPool.new()
+
+  # The normalized, valid HostSpecs the current config asks for. Invalid
+  # entries are dropped (Schema.validate already gates them at preflight).
+  defp desired_host_specs(config) do
     (Map.get(config || %{}, :worker) || %{})
     |> Map.get(:ssh_hosts, [])
     |> Enum.flat_map(fn raw ->
@@ -470,7 +475,34 @@ defmodule Raxol.Symphony.Orchestrator do
         {:error, _} -> []
       end
     end)
-    |> HostPool.new()
+  end
+
+  # Rebuild the pool from the (possibly hot-reloaded) config when the desired
+  # ssh_hosts set changed: adds free slots for new hosts, drops removed free
+  # hosts, and marks a removed host that still holds a live worker for drain
+  # (its slot releases on worker exit, never gets re-claimed).
+  defp reconcile_host_pool(%State{config: config, host_pool: pool} = state) do
+    desired = desired_host_specs(config)
+
+    if Enum.sort(HostPool.host_ids(pool)) == Enum.sort(Enum.map(desired, &HostSpec.id/1)) do
+      state
+    else
+      new_pool = HostPool.reconcile(pool, desired)
+      log_new_drains(pool, new_pool)
+      %State{state | host_pool: new_pool}
+    end
+  end
+
+  defp log_new_drains(old_pool, new_pool) do
+    if HostPool.draining_count(new_pool) > HostPool.draining_count(old_pool) do
+      Logger.info(
+        "symphony.orchestrator.host_pool_drain " <>
+          "draining=#{HostPool.draining_count(new_pool)} " <>
+          "(removed hosts still holding live workers; slots free on worker exit)"
+      )
+    end
+
+    :ok
   end
 
   defp claim_host(%State{host_pool: nil} = state), do: {:ok, nil, state}
