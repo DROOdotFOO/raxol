@@ -161,7 +161,8 @@ defmodule Raxol.Harness.HarnessAppClickTest do
     # press alone arms but toggles nothing (the release is the acting edge)
     m2 = mouse(model, :press, 3, row)
     assert m2.record_fold == %{}
-    assert m2.mouse_press == {3, row}
+    # the arm pins {cell, resolved target} — the block, resolved at press
+    assert {{3, ^row}, {:block, _}} = m2.mouse_press
 
     {m3, []} =
       HarnessApp.update(
@@ -188,6 +189,200 @@ defmodule Raxol.Harness.HarnessAppClickTest do
     # a later clean click still works (the failed drag left no residue)
     clicked = click(dragged, 3, reasoning_row(dragged))
     assert screen_text(clicked) =~ "SECRET-THOUGHT-LINE-1"
+  end
+
+  test "a non-left release at the armed cell does not complete the click" do
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+
+    # left press arms the site ...
+    armed = mouse(model, :press, 3, row)
+    assert {{3, ^row}, {:block, _}} = armed.mouse_press
+
+    # ... but a RIGHT-button release on that same cell is not the user's
+    # click (the arm is left-only), so it must not toggle the block.
+    {released, []} =
+      HarnessApp.update(
+        {:key,
+         %Event{
+           type: :mouse,
+           data: %{action: :release, button: :right, x: 3, y: row}
+         }},
+        armed
+      )
+
+    assert released.record_fold == %{}
+    refute screen_text(released) =~ "SECRET-THOUGHT-LINE-1"
+  end
+
+  test "an unmodeled-button release is dropped, but the drop is logged" do
+    import ExUnit.CaptureLog
+
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+    armed = mouse(model, :press, 3, row)
+
+    # A wheel button-up is a release whose button is outside the completion
+    # allowlist. It must not toggle the block -- but unlike the generic
+    # catch-all fold, the drop is observable (a breadcrumb for a mystery
+    # dead click), so we assert both the no-toggle AND the debug log.
+    log =
+      capture_log([level: :debug], fn ->
+        {released, []} =
+          HarnessApp.update(
+            {:key,
+             %Event{
+               type: :mouse,
+               data: %{action: :release, button: :wheel_up, x: 3, y: row}
+             }},
+            armed
+          )
+
+        send(self(), {:released, released})
+      end)
+
+    assert_received {:released, released}
+    assert released.record_fold == %{}
+    assert log =~ "dropped unrecognized mouse release"
+    assert log =~ "wheel_up"
+  end
+
+  test "a resize between press and release cancels the click" do
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+
+    armed = mouse(model, :press, 3, row)
+    assert {{3, ^row}, {:block, _}} = armed.mouse_press
+
+    # geometry moves under the armed cell ...
+    {resized, []} =
+      HarnessApp.update(
+        %Event{type: :resize, data: %{width: 80, height: 30}},
+        armed
+      )
+
+    assert resized.mouse_press == nil
+
+    # ... so the release on the old coordinates has no armed target: a
+    # resize cancels the click outright (mouse_press nilled above).
+    {released, []} =
+      HarnessApp.update(
+        {:key,
+         %Event{
+           type: :mouse,
+           data: %{action: :release, button: :left, x: 3, y: row}
+         }},
+        resized
+      )
+
+    assert released.record_fold == %{}
+  end
+
+  # Two sealed reasoning blocks in a window too short to hold them plus a
+  # burst of marker lines — sealing the markers (tail anchor) scrolls the
+  # older block up and off the top, so a DIFFERENT record slides under the
+  # cell the press armed. The general reflow class the resize clear only
+  # closed for one kind of geometry change.
+  defp two_reasoning_model do
+    Model.build(width: 60, rows: 12)
+    |> Model.fold_batch([
+      {:event, ev(1, :turn_started, %{})},
+      {:event,
+       ev(2, :item_started, %{"item_id" => "a1", "item_type" => "reasoning"})},
+      {:event,
+       ev(3, :item_completed, %{
+         "item_id" => "a1",
+         "item_type" => "reasoning",
+         "content" => "ALPHA-THOUGHT-BODY"
+       })},
+      {:event,
+       ev(4, :item_completed, %{
+         "item_id" => "a2",
+         "item_type" => "message",
+         "content" => "alpha reply"
+       })},
+      {:event, ev(5, :turn_completed, %{})},
+      {:event, ev(6, :turn_started, %{})},
+      {:event,
+       ev(7, :item_started, %{"item_id" => "b1", "item_type" => "reasoning"})},
+      {:event,
+       ev(8, :item_completed, %{
+         "item_id" => "b1",
+         "item_type" => "reasoning",
+         "content" => "BETA-THOUGHT-BODY"
+       })},
+      {:event,
+       ev(9, :item_completed, %{
+         "item_id" => "b2",
+         "item_type" => "message",
+         "content" => "beta reply"
+       })},
+      {:event, ev(10, :turn_completed, %{})}
+    ])
+  end
+
+  defp first_block_row(model) do
+    Enum.find(1..model.rows, fn y ->
+      match?({:block, _}, View.hit_test(model, 3, y))
+    end)
+  end
+
+  test "a mid-press transcript reflow toggles the ORIGINAL target, not the block that slid under the cell" do
+    model = two_reasoning_model()
+
+    row = first_block_row(model)
+    assert row != nil, "no block visible to press on"
+    {:block, pressed} = View.hit_test(model, 3, row)
+
+    # arm the press on the topmost block, at its press-time row ...
+    armed = mouse(model, :press, 3, row)
+    assert {{3, ^row}, {:block, ^pressed}} = armed.mouse_press
+
+    # ... reflow the transcript so the window scrolls and a DIFFERENT record
+    # slides under that same cell (NOT a resize — the general reflow class).
+    reflowed = Model.seal_lines(armed, Enum.map(1..20, &"marker line #{&1}"))
+    slid_in = View.hit_test(reflowed, 3, row)
+
+    refute slid_in == {:block, pressed},
+           "reflow did not move a different record under the armed cell; " <>
+             "the test proves nothing (still #{inspect(slid_in)})"
+
+    # release at the SAME cell: it must toggle the block the PRESS resolved,
+    # never the one that slid under the cell after the reflow.
+    released =
+      HarnessApp.update(
+        {:key,
+         %Event{
+           type: :mouse,
+           data: %{action: :release, button: :left, x: 3, y: row}
+         }},
+        reflowed
+      )
+      |> elem(0)
+
+    assert Map.has_key?(released.record_fold, pressed.event_refs),
+           "the original press target was not toggled"
+
+    case slid_in do
+      {:block, other} ->
+        refute Map.has_key?(released.record_fold, other.event_refs),
+               "the block that slid under the cell was wrongly toggled"
+
+      _not_a_block ->
+        :ok
+    end
+  end
+
+  test "hit_test/3 resolves the block render paints, off it resolves no block" do
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+
+    # Explicit hit_test/3 coverage (the finding noted it had none): the row
+    # the ⁖ header renders on resolves to a block; a pad row does not. Both
+    # read the SAME layout_geometry/1 solve render/1 paints from, so a
+    # one-sided geometry edit can no longer drift a click off the paint.
+    assert {:block, _block} = View.hit_test(model, 3, row)
+    refute match?({:block, _}, View.hit_test(model, 3, 1))
   end
 
   test "a click on the streaming reasoning preview toggles peek ⇄ expanded" do

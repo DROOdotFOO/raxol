@@ -131,9 +131,12 @@ defmodule Raxol.Harness.HarnessApp.Model do
             record_fold: %{},
             # click on the live reasoning preview toggles peek ⇄ expanded
             tail_expanded?: false,
-            # the pending left-button press site {x, y} — a click ACTS on
-            # RELEASE at the same cell, so a drag (a selection attempt)
-            # never toggles anything. See HarnessApp.handle_mouse/2.
+            # the pending left-button press as `{cell, target}` — the press
+            # resolves and pins its hit-test target, and a click ACTS on
+            # RELEASE at the same cell against THAT pinned target (never a
+            # release-time re-hit-test), so neither a drag nor a mid-press
+            # transcript reflow can toggle the wrong block. nil when unarmed.
+            # See HarnessApp.handle_mouse/2.
             mouse_press: nil,
             # the sole lane client (pid) or nil in fixture mode
             pump: nil

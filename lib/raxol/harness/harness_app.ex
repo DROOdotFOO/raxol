@@ -42,6 +42,8 @@ defmodule Raxol.Harness.HarnessApp do
 
   alias Raxol.Harness.HarnessApp.{Model, View}
 
+  require Logger
+
   # ── init ────────────────────────────────────────────────────────────────
 
   @impl true
@@ -83,17 +85,26 @@ defmodule Raxol.Harness.HarnessApp do
     do: {Model.tick(model, now), []}
 
   # -- resize rides the real Event (the system-event path, PumpContract §3) --
+  # Clear any armed press: the {x,y} it recorded points at a PRE-resize
+  # layout, so a release landing on the same cell after the reflow would
+  # hit-test against different geometry and toggle the wrong block. A resize
+  # mid-drag cancels the click.
   def update(%Event{type: :resize, data: %{width: w, height: h}}, model)
       when is_integer(w) and is_integer(h),
-      do: {Model.resize(model, w, h), []}
+      do: {%{Model.resize(model, w, h) | mouse_press: nil}, []}
 
   # -- mouse (click-to-fold; V's ruling) --
   #
   # Resolved HERE, not in the Model: hit-testing needs the view's own
   # geometry (footer fit, transcript window), and this module is the one
   # place that legitimately holds both halves. `View.hit_test/3` is pure
-  # geometry; `Model.click/2` is the pure fold. A left PRESS acts;
-  # releases/moves/other buttons fold away silently.
+  # geometry; `Model.click/2` is the pure fold. A left PRESS arms the site;
+  # the matching left RELEASE on the same cell acts. Moves fold away
+  # silently; a release outside the completion allowlist (`[:left,
+  # :release]`) also folds — the arm is left-only, so completing on a
+  # right/middle release would toggle a block the user never left-clicked —
+  # but that drop is LOGGED at debug (see `handle_mouse/2`), so a click that
+  # silently dies under an unmodeled button token leaves a breadcrumb.
   # The LIVE shape: the pump normalizes every input event
   # (`PumpContract.key/1` → `InputEvent.normalize/1`), and a mouse Event
   # classifies `%{kind: :other, raw: %Event{type: :mouse}}` — the struct
@@ -160,6 +171,15 @@ defmodule Raxol.Harness.HarnessApp do
   # selection attempt, not a click — it must never toggle the block under
   # the pointer. The press only arms the site; all state change waits for
   # the matching release.
+  #
+  # The press RESOLVES its target NOW, against the press-time geometry, and
+  # arms `{cell, target}`. The release acts on THAT stored target — it does
+  # NOT re-hit-test the cell. So any transcript reflow between press and
+  # release (a `:seal_lines` fold, streamed reasoning lines, a scroll) that
+  # slides a different block under the same cell can no longer toggle the
+  # WRONG block: the target was pinned at press. (Resize additionally nils
+  # the arm above, cancelling the click outright — a viewport change is a
+  # bigger disruption than a transcript reflow.)
   defp handle_mouse(
          %Event{
            type: :mouse,
@@ -168,23 +188,47 @@ defmodule Raxol.Harness.HarnessApp do
          model
        )
        when is_integer(x) and is_integer(y) do
-    {%{model | mouse_press: {x, y}}, []}
+    {%{model | mouse_press: {{x, y}, View.hit_test(model, x, y)}}, []}
   end
 
+  # SGR (mode 1006) preserves the button on release, so a left release
+  # reports `button: :left`; `:release` is the legacy button-agnostic
+  # marker (both complete the click). A right/middle/wheel release does
+  # not match here and folds away via the catch-all.
   defp handle_mouse(
          %Event{
            type: :mouse,
-           data: %{action: :release, x: x, y: y}
+           data: %{action: :release, button: button, x: x, y: y}
          },
          model
        )
-       when is_integer(x) and is_integer(y) do
+       when button in [:left, :release] and is_integer(x) and is_integer(y) do
     armed = model.mouse_press
     model = %{model | mouse_press: nil}
 
-    if armed == {x, y},
-      do: {Model.click(model, View.hit_test(model, x, y)), []},
-      else: {model, []}
+    case armed do
+      {{^x, ^y}, target} -> {Model.click(model, target), []}
+      _drag_or_unarmed -> {model, []}
+    end
+  end
+
+  # A release that is a release but did NOT satisfy the completion clause
+  # above — its button is missing, or outside the [:left, :release]
+  # allowlist (right/middle/wheel button-up, or an unmodeled token from a
+  # mouse mode we don't handle). We fold it (no toggle), but log at debug
+  # so the drop is observable: if a real left-click ever arrives under an
+  # unexpected button token, this breadcrumb explains the otherwise-silent
+  # dead click instead of it vanishing into the generic catch-all.
+  defp handle_mouse(
+         %Event{type: :mouse, data: %{action: :release} = data},
+         model
+       ) do
+    Logger.debug(fn ->
+      "harness: dropped unrecognized mouse release " <>
+        "button=#{inspect(Map.get(data, :button))}"
+    end)
+
+    {model, []}
   end
 
   defp handle_mouse(_event, model), do: {model, []}
