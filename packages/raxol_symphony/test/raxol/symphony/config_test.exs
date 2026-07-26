@@ -3,6 +3,44 @@ defmodule Raxol.Symphony.ConfigTest do
 
   alias Raxol.Symphony.Config
 
+  describe "from_workflow/2 -- codex.auth" do
+    test "parses a configured auth block and normalizes the mode to an atom" do
+      workflow = %{
+        config: %{
+          codex: %{
+            auth: %{mode: "api_key", api_key_env: "MY_KEY", require_login: true}
+          }
+        },
+        prompt_template: ""
+      }
+
+      auth = Config.from_workflow(workflow).codex.auth
+      assert auth.mode == :api_key
+      assert auth.api_key_env == "MY_KEY"
+      assert auth.require_login == true
+    end
+
+    test "expands ~ in codex_home" do
+      workflow = %{
+        config: %{codex: %{auth: %{mode: "codex_home", codex_home: "~/.codex"}}},
+        prompt_template: ""
+      }
+
+      auth = Config.from_workflow(workflow).codex.auth
+      assert auth.mode == :codex_home
+      assert auth.codex_home == Path.join(System.user_home!(), ".codex")
+    end
+
+    test "leaves an unknown mode intact for the schema to reject" do
+      workflow = %{
+        config: %{codex: %{auth: %{mode: "bogus"}}},
+        prompt_template: ""
+      }
+
+      assert Config.from_workflow(workflow).codex.auth.mode == "bogus"
+    end
+  end
+
   describe "from_workflow/2 -- defaults" do
     test "applies defaults for an empty config" do
       workflow = %{config: %{}, prompt_template: ""}
@@ -17,6 +55,10 @@ defmodule Raxol.Symphony.ConfigTest do
       assert config.codex.turn_timeout_ms == 3_600_000
       assert config.codex.read_timeout_ms == 5_000
       assert config.codex.stall_timeout_ms == 300_000
+      assert config.codex.auth.mode == :inherit
+      assert config.codex.auth.api_key_env == "OPENAI_API_KEY"
+      assert config.codex.auth.codex_home == nil
+      assert config.codex.auth.require_login == false
       assert config.runner.kind == "raxol_agent"
       assert config.workflow_mode == :default
       assert config.workflow_parallelism == 3
