@@ -451,7 +451,7 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path, host) do
     capture_pid = maybe_start_capture(state, issue, attempt, workspace_path)
-    task = spawn_worker_task(state, runner_mod, issue, attempt, workspace_path)
+    task = spawn_worker_task(state, runner_mod, issue, attempt, workspace_path, host)
 
     entry =
       build_running_entry(issue, attempt, workspace_path, task, capture_pid, host)
@@ -548,7 +548,8 @@ defmodule Raxol.Symphony.Orchestrator do
          runner_mod,
          %Issue{} = issue,
          attempt,
-         workspace_path
+         workspace_path,
+         host
        ) do
     parent = self()
     config = state.config
@@ -563,6 +564,7 @@ defmodule Raxol.Symphony.Orchestrator do
           issue,
           attempt,
           workspace_path,
+          host,
           parent
         )
       end
@@ -576,6 +578,7 @@ defmodule Raxol.Symphony.Orchestrator do
          issue,
          attempt,
          workspace_path,
+         _host,
          parent
        ) do
     case GraphAdapter.from_workflow([]) do
@@ -605,12 +608,14 @@ defmodule Raxol.Symphony.Orchestrator do
          issue,
          attempt,
          workspace_path,
+         host,
          parent
        ) do
     runner_opts = [
       parent: parent,
       attempt: attempt,
-      workspace_path: workspace_path
+      workspace_path: workspace_path,
+      host: host
     ]
 
     run_runner(runner_mod, issue, config, runner_opts)
