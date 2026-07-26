@@ -74,11 +74,16 @@ defmodule Mix.Tasks.Raxol.Harness do
     # the paths that never reach it — a ^C that lands as SIGINT while
     # prim_tty has ISIG re-flipped (the BREAK-menu abort kills the VM
     # mid-session, but abort DOES run at_exit handlers), a crashed pump,
-    # an init:stop unwind. Idempotent byte-wise: mode resets are set/reset
-    # DEC privates, and `stty sane` after a restored tty is a no-op in
+    # a runtime-boot failure (ENTER already on the tty, `teardown/1` never
+    # reached), an init:stop unwind. The ViewportAuthority LEAVE
+    # (`\e[?1049l` + cursor/autowrap restore) must be part of this net, or
+    # a strand on any of those paths drops the operator into the hidden
+    # alternate buffer. Idempotent byte-wise: LEAVE on the primary screen,
+    # mode resets, and `stty sane` after a restored tty are all no-ops in
     # effect. SIGKILL still cleans nothing — nothing can.
     System.at_exit(fn _status ->
       IO.write(:stdio, "\e[?1000l\e[?1006l\e[?1003l\e[?2004l\e[?1004l")
+      IO.write(:stdio, Raxol.UI.Rendering.PaintAuthority.ViewportAuthority.leave())
       Raxol.Terminal.Driver.Stty.sane!()
     end)
 
@@ -264,8 +269,7 @@ defmodule Mix.Tasks.Raxol.Harness do
         })
 
       true ->
-        {Raxol.Agent.Backend.Mock,
-         [response: "Raxol harness live echo (mock backend)."], "mock"}
+        {Raxol.Agent.Backend.Mock, [response: "Raxol harness live echo (mock backend)."], "mock"}
     end
   end
 
@@ -283,8 +287,7 @@ defmodule Mix.Tasks.Raxol.Harness do
         {backend, opts, Atom.to_string(harness)}
 
       {:error, _} ->
-        {Raxol.Agent.Backend.Mock, [response: "mock (selector fell back)"],
-         "mock"}
+        {Raxol.Agent.Backend.Mock, [response: "mock (selector fell back)"], "mock"}
     end
   end
 
@@ -297,8 +300,7 @@ defmodule Mix.Tasks.Raxol.Harness do
         # Backend.HTTP's :openai provider appends /v1/chat/completions itself
         # -- strip a conventionally-supplied trailing /v1.
         [
-          base_url:
-            url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
+          base_url: url |> String.trim_trailing("/") |> String.trim_trailing("/v1")
         ]
     end
   end
