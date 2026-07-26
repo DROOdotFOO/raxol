@@ -310,7 +310,9 @@ defmodule Raxol.Symphony.Orchestrator do
         |> notify_listeners(:tick_completed)
 
       {:error, reason, state} ->
-        Logger.warning("symphony.orchestrator.preflight_failed reason=#{inspect(reason)}")
+        Logger.warning(
+          "symphony.orchestrator.preflight_failed reason=#{inspect(reason)}"
+        )
 
         notify_listeners(state, {:preflight_failed, reason})
     end
@@ -333,12 +335,14 @@ defmodule Raxol.Symphony.Orchestrator do
   defp preflight(%State{workflow_store: store} = state) do
     case WorkflowStore.get(store) do
       nil ->
-        {:error, :no_workflow_config, %State{state | last_preflight_error: :no_workflow_config}}
+        {:error, :no_workflow_config,
+         %State{state | last_preflight_error: :no_workflow_config}}
 
       latest_config ->
         case Schema.validate(latest_config, validate_opts(state)) do
           :ok ->
-            {:ok, %State{state | config: latest_config, last_preflight_error: nil}}
+            {:ok,
+             %State{state | config: latest_config, last_preflight_error: nil}}
 
           {:error, reason} ->
             {:error, reason, %State{state | last_preflight_error: reason}}
@@ -352,7 +356,9 @@ defmodule Raxol.Symphony.Orchestrator do
   defp validate_opts(%State{runner_module: nil}), do: []
   defp validate_opts(%State{}), do: [skip_runner: true]
 
-  defp dispatch_candidates(%State{config: %{workflow_mode: :graph_parallel}} = state) do
+  defp dispatch_candidates(
+         %State{config: %{workflow_mode: :graph_parallel}} = state
+       ) do
     dispatch_parallel_candidates(state)
   end
 
@@ -576,7 +582,9 @@ defmodule Raxol.Symphony.Orchestrator do
       do_dispatch_parallel_batch(state, runner_mod, prepared)
     else
       {:error, reason} ->
-        Logger.warning("symphony.orchestrator.parallel_dispatch_failed reason=#{inspect(reason)}")
+        Logger.warning(
+          "symphony.orchestrator.parallel_dispatch_failed reason=#{inspect(reason)}"
+        )
 
         # Nothing was spawned; fall each issue back to a failure retry so the
         # batch is never silently dropped.
@@ -588,7 +596,8 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp ensure_batch_workspaces(%State{} = state, issues_with_attempts) do
     result =
-      Enum.reduce_while(issues_with_attempts, {:ok, []}, fn {issue, attempt}, {:ok, acc} ->
+      Enum.reduce_while(issues_with_attempts, {:ok, []}, fn {issue, attempt},
+                                                            {:ok, acc} ->
         case Workspace.ensure(state.config, issue.identifier) do
           {:ok, %{path: path}} ->
             entry = %{issue: issue, attempt: attempt, workspace_path: path}
@@ -627,14 +636,23 @@ defmodule Raxol.Symphony.Orchestrator do
         MapSet.put(acc, issue.id)
       end)
 
-    state = %State{state | batches: Map.put(state.batches, ref, entry), claimed: claimed}
+    state = %State{
+      state
+      | batches: Map.put(state.batches, ref, entry),
+        claimed: claimed
+    }
 
     Enum.reduce(entry.issues, state, fn %{issue: issue}, acc ->
       cancel_retry(acc, issue.id)
     end)
   end
 
-  defp spawn_parallel_batch_task(%State{} = state, runner_mod, issues, workspaces) do
+  defp spawn_parallel_batch_task(
+         %State{} = state,
+         runner_mod,
+         issues,
+         workspaces
+       ) do
     parent = self()
     config = state.config
     max_candidates = length(issues)
@@ -673,7 +691,9 @@ defmodule Raxol.Symphony.Orchestrator do
             parent_pid: parent
           )
 
-        results = batch_run_results(WorkflowCompiled.invoke(compiled, state), issues)
+        results =
+          batch_run_results(WorkflowCompiled.invoke(compiled, state), issues)
+
         {:batch_result, results}
 
       {:error, reason} ->
@@ -700,7 +720,10 @@ defmodule Raxol.Symphony.Orchestrator do
         state
 
       entry ->
-        %State{state | batches: Map.put(state.batches, ref, %{entry | results: results})}
+        %State{
+          state
+          | batches: Map.put(state.batches, ref, %{entry | results: results})
+        }
     end
   end
 
@@ -729,7 +752,11 @@ defmodule Raxol.Symphony.Orchestrator do
     end)
   end
 
-  defp apply_batch_issue_result(%State{} = state, %{issue: %Issue{} = issue}, :ok) do
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue},
+         :ok
+       ) do
     state
     |> Map.put(:completed, MapSet.put(state.completed, issue.id))
     |> schedule_continuation_retry(issue, 1)
@@ -746,14 +773,41 @@ defmodule Raxol.Symphony.Orchestrator do
   # A branch that paused mid-batch: park it as resumable exactly like a
   # sequential worker pause. Siblings in the batch already completed; only
   # this issue waits for an operator resume.
-  defp apply_batch_issue_result(%State{} = state, prepared, {:pause, reason, token})
+  defp apply_batch_issue_result(
+         %State{} = state,
+         prepared,
+         {:pause, reason, token}
+       )
        when is_atom(reason) do
     park_batch_pause(state, prepared, {reason, token})
   end
 
   # No result recorded for this slot (e.g. a candidate beyond the graph's slot
   # count). Re-check via a continuation retry rather than dropping it.
-  defp apply_batch_issue_result(%State{} = state, %{issue: %Issue{} = issue}, nil) do
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue},
+         nil
+       ) do
+    schedule_continuation_retry(state, issue, 1)
+  end
+
+  # Fail-safe: a result shape outside the runner contract -- e.g. a
+  # `{:pause, reason, _}` whose reason is not an atom (the pause clause above
+  # guards `is_atom(reason)`), or any other unexpected return -- must never
+  # crash the batch reduce and take the orchestrator down with it. Log it and
+  # re-check via a continuation retry, mirroring the nil-slot path so the
+  # issue is neither dropped nor lost.
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue},
+         other
+       ) do
+    Logger.warning(
+      "symphony.orchestrator.unexpected_batch_result issue=#{issue.identifier} " <>
+        "result=#{inspect(other)}"
+    )
+
     schedule_continuation_retry(state, issue, 1)
   end
 
@@ -969,7 +1023,12 @@ defmodule Raxol.Symphony.Orchestrator do
             "reason=#{inspect(reason)}"
         )
 
-        schedule_failure_retry(state, issue, (paused_entry.attempt || 0) + 1, reason)
+        schedule_failure_retry(
+          state,
+          issue,
+          (paused_entry.attempt || 0) + 1,
+          reason
+        )
     end
   end
 
@@ -1275,7 +1334,8 @@ defmodule Raxol.Symphony.Orchestrator do
   defp update_entry_from_event(entry, event) do
     %{
       entry
-      | last_event: Map.get(event, :event) || Map.get(event, "event") || entry.last_event,
+      | last_event:
+          Map.get(event, :event) || Map.get(event, "event") || entry.last_event,
         last_message:
           Map.get(event, :message) || Map.get(event, "message") ||
             entry.last_message,

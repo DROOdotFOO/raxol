@@ -45,13 +45,19 @@ defmodule Raxol.Symphony.OrchestratorParallelTest do
   end
 
   defp issue(id, identifier, state) do
-    %Issue{id: id, identifier: identifier, title: "T-#{identifier}", state: state}
+    %Issue{
+      id: id,
+      identifier: identifier,
+      title: "T-#{identifier}",
+      state: state
+    }
   end
 
   defp start_orchestrator(config) do
     {:ok, pid} =
       start_supervised(
-        {Orchestrator, config: config, runner_module: Noop, auto_start_tick: false, name: nil},
+        {Orchestrator,
+         config: config, runner_module: Noop, auto_start_tick: false, name: nil},
         id: {Orchestrator, make_ref()}
       )
 
@@ -83,7 +89,9 @@ defmodule Raxol.Symphony.OrchestratorParallelTest do
 
   test "successful slots fan back to continuation retries per issue" do
     put_three_todos()
-    for id <- ~w(MP-1 MP-2 MP-3), do: Noop.Director.set(id, {:succeed_after, 10})
+
+    for id <- ~w(MP-1 MP-2 MP-3),
+        do: Noop.Director.set(id, {:succeed_after, 10})
 
     pid = start_orchestrator(parallel_config())
     :ok = Orchestrator.subscribe(pid)
@@ -140,6 +148,40 @@ defmodule Raxol.Symphony.OrchestratorParallelTest do
     assert %{"b" => entry} = Orchestrator.paused(pid)
     assert entry.resume_token == %{token: 7}
     assert entry.interrupt_reason == :awaiting_review
+  end
+
+  test "a non-atom pause reason does not crash the batch; the slot re-checks via retry" do
+    import ExUnit.CaptureLog
+
+    put_three_todos()
+    Noop.Director.set("MP-1", {:succeed_after, 10})
+    # A non-atom interrupt reason is outside the runner contract. The pause
+    # clause guards `is_atom(reason)`, so without the fail-safe catch-all
+    # this would raise FunctionClauseError inside the batch reduce and take
+    # the orchestrator GenServer down with it.
+    Noop.Director.set("MP-2", {:pause, "not-an-atom", %{token: 1}})
+    Noop.Director.set("MP-3", {:succeed_after, 10})
+
+    pid = start_orchestrator(parallel_config())
+    :ok = Orchestrator.subscribe(pid)
+
+    log =
+      capture_log([level: :warning], fn ->
+        :ok = Orchestrator.tick_now(pid)
+        assert_receive {:symphony_event, :batch_exit, snap}, 2_000
+        send(self(), {:snap, snap})
+      end)
+
+    assert_received {:snap, snap}
+
+    # The orchestrator survived; the malformed slot fell back to a
+    # continuation retry (like the nil-slot path) rather than parking or
+    # dying, so nothing paused and all three issues re-check.
+    assert Process.alive?(pid)
+    assert snap.counts.paused == 0
+    assert snap.counts.retrying == 3
+    assert log =~ "unexpected_batch_result"
+    assert log =~ "MP-2"
   end
 
   test "max_concurrent_agents caps the batch size below workflow_parallelism" do
