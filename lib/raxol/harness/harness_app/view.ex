@@ -48,14 +48,13 @@ defmodule Raxol.Harness.HarnessApp.View do
   @doc "Renders the model to a View-DSL element tree (with a root `:cursor`)."
   @spec render(Model.t()) :: map()
   def render(model) do
-    cw = Model.content_width(model)
-    inset = Model.frame_inset(model)
-
-    groups = footer_groups(model, cw)
-    budget_cap = max(model.rows - 1 - inset, 1)
-    natural = FooterStack.total_height(groups)
-    budget = natural |> min(budget_cap) |> max(1)
-    transcript_h = max(model.rows - budget - inset, 0)
+    %{
+      cw: cw,
+      inset: inset,
+      groups: groups,
+      budget: budget,
+      transcript_h: transcript_h
+    } = layout_geometry(model)
 
     base =
       frame(
@@ -85,6 +84,41 @@ defmodule Raxol.Harness.HarnessApp.View do
           AbsoluteLayer.dialog_overlay(w, h, surface)
         ])
     end
+  end
+
+  # The single geometry solve shared by `render/1` and `hit_test/3`:
+  # content width, painted inset, the fitted footer groups, the footer's
+  # row budget, and the transcript height above it. `hit_test/3` MUST
+  # resolve a click against the exact layout `render/1` paints, so a click
+  # can never land on a row the paint didn't put there. Extracting the
+  # derivation here is what makes that invariant a fact instead of a
+  # copy-paste convention that a future one-sided edit could silently break
+  # (`budget_cap`/`natural` stay local — pure intermediates neither caller
+  # consumes).
+  @spec layout_geometry(Model.t()) :: %{
+          cw: non_neg_integer(),
+          inset: non_neg_integer(),
+          groups: keyword(),
+          budget: pos_integer(),
+          transcript_h: non_neg_integer()
+        }
+  defp layout_geometry(model) do
+    cw = Model.content_width(model)
+    inset = Model.frame_inset(model)
+
+    groups = footer_groups(model, cw)
+    budget_cap = max(model.rows - 1 - inset, 1)
+    natural = FooterStack.total_height(groups)
+    budget = natural |> min(budget_cap) |> max(1)
+    transcript_h = max(model.rows - budget - inset, 0)
+
+    %{
+      cw: cw,
+      inset: inset,
+      groups: groups,
+      budget: budget,
+      transcript_h: transcript_h
+    }
   end
 
   # ── the slash autocomplete popup ─────────────────────────────────────────
@@ -182,9 +216,9 @@ defmodule Raxol.Harness.HarnessApp.View do
 
   @doc """
   Resolves a click at 1-based terminal `{x, y}` (the SGR mouse report's
-  own coordinates) against THIS view's geometry — the same groups/budget/
-  window `render/1` lays out, recomputed from the model so the answer
-  can never drift from the paint:
+  own coordinates) against THIS view's geometry — the SAME
+  `layout_geometry/1` solve `render/1` paints from, so the answer can
+  never drift from the paint:
 
     * a transcript row over a block record → `{:block, block}`
     * a footer row inside the live-tail preview group → `:tail`
@@ -196,14 +230,8 @@ defmodule Raxol.Harness.HarnessApp.View do
   @spec hit_test(Model.t(), pos_integer(), pos_integer()) ::
           {:block, term()} | :tail | :none
   def hit_test(model, _x, y) when is_integer(y) and y >= 1 do
-    cw = Model.content_width(model)
-    inset = Model.frame_inset(model)
-
-    groups = footer_groups(model, cw)
-    budget_cap = max(model.rows - 1 - inset, 1)
-    natural = FooterStack.total_height(groups)
-    budget = natural |> min(budget_cap) |> max(1)
-    transcript_h = max(model.rows - budget - inset, 0)
+    %{cw: cw, groups: groups, budget: budget, transcript_h: transcript_h} =
+      layout_geometry(model)
 
     row = y - 1
 

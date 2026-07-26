@@ -83,17 +83,24 @@ defmodule Raxol.Harness.HarnessApp do
     do: {Model.tick(model, now), []}
 
   # -- resize rides the real Event (the system-event path, PumpContract §3) --
+  # Clear any armed press: the {x,y} it recorded points at a PRE-resize
+  # layout, so a release landing on the same cell after the reflow would
+  # hit-test against different geometry and toggle the wrong block. A resize
+  # mid-drag cancels the click.
   def update(%Event{type: :resize, data: %{width: w, height: h}}, model)
       when is_integer(w) and is_integer(h),
-      do: {Model.resize(model, w, h), []}
+      do: {%{Model.resize(model, w, h) | mouse_press: nil}, []}
 
   # -- mouse (click-to-fold; V's ruling) --
   #
   # Resolved HERE, not in the Model: hit-testing needs the view's own
   # geometry (footer fit, transcript window), and this module is the one
   # place that legitimately holds both halves. `View.hit_test/3` is pure
-  # geometry; `Model.click/2` is the pure fold. A left PRESS acts;
-  # releases/moves/other buttons fold away silently.
+  # geometry; `Model.click/2` is the pure fold. A left PRESS arms the site;
+  # the matching left RELEASE on the same cell acts. Moves, and any release
+  # that is not the left button, fold away silently — the arm is left-only,
+  # so completing on a right/middle release would toggle a block the user
+  # never left-clicked.
   # The LIVE shape: the pump normalizes every input event
   # (`PumpContract.key/1` → `InputEvent.normalize/1`), and a mouse Event
   # classifies `%{kind: :other, raw: %Event{type: :mouse}}` — the struct
@@ -171,14 +178,18 @@ defmodule Raxol.Harness.HarnessApp do
     {%{model | mouse_press: {x, y}}, []}
   end
 
+  # SGR (mode 1006) preserves the button on release, so a left release
+  # reports `button: :left`; `:release` is the legacy button-agnostic
+  # marker (both complete the click). A right/middle/wheel release does
+  # not match here and folds away via the catch-all.
   defp handle_mouse(
          %Event{
            type: :mouse,
-           data: %{action: :release, x: x, y: y}
+           data: %{action: :release, button: button, x: x, y: y}
          },
          model
        )
-       when is_integer(x) and is_integer(y) do
+       when button in [:left, :release] and is_integer(x) and is_integer(y) do
     armed = model.mouse_press
     model = %{model | mouse_press: nil}
 

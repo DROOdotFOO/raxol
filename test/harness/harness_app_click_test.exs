@@ -190,6 +190,73 @@ defmodule Raxol.Harness.HarnessAppClickTest do
     assert screen_text(clicked) =~ "SECRET-THOUGHT-LINE-1"
   end
 
+  test "a non-left release at the armed cell does not complete the click" do
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+
+    # left press arms the site ...
+    armed = mouse(model, :press, 3, row)
+    assert armed.mouse_press == {3, row}
+
+    # ... but a RIGHT-button release on that same cell is not the user's
+    # click (the arm is left-only), so it must not toggle the block.
+    {released, []} =
+      HarnessApp.update(
+        {:key,
+         %Event{
+           type: :mouse,
+           data: %{action: :release, button: :right, x: 3, y: row}
+         }},
+        armed
+      )
+
+    assert released.record_fold == %{}
+    refute screen_text(released) =~ "SECRET-THOUGHT-LINE-1"
+  end
+
+  test "a resize between press and release cancels the click" do
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+
+    armed = mouse(model, :press, 3, row)
+    assert armed.mouse_press == {3, row}
+
+    # geometry moves under the armed cell ...
+    {resized, []} =
+      HarnessApp.update(
+        %Event{type: :resize, data: %{width: 80, height: 30}},
+        armed
+      )
+
+    assert resized.mouse_press == nil
+
+    # ... so the release on the old coordinates resolves nothing (a stale
+    # arm can no longer hit-test against the pre-resize layout).
+    {released, []} =
+      HarnessApp.update(
+        {:key,
+         %Event{
+           type: :mouse,
+           data: %{action: :release, button: :left, x: 3, y: row}
+         }},
+        resized
+      )
+
+    assert released.record_fold == %{}
+  end
+
+  test "hit_test/3 resolves the block render paints, off it resolves no block" do
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+
+    # Explicit hit_test/3 coverage (the finding noted it had none): the row
+    # the ⁖ header renders on resolves to a block; a pad row does not. Both
+    # read the SAME layout_geometry/1 solve render/1 paints from, so a
+    # one-sided geometry edit can no longer drift a click off the paint.
+    assert {:block, _block} = View.hit_test(model, 3, row)
+    refute match?({:block, _}, View.hit_test(model, 3, 1))
+  end
+
   test "a click on the streaming reasoning preview toggles peek ⇄ expanded" do
     lines = Enum.map_join(1..8, "\n", &"active thought line #{&1}")
 
