@@ -41,13 +41,14 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   `{:error, {:invalid_ssh_host, raw}}`.
   """
   @spec normalize(term()) :: {:ok, t()} | {:error, {:invalid_ssh_host, term()}}
-  def normalize(%__MODULE__{host: host} = spec) when is_binary(host) and host != "" do
-    {:ok, spec}
+  def normalize(%__MODULE__{host: host} = spec)
+      when is_binary(host) and host != "" do
+    validate(spec, spec)
   end
 
   def normalize(raw) when is_binary(raw) do
     case split_user_host(String.trim(raw)) do
-      {:ok, user, host} -> {:ok, %__MODULE__{host: host, user: user}}
+      {:ok, user, host} -> validate(%__MODULE__{host: host, user: user}, raw)
       :error -> {:error, {:invalid_ssh_host, raw}}
     end
   end
@@ -55,14 +56,16 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   def normalize(raw) when is_map(raw) do
     case fetch(raw, :host) do
       host when is_binary(host) and host != "" ->
-        {:ok,
-         %__MODULE__{
-           host: host,
-           user: string_or_nil(fetch(raw, :user)),
-           port: positive_int_or_nil(fetch(raw, :port)),
-           identity_file: string_or_nil(fetch(raw, :identity_file)),
-           workspace_root: string_or_nil(fetch(raw, :workspace_root))
-         }}
+        validate(
+          %__MODULE__{
+            host: host,
+            user: string_or_nil(fetch(raw, :user)),
+            port: positive_int_or_nil(fetch(raw, :port)),
+            identity_file: string_or_nil(fetch(raw, :identity_file)),
+            workspace_root: string_or_nil(fetch(raw, :workspace_root))
+          },
+          raw
+        )
 
       _absent_or_blank ->
         {:error, {:invalid_ssh_host, raw}}
@@ -82,6 +85,51 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   end
 
   # -- Internals --------------------------------------------------------------
+
+  # A hostname/username token: first char alphanumeric or `_` (so it can
+  # never be read as an `ssh` flag like `-oProxyCommand=...`), the rest
+  # alphanumeric / dot / dash / underscore. This rejects whitespace and
+  # shell metacharacters (`;`, `$`, backtick, quotes, `|`, `&`, newlines)
+  # BEFORE the value can reach an `ssh` invocation (transport, issue #743).
+  @token_re ~r/\A[A-Za-z0-9_][A-Za-z0-9._-]*\z/
+
+  # Optional path fields become `ssh -i <file>` / a remote workspace root.
+  # Allow ordinary path characters; reject whitespace + shell metacharacters.
+  @path_re ~r/\A[A-Za-z0-9._\-\/~]+\z/
+
+  # Reject any spec whose host/user/path fields carry characters that could
+  # break out of a later `ssh` command. This is the single validation point
+  # shared by config validation and pool construction, so a malformed target
+  # can never be silently normalized and handed to the transport.
+  defp validate(%__MODULE__{} = spec, raw) do
+    cond do
+      not safe_token?(spec.host) ->
+        {:error, {:invalid_ssh_host, raw}}
+
+      not safe_optional_token?(spec.user) ->
+        {:error, {:invalid_ssh_host, raw}}
+
+      not safe_optional_path?(spec.identity_file) ->
+        {:error, {:invalid_ssh_host, raw}}
+
+      not safe_optional_path?(spec.workspace_root) ->
+        {:error, {:invalid_ssh_host, raw}}
+
+      true ->
+        {:ok, spec}
+    end
+  end
+
+  defp safe_token?(value) when is_binary(value),
+    do: Regex.match?(@token_re, value)
+
+  defp safe_token?(_value), do: false
+
+  defp safe_optional_token?(nil), do: true
+  defp safe_optional_token?(value), do: safe_token?(value)
+
+  defp safe_optional_path?(nil), do: true
+  defp safe_optional_path?(value), do: Regex.match?(@path_re, value)
 
   # Config front matter is atomized (trusted WORKFLOW.md), but tolerate
   # string keys too so a directly-built config still normalizes.
@@ -105,7 +153,9 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   defp string_or_nil(value) when is_binary(value) and value != "", do: value
   defp string_or_nil(_value), do: nil
 
-  defp positive_int_or_nil(value) when is_integer(value) and value > 0, do: value
+  defp positive_int_or_nil(value) when is_integer(value) and value > 0,
+    do: value
+
   defp positive_int_or_nil(_value), do: nil
 
   defp user_prefix(nil), do: ""

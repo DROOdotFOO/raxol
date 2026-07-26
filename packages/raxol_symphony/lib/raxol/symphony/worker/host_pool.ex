@@ -35,27 +35,38 @@ defmodule Raxol.Symphony.Worker.HostPool do
   @doc """
   Claim the first free slot. Returns `{:ok, spec, pool}` with that slot
   marked busy, or `:none_free` when every host is occupied.
+
+  Exactly ONE slot flips per claim, addressed by position — two entries
+  that share a `HostSpec.id/1` (duplicate targets) stay independent slots,
+  so N identical hosts still provide N concurrent workers.
   """
   @spec claim(t()) :: {:ok, HostSpec.t(), t()} | :none_free
   def claim(%__MODULE__{slots: slots} = pool) do
-    case Enum.find(slots, &(not &1.busy?)) do
+    case Enum.find_index(slots, &(not &1.busy?)) do
       nil -> :none_free
-      %{spec: spec} -> {:ok, spec, mark(pool, HostSpec.id(spec), true)}
+      idx -> {:ok, Enum.at(slots, idx).spec, mark_at(pool, idx, true)}
     end
   end
 
   @doc """
-  Release the slot for `spec`, marking it free. A no-op if the host is not
-  in the pool or is already free (idempotent).
+  Release the slot for `spec`, marking one busy match free. A no-op if the
+  host is not in the pool or is already free (idempotent). Frees exactly one
+  slot, so duplicate-id hosts release independently rather than collapsing.
   """
   @spec release(t(), HostSpec.t()) :: t()
-  def release(%__MODULE__{} = pool, %HostSpec{} = spec) do
-    mark(pool, HostSpec.id(spec), false)
+  def release(%__MODULE__{slots: slots} = pool, %HostSpec{} = spec) do
+    id = HostSpec.id(spec)
+
+    case Enum.find_index(slots, &(&1.busy? and HostSpec.id(&1.spec) == id)) do
+      nil -> pool
+      idx -> mark_at(pool, idx, false)
+    end
   end
 
   @doc "Count of free slots."
   @spec free_count(t()) :: non_neg_integer()
-  def free_count(%__MODULE__{slots: slots}), do: Enum.count(slots, &(not &1.busy?))
+  def free_count(%__MODULE__{slots: slots}),
+    do: Enum.count(slots, &(not &1.busy?))
 
   @doc "Count of busy slots."
   @spec busy_count(t()) :: non_neg_integer()
@@ -65,12 +76,7 @@ defmodule Raxol.Symphony.Worker.HostPool do
   @spec size(t()) :: non_neg_integer()
   def size(%__MODULE__{slots: slots}), do: length(slots)
 
-  defp mark(%__MODULE__{slots: slots} = pool, id, busy?) do
-    slots =
-      Enum.map(slots, fn slot ->
-        if HostSpec.id(slot.spec) == id, do: %{slot | busy?: busy?}, else: slot
-      end)
-
-    %{pool | slots: slots}
+  defp mark_at(%__MODULE__{slots: slots} = pool, idx, busy?) do
+    %{pool | slots: List.update_at(slots, idx, &%{&1 | busy?: busy?})}
   end
 end

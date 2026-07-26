@@ -54,8 +54,40 @@ defmodule Raxol.Symphony.Worker.HostPoolTest do
     test "releasing an already-free or unknown host is a no-op" do
       pool = HostPool.new(specs(1))
 
-      assert HostPool.release(pool, %HostSpec{host: "build-1"}) |> HostPool.free_count() == 1
-      assert HostPool.release(pool, %HostSpec{host: "not-in-pool"}) |> HostPool.free_count() == 1
+      assert HostPool.release(pool, %HostSpec{host: "build-1"})
+             |> HostPool.free_count() == 1
+
+      assert HostPool.release(pool, %HostSpec{host: "not-in-pool"})
+             |> HostPool.free_count() == 1
+    end
+
+    test "duplicate-id hosts stay independent: N identical slots give N workers" do
+      # Two entries that resolve the SAME HostSpec.id/1 must not collapse:
+      # claiming one flips exactly one slot, so both remain usable.
+      dup = %HostSpec{host: "build-1", user: "ci"}
+      pool = HostPool.new([dup, dup])
+
+      {:ok, ^dup, pool} = HostPool.claim(pool)
+      assert HostPool.busy_count(pool) == 1
+      assert HostPool.free_count(pool) == 1
+
+      # The second identical host is still claimable (not collapsed busy).
+      {:ok, ^dup, pool} = HostPool.claim(pool)
+      assert HostPool.busy_count(pool) == 2
+      assert HostPool.claim(pool) == :none_free
+    end
+
+    test "release frees exactly one of two busy duplicate-id slots" do
+      dup = %HostSpec{host: "build-1", user: "ci"}
+      pool = HostPool.new([dup, dup])
+
+      {:ok, _, pool} = HostPool.claim(pool)
+      {:ok, _, pool} = HostPool.claim(pool)
+      assert HostPool.busy_count(pool) == 2
+
+      pool = HostPool.release(pool, dup)
+      assert HostPool.busy_count(pool) == 1
+      assert HostPool.free_count(pool) == 1
     end
   end
 end

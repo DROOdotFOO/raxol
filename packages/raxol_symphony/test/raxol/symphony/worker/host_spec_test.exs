@@ -40,12 +40,22 @@ defmodule Raxol.Symphony.Worker.HostSpecTest do
 
     test "string keys are tolerated (directly-built config)" do
       assert {:ok, %HostSpec{host: "build-5", user: "ci", port: 22}} =
-               HostSpec.normalize(%{"host" => "build-5", "user" => "ci", "port" => 22})
+               HostSpec.normalize(%{
+                 "host" => "build-5",
+                 "user" => "ci",
+                 "port" => 22
+               })
     end
 
     test "blank/absent optional fields normalize to nil" do
-      assert {:ok, %HostSpec{host: "h", user: nil, port: nil, identity_file: nil}} =
-               HostSpec.normalize(%{host: "h", user: "", port: 0, identity_file: ""})
+      assert {:ok,
+              %HostSpec{host: "h", user: nil, port: nil, identity_file: nil}} =
+               HostSpec.normalize(%{
+                 host: "h",
+                 user: "",
+                 port: 0,
+                 identity_file: ""
+               })
     end
 
     test "an already-built spec passes through" do
@@ -55,9 +65,59 @@ defmodule Raxol.Symphony.Worker.HostSpecTest do
 
     test "rejects an empty string, a userless '@host', a mapless host, and non-string/map" do
       assert {:error, {:invalid_ssh_host, ""}} = HostSpec.normalize("")
-      assert {:error, {:invalid_ssh_host, "@build"}} = HostSpec.normalize("@build")
-      assert {:error, {:invalid_ssh_host, %{user: "ci"}}} = HostSpec.normalize(%{user: "ci"})
+
+      assert {:error, {:invalid_ssh_host, "@build"}} =
+               HostSpec.normalize("@build")
+
+      assert {:error, {:invalid_ssh_host, %{user: "ci"}}} =
+               HostSpec.normalize(%{user: "ci"})
+
       assert {:error, {:invalid_ssh_host, 42}} = HostSpec.normalize(42)
+    end
+
+    test "rejects shell-metacharacter and flag-injection host/user tokens" do
+      # These would break out of a later `ssh` invocation (transport #743).
+      for bad <- [
+            "build; rm -rf /",
+            "build`whoami`",
+            "build$(id)",
+            "a b",
+            "build|nc",
+            "-oProxyCommand=evil",
+            "build\nx"
+          ] do
+        assert {:error, {:invalid_ssh_host, ^bad}} = HostSpec.normalize(bad),
+               "expected #{inspect(bad)} to be rejected"
+      end
+
+      assert {:error, {:invalid_ssh_host, _}} =
+               HostSpec.normalize(%{host: "ok", user: "-oX"})
+
+      assert {:error, {:invalid_ssh_host, _}} =
+               HostSpec.normalize(%{
+                 host: "ok",
+                 identity_file: "/tmp/k; rm -rf /"
+               })
+
+      # A directly-built struct cannot smuggle a dangerous host past normalize.
+      assert {:error, {:invalid_ssh_host, _}} =
+               HostSpec.normalize(%HostSpec{host: "build; rm"})
+    end
+
+    test "accepts ordinary hostnames, IPv4, and safe path fields" do
+      assert {:ok, _} = HostSpec.normalize("build-1.internal")
+      assert {:ok, _} = HostSpec.normalize("ci@10.0.0.5")
+
+      assert {:ok,
+              %HostSpec{
+                identity_file: "~/.ssh/id_ci",
+                workspace_root: "/var/lib/symphony"
+              }} =
+               HostSpec.normalize(%{
+                 host: "b",
+                 identity_file: "~/.ssh/id_ci",
+                 workspace_root: "/var/lib/symphony"
+               })
     end
   end
 
