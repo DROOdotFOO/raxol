@@ -1,0 +1,189 @@
+defmodule Raxol.Symphony.Ssh do
+  @moduledoc """
+  The single seam that runs a command on a remote worker host over SSH
+  (issue #743). Pure argv construction plus an allowlisted, injectable
+  executor — nothing here spawns a process except `exec/3`, and that is
+  injectable for tests.
+
+  A remote worker command is `ssh <opts> <user@host> "bash -lc 'cd WS && …'"`.
+  Two deliberate decisions:
+
+    * **The remote LOGIN shell provides credentials.** The orchestrator
+      forwards **no** environment over SSH — the remote `bash -lc` sources
+      the host's login profile, so worker credentials (API keys, etc.) are
+      provisioned host-side and never travel on a command line. Env
+      injection stays a local-worker concern (`Runners.Codex.Session`).
+    * **`ssh` is allowlisted.** `executable/0` refuses anything whose
+      basename is not `ssh` (mirrors the gateway transcribe allowlist).
+
+  The remote workspace path handling (creating `WS` on the host) is issue
+  #744; here the caller supplies whatever path the remote command should
+  `cd` into.
+  """
+
+  alias Raxol.Symphony.Worker.HostSpec
+
+  @allowed_binaries ~w(ssh)
+
+  # Fail fast on an unreachable host instead of wedging a worker slot on a
+  # stalled TCP connect.
+  @connect_timeout_seconds 15
+
+  # Detect a half-open connection (dropped network / dead remote) so a stuck
+  # worker frees its host slot instead of hanging forever: probe every 30s,
+  # give up after 3 unanswered probes (~90s), then the local `ssh` exits and
+  # the Port closes.
+  @server_alive_interval_seconds 30
+  @server_alive_count_max 3
+
+  @doc """
+  Resolve the `ssh` executable, refusing anything not named `ssh`.
+  """
+  @spec executable() :: {:ok, binary()} | {:error, :ssh_not_allowed}
+  def executable do
+    with path when is_binary(path) <- System.find_executable("ssh"),
+         true <- Path.basename(path) in @allowed_binaries do
+      {:ok, path}
+    else
+      _ -> {:error, :ssh_not_allowed}
+    end
+  end
+
+  @doc "The `user@host` (or bare `host`) SSH destination for a spec."
+  @spec target(HostSpec.t()) :: binary()
+  def target(%HostSpec{host: host, user: nil}), do: host
+  def target(%HostSpec{host: host, user: user}), do: "#{user}@#{host}"
+
+  @doc """
+  The SSH option args for a spec: non-interactive base (BatchMode, connect
+  timeout, server-alive keepalive), the spec's host-key policy
+  (`StrictHostKeyChecking` + optional `UserKnownHostsFile`), then port and
+  identity. Derived from the `HostSpec` so a deployment can force
+  `StrictHostKeyChecking=yes` against a pre-seeded `known_hosts`.
+  """
+  @spec option_args(HostSpec.t()) :: [binary()]
+  def option_args(%HostSpec{port: port, identity_file: identity} = spec) do
+    base_options() ++ host_key_args(spec) ++ port_args(port) ++ identity_args(identity)
+  end
+
+  @doc """
+  The full `ssh` argv to run `remote_command` on the host:
+  `[options…, target, remote_command]`. `remote_command` is a single element
+  so SSH forwards it verbatim to the remote shell (no re-tokenization).
+  """
+  @spec command_args(HostSpec.t(), binary()) :: [binary()]
+  def command_args(%HostSpec{} = spec, remote_command) when is_binary(remote_command) do
+    option_args(spec) ++ [target(spec), remote_command]
+  end
+
+  @doc """
+  A remote `bash -lc` login-shell command that cds into `workspace` then runs
+  `command`. Quoted so it survives SSH's transport and the remote shell's
+  re-parse. The remote login shell sources host-provisioned credentials; no
+  env is forwarded from the orchestrator.
+
+  `workspace` is the (local) workspace path as-is; `HostSpec.workspace_root`
+  is not consulted here. Per-host remote workspace roots are reserved for
+  issue #744.
+  """
+  @spec remote_bash(binary(), binary()) :: binary()
+  def remote_bash(workspace, command) when is_binary(workspace) and is_binary(command) do
+    inner = "cd #{shell_quote(workspace)} && #{command}"
+    "bash -lc #{shell_quote(inner)}"
+  end
+
+  @doc """
+  Wrap `command` so a dropped SSH connection can never orphan it.
+
+  Closing the local `ssh` Port (`Port.close`) tears down the ssh client but,
+  for a non-pty exec channel, sshd does NOT signal the remote command — it
+  reparents and lingers (the classic orphan). We can't force a pty here: the
+  remote `codex app-server` speaks newline-delimited JSON-RPC over stdio and a
+  pty's echo + CR/LF translation would corrupt that framing.
+
+  So the command runs with its stdio untouched (`<&0` keeps stdin wired to the
+  ssh channel, stdout/stderr inherited) and a co-resident watcher polls the
+  shell's parent (the sshd session process): when it dies, the watcher signals
+  the command. A normal exit falls straight through with the command's real
+  status (`wait`). Framing-safe: the watcher never reads the data channel.
+  """
+  @spec reap_on_disconnect(binary()) :: binary()
+  def reap_on_disconnect(command) when is_binary(command) do
+    # Single-quote-free so it survives `remote_bash/2`'s single-quoting intact.
+    command <>
+      " <&0 & __rx_pid=$!; __rx_ppid=$PPID; " <>
+      "while kill -0 $__rx_pid 2>/dev/null; do " <>
+      "ps -p $__rx_ppid >/dev/null 2>&1 || break; sleep 5; done; " <>
+      "kill $__rx_pid 2>/dev/null; wait $__rx_pid"
+  end
+
+  @doc """
+  Run `remote_command` on the host once and return `{output, exit_status}`.
+
+  The executor is injectable (`:exec_fn`, default `System.cmd/3` with
+  `stderr_to_stdout: true`) and the executable is resolvable (`:executable`,
+  default `executable/0`) so tests need no real `ssh`. Returns
+  `{:error, :ssh_not_allowed}` when the `ssh` binary can't be resolved.
+  """
+  @spec exec(HostSpec.t(), binary(), keyword()) ::
+          {binary(), non_neg_integer()} | {:error, :ssh_not_allowed}
+  def exec(%HostSpec{} = spec, remote_command, opts \\ []) do
+    exec_fn = Keyword.get(opts, :exec_fn, &System.cmd/3)
+
+    case resolve_executable(opts) do
+      {:ok, ssh} ->
+        exec_fn.(ssh, command_args(spec, remote_command), stderr_to_stdout: true)
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # -- Internals --------------------------------------------------------------
+
+  defp resolve_executable(opts) do
+    case Keyword.get(opts, :executable) do
+      nil -> executable()
+      path when is_binary(path) -> {:ok, path}
+    end
+  end
+
+  # Never prompt (BatchMode); bound the TCP connect; keep the connection
+  # probed so a dead remote is noticed and the local `ssh` exits.
+  defp base_options do
+    [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=#{@connect_timeout_seconds}",
+      "-o",
+      "ServerAliveInterval=#{@server_alive_interval_seconds}",
+      "-o",
+      "ServerAliveCountMax=#{@server_alive_count_max}"
+    ]
+  end
+
+  defp host_key_args(%HostSpec{strict_host_key_checking: mode, known_hosts: known_hosts}) do
+    ["-o", "StrictHostKeyChecking=#{ssh_host_key_mode(mode)}"] ++ known_hosts_args(known_hosts)
+  end
+
+  # HostSpec validated the mode; map to ssh's spelling (hyphenated accept-new).
+  defp ssh_host_key_mode(:yes), do: "yes"
+  defp ssh_host_key_mode(:no), do: "no"
+  defp ssh_host_key_mode(_accept_new), do: "accept-new"
+
+  defp known_hosts_args(nil), do: []
+  defp known_hosts_args(path) when is_binary(path), do: ["-o", "UserKnownHostsFile=#{path}"]
+
+  defp port_args(nil), do: []
+  defp port_args(port) when is_integer(port), do: ["-p", Integer.to_string(port)]
+
+  defp identity_args(nil), do: []
+  defp identity_args(path) when is_binary(path), do: ["-i", path]
+
+  # POSIX single-quote escaping: wrap in single quotes, and end/re-open the
+  # quote around any embedded single quote (`'` -> `'\''`).
+  defp shell_quote(str) do
+    "'" <> String.replace(str, "'", "'\\''") <> "'"
+  end
+end

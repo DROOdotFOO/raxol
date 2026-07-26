@@ -69,6 +69,7 @@ defmodule Raxol.Symphony.Runners.Codex do
     parent = Keyword.fetch!(opts, :parent)
     attempt = Keyword.get(opts, :attempt)
     workspace_path = Keyword.fetch!(opts, :workspace_path)
+    host = Keyword.get(opts, :host)
     resume_value = Keyword.get(opts, :resume_value)
     resume_token = Keyword.get(opts, :resume_token)
 
@@ -82,6 +83,7 @@ defmodule Raxol.Symphony.Runners.Codex do
         parent: parent,
         attempt: attempt,
         workspace_path: workspace_path,
+        host: host,
         turn: 1,
         max_turns: config.agent.max_turns,
         auth_env: auth.env
@@ -115,7 +117,7 @@ defmodule Raxol.Symphony.Runners.Codex do
     policy = build_policy(config)
     env = Map.get(ctx, :auth_env, [])
 
-    case Session.start(ctx.workspace_path, config.codex.command, policy, env) do
+    case Session.start(ctx.workspace_path, config.codex.command, policy, env, Map.get(ctx, :host)) do
       {:ok, session} ->
         try do
           run_turns(session, issue, config, ctx)
