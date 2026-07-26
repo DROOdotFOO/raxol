@@ -214,6 +214,38 @@ defmodule Raxol.Harness.HarnessAppClickTest do
     refute screen_text(released) =~ "SECRET-THOUGHT-LINE-1"
   end
 
+  test "an unmodeled-button release is dropped, but the drop is logged" do
+    import ExUnit.CaptureLog
+
+    model = sealed_reasoning_model()
+    row = reasoning_row(model)
+    armed = mouse(model, :press, 3, row)
+
+    # A wheel button-up is a release whose button is outside the completion
+    # allowlist. It must not toggle the block -- but unlike the generic
+    # catch-all fold, the drop is observable (a breadcrumb for a mystery
+    # dead click), so we assert both the no-toggle AND the debug log.
+    log =
+      capture_log([level: :debug], fn ->
+        {released, []} =
+          HarnessApp.update(
+            {:key,
+             %Event{
+               type: :mouse,
+               data: %{action: :release, button: :wheel_up, x: 3, y: row}
+             }},
+            armed
+          )
+
+        send(self(), {:released, released})
+      end)
+
+    assert_received {:released, released}
+    assert released.record_fold == %{}
+    assert log =~ "dropped unrecognized mouse release"
+    assert log =~ "wheel_up"
+  end
+
   test "a resize between press and release cancels the click" do
     model = sealed_reasoning_model()
     row = reasoning_row(model)

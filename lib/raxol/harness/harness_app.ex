@@ -42,6 +42,8 @@ defmodule Raxol.Harness.HarnessApp do
 
   alias Raxol.Harness.HarnessApp.{Model, View}
 
+  require Logger
+
   # ── init ────────────────────────────────────────────────────────────────
 
   @impl true
@@ -97,10 +99,12 @@ defmodule Raxol.Harness.HarnessApp do
   # geometry (footer fit, transcript window), and this module is the one
   # place that legitimately holds both halves. `View.hit_test/3` is pure
   # geometry; `Model.click/2` is the pure fold. A left PRESS arms the site;
-  # the matching left RELEASE on the same cell acts. Moves, and any release
-  # that is not the left button, fold away silently — the arm is left-only,
-  # so completing on a right/middle release would toggle a block the user
-  # never left-clicked.
+  # the matching left RELEASE on the same cell acts. Moves fold away
+  # silently; a release outside the completion allowlist (`[:left,
+  # :release]`) also folds — the arm is left-only, so completing on a
+  # right/middle release would toggle a block the user never left-clicked —
+  # but that drop is LOGGED at debug (see `handle_mouse/2`), so a click that
+  # silently dies under an unmodeled button token leaves a breadcrumb.
   # The LIVE shape: the pump normalizes every input event
   # (`PumpContract.key/1` → `InputEvent.normalize/1`), and a mouse Event
   # classifies `%{kind: :other, raw: %Event{type: :mouse}}` — the struct
@@ -196,6 +200,25 @@ defmodule Raxol.Harness.HarnessApp do
     if armed == {x, y},
       do: {Model.click(model, View.hit_test(model, x, y)), []},
       else: {model, []}
+  end
+
+  # A release that is a release but did NOT satisfy the completion clause
+  # above — its button is missing, or outside the [:left, :release]
+  # allowlist (right/middle/wheel button-up, or an unmodeled token from a
+  # mouse mode we don't handle). We fold it (no toggle), but log at debug
+  # so the drop is observable: if a real left-click ever arrives under an
+  # unexpected button token, this breadcrumb explains the otherwise-silent
+  # dead click instead of it vanishing into the generic catch-all.
+  defp handle_mouse(
+         %Event{type: :mouse, data: %{action: :release} = data},
+         model
+       ) do
+    Logger.debug(fn ->
+      "harness: dropped unrecognized mouse release " <>
+        "button=#{inspect(Map.get(data, :button))}"
+    end)
+
+    {model, []}
   end
 
   defp handle_mouse(_event, model), do: {model, []}
