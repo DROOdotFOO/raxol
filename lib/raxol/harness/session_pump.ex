@@ -355,7 +355,10 @@ defmodule Raxol.Harness.SessionPump do
   #
   #   1. The alt-screen ENTER bytes are written BEFORE the callback runs.
   #      The Rendering Engine starts inside the callback, so its first
-  #      frame can never land in the user's scrollback.
+  #      frame can never land in the user's scrollback. The flip side: a
+  #      boot FAILURE has already put ENTER on the tty, so the error branch
+  #      must emit the matching LEAVE (see below) — the loop never starts,
+  #      so `teardown/1` (which normally owns the leave byte) never runs.
   #   2. The three seams rewire from the returned pids BEFORE the loop
   #      starts: consumer becomes a DeliveryShim bound to the Dispatcher
   #      (verbatim {:harness, _} ingress; resize rides the system path),
@@ -363,8 +366,12 @@ defmodule Raxol.Harness.SessionPump do
   #      lifecycle_stop becomes the real Lifecycle stop.
   #
   # A boot failure is fatal and loud: the pump cannot feed an app that does
-  # not exist, so it raises and lets the link take the embedder down --
-  # before the loop starts, there is no session to tear down honestly.
+  # not exist, so it raises and lets the link take the embedder down. There
+  # is no session to tear down honestly yet, but the alt-screen ENTER bytes
+  # are already on the tty, so the error branch first restores the primary
+  # screen (the LEAVE `teardown/1` would otherwise emit) before raising --
+  # otherwise a failed boot strands the operator in the hidden alternate
+  # buffer, needing a manual `reset`.
   defp boot_runtime(%{runtime_boot: nil} = state), do: state
 
   defp boot_runtime(%{runtime_boot: boot} = state) do
@@ -385,6 +392,11 @@ defmodule Raxol.Harness.SessionPump do
         }
 
       {:error, reason} ->
+        # ENTER (above) is already on the tty and the loop never starts, so
+        # restore the primary screen here before the raise takes the
+        # embedder down. Guarded like teardown's leave: a device already
+        # gone must not turn the strand into a crash-behind-a-crash.
+        safe_device_write(state.device, ViewportAuthority.leave())
         raise "harness runtime boot failed: #{inspect(reason)}"
     end
   end

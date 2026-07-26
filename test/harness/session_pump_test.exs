@@ -1225,17 +1225,67 @@ defmodule Raxol.Harness.SessionPumpTest do
       assert String.ends_with?(bytes_at_boot, ViewportAuthority.enter())
     end
 
+    test "a boot FAILURE restores the primary screen before it raises" do
+      # ENTER is already on the tty when boot runs (proven above). A boot
+      # failure aborts before the loop, so teardown/1 never emits the LEAVE
+      # -- boot_runtime/2 must emit it itself, or the operator is stranded
+      # in the hidden alternate buffer needing a manual `reset`.
+      Process.flag(:trap_exit, true)
+      test_pid = self()
+      {:ok, device} = StringIO.open("")
+
+      boot = fn _pump_pid ->
+        {_in, out} = StringIO.contents(device)
+        send(test_pid, {:boot_invoked, out})
+        {:error, :boom}
+      end
+
+      {:ok, pump} =
+        SessionPump.start_link(
+          lane:
+            {FakeLane,
+             %{session_id: "s1", pid: start_fake_session(), test: test_pid}},
+          device: device,
+          width: @width,
+          rows: @rows,
+          cadence_opts: [flush_interval_ms: 0],
+          tick_ms: 60_000,
+          notify: test_pid,
+          runtime_boot: boot
+        )
+
+      # ENTER was on the tty when boot ran ...
+      assert_receive {:boot_invoked, at_boot}, 2_000
+      assert String.ends_with?(at_boot, ViewportAuthority.enter())
+
+      # ... the boot failure is fatal and loud (the pump crashes) ...
+      assert_receive {:EXIT, ^pump, {%RuntimeError{message: msg}, _stack}},
+                     2_000
+
+      assert msg =~ "harness runtime boot failed"
+
+      # ... but the primary screen is restored: LEAVE is the LAST byte on
+      # the device, after the ENTER that opened the alternate buffer.
+      {_in, out} = StringIO.contents(device)
+      assert out =~ ViewportAuthority.enter()
+      assert String.ends_with?(out, ViewportAuthority.leave())
+    end
+
     test "rewires delivery: batches ride {:harness, _}, resize rides the system path" do
       %{forwarder: forwarder, pump: pump} = new_booted_pump()
 
       send(forwarder, {:session_event, "s1", turn_started_event("t1")})
-      assert_receive {:dispatched, {:dispatch, {:harness, {:batch, items}}}}, 2_000
+
+      assert_receive {:dispatched, {:dispatch, {:harness, {:batch, items}}}},
+                     2_000
+
       assert Enum.any?(items, &match?({:event, %{type: :turn_started}}, &1))
 
       SessionPump.notify_resize(pump, 100, 40)
 
       assert_receive {:dispatched,
-                      {:dispatch, %Event{type: :resize, data: %{width: 100, height: 40}}}},
+                      {:dispatch,
+                       %Event{type: :resize, data: %{width: 100, height: 40}}}},
                      2_000
     end
 
@@ -1252,7 +1302,8 @@ defmodule Raxol.Harness.SessionPumpTest do
       assert_receive {:paint_gate, :resume_painting}, 2_000
       # The editor result travels the rewired delivery path, too.
       assert_receive {:dispatched,
-                      {:dispatch, {:harness, {:editor_result, {:ok, %{text: "e"}}}}}},
+                      {:dispatch,
+                       {:harness, {:editor_result, {:ok, %{text: "e"}}}}}},
                      2_000
     end
 
