@@ -46,6 +46,8 @@ defmodule Raxol.Symphony.Orchestrator.State do
           interrupt_reason: atom(),
           resume_token: term(),
           paused_at: integer(),
+          paused_at_system: integer(),
+          durable?: boolean(),
           last_event: atom() | binary() | nil,
           last_message: binary() | nil,
           turn_count: non_neg_integer(),
@@ -74,7 +76,12 @@ defmodule Raxol.Symphony.Orchestrator.State do
   """
   @type batch_entry :: %{
           issues: [
-            %{issue: Issue.t(), attempt: non_neg_integer() | nil, workspace_path: Path.t()}
+            %{
+              issue: Issue.t(),
+              attempt: non_neg_integer() | nil,
+              workspace_path: Path.t(),
+              host: Raxol.Symphony.Worker.HostSpec.t() | nil
+            }
           ],
           worker_pid: pid(),
           worker_ref: reference(),
@@ -92,6 +99,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
     :last_preflight_error,
     :paused_saver,
     :host_pool,
+    :paused_max_age_ms,
     running: %{},
     batches: %{},
     claimed: MapSet.new(),
@@ -123,6 +131,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
           paused: %{optional(binary()) => paused_entry()},
           paused_saver: {module(), map()} | nil,
           host_pool: Raxol.Symphony.Worker.HostPool.t() | nil,
+          paused_max_age_ms: non_neg_integer() | nil,
           completed: MapSet.t(binary()),
           codex_totals: codex_totals(),
           codex_rate_limits: term() | nil,

@@ -251,16 +251,41 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       assert results_by_id["bad"] == {:error, :boom}
     end
 
-    test "runner pause in a parallel slot is normalized to :pause_in_parallel_branch_unsupported", ctx do
+    test "a paused slot surfaces its pause verbatim and skips evidence", ctx do
       Memory.put_issue(issue("p", "PAR-6", "Todo"))
       Noop.Director.set("PAR-6", {:pause, :awaiting_review, %{token: 1}})
 
       {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 1)
       state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
 
+      # The run COMPLETES (no interrupt); the pause rides through aggregate.
       assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
 
-      assert [{"p", {:error, :pause_in_parallel_branch_unsupported}}] = final.run_results
+      assert [{"p", {:pause, :awaiting_review, %{token: 1}}}] = final.run_results
+      # A half-done branch collects no evidence.
+      assert [{"p", nil}] = final.evidences
+      assert %DateTime{} = final.completed_at
+    end
+
+    test "a paused branch does not stop its siblings from completing", ctx do
+      Memory.put_issue(issue("ok", "PAR-7", "Todo"))
+      Memory.put_issue(issue("paused", "PAR-8", "Todo"))
+      Noop.Director.set("PAR-7", {:succeed_after, 0})
+      Noop.Director.set("PAR-8", {:pause, :awaiting_review, %{token: 2}})
+
+      {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 2)
+      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
+
+      results_by_id = Map.new(final.run_results)
+      assert results_by_id["ok"] == :ok
+      assert results_by_id["paused"] == {:pause, :awaiting_review, %{token: 2}}
+
+      # the sibling that finished still has evidence; the paused one does not
+      evidences_by_id = Map.new(final.evidences)
+      assert evidences_by_id["ok"] != nil
+      assert evidences_by_id["paused"] == nil
     end
   end
 end

@@ -11,6 +11,9 @@ defmodule Raxol.Symphony.Orchestrator do
   - Schedules failure-driven retries with exponential backoff.
   - Reconciles running issues each tick: stall detection + tracker state
     refresh.
+  - Expires abandoned paused runs past a TTL, releasing the claim slot and
+    reclaiming the workspace + durable row so a never-resumed park cannot
+    leak them forever.
 
   Workers run under a `Task.Supervisor` so the orchestrator survives worker
   crashes. Each worker is monitored; `:DOWN` messages drive state transitions.
@@ -31,6 +34,15 @@ defmodule Raxol.Symphony.Orchestrator do
 
   use Raxol.Core.Behaviours.BaseManager
   require Logger
+
+  # A parked run waits on an out-of-band event (buyer payment, delivery,
+  # evaluator approval), so day-scale waits are legitimate and the ceiling is
+  # deliberately generous. Past it a paused run is almost certainly orphaned
+  # (the event will never arrive) and must be reclaimed -- otherwise its claim
+  # slot, workspace, and durable saver row leak forever (T3, #750). Reconcile
+  # keys off a wall-clock timestamp so the age survives a BEAM restart; set to
+  # <= 0 to disable expiry.
+  @default_paused_max_age_ms 7 * 24 * 60 * 60 * 1000
 
   alias Raxol.Symphony.Config.Schema
   alias Raxol.Symphony.Evidence.Capture
@@ -151,6 +163,9 @@ defmodule Raxol.Symphony.Orchestrator do
     auto_start_tick = Keyword.get(opts, :auto_start_tick, true)
     paused_saver = Keyword.get(opts, :paused_saver)
 
+    paused_max_age_ms =
+      Keyword.get(opts, :paused_max_age_ms, @default_paused_max_age_ms)
+
     state = %State{
       config: config,
       runner_module: runner_module,
@@ -158,7 +173,8 @@ defmodule Raxol.Symphony.Orchestrator do
       task_supervisor: task_supervisor,
       workflow_store: workflow_store,
       paused_saver: paused_saver,
-      paused: PausedSaver.load_all(paused_saver),
+      paused_max_age_ms: paused_max_age_ms,
+      paused: hydrate_paused(PausedSaver.load_all(paused_saver)),
       host_pool: build_host_pool(config)
     }
 
@@ -683,6 +699,7 @@ defmodule Raxol.Symphony.Orchestrator do
   defp dispatch_parallel_batch(%State{} = state, issues_with_attempts) do
     with {:ok, runner_mod} <- runner_module(state),
          {:ok, prepared} <- ensure_batch_workspaces(state, issues_with_attempts) do
+      {prepared, state} = claim_batch_hosts(state, prepared)
       do_dispatch_parallel_batch(state, runner_mod, prepared)
     else
       {:error, reason} ->
@@ -715,6 +732,21 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
+  # Reserve one host slot per batch slot (one-worker-lifetime-per-host), so a
+  # branch that pauses mid-batch keeps its host across the pause and resumes on
+  # it. A slot past the free-host count gets `host: nil` (local, ungated) --
+  # the batch is never deferred on host scarcity. With no pool configured every
+  # slot gets nil and nothing is reserved, preserving pre-host batch behaviour.
+  # Threads the mutated pool back out via the accumulator.
+  defp claim_batch_hosts(%State{} = state, prepared) do
+    Enum.map_reduce(prepared, state, fn slot, acc ->
+      case claim_host(acc) do
+        {:ok, host, acc} -> {Map.put(slot, :host, host), acc}
+        :none_free -> {Map.put(slot, :host, nil), acc}
+      end
+    end)
+  end
+
   defp do_dispatch_parallel_batch(%State{} = state, runner_mod, prepared) do
     issues = Enum.map(prepared, & &1.issue)
     workspaces = Enum.map(prepared, & &1.workspace_path)
@@ -737,14 +769,23 @@ defmodule Raxol.Symphony.Orchestrator do
         MapSet.put(acc, issue.id)
       end)
 
-    state = %State{state | batches: Map.put(state.batches, ref, entry), claimed: claimed}
+    state = %State{
+      state
+      | batches: Map.put(state.batches, ref, entry),
+        claimed: claimed
+    }
 
     Enum.reduce(entry.issues, state, fn %{issue: issue}, acc ->
       cancel_retry(acc, issue.id)
     end)
   end
 
-  defp spawn_parallel_batch_task(%State{} = state, runner_mod, issues, workspaces) do
+  defp spawn_parallel_batch_task(
+         %State{} = state,
+         runner_mod,
+         issues,
+         workspaces
+       ) do
     parent = self()
     config = state.config
     max_candidates = length(issues)
@@ -783,7 +824,9 @@ defmodule Raxol.Symphony.Orchestrator do
             parent_pid: parent
           )
 
-        results = batch_run_results(WorkflowCompiled.invoke(compiled, state), issues)
+        results =
+          batch_run_results(WorkflowCompiled.invoke(compiled, state), issues)
+
         {:batch_result, results}
 
       {:error, reason} ->
@@ -810,7 +853,10 @@ defmodule Raxol.Symphony.Orchestrator do
         state
 
       entry ->
-        %State{state | batches: Map.put(state.batches, ref, %{entry | results: results})}
+        %State{
+          state
+          | batches: Map.put(state.batches, ref, %{entry | results: results})
+        }
     end
   end
 
@@ -821,8 +867,8 @@ defmodule Raxol.Symphony.Orchestrator do
     results = batch_results_map(entry, reason)
 
     entry.issues
-    |> Enum.reduce(state, fn %{issue: issue, attempt: attempt}, acc ->
-      apply_batch_issue_result(acc, issue, attempt, Map.get(results, issue.id))
+    |> Enum.reduce(state, fn %{issue: issue} = prepared, acc ->
+      apply_batch_issue_result(acc, prepared, Map.get(results, issue.id))
     end)
     |> notify_listeners(:batch_exit)
   end
@@ -839,20 +885,93 @@ defmodule Raxol.Symphony.Orchestrator do
     end)
   end
 
-  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, _attempt, :ok) do
+  # A terminal batch outcome frees the slot's reserved host (only a pause keeps
+  # it). A nil host -- no pool, or a slot past the free-host count -- is a no-op.
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue} = prepared,
+         :ok
+       ) do
     state
+    |> release_host(Map.get(prepared, :host))
     |> Map.put(:completed, MapSet.put(state.completed, issue.id))
     |> schedule_continuation_retry(issue, 1)
   end
 
-  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, attempt, {:error, reason}) do
-    schedule_failure_retry(state, issue, (attempt || 0) + 1, reason)
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue, attempt: attempt} = prepared,
+         {:error, reason}
+       ) do
+    state
+    |> release_host(Map.get(prepared, :host))
+    |> schedule_failure_retry(issue, (attempt || 0) + 1, reason)
+  end
+
+  # A branch that paused mid-batch: park it as resumable exactly like a
+  # sequential worker pause. Siblings in the batch already completed; only
+  # this issue waits for an operator resume.
+  defp apply_batch_issue_result(
+         %State{} = state,
+         prepared,
+         {:pause, reason, token}
+       )
+       when is_atom(reason) do
+    park_batch_pause(state, prepared, {reason, token})
   end
 
   # No result recorded for this slot (e.g. a candidate beyond the graph's slot
   # count). Re-check via a continuation retry rather than dropping it.
-  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, _attempt, nil) do
-    schedule_continuation_retry(state, issue, 1)
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue} = prepared,
+         nil
+       ) do
+    state
+    |> release_host(Map.get(prepared, :host))
+    |> schedule_continuation_retry(issue, 1)
+  end
+
+  # Fail-safe: a result shape outside the runner contract -- e.g. a
+  # `{:pause, reason, _}` whose reason is not an atom (the pause clause above
+  # guards `is_atom(reason)`), or any other unexpected return -- must never
+  # crash the batch reduce and take the orchestrator down with it. Log it and
+  # re-check via a continuation retry, mirroring the nil-slot path so the
+  # issue is neither dropped nor lost.
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue} = prepared,
+         other
+       ) do
+    Logger.warning(
+      "symphony.orchestrator.unexpected_batch_result issue=#{issue.identifier} " <>
+        "result=#{inspect(other)}"
+    )
+
+    state
+    |> release_host(Map.get(prepared, :host))
+    |> schedule_continuation_retry(issue, 1)
+  end
+
+  # Build a paused entry from the prepared batch slot and park it via the
+  # shared `park_paused/3`. The slot's reserved host is threaded through so a
+  # batch-origin pause keeps its host slot exactly like a sequential pause
+  # (resume re-holds it, stop/GC release it). Batch workers do not stream
+  # per-issue turn/token telemetry, so those fields take the running-entry
+  # defaults.
+  defp park_batch_pause(%State{} = state, prepared, {reason, token}) do
+    entry = %{
+      issue: prepared.issue,
+      attempt: prepared.attempt,
+      workspace_path: prepared.workspace_path,
+      host: Map.get(prepared, :host),
+      last_event: nil,
+      last_message: nil,
+      turn_count: 0,
+      tokens: State.empty_tokens()
+    }
+
+    park_paused(state, entry, {reason, token})
   end
 
   defp record_batch_runtime(%State{} = state, entry) do
@@ -983,38 +1102,73 @@ defmodule Raxol.Symphony.Orchestrator do
         "reason=#{inspect(interrupt_reason)}"
     )
 
-    paused_entry = %{
+    base_entry = %{
       issue: entry.issue,
       attempt: entry.attempt,
       workspace_path: entry.workspace_path,
-      host: entry.host,
+      host: Map.get(entry, :host),
       interrupt_reason: interrupt_reason,
       resume_token: token,
       paused_at: System.monotonic_time(:millisecond),
+      paused_at_system: System.system_time(:millisecond),
       last_event: entry.last_event,
       last_message: entry.last_message,
       turn_count: entry.turn_count,
       tokens: entry.tokens
     }
 
-    persist_paused(state.paused_saver, entry.issue.id, paused_entry)
+    durable? = persist_paused(state.paused_saver, entry.issue.id, base_entry)
+    paused_entry = Map.put(base_entry, :durable?, durable?)
 
     state
     |> Map.put(:paused, Map.put(state.paused, entry.issue.id, paused_entry))
     |> notify_listeners(:worker_paused)
   end
 
+  # Returns whether the entry is now durably on disk. A configured saver that
+  # accepts the write yields `true`; a nil saver (no persistence), an error
+  # tuple, or a RAISE from the saver (full/read-only disk: `File.mkdir_p!`
+  # raises `File.Error`, `:ok = :dets.insert` raises `MatchError`) all degrade
+  # to `false` -- the run stays parked in memory rather than crashing the
+  # orchestrator and losing all in-memory running/batches state.
   defp persist_paused(saver, issue_id, paused_entry) do
     case PausedSaver.put(saver, issue_id, paused_entry) do
       :ok ->
-        :ok
+        saver != nil
 
       {:error, reason} ->
         Logger.warning(
           "symphony.orchestrator.paused_saver_put_failed issue=#{issue_id} " <>
             "reason=#{inspect(reason)}"
         )
+
+        false
     end
+  rescue
+    e in [File.Error, MatchError] ->
+      Logger.warning(
+        "symphony.orchestrator.paused_saver_put_raised issue=#{issue_id} " <>
+          "reason=#{inspect(e)}"
+      )
+
+      false
+  end
+
+  # Loaded-from-disk entries came from an earlier BEAM: their monotonic
+  # `paused_at` is meaningless now, and pre-upgrade rows may lack
+  # `paused_at_system`. Backfill a fresh wall-clock stamp so the TTL clock
+  # starts at boot, and mark them durable (they were just read off disk).
+  defp hydrate_paused(paused) do
+    now = System.system_time(:millisecond)
+
+    Map.new(paused, fn {issue_id, entry} ->
+      hydrated =
+        entry
+        |> Map.put_new(:paused_at_system, now)
+        |> Map.put(:durable?, true)
+
+      {issue_id, hydrated}
+    end)
   end
 
   defp forget_paused(saver, issue_id) do
@@ -1080,7 +1234,12 @@ defmodule Raxol.Symphony.Orchestrator do
             "reason=#{inspect(reason)}"
         )
 
-        schedule_failure_retry(state, issue, (paused_entry.attempt || 0) + 1, reason)
+        schedule_failure_retry(
+          state,
+          issue,
+          (paused_entry.attempt || 0) + 1,
+          reason
+        )
     end
   end
 
@@ -1271,6 +1430,55 @@ defmodule Raxol.Symphony.Orchestrator do
     state
     |> reconcile_stalls()
     |> reconcile_tracker_states()
+    |> reconcile_paused()
+  end
+
+  # Expire abandoned parked runs. `state.paused` is otherwise invisible to
+  # reconciliation, so a run that is parked and never resumed would hold its
+  # claim slot, workspace, and durable saver row indefinitely (T3, #750).
+  defp reconcile_paused(%State{paused_max_age_ms: ttl} = state)
+       when not is_integer(ttl) or ttl <= 0,
+       do: state
+
+  defp reconcile_paused(%State{paused_max_age_ms: ttl} = state) do
+    now = System.system_time(:millisecond)
+
+    Enum.reduce(state.paused, state, fn {issue_id, entry}, acc ->
+      if paused_expired?(entry, now, ttl) do
+        gc_abandoned_paused(acc, issue_id, entry, now)
+      else
+        acc
+      end
+    end)
+  end
+
+  # Key off the restart-safe wall-clock stamp. A recently parked run (or one
+  # whose stamp is somehow absent) is never expired.
+  defp paused_expired?(entry, now, ttl) do
+    case Map.get(entry, :paused_at_system) do
+      ts when is_integer(ts) -> now - ts > ttl
+      _ -> false
+    end
+  end
+
+  defp gc_abandoned_paused(%State{} = state, issue_id, entry, now) do
+    age_ms = now - Map.get(entry, :paused_at_system, now)
+
+    Logger.warning(
+      "symphony.orchestrator.paused_gc issue=#{entry.issue.identifier} " <>
+        "reason=#{inspect(entry.interrupt_reason)} paused_ms_ago=#{age_ms}"
+    )
+
+    forget_paused(state.paused_saver, issue_id)
+    Workspace.remove(state.config, entry.workspace_path)
+
+    state
+    # The parked run kept its host slot reserved; free it now that the run is
+    # abandoned, otherwise the reserved slot leaks busy forever (T2 unify #749).
+    |> release_host(Map.get(entry, :host))
+    |> Map.put(:paused, Map.delete(state.paused, issue_id))
+    |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
+    |> notify_listeners(:paused_gc)
   end
 
   defp reconcile_stalls(%State{} = state) do
@@ -1493,6 +1701,7 @@ defmodule Raxol.Symphony.Orchestrator do
       issue_identifier: entry.issue.identifier,
       interrupt_reason: entry.interrupt_reason,
       paused_ms_ago: now_ms - entry.paused_at,
+      durable?: Map.get(entry, :durable?, false),
       attempt: entry.attempt,
       turn_count: entry.turn_count,
       last_event: entry.last_event,
