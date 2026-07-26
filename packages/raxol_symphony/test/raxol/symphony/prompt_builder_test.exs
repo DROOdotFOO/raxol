@@ -112,18 +112,25 @@ defmodule Raxol.Symphony.PromptBuilderTest do
 
     test "unknown filter fails rendering" do
       assert {:error, {:template_render_error, _}} =
-               PromptBuilder.build(issue(), "{{ issue.title | nonexistent_filter }}.")
+               PromptBuilder.build(
+                 issue(),
+                 "{{ issue.title | nonexistent_filter }}."
+               )
     end
 
     test "unknown nested issue field fails rendering" do
       assert {:error, {:template_render_error, _}} =
-               PromptBuilder.build(issue(), "{{ issue.totally_made_up_field }}.")
+               PromptBuilder.build(
+                 issue(),
+                 "{{ issue.totally_made_up_field }}."
+               )
     end
   end
 
   describe "default_prompt/0" do
     test "exposes the spec default" do
-      assert PromptBuilder.default_prompt() == "You are working on an issue from Linear."
+      assert PromptBuilder.default_prompt() ==
+               "You are working on an issue from Linear."
     end
   end
 end
