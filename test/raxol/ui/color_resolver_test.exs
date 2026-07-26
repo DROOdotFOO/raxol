@@ -890,4 +890,105 @@ defmodule Raxol.UI.ColorResolverTest do
     # describe exercises) is what actually needs the regression net, and
     # is race-free (a plain function argument, no global state).
   end
+
+  # ---- malformed / unknown-input crash guards ----
+  #
+  # `resolve_cells/2` must never crash a render on a malformed literal or an
+  # unwired role (RP-N-03: "never a crashed render"). Each guard degrades to
+  # a sensible fallback rather than raising; a valid input's happy path is
+  # unchanged.
+
+  describe "malformed hex input degrades instead of crashing" do
+    # `rgb_of/1`'s `valid_hex?` guard: a syntactically-6-char-but-non-hex
+    # string (`"#gggggg"`) would otherwise reach `Colors.hex_to_rgb/1` ->
+    # `Color.from_hex/1`, get back `{:error, :invalid_hex}`, and crash on
+    # the `.r` field access when the :ansi256/:ansi16 rung requantizes it.
+    test "a non-hex 6-char literal passes through untouched under :ansi256 downgrade" do
+      cells = [{0, 0, "x", "#gggggg", nil, []}]
+
+      assert [{0, 0, "x", "#gggggg", nil, []}] =
+               ColorResolver.resolve_cells(cells,
+                 ground: @dark_ground,
+                 color_depth: :ansi256
+               )
+    end
+
+    test "a non-hex 6-char literal passes through untouched under :ansi16 downgrade" do
+      cells = [{0, 0, "x", "#GGGGGG", nil, []}]
+
+      assert [{0, 0, "x", "#GGGGGG", nil, []}] =
+               ColorResolver.resolve_cells(cells,
+                 ground: @dark_ground,
+                 color_depth: :ansi16
+               )
+    end
+
+    # `region_dim_literal/3`'s `safe_hex_to_oklch` rescue: a region-dimmed
+    # cell (p < 1.0) carrying a malformed or wrong-length hex would
+    # otherwise raise from `Salience.hex_to_oklch/1`. An unparseable hex
+    # passes through UNDIMMED rather than crashing the whole pass.
+    test "a malformed hex under region dim (p < 1.0) passes through undimmed" do
+      for bad <- ["#gggggg", "#12", "#abc", "#RRGGBBAA"] do
+        cells = [{0, 0, "x", bad, nil, [{:region_prominence, 0.45}]}]
+
+        assert [{0, 0, "x", ^bad, nil, []}] =
+                 ColorResolver.resolve_cells(cells, ground: @dark_ground),
+               "malformed hex #{inspect(bad)} should pass through undimmed"
+      end
+    end
+
+    test "a well-formed hex under region dim (p < 1.0) is still dimmed (happy path unchanged)" do
+      cells = [{0, 0, "x", "#c1712c", nil, [{:region_prominence, 0.45}]}]
+
+      [{0, 0, "x", fg, nil, []}] =
+        ColorResolver.resolve_cells(cells, ground: @dark_ground)
+
+      # A parseable hex still round-trips through the dimming math -- the
+      # rescue must not have swallowed a good input.
+      assert is_binary(fg)
+      assert fg != "#c1712c"
+    end
+  end
+
+  describe "unknown role degrades to the role-less quantize path" do
+    # `ansi16_slot/4`'s `role in Ansi16Salience.roles()` guard: a
+    # `%ColorIntent{}` tagged with a role the ANSI16 table doesn't know
+    # would otherwise raise from `Ansi16Salience.slot/3` (guard clause
+    # `role in @roles`). It must fall back to the role-less nearest-color
+    # path instead.
+    test "an unwired role resolves via the role-less path under :ansi16 downgrade" do
+      unknown_role = :not_a_real_role_xyz
+      refute unknown_role in Ansi16Salience.roles()
+
+      intent = %ColorIntent{tier: :alarm, c: 0.15, h: 20, role: unknown_role}
+      cells = [{0, 0, "x", intent, nil, []}]
+
+      [{_, _, _, fg, _, _}] =
+        ColorResolver.resolve_cells(cells,
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      # It degraded to a concrete ANSI16 atom (the role-less quantize
+      # landing zone), never raised.
+      assert fg in Map.values(@ansi16_atoms)
+    end
+
+    test "a wired role still pins via Ansi16Salience (happy path unchanged)" do
+      intent = %ColorIntent{tier: :alarm, c: 0.15, h: 20, role: :error}
+      cells = [{0, 0, "x", intent, nil, []}]
+
+      [{_, _, _, fg, _, _}] =
+        ColorResolver.resolve_cells(cells,
+          ground: @dark_ground,
+          color_depth: :ansi16
+        )
+
+      assert fg ==
+               Map.fetch!(
+                 @ansi16_atoms,
+                 Ansi16Salience.slot(:error, :dark, 1.0)
+               )
+    end
+  end
 end

@@ -654,12 +654,24 @@ defmodule Raxol.UI.ColorResolver do
   # user's slot 1 could be any hue), so semantic colors are PINNED by
   # category + polarity + prominence-bucket instead of measured by
   # distance. `Ansi16Salience.slot/3` intentionally has no clause for a
-  # role outside its closed `roles/0` set -- raises rather than guessing,
-  # matching that module's own documented fail-loud contract.
-  defp ansi16_slot(_rgb, role, effective_p, ground) when not is_nil(role) do
-    polarity = Ansi16Salience.polarity(ground)
-    slot = Ansi16Salience.slot(role, polarity, effective_p)
-    ansi16_atom(slot)
+  # role outside its closed `roles/0` set -- it raises rather than guessing
+  # a slot, matching that module's own documented fail-loud contract for a
+  # role IT knows about but was asked to render wrong. `ColorIntent.role`
+  # is typed as a bare `atom()`, though, not `Ansi16Salience.role()` -- a
+  # role this codebase hasn't wired into the table yet (or a producer typo)
+  # is a normal, expected input at this resolver choke point, not a
+  # violation of that contract. The resolver's own contract (RP-N-03:
+  # "never a crashed render") wins here: an unrecognized role falls back to
+  # the role-less nearest-color quantize path instead of propagating the
+  # raise.
+  defp ansi16_slot(rgb, role, effective_p, ground) when not is_nil(role) do
+    if role in Ansi16Salience.roles() do
+      polarity = Ansi16Salience.polarity(ground)
+      slot = Ansi16Salience.slot(role, polarity, effective_p)
+      ansi16_atom(slot)
+    else
+      ansi16_slot(rgb, nil, effective_p, ground)
+    end
   end
 
   # Role-less: the chroma gate (see `@ansi16_gray_chroma_gate`'s comment
@@ -695,13 +707,29 @@ defmodule Raxol.UI.ColorResolver do
   # integer, or any other literal shape) returns `nil` so the caller
   # passes it through unchanged -- it is already a discrete-palette
   # literal with nothing to quantize.
-  defp rgb_of("#" <> hex_digits = full) when byte_size(hex_digits) == 6,
-    do: Colors.hex_to_rgb(full)
+  # The length guard alone doesn't prove `hex_digits` is actually hex --
+  # `"#gggggg"` is 6 bytes but not a valid hex triplet, and
+  # `Colors.hex_to_rgb/1` -> `Color.from_hex/1` returns `{:error,
+  # :invalid_hex}` (a plain tuple, not a `%Color{}`) for it, which would
+  # crash on the `color.r` field access one level down. Validating the
+  # digits here keeps that malformed-input case on the same "pass through
+  # unchanged" contract every other clause in this function already gives
+  # a non-requantizable shape.
+  defp rgb_of("#" <> hex_digits = full) when byte_size(hex_digits) == 6 do
+    if valid_hex?(hex_digits), do: Colors.hex_to_rgb(full), else: nil
+  end
 
   defp rgb_of({r, g, b}) when is_integer(r) and is_integer(g) and is_integer(b),
     do: {r, g, b}
 
   defp rgb_of(_other), do: nil
+
+  defp valid_hex?(digits) do
+    case Integer.parse(digits, 16) do
+      {_int, ""} -> true
+      _ -> false
+    end
+  end
 
   # --- F2 output-contrast clamp (§3.4), adapted from
   # `Prominence.clamp_to_floor/7` -- the same bisection-along-the-fade-line
@@ -829,13 +857,40 @@ defmodule Raxol.UI.ColorResolver do
     region_dim_rgb(r, g, b, p, ground)
   end
 
+  # `Salience.hex_to_oklch/1` is total only over plain 6-digit hex (its
+  # only clauses are a `%{r,g,b}` map and an exact 6-byte binary after the
+  # leading `#` is stripped) -- it has no clause for the 3-digit shorthand
+  # or `"#RRGGBBAA"` alpha shapes this codebase's style maps ship (see
+  # `literal_ref/1`, the other caller that already rescues this), and a
+  # syntactically-6-char but non-hex string (`"#gggggg"`) raises from
+  # `String.to_integer/2` inside it. A cell's region prominence is decided
+  # by which regions are mounted this frame, never by what shape of hex a
+  # producer painted -- so a fg/bg literal reaching this dimming stage must
+  # degrade the same way `literal_ref/1` already does for the identical
+  # input space: an unparseable hex passes through UNDIMMED rather than
+  # crashing the whole `resolve_cells/2` pass.
   defp region_dim_literal("#" <> _ = hex, p, ground) do
-    {l, c, h} = Salience.hex_to_oklch(hex)
-    {new_l, new_c, new_h} = region_dim_oklch(l, c, h, p, ground)
-    Salience.oklch_to_hex(new_l, new_c, new_h)
+    case safe_hex_to_oklch(hex) do
+      {:ok, {l, c, h}} ->
+        {new_l, new_c, new_h} = region_dim_oklch(l, c, h, p, ground)
+        Salience.oklch_to_hex(new_l, new_c, new_h)
+
+      :error ->
+        hex
+    end
   end
 
   defp region_dim_literal(other, _p, _ground), do: other
+
+  # Only the malformed-hex shapes `Salience.hex_to_oklch/1` cannot parse
+  # are caught: `ArgumentError` (a non-hex digit reaching `String.to_integer/2`)
+  # and `FunctionClauseError` (a length other than 6 after the `#`). A raise
+  # from anywhere else stays visible.
+  defp safe_hex_to_oklch(hex) do
+    {:ok, Salience.hex_to_oklch(hex)}
+  rescue
+    _ in [ArgumentError, FunctionClauseError] -> :error
+  end
 
   defp region_dim_rgb(r, g, b, p, ground) do
     {l, c, h} = Salience.rgb_to_oklch(r / 255, g / 255, b / 255)
