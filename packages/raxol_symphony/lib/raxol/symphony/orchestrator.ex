@@ -11,6 +11,9 @@ defmodule Raxol.Symphony.Orchestrator do
   - Schedules failure-driven retries with exponential backoff.
   - Reconciles running issues each tick: stall detection + tracker state
     refresh.
+  - Expires abandoned paused runs past a TTL, releasing the claim slot and
+    reclaiming the workspace + durable row so a never-resumed park cannot
+    leak them forever.
 
   Workers run under a `Task.Supervisor` so the orchestrator survives worker
   crashes. Each worker is monitored; `:DOWN` messages drive state transitions.
@@ -31,6 +34,15 @@ defmodule Raxol.Symphony.Orchestrator do
 
   use Raxol.Core.Behaviours.BaseManager
   require Logger
+
+  # A parked run waits on an out-of-band event (buyer payment, delivery,
+  # evaluator approval), so day-scale waits are legitimate and the ceiling is
+  # deliberately generous. Past it a paused run is almost certainly orphaned
+  # (the event will never arrive) and must be reclaimed -- otherwise its claim
+  # slot, workspace, and durable saver row leak forever (T3, #750). Reconcile
+  # keys off a wall-clock timestamp so the age survives a BEAM restart; set to
+  # <= 0 to disable expiry.
+  @default_paused_max_age_ms 7 * 24 * 60 * 60 * 1000
 
   alias Raxol.Symphony.Config.Schema
   alias Raxol.Symphony.Evidence.Capture
@@ -149,6 +161,9 @@ defmodule Raxol.Symphony.Orchestrator do
     auto_start_tick = Keyword.get(opts, :auto_start_tick, true)
     paused_saver = Keyword.get(opts, :paused_saver)
 
+    paused_max_age_ms =
+      Keyword.get(opts, :paused_max_age_ms, @default_paused_max_age_ms)
+
     state = %State{
       config: config,
       runner_module: runner_module,
@@ -156,7 +171,8 @@ defmodule Raxol.Symphony.Orchestrator do
       task_supervisor: task_supervisor,
       workflow_store: workflow_store,
       paused_saver: paused_saver,
-      paused: PausedSaver.load_all(paused_saver)
+      paused_max_age_ms: paused_max_age_ms,
+      paused: hydrate_paused(PausedSaver.load_all(paused_saver))
     }
 
     state = if auto_start_tick, do: schedule_tick(state, 0), else: state
@@ -935,37 +951,72 @@ defmodule Raxol.Symphony.Orchestrator do
         "reason=#{inspect(interrupt_reason)}"
     )
 
-    paused_entry = %{
+    base_entry = %{
       issue: entry.issue,
       attempt: entry.attempt,
       workspace_path: entry.workspace_path,
       interrupt_reason: interrupt_reason,
       resume_token: token,
       paused_at: System.monotonic_time(:millisecond),
+      paused_at_system: System.system_time(:millisecond),
       last_event: entry.last_event,
       last_message: entry.last_message,
       turn_count: entry.turn_count,
       tokens: entry.tokens
     }
 
-    persist_paused(state.paused_saver, entry.issue.id, paused_entry)
+    durable? = persist_paused(state.paused_saver, entry.issue.id, base_entry)
+    paused_entry = Map.put(base_entry, :durable?, durable?)
 
     state
     |> Map.put(:paused, Map.put(state.paused, entry.issue.id, paused_entry))
     |> notify_listeners(:worker_paused)
   end
 
+  # Returns whether the entry is now durably on disk. A configured saver that
+  # accepts the write yields `true`; a nil saver (no persistence), an error
+  # tuple, or a RAISE from the saver (full/read-only disk: `File.mkdir_p!`
+  # raises `File.Error`, `:ok = :dets.insert` raises `MatchError`) all degrade
+  # to `false` -- the run stays parked in memory rather than crashing the
+  # orchestrator and losing all in-memory running/batches state.
   defp persist_paused(saver, issue_id, paused_entry) do
     case PausedSaver.put(saver, issue_id, paused_entry) do
       :ok ->
-        :ok
+        saver != nil
 
       {:error, reason} ->
         Logger.warning(
           "symphony.orchestrator.paused_saver_put_failed issue=#{issue_id} " <>
             "reason=#{inspect(reason)}"
         )
+
+        false
     end
+  rescue
+    e in [File.Error, MatchError] ->
+      Logger.warning(
+        "symphony.orchestrator.paused_saver_put_raised issue=#{issue_id} " <>
+          "reason=#{inspect(e)}"
+      )
+
+      false
+  end
+
+  # Loaded-from-disk entries came from an earlier BEAM: their monotonic
+  # `paused_at` is meaningless now, and pre-upgrade rows may lack
+  # `paused_at_system`. Backfill a fresh wall-clock stamp so the TTL clock
+  # starts at boot, and mark them durable (they were just read off disk).
+  defp hydrate_paused(paused) do
+    now = System.system_time(:millisecond)
+
+    Map.new(paused, fn {issue_id, entry} ->
+      hydrated =
+        entry
+        |> Map.put_new(:paused_at_system, now)
+        |> Map.put(:durable?, true)
+
+      {issue_id, hydrated}
+    end)
   end
 
   defp forget_paused(saver, issue_id) do
@@ -1218,6 +1269,52 @@ defmodule Raxol.Symphony.Orchestrator do
     state
     |> reconcile_stalls()
     |> reconcile_tracker_states()
+    |> reconcile_paused()
+  end
+
+  # Expire abandoned parked runs. `state.paused` is otherwise invisible to
+  # reconciliation, so a run that is parked and never resumed would hold its
+  # claim slot, workspace, and durable saver row indefinitely (T3, #750).
+  defp reconcile_paused(%State{paused_max_age_ms: ttl} = state)
+       when not is_integer(ttl) or ttl <= 0,
+       do: state
+
+  defp reconcile_paused(%State{paused_max_age_ms: ttl} = state) do
+    now = System.system_time(:millisecond)
+
+    Enum.reduce(state.paused, state, fn {issue_id, entry}, acc ->
+      if paused_expired?(entry, now, ttl) do
+        gc_abandoned_paused(acc, issue_id, entry, now)
+      else
+        acc
+      end
+    end)
+  end
+
+  # Key off the restart-safe wall-clock stamp. A recently parked run (or one
+  # whose stamp is somehow absent) is never expired.
+  defp paused_expired?(entry, now, ttl) do
+    case Map.get(entry, :paused_at_system) do
+      ts when is_integer(ts) -> now - ts > ttl
+      _ -> false
+    end
+  end
+
+  defp gc_abandoned_paused(%State{} = state, issue_id, entry, now) do
+    age_ms = now - Map.get(entry, :paused_at_system, now)
+
+    Logger.warning(
+      "symphony.orchestrator.paused_gc issue=#{entry.issue.identifier} " <>
+        "reason=#{inspect(entry.interrupt_reason)} paused_ms_ago=#{age_ms}"
+    )
+
+    forget_paused(state.paused_saver, issue_id)
+    Workspace.remove(state.config, entry.workspace_path)
+
+    state
+    |> Map.put(:paused, Map.delete(state.paused, issue_id))
+    |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
+    |> notify_listeners(:paused_gc)
   end
 
   defp reconcile_stalls(%State{} = state) do
@@ -1429,6 +1526,7 @@ defmodule Raxol.Symphony.Orchestrator do
       issue_identifier: entry.issue.identifier,
       interrupt_reason: entry.interrupt_reason,
       paused_ms_ago: now_ms - entry.paused_at,
+      durable?: Map.get(entry, :durable?, false),
       attempt: entry.attempt,
       turn_count: entry.turn_count,
       last_event: entry.last_event,
