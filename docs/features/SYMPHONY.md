@@ -40,6 +40,31 @@ Coding agent run                    Six surfaces
 
 Pick a runner per workflow. Mix-and-match isn't supported in a single run.
 
+### Codex authentication
+
+The Codex runner spawns the externally-authenticated `codex` CLI and does not
+drive its interactive/OAuth sign-in (that stays out-of-band via `codex login`).
+It only *selects and verifies* the credential the CLI already holds, via an
+optional `codex.auth` block:
+
+```
+codex:
+  command: "codex app-server"
+  auth:
+    mode: inherit        # inherit (default) | api_key | codex_home
+    api_key_env: OPENAI_API_KEY   # env var *name* to read the key from (api_key mode)
+    codex_home: ~/.codex          # CODEX_HOME to inject (codex_home mode)
+    require_login: false          # hard-fail preflight when unauthenticated
+```
+
+Config stores only references (an env var name, a path), never the secret; the
+key value is read from the environment at spawn and injected into the child
+process. `mode: inherit` (the default) injects nothing and preserves the
+ambient-env behavior. `require_login: true` makes an unauthenticated spawn fail
+preflight with `{:error, :codex_unauthenticated}` instead of stalling mid-turn.
+Each spawn emits `[:raxol, :symphony, :codex, :auth]` telemetry
+(`%{mode, authenticated?, source}` -- never the secret).
+
 ## Surfaces
 
 Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, so they stay consistent without per-surface state:

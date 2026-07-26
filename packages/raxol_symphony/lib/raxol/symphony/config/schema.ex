@@ -35,6 +35,8 @@ defmodule Raxol.Symphony.Config.Schema do
           | :reviewer_kind_must_differ
           | {:invalid_value, atom(), term()}
 
+  @codex_auth_modes [:inherit, :api_key, :codex_home]
+
   @doc """
   Validates a config struct. Returns `:ok` or `{:error, reason}`.
 
@@ -52,7 +54,8 @@ defmodule Raxol.Symphony.Config.Schema do
          :ok <- validate_workspace(config.workspace),
          :ok <- validate_hooks(config.hooks),
          :ok <- validate_agent(config.agent),
-         :ok <- validate_review(config.review) do
+         :ok <- validate_review(config.review),
+         :ok <- validate_codex_auth(config.codex) do
       if Keyword.get(opts, :skip_runner, false) do
         :ok
       else
@@ -123,6 +126,25 @@ defmodule Raxol.Symphony.Config.Schema do
   end
 
   defp validate_runner(_runner, _codex), do: :ok
+
+  # -- Codex auth -------------------------------------------------------------
+
+  defp validate_codex_auth(%{auth: %{mode: mode}})
+       when mode not in @codex_auth_modes do
+    {:error, {:invalid_value, :codex_auth_mode, mode}}
+  end
+
+  defp validate_codex_auth(%{auth: %{mode: :api_key, api_key_env: env}})
+       when not is_binary(env) or env == "" do
+    {:error, {:invalid_value, :codex_auth_api_key_env, env}}
+  end
+
+  defp validate_codex_auth(%{auth: %{mode: :codex_home, codex_home: home}})
+       when not is_binary(home) or home == "" do
+    {:error, {:invalid_value, :codex_auth_codex_home, home}}
+  end
+
+  defp validate_codex_auth(_codex), do: :ok
 
   # -- Review -----------------------------------------------------------------
 

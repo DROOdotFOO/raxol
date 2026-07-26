@@ -59,7 +59,7 @@ defmodule Raxol.Symphony.Runners.Codex do
   require Logger
 
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Tracker}
-  alias Raxol.Symphony.Runners.Codex.Session
+  alias Raxol.Symphony.Runners.Codex.{Auth, Session}
 
   @impl Raxol.Symphony.Runner
   def pause_reasons, do: [:awaiting_approval]
@@ -72,7 +72,10 @@ defmodule Raxol.Symphony.Runners.Codex do
     resume_value = Keyword.get(opts, :resume_value)
     resume_token = Keyword.get(opts, :resume_token)
 
-    with :ok <- check_codex_installed(config) do
+    with :ok <- check_codex_installed(config),
+         auth = Auth.resolve(config.codex),
+         :ok <- Auth.emit(auth),
+         :ok <- Auth.gate(config.codex, auth) do
       maybe_emit_resumed(parent, issue, resume_value, resume_token)
 
       do_run(issue, config, %{
@@ -80,7 +83,8 @@ defmodule Raxol.Symphony.Runners.Codex do
         attempt: attempt,
         workspace_path: workspace_path,
         turn: 1,
-        max_turns: config.agent.max_turns
+        max_turns: config.agent.max_turns,
+        auth_env: auth.env
       })
     end
   end
@@ -109,8 +113,9 @@ defmodule Raxol.Symphony.Runners.Codex do
 
   defp do_run(%Issue{} = issue, %Config{} = config, ctx) do
     policy = build_policy(config)
+    env = Map.get(ctx, :auth_env, [])
 
-    case Session.start(ctx.workspace_path, config.codex.command, policy) do
+    case Session.start(ctx.workspace_path, config.codex.command, policy, env) do
       {:ok, session} ->
         try do
           run_turns(session, issue, config, ctx)

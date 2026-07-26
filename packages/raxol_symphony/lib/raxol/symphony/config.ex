@@ -63,6 +63,7 @@ defmodule Raxol.Symphony.Config do
   @default_max_turns 20
   @default_max_retry_backoff_ms 300_000
   @default_codex_command "codex app-server"
+  @default_codex_api_key_env "OPENAI_API_KEY"
   @default_turn_timeout_ms 3_600_000
   @default_read_timeout_ms 5_000
   @default_stall_timeout_ms 300_000
@@ -199,9 +200,43 @@ defmodule Raxol.Symphony.Config do
       turn_sandbox_policy: Map.get(section, :turn_sandbox_policy),
       turn_timeout_ms: Map.get(section, :turn_timeout_ms, @default_turn_timeout_ms),
       read_timeout_ms: Map.get(section, :read_timeout_ms, @default_read_timeout_ms),
-      stall_timeout_ms: Map.get(section, :stall_timeout_ms, @default_stall_timeout_ms)
+      stall_timeout_ms: Map.get(section, :stall_timeout_ms, @default_stall_timeout_ms),
+      auth: codex_auth(Map.get(section, :auth, %{}))
     }
   end
+
+  # Codex credential selection. Stores only references (an env var *name* and a
+  # `CODEX_HOME` path), never a secret -- the actual key is read from the
+  # environment at spawn time. `:inherit` is the default and preserves the
+  # ambient-env behavior the runner has always had.
+  defp codex_auth(section) do
+    %{
+      mode: normalize_auth_mode(Map.get(section, :mode, "inherit")),
+      api_key_env: Map.get(section, :api_key_env, @default_codex_api_key_env),
+      codex_home: expand_codex_home(Map.get(section, :codex_home)),
+      require_login: Map.get(section, :require_login, false) == true
+    }
+  end
+
+  # Known modes map to atoms; anything else is passed through verbatim so the
+  # schema rejects it with a clear error rather than this minting an atom from
+  # untrusted workflow input.
+  defp normalize_auth_mode(mode) when mode in [:inherit, :api_key, :codex_home], do: mode
+  defp normalize_auth_mode("inherit"), do: :inherit
+  defp normalize_auth_mode("api_key"), do: :api_key
+  defp normalize_auth_mode("codex_home"), do: :codex_home
+  defp normalize_auth_mode(other), do: other
+
+  defp expand_codex_home(nil), do: nil
+
+  defp expand_codex_home(path) when is_binary(path) do
+    case resolve_value(path) do
+      value when is_binary(value) -> value |> expand_home() |> Path.expand()
+      _not_binary -> nil
+    end
+  end
+
+  defp expand_codex_home(_other), do: nil
 
   # Raxol extension: lets WORKFLOW.md select between the raxol_agent runner
   # (default) and the Codex app-server runner, without forking the SPEC.
