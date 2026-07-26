@@ -69,18 +69,19 @@ defmodule Raxol.Symphony.PromptBuilder do
     key = {__MODULE__, :parsed_template, template}
 
     case :persistent_term.get(key, :miss) do
-      :miss ->
-        case Solid.parse(template) do
-          {:ok, parsed} ->
-            :persistent_term.put(key, parsed)
-            {:ok, parsed}
+      :miss -> parse_and_memoize(key, template)
+      parsed -> {:ok, parsed}
+    end
+  end
 
-          {:error, error} ->
-            {:error, {:template_parse_error, error}}
-        end
-
-      parsed ->
+  defp parse_and_memoize(key, template) do
+    case Solid.parse(template) do
+      {:ok, parsed} ->
+        :persistent_term.put(key, parsed)
         {:ok, parsed}
+
+      {:error, error} ->
+        {:error, {:template_parse_error, error}}
     end
   end
 
