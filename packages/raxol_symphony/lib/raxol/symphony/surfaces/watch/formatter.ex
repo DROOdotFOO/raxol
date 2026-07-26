@@ -127,6 +127,8 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
     }
   end
 
+  def event_notification(_other, _snapshot), do: :skip
+
   defp paused_event_body(nil, _count) do
     {"A run is paused. Tap Refresh to see details.",
      [refresh_action(), dismiss_action()]}
@@ -153,8 +155,6 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
 
     {body, actions}
   end
-
-  def event_notification(_other, _snapshot), do: :skip
 
   @doc """
   Builds a per-run notification with a tap-to-stop action. Useful for the

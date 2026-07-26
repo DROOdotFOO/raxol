@@ -214,7 +214,8 @@ defmodule Raxol.Symphony.Evidence.Capture do
   defp truncate(text, limit) when byte_size(text) <= limit, do: text
 
   defp truncate(text, limit) do
-    <<head::binary-size(limit - 13), _::binary>> = text
+    head_size = limit - 13
+    <<head::binary-size(^head_size), _::binary>> = text
     head <> "...[truncated]"
   end
 end
