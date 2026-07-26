@@ -57,6 +57,18 @@ defmodule Raxol.Gateway.Adapter.Email do
   or (when `:mimemail` is absent) any input, returns `:ignore`. Parsing never
   raises: a malformed message is `:ignore`, not a crash.
 
+  ## Security: the sender address is unauthenticated
+
+  The `From` header is trivially forgeable, and this adapter does NOT verify
+  SPF/DKIM/DMARC. The route's `chat_id`/`user_id` are the parsed sender address,
+  so any authorization keyed on them (`Raxol.Gateway.Pairing.authorize/2`,
+  allowlists) is only as trustworthy as the mail path that produced the message.
+  Run inbound email behind an MTA that rejects or authenticates spoofed senders,
+  and treat a raw-inbound feed with no upstream authentication as anonymous. The
+  agent runs tools and can spend, so a spoofed `From` reaching a paired session
+  is a privilege escalation. If you need in-process verification, gate the feed's
+  `:on_message` on the parsed `Authentication-Results` header before routing.
+
   ## Outbound
 
   The rendered reply becomes the text/plain body (charset utf-8,
@@ -245,7 +257,10 @@ defmodule Raxol.Gateway.Adapter.Email do
 
   # Trim quoted history: keep the reply text above the first quote marker
   # (a `>`-prefixed line, an "On ... wrote:" attribution, an Outlook-style
-  # "----- Original Message -----" divider, or the "-- " signature delimiter).
+  # "----- Original Message -----" divider, or the RFC 3676 "-- " signature
+  # delimiter -- the exact "dash dash space" form, so a bare "--" content line
+  # is NOT a boundary). Best-effort and English-attribution-only; a non-English
+  # "wrote:" equivalent is left in place rather than risking a wrong cut.
   defp strip_quoted(body) do
     body
     |> String.split(~r/\r?\n/)
@@ -267,7 +282,7 @@ defmodule Raxol.Gateway.Adapter.Email do
   defp quote_boundary?(line) do
     trimmed = String.trim_trailing(line)
 
-    String.starts_with?(trimmed, ">") or trimmed == "--" or
+    line == "-- " or String.starts_with?(trimmed, ">") or
       Regex.match?(~r/^-{2,}\s*Original Message\s*-{2,}/i, trimmed) or
       Regex.match?(~r/^On\b.+\bwrote:$/, trimmed)
   end

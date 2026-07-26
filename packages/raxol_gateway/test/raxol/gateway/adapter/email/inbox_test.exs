@@ -98,6 +98,33 @@ defmodule Raxol.Gateway.Adapter.Email.InboxTest do
     assert Process.alive?(inbox)
   end
 
+  test "drops a message larger than max_bytes and emits telemetry" do
+    test = self()
+    handler = {__MODULE__, :oversized}
+
+    :telemetry.attach(
+      handler,
+      [:raxol_gateway, :email_inbox, :oversized],
+      fn _event, meas, meta, _config -> send(test, {:oversized, meas, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    big = String.duplicate("x", 200)
+
+    start_inbox(
+      fetch_fn: fn _ -> {:ok, ["small", big], :done} end,
+      on_message: fn raw -> send(test, {:msg, byte_size(raw)}) end,
+      max_bytes: 100,
+      interval_ms: 50
+    )
+
+    assert_receive {:msg, 5}
+    assert_receive {:oversized, %{bytes: 200}, %{limit: 100}}
+    refute_receive {:msg, 200}, 50
+  end
+
   defp next_cursor(nil), do: 1
   defp next_cursor(n) when is_integer(n), do: n + 1
 end

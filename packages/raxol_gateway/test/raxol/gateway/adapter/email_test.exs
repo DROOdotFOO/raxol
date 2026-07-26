@@ -94,6 +94,14 @@ defmodule Raxol.Gateway.Adapter.EmailTest do
       assert {:ok, _route, %{text: "Yes, ship it."}} = Email.normalize_event(raw)
     end
 
+    test "trims below the RFC 3676 signature but keeps a bare -- content line" do
+      sig = raw_mail([{"From", "a@x.com"}, {"To", "bot@x"}], "the reply\r\n-- \r\nSignature")
+      assert {:ok, _route, %{text: "the reply"}} = Email.normalize_event(sig)
+
+      dashes = raw_mail([{"From", "a@x.com"}, {"To", "bot@x"}], "before\r\n--\r\nafter")
+      assert {:ok, _route, %{text: "before\n--\nafter"}} = Email.normalize_event(dashes)
+    end
+
     test "surfaces threading metadata under :email" do
       raw =
         raw_mail(

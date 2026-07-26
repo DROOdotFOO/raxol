@@ -22,6 +22,10 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
         on_message: fn raw ->
           case Raxol.Gateway.Adapter.Email.normalize_event(raw) do
             {:ok, route, event} ->
+              # NOTE: `route` is keyed on the unauthenticated `From` header.
+              # authorize is only meaningful behind an MTA that verifies the
+              # sender (SPF/DKIM/DMARC) -- see the `Adapter.Email` "Security"
+              # section. A raw feed with no upstream auth is anonymous.
               with :allow <- Raxol.Gateway.Pairing.authorize(MyPairing, route) do
                 Raxol.Gateway.Adapter.Email.ThreadStore.record_event(store, route, event)
                 Raxol.Gateway.SessionRouter.route(MyRouter, route, event)
@@ -49,6 +53,10 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
       dedup on `Message-ID`.
     * `:interval_ms` - delay between polls (default 60_000). Applied after each
       completed poll, empty or not.
+    * `:max_bytes` - a raw message larger than this is dropped before
+      `on_message` (default 10MB), with a `Logger.warning` and
+      `[:raxol_gateway, :email_inbox, :oversized]` telemetry. Bounds the memory
+      `:mimemail.decode` spends parsing untrusted mail into part trees.
     * `:initial_cursor` - the cursor for the first fetch (default `nil`).
     * `:name` - optional registered name.
 
@@ -67,6 +75,10 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
   alias Raxol.Core.ErrorHandling
 
   @default_interval_ms 60_000
+  # Inbound mail is untrusted: `:mimemail.decode` parses every part into memory,
+  # so a raw message is dropped before `on_message` if it exceeds this. 10MB is
+  # generous for text mail; raise `:max_bytes` for attachment-heavy mailboxes.
+  @default_max_bytes 10 * 1024 * 1024
   @backoff_base_ms 1_000
   @backoff_cap_ms 60_000
 
@@ -81,6 +93,7 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
       fetch_fn: Keyword.fetch!(opts, :fetch_fn),
       on_message: Keyword.fetch!(opts, :on_message),
       interval_ms: Keyword.get(opts, :interval_ms, @default_interval_ms),
+      max_bytes: Keyword.get(opts, :max_bytes, @default_max_bytes),
       cursor: Keyword.get(opts, :initial_cursor),
       failures: 0,
       timer: nil
@@ -96,7 +109,7 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
 
     case safe_fetch(state) do
       {:ok, messages, next_cursor} when is_list(messages) ->
-        Enum.each(messages, &deliver(&1, state.on_message))
+        Enum.each(messages, &deliver(&1, state))
         {:noreply, schedule_poll(%{state | cursor: next_cursor, failures: 0}, state.interval_ms)}
 
       {:ok, other} ->
@@ -126,7 +139,28 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
     kind, reason -> {:error, {:fetch_exit, kind, reason}}
   end
 
-  defp deliver(raw, on_message) do
+  defp deliver(raw, state) do
+    case raw_size(raw) do
+      size when is_integer(size) and size > state.max_bytes ->
+        drop_oversized(size, state.max_bytes)
+
+      _within_limit ->
+        invoke(raw, state.on_message)
+    end
+  end
+
+  defp drop_oversized(size, limit) do
+    :telemetry.execute(
+      [:raxol_gateway, :email_inbox, :oversized],
+      %{bytes: size},
+      %{limit: limit}
+    )
+
+    Logger.warning("email inbox dropped oversized message (#{size} > #{limit} bytes)")
+    :ok
+  end
+
+  defp invoke(raw, on_message) do
     case ErrorHandling.safe_call(fn -> on_message.(raw) end) do
       {:ok, _result} ->
         :ok
@@ -136,6 +170,10 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
         :ok
     end
   end
+
+  defp raw_size(raw) when is_binary(raw), do: byte_size(raw)
+  defp raw_size(%{rfc822: raw}) when is_binary(raw), do: byte_size(raw)
+  defp raw_size(_other), do: nil
 
   defp backoff(state, reason) do
     failures = state.failures + 1
