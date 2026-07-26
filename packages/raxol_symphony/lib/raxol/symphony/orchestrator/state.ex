@@ -11,6 +11,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
           issue: Issue.t(),
           attempt: non_neg_integer() | nil,
           workspace_path: Path.t(),
+          host: Raxol.Symphony.Worker.HostSpec.t() | nil,
           started_at: integer(),
           worker_pid: pid(),
           worker_ref: reference(),
@@ -41,9 +42,12 @@ defmodule Raxol.Symphony.Orchestrator.State do
           issue: Issue.t(),
           attempt: non_neg_integer() | nil,
           workspace_path: Path.t(),
+          host: Raxol.Symphony.Worker.HostSpec.t() | nil,
           interrupt_reason: atom(),
           resume_token: term(),
           paused_at: integer(),
+          paused_at_system: integer(),
+          durable?: boolean(),
           last_event: atom() | binary() | nil,
           last_message: binary() | nil,
           turn_count: non_neg_integer(),
@@ -72,7 +76,12 @@ defmodule Raxol.Symphony.Orchestrator.State do
   """
   @type batch_entry :: %{
           issues: [
-            %{issue: Issue.t(), attempt: non_neg_integer() | nil, workspace_path: Path.t()}
+            %{
+              issue: Issue.t(),
+              attempt: non_neg_integer() | nil,
+              workspace_path: Path.t(),
+              host: Raxol.Symphony.Worker.HostSpec.t() | nil
+            }
           ],
           worker_pid: pid(),
           worker_ref: reference(),
@@ -89,6 +98,8 @@ defmodule Raxol.Symphony.Orchestrator.State do
     :workflow_store,
     :last_preflight_error,
     :paused_saver,
+    :host_pool,
+    :paused_max_age_ms,
     running: %{},
     batches: %{},
     claimed: MapSet.new(),
@@ -119,6 +130,8 @@ defmodule Raxol.Symphony.Orchestrator.State do
           retry_attempts: %{optional(binary()) => retry_entry()},
           paused: %{optional(binary()) => paused_entry()},
           paused_saver: {module(), map()} | nil,
+          host_pool: Raxol.Symphony.Worker.HostPool.t() | nil,
+          paused_max_age_ms: non_neg_integer() | nil,
           completed: MapSet.t(binary()),
           codex_totals: codex_totals(),
           codex_rate_limits: term() | nil,

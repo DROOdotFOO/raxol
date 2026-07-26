@@ -89,6 +89,8 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
           optional(:config) => Config.t(),
           optional(:candidates) => [Issue.t()],
           optional(:workspaces) => [Path.t()],
+          optional(:hosts) => [term() | nil],
+          optional(:host) => term() | nil,
           optional(:candidate) => Issue.t() | nil,
           optional(:run_result) => :ok | {:error, term()},
           optional(:runner_pause) => {atom(), term()} | nil,
@@ -154,13 +156,15 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     * `:saver`, `:failure_policy`, `:step_timeout_ms`, `:run_timeout_ms`
       -- same as `from_workflow/1`.
 
-  ## Limitations
+  ## Branch pauses
 
-  Runner pauses are unsupported in this variant. If any per-slot runner
-  returns `{:pause, _, _}`, the slot records
-  `{:error, :pause_in_parallel_branch_unsupported}` and the run continues.
-  Consumers needing pause semantics on parallel candidates should split
-  their pipeline differently or stick with `from_workflow/1`.
+  A per-slot runner may return `{:pause, reason, token}`; the slot records
+  it verbatim as its `run_result` and the aggregate surfaces it alongside
+  the completed branches. Unlike `from_workflow/1`, the graph run does NOT
+  interrupt on a pause — sibling branches run to completion, and the paused
+  branch's evidence is left `nil` (the workspace is only half-done). The
+  orchestrator parks the pause token and re-dispatches the paused issue on
+  resume; there is no whole-batch rollback.
   """
   @spec from_workflow_parallel(keyword()) :: {:ok, Compiled.t()} | {:error, term()}
   def from_workflow_parallel(opts) do
@@ -240,6 +244,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     Enum.at(workspaces, slot) || Map.get(state, :workspace_path, "")
   end
 
+  # Per-slot reserved host (from the orchestrator's host pool), so a fan-out
+  # branch runs on the slot the orchestrator reserved for it. `nil` (no pool,
+  # or a slot past the free-host count) means local execution.
+  defp slot_host(state, slot) do
+    Enum.at(Map.get(state, :hosts, []), slot)
+  end
+
   defp build_slot_dispatch(slot) do
     candidate_key = :"candidate_#{slot}"
     workspace_key = :"workspace_#{slot}"
@@ -255,22 +266,23 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
           parent = Map.get(state, :parent_pid, self())
           attempt = Map.get(state, :attempt) || 1
           workspace = Map.get(state, workspace_key) || Map.get(state, :workspace_path, "")
+          host = slot_host(state, slot)
 
           with {:ok, runner_module} <- Runner.resolve(state.config, runner_opts) do
             result =
               runner_module.run(issue, state.config,
                 parent: parent,
                 attempt: attempt,
-                workspace_path: workspace
+                workspace_path: workspace,
+                host: host
               )
 
-            normalized =
-              case result do
-                {:pause, _, _} -> {:error, :pause_in_parallel_branch_unsupported}
-                other -> other
-              end
-
-            {:ok, Map.put(state, result_key, normalized)}
+            # A branch pause is recorded verbatim as the slot result and
+            # surfaced through the aggregate; sibling branches run to
+            # completion. The graph run itself does NOT interrupt (unlike
+            # `from_workflow/1`) — the orchestrator parks the pause token
+            # and re-dispatches the paused issue on resume.
+            {:ok, Map.put(state, result_key, result)}
           end
       end
     end
@@ -279,14 +291,20 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
   defp build_slot_evidence(slot) do
     candidate_key = :"candidate_#{slot}"
     workspace_key = :"workspace_#{slot}"
+    result_key = :"run_result_#{slot}"
     evidence_key = :"evidence_#{slot}"
 
     fn state ->
-      case Map.get(state, candidate_key) do
-        nil ->
+      case {Map.get(state, candidate_key), Map.get(state, result_key)} do
+        {nil, _} ->
           {:ok, Map.put(state, evidence_key, nil)}
 
-        %Issue{} ->
+        # A paused branch has not finished; collecting evidence now would
+        # capture a half-done workspace. Leave it nil until the resume.
+        {%Issue{}, {:pause, _reason, _token}} ->
+          {:ok, Map.put(state, evidence_key, nil)}
+
+        {%Issue{}, _result} ->
           subject = %{
             workspace: Map.get(state, workspace_key) || Map.get(state, :workspace_path, ""),
             repo: nil,
@@ -349,9 +367,11 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     |> maybe_put(:candidates, Keyword.get(opts, :candidates))
     |> maybe_put(:candidate, Keyword.get(opts, :candidate))
     |> maybe_put(:workspaces, Keyword.get(opts, :workspaces))
+    |> maybe_put(:hosts, Keyword.get(opts, :hosts))
     |> maybe_put(:parent_pid, Keyword.get(opts, :parent_pid))
     |> maybe_put(:attempt, Keyword.get(opts, :attempt))
     |> maybe_put(:workspace_path, Keyword.get(opts, :workspace_path))
+    |> maybe_put(:host, Keyword.get(opts, :host))
   end
 
   defp maybe_put(map, _key, nil), do: map
@@ -402,10 +422,11 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     parent = Map.get(state, :parent_pid, self())
     attempt = Map.get(state, :attempt) || 1
     workspace = Map.get(state, :workspace_path, "")
+    host = Map.get(state, :host)
 
     {resume_token, resume_value, state} = consume_pending_resume(state)
 
-    base_opts = [parent: parent, attempt: attempt, workspace_path: workspace]
+    base_opts = [parent: parent, attempt: attempt, workspace_path: workspace, host: host]
     run_opts = maybe_put_resume_opts(base_opts, resume_token, resume_value)
 
     with {:ok, runner_module} <- Runner.resolve(config, runner_opts) do

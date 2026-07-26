@@ -119,7 +119,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
       by `issue.id`. The orchestrator calls it at *every* site an issue
       leaves the run set for good: a retry that finds it terminal, gone,
       or no longer active; a user `stop_run` (whether it was running or
-      paused); and a reconcile-kill. This reclaims the single row a
+      paused); a reconcile-kill; and the TTL GC of an abandoned paused
+      run that was parked and never resumed. This reclaims the single row a
       one-shot issue (completes on first dispatch, no continuation reads
       it), or an odd-length continuation chain, leaves behind. Because
       the key is `issue.id` alone, this works even though the issue's
@@ -408,8 +409,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   end
 
   defp build_session_id(%Issue{id: id}, attempt),
-    do:
-      "symphony-session-#{id}-#{attempt || 0}-#{:erlang.unique_integer([:positive])}"
+    do: "symphony-session-#{id}-#{attempt || 0}-#{:erlang.unique_integer([:positive])}"
 
   @doc """
   Removes any prompt-cache row for `issue_id`.

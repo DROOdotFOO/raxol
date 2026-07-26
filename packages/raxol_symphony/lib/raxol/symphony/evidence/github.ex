@@ -20,8 +20,6 @@ defmodule Raxol.Symphony.Evidence.GitHub do
 
   @behaviour Raxol.Symphony.Evidence.Backend
 
-  require Logger
-
   alias Raxol.Symphony.{Config, Evidence}
 
   @default_endpoint "https://api.github.com"

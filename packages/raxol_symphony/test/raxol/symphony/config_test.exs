@@ -60,6 +60,7 @@ defmodule Raxol.Symphony.ConfigTest do
       assert config.codex.auth.codex_home == nil
       assert config.codex.auth.require_login == false
       assert config.runner.kind == "raxol_agent"
+      assert config.worker.ssh_hosts == []
       assert config.workflow_mode == :default
       assert config.workflow_parallelism == 3
       assert config.tracker.active_states == ["Todo", "In Progress"]
@@ -309,6 +310,51 @@ defmodule Raxol.Symphony.ConfigTest do
       """)
 
       assert {:error, :missing_tracker_api_key} = Config.load_and_validate(path)
+    end
+  end
+
+  describe "worker.ssh_hosts (issue #742)" do
+    alias Raxol.Symphony.Config.Schema
+
+    defp memory_workflow(worker) do
+      %{
+        config: %{
+          tracker: %{kind: "memory"},
+          runner: %{kind: "raxol_agent"},
+          worker: worker
+        },
+        prompt_template: ""
+      }
+    end
+
+    test "parses string and map host forms verbatim" do
+      config =
+        Config.from_workflow(
+          memory_workflow(%{ssh_hosts: ["ci@build-1", %{host: "build-2", port: 2222}]})
+        )
+
+      assert config.worker.ssh_hosts == ["ci@build-1", %{host: "build-2", port: 2222}]
+    end
+
+    test "validate accepts well-formed hosts" do
+      config = Config.from_workflow(memory_workflow(%{ssh_hosts: ["ci@build-1", %{host: "b2"}]}))
+      assert Schema.validate(config) == :ok
+    end
+
+    test "validate rejects a malformed host entry" do
+      config = Config.from_workflow(memory_workflow(%{ssh_hosts: ["ci@build-1", %{user: "ci"}]}))
+      assert {:error, {:invalid_ssh_host, %{user: "ci"}}} = Schema.validate(config)
+    end
+
+    test "validate rejects a non-list ssh_hosts" do
+      config = Config.from_workflow(memory_workflow(%{ssh_hosts: "build-1"}))
+      assert {:error, {:invalid_value, :worker_ssh_hosts, "build-1"}} = Schema.validate(config)
+    end
+
+    test "an empty/absent worker section validates and defaults to []" do
+      config = Config.from_workflow(memory_workflow(%{}))
+      assert config.worker.ssh_hosts == []
+      assert Schema.validate(config) == :ok
     end
   end
 end

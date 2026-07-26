@@ -33,6 +33,7 @@ defmodule Raxol.Symphony.Config.Schema do
           | {:unsupported_runner_kind, binary()}
           | :missing_reviewer_kind
           | :reviewer_kind_must_differ
+          | {:invalid_ssh_host, term()}
           | {:invalid_value, atom(), term()}
 
   @codex_auth_modes [:inherit, :api_key, :codex_home]
@@ -55,6 +56,7 @@ defmodule Raxol.Symphony.Config.Schema do
          :ok <- validate_hooks(config.hooks),
          :ok <- validate_agent(config.agent),
          :ok <- validate_review(config.review),
+         :ok <- validate_worker(config.worker),
          :ok <- validate_codex_auth(config.codex) do
       if Keyword.get(opts, :skip_runner, false) do
         :ok
@@ -162,6 +164,22 @@ defmodule Raxol.Symphony.Config.Schema do
   end
 
   defp validate_review(_review), do: :ok
+
+  # -- Worker (issue #742) ----------------------------------------------------
+
+  defp validate_worker(%{ssh_hosts: hosts}) when is_list(hosts) do
+    Enum.reduce_while(hosts, :ok, fn raw, :ok ->
+      case Raxol.Symphony.Worker.HostSpec.normalize(raw) do
+        {:ok, _spec} -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp validate_worker(%{ssh_hosts: hosts}),
+    do: {:error, {:invalid_value, :worker_ssh_hosts, hosts}}
+
+  defp validate_worker(_worker), do: :ok
 
   # -- Helpers ----------------------------------------------------------------
 

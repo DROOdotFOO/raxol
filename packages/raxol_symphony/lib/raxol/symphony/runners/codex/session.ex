@@ -19,6 +19,8 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   require Logger
 
   alias Raxol.Symphony.Runners.Codex.{Framing, Protocol}
+  alias Raxol.Symphony.Ssh
+  alias Raxol.Symphony.Worker.HostSpec
 
   @type session :: %{
           port: port(),
@@ -49,13 +51,15 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   Starts a Codex app-server session in `workspace`.
 
   `command` is the shell command Codex was launched with (per `codex.command`).
+  `host` (a `Raxol.Symphony.Worker.HostSpec` or `nil`) routes the session to a
+  remote worker over SSH when present; `nil` runs it locally (the default).
   """
-  @spec start(Path.t(), binary(), policy(), [{charlist(), charlist()}]) ::
+  @spec start(Path.t(), binary(), policy(), [{charlist(), charlist()}], HostSpec.t() | nil) ::
           {:ok, session()} | {:error, term()}
-  def start(workspace, command, %{} = policy, env \\ [])
+  def start(workspace, command, %{} = policy, env \\ [], host \\ nil)
       when is_binary(workspace) and is_binary(command) and is_list(env) do
     with {:ok, bash} <- find_bash(),
-         {:ok, port} <- open_port(bash, command, workspace, env),
+         {:ok, port} <- open_port(host, bash, command, workspace, env),
          :ok <- send_initialize(port, policy.read_timeout_ms),
          {:ok, thread_id} <- send_thread_start(port, workspace, policy) do
       {:ok,
@@ -316,25 +320,48 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
     end
   end
 
-  defp open_port(bash, command, workspace, env) do
-    opts = [
-      :binary,
-      :exit_status,
-      :stderr_to_stdout,
-      :hide,
-      {:cd, workspace},
-      {:line, @port_line_bytes},
-      {:args, ["-lc", command]}
-    ]
+  defp open_port(host, bash, command, workspace, env) do
+    with {:ok, {executable, opts}} <- launch_spec(host, bash, command, workspace, env) do
+      {:ok, Port.open({:spawn_executable, executable}, opts)}
+    end
+  rescue
+    e -> {:error, {:port_open_failed, e}}
+  end
+
+  # Pure: the `{executable, Port.open-opts}` for a local or remote launch.
+  #
+  # Local (`host == nil`): `bash -lc command`, cwd via `{:cd, workspace}`, env
+  # injected into the child. Remote (`%HostSpec{}`): `ssh <opts> host
+  # "bash -lc 'cd WS && command'"` — the remote login shell sources
+  # host-provisioned credentials, so no env is forwarded (see
+  # `Raxol.Symphony.Ssh`). Codex's JSON-RPC then streams over the port's
+  # stdio unchanged, whether that stdio is local bash or an ssh pipe.
+  @doc false
+  @spec launch_spec(HostSpec.t() | nil, binary(), binary(), Path.t(), list()) ::
+          {:ok, {binary(), keyword()}} | {:error, term()}
+  def launch_spec(nil, bash, command, workspace, env) do
+    opts = base_port_opts() ++ [{:cd, workspace}, {:args, ["-lc", command]}]
 
     # Only add {:env, _} when there is something to inject: an empty list still
     # scopes the child to an explicit env on some OTP versions, so `:inherit`
     # (env == []) must pass through untouched to keep the ambient environment.
     opts = if env == [], do: opts, else: opts ++ [{:env, env}]
 
-    {:ok, Port.open({:spawn_executable, bash}, opts)}
-  rescue
-    e -> {:error, {:port_open_failed, e}}
+    {:ok, {bash, opts}}
+  end
+
+  def launch_spec(%HostSpec{} = host, _bash, command, workspace, _env) do
+    with {:ok, ssh} <- Ssh.executable() do
+      # Reap the remote codex on disconnect so a `Port.close` (worker stop /
+      # pause / crash) never orphans it on the host.
+      remote = Ssh.remote_bash(workspace, Ssh.reap_on_disconnect(command))
+      args = Ssh.command_args(host, remote)
+      {:ok, {ssh, base_port_opts() ++ [{:args, args}]}}
+    end
+  end
+
+  defp base_port_opts do
+    [:binary, :exit_status, :stderr_to_stdout, :hide, {:line, @port_line_bytes}]
   end
 
   defp close_port(port) do

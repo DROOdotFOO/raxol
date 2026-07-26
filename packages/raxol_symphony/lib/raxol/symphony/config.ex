@@ -26,6 +26,7 @@ defmodule Raxol.Symphony.Config do
     :runner,
     :review,
     :recording,
+    :worker,
     :workflow_mode,
     :workflow_parallelism,
     :workflow_path,
@@ -42,6 +43,7 @@ defmodule Raxol.Symphony.Config do
           runner: map(),
           review: map(),
           recording: map(),
+          worker: map(),
           workflow_mode: :default | :graph | :graph_parallel,
           workflow_parallelism: pos_integer(),
           workflow_path: Path.t() | nil,
@@ -96,6 +98,7 @@ defmodule Raxol.Symphony.Config do
       runner: runner(raw),
       review: review(raw),
       recording: recording(raw),
+      worker: worker(raw),
       workflow_mode: workflow_mode(raw),
       workflow_parallelism: workflow_parallelism(raw),
       workflow_path: workflow_path,
@@ -247,6 +250,19 @@ defmodule Raxol.Symphony.Config do
     %{
       kind: kind,
       agent: Map.get(section, :agent, %{})
+    }
+  end
+
+  # Raxol extension (issue #742): SSH worker dispatch. `worker.ssh_hosts` is
+  # a list of host specs (a "user@host" string or a map) that gate remote
+  # worker placement one-per-host. Stored raw here (mirrors `runner.agent`
+  # passthrough); `Config.Schema` normalizes/validates each entry, and the
+  # orchestrator builds the pool at init. Empty by default -> no gating.
+  defp worker(raw) do
+    section = Map.get(raw, :worker, %{})
+
+    %{
+      ssh_hosts: Map.get(section, :ssh_hosts, [])
     }
   end
 
