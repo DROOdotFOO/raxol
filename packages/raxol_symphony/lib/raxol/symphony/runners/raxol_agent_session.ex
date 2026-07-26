@@ -89,11 +89,25 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   `still_active?` check and so trades freshness for HTTP cost), this
   cache is **self-invalidating**: the rendered prompt is a pure
   function of the fingerprinted determinants, so any change to the
-  issue content, template, or attempt yields a new key. The TTL is
-  only an eviction/memory bound, never a staleness window. The hit
-  case is a continuation re-dispatch of an unchanged issue at the
-  same attempt. It is opt-in and **off by default** (`prompt_cache`
-  unset preserves the existing per-run render).
+  issue content, template, or attempt yields a new key. The hit case
+  is a continuation re-dispatch of an unchanged issue at the same
+  attempt. It is opt-in and **off by default** (`prompt_cache` unset
+  preserves the existing per-run render).
+
+  ### Bounding (read-once)
+
+  Each key is written once (on the render that misses) and read once
+  (by the single continuation re-dispatch that hits). The entry is
+  **deleted on that read**, so the cache holds at most one entry per
+  run currently awaiting its continuation -- it cannot accumulate a
+  permanent per-issue row. The TTL is NOT a reliable memory bound
+  here: `Cache.Ets` expires lazily (only a same-key `get` reclaims a
+  stale entry), and a write-once/read-once key is never `get` again,
+  so its TTL would never fire on its own. Delete-on-read, not the
+  TTL, is what keeps the cache from growing unbounded across issues;
+  the TTL only backstops the rare final render whose continuation
+  never comes (the issue reached a terminal state), which a periodic
+  `flush/1` or table drop reclaims.
 
   ### Relationship to `PromptBuilder`'s template memo
 
@@ -387,6 +401,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
     case Raxol.Agent.Cache.get(cache, key) do
       {:ok, cached} ->
+        # Read-once: the continuation re-dispatch is the only reader, so flush
+        # the entry as it is consumed. Otherwise this write-once/read-once key
+        # would linger permanently -- its lazy TTL is only reclaimed by a
+        # same-key `get`, which never comes for an issue that has moved on.
+        Raxol.Agent.Cache.delete(cache, key)
         cached
 
       :miss ->
@@ -423,7 +442,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
          attempt
        ) do
     fingerprint =
-      :crypto.hash(:sha256, :erlang.term_to_binary({issue, template, attempt}))
+      :crypto.hash(
+        :sha256,
+        :erlang.term_to_binary({issue, template, attempt}, [:deterministic])
+      )
 
     {:prompt, fingerprint}
   end

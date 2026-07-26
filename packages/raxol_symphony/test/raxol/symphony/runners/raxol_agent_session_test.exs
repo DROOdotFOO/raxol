@@ -153,4 +153,57 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
       assert {:ok, RaxolAgentSession} = Raxol.Symphony.Runner.resolve(cfg)
     end
   end
+
+  describe "prompt cache bounding" do
+    setup do
+      table = :"prompt_cache_test_#{:erlang.unique_integer([:positive])}"
+      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      %{table: table, cache: {Raxol.Agent.Cache.Ets, %{table: table}}}
+    end
+
+    defp cached_config(cache) do
+      config(%{module: SessionAgentSucceed, prompt_cache: cache})
+    end
+
+    defp run_issue(cfg, id) do
+      issue = %Issue{id: id, identifier: id, title: "T", state: "Todo"}
+      assert :ok = RaxolAgentSession.run(issue, cfg, parent: self(), attempt: nil)
+    end
+
+    test "the continuation re-dispatch read flushes its entry", %{
+      table: table,
+      cache: cache
+    } do
+      cfg = cached_config(cache)
+
+      # First dispatch of an issue: cache miss -> render -> one stored entry.
+      run_issue(cfg, "MT-1")
+      assert :ets.info(table, :size) == 1
+
+      # The continuation re-dispatch of the SAME issue/attempt: cache hit,
+      # consumed and flushed on read.
+      run_issue(cfg, "MT-1")
+      assert :ets.info(table, :size) == 0
+    end
+
+    test "many distinct issues do not accumulate entries", %{
+      table: table,
+      cache: cache
+    } do
+      cfg = cached_config(cache)
+
+      # Each issue goes through its miss (write) then its continuation read
+      # (flush). Across 50 distinct issues the table never carries more than
+      # one in-flight entry and ends empty -- no permanent per-issue rows.
+      for n <- 1..50 do
+        id = "MT-#{n}"
+        run_issue(cfg, id)
+        assert :ets.info(table, :size) == 1
+        run_issue(cfg, id)
+        assert :ets.info(table, :size) == 0
+      end
+
+      assert :ets.info(table, :size) == 0
+    end
+  end
 end
