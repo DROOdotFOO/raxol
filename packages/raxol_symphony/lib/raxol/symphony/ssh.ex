@@ -25,9 +25,16 @@ defmodule Raxol.Symphony.Ssh do
 
   @allowed_binaries ~w(ssh)
 
-  # Non-interactive defaults: never prompt (BatchMode), and trust a new host
-  # key on first contact rather than hanging on the yes/no prompt.
-  @base_options ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+  # Fail fast on an unreachable host instead of wedging a worker slot on a
+  # stalled TCP connect.
+  @connect_timeout_seconds 15
+
+  # Detect a half-open connection (dropped network / dead remote) so a stuck
+  # worker frees its host slot instead of hanging forever: probe every 30s,
+  # give up after 3 unanswered probes (~90s), then the local `ssh` exits and
+  # the Port closes.
+  @server_alive_interval_seconds 30
+  @server_alive_count_max 3
 
   @doc """
   Resolve the `ssh` executable, refusing anything not named `ssh`.
@@ -47,10 +54,16 @@ defmodule Raxol.Symphony.Ssh do
   def target(%HostSpec{host: host, user: nil}), do: host
   def target(%HostSpec{host: host, user: user}), do: "#{user}@#{host}"
 
-  @doc "The SSH option args for a spec (non-interactive base + port + identity)."
+  @doc """
+  The SSH option args for a spec: non-interactive base (BatchMode, connect
+  timeout, server-alive keepalive), the spec's host-key policy
+  (`StrictHostKeyChecking` + optional `UserKnownHostsFile`), then port and
+  identity. Derived from the `HostSpec` so a deployment can force
+  `StrictHostKeyChecking=yes` against a pre-seeded `known_hosts`.
+  """
   @spec option_args(HostSpec.t()) :: [binary()]
-  def option_args(%HostSpec{port: port, identity_file: identity}) do
-    @base_options ++ port_args(port) ++ identity_args(identity)
+  def option_args(%HostSpec{port: port, identity_file: identity} = spec) do
+    base_options() ++ host_key_args(spec) ++ port_args(port) ++ identity_args(identity)
   end
 
   @doc """
@@ -73,6 +86,31 @@ defmodule Raxol.Symphony.Ssh do
   def remote_bash(workspace, command) when is_binary(workspace) and is_binary(command) do
     inner = "cd #{shell_quote(workspace)} && #{command}"
     "bash -lc #{shell_quote(inner)}"
+  end
+
+  @doc """
+  Wrap `command` so a dropped SSH connection can never orphan it.
+
+  Closing the local `ssh` Port (`Port.close`) tears down the ssh client but,
+  for a non-pty exec channel, sshd does NOT signal the remote command — it
+  reparents and lingers (the classic orphan). We can't force a pty here: the
+  remote `codex app-server` speaks newline-delimited JSON-RPC over stdio and a
+  pty's echo + CR/LF translation would corrupt that framing.
+
+  So the command runs with its stdio untouched (`<&0` keeps stdin wired to the
+  ssh channel, stdout/stderr inherited) and a co-resident watcher polls the
+  shell's parent (the sshd session process): when it dies, the watcher signals
+  the command. A normal exit falls straight through with the command's real
+  status (`wait`). Framing-safe: the watcher never reads the data channel.
+  """
+  @spec reap_on_disconnect(binary()) :: binary()
+  def reap_on_disconnect(command) when is_binary(command) do
+    # Single-quote-free so it survives `remote_bash/2`'s single-quoting intact.
+    command <>
+      " <&0 & __rx_pid=$!; __rx_ppid=$PPID; " <>
+      "while kill -0 $__rx_pid 2>/dev/null; do " <>
+      "ps -p $__rx_ppid >/dev/null 2>&1 || break; sleep 5; done; " <>
+      "kill $__rx_pid 2>/dev/null; wait $__rx_pid"
   end
 
   @doc """
@@ -105,6 +143,33 @@ defmodule Raxol.Symphony.Ssh do
       path when is_binary(path) -> {:ok, path}
     end
   end
+
+  # Never prompt (BatchMode); bound the TCP connect; keep the connection
+  # probed so a dead remote is noticed and the local `ssh` exits.
+  defp base_options do
+    [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=#{@connect_timeout_seconds}",
+      "-o",
+      "ServerAliveInterval=#{@server_alive_interval_seconds}",
+      "-o",
+      "ServerAliveCountMax=#{@server_alive_count_max}"
+    ]
+  end
+
+  defp host_key_args(%HostSpec{strict_host_key_checking: mode, known_hosts: known_hosts}) do
+    ["-o", "StrictHostKeyChecking=#{ssh_host_key_mode(mode)}"] ++ known_hosts_args(known_hosts)
+  end
+
+  # HostSpec validated the mode; map to ssh's spelling (hyphenated accept-new).
+  defp ssh_host_key_mode(:yes), do: "yes"
+  defp ssh_host_key_mode(:no), do: "no"
+  defp ssh_host_key_mode(_accept_new), do: "accept-new"
+
+  defp known_hosts_args(nil), do: []
+  defp known_hosts_args(path) when is_binary(path), do: ["-o", "UserKnownHostsFile=#{path}"]
 
   defp port_args(nil), do: []
   defp port_args(port) when is_integer(port), do: ["-p", Integer.to_string(port)]

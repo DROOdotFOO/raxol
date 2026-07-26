@@ -352,7 +352,10 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
 
   def launch_spec(%HostSpec{} = host, _bash, command, workspace, _env) do
     with {:ok, ssh} <- Ssh.executable() do
-      args = Ssh.command_args(host, Ssh.remote_bash(workspace, command))
+      # Reap the remote codex on disconnect so a `Port.close` (worker stop /
+      # pause / crash) never orphans it on the host.
+      remote = Ssh.remote_bash(workspace, Ssh.reap_on_disconnect(command))
+      args = Ssh.command_args(host, remote)
       {:ok, {ssh, base_port_opts() ++ [{:args, args}]}}
     end
   end

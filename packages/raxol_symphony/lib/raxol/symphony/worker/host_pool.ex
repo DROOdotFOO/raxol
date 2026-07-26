@@ -118,6 +118,31 @@ defmodule Raxol.Symphony.Worker.HostPool do
     end
   end
 
+  @doc """
+  Re-hold a slot for `spec`, marking one matching free slot busy. Used to keep
+  a paused worker's host reserved across a resume and to re-hold slots after a
+  restart rebuilt the pool. Idempotent: if a matching slot is already busy the
+  pool is returned unchanged (no second slot is taken); a no-op when the host
+  is absent.
+  """
+  @spec hold(t() | nil, HostSpec.t()) :: t() | nil
+  def hold(nil, %HostSpec{}), do: nil
+
+  def hold(%__MODULE__{slots: slots} = pool, %HostSpec{} = spec) do
+    id = HostSpec.id(spec)
+
+    cond do
+      Enum.any?(slots, &(&1.busy? and HostSpec.id(&1.spec) == id)) ->
+        pool
+
+      true ->
+        case Enum.find_index(slots, &(not &1.busy? and HostSpec.id(&1.spec) == id)) do
+          nil -> pool
+          idx -> mark_at(pool, idx, true)
+        end
+    end
+  end
+
   @doc "Count of free slots."
   @spec free_count(t()) :: non_neg_integer()
   def free_count(%__MODULE__{slots: slots}),

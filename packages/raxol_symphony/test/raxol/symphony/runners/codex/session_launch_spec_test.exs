@@ -43,7 +43,12 @@ defmodule Raxol.Symphony.Runners.Codex.SessionLaunchSpecTest do
           # ssh options + destination + the single remote-command element.
           assert "ci@build-1" in args
           assert ["-p", "2222"] == Enum.slice(args, -4, 2) or "-p" in args
-          assert List.last(args) =~ "bash -lc 'cd '\\''/ws'\\'' && codex app-server'"
+          assert List.last(args) =~ "bash -lc 'cd '\\''/ws'\\'' && codex app-server"
+
+          # The remote codex is wrapped in the disconnect reaper so a
+          # Port.close never orphans it on the host.
+          assert List.last(args) =~ "codex app-server <&0 &"
+          assert List.last(args) =~ "wait $__rx_pid"
 
           # No {:cd, _} and no {:env, _} on the remote path (login shell owns
           # cwd + credentials); stdio is the ssh pipe.

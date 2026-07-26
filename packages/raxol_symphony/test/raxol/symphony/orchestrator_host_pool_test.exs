@@ -133,6 +133,57 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
     assert snap.counts.running == 2
   end
 
+  test "a paused worker keeps its host slot reserved and the resume re-holds it" do
+    Memory.put_issues([issue("a", "HP-1")])
+    Noop.Director.set("HP-1", {:pause_then, :awaiting_review, "rt", {:succeed_after, 10}})
+
+    pid = start_orchestrator(config(["ci@build-1"]))
+    :ok = Orchestrator.tick_now(pid)
+    wait_until(pid, fn s -> s.counts.paused == 1 end)
+
+    # The pausing exit does NOT free the slot -- it stays reserved for resume.
+    assert Orchestrator.snapshot(pid).hosts == %{total: 1, free: 0, busy: 1}
+
+    :ok = Orchestrator.resume_run(pid, "a", :approved)
+    wait_until(pid, fn s -> s.counts.paused == 0 and s.counts.running == 0 end)
+
+    # The resumed worker ran WITH its original host: on completion it releases
+    # that slot. Had it run with host: nil, the reserved slot would leak busy.
+    assert Orchestrator.snapshot(pid).hosts == %{total: 1, free: 1, busy: 0}
+  end
+
+  test "stopping a paused run frees its reserved host slot" do
+    Memory.put_issues([issue("a", "HP-1")])
+    Noop.Director.set("HP-1", {:pause, :awaiting_review, "rt"})
+
+    pid = start_orchestrator(config(["ci@build-1"]))
+    :ok = Orchestrator.tick_now(pid)
+    wait_until(pid, fn s -> s.counts.paused == 1 end)
+    assert Orchestrator.snapshot(pid).hosts.busy == 1
+
+    :ok = Orchestrator.stop_run(pid, "a")
+    assert Orchestrator.snapshot(pid).hosts == %{total: 1, free: 1, busy: 0}
+  end
+
+  defp wait_until(pid, fun, timeout_ms \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(pid, fun, deadline)
+  end
+
+  defp do_wait_until(pid, fun, deadline) do
+    cond do
+      fun.(Orchestrator.snapshot(pid)) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("condition not met before timeout")
+
+      true ->
+        Process.sleep(10)
+        do_wait_until(pid, fun, deadline)
+    end
+  end
+
   defp start_orchestrator_with_store(store) do
     {:ok, pid} =
       start_supervised(

@@ -14,10 +14,29 @@ defmodule Raxol.Symphony.SshTest do
   end
 
   describe "option_args/1" do
-    test "always includes non-interactive base options" do
+    test "always includes non-interactive base options and keepalive" do
       args = Ssh.option_args(spec())
       assert "BatchMode=yes" in args
+      assert "ConnectTimeout=15" in args
+      assert "ServerAliveInterval=30" in args
+      assert "ServerAliveCountMax=3" in args
+      # Default host-key policy is unchanged (trust-on-first-use).
       assert "StrictHostKeyChecking=accept-new" in args
+    end
+
+    test "honors a forced host-key mode and a known_hosts file" do
+      args =
+        Ssh.option_args(spec(strict_host_key_checking: :yes, known_hosts: "/etc/ssh/known_hosts"))
+
+      assert "StrictHostKeyChecking=yes" in args
+      assert "UserKnownHostsFile=/etc/ssh/known_hosts" in args
+      refute "StrictHostKeyChecking=accept-new" in args
+    end
+
+    test "maps the :no mode and omits UserKnownHostsFile when absent" do
+      args = Ssh.option_args(spec(strict_host_key_checking: :no))
+      assert "StrictHostKeyChecking=no" in args
+      refute Enum.any?(args, &String.starts_with?(&1, "UserKnownHostsFile="))
     end
 
     test "adds -p for a port and -i for an identity file" do
@@ -30,6 +49,29 @@ defmodule Raxol.Symphony.SshTest do
       args = Ssh.option_args(spec())
       refute "-p" in args
       refute "-i" in args
+    end
+  end
+
+  describe "reap_on_disconnect/1" do
+    test "ties the command to the ssh connection without touching its stdio" do
+      wrapped = Ssh.reap_on_disconnect("codex app-server")
+
+      # The command runs with stdin preserved (<&0), backgrounded, and a
+      # watcher polls the shell's parent, signalling the command when it dies.
+      assert wrapped =~ "codex app-server <&0 &"
+      assert wrapped =~ "__rx_ppid=$PPID"
+      assert wrapped =~ "ps -p $__rx_ppid"
+      assert wrapped =~ "kill $__rx_pid"
+      assert wrapped =~ "wait $__rx_pid"
+      # Framing-safe: no pty request, no single quotes to break remote_bash.
+      refute wrapped =~ "-t"
+      refute wrapped =~ "'"
+    end
+
+    test "is syntactically valid bash" do
+      # `-n` parses without executing: a syntax error would be non-zero.
+      {_out, status} = System.cmd("bash", ["-n", "-c", Ssh.reap_on_disconnect("codex")])
+      assert status == 0
     end
   end
 

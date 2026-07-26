@@ -168,4 +168,32 @@ defmodule Raxol.Symphony.Worker.HostPoolTest do
       assert HostPool.reconcile(pool, []) == nil
     end
   end
+
+  describe "hold/2 (re-hold across pause/resume or restart)" do
+    test "claims a matching free slot (restart rebuilt the pool)" do
+      [s1, s2] = specs(2)
+      pool = HostPool.new([s1, s2])
+
+      pool = HostPool.hold(pool, s1)
+      assert HostPool.busy_count(pool) == 1
+      # The held host is no longer free; the other stays claimable.
+      {:ok, ^s2, pool} = HostPool.claim(pool)
+      assert HostPool.claim(pool) == :none_free
+    end
+
+    test "is idempotent when a matching slot is already busy" do
+      [s1, s2] = specs(2)
+      pool = HostPool.new([s1, s2])
+      {:ok, ^s1, pool} = HostPool.claim(pool)
+
+      held = HostPool.hold(pool, s1)
+      assert HostPool.busy_count(held) == 1
+    end
+
+    test "is a no-op for an absent host or a nil pool" do
+      pool = HostPool.new(specs(1))
+      assert HostPool.hold(pool, %HostSpec{host: "gone"}) == pool
+      assert HostPool.hold(nil, %HostSpec{host: "x"}) == nil
+    end
+  end
 end

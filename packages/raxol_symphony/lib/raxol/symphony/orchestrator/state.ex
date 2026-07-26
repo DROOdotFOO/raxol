@@ -42,6 +42,7 @@ defmodule Raxol.Symphony.Orchestrator.State do
           issue: Issue.t(),
           attempt: non_neg_integer() | nil,
           workspace_path: Path.t(),
+          host: Raxol.Symphony.Worker.HostSpec.t() | nil,
           interrupt_reason: atom(),
           resume_token: term(),
           paused_at: integer(),

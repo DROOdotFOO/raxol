@@ -162,6 +162,11 @@ defmodule Raxol.Symphony.Orchestrator do
       host_pool: build_host_pool(config)
     }
 
+    # Re-hold host slots for runs that were paused before a restart, so a
+    # rebuilt (all-free) pool does not hand a paused worker's host to another
+    # issue before it resumes.
+    state = rehold_paused_hosts(state)
+
     state = if auto_start_tick, do: schedule_tick(state, 0), else: state
 
     {:ok, state}
@@ -192,10 +197,14 @@ defmodule Raxol.Symphony.Orchestrator do
         {:reply, :ok, new_state}
 
       Map.has_key?(state.paused, issue_id) ->
+        paused_entry = Map.fetch!(state.paused, issue_id)
         forget_paused(state.paused_saver, issue_id)
 
         new_state =
           state
+          # A paused run keeps its host slot reserved; free it now that the run
+          # is being discarded rather than resumed.
+          |> release_host(Map.get(paused_entry, :host))
           |> Map.put(:paused, Map.delete(state.paused, issue_id))
           |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
           |> notify_listeners(:worker_stopped)
@@ -519,6 +528,21 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp release_host(%State{host_pool: pool} = state, %HostSpec{} = host) do
     %State{state | host_pool: HostPool.release(pool, host)}
+  end
+
+  defp hold_host(%State{} = state, nil), do: state
+  defp hold_host(%State{host_pool: nil} = state, _host), do: state
+
+  defp hold_host(%State{host_pool: pool} = state, %HostSpec{} = host) do
+    %State{state | host_pool: HostPool.hold(pool, host)}
+  end
+
+  defp rehold_paused_hosts(%State{host_pool: nil} = state), do: state
+
+  defp rehold_paused_hosts(%State{paused: paused} = state) do
+    Enum.reduce(paused, state, fn {_id, entry}, acc ->
+      hold_host(acc, Map.get(entry, :host))
+    end)
   end
 
   defp maybe_start_capture(
@@ -876,7 +900,12 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp handle_worker_exit(%State{} = state, issue_id, reason) do
     entry = Map.fetch!(state.running, issue_id)
-    state = detach_worker(state, issue_id, entry)
+    pausing? = reason == :normal and entry.pending_pause != nil
+
+    # A pausing worker keeps its host slot reserved (the resume must re-hold
+    # the SAME remote host -- its workspace lives there); every other exit
+    # frees it.
+    state = detach_worker(state, issue_id, entry, not pausing?)
 
     case reason do
       :normal when entry.pending_pause != nil ->
@@ -921,14 +950,17 @@ defmodule Raxol.Symphony.Orchestrator do
   # its host slot (one-worker-lifetime-per-host; a nil host is a no-op), record
   # runtime, and drop the entry. Claimed-set handling is exit-reason-specific
   # and stays in `handle_worker_exit/3`.
-  defp detach_worker(%State{} = state, issue_id, entry) do
+  defp detach_worker(%State{} = state, issue_id, entry, release_host?) do
     Capture.stop(entry.capture_pid)
 
     state
-    |> release_host(entry.host)
+    |> maybe_release_host(entry.host, release_host?)
     |> record_runtime(entry)
     |> Map.put(:running, Map.delete(state.running, issue_id))
   end
+
+  defp maybe_release_host(%State{} = state, _host, false), do: state
+  defp maybe_release_host(%State{} = state, host, true), do: release_host(state, host)
 
   # Pause is signalled by a {:run_paused, ...} message arriving from the
   # worker BEFORE its :normal exit (same-process message order
@@ -955,6 +987,7 @@ defmodule Raxol.Symphony.Orchestrator do
       issue: entry.issue,
       attempt: entry.attempt,
       workspace_path: entry.workspace_path,
+      host: entry.host,
       interrupt_reason: interrupt_reason,
       resume_token: token,
       paused_at: System.monotonic_time(:millisecond),
@@ -1000,7 +1033,14 @@ defmodule Raxol.Symphony.Orchestrator do
   defp dispatch_resumption(%State{} = state, paused_entry, resume_value) do
     issue = paused_entry.issue
 
+    host = Map.get(paused_entry, :host)
+
     with {:ok, runner_mod} <- runner_module(state) do
+      # The slot was kept reserved across the pause; re-hold it (idempotent,
+      # and a real claim after a restart rebuilt the pool) so the resumed
+      # worker runs on its ORIGINAL host, never locally with host: nil.
+      state = hold_host(state, host)
+
       capture_pid =
         maybe_start_capture(
           state,
@@ -1027,9 +1067,7 @@ defmodule Raxol.Symphony.Orchestrator do
           paused_entry.workspace_path,
           task,
           capture_pid,
-          # Resume host re-claiming lands with the transport (issue #743);
-          # a resumed worker holds no host slot for now.
-          nil
+          host
         )
         |> Map.put(:turn_count, paused_entry.turn_count)
         |> Map.put(:tokens, paused_entry.tokens)
