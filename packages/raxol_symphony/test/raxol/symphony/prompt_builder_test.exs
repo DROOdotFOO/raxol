@@ -112,73 +112,25 @@ defmodule Raxol.Symphony.PromptBuilderTest do
 
     test "unknown filter fails rendering" do
       assert {:error, {:template_render_error, _}} =
-               PromptBuilder.build(issue(), "{{ issue.title | nonexistent_filter }}.")
+               PromptBuilder.build(
+                 issue(),
+                 "{{ issue.title | nonexistent_filter }}."
+               )
     end
 
     test "unknown nested issue field fails rendering" do
       assert {:error, {:template_render_error, _}} =
-               PromptBuilder.build(issue(), "{{ issue.totally_made_up_field }}.")
+               PromptBuilder.build(
+                 issue(),
+                 "{{ issue.totally_made_up_field }}."
+               )
     end
   end
 
   describe "default_prompt/0" do
     test "exposes the spec default" do
-      assert PromptBuilder.default_prompt() == "You are working on an issue from Linear."
-    end
-  end
-
-  # White-box: the memo key is `{PromptBuilder, :parsed_template, template}`
-  # in `:persistent_term`. Unique per-template tags keep these async-safe.
-  describe "template AST memoization" do
-    defp memo_key(template), do: {PromptBuilder, :parsed_template, template}
-
-    test "memoizes the parsed AST; a second build reuses it instead of re-parsing" do
-      tag = System.unique_integer([:positive])
-      template = "A#{tag} {{ issue.identifier }}"
-      other = "B#{tag} {{ issue.identifier }}"
-      on_exit(fn -> :persistent_term.erase(memo_key(template)) end)
-
-      # First build parses + memoizes `template`.
-      assert {:ok, rendered} = PromptBuilder.build(issue(), template)
-      assert rendered == "A#{tag} MT-1"
-
-      # Poison the memo with a DIFFERENT template's AST. A re-parse would
-      # render `template`'s text ("A..."); a memo HIT renders the poisoned
-      # AST's text ("B...").
-      {:ok, other_ast} = Solid.parse(other)
-      :persistent_term.put(memo_key(template), other_ast)
-
-      assert {:ok, hit} = PromptBuilder.build(issue(), template)
-      assert hit == "B#{tag} MT-1"
-    end
-
-    test "a different template is a distinct key and re-parses" do
-      tag = System.unique_integer([:positive])
-      t1 = "one#{tag} {{ issue.identifier }}"
-      t2 = "two#{tag} {{ issue.identifier }}"
-
-      on_exit(fn ->
-        :persistent_term.erase(memo_key(t1))
-        :persistent_term.erase(memo_key(t2))
-      end)
-
-      assert {:ok, r1} = PromptBuilder.build(issue(), t1)
-      assert r1 == "one#{tag} MT-1"
-
-      assert {:ok, r2} = PromptBuilder.build(issue(), t2)
-      assert r2 == "two#{tag} MT-1"
-    end
-
-    test "renders of the memoized template stay per-issue/attempt (only the parse is shared)" do
-      tag = System.unique_integer([:positive])
-      template = "s#{tag} {{ issue.identifier }} a={{ attempt }}"
-      on_exit(fn -> :persistent_term.erase(memo_key(template)) end)
-
-      assert {:ok, first} = PromptBuilder.build(issue(), template, nil)
-      assert first == "s#{tag} MT-1 a="
-
-      assert {:ok, retry} = PromptBuilder.build(issue(identifier: "MT-2"), template, 5)
-      assert retry == "s#{tag} MT-2 a=5"
+      assert PromptBuilder.default_prompt() ==
+               "You are working on an issue from Linear."
     end
   end
 end

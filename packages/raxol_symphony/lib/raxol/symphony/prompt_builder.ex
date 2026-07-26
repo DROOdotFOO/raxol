@@ -13,10 +13,12 @@ defmodule Raxol.Symphony.PromptBuilder do
   Fallback: when the prompt body is empty/blank, returns the SPEC's default
   `"You are working on an issue from Linear."` prompt instead of failing.
 
-  The parsed template AST is memoized in `:persistent_term` keyed by the
-  template string (a pure function of it), so a template is parsed once and
-  every subsequent render across both runners reuses the AST. Rendering is
-  never memoized (it varies per issue/attempt).
+  The parsed template AST is memoized in a single `:persistent_term` entry
+  (a bounded, FIFO-evicted map from template string to AST), so a template
+  is parsed once and every subsequent render across both runners reuses the
+  AST. Rendering is never memoized (it varies per issue/attempt). The cache
+  is capped at #{16} templates so a live-reloaded `WORKFLOW.md` cannot grow
+  it without bound; a re-parse of an evicted template is the only cost.
 
   Error returns:
 
@@ -56,28 +58,34 @@ defmodule Raxol.Symphony.PromptBuilder do
   end
 
   # The parsed Liquid AST is a pure function of the template string, so it
-  # is memoized in `:persistent_term` keyed by the template itself. Both
-  # runners re-render the SAME `WORKFLOW.md` template on every fresh run of
-  # every issue; without this each run re-parses it. Templates are few and
-  # stable (one per `WORKFLOW.md`), so the read-often/write-rarely profile
-  # fits `:persistent_term` (each distinct template is parsed once; an
-  # edited template is a new key -> a fresh parse, and the superseded entry
-  # is harmless dead weight — not evicted, since distinct templates are few).
-  # The template string is the key, so there is no hash-collision risk.
-  # Parse errors are not memoized (cheap, rare, and must stay observable).
-  defp parse_template(template) do
-    key = {__MODULE__, :parsed_template, template}
+  # is memoized in ONE `:persistent_term` entry holding a bounded map from
+  # template string to AST. Both runners re-render the SAME `WORKFLOW.md`
+  # template on every fresh run of every issue; without this each run
+  # re-parses it. The read-often/write-rarely profile fits `:persistent_term`
+  # (a global GC fires only on a genuinely new template, which is rare).
+  #
+  # A single entry, not one key per template, is deliberate: `WorkflowStore`
+  # hot-reloads `WORKFLOW.md`, so a per-template key scheme would accumulate a
+  # never-evicted entry for every template ever seen. Here the map is capped
+  # at @max_memoized with FIFO eviction, so a live-edited template can never
+  # grow the cache without bound — an evicted template just re-parses on next
+  # use. Parse errors are not memoized (cheap, rare, and must stay observable).
+  @memo_key {__MODULE__, :parsed_templates}
+  @max_memoized 16
 
-    case :persistent_term.get(key, :miss) do
-      :miss -> parse_and_memoize(key, template)
+  defp parse_template(template) do
+    memo = :persistent_term.get(@memo_key, %{map: %{}, order: []})
+
+    case Map.get(memo.map, template) do
+      nil -> parse_and_memoize(memo, template)
       parsed -> {:ok, parsed}
     end
   end
 
-  defp parse_and_memoize(key, template) do
+  defp parse_and_memoize(memo, template) do
     case Solid.parse(template) do
       {:ok, parsed} ->
-        :persistent_term.put(key, parsed)
+        :persistent_term.put(@memo_key, put_bounded(memo, template, parsed))
         {:ok, parsed}
 
       {:error, error} ->
@@ -85,10 +93,28 @@ defmodule Raxol.Symphony.PromptBuilder do
     end
   end
 
+  # FIFO insert into the bounded memo: evict the oldest template when full so
+  # the entry never grows past @max_memoized across live template reloads.
+  defp put_bounded(%{map: map, order: order}, template, parsed) do
+    if map_size(map) >= @max_memoized do
+      {evict, rest} = List.pop_at(order, 0)
+
+      %{
+        map: map |> Map.delete(evict) |> Map.put(template, parsed),
+        order: rest ++ [template]
+      }
+    else
+      %{map: Map.put(map, template, parsed), order: order ++ [template]}
+    end
+  end
+
   defp render_template(parsed, %Issue{} = issue, attempt) do
     vars = build_vars(issue, attempt)
 
-    case Solid.render(parsed, vars, strict_variables: true, strict_filters: true) do
+    case Solid.render(parsed, vars,
+           strict_variables: true,
+           strict_filters: true
+         ) do
       {:ok, iolist} ->
         {:ok, IO.iodata_to_binary(iolist)}
 
