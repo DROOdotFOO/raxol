@@ -44,6 +44,8 @@ defmodule Raxol.Symphony.Orchestrator do
   alias Raxol.Symphony.Workflow.GraphAdapter
   alias Raxol.Symphony.WorkflowStore
   alias Raxol.Symphony.Workspace
+  alias Raxol.Symphony.Worker.HostPool
+  alias Raxol.Symphony.Worker.HostSpec
   alias Raxol.Workflow.Compiled, as: WorkflowCompiled
 
   # -- Client API -------------------------------------------------------------
@@ -156,7 +158,8 @@ defmodule Raxol.Symphony.Orchestrator do
       task_supervisor: task_supervisor,
       workflow_store: workflow_store,
       paused_saver: paused_saver,
-      paused: PausedSaver.load_all(paused_saver)
+      paused: PausedSaver.load_all(paused_saver),
+      host_pool: build_host_pool(config)
     }
 
     state = if auto_start_tick, do: schedule_tick(state, 0), else: state
@@ -416,28 +419,74 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, %Issue{} = issue, attempt) do
+    case claim_host(state) do
+      {:ok, host, state} ->
+        dispatch_issue_on_host(state, issue, attempt, host)
+
+      # Every configured SSH host is busy (one-worker-lifetime-per-host).
+      # Leave the issue unclaimed; the next tick re-dispatches it once a
+      # host frees. Nothing was reserved, so there is nothing to release.
+      :none_free ->
+        state
+    end
+  end
+
+  defp dispatch_issue_on_host(%State{} = state, %Issue{} = issue, attempt, host) do
     with {:ok, runner_mod} <- runner_module(state),
          {:ok, %{path: workspace_path}} <-
            Workspace.ensure(state.config, issue.identifier) do
-      do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path)
+      do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path, host)
     else
       {:error, reason} ->
         Logger.warning(
           "symphony.orchestrator.dispatch_failed issue=#{issue.identifier} reason=#{inspect(reason)}"
         )
 
-        schedule_failure_retry(state, issue, attempt || 0, reason)
+        state
+        |> release_host(host)
+        |> schedule_failure_retry(issue, attempt || 0, reason)
     end
   end
 
-  defp do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path) do
+  defp do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path, host) do
     capture_pid = maybe_start_capture(state, issue, attempt, workspace_path)
     task = spawn_worker_task(state, runner_mod, issue, attempt, workspace_path)
 
     entry =
-      build_running_entry(issue, attempt, workspace_path, task, capture_pid)
+      build_running_entry(issue, attempt, workspace_path, task, capture_pid, host)
 
     register_running(state, issue, entry)
+  end
+
+  # -- Host pool (issue #742) -------------------------------------------------
+
+  # nil pool = no `worker.ssh_hosts` configured -> local dispatch, no gating.
+  defp build_host_pool(config) do
+    (Map.get(config || %{}, :worker) || %{})
+    |> Map.get(:ssh_hosts, [])
+    |> Enum.flat_map(fn raw ->
+      case HostSpec.normalize(raw) do
+        {:ok, spec} -> [spec]
+        {:error, _} -> []
+      end
+    end)
+    |> HostPool.new()
+  end
+
+  defp claim_host(%State{host_pool: nil} = state), do: {:ok, nil, state}
+
+  defp claim_host(%State{host_pool: pool} = state) do
+    case HostPool.claim(pool) do
+      {:ok, host, pool} -> {:ok, host, %State{state | host_pool: pool}}
+      :none_free -> :none_free
+    end
+  end
+
+  defp release_host(%State{} = state, nil), do: state
+  defp release_host(%State{host_pool: nil} = state, _host), do: state
+
+  defp release_host(%State{host_pool: pool} = state, %HostSpec{} = host) do
+    %State{state | host_pool: HostPool.release(pool, host)}
   end
 
   defp maybe_start_capture(
@@ -759,12 +808,14 @@ defmodule Raxol.Symphony.Orchestrator do
          attempt,
          workspace_path,
          task,
-         capture_pid
+         capture_pid,
+         host
        ) do
     %{
       issue: issue,
       attempt: attempt,
       workspace_path: workspace_path,
+      host: host,
       started_at: System.monotonic_time(:millisecond),
       worker_pid: task.pid,
       worker_ref: task.ref,
@@ -788,9 +839,7 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp handle_worker_exit(%State{} = state, issue_id, reason) do
     entry = Map.fetch!(state.running, issue_id)
-    Capture.stop(entry.capture_pid)
-    state = record_runtime(state, entry)
-    state = %State{state | running: Map.delete(state.running, issue_id)}
+    state = detach_worker(state, issue_id, entry)
 
     case reason do
       :normal when entry.pending_pause != nil ->
@@ -829,6 +878,19 @@ defmodule Raxol.Symphony.Orchestrator do
         |> schedule_failure_retry(entry.issue, next_attempt, other)
         |> notify_listeners(:worker_exit_abnormal)
     end
+  end
+
+  # Common teardown for a worker leaving `running`: stop its capture, free
+  # its host slot (one-worker-lifetime-per-host; a nil host is a no-op), record
+  # runtime, and drop the entry. Claimed-set handling is exit-reason-specific
+  # and stays in `handle_worker_exit/3`.
+  defp detach_worker(%State{} = state, issue_id, entry) do
+    Capture.stop(entry.capture_pid)
+
+    state
+    |> release_host(entry.host)
+    |> record_runtime(entry)
+    |> Map.put(:running, Map.delete(state.running, issue_id))
   end
 
   # Pause is signalled by a {:run_paused, ...} message arriving from the
@@ -927,7 +989,10 @@ defmodule Raxol.Symphony.Orchestrator do
           paused_entry.attempt,
           paused_entry.workspace_path,
           task,
-          capture_pid
+          capture_pid,
+          # Resume host re-claiming lands with the transport (issue #743);
+          # a resumed worker holds no host slot for now.
+          nil
         )
         |> Map.put(:turn_count, paused_entry.turn_count)
         |> Map.put(:tokens, paused_entry.tokens)
@@ -981,6 +1046,7 @@ defmodule Raxol.Symphony.Orchestrator do
         Capture.stop(entry.capture_pid)
 
         state
+        |> release_host(entry.host)
         |> record_runtime(entry)
         |> Map.put(:running, Map.delete(state.running, issue_id))
         |> Map.put(:claimed, MapSet.delete(state.claimed, issue_id))
@@ -1297,8 +1363,20 @@ defmodule Raxol.Symphony.Orchestrator do
       retrying: Enum.map(state.retry_attempts, &snapshot_retry(&1, now_ms)),
       paused: Enum.map(state.paused, &snapshot_paused(&1, now_ms)),
       batches: Enum.map(state.batches, &snapshot_batch(&1, now_ms)),
+      hosts: snapshot_hosts(state.host_pool),
       codex_totals: state.codex_totals,
       rate_limits: state.codex_rate_limits
+    }
+  end
+
+  # nil when no `worker.ssh_hosts` are configured (no host gating in effect).
+  defp snapshot_hosts(nil), do: nil
+
+  defp snapshot_hosts(pool) do
+    %{
+      total: HostPool.size(pool),
+      free: HostPool.free_count(pool),
+      busy: HostPool.busy_count(pool)
     }
   end
 
