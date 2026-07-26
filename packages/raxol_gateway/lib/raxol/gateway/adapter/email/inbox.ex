@@ -48,9 +48,12 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
       UIDVALIDITY/UID checkpoint), so a restart resumes where the transport
       left off rather than re-reading the mailbox.
     * `:on_message` (required) - 1-arity function called per raw message, in
-      order. A crash inside it is caught and logged; the loop continues and
-      the cursor still advances, so a consumer that needs exactly-once must
-      dedup on `Message-ID`.
+      order. A crash inside it is caught, logged, and reported as
+      `[:raxol_gateway, :email_inbox, :handler_error]` telemetry; the loop
+      continues and the cursor still advances (holding it would let one poison
+      message stall the feed), so the failed message is dropped -- a consumer
+      that needs exactly-once must dedup on `Message-ID`, and an operator should
+      alert on that telemetry to catch drops from a transient downstream outage.
     * `:interval_ms` - delay between polls (default 60_000). Applied after each
       completed poll, empty or not.
     * `:max_bytes` - a raw message larger than this is dropped before
@@ -166,7 +169,19 @@ defmodule Raxol.Gateway.Adapter.Email.Inbox do
         :ok
 
       {:error, reason} ->
-        Logger.warning("email inbox on_message failed: #{inspect(reason)}")
+        # The cursor still advances past this message (see moduledoc): holding it
+        # on a handler failure would re-deliver the whole batch and let one
+        # poison message stall the feed forever. The trade-off is that a
+        # transient downstream failure permanently drops this message, so make
+        # that drop observable -- an operator can alert on it and a consumer that
+        # needs exactly-once dedups on `Message-ID`.
+        :telemetry.execute(
+          [:raxol_gateway, :email_inbox, :handler_error],
+          %{count: 1},
+          %{reason: reason}
+        )
+
+        Logger.warning("email inbox on_message failed (message dropped): #{inspect(reason)}")
         :ok
     end
   end

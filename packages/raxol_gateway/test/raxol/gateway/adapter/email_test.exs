@@ -102,6 +102,18 @@ defmodule Raxol.Gateway.Adapter.EmailTest do
       assert {:ok, _route, %{text: "before\n--\nafter"}} = Email.normalize_event(dashes)
     end
 
+    test "reinterprets a non-UTF-8 (Latin-1) body as valid UTF-8" do
+      # A lone 0xE9 byte is "é" in Latin-1 but invalid UTF-8. :mimemail does not
+      # transcode charset, so without the inbound guard this text would reach the
+      # agent turn as invalid UTF-8 and crash the first Jason.encode/LiveView
+      # render. The guard reinterprets it as Latin-1 -> valid UTF-8.
+      raw = raw_mail([{"From", "a@x.com"}, {"To", "bot@x"}], "caf" <> <<0xE9>>)
+
+      assert {:ok, _route, %{text: text}} = Email.normalize_event(raw)
+      assert String.valid?(text)
+      assert text == "café"
+    end
+
     test "surfaces threading metadata under :email" do
       raw =
         raw_mail(

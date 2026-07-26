@@ -63,6 +63,28 @@ defmodule Raxol.Gateway.Adapter.Email.InboxTest do
     assert_receive {:ok_msg, "b"}
   end
 
+  test "a dropped (crashing) message emits handler_error telemetry" do
+    test = self()
+    handler = {__MODULE__, :handler_error}
+
+    :telemetry.attach(
+      handler,
+      [:raxol_gateway, :email_inbox, :handler_error],
+      fn _event, meas, meta, _config -> send(test, {:handler_error, meas, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    start_inbox(
+      fetch_fn: fn _ -> {:ok, ["boom"], :done} end,
+      on_message: fn "boom" -> raise "kaboom" end,
+      interval_ms: 50
+    )
+
+    assert_receive {:handler_error, %{count: 1}, %{reason: _reason}}
+  end
+
   test "a fetch error backs off without delivering or crashing" do
     test = self()
 

@@ -178,7 +178,8 @@ defmodule Raxol.Gateway.Adapter.Email do
           user_id: from
         })
 
-      {:ok, route, %{text: strip_quoted(text), email: mail_meta(headers, from)}}
+      body = text |> ensure_utf8() |> strip_quoted()
+      {:ok, route, %{text: body, email: mail_meta(headers, from)}}
     else
       _other -> :ignore
     end
@@ -253,6 +254,25 @@ defmodule Raxol.Gateway.Adapter.Email do
     raw
     |> to_string()
     |> String.split(~r/\s+/, trim: true)
+  end
+
+  # `:mimemail` decodes transfer-encoding but does NOT transcode charset, so a
+  # non-UTF-8 body (Latin-1/Windows-1252 is the common case) comes back as
+  # invalid-UTF-8 bytes. Left as-is it would crash the first `Jason.encode` (the
+  # LLM request) or LiveView render downstream -- the same invalid-UTF-8 hazard
+  # `send_message/3` already guards with `String.valid?/1` on the outbound side.
+  # Guard the inbound side symmetrically: keep a valid body untouched, else
+  # best-effort reinterpret the bytes as Latin-1 (total -- every byte is a code
+  # point), which always yields valid UTF-8.
+  defp ensure_utf8(body) when is_binary(body) do
+    if String.valid?(body) do
+      body
+    else
+      case :unicode.characters_to_binary(body, :latin1) do
+        transcoded when is_binary(transcoded) -> transcoded
+        _error_or_incomplete -> String.replace_invalid(body)
+      end
+    end
   end
 
   # Trim quoted history: keep the reply text above the first quote marker
