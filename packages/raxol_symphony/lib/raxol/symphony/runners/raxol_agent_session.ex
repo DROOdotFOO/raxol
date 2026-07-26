@@ -74,6 +74,26 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   If the Session is no longer in the Registry (e.g. the BEAM
   restarted), resume returns `{:error, :session_not_found}` and
   the orchestrator's retry-on-error path kicks in.
+
+  ## Prompt caching
+
+  Optional: set `agent.prompt_cache` to a `{module, config}` tuple
+  (or a bare `Raxol.Agent.Cache`-impl module) and the runner will
+  cache the rendered prompt across fresh runs. The cache key is
+  `{:prompt, sha256({issue prompt-fields, prompt_template, attempt})}`
+  and the TTL defaults to 300s, overridden by
+  `agent.prompt_cache_ttl_ms`.
+
+  Unlike `RaxolAgent`'s `tracker_cache` (which caches a network
+  `still_active?` check and so trades freshness for HTTP cost), this
+  cache is **self-invalidating**: the rendered prompt is a pure
+  function of the fingerprinted determinants, so any change to the
+  issue content, template, or attempt yields a new key. The TTL is
+  only an eviction/memory bound, never a staleness window. The hit
+  case is a continuation re-dispatch of an unchanged issue at the
+  same attempt. It caches a CPU-bound Liquid render (not a network
+  call), so the win is modest; it is opt-in and **off by default**
+  (`prompt_cache` unset preserves the existing per-run render).
   """
 
   @behaviour Raxol.Symphony.Runner
@@ -84,12 +104,14 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   @compile {:no_warn_undefined,
             [
+              Raxol.Agent.Cache,
               Raxol.Agent.Session,
               Raxol.Agent.Session.Supervisor,
               Raxol.Agent.SessionStreamer
             ]}
 
   @default_timeout_ms 60_000
+  @default_prompt_cache_ttl_ms 300_000
 
   @impl Runner
   def run(%Issue{} = issue, %Config{} = config, opts) do
@@ -320,12 +342,64 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   defp build_session_id(%Issue{id: id}, attempt),
     do: "symphony-session-#{id}-#{attempt || 0}-#{:erlang.unique_integer([:positive])}"
 
+  # Renders the seed prompt, optionally through the opt-in prompt cache.
+  # The rendered prompt is a pure function of the fingerprinted
+  # determinants, so the content-hash key is self-invalidating (see the
+  # "Prompt caching" moduledoc section). A `nil` cache renders directly.
   defp build_prompt(issue, config, attempt) do
+    case agent_prompt_cache(config) do
+      nil ->
+        render_prompt(issue, config, attempt)
+
+      cache ->
+        key = prompt_cache_key(issue, config, attempt)
+
+        case Raxol.Agent.Cache.get(cache, key) do
+          {:ok, cached} ->
+            cached
+
+          :miss ->
+            rendered = render_prompt(issue, config, attempt)
+            ttl = agent_prompt_cache_ttl_ms(config)
+            :ok = Raxol.Agent.Cache.put(cache, key, rendered, ttl)
+            rendered
+        end
+    end
+  end
+
+  defp render_prompt(issue, config, attempt) do
     case PromptBuilder.build(issue, config.prompt_template, attempt) do
       {:ok, rendered} -> rendered
       _ -> PromptBuilder.default_prompt()
     end
   end
+
+  defp prompt_cache_key(%Issue{} = issue, %Config{prompt_template: template}, attempt) do
+    fingerprint =
+      :crypto.hash(
+        :sha256,
+        :erlang.term_to_binary({prompt_fields(issue), template, attempt})
+      )
+
+    {:prompt, fingerprint}
+  end
+
+  # Exactly the fields `PromptBuilder.issue_to_liquid_map/1` renders into
+  # the template — the full determinant set of the rendered prompt.
+  defp prompt_fields(%Issue{} = issue) do
+    {issue.id, issue.identifier, issue.title, issue.description, issue.state, issue.url,
+     issue.labels, issue.priority, issue.branch_name, issue.created_at, issue.updated_at,
+     issue.blocked_by}
+  end
+
+  # `config.runner` is always a map (`Config` builds it so), but `get_in`
+  # tolerates a nil/blank runner or a missing `:agent`/key -- a single
+  # total clause, so there is no provably-dead catch-all to warn on.
+  defp agent_prompt_cache(%Config{runner: runner}),
+    do: Raxol.Agent.Cache.normalize(get_in(runner, [:agent, :prompt_cache]))
+
+  defp agent_prompt_cache_ttl_ms(%Config{runner: runner}),
+    do: get_in(runner, [:agent, :prompt_cache_ttl_ms]) || @default_prompt_cache_ttl_ms
 
   defp raxol_agent_loaded?, do: Code.ensure_loaded?(Raxol.Agent.Session)
 end
