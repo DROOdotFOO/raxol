@@ -171,6 +171,15 @@ defmodule Raxol.Harness.HarnessApp do
   # selection attempt, not a click — it must never toggle the block under
   # the pointer. The press only arms the site; all state change waits for
   # the matching release.
+  #
+  # The press RESOLVES its target NOW, against the press-time geometry, and
+  # arms `{cell, target}`. The release acts on THAT stored target — it does
+  # NOT re-hit-test the cell. So any transcript reflow between press and
+  # release (a `:seal_lines` fold, streamed reasoning lines, a scroll) that
+  # slides a different block under the same cell can no longer toggle the
+  # WRONG block: the target was pinned at press. (Resize additionally nils
+  # the arm above, cancelling the click outright — a viewport change is a
+  # bigger disruption than a transcript reflow.)
   defp handle_mouse(
          %Event{
            type: :mouse,
@@ -179,7 +188,7 @@ defmodule Raxol.Harness.HarnessApp do
          model
        )
        when is_integer(x) and is_integer(y) do
-    {%{model | mouse_press: {x, y}}, []}
+    {%{model | mouse_press: {{x, y}, View.hit_test(model, x, y)}}, []}
   end
 
   # SGR (mode 1006) preserves the button on release, so a left release
@@ -197,9 +206,10 @@ defmodule Raxol.Harness.HarnessApp do
     armed = model.mouse_press
     model = %{model | mouse_press: nil}
 
-    if armed == {x, y},
-      do: {Model.click(model, View.hit_test(model, x, y)), []},
-      else: {model, []}
+    case armed do
+      {{^x, ^y}, target} -> {Model.click(model, target), []}
+      _drag_or_unarmed -> {model, []}
+    end
   end
 
   # A release that is a release but did NOT satisfy the completion clause
