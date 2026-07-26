@@ -61,9 +61,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   The runner returns `{:pause, reason, token}` where `token` carries
   the `session_id` so the orchestrator's later `resume_run/3` call
-  can re-attach to the same live Session. The Session is started
-  under `Raxol.Agent.DynSup`, so it survives the worker exit that
-  follows the pause return.
+  can re-attach to the same live Session. The Session runs as a
+  supervised subtree under `Raxol.Agent.DynSup` (via
+  `Raxol.Agent.Session.Supervisor`), so it survives the worker exit
+  that follows the pause return.
 
   On resume the runner sends:
 
@@ -82,7 +83,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Runner}
 
   @compile {:no_warn_undefined,
-            [Raxol.Agent.Session, Raxol.Agent.SessionStreamer]}
+            [
+              Raxol.Agent.Session,
+              Raxol.Agent.Session.Supervisor,
+              Raxol.Agent.SessionStreamer
+            ]}
 
   @default_timeout_ms 60_000
 
@@ -158,8 +163,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
           send_resume(session_id, resume_value)
 
           case loop(session_id, issue.id, parent, timeout_ms) do
-            :ok -> finalize(session_id, :ok)
-            {:error, _} = err -> finalize(session_id, err)
+            :ok ->
+              finalize(session_id, :ok)
+
+            {:error, _} = err ->
+              finalize(session_id, err)
+
             {:pause, _, _} = pause ->
               unsubscribe(session_id)
               pause
@@ -242,12 +251,20 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   end
 
   defp start_session(session_id, module) do
-    # Start the Session under DynSup so it survives the worker exit
-    # that follows a `{:pause, ...}` return; resume re-attaches by
-    # looking up `session_id` in the Registry.
-    spec = {Raxol.Agent.Session, [id: session_id, app_module: module]}
-
-    case DynamicSupervisor.start_child(Raxol.Agent.DynSup, spec) do
+    # Start the session as a supervised SUBTREE (EmitBridge -> Lifecycle ->
+    # Session, `:rest_for_one`) under `Raxol.Agent.DynSup`, not as a bare
+    # Session child. The tree still survives the worker exit that follows a
+    # `{:pause, ...}` return, but -- unlike a bare Session -- it cannot
+    # deadlock: a bare `Raxol.Agent.Session` starts its own EmitBridge under the
+    # SAME `Raxol.Agent.DynSup` during init, which blocks forever behind the
+    # in-progress start (a DynamicSupervisor runs a child's init synchronously
+    # inside its own call). The subtree owns the bridge as a sibling instead.
+    # `id` and `session_id` are pinned equal so registration, `send_message`,
+    # `subscribe`, and `stop_session` all key on the runner's `session_id`.
+    case Raxol.Agent.Session.Supervisor.start_session(module,
+           id: session_id,
+           session_id: session_id
+         ) do
       {:ok, pid} -> {:ok, pid}
       {:ok, pid, _info} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
@@ -267,23 +284,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   end
 
   defp stop_session(session_id) do
-    case Registry.lookup(Raxol.Agent.Registry, session_id) do
-      [{pid, _}] ->
-        case DynamicSupervisor.terminate_child(Raxol.Agent.DynSup, pid) do
-          :ok ->
-            :ok
-
-          {:error, :not_found} ->
-            try do
-              GenServer.stop(pid, :normal, 1_000)
-            catch
-              :exit, _ -> :ok
-            end
-        end
-
-      [] ->
-        :ok
-    end
+    # Tears down the whole subtree (session -> lifecycle -> bridge), draining
+    # the durable tail first. Best-effort: a missing/already-gone session is a
+    # no-op, and a dying supervisor mid-teardown must not fail finalize.
+    Raxol.Agent.Session.Supervisor.stop_session(session_id)
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   defp seed_agent(session_id, issue, config, attempt) do
