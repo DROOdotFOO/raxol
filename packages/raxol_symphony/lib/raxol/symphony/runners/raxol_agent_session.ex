@@ -80,34 +80,57 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   Optional: set `agent.prompt_cache` to a `{module, config}` tuple
   (or a bare `Raxol.Agent.Cache`-impl module) and the runner will
   cache the rendered prompt across fresh runs. The cache key is
-  `{:prompt, sha256({issue, prompt_template, attempt})}` (the full
-  `%Issue{}` is fingerprinted, so the key can never drift from what
-  the template renders) and the TTL defaults to 300s, overridden by
-  `agent.prompt_cache_ttl_ms`.
+  `{:prompt, issue.id}` -- a stable per-issue slot. The stored value
+  is `{fingerprint, rendered}`, where `fingerprint` is
+  `sha256({issue, prompt_template, attempt})`. The TTL defaults to
+  300s, overridden by `agent.prompt_cache_ttl_ms`.
 
   Unlike `RaxolAgent`'s `tracker_cache` (which caches a network
   `still_active?` check and so trades freshness for HTTP cost), this
-  cache is **self-invalidating**: the rendered prompt is a pure
-  function of the fingerprinted determinants, so any change to the
-  issue content, template, or attempt yields a new key. The hit case
-  is a continuation re-dispatch of an unchanged issue at the same
-  attempt. It is opt-in and **off by default** (`prompt_cache` unset
-  preserves the existing per-run render).
+  cache is **self-invalidating**, but the freshness check lives in the
+  stored fingerprint rather than in the key. The rendered prompt is a
+  pure function of `{issue, template, attempt}` (the whole `%Issue{}`
+  is fingerprinted, so the check can never drift from what the template
+  renders -- and note `attempt` DOES affect the render, since
+  `PromptBuilder` exposes it as the `{{ attempt }}` Liquid variable).
+  On a `get`, a fingerprint mismatch (any change to the issue content,
+  template, or attempt -- including the initial `attempt: nil` dispatch
+  versus its `attempt: 1` continuation) is treated as a miss and the
+  entry is re-rendered and overwritten. A stale render is therefore
+  **never served**. It is opt-in and **off by default**
+  (`prompt_cache` unset preserves the existing per-run render).
 
-  ### Bounding (read-once)
+  ### Bounding
 
-  Each key is written once (on the render that misses) and read once
-  (by the single continuation re-dispatch that hits). The entry is
-  **deleted on that read**, so the cache holds at most one entry per
-  run currently awaiting its continuation -- it cannot accumulate a
-  permanent per-issue row. The TTL is NOT a reliable memory bound
-  here: `Cache.Ets` expires lazily (only a same-key `get` reclaims a
-  stale entry), and a write-once/read-once key is never `get` again,
-  so its TTL would never fire on its own. Delete-on-read, not the
-  TTL, is what keeps the cache from growing unbounded across issues;
-  the TTL only backstops the rare final render whose continuation
-  never comes (the issue reached a terminal state), which a periodic
-  `flush/1` or table drop reclaims.
+  Keying on the stable `issue.id` (not on the fingerprint) is what
+  makes the cache bounded, via three cooperating mechanisms:
+
+    * **Overwrite on the freshness miss.** A fingerprint mismatch
+      re-renders and `put`s under the same key, so an issue holds at
+      most one row at a time. The initial `attempt: nil` render is
+      reclaimed by the overwrite its first `attempt: 1` continuation
+      performs -- it is not a permanent orphan.
+    * **Read-once delete on the exact hit.** A continuation re-dispatch
+      of an unchanged issue at an unchanged attempt (the hit case:
+      consecutive `attempt: 1` continuations render the same prompt)
+      reads the entry and **deletes it on that read**, so a continued
+      issue oscillates between one and zero rows.
+    * **Terminal flush.** `flush_prompt_cache/2` deletes an issue's row
+      by `issue.id`. The orchestrator calls it when an issue leaves the
+      run set (reached a terminal state, or was dropped), which reclaims
+      the single row a one-shot issue (completes on first dispatch, no
+      continuation reads it) or an odd-length continuation chain leaves
+      behind. Because the key is `issue.id` alone, this works even
+      though the issue's content (and thus its fingerprint) has changed
+      by the time it is observed terminal.
+
+  Together these keep the live-entry count at `O(issues currently
+  in-flight)`, not `O(issues ever processed)`. The TTL is only a
+  backstop for the edge exits the orchestrator does not route through
+  `flush_prompt_cache/2`; it is not the primary bound, because
+  `Cache.Ets` expires lazily (only a same-key `get` reclaims a stale
+  entry) and a row whose issue has moved on is never `get` again. There
+  is no background sweeper.
 
   ### Relationship to `PromptBuilder`'s template memo
 
@@ -117,9 +140,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     * `PromptBuilder` memoizes the **parsed Liquid AST**, keyed by the
       template string. That is shared across *every* issue using a given
       `WORKFLOW.md` and always on -- it removes the re-parse cost.
-    * This `prompt_cache` memoizes the **fully rendered prompt**, keyed by
-      (issue, template, attempt). It removes the per-issue variable
-      substitution too, but only for the narrow hit case above.
+    * This `prompt_cache` memoizes the **fully rendered prompt**. It
+      removes the per-issue variable substitution too, but only for the
+      narrow hit case above.
 
   So on a continuation re-dispatch of an unchanged issue, the parse is
   skipped by `PromptBuilder` and the render is skipped here. The render
@@ -384,10 +407,23 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     do:
       "symphony-session-#{id}-#{attempt || 0}-#{:erlang.unique_integer([:positive])}"
 
+  @doc """
+  Removes any prompt-cache row for `issue_id`.
+
+  A no-op when no `prompt_cache` is configured. The orchestrator calls
+  this when an issue leaves the run set (terminal or dropped) so a
+  one-shot render -- written on the issue's only dispatch and never
+  read by a continuation -- does not linger. Keying on `issue.id`
+  alone (not the freshness fingerprint) means this reclaims the row
+  even though the issue's content, and thus its fingerprint, has
+  changed by the time it is observed terminal.
+  """
+  @spec flush_prompt_cache(Config.t(), term()) :: :ok
+  def flush_prompt_cache(%Config{} = config, issue_id) do
+    Raxol.Agent.Cache.delete(agent_prompt_cache(config), prompt_cache_key(issue_id))
+  end
+
   # Renders the seed prompt, optionally through the opt-in prompt cache.
-  # The rendered prompt is a pure function of the fingerprinted
-  # determinants, so the content-hash key is self-invalidating (see the
-  # "Prompt caching" moduledoc section).
   defp build_prompt(issue, config, attempt),
     do: render_cached(agent_prompt_cache(config), issue, config, attempt)
 
@@ -396,26 +432,34 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     do: render_prompt(issue, config, attempt)
 
   # Cache configured: reuse the memoized render, or compute and store it.
+  # The key is the stable `issue.id`; freshness is guarded by a fingerprint
+  # stored alongside the render, so the cache stays bounded per issue (see the
+  # "Prompt caching" moduledoc section).
   defp render_cached(cache, issue, config, attempt) do
-    key = prompt_cache_key(issue, config, attempt)
+    key = prompt_cache_key(issue.id)
+    fingerprint = prompt_fingerprint(issue, config.prompt_template, attempt)
 
     case Raxol.Agent.Cache.get(cache, key) do
-      {:ok, cached} ->
-        # Read-once: the continuation re-dispatch is the only reader, so flush
-        # the entry as it is consumed. Otherwise this write-once/read-once key
-        # would linger permanently -- its lazy TTL is only reclaimed by a
-        # same-key `get`, which never comes for an issue that has moved on.
+      {:ok, {^fingerprint, cached}} ->
+        # Exact hit (unchanged issue + template + attempt). Read-once: the
+        # continuation re-dispatch is the only reader, so flush the row as it
+        # is consumed. A continued issue thus oscillates between one and zero
+        # rows instead of lingering.
         Raxol.Agent.Cache.delete(cache, key)
         cached
 
-      :miss ->
+      _miss_or_stale ->
+        # Miss, or a stale fingerprint (issue/template/attempt changed --
+        # e.g. the initial `attempt: nil` row seen by an `attempt: 1`
+        # continuation). Re-render and overwrite under the same key, so the
+        # prior row is reclaimed and a stale render is never served.
         rendered = render_prompt(issue, config, attempt)
 
         :ok =
           Raxol.Agent.Cache.put(
             cache,
             key,
-            rendered,
+            {fingerprint, rendered},
             agent_prompt_cache_ttl_ms(config)
           )
 
@@ -430,24 +474,19 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     end
   end
 
+  defp prompt_cache_key(issue_id), do: {:prompt, issue_id}
+
   # The rendered prompt is a pure function of (issue, template, attempt), so
   # the whole `%Issue{}` is fingerprinted rather than a hand-listed subset:
-  # any field change -> a new key, with zero risk of drifting out of sync
-  # with what the template renders. Over-invalidation (a non-rendered field
-  # wobbling between identical re-dispatches) only costs a re-render, never a
-  # stale prompt -- the safe direction for a self-invalidating cache.
-  defp prompt_cache_key(
-         %Issue{} = issue,
-         %Config{prompt_template: template},
-         attempt
-       ) do
-    fingerprint =
-      :crypto.hash(
-        :sha256,
-        :erlang.term_to_binary({issue, template, attempt}, [:deterministic])
-      )
-
-    {:prompt, fingerprint}
+  # any field change -> a new fingerprint, with zero risk of drifting out of
+  # sync with what the template renders. A fingerprint mismatch only costs a
+  # re-render (never a stale prompt) -- the safe direction for a
+  # self-invalidating cache.
+  defp prompt_fingerprint(%Issue{} = issue, template, attempt) do
+    :crypto.hash(
+      :sha256,
+      :erlang.term_to_binary({issue, template, attempt}, [:deterministic])
+    )
   end
 
   # `config.runner` is always a map (`Config` builds it so), but `get_in`

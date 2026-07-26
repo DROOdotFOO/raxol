@@ -40,6 +40,7 @@ defmodule Raxol.Symphony.Orchestrator do
   alias Raxol.Symphony.Orchestrator.Retry
   alias Raxol.Symphony.Orchestrator.State
   alias Raxol.Symphony.Runner
+  alias Raxol.Symphony.Runners.RaxolAgentSession
   alias Raxol.Symphony.Tracker
   alias Raxol.Symphony.Workflow.GraphAdapter
   alias Raxol.Symphony.WorkflowStore
@@ -1083,7 +1084,7 @@ defmodule Raxol.Symphony.Orchestrator do
         retry_with_refreshed_issue(state, issue, retry_entry)
 
       {:ok, []} ->
-        %{state | claimed: MapSet.delete(state.claimed, issue_id)}
+        release_issue(state, issue_id)
 
       {:error, _reason} ->
         requeue_retry(state, issue_id, retry_entry)
@@ -1097,14 +1098,24 @@ defmodule Raxol.Symphony.Orchestrator do
        ) do
     cond do
       Issue.terminal?(issue, state.config.tracker.terminal_states) ->
-        %{state | claimed: MapSet.delete(state.claimed, issue.id)}
+        release_issue(state, issue.id)
 
       Issue.active?(issue, state.config.tracker.active_states) ->
         dispatch_issue(state, issue, retry_entry.attempt)
 
       true ->
-        %{state | claimed: MapSet.delete(state.claimed, issue.id)}
+        release_issue(state, issue.id)
     end
+  end
+
+  # An issue is leaving the run set for good (terminal, gone, or no longer
+  # active): drop the claim AND flush any prompt-cache row it left behind. The
+  # session runner's `prompt_cache` writes a row on every fresh dispatch; a
+  # one-shot issue (or an odd-length continuation chain) leaves one unread row
+  # that only this terminal flush reclaims. No-op unless `prompt_cache` is set.
+  defp release_issue(%State{} = state, issue_id) do
+    RaxolAgentSession.flush_prompt_cache(state.config, issue_id)
+    %{state | claimed: MapSet.delete(state.claimed, issue_id)}
   end
 
   defp requeue_retry(%State{} = state, issue_id, retry_entry) do
