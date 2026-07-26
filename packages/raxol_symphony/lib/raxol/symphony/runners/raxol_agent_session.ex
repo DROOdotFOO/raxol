@@ -80,8 +80,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   Optional: set `agent.prompt_cache` to a `{module, config}` tuple
   (or a bare `Raxol.Agent.Cache`-impl module) and the runner will
   cache the rendered prompt across fresh runs. The cache key is
-  `{:prompt, sha256({issue prompt-fields, prompt_template, attempt})}`
-  and the TTL defaults to 300s, overridden by
+  `{:prompt, sha256({issue, prompt_template, attempt})}` (the full
+  `%Issue{}` is fingerprinted, so the key can never drift from what
+  the template renders) and the TTL defaults to 300s, overridden by
   `agent.prompt_cache_ttl_ms`.
 
   Unlike `RaxolAgent`'s `tracker_cache` (which caches a network
@@ -91,9 +92,27 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   issue content, template, or attempt yields a new key. The TTL is
   only an eviction/memory bound, never a staleness window. The hit
   case is a continuation re-dispatch of an unchanged issue at the
-  same attempt. It caches a CPU-bound Liquid render (not a network
-  call), so the win is modest; it is opt-in and **off by default**
-  (`prompt_cache` unset preserves the existing per-run render).
+  same attempt. It is opt-in and **off by default** (`prompt_cache`
+  unset preserves the existing per-run render).
+
+  ### Relationship to `PromptBuilder`'s template memo
+
+  This layers ON TOP of `PromptBuilder`'s parsed-template memo, it does
+  not duplicate it. The two cache different stages of the same pipeline:
+
+    * `PromptBuilder` memoizes the **parsed Liquid AST**, keyed by the
+      template string. That is shared across *every* issue using a given
+      `WORKFLOW.md` and always on -- it removes the re-parse cost.
+    * This `prompt_cache` memoizes the **fully rendered prompt**, keyed by
+      (issue, template, attempt). It removes the per-issue variable
+      substitution too, but only for the narrow hit case above.
+
+  So on a continuation re-dispatch of an unchanged issue, the parse is
+  skipped by `PromptBuilder` and the render is skipped here. The render
+  is CPU-bound (not a network call) and the AST is already memoized, so
+  this second layer's marginal win is small -- which is exactly why it is
+  off by default and worth enabling only for high-churn continuation
+  queues where the render cost is measured to matter.
   """
 
   @behaviour Raxol.Symphony.Runner
@@ -170,7 +189,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     end
   end
 
-  defp resume_run(%Issue{} = issue, %Config{} = config, opts, resume_token, resume_value) do
+  defp resume_run(
+         %Issue{} = issue,
+         %Config{} = config,
+         opts,
+         resume_token,
+         resume_value
+       ) do
     parent = Keyword.fetch!(opts, :parent)
     timeout_ms = session_timeout_ms(config)
     %{session_id: session_id} = resume_token
@@ -329,7 +354,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   # -- Helpers --
 
-  defp agent_module(%Config{runner: %{agent: %{module: mod}}}) when is_atom(mod), do: mod
+  defp agent_module(%Config{runner: %{agent: %{module: mod}}})
+       when is_atom(mod), do: mod
+
   defp agent_module(_), do: nil
 
   defp session_timeout_ms(%Config{runner: %{agent: agent}}) do
@@ -340,7 +367,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   end
 
   defp build_session_id(%Issue{id: id}, attempt),
-    do: "symphony-session-#{id}-#{attempt || 0}-#{:erlang.unique_integer([:positive])}"
+    do:
+      "symphony-session-#{id}-#{attempt || 0}-#{:erlang.unique_integer([:positive])}"
 
   # Renders the seed prompt, optionally through the opt-in prompt cache.
   # The rendered prompt is a pure function of the fingerprinted
@@ -363,7 +391,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
       :miss ->
         rendered = render_prompt(issue, config, attempt)
-        :ok = Raxol.Agent.Cache.put(cache, key, rendered, agent_prompt_cache_ttl_ms(config))
+
+        :ok =
+          Raxol.Agent.Cache.put(
+            cache,
+            key,
+            rendered,
+            agent_prompt_cache_ttl_ms(config)
+          )
+
         rendered
     end
   end
@@ -375,22 +411,21 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     end
   end
 
-  defp prompt_cache_key(%Issue{} = issue, %Config{prompt_template: template}, attempt) do
+  # The rendered prompt is a pure function of (issue, template, attempt), so
+  # the whole `%Issue{}` is fingerprinted rather than a hand-listed subset:
+  # any field change -> a new key, with zero risk of drifting out of sync
+  # with what the template renders. Over-invalidation (a non-rendered field
+  # wobbling between identical re-dispatches) only costs a re-render, never a
+  # stale prompt -- the safe direction for a self-invalidating cache.
+  defp prompt_cache_key(
+         %Issue{} = issue,
+         %Config{prompt_template: template},
+         attempt
+       ) do
     fingerprint =
-      :crypto.hash(
-        :sha256,
-        :erlang.term_to_binary({prompt_fields(issue), template, attempt})
-      )
+      :crypto.hash(:sha256, :erlang.term_to_binary({issue, template, attempt}))
 
     {:prompt, fingerprint}
-  end
-
-  # Exactly the fields `PromptBuilder.issue_to_liquid_map/1` renders into
-  # the template — the full determinant set of the rendered prompt.
-  defp prompt_fields(%Issue{} = issue) do
-    {issue.id, issue.identifier, issue.title, issue.description, issue.state, issue.url,
-     issue.labels, issue.priority, issue.branch_name, issue.created_at, issue.updated_at,
-     issue.blocked_by}
   end
 
   # `config.runner` is always a map (`Config` builds it so), but `get_in`
@@ -400,7 +435,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     do: Raxol.Agent.Cache.normalize(get_in(runner, [:agent, :prompt_cache]))
 
   defp agent_prompt_cache_ttl_ms(%Config{runner: runner}),
-    do: get_in(runner, [:agent, :prompt_cache_ttl_ms]) || @default_prompt_cache_ttl_ms
+    do:
+      get_in(runner, [:agent, :prompt_cache_ttl_ms]) ||
+        @default_prompt_cache_ttl_ms
 
   defp raxol_agent_loaded?, do: Code.ensure_loaded?(Raxol.Agent.Session)
 end

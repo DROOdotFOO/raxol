@@ -2,7 +2,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
   @moduledoc """
   Verifies the `agent.prompt_cache` opt-in on the session runner: the
   rendered seed prompt is cached across fresh runs under a self-invalidating
-  content-hash key `{:prompt, sha256({issue prompt-fields, template, attempt})}`.
+  content-hash key `{:prompt, sha256({issue, template, attempt})}`.
 
   Strategy mirrors the `tracker_cache` test: configure an ETS-backed cache,
   drive a real run, then read the ETS table directly. Cache HIT is proven
@@ -29,8 +29,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
   end
 
   defp ets_cache_adapter do
-    table = :"sym_session_prompt_cache_test_#{:erlang.unique_integer([:positive])}"
-    on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+    table =
+      :"sym_session_prompt_cache_test_#{:erlang.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+    end)
+
     {Raxol.Agent.Cache.Ets, %{table: table}}
   end
 
@@ -54,7 +59,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
     })
   end
 
-  defp issue, do: %Issue{id: "issue-1", identifier: "MT-1", title: "T", state: "Todo"}
+  defp issue,
+    do: %Issue{id: "issue-1", identifier: "MT-1", title: "T", state: "Todo"}
 
   defp run(cfg, attempt \\ nil) do
     RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: attempt)
@@ -105,12 +111,38 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
       assert length(:ets.tab2list(table_of(adapter))) == 2
     end
 
+    test "the whole issue is fingerprinted: same render, differing field -> distinct keys" do
+      adapter = ets_cache_adapter()
+      cfg = config(%{prompt_cache: adapter})
+
+      # Both render to "MT-1" (template is {{ issue.identifier }}) but differ
+      # in `description`, which the template never renders. The key is the
+      # full %Issue{}, so they must NOT collide -- proving the key tracks all
+      # determinants, not just the rendered output, and can never drift from
+      # a hand-listed field subset.
+      assert :ok =
+               RaxolAgentSession.run(%{issue() | description: "A"}, cfg,
+                 parent: self()
+               )
+
+      assert :ok =
+               RaxolAgentSession.run(%{issue() | description: "B"}, cfg,
+                 parent: self()
+               )
+
+      entries = :ets.tab2list(table_of(adapter))
+      assert length(entries) == 2
+      assert Enum.all?(entries, fn {_k, rendered, _e} -> rendered == "MT-1" end)
+    end
+
     test "default TTL is 300s when prompt_cache_ttl_ms is unset" do
       adapter = ets_cache_adapter()
 
       assert :ok = run(config(%{prompt_cache: adapter}))
 
-      assert [{_key, "MT-1", %DateTime{} = expiry}] = :ets.tab2list(table_of(adapter))
+      assert [{_key, "MT-1", %DateTime{} = expiry}] =
+               :ets.tab2list(table_of(adapter))
+
       # Well beyond a 30s window -> the 300s default, not some shorter TTL.
       assert DateTime.diff(expiry, DateTime.utc_now()) > 60
     end
