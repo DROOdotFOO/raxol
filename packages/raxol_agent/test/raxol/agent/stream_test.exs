@@ -63,6 +63,26 @@ defmodule Raxol.Agent.StreamTest do
     def capabilities, do: [:completion, :tool_use]
   end
 
+  # -- Native (vendor-owns-loop) backend --------------------------------------
+
+  defmodule NativeToolLoopBackend do
+    @moduledoc "A backend that runs its own tool loop (tools injected over MCP)."
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(_messages, _opts),
+      do: {:ok, %{content: "ok", usage: %{}, metadata: %{}}}
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Native Tool Loop"
+    @impl true
+    def capabilities, do: [:completion, :tool_use]
+    @impl true
+    def handles_tools_internally?, do: true
+  end
+
   # -- Capturing Mock Backend ---------------------------------------------------
 
   defmodule CapturingBackend do
@@ -392,6 +412,20 @@ defmodule Raxol.Agent.StreamTest do
                AgentStream.react("Hello", opts) |> Enum.to_list()
 
       assert done.content == "I'm helpful."
+    end
+  end
+
+  describe "native_tool_loop?/1" do
+    test "true for a backend that runs its own tool loop" do
+      assert AgentStream.native_tool_loop?(backend: NativeToolLoopBackend)
+    end
+
+    test "false for a framework (Mock) backend" do
+      refute AgentStream.native_tool_loop?(backend: Raxol.Agent.Backend.Mock)
+    end
+
+    test "resolves the same backend react/2 will use (default fallback is framework)" do
+      refute AgentStream.native_tool_loop?([])
     end
   end
 
