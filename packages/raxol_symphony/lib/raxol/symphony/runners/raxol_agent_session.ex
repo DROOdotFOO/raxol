@@ -345,25 +345,26 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   # Renders the seed prompt, optionally through the opt-in prompt cache.
   # The rendered prompt is a pure function of the fingerprinted
   # determinants, so the content-hash key is self-invalidating (see the
-  # "Prompt caching" moduledoc section). A `nil` cache renders directly.
-  defp build_prompt(issue, config, attempt) do
-    case agent_prompt_cache(config) do
-      nil ->
-        render_prompt(issue, config, attempt)
+  # "Prompt caching" moduledoc section).
+  defp build_prompt(issue, config, attempt),
+    do: render_cached(agent_prompt_cache(config), issue, config, attempt)
 
-      cache ->
-        key = prompt_cache_key(issue, config, attempt)
+  # No cache configured (the default): render directly, unchanged behaviour.
+  defp render_cached(nil, issue, config, attempt),
+    do: render_prompt(issue, config, attempt)
 
-        case Raxol.Agent.Cache.get(cache, key) do
-          {:ok, cached} ->
-            cached
+  # Cache configured: reuse the memoized render, or compute and store it.
+  defp render_cached(cache, issue, config, attempt) do
+    key = prompt_cache_key(issue, config, attempt)
 
-          :miss ->
-            rendered = render_prompt(issue, config, attempt)
-            ttl = agent_prompt_cache_ttl_ms(config)
-            :ok = Raxol.Agent.Cache.put(cache, key, rendered, ttl)
-            rendered
-        end
+    case Raxol.Agent.Cache.get(cache, key) do
+      {:ok, cached} ->
+        cached
+
+      :miss ->
+        rendered = render_prompt(issue, config, attempt)
+        :ok = Raxol.Agent.Cache.put(cache, key, rendered, agent_prompt_cache_ttl_ms(config))
+        rendered
     end
   end
 
