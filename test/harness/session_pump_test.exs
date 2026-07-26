@@ -1271,6 +1271,93 @@ defmodule Raxol.Harness.SessionPumpTest do
       assert String.ends_with?(out, ViewportAuthority.leave())
     end
 
+    test "a RAISING boot callback restores the primary screen before it re-raises" do
+      # The real boot (Live) matches only {:ok, _}/{:error, _} on
+      # Raxol.start_link, so an unexpected return raises a CaseClauseError
+      # INSIDE boot, and the success arm's DeliveryShim.start_link is a hard
+      # match that can MatchError. Neither is the {:error, _} RETURN the
+      # error branch handles -- without the boot `try`, they strand the
+      # operator in the alternate buffer. The original error must survive.
+      Process.flag(:trap_exit, true)
+      test_pid = self()
+      {:ok, device} = StringIO.open("")
+
+      boot = fn _pump_pid ->
+        {_in, out} = StringIO.contents(device)
+        send(test_pid, {:boot_invoked, out})
+        raise "boot exploded mid-start"
+      end
+
+      {:ok, pump} =
+        SessionPump.start_link(
+          lane:
+            {FakeLane,
+             %{session_id: "s1", pid: start_fake_session(), test: test_pid}},
+          device: device,
+          width: @width,
+          rows: @rows,
+          cadence_opts: [flush_interval_ms: 0],
+          tick_ms: 60_000,
+          notify: test_pid,
+          runtime_boot: boot
+        )
+
+      # ENTER was on the tty when boot ran ...
+      assert_receive {:boot_invoked, at_boot}, 2_000
+      assert String.ends_with?(at_boot, ViewportAuthority.enter())
+
+      # ... the raise propagates verbatim (message + stacktrace preserved,
+      # NOT swallowed or reshaped into the {:error, _} RuntimeError) ...
+      assert_receive {:EXIT, ^pump, {%RuntimeError{message: msg}, _stack}},
+                     2_000
+
+      assert msg == "boot exploded mid-start"
+
+      # ... but the primary screen is restored: LEAVE is the LAST byte,
+      # after the ENTER that opened the alternate buffer.
+      {_in, out} = StringIO.contents(device)
+      assert out =~ ViewportAuthority.enter()
+      assert String.ends_with?(out, ViewportAuthority.leave())
+    end
+
+    test "an UNCOVERED boot return shape restores the primary screen before it raises" do
+      # The real boot's `case` has no clause for a non-{:ok,_}/{:error,_}
+      # return, so a bad shape raises CaseClauseError inside boot -- the
+      # `try` must still restore the primary screen.
+      Process.flag(:trap_exit, true)
+      test_pid = self()
+      {:ok, device} = StringIO.open("")
+
+      boot = fn _pump_pid ->
+        {_in, out} = StringIO.contents(device)
+        send(test_pid, {:boot_invoked, out})
+        :unexpected_shape
+      end
+
+      {:ok, pump} =
+        SessionPump.start_link(
+          lane:
+            {FakeLane,
+             %{session_id: "s1", pid: start_fake_session(), test: test_pid}},
+          device: device,
+          width: @width,
+          rows: @rows,
+          cadence_opts: [flush_interval_ms: 0],
+          tick_ms: 60_000,
+          notify: test_pid,
+          runtime_boot: boot
+        )
+
+      assert_receive {:boot_invoked, at_boot}, 2_000
+      assert String.ends_with?(at_boot, ViewportAuthority.enter())
+
+      assert_receive {:EXIT, ^pump, {%CaseClauseError{}, _stack}}, 2_000
+
+      {_in, out} = StringIO.contents(device)
+      assert out =~ ViewportAuthority.enter()
+      assert String.ends_with?(out, ViewportAuthority.leave())
+    end
+
     test "rewires delivery: batches ride {:harness, _}, resize rides the system path" do
       %{forwarder: forwarder, pump: pump} = new_booted_pump()
 
