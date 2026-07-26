@@ -81,6 +81,10 @@ defmodule Raxol.Symphony.Ssh do
   `command`. Quoted so it survives SSH's transport and the remote shell's
   re-parse. The remote login shell sources host-provisioned credentials; no
   env is forwarded from the orchestrator.
+
+  `workspace` is the (local) workspace path as-is; `HostSpec.workspace_root`
+  is not consulted here. Per-host remote workspace roots are reserved for
+  issue #744.
   """
   @spec remote_bash(binary(), binary()) :: binary()
   def remote_bash(workspace, command) when is_binary(workspace) and is_binary(command) do

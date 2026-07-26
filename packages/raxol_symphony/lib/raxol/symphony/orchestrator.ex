@@ -556,9 +556,21 @@ defmodule Raxol.Symphony.Orchestrator do
   defp rehold_paused_hosts(%State{host_pool: nil} = state), do: state
 
   defp rehold_paused_hosts(%State{paused: paused} = state) do
+    # Slot-precise reservation: each paused entry takes its OWN free slot. Using
+    # the idempotent `hold_host/2` here would under-reserve on a duplicated host
+    # (two entries on `build-1` x2 would rehold only one slot, leaving the other
+    # claimable by a fresh worker). `reserve_host/2` takes a distinct slot per
+    # entry against the fresh all-free pool.
     Enum.reduce(paused, state, fn {_id, entry}, acc ->
-      hold_host(acc, Map.get(entry, :host))
+      reserve_host(acc, Map.get(entry, :host))
     end)
+  end
+
+  defp reserve_host(%State{} = state, nil), do: state
+  defp reserve_host(%State{host_pool: nil} = state, _host), do: state
+
+  defp reserve_host(%State{host_pool: pool} = state, %HostSpec{} = host) do
+    %State{state | host_pool: HostPool.reserve(pool, host)}
   end
 
   defp maybe_start_capture(
@@ -618,7 +630,7 @@ defmodule Raxol.Symphony.Orchestrator do
          issue,
          attempt,
          workspace_path,
-         _host,
+         host,
          parent
        ) do
     case GraphAdapter.from_workflow([]) do
@@ -631,7 +643,8 @@ defmodule Raxol.Symphony.Orchestrator do
             candidate: issue,
             parent_pid: parent,
             attempt: attempt,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            host: host
           )
 
         graph_outcome(WorkflowCompiled.invoke(compiled, state))
@@ -750,7 +763,8 @@ defmodule Raxol.Symphony.Orchestrator do
   defp do_dispatch_parallel_batch(%State{} = state, runner_mod, prepared) do
     issues = Enum.map(prepared, & &1.issue)
     workspaces = Enum.map(prepared, & &1.workspace_path)
-    task = spawn_parallel_batch_task(state, runner_mod, issues, workspaces)
+    hosts = Enum.map(prepared, &Map.get(&1, :host))
+    task = spawn_parallel_batch_task(state, runner_mod, issues, workspaces, hosts)
 
     entry = %{
       issues: prepared,
@@ -784,7 +798,8 @@ defmodule Raxol.Symphony.Orchestrator do
          %State{} = state,
          runner_mod,
          issues,
-         workspaces
+         workspaces,
+         hosts
        ) do
     parent = self()
     config = state.config
@@ -798,6 +813,7 @@ defmodule Raxol.Symphony.Orchestrator do
           runner_mod,
           issues,
           workspaces,
+          hosts,
           max_candidates,
           parent
         )
@@ -810,6 +826,7 @@ defmodule Raxol.Symphony.Orchestrator do
          runner_mod,
          issues,
          workspaces,
+         hosts,
          max_candidates,
          parent
        ) do
@@ -821,6 +838,7 @@ defmodule Raxol.Symphony.Orchestrator do
             runner_module: runner_mod,
             candidates: issues,
             workspaces: workspaces,
+            hosts: hosts,
             parent_pid: parent
           )
 
@@ -1211,7 +1229,8 @@ defmodule Raxol.Symphony.Orchestrator do
           paused_entry.attempt,
           paused_entry.workspace_path,
           paused_entry.resume_token,
-          resume_value
+          resume_value,
+          host
         )
 
       entry =
@@ -1250,7 +1269,8 @@ defmodule Raxol.Symphony.Orchestrator do
          attempt,
          workspace_path,
          resume_token,
-         resume_value
+         resume_value,
+         host
        ) do
     parent = self()
     config = state.config
@@ -1258,12 +1278,15 @@ defmodule Raxol.Symphony.Orchestrator do
     Task.Supervisor.async_nolink(
       task_supervisor(state),
       fn ->
+        # Thread the ORIGINAL host (the slot reserved across the pause) so the
+        # resumed worker runs where it paused, never locally with host: nil.
         runner_opts = [
           parent: parent,
           attempt: attempt,
           workspace_path: workspace_path,
           resume_token: resume_token,
-          resume_value: resume_value
+          resume_value: resume_value,
+          host: host
         ]
 
         run_runner(runner_mod, issue, config, runner_opts)
@@ -1638,13 +1661,17 @@ defmodule Raxol.Symphony.Orchestrator do
 
   defp build_snapshot(%State{} = state) do
     now_ms = System.monotonic_time(:millisecond)
+    # Paused durations key off the wall clock so they survive a restart: a
+    # paused entry's monotonic `paused_at` is meaningless post-restart (it came
+    # from an earlier BEAM), whereas `paused_at_system` is backfilled at boot.
+    now_system_ms = System.system_time(:millisecond)
 
     %{
       generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
       counts: snapshot_counts(state),
       running: Enum.map(state.running, &snapshot_running(&1, now_ms)),
       retrying: Enum.map(state.retry_attempts, &snapshot_retry(&1, now_ms)),
-      paused: Enum.map(state.paused, &snapshot_paused(&1, now_ms)),
+      paused: Enum.map(state.paused, &snapshot_paused(&1, now_system_ms)),
       batches: Enum.map(state.batches, &snapshot_batch(&1, now_ms)),
       hosts: snapshot_hosts(state.host_pool),
       codex_totals: state.codex_totals,
@@ -1695,12 +1722,12 @@ defmodule Raxol.Symphony.Orchestrator do
     }
   end
 
-  defp snapshot_paused({_id, entry}, now_ms) do
+  defp snapshot_paused({_id, entry}, now_system_ms) do
     %{
       issue_id: entry.issue.id,
       issue_identifier: entry.issue.identifier,
       interrupt_reason: entry.interrupt_reason,
-      paused_ms_ago: now_ms - entry.paused_at,
+      paused_ms_ago: max(now_system_ms - Map.get(entry, :paused_at_system, now_system_ms), 0),
       durable?: Map.get(entry, :durable?, false),
       attempt: entry.attempt,
       turn_count: entry.turn_count,

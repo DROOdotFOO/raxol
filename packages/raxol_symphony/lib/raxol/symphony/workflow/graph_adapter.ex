@@ -89,6 +89,8 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
           optional(:config) => Config.t(),
           optional(:candidates) => [Issue.t()],
           optional(:workspaces) => [Path.t()],
+          optional(:hosts) => [term() | nil],
+          optional(:host) => term() | nil,
           optional(:candidate) => Issue.t() | nil,
           optional(:run_result) => :ok | {:error, term()},
           optional(:runner_pause) => {atom(), term()} | nil,
@@ -242,6 +244,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     Enum.at(workspaces, slot) || Map.get(state, :workspace_path, "")
   end
 
+  # Per-slot reserved host (from the orchestrator's host pool), so a fan-out
+  # branch runs on the slot the orchestrator reserved for it. `nil` (no pool,
+  # or a slot past the free-host count) means local execution.
+  defp slot_host(state, slot) do
+    Enum.at(Map.get(state, :hosts, []), slot)
+  end
+
   defp build_slot_dispatch(slot) do
     candidate_key = :"candidate_#{slot}"
     workspace_key = :"workspace_#{slot}"
@@ -257,13 +266,15 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
           parent = Map.get(state, :parent_pid, self())
           attempt = Map.get(state, :attempt) || 1
           workspace = Map.get(state, workspace_key) || Map.get(state, :workspace_path, "")
+          host = slot_host(state, slot)
 
           with {:ok, runner_module} <- Runner.resolve(state.config, runner_opts) do
             result =
               runner_module.run(issue, state.config,
                 parent: parent,
                 attempt: attempt,
-                workspace_path: workspace
+                workspace_path: workspace,
+                host: host
               )
 
             # A branch pause is recorded verbatim as the slot result and
@@ -356,9 +367,11 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     |> maybe_put(:candidates, Keyword.get(opts, :candidates))
     |> maybe_put(:candidate, Keyword.get(opts, :candidate))
     |> maybe_put(:workspaces, Keyword.get(opts, :workspaces))
+    |> maybe_put(:hosts, Keyword.get(opts, :hosts))
     |> maybe_put(:parent_pid, Keyword.get(opts, :parent_pid))
     |> maybe_put(:attempt, Keyword.get(opts, :attempt))
     |> maybe_put(:workspace_path, Keyword.get(opts, :workspace_path))
+    |> maybe_put(:host, Keyword.get(opts, :host))
   end
 
   defp maybe_put(map, _key, nil), do: map
@@ -409,10 +422,11 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     parent = Map.get(state, :parent_pid, self())
     attempt = Map.get(state, :attempt) || 1
     workspace = Map.get(state, :workspace_path, "")
+    host = Map.get(state, :host)
 
     {resume_token, resume_value, state} = consume_pending_resume(state)
 
-    base_opts = [parent: parent, attempt: attempt, workspace_path: workspace]
+    base_opts = [parent: parent, attempt: attempt, workspace_path: workspace, host: host]
     run_opts = maybe_put_resume_opts(base_opts, resume_token, resume_value)
 
     with {:ok, runner_module} <- Runner.resolve(config, runner_opts) do

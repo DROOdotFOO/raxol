@@ -17,6 +17,7 @@ defmodule Raxol.Symphony.OrchestratorPauseHostReconcileTest do
   alias Raxol.Symphony.Orchestrator.PausedSaver.Memory, as: MemorySaver
   alias Raxol.Symphony.Runners.Noop
   alias Raxol.Symphony.Trackers.Memory, as: MemoryTracker
+  alias Raxol.Symphony.Worker.HostSpec
 
   setup do
     start_supervised!({Task.Supervisor, name: Raxol.Symphony.TaskSupervisor})
@@ -59,6 +60,25 @@ defmodule Raxol.Symphony.OrchestratorPauseHostReconcileTest do
   defp issue(id, identifier),
     do: %Issue{id: id, identifier: identifier, title: "T", state: "Todo"}
 
+  # A paused-saver row shaped like a real parked entry, carrying the reserved
+  # host so boot rehold has something to reserve.
+  defp paused_entry(id, identifier, %HostSpec{} = host) do
+    %{
+      issue: issue(id, identifier),
+      attempt: 0,
+      workspace_path: "/tmp/#{identifier}",
+      host: host,
+      interrupt_reason: :awaiting_review,
+      resume_token: "rt-#{id}",
+      paused_at: System.monotonic_time(:millisecond),
+      paused_at_system: System.system_time(:millisecond),
+      last_event: nil,
+      last_message: nil,
+      turn_count: 0,
+      tokens: %{input_tokens: 0, output_tokens: 0, total_tokens: 0}
+    }
+  end
+
   defp start_orchestrator(config, saver, opts) do
     {:ok, pid} =
       start_supervised(
@@ -92,6 +112,32 @@ defmodule Raxol.Symphony.OrchestratorPauseHostReconcileTest do
       true ->
         Process.sleep(10)
         do_wait_until(pid, fun, deadline)
+    end
+  end
+
+  describe "boot rehold reserves a slot per paused entry (duplicated host)" do
+    test "two paused entries on a duplicated host rehold two slots at boot", %{
+      workspace_root: root,
+      saver: {MemorySaver, saver_cfg} = saver
+    } do
+      # Preload two paused runs, both parked on the SAME physical host that the
+      # config lists TWICE (two slots). At boot the orchestrator must rehold
+      # BOTH slots -- the idempotent hold/2 short-circuit would rehold only one,
+      # leaving the second free for a fresh worker to steal.
+      {:ok, host} = HostSpec.normalize("ci@build-1")
+      MemorySaver.put(saver_cfg, "a", paused_entry("a", "DUP-1", host))
+      MemorySaver.put(saver_cfg, "b", paused_entry("b", "DUP-2", host))
+
+      pid =
+        start_orchestrator(
+          config(root, ["ci@build-1", "ci@build-1"], %{}),
+          saver,
+          []
+        )
+
+      snap = Orchestrator.snapshot(pid)
+      assert snap.counts.paused == 2
+      assert snap.hosts == %{total: 2, free: 0, busy: 2}
     end
   end
 

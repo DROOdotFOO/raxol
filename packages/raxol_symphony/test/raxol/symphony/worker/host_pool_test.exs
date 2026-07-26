@@ -196,4 +196,36 @@ defmodule Raxol.Symphony.Worker.HostPoolTest do
       assert HostPool.hold(nil, %HostSpec{host: "x"}) == nil
     end
   end
+
+  describe "reserve/2 (slot-precise boot rehold)" do
+    test "N reserves on a duplicated host take N distinct slots" do
+      # Two paused entries on a host that appears twice in the config must
+      # rehold TWO slots at boot. `hold/2` would short-circuit on the first
+      # busy match and under-reserve; `reserve/2` takes a distinct free slot.
+      dup = %HostSpec{host: "build-1", user: "ci"}
+      pool = HostPool.new([dup, dup])
+
+      pool = HostPool.reserve(pool, dup)
+      assert HostPool.busy_count(pool) == 1
+
+      pool = HostPool.reserve(pool, dup)
+      assert HostPool.busy_count(pool) == 2
+      # Both slots reserved -> no fresh worker can claim the physical host.
+      assert HostPool.claim(pool) == :none_free
+    end
+
+    test "returns the pool unchanged when no free matching slot exists" do
+      dup = %HostSpec{host: "build-1", user: "ci"}
+      pool = HostPool.new([dup, dup])
+      pool = pool |> HostPool.reserve(dup) |> HostPool.reserve(dup)
+
+      assert HostPool.reserve(pool, dup) == pool
+    end
+
+    test "is a no-op for an absent host or a nil pool" do
+      pool = HostPool.new(specs(1))
+      assert HostPool.reserve(pool, %HostSpec{host: "gone"}) == pool
+      assert HostPool.reserve(nil, %HostSpec{host: "x"}) == nil
+    end
+  end
 end

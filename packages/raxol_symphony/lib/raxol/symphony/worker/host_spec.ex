@@ -20,6 +20,12 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   (`Raxol.Symphony.Config.Schema`) and pool construction
   (`Raxol.Symphony.Worker.HostPool`). Only the transport (issue #743) turns
   a spec into an actual `ssh` invocation; this module is pure data.
+
+  Note: `workspace_root` is validated and carried here but is currently INERT.
+  The SSH transport (`Raxol.Symphony.SSH` / `Session`) still `cd`s into the
+  local workspace path on the remote host; per-host remote workspace roots are
+  reserved for issue #744. The field is retained (not removed) so config that
+  already declares it stays valid.
   """
 
   @enforce_keys [:host]

@@ -143,6 +143,26 @@ defmodule Raxol.Symphony.Worker.HostPool do
     end
   end
 
+  @doc """
+  Reserve one FREE slot matching `spec`, marking it busy. Unlike `hold/2` this
+  is NOT idempotent on an already-busy match: every call takes a *distinct*
+  free slot. Folding N paused entries that share a duplicated `HostSpec.id/1`
+  therefore reserves N slots (one per entry), which `hold/2` cannot do because
+  it short-circuits on the first busy match. Returns the pool unchanged when no
+  free matching slot exists, and `nil` for a nil pool.
+  """
+  @spec reserve(t() | nil, HostSpec.t()) :: t() | nil
+  def reserve(nil, %HostSpec{}), do: nil
+
+  def reserve(%__MODULE__{slots: slots} = pool, %HostSpec{} = spec) do
+    id = HostSpec.id(spec)
+
+    case Enum.find_index(slots, &(not &1.busy? and HostSpec.id(&1.spec) == id)) do
+      nil -> pool
+      idx -> mark_at(pool, idx, true)
+    end
+  end
+
   @doc "Count of free slots."
   @spec free_count(t()) :: non_neg_integer()
   def free_count(%__MODULE__{slots: slots}),
