@@ -13,6 +13,11 @@ defmodule Raxol.Symphony.PromptBuilder do
   Fallback: when the prompt body is empty/blank, returns the SPEC's default
   `"You are working on an issue from Linear."` prompt instead of failing.
 
+  The parsed template AST is memoized in `:persistent_term` keyed by the
+  template string (a pure function of it), so a template is parsed once and
+  every subsequent render across both runners reuses the AST. Rendering is
+  never memoized (it varies per issue/attempt).
+
   Error returns:
 
   - `{:error, :solid_not_loaded}` -- consumer omitted `:solid`.
@@ -50,10 +55,32 @@ defmodule Raxol.Symphony.PromptBuilder do
     end
   end
 
+  # The parsed Liquid AST is a pure function of the template string, so it
+  # is memoized in `:persistent_term` keyed by the template itself. Both
+  # runners re-render the SAME `WORKFLOW.md` template on every fresh run of
+  # every issue; without this each run re-parses it. Templates are few and
+  # stable (one per `WORKFLOW.md`), so the read-often/write-rarely profile
+  # fits `:persistent_term` (each distinct template is parsed once; an
+  # edited template is a new key -> a fresh parse, and the superseded entry
+  # is harmless dead weight — not evicted, since distinct templates are few).
+  # The template string is the key, so there is no hash-collision risk.
+  # Parse errors are not memoized (cheap, rare, and must stay observable).
   defp parse_template(template) do
-    case Solid.parse(template) do
-      {:ok, parsed} -> {:ok, parsed}
-      {:error, error} -> {:error, {:template_parse_error, error}}
+    key = {__MODULE__, :parsed_template, template}
+
+    case :persistent_term.get(key, :miss) do
+      :miss ->
+        case Solid.parse(template) do
+          {:ok, parsed} ->
+            :persistent_term.put(key, parsed)
+            {:ok, parsed}
+
+          {:error, error} ->
+            {:error, {:template_parse_error, error}}
+        end
+
+      parsed ->
+        {:ok, parsed}
     end
   end
 
