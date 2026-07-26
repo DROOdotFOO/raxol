@@ -14,6 +14,12 @@ defmodule Raxol.Gateway.Adapter do
     * `send_message/3` -- deliver a rendered outbound message to a route.
 
   `Raxol.Gateway.Adapter.InMemory` is a reference implementation.
+
+  ## Stability
+
+  Frozen (ADR-0023): these five callbacks are the stable contract every
+  platform adapter builds against. Additions must be optional callbacks;
+  existing callbacks do not change shape.
   """
 
   alias Raxol.Gateway.Route

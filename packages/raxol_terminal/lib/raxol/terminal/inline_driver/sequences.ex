@@ -1,12 +1,11 @@
 defmodule Raxol.Terminal.InlineDriver.Sequences do
   @moduledoc """
   Pure ANSI byte-sequence constants + builders for the inline driver
-  profile (unit T2d, `docs/proposals/in-flight/harness-ui-roadmap.md`).
+  profile (unit T2d).
 
   Kept separate from the GenServer (`Raxol.Terminal.InlineDriver`) so the
-  Tier A suite (`harness-ui-testing/03-lifecycle.md`) can assert on exact
-  bytes without a process, a device, or the OS tty -- this module has no
-  side effects at all.
+  Tier A suite can assert on exact bytes without a process, a device, or
+  the OS tty -- this module has no side effects at all.
 
   ## The canonical teardown order (pinned, load-bearing)
 

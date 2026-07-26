@@ -55,7 +55,8 @@ defmodule Raxol.Agent.Backend.HTTP do
     # unparseable body or an empty length-truncated turn is an honest error,
     # NOT assistant prose (the "cannot lie at the wire boundary" rule). The
     # with-chain surfaces either the transport error or the parse error.
-    with {:ok, response_body} <- do_request(url, headers, body, timeout, plugins),
+    with {:ok, response_body} <-
+           do_request(url, headers, body, timeout, plugins),
          {:ok, parsed} <- parse_response(provider, response_body) do
       {:ok, parsed}
     end
@@ -80,6 +81,149 @@ defmodule Raxol.Agent.Backend.HTTP do
   @impl true
   def available? do
     Code.ensure_loaded?(Req)
+  end
+
+  @doc """
+  Cheap credential check via the provider's model-list endpoint.
+
+  Unlike a completion, listing models costs no tokens, so this is the
+  preferred `/login` validation for the hosted providers. Returns:
+
+    * `:valid`                    — a 2xx (authorized),
+    * `{:rejected, status}`       — 401/403 (bad key),
+    * `{:reachable_error, status}`— reachable but another status,
+    * `:unreachable`              — transport failure,
+    * `:unsupported`             — no known model-list endpoint for this
+      provider (the caller should fall back to a completion ping).
+  """
+  @spec check_auth(keyword()) ::
+          :valid
+          | {:rejected, non_neg_integer()}
+          | {:reachable_error, non_neg_integer()}
+          | :unreachable
+          | :unsupported
+  def check_auth(opts) do
+    if available?() do
+      opts |> detect_provider() |> models_request(opts) |> run_auth_check(opts)
+    else
+      :unsupported
+    end
+  end
+
+  defp run_auth_check(:unsupported, _opts), do: :unsupported
+
+  defp run_auth_check({url, headers}, opts) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+
+    req = Req.new(url: url, headers: headers, receive_timeout: timeout)
+
+    case Req.get(req) do
+      {:ok, %{status: status}} -> interpret_models_status(status)
+      {:error, _reason} -> :unreachable
+    end
+  rescue
+    _ -> :unreachable
+  end
+
+  @doc false
+  def interpret_models_status(status) when status in 200..299, do: :valid
+
+  def interpret_models_status(status) when status in [401, 403],
+    do: {:rejected, status}
+
+  def interpret_models_status(status) when is_integer(status),
+    do: {:reachable_error, status}
+
+  @doc """
+  List a provider's available model ids via the SAME model-list endpoint
+  `check_auth/1` uses (so it costs no tokens and reuses the auth plumbing).
+
+  Returns `{:ok, ids}` (a possibly-empty list of model-id strings),
+  `{:error, reason}` (transport failure or non-2xx), or `:unsupported` (no
+  known model-list endpoint for this provider — the caller should fall back
+  to typing a model name).
+  """
+  @spec list_models(keyword()) ::
+          {:ok, [String.t()]} | {:error, term()} | :unsupported
+  def list_models(opts) do
+    if available?() do
+      provider = detect_provider(opts)
+      provider |> models_request(opts) |> fetch_models(provider, opts)
+    else
+      :unsupported
+    end
+  end
+
+  defp fetch_models(:unsupported, _provider, _opts), do: :unsupported
+
+  defp fetch_models({url, headers}, provider, opts) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    req = Req.new(url: url, headers: headers, receive_timeout: timeout)
+
+    case Req.get(req) do
+      {:ok, %{status: status, body: body}} when status in 200..299 ->
+        {:ok, parse_models(provider, body)}
+
+      {:ok, %{status: status}} ->
+        {:error, {:http_error, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    _ -> {:error, :request_failed}
+  end
+
+  @doc false
+  # Extract model-id strings from a model-list response body. Public for
+  # testing the two response shapes without a live endpoint.
+  # Ollama `/api/tags`: `%{"models" => [%{"name" => id}, ...]}`.
+  def parse_models(:ollama, %{"models" => models}) when is_list(models),
+    do: for(%{"name" => name} <- models, is_binary(name), do: name)
+
+  # OpenAI-compatible `/v1/models`: `%{"data" => [%{"id" => id}, ...]}`.
+  def parse_models(_provider, %{"data" => data}) when is_list(data),
+    do: for(%{"id" => id} <- data, is_binary(id), do: id)
+
+  def parse_models(_provider, _body), do: []
+
+  defp models_request(:anthropic, opts) do
+    case Keyword.get(opts, :api_key) do
+      key when is_binary(key) ->
+        base = Keyword.get(opts, :base_url, "https://api.anthropic.com")
+
+        {"#{base}/v1/models",
+         [{"x-api-key", key}, {"anthropic-version", @anthropic_api_version}]}
+
+      _no_key ->
+        :unsupported
+    end
+  end
+
+  defp models_request(:openai, opts),
+    do: bearer_models_request(opts, "https://api.openai.com")
+
+  defp models_request(:kimi, opts),
+    do: bearer_models_request(opts, "https://api.moonshot.ai")
+
+  defp models_request(:ollama, opts) do
+    base =
+      Keyword.get(opts, :base_url, "http://localhost:#{@default_ollama_port}")
+
+    {"#{base}/api/tags", []}
+  end
+
+  defp models_request(_provider, _opts), do: :unsupported
+
+  defp bearer_models_request(opts, default_base) do
+    case Keyword.get(opts, :api_key) do
+      key when is_binary(key) ->
+        base = Keyword.get(opts, :base_url, default_base)
+        {"#{base}/v1/models", [{"authorization", "Bearer #{key}"}]}
+
+      _no_key ->
+        :unsupported
+    end
   end
 
   @impl true
@@ -259,6 +403,21 @@ defmodule Raxol.Agent.Backend.HTTP do
   end
 
   def parse_sse(raw, provider) when provider in [:anthropic, :openai, :kimi] do
+    # Canonicalize CRLF line endings before framing. Some providers (or a
+    # proxy in front of them) speak `\r\n`: left alone, the double-newline
+    # record separator never matches a literal "\r\n\r\n" (no `"\n\n"`
+    # substring exists inside it), so the stream never frames a single
+    # event and just buffers forever -- the answer never surfaces. And when
+    # a boundary DOES happen to land such that a `\r` survives on its own
+    # line (e.g. a `"data: [DONE]\r"` line), the `"data: [DONE]"` exact
+    # match below misses it, falls through to `Jason.decode("[DONE]\r")`,
+    # and seals a bogus "unparseable response chunk" ⚠ marker on every
+    # single turn from that provider. Replacing every `\r\n` pair with `\n`
+    # up front fixes both: the separator normalizes to `"\n\n"`, and no
+    # line keeps a trailing `\r`. A lone `\r` not yet paired with its `\n`
+    # (split across a chunk boundary) is left untouched here and completes
+    # correctly once the rest of the pair arrives in the next chunk.
+    raw = String.replace(raw, "\r\n", "\n")
     parts = String.split(raw, "\n\n")
 
     case parts do
@@ -349,9 +508,9 @@ defmodule Raxol.Agent.Backend.HTTP do
     tool_calls = msg["tool_calls"]
 
     []
-    |> maybe_append(reasoning && {:reasoning_delta, reasoning})
-    |> maybe_append(text != "" && {:text_delta, text})
-    |> maybe_append(
+    |> maybe_prepend(reasoning && {:reasoning_delta, reasoning})
+    |> maybe_prepend(text != "" && {:text_delta, text})
+    |> maybe_prepend(
       # RAW tool-call fragments -- the stream accumulates them by index
       # (`merge_tool_call_frags/2`), because OpenAI-compatible providers
       # (incl. LongCat) stream `delta.tool_calls[]` incrementally: the id +
@@ -360,9 +519,11 @@ defmodule Raxol.Agent.Backend.HTTP do
       # the whole array per chunk + last-wins loses the name (the final
       # fragment is args-only). A single full-message tool_calls array is just
       # the degenerate one-fragment case, so this handles both.
-      is_list(tool_calls) and tool_calls != [] and {:tool_call_delta, tool_calls}
+      is_list(tool_calls) and tool_calls != [] and
+        {:tool_call_delta, tool_calls}
     )
-    |> maybe_append(finish == "length" && {:marker, truncation_marker(choice)})
+    |> maybe_prepend(finish == "length" && {:marker, truncation_marker(choice)})
+    |> Enum.reverse()
   end
 
   # A trailing usage-only chunk (some providers emit `{"usage": {...}}` with an
@@ -374,8 +535,10 @@ defmodule Raxol.Agent.Backend.HTTP do
   # a fidelity gap -- skipped (never dumped). Only a JSON DECODE failure marks.
   defp openai_stream_events(_other), do: []
 
-  defp maybe_append(events, falsy) when falsy in [nil, false], do: events
-  defp maybe_append(events, event), do: events ++ [event]
+  # Prepend (O(1)) each present event, so the caller reverses ONCE to restore
+  # emission order -- rather than `events ++ [event]` per step.
+  defp maybe_prepend(events, falsy) when falsy in [nil, false], do: events
+  defp maybe_prepend(events, event), do: [event | events]
 
   # -- Request building -------------------------------------------------------
 
@@ -557,7 +720,11 @@ defmodule Raxol.Agent.Backend.HTTP do
        content: choice_text(msg),
        tool_calls: parse_openai_tool_calls(tool_calls),
        usage: Map.get(body, "usage", %{}),
-       metadata: %{backend: :http, provider: :openai, model: Map.get(body, "model")}
+       metadata: %{
+         backend: :http,
+         provider: :openai,
+         model: Map.get(body, "model")
+       }
      }
      |> put_reasoning(choice_reasoning(msg))}
   end
@@ -575,18 +742,16 @@ defmodule Raxol.Agent.Backend.HTTP do
     reasoning = choice_reasoning(msg)
     finish = finish_reason(choice)
 
-    cond do
-      finish == "length" and blank?(content) ->
-        {:error, truncation_marker(body)}
-
-      true ->
-        {:ok,
-         %{
-           content: content,
-           usage: Map.get(body, "usage", %{}),
-           metadata: openai_metadata(body, finish)
-         }
-         |> put_reasoning(reasoning)}
+    if finish == "length" and blank?(content) do
+      {:error, truncation_marker(body)}
+    else
+      {:ok,
+       %{
+         content: content,
+         usage: Map.get(body, "usage", %{}),
+         metadata: openai_metadata(body, finish)
+       }
+       |> put_reasoning(reasoning)}
     end
   end
 
@@ -620,47 +785,57 @@ defmodule Raxol.Agent.Backend.HTTP do
   # the identical shape -- a tool call must round-trip the stream unchanged.
   defp parse_openai_tool_calls(tool_calls) when is_list(tool_calls) do
     Enum.map(tool_calls, fn tc ->
-      args =
-        case get_in(tc, ["function", "arguments"]) do
-          s when is_binary(s) ->
-            case Jason.decode(s) do
-              {:ok, map} -> map
-              _ -> %{}
-            end
-
-          map when is_map(map) ->
-            map
-
-          _ ->
-            %{}
-        end
-
-      %{
-        "id" => tc["id"],
-        "name" => get_in(tc, ["function", "name"]),
-        "arguments" => args
-      }
+      build_tool_call(
+        tc["id"],
+        get_in(tc, ["function", "name"]),
+        get_in(tc, ["function", "arguments"])
+      )
     end)
   end
 
-  # Merge streamed tool-call fragments into the accumulator, keyed by the
-  # provider's `index` (falling back to list position for a full-message array
-  # with no index). `id`/`name` are taken from the first fragment that carries
-  # them; `function.arguments` string fragments are concatenated (a whole JSON
-  # string in one fragment is just the length-1 case). A fragment carrying
-  # `arguments` as an already-parsed map overrides the string buffer.
+  # Build the downstream tool-call contract from id/name/raw arguments, shared
+  # by the blocking (`parse_openai_tool_calls`) and streaming
+  # (`finalize_tool_call`) paths so BOTH surface the identical honesty marker.
+  # Undecodable arguments never silently become `%{}`: `arguments` stays
+  # map-shaped `%{}` (a consumer expecting a map is not broken) but an
+  # `arguments_error` rides alongside, so a tool is never executed -- or
+  # reported unexecuted -- under wrong/empty args with no trace.
+  defp build_tool_call(id, name, raw_args) do
+    base = %{"id" => id, "name" => name}
+
+    case decode_tool_args(raw_args) do
+      {:ok, args} ->
+        Map.put(base, "arguments", args)
+
+      {:error, marker} ->
+        base
+        |> Map.put("arguments", %{})
+        |> Map.put("arguments_error", marker)
+    end
+  end
+
+  # Merge streamed tool-call fragments into the accumulator. Correlation
+  # priority: the provider's own `index` (unchanged) > a matching `id`
+  # already present in the accumulator (a same-call continuation from a
+  # no-index provider that still repeats the id) > a FRESH key strictly
+  # past every key already assigned (a new, complete fragment from a
+  # no-index provider — see `resolve_tool_call_index/3`). `id`/`name` are
+  # taken from the first fragment that carries them; `function.arguments`
+  # string fragments are concatenated (a whole JSON string in one fragment
+  # is just the length-1 case). A fragment carrying `arguments` as an
+  # already-parsed map overrides the string buffer.
   defp merge_tool_call_frags(acc, frags) when is_list(frags) do
     frags
     |> Enum.with_index()
     |> Enum.reduce(acc, fn {frag, pos}, acc ->
-      idx = frag["index"] || pos
+      idx = resolve_tool_call_index(acc, frag, pos)
       cur = Map.get(acc, idx, %{"id" => nil, "name" => nil, "args" => ""})
       fun = frag["function"] || %{}
 
       args =
         case fun["arguments"] do
           s when is_binary(s) ->
-            (if is_binary(cur["args"]), do: cur["args"], else: "") <> s
+            if(is_binary(cur["args"]), do: cur["args"], else: "") <> s
 
           m when is_map(m) ->
             m
@@ -679,6 +854,43 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   defp merge_tool_call_frags(acc, _frags), do: acc
 
+  # A provider that never sends `index` has no stable key across chunks: the
+  # position within any ONE `frags` batch (`pos`) always restarts at 0, so two
+  # SEPARATE complete fragments arriving in two different chunks both resolved
+  # to key 0 and the second silently overwrote (cross-merged into) the first.
+  # Falls back to `id` (a same-call continuation that still repeats it lands
+  # back on its own slot) and finally to a key strictly greater than every
+  # key already in the accumulator — new and distinct no matter how many
+  # earlier, unrelated calls have already been assigned.
+  # Only a non-negative INTEGER index is a usable key: it is provider
+  # (network) controlled, and a non-integer value (string/float/map from a
+  # buggy or hostile OpenAI-compatible endpoint) used verbatim as a key
+  # later crashes `next_tool_call_index/1` with an ArithmeticError
+  # (`<non-number> + 1`), killing the whole streaming turn. Anything else
+  # falls through to id-based / positional resolution.
+  defp resolve_tool_call_index(_acc, %{"index" => index}, _pos)
+       when is_integer(index) and index >= 0,
+       do: index
+
+  defp resolve_tool_call_index(acc, %{"id" => id}, pos) when not is_nil(id) do
+    case find_tool_call_index_by_id(acc, id) do
+      nil -> next_tool_call_index(acc) + pos
+      existing -> existing
+    end
+  end
+
+  defp resolve_tool_call_index(acc, _frag, pos),
+    do: next_tool_call_index(acc) + pos
+
+  defp find_tool_call_index_by_id(acc, id) do
+    Enum.find_value(acc, fn
+      {idx, %{"id" => ^id}} -> idx
+      _ -> nil
+    end)
+  end
+
+  defp next_tool_call_index(acc), do: Enum.max(Map.keys(acc), fn -> -1 end) + 1
+
   # Finalize the accumulator to the downstream tool_calls contract (index
   # order, arguments JSON-decoded), matching `parse_openai_tool_calls/1`.
   defp finalize_tool_calls(acc) when map_size(acc) == 0, do: []
@@ -686,28 +898,33 @@ defmodule Raxol.Agent.Backend.HTTP do
   defp finalize_tool_calls(acc) do
     acc
     |> Enum.sort_by(fn {idx, _} -> idx end)
-    |> Enum.map(fn {_idx, tc} ->
-      args =
-        case tc["args"] do
-          "" ->
-            %{}
-
-          s when is_binary(s) ->
-            case Jason.decode(s) do
-              {:ok, map} -> map
-              _ -> %{}
-            end
-
-          m when is_map(m) ->
-            m
-
-          _ ->
-            %{}
-        end
-
-      %{"id" => tc["id"], "name" => tc["name"], "arguments" => args}
-    end)
+    |> Enum.map(fn {_idx, tc} -> finalize_tool_call(tc) end)
   end
+
+  # The accumulated `args` string can fail to decode -- a real fidelity gap,
+  # not a zero-arg call. `build_tool_call/3` attaches the honest
+  # `arguments_error` marker (never leaking the raw text, matching
+  # `unparseable_marker/2`'s keys-only discipline), identically to the
+  # blocking path.
+  defp finalize_tool_call(tc) do
+    build_tool_call(tc["id"], tc["name"], tc["args"])
+  end
+
+  defp decode_tool_args(""), do: {:ok, %{}}
+  defp decode_tool_args(nil), do: {:ok, %{}}
+
+  defp decode_tool_args(s) when is_binary(s) do
+    case Jason.decode(s) do
+      {:ok, map} when is_map(map) ->
+        {:ok, map}
+
+      _ ->
+        {:error, "⚠ undecodable tool call arguments (#{byte_size(s)} bytes)"}
+    end
+  end
+
+  defp decode_tool_args(m) when is_map(m), do: {:ok, m}
+  defp decode_tool_args(_other), do: {:ok, %{}}
 
   @doc false
   # Test seam: fold a sequence of streamed tool-call fragment batches (one
@@ -735,8 +952,12 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   # The separate reasoning channel: `reasoning` (OpenRouter) or
   # `reasoning_content` (DeepSeek / LongCat); nil when absent/blank.
-  defp choice_reasoning(%{"reasoning_content" => t}) when is_binary(t) and t != "", do: t
-  defp choice_reasoning(%{"reasoning" => t}) when is_binary(t) and t != "", do: t
+  defp choice_reasoning(%{"reasoning_content" => t})
+       when is_binary(t) and t != "", do: t
+
+  defp choice_reasoning(%{"reasoning" => t}) when is_binary(t) and t != "",
+    do: t
+
   defp choice_reasoning(_msg), do: nil
 
   # Tolerate the wire-key variant: LongCat sends `finishreason` (no
@@ -771,7 +992,9 @@ defmodule Raxol.Agent.Backend.HTTP do
   end
 
   defp put_reasoning(response, nil), do: response
-  defp put_reasoning(response, reasoning), do: Map.put(response, :reasoning, reasoning)
+
+  defp put_reasoning(response, reasoning),
+    do: Map.put(response, :reasoning, reasoning)
 
   defp blank?(s) when is_binary(s), do: String.trim(s) == ""
   defp blank?(_), do: false

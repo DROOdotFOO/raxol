@@ -6,6 +6,8 @@ defmodule Raxol.Terminal.Buffer.Cursor do
 
   alias Raxol.Terminal.ScreenBuffer
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   @type cursor_style :: :block | :underline | :bar
 
   @type t :: %__MODULE__{
@@ -350,8 +352,8 @@ defmodule Raxol.Terminal.Buffer.Cursor do
       {10, 5}
   """
   def move_to(buffer, {x, y}) do
-    x = max(0, min(buffer.width - 1, x))
-    y = max(0, min(buffer.height - 1, y))
+    x = clamp_to_bounds(x, buffer.width)
+    y = clamp_to_bounds(y, buffer.height)
     set_position(buffer, x, y)
   end
 

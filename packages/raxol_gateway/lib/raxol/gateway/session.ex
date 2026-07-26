@@ -42,13 +42,21 @@ defmodule Raxol.Gateway.Session do
   def route(server), do: GenServer.call(server, :route)
 
   @doc "The session's stable conversation id."
-  @spec conversation_id(GenServer.server()) :: String.t()
-  def conversation_id(server), do: GenServer.call(server, :conversation_id)
+  @spec conversation_id(GenServer.server(), timeout()) :: String.t()
+  def conversation_id(server, timeout \\ 5_000),
+    do: GenServer.call(server, :conversation_id, timeout)
 
   @impl true
   def init(opts) do
     route = Keyword.fetch!(opts, :route)
     {handler_mod, handler_opts} = Keyword.fetch!(opts, :handler)
+
+    # Trap exits so terminate/2 -- and with it the handler's optional
+    # terminate -- also runs on supervisor-driven stops: the router's
+    # stop_session goes through DynamicSupervisor.terminate_child, which
+    # delivers exit(:shutdown) and would otherwise kill the session with no
+    # teardown at all.
+    Process.flag(:trap_exit, true)
 
     case handler_mod.init(route, handler_opts) do
       {:ok, handler_state} ->
@@ -60,7 +68,8 @@ defmodule Raxol.Gateway.Session do
           idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
           conversation_id: Keyword.get(opts, :conversation_id) || Route.key(route),
           log: Keyword.get(opts, :log),
-          timer: nil
+          timer: nil,
+          idle_ref: nil
         }
 
         {:ok, arm_timer(state)}
@@ -90,8 +99,36 @@ defmodule Raxol.Gateway.Session do
   end
 
   @impl true
-  def handle_info(:idle_timeout, state), do: {:stop, :normal, state}
+  def handle_info({:idle_timeout, ref}, %{idle_ref: ref} = state),
+    do: {:stop, :normal, state}
+
+  # A stale idle message: the timer fired while a long handler turn blocked the
+  # mailbox and arm_timer/1 has since re-armed. Cancelling alone cannot prevent
+  # this (the message may already be queued), so only the current ref stops.
+  def handle_info({:idle_timeout, _stale}, state), do: {:noreply, state}
+
+  # Trapping exits means a crashed handler-owned linked process (e.g. the
+  # Handler.Lifecycle per-chat app) arrives here instead of killing the
+  # session outright; stop with the same reason so the chat is not a zombie.
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+  def handle_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # Runs on clean stops (idle timeout, router stop_session, supervisor
+  # shutdown, explicit stop); only a brutal kill skips it. A handler owning
+  # linked processes needs this: the session's :normal exit does not
+  # propagate over links, so without teardown they would leak.
+  @impl true
+  def terminate(reason, state) do
+    if function_exported?(state.handler_mod, :terminate, 2) do
+      # A raising teardown must not turn a clean stop into a crash report.
+      Raxol.Core.ErrorHandling.safe_call(fn ->
+        state.handler_mod.terminate(reason, state.handler_state)
+      end)
+    end
+
+    :ok
+  end
 
   defp record(%{log: nil}, _item), do: :ok
 
@@ -102,6 +139,8 @@ defmodule Raxol.Gateway.Session do
 
   defp arm_timer(state) do
     if state.timer, do: Process.cancel_timer(state.timer)
-    %{state | timer: Process.send_after(self(), :idle_timeout, state.idle_timeout)}
+    ref = make_ref()
+    timer = Process.send_after(self(), {:idle_timeout, ref}, state.idle_timeout)
+    %{state | timer: timer, idle_ref: ref}
   end
 end

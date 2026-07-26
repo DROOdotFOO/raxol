@@ -53,7 +53,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
             height: non_neg_integer(),
             debug_mode: boolean(),
             plugin_manager: pid() | nil,
-            command_registry_table: atom() | nil,
+            command_registry_table: :ets.table() | nil,
             initial_commands: list(),
             dispatcher_pid: pid() | nil,
             driver_pid: pid() | nil,
@@ -108,11 +108,13 @@ defmodule Raxol.Core.Runtime.Lifecycle do
       when is_atom(app_module) and is_list(options) do
     environment = Keyword.get(options, :environment, :terminal)
 
-    # :liveview/:agent/:harness are multi-instance profiles reached by pid
-    # (the harness SessionPump holds the Lifecycle pid); registering a
-    # per-app_module global name would make a second session collide.
+    # :liveview/:agent/:harness/:telegram/:gateway are multi-instance
+    # profiles reached by pid (e.g. the harness SessionPump holds the
+    # Lifecycle pid; two concurrent chats/sessions of the same app run
+    # side by side): registering a per-app_module global name would make a
+    # second session collide.
     name_option =
-      if environment in [:liveview, :agent, :harness] do
+      if environment in [:liveview, :agent, :harness, :telegram, :gateway] do
         Keyword.get(options, :name)
       else
         Keyword.get(options, :name, derive_process_name(app_module))

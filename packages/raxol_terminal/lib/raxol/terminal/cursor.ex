@@ -5,6 +5,8 @@ defmodule Raxol.Terminal.Cursor do
   and managing cursor state.
   """
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   defstruct [:position, :shape, :visible, :saved_position]
 
   @type t :: %__MODULE__{
@@ -85,7 +87,7 @@ defmodule Raxol.Terminal.Cursor do
   """
   def move_to_column(emulator, col) do
     {_, y} = emulator.cursor.position
-    new_x = max(0, min(emulator.width - 1, col))
+    new_x = clamp_to_bounds(col, emulator.width)
     %{emulator | cursor: %{emulator.cursor | position: {new_x, y}}}
   end
 
@@ -93,14 +95,14 @@ defmodule Raxol.Terminal.Cursor do
   Moves the cursor to the specified position.
   """
   def move_to(%{cursor: nil} = emulator, {row, col}) do
-    new_x = max(0, min(emulator.width - 1, col))
-    new_y = max(0, min(emulator.height - 1, row))
+    new_x = clamp_to_bounds(col, emulator.width)
+    new_y = clamp_to_bounds(row, emulator.height)
     %{emulator | cursor: %{position: {new_x, new_y}, row: new_y, col: new_x}}
   end
 
   def move_to(emulator, {row, col}) do
-    new_x = max(0, min(emulator.width - 1, col))
-    new_y = max(0, min(emulator.height - 1, row))
+    new_x = clamp_to_bounds(col, emulator.width)
+    new_y = clamp_to_bounds(row, emulator.height)
     %{emulator | cursor: %{emulator.cursor | position: {new_x, new_y}}}
   end
 
@@ -158,8 +160,8 @@ defmodule Raxol.Terminal.Cursor do
   Moves the cursor to the specified position, taking into account the screen width and height.
   """
   def move_to(cursor, {x, y}, width, height) do
-    x = max(0, min(x, width - 1))
-    y = max(0, min(y, height - 1))
+    x = clamp_to_bounds(x, width)
+    y = clamp_to_bounds(y, height)
     %{cursor | position: {x, y}}
   end
 
@@ -191,8 +193,8 @@ defmodule Raxol.Terminal.Cursor do
   """
   def set_position(%{cursor: nil} = emulator, {col, row}) do
     # Create a cursor if it doesn't exist
-    new_x = max(0, min(emulator.width - 1, col))
-    new_y = max(0, min(emulator.height - 1, row))
+    new_x = clamp_to_bounds(col, emulator.width)
+    new_y = clamp_to_bounds(row, emulator.height)
     %{emulator | cursor: %{position: {new_x, new_y}, row: new_y, col: new_x}}
   end
 

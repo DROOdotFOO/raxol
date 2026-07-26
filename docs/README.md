@@ -5,7 +5,10 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 ## Start Here
 
 - [Why OTP](WHY_OTP.md): why the BEAM runtime changes what's possible
+- [Why Raxol](WHY_RAXOL.md): how the runtime compares to Python agent stacks (Hermes, Omnigent)
+- [Philosophy](PHILOSOPHY.md): the one law behind every rendering decision -- what is shown must be a provable projection of what is, and the wrong thing must be unrepresentable
 - [Quickstart](getting-started/QUICKSTART.md): build your first terminal app
+- [Build Your First Agent](getting-started/BUILD_AN_AGENT.md): tools, memory, and a learning loop
 - [Core Concepts](getting-started/CORE_CONCEPTS.md): architecture and design
 - [Component Gallery](getting-started/COMPONENT_GALLERY.md): all Components with examples
 
@@ -40,12 +43,15 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 
 ## Guides
 
+- [Surfaces](guides/SURFACES.md): write once, render to every surface
+- [Skill Authoring](guides/SKILL_AUTHORING.md): write a reusable `SKILL.md`
 - [Custom Components](cookbook/CUSTOM_COMPONENTS.md)
 
 ## Reference
 
 - [Architecture](core/ARCHITECTURE.md)
 - [Buffer API](core/BUFFER_API.md)
+- [Tool/Action Catalog](reference/TOOL_CATALOG.md): every LLM-callable tool, generated
 - [Architecture Decisions](adr/)
 - [Plugin Development](plugins/)
 - [Benchmarks](bench/)
@@ -56,7 +62,7 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 ## Examples
 
 - [Examples Learning Path](../examples/README.md): runnable examples, beginner to advanced
-- `mix raxol.playground`: interactive Component catalog with 30 demos
+- `mix raxol.playground`: interactive Component catalog with 40 demos
 
 ## Resources
 

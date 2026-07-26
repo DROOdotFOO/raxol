@@ -8,7 +8,7 @@ defmodule Raxol.UI.Theming.Palette do
 
   ## Why this module exists
 
-  A full-codebase audit (`docs/proposals/in-flight/palette-inventory.md`)
+  A full-codebase audit (`docs/proposals/palette-inventory.md`)
   found the same conceptual color defined independently, with DIFFERENT
   values, in many places -- most strikingly at least four conflicting "the
   standard ANSI 16 colors" conventions (6+ literal copies) and at least five

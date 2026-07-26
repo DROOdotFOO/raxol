@@ -1,9 +1,8 @@
 defmodule Raxol.Agent.Red.U5InterruptRedTest do
   @moduledoc """
   U5-R — permanent **failing-first** contour reds for U5 "Interrupt = staged
-  supervised kill" (AD-12), authored BEFORE the implementation exists, against
-  the frozen contract in `docs/proposals/in-flight/harness-roadmap.md` (U5),
-  `harness-research/spike-u5-kill.md`, and `harness-freeze-contracts.md`.
+  supervised kill" (AD-12), authored BEFORE the implementation exists,
+  against the frozen contract and the staged-kill spike research.
 
   Every test here drives the real `Raxol.Agent.Interrupt`. The suite was authored
   **failing-first** (`@moduletag :harness_red`, excluded from CI) against the
@@ -47,16 +46,22 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
   alias Raxol.Agent.KillLab
 
   setup do
-    base = Path.join(System.tmp_dir!(), "raxol_u5_red_#{System.unique_integer([:positive])}")
+    base =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol_u5_red_#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(base)
     on_exit(fn -> File.rm_rf(base) end)
     {:ok, base: base}
   end
 
   describe "P1/P2 — staged event trace (pure journal, no tool Port)" do
-    test "signal → wait → kill → turn_canceled are journaled in order under one turn_id", %{
-      base: base
-    } do
+    test "signal → wait → kill → turn_canceled are journaled in order under one turn_id",
+         %{
+           base: base
+         } do
       {turn_id, dir, sink} = open_turn(base)
 
       # A turn is live and streaming when the interrupt lands.
@@ -64,7 +69,11 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
       seed(sink, :item_delta, %{chunk: "working"})
 
       {:ok, _outcome} =
-        Interrupt.interrupt(%{turn_id: turn_id, port: nil, os_pid: nil}, sink, [])
+        Interrupt.interrupt(
+          %{turn_id: turn_id, port: nil, os_pid: nil},
+          sink,
+          []
+        )
 
       Contours.assert_staging!(Contours.records(dir), turn_id)
     end
@@ -74,32 +83,44 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
       seed(sink, :turn_started, %{prompt: "long task"})
 
       {:ok, outcome} =
-        Interrupt.interrupt(%{turn_id: turn_id, port: nil, os_pid: nil}, sink, [])
+        Interrupt.interrupt(
+          %{turn_id: turn_id, port: nil, os_pid: nil},
+          sink,
+          []
+        )
 
       Contours.assert_turn_canceled!(Contours.records(dir), turn_id, outcome)
     end
   end
 
   describe "P4 — post-kill quiescence (the no-zombie-emission law)" do
-    test "no item_delta/item_completed/tool_result for the turn after kill-complete", %{
-      base: base
-    } do
+    test "no item_delta/item_completed/tool_result for the turn after kill-complete",
+         %{
+           base: base
+         } do
       {turn_id, dir, sink} = open_turn(base)
 
       # Pre-kill output exists (non-vacuous): the tool produced a result before
       # the interrupt. Quiescence forbids any output AFTER kill-complete.
       seed(sink, :turn_started, %{prompt: "long task"})
+
       seed(sink, :item_completed, %{item_type: "tool_result", result: "partial"})
 
       {:ok, _outcome} =
-        Interrupt.interrupt(%{turn_id: turn_id, port: nil, os_pid: nil}, sink, [])
+        Interrupt.interrupt(
+          %{turn_id: turn_id, port: nil, os_pid: nil},
+          sink,
+          []
+        )
 
       Contours.assert_quiescent!(Contours.records(dir), turn_id)
     end
   end
 
   describe "P3b — mid-provider-stream interrupt (no tool Port)" do
-    test "the turn cancels with no trailing output after turn_canceled", %{base: base} do
+    test "the turn cancels with no trailing output after turn_canceled", %{
+      base: base
+    } do
       {turn_id, dir, sink} = open_turn(base)
 
       # Mid-stream: deltas were flowing when the cancel arrived.
@@ -107,7 +128,11 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
       seed(sink, :item_delta, %{chunk: "half a sen"})
 
       {:ok, _outcome} =
-        Interrupt.interrupt(%{turn_id: turn_id, port: nil, os_pid: nil}, sink, [])
+        Interrupt.interrupt(
+          %{turn_id: turn_id, port: nil, os_pid: nil},
+          sink,
+          []
+        )
 
       Contours.assert_no_trailing_output!(Contours.records(dir), turn_id)
     end
@@ -115,7 +140,8 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
 
   describe "P3/P5 — kill effective mid-shell-Port (real OS processes)" do
     @tag :unix_only
-    test "a rogue tool that ignores SIGTERM is group-killed and OS-confirmed dead", %{base: base} do
+    test "a rogue tool that ignores SIGTERM is group-killed and OS-confirmed dead",
+         %{base: base} do
       lab = KillLab.spawn_rogue(sleep: 30)
       on_exit(fn -> KillLab.reap(lab) end)
 
@@ -135,9 +161,10 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
     end
 
     @tag :unix_only
-    test "the OS process AND its grandchild are gone — zero orphans (spike ground truth)", %{
-      base: base
-    } do
+    test "the OS process AND its grandchild are gone — zero orphans (spike ground truth)",
+         %{
+           base: base
+         } do
       lab = KillLab.spawn_rogue(sleep: 30)
       on_exit(fn -> KillLab.reap(lab) end)
 
@@ -162,9 +189,10 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
 
   describe "P6 — kill-claim integrity (the OS kill signal fails)" do
     @tag :unix_only
-    test "a kill whose signal fails journals :interrupt_kill_failed, never a killed success", %{
-      base: base
-    } do
+    test "a kill whose signal fails journals :interrupt_kill_failed, never a killed success",
+         %{
+           base: base
+         } do
       # Simulate an OS-level signal failure (e.g. a permission-denied kill) by
       # pointing the `kill` shell-out at `false`: every kill exits non-zero, the
       # rogue tool survives, and the staged kill must report the TRUTH — an
@@ -254,7 +282,12 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
 
       {:ok, outcome} =
         Interrupt.interrupt(
-          %{turn_id: turn_id, port: lab.port, os_pid: lab.child_pid, grace_ms: 50},
+          %{
+            turn_id: turn_id,
+            port: lab.port,
+            os_pid: lab.child_pid,
+            grace_ms: 50
+          },
           sink,
           []
         )
@@ -293,9 +326,10 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
   end
 
   describe "P10 — a sink failure after the kill never raises out of the staged kill" do
-    test "a sink dying on the kill fence yields {:error, {:sink_failure, _, outcome}}", %{
-      base: base
-    } do
+    test "a sink dying on the kill fence yields {:error, {:sink_failure, _, outcome}}",
+         %{
+           base: base
+         } do
       {turn_id, dir, sink} = open_turn(base)
       seed(sink, :turn_started, %{prompt: "long task"})
 
@@ -311,14 +345,20 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
       end
 
       assert {:error, {:sink_failure, %RuntimeError{}, outcome}} =
-               Interrupt.interrupt(%{turn_id: turn_id, port: nil, os_pid: nil}, failing, [])
+               Interrupt.interrupt(
+                 %{turn_id: turn_id, port: nil, os_pid: nil},
+                 failing,
+                 []
+               )
 
       assert outcome.turn_id == turn_id
       assert Interrupt.kill_stage() in outcome.stages
 
       # The journal holds the pre-kill stages, and no forged records after the
       # sink died — the caller owns reconciliation, the journal never lies.
-      types = for r <- Contours.records(dir), r["turn_id"] == turn_id, do: r["type"]
+      types =
+        for r <- Contours.records(dir), r["turn_id"] == turn_id, do: r["type"]
+
       assert "interrupt_signaled" in types
       assert "interrupt_waited" in types
       refute "interrupt_killed" in types

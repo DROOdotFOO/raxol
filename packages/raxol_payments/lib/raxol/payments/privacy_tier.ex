@@ -6,6 +6,16 @@ defmodule Raxol.Payments.PrivacyTier do
   unlock deeper privacy at lower fees. Users can always opt into less
   privacy than their score allows.
 
+  ## Attestations are pre-verified
+
+  The `:attestations` this module reads for tier-requirement gating must already
+  be **verified** -- the output of `Raxol.Payments.Zksar.verify/2` (which carries
+  `valid: true`). `Raxol.Payments.Router` is the verification choke point: it runs
+  `Zksar.verify_batch/2` against the operator-pinned issuer allowlist and passes
+  only the verified subset here. Do not call `from_trust_score/2` with raw,
+  caller-supplied attestations expecting them to be trusted; a self-asserted
+  `%{valid: true}` map is not a proof.
+
   ## Tiers
 
   | Score | Tier      | Fee (bps) | Settlement |
@@ -101,6 +111,10 @@ defmodule Raxol.Payments.PrivacyTier do
 
   # -- Private --
 
+  # Consumes PRE-VERIFIED attestations (Zksar.verify output; Router verifies
+  # before calling here). The `valid: true` filter is a guard, not the trust
+  # decision -- a raw caller-supplied `valid: true` is meaningless here because it
+  # never passed through the Router's `Zksar.verify_batch/2`. See the moduledoc.
   defp extract_attestation_types(opts) do
     case Keyword.get(opts, :attestations) do
       nil ->

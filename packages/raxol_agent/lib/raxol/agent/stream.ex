@@ -49,6 +49,13 @@ defmodule Raxol.Agent.Stream do
     (takes precedence over `:backend`)
   - `:backend` -- AIBackend module (default: `Raxol.Agent.Backend.Mock`); ignored
     when `:executor` is given
+  - `:auto_provider` -- when `true` and no `:executor` is given, resolve one from
+    the environment via `Raxol.Agent.Backend.Resolver` (the same op-ref ->
+    provider-env -> `AI_API_KEY` onboarding the coding TUI and `mix raxol.setup`
+    use). An optional `:provider` pins a specific one. Falls through to
+    `:backend`/Mock when nothing resolves, so it never crashes an unconfigured
+    caller. This is how a headless/embedded agent surface gets the same
+    credential story without hand-rolling a resolver call.
   - `:backend_opts` -- keyword list passed to backend (api_key, model, etc.);
     merged over the executor's resolved opts
   - `:model` -- per-request model override (wins over `:executor`/`:backend_opts`)
@@ -157,6 +164,24 @@ defmodule Raxol.Agent.Stream do
     else
       framework_react(messages, backend, backend_opts, opts)
     end
+  end
+
+  @doc """
+  Whether the backend resolved from `opts` runs its own tool loop.
+
+  Native / vendor-owns-loop backends (`handles_tools_internally? == true`)
+  execute tools out-of-process over MCP, where the framework cannot thread run
+  context -- `:tool_authorizer`, `:tool_call_hooks`, and app flags such as the
+  cron `:in_cron` recursion guard -- into tool execution. A caller that exposes a
+  context-guarded tool uses this to fail closed: withhold the tool on that path
+  rather than hand over capability the guard cannot police. Resolution mirrors
+  `react/2` (executor / auto_provider / `:backend`), so the answer matches the
+  backend the turn will actually use.
+  """
+  @spec native_tool_loop?(keyword()) :: boolean()
+  def native_tool_loop?(opts) do
+    {backend, _backend_opts} = resolve_backend(opts)
+    Raxol.Agent.AIBackend.handles_tools_internally?(backend)
   end
 
   # Vendor-owns-loop backends (native CLI harnesses) run their own tool loop with
@@ -303,10 +328,27 @@ defmodule Raxol.Agent.Stream do
         {[{:marker, text}], :running}
 
       {:done, response}, :running ->
-        done_event =
-          {:done, %{content: response.content, tool_results: [], usage: response.usage}}
+        # `run/2` is the single-completion path -- there is no tool-execution
+        # loop downstream of this stream (that is `react/2`). `Backend.HTTP`
+        # accumulates streamed `tool_calls` onto the done response even here
+        # (`finalize_tool_calls/1`); silently dropping them would strand a
+        # model's claimed tool call with zero receipt while the turn still
+        # reports a clean done -- a green-wash. Seal an honest
+        # `:tool_unexecuted` marker per call instead: the vocabulary already
+        # exists and `Contract.pump/3` already renders it as a visible ⚠
+        # message -- this is its producer on the streaming run/2 path. The
+        # `:done` payload's own shape is untouched (content/tool_results/usage)
+        # so nothing reading it directly is disturbed.
+        unexecuted_events =
+          response
+          |> Map.get(:tool_calls, [])
+          |> Enum.map(&unexecuted_tool_call_event/1)
 
-        {[done_event], :done}
+        done_event =
+          {:done,
+           %{content: response.content, tool_results: [], usage: response.usage}}
+
+        {unexecuted_events ++ [done_event], :done}
 
       {:error, reason}, :running ->
         {[{:error, reason}], :done}
@@ -314,6 +356,13 @@ defmodule Raxol.Agent.Stream do
       _event, :done ->
         {:halt, :done}
     end)
+  end
+
+  defp unexecuted_tool_call_event(tool_call) do
+    name =
+      Map.get(tool_call, "name") || Map.get(tool_call, :name) || "unknown"
+
+    {:tool_unexecuted, %{name: name, reason: :no_tool_loop}}
   end
 
   defp sync_completion(backend, messages, backend_opts) do
@@ -542,7 +591,7 @@ defmodule Raxol.Agent.Stream do
   end
 
   defp backend_from_opts(opts) do
-    case Keyword.get(opts, :executor) do
+    case Keyword.get(opts, :executor) || resolve_executor(opts) do
       %Raxol.Agent.ExecutorConfig{} = executor ->
         case Raxol.Agent.Backend.Selector.select(executor) do
           {:ok, backend, executor_opts} -> {backend, executor_opts}
@@ -551,6 +600,33 @@ defmodule Raxol.Agent.Stream do
 
       _ ->
         {fallback_backend(opts), []}
+    end
+  end
+
+  @doc false
+  # Opt-in environment/1Password onboarding for any programmatic agent surface.
+  # With `auto_provider: true` and no explicit `:executor`, resolve one through
+  # the shared `Raxol.Agent.Backend.Resolver` — the SAME op-ref -> provider-env
+  # (`ANTHROPIC_API_KEY`, ...) -> `AI_API_KEY`/`AI_BASE_URL` precedence the coding
+  # TUI and `mix raxol.setup` use — so a surface gets the same credential story
+  # for free instead of hand-rolling a resolver call. A resolution that finds no
+  # credential returns `nil`, so `backend_from_opts/1` falls through to
+  # `:backend`/Mock and the opt never crashes a caller with no provider set up.
+  def resolve_executor(opts) do
+    if Keyword.get(opts, :auto_provider, false) do
+      resolver_opts =
+        [
+          harness: Keyword.get(opts, :provider),
+          model: Keyword.get(opts, :model),
+          api_key: Keyword.get(opts, :api_key),
+          base_url: Keyword.get(opts, :base_url)
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+      case Raxol.Agent.Backend.Resolver.resolve(resolver_opts) do
+        {:ok, executor, _source} -> executor
+        _ -> nil
+      end
     end
   end
 

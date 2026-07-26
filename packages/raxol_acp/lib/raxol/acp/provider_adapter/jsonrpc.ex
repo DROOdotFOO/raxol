@@ -52,7 +52,7 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
 
   @behaviour Raxol.ACP.ProviderAdapter
 
-  alias Raxol.ACP.{ABI, Onchain.RPC, Onchain.Transaction, Secret}
+  alias Raxol.ACP.{ABI, Onchain.Hex, Onchain.RPC, Onchain.Transaction, Secret}
   alias Raxol.ACP.Wallet.NonceServer
 
   @type config :: %{
@@ -288,10 +288,14 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
         # forks usually have very low fees so the floor is generous.
         case RPC.fee_history(client, 5, "latest", [50]) do
           {:ok, %{"baseFeePerGas" => base_fees, "reward" => reward}} ->
-            base = base_fees |> List.last() |> decode_hex_uint!()
+            base = base_fees |> List.last() |> Hex.decode_quantity!()
 
             prio =
-              reward |> List.first() |> List.first() |> decode_hex_uint!() |> max(1_000_000_000)
+              reward
+              |> List.first()
+              |> List.first()
+              |> Hex.decode_quantity!()
+              |> max(1_000_000_000)
 
             {:ok, %{max_priority_fee_per_gas: prio, max_fee_per_gas: base * 2 + prio}}
 
@@ -356,13 +360,8 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
     end)
   end
 
-  defp encode_block(n) when is_integer(n), do: encode_quantity(n)
+  defp encode_block(n) when is_integer(n), do: Hex.encode_quantity(n)
   defp encode_block(b) when is_binary(b), do: b
-
-  defp encode_quantity(n) when is_integer(n) and n >= 0,
-    do: "0x" <> Integer.to_string(n, 16)
-
-  defp decode_hex_uint!("0x" <> hex), do: String.to_integer(hex, 16)
 
   defp normalize_data("0x" <> hex), do: Base.decode16!(hex, case: :mixed)
   defp normalize_data(bin) when is_binary(bin), do: bin
@@ -378,6 +377,6 @@ defmodule Raxol.ACP.ProviderAdapter.JSONRPC do
     <<_prefix::8, payload::binary-size(64)>> = public_key
     hash = ExKeccak.hash_256(payload)
     <<_padding::binary-size(12), addr::binary-size(20)>> = hash
-    "0x" <> Base.encode16(addr, case: :lower)
+    Hex.encode(addr)
   end
 end

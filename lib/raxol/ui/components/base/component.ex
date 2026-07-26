@@ -149,6 +149,9 @@ defmodule Raxol.UI.Components.Base.Component do
       def mount(state), do: {state, []}
       def unmount(state), do: state
 
+      # Default no-op event handler (components override as needed)
+      def handle_event(_event, state, _context), do: {state, []}
+
       # Default prop-merge update
       def update(props, state) when is_map(props) do
         Raxol.UI.Components.Base.Component.merge_props(props, state)
@@ -157,7 +160,7 @@ defmodule Raxol.UI.Components.Base.Component do
       def update(_msg, state), do: {state, []}
 
       # Allow overriding
-      defoverridable mount: 1, unmount: 1, update: 2
+      defoverridable mount: 1, unmount: 1, update: 2, handle_event: 3
 
       # Helper functions for commands
       def command(cmd), do: {:command, cmd}

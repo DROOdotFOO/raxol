@@ -69,7 +69,7 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ModelInfo do
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = m) do
     %{"modelId" => m.model_id, "name" => m.name}
-    |> maybe_put("description", m.description)
+    |> AgentTypes.maybe_put("description", m.description)
     |> AgentTypes.put_meta(m._meta)
   end
 
@@ -88,12 +88,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ModelInfo do
   end
 
   def from_json(other), do: {:error, {:invalid_model_info, other}}
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ModelInfo do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ModelInfo do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ModelInfo
 
   def encode(%ModelInfo{} = val, opts) do
@@ -124,7 +122,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionModelState do
 
   @spec new(String.t(), [ModelInfo.t()]) :: t()
   def new(current_model_id, available_models) do
-    %__MODULE__{current_model_id: current_model_id, available_models: available_models}
+    %__MODULE__{
+      current_model_id: current_model_id,
+      available_models: available_models
+    }
   end
 
   @spec to_json(t()) :: map()
@@ -140,7 +141,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionModelState do
   def from_json(map) when is_map(map) do
     with {:ok, current_model_id} <- AgentTypes.fetch(map, "currentModelId"),
          {:ok, raw_models} <- AgentTypes.fetch(map, "availableModels"),
-         {:ok, available_models} <- AgentTypes.decode_list(raw_models, &ModelInfo.from_json/1) do
+         {:ok, available_models} <-
+           AgentTypes.decode_list(raw_models, &ModelInfo.from_json/1) do
       {:ok,
        %__MODULE__{
          current_model_id: current_model_id,
@@ -153,7 +155,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionModelState do
   def from_json(other), do: {:error, {:invalid_session_model_state, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionModelState do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionModelState do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionModelState
 
   def encode(%SessionModelState{} = val, opts) do
@@ -173,17 +176,25 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelRequest do
 
   @known_keys ["sessionId", "modelId", "_meta"]
 
-  @type t :: %__MODULE__{session_id: String.t(), model_id: String.t(), _meta: map()}
+  @type t :: %__MODULE__{
+          session_id: String.t(),
+          model_id: String.t(),
+          _meta: map()
+        }
 
   @enforce_keys [:session_id, :model_id]
   defstruct session_id: nil, model_id: nil, _meta: %{}
 
   @spec new(String.t(), String.t()) :: t()
-  def new(session_id, model_id), do: %__MODULE__{session_id: session_id, model_id: model_id}
+  def new(session_id, model_id),
+    do: %__MODULE__{session_id: session_id, model_id: model_id}
 
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = r) do
-    AgentTypes.put_meta(%{"sessionId" => r.session_id, "modelId" => r.model_id}, r._meta)
+    AgentTypes.put_meta(
+      %{"sessionId" => r.session_id, "modelId" => r.model_id},
+      r._meta
+    )
   end
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
@@ -199,10 +210,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelRequest do
     end
   end
 
-  def from_json(other), do: {:error, {:invalid_set_session_model_request, other}}
+  def from_json(other),
+    do: {:error, {:invalid_set_session_model_request, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelRequest do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelRequest do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelRequest
 
   def encode(%SetSessionModelRequest{} = val, opts) do
@@ -234,10 +247,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelResponse do
     {:ok, %__MODULE__{_meta: AgentTypes.extract_meta(map, ["_meta"])}}
   end
 
-  def from_json(other), do: {:error, {:invalid_set_session_model_response, other}}
+  def from_json(other),
+    do: {:error, {:invalid_set_session_model_response, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelResponse do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelResponse do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SetSessionModelResponse
 
   def encode(%SetSessionModelResponse{} = val, opts) do
@@ -275,7 +290,7 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOption do
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = o) do
     %{"value" => o.value, "name" => o.name}
-    |> maybe_put("description", o.description)
+    |> AgentTypes.maybe_put("description", o.description)
     |> AgentTypes.put_meta(o._meta)
   end
 
@@ -293,13 +308,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOption do
     end
   end
 
-  def from_json(other), do: {:error, {:invalid_session_config_select_option, other}}
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+  def from_json(other),
+    do: {:error, {:invalid_session_config_select_option, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOption do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOption do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOption
 
   def encode(%SessionConfigSelectOption{} = val, opts) do
@@ -330,7 +344,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectGroup do
   defstruct group: nil, name: nil, options: nil, _meta: %{}
 
   @spec new(String.t(), String.t(), [SessionConfigSelectOption.t()]) :: t()
-  def new(group, name, options), do: %__MODULE__{group: group, name: name, options: options}
+  def new(group, name, options),
+    do: %__MODULE__{group: group, name: name, options: options}
 
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = g) do
@@ -348,7 +363,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectGroup do
          {:ok, name} <- AgentTypes.fetch(map, "name"),
          {:ok, raw_options} <- AgentTypes.fetch(map, "options"),
          {:ok, options} <-
-           AgentTypes.decode_list(raw_options, &SessionConfigSelectOption.from_json/1) do
+           AgentTypes.decode_list(
+             raw_options,
+             &SessionConfigSelectOption.from_json/1
+           ) do
       {:ok,
        %__MODULE__{
          group: group,
@@ -359,10 +377,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectGroup do
     end
   end
 
-  def from_json(other), do: {:error, {:invalid_session_config_select_group, other}}
+  def from_json(other),
+    do: {:error, {:invalid_session_config_select_group, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectGroup do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectGroup do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectGroup
 
   def encode(%SessionConfigSelectGroup{} = val, opts) do
@@ -392,8 +412,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOptions d
           | {:grouped, [SessionConfigSelectGroup.t()]}
 
   @spec to_json(t()) :: [map()]
-  def to_json({:ungrouped, options}), do: Enum.map(options, &SessionConfigSelectOption.to_json/1)
-  def to_json({:grouped, groups}), do: Enum.map(groups, &SessionConfigSelectGroup.to_json/1)
+  def to_json({:ungrouped, options}),
+    do: Enum.map(options, &SessionConfigSelectOption.to_json/1)
+
+  def to_json({:grouped, groups}),
+    do: Enum.map(groups, &SessionConfigSelectGroup.to_json/1)
 
   @doc "Total: never raises. Non-list input returns `{:error, _}`."
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
@@ -413,7 +436,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOptions d
     end
   end
 
-  def from_json(other), do: {:error, {:invalid_session_config_select_options, other}}
+  def from_json(other),
+    do: {:error, {:invalid_session_config_select_options, other}}
 end
 
 defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelect do
@@ -433,13 +457,17 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelect do
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelectOptions
 
-  @type t :: %__MODULE__{current_value: term(), options: SessionConfigSelectOptions.t()}
+  @type t :: %__MODULE__{
+          current_value: term(),
+          options: SessionConfigSelectOptions.t()
+        }
 
   @enforce_keys [:current_value, :options]
   defstruct current_value: nil, options: nil
 
   @spec new(term(), SessionConfigSelectOptions.t()) :: t()
-  def new(current_value, options), do: %__MODULE__{current_value: current_value, options: options}
+  def new(current_value, options),
+    do: %__MODULE__{current_value: current_value, options: options}
 
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = s) do
@@ -461,7 +489,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelect do
   def from_json(other), do: {:error, {:invalid_session_config_select, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelect do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelect do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigSelect
 
   def encode(%SessionConfigSelect{} = val, opts) do
@@ -526,7 +555,9 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigKind do
     end
   end
 
-  def from_json(%{"type" => other}), do: {:error, {:unsupported_session_config_kind, other}}
+  def from_json(%{"type" => other}),
+    do: {:error, {:unsupported_session_config_kind, other}}
+
   def from_json(map) when is_map(map), do: {:error, {:missing_field, "type"}}
   def from_json(other), do: {:error, {:invalid_session_config_kind, other}}
 end
@@ -542,7 +573,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
   """
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
-  alias Raxol.AgentClientProtocol.Schema.Unstable.{SessionConfigKind, SessionConfigOptionCategory}
+
+  alias Raxol.AgentClientProtocol.Schema.Unstable.{
+    SessionConfigKind,
+    SessionConfigOptionCategory
+  }
 
   # "type"/"currentValue"/"options" are the flattened SessionConfigKind
   # payload fields, consumed at this level even though they belong to the
@@ -568,7 +603,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
         }
 
   @enforce_keys [:id, :name, :kind]
-  defstruct id: nil, name: nil, description: nil, category: nil, kind: nil, _meta: %{}
+  defstruct id: nil,
+            name: nil,
+            description: nil,
+            category: nil,
+            kind: nil,
+            _meta: %{}
 
   @spec new(String.t(), String.t(), SessionConfigKind.t()) :: t()
   def new(id, name, kind), do: %__MODULE__{id: id, name: name, kind: kind}
@@ -584,7 +624,7 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
   def to_json(%__MODULE__{} = o) do
     SessionConfigKind.to_json(o.kind)
     |> Map.merge(%{"id" => o.id, "name" => o.name})
-    |> maybe_put("description", o.description)
+    |> AgentTypes.maybe_put("description", o.description)
     |> maybe_put_category(o.category)
     |> AgentTypes.put_meta(o._meta)
   end
@@ -595,7 +635,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
          {:ok, name} <- AgentTypes.fetch(map, "name"),
          {:ok, kind} <- SessionConfigKind.from_json(map),
          {:ok, category} <-
-           AgentTypes.decode_optional(map, "category", &SessionConfigOptionCategory.from_json/1) do
+           AgentTypes.decode_optional(
+             map,
+             "category",
+             &SessionConfigOptionCategory.from_json/1
+           ) do
       {:ok,
        %__MODULE__{
          id: id,
@@ -610,9 +654,6 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
 
   def from_json(other), do: {:error, {:invalid_session_config_option, other}}
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
   defp maybe_put_category(map, nil), do: map
 
   defp maybe_put_category(map, category) do
@@ -620,7 +661,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
   end
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionConfigOption
 
   def encode(%SessionConfigOption{} = val, opts) do
@@ -658,7 +700,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionConfigOptionReques
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = r) do
     AgentTypes.put_meta(
-      %{"sessionId" => r.session_id, "configId" => r.config_id, "value" => r.value},
+      %{
+        "sessionId" => r.session_id,
+        "configId" => r.config_id,
+        "value" => r.value
+      },
       r._meta
     )
   end
@@ -678,7 +724,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionConfigOptionReques
     end
   end
 
-  def from_json(other), do: {:error, {:invalid_set_session_config_option_request, other}}
+  def from_json(other),
+    do: {:error, {:invalid_set_session_config_option_request, other}}
 end
 
 defimpl Jason.Encoder,
@@ -703,7 +750,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionConfigOptionRespon
 
   @known_keys ["configOptions", "_meta"]
 
-  @type t :: %__MODULE__{config_options: [SessionConfigOption.t()], _meta: map()}
+  @type t :: %__MODULE__{
+          config_options: [SessionConfigOption.t()],
+          _meta: map()
+        }
 
   @enforce_keys [:config_options]
   defstruct config_options: nil, _meta: %{}
@@ -714,7 +764,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionConfigOptionRespon
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = r) do
     AgentTypes.put_meta(
-      %{"configOptions" => Enum.map(r.config_options, &SessionConfigOption.to_json/1)},
+      %{
+        "configOptions" =>
+          Enum.map(r.config_options, &SessionConfigOption.to_json/1)
+      },
       r._meta
     )
   end
@@ -732,7 +785,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionConfigOptionRespon
     end
   end
 
-  def from_json(other), do: {:error, {:invalid_set_session_config_option_response, other}}
+  def from_json(other),
+    do: {:error, {:invalid_set_session_config_option_response, other}}
 end
 
 defimpl Jason.Encoder,
@@ -769,7 +823,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionRequest do
   defstruct session_id: nil, cwd: nil, mcp_servers: [], _meta: %{}
 
   @spec new(String.t(), String.t()) :: t()
-  def new(session_id, cwd), do: %__MODULE__{session_id: session_id, cwd: cwd, mcp_servers: []}
+  def new(session_id, cwd),
+    do: %__MODULE__{session_id: session_id, cwd: cwd, mcp_servers: []}
 
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = r) do
@@ -783,7 +838,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionRequest do
     with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId"),
          {:ok, cwd} <- AgentTypes.fetch(map, "cwd"),
          {:ok, mcp_servers} <-
-           AgentTypes.decode_list(Map.get(map, "mcpServers", []), &McpServer.from_json/1) do
+           AgentTypes.decode_list(
+             Map.get(map, "mcpServers", []),
+             &McpServer.from_json/1
+           ) do
       {:ok,
        %__MODULE__{
          session_id: session_id,
@@ -804,7 +862,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionRequest do
   end
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionRequest do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionRequest do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionRequest
 
   def encode(%ForkSessionRequest{} = val, opts) do
@@ -822,7 +881,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse do
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionModeState
-  alias Raxol.AgentClientProtocol.Schema.Unstable.{SessionConfigOption, SessionModelState}
+
+  alias Raxol.AgentClientProtocol.Schema.Unstable.{
+    SessionConfigOption,
+    SessionModelState
+  }
 
   @known_keys ["sessionId", "modes", "models", "configOptions", "_meta"]
 
@@ -835,7 +898,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse do
         }
 
   @enforce_keys [:session_id]
-  defstruct session_id: nil, modes: nil, models: nil, config_options: nil, _meta: %{}
+  defstruct session_id: nil,
+            modes: nil,
+            models: nil,
+            config_options: nil,
+            _meta: %{}
 
   @spec new(String.t()) :: t()
   def new(session_id), do: %__MODULE__{session_id: session_id}
@@ -852,10 +919,20 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse do
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
     with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId"),
-         {:ok, modes} <- AgentTypes.decode_optional(map, "modes", &SessionModeState.from_json/1),
+         {:ok, modes} <-
+           AgentTypes.decode_optional(
+             map,
+             "modes",
+             &SessionModeState.from_json/1
+           ),
          {:ok, models} <-
-           AgentTypes.decode_optional(map, "models", &SessionModelState.from_json/1),
-         {:ok, config_options} <- decode_config_options(Map.get(map, "configOptions")) do
+           AgentTypes.decode_optional(
+             map,
+             "models",
+             &SessionModelState.from_json/1
+           ),
+         {:ok, config_options} <-
+           decode_config_options(Map.get(map, "configOptions")) do
       {:ok,
        %__MODULE__{
          session_id: session_id,
@@ -875,7 +952,9 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse do
     do: AgentTypes.decode_list(opts, &SessionConfigOption.from_json/1)
 
   defp maybe_put_modes(map, nil), do: map
-  defp maybe_put_modes(map, modes), do: Map.put(map, "modes", SessionModeState.to_json(modes))
+
+  defp maybe_put_modes(map, modes),
+    do: Map.put(map, "modes", SessionModeState.to_json(modes))
 
   defp maybe_put_models(map, nil), do: map
 
@@ -885,11 +964,16 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse do
   defp maybe_put_config_options(map, nil), do: map
 
   defp maybe_put_config_options(map, opts) do
-    Map.put(map, "configOptions", Enum.map(opts, &SessionConfigOption.to_json/1))
+    Map.put(
+      map,
+      "configOptions",
+      Enum.map(opts, &SessionConfigOption.to_json/1)
+    )
   end
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ForkSessionResponse
 
   def encode(%ForkSessionResponse{} = val, opts) do
@@ -923,7 +1007,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionRequest do
   defstruct session_id: nil, cwd: nil, mcp_servers: [], _meta: %{}
 
   @spec new(String.t(), String.t()) :: t()
-  def new(session_id, cwd), do: %__MODULE__{session_id: session_id, cwd: cwd, mcp_servers: []}
+  def new(session_id, cwd),
+    do: %__MODULE__{session_id: session_id, cwd: cwd, mcp_servers: []}
 
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = r) do
@@ -937,7 +1022,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionRequest do
     with {:ok, session_id} <- AgentTypes.fetch(map, "sessionId"),
          {:ok, cwd} <- AgentTypes.fetch(map, "cwd"),
          {:ok, mcp_servers} <-
-           AgentTypes.decode_list(Map.get(map, "mcpServers", []), &McpServer.from_json/1) do
+           AgentTypes.decode_list(
+             Map.get(map, "mcpServers", []),
+             &McpServer.from_json/1
+           ) do
       {:ok,
        %__MODULE__{
          session_id: session_id,
@@ -958,7 +1046,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionRequest do
   end
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionRequest do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionRequest do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionRequest
 
   def encode(%ResumeSessionRequest{} = val, opts) do
@@ -976,7 +1065,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionResponse do
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.SessionModeState
-  alias Raxol.AgentClientProtocol.Schema.Unstable.{SessionConfigOption, SessionModelState}
+
+  alias Raxol.AgentClientProtocol.Schema.Unstable.{
+    SessionConfigOption,
+    SessionModelState
+  }
 
   @known_keys ["modes", "models", "configOptions", "_meta"]
 
@@ -1003,10 +1096,20 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionResponse do
 
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
-    with {:ok, modes} <- AgentTypes.decode_optional(map, "modes", &SessionModeState.from_json/1),
+    with {:ok, modes} <-
+           AgentTypes.decode_optional(
+             map,
+             "modes",
+             &SessionModeState.from_json/1
+           ),
          {:ok, models} <-
-           AgentTypes.decode_optional(map, "models", &SessionModelState.from_json/1),
-         {:ok, config_options} <- decode_config_options(Map.get(map, "configOptions")) do
+           AgentTypes.decode_optional(
+             map,
+             "models",
+             &SessionModelState.from_json/1
+           ),
+         {:ok, config_options} <-
+           decode_config_options(Map.get(map, "configOptions")) do
       {:ok,
        %__MODULE__{
          modes: modes,
@@ -1025,7 +1128,9 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionResponse do
     do: AgentTypes.decode_list(opts, &SessionConfigOption.from_json/1)
 
   defp maybe_put_modes(map, nil), do: map
-  defp maybe_put_modes(map, modes), do: Map.put(map, "modes", SessionModeState.to_json(modes))
+
+  defp maybe_put_modes(map, modes),
+    do: Map.put(map, "modes", SessionModeState.to_json(modes))
 
   defp maybe_put_models(map, nil), do: map
 
@@ -1035,11 +1140,16 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionResponse do
   defp maybe_put_config_options(map, nil), do: map
 
   defp maybe_put_config_options(map, opts) do
-    Map.put(map, "configOptions", Enum.map(opts, &SessionConfigOption.to_json/1))
+    Map.put(
+      map,
+      "configOptions",
+      Enum.map(opts, &SessionConfigOption.to_json/1)
+    )
   end
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionResponse do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionResponse do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ResumeSessionResponse
 
   def encode(%ResumeSessionResponse{} = val, opts) do
@@ -1077,8 +1187,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionInfo do
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = s) do
     %{"sessionId" => s.session_id, "cwd" => s.cwd}
-    |> maybe_put("title", s.title)
-    |> maybe_put("updatedAt", s.updated_at)
+    |> AgentTypes.maybe_put("title", s.title)
+    |> AgentTypes.maybe_put("updatedAt", s.updated_at)
     |> AgentTypes.put_meta(s._meta)
   end
 
@@ -1098,12 +1208,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionInfo do
   end
 
   def from_json(other), do: {:error, {:invalid_session_info, other}}
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionInfo do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionInfo do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionInfo
 
   def encode(%SessionInfo{} = val, opts) do
@@ -1122,7 +1230,11 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsRequest do
 
   @known_keys ["cwd", "cursor", "_meta"]
 
-  @type t :: %__MODULE__{cwd: String.t() | nil, cursor: String.t() | nil, _meta: map()}
+  @type t :: %__MODULE__{
+          cwd: String.t() | nil,
+          cursor: String.t() | nil,
+          _meta: map()
+        }
 
   defstruct cwd: nil, cursor: nil, _meta: %{}
 
@@ -1132,8 +1244,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsRequest do
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = r) do
     %{}
-    |> maybe_put("cwd", r.cwd)
-    |> maybe_put("cursor", r.cursor)
+    |> AgentTypes.maybe_put("cwd", r.cwd)
+    |> AgentTypes.maybe_put("cursor", r.cursor)
     |> AgentTypes.put_meta(r._meta)
   end
 
@@ -1148,12 +1260,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsRequest do
   end
 
   def from_json(other), do: {:error, {:invalid_list_sessions_request, other}}
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsRequest do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsRequest do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsRequest
 
   def encode(%ListSessionsRequest{} = val, opts) do
@@ -1195,7 +1305,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsResponse do
   @spec from_json(term()) :: {:ok, t()} | {:error, term()}
   def from_json(map) when is_map(map) do
     with {:ok, raw_sessions} <- AgentTypes.fetch(map, "sessions"),
-         {:ok, sessions} <- AgentTypes.decode_list(raw_sessions, &SessionInfo.from_json/1) do
+         {:ok, sessions} <-
+           AgentTypes.decode_list(raw_sessions, &SessionInfo.from_json/1) do
       {:ok,
        %__MODULE__{
          sessions: sessions,
@@ -1208,10 +1319,13 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsResponse do
   def from_json(other), do: {:error, {:invalid_list_sessions_response, other}}
 
   defp maybe_put_next_cursor(map, nil), do: map
-  defp maybe_put_next_cursor(map, cursor), do: Map.put(map, "nextCursor", cursor)
+
+  defp maybe_put_next_cursor(map, cursor),
+    do: Map.put(map, "nextCursor", cursor)
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsResponse do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsResponse do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ListSessionsResponse
 
   def encode(%ListSessionsResponse{} = val, opts) do
@@ -1245,10 +1359,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionListCapabilities do
     {:ok, %__MODULE__{_meta: AgentTypes.extract_meta(map, ["_meta"])}}
   end
 
-  def from_json(other), do: {:error, {:invalid_session_list_capabilities, other}}
+  def from_json(other),
+    do: {:error, {:invalid_session_list_capabilities, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionListCapabilities do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionListCapabilities do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionListCapabilities
 
   def encode(%SessionListCapabilities{} = val, opts) do
@@ -1280,10 +1396,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionForkCapabilities do
     {:ok, %__MODULE__{_meta: AgentTypes.extract_meta(map, ["_meta"])}}
   end
 
-  def from_json(other), do: {:error, {:invalid_session_fork_capabilities, other}}
+  def from_json(other),
+    do: {:error, {:invalid_session_fork_capabilities, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionForkCapabilities do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionForkCapabilities do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionForkCapabilities
 
   def encode(%SessionForkCapabilities{} = val, opts) do
@@ -1315,10 +1433,12 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionResumeCapabilities do
     {:ok, %__MODULE__{_meta: AgentTypes.extract_meta(map, ["_meta"])}}
   end
 
-  def from_json(other), do: {:error, {:invalid_session_resume_capabilities, other}}
+  def from_json(other),
+    do: {:error, {:invalid_session_resume_capabilities, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionResumeCapabilities do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionResumeCapabilities do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionResumeCapabilities
 
   def encode(%SessionResumeCapabilities{} = val, opts) do
@@ -1343,7 +1463,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate do
 
   @known_keys ["configOptions", "_meta"]
 
-  @type t :: %__MODULE__{config_options: [SessionConfigOption.t()], _meta: map()}
+  @type t :: %__MODULE__{
+          config_options: [SessionConfigOption.t()],
+          _meta: map()
+        }
 
   @enforce_keys [:config_options]
   defstruct config_options: nil, _meta: %{}
@@ -1354,7 +1477,10 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate do
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{} = c) do
     AgentTypes.put_meta(
-      %{"configOptions" => Enum.map(c.config_options, &SessionConfigOption.to_json/1)},
+      %{
+        "configOptions" =>
+          Enum.map(c.config_options, &SessionConfigOption.to_json/1)
+      },
       c._meta
     )
   end
@@ -1377,7 +1503,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate do
   def from_json(other), do: {:error, {:invalid_config_option_update, other}}
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate do
   alias Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate
 
   def encode(%ConfigOptionUpdate{} = val, opts) do
@@ -1455,7 +1582,8 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate do
   end
 end
 
-defimpl Jason.Encoder, for: Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate do
+defimpl Jason.Encoder,
+  for: Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate do
   alias Raxol.AgentClientProtocol.Schema.Unstable.SessionInfoUpdate
 
   def encode(%SessionInfoUpdate{} = val, opts) do

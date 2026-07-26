@@ -52,7 +52,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
   use GenServer
 
   alias Raxol.ACP.{Agent, HookClient}
-  alias Raxol.ACP.Xochi.Offering
+  alias Raxol.ACP.Xochi.{IntentDeriver, Offering}
 
   @type session_status ::
           :awaiting_requirement
@@ -313,8 +313,23 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
   # A storefront job is a PLAIN job (hook = address(0)): `set_budget` carries no
   # hook data. The budget is the storefront fee; the transfer settles through
   # Xochi off-escrow, so no FundTransfer hook is involved.
+  #
+  # The fee is sized on the AUTHORITATIVE amount the buyer signed -- read from
+  # Xochi by the intent id, never the relayed `amount_atomic` a buyer could
+  # understate (`IntentDeriver`). Fails the job closed if the intent can't be
+  # resolved rather than proposing a budget on an untrusted number.
   defp propose_budget(state, key, session, requirement) do
-    transfer_atomic = String.to_integer(requirement["amount_atomic"])
+    case IntentDeriver.resolve(state.xochi_config, requirement) do
+      {:ok, %{from_amount: transfer_atomic}} ->
+        set_budget(state, key, session, requirement, transfer_atomic)
+
+      {reject_or_error, reason} when reject_or_error in [:reject, :error] ->
+        emit(state, key, :requirement_error, reason)
+        put_session(state, key, %{session | status: :failed})
+    end
+  end
+
+  defp set_budget(state, key, session, requirement, transfer_atomic) do
     budget_atomic = budget_for(transfer_atomic, state.fee_bps)
 
     case HookClient.set_budget(
@@ -398,7 +413,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
   # In production, callers pass a `Raxol.ACP.Xochi.Settler` relay closure via
   # :settle_fn. The default below produces a deterministic stub so the
   # SolverAgent can be exercised in tests without a live Xochi server.
-  defp default_settle(%{requirement: req, transfer_amount_atomic: _}) do
+  defp default_settle(%{transfer_amount_atomic: transfer_atomic}) do
     {:ok,
      %{
        intent_id: ("stub-intent-" <> :erlang.unique_integer([:positive])) |> to_string(),
@@ -407,7 +422,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
        receiving_tx_hash: "0x" <> String.duplicate("b", 64),
        status: "settled",
        fee_atomic: "0",
-       dst_amount_atomic: req["amount_atomic"]
+       dst_amount_atomic: transfer_atomic && to_string(transfer_atomic)
      }}
   end
 

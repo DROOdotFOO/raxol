@@ -61,6 +61,9 @@ ExUnit.start(
     :docker,
     :pending_unit,
     :mutation,
-    :harness_red
+    :harness_red,
+    # :live_longcat hits the real LongCat API; run with
+    # `LONGCAT_API_KEY=<key> mix test --only live_longcat`.
+    :live_longcat
   ]
 )

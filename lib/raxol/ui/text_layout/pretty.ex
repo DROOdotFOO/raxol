@@ -31,6 +31,21 @@ defmodule Raxol.UI.TextLayout.Pretty do
   @default_orphan_threshold 2
   @default_badness_exponent 2
 
+  # `run_dp` is O(m^2) in legal break-point count `m` (every candidate line
+  # end considers every earlier candidate start). Ordinary prose paragraphs
+  # keep `m` in the low hundreds at most, but a single CJK line has one
+  # breakable token per ideograph, so a long newline-free CJK line (e.g. a
+  # streamed LLM response with no line breaks) can push `m` into the tens
+  # of thousands -- `m^2` there is billions of iterations on ONE call.
+  # Above this ceiling `dp_wrap` skips the DP and packs the paragraph with
+  # an O(m) greedy pass instead (`greedy_wrap/4`): same "never exceed
+  # width except the single-overlong-token exception" guarantee, just
+  # without the DP's raggedness-minimizing line choice. 600^2 (360k) stays
+  # comfortably sub-millisecond, and ordinary paragraphs are almost always
+  # far under 600 break points, so this only engages on the pathological
+  # inputs it exists for.
+  @max_dp_breaks 600
+
   @doc """
   Wraps `text` to `width` display columns using the pretty (Knuth-Plass-style)
   algorithm.
@@ -269,6 +284,22 @@ defmodule Raxol.UI.TextLayout.Pretty do
     breaks_t = List.to_tuple(breaks)
     m = tuple_size(breaks_t)
 
+    if m > @max_dp_breaks do
+      greedy_wrap(tokens_t, prefix, breaks_t, m, width)
+    else
+      dp_wrap_within_ceiling(tokens, tokens_t, prefix, breaks_t, m, width, opts)
+    end
+  end
+
+  defp dp_wrap_within_ceiling(
+         tokens,
+         tokens_t,
+         prefix,
+         breaks_t,
+         m,
+         width,
+         opts
+       ) do
     total_words =
       tokens
       |> Enum.map(& &1.word_id)
@@ -300,12 +331,89 @@ defmodule Raxol.UI.TextLayout.Pretty do
       # adjacent to at least one legally-breakable neighbor). Fall back to a
       # single-token-per-line split so callers never crash on pathological
       # input (e.g. mixed-script tokens not covered by the break rules).
-      fallback_wrap(tokens_t, n)
+      fallback_wrap(tokens_t, tuple_size(tokens_t))
     else
       breaks_t
       |> backtrack(prevs, m - 1)
       |> build_lines(tokens_t)
     end
+  end
+
+  # O(m) greedy line pack, used above `@max_dp_breaks`: pack tokens onto
+  # the current line until the next legal break would overflow `width`,
+  # then cut there -- classic greedy word-wrap (no raggedness
+  # minimization, no last-line orphan handling; those are the DP's job).
+  #
+  # Scans `breaks_t` with two indices that each only move forward, so the
+  # whole paragraph costs O(m) rather than the DP's O(m^2): `jdx` is the
+  # break the current line starts at, `idx` is the next candidate break
+  # being tested to extend it.
+  defp greedy_wrap(tokens_t, prefix, breaks_t, m, width) do
+    greedy_break_indices(tokens_t, prefix, breaks_t, m, width, 0, 1, [0])
+    |> Enum.map(&elem(breaks_t, &1))
+    |> build_lines(tokens_t)
+  end
+
+  defp greedy_break_indices(
+         _tokens_t,
+         _prefix,
+         _breaks_t,
+         m,
+         _width,
+         _jdx,
+         idx,
+         acc
+       )
+       when idx >= m do
+    Enum.reverse([m - 1 | acc])
+  end
+
+  defp greedy_break_indices(tokens_t, prefix, breaks_t, m, width, jdx, idx, acc) do
+    start_idx = elem(breaks_t, jdx)
+    end_idx = end_index(tokens_t, elem(breaks_t, idx))
+
+    if greedy_line_fits?(prefix, start_idx, end_idx, width) do
+      greedy_break_indices(
+        tokens_t,
+        prefix,
+        breaks_t,
+        m,
+        width,
+        jdx,
+        idx + 1,
+        acc
+      )
+    else
+      # `idx` overflows the line started at `jdx` -- cut at `idx - 1`
+      # instead and start the next line there. `idx - 1 > jdx` always
+      # holds here: two ADJACENT legal breaks (`idx == jdx + 1`) bound
+      # exactly one token between them (by construction of
+      # `legal_breaks/2` -- a break exists only right after a breakable
+      # token, and `:word` tokens, the only non-breakable kind, never sit
+      # adjacent to each other), so that span is always
+      # `greedy_line_fits?` regardless of width (see its single-token
+      # clause) -- overflow is only ever detected once at least one break
+      # has already been accepted since `jdx`, guaranteeing progress.
+      new_jdx = idx - 1
+
+      greedy_break_indices(tokens_t, prefix, breaks_t, m, width, new_jdx, idx, [
+        new_jdx | acc
+      ])
+    end
+  end
+
+  # A candidate line from `start_idx` to `end_idx` (token indices,
+  # inclusive) "fits" when: it is degenerate (`end_idx < start_idx`, all
+  # content between the two breaks was a single dropped space -- treated
+  # as a non-boundary so the scan just keeps extending through it rather
+  # than forcing an empty line); OR it is a single token (`end_idx ==
+  # start_idx`, always accepted regardless of width -- the same "one
+  # overlong token stands alone" exception `force_split_wide` and the
+  # DP's `line_cost` both rely on); OR its display width is within
+  # `width`.
+  defp greedy_line_fits?(prefix, start_idx, end_idx, width) do
+    end_idx <= start_idx or
+      elem(prefix, end_idx + 1) - elem(prefix, start_idx) <= width
   end
 
   defp build_prefix(tokens) do

@@ -22,6 +22,17 @@ defmodule Raxol.Agent.Actions.Shell do
   that does not wire interrupts), the command still runs — just
   un-interruptible, which is the honest degradation, not a silent no-op.
 
+  ## Wall-clock timeout is also a kill, not just a hangup
+
+  `Port.close/1` alone only tears down the BEAM's side of the pipe — the OS
+  process on the other end (and anything it forked) survives, detached, the
+  exact failure mode `Raxol.Agent.Interrupt`'s moduledoc documents as the
+  reason a plain port close is insufficient. So a wall-clock timeout runs
+  the SAME OS process-group kill the interrupt path uses
+  (`Raxol.Agent.Interrupt.kill_os_pid/1`) before closing the port — a timed-
+  out `run_shell "sleep 600"` does not leave `sh` (or anything it spawned)
+  running after the Action returns.
+
   Consequential classification lives in
   `Raxol.Agent.Harness.ToolClassifier`, not here — the Action is a pure
   operation; the ASK-gate is the harness's decision.
@@ -55,6 +66,8 @@ defmodule Raxol.Agent.Actions.Shell do
       ]
     ]
 
+  alias Raxol.Agent.Interrupt
+
   @default_timeout_ms 30_000
   @max_output_bytes 65_536
 
@@ -79,27 +92,30 @@ defmodule Raxol.Agent.Actions.Shell do
     deadline = System.monotonic_time(:millisecond) + timeout
 
     try do
-      collect(port, command, deadline, "", false)
+      collect(port, os_pid, command, deadline, "", false)
     after
       publish(sink, nil)
     end
   end
 
   # Collect output until the Port reports exit, the output cap is hit, or the
-  # wall-clock deadline passes. A kill (OS pgroup death from an interrupt)
-  # surfaces here as the Port's own `:exit_status`, so `killed:` is inferred
-  # from a non-zero/negative exit combined with the deadline still open.
-  defp collect(port, command, deadline, acc, capped) do
+  # wall-clock deadline passes.
+  #
+  # The loop process does NOT trap exits, so an abnormal port crash delivers
+  # a real exit *signal* (killing this process), never an `{:EXIT, port,
+  # reason}` *message* — there is deliberately no such receive clause here;
+  # trying to catch it as a message would be dead code.
+  defp collect(port, os_pid, command, deadline, acc, capped) do
     remaining = deadline - System.monotonic_time(:millisecond)
 
     if remaining <= 0 do
-      close_port(port)
-      result(command, acc, 124, capped, true, false)
+      killed? = kill_and_close(port, os_pid)
+      result(command, acc, 124, capped, true, killed?)
     else
       receive do
         {^port, {:data, data}} ->
           {acc, capped} = append_capped(acc, data, capped)
-          collect(port, command, deadline, acc, capped)
+          collect(port, os_pid, command, deadline, acc, capped)
 
         {^port, {:exit_status, status}} ->
           # A signal death shows up as 128+signum on /bin/sh; treat any
@@ -109,15 +125,25 @@ defmodule Raxol.Agent.Actions.Shell do
           # exit code carries the truth (the inbox's :turn_canceled event is
           # the authoritative interrupt receipt).
           result(command, acc, status, capped, false, false)
-
-        {:EXIT, ^port, _reason} ->
-          result(command, acc, -1, capped, false, true)
       after
         remaining ->
-          close_port(port)
-          result(command, acc, 124, capped, true, false)
+          killed? = kill_and_close(port, os_pid)
+          result(command, acc, 124, capped, true, killed?)
       end
     end
+  end
+
+  # A wall-clock timeout means the caller is done waiting -- but "done
+  # waiting" must not mean "the OS process keeps running unattended". Fire
+  # the same OS process-group kill `Raxol.Agent.Interrupt` uses so a rogue
+  # `sleep 600` (and every child it spawned) is actually dead, not orphaned,
+  # THEN close the port. Reports `killed: true` only when the group kill
+  # itself was confirmed to land -- never claiming a kill that wasn't
+  # established (same honesty rule `Interrupt` follows).
+  defp kill_and_close(port, os_pid) do
+    {disposition, _confirmed?, _os_pid} = Interrupt.kill_os_pid(os_pid)
+    close_port(port)
+    disposition == :killed
   end
 
   defp append_capped(acc, _data, true), do: {acc, true}

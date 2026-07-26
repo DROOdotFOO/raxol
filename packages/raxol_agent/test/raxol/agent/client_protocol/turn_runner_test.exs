@@ -118,6 +118,17 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     def complete(_messages, _opts), do: {:error, :stream_only}
   end
 
+  defmodule EchoAction do
+    @moduledoc "A fast, non-blocking tool that echoes its `v` argument back."
+    use Raxol.Agent.Action,
+      name: "echo",
+      description: "echoes v",
+      schema: [input: [v: [type: :integer, required: true]]]
+
+    @impl true
+    def run(%{v: v}, _context), do: {:ok, %{v: v}}
+  end
+
   defmodule BlockingAction do
     @moduledoc "A tool that announces itself then blocks until killed."
     use Raxol.Agent.Action,
@@ -357,6 +368,45 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     refute Process.alive?(pump)
   end
 
+  # -- 3b. interrupt-failure telemetry --------------------------------------------
+
+  test "a failing interrupt still completes the cancel honestly, and fires a distinguishable telemetry event" do
+    test_pid = self()
+    handler_id = "turn-runner-interrupt-failed-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:raxol, :agent, :acp_turn_runner, :interrupt_failed],
+      fn _event, _measurements, metadata, _config ->
+        send(test_pid, {:telemetry_interrupt_failed, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    runner =
+      TurnRunner.new(
+        backend: GatedBackend,
+        backend_opts: [owner: self()],
+        interrupt: fn _tool_ref, _sink, _opts -> {:error, :boom} end
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id)
+
+    assert_receive {:backend_up, pump}, 2_000
+    cancel!(session)
+
+    assert_receive {:telemetry_interrupt_failed, %{stage: :error, detail: :boom}},
+                   2_000
+
+    # The failure is measurable, but the cancel sequence still completes:
+    # exactly one cancelled reply, the pump still dead.
+    assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :cancelled}}}, 2_000
+    refute Process.alive?(pump)
+  end
+
   # -- 4. kill-complete fence -----------------------------------------------------
 
   test "cancel mid-tool: fence tool_call_update with _meta rider precedes the cancelled reply" do
@@ -438,6 +488,57 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :cancelled}}}, 2_000
     refute_receive {:conn_notify, _, _}, 150
     refute_receive {:conn_reply, _, _}, 100
+  end
+
+  # -- 4b. tool id correlation (same-name parallel calls) ------------------------
+
+  test "two in-flight tool_use calls sharing a name correlate their results by call order, not by name" do
+    runner =
+      TurnRunner.new(
+        backend: Raxol.Agent.Backend.Mock,
+        backend_opts: [
+          tool_calls: [
+            %{"name" => "echo", "arguments" => %{"v" => 1}, "id" => "tc-a"},
+            %{"name" => "echo", "arguments" => %{"v" => 2}, "id" => "tc-b"}
+          ]
+        ],
+        actions: [EchoAction],
+        # Bounds the ReAct loop to exactly one tool-turn: the mock backend
+        # replays the SAME static tool_calls every round, so without this the
+        # runner would loop announcing "tc-a"/"tc-b" again indefinitely.
+        max_iterations: 1
+      )
+
+    {session, session_id} = start_session!(runner)
+    _reply_ref = begin_prompt!(session, session_id)
+
+    # Both calls are announced (batch-style) BEFORE either is executed —
+    # the exact window the prior name-keyed single slot corrupted.
+    assert_receive {:conn_notify, "session/update",
+                    %{update: {:tool_call, %{tool_call_id: "tc-a", status: :in_progress}}}},
+                   2_000
+
+    assert_receive {:conn_notify, "session/update",
+                    %{update: {:tool_call, %{tool_call_id: "tc-b", status: :in_progress}}}},
+                   2_000
+
+    # Results are executed and emitted in the SAME order as their
+    # announcements (`execute_tools/2`'s `Enum.map/2`): tc-a's result (v: 1)
+    # must correlate back to "tc-a", tc-b's (v: 2) to "tc-b" — the prior
+    # name-keyed `tool_ids[name] = id` slot pointed BOTH at whichever id
+    # fired last ("tc-b"), corrupting tc-a's correlation.
+    assert_receive {:conn_notify, "session/update", %{update: {:tool_call_update, tcu_a}}},
+                   2_000
+
+    assert tcu_a.tool_call_id == "tc-a"
+    assert tcu_a.fields.status == :completed
+    assert tcu_a.fields.raw_output == %{v: 1}
+
+    assert_receive {:conn_notify, "session/update", %{update: {:tool_call_update, tcu_b}}},
+                   2_000
+
+    assert tcu_b.tool_call_id == "tc-b"
+    assert tcu_b.fields.raw_output == %{v: 2}
   end
 
   # -- 5. stream error ------------------------------------------------------------

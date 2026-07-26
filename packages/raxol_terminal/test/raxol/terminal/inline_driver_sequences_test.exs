@@ -2,10 +2,9 @@ defmodule Raxol.Terminal.InlineDriverSequencesTest do
   @moduledoc """
   Pure byte-sequence tests for unit T2d (`Raxol.Terminal.InlineDriver.Sequences`).
 
-  No process, no device, no OS tty -- Tier A of
-  `harness-ui-testing/03-lifecycle.md`. These are the fail-first anchors:
-  LC-P-NOALT (init/teardown alt-screen symmetry) and LC-P-CSIR (`CSI r`
-  present in teardown -- this is the one that fails against today's
+  No process, no device, no OS tty -- Tier A. These are the fail-first
+  anchors: LC-P-NOALT (init/teardown alt-screen symmetry) and LC-P-CSIR
+  (`CSI r` present in teardown -- this is the one that fails against
   `Termbox.Lifecycle.cleanup_terminal/1`, which never emits it).
   """
 

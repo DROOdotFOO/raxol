@@ -90,7 +90,9 @@ defmodule Raxol.Payments.Wallets.Op do
   def handle_manager_call({:sign_message, message}, _from, state) do
     case ensure_loaded(state) do
       {:ok, state} ->
-        result = Secret.with_revealed(state.privkey, &do_sign_message(&1, message))
+        result =
+          Secret.with_revealed(state.privkey, &do_sign_message(&1, message))
+
         {:reply, result, state}
 
       {:error, reason} ->
@@ -98,11 +100,18 @@ defmodule Raxol.Payments.Wallets.Op do
     end
   end
 
-  def handle_manager_call({:sign_typed_data, domain, types, message}, _from, state) do
+  def handle_manager_call(
+        {:sign_typed_data, domain, types, message},
+        _from,
+        state
+      ) do
     case ensure_loaded(state) do
       {:ok, state} ->
         result =
-          Secret.with_revealed(state.privkey, &do_sign_typed_data(&1, domain, types, message))
+          Secret.with_revealed(
+            state.privkey,
+            &do_sign_typed_data(&1, domain, types, message)
+          )
 
         {:reply, result, state}
 
@@ -133,8 +142,14 @@ defmodule Raxol.Payments.Wallets.Op do
     # crashing the wallet on a bad key.
     with {:ok, privkey} <- fetch_from_op(op_ref),
          secret = Secret.new(privkey),
-         {:ok, pubkey} <- Secret.with_revealed(secret, &ExSecp256k1.create_public_key/1) do
-      {:ok, %{state | privkey: secret, address: derive_address(pubkey)}}
+         {:ok, pubkey} <-
+           Secret.with_revealed(secret, &ExSecp256k1.create_public_key/1) do
+      {:ok,
+       %{
+         state
+         | privkey: secret,
+           address: Raxol.Payments.EIP712.address_from_pubkey(pubkey)
+       }}
     end
   end
 
@@ -154,12 +169,6 @@ defmodule Raxol.Payments.Wallets.Op do
       {output, code} ->
         {:error, {:op_failed, code, String.trim(output)}}
     end
-  end
-
-  defp derive_address(pubkey) do
-    <<_prefix::8, key_bytes::binary>> = pubkey
-    <<_first_12::binary-size(12), address_bytes::binary-size(20)>> = ExKeccak.hash_256(key_bytes)
-    "0x" <> Base.encode16(address_bytes, case: :lower)
   end
 
   defp do_sign_message(privkey, message) do

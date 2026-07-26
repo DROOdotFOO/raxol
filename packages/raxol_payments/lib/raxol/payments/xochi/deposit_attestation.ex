@@ -30,7 +30,6 @@ defmodule Raxol.Payments.Xochi.DepositAttestation do
   """
 
   @message_prefix "xochi-deposit-attestation:v1"
-  @eip191_prefix "\x19Ethereum Signed Message:\n"
 
   @type fields :: %{
           intent_id: String.t(),
@@ -71,11 +70,12 @@ defmodule Raxol.Payments.Xochi.DepositAttestation do
   @spec recover(fields(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def recover(%{} = fields, "0x" <> hex), do: recover(fields, hex)
 
-  def recover(%{} = fields, hex) when is_binary(hex) and byte_size(hex) == 130 do
+  def recover(%{} = fields, hex)
+      when is_binary(hex) and byte_size(hex) == 130 do
     with {:ok, {r, s, recovery_id}} <- decode_signature(hex),
-         digest = eip191_digest(message(fields)),
+         digest = Raxol.Payments.Eip191.digest(message(fields)),
          {:ok, pubkey} <- ExSecp256k1.recover(digest, r, s, recovery_id) do
-      {:ok, address_from_pubkey(pubkey)}
+      {:ok, Raxol.Payments.EIP712.address_from_pubkey(pubkey)}
     else
       _ -> {:error, :invalid_signature}
     end
@@ -92,7 +92,8 @@ defmodule Raxol.Payments.Xochi.DepositAttestation do
     * `{:error, :attestation_mismatch}` -- it recovers to a different address.
     * `{:error, :invalid_signature}` -- it cannot be recovered.
   """
-  @spec verify(fields(), String.t() | nil, String.t() | nil) :: :ok | {:error, atom()}
+  @spec verify(fields(), String.t() | nil, String.t() | nil) ::
+          :ok | {:error, atom()}
   def verify(_fields, nil, _signer), do: {:error, :missing_attestation}
   def verify(_fields, "", _signer), do: {:error, :missing_attestation}
   def verify(_fields, _signature, nil), do: {:error, :signer_unavailable}
@@ -118,29 +119,14 @@ defmodule Raxol.Payments.Xochi.DepositAttestation do
   defp normalize_address("0x" <> _ = address), do: String.downcase(address)
   defp normalize_address(other), do: other
 
-  defp eip191_digest(message) do
-    prefixed = @eip191_prefix <> Integer.to_string(byte_size(message)) <> message
-    ExKeccak.hash_256(prefixed)
-  end
-
   defp decode_signature(hex) do
     case Base.decode16(hex, case: :mixed) do
       {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>} ->
-        {:ok, {r, s, normalize_recovery_id(v)}}
+        {:ok, {r, s, Raxol.Payments.Eip191.normalize_recovery_id(v)}}
 
       _ ->
         {:error, :invalid_signature}
     end
-  end
-
-  # EIP-191/personal_sign uses v in {27, 28}; ExSecp256k1 wants a 0/1 recovery id.
-  defp normalize_recovery_id(v) when v >= 27, do: v - 27
-  defp normalize_recovery_id(v), do: v
-
-  # address = last 20 bytes of keccak256(uncompressed pubkey without the 0x04 tag).
-  defp address_from_pubkey(<<_prefix::8, xy::binary-size(64)>>) do
-    <<_first12::binary-size(12), addr::binary-size(20)>> = ExKeccak.hash_256(xy)
-    "0x" <> Base.encode16(addr, case: :lower)
   end
 
   defp addr_eq?(a, b), do: String.downcase(a) == String.downcase(b)

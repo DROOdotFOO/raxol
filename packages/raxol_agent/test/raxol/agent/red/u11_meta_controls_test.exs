@@ -6,9 +6,9 @@ defmodule Raxol.Agent.Red.U11MetaControlsTest do
 
   ## Negative controls (meta-invariant m4 — dead injectors)
 
-  Every negative contour of `harness-freeze-contracts.md` §2.3 names a *dead
-  injector*: the exact broken implementation that would make its red
-  green-on-broken. Each control here runs that injector (a broken oracle
+  Every negative contour of the U11 red suite names a *dead injector*: the
+  exact broken implementation that would make its red green-on-broken.
+  Each control here runs that injector (a broken oracle
   variant in `Raxol.Agent.Red.MetaOracle`) against the SAME generated journals
   the red suite uses and asserts the breakage is **detectable** — the broken
   answer must disagree with the correct oracle exactly where the red asserts.

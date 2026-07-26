@@ -1,22 +1,20 @@
 defmodule Raxol.Agent.Red.U9CheckpointRedTest do
   @moduledoc """
   U9-R — permanent failing-first (RED) suite for **checkpoint pointer records**
-  (AD-10 / AD-3a), authored BEFORE implementation against the frozen shapes in
-  `docs/proposals/in-flight/harness-freeze-contracts.md` §1.1–§1.3 (JS-FREEZE).
+  (AD-10 / AD-3a), authored BEFORE implementation against the frozen shapes
+  (JS-FREEZE).
 
-  These tests assert the *correct* checkpoint behaviour. The enabler skeleton
-  `Raxol.Agent.Journal.Records.Checkpoint` returns `{:error, :not_implemented}`
-  from `write/3` and `restore/2`, so every contour here is RED by construction
-  until U9 lands. The suite carries `@moduletag :harness_red` and is excluded
-  from CI (see `test/test_helper.exs`); when U9 lands, the exclusion is dropped
-  and these must go green unchanged.
+  These tests assert the *correct* checkpoint behaviour. U9 has since landed:
+  `Raxol.Agent.Journal.Records.Checkpoint`'s `write/3` and `restore/2` dispatch
+  to the real `FileBackend` by default, the `:harness_red` exclusion was
+  dropped, and this suite now runs GREEN in CI unchanged.
 
   Journal truth is the independent raw oracle in `Raxol.Agent.Red.CheckpointRed`
   (meta-inv 6), never `FileStore.read/2`. Where the real Writer/FileStore exist
   they ARE driven (single-Writer append, dense offsets); only the checkpoint
-  seam is the not-yet-built subject.
+  seam was the not-yet-built subject before U9 landed.
 
-  Contours (freeze §1.2/§1.3):
+  Contours:
 
     * P-JS1  — checkpoint consumes exactly one offset; record ids stay dense
     * file-before-record — orphan file harmless; record-without-file → N-JS3
@@ -29,7 +27,7 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
     * reason enum accepted; unknown reason tolerated on READ (forward-compat)
 
   DEFERRED (do NOT author — freeze marks `@tag :gc`): P-JS11 / N-JS11 (GC
-  low-watermark density). See the PR body.
+  low-watermark density).
   """
   use ExUnit.Case, async: true
 
@@ -187,7 +185,9 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
       # Checkpoint captures the model as of the tip.
       assert {:ok, _cp_off} =
-               Checkpoint.write(j, CR.fold(CR.raw_records(dir)), reason: "manual")
+               Checkpoint.write(j, CR.fold(CR.raw_records(dir)),
+                 reason: "manual"
+               )
 
       # Mutate the conversation forward past the checkpoint.
       CR.append_all!(j, [
@@ -762,7 +762,9 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       # ~200 KB of bytes, ~100k levels of nesting: passes the 64 MiB size cap
       # and the sha256 check, and BEFORE the fix reached `Jason.decode/1`,
       # which materializes the entire term before any post-hoc depth walk.
-      deep = String.duplicate("[", 100_000) <> "1" <> String.duplicate("]", 100_000)
+      deep =
+        String.duplicate("[", 100_000) <> "1" <> String.duplicate("]", 100_000)
+
       bytes = ~s({"applied":) <> deep <> "}"
       hash = CR.sha256_hex(bytes)
       ref = "snapshots/#{hash}.json"
@@ -867,7 +869,9 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       cp = %{"kind" => "checkpoint", "tip_offset" => 1, "reason" => "manual"}
 
       assert {:error, :mid_turn} = FileStore.append_checked(j, cp, check)
-      assert CR.raw_ids(dir) == before_ids, "a rejected checked append appends nothing"
+
+      assert CR.raw_ids(dir) == before_ids,
+             "a rejected checked append appends nothing"
 
       # Close the turn → the same append is admitted, dense offset consumed.
       CR.append_all!(j, [CR.loop_event("turn_completed")])
@@ -921,7 +925,8 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
       assert :ok = Task.await(turns)
 
       # After the dust settles a write at the boundary must still land.
-      assert {:ok, _} = Checkpoint.write(j, %{"applied" => []}, reason: "manual")
+      assert {:ok, _} =
+               Checkpoint.write(j, %{"applied" => []}, reason: "manual")
 
       # The raw-journal invariant: for EVERY checkpoint record, the records
       # before it sit at a turn boundary (open-turn balance zero).

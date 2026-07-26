@@ -159,9 +159,8 @@ defmodule Raxol.Terminal.Capabilities do
   # Wire bytes only: raw {r,g,b} from OSC 11/10, the classified color
   # depth, and the $COLORFGBG polarity SEED. Deliberately no OKLab/OKLCH
   # math, no computed ground lightness, no final polarity decision --
-  # that color science lives in main raxol's Salience module (see
-  # `docs/proposals/in-flight/native-palette-riding.md` §7 / amendment
-  # A3). Nil-safe when no record has been cached yet (headless, tests).
+  # that color science lives in main raxol's Salience module. Nil-safe
+  # when no record has been cached yet (headless, tests).
 
   @doc "Detected native background color (`OSC 11`), if any."
   @spec background() :: rgb() | nil

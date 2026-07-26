@@ -63,6 +63,26 @@ defmodule Raxol.Agent.StreamTest do
     def capabilities, do: [:completion, :tool_use]
   end
 
+  # -- Native (vendor-owns-loop) backend --------------------------------------
+
+  defmodule NativeToolLoopBackend do
+    @moduledoc "A backend that runs its own tool loop (tools injected over MCP)."
+    @behaviour Raxol.Agent.AIBackend
+
+    @impl true
+    def complete(_messages, _opts),
+      do: {:ok, %{content: "ok", usage: %{}, metadata: %{}}}
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "Native Tool Loop"
+    @impl true
+    def capabilities, do: [:completion, :tool_use]
+    @impl true
+    def handles_tools_internally?, do: true
+  end
+
   # -- Capturing Mock Backend ---------------------------------------------------
 
   defmodule CapturingBackend do
@@ -205,6 +225,41 @@ defmodule Raxol.Agent.StreamTest do
                AgentStream.run("Hello", opts) |> Enum.to_list()
 
       assert done.content == "Sync response"
+    end
+  end
+
+  # `run/2` has no tool-execution loop (that's `react/2`); a streamed done
+  # can still carry `tool_calls` (`Backend.HTTP` accumulates them via
+  # `finalize_tool_calls/1` regardless of which path is used). Before this
+  # fix, `normalize_backend_stream/1`'s `{:done, response}` clause rebuilt
+  # the done event from `content`/`usage` only and discarded
+  # `response.tool_calls` outright -- a model's claimed tool call vanished
+  # with no receipt while the turn still reported a clean done.
+  describe "run/2 tool_calls on a streamed done (no react loop to execute them)" do
+    test "a streamed done carrying tool_calls seals a :tool_unexecuted marker, never a silent drop" do
+      tool_calls = [tool_call("c1", "read_file", %{"path" => "mix.exs"})]
+
+      opts = [backend: Raxol.Agent.Backend.Mock, backend_opts: [tool_calls: tool_calls]]
+
+      events = AgentStream.run("Hello", opts) |> Enum.to_list()
+
+      assert [{:text_delta, ""}, {:tool_unexecuted, marker}, {:done, done}] = events
+
+      assert marker.name == "read_file"
+
+      # The done event's own shape (content/tool_results/usage) is
+      # untouched -- the marker rides as its own event, not folded in.
+      assert done.content == ""
+      assert done.tool_results == []
+
+      refute Enum.any?(events, &match?({:tool_use, _}, &1)),
+             "run/2 has no executor; {:tool_use} would imply one exists"
+    end
+
+    test "a streamed done with no tool_calls emits no marker (no regression on the common path)" do
+      events = AgentStream.run("Hello", mock_opts("Hi there!")) |> Enum.to_list()
+
+      refute Enum.any?(events, &match?({:tool_unexecuted, _}, &1))
     end
   end
 
@@ -357,6 +412,20 @@ defmodule Raxol.Agent.StreamTest do
                AgentStream.react("Hello", opts) |> Enum.to_list()
 
       assert done.content == "I'm helpful."
+    end
+  end
+
+  describe "native_tool_loop?/1" do
+    test "true for a backend that runs its own tool loop" do
+      assert AgentStream.native_tool_loop?(backend: NativeToolLoopBackend)
+    end
+
+    test "false for a framework (Mock) backend" do
+      refute AgentStream.native_tool_loop?(backend: Raxol.Agent.Backend.Mock)
+    end
+
+    test "resolves the same backend react/2 will use (default fallback is framework)" do
+      refute AgentStream.native_tool_loop?([])
     end
   end
 

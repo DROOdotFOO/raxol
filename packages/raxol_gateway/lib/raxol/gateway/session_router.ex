@@ -196,8 +196,21 @@ defmodule Raxol.Gateway.SessionRouter do
         {:reply, {:error, :no_source_session}, state}
 
       from_pid ->
-        rebind(Session.conversation_id(from_pid), to_route, state)
+        case fetch_conversation_id(from_pid) do
+          {:ok, conversation_id} -> rebind(conversation_id, to_route, state)
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
     end
+  end
+
+  # A session blocked in a long handler turn (an LLM call in Handler.Agent is
+  # the common case) cannot answer before the call timeout; surface
+  # :session_busy instead of letting the exit crash the router and wipe all
+  # session tracking.
+  defp fetch_conversation_id(pid) do
+    {:ok, Session.conversation_id(pid, 1_000)}
+  catch
+    :exit, _reason -> {:error, :session_busy}
   end
 
   # Start (or reuse) the destination session, carrying the source's

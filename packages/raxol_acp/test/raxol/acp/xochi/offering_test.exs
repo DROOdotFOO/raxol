@@ -8,7 +8,11 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       meta = Offering.offering_metadata()
 
       assert meta.name == "xochi_cross_chain_transfer"
-      assert meta.required_funds == true
+      # No funds move through ACP -- capital moves via the buyer's signed intent.
+      assert meta.required_funds == false
+      # A percentage storefront fee; price carries the value (0.10 = 10 bps).
+      assert meta.price_type == "percentage"
+      assert meta.price_usdc == 0.10
       assert meta.hook_kind == "none"
       assert meta.sla_minutes == 10
       assert "payments" in meta.tags
@@ -31,21 +35,9 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       assert schema["additionalProperties"] == false
     end
 
-    test "marks the corridor fields plus the signed intent as required" do
+    test "requires only the signed intent; corridor + amount are derived" do
       schema = Offering.requirement_schema()
-      required = MapSet.new(schema["required"])
-
-      assert MapSet.equal?(
-               required,
-               MapSet.new([
-                 "src_chain_id",
-                 "dst_chain_id",
-                 "src_token",
-                 "dst_token",
-                 "amount_atomic",
-                 "signed_intent"
-               ])
-             )
+      assert schema["required"] == ["signed_intent"]
     end
 
     test "the signed_intent object requires the bundle fields" do
@@ -56,7 +48,7 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
 
       assert MapSet.equal?(
                MapSet.new(bundle["required"]),
-               MapSet.new(["intent_id", "quote_id", "signature", "nonce"])
+               MapSet.new(["intent_id", "quote_id", "signature", "nonce", "pull_signature"])
              )
     end
 
@@ -80,13 +72,19 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
           "intent_id" => "xi_1",
           "quote_id" => "xq_1",
           "signature" => "0x" <> String.duplicate("11", 65),
-          "nonce" => 7
+          "nonce" => 7,
+          "pull_signature" => "0x" <> String.duplicate("22", 65)
         }
       }
     end
 
     test "accepts a minimal valid request" do
       assert Offering.valid_requirement?(minimal_req())
+    end
+
+    test "accepts a signed-intent-only request (corridor is derived from Xochi)" do
+      bundle = minimal_req()["signed_intent"]
+      assert Offering.valid_requirement?(%{"signed_intent" => bundle})
     end
 
     test "rejects requests missing a required field" do

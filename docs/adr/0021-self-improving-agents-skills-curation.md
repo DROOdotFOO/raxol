@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-17. First of the Hermes-extraction Tier 1 ADRs (research deliverable at
+Accepted, 2026-07-22 (implemented in `Raxol.Agent.SelfImprove`, `Raxol.Agent.Curator`, and `Raxol.Agent.Skills.Store`). Originally proposed 2026-06-17. First of the Hermes-extraction Tier 1 ADRs (research deliverable at
 `~/Desktop/hermes-extraction-report.md`, items H1.1 self-improvement loop + H1.2 runtime skill
 authoring). Hermes (Nous Research) is the benchmark agent this work targets: its defining claim,
 "an agent that gets more capable the longer it runs," rests on agent-authored skills plus an

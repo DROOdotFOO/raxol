@@ -306,6 +306,17 @@ defmodule Raxol.AgentClientProtocol.Test.Conformance.CaseRunner do
     result =
       Connection.request(harness.client_conn, "session/prompt", req, opts.update_timeout_ms)
 
+    # The synchronous prompt result has no happens-before with MockClient's
+    # `session/update` accumulation (that runs on the async broadcast-callback
+    # path, a fresh dispatch task per notification). All update FRAMES were
+    # received before the response frame (I3), but their handler tasks may not
+    # have appended to the accumulator yet when a downstream `updates_*` check
+    # reads it. Quiesce the accumulator (bounded) before returning so a check
+    # never races the drain. Test-harness synchronization only — not a runtime
+    # ordering assertion (the prompt/prompt_stream direct channel is what the
+    # real ordering guarantee rides on; this fixture uses the callback path).
+    quiesce_updates(harness.client_state)
+
     result = apply_expect_error(result, step["expect_error"], "session/prompt")
     save(ctx, step["save_as"], unwrap(result))
   end
@@ -416,6 +427,23 @@ defmodule Raxol.AgentClientProtocol.Test.Conformance.CaseRunner do
 
   defp save(ctx, nil, _value), do: ctx
   defp save(ctx, key, value), do: %{ctx | saved: Map.put(ctx.saved, key, value)}
+
+  # Poll the MockClient update accumulator until its length is stable across two
+  # consecutive reads (the async dispatch tasks have drained) or a bounded cap
+  # is reached. Resolves in a few ms for the mock's burst-then-done pattern.
+  defp quiesce_updates(client_state, prev \\ -1, tries \\ 0)
+  defp quiesce_updates(_client_state, _prev, tries) when tries >= 50, do: :ok
+
+  defp quiesce_updates(client_state, prev, tries) do
+    count = client_state |> MockClient.updates() |> length()
+
+    if count == prev and count > 0 do
+      :ok
+    else
+      Process.sleep(2)
+      quiesce_updates(client_state, count, tries + 1)
+    end
+  end
 
   defp resolve_ref("$" <> key, saved) do
     case Map.fetch(saved, key) do

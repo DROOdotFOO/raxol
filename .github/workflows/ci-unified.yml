@@ -239,6 +239,54 @@ jobs:
           path: _build/test/boot_metrics.json
           if-no-files-found: ignore
 
+  # ========================================
+  # Extracted Package Tests
+  # ========================================
+  # Packages not in the root umbrella's dependency set compile and test on
+  # their own; the root jobs never see them.
+  package-tests:
+    name: Package Tests (${{ matrix.package }})
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [raxol_gateway, raxol_telegram]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ needs.setup.outputs.elixir-version }}
+          otp-version: ${{ needs.setup.outputs.otp-version }}
+
+      - name: Cache package dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            packages/${{ matrix.package }}/deps
+            packages/${{ matrix.package }}/_build
+          key: pkg-${{ matrix.package }}-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-${{ hashFiles(format('packages/{0}/mix.lock', matrix.package)) }}
+          restore-keys: |
+            pkg-${{ matrix.package }}-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-
+
+      - name: Install hex and rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Compile package
+        working-directory: packages/${{ matrix.package }}
+        run: |
+          mix deps.get
+          mix compile --warnings-as-errors
+
+      - name: Run package tests
+        working-directory: packages/${{ matrix.package }}
+        run: mix test
+
   test-integration:
     name: Integration Tests
     needs: [setup, compile]
@@ -320,7 +368,12 @@ jobs:
       
       - name: Run property tests
         run: |
-          mix test test/property
+          # Run test/property by path, but still honor skip_on_ci: some
+          # properties are wall-clock timing assertions (e.g. parser
+          # sub-quadratic scaling) tagged skip_on_ci precisely because they
+          # flake on shared CI runners. By path alone they would run and
+          # flake; exclude them like every other CI lane.
+          mix test test/property --exclude skip_on_ci
         env:
           MIX_TEST_PARTITION: 3
       
@@ -622,10 +675,10 @@ jobs:
   # ========================================
   ci-status:
     name: CI Status
-    needs: [format, compile, test-unit, credo, security]
+    needs: [format, compile, test-unit, package-tests, credo, security]
     runs-on: ubuntu-latest
     if: always()
-    
+
     steps:
       - name: Check status
         run: |
@@ -634,14 +687,19 @@ jobs:
             echo "❌ Format check failed"
             exit 1
           fi
-          
+
           if [ "${{ needs.compile.result }}" != "success" ]; then
             echo "❌ Compilation check failed"
             exit 1
           fi
-          
+
           if [ "${{ needs.test-unit.result }}" != "success" ]; then
             echo "❌ Unit tests failed"
+            exit 1
+          fi
+
+          if [ "${{ needs.package-tests.result }}" != "success" ]; then
+            echo "❌ Package tests failed"
             exit 1
           fi
           

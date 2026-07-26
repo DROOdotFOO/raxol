@@ -17,6 +17,24 @@ defmodule Raxol.Gateway.SessionRouterTest do
     def handle_event(_event, state), do: {:noreply, state}
   end
 
+  defmodule BlockingHandler do
+    @behaviour Raxol.Gateway.Handler
+
+    @impl true
+    def init(_route, opts), do: {:ok, %{caller: Keyword.fetch!(opts, :caller)}}
+
+    @impl true
+    def handle_event(:block, state) do
+      send(state.caller, :blocked)
+
+      receive do
+        :release -> {:noreply, state}
+      end
+    end
+
+    def handle_event(_event, state), do: {:noreply, state}
+  end
+
   setup ctx do
     test_pid = self()
     sup = :"sup_#{uid()}"
@@ -90,8 +108,49 @@ defmodule Raxol.Gateway.SessionRouterTest do
   test "a session stops on idle timeout", %{router: r} do
     {:ok, pid} = SessionRouter.start_session(r, route(1))
     ref = Process.monitor(pid)
-    send(pid, :idle_timeout)
+    %{idle_ref: idle_ref} = :sys.get_state(pid)
+    send(pid, {:idle_timeout, idle_ref})
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
+  test "a stale idle timeout from a superseded timer is ignored", %{router: r} do
+    {:ok, pid} = SessionRouter.start_session(r, route(1))
+    ref = Process.monitor(pid)
+    send(pid, {:idle_timeout, make_ref()})
+    # The session must survive the stale message; a sync call proves liveness.
+    assert %Route{} = Raxol.Gateway.Session.route(pid)
+    refute_received {:DOWN, ^ref, :process, ^pid, _}
+  end
+
+  test "handoff from a session blocked in a long turn returns busy, router survives" do
+    sup = :"busy_sup_#{uid()}"
+    start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+    router = :"busy_router_#{uid()}"
+
+    start_supervised!(%{
+      id: router,
+      start:
+        {SessionRouter, :start_link,
+         [
+           [
+             name: router,
+             handler: {BlockingHandler, [caller: self()]},
+             sessions_sup: sup
+           ]
+         ]}
+    })
+
+    from = route(1)
+    {:ok, pid} = SessionRouter.start_session(router, from)
+    Raxol.Gateway.Session.dispatch(pid, :block)
+    assert_receive :blocked
+
+    to = Route.new(%{platform: :other, chat_type: :dm, chat_id: "x"})
+    assert {:error, :session_busy} = SessionRouter.handoff(router, Route.key(from), to)
+
+    # The router survived the timed-out call and still tracks the session.
+    assert SessionRouter.session_count(router) == 1
+    send(pid, :release)
   end
 
   @tag max_sessions: 1

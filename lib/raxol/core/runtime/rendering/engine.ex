@@ -620,7 +620,12 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
         Backends.render_to_ssh(final_cells, state)
 
       :telegram ->
-        Backends.render_to_telegram(final_cells, state)
+        Backends.render_to_telegram(final_cells, state, view)
+
+      # :gateway renders the frame as plain text through the caller-supplied
+      # io_writer (Handler.Lifecycle formats it per chat); no tty is owned.
+      :gateway ->
+        Backends.render_to_io_writer(final_cells, state, view)
 
       :agent ->
         # Agent environment: buffer maintained for inspection, no output

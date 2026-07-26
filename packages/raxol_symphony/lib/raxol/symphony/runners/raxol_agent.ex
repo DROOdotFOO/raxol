@@ -201,14 +201,17 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
          {:ok, compiled} <-
            AgentWorkflow.compile(max_turns, workflow_compile_opts(config)) do
       case resume_token do
-        %{workflow_run_id: run_id} when not is_nil(run_id) and not is_nil(resume_value) ->
+        %{workflow_run_id: run_id}
+        when not is_nil(run_id) and not is_nil(resume_value) ->
           compiled
           |> Compiled.resume(run_id, resume_value)
           |> translate_workflow_result(issue)
 
         _ ->
           run_id = generate_workflow_run_id(issue, opts)
-          state = build_workflow_state(issue, config, opts, backend, backend_opts)
+
+          state =
+            build_workflow_state(issue, config, opts, backend, backend_opts)
 
           compiled
           |> Compiled.invoke(state, run_id: run_id)
@@ -226,7 +229,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     # Postgrex equivalent.
     saver =
       Map.get(agent, :workflow_saver) ||
-        {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: :raxol_symphony_agent_workflow}}
+        {Raxol.Workflow.Checkpoint.Saver.Ets,
+         %{table: :raxol_symphony_agent_workflow}}
 
     [saver: saver]
   end
@@ -400,7 +404,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           system_prompt: state.system_prompt
         )
 
-      {:ok, collect_with_detector(stream, state.parent, state.issue.id, state.pause_detector)}
+      {:ok,
+       collect_with_detector(
+         stream,
+         state.parent,
+         state.issue.id,
+         state.pause_detector
+       )}
     end
 
     case Raxol.Agent.PolicyApplier.apply(policies, op, turn_payload) do
@@ -449,7 +459,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     still_active?(state.issue, state.config)
   end
 
-  def __workflow_still_active__(%{tracker_cache: cache, issue: issue, config: config} = state) do
+  def __workflow_still_active__(
+        %{tracker_cache: cache, issue: issue, config: config} = state
+      ) do
     key = {:tracker, issue.id}
 
     case Raxol.Agent.Cache.get(cache, key) do
@@ -533,7 +545,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       )
 
     if SelfImprove.configured?(config) do
-      {result, events} = forward_collecting(stream, ctx.parent, issue.id, ctx.pause_detector)
+      {result, events} =
+        forward_collecting(stream, ctx.parent, issue.id, ctx.pause_detector)
+
       SelfImprove.fire(config, issue, events)
       result
     else
@@ -560,7 +574,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   # (apply_detector returns `:continue`).
   defp forward_collecting(stream, parent, issue_id, detector) do
     {result, events} =
-      Enum.reduce_while(stream, {{:error, :no_done}, []}, fn event, {_result, acc} ->
+      Enum.reduce_while(stream, {{:error, :no_done}, []}, fn event,
+                                                             {_result, acc} ->
         send(parent, {:run_event, issue_id, legacy_payload(event)})
         acc = [legacy_payload(event) | acc]
         {step, result} = collect_decision(event, detector)
@@ -572,8 +587,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   defp collect_decision(event, detector) do
     case apply_detector(detector, event) do
-      {:pause, reason, token} when is_atom(reason) -> {:halt, {:pause, reason, token}}
-      _ -> done_decision(event)
+      {:pause, reason, token} when is_atom(reason) ->
+        {:halt, {:pause, reason, token}}
+
+      _ ->
+        done_decision(event)
     end
   end
 
@@ -648,7 +666,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     :ok
   end
 
-  defp settle_one(%Raxol.Symphony.Sandboxes.BudgetCap{} = sandbox, event, payload) do
+  defp settle_one(
+         %Raxol.Symphony.Sandboxes.BudgetCap{} = sandbox,
+         event,
+         payload
+       ) do
     Raxol.Symphony.Sandboxes.BudgetCap.settle(sandbox, event, payload)
   end
 
@@ -794,55 +816,49 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     Map.get(agent, :pause_detector)
   end
 
-  defp agent_tracker_cache(%Config{runner: %{agent: agent}}) do
-    Raxol.Agent.Cache.normalize(Map.get(agent, :tracker_cache))
-  end
+  # `Config` always builds `runner` as a map, so a single `%Config{}` clause
+  # is total -- `get_in` tolerates a missing `:agent` or key and yields nil
+  # (same as the old catch-all), leaving no provably-dead clause for the
+  # type checker to reject. Mirrors the session runner's `agent_prompt_cache`.
+  defp agent_tracker_cache(%Config{runner: runner}),
+    do: Raxol.Agent.Cache.normalize(get_in(runner, [:agent, :tracker_cache]))
 
-  defp agent_tracker_cache(_), do: nil
+  defp agent_tracker_cache_ttl_ms(%Config{runner: runner}),
+    do: get_in(runner, [:agent, :tracker_cache_ttl_ms]) || 30_000
 
-  defp agent_tracker_cache_ttl_ms(%Config{runner: %{agent: agent}}) do
-    Map.get(agent, :tracker_cache_ttl_ms, 30_000)
-  end
-
-  defp agent_tracker_cache_ttl_ms(_), do: 30_000
-
-  defp agent_thread_log(%Config{runner: %{agent: agent}} = config) do
-    case Raxol.Agent.ThreadLog.normalize(Map.get(agent, :thread_log)) do
+  defp agent_thread_log(%Config{runner: runner} = config) do
+    case Raxol.Agent.ThreadLog.normalize(get_in(runner, [:agent, :thread_log])) do
       nil -> Raxol.Symphony.AgentMetadata.read(agent_module(config)).thread_log
       tuple -> tuple
     end
   end
 
-  defp agent_thread_log(_), do: nil
-
-  defp agent_module(%Config{runner: %{agent: agent}}), do: Map.get(agent, :module)
-  defp agent_module(_), do: nil
+  defp agent_module(%Config{runner: runner}),
+    do: get_in(runner, [:agent, :module])
 
   defp build_thread_id(%Issue{id: id}, attempt) when not is_nil(id) do
     "symphony-agent-" <> to_string(id) <> "-" <> to_string(attempt || 0)
   end
 
-  defp agent_policies(%Config{runner: %{agent: agent}}) do
-    case Map.get(agent, :policies, []) do
+  defp agent_policies(%Config{runner: runner}) do
+    case get_in(runner, [:agent, :policies]) do
       list when is_list(list) -> list
       _ -> []
     end
   end
 
-  defp agent_policies(_), do: []
-
-  defp agent_sandboxes(%Config{runner: %{agent: agent}} = config) do
+  defp agent_sandboxes(%Config{runner: runner} = config) do
     direct =
-      case Map.get(agent, :sandboxes, []) do
+      case get_in(runner, [:agent, :sandboxes]) do
         list when is_list(list) -> list
         _ -> []
       end
 
-    module_declared = Raxol.Symphony.AgentMetadata.read(agent_module(config)).sandboxes
+    module_declared =
+      Raxol.Symphony.AgentMetadata.read(agent_module(config)).sandboxes
+
     direct ++ module_declared
   end
-
-  defp agent_sandboxes(_), do: []
 
   # -- Prompt building (Liquid via PromptBuilder) -----------------------------
 

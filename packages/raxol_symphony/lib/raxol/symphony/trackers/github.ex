@@ -56,6 +56,8 @@ defmodule Raxol.Symphony.Trackers.GitHub do
 
   @behaviour Raxol.Symphony.Tracker
 
+  import Raxol.Symphony.Util, only: [blank?: 1]
+
   alias Raxol.Symphony.{Config, Issue}
 
   @max_pages 20
@@ -130,11 +132,6 @@ defmodule Raxol.Symphony.Trackers.GitHub do
       _ -> false
     end
   end
-
-  defp blank?(nil), do: true
-  defp blank?(""), do: true
-  defp blank?(s) when is_binary(s), do: String.trim(s) == ""
-  defp blank?(_), do: false
 
   # -- List + paginate --------------------------------------------------------
 
@@ -366,21 +363,12 @@ defmodule Raxol.Symphony.Trackers.GitHub do
     receive_timeout = Keyword.get(extra, :receive_timeout, 15_000)
     base_url = tracker.endpoint || @default_endpoint
 
-    base = [
-      base_url: base_url,
-      headers: [
-        {"accept", "application/vnd.github+json"},
-        {"authorization", "Bearer #{tracker.api_key}"},
-        {"x-github-api-version", "2022-11-28"},
-        {"user-agent", "raxol-symphony"}
-      ],
-      receive_timeout: receive_timeout,
-      retry: false
-    ]
-
-    base = if plug, do: Keyword.put(base, :plug, plug), else: base
-    base = if adapter, do: Keyword.put(base, :adapter, adapter), else: base
-
-    Req.new(base)
+    Raxol.Symphony.GitHub.Client.build(
+      base_url,
+      tracker.api_key,
+      plug,
+      adapter,
+      receive_timeout
+    )
   end
 end

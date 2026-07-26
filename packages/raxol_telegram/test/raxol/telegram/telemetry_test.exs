@@ -4,7 +4,7 @@ defmodule Raxol.Telegram.TelemetryTest do
   alias Raxol.Telegram.{Bot, SessionRouter}
 
   setup do
-    start_supervised!({SessionRouter, app_module: FakeApp, max_sessions: 1})
+    start_supervised!({SessionRouter, app_module: TelemetryFakeApp, max_sessions: 1})
 
     ref =
       :telemetry_test.attach_event_handlers(self(), [
@@ -63,7 +63,7 @@ defmodule Raxol.Telegram.TelemetryTest do
   describe "SessionRouter events" do
     test "rejected fires when max_sessions is reached" do
       # max_sessions is 1 from setup. First request hits do_start_session
-      # (which will fail because FakeApp isn't a real TEA app), and no slot
+      # (which will fail because TelemetryFakeApp isn't a real TEA app), and no slot
       # is taken. To exercise :max_sessions_reached deterministically,
       # poke a fake session pid into the state map.
       :sys.replace_state(SessionRouter, fn state ->
@@ -102,6 +102,6 @@ defmodule Raxol.Telegram.TelemetryTest do
   end
 end
 
-defmodule FakeApp do
+defmodule TelemetryFakeApp do
   @moduledoc false
 end

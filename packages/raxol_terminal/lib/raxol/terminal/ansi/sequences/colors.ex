@@ -7,7 +7,8 @@ defmodule Raxol.Terminal.ANSI.Sequences.Colors do
   """
 
   # Style.Colors lives in main raxol; guarded at runtime
-  @compile {:no_warn_undefined, [Raxol.Style.Colors.Advanced, Raxol.Style.Colors.Color]}
+  @compile {:no_warn_undefined,
+            [Raxol.Style.Colors.Advanced, Raxol.Style.Colors.Color]}
 
   alias Raxol.Terminal.ANSI.TextFormatting
 
@@ -258,13 +259,10 @@ defmodule Raxol.Terminal.ANSI.Sequences.Colors do
 
   defp parse_hex_color("#" <> hex) do
     case hex do
-      <<r::binary-size(2), g::binary-size(2), b::binary-size(2)>> ->
-        with {r_int, ""} <- Integer.parse(r, 16),
-             {g_int, ""} <- Integer.parse(g, 16),
-             {b_int, ""} <- Integer.parse(b, 16) do
-          color_from_rgb(r_int, g_int, b_int)
-        else
-          _ -> nil
+      <<_::binary-size(2), _::binary-size(2), _::binary-size(2)>> ->
+        case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_6(hex) do
+          {:ok, r, g, b, _a} -> color_from_rgb(r, g, b)
+          {:error, _} -> nil
         end
 
       _ ->
@@ -455,7 +453,12 @@ defmodule Raxol.Terminal.ANSI.Sequences.Colors do
     if Code.ensure_loaded?(Raxol.Style.Colors.Advanced) and
          Code.ensure_loaded?(Raxol.Style.Colors.Color) do
       color = Raxol.Style.Colors.Color.from_rgb(r, g, b)
-      adapted = Raxol.Style.Colors.Advanced.adapt_color_advanced(color, preserve_brightness: true)
+
+      adapted =
+        Raxol.Style.Colors.Advanced.adapt_color_advanced(color,
+          preserve_brightness: true
+        )
+
       {adapted.r, adapted.g, adapted.b}
     else
       {r, g, b}

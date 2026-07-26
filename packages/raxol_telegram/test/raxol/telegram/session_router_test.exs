@@ -8,7 +8,7 @@ defmodule Raxol.Telegram.SessionRouterTest do
 
   setup do
     # Start a fresh SessionRouter for each test
-    start_supervised!({SessionRouter, app_module: FakeApp})
+    start_supervised!({SessionRouter, app_module: SessionRouterFakeApp})
     :ok
   end
 
@@ -63,7 +63,7 @@ defmodule Raxol.Telegram.SessionRouterTest do
   end
 end
 
-defmodule FakeApp do
+defmodule SessionRouterFakeApp do
   @moduledoc false
   # Minimal module to satisfy app_module requirement
 end

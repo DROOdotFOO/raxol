@@ -100,8 +100,16 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     * `:gate?` — whether consequential tools require approval (default
       `true`). `false` is `--yolo`: no approval events, tools run directly.
     * `:await_decision` — `(request_id, meta) -> {:allow, option_id} |
-      {:deny, option_id, reason}`, blocking; the harness parks it. Default
-      auto-allows (used only when `gate?: false`, or in tests).
+      {:deny, option_id, reason}`, blocking; the harness parks it. Left
+      unwired, the default is FAIL-CLOSED: with `gate?: true` (the default)
+      an unwired approval seam denies every consequential call rather than
+      silently auto-allowing it — the opposite default would make turning
+      the gate on without wiring an answerer a silent auto-approval of
+      `run_shell` and friends, exactly the posture `ToolClassifier` exists to
+      prevent. The auto-allow default is reserved for `gate?: false`, where
+      it is provably never invoked (a `--yolo` run never reaches the gate at
+      all) — it exists only so the two are visibly paired, not because it is
+      reachable.
     * `:shell_tool_ref_sink` — arity-1 fun threaded into the tool context so
       `run_shell` can publish its live `%{port, os_pid}` for interrupts.
     * `:context` — extra Action context merged under the above.
@@ -127,14 +135,16 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
         Keyword.get(opts, :shell_tool_ref_sink)
       )
 
+    gate? = Keyword.get(opts, :gate?, true)
+
     config = %{
       backend: backend,
       opts: backend_opts,
       actions: actions,
       tool_context: tool_context,
       max_iterations: max_iterations,
-      gate?: Keyword.get(opts, :gate?, true),
-      await_decision: Keyword.get(opts, :await_decision, &default_allow/2),
+      gate?: gate?,
+      await_decision: Keyword.get(opts, :await_decision, default_await_decision(gate?)),
       # `stream: true` drives each round off `backend.stream/2` instead of the
       # blocking `complete/2` -- reasoning + answer text are forwarded to the
       # tail LIVE (the ShadowStream preview + streaming answer), and the final
@@ -157,8 +167,28 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     Stream.resource(
       fn -> %{ref: ref, pid: pid, done: false} end,
       &receive_event/1,
-      fn %{pid: p} -> if Process.alive?(p), do: Process.exit(p, :normal) end
+      &stop_loop/1
     )
+  end
+
+  # Consumption ending early (the operator navigates away, the parent turn
+  # is torn down, an exception unwinds the enumeration) must not leave the
+  # spawned loop parked forever. A plain `Process.exit(p, :normal)` sent by
+  # any process OTHER than `p` itself is a no-op -- the receiving process is
+  # not trapping exits, and an externally-sent `:normal` exit signal is
+  # simply discarded in that case, never terminating it. `p` may be blocked
+  # for up to `@loop_timeout_ms` inside a parked `GenServer.call` (an
+  # operator who never answers an approval), so nothing else reaps it either.
+  # `:kill` is the untrappable signal that actually terminates a non-trapping
+  # process no matter what it is blocked on. `p` was started via `spawn_link`
+  # from THIS process, so it must be unlinked first -- killing a still-linked
+  # process would deliver the same fatal exit signal back to the (also
+  # non-trapping) caller and take it down too.
+  defp stop_loop(%{pid: p}) do
+    if Process.alive?(p) do
+      Process.unlink(p)
+      Process.exit(p, :kill)
+    end
   end
 
   # -- stream plumbing (mirrors Stream.react's spawned-loop pattern) ----------
@@ -304,9 +334,20 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
     emit(
       st,
-      {:done,
-       %{content: content || "", tool_results: [], usage: usage(response)}}
+      {:done, %{content: content || "", tool_results: [], usage: usage(response)}}
     )
+  end
+
+  # A response with neither a non-empty `tool_calls` NOR a `:content` key
+  # (an empty/malformed provider reply -- e.g. `tool_calls: []` and no
+  # content) matches neither clause above; without this catch-all it is a
+  # `FunctionClauseError` that kills the spawned loop before `{:executor_done,
+  # _}` ever fires, relying on an unstated invariant that `:content` is
+  # always present. Coerce to an honest empty answer instead -- the round
+  # still seals a `:done` receipt rather than hanging or crashing.
+  defp dispatch_response(messages, iteration, st, response, opts)
+       when is_map(response) do
+    dispatch_response(messages, iteration, st, Map.put_new(response, :content, ""), opts)
   end
 
   # The model's chain-of-thought for this round, surfaced from
@@ -381,8 +422,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
         emit(
           st,
-          {:tool_result,
-           %{name: "unknown", result: {:error, :missing_tool_name}}}
+          {:tool_result, %{name: "unknown", result: {:error, :missing_tool_name}}}
         )
 
         %{role: :user, content: "[Tool error]: tool call had no name"}
@@ -390,11 +430,11 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       config.gate? and ToolClassifier.consequential?(name) ->
         gated_run(tc, name, arguments, st)
 
-      # An outside-cwd read is not destructive but IS a boundary cross:
-      # it escalates to the operator like an edit does (V's ruling),
-      # instead of the old hard :outside_cwd refusal. Gate off (--yolo)
-      # keeps the hard sandbox — auto-allowing an escape would widen the
-      # blast radius exactly when the operator opted out of questions.
+      # An outside-cwd read is not destructive but IS a boundary cross: it
+      # escalates to the operator like an edit does, rather than refusing
+      # outright. Gate off (--yolo) keeps the hard sandbox — auto-allowing an
+      # escape would widen the blast radius exactly when the operator opted
+      # out of questions.
       config.gate? and name == "read_file" and
           Fs.outside_cwd?(read_path(arguments)) ->
         gated_run(tc, name, arguments, st)
@@ -423,8 +463,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
     emit(
       st,
-      {:approval_requested,
-       approval_payload(request_id, name, arguments, options, preview)}
+      {:approval_requested, approval_payload(request_id, name, arguments, options, preview)}
     )
 
     decision =
@@ -438,8 +477,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:allow, option_id} ->
         emit(
           st,
-          {:approval_decided,
-           %{request_id: request_id, option_id: option_id, decision: :allow}}
+          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :allow}}
         )
 
         apply_after_allow(tc, name, preview, st)
@@ -447,8 +485,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:deny, option_id, reason} ->
         emit(
           st,
-          {:approval_decided,
-           %{request_id: request_id, option_id: option_id, decision: :deny}}
+          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :deny}}
         )
 
         emit(
@@ -473,10 +510,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # unless the path itself is rejected (outside cwd / too large), which stays
   # `:none`. Every other tool has no diff to show.
   defp tool_preview("write_file", args),
-    do:
-      preview_or_none(
-        Workspace.preview_write(arg(args, "path"), arg(args, "content"))
-      )
+    do: preview_or_none(Workspace.preview_write(arg(args, "path"), arg(args, "content")))
 
   defp tool_preview("edit_file", args),
     do:
@@ -635,7 +669,19 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
   # -- helpers ----------------------------------------------------------------
 
+  # `gate?: false` (--yolo) never routes through `gated_run/4` -- `run_one/2`
+  # only calls `gated_run/4` when `config.gate?` is true (or for the
+  # outside-cwd read escalation, itself gate?-guarded), so this branch is
+  # provably dead code, not a live auto-allow. `gate?: true` (the default,
+  # and every explicit opt-in) with no `:await_decision` wired gets the
+  # fail-closed default instead -- see `stream/2`'s moduledoc.
+  defp default_await_decision(false), do: &default_allow/2
+  defp default_await_decision(_gate?), do: &default_deny/2
+
   defp default_allow(_request_id, _meta), do: {:allow, "allow"}
+
+  defp default_deny(_request_id, _meta),
+    do: {:deny, "deny", :no_await_decision_configured}
 
   defp build_messages(prompt, nil), do: [%{role: :user, content: prompt}]
 

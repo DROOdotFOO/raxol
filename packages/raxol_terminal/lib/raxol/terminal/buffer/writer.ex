@@ -180,7 +180,7 @@ defmodule Raxol.Terminal.Buffer.Writer do
     new_cell = Cell.new(char, cell_style)
     # Same half-of-a-wide-pair cleanup `fill_cells/3` does -- the two paths
     # are documented to produce identical buffers.
-    row = clear_wide_neighbour_in_row(row, x, buffer_width)
+    row = clear_wide_neighbour_in_row(row, x, width, buffer_width)
 
     case {width == 2, x + 1 < buffer_width} do
       {true, true} ->
@@ -206,12 +206,13 @@ defmodule Raxol.Terminal.Buffer.Writer do
     end
   end
 
-  # List-based twin of `clear_wide_neighbour/4` (see its comment for why
+  # List-based twin of `clear_wide_neighbour/5` (see its comment for why
   # both halves of a wide pair must die together).
-  defp clear_wide_neighbour_in_row(row, x, buffer_width) do
+  defp clear_wide_neighbour_in_row(row, x, width, buffer_width) do
     row
     |> clear_lead_in_row(x)
     |> clear_placeholder_in_row(x, buffer_width)
+    |> clear_neighbour_lead_in_row(x, width, buffer_width)
   end
 
   defp clear_lead_in_row(row, x) when x > 0 do
@@ -232,6 +233,21 @@ defmodule Raxol.Terminal.Buffer.Writer do
   end
 
   defp clear_placeholder_in_row(row, _x, _buffer_width), do: row
+
+  # A WIDE write's own placeholder lands at `x + 1` -- which may currently
+  # be serving as a DIFFERENT pair's LEAD (not its placeholder; that case
+  # is `clear_placeholder_in_row/3` above, keyed off whether `x` itself
+  # used to be a lead). If `x + 1` is a lead (i.e. `x + 2` is currently
+  # flagged as a placeholder), that neighbour is about to be destroyed by
+  # our own placeholder overwriting its lead -- clear its now-orphaned
+  # placeholder at `x + 2` too, or the row paints one column too narrow
+  # (see `clear_wide_neighbour/5`'s comment for the full write-up). Only
+  # reachable for a wide write: a narrow write never touches `x + 1`, so
+  # it can never disturb whatever pair `x + 1` belongs to.
+  defp clear_neighbour_lead_in_row(row, x, 2, buffer_width),
+    do: clear_placeholder_in_row(row, x + 1, buffer_width)
+
+  defp clear_neighbour_lead_in_row(row, _x, _width, _buffer_width), do: row
 
   @typedoc """
   One bulk write: `{x, y, char, style}` with the same per-cell semantics
@@ -278,9 +294,16 @@ defmodule Raxol.Terminal.Buffer.Writer do
   def fill_cells(buffer, cells, style_resolver)
       when is_map(buffer) and is_list(cells) do
     by_row =
-      Enum.group_by(cells, fn {_x, y, _char, _style}
-                              when is_integer(y) and y >= 0 ->
-        y
+      Enum.group_by(cells, fn
+        {_x, y, _char, _style} when is_integer(y) and y >= 0 ->
+          y
+
+        # A negative / non-integer / malformed y is an extreme out-of-bounds
+        # write: bucket it under a sentinel key the row scan never looks up,
+        # so one bad coordinate is skipped like any other out-of-bounds cell
+        # instead of raising FunctionClauseError and aborting the whole frame.
+        _ ->
+          :__out_of_bounds__
       end)
 
     height = buffer.height
@@ -311,24 +334,30 @@ defmodule Raxol.Terminal.Buffer.Writer do
     original = List.to_tuple(row)
 
     {written, memo} =
-      Enum.reduce(row_cells, {%{}, memo}, fn {x, _y, char, style}, {written, memo}
-                                             when is_integer(x) and x >= 0 ->
-        case x < width do
-          true ->
-            write_into(
-              written,
-              memo,
-              original,
-              x,
-              char,
-              style,
-              width,
-              style_resolver
-            )
+      Enum.reduce(row_cells, {%{}, memo}, fn
+        {x, _y, char, style}, {written, memo}
+        when is_integer(x) and x >= 0 ->
+          case x < width do
+            true ->
+              write_into(
+                written,
+                memo,
+                original,
+                x,
+                char,
+                style,
+                width,
+                style_resolver
+              )
 
-          false ->
-            {written, memo}
-        end
+            false ->
+              {written, memo}
+          end
+
+        # Negative / non-integer / malformed x: skip this cell (same as an
+        # out-of-bounds write) rather than crashing the whole row's fold.
+        _cell, {written, memo} ->
+          {written, memo}
       end)
 
     case map_size(written) do
@@ -361,7 +390,7 @@ defmodule Raxol.Terminal.Buffer.Writer do
     # documented to produce exactly the buffer that folding `write_char/5`
     # produces. Skipping it here made the two paths disagree whenever a
     # last-column wide write landed on half of an existing wide pair.
-    written = clear_wide_neighbour(written, original, x, width)
+    written = clear_wide_neighbour(written, original, x, char_width, width)
 
     case {char_width == 2, x + 1 < width} do
       # A wide glyph with no room for its placeholder is dropped, not
@@ -404,12 +433,25 @@ defmodule Raxol.Terminal.Buffer.Writer do
   #     orphaned, and since the renderer drops placeholders the row paints
   #     one column TOO NARROW.
   #
-  # Both are cleared to a blank, which is what a terminal does when a write
-  # lands inside a wide character.
-  defp clear_wide_neighbour(written, original, x, width) do
+  # A THIRD case follows the same rule but at the NEIGHBOUR one column
+  # further out: when THIS write is itself wide, its own placeholder lands
+  # at `x + 1` -- which may currently be a DIFFERENT pair's lead glyph
+  # (e.g. `日本` then a wide `月` at column 1: `月`'s placeholder overwrites
+  # `本`'s lead at column 2). Overwriting that lead with a mere placeholder
+  # orphans `本`'s OWN placeholder at column 3 exactly as the second case
+  # above does, and it is invisible to `clear_orphaned_lead/placeholder`
+  # above (both only look at column `x` itself, never `x + 1`) -- so the
+  # row painted one column TOO NARROW again, just one column further
+  # right. Only reachable for a wide write: a narrow write never touches
+  # `x + 1`, so it can never disturb whatever pair `x + 1` belongs to.
+  #
+  # All three are cleared to a blank, which is what a terminal does when a
+  # write lands inside a wide character.
+  defp clear_wide_neighbour(written, original, x, char_width, width) do
     written
     |> clear_orphaned_lead(original, x)
     |> clear_orphaned_placeholder(original, x, width)
+    |> clear_neighbour_lead(original, x, char_width, width)
   end
 
   defp clear_orphaned_lead(written, original, x) when x > 0 do
@@ -430,6 +472,12 @@ defmodule Raxol.Terminal.Buffer.Writer do
   end
 
   defp clear_orphaned_placeholder(written, _original, _x, _width), do: written
+
+  defp clear_neighbour_lead(written, original, x, 2, width),
+    do: clear_orphaned_placeholder(written, original, x + 1, width)
+
+  defp clear_neighbour_lead(written, _original, _x, _char_width, _width),
+    do: written
 
   defp wide_placeholder?(%{wide_placeholder: true}), do: true
   defp wide_placeholder?(_cell), do: false

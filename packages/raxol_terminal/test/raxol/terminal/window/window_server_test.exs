@@ -14,8 +14,11 @@ defmodule Raxol.Terminal.Window.WindowServerTest do
     {:ok, pid} = Server.start_link(name: Server)
 
     on_exit(fn ->
-      if Process.alive?(pid) do
-        GenServer.stop(pid)
+      # Server may be mid-shutdown at teardown; swallow the stop's :exit.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
       end
     end)
 

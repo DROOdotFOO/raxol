@@ -57,6 +57,8 @@ defmodule Raxol.ACP.Onchain.RPC do
     hex but failed to decode
   """
 
+  alias Raxol.ACP.Onchain.Hex
+
   @type client :: Req.Request.t()
 
   @doc """
@@ -195,7 +197,7 @@ defmodule Raxol.ACP.Onchain.RPC do
   @spec send_raw_transaction(client(), binary()) ::
           {:ok, String.t()} | {:error, term()}
   def send_raw_transaction(client, raw_bytes) when is_binary(raw_bytes) do
-    call(client, "eth_sendRawTransaction", ["0x" <> Base.encode16(raw_bytes, case: :lower)])
+    call(client, "eth_sendRawTransaction", [Hex.encode(raw_bytes)])
   end
 
   @doc """
@@ -248,25 +250,14 @@ defmodule Raxol.ACP.Onchain.RPC do
 
   @doc "Encode a non-negative integer as a 0x-prefixed minimal hex quantity."
   @spec encode_quantity(non_neg_integer()) :: String.t()
-  def encode_quantity(n) when is_integer(n) and n >= 0 do
-    "0x" <> (n |> Integer.to_string(16) |> String.downcase())
-  end
+  def encode_quantity(n) when is_integer(n) and n >= 0, do: Hex.encode_quantity(n)
 
   @doc """
   Decode a 0x-prefixed hex quantity to an integer. The empty value
   `"0x"` and `"0x0"` both decode as 0.
   """
   @spec decode_quantity(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def decode_quantity("0x"), do: {:ok, 0}
-
-  def decode_quantity("0x" <> hex) do
-    case Integer.parse(hex, 16) do
-      {n, ""} -> {:ok, n}
-      _ -> {:error, {:hex_decode, "0x" <> hex, :not_integer}}
-    end
-  end
-
-  def decode_quantity(other), do: {:error, {:hex_decode, other, :missing_0x_prefix}}
+  def decode_quantity(hex), do: Hex.decode_quantity(hex)
 
   defp encode_block_tag(tag) when tag in ["latest", "pending", "earliest", "safe", "finalized"],
     do: tag
@@ -289,7 +280,7 @@ defmodule Raxol.ACP.Onchain.RPC do
 
   defp encode_data(nil), do: nil
   defp encode_data(<<>>), do: "0x"
-  defp encode_data(bin) when is_binary(bin), do: "0x" <> Base.encode16(bin, case: :lower)
+  defp encode_data(bin) when is_binary(bin), do: Hex.encode(bin)
 
   @doc """
   Escape hatch for arbitrary JSON-RPC methods this module doesn't wrap
@@ -319,11 +310,14 @@ defmodule Raxol.ACP.Onchain.RPC do
       {:ok, %Req.Response{status: 200, body: %{"error" => err}}} ->
         {:error, {:rpc_error, normalize_error(err)}}
 
+      # A 200 whose body carries neither "result" nor "error" is malformed.
+      # This must precede the generic status clause below, which would otherwise
+      # match every 200 and leave this unreachable.
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        {:error, {:malformed_response, body}}
+
       {:ok, %Req.Response{status: status, body: body}} ->
         {:error, {:transport, {:http_status, status, body}}}
-
-      {:ok, %Req.Response{} = resp} ->
-        {:error, {:malformed_response, resp.body}}
 
       {:error, reason} ->
         {:error, {:transport, reason}}

@@ -154,8 +154,7 @@ defmodule Raxol.Agent.Harness.SessionInboxTest do
     send(
       inbox,
       {:harness_command,
-       {:approval_decision, session_id,
-        %{request_id: request_id, option_id: "allow"}}}
+       {:approval_decision, session_id, %{request_id: request_id, option_id: "allow"}}}
     )
 
     decided = drain_until(:approval_decided)
@@ -172,6 +171,78 @@ defmodule Raxol.Agent.Harness.SessionInboxTest do
     assert old =~ "value = 1"
     assert new =~ "value = 2"
     assert File.read!(path) =~ "value = 2"
+  end
+
+  test "a parked approval's pending entry is reaped when its turn dies, not left to leak",
+       %{tmp: tmp} do
+    session_id = "inbox-reap-#{System.unique_integer([:positive])}"
+    :ok = SessionStreamer.subscribe(session_id)
+
+    path = Path.join(tmp, "code.ex")
+    File.write!(path, "value = 1\n")
+
+    inbox =
+      start_inbox(
+        session_id,
+        [
+          {:tool_calls,
+           [
+             %{
+               "name" => "edit_file",
+               "arguments" => %{
+                 "path" => "code.ex",
+                 "old_string" => "value = 1",
+                 "new_string" => "value = 2"
+               },
+               "id" => "e1"
+             }
+           ]},
+          {:content, "never reached"}
+        ],
+        actions: Raxol.Agent.Actions.Workspace.all()
+      )
+
+    send(
+      inbox,
+      {:harness_command, {:start_turn, session_id, %{text: "bump it"}}}
+    )
+
+    _req = drain_until(:approval_requested)
+
+    parked_state = :sys.get_state(inbox)
+    assert map_size(parked_state.pending) == 1, "the approval must be parked"
+
+    # Kill the turn task directly (no answer ever arrives) -- the same
+    # shape as a crash mid-approval, without going through the interrupt
+    # path.
+    %Task{pid: turn_pid} = parked_state.turn
+    Process.exit(turn_pid, :kill)
+
+    reaped_state = wait_until_turn_cleared(inbox)
+
+    assert reaped_state.pending == %{},
+           "a parked approval's pending entry leaked after its turn died"
+  end
+
+  defp wait_until_turn_cleared(inbox, timeout \\ 3_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_until_turn_cleared(inbox, deadline)
+  end
+
+  defp do_wait_until_turn_cleared(inbox, deadline) do
+    state = :sys.get_state(inbox)
+
+    cond do
+      state.turn == nil ->
+        state
+
+      System.monotonic_time(:millisecond) > deadline ->
+        ExUnit.Assertions.flunk("turn never cleared after being killed")
+
+      true ->
+        Process.sleep(20)
+        do_wait_until_turn_cleared(inbox, deadline)
+    end
   end
 
   test "deny: no file change, honest denial", %{tmp: tmp} do
@@ -212,8 +283,7 @@ defmodule Raxol.Agent.Harness.SessionInboxTest do
     send(
       inbox,
       {:harness_command,
-       {:approval_decision, session_id,
-        %{request_id: req.payload.request_id, option_id: "deny"}}}
+       {:approval_decision, session_id, %{request_id: req.payload.request_id, option_id: "deny"}}}
     )
 
     _decided = drain_until(:approval_decided)
@@ -275,8 +345,7 @@ defmodule Raxol.Agent.Harness.SessionInboxTest do
       ExUnit.Assertions.flunk("no tool_result item")
     else
       receive do
-        {:session_event, _sid,
-         %{type: :item_completed, payload: %{item_type: :tool_result}} = e} ->
+        {:session_event, _sid, %{type: :item_completed, payload: %{item_type: :tool_result}} = e} ->
           e
 
         {:session_event, _sid, _other} ->

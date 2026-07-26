@@ -1,7 +1,7 @@
 defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
   @moduledoc """
-  Tier-1 identity invariants I1–I3
-  (docs/proposals/in-flight/harness-invariants.md).
+  Tier-1 identity invariants I1–I3 (see `docs/harness/architecture.md`'s
+  "Journal and projection" section for the durable-journal model).
 
     * I1 — id authority under failure/crash: under generated fault schedules
       ({append_fail, open_fail, kill_after_write_before_head,
@@ -45,7 +45,9 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
   setup do
     FaultJournal.ensure_registry(:duplicate, EmitBus.registry_name())
 
-    FaultJournal.ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
+    FaultJournal.ensure_running(
+      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
+    )
 
     base =
       Path.join(
@@ -111,7 +113,10 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
 
       step = frequency([{3, constant(:durable)}, {2, constant(:ephemeral)}])
 
-      check all(raw_steps <- list_of(step, min_length: 5, max_length: 25), max_runs: 25) do
+      check all(
+              raw_steps <- list_of(step, min_length: 5, max_length: 25),
+              max_runs: 25
+            ) do
         # m5 required pattern: MIXED tiers — force at least one of each.
         steps = [:durable, :ephemeral | raw_steps]
         schedule = Enum.with_index(steps, fn s, i -> {s, i} end)
@@ -133,7 +138,10 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         Enum.reduce(ctx.live, 0, fn
           %Event{tier: :durable} = e, _watermark ->
             assert e.id >= 1, "durable id 0 leaked into the live tail"
-            assert e.id in journal_ids, "live durable id #{e.id} is not in the journal"
+
+            assert e.id in journal_ids,
+                   "live durable id #{e.id} is not in the journal"
+
             e.id
 
           %Event{tier: :ephemeral} = e, watermark ->
@@ -155,9 +163,10 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
       end
     end
 
-    test "the tier field never lies: a durable event is journaled, an ephemeral one is not", %{
-      base: base
-    } do
+    test "the tier field never lies: a durable event is journaled, an ephemeral one is not",
+         %{
+           base: base
+         } do
       ctx = start_run(base, [])
       ctx = run_step(ctx, {:durable, 1})
       ctx = run_step(ctx, {:ephemeral, 1})
@@ -285,7 +294,9 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
 
     publish(ctx, :app_update, :durable, %{tag: "victim-append-fail"})
     err = await_error!(ctx, :journal_append_failed)
-    assert err.id == last_live_durable_id(ctx), "failure signal must ride the old watermark"
+
+    assert err.id == last_live_durable_id(ctx),
+           "failure signal must ride the old watermark"
 
     assert FaultJournal.raw_ids!(ctx.dir) == ids_before,
            "a failed append must not reach the journal"
@@ -343,7 +354,10 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
     publish(ctx, :app_update, :durable, %{tag: "victim-after-raw"})
     err = await_error!(ctx, :journal_append_failed)
 
-    run_step(%{ctx | live: ctx.live ++ [err]}, {:durable, :after_write_before_head})
+    run_step(
+      %{ctx | live: ctx.live ++ [err]},
+      {:durable, :after_write_before_head}
+    )
   end
 
   # :kill_after_head_before_publish — a record lands in journal + HEAD through
@@ -354,16 +368,21 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
     _writer = bridge_writer!(ctx)
 
     offset =
-      FaultJournal.inject_head_before_publish(ctx.harness, ctx.session_id, ctx.base, %{
-        v: 0,
-        session_id: ctx.session_id,
-        turn_id: "t1",
-        ts: System.system_time(:microsecond),
-        family: :loop,
-        type: :item_completed,
-        tier: :durable,
-        payload: %{tag: "appended-never-published"}
-      })
+      FaultJournal.inject_head_before_publish(
+        ctx.harness,
+        ctx.session_id,
+        ctx.base,
+        %{
+          v: 0,
+          session_id: ctx.session_id,
+          turn_id: "t1",
+          ts: System.system_time(:microsecond),
+          family: :loop,
+          type: :item_completed,
+          tier: :durable,
+          payload: %{tag: "appended-never-published"}
+        }
+      )
 
     assert offset == ctx.next_id + 1
     %{ctx | next_id: offset, journal_only: ctx.journal_only ++ [offset]}
@@ -403,7 +422,8 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
     assert journal_ids -- live_durable_ids == ctx.journal_only
 
     # Every live durable event is byte-identical to its journal record.
-    for %Event{tier: :durable} = e <- ctx.live, do: assert_byte_identical!(ctx.dir, e)
+    for %Event{tier: :durable} = e <- ctx.live,
+        do: assert_byte_identical!(ctx.dir, e)
 
     # HEAD never points past the journal.
     case FaultJournal.raw_head(ctx.dir) do
@@ -425,7 +445,9 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
   # --- oracle helpers ----------------------------------------------------------
 
   defp publish(ctx, type, tier, payload) do
-    EmitBus.publish(EmitBus.build(ctx.session_id, type, tier, payload, turn_id: "t1"))
+    EmitBus.publish(
+      EmitBus.build(ctx.session_id, type, tier, payload, turn_id: "t1")
+    )
   end
 
   # Receive the next live durable event and assert I3 at the moment of first
@@ -461,7 +483,9 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         )
     after
       2_000 ->
-        flunk("timed out waiting for #{inspect(type)} (schedule: #{inspect(ctx.schedule)})")
+        flunk(
+          "timed out waiting for #{inspect(type)} (schedule: #{inspect(ctx.schedule)})"
+        )
     end
   end
 
@@ -470,7 +494,9 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
 
     receive do
       {:session_event, ^session_id, %Event{type: :error} = ev} ->
-        assert ev.tier == :ephemeral, "journal-failure signal must never look durable"
+        assert ev.tier == :ephemeral,
+               "journal-failure signal must never look durable"
+
         assert ev.payload.reason == reason
         assert ev.payload.original_type == :item_completed
         ev
@@ -482,7 +508,9 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         )
     after
       2_000 ->
-        flunk("timed out waiting for #{inspect(reason)} (schedule: #{inspect(ctx.schedule)})")
+        flunk(
+          "timed out waiting for #{inspect(reason)} (schedule: #{inspect(ctx.schedule)})"
+        )
     end
   end
 
@@ -514,7 +542,7 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
       "type" => e.type,
       "tier" => e.tier,
       "payload" => e.payload,
-      "schema_version" => "1.0.0"
+      "schema_version" => "1.1.0"
     }
 
     assert Jason.encode!(reconstructed) == line,
@@ -527,7 +555,9 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         writer
 
       %{journal: nil} ->
-        flunk("fault site needs an open journal; schedule must front-load durables")
+        flunk(
+          "fault site needs an open journal; schedule must front-load durables"
+        )
     end
   end
 
@@ -568,7 +598,8 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
     gen all(
           with_open_fail <- boolean(),
           body <- list_of(step, min_length: 4, max_length: 14),
-          positions <- list_of(integer(0..100), length: length(@required_faults))
+          positions <-
+            list_of(integer(0..100), length: length(@required_faults))
         ) do
       faults = Enum.map(@required_faults, &{:fault, &1})
 
@@ -580,7 +611,10 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         end)
 
       prefix = if with_open_fail, do: [{:fault, :open_fail}], else: []
-      prefix ++ [{:durable, :seed1}, {:durable, :seed2}, {:ephemeral, :seed}] ++ body_with_faults
+
+      prefix ++
+        [{:durable, :seed1}, {:durable, :seed2}, {:ephemeral, :seed}] ++
+        body_with_faults
     end
   end
 end

@@ -304,7 +304,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       mref: mref,
       opts: opts,
       tool_ids: %{},
-      current_tool: nil
+      open_tools: %{}
     })
   end
 
@@ -355,6 +355,18 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     loop(state)
   end
 
+  # `Raxol.Agent.Stream.tool_result/0` carries only `name` — no `id` (the
+  # backend's tool-call id never survives `Stream`'s own result mapping, see
+  # `build_tool_response/2`) — so exact id correlation is not data this
+  # runner has access to. What IS available, and what a same-named parallel
+  # tool_call pair (two `read_file` calls in one batch) needs to not corrupt,
+  # is CALL ORDER: `Stream.react/2` emits every `tool_use` in a batch before
+  # executing any of them, then executes + emits each `tool_result`
+  # sequentially in the SAME order (`execute_tools/2`'s `Enum.map/2`). A
+  # per-name FIFO queue therefore pairs each result with the correct
+  # announcement even when two in-flight calls share a name — a single
+  # `tool_ids[name] = id` slot (the prior shape) collapsed the second
+  # `tool_use` over the first, so BOTH results pointed at the last id.
   defp handle_event({:tool_use, %{name: name} = tu}, state) do
     id = tool_use_id(tu)
 
@@ -368,13 +380,13 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
     loop(%{
       state
-      | tool_ids: Map.put(state.tool_ids, name, id),
-        current_tool: {id, name}
+      | tool_ids: push_tool_id(state.tool_ids, name, id),
+        open_tools: Map.put(state.open_tools, id, name)
     })
   end
 
   defp handle_event({:tool_result, %{name: name, result: result}}, state) do
-    id = Map.get(state.tool_ids, name) || generated_tool_id()
+    {id, tool_ids} = pop_tool_id(state.tool_ids, name)
 
     {status, raw_output} =
       case result do
@@ -385,7 +397,12 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
     fields = %{@tcu_fields.new() | status: status, raw_output: raw_output}
     post(state, {:tool_call_update, @tool_call_update.new(id, fields)})
-    loop(%{state | current_tool: nil})
+
+    loop(%{
+      state
+      | tool_ids: tool_ids,
+        open_tools: Map.delete(state.open_tools, id)
+    })
   end
 
   defp handle_event({:turn_complete, _info}, state), do: loop(state)
@@ -448,6 +465,21 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     end
   end
 
+  # Deliberately catches broadly (`rescue` + `catch :exit`, not just
+  # `:error`/`:throw`): this runs on the cancel path, and the whole point of
+  # that path (see moduledoc) is that it MUST reach the kill-complete fence
+  # and `{:stop, :cancelled}` no matter what the injected `:interrupt`
+  # implementation does — letting a raise/throw/exit from a THIRD-PARTY
+  # double propagate here would abort the cancel sequence itself, stranding
+  # the Session's drain gate with no cancelled reply ever rendered (worse
+  # than a swallowed exception: an actual hang). What review flagged as
+  # "hides real defects" is answered by telemetry, not by narrowing the
+  # catch: every failure branch below fires
+  # `[:raxol, :agent, :acp_turn_runner, :interrupt_failed]` with a `:stage`
+  # tag distinguishing exactly which branch fired (`:rescue`, `:catch`,
+  # `:sink_failure`, `:error`) — a genuine defect in a production
+  # `Raxol.Agent.Interrupt` impl is now a measurable signal, not silence,
+  # while the cancel sequence still completes honestly either way.
   defp run_interrupt(state) do
     tool_ref = build_tool_ref(state)
     sink = Keyword.get(state.opts, :interrupt_sink, &default_sink/2)
@@ -460,20 +492,32 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       {:error, {:sink_failure, error, outcome}} ->
         # The kill already happened; the outcome still carries the OS truth.
         Logger.warning("acp turn_runner: interrupt sink failure: #{inspect(error)}")
+        interrupt_failure_telemetry(:sink_failure, error)
         outcome
 
       {:error, reason} ->
         Logger.warning("acp turn_runner: interrupt failed: #{inspect(reason)}")
+        interrupt_failure_telemetry(:error, reason)
         nil
     end
   rescue
     error ->
       Logger.warning("acp turn_runner: interrupt raised: #{inspect(error)}")
+      interrupt_failure_telemetry(:rescue, error)
       nil
   catch
     kind, value ->
       Logger.warning("acp turn_runner: interrupt threw: #{inspect({kind, value})}")
+      interrupt_failure_telemetry(:catch, {kind, value})
       nil
+  end
+
+  defp interrupt_failure_telemetry(stage, detail) do
+    :telemetry.execute(
+      [:raxol, :agent, :acp_turn_runner, :interrupt_failed],
+      %{},
+      %{stage: stage, detail: detail}
+    )
   end
 
   defp do_interrupt(impl, tool_ref, sink, opts) when is_function(impl, 3),
@@ -502,23 +546,35 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     :ok
   end
 
-  # The kill-complete fence: only when a kill stage actually landed AND a tool
-  # call was announced on this turn (the honest carrier). Tool-less turns and
-  # cooperative short-circuits emit nothing — see the moduledoc.
-  defp maybe_post_fence(
-         %{current_tool: {tool_id, _name}} = state,
-         %{stages: stages} = outcome
-       ) do
+  # The kill-complete fence: only when a kill stage actually landed AND at
+  # least one tool call is still open on this turn (the honest carrier).
+  # Tool-less turns and cooperative short-circuits emit nothing — see the
+  # moduledoc. `open_tools` (populated on `tool_use`, cleared on the matching
+  # `tool_result`) tracks every announced-but-not-yet-resulted call, not just
+  # the most recent one: `Stream.react/2` announces a whole batch of
+  # `tool_use` events before executing any of them, so more than one call can
+  # be genuinely in flight when the cancel lands — a single `current_tool`
+  # slot silently dropped the fence for every tool but the last announced.
+  # Every open tool gets its own terminal `tool_call_update`, all carrying
+  # the SAME outcome-derived rider (one OS-level kill, fenced once per
+  # announced call).
+  defp maybe_post_fence(%{open_tools: open_tools} = state, %{stages: stages} = outcome)
+       when map_size(open_tools) > 0 do
     case Enum.find(stages, &(&1 in @kill_stages)) do
       nil ->
         :ok
 
       fence_stage ->
-        fields = %{@tcu_fields.new() | status: :failed}
-        update = @tool_call_update.new(tool_id, fields)
-        notif = @session_notification.new(state.session_id, {:tool_call_update, update})
-        notif = %{notif | _meta: %{@fence_meta_key => fence_rider(fence_stage, state, outcome)}}
-        _ = @ctx.post_update(state.session, notif)
+        rider = fence_rider(fence_stage, state, outcome)
+
+        Enum.each(open_tools, fn {tool_id, _name} ->
+          fields = %{@tcu_fields.new() | status: :failed}
+          update = @tool_call_update.new(tool_id, fields)
+          notif = @session_notification.new(state.session_id, {:tool_call_update, update})
+          notif = %{notif | _meta: %{@fence_meta_key => rider}}
+          _ = @ctx.post_update(state.session, notif)
+        end)
+
         :ok
     end
   end
@@ -571,4 +627,31 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
   defp generated_tool_id,
     do: "tool-" <> Integer.to_string(System.unique_integer([:positive]))
+
+  # -- per-name FIFO id correlation ---------------------------------------------
+  #
+  # `tool_ids` maps a tool name to the QUEUE of announced ids awaiting a
+  # result, oldest first. `push_tool_id/3` appends (a later `tool_use` for the
+  # same name queues behind, never overwrites); `pop_tool_id/2` takes the
+  # oldest (the result whose execution order is first, per `execute_tools/2`).
+  defp push_tool_id(tool_ids, name, id) do
+    Map.update(tool_ids, name, [id], &(&1 ++ [id]))
+  end
+
+  # An empty/absent queue (a result for a tool never announced, or one
+  # already drained) still returns a usable id rather than crashing the
+  # runner mid-turn — the same honest fallback the prior single-slot shape
+  # used (`generated_tool_id/0`), just never reachable via a queue collision.
+  defp pop_tool_id(tool_ids, name) do
+    case Map.get(tool_ids, name) do
+      [id | rest] ->
+        tool_ids =
+          if rest == [], do: Map.delete(tool_ids, name), else: Map.put(tool_ids, name, rest)
+
+        {id, tool_ids}
+
+      _empty_or_absent ->
+        {generated_tool_id(), tool_ids}
+    end
+  end
 end

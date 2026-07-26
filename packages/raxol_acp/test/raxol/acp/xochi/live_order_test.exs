@@ -1,12 +1,13 @@
 defmodule Raxol.ACP.Xochi.LiveOrderTest do
   @moduledoc """
-  Live gate: a buyer orders the `xochi_cross_chain_transfer` ACP offering and the
-  seller settles it for real through Xochi + the Riddler solver. Moves real funds.
+  Live gate: a buyer orders the `xochi_stable_public` ACP offering and the seller
+  settles it for real through Xochi + the Riddler solver. Moves real funds.
 
   The buyer quotes and signs a Xochi intent itself
   (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`), embeds the signed bundle in
-  the job requirement's `signed_intent`, and the seller's `TransferOffering` relays
-  it via `Raxol.ACP.Xochi.Settler` -> `execute_signed/2` (no re-signing) and polls.
+  the job requirement's `signed_intent`, and the seller's `StablePublicOffering`
+  relays it via `Raxol.ACP.Xochi.Settler` -> `execute_signed/2` (no re-signing) and
+  polls.
   Job orchestration is in-process (`ProviderAdapter.Mock` stands in for the on-chain
   hook writes); only the settlement moves funds. The funded `LiveWallet` plays every
   role -- buyer, provider, and recipient (the Xochi `QuoteRequest` has no separate
@@ -21,8 +22,8 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
         mix test --only live_xochi_order test/raxol/acp/xochi/live_order_test.exs
 
   Runner + full env/corridor reference (USDC/ERC-3009 vs USDT/WETH/USDG Permit2,
-  Robinhood cross-asset corridors, mesh, and all `XOCHI_ORDER_*` overrides):
-  `examples/run_live_acp_order_gate.sh`.
+  Robinhood cross-asset corridors, mesh, and all `XOCHI_ORDER_*` overrides): the
+  unified gate at the repo root, `scripts/run_live_gates.sh --route acp`.
   """
 
   use ExUnit.Case, async: false
@@ -36,7 +37,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     alias Raxol.ACP.Onchain.Permit2Approver
     alias Raxol.ACP.ProviderAdapter
     alias Raxol.ACP.ProviderAdapter.JSONRPC
-    alias Raxol.ACP.Xochi.TransferOffering
+    alias Raxol.ACP.Xochi.StablePublicOffering
     alias Raxol.Payments.Assets
     alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
     alias Raxol.Payments.Xochi.Schemas.QuoteRequest
@@ -55,6 +56,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
     setup do
       pin_live_solver()
+      maybe_enable_corridor_allowlist()
 
       url = System.fetch_env!("XOCHI_ORDER_LIVE_URL")
       token = System.get_env("XOCHI_ORDER_LIVE_TOKEN", "")
@@ -81,8 +83,8 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
     @tag :live_xochi_order_preflight
     test "the offering is discoverable and every cell quotes read-only", %{cfg: cfg} do
-      assert {:ok, spec} = OfferingRegistry.lookup(TransferOffering.offering_name())
-      assert spec.handler == TransferOffering
+      assert {:ok, spec} = OfferingRegistry.lookup(StablePublicOffering.offering_name())
+      assert spec.handler == StablePublicOffering
 
       cells = cells()
       log("preflight: checking #{length(cells)} cells (NO funds move)")
@@ -114,7 +116,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
 
     defp cells do
       corridors = parse_corridors(System.get_env("XOCHI_ORDER_CORRIDORS", "8453>42161"))
-      tokens = parse_list(System.get_env("XOCHI_ORDER_TOKENS", "USDC,USDT,WETH"))
+      tokens = parse_list(System.get_env("XOCHI_ORDER_TOKENS", "USDC,USDT,USDG"))
       for {from, to} <- corridors, token <- tokens, do: {from, to, token}
     end
 
@@ -165,7 +167,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
       provider =
         JobSession.Provider.new(
           session: {chain_id, job_id},
-          handler: TransferOffering,
+          handler: StablePublicOffering,
           adapter: ProviderAdapter.Mock.new(),
           chain_id: chain_id,
           acp_core_address: Chain.mainnet().acp_core_address,
@@ -208,6 +210,7 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
         "src_token" => src_token,
         "dst_token" => dst_token,
         "amount_atomic" => amount_atomic(from, token, cfg.stable_amount),
+        "settlement_preference" => "public",
         "signed_intent" => bundle_to_json(bundle)
       }
     end
@@ -321,12 +324,28 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
     defp restore_env(key, nil), do: Application.delete_env(:raxol_payments, key)
     defp restore_env(key, value), do: Application.put_env(:raxol_payments, key, value)
 
+    # Enable the launch corridor scope (USDC mesh, USDT arb/poly, USDG 4663 drain)
+    # so this gate exercises the same allowlist production runs under. Opt-in via
+    # XOCHI_ORDER_STABLECOIN_ALLOWLIST=true (the run_live_gates.sh acp route sets
+    # it, driving one allowlist-valid corridor per asset); off by default so a raw
+    # `mix test` with mixed default corridors is not gated.
+    defp maybe_enable_corridor_allowlist do
+      if System.get_env("XOCHI_ORDER_STABLECOIN_ALLOWLIST") == "true" do
+        prior = Application.get_env(:raxol_acp, :stablecoin_corridors_only)
+        Application.put_env(:raxol_acp, :stablecoin_corridors_only, true)
+        on_exit(fn -> restore_acp_env(:stablecoin_corridors_only, prior) end)
+      end
+    end
+
+    defp restore_acp_env(key, nil), do: Application.delete_env(:raxol_acp, key)
+    defp restore_acp_env(key, value), do: Application.put_env(:raxol_acp, key, value)
+
     # -- Helpers --
 
     defp ensure_registered do
-      case OfferingRegistry.lookup(TransferOffering.offering_name()) do
+      case OfferingRegistry.lookup(StablePublicOffering.offering_name()) do
         {:ok, _spec} -> :ok
-        :error -> TransferOffering.register()
+        :error -> StablePublicOffering.register()
       end
     end
 

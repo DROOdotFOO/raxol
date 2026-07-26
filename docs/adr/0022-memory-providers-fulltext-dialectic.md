@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-17. Second of the Hermes-extraction Tier 1 ADRs (`~/Desktop/hermes-extraction-report.md`,
+Accepted, 2026-07-22 (implemented in `Raxol.Agent.Memory.Stack`, `Raxol.Agent.Memory.SessionSearch`, and `Raxol.Agent.UserModel`). Originally proposed 2026-06-17. Second of the Hermes-extraction Tier 1 ADRs (`~/Desktop/hermes-extraction-report.md`,
 item H1.3). Companion to ADR-0021 (self-improving agents), which deliberately scoped memory OUT and
 deferred it here. Builds on the existing `Raxol.Agent.Memory` behaviour and the omnigent item-log
 (`Raxol.Agent.Conversation.{Store,Log}`). The following Tier 1 ADR is H1.4 (unified messaging gateway).

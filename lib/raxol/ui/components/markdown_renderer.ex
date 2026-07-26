@@ -34,14 +34,18 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
 
   Trust note: a new output surface added to a shared component inherits
   the component's OWN trust contract, not the calling path's. This
-  module's contract is "callers may pass untrusted text", and it has
-  direct callers with no sanitizer in front (the harness path's
-  `Harness.MarkdownBody` pre-strips control bytes, but e.g. the
-  playground's `DemoHelpers.markdown/2` does not).
+  module's contract is "callers may pass untrusted text", so control-byte
+  sanitization happens at THIS module's own boundary
+  (`render_with_builtin/3`, before the text is split into lines) rather
+  than being left to callers -- some callers pre-strip already (the
+  harness path's `Harness.MarkdownBody`, making this redundant-but-cheap
+  there), others don't (the playground's `DemoHelpers.markdown/2`), and a
+  shared component can't assume which kind of caller it has.
   """
   use Raxol.UI.Components.Base.Component
 
   alias Raxol.UI.Components.CodeBlock
+  alias Raxol.UI.Components.Harness.TextUtil
   alias Raxol.UI.Components.Table
   alias Raxol.UI.TextLayout
   alias Raxol.UI.TextMeasure
@@ -100,10 +104,6 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   @impl true
   @spec update(term(), map()) :: map()
   def update(_message, state), do: state
-
-  @impl true
-  @spec handle_event(term(), map(), map()) :: {map(), list()}
-  def handle_event(_event, state, _context), do: {state, []}
 
   @spec render(map(), map()) :: map()
   @impl true
@@ -305,7 +305,35 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
 
     case :binary.match(rest, line) do
       {offset, len} -> {cursor + offset, len}
-      :nomatch -> nil
+      :nomatch -> fuzzy_line_span(rest, line, cursor)
+    end
+  end
+
+  # `:pretty` collapses every whitespace run in its input to a single
+  # space (`Pretty`'s tokenizer emits one `" "` token per run,
+  # regardless of the run's original width), so a returned `line` is only
+  # a literal substring of `plain` when the source had single spaces
+  # throughout. Source text with a double space, or leading/trailing
+  # space inside a wrapped span, makes the exact byte search above
+  # miss -- this retries whitespace-insensitively (each space in `line`
+  # matches one-or-more whitespace chars in `plain`) before the caller
+  # gives up and emits the line unstyled.
+  defp fuzzy_line_span(rest, line, cursor) do
+    # Escape each space-delimited piece BEFORE joining with the raw
+    # (unescaped) `\s+` construct -- escaping the whole line first and
+    # then substituting spaces would double-escape the backslash
+    # `Regex.escape/1` itself inserts before a literal space, turning the
+    # intended whitespace class into "a literal backslash, then one-or-
+    # more literal 's' characters" instead.
+    pattern =
+      line
+      |> String.split(" ")
+      |> Enum.map(&Regex.escape/1)
+      |> Enum.join("\\s+")
+
+    case Regex.run(Regex.compile!(pattern, "u"), rest, return: :index) do
+      [{offset, len}] -> {cursor + offset, len}
+      _ -> nil
     end
   end
 
@@ -345,6 +373,7 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
           [map()]
   def render_with_builtin(markdown_text, width, theme) do
     markdown_text
+    |> TextUtil.sanitize_controls()
     |> String.split("\n")
     |> parse_blocks(width, theme, [])
     |> Enum.reverse()
@@ -399,20 +428,25 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     parse_blocks(rest, width, theme, Enum.reverse(elements) ++ acc)
   end
 
-  defp parse_line("# " <> text, width) do
-    render_heading_line("# ", text, width)
-  end
+  # ATX heading: 1-6 `#` characters followed by a space (GFM/CommonMark
+  # caps headings at h6; `#######` and beyond fall through to the
+  # non-heading clauses below as literal text, same as a bare "#" with no
+  # trailing space always has). One regex-driven clause replaces what
+  # used to be three duplicated `"# " <> text` / `"## " <> text` /
+  # `"### " <> text` function heads capped at h3, so h4-h6 render with the
+  # same heading style instead of falling through to plain-paragraph
+  # parsing with their `####` markers left unstyled in the visible text.
+  @heading_pattern ~r/^(\#{1,6}) (.*)/
 
-  defp parse_line("## " <> text, width) do
-    render_heading_line("## ", text, width)
-  end
-
-  defp parse_line("### " <> text, width) do
-    render_heading_line("### ", text, width)
+  defp parse_line(line, width) do
+    case Regex.run(@heading_pattern, line) do
+      [_, hashes, text] -> render_heading_line(hashes <> " ", text, width)
+      nil -> parse_non_heading_line(line, width)
+    end
   end
 
   # Thematic break — continuous box-drawing rule, full content width.
-  defp parse_line("---" <> rest, width) do
+  defp parse_non_heading_line("---" <> rest, width) do
     if String.trim(rest) == "" or String.match?(rest, ~r/^-+\s*$/) do
       [hr_element(width)]
     else
@@ -420,7 +454,7 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     end
   end
 
-  defp parse_line("***" <> rest, width) do
+  defp parse_non_heading_line("***" <> rest, width) do
     if String.trim(rest) == "" or String.match?(rest, ~r/^\*+\s*$/) do
       [hr_element(width)]
     else
@@ -428,7 +462,7 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     end
   end
 
-  defp parse_line("> " <> text, width) do
+  defp parse_non_heading_line("> " <> text, width) do
     segments =
       text
       |> builtin_segments()
@@ -437,15 +471,15 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     render_segments_line(segments, width, @blockquote_prefix, @blockquote_style)
   end
 
-  defp parse_line("- " <> text, width) do
+  defp parse_non_heading_line("- " <> text, width) do
     render_segments_line(builtin_segments(text), width, @ul_prefix)
   end
 
-  defp parse_line("* " <> text, width) do
+  defp parse_non_heading_line("* " <> text, width) do
     render_segments_line(builtin_segments(text), width, @ul_prefix)
   end
 
-  defp parse_line(line, width) do
+  defp parse_non_heading_line(line, width) do
     # Check for ordered list: "1. text", "2. text", etc.
     case Regex.run(~r/^(\d+)\.\s+(.*)/, line) do
       [_, num, text] ->
@@ -478,7 +512,14 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   # character in, where it happily matches `**both**` -- yielding a bold
   # "both" wrapped in two literal leftover asterisks. Matching the triple
   # form first is what makes `***x***` bold+italic instead.
-  @builtin_pattern ~r/`([^`]+)`|\*\*\*([^*]+)\*\*\*|___([^_]+)___|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_|\[([^\]]+)\]\(([^)]+)\)/
+  #
+  # Every underscore alternative additionally requires NOT being flanked
+  # by a word character on either side (CommonMark's intraword-emphasis
+  # rule for `_`, which `*` is deliberately exempt from). Without this an
+  # ordinary `snake_case_identifier` matches `_case_` as italic, silently
+  # deleting the underscores from otherwise plain text -- common in any
+  # dev-tool content (code identifiers in prose, table cells).
+  @builtin_pattern ~r/`([^`]+)`|\*\*\*([^*]+)\*\*\*|(?<!\w)___([^_]+)___(?!\w)|\*\*([^*]+)\*\*|(?<!\w)__([^_]+)__(?!\w)|\*([^*]+)\*|(?<!\w)_([^_]+)_(?!\w)|\[([^\]]+)\]\(([^)]+)\)/
 
   defp builtin_segments(text) do
     scan_builtin_segments(text, [])
@@ -765,7 +806,11 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
       })
 
     rendered = Table.render(table, %{available_width: max(width, 1)})
-    line_elements = table_line_children(rendered)
+
+    line_elements =
+      rendered
+      |> table_line_children()
+      |> Enum.map(&normalize_table_element_style/1)
 
     line_elements ++ [Components.text(content: "")]
   end
@@ -775,6 +820,43 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
   end
 
   defp table_line_children(_), do: []
+
+  # `Table.render/2` builds its cells through
+  # `Raxol.Core.Renderer.View.text/2`, whose own convention is a `style:`
+  # ATOM LIST (e.g. `[:bold]`, `[{:fg, :cyan}, :fg, :cyan]`), not the
+  # `%{bold: true, fg: :cyan}` MAP every other element this module emits
+  # uses (`Raxol.View.Components.text/1`'s convention). Splicing Table's
+  # raw cells straight into this module's own tree would leak that
+  # foreign representation into every consumer of `render_with_builtin/3`
+  # -- including `Harness.Surface`'s `ViewText.lines/3` bridge, which
+  # reads `:style` as a map unconditionally (`Map.get(style, :bold, ...)`)
+  # and raises `BadMapError` the first time a rendered GFM table reaches
+  # it. Re-mapped here, at this module's own output boundary, so every
+  # element `render_with_builtin/3` returns keeps ONE style contract
+  # regardless of which component built its cells.
+  defp normalize_table_element_style(%{type: :text, style: style} = element)
+       when is_list(style) do
+    %{element | style: table_style_list_to_map(style)}
+  end
+
+  defp normalize_table_element_style(element), do: element
+
+  defp table_style_list_to_map(style_list) do
+    Enum.reduce(style_list, %{}, fn
+      :bold, acc -> Map.put(acc, :bold, true)
+      :italic, acc -> Map.put(acc, :italic, true)
+      :underline, acc -> Map.put(acc, :underline, true)
+      :dim, acc -> Map.put(acc, :dim, true)
+      {:fg, color}, acc -> Map.put(acc, :fg, color)
+      {:bg, color}, acc -> Map.put(acc, :bg, color)
+      {:color, color}, acc -> Map.put(acc, :fg, color)
+      # Bare color atoms (`convert_style_to_list/1`'s redundant
+      # `[{:fg, color}, :fg, color]` encoding) and the bare `:fg`/`:bg`
+      # tag atoms carry no information the `{:fg, _}`/`{:bg, _}` tuple
+      # pair in the SAME list doesn't already capture.
+      _other, acc -> acc
+    end)
+  end
 
   defp pad_row(cells, col_count) do
     cells

@@ -24,6 +24,15 @@ defmodule Raxol.Property.RendererSealOnceTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
 
+  # This suite is the CPU-bound emulator-replay keystone the nightly matrix
+  # excludes via `--exclude property`. Its `property` blocks are auto-tagged
+  # `:property`, but its plain `test` keystones (e.g. the 1000-block
+  # immutable-prefix streaming test) are NOT -- so they leaked into the
+  # matrix and timed out on slow legs. Module-tag the whole suite `:property`
+  # so every test here is excluded from the matrix and still covered by the
+  # by-path `mix test test/property` lane (ci-unified) + nightly extended.
+  @moduletag :property
+
   alias Raxol.Harness.Test.SealOracle
   alias Raxol.Terminal.Emulator
   alias Raxol.UI.Rendering.PaintAuthority.InlineAuthority

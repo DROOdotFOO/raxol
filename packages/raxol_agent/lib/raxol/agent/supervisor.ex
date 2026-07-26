@@ -11,6 +11,7 @@ defmodule Raxol.Agent.Supervisor do
   - `Raxol.Agent.Memory.Store.Ets` -- when configured as the memory provider
   - `Raxol.Agent.Skills.Store` -- when a skills provider is configured
   - `Raxol.Agent.Curator` -- when a `:curator` config is set
+  - `Raxol.Agent.Scheduler` -- when a `:scheduler` config is set
 
   Strategy is `:rest_for_one`: if the DynSup crashes, the Orchestrator
   restarts and rebuilds from ContextStore. If the Registry crashes,
@@ -40,7 +41,11 @@ defmodule Raxol.Agent.Supervisor do
         {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one},
         Raxol.Agent.SessionStreamer,
         Raxol.Agent.Orchestrator
-      ] ++ memory_children() ++ skills_children() ++ curator_children()
+      ] ++
+        memory_children() ++
+        skills_children() ++
+        curator_children() ++
+        scheduler_children()
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
@@ -67,6 +72,21 @@ defmodule Raxol.Agent.Supervisor do
     case Application.get_env(:raxol_agent, :curator) do
       opts when is_list(opts) -> [{Raxol.Agent.Curator, opts}]
       _ -> []
+    end
+  end
+
+  # Start the Scheduler only when a :scheduler config (a keyword list) is set,
+  # so the whole cronjob subsystem stays opt-in (ADR-0025).
+  defp scheduler_children do
+    case Application.get_env(:raxol_agent, :scheduler) do
+      opts when is_list(opts) ->
+        # BaseManager registers a name only when one is given; default it to the
+        # module so `Scheduler.create/2` and friends resolve without an explicit
+        # server argument.
+        [{Raxol.Agent.Scheduler, Keyword.put_new(opts, :name, Raxol.Agent.Scheduler)}]
+
+      _ ->
+        []
     end
   end
 end

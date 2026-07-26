@@ -60,7 +60,7 @@ defmodule Raxol.Swarm.CRDT.ORSet do
   def member?(%__MODULE__{} = set, element) do
     case Map.get(set.entries, element) do
       nil -> false
-      dots -> not MapSet.subset?(dots, set.removed)
+      dots -> present?(dots, set.removed)
     end
   end
 
@@ -68,18 +68,14 @@ defmodule Raxol.Swarm.CRDT.ORSet do
   @spec to_list(t()) :: [term()]
   def to_list(%__MODULE__{} = set) do
     set.entries
-    |> Enum.filter(fn {_elem, dots} ->
-      not MapSet.subset?(dots, set.removed)
-    end)
+    |> Enum.filter(fn {_elem, dots} -> present?(dots, set.removed) end)
     |> Enum.map(fn {elem, _dots} -> elem end)
   end
 
   @doc "Returns the number of elements in the set."
   @spec size(t()) :: non_neg_integer()
   def size(%__MODULE__{} = set) do
-    Enum.count(set.entries, fn {_elem, dots} ->
-      not MapSet.subset?(dots, set.removed)
-    end)
+    Enum.count(set.entries, fn {_elem, dots} -> present?(dots, set.removed) end)
   end
 
   @doc """
@@ -106,4 +102,8 @@ defmodule Raxol.Swarm.CRDT.ORSet do
 
     %__MODULE__{entries: entries, removed: removed, clock: clock}
   end
+
+  # An element survives (add-wins) if it has any dot not observed-removed.
+  @spec present?(MapSet.t(dot()), MapSet.t(dot())) :: boolean()
+  defp present?(dots, removed), do: not MapSet.subset?(dots, removed)
 end

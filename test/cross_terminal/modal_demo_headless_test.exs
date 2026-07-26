@@ -60,10 +60,16 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
     {:ok, id} =
       Headless.start(Raxol.Playground.Demos.ModalDemo, id: :modal_demo_reflow)
 
+    # `start/2` does not render an initial frame and `get_buffer/1` does not
+    # force one (unlike `screenshot/1`, which does `:render_frame_sync`), so
+    # read the baseline through a render-sync to avoid racing the first frame
+    # on a loaded runner.
+    {:ok, _} = Headless.screenshot(id)
     {:ok, closed_buffer} = Headless.get_buffer(id)
 
     :ok = Headless.send_key(id, "o")
     Process.sleep(50)
+    {:ok, _} = Headless.screenshot(id)
     {:ok, open_buffer} = Headless.get_buffer(id)
 
     for y <- 0..3, x <- 0..35 do
@@ -81,6 +87,10 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
     {:ok, id} =
       Headless.start(Raxol.Playground.Demos.ModalDemo, id: :modal_demo_dim)
 
+    # Render-sync the baseline: `start/2` renders no initial frame and
+    # `get_buffer/1` does not force one, so reading it directly races the first
+    # frame (this was the macOS flake). `screenshot/1` does `:render_frame_sync`.
+    {:ok, _} = Headless.screenshot(id)
     {:ok, closed_buffer} = Headless.get_buffer(id)
     closed_title_cell = cell_at(closed_buffer, 0, 0)
     assert closed_title_cell.char == "M"
@@ -90,6 +100,7 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
 
     :ok = Headless.send_key(id, "o")
     Process.sleep(50)
+    {:ok, _} = Headless.screenshot(id)
     {:ok, open_buffer} = Headless.get_buffer(id)
     open_title_cell = cell_at(open_buffer, 0, 0)
     assert open_title_cell.char == "M"
@@ -103,6 +114,7 @@ defmodule Raxol.CrossTerminal.ModalDemoHeadlessTest do
 
     :ok = Headless.send_key(id, "n")
     Process.sleep(50)
+    {:ok, _} = Headless.screenshot(id)
     {:ok, closed_again_buffer} = Headless.get_buffer(id)
     closed_again_title_cell = cell_at(closed_again_buffer, 0, 0)
     assert closed_again_title_cell.style.foreground == closed_fg

@@ -38,13 +38,16 @@ defmodule Raxol.Payments.Checkpoint do
   @type handle :: term()
   @type store :: {module(), handle()}
   @type key :: String.t()
-  @type record :: map()
+  # Named `entry`, not `record`: `record` shadows a dialyzer built-in type, which
+  # makes callers' map patterns/args (e.g. `%{"tx_hash" => _}`) look like they can
+  # never match `record()`. `entry` is a plain map alias with no such collision.
+  @type entry :: map()
 
   @doc "Fetch the record stored under `key`, or `:error` if none."
-  @callback fetch(handle(), key()) :: {:ok, record()} | :error
+  @callback fetch(handle(), key()) :: {:ok, entry()} | :error
 
   @doc "Store `record` under `key`, overwriting any existing record."
-  @callback put(handle(), key(), record()) :: :ok
+  @callback put(handle(), key(), entry()) :: :ok
 
   @doc "Remove any record stored under `key`."
   @callback delete(handle(), key()) :: :ok
@@ -55,12 +58,12 @@ defmodule Raxol.Payments.Checkpoint do
   Returns `:error` when no store is configured (`nil`), so a caller can treat a
   missing checkpoint and a disabled checkpoint identically.
   """
-  @spec fetch(store() | nil, key()) :: {:ok, record()} | :error
+  @spec fetch(store() | nil, key()) :: {:ok, entry()} | :error
   def fetch(nil, _key), do: :error
   def fetch({module, handle}, key) when is_atom(module), do: module.fetch(handle, key)
 
   @doc "Store the in-flight record for `key`. No-op when no store is configured."
-  @spec put(store() | nil, key(), record()) :: :ok
+  @spec put(store() | nil, key(), entry()) :: :ok
   def put(nil, _key, _record), do: :ok
   def put({module, handle}, key, record) when is_atom(module), do: module.put(handle, key, record)
 

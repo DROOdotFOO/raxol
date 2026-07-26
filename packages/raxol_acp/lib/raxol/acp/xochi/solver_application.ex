@@ -4,7 +4,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   against Virtuals, streams jobs, and settles each funded job by relaying the
   buyer's pre-signed Xochi intent.
 
-  Supervises four children (`:rest_for_one`, so an `Auth`/`Agent` crash restarts
+  Supervises five children (`:rest_for_one`, so an `Auth`/`Agent` crash restarts
   everything downstream):
 
     1. `Raxol.ACP.Auth` -- EIP-712 auth against the Virtuals server.
@@ -14,6 +14,8 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
        storefront relay `settle_fn` and submits the deliverable on-chain.
     4. an internal stream starter -- calls `Agent.start_stream/1` last, so the
        solver is subscribed before the first SSE event arrives.
+    5. `Raxol.ACP.Xochi.Heartbeat` -- periodic liveness log + telemetry, last so its
+       crash restarts nothing above it.
 
   The `settle_fn` is a pure relay (`Raxol.ACP.Xochi.Settler.build/1`, `:xochi_config`
   only): it never re-signs, so no signing wallet is wired here. raxol earns the
@@ -45,7 +47,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   use Supervisor
 
   alias Raxol.ACP
-  alias Raxol.ACP.Xochi.{Settler, SolverAgent}
+  alias Raxol.ACP.Xochi.{Heartbeat, Settler, SolverAgent}
 
   # Base mainnet. The storefront authenticates and submits on Base; the transferred
   # funds move across chains inside the buyer's Xochi intent, off the ACP ledger.
@@ -67,65 +69,127 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   @impl true
   def init(_opts) do
     chain = ACP.Chain.mainnet()
-    private_key = decode_pk!(System.fetch_env!("RAXOL_ACP_AGENT_PRIVATE_KEY"))
-    rpc_url = System.get_env("RAXOL_ACP_RPC_URL", chain.rpc_url)
+
     server_url = chain.acp_server_url
 
-    provider =
-      ACP.ProviderAdapter.JSONRPC.new(chains: %{@chain_id => rpc_url}, private_key: private_key)
-
-    wallet_address = ACP.ProviderAdapter.get_address(provider)
+    # Two signing substrates share this tree (see build_provider/1):
+    #   * delegated (Privy + Alchemy managed wallet) -- no local key; signs via the
+    #     Node signing sidecar. `sidecar_children` prepends its supervisor.
+    #   * legacy EOA -- holds a raw secp256k1 key and signs locally (JSONRPC).
+    {provider, wallet_address, sidecar_children} = build_provider(chain)
 
     api = ACP.JobApi.HTTP.new(auth: auth_name(), server_url: server_url, chain_ids: [@chain_id])
     transport = ACP.Transport.SSE.new(auth: auth_name(), server_url: server_url)
 
-    settle_fn =
-      Settler.build(
-        xochi_config: %{
-          base_url: System.fetch_env!("XOCHI_BASE_URL"),
-          auth_token: System.fetch_env!("XOCHI_AUTH_TOKEN")
-        }
-      )
+    # One Xochi client config, shared by the accept-time intent derivation (the
+    # SolverAgent reads the authoritative amount by intent id) and the settle
+    # relay. Without it on the agent, every job would fail closed at budget time.
+    # The bearer token is `Secret`-wrapped (same invariant as the signing key
+    # above): it lives in the SolverAgent state and the settle closure, so it
+    # must not render into a crash report. The Xochi client reveals it only when
+    # building the Authorization header.
+    xochi_config = %{
+      base_url: System.fetch_env!("XOCHI_BASE_URL"),
+      auth_token: Raxol.Payments.Secret.new(System.fetch_env!("XOCHI_AUTH_TOKEN"))
+    }
 
-    children = [
-      Supervisor.child_spec(
-        {ACP.Auth,
-         provider: provider, server_url: server_url, chain_id: @chain_id, name: auth_name()},
-        id: :auth
-      ),
-      Supervisor.child_spec(
-        {ACP.Agent,
-         provider: provider,
-         transport: transport,
-         api: api,
-         wallet_address: wallet_address,
-         supported_chain_ids: [@chain_id],
-         default_role: :provider,
-         name: agent_name()},
-        id: :agent
-      ),
-      Supervisor.child_spec(
-        {SolverAgent,
-         agent: agent_name(),
-         provider: provider,
-         wallet_address: wallet_address,
-         evaluator_address: System.fetch_env!("RAXOL_ACP_EVALUATOR"),
-         chain_id: @chain_id,
-         acp_core_address: chain.acp_core_address,
-         fee_bps: fee_bps(),
-         settle_fn: settle_fn,
-         name: solver_name()},
-        id: :solver
-      ),
-      # Start the SSE stream last, after the solver has subscribed.
-      %{
-        id: :stream_starter,
-        start: {Task, :start_link, [fn -> :ok = ACP.Agent.start_stream(agent_name()) end]},
-        restart: :transient
-      }
-    ]
+    settle_fn = Settler.build(xochi_config: xochi_config)
+
+    children =
+      sidecar_children ++
+        [
+          Supervisor.child_spec(
+            {ACP.Auth,
+             provider: provider, server_url: server_url, chain_id: @chain_id, name: auth_name()},
+            id: :auth
+          ),
+          Supervisor.child_spec(
+            {ACP.Agent,
+             provider: provider,
+             transport: transport,
+             api: api,
+             wallet_address: wallet_address,
+             supported_chain_ids: [@chain_id],
+             default_role: :provider,
+             name: agent_name()},
+            id: :agent
+          ),
+          Supervisor.child_spec(
+            {
+              SolverAgent,
+              # Trusted-buyer mode: the evaluator (allowed to call complete/reject) defaults to
+              # the agent's OWN address. Legacy deploys may still pin it via RAXOL_ACP_EVALUATOR;
+              # delegated mode has no separate evaluator secret, so it falls back to the wallet.
+              agent: agent_name(),
+              provider: provider,
+              wallet_address: wallet_address,
+              evaluator_address: System.get_env("RAXOL_ACP_EVALUATOR", wallet_address),
+              chain_id: @chain_id,
+              acp_core_address: chain.acp_core_address,
+              fee_bps: fee_bps(),
+              settle_fn: settle_fn,
+              xochi_config: xochi_config,
+              name: solver_name()
+            },
+            id: :solver
+          ),
+          # Start the SSE stream last, after the solver has subscribed.
+          %{
+            id: :stream_starter,
+            start: {Task, :start_link, [fn -> :ok = ACP.Agent.start_stream(agent_name()) end]},
+            restart: :transient
+          },
+          # Liveness heartbeat -- last so a crash here restarts nothing above it under
+          # :rest_for_one. Emits a periodic log + telemetry event so external monitoring can
+          # tell a live-but-idle solver from a wedged one (no inbound port for a fly check).
+          {Heartbeat, name: heartbeat_name()}
+        ]
 
     Supervisor.init(children, strategy: :rest_for_one)
+  end
+
+  # Delegated (Privy + Alchemy managed wallet) when a wallet id + address are set;
+  # otherwise the legacy local-EOA path. Delegated mode holds NO signing key in the
+  # BEAM -- the sidecar does, from its own env.
+  defp privy_mode? do
+    present?(System.get_env("RAXOL_ACP_WALLET_ID")) and
+      present?(System.get_env("RAXOL_ACP_WALLET_ADDRESS"))
+  end
+
+  defp present?(v), do: is_binary(v) and String.trim(v) != ""
+
+  defp build_provider(chain) do
+    rpc_url = System.get_env("RAXOL_ACP_RPC_URL", chain.rpc_url)
+
+    if privy_mode?() do
+      sidecar_url = Raxol.ACP.SignerSidecar.base_url([])
+      address = System.fetch_env!("RAXOL_ACP_WALLET_ADDRESS")
+
+      provider =
+        ACP.ProviderAdapter.Privy.new(
+          sidecar_url: sidecar_url,
+          address: address,
+          chains: %{@chain_id => rpc_url}
+        )
+
+      # Start the sidecar FIRST (its init blocks until GET /health is 200), so Auth and
+      # everything downstream only start once delegated signing is actually available.
+      {provider, address, [{Raxol.ACP.SignerSidecar, []}]}
+    else
+      # Secret-handling invariant -- KEEP THIS if you reuse the solver pattern. The raw
+      # key exists only as this transient local; `JSONRPC.new/1` immediately wraps it in a
+      # `Raxol.ACP.Secret` before it enters the provider config. That wrapper redacts under
+      # `Inspect`, so the key never renders into an OTP/SASL crash report even though the
+      # provider is passed as a supervised child's start arg (a plain unwrapped key here
+      # WOULD leak on any boot-time child crash -- see Secret's moduledoc). Do not log or
+      # interpolate `private_key`; only `Secret.reveal/1` at a sign call site unwraps it.
+      private_key = decode_pk!(System.fetch_env!("RAXOL_ACP_AGENT_PRIVATE_KEY"))
+
+      provider =
+        ACP.ProviderAdapter.JSONRPC.new(chains: %{@chain_id => rpc_url}, private_key: private_key)
+
+      {provider, ACP.ProviderAdapter.get_address(provider), []}
+    end
   end
 
   defp fee_bps, do: String.to_integer(System.get_env("XOCHI_FEE_BPS", "50"))
@@ -133,6 +197,7 @@ defmodule Raxol.ACP.Xochi.SolverApplication do
   defp auth_name, do: Module.concat(__MODULE__, Auth)
   defp agent_name, do: Module.concat(__MODULE__, Agent)
   defp solver_name, do: Module.concat(__MODULE__, Solver)
+  defp heartbeat_name, do: Module.concat(__MODULE__, Heartbeat)
 
   defp decode_pk!("0x" <> hex), do: Base.decode16!(hex, case: :mixed)
   defp decode_pk!(hex), do: Base.decode16!(hex, case: :mixed)

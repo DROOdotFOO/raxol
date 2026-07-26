@@ -409,20 +409,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
           clamped_top = max(1, min(top, emulator.height))
           {clamped_top, emulator.height, {clamped_top - 1, emulator.height - 1}}
 
-        [top, bottom] ->
-          # Both parameters
-          clamped_top = max(1, min(top, emulator.height))
-          clamped_bottom = max(clamped_top, min(bottom, emulator.height))
-
-          # Invalid region if top >= bottom
-          if clamped_top >= clamped_bottom do
-            {1, emulator.height, nil}
-          else
-            {clamped_top, clamped_bottom, {clamped_top - 1, clamped_bottom - 1}}
-          end
-
         [top, bottom | _] ->
-          # Same as [top, bottom]
+          # Both parameters (2+ params; any extra are ignored)
           clamped_top = max(1, min(top, emulator.height))
           clamped_bottom = max(clamped_top, min(bottom, emulator.height))
 

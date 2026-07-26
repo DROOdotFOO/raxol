@@ -31,7 +31,7 @@ defmodule Raxol.Symphony.Web.CallbackRouter do
   push_patch / push_redirect to a per-run route.
   """
 
-  alias Raxol.Symphony.Orchestrator
+  alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
 
   @type result ::
           :noop
@@ -52,45 +52,20 @@ defmodule Raxol.Symphony.Web.CallbackRouter do
     |> dispatch(orch)
   end
 
-  defp dispatch(:refresh, orch), do: do_refresh(orch)
+  defp dispatch(:refresh, orch), do: OrchestratorClient.refresh(orch)
   defp dispatch(:list, orch), do: do_list(orch)
   defp dispatch(:dismiss, _orch), do: :noop
-  defp dispatch({:stop, id}, orch), do: do_stop(orch, id)
+  defp dispatch({:stop, id}, orch), do: OrchestratorClient.stop(orch, id)
   defp dispatch({:run_detail, id}, _orch), do: {:ok, {:run_detail, id}}
   defp dispatch({:approve, _id}, _orch), do: :noop
-  defp dispatch({:resume, id, decision}, orch), do: do_resume(orch, id, decision)
+
+  defp dispatch({:resume, id, decision}, orch),
+    do: OrchestratorClient.resume(orch, id, decision)
+
   defp dispatch({:unknown, _raw}, _orch), do: :noop
 
-  defp do_refresh(orch) do
-    _ = safe_call(fn -> Orchestrator.refresh(orch) end)
-    {:ok, :refresh}
-  end
-
   defp do_list(orch) do
-    _ = safe_call(fn -> Orchestrator.refresh(orch) end)
+    _ = OrchestratorClient.safe_call(fn -> Orchestrator.refresh(orch) end)
     {:ok, :listed}
-  end
-
-  defp do_stop(orch, id) do
-    case safe_call(fn -> Orchestrator.stop_run(orch, id) end) do
-      {:ok, :ok} -> {:ok, :stopped}
-      {:ok, {:error, reason}} -> {:error, reason}
-      _ -> {:error, :orchestrator_unavailable}
-    end
-  end
-
-  defp do_resume(orch, id, decision) do
-    case safe_call(fn -> Orchestrator.resume_run(orch, id, decision) end) do
-      {:ok, :ok} -> {:ok, {:resumed, decision}}
-      {:ok, {:error, reason}} -> {:error, reason}
-      _ -> {:error, :orchestrator_unavailable}
-    end
-  end
-
-  defp safe_call(fun) do
-    {:ok, fun.()}
-  catch
-    :exit, _ -> :error
-    :error, _ -> :error
   end
 end

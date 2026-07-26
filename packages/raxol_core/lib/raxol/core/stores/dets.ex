@@ -83,6 +83,25 @@ defmodule Raxol.Core.Stores.Dets do
     end
   end
 
+  @doc """
+  Read a record straight from disk, or `default` when the key is absent.
+
+  For stores whose working set lives in ETS this is never needed (replay
+  covers boot); it exists for single-record stores with no ETS mirror, such
+  as a poller checkpoint. Returns `default` when persistence is disabled.
+  """
+  @spec get(handle(), term(), term()) :: term()
+  def get(handle, key, default \\ nil)
+
+  def get(nil, _key, default), do: default
+
+  def get(dets, key, default) do
+    case :dets.lookup(dets, key) do
+      [{^key, value}] -> value
+      _other -> default
+    end
+  end
+
   @doc "Write a record through to disk. No-op when persistence is disabled."
   @spec put(handle(), term(), term()) :: :ok
   def put(nil, _key, _value), do: :ok

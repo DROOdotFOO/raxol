@@ -7,14 +7,16 @@ defmodule Raxol.Terminal.ScreenBuffer.Attributes do
   alias Raxol.Terminal.ANSI.TextFormatting
   alias Raxol.Terminal.ScreenBuffer.SharedOperations
 
+  import Raxol.Terminal.Bounds, only: [clamp_to_bounds: 2]
+
   # Cursor operations
 
   @doc """
   Sets the cursor position.
   """
   def set_cursor_position(buffer, x, y) do
-    x = max(0, min(x, buffer.width - 1))
-    y = max(0, min(y, buffer.height - 1))
+    x = clamp_to_bounds(x, buffer.width)
+    y = clamp_to_bounds(y, buffer.height)
     %{buffer | cursor_position: {x, y}}
   end
 

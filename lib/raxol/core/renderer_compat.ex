@@ -57,7 +57,13 @@ defmodule Raxol.Core.Renderer do
   Returns a list of update tuples:
   - `{:move, x, y}` - Move cursor to position
   - `{:write, text, style}` - Write text with style
-  - `{:clear_line, y}` - Clear line at y
+  - `{:clear_line, y}` - Clear line at y, emitted when a changed row becomes
+    entirely blank (spaces with no visible style and no hyperlink)
+
+  Note: `apply_diff/1` renders `:clear_line` as `ESC[2K`, which erases the
+  entire physical terminal row. Buffers narrower than the terminal that share
+  rows with unmanaged content should not rely on the diff staying inside the
+  buffer's width when a row goes blank.
 
   ## Example
 
@@ -131,6 +137,19 @@ defmodule Raxol.Core.Renderer do
   end
 
   defp generate_line_diff(old_cells, new_cells, y) do
+    cond do
+      blank_row?(new_cells) and blank_row?(old_cells) ->
+        []
+
+      blank_row?(new_cells) and old_cells != new_cells ->
+        [{:clear_line, y}]
+
+      true ->
+        cell_run_diff(old_cells, new_cells, y)
+    end
+  end
+
+  defp cell_run_diff(old_cells, new_cells, y) do
     old_cells
     |> Enum.zip(new_cells)
     |> Enum.with_index()
@@ -143,6 +162,21 @@ defmodule Raxol.Core.Renderer do
       |> Enum.reverse()
     end)
   end
+
+  # A row is blank when every cell renders as an unstyled space: clear_line
+  # erases with the default background, so any visible style or hyperlink
+  # disqualifies the row. Non-map styles (set_cell has no style guard) fall
+  # through to non-blank so this fast path never crashes on shapes the diff
+  # path itself tolerates.
+  defp blank_row?(cells) do
+    Enum.all?(cells, &blank_cell?/1)
+  end
+
+  defp blank_cell?(%{char: " ", style: style}) when is_map(style) do
+    Style.to_ansi(style) == "" and Map.get(style, :hyperlink) in [nil, ""]
+  end
+
+  defp blank_cell?(_cell), do: false
 
   defp diff_cell({ops, run_start, run_chars}, old_cell, new_cell, x, y, cells) do
     if cells_equal?(old_cell, new_cell) do

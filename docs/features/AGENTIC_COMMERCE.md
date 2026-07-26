@@ -72,6 +72,57 @@ Xochi is the default for cross-chain and privacy (stealth addresses, shielded tr
 
 Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics. The `Protocols.Riddler` module itself is deprecated and now delegates to Xochi internally; prefer `Protocols.Xochi` directly.
 
+## Trust and Compliance (ZKSAR)
+
+ZKSAR (Zero-Knowledge Sanctions/AML Reporting) lets an agent prove compliance facts without
+revealing the underlying data, and turns those proofs into a trust score that unlocks lower
+fees and stronger privacy. The zero-knowledge proofs themselves are verified on-chain or in
+the Xochi oracle; `Raxol.Payments.Zksar` verifies the oracle's signed attestation result
+(type, expiry, issuer, structural integrity, and that the signature recovers to a trusted
+issuer).
+
+Six proof types (`@proof_types`):
+
+| Type | Proves |
+|------|--------|
+| `:compliance` | Score below a jurisdiction threshold |
+| `:risk_score` | A score comparison without revealing the score |
+| `:pattern` | No structuring or velocity anomalies |
+| `:attestation` | A valid credential exists |
+| `:membership` | Address is in a whitelist |
+| `:non_membership` | Address is NOT on a sanctions list |
+
+`Zksar.TrustScore.aggregate/2` folds verified proofs into a 0-100 score with diminishing
+returns: proofs are weighted by type, sorted descending, and each successive proof
+contributes less (the first at full weight, the second about 91%, the third about 73%).
+
+`Raxol.Payments.PrivacyTier` maps the score to a tier (the Xochi whitepaper's Glass Cube
+model), which sets the fee and the settlement mode:
+
+| Score | Tier | Fee (bps) | Settlement |
+|-------|------|:---:|-----------|
+| 0-24 | `:standard` | 30 | public |
+| 25-49 | `:stealth` | 25 | stealth |
+| 50-74 | `:private` | 20 | shielded |
+| 75+ | `:sovereign` | 15 | shielded |
+
+`:private` requires a `:compliance` attestation and `:sovereign` requires `:compliance` plus
+`:non_membership`; without them, the tier is walked down toward `:standard`. Two lower-privacy
+tiers (`:open`, `:public`) exist only as an opt-in override, so a user can choose to reveal
+more, never less by default.
+
+`Raxol.Payments.Router` is the verification choke point. Callers pass raw, signed
+attestations; the Router runs `Zksar.verify_batch/2` against an operator-pinned issuer
+allowlist (`config :raxol_payments, :zksar_allowed_issuers`) on every path, replacing the
+attestation set with only the verified subset before it scores or checks tier requirements. It
+fails closed: with the allowlist unset (the default `[]`), no attestation can be verified, so
+none buys trust. A self-asserted `%{valid: true}` map is not a proof.
+
+Signature verification is implemented and on by default, but the digest scheme it checks
+(EIP-191 over canonical attestation fields) is provisional: it has not yet been reconciled
+byte-for-byte with the live Xochi oracle signer, so it fails closed on mismatch (rejecting
+real attestations rather than accepting forged ones) until a production vector is pinned.
+
 ## Spending Controls
 
 Three layers of limits in `SpendingPolicy`:

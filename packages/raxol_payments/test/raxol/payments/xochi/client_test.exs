@@ -29,6 +29,20 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       assert {"authorization", "Bearer legacy-jwt"} in downcase(headers)
     end
 
+    test "a Secret-wrapped auth_token is revealed into the Bearer header" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth_token: Raxol.Payments.Secret.new("wrapped-jwt"),
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Client.claim(config, @claim_params)
+      assert_receive {:req, _method, _path, headers, _body}
+      assert {"authorization", "Bearer wrapped-jwt"} in downcase(headers)
+      # The token never renders in the clear (redacted Inspect).
+      refute inspect(config.auth_token) =~ "wrapped-jwt"
+    end
+
     test "none mode sends no Authorization header" do
       assert {:ok, _} = Client.claim(config(auth: :none), @claim_params)
       assert_receive {:req, _method, _path, headers, _body}
@@ -79,6 +93,44 @@ defmodule Raxol.Payments.Xochi.ClientTest do
     end
   end
 
+  describe "get_intent/2" do
+    test "GETs /api/intent/:id and parses the authoritative corridor + amounts" do
+      intent = %{
+        "id" => "xi_9",
+        "status" => "quoted",
+        "from_chain_id" => 8453,
+        "to_chain_id" => 42_161,
+        "from_token" => "0xusdc_base",
+        "to_token" => "0xusdc_arb",
+        "from_amount" => "1000000000",
+        "to_amount" => "999000000",
+        "quote_id" => "xq_9",
+        "fee_rate" => 0.003,
+        "settlement_type" => "public"
+      }
+
+      config = %{base_url: "https://api.xochi.fi", req_options: [plug: json_plug(intent)]}
+
+      assert {:ok, parsed} = Client.get_intent(config, "xi_9")
+      assert parsed.intent_id == "xi_9"
+      assert parsed.status == :quoted
+      assert parsed.from_chain_id == 8453
+      assert parsed.to_chain_id == 42_161
+      assert parsed.from_amount == "1000000000"
+      assert parsed.to_amount == "999000000"
+      assert parsed.quote_id == "xq_9"
+    end
+
+    test "surfaces a 404 as an :http error" do
+      config = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(%{"error" => "Intent not found"}, 404), retry: false]
+      }
+
+      assert {:error, {:http, 404, _}} = Client.get_intent(config, "xi_missing")
+    end
+  end
+
   describe "base_url validation" do
     test "rejects a non-HTTPS base_url" do
       config = %{base_url: "ftp://api.xochi.fi", auth: :none}
@@ -101,6 +153,14 @@ defmodule Raxol.Payments.Xochi.ClientTest do
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, Jason.encode!(%{"tx_hash" => "0xabc", "status" => "submitted"}))
+    end
+  end
+
+  defp json_plug(body, status \\ 200) do
+    fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(status, Jason.encode!(body))
     end
   end
 

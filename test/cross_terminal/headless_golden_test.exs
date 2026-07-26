@@ -65,7 +65,7 @@ defmodule Raxol.CrossTerminal.HeadlessGoldenTest do
 
   test "initial render matches golden" do
     {:ok, id} = Headless.start(GoldenApp, id: :golden_initial)
-    {:ok, text} = Headless.screenshot(id)
+    {:ok, text} = screenshot_until(id, "Count: 0")
 
     assert text =~ "Count: 0"
     assert text =~ "Panel: a"
@@ -95,5 +95,30 @@ defmodule Raxol.CrossTerminal.HeadlessGoldenTest do
     assert model.count == 2
     assert text =~ "Count: 2"
     :ok = Headless.stop(id)
+  end
+
+  # The very first screenshot right after `start` can observe the buffer in
+  # the narrow window between `render_frame_sync` replying and the frame's
+  # cells committing to the buffer `get_buffer` reads -- on fast runners this
+  # races and returns an empty capture. Re-issue the synchronous screenshot
+  # (which re-renders each call) until the expected content lands; it
+  # converges within a couple of attempts. Bounded, no sleep -- a genuine
+  # never-render fails loudly at the bound rather than hanging.
+  defp screenshot_until(id, marker, attempts \\ 50)
+
+  defp screenshot_until(id, marker, 0) do
+    flunk("screenshot never contained #{inspect(marker)} for #{inspect(id)}")
+  end
+
+  defp screenshot_until(id, marker, attempts) do
+    case Headless.screenshot(id) do
+      {:ok, text} ->
+        if String.contains?(text, marker),
+          do: {:ok, text},
+          else: screenshot_until(id, marker, attempts - 1)
+
+      other ->
+        other
+    end
   end
 end

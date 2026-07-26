@@ -40,7 +40,9 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
 
     use Raxol.Core.Runtime.Application
 
-    alias Raxol.Symphony.Orchestrator
+    alias Raxol.Symphony.{Orchestrator, OrchestratorClient}
+    alias Raxol.Symphony.PauseReason
+    alias Raxol.Symphony.SurfaceFormat
 
     @poll_ms 500
 
@@ -127,7 +129,13 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp do_tick(model) do
       snapshot = safe_snapshot(model.orchestrator)
       selection = clamp_selection(model.selection, length(snapshot.running))
-      {%{model | snapshot: snapshot, selection: selection, tick: model.tick + 1}, []}
+
+      {%{
+         model
+         | snapshot: snapshot,
+           selection: selection,
+           tick: model.tick + 1
+       }, []}
     end
 
     defp handle_key(message, model) do
@@ -144,7 +152,11 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     end
 
     defp handle_refresh(model) do
-      _ = safe_call(fn -> Orchestrator.refresh(model.orchestrator) end)
+      _ =
+        OrchestratorClient.safe_call(fn ->
+          Orchestrator.refresh(model.orchestrator)
+        end)
+
       {note_action(model, :refresh_requested), []}
     end
 
@@ -160,7 +172,11 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
           {note_action(model, :no_run_selected), []}
 
         %{issue_id: id, issue_identifier: ident} ->
-          _ = safe_call(fn -> Orchestrator.stop_run(model.orchestrator, id) end)
+          _ =
+            OrchestratorClient.safe_call(fn ->
+              Orchestrator.stop_run(model.orchestrator, id)
+            end)
+
           {note_action(model, {:stopped, ident}), []}
       end
     end
@@ -180,21 +196,20 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp clamp_selection(selection, _runs), do: selection
 
     defp note_action(model, action) do
-      %{model | last_action: action, last_action_at: System.system_time(:millisecond)}
+      %{
+        model
+        | last_action: action,
+          last_action_at: System.system_time(:millisecond)
+      }
     end
 
     defp safe_snapshot(orchestrator) do
-      case safe_call(fn -> Orchestrator.snapshot(orchestrator) end) do
+      case OrchestratorClient.safe_call(fn ->
+             Orchestrator.snapshot(orchestrator)
+           end) do
         {:ok, snap} when is_map(snap) -> snap
         _ -> empty_snapshot()
       end
-    end
-
-    defp safe_call(fun) do
-      {:ok, fun.()}
-    catch
-      :exit, _ -> :error
-      :error, _ -> :error
     end
 
     # -- View -----------------------------------------------------------------
@@ -280,12 +295,14 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp running_rows(model) do
       model.snapshot.running
       |> Enum.with_index()
-      |> Enum.map(fn {entry, idx} -> running_row(entry, idx == model.selection) end)
+      |> Enum.map(fn {entry, idx} ->
+        running_row(entry, idx == model.selection)
+      end)
     end
 
     defp running_row(entry, selected?) do
       marker = if selected?, do: ">", else: " "
-      runtime = format_ms(entry.started_ms_ago)
+      runtime = SurfaceFormat.format_ms(entry.started_ms_ago)
       last_event = format_event(entry.last_event)
 
       text(
@@ -320,8 +337,8 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp paused_rows(model), do: Enum.map(model.snapshot.paused, &paused_row/1)
 
     defp paused_row(entry) do
-      reason = format_reason(entry[:interrupt_reason])
-      paused_ago = format_ms(entry[:paused_ms_ago] || 0)
+      reason = PauseReason.format(entry[:interrupt_reason])
+      paused_ago = SurfaceFormat.format_ms(entry[:paused_ms_ago] || 0)
       last_event = format_event(entry[:last_event])
 
       text(
@@ -357,7 +374,7 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
       text(
         "  #{pad(entry.issue_identifier, 8)} " <>
           "attempt=#{pad(to_string(entry.attempt), 2)}  " <>
-          "due in #{pad(format_ms(entry.due_in_ms), 8)}  " <>
+          "due in #{pad(SurfaceFormat.format_ms(entry.due_in_ms), 8)}  " <>
           "#{entry.error || ""}",
         fg: :magenta
       )
@@ -377,7 +394,10 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     end
 
     defp action_label(%{last_action: nil}), do: ""
-    defp action_label(%{last_action: :refresh_requested}), do: "refresh requested"
+
+    defp action_label(%{last_action: :refresh_requested}),
+      do: "refresh requested"
+
     defp action_label(%{last_action: :no_run_selected}), do: "no run selected"
     defp action_label(%{last_action: {:stopped, ident}}), do: "stopped #{ident}"
     defp action_label(%{last_action: other}), do: inspect(other)
@@ -407,19 +427,6 @@ if Code.ensure_loaded?(Raxol.Core.Runtime.Application) do
     defp format_event(atom) when is_atom(atom), do: Atom.to_string(atom)
     defp format_event(binary) when is_binary(binary), do: binary
     defp format_event(other), do: inspect(other)
-
-    defp format_reason(reason), do: Raxol.Symphony.PauseReason.format(reason)
-
-    defp format_ms(ms) when is_integer(ms) and ms < 1_000, do: "#{ms}ms"
-    defp format_ms(ms) when is_integer(ms) and ms < 60_000, do: "#{div(ms, 1000)}s"
-
-    defp format_ms(ms) when is_integer(ms) do
-      mins = div(ms, 60_000)
-      secs = div(rem(ms, 60_000), 1000)
-      "#{mins}m#{secs}s"
-    end
-
-    defp format_ms(_), do: "?"
 
     defp pad(s, width) when is_binary(s) do
       if byte_size(s) >= width do

@@ -3,9 +3,7 @@ defmodule Raxol.ACP.Seller.OfferingsTest do
 
   alias Raxol.ACP.Offering.Registry
   alias Raxol.ACP.Seller.Offerings
-  alias Raxol.ACP.Xochi.TransferOffering
-
-  @offering "xochi_cross_chain_transfer"
+  alias Raxol.ACP.Xochi.{TransferOffering, UsdcPublicOffering}
 
   setup do
     # The Offering.Registry is started by the application; start each test from
@@ -16,24 +14,33 @@ defmodule Raxol.ACP.Seller.OfferingsTest do
   end
 
   describe "register_all/0" do
-    test "registers the default offerings into the registry" do
-      assert :error = Registry.lookup(@offering)
-
+    test "the default is fail-closed: only the USDC-only launch offering registers" do
       assert :ok = Offerings.register_all()
 
-      assert {:ok, spec} = Registry.lookup(@offering)
-      assert spec.handler == TransferOffering
+      assert {:ok, spec} = Registry.lookup("xochi_usdc_public")
+      assert spec.handler == UsdcPublicOffering
+
+      # The token-agnostic / deprecated rails are NOT advertised by default; they
+      # accept tokens whose settlement is not ready and would revert.
+      assert :error = Registry.lookup("xochi_cross_chain_transfer")
+      assert :error = Registry.lookup("xochi_stable_public")
+      assert :error = Registry.lookup("xochi_stable_stealth")
     end
 
     test "is idempotent across repeated calls" do
       assert :ok = Offerings.register_all()
       assert :ok = Offerings.register_all()
-      assert {:ok, _spec} = Registry.lookup(@offering)
+      assert {:ok, _spec} = Registry.lookup("xochi_usdc_public")
     end
 
-    test "honors the :offerings config" do
-      Application.put_env(:raxol_acp, :offerings, [TransferOffering])
-      assert Offerings.configured() == [TransferOffering]
+    test "honors the :offerings config to widen the set" do
+      Application.put_env(:raxol_acp, :offerings, [UsdcPublicOffering, TransferOffering])
+      assert Offerings.configured() == [UsdcPublicOffering, TransferOffering]
+
+      assert :ok = Offerings.register_all()
+      assert {:ok, _} = Registry.lookup("xochi_usdc_public")
+      assert {:ok, spec} = Registry.lookup("xochi_cross_chain_transfer")
+      assert spec.handler == TransferOffering
     end
   end
 end

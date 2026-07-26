@@ -51,7 +51,7 @@ regenerate the references with `mix raxol.fate --gen` and commit them.
 
 ### Development
 ```bash
-mix raxol.playground   # Component playground (30 demos)
+mix raxol.playground   # Component playground (40 demos)
 mix raxol.repl         # Interactive REPL with sandboxing
 iex -S mix            # Interactive shell
 ```

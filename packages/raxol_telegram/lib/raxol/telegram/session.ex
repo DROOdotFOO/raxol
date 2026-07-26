@@ -120,9 +120,12 @@ defmodule Raxol.Telegram.Session do
       try do
         GenServer.stop(state.lifecycle_pid, :normal, 1000)
       catch
-        # Process may have already exited between alive? check and stop call
-        :exit, {:noproc, _} -> :ok
-        :exit, {:normal, _} -> :ok
+        # Any exit here means the Lifecycle is down or already going down:
+        # noproc/normal races, its :shutdown teardown cascade overriding the
+        # requested :normal (the exit arrives MFA-wrapped), or a stop that
+        # outlived the wait budget after the request was delivered. This
+        # teardown's only goal is "not leaked", so all of these are success.
+        :exit, _reason -> :ok
       end
     end
 

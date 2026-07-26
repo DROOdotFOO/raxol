@@ -964,19 +964,42 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
             ),
             fn levels ->
               deduped = Enum.dedup_by(levels, fn {kind, _leaf} -> kind end)
-
-              doc =
-                leading <>
-                  Enum.map_join(deduped, fn {kind, leaf} ->
-                    Map.fetch!(@emphasis_openers, kind) <> leaf
-                  end)
-
-              StreamData.constant(doc)
+              StreamData.constant(build_nested_doc(leading, deduped))
             end
           )
         end)
       end)
     end
+
+    # Threads a running text accumulator through each level so an
+    # underscore-family opener (`_`/`__`) never lands immediately after a
+    # word character. CommonMark (and the renderer, post the intraword-
+    # emphasis fix) does not treat such a run as an opening delimiter at
+    # all -- it is ordinary intraword content (`get_user_id` keeps its
+    # underscores) -- so a generated doc that put one there would no
+    # longer contain a genuinely open construct, contradicting this
+    # property's "never-closed emphasis chain" premise. A single
+    # boundary space is inserted only when needed; star-family openers
+    # have no such restriction (CommonMark allows intraword `*`/`**`).
+    defp build_nested_doc(leading, levels) do
+      Enum.reduce(levels, leading, fn {kind, leaf}, acc ->
+        opener = Map.fetch!(@emphasis_openers, kind)
+        acc <> underscore_boundary(acc, kind) <> opener <> leaf
+      end)
+    end
+
+    @underscore_kinds [:bold_under, :italic_under]
+
+    defp underscore_boundary(text, kind) do
+      if kind in @underscore_kinds and ends_in_word_char?(text) do
+        " "
+      else
+        ""
+      end
+    end
+
+    defp ends_in_word_char?(""), do: false
+    defp ends_in_word_char?(text), do: String.last(text) =~ ~r/[a-zA-Z0-9_]/
 
     property "every prefix of an arbitrarily nested, never-closed emphasis chain renders with no marker leak" do
       check all(doc <- nested_never_closed_doc_gen(), max_runs: 200) do

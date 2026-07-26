@@ -167,6 +167,20 @@ defmodule Raxol.UI.Charts.ChartUtils do
   end
 
   @doc """
+  Renders a legend when `show?` is true, otherwise returns `[]`.
+  """
+  @spec render_optional_legend(
+          boolean(),
+          non_neg_integer(),
+          non_neg_integer(),
+          [map()]
+        ) :: [cell()]
+  def render_optional_legend(false, _x, _y, _series), do: []
+
+  def render_optional_legend(true, x, y, series),
+    do: render_legend(x, y, series)
+
+  @doc """
   Resolves a Y-axis range from data values and opts (`:min`, `:max`).
   Falls back to `auto_range/1` for `:auto` bounds. Empty data defaults to `{0.0, 1.0}`.
   """
@@ -228,5 +242,31 @@ defmodule Raxol.UI.Charts.ChartUtils do
     |> Enum.map(fn {char, offset} ->
       {x + offset, y, char, fg, bg, %{}}
     end)
+  end
+
+  @doc """
+  Resolves a chart node id to a label string: a binary as-is, a non-nil atom
+  via `Atom.to_string/1`, anything else `nil`.
+  """
+  @spec a11y_chart_id(term()) :: String.t() | nil
+  def a11y_chart_id(id) when is_binary(id), do: id
+
+  def a11y_chart_id(id) when is_atom(id) and not is_nil(id),
+    do: Atom.to_string(id)
+
+  def a11y_chart_id(_id), do: nil
+
+  @doc """
+  Builds the accessibility node for a chart. Uses `:aria_label`, then `:title`,
+  then an id-derived label, falling back to `default_label`.
+  """
+  @spec a11y_node(map(), String.t()) :: %{role: :img, label: String.t()}
+  def a11y_node(node, default_label) do
+    %{
+      role: :img,
+      label:
+        node[:aria_label] || node[:title] || a11y_chart_id(node[:id]) ||
+          default_label
+    }
   end
 end

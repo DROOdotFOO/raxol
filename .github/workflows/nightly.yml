@@ -116,7 +116,22 @@ jobs:
 
       - name: Run full test suite
         run: |
-          mix test --exclude slow --exclude integration --exclude docker --exclude skip_on_ci
+          # --exclude property: the emulator-replay-heavy property tests
+          # (renderer seal-once keystones) are CPU/allocation-bound. They
+          # already run isolated at --timeout 300000 in the extended-scenarios
+          # job, so excluding them here removes the duplicate run.
+          #
+          # --max-cases / --timeout: the harness surface suites (test/harness)
+          # are the same CPU-bound emulator-replay class but are NOT property
+          # tests, so --exclude property never covered them. On slow matrix
+          # legs (older Elixir, macOS 2-3 core runners) the default async pool
+          # (2x schedulers) co-schedules several of them and starves each of
+          # cores, pushing them past the default 60s bound -- a runner-load
+          # artifact, not a hang. Capping concurrency gives each a full core
+          # and raising the default bound to 120s absorbs the residual GC/
+          # scheduling jitter. ci-unified runs this same suite per-push on
+          # fast runners, so cross-version coverage is unchanged.
+          mix test --exclude slow --exclude integration --exclude docker --exclude skip_on_ci --exclude property --max-cases 4 --timeout 120000
         env:
           POSTGRES_HOST: localhost
           POSTGRES_USER: postgres
@@ -173,7 +188,17 @@ jobs:
 
       - name: Run property-based tests (extended)
         run: |
-          mix test --only property --timeout 300000 || true
+          # No `|| true`: this isolated 300s run is the nightly's property
+          # gate (the matrix job excludes property). It passes reliably in
+          # its own process, so a failure here is a genuine regression that
+          # must fail the build, not be swallowed.
+          #
+          # `--exclude skip_on_ci`: some properties are tagged skip_on_ci
+          # BECAUSE they are wall-clock timing assertions (e.g. the parser
+          # sub-quadratic scaling check) that flake on shared CI runners.
+          # `--only property` alone does not honor that tag, so they ran here
+          # and flaked; exclude them like every other CI lane does.
+          mix test --only property --exclude skip_on_ci --timeout 300000
 
       - name: Generate extended test report
         run: |

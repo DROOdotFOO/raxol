@@ -58,6 +58,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
   alias Raxol.Payments.Xochi.Schemas.{
     DepositRouteRequest,
     ExecuteRequest,
+    Intent,
     IntentStatus,
     QuoteRequest,
     QuoteResponse
@@ -74,7 +75,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   def detect?(_status, _headers), do: false
 
   @impl true
-  @spec parse_challenge([{String.t(), String.t()}]) :: {:error, :not_a_402_protocol}
+  @spec parse_challenge([{String.t(), String.t()}]) ::
+          {:error, :not_a_402_protocol}
   def parse_challenge(_headers), do: {:error, :not_a_402_protocol}
 
   @impl true
@@ -82,7 +84,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   def build_payment(_challenge, _wallet), do: {:error, :not_a_402_protocol}
 
   @impl true
-  @spec parse_receipt([{String.t(), String.t()}]) :: {:error, :not_a_402_protocol}
+  @spec parse_receipt([{String.t(), String.t()}]) ::
+          {:error, :not_a_402_protocol}
   def parse_receipt(_headers), do: {:error, :not_a_402_protocol}
 
   @impl true
@@ -100,6 +103,18 @@ defmodule Raxol.Payments.Protocols.Xochi do
           {:ok, QuoteResponse.t()} | {:error, term()}
   def get_quote(config, %QuoteRequest{} = request) do
     Client.get_quote(config, request)
+  end
+
+  @doc """
+  Fetch a persisted intent by id (`GET /api/intent/:id`).
+
+  Returns the authoritative corridor + amounts written at quote time, so a
+  storefront can read what the buyer signed before settlement rather than trust
+  a relayed, buyer-declared amount.
+  """
+  @spec get_intent(Client.config(), String.t()) :: {:ok, Intent.t()} | {:error, term()}
+  def get_intent(config, intent_id) when is_binary(intent_id) do
+    Client.get_intent(config, intent_id)
   end
 
   @doc """
@@ -130,7 +145,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   def deposit_route_quote(config, %DepositRouteRequest{} = request, opts \\ []) do
     with {:ok, quote} <- Client.get_deposit_route_quote(config, request),
          :ok <- ensure_solvable(quote),
-         {:ok, instructions} <- verify_deposit_route(config, request, quote, opts) do
+         {:ok, instructions} <-
+           verify_deposit_route(config, request, quote, opts) do
       {:ok, instructions}
     end
   end
@@ -165,10 +181,14 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   defp ensure_solvable(%QuoteResponse{can_solve: true}), do: :ok
-  defp ensure_solvable(%QuoteResponse{error: reason}), do: {:error, {:not_solvable, reason}}
+
+  defp ensure_solvable(%QuoteResponse{error: reason}),
+    do: {:error, {:not_solvable, reason}}
 
   defp ensure_deposit_route(%QuoteResponse{} = quote) do
-    if QuoteResponse.deposit_route?(quote), do: :ok, else: {:error, :not_a_deposit_route}
+    if QuoteResponse.deposit_route?(quote),
+      do: :ok,
+      else: {:error, :not_a_deposit_route}
   end
 
   # Pin the expected signer, failing closed when none is available -- a bare
@@ -177,7 +197,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
     signer =
       opts[:deposit_attestation_signer] ||
         Application.get_env(:raxol_payments, :xochi_deposit_attestation_signer) ||
-        Capabilities.deposit_attestation_signer(deposit_capabilities(config, opts))
+        Capabilities.deposit_attestation_signer(
+          deposit_capabilities(config, opts)
+        )
 
     case signer do
       s when is_binary(s) and s != "" -> {:ok, s}
@@ -194,7 +216,10 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   # The attestation binds fields split across the request (origin) and the quote
   # response (ids + deposit address); reassemble them for recovery.
-  defp deposit_binding_fields(%DepositRouteRequest{} = request, %QuoteResponse{} = quote) do
+  defp deposit_binding_fields(
+         %DepositRouteRequest{} = request,
+         %QuoteResponse{} = quote
+       ) do
     %{
       intent_id: quote.intent_id,
       quote_id: quote.quote_id,
@@ -205,7 +230,10 @@ defmodule Raxol.Payments.Protocols.Xochi do
     }
   end
 
-  defp deposit_instructions(%DepositRouteRequest{} = request, %QuoteResponse{} = quote) do
+  defp deposit_instructions(
+         %DepositRouteRequest{} = request,
+         %QuoteResponse{} = quote
+       ) do
     %{
       intent_id: quote.intent_id,
       quote_id: quote.quote_id,
@@ -229,7 +257,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   then submits the signed intent for execution.
   """
   @spec execute(Client.config(), QuoteResponse.t(), module()) ::
-          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()} | {:error, term()}
+          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()}
+          | {:error, term()}
   def execute(config, %QuoteResponse{} = quote_resp, wallet) do
     execute(config, quote_resp, wallet, nil)
   end
@@ -245,8 +274,14 @@ defmodule Raxol.Payments.Protocols.Xochi do
   released. Pass `nil` only when there is no pull authorization to validate; a
   pull authorization presented with a `nil` request fails closed.
   """
-  @spec execute(Client.config(), QuoteResponse.t(), module(), QuoteRequest.t() | nil) ::
-          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()} | {:error, term()}
+  @spec execute(
+          Client.config(),
+          QuoteResponse.t(),
+          module(),
+          QuoteRequest.t() | nil
+        ) ::
+          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()}
+          | {:error, term()}
   def execute(config, %QuoteResponse{} = quote_resp, wallet, request) do
     with {:ok, bundle} <- sign_intent(quote_resp, wallet, request) do
       execute_signed(config, bundle)
@@ -262,7 +297,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   quote carried an origin-pull authorization) to hand to a storefront/relay or
   to `execute_signed/2` directly. Does not talk to the worker.
   """
-  @spec sign_intent(QuoteResponse.t(), module()) :: {:ok, signed_intent()} | {:error, term()}
+  @spec sign_intent(QuoteResponse.t(), module()) ::
+          {:ok, signed_intent()} | {:error, term()}
   def sign_intent(quote_resp, wallet), do: sign_intent(quote_resp, wallet, nil)
 
   @doc """
@@ -323,7 +359,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   before any network call.
   """
   @spec execute_signed(Client.config(), signed_intent()) ::
-          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()} | {:error, term()}
+          {:ok, Raxol.Payments.Xochi.Schemas.ExecuteResponse.t()}
+          | {:error, term()}
   def execute_signed(config, signed_intent) when is_map(signed_intent) do
     with {:ok, exec_request} <- build_signed_execute_request(signed_intent) do
       Client.execute(config, exec_request)
@@ -374,7 +411,13 @@ defmodule Raxol.Payments.Protocols.Xochi do
     with {:ok, quote_resp} <- get_quote(config, request),
          {:ok, exec_resp} <- execute(config, quote_resp, wallet, request),
          {:ok, status} <- poll_status(config, exec_resp.intent_id, opts) do
-      emit_settled(request, quote_resp, status, System.monotonic_time(:millisecond) - started)
+      emit_settled(
+        request,
+        quote_resp,
+        status,
+        System.monotonic_time(:millisecond) - started
+      )
+
       {:ok, status}
     end
   end
@@ -383,7 +426,12 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # destination tx, so accounting can book the fill's P&L without threading a ledger
   # through the protocol. Only on a completed terminal status. See
   # `Raxol.Payments.Telemetry` and `Raxol.Payments.SettlementAccountant`.
-  defp emit_settled(request, quote_resp, %IntentStatus{status: :completed} = status, elapsed_ms) do
+  defp emit_settled(
+         request,
+         quote_resp,
+         %IntentStatus{status: :completed} = status,
+         elapsed_ms
+       ) do
     :telemetry.execute(
       [:raxol, :payments, :xochi, :settled],
       %{elapsed_ms: elapsed_ms},
@@ -418,7 +466,11 @@ defmodule Raxol.Payments.Protocols.Xochi do
   """
   @spec validate_pull(QuoteResponse.t(), QuoteRequest.t(), module()) ::
           :ok | {:error, term()}
-  def validate_pull(%QuoteResponse{} = quote_resp, %QuoteRequest{} = request, wallet) do
+  def validate_pull(
+        %QuoteResponse{} = quote_resp,
+        %QuoteRequest{} = request,
+        wallet
+      ) do
     validate_pull_authorization(quote_resp, request, wallet)
   end
 
@@ -471,7 +523,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   defp put_pull_signature(bundle, nil), do: bundle
-  defp put_pull_signature(bundle, sig), do: Map.put(bundle, :pull_signature, sig)
+
+  defp put_pull_signature(bundle, sig),
+    do: Map.put(bundle, :pull_signature, sig)
 
   # Build an ExecuteRequest from a buyer-supplied bundle without signing. Fails
   # closed on a missing/malformed field so a bad relay never reaches the worker
@@ -558,7 +612,10 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # is PermitWitnessTransferFrom (needs a one-time on-chain Permit2 approval the
   # agent must already hold). Absent for non-pulling methods, in which case there
   # is no pull signature to send.
-  defp sign_pull_authorization(%QuoteResponse{pull_authorization: nil}, _wallet), do: {:ok, nil}
+  defp sign_pull_authorization(
+         %QuoteResponse{pull_authorization: nil},
+         _wallet
+       ), do: {:ok, nil}
 
   defp sign_pull_authorization(%QuoteResponse{pull_authorization: pull}, wallet) do
     domain = eip712_domain(pull)
@@ -581,11 +638,19 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # agent would sign blind (the SpendGate only sees the intended human amount, not
   # the signed message). Check signer, token, chain, and that the authorized value
   # does not exceed the intended origin amount. Fail closed on anything unexpected.
-  defp validate_pull_authorization(%QuoteResponse{pull_authorization: nil}, _request, _wallet),
-    do: :ok
+  defp validate_pull_authorization(
+         %QuoteResponse{pull_authorization: nil},
+         _request,
+         _wallet
+       ),
+       do: :ok
 
-  defp validate_pull_authorization(%QuoteResponse{pull_authorization: _pull}, nil, _wallet),
-    do: {:error, {:authorization_mismatch, :no_request_context}}
+  defp validate_pull_authorization(
+         %QuoteResponse{pull_authorization: _pull},
+         nil,
+         _wallet
+       ),
+       do: {:error, {:authorization_mismatch, :no_request_context}}
 
   defp validate_pull_authorization(
          %QuoteResponse{pull_authorization: pull, payment_method: method},
@@ -593,9 +658,14 @@ defmodule Raxol.Payments.Protocols.Xochi do
          wallet
        ) do
     case method do
-      "erc3009" -> validate_erc3009_pull(pull, request, wallet.address())
-      "permit2" -> validate_permit2_pull(pull, request)
-      other -> {:error, {:authorization_mismatch, {:unsupported_pull_method, other}}}
+      "erc3009" ->
+        validate_erc3009_pull(pull, request, wallet.address())
+
+      "permit2" ->
+        validate_permit2_pull(pull, request)
+
+      other ->
+        {:error, {:authorization_mismatch, {:unsupported_pull_method, other}}}
     end
   end
 
@@ -621,9 +691,11 @@ defmodule Raxol.Payments.Protocols.Xochi do
     message = pull["message"] || %{}
 
     first_mismatch([
-      {:pull_type, valid_envelope?(pull, @erc3009_primary_type, @erc3009_fields)},
+      {:pull_type,
+       valid_envelope?(pull, @erc3009_primary_type, @erc3009_fields)},
       {:pull_from, addr_match?(message["from"], signer)},
-      {:pull_token, addr_match?(domain["verifyingContract"], request.from_token)},
+      {:pull_token,
+       addr_match?(domain["verifyingContract"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(message["value"], request.from_amount)},
       {:pull_to, solver_allowed?(message["to"], :erc3009)},
@@ -644,7 +716,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
     permitted = message["permitted"] || %{}
 
     first_mismatch([
-      {:pull_type, valid_envelope?(pull, @permit2_primary_type, @permit2_fields)},
+      {:pull_type,
+       valid_envelope?(pull, @permit2_primary_type, @permit2_fields)},
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(permitted["amount"], request.from_amount)},
@@ -657,7 +730,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # right `primaryType` and precisely its field set (no missing, no extra signable
   # fields). This binds the object validated to the object signed.
   defp valid_envelope?(pull, primary_type, fields) do
-    pull["primaryType"] == primary_type and type_field_names(pull, primary_type) == fields
+    pull["primaryType"] == primary_type and
+      type_field_names(pull, primary_type) == fields
   end
 
   defp type_field_names(pull, type_name) do
@@ -674,7 +748,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # Configurable via `:pull_max_validity_seconds` (default 1 hour).
   defp valid_window?(value) do
     now = System.system_time(:second)
-    max_ahead = Application.get_env(:raxol_payments, :pull_max_validity_seconds, 3600)
+
+    max_ahead =
+      Application.get_env(:raxol_payments, :pull_max_validity_seconds, 3600)
 
     case to_uint(value) do
       t when is_integer(t) -> t > now and t <= now + max_ahead
@@ -699,8 +775,12 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # is the seam to prefer it over static config. See GitHub #333.
   defp solver_allowed?(addr, method) do
     case solver_allowlist() do
-      [] -> method == :erc3009 and not require_solver_pin?()
-      list -> is_binary(addr) and normalize_address(addr) in list
+      [] ->
+        method == :erc3009 and not require_solver_pin?()
+
+      list ->
+        is_binary(addr) and
+          Raxol.Payments.EIP712.normalize_address(addr) in list
     end
   end
 
@@ -708,14 +788,16 @@ defmodule Raxol.Payments.Protocols.Xochi do
     do: Application.get_env(:raxol_payments, :pull_require_solver_pin, false)
 
   defp solver_allowlist do
-    normalize_solver_list(Application.get_env(:raxol_payments, :pull_solver_allowlist, []))
+    normalize_solver_list(
+      Application.get_env(:raxol_payments, :pull_solver_allowlist, [])
+    )
   end
 
   defp normalize_solver_list(list) do
     list
     |> List.wrap()
     |> Enum.filter(&is_binary/1)
-    |> Enum.map(&normalize_address/1)
+    |> Enum.map(&Raxol.Payments.EIP712.normalize_address/1)
     |> Enum.reject(&(&1 == ""))
   end
 
@@ -727,19 +809,17 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   defp addr_match?(a, b) when is_binary(a) and is_binary(b) do
-    na = normalize_address(a)
-    valid_address?(na) and na == normalize_address(b)
+    na = Raxol.Payments.EIP712.normalize_address(a)
+    valid_address?(na) and na == Raxol.Payments.EIP712.normalize_address(b)
   end
 
   defp addr_match?(_, _), do: false
 
-  defp normalize_address(addr) do
-    addr |> String.trim() |> String.downcase() |> String.replace_prefix("0x", "")
-  end
-
   # A canonical 20-byte hex address (after `normalize_address` strips `0x`), so a
   # bound comparison rejects a malformed value rather than matching loosely.
-  defp valid_address?(<<hex::binary-size(40)>>), do: String.match?(hex, ~r/\A[0-9a-f]{40}\z/)
+  defp valid_address?(<<hex::binary-size(40)>>),
+    do: String.match?(hex, ~r/\A[0-9a-f]{40}\z/)
+
   defp valid_address?(_), do: false
 
   defp int_match?(a, b) do
@@ -776,11 +856,15 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # constant 0 for every intent makes the worker reject the second non-terminal
   # intent from a wallet ("Nonce already used"). Fall back to 0 only when neither
   # a signed nonce nor a pull nonce is present.
-  defp signed_nonce(%QuoteResponse{eip712_data: %{"message" => %{"nonce" => nonce}}})
+  defp signed_nonce(%QuoteResponse{
+         eip712_data: %{"message" => %{"nonce" => nonce}}
+       })
        when is_integer(nonce),
        do: nonce
 
-  defp signed_nonce(%QuoteResponse{pull_authorization: %{"message" => %{"nonce" => nonce}}})
+  defp signed_nonce(%QuoteResponse{
+         pull_authorization: %{"message" => %{"nonce" => nonce}}
+       })
        when is_binary(nonce),
        do: replay_nonce_from(nonce)
 
@@ -819,7 +903,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
   end
 
   defp maybe_put_verifying_contract(domain, nil), do: domain
-  defp maybe_put_verifying_contract(domain, vc), do: Map.put(domain, :verifyingContract, vc)
+
+  defp maybe_put_verifying_contract(domain, vc),
+    do: Map.put(domain, :verifyingContract, vc)
 
   defp maybe_put_salt(domain, nil), do: domain
   defp maybe_put_salt(domain, salt), do: Map.put(domain, :salt, salt)

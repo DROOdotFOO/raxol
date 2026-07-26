@@ -121,7 +121,7 @@ enforcing test is cited.
 | IC-7 | The Connection never blocks — no `GenServer.call` to itself, no synchronous wait on tasks, no transport call that waits on peer progress. | `connection_test.exs:765` (Inv-8) |
 | IC-8 | Sibling supervision tree: `task_sup`/`session_sup` resolved from the parent supervisor by module/type heuristic (injectable in tests); Connection is `:temporary`. | `connection_test.exs:88`; `integration/end_to_end_test.exs:300` |
 
-## Family `F` — NDJSON framing / transport (F1..F6) — **[NEW registration]**
+## Family `F` — NDJSON framing / transport (F1..F8) — **[NEW registration]**
 
 Home: `test/transport/framer_test.exs`. These IDs *name what the existing
 thorough framer tests already prove* — no test behavior was rewritten; each
@@ -136,6 +136,41 @@ carries the family legend.
 | F4 | Oversized-frame rejection + resync: a line exceeding `max_frame_bytes` yields `{:frame_too_large, size}` WITHOUT unbounded buffering and resyncs at the next terminator (surrounding frames intact, exactly-at-limit passes, default 64MiB, `new/1` rejects non-positive max). | `framer_test.exs` `describe "F4 oversized-frame rejection + resync ..."` |
 | F5 | Volume / no-loss: no data loss or reordering across 10k frames fed in randomly sized chunks; the buffer drains empty. | `framer_test.exs` `describe "F5 volume ..."` |
 | F6 | Re-chunking invariance (property): any re-chunking of concatenated JSON lines yields the original frames in order; CRLF and LF terminators are equivalent; an oversized frame errors then resyncs (totality). | `framer_test.exs` `describe "F6 re-chunking invariance ..."` |
+| F7 | **[NEW]** Transport ordered delivery (T-ORD, `transport.ex` "Delivery guarantees"): per direction, frames delivered to the owner as `{:message, frame}` arrive in EXACTLY the order the peer's send path accepted them — pinned against `Transport.Paired`; a deliberately-reordering fake transport run through the identical check FAILS it (falsifier proof: the check is sensitive to reordering, not vacuous). | `test/transport/ordering_contract_test.exs` `describe "F7 T-ORD conformance: Transport.Paired"` (green) + `describe "F7 red variant: the conformance check is a real falsifier"` (red) |
+| F8 | Unordered-transport design-stub: `Envelope.wrap/2`/`unwrap/1` round-trip for any frame/tseq (the tseq never leaks into the unwrapped frame); `Reassembly.push/3` releases a tseq-enveloped frame sequence in original order for ANY arrival permutation (property), cascades a contiguous buffered run in one call, drops duplicates (already-released or already-buffered) silently, and crosses either watermark (frame-count or byte) as `{:closed, {:transport, :reassembly_overflow}}` — never growing past it, never timer-bounded. | `transport/reassembly_test.exs` `describe "F8a Envelope ..."` / `"F8b Reassembly ..."` |
+
+*Note (F7):* lives in its own file (`ordering_contract_test.exs`), not
+`framer_test.exs` — it exercises the `Transport` behaviour contract
+(acceptance-order delivery across a whole transport), not the Framer's
+byte-splitting, so it does not belong beside F1-F6.
+
+## Family `D` — delivery / transport ordering (D1..D9) — **[NEW registration]**
+
+Home: `test/connection_delivery_test.exs` (D1/D2/D3/D5/D7/D9 — the Connection
+unit + `Client.prompt/3`/`prompt_stream/4`'s direct turn-delivery channel);
+`client_ergonomics_test.exs`'s `prompt_stream/4` describe block already covers
+D6's positive case. D4 (the bounded broadcast-path Reorder engine) is
+**RESERVED** here — no `Delivery.Reorder` module exists yet; a later unit owns
+it. Registered per the transport-ordering design
+(`TRANSPORT_ORDERING_DESIGN.md` §4/§8, ADR-0030 clauses 1/2/3/5/9): the
+Connection stamps a receiver-assigned, contiguous per-turn ordinal at the
+demux point (`dispatch_inbound_notification/3`) and delivers
+`{:acp_turn_update, tag, ordinal, notification}` to the turn's owner DIRECTLY,
+itself — the same single-sender operation `deliver_outcome/2` already uses for
+the terminal result — so the owner's mailbox order is wire order with no
+reorder buffer and no settle timer needed on this path.
+
+| ID | Canonical property | Enforcing test (`file:line`) |
+|----|--------------------|------------------------------|
+| D1 | Order: the turn owner observes a turn's updates in stamped order 0..N-1 for ANY interleaving/delay of the per-notification dispatch tasks (direct delivery happens at demux time, before any task is spawned). | `connection_delivery_test.exs` `describe "D1 order"` |
+| D2 | No silent drop: `delivered < turn_end count` at an ok-result ⇒ `{:error, {:delivery_gap, _}}`, never a silent partial list (the real single-sender Connection cannot produce a gap at all — D1 is the proof; a fault-injected fake Connection double manufactures it here). | `connection_delivery_test.exs` `describe "D2 no silent drop / fail-the-turn"` |
+| D3 | No timer in the guarantee: `Client.prompt/3`'s and `prompt_stream/4`'s receive loops (and `Delivery`) contain no wall-clock `after`/`Process.send_after` — the Connection's own terminal-result guarantee (exactly one `{:acp_result, tag, _}` per accepted submission) bounds the loop instead. | `connection_delivery_test.exs` `describe "D3 no wall-clock timer (grep-gate)"` |
+| D4 | **RESERVED** — bounded Reorder-engine occupancy; no `Delivery.Reorder` module exists yet (a later unit's scope). | — |
+| D5 | Peer cannot wedge or steer delivery: a hostile agent that replays/freezes/garbles `_meta` (incl. the retired `update_seq` shape) changes NOTHING about stamped order or delivery; `_meta` reaches the handler byte-identical (opaque, never read for ordering). | `connection_delivery_test.exs` `describe "D5 hostile peer cannot steer delivery"` |
+| D6 | Streaming live: `prompt_stream/4` invokes `on_update` synchronously at receipt, strictly before the terminal result, with no accumulation (O(1) — the loop keeps no update list at all). | `client_ergonomics_test.exs:209` (positive case); `connection_delivery_test.exs` D2's `prompt_stream/4` gap test re-confirms the no-settle-timer half |
+| D7 | Recursive namespace: a straggler demuxed after a turn's result is stamped out-of-turn and never reaches the departed owner as a turn message; a fresh turn for the same session gets a fresh receiver-minted token with ordinals reset to 0 (no cross-turn aliasing); two sessions' concurrent turns never cross-deliver. | `connection_delivery_test.exs` `describe "D7 recursive turn namespace"` |
+| D8 | **RESERVED** — replay idempotence across reconnect (reattach/journal integration); a later unit's scope. | — |
+| D9 | Telemetry contract: every delivery decision emits `[:raxol, :acp, :delivery]` with `%{session, turn, decision, buffered, ordinal}` (direct path: `decision: :emit, buffered: 0`); the client's fail-the-turn gap emits exactly one `:fail` decision. Asserted via a test-local literal `:telemetry` module (the package has no real `:telemetry` dependency, deviation #5). | `connection_delivery_test.exs` `describe "D9 telemetry contract"` |
 
 ---
 

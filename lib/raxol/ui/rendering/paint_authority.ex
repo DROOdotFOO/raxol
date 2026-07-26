@@ -1,34 +1,34 @@
 defmodule Raxol.UI.Rendering.PaintAuthority do
   @moduledoc """
   The single seam both inline-render emit paths go through: the printed-
-  history append path (T2b) and the pinned-viewport repaint path (T2c).
+  history append path and the pinned-viewport repaint path.
 
-  Per `docs/proposals/in-flight/harness-ui-roadmap.md` §0 (D-PA) and
-  `harness-ui-testing/02-renderer.md` §1b: "one owner module, both paths go
-  through it." This behaviour is the CONTRACT that makes that true — T2b/T2c
-  implement it against the real terminal (`IOAuthority`, below); tests drive
-  it against `Raxol.Harness.Test.CaptureAuthority`, which records every emit
-  as an origin-tagged entry instead of writing bytes. Because the tag layer
-  is a property of the TEST double, not the behaviour, production callers pay
+  One owner module, both paths go through it: this behaviour is the CONTRACT
+  that makes that true — implementations execute it against the real
+  terminal (`IOAuthority`, below); tests drive it against
+  `Raxol.Harness.Test.CaptureAuthority`, which records every emit as an
+  origin-tagged entry instead of writing bytes. Because the tag layer is a
+  property of the TEST double, not the behaviour, production callers pay
   nothing for it.
 
   Callback origins (mirrors `Raxol.Harness.Test.CaptureAuthority.Emit.origin`):
 
-    * `append_sealed/2`   — `:seal`, T2b: append at the region's bottom line.
-    * `repaint_footer/2`  — `:footer`, T2c: repaint the pinned footer rows.
-    * `keyframe_footer/2` — `:keyframe`, T2c: Ctrl-L / resize footer redraw.
+    * `append_sealed/2`   — `:seal`, append at the region's bottom line.
+    * `repaint_footer/2`  — `:footer`, repaint the pinned footer rows.
+    * `keyframe_footer/2` — `:keyframe`, Ctrl-L / resize footer redraw.
     * `with_cursor/3`     — `:cursor`, the save -> position -> emit -> restore
-      bracket described in the roadmap's T2b spec; the sole owner of cursor
-      save/restore so the two paths never race.
-    * `resize/3`          — policy-bearing: behavior on resize is scoped by
-      the D-PA verdict (seal-time-only / soft-owned / live-region-only, see
-      the roadmap §0). This behaviour does not pick a policy; implementers
-      do.
+      bracket; the sole owner of cursor save/restore so the two paths never
+      race.
+    * `resize/3`          — policy-bearing: which of seal-time-only /
+      soft-owned / live-region-only a resize follows is a terminal-
+      compatibility decision (D-PA; `docs/proposals/t0-verdict-schema.md`
+      tracks the measurement matrix that resolves it). This behaviour does
+      not pick a policy; implementers do.
     * `region_top/1`      — the current split point `H - N` (number of rows
       in the scrolling history region; rows below it are the footer).
 
   This module intentionally carries NO implementation logic — it is the
-  interface T2b/T2c build against and the test harness (TB) doubles. See
+  interface implementations build against and the test harness doubles. See
   `Raxol.Harness.Test.CaptureAuthority` for the recording test double and
   `Raxol.Harness.Test.SealOracle` for the assertions built on top of it.
   """
@@ -52,15 +52,15 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
   Runs `fun` under a save -> position-into-`region` -> ... -> restore cursor
   bracket. The single owner of the save/restore protocol; both `append_sealed`
   and `repaint_footer` paths must route cursor movement through this so saves
-  and restores never interleave across paths (roadmap T2b: "cursor-ownership
-  protocol... one owner module, both paths go through it").
+  and restores never interleave across paths.
   """
   @callback with_cursor(t, cursor_region(), (t -> t)) :: t
 
   @doc """
   Applies a resize. Policy-bearing per D-PA: what happens to already-sealed
-  history on resize is an implementation decision bound by the T0 verdict,
-  not by this behaviour. Implementations MUST emit their DECSTBM re-set
+  history on resize is a terminal-compatibility decision this behaviour
+  stays agnostic to (`docs/proposals/t0-verdict-schema.md` tracks the
+  measurement matrix that resolves it). Implementations MUST emit their DECSTBM re-set
   (one `Dialect.region_set/2` per resize) through their own emit path, so
   INV-5's "re-set exactly once as `CSI 1;(h-N) r`" is byte-assertable.
   """
@@ -72,20 +72,20 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
   defmodule Dialect do
     @moduledoc """
     The single home of the wire vocabulary shared by every `PaintAuthority`
-    implementation: the cursor-save dialect and the scroll-region set. T2d's
-    dialect decision (DECSC `\\e7`/`\\e8` vs SCO `\\e[s`/`\\e[u` — see
-    `harness-ui-testing/02-renderer.md` open question 3) changes exactly the
-    two constants below and nothing else; implementations and oracles must
-    reference this module rather than embedding the bytes.
+    implementation: the cursor-save dialect and the scroll-region set. The
+    cursor-save dialect choice (DECSC `\\e7`/`\\e8` vs SCO `\\e[s`/`\\e[u`)
+    changes exactly the two constants below and nothing else; implementations
+    and oracles must reference this module rather than embedding the bytes.
 
-    DECSC is the provisional choice pending T2d.
+    DECSC is the current choice, held provisional until broader terminal
+    coverage confirms it.
     """
 
-    @doc "Cursor save (DECSC, provisional pending T2d)."
+    @doc "Cursor save (DECSC, provisional)."
     @spec cursor_save() :: binary()
     def cursor_save, do: "\e7"
 
-    @doc "Cursor restore (DECRC, provisional pending T2d)."
+    @doc "Cursor restore (DECRC, provisional)."
     @spec cursor_restore() :: binary()
     def cursor_restore, do: "\e8"
 
@@ -151,22 +151,32 @@ defmodule Raxol.UI.Rendering.PaintAuthority do
     @doc "DEC 2026 synchronized-update end: `CSI ? 2026 l`. See `sync_begin/0`."
     @spec sync_end() :: binary()
     def sync_end, do: "\e[?2026l"
+
+    @doc """
+    Erase in Line (EL), default parameter (cursor to end of line): `CSI K`.
+    The single byte-builder for "clear the row the cursor is currently on"
+    -- callers that used to hand-roll the `"\\e[K"` literal at each footer/
+    transient emit site route through this instead, same single-home rule
+    as `cursor_position/1`.
+    """
+    @spec erase_line() :: binary()
+    def erase_line, do: "\e[K"
   end
 
   defmodule IOAuthority do
     @moduledoc """
     Minimal production `PaintAuthority` stub: writes every emit straight to
     `IO.write/1` and otherwise just tracks dimensions. This is deliberately
-    NOT a full T2b/T2c implementation — no scroll-region (DECSTBM) lifecycle,
-    no D-PA-scoped resize policy, no real cursor-save dialect wiring (pending
-    T2d, see `harness-ui-testing/02-renderer.md` open question 3). It exists
+    NOT a full implementation — no scroll-region (DECSTBM) lifecycle, no
+    D-PA-scoped resize policy, no real cursor-save dialect wiring. It exists
     so `Raxol.UI.Rendering.PaintAuthority` has at least one non-test
     implementation to compile against, and so the "tag layer costs nothing
     in prod" claim in the module doc is checkable: this module emits the
     same bytes `Raxol.Harness.Test.CaptureAuthority` records, minus the tags.
 
-    T2b/T2c own filling this in for real (scroll region set/teardown,
-    resize policy per D-PA, dialect-pinned cursor protocol).
+    A real production implementation still needs to fill this in: scroll
+    region set/teardown, resize policy per D-PA, dialect-pinned cursor
+    protocol.
     """
 
     @behaviour Raxol.UI.Rendering.PaintAuthority

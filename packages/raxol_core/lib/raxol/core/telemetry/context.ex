@@ -2,6 +2,14 @@ defmodule Raxol.Core.Telemetry.Context do
   @moduledoc """
   Trace context propagation for telemetry events.
 
+  > #### Deprecated {: .warning}
+  >
+  > Use `Raxol.Core.Telemetry.TraceContext` instead. It provides the same
+  > `span/3`, `execute/3`, and `to_metadata/1` telemetry surface (with
+  > binary span names) plus causation tracking and header propagation.
+  > This module is retained for backward compatibility and will be
+  > removed in the next major release.
+
   Provides request correlation across components using trace_id and span_id.
   Following OpenTelemetry-compatible patterns for distributed tracing.
 

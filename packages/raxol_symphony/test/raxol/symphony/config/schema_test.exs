@@ -52,6 +52,13 @@ defmodule Raxol.Symphony.Config.SchemaTest do
                  })
                )
     end
+
+    test "codex api_key auth passes" do
+      assert :ok =
+               Schema.validate(
+                 build_config(%{codex: %{auth: %{mode: "api_key", api_key_env: "MY_KEY"}}})
+               )
+    end
   end
 
   describe "validate/1 -- failures" do
@@ -97,6 +104,23 @@ defmodule Raxol.Symphony.Config.SchemaTest do
                    codex: %{command: ""}
                  })
                )
+    end
+
+    test "codex auth with an unknown mode" do
+      assert {:error, {:invalid_value, :codex_auth_mode, "bogus"}} =
+               Schema.validate(build_config(%{codex: %{auth: %{mode: "bogus"}}}))
+    end
+
+    test "codex api_key mode with a blank env var name" do
+      assert {:error, {:invalid_value, :codex_auth_api_key_env, ""}} =
+               Schema.validate(
+                 build_config(%{codex: %{auth: %{mode: "api_key", api_key_env: ""}}})
+               )
+    end
+
+    test "codex_home mode without a path" do
+      assert {:error, {:invalid_value, :codex_auth_codex_home, nil}} =
+               Schema.validate(build_config(%{codex: %{auth: %{mode: "codex_home"}}}))
     end
 
     test "unsupported runner kind" do

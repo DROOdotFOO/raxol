@@ -87,6 +87,8 @@ defmodule Raxol.UI.Components.Harness.Picker do
   """
 
   alias Raxol.Core.Events.Event
+  alias Raxol.UI.Components.Harness.Ids
+  alias Raxol.UI.Components.Harness.TextUtil
   alias Raxol.UI.ListScorer
   alias Raxol.UI.ScrollWindow
   alias Raxol.UI.StyleHelper
@@ -130,12 +132,7 @@ defmodule Raxol.UI.Components.Harness.Picker do
   def init(props) do
     props = Map.new(props)
 
-    id =
-      Map.get(
-        props,
-        :id,
-        "harness-picker-#{:erlang.unique_integer([:positive])}"
-      )
+    id = Ids.default_id(props, "harness-picker")
 
     items = Map.get(props, :items, [])
     key_fn = Map.fetch!(props, :key_fn)
@@ -477,7 +474,7 @@ defmodule Raxol.UI.Components.Harness.Picker do
 
     Components.text(
       id: "picker-prompt",
-      content: truncate_to_width("> " <> shown, avail_width),
+      content: TextUtil.truncate_to_width("> " <> shown, avail_width),
       style: if(dim?, do: %{dim: true}, else: %{})
     )
   end
@@ -566,19 +563,6 @@ defmodule Raxol.UI.Components.Harness.Picker do
   end
 
   defp truncate_key(key, positions, _avail_width), do: {key, positions}
-
-  defp truncate_to_width(text, width) when is_integer(width) and width > 0 do
-    if TextMeasure.display_width(text) <= width do
-      text
-    else
-      {left, _rest} =
-        TextMeasure.split_at_display_width(text, max(width - 1, 0))
-
-      left <> "…"
-    end
-  end
-
-  defp truncate_to_width(text, _width), do: text
 
   defp render_preview(state, avail_width) do
     preview_width =

@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Raxol.Fate do
-  @shortdoc "Run the golden render harness (FATE-style)"
+  @shortdoc "Golden render-determinism suite (FATE-style)"
   @moduledoc """
   Render the fixture corpus and compare each hash against `priv/fate/golden.refs`.
 

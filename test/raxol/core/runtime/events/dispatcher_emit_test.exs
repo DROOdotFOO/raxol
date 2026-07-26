@@ -66,9 +66,7 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
 
     {:ok, dispatcher} = Dispatcher.start_link(self(), initial_state, name: nil)
 
-    on_exit(fn ->
-      if Process.alive?(dispatcher), do: GenServer.stop(dispatcher)
-    end)
+    stop_on_exit(dispatcher)
 
     EmitBus.subscribe(@session_id)
 
@@ -175,9 +173,7 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
         name: nil
       )
 
-    on_exit(fn ->
-      if Process.alive?(dispatcher), do: GenServer.stop(dispatcher)
-    end)
+    stop_on_exit(dispatcher)
 
     # Subscribe to a wildcard is impossible; subscribe to the id the app would
     # have used and confirm nothing arrives.
@@ -185,6 +181,21 @@ defmodule Raxol.Core.Runtime.Events.DispatcherEmitTest do
     send(dispatcher, {:command_result, {:llm_chunk, "silent"}})
 
     refute_receive {:emit_bus, _, _}, 300
+  end
+
+  # GenServer.stop can race the dispatcher's own linked shutdown: between the
+  # alive? check and the stop, the process may die (with :shutdown, not the
+  # :normal GenServer.stop expects), which makes GenServer.stop itself exit and
+  # fails the on_exit callback. Teardown only needs the process gone, and it
+  # is -- swallow the exit.
+  defp stop_on_exit(dispatcher) do
+    on_exit(fn ->
+      try do
+        if Process.alive?(dispatcher), do: GenServer.stop(dispatcher)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
   end
 
   defp ensure_registry(name, keys) do

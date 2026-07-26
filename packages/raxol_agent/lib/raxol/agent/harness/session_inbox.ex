@@ -25,9 +25,12 @@ defmodule Raxol.Agent.Harness.SessionInbox do
       `session/request_permission`. The keyboard answer arrives as
       `{:approval_decision, _, %{request_id, option_id}}`; the inbox maps the
       chosen option to allow/deny and `GenServer.reply`s the parked caller,
-      unblocking the tool. Fail-closed: if the turn dies with an approval
-      still parked, the parked caller is already gone (linked), so nothing
-      leaks.
+      unblocking the tool. `pending` never outlives the turn that parked
+      it: `turn_finished/1` clears it on every turn end, including a
+      die-mid-approval `:DOWN` — an unresolved `from` is unreachable at
+      that point regardless (the executor's call died with the task), so
+      the entry itself, not a stale reply, was the only thing that could
+      leak.
     * **Interrupt (the staged kill).** `{:interrupt, _, _}` runs the REAL
       `Raxol.Agent.Interrupt.interrupt/3` against the live shell tool's
       `%{port, os_pid}` (published by `run_shell` via the injected
@@ -211,9 +214,17 @@ defmodule Raxol.Agent.Harness.SessionInbox do
     %{state | turn: task}
   end
 
+  # A parked approval belongs to the turn that requested it -- only one
+  # turn ever runs at a time (`maybe_start_turn/2` queues a submit that
+  # arrives mid-turn), so no `pending` entry can outlive the turn that
+  # created it. Clearing it here, on every turn end (normal completion OR
+  # a die-mid-approval `:DOWN`), is what keeps `pending` bounded over a
+  # long session -- the parked `from` is already unreachable at that
+  # point (the executor's call is gone with the task), so a stale
+  # `GenServer.reply` was never the risk; an ever-growing map was.
   defp turn_finished(state) do
     notify(state.notify, {:harness_turn_done, state.session_id})
-    dequeue(%{state | turn: nil, tool_ref: nil})
+    dequeue(%{state | turn: nil, tool_ref: nil, pending: %{}})
   end
 
   defp notify(pid, msg) when is_pid(pid), do: send(pid, msg)

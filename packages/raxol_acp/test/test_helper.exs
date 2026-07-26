@@ -4,7 +4,7 @@
 #   :live_relay -- moves real funds (broadcasts an on-chain deposit).
 #   :live_xochi_order / :live_xochi_order_preflight -- a buyer orders the
 #     xochi_cross_chain_transfer offering; the settle variant moves real funds
-#     (see run_live_acp_order_gate.sh). The preflight variant is read-only.
+#     (see scripts/run_live_gates.sh --route acp). The preflight variant is read-only.
 #   :cli_signer -- spawns the riddler-client CLI; auto-enabled when
 #     RIDDLER_CLI_DIR is set.
 #

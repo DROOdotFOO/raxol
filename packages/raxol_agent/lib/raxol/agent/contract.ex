@@ -3,11 +3,11 @@ defmodule Raxol.Agent.Contract do
   Harness contract v0 — the typed event contract between the agent core and
   any surface (CLI, TUI, LiveView, remote).
 
-  This is the minimal loop-family slice of the contract in
-  `docs/proposals/in-flight/harness-spec-protocol.md`: every observable step
-  of an agent run becomes a `Raxol.Agent.Contract.Event` and is published
-  through `Raxol.Agent.SessionStreamer`. Surfaces subscribe to the streamer
-  and render; they never reach into the loop.
+  This is the minimal loop-family slice of the contract described in
+  `docs/harness/architecture.md` ("The event contract"): every observable
+  step of an agent run becomes a `Raxol.Agent.Contract.Event` and is
+  published through `Raxol.Agent.SessionStreamer`. Surfaces subscribe to the
+  streamer and render; they never reach into the loop.
 
   (Distinct from `Raxol.Agent.Protocol`, which is agent-to-agent cockpit
   messaging — this module is the core↔surface boundary.)
@@ -39,14 +39,102 @@ defmodule Raxol.Agent.Contract do
       `%{usage, iteration, final}` (`final: true` closes the run)
     * `:error`          — fault; payload `%{reason}`
 
-  Growth note (I9, contract-only-grows): `:item_started` and the
+  Growth note (the contract only grows): `:item_started` and the
   `item_id` payload keys are additive — both were already in the frozen
-  §3 loop vocabulary and the fixture wire shape; v0's producer simply
-  lagged the vocabulary it was specified against.
+  loop vocabulary and the fixture wire shape.
 
   The meta family (probe swarm), `steer`/`approval` commands, and the
   durable journal sink attach behind this same boundary in later steps —
   producers change, the contract does not.
+
+  ## U21 evidence tri-state wire marker
+
+  On a `turn_completed{final: true}` produced by `gated_done_payload/4`, the
+  payload grows one optional discriminator plus one optional detail —
+  additive, grow-only, mirrors the Q1 `context`-field growth pattern:
+
+    * `evidence: :accepted | :rejected | :absent` — grow-only enum (atom
+      in-memory, JSON string on the wire, same convention as every other
+      enum on this surface).
+      - `:accepted` — stamped alongside `refs` (untouched: still the sole
+        accepted-refs carrier, no rename, no move).
+      - `:absent` — the `{:error, :evidence_required}` gate arm: the turn
+        offered no refs at all.
+      - `:rejected` — the `{:error, reason}` gate arm: refs were offered and
+        the gate refused them.
+    * `evidence_rejected` (present only when `evidence: :rejected`) —
+      `%{"refs" => offered_refs, "reason" => reason_name, "ref" =>
+      offset_or_nil}`, the `Raxol.Agent.DoneGate` verdict tuple flattened
+      EXPLICITLY into these string values — never handed to
+      `sanitize_payload/1` to `inspect/1`-stringify a raw tuple onto the
+      wire. `reason_name` is one of `"missing_ref"`, `"not_evidence"`,
+      `"foreign_turn"`, `"stale_evidence"`, `"mutation_echo"`.
+      `DoneGate`'s `:unturned_done` reject is unreachable on this path
+      (`pump/3` always mints a non-nil `turn_id`) and deliberately has no
+      clause here — it stays out of the wire enum.
+
+  Before this marker, a rejected done and a never-offered done were
+  byte-identical on the wire (`%{usage, final: true}`, no `refs`) — the two
+  gate-telemetry signals distinguished them live, but telemetry is not
+  journaled, so a replayed surface could not tell "offered but refused" from
+  "never offered". `evidence_status/1` decodes the field with the
+  grandfather rule this gap requires: an `evidence` key present is
+  authoritative; a **legacy** record (key absent) with `refs` present
+  grandfathers to `:accepted` (the `refs` carrier never lied); a legacy
+  record with neither key present is genuinely `:unknown` — it must NEVER
+  be guessed as `:absent`, which would launder a historical rejection into
+  a false "never offered" claim.
+
+  Both `[:raxol, :agent, :done_gate, :ungated_done]` and `[:raxol, :agent,
+  :done_gate, :rejected_evidence]` telemetry stay exactly as they were —
+  this marker is the durable/replay view; telemetry remains the live-ops
+  view. `refs` is untouched. The journal `schema_version` default bumps
+  1.0.0 -> 1.1.0 (`Raxol.Agent.Journal.FileStore.Writer`, additive per
+  upcast-on-read) alongside this payload growth; the pinned `v1.0.0` golden
+  corpus stays literal "1.0.0" and unrewritten (an old journal's records are
+  never rewritten in place, only decoded — covered by the grandfather rule
+  above).
+
+  ## Trust boundary — producer-stamped, journal-trusted
+
+  `evidence_status/1` is a **decode**, not a **re-derivation**. It reports the
+  enum the producer stamped; it does NOT re-run `DoneGate.gate/3` over the
+  journal at read time. The soundness of the marker therefore rests on two
+  explicit assumptions, stated here so a reader wiring it to a surface knows
+  exactly what it does and does not defend against:
+
+    1. **Producer honesty is stamped, not asserted.** The marker is written by
+       `gated_done_payload/4` from the *same* `DoneGate.gate/3` verdict that
+       decides the done — producer and decider are one call, they cannot
+       disagree at write time. This producer half is pinned by
+       `Raxol.Agent.ContractTest` ("the done gate is consulted on the real done
+       path", "a mutation's own result echo is rejected", "a zero-tool turn
+       closes ungated") and by `Raxol.Agent.Red.U21RealProducerRegressionTest`,
+       which gates journals produced by the real `pump/3`, not synthetic ones.
+
+    2. **The reader trusts the journal.** A hand-forged or replayed line that
+       stamps `evidence: :accepted` — or a legacy-shaped forged line that omits
+       the marker but carries a `refs` list, which the grandfather arm blesses
+       `:accepted` — will decode as proven-done. This is the **identical**
+       threat model as `refs` themselves and every other durable field: a
+       journal that can be forged can fabricate tool results, refs, and verdicts
+       directly. The marker adds no trust surface the journal did not already
+       assume (append-only, single-writer integrity). It is sound only on a
+       trusted, append-only journal.
+
+  What the decoder *does* defend: an `evidence` value it cannot understand —
+  a forged string, a future enum value, a garbage type — fails safe to
+  `:unknown`, never `:accepted` (see `normalize_evidence/1`). A forged
+  non-legacy line thus cannot launder a bogus marker into acceptance.
+
+  **Read-side re-derivation was considered and deliberately rejected.**
+  Re-running `DoneGate.gate/3` at decode time would (a) require the whole
+  journal + turn + refs, coupling a pure single-record decode to journal state
+  it does not carry, and (b) resurrect exactly the display-side re-evaluation of
+  *open* gate predicates (staleness relative to *later* mutations) that must
+  NOT be frozen or recomputed at the display surface. Documenting the
+  append-only trust assumption is the honest close; a hostile-journal re-check
+  is out of scope for a producer-stamped durable marker.
 
   ## Producers
 
@@ -76,10 +164,11 @@ defmodule Raxol.Agent.Contract do
               type: nil,
               tier: :durable,
               payload: %{},
-              # --- U11 envelope growth (harness-freeze-contracts.md §2.1) -----
+              # --- U11 envelope growth (see docs/harness/architecture.md, "The
+              # event contract") -----------------------------------------------
               # All defaulted; every landed v0 event and every journal record
               # without these keys decodes to these values — the grandfather
-              # clause. The I9 "contract only grows" rule is honored: new fields
+              # clause. The contract-only-grows rule is honored: new fields
               # are optional-with-default, never required (removal / rename /
               # optional→required is forbidden). The EmitBridge / Writer / Reader
               # carry-through of these fields (`durable_record/1` AND
@@ -222,7 +311,30 @@ defmodule Raxol.Agent.Contract do
         end
       )
 
+    # A stream that halts without ever reaching a `{:done, _}` or
+    # `{:error, _}` element (so `result` is still its `:no_result` init
+    # value) leaves the reduce above with no terminal arm to seal whatever
+    # was open. A no-op once `:done`/`:error` have already closed both (the
+    # common case) — closing here too costs nothing, and it means the
+    # producer never strands an item_started with no completion no matter
+    # how the enumerable ends.
+    final_acc = close_reasoning_item(session_id, turn_id, counter, final_acc)
+    final_acc = close_message_item(session_id, turn_id, counter, final_acc)
+
     final_acc.result
+  end
+
+  # Seal any open reasoning-then-message item before a tool/approval
+  # boundary, so pre-boundary text becomes its own block (ordered ahead of
+  # the boundary item) and a LATER text_delta opens a FRESH message instead
+  # of re-entering the still-open one and fusing across the boundary. Both
+  # closes are no-ops when nothing is open (the common tool_use-then-result
+  # path, where tool_use already sealed), so this is safe to apply at every
+  # boundary arm and only changes behavior for a producer that reaches a
+  # tool_result/approval/tool_unexecuted with a message still open.
+  defp seal_open_items(session_id, turn_id, counter, acc) do
+    acc = close_reasoning_item(session_id, turn_id, counter, acc)
+    close_message_item(session_id, turn_id, counter, acc)
   end
 
   defp handle_stream_event(session_id, turn_id, counter, event, acc) do
@@ -249,8 +361,7 @@ defmodule Raxol.Agent.Contract do
         # items) rather than leaking it into the final answer's item.
         # Any open reasoning (think→tool, no intervening answer text)
         # seals first as its own ∴ block, ahead of the tool.
-        acc = close_reasoning_item(session_id, turn_id, counter, acc)
-        acc = close_message_item(session_id, turn_id, counter, acc)
+        acc = seal_open_items(session_id, turn_id, counter, acc)
 
         complete_item(session_id, turn_id, counter, acc, :tool_use, %{
           name: name,
@@ -259,6 +370,11 @@ defmodule Raxol.Agent.Contract do
         })
 
       {:tool_result, %{name: name} = tool_result} ->
+        # Seal an open message/reasoning first (symmetric with :tool_use), so
+        # a result arriving with a message still open does not later fuse
+        # pre- and post-result text into one block across the boundary.
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         complete_item(
           session_id,
           turn_id,
@@ -274,6 +390,8 @@ defmodule Raxol.Agent.Contract do
       # `approval_decided` answer — into ONE approval block that holds the
       # seal frontier between the tool_use and its result (correct ordering).
       {:approval_requested, payload} when is_map(payload) ->
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         ev =
           emit_event(
             session_id,
@@ -284,9 +402,11 @@ defmodule Raxol.Agent.Contract do
             payload
           )
 
-        %{acc | journal: acc.journal ++ [ev]}
+        %{acc | journal: [ev | acc.journal]}
 
       {:approval_decided, payload} when is_map(payload) ->
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         ev =
           emit_event(
             session_id,
@@ -297,26 +417,28 @@ defmodule Raxol.Agent.Contract do
             payload
           )
 
-        %{acc | journal: acc.journal ++ [ev]}
+        %{acc | journal: [ev | acc.journal]}
 
       # The honesty marker: a tool call the model made that produced no
       # receipt. A claim of action with zero receipts is NEVER silent — it
       # seals a visible ⚠ message item into the transcript (full item
       # lifecycle, like every other completed item).
       {:tool_unexecuted, payload} when is_map(payload) ->
+        acc = seal_open_items(session_id, turn_id, counter, acc)
+
         complete_item(session_id, turn_id, counter, acc, :message, %{
           content: tool_unexecuted_marker(payload)
         })
 
       # An honest wire-boundary marker: a length-truncated round that still
       # produced partial answer text (complete/2 loop), or an unparseable /
-      # again-degraded chunk forwarded on the streaming path. Previously the
-      # catch-all `_other` dropped it — a truncated turn went silent. It now
-      # seals as a durable ⚠ message so the notice is a peekable transcript
-      # fact. Any OPEN reasoning seals FIRST (∴ ahead of the warning); an
-      # open message is LEFT open, so its own `done` seal keeps the partial
-      # answer a single, un-duplicated block that (by pump's first-appearance
-      # order) renders BEFORE the marker qualifying it. Blank marker → no-op.
+      # again-degraded chunk forwarded on the streaming path. A truncated or
+      # unparseable marker seals as a durable ⚠ message so the notice is a
+      # peekable transcript fact. Any OPEN reasoning seals FIRST (∴ ahead of
+      # the warning); an open message is LEFT open, so its own `done` seal
+      # keeps the partial answer a single, un-duplicated block that (by
+      # pump's first-appearance order) renders BEFORE the marker qualifying
+      # it. Blank marker → no-op.
       {:marker, text} when is_binary(text) ->
         if blank?(text) do
           acc
@@ -341,7 +463,7 @@ defmodule Raxol.Agent.Contract do
             final: false
           })
 
-        %{acc | journal: acc.journal ++ [ev]}
+        %{acc | journal: [ev | acc.journal]}
 
       {:done, %{content: content} = info} ->
         # A pure-thinking tail (reasoning with no answer text) seals as
@@ -374,10 +496,15 @@ defmodule Raxol.Agent.Contract do
                   %{item_id: item_id, item_type: :message, content: content}
                 )
 
-              acc.journal ++ [message_ev]
+              [message_ev | acc.journal]
           end
 
-        refs = DoneGate.evidence_refs(journal, turn_id)
+        # The journal accumulates newest-first (prepend); DoneGate consumes it
+        # chronologically, so reverse ONCE here at the single read site. This
+        # is the exact list the append form produced, so evidence offsets on
+        # the wire are unchanged.
+        chronological = Enum.reverse(journal)
+        refs = DoneGate.evidence_refs(chronological, turn_id)
 
         final_ev =
           emit_event(
@@ -386,21 +513,31 @@ defmodule Raxol.Agent.Contract do
             counter,
             :turn_completed,
             :durable,
-            gated_done_payload(journal, turn_id, refs, info)
+            gated_done_payload(chronological, turn_id, refs, info)
           )
 
         %{
           acc
           | result: {:ok, %{content: content, usage: Map.get(info, :usage, %{})}},
-            journal: journal ++ [final_ev]
+            journal: [final_ev | journal]
         }
 
       {:error, reason} ->
-        emit_event(session_id, turn_id, counter, :error, :durable, %{
-          reason: reason
-        })
+        # A halted stream (backend error, timeout, dropped connection) must
+        # not leave a dangling item_started with no completion: whatever
+        # reasoning/answer text streamed before the halt is sealed FIRST
+        # (reasoning ahead of the message, mirroring every other boundary
+        # in this reduce), so the durable journal never loses an open item
+        # and the partial content survives replay instead of evaporating.
+        acc = close_reasoning_item(session_id, turn_id, counter, acc)
+        acc = close_message_item(session_id, turn_id, counter, acc)
 
-        %{acc | result: {:error, reason}}
+        error_ev =
+          emit_event(session_id, turn_id, counter, :error, :durable, %{
+            reason: reason
+          })
+
+        %{acc | journal: [error_ev | acc.journal], result: {:error, reason}}
 
       _other ->
         acc
@@ -466,7 +603,7 @@ defmodule Raxol.Agent.Contract do
         chunk: content
       })
 
-      %{acc | journal: acc.journal ++ [started_ev], msg_item: item_id}
+      %{acc | journal: [started_ev | acc.journal], msg_item: item_id}
     end
   end
 
@@ -502,7 +639,7 @@ defmodule Raxol.Agent.Contract do
         content: content
       })
 
-    %{acc | journal: acc.journal ++ [ev], msg_item: nil, msg_chunks: []}
+    %{acc | journal: [ev | acc.journal], msg_item: nil, msg_chunks: []}
   end
 
   # -- reasoning item lifecycle ---------------------------------------------
@@ -552,7 +689,7 @@ defmodule Raxol.Agent.Contract do
         thought: true
       })
 
-      %{acc | journal: acc.journal ++ [started_ev], reasoning_item: item_id}
+      %{acc | journal: [started_ev | acc.journal], reasoning_item: item_id}
     end
   end
 
@@ -590,13 +727,14 @@ defmodule Raxol.Agent.Contract do
 
     %{
       acc
-      | journal: acc.journal ++ [ev],
+      | journal: [ev | acc.journal],
         reasoning_item: nil,
         reasoning_chunks: []
     }
   end
 
-  defp blank?(text), do: String.trim(text) == ""
+  defp blank?(nil), do: true
+  defp blank?(text) when is_binary(text), do: String.trim(text) == ""
 
   # The done site's item resolution: reuse the open streamed item when
   # there is one (its deltas ARE this message); otherwise open a fresh
@@ -626,7 +764,7 @@ defmodule Raxol.Agent.Contract do
           item_type: :message
         })
 
-      {item_id, %{acc | journal: acc.journal ++ [ev]}}
+      {item_id, %{acc | journal: [ev | acc.journal]}}
     end
   end
 
@@ -658,7 +796,9 @@ defmodule Raxol.Agent.Contract do
         Map.merge(%{item_id: item_id, item_type: item_type}, extra)
       )
 
-    %{acc | journal: acc.journal ++ [started_ev, completed_ev]}
+    # Prepend newest-first: completed follows started chronologically, so it
+    # sits ahead of started in the reverse-ordered journal.
+    %{acc | journal: [completed_ev, started_ev | acc.journal]}
   end
 
   # Consult the evidence gate on the real done path in observe-only mode (see
@@ -671,7 +811,9 @@ defmodule Raxol.Agent.Contract do
 
     case DoneGate.gate(journal, turn_id, refs) do
       {:ok, _done} ->
-        Map.put(base, :refs, refs)
+        base
+        |> Map.put(:refs, refs)
+        |> Map.put(:evidence, :accepted)
 
       {:error, :evidence_required} ->
         :telemetry.execute(
@@ -680,7 +822,7 @@ defmodule Raxol.Agent.Contract do
           %{turn_id: turn_id}
         )
 
-        base
+        Map.put(base, :evidence, :absent)
 
       {:error, reason} ->
         :telemetry.execute(
@@ -690,6 +832,92 @@ defmodule Raxol.Agent.Contract do
         )
 
         base
+        |> Map.put(:evidence, :rejected)
+        |> Map.put(:evidence_rejected, evidence_rejected_detail(refs, reason))
+    end
+  end
+
+  # Flatten the DoneGate verdict tuple onto the wire EXPLICITLY — this must
+  # never be handed to `sanitize_payload/1` to `inspect/1`-stringify (that
+  # would render `"{:mutation_echo, 3}"` instead of a JSON-shaped detail).
+  # Every `DoneGate.gate/3` rejection reaching this arm (i.e. everything but
+  # `:evidence_required`, matched separately above) is a `{reason, offset}`
+  # pair per `DoneGate.verdict/0`. `:unturned_done` is the one bare-atom
+  # reject and is unreachable here — `pump/3` always mints a non-nil
+  # `turn_id` — so it deliberately has no clause and stays out of the wire
+  # enum; a value there would be a real invariant violation worth crashing
+  # loudly on rather than silently coercing.
+  @spec evidence_rejected_detail([DoneGate.offset()], {atom(), DoneGate.offset()}) ::
+          %{String.t() => term()}
+  defp evidence_rejected_detail(refs, {reason, offset}) when is_atom(reason) do
+    %{"refs" => refs, "reason" => Atom.to_string(reason), "ref" => offset}
+  end
+
+  @doc """
+  Decode a `turn_completed{final: true}` payload's evidence status.
+
+  Tolerant of both atom- and string-keyed payloads and both atom- and
+  string-valued enums (live in-memory events vs. journal-replayed JSON —
+  same convention as `Raxol.Agent.DoneGate`'s accessors).
+
+  Implements the grandfather rule for records written before this marker
+  existed (see moduledoc): an `evidence` key present is authoritative and
+  wins outright. A legacy record (key absent) with `refs` present
+  grandfathers to `:accepted` — the `refs` carrier never lied about
+  acceptance. A legacy record with **neither** key present is genuinely
+  `:unknown`: before this marker, a rejected done and a never-offered done
+  were wire-identical, so there is no way to tell them apart after the
+  fact. This case must NEVER decode as `:absent` — that would launder a
+  historical rejection into a false "never offered" claim.
+
+  Totality (S1): the decoder never crashes. An `evidence` value it does not
+  recognize — a future grow-only enum value, a forged string, a garbage type —
+  degrades to `:unknown` (fail-safe, never `:accepted`); see
+  `normalize_evidence/1`. The decode is quaternary — `:accepted | :rejected |
+  :absent | :unknown` — even though the wire enum a producer stamps is
+  tri-state; `:unknown` is the decode-only bucket for legacy/unrecognized
+  records, so a consumer's `case` over this must handle four outcomes.
+
+  Trust: this reports the stamped enum, it does not re-derive the verdict from
+  the journal — see the "Trust boundary" section in the moduledoc for what that
+  does and does not defend (S2).
+  """
+  @spec evidence_status(map()) :: :accepted | :rejected | :absent | :unknown
+  def evidence_status(payload) when is_map(payload) do
+    case fetch_either(payload, :evidence) do
+      {:ok, value} ->
+        normalize_evidence(value)
+
+      :error ->
+        case fetch_either(payload, :refs) do
+          {:ok, _refs} -> :accepted
+          :error -> :unknown
+        end
+    end
+  end
+
+  defp normalize_evidence(value) when value in [:accepted, "accepted"], do: :accepted
+  defp normalize_evidence(value) when value in [:rejected, "rejected"], do: :rejected
+  defp normalize_evidence(value) when value in [:absent, "absent"], do: :absent
+
+  # Total fallthrough. The `evidence` enum is grow-only (upcast-on-read): a
+  # reader on 1.1.0 WILL meet a future 1.2.0 journal carrying
+  # a 4th value — exactly the grow-forward case the enum promises — and must
+  # degrade, not `FunctionClauseError` on the replay surface. A corrupt or
+  # forged line (`evidence: "bogus"`, a number, nil) lands here too. Every
+  # unrecognized value fails safe to `:unknown` — never `:accepted` — the same
+  # safe direction the grandfather rule already takes absence: an authoritative
+  # marker that cannot be understood is treated as "cannot vouch", never as
+  # proven-done. This also means a forged non-legacy line whose bogus `evidence`
+  # value sits atop a `refs` list decodes `:unknown` (the key is present, so the
+  # refs-grandfather arm is never consulted), not laundered to `:accepted`.
+  defp normalize_evidence(_), do: :unknown
+
+  defp fetch_either(map, key) when is_map(map) do
+    cond do
+      Map.has_key?(map, key) -> {:ok, Map.get(map, key)}
+      Map.has_key?(map, Atom.to_string(key)) -> {:ok, Map.get(map, Atom.to_string(key))}
+      true -> :error
     end
   end
 
@@ -734,7 +962,7 @@ defmodule Raxol.Agent.Contract do
   # inspecting an arbitrary term into the transcript).
   defp result_summary(%{entries: entries}) when is_list(entries) do
     n = length(entries)
-    preview = entries |> Enum.take(20) |> Enum.map_join(", ", &to_string/1)
+    preview = entries |> Enum.take(20) |> Enum.map_join(", ", &display_entry/1)
     count = "#{n} #{plural(n, "entry", "entries")}"
     if preview == "", do: count, else: count <> ": " <> preview
   end
@@ -758,6 +986,14 @@ defmodule Raxol.Agent.Contract do
     do: "#{byte_size(out)} bytes" <> result_excerpt(out)
 
   defp result_summary(_result), do: nil
+
+  # A list entry may be any term. `to_string/1` raises Protocol.UndefinedError
+  # on a map/tuple/keyword -- inside pump's reduce that crashes the whole turn
+  # rather than degrading to an honest summary. Stringify scalars directly and
+  # `inspect/1` everything else.
+  defp display_entry(e) when is_binary(e), do: e
+  defp display_entry(e) when is_atom(e) or is_number(e), do: to_string(e)
+  defp display_entry(e), do: inspect(e)
 
   defp result_excerpt(""), do: ""
 

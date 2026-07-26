@@ -32,6 +32,16 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       assert opts[:base_url] == "https://api.llm7.io"
     end
 
+    test "resolves longcat to the HTTP backend with a base_url and model default" do
+      cfg = ExecutorConfig.new(harness: :longcat)
+      assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+      assert opts[:provider] == :openai
+
+      # Base URL stops at "/openai"; build_request appends "/v1/chat/completions".
+      assert opts[:base_url] == "https://api.longcat.chat/openai"
+      assert opts[:model] == "LongCat-2.0"
+    end
+
     test "resolves openrouter to the HTTP backend with attribution headers" do
       cfg = ExecutorConfig.new(harness: :openrouter)
       assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
@@ -80,7 +90,9 @@ defmodule Raxol.Agent.Backend.SelectorTest do
     end
 
     test "config opts override harness defaults" do
-      cfg = ExecutorConfig.new(harness: :llm7, opts: [base_url: "https://override"])
+      cfg =
+        ExecutorConfig.new(harness: :llm7, opts: [base_url: "https://override"])
+
       assert {:ok, _, opts} = Selector.select(cfg)
       assert opts[:base_url] == "https://override"
     end
@@ -95,18 +107,18 @@ defmodule Raxol.Agent.Backend.SelectorTest do
 
     test "codex is reserved (served by the symphony app-server runner)" do
       cfg = ExecutorConfig.new(harness: :codex)
-      assert {:error, {:harness_not_implemented, :codex}} = Selector.select(cfg)
+      assert {:error, {:backend_not_implemented, :codex}} = Selector.select(cfg)
     end
 
-    test "unknown harness returns an error" do
+    test "unknown backend returns an error" do
       cfg = ExecutorConfig.new(harness: :nonsense)
-      assert {:error, {:unknown_harness, :nonsense}} = Selector.select(cfg)
+      assert {:error, {:unknown_backend, :nonsense}} = Selector.select(cfg)
     end
   end
 
-  describe "supported_harnesses/0" do
-    test "lists the resolvable harnesses" do
-      supported = Selector.supported_harnesses()
+  describe "supported_backends/0" do
+    test "lists the resolvable backends" do
+      supported = Selector.supported_backends()
       assert :anthropic in supported
       assert :mock in supported
       refute :codex in supported

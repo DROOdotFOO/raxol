@@ -110,10 +110,12 @@ defmodule Raxol.Payments.Zksar do
   `:malformed | :expired | :unknown_type | :issuer_required | :invalid_issuer
   | :invalid_signature`
   """
-  @spec verify(proof(), keyword()) :: {:ok, verified_proof()} | {:error, verification_error()}
+  @spec verify(proof(), keyword()) ::
+          {:ok, verified_proof()} | {:error, verification_error()}
   def verify(proof, opts \\ [])
 
-  def verify(%{type_code: code} = proof, opts) when is_map_key(@proof_types, code) do
+  def verify(%{type_code: code} = proof, opts)
+      when is_map_key(@proof_types, code) do
     now = Keyword.get(opts, :now, :os.system_time(:second))
 
     with :ok <- check_structure(proof),
@@ -154,7 +156,9 @@ defmodule Raxol.Payments.Zksar do
 
   @doc "Look up proof type name from numeric code."
   @spec proof_type_name(pos_integer()) :: {:ok, proof_type()} | :error
-  def proof_type_name(code) when is_map_key(@proof_types, code), do: {:ok, @proof_types[code]}
+  def proof_type_name(code) when is_map_key(@proof_types, code),
+    do: {:ok, @proof_types[code]}
+
   def proof_type_name(_code), do: :error
 
   @doc "Look up numeric code from proof type name."
@@ -191,8 +195,8 @@ defmodule Raxol.Payments.Zksar do
         [
           "ZKSAR-Attestation-v1",
           Integer.to_string(type_code),
-          normalize_address(issuer),
-          normalize_address(subject),
+          Raxol.Payments.EIP712.normalize_address(issuer),
+          Raxol.Payments.EIP712.normalize_address(subject),
           Integer.to_string(issued_at),
           Integer.to_string(expires_at),
           Base.encode16(payload, case: :lower)
@@ -200,7 +204,7 @@ defmodule Raxol.Payments.Zksar do
         "\n"
       )
 
-    eip191_digest(message)
+    Raxol.Payments.Eip191.digest(message)
   end
 
   @doc """
@@ -220,7 +224,8 @@ defmodule Raxol.Payments.Zksar do
         "payload" => payload_hex
       })
       when is_integer(type_code) and is_binary(issuer) and is_binary(subject) and
-             is_integer(issued_at) and is_integer(expires_at) and is_binary(signature) and
+             is_integer(issued_at) and is_integer(expires_at) and
+             is_binary(signature) and
              is_binary(payload_hex) do
     case Base.decode16(payload_hex, case: :mixed) do
       {:ok, payload} ->
@@ -252,7 +257,9 @@ defmodule Raxol.Payments.Zksar do
 
   defp check_structure(_), do: {:error, :malformed}
 
-  defp check_expiry(%{expires_at: exp}, now) when is_integer(exp) and exp > now, do: :ok
+  defp check_expiry(%{expires_at: exp}, now) when is_integer(exp) and exp > now,
+    do: :ok
+
   defp check_expiry(_, _), do: {:error, :expired}
 
   defp check_issuer(proof, opts) do
@@ -276,7 +283,9 @@ defmodule Raxol.Payments.Zksar do
     if Keyword.get(opts, :verify_signature, true) do
       case recover_signer(attestation_digest(proof), proof.signature) do
         {:ok, recovered} ->
-          if addr_eq?(recovered, proof.issuer), do: :ok, else: {:error, :invalid_signature}
+          if addr_eq?(recovered, proof.issuer),
+            do: :ok,
+            else: {:error, :invalid_signature}
 
         :error ->
           {:error, :invalid_signature}
@@ -289,7 +298,7 @@ defmodule Raxol.Payments.Zksar do
   defp recover_signer(digest, signature) do
     with {:ok, {r, s, recovery_id}} <- decode_signature(signature),
          {:ok, pubkey} <- ExSecp256k1.recover(digest, r, s, recovery_id) do
-      {:ok, pubkey_to_address(pubkey)}
+      {:ok, Raxol.Payments.EIP712.address_from_pubkey(pubkey)}
     else
       _ -> :error
     end
@@ -300,7 +309,7 @@ defmodule Raxol.Payments.Zksar do
   defp decode_signature(hex) when is_binary(hex) and byte_size(hex) == 130 do
     case Base.decode16(hex, case: :mixed) do
       {:ok, <<r::binary-size(32), s::binary-size(32), v::8>>} ->
-        {:ok, {r, s, normalize_recovery_id(v)}}
+        {:ok, {r, s, Raxol.Payments.Eip191.normalize_recovery_id(v)}}
 
       _ ->
         :error
@@ -309,27 +318,10 @@ defmodule Raxol.Payments.Zksar do
 
   defp decode_signature(_), do: :error
 
-  # Accept both Ethereum's 27/28 and the raw 0/1 recovery id.
-  defp normalize_recovery_id(v) when v >= 27, do: v - 27
-  defp normalize_recovery_id(v), do: v
-
-  # address = last 20 bytes of keccak256(uncompressed_public_key without 0x04 prefix)
-  defp pubkey_to_address(<<_prefix::8, key_bytes::binary-size(64)>>) do
-    <<_first_12::binary-size(12), addr::binary-size(20)>> = ExKeccak.hash_256(key_bytes)
-    "0x" <> Base.encode16(addr, case: :lower)
-  end
-
   defp addr_eq?(a, b) when is_binary(a) and is_binary(b),
-    do: normalize_address(a) == normalize_address(b)
+    do:
+      Raxol.Payments.EIP712.normalize_address(a) ==
+        Raxol.Payments.EIP712.normalize_address(b)
 
   defp addr_eq?(_, _), do: false
-
-  defp normalize_address(addr) when is_binary(addr) do
-    addr |> String.trim() |> String.downcase() |> String.replace_prefix("0x", "")
-  end
-
-  defp eip191_digest(message) do
-    prefix = "\x19Ethereum Signed Message:\n" <> Integer.to_string(byte_size(message))
-    ExKeccak.hash_256(prefix <> message)
-  end
 end

@@ -23,9 +23,11 @@ defmodule Raxol.Core.Events.EventManagerTest do
 
     # Clean up after tests
     on_exit(fn ->
-      case Process.alive?(pid) do
-        true -> GenServer.stop(pid)
-        false -> :ok
+      # Server may be mid-shutdown at teardown; swallow the stop's :exit.
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
       end
     end)
 
@@ -83,7 +85,10 @@ defmodule Raxol.Core.Events.EventManagerTest do
       # Verify handler was registered only once
       handlers = EventManager.get_handlers()
       assert Map.has_key?(handlers, :test_event)
-      assert Map.get(handlers, :test_event) == [{__MODULE__, :dummy_handler, 50}]
+
+      assert Map.get(handlers, :test_event) == [
+               {__MODULE__, :dummy_handler, 50}
+             ]
     end
   end
 
@@ -102,6 +107,7 @@ defmodule Raxol.Core.Events.EventManagerTest do
 
       # Verify handler was unregistered
       handlers = EventManager.get_handlers()
+
       # When all handlers are removed, the key may be removed entirely or set to empty list
       event_handlers = Map.get(handlers, :test_event, [])
       assert event_handlers == []
@@ -118,7 +124,10 @@ defmodule Raxol.Core.Events.EventManagerTest do
       # Verify only that handler was unregistered
       handlers = EventManager.get_handlers()
       assert Map.has_key?(handlers, :test_event)
-      assert Map.get(handlers, :test_event) == [{__MODULE__, :another_handler, 50}]
+
+      assert Map.get(handlers, :test_event) == [
+               {__MODULE__, :another_handler, 50}
+             ]
     end
 
     test "does nothing for unregistered handler" do
@@ -147,7 +156,10 @@ defmodule Raxol.Core.Events.EventManagerTest do
       # Define handler module -- arity 2 because EventManager dispatches (event_type, event_data)
       defmodule DispatchTestHandler do
         def handle_test_event(event_type, event_data) do
-          send(Process.whereis(:dispatch_test_receiver), {event_type, event_data})
+          send(
+            Process.whereis(:dispatch_test_receiver),
+            {event_type, event_data}
+          )
         end
       end
 

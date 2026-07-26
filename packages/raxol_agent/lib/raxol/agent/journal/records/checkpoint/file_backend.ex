@@ -16,12 +16,12 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
     1. read the journal (tolerant Reader; STRING-keyed maps);
     2. resolve `tip_offset` (explicit opt, else the derived conversational tip);
     3. reject an invalid tip (`:invalid_tip`) — the named record must exist and
-       be CONVERSATIONAL on the branch (N-JS1); **nothing is appended**;
-    4. reject a mid-turn / mid-reserve write (`:mid_turn` / `:mid_reserve`, N-JS2);
+       be CONVERSATIONAL on the branch; **nothing is appended**;
+    4. reject a mid-turn / mid-reserve write (`:mid_turn` / `:mid_reserve`);
     5. stage the snapshot file (content-addressed, atomic) — skipped for a
        `nil` model, which is a legal tip-only pointer (OQ-JS1);
     6. append the pointer record through the single Writer ⇒ `{:ok, offset}`.
-       The N-JS2 turn-boundary check is **re-run atomically at the commit
+       The turn-boundary check is **re-run atomically at the commit
        point** (`FileStore.append_checked/3` — the check executes inside the
        single Writer against the freshest on-disk records), so a concurrent
        `turn_started` landing between step 1's read and the append can never
@@ -35,12 +35,12 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
     * tip-only pointer (`snapshot_ref == nil`) ⇒ full `fold(0..tip_offset)`;
     * else verify `sha256(bytes) == snapshot_hash` (mismatch ⇒
       `:snapshot_corrupt`; absent file ⇒ `:snapshot_missing`; both leave the
-      journal `:ok` and delete nothing, N-JS3), load the snapshot, then fold the
+      journal `:ok` and delete nothing), load the snapshot, then fold the
       CONVERSATIONAL tail (records with `id > tip_offset`) forward onto it.
 
   Restore folds equal a full fold over the persistent slice (P-JS4).
 
-  ## Restore-path hardening (folded in from `harness-parked.md`)
+  ## Restore-path hardening
 
     * **Bounded nesting BEFORE decode** — the raw snapshot bytes are pre-scanned
       (`nesting_within_bound?/1`, an O(n) byte walk that never builds a term)
@@ -99,13 +99,12 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   The record body itself never carries model content (FI-10 proper). Re-bind
   redaction together with `dump/1` when MS lands.
 
-  ### Acronym legend (defined in `harness-freeze-contracts.md`)
+  ### Acronym legend
 
   AD-10/AD-3a checkpoint decisions · FI-7 never delete implicitly · FI-8 atomic
-  temp+fsync+rename · FI-10 no model content in records/telemetry · N-JS1 tip
-  validity · N-JS2 turn-boundary · N-JS3 corrupt/missing snapshot is typed, not
-  damage · P-JS4 restore == full fold · OQ-JS1 tip-only pointer ruled legal ·
-  JS-FREEZE §1.1 the frozen record shape/offset law.
+  temp+fsync+rename · FI-10 no model content in records/telemetry · P-JS4
+  restore == full fold · OQ-JS1 tip-only pointer ruled legal · JS-FREEZE §1.1
+  the frozen record shape/offset law.
   """
 
   require Logger
@@ -165,10 +164,11 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
       # The single Writer stamps `id` (= the checkpoint's own dense offset) and
       # `schema_version`, consuming one offset from the one counter (offset law).
       #
-      # N-JS2 at the COMMIT POINT: `write/3`'s pre-flight boundary check read a
-      # snapshot of the records that can go stale — with a shared Writer (owner
-      # + joiner handles) a concurrent `turn_started` could land between that
-      # read and this append. `append_checked/3` re-runs the turn-boundary rule
+      # The turn-boundary check is re-run at the COMMIT POINT: `write/3`'s
+      # pre-flight boundary check read a snapshot of the records that can go
+      # stale — with a shared Writer (owner + joiner handles) a concurrent
+      # `turn_started` could land between that read and this append.
+      # `append_checked/3` re-runs the turn-boundary rule
       # INSIDE the single Writer against the freshest on-disk records, so
       # check-and-append is one atomic step and a checkpoint can never land
       # mid-turn through the race window. (A staged snapshot rejected here is a
@@ -256,8 +256,8 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
   end
 
   # A checkpoint restore dereferences `id` (selection), `tip_offset`, and
-  # `snapshot_ref`; any missing ⇒ `:malformed_checkpoint` (typed reject, N-JS3
-  # class) rather than an unhandled `KeyError` on `Map.fetch!`.
+  # `snapshot_ref`; any missing ⇒ `:malformed_checkpoint` (typed reject)
+  # rather than an unhandled `KeyError` on `Map.fetch!`.
   #
   # `tip_offset` must be a POSITIVE INTEGER, not merely present: a nil/absent
   # `tip_offset` would otherwise fold nothing forward (`id > nil` is always false
@@ -315,7 +315,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
 
   def protected_floor(_journal, _records), do: :none
 
-  # --- tip resolution / validation (N-JS1) -----------------------------------
+  # --- tip resolution / validation --------------------------------------------
 
   defp resolve_tip(records, opts) do
     case Keyword.get(opts, :tip_offset) do
@@ -357,7 +357,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
       MapSet.member?(@conversational, Map.get(record, "type"))
   end
 
-  # --- turn-boundary rule (N-JS2) --------------------------------------------
+  # --- turn-boundary rule -----------------------------------------------------
 
   defp check_turn_boundary(records) do
     {turns, reserves} =
@@ -397,7 +397,7 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint.FileBackend do
     end
   end
 
-  # --- snapshot pointer / integrity (N-JS3 + hardening) ----------------------
+  # --- snapshot pointer / integrity (hardening) -------------------------------
 
   defp validate_ref(ref) when is_binary(ref) do
     if Regex.match?(@ref_re, ref), do: :ok, else: {:error, :malformed_pointer}

@@ -1,13 +1,11 @@
 # U21-R — evidence-gated-done suite (FI-6). Authored failing-first, now GREEN.
 #
-# Authored BEFORE the implementation existed, against the roadmap disposition
-# (docs/proposals/in-flight/harness-roadmap.md §U21 + FI-6) and the freeze
-# contracts' Event vocabulary, so the reds pin the contract instead of being
-# fitted to it. U21 has since LANDED: `Raxol.Agent.DoneGate.gate/3` implements
-# the gate, the `:harness_red` tag was removed, and these reds now run GREEN in
-# CI against the real gate.
-#
-# Part of the red-first fan-out authored against docs PR #569.
+# Authored BEFORE the implementation existed, against the roadmap
+# disposition (U21 + FI-6) and the freeze contracts' Event vocabulary, so
+# the reds pin the contract instead of being fitted to it. U21 has since
+# LANDED: `Raxol.Agent.DoneGate.gate/3` implements the gate, the
+# `:harness_red` tag was removed, and these reds now run GREEN in CI
+# against the real gate.
 #
 # ## What U21 gates
 #
@@ -27,7 +25,7 @@
 #
 # EVERY completed `:tool_use` is a mutation. The real producer
 # (`Raxol.Agent.Contract.pump/3`) stamps no effect metadata on tool calls, and
-# the frozen effect taxonomy (harness-freeze-contracts.md §5.2) contains only
+# the frozen effect taxonomy (§5.2 of the frozen contract) contains only
 # effect-BEARING classes and rules that effect enforcement is structural,
 # never self-reported. So an absent `effect_class` resolves toward "is a
 # mutation", and a stamped `mutating: false` (the `destructiveHint`-is-a-lie
@@ -47,12 +45,11 @@
 #   (severity High/Medium/Low + index), kept so each fix stays traceable to
 #   the finding it closes. "U21-R2 #N" / "U21-R3" — fixes from review rounds
 #   2 and 3 of the same PR.
-# §0 / §5.2 — sections of docs/proposals/in-flight/harness-freeze-contracts.md
-#   (§0 clause 7 is the decision-time-fold law; §5.2 the effect taxonomy).
-# meta-inv N — the red-suite meta-invariants in
-#   docs/proposals/in-flight/harness-invariants.md.
-# FI-6 — the roadmap future-invariant this unit implements
-#   (docs/proposals/in-flight/harness-roadmap.md §U21).
+# §0 / §5.2 — sections of the frozen contract (§0 clause 7 is the
+#   decision-time-fold law; §5.2 the effect taxonomy).
+# meta-inv N — the red-suite meta-invariants shared across the U-series
+#   red suites.
+# FI-6 — the roadmap future-invariant this unit implements (U21).
 #
 # ## Layout
 #

@@ -276,4 +276,37 @@ defmodule Raxol.Terminal.InlineDriverCursorProbeTest do
       end
     end
   end
+
+  describe "probe_cursor/2 -- flood resilience (#651)" do
+    test "a sustained non-CPR input flood cannot wedge the probe past its deadline",
+         %{sio: sio} do
+      pid = start_driver!(sio)
+
+      # A flooder keeps the driver's mailbox full of NON-CPR input for the
+      # whole probe. The absolute-deadline `receive ... after remaining` loses
+      # to any already-queued matching message, so before the fix these queued
+      # bytes starved `after` and the probe never returned while the flood
+      # continued (init-time availability DoS). The explicit deadline pre-check
+      # bounds it regardless of mailbox pressure.
+      # Unlinked: killing it must not propagate to the test process.
+      flooder = spawn(fn -> flood(pid) end)
+      on_exit(fn -> Process.exit(flooder, :kill) end)
+
+      task = Task.async(fn -> InlineDriver.probe_cursor(pid, budget_ms: 50) end)
+
+      # Generous window (40x the budget): post-fix the probe returns :timeout
+      # well within it; pre-fix Task.yield reports nil (still wedged).
+      result = Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
+      Process.exit(flooder, :kill)
+
+      assert {:ok, {:error, :timeout}} = result
+
+      GenServer.stop(pid)
+    end
+  end
+
+  defp flood(pid) do
+    inject(pid, "x")
+    flood(pid)
+  end
 end

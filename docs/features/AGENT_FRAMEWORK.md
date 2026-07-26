@@ -2,7 +2,7 @@
 
 An agent is a TEA module where input comes from LLMs and tools instead of a keyboard. Same `init/update/view` loop, same OTP supervision, same crash isolation. The "user" is an AI model issuing commands and processing results.
 
-For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md).
+For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md). For the interactive coding agent built on this framework, see [Coding Agent](CODING_AGENT.md). For the learning and recall layers an agent can opt into, see [Self-Improvement](SELF_IMPROVEMENT.md) and [Memory](MEMORY.md).
 
 ## Quick Start
 
@@ -145,12 +145,116 @@ When `view/1` returns `nil` (the default), no rendering happens. The agent is a 
 # {:error, "message"}
 ```
 
-Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, and OpenRouter.
+Supports Anthropic, OpenAI, Ollama, Proton's Lumo, Kimi 2.5/moonshot, OpenRouter, and Meituan's LongCat.
 Provider is auto-detected from `:base_url` or set via `:provider`.
 
 Without an explicit `:provider`, detection matches the `:base_url`: `anthropic` picks Anthropic, `ollama` (or the default Ollama port) picks Ollama, `moonshot` picks Kimi, and anything else is treated as OpenAI-compatible. The `FREE_AI=true` / `AI_API_KEY` backend switch is a convention of the example agents under `examples/agents/`, not the `Backend.HTTP` layer.
 
 The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI-compatible aggregator. It attaches app-attribution headers (HTTP-Referer, X-OpenRouter-Title, X-OpenRouter-Categories) so Raxol's usage appears on openrouter.ai/rankings. Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
+
+The `:longcat` harness targets Meituan's LongCat (`https://api.longcat.chat/openai`, model `LongCat-2.0`), also OpenAI-compatible. It rides the `:openai` request/SSE path, which already handles LongCat's non-standard frames (a full `message` chunk instead of `delta`, the `reasoning_content` channel, and the underscore-less `finishreason` key). Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
+
+## Turn Driver
+
+`Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Turn` drives a whole
+self-improving turn: it assembles tool context from the agent module's callbacks, runs the
+reasoning loop, records the turn to a conversation log, then fires the background side
+effects.
+
+```elixir
+{:ok, items} =
+  Raxol.Agent.Turn.run(MyAgent, "refactor lib/foo.ex",
+    backend: MyBackend,
+    log: log_server,
+    conversation_id: cid,
+    agent_id: "my-agent",
+    user_id: "user-123",        # optional, with :user_model
+    user_model: MyApp.UserModel,
+    session_search: MyApp.SessionSearch
+  )
+```
+
+- `build_context/2` builds the tool context, each key present only when configured: memory
+  (from `memory_providers`/`memory_provider`), skills (`skills_provider`), user context, and
+  session search.
+- `run/3` runs `Stream.react/2` with that context and records the stream into a
+  [Conversation Log](#conversation-item-log).
+- `after_turn/4` fires [self-improvement](SELF_IMPROVEMENT.md), the user-model refresh, and
+  session indexing.
+
+The agent *module* declares which providers it wants through zero-arity callbacks; the
+*caller* supplies the running server instances through opts. Turn is the canonical driver
+other runtimes can adopt.
+
+## Native Multi-Vendor Harness
+
+An agent can run its own reasoning loop, or hand the loop to a vendor CLI (Claude Code,
+Cursor) and expose Raxol's tools to it over MCP. `Raxol.Agent.ExecutorConfig`
+(`%{harness, model, auth, opts}`) plus `Raxol.Agent.Backend.Selector.select/1` map a harness
+atom to a backend:
+
+| Harness | Backend |
+|---------|---------|
+| `:anthropic`, `:openai`, `:kimi`, `:ollama`, `:lm_studio`, `:llm7`, `:longcat`, `:openrouter` | `Backend.HTTP` |
+| `:lumo` | `Backend.Lumo` |
+| `:claude_native` | `Backend.ClaudeCode` |
+| `:cursor` | `Backend.Cursor` |
+| `:mock` | `Backend.Mock` |
+
+A native backend reports `handles_tools_internally?/0` as `true`, which tells the framework
+not to drive the reasoning loop: the CLI runs its own loop and calls Raxol's tools through an
+injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-config`). The
+`:codex` harness is reserved (it speaks a stateful app-server protocol served by
+`Raxol.Symphony.Runners.Codex`, not an agent backend), so `select/1` returns
+`{:error, {:harness_not_implemented, :codex}}` for it.
+
+## Authorization (ALLOW/ASK/DENY)
+
+`Raxol.Agent.Authorization` is a three-way policy engine, richer than the deny-only
+`PermissionHook`. It is what [`mix raxol.code`](CODING_AGENT.md) gates every mutating tool on.
+
+- `Engine` is a pure reducer over a list of policies. It folds with `reduce_while`: a DENY
+  short-circuits, an ALLOW merges whitelisted label writes, an ASK escrows writes and
+  accumulates a prompt. Final precedence is deny > ask > allow.
+- `Policy` is a data struct (`phases`, `conditions`, `writable_labels`, `scope`). Scope is
+  `:once`, `:session`, or `:root`; a remembered ASK auto-allows within its scope, so
+  "approve once covers the tree" works.
+- `Server` is a per-workflow GenServer holding the policies and pending ASKs; `Hook`
+  composes the engine into the `CommandHook` chain at the `:tool_call` phase, resolving an
+  ASK through a synchronous prompter.
+
+## Conversation Item-Log
+
+`Raxol.Agent.Conversation` is a durable, append-only record of what an agent did, separate
+from its compacted working memory.
+
+- `Item` is an immutable typed entry (message, tool_call, tool_result, reasoning, error, and
+  more) with a stable id `"<conversation_id>:<seq>"` and a monotonic, store-assigned seq.
+- `Store` is a behaviour with cursor pagination (`:after`/`:before`/`:limit`/`:order`/`:type`);
+  `Store.ETS` is the shipped adapter (an `ordered_set` keyed `{conversation_id, seq}`). Append
+  is the only writer.
+- `Log` is a GenServer that wraps a store (durability) with in-process subscriber fan-out
+  (liveness) and no replay buffer. `subscribe/3` returns the snapshot and registers the
+  subscriber in one serialized call, so the snapshot and the live tail partition exactly:
+  every item once, no gap, no duplicate. Reconnect with an `:after` cursor.
+- `Recorder` bridges `Stream` events into items (tool_use to tool_call, done to message, and
+  so on). [Session search](MEMORY.md#session-search) indexes this log.
+
+## Tunnel (Reverse Co-Drive)
+
+`Raxol.Agent.Tunnel` lets a teammate attach to an agent running on your machine over a single
+outbound link, without your files or credentials leaving it. The host dials out to a server;
+many logical channels multiplex over the one link; when a peer opens a channel, its frames
+tunnel to the host, which spawns the channel's handler locally.
+
+- `Frame` has four kinds: `:hello` (host identity, once), `:open`, `:data` (base64 when
+  binary), `:close`. Kinds are decoded through a whitelist, never `String.to_atom` on link
+  input.
+- `Tunnel` is the endpoint GenServer (`role: :host` or `:server`), transport-agnostic:
+  outbound frames go through a `send_fun`, inbound bytes arrive as `{:tunnel_recv, binary}`.
+- `Tunnel.Link.connect/2` wires two endpoints in-process for tests and same-node co-driving.
+  The cross-machine transport (a WebSocket host and server) is a drop-in doing the same two
+  things.
 
 ## Examples
 

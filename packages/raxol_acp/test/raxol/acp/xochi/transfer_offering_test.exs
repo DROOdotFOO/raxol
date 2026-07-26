@@ -39,7 +39,8 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
           "intent_id" => "xi_1",
           "quote_id" => "xq_1",
           "signature" => "0x" <> String.duplicate("11", 65),
-          "nonce" => 7
+          "nonce" => 7,
+          "pull_signature" => "0x" <> String.duplicate("22", 65)
         }
       },
       overrides

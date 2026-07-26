@@ -592,15 +592,19 @@ defmodule Raxol.Terminal.Driver do
       state
   end
 
-  # While a probe is live (`:awaiting`, `:draining`, or even `:done` --
-  # Probe.step/2 keeps draining late replies losslessly forever, CAP-N-03),
-  # route each raw input chunk through it. Returns `{clean_data, state}`
-  # where `clean_data` is exactly the leak-free residual: real keystrokes
+  # While a probe is live (`:awaiting` or `:draining`), route each raw
+  # input chunk through it. Returns `{clean_data, state}` where
+  # `clean_data` is exactly the leak-free residual: real keystrokes
   # interleaved with reply bytes, in original order, with every recognized
   # reply frame stripped -- safe to hand to `parse_input_safely/1`. Any
   # exception abandons capability detection (drops the probe from state so
   # later chunks pass straight through) and degrades to passing this chunk
   # through untouched, exactly as the old OSC 11-only scan did.
+  #
+  # Once `finalize_capabilities/2` runs, `capabilities_probe` is `nil`
+  # (its job is done -- see that function's comment), so this clause no
+  # longer matches and every later chunk falls straight to the catch-all
+  # below, untouched by the probe.
   defp route_capabilities_input(data, %{capabilities_probe: %Probe{} = probe} = state) do
     {probe, actions} = Probe.step(probe, {:input, data})
     apply_probe_actions(actions, %{state | capabilities_probe: probe})
@@ -699,7 +703,16 @@ defmodule Raxol.Terminal.Driver do
   # W2c shim fallback both still read through it -- and the
   # `:terminal_background` event), and additionally emit
   # `:terminal_capabilities` carrying the full classified record. Cancels
-  # the now-moot deadline timer.
+  # the now-moot deadline timer AND retires the probe itself: once done,
+  # its job is over, so `capabilities_probe` is cleared to `nil` here so
+  # `route_capabilities_input/2` stops routing input through it and hands
+  # every later chunk straight to `parse_input_safely/1`. Without this,
+  # the probe stays "live" forever and every future chunk keeps hitting
+  # `Probe.step/2`'s `:done` clause, which scans with a fresh
+  # `ReplyScanner` each call and never threads the result back -- so a
+  # lone `"\e"` (a plain Escape keypress with nothing else in the same
+  # read) parks as that scanner's `partial` and is silently discarded
+  # instead of ever reaching a key event.
   defp finalize_capabilities(%Capabilities{} = caps, state) do
     Capabilities.cache(caps)
 
@@ -721,7 +734,9 @@ defmodule Raxol.Terminal.Driver do
       data: %{capabilities: caps}
     })
 
-    cancel_capabilities_timer(state)
+    state
+    |> cancel_capabilities_timer()
+    |> Map.put(:capabilities_probe, nil)
   end
 
   defp dispatch_capabilities_event(%{dispatcher_pid: nil}, _event), do: :ok

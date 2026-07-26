@@ -1,11 +1,11 @@
 defmodule Raxol.Agent.Probe do
   @moduledoc """
-  U12 — the probe behaviour (frozen interface, `harness-freeze-contracts.md`
-  §3.1). **Interface only** — this module carries no runtime; it declares the
-  three callbacks a probe implements. The permanent U12-R red suite
+  U12 — the probe behaviour (frozen interface). **Interface only** — this
+  module carries no runtime; it declares the three callbacks a probe
+  implements. The permanent U12-R red suite
   (`test/raxol/agent/red/u12_probe_runner_red_test.exs`) is authored against
-  this shape *before* any Runner implementation exists (the red-first fan-out,
-  docs PR #569).
+  this shape *before* any Runner implementation exists (the red-first
+  fan-out).
 
   ## Probes are PURE interpreters
 

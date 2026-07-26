@@ -59,5 +59,12 @@ docker/
 # CI/CD
 .github/
 
-# Large directories that aren't needed
+# Large directories that aren't needed. These are build-irrelevant artifacts that
+# otherwise bloat the build context (uploaded to the fly builder on every deploy):
+#   priv/plts -- Dialyzer PLT cache (~49MB)
+#   demos     -- asciinema .cast recordings (~23MB)
+#   doc       -- generated ExDoc HTML (~15MB; distinct from the `docs/` rule above)
 priv/static/
+priv/plts/
+demos/
+doc/

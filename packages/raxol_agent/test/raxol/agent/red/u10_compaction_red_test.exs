@@ -8,8 +8,8 @@ defmodule Raxol.Agent.Red.U10CompactionRedTest do
   they are GREEN and run every CI pass — the `:harness_red` exclusion was
   dropped when the implementation landed.
 
-  Governing contract: `docs/proposals/in-flight/harness-freeze-contracts.md` §1
-  (JS-FREEZE) — the one-artifact thesis. The five laws:
+  Governing contract: the frozen JS-FREEZE one-artifact thesis. The five
+  laws:
 
     1. compact-then-resume ≡ checkpoint-restore (P-JS4 fold equality);
     2. compaction never loses un-manifested data (MS discipline);

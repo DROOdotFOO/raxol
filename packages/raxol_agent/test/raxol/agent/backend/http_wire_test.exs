@@ -247,6 +247,41 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
     end
   end
 
+  describe "parse_sse/2 CRLF line endings (real CRLF-speaking providers/proxies)" do
+    test "a data: [DONE] line terminated with \\r completes normally, no spurious unparseable marker" do
+      # The isolated defect: a "data: [DONE]" content line terminated with
+      # \r\n, followed by the record's blank-line separator. Before the
+      # fix, that trailing \r survives the "\n\n" split and breaks the
+      # exact-match `"data: [DONE]"` clause, falling through to
+      # `Jason.decode("[DONE]\r")` -- which fails and seals a bogus
+      # "unparseable response chunk" marker on every turn from a
+      # CRLF-speaking provider (a NEW regression, never a clean [DONE]).
+      raw = "data: [DONE]\r\n\n"
+
+      {events, buffer} = HTTP.parse_sse(raw, :openai)
+
+      assert events == [{:usage, %{}}]
+      assert buffer == ""
+
+      refute Enum.any?(events, &match?({:marker, _}, &1)),
+             "a CRLF [DONE] sentinel must not seal a bogus unparseable marker: #{inspect(events)}"
+    end
+
+    test "a fully CRLF-delimited stream frames its record boundary (does not buffer forever)" do
+      # Without CRLF-tolerant framing, "\r\n\r\n" never matches a literal
+      # "\n\n" split -- the whole chunk is kept as unparsed buffer forever
+      # and the answer never surfaces (empty content at :done).
+      raw =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n" <>
+          "data: [DONE]\r\n\r\n"
+
+      {events, buffer} = HTTP.parse_sse(raw, :openai)
+
+      assert events == [{:text_delta, "hi"}, {:usage, %{}}]
+      assert buffer == ""
+    end
+  end
+
   describe "parse_sse/2 no-regression for other providers" do
     test "anthropic content_block_delta still yields text" do
       raw = ~s(data: {"type":"content_block_delta","delta":{"text":"a"}}\n\n)
@@ -257,6 +292,66 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
       raw = ~s({"message":{"content":"o"}}\n)
       {events, _} = HTTP.parse_sse(raw, :ollama)
       assert events == [{:text_delta, "o"}]
+    end
+  end
+
+  describe "blocking tool_calls honesty (parity with streaming)" do
+    test "undecodable arguments surface an honest marker, never a silent %{} (#652)" do
+      # The blocking parse must match the streaming path: a tool_call whose
+      # arguments string is not valid JSON keeps a map-shaped `%{}` but rides
+      # an `arguments_error` alongside, so the tool is never invoked under
+      # silently-empty args. Previously the blocking path coerced to `%{}`
+      # with no trace.
+      body = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "tool_calls" => [
+                %{
+                  "id" => "c1",
+                  "function" => %{
+                    "name" => "edit_file",
+                    "arguments" => "{not valid json"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+
+      assert {:ok, %{tool_calls: [call]}} = complete_stub(body, provider: :openai, api_key: "test")
+
+      assert call["arguments"] == %{}
+      assert is_binary(call["arguments_error"])
+      assert call["arguments_error"] =~ "undecodable"
+
+      # The marker never leaks the raw provider text.
+      refute call["arguments_error"] =~ "not valid json"
+    end
+
+    test "valid arguments still decode to a map with no error marker" do
+      body = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "tool_calls" => [
+                %{
+                  "id" => "c2",
+                  "function" => %{
+                    "name" => "read_file",
+                    "arguments" => ~s({"path":"a.txt"})
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+
+      assert {:ok, %{tool_calls: [call]}} = complete_stub(body, provider: :openai, api_key: "test")
+      assert call["arguments"] == %{"path" => "a.txt"}
+      refute Map.has_key?(call, "arguments_error")
     end
   end
 end

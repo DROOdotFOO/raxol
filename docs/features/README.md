@@ -4,7 +4,19 @@
 
 ### [Agent Framework](AGENT_FRAMEWORK.md)
 
-AI agents as TEA apps. OTP supervision, crash isolation, inter-agent messaging, LLM streaming to Anthropic/OpenAI/Ollama/Kimi/Lumo.
+AI agents as TEA apps. OTP supervision, crash isolation, inter-agent messaging, LLM streaming to Anthropic/OpenAI/Ollama/Kimi/Lumo. Turn driver, native multi-vendor harness, ALLOW/ASK/DENY authorization, conversation item-log, reverse co-drive tunnel.
+
+### [Coding Agent](CODING_AGENT.md)
+
+`mix raxol.code`: an interactive terminal coding assistant wearing the axol face. Gated tools, plan mode, persistent sessions, slash commands.
+
+### [Self-Improvement](SELF_IMPROVEMENT.md)
+
+An agent that gets more capable the longer it runs. After-turn reviewer, agent-authored skills, and a Curator that ages them, all OTP-supervised and reversible.
+
+### [Memory](MEMORY.md)
+
+Provider stack, full-text session recall, and a dialectic user model. Pure-Elixir BM25-lite, no SQLite or NIF.
 
 ### [Agentic Commerce](AGENTIC_COMMERCE.md)
 
@@ -12,7 +24,11 @@ Autonomous payments for agents. Wallet management, spending controls, x402/MPP a
 
 ### [Agent Commerce Protocol](ACP.md)
 
-The seller side. Sell agent services on Base with on-chain settlement, EIP-712 typed memos, and a Job state machine. Pre-alpha.
+The seller side. Sell agent services on Base with on-chain settlement and a per-job state machine (the v2 hook/event model). Pre-alpha.
+
+### [Editor Agent Client Protocol](EDITOR_ACP.md)
+
+The JSON-RPC protocol between a code editor (Zed and others) and an AI coding agent. Both roles, durable resumable sessions, zero raxol deps. Distinct from the commerce ACP above. Pre-alpha.
 
 ### [Symphony](SYMPHONY.md)
 
@@ -55,6 +71,10 @@ Snapshot every `update/2` cycle. Step back, forward, jump to any point, restore 
 Pure functional in-memory VFS with REPL helpers and 7 LLM-callable agent actions.
 
 ## Surfaces
+
+### [Unified Messaging Gateway](GATEWAY.md)
+
+One daemon connecting many chat platforms through a shared adapter contract. Per-chat OTP sessions, DM pairing, cross-platform handoff. Pre-alpha.
 
 ### [Speech](SPEECH.md)
 

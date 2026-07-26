@@ -22,8 +22,7 @@ defmodule Raxol.Terminal.CharacterHandling do
   # Emoji_Presentation=Yes subranges are listed.
   #
   # Maintaining this by hand is the same fragile pattern that hid the flag
-  # bug; docs/proposals/in-flight/unicode-width-table.md plans deriving it
-  # from Unicode data instead.
+  # bug; a future pass should derive it from Unicode data instead.
   @emoji_presentation_ranges [
     # Watch, hourglass
     {0x231A, 0x231B},
@@ -90,52 +89,56 @@ defmodule Raxol.Terminal.CharacterHandling do
     # `get_char_width/1`.
   ]
 
+  # East Asian Wide + Fullwidth ranges, plus the hand-maintained
+  # `@emoji_presentation_ranges`, assembled ONCE at compile time. This used to
+  # be rebuilt (list literal `++ @emoji_presentation_ranges`) on every
+  # `wide_char?/1` call -- i.e. per grapheme on the measurement hot path.
+  @wide_ranges [
+                 # CJK Unified Ideographs
+                 {0x4E00, 0x9FFF},
+                 # CJK Unified Ideographs Extension A
+                 {0x3400, 0x4DBF},
+                 # CJK Unified Ideographs Extension B
+                 {0x20000, 0x2A6DF},
+                 # CJK Unified Ideographs Extension C
+                 {0x2A700, 0x2B73F},
+                 # CJK Unified Ideographs Extension D
+                 {0x2B740, 0x2B81F},
+                 # CJK Unified Ideographs Extension E
+                 {0x2B820, 0x2CEAF},
+                 # CJK Unified Ideographs Extension F
+                 {0x2CEB0, 0x2EBEF},
+                 # CJK Unified Ideographs Extension G
+                 {0x30000, 0x3134F},
+                 # CJK Compatibility Ideographs
+                 {0xF900, 0xFAFF},
+                 # CJK Symbols and Punctuation (ideographic space, 、。「」...)
+                 {0x3000, 0x303E},
+                 # Hiragana + Katakana (incl. the ー prolonged sound mark). Kana
+                 # are East Asian Wide just like Han -- this range was missing,
+                 # so kana measured 1 cell and every downstream layout budget
+                 # drifted (caught by the harness diff viewer's unicode fixture).
+                 {0x3041, 0x30FF},
+                 # Katakana Phonetic Extensions
+                 {0x31F0, 0x31FF},
+                 # Hangul Syllables
+                 {0xAC00, 0xD7AF},
+                 # Fullwidth ASCII variants
+                 {0xFF01, 0xFF60},
+                 # Fullwidth symbols
+                 {0xFFE0, 0xFFE6},
+                 # Miscellaneous Symbols and Pictographs. Everything
+                 # emoji-presentation BELOW this block lives in
+                 # @emoji_presentation_ranges instead.
+                 {0x1F300, 0x1FAFF}
+               ] ++ @emoji_presentation_ranges
+
   @doc """
   Determines if a character is a wide character (takes up two cells).
   """
   @spec wide_char?(char()) :: boolean()
   def wide_char?(char) do
-    wide_ranges =
-      [
-        # CJK Unified Ideographs
-        {0x4E00, 0x9FFF},
-        # CJK Unified Ideographs Extension A
-        {0x3400, 0x4DBF},
-        # CJK Unified Ideographs Extension B
-        {0x20000, 0x2A6DF},
-        # CJK Unified Ideographs Extension C
-        {0x2A700, 0x2B73F},
-        # CJK Unified Ideographs Extension D
-        {0x2B740, 0x2B81F},
-        # CJK Unified Ideographs Extension E
-        {0x2B820, 0x2CEAF},
-        # CJK Unified Ideographs Extension F
-        {0x2CEB0, 0x2EBEF},
-        # CJK Unified Ideographs Extension G
-        {0x30000, 0x3134F},
-        # CJK Compatibility Ideographs
-        {0xF900, 0xFAFF},
-        # CJK Symbols and Punctuation (ideographic space, 、。「」...)
-        {0x3000, 0x303E},
-        # Hiragana + Katakana (incl. the ー prolonged sound mark). Kana are
-        # East Asian Wide just like Han -- this range was missing, so kana
-        # measured 1 cell and every downstream layout budget drifted
-        # (caught by the harness diff viewer's unicode fixture, U1-b).
-        {0x3041, 0x30FF},
-        # Katakana Phonetic Extensions
-        {0x31F0, 0x31FF},
-        # Hangul Syllables
-        {0xAC00, 0xD7AF},
-        # Fullwidth ASCII variants
-        {0xFF01, 0xFF60},
-        # Fullwidth symbols
-        {0xFFE0, 0xFFE6},
-        # Miscellaneous Symbols and Pictographs. Everything emoji-presentation
-        # BELOW this block lives in @emoji_presentation_ranges instead.
-        {0x1F300, 0x1FAFF}
-      ] ++ @emoji_presentation_ranges
-
-    Enum.any?(wide_ranges, fn {start, finish} ->
+    Enum.any?(@wide_ranges, fn {start, finish} ->
       char >= start and char <= finish
     end)
   end
@@ -152,18 +155,28 @@ defmodule Raxol.Terminal.CharacterHandling do
   end
 
   def get_char_width(str) when is_binary(str) do
-    case String.to_charlist(str) do
-      # Variation Selector-16 forces EMOJI presentation on a base character
-      # that defaults to text presentation, and emoji presentation is two
-      # columns. This is why `❤` (U+2665, correctly 1) and `❤️` (the same
-      # base plus VS16, 2) must not measure the same -- ignoring the
-      # selector made every VS16 sequence, including keycaps like `1️⃣`,
-      # measure one column short. Checked before the first-codepoint
-      # lookup because the base codepoint alone cannot answer this.
-      codepoints when is_list(codepoints) and codepoints != [] ->
-        emoji_presentation_width(codepoints)
+    # Only the FIRST grapheme cluster decides this call's width. Splitting
+    # here (instead of `String.to_charlist/1` on the whole binary) matters
+    # for multi-grapheme input: a VS16 (or any other modifier) that
+    # belongs to a LATER grapheme must never leak into an earlier,
+    # unrelated character's width -- e.g. in "A❤️" the heart's VS16 used
+    # to widen the plain "A" to 2 because both graphemes' codepoints were
+    # flattened into one list before the VS16 scan.
+    case String.next_grapheme(str) do
+      {grapheme, _rest} ->
+        # Variation Selector-16 forces EMOJI presentation on a base
+        # character that defaults to text presentation, and emoji
+        # presentation is two columns. This is why `❤` (U+2665, correctly
+        # 1) and `❤️` (the same base plus VS16, 2) must not measure the
+        # same -- ignoring the selector made every VS16 sequence,
+        # including keycaps like `1️⃣`, measure one column short. Checked
+        # before the first-codepoint lookup because the base codepoint
+        # alone cannot answer this.
+        grapheme
+        |> String.to_charlist()
+        |> emoji_presentation_width()
 
-      [] ->
+      nil ->
         1
     end
   end
@@ -356,8 +369,7 @@ defmodule Raxol.Terminal.CharacterHandling do
     end)
     |> case do
       {left, :rest, _used} ->
-        {left,
-         binary_part(text, byte_size(left), byte_size(text) - byte_size(left))}
+        {left, binary_part(text, byte_size(left), byte_size(text) - byte_size(left))}
 
       {left, _right, _used} ->
         {left, ""}

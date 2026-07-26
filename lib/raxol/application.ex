@@ -662,6 +662,10 @@ defmodule Raxol.Application do
         Raxol.Headless.McpTools.register(Raxol.MCP.Registry)
       end
 
+      if Code.ensure_loaded?(Raxol.Headless.DocsResource) do
+        Raxol.Headless.DocsResource.register(Raxol.MCP.Registry)
+      end
+
       if Code.ensure_loaded?(Raxol.MCP.AdaptiveTools) and
            Raxol.MCP.AdaptiveTools.available?() do
         Raxol.MCP.AdaptiveTools.register(Raxol.MCP.Registry)

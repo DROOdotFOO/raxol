@@ -150,22 +150,13 @@ defmodule Raxol.Symphony.Evidence.GitHub do
     receive_timeout = Keyword.get(extra, :receive_timeout, 15_000)
     base_url = Keyword.get(opts, :endpoint, @default_endpoint)
 
-    base = [
-      base_url: base_url,
-      headers: [
-        {"accept", "application/vnd.github+json"},
-        {"authorization", "Bearer #{token}"},
-        {"x-github-api-version", "2022-11-28"},
-        {"user-agent", "raxol-symphony"}
-      ],
-      receive_timeout: receive_timeout,
-      retry: false
-    ]
-
-    base = if plug, do: Keyword.put(base, :plug, plug), else: base
-    base = if adapter, do: Keyword.put(base, :adapter, adapter), else: base
-
-    Req.new(base)
+    Raxol.Symphony.GitHub.Client.build(
+      base_url,
+      token,
+      plug,
+      adapter,
+      receive_timeout
+    )
   end
 
   defp req_loaded?, do: Code.ensure_loaded?(Req)

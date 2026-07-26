@@ -2,26 +2,38 @@ defmodule Raxol.ACP.Xochi.Offering do
   @moduledoc """
   Xochi cross-chain intent offering schema for the Virtuals ACP marketplace.
 
-  Raxol sells this as a **pure storefront**: the buyer quotes and signs a Xochi
-  cross-chain intent against Xochi itself, then creates a **plain** ACP job
+  Raxol sells this as a pure storefront. The buyer quotes and signs a Xochi
+  cross-chain intent against Xochi itself, then creates a plain ACP job
   (hook = `address(0)`) whose budget is raxol's storefront fee. On funding, the
   storefront relays the buyer's pre-signed intent to Xochi (via
-  `Raxol.ACP.Xochi.Settler` -> `Raxol.Payments.Protocols.Xochi.execute_signed/2`)
+  `Raxol.ACP.Xochi.Settler` then `Raxol.Payments.Protocols.Xochi.execute_signed/2`)
   and polls it to settlement. raxol never signs the transfer and never touches
-  the transferred funds -- the transfer moves through Xochi off-escrow, so the
-  ACP core's platform/evaluator take never bites the transfer amount. raxol
-  earns the storefront fee: on `complete`, the provider nets `budget * 0.90`.
+  the transferred funds. The transfer moves through Xochi off-escrow, so the ACP
+  core's platform and evaluator take never bites the transfer amount. raxol earns
+  only the storefront fee: on `complete`, the provider nets `budget * 0.90`.
 
-  This module defines the offering's JSON schema (for marketplace registration),
-  the canonical request shape (which carries the buyer's signed intent bundle),
-  and the deliverable shape returned when the intent settles.
+  This module holds the offering's JSON schemas: the request shape (which carries
+  the buyer's signed intent bundle) and the deliverable shape returned when the
+  intent settles.
+
+  ## Which module to register
+
+  Register the focused pair, not this base module directly:
+
+    - `Raxol.ACP.Xochi.StablePublicOffering`  (name `xochi_stable_public`)
+    - `Raxol.ACP.Xochi.StableStealthOffering` (name `xochi_stable_stealth`)
+
+  Both share these schemas via the mode-specific `requirement_schema/1` and
+  `deliverable_schema/1`. `Raxol.ACP.Xochi.TransferOffering` (name
+  `xochi_cross_chain_transfer`) is the deprecated settlement-agnostic shim; it
+  uses the full `requirement_schema/0` and stays only until buyers migrate.
 
   ## Lifecycle
 
       job.created      -> buyer initiated a plain job, awaiting acceptance
       budget.set       -> storefront proposes budget = its fee (bps of transfer)
       job.funded       -> buyer escrowed the storefront fee
-      job.submitted    -> storefront relayed the buyer's signed intent; solver
+      job.submitted    -> storefront relayed the buyer's signed intent; the solver
                           fills cross-chain; deliverable = { intent_id,
                           settlement_tx_hash, receiving_tx_hash, status }
                           plus the ERC-5564 announcement ({ settlement_type,
@@ -29,25 +41,24 @@ defmodule Raxol.ACP.Xochi.Offering do
                           stealth settlement
       job.completed    -> buyer verifies dst_tx; provider nets budget*0.90
 
-  The deliverable surfaces both src and dst transaction hashes so the buyer (or
-  an evaluator agent) can verify the cross-chain settlement on-chain before
+  The deliverable carries both the source and destination transaction hashes, so
+  the buyer (or an evaluator agent) can verify the settlement on-chain before
   approving.
 
   ## Safety: the buyer signs, Riddler verifies
 
-  Because the buyer signs the EIP-712 intent (and any origin-pull authorization)
-  against Xochi, and Riddler verifies it against its own server-persisted quote,
-  neither raxol nor the buyer can forge the amount or route. raxol relays the
-  opaque bundle without inspecting or re-signing it, so the destination, privacy
-  tier, and route are whatever the buyer signed -- there is no same-owner or
-  public-only gate on raxol's side (there is nothing raxol could misroute).
+  The buyer signs the EIP-712 intent (and any origin-pull authorization) against
+  Xochi, and Riddler verifies it against its own server-persisted quote. Neither
+  raxol nor the buyer can forge the amount or route. raxol relays the opaque
+  bundle without inspecting or re-signing it, so the destination, privacy tier,
+  and route are whatever the buyer signed. There is no same-owner or public-only
+  gate on raxol's side, because there is nothing raxol could misroute.
 
   ## Marketplace registration
 
-  When registering the offering at https://app.virtuals.io/acp/new, the
-  `requirement_schema/0` and `deliverable_schema/0` JSON Schemas below
-  go into the `Job Offering` form. `request_schema/0` is what buyers
-  fill out when creating a job.
+  When registering at https://app.virtuals.io/acp/new, the mode-specific
+  `requirement_schema/1` and `deliverable_schema/1` go into the `Job Offering`
+  form. `offering_metadata/1` returns the full payload for the offerings API.
   """
 
   @doc """
@@ -67,7 +78,12 @@ defmodule Raxol.ACP.Xochi.Offering do
           "the buyer escrows only the storefront fee (a plain job, no fund hook). " <>
           "The buyer may settle to a different recipient or an ERC-5564 stealth " <>
           "address by signing it into their intent; the storefront relays it verbatim.",
-      required_funds: true,
+      # No funds move through ACP: the buyer's capital moves via their signed Xochi
+      # intent (off-ACP), so the job takes no fund hook. The listed fee is a
+      # percentage (0.10 = 10 bps); price carries the value, not a USDC amount.
+      required_funds: false,
+      price_usdc: 0.10,
+      price_type: "percentage",
       hook_kind: "none",
       sla_minutes: 10,
       requirement_schema: requirement_schema(),
@@ -76,20 +92,21 @@ defmodule Raxol.ACP.Xochi.Offering do
     }
   end
 
-  @doc "JSON Schema for what the buyer must send when initiating a job."
+  @doc """
+  JSON Schema for what the buyer must send when initiating a job.
+
+  Only `signed_intent` is required: the storefront reads the authoritative
+  corridor and amount from Xochi by the bundle's `intent_id` at accept time, so
+  the buyer no longer hand-carries (and cannot misstate) `src_chain_id`,
+  `dst_chain_id`, `src_token`, `dst_token`, or `amount_atomic`. Those remain as
+  optional audit hints; raxol derives and enforces the real values.
+  """
   @spec requirement_schema() :: map()
   def requirement_schema do
     %{
       "$schema" => "https://json-schema.org/draft/2020-12/schema",
       "type" => "object",
-      "required" => [
-        "src_chain_id",
-        "dst_chain_id",
-        "src_token",
-        "dst_token",
-        "amount_atomic",
-        "signed_intent"
-      ],
+      "required" => ["signed_intent"],
       "additionalProperties" => false,
       "properties" => %{
         "src_chain_id" => %{
@@ -122,13 +139,14 @@ defmodule Raxol.ACP.Xochi.Offering do
           "type" => "string",
           "pattern" => "^[0-9]+$",
           "description" =>
-            "Transfer size in token base units (USDC: 1 USDC = 1_000_000). Used to " <>
-              "size the storefront fee (bps of this) and to commit the deliverable " <>
-              "amount; the on-chain amount is fixed by the buyer's signed intent."
+            "Optional audit hint of the transfer size in token base units (USDC: " <>
+              "1 USDC = 1_000_000). raxol does not trust it: the authoritative amount " <>
+              "is read from Xochi by the signed intent's intent_id and is what sizes " <>
+              "the storefront fee and the deliverable."
         },
         "signed_intent" => %{
           "type" => "object",
-          "required" => ["intent_id", "quote_id", "signature", "nonce"],
+          "required" => ["intent_id", "quote_id", "signature", "nonce", "pull_signature"],
           "additionalProperties" => false,
           "description" =>
             "The buyer's pre-signed Xochi intent bundle. The buyer quotes and signs " <>
@@ -158,8 +176,9 @@ defmodule Raxol.ACP.Xochi.Offering do
               "type" => "string",
               "pattern" => "^0x[0-9a-fA-F]+$",
               "description" =>
-                "Optional ERC-3009/Permit2 origin-pull signature (absent for " <>
-                  "non-pulling methods)."
+                "ERC-3009 origin-pull signature. Required for USDC settlement: the " <>
+                  "solver pulls the origin funds with this authorization, so a bundle " <>
+                  "without it cannot settle."
             },
             "aztec_proof" => %{
               "type" => "string",
@@ -173,8 +192,8 @@ defmodule Raxol.ACP.Xochi.Offering do
             "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
           "description" =>
             "Optional: the recipient the buyer signed into their Xochi intent, for " <>
-              "the buyer's / evaluator's audit trail. raxol does not use or enforce " <>
-              "it -- the destination is fixed by the buyer's signature."
+              "the buyer's or evaluator's audit trail. raxol does not use or enforce " <>
+              "it; the destination is fixed by the buyer's signature."
         },
         "slippage_bps" => %{
           "type" => "integer",
@@ -189,7 +208,7 @@ defmodule Raxol.ACP.Xochi.Offering do
           "default" => "public",
           "description" =>
             "Optional audit hint of the privacy tier the buyer signed. \"stealth\" " <>
-              "records an ERC-5564 stealth delivery -- the buyer signed the stealth " <>
+              "records an ERC-5564 stealth delivery: the buyer signed the stealth " <>
               "spending/viewing keys and an ephemeral recipient into their Xochi " <>
               "intent, so funds land at a stealth address they control. raxol relays " <>
               "whatever the buyer signed and does not gate on this."
@@ -273,27 +292,190 @@ defmodule Raxol.ACP.Xochi.Offering do
     }
   end
 
-  @doc "Default SLA in minutes -- max time from `job.funded` to `job.submitted`."
+  @doc """
+  Requirement schema narrowed to a settlement mode.
+
+  `:public` fixes `settlement_preference` to `"public"`. `:stealth` fixes it to
+  `"stealth"`, pins `dst_chain_id` to Ethereum L1 (`1`), and requires the
+  ERC-5564 `stealth_meta_address`. Built from `requirement_schema/0` so the two
+  variants never drift from the shared corridor/intent fields.
+  """
+  @spec requirement_schema(:public | :usdc_public | :stealth) :: map()
+  def requirement_schema(:public) do
+    put_in(requirement_schema(), ["properties", "settlement_preference"], %{
+      "type" => "string",
+      "enum" => ["public"],
+      "default" => "public",
+      "description" => "Public settlement: the payout lands in a wallet on the destination chain."
+    })
+  end
+
+  # USDC-only public settlement: `:public` plus both legs pinned to the CCTP
+  # mesh. The chain enum derives from `Raxol.Payments.Assets.usdc_chains/0` so it
+  # cannot drift from the runtime USDC gate in `UsdcPublicOffering`.
+  def requirement_schema(:usdc_public) do
+    requirement_schema(:public)
+    |> put_in(["properties", "src_chain_id"], usdc_chain_prop("Source"))
+    |> put_in(["properties", "dst_chain_id"], usdc_chain_prop("Destination"))
+    |> put_in(
+      ["properties", "src_token", "description"],
+      "The USDC contract on src_chain_id. Only USDC is accepted; a non-USDC token is rejected before escrow."
+    )
+    |> put_in(
+      ["properties", "dst_token", "description"],
+      "The USDC contract on dst_chain_id. Only USDC is accepted; a non-USDC token is rejected before escrow."
+    )
+  end
+
+  def requirement_schema(:stealth) do
+    requirement_schema()
+    |> put_in(["properties", "settlement_preference"], %{
+      "type" => "string",
+      "enum" => ["stealth"],
+      "default" => "stealth",
+      "description" =>
+        "Stealth settlement (ERC-5564): the payout lands at a one-time address on " <>
+          "Ethereum L1 that only the recipient controls."
+    })
+    |> put_in(["properties", "dst_chain_id"], %{
+      "type" => "integer",
+      "const" => 1,
+      "description" =>
+        "Destination chain. Stealth settles on Ethereum L1, so this must be 1 " <>
+          "(cross-chain stealth is not yet live)."
+    })
+    |> put_in(["properties", "stealth_meta_address"], %{
+      "type" => "object",
+      "required" => ["spending_pub_key", "viewing_pub_key"],
+      "additionalProperties" => false,
+      "description" =>
+        "ERC-5564 stealth meta-address keys the buyer also signed into their intent, " <>
+          "surfaced here so the offering can validate them before escrow and the " <>
+          "deliverable can carry the on-chain announcement.",
+      "properties" => %{
+        "spending_pub_key" => %{"type" => "string", "pattern" => "^0x[0-9a-fA-F]+$"},
+        "viewing_pub_key" => %{"type" => "string", "pattern" => "^0x[0-9a-fA-F]+$"}
+      }
+    })
+    |> update_in(["required"], &(&1 ++ ["stealth_meta_address"]))
+  end
+
+  defp usdc_chain_prop(role) do
+    %{
+      "type" => "integer",
+      "enum" => Raxol.Payments.Assets.usdc_chains(),
+      "description" =>
+        "#{role} chain. USDC settles across the CCTP mesh: " <>
+          "1 (Ethereum), 10 (OP), 137 (Polygon), 8453 (Base), 42161 (Arbitrum)."
+    }
+  end
+
+  @doc """
+  Deliverable schema narrowed to a settlement mode. `:public` drops the stealth
+  announcement fields; `:stealth` promotes them to `required`.
+  """
+  @spec deliverable_schema(:public | :usdc_public | :stealth) :: map()
+  def deliverable_schema(:public) do
+    update_in(deliverable_schema(), ["properties"], fn props ->
+      Map.drop(props, ["settlement_type", "stealth_address", "ephemeral_pub_key", "view_tag"])
+    end)
+  end
+
+  def deliverable_schema(:usdc_public), do: deliverable_schema(:public)
+
+  def deliverable_schema(:stealth) do
+    update_in(deliverable_schema(), ["required"], fn required ->
+      required ++ ["settlement_type", "stealth_address", "ephemeral_pub_key", "view_tag"]
+    end)
+  end
+
+  @doc "Marketplace metadata for a mode-specific offering (`:usdc_public` | `:public` | `:stealth`)."
+  @spec offering_metadata(:usdc_public | :public | :stealth) :: map()
+  def offering_metadata(:usdc_public) do
+    %{
+      name: "xochi_usdc_public",
+      display_name: "Xochi USDC Transfer (Public)",
+      description:
+        "USDC-only cross-chain settlement to a wallet on the destination chain, across " <>
+          "the CCTP mesh (Ethereum, Optimism, Polygon, Base, Arbitrum). The buyer signs a " <>
+          "Xochi intent, the storefront relays it and returns the settlement tx hashes; " <>
+          "the buyer escrows only the storefront fee (a plain job, no fund hook). Both " <>
+          "legs must be USDC; other stablecoins are rejected before escrow. Order size is " <>
+          "bounded (min 1 USDC, max 3,000 USDC).",
+      required_funds: false,
+      price_usdc: 0.10,
+      price_type: "percentage",
+      hook_kind: "none",
+      sla_minutes: 10,
+      requirement_schema: requirement_schema(:usdc_public),
+      deliverable_schema: deliverable_schema(:usdc_public),
+      tags: ["payments", "cross-chain", "stablecoin", "usdc", "xochi", "public"]
+    }
+  end
+
+  def offering_metadata(:public) do
+    %{
+      name: "xochi_stable_public",
+      display_name: "Xochi Stablecoin Transfer (Public)",
+      description:
+        "Cross-chain stablecoin settlement to a wallet on the destination chain. The " <>
+          "buyer signs a Xochi intent, the storefront relays it and returns the " <>
+          "settlement tx hashes; the buyer escrows only the storefront fee (a plain " <>
+          "job, no fund hook).",
+      required_funds: false,
+      price_usdc: 0.10,
+      price_type: "percentage",
+      hook_kind: "none",
+      sla_minutes: 10,
+      requirement_schema: requirement_schema(:public),
+      deliverable_schema: deliverable_schema(:public),
+      tags: ["payments", "cross-chain", "stablecoin", "xochi", "public"]
+    }
+  end
+
+  def offering_metadata(:stealth) do
+    %{
+      name: "xochi_stable_stealth",
+      display_name: "Xochi Stablecoin Transfer (Stealth, Ethereum L1)",
+      description:
+        "Cross-chain stablecoin settlement to a one-time ERC-5564 stealth address on " <>
+          "Ethereum L1 that only the recipient controls. Destination must be Ethereum " <>
+          "(chain 1); cross-chain stealth is not yet live. The buyer signs a Xochi " <>
+          "intent, the storefront relays it and returns the settlement tx hashes plus " <>
+          "the stealth announcement for on-chain verification.",
+      required_funds: false,
+      price_usdc: 0.10,
+      price_type: "percentage",
+      hook_kind: "none",
+      sla_minutes: 10,
+      requirement_schema: requirement_schema(:stealth),
+      deliverable_schema: deliverable_schema(:stealth),
+      tags: ["payments", "cross-chain", "stablecoin", "xochi", "stealth", "privacy"]
+    }
+  end
+
+  @doc "Default SLA in minutes: max time from `job.funded` to `job.submitted`."
   @spec sla_minutes() :: pos_integer()
   def sla_minutes, do: 10
 
   @doc """
-  Whether a given requirement payload is well-formed enough to relay. Cheap
-  shape check only -- confirms the corridor fields plus a `signed_intent` bundle
-  carrying at least `intent_id`, `quote_id`, `signature`, and `nonce`. Does not
-  verify the signature (Riddler does that against its persisted quote).
+  Whether a given requirement payload is well-formed enough to relay. A cheap
+  shape check: it confirms a `signed_intent` bundle carrying at least
+  `intent_id`, `quote_id`, `signature`, `nonce`, and `pull_signature`. The
+  corridor (chains, tokens, amount) is NOT required here -- it is read
+  authoritatively from Xochi by the intent id (see
+  `Raxol.ACP.Xochi.IntentDeriver`). It does not verify the signature (Riddler
+  does that against its persisted quote).
   """
   @spec valid_requirement?(map()) :: boolean()
   def valid_requirement?(req) when is_map(req) do
-    required = ~w(src_chain_id dst_chain_id src_token dst_token amount_atomic signed_intent)
-
-    Enum.all?(required, &Map.has_key?(req, &1)) and valid_signed_intent?(req["signed_intent"])
+    valid_signed_intent?(req["signed_intent"])
   end
 
   def valid_requirement?(_), do: false
 
   defp valid_signed_intent?(bundle) when is_map(bundle) do
-    Enum.all?(~w(intent_id quote_id signature nonce), &Map.has_key?(bundle, &1))
+    Enum.all?(~w(intent_id quote_id signature nonce pull_signature), &Map.has_key?(bundle, &1))
   end
 
   defp valid_signed_intent?(_), do: false

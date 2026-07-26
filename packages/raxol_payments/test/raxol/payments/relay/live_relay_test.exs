@@ -17,7 +17,7 @@ defmodule Raxol.Payments.Relay.LiveRelayTest do
       RELAY_LIVE_FROM_ADDRESS=0x<your Base address> \\
         mix test --include live_relay test/raxol/payments/relay/live_relay_test.exs
 
-  Or use the runner: examples/run_live_relay_gate.sh
+  Or use the unified gate at the repo root: scripts/run_live_gates.sh --route relay
 
   Defaults (Base USDC -> Tron USDT) are overridable via RELAY_LIVE_FROM_CHAIN,
   RELAY_LIVE_TO_CHAIN, RELAY_LIVE_FROM_TOKEN, RELAY_LIVE_TO_TOKEN,

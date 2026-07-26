@@ -47,6 +47,7 @@ defmodule Raxol.ACP.Auth do
 
   use GenServer
 
+  alias Raxol.ACP.Onchain.Hex
   alias Raxol.ACP.ProviderAdapter
 
   @type t :: %__MODULE__{
@@ -159,7 +160,7 @@ defmodule Raxol.ACP.Auth do
 
     with {:ok, sig_bytes} <-
            ProviderAdapter.sign_typed_data(state.provider, state.chain_id, typed_data),
-         signature_hex <- "0x" <> Base.encode16(sig_bytes, case: :lower),
+         signature_hex <- Hex.encode(sig_bytes),
          {:ok, %{"data" => %{"token" => token}}} <- post_auth(state, signature_hex, issued_at),
          {:ok, exp_ms} <- decode_jwt_exp_ms(token) do
       {:ok, %{state | token: token, expires_at_ms: exp_ms}}
@@ -203,7 +204,9 @@ defmodule Raxol.ACP.Auth do
     opts = [url: url, json: body] ++ state.req_options
 
     case Req.post(opts) do
-      {:ok, %Req.Response{status: 200, body: body}} ->
+      # The ACP server returns 201 Created for a fresh token (and 200 on some paths);
+      # accept any 2xx.
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         {:ok, body}
 
       {:ok, %Req.Response{status: status, body: body}} ->

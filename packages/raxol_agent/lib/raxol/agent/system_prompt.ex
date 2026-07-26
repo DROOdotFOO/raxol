@@ -8,9 +8,9 @@ defmodule Raxol.Agent.SystemPrompt do
     * `:none` — no system prompt (resolves to `{:ok, :none}`)
     * `{:text, binary}` — inline text, passed through verbatim
     * `{:file, path}` — a prompt file, read verbatim (no assembly)
-    * `:bonded` — the bonded-harness package's Layer-0 core prompt
-      (`docs/proposals/bonded-harness/core.prompt.md`), assembled per the
-      package's own instructions (below)
+    * `:bonded` — the bonded Layer-0 core prompt (the package asset
+      `priv/prompts/core.prompt.md`), assembled per its own embedded
+      instructions (below)
 
   The enum is deliberately extensible: a future `:bonded_subagent` arm will
   load the package's `subagent.prompt.md` (worker-tier, rules-only — the
@@ -40,8 +40,9 @@ defmodule Raxol.Agent.SystemPrompt do
   1. `RAXOL_BONDED_PROMPT` env var — authoritative when set: a missing file
      is an error, never a silent fallback to scanning
   2. `config :raxol_agent, :bonded_prompt_path` — same authority rule
-  3. `docs/proposals/bonded-harness/core.prompt.md` under the cwd
-  4. the same path under `../..` (running from a `packages/*` dir)
+  3. the package asset `priv/prompts/core.prompt.md` (via
+     `Application.app_dir/2`, so it resolves wherever raxol_agent is
+     installed — monorepo, dependency, or release)
 
   ## Caching and identity
 
@@ -52,7 +53,7 @@ defmodule Raxol.Agent.SystemPrompt do
   live.
   """
 
-  @bonded_relative_path "docs/proposals/bonded-harness/core.prompt.md"
+  @bonded_priv_path "prompts/core.prompt.md"
   @cache_key {__MODULE__, :cache}
 
   @reference_slots %{
@@ -147,10 +148,7 @@ defmodule Raxol.Agent.SystemPrompt do
         end
 
       nil ->
-        candidates = [
-          Path.expand(@bonded_relative_path),
-          Path.expand(Path.join("../..", @bonded_relative_path))
-        ]
+        candidates = [Application.app_dir(:raxol_agent, @bonded_priv_path)]
 
         case Enum.find(candidates, &File.regular?/1) do
           nil -> {:error, {:bonded_not_found, candidates}}

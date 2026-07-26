@@ -5,11 +5,12 @@ defmodule Raxol.Agent.Authorization.BlastRadiusGate do
 
   **SKELETON ONLY.** This module is the enabler for the permanent U8-R red suite
   (`test/raxol/agent/red/u8_blast_radius_red_test.exs`), authored *before*
-  implementation per the red-first fan-out against the harness freeze contracts
-  (`docs/proposals/in-flight/harness-freeze-contracts.md`). Every public function
-  here raises `:not_implemented` — the red contours run against this skeleton and
-  MUST fail until U8 lands, at which point they turn green in place. The suite's
-  reference gate (test support) is the executable spec these callbacks must match.
+  implementation per the red-first fan-out against the harness safety substrate
+  (see `docs/harness/architecture.md`, "The safety substrate"). Every public
+  function here raises `:not_implemented` — the red contours run against this
+  skeleton and MUST fail until U8 lands, at which point they turn green in
+  place. The suite's reference gate (test support) is the executable spec
+  these callbacks must match.
 
   ## The contract this gate enforces
 

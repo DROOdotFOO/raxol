@@ -204,6 +204,16 @@ defmodule Raxol.Payments.Assets do
   def usdc?(_chain, _address), do: false
 
   @doc """
+  The chain ids on which a USDC contract is registered, ascending.
+
+  Single source of truth for the USDC settlement mesh; callers that advertise
+  the supported chains (e.g. an offering's requirement schema) derive them from
+  here instead of re-declaring the set, so they cannot drift from `usdc?/2`.
+  """
+  @spec usdc_chains() :: [pos_integer()]
+  def usdc_chains, do: @usdc |> Map.keys() |> Enum.sort()
+
+  @doc """
   True when `(chain_id, address)` is a registered contract, i.e. `decimals/2`
   returns a pinned value rather than the `@default_decimals` fallback. An
   unregistered token resolves to 6 decimals, which is wrong for an 18-decimal

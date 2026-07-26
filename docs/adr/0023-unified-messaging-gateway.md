@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-06-17. Third and last of the Hermes-extraction Tier 1 ADRs
+Accepted, 2026-07-22 (implemented as the `raxol_gateway` package). Originally proposed 2026-06-17. Third and last of the Hermes-extraction Tier 1 ADRs
 (`~/Desktop/hermes-extraction-report.md`, item H1.4). Companion to ADR-0021 (self-improving agents)
 and ADR-0022 (memory). Builds on the existing surface packages (`raxol_telegram`, `raxol_watch`,
 `raxol_speech`), the shared `Raxol.Core.Events.Event`, the `Lifecycle` environment system, the
@@ -22,6 +22,10 @@ landed the same day: per-chat history recording (`Session` `:log` keyed by `conv
 four-mode `Delivery` router (decision item 4), and `SessionRouter.handoff/3` (rebind to an existing
 `conversation_id` so history follows). Still to do: the concrete platform adapters (Telegram refactor,
 Discord, ...) and the `Lifecycle`-backed handler.
+
+2026-07-24: the `Adapter` contract is frozen (five callbacks; additions must be optional callbacks),
+and the first production handler landed: `Handler.Agent`, backed by `Raxol.Agent.Stream` with
+environment-resolved credentials (`auto_provider`). The `Lifecycle`-backed TEA handler remains open.
 
 ## Context
 

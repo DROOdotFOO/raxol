@@ -50,11 +50,12 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
 
   `command` is the shell command Codex was launched with (per `codex.command`).
   """
-  @spec start(Path.t(), binary(), policy()) :: {:ok, session()} | {:error, term()}
-  def start(workspace, command, %{} = policy)
-      when is_binary(workspace) and is_binary(command) do
+  @spec start(Path.t(), binary(), policy(), [{charlist(), charlist()}]) ::
+          {:ok, session()} | {:error, term()}
+  def start(workspace, command, %{} = policy, env \\ [])
+      when is_binary(workspace) and is_binary(command) and is_list(env) do
     with {:ok, bash} <- find_bash(),
-         {:ok, port} <- open_port(bash, command, workspace),
+         {:ok, port} <- open_port(bash, command, workspace, env),
          :ok <- send_initialize(port, policy.read_timeout_ms),
          {:ok, thread_id} <- send_thread_start(port, workspace, policy) do
       {:ok,
@@ -315,22 +316,23 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
     end
   end
 
-  defp open_port(bash, command, workspace) do
-    port =
-      Port.open(
-        {:spawn_executable, bash},
-        [
-          :binary,
-          :exit_status,
-          :stderr_to_stdout,
-          :hide,
-          {:cd, workspace},
-          {:line, @port_line_bytes},
-          {:args, ["-lc", command]}
-        ]
-      )
+  defp open_port(bash, command, workspace, env) do
+    opts = [
+      :binary,
+      :exit_status,
+      :stderr_to_stdout,
+      :hide,
+      {:cd, workspace},
+      {:line, @port_line_bytes},
+      {:args, ["-lc", command]}
+    ]
 
-    {:ok, port}
+    # Only add {:env, _} when there is something to inject: an empty list still
+    # scopes the child to an explicit env on some OTP versions, so `:inherit`
+    # (env == []) must pass through untouched to keep the ambient environment.
+    opts = if env == [], do: opts, else: opts ++ [{:env, env}]
+
+    {:ok, Port.open({:spawn_executable, bash}, opts)}
   rescue
     e -> {:error, {:port_open_failed, e}}
   end

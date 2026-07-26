@@ -43,17 +43,23 @@ defmodule Raxol.Agent.Session.SupervisorTest do
     # App-level singletons: tolerate an already-running instance.
     ensure_registry(:duplicate, EmitBus.registry_name())
 
-    ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
+    ensure_running(
+      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
+    )
 
     # The lifecycle's own DynamicSupervisor (used by Lifecycle.start_link).
-    ensure_running({DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one})
+    ensure_running(
+      {DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one}
+    )
 
     # Per-test singletons owned by ExUnit (auto-stopped at test end): the agent
     # Registry, the DynSup the session trees run under, and the named
     # SessionStreamer the sink emits into.
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 
-    start_supervised!({DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one})
+    start_supervised!(
+      {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one}
+    )
 
     start_supervised!(Raxol.Agent.SessionStreamer)
 
@@ -86,7 +92,9 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       # writer pid to prove it closes on teardown.
       :ok = SessionStreamer.subscribe(sid)
       :ok = Session.send_message(agent_id(session), {:say, "hi"})
-      assert_receive {:session_event, ^sid, %Event{type: :turn_completed}}, 1_000
+
+      assert_receive {:session_event, ^sid, %Event{type: :turn_completed}},
+                     1_000
 
       %{journal: %FileStore{writer: writer}} = :sys.get_state(bridge)
       assert Process.alive?(writer)
@@ -223,7 +231,9 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       :ok = Session.send_message(agent_id(session2), {:say, "after"})
 
       assert_receive {:session_event, ^sid, %Event{type: :turn_started}}, 1_000
-      assert_receive {:session_event, ^sid, %Event{type: :turn_completed}}, 1_000
+
+      assert_receive {:session_event, ^sid, %Event{type: :turn_completed}},
+                     1_000
 
       refute_receive {:session_event, ^sid, %Event{type: :turn_started}}, 200
 
@@ -284,7 +294,11 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       wait_until(fn -> get_model(session1) == {:ok, %{seen: ["one"]}} end)
 
       assert :ok = Session.Supervisor.stop_session(sid)
-      wait_until(fn -> not Process.alive?(sup1) and lifecycle_pid(sid) == nil end)
+
+      wait_until(fn ->
+        not Process.alive?(sup1) and lifecycle_pid(sid) == nil
+      end)
+
       refute Process.alive?(life1)
 
       # Same session_id again: a fresh subtree, a fresh lifecycle, and — the
@@ -359,7 +373,10 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       assert life2 != life0
 
       wait_until(fn ->
-        match?(%{lifecycle_pid: ^life2}, :sys.get_state(Session.Supervisor.whereis(sid)))
+        match?(
+          %{lifecycle_pid: ^life2},
+          :sys.get_state(Session.Supervisor.whereis(sid))
+        )
       end)
 
       # The crux: the fresh lifecycle carries the app's INIT model, NOT the
@@ -556,7 +573,14 @@ defmodule Raxol.Agent.Session.SupervisorTest do
           journal_opts: [base_dir: base]
         )
 
-      on_exit(fn -> if Process.alive?(session), do: GenServer.stop(session) end)
+      on_exit(fn ->
+        # Session may be mid-shutdown at teardown; swallow the stop's :exit.
+        try do
+          if Process.alive?(session), do: GenServer.stop(session)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
 
       # Resolvable via the shared seam even though it was NOT started under the
       # tree (no {:session_supervisor, _} key exists for it).
@@ -566,6 +590,7 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       # stop_session falls back to stopping the standalone session directly.
       assert :ok = Session.Supervisor.stop_session(sid)
       wait_until(fn -> not Process.alive?(session) end)
+
       # Registry removes the {:session, _} key on the process's DOWN, which lands
       # just after GenServer.stop returns — wait for the key to clear.
       wait_until(fn -> Session.Supervisor.whereis(sid) == nil end)
