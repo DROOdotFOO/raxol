@@ -1,4 +1,15 @@
 defmodule Raxol.Symphony.PromptBuilder do
+  @memo_key {__MODULE__, :parsed_templates}
+  @empty_memo %{map: %{}, order: []}
+
+  # WHY 16: cap the parsed-template memo so a hot-reloaded `WORKFLOW.md`
+  # (every edit is a fresh template string, hence a new key) cannot grow it
+  # without bound. 16 comfortably covers the handful of workflow variants a
+  # deployment runs concurrently; an evicted template just re-parses on next
+  # use. Defined above the moduledoc so the doc can interpolate the attribute
+  # rather than restate the literal.
+  @max_memoized 16
+
   @moduledoc """
   Renders a `WORKFLOW.md` prompt template with strict Liquid semantics.
 
@@ -17,8 +28,18 @@ defmodule Raxol.Symphony.PromptBuilder do
   (a bounded, FIFO-evicted map from template string to AST), so a template
   is parsed once and every subsequent render across both runners reuses the
   AST. Rendering is never memoized (it varies per issue/attempt). The cache
-  is capped at #{16} templates so a live-reloaded `WORKFLOW.md` cannot grow
-  it without bound; a re-parse of an evicted template is the only cost.
+  is capped at #{@max_memoized} templates so a live-reloaded `WORKFLOW.md`
+  cannot grow it without bound; a re-parse of an evicted template is the only
+  cost. Writes funnel through `Raxol.Symphony.PromptBuilder.Memo` (a single
+  writer) so the cap holds under concurrent parses; reads stay lock-free
+  against `:persistent_term`.
+
+  On `:persistent_term` cost: every write is a `:persistent_term.put`, which
+  triggers a global GC. A WorkflowStore hot-reload of a changed template is a
+  new key, so a fresh parse -> put -> global GC; and once the memo is at the
+  cap, every new-template build rewrites the single entry (another put, another
+  global GC). This is acceptable only because template churn is low -- the
+  memo is read on every render but written rarely.
 
   Error returns:
 
@@ -29,6 +50,7 @@ defmodule Raxol.Symphony.PromptBuilder do
   """
 
   alias Raxol.Symphony.Issue
+  alias Raxol.Symphony.PromptBuilder.Memo
 
   @default_prompt "You are working on an issue from Linear."
 
@@ -61,50 +83,30 @@ defmodule Raxol.Symphony.PromptBuilder do
   # is memoized in ONE `:persistent_term` entry holding a bounded map from
   # template string to AST. Both runners re-render the SAME `WORKFLOW.md`
   # template on every fresh run of every issue; without this each run
-  # re-parses it. The read-often/write-rarely profile fits `:persistent_term`
-  # (a global GC fires only on a genuinely new template, which is rare).
+  # re-parses it. Reads are lock-free here; writes are serialized through the
+  # single-writer `Memo` so the FIFO bound holds under concurrent parses.
   #
   # A single entry, not one key per template, is deliberate: `WorkflowStore`
   # hot-reloads `WORKFLOW.md`, so a per-template key scheme would accumulate a
-  # never-evicted entry for every template ever seen. Here the map is capped
-  # at @max_memoized with FIFO eviction, so a live-edited template can never
-  # grow the cache without bound — an evicted template just re-parses on next
-  # use. Parse errors are not memoized (cheap, rare, and must stay observable).
-  @memo_key {__MODULE__, :parsed_templates}
-  @max_memoized 16
-
+  # never-evicted entry for every template ever seen. Parse errors are not
+  # memoized (cheap, rare, and must stay observable).
   defp parse_template(template) do
-    memo = :persistent_term.get(@memo_key, %{map: %{}, order: []})
+    memo = :persistent_term.get(@memo_key, @empty_memo)
 
     case Map.get(memo.map, template) do
-      nil -> parse_and_memoize(memo, template)
+      nil -> parse_and_memoize(template)
       parsed -> {:ok, parsed}
     end
   end
 
-  defp parse_and_memoize(memo, template) do
+  defp parse_and_memoize(template) do
     case Solid.parse(template) do
       {:ok, parsed} ->
-        :persistent_term.put(@memo_key, put_bounded(memo, template, parsed))
+        Memo.memoize(@memo_key, @max_memoized, template, parsed)
         {:ok, parsed}
 
       {:error, error} ->
         {:error, {:template_parse_error, error}}
-    end
-  end
-
-  # FIFO insert into the bounded memo: evict the oldest template when full so
-  # the entry never grows past @max_memoized across live template reloads.
-  defp put_bounded(%{map: map, order: order}, template, parsed) do
-    if map_size(map) >= @max_memoized do
-      {evict, rest} = List.pop_at(order, 0)
-
-      %{
-        map: map |> Map.delete(evict) |> Map.put(template, parsed),
-        order: rest ++ [template]
-      }
-    else
-      %{map: Map.put(map, template, parsed), order: order ++ [template]}
     end
   end
 

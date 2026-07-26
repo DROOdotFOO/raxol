@@ -88,4 +88,46 @@ defmodule Raxol.Symphony.PromptBuilderMemoTest do
     assert Map.has_key?(m.map, List.last(templates))
     refute Map.has_key?(m.map, List.first(templates))
   end
+
+  test "distinct templates parsed concurrently keep the memo bounded and consistent" do
+    # Far more distinct new templates than the cap, all racing through the
+    # parse+memoize path at once. The single-writer memo owner serializes the
+    # read-modify-write so the bound holds and order/map cannot drift.
+    1..200
+    |> Task.async_stream(
+      fn n ->
+        assert {:ok, _} =
+                 PromptBuilder.build(issue(), "t#{n} {{ issue.identifier }}")
+      end,
+      max_concurrency: 50,
+      ordered: false
+    )
+    |> Stream.run()
+
+    m = memo()
+
+    assert map_size(m.map) == @max_memoized
+    assert length(m.order) == @max_memoized
+    # No duplicate order entries, and order agrees exactly with the map keys.
+    assert Enum.uniq(m.order) == m.order
+    assert MapSet.new(m.order) == MapSet.new(Map.keys(m.map))
+  end
+
+  test "concurrent parses of the same new template do not double-insert" do
+    template = "same {{ issue.identifier }}"
+
+    1..50
+    |> Task.async_stream(
+      fn _ -> assert {:ok, _} = PromptBuilder.build(issue(), template) end,
+      max_concurrency: 50,
+      ordered: false
+    )
+    |> Stream.run()
+
+    m = memo()
+
+    assert map_size(m.map) == 1
+    assert length(m.order) == 1
+    assert m.order == Map.keys(m.map)
+  end
 end
