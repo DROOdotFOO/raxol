@@ -78,8 +78,6 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   @behaviour Raxol.Symphony.Runner
 
-  require Logger
-
   alias Raxol.Symphony.{Config, Issue, PromptBuilder, Runner}
 
   @compile {:no_warn_undefined,

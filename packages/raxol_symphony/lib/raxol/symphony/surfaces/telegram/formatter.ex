@@ -263,7 +263,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
     "\n<b>Pending retries</b>\n" <> rows
   end
 
-  defp snapshot_keyboard(running, paused \\ []) do
+  defp snapshot_keyboard(running, paused) do
     refresh = %{text: "Refresh", callback_data: "sym:refresh"}
 
     stop_buttons =
