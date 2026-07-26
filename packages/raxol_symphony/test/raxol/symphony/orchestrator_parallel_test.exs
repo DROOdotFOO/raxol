@@ -114,6 +114,34 @@ defmodule Raxol.Symphony.OrchestratorParallelTest do
     assert only.error =~ "boom"
   end
 
+  test "a paused slot is parked as resumable while its siblings continue" do
+    put_three_todos()
+    Noop.Director.set("MP-1", {:succeed_after, 10})
+    Noop.Director.set("MP-2", {:pause, :awaiting_review, %{token: 7}})
+    Noop.Director.set("MP-3", {:succeed_after, 10})
+
+    pid = start_orchestrator(parallel_config())
+    :ok = Orchestrator.subscribe(pid)
+    :ok = Orchestrator.tick_now(pid)
+
+    assert_receive {:symphony_event, :batch_exit, snap}, 2_000
+
+    # The paused issue parks (awaiting a resume); the two siblings run to
+    # completion and fan back to continuation retries.
+    assert snap.counts.paused == 1
+    assert snap.counts.retrying == 2
+
+    assert [parked] = snap.paused
+    assert parked.issue_identifier == "MP-2"
+    assert parked.interrupt_reason == :awaiting_review
+
+    # The parked entry carries the runner's resume token, so the run can be
+    # resumed later via `Orchestrator.resume_run/3`.
+    assert %{"b" => entry} = Orchestrator.paused(pid)
+    assert entry.resume_token == %{token: 7}
+    assert entry.interrupt_reason == :awaiting_review
+  end
+
   test "max_concurrent_agents caps the batch size below workflow_parallelism" do
     Memory.put_issues(for n <- 1..5, do: issue("id#{n}", "MP-#{n}", "Todo"))
     for n <- 1..5, do: Noop.Director.set("MP-#{n}", :stall)

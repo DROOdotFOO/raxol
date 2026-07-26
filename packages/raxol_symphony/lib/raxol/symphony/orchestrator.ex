@@ -711,8 +711,8 @@ defmodule Raxol.Symphony.Orchestrator do
     results = batch_results_map(entry, reason)
 
     entry.issues
-    |> Enum.reduce(state, fn %{issue: issue, attempt: attempt}, acc ->
-      apply_batch_issue_result(acc, issue, attempt, Map.get(results, issue.id))
+    |> Enum.reduce(state, fn %{issue: issue} = prepared, acc ->
+      apply_batch_issue_result(acc, prepared, Map.get(results, issue.id))
     end)
     |> notify_listeners(:batch_exit)
   end
@@ -729,20 +729,49 @@ defmodule Raxol.Symphony.Orchestrator do
     end)
   end
 
-  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, _attempt, :ok) do
+  defp apply_batch_issue_result(%State{} = state, %{issue: %Issue{} = issue}, :ok) do
     state
     |> Map.put(:completed, MapSet.put(state.completed, issue.id))
     |> schedule_continuation_retry(issue, 1)
   end
 
-  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, attempt, {:error, reason}) do
+  defp apply_batch_issue_result(
+         %State{} = state,
+         %{issue: %Issue{} = issue, attempt: attempt},
+         {:error, reason}
+       ) do
     schedule_failure_retry(state, issue, (attempt || 0) + 1, reason)
+  end
+
+  # A branch that paused mid-batch: park it as resumable exactly like a
+  # sequential worker pause. Siblings in the batch already completed; only
+  # this issue waits for an operator resume.
+  defp apply_batch_issue_result(%State{} = state, prepared, {:pause, reason, token})
+       when is_atom(reason) do
+    park_batch_pause(state, prepared, {reason, token})
   end
 
   # No result recorded for this slot (e.g. a candidate beyond the graph's slot
   # count). Re-check via a continuation retry rather than dropping it.
-  defp apply_batch_issue_result(%State{} = state, %Issue{} = issue, _attempt, nil) do
+  defp apply_batch_issue_result(%State{} = state, %{issue: %Issue{} = issue}, nil) do
     schedule_continuation_retry(state, issue, 1)
+  end
+
+  # Build a paused entry from the prepared batch slot and park it via the
+  # shared `park_paused/3`. Batch workers do not stream per-issue turn/token
+  # telemetry, so those fields take the running-entry defaults.
+  defp park_batch_pause(%State{} = state, prepared, {reason, token}) do
+    entry = %{
+      issue: prepared.issue,
+      attempt: prepared.attempt,
+      workspace_path: prepared.workspace_path,
+      last_event: nil,
+      last_message: nil,
+      turn_count: 0,
+      tokens: State.empty_tokens()
+    }
+
+    park_paused(state, entry, {reason, token})
   end
 
   defp record_batch_runtime(%State{} = state, entry) do
