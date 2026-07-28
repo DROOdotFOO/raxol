@@ -21,6 +21,16 @@ L1 destinations (stealth is an **X→L1 / L1↔L1** product; cross-chain stealth
 
 This is a DX/clarity change, not a security change. Riddler remains the enforcer.
 
+The settlement-agnostic `xochi_cross_chain_transfer` document is retained as the single
+"covers-everything" listing: one offering whose schema spans public/private/stealth across
+every supported token and chain. It self-describes the live corridor set (kept in lockstep
+with `Raxol.ACP.Xochi.CorridorAllowlist`, which mirrors the deployed Riddler route tables in
+`ansible-riddler`): USDC and USDT each across the full 5-chain EVM mesh, USDG on Robinhood
+Chain (4663) cross-asset in both directions (in from and out to USDC/USDT on any mesh
+chain), USDC<->USDT conversion, and ERC-5564 stealth to Ethereum L1. Its generated artifact
+is `priv/offering.json` (`mix acp.register_offering --offering legacy`); the narrower
+USDC-only listing stays at `priv/offering.usdc_public.json`.
+
 ## The two offerings
 
 | | `xochi_stable_public` | `xochi_stable_stealth` |

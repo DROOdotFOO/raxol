@@ -18,6 +18,22 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       assert "payments" in meta.tags
     end
 
+    test "advertises the full corridor set: USDC, USDT, USDG/Robinhood, and stealth" do
+      meta = Offering.offering_metadata()
+      desc = meta.description
+
+      assert desc =~ "USDC"
+      assert desc =~ "USDT"
+      assert desc =~ "USDG"
+      assert desc =~ "Robinhood"
+      assert desc =~ "4663"
+      assert desc =~ "stealth"
+
+      for tag <- ["usdt", "usdg", "robinhood", "stealth"] do
+        assert tag in meta.tags
+      end
+    end
+
     test "requirement and deliverable schemas are JSON-Schema 2020-12" do
       meta = Offering.offering_metadata()
 
@@ -57,6 +73,42 @@ defmodule Raxol.ACP.Xochi.OfferingTest do
       prop = schema["properties"]["settlement_preference"]
       assert prop["enum"] == ["public", "private", "stealth"]
       assert prop["default"] == "public"
+    end
+
+    test "chain and token descriptions advertise the Robinhood/USDT/USDG corridors" do
+      props = Offering.requirement_schema()["properties"]
+
+      # Robinhood Chain (4663) is discoverable as a source; USDG has no inbound.
+      assert props["src_chain_id"]["description"] =~ "4663"
+      assert props["src_chain_id"]["description"] =~ "Robinhood"
+      assert props["dst_chain_id"]["description"] =~ "Arbitrum"
+
+      # The three stablecoin families are named on the token legs.
+      assert props["src_token"]["description"] =~ "USDG"
+      assert props["src_token"]["description"] =~ "USDT"
+      assert props["dst_token"]["description"] =~ "cross-asset"
+    end
+
+    test "token/destination legs advertise EVM-only, not the unsupported Tron/Solana VMs" do
+      # Every advertised corridor is EVM (chains 1/10/137/8453/42161/4663), so the
+      # human-readable legs must not offer Tron/Solana as usable formats -- that
+      # would pass schema and fail at corridor gating (a late, confusing reject).
+      props = Offering.requirement_schema()["properties"]
+
+      for leg <- ["src_token", "dst_token", "destination"] do
+        desc = props[leg]["description"]
+        assert desc =~ "EVM"
+        refute desc =~ "Base58Check (Tron)"
+        refute desc =~ "base58 mint (Solana)"
+      end
+    end
+
+    test "every advertised chain is EVM (guards the EVM-only leg copy)" do
+      # If a non-EVM chain ever becomes supported, this fails and forces the
+      # Tron/Solana leg copy to be revisited in lockstep.
+      non_evm = [728_126_428]
+      supported = Raxol.Payments.Assets.supported_chain_ids()
+      assert Enum.all?(non_evm, &(&1 not in supported))
     end
   end
 
