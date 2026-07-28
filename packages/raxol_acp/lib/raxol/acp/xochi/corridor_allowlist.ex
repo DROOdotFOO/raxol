@@ -11,21 +11,20 @@ defmodule Raxol.ACP.Xochi.CorridorAllowlist do
   the solver cannot route -- e.g. USDT Arbitrum -> Base passes both leg checks but
   is not a relay corridor. This module adds the missing pair-level constraint.
 
-  ## The three stablecoin families (launch scope)
+  ## The corridor families (production scope)
 
     * **USDC** -- full mesh across the five CCTP chains `{1, 10, 137, 8453, 42161}`.
-      Settles via CCTP, not the relay route table, so every ordered pair is live.
-    * **USDT** -- the explicit relay corridor set only: Arbitrum <-> Polygon plus
-      the Polygon exits to the OP and Ethereum hubs. NOT Base (8453 is not a USDT
-      relay corridor). Mirrors Riddler's `Relay.Routes` `@usdt_corridors`
-      byte-for-byte.
-    * **USDG** -- Robinhood Chain (4663) drain only: `4663 -> USDC` on a hub
-      (Arbitrum or Base). Robinhood is USDG-in-only; there is no inbound route to
-      4663, and the fill is cross-asset (USDG on the Robinhood leg delivered as
-      USDC on the hub).
+      Settles via CCTP, so every ordered pair is live.
+    * **USDT** -- full mesh across the same five EVM chains via relay.link: every
+      ordered pair (Base included). Mirrors Riddler's `Relay.Routes` `@usdt_chains`.
+    * **USDG** -- Robinhood Chain (4663) is USDG-only, settling cross-asset in both
+      directions: an inbound entry (USDC or USDT on a mesh chain -> USDG on 4663)
+      and an exit drain (USDG on 4663 -> USDC or USDT on any mesh chain). Mirrors
+      Riddler's cross-token pairs + the relay drain to any USDC chain.
+    * **USDC <-> USDT** -- cross-asset conversion across the mesh, either direction
+      (Riddler `cross_token_pairs`). Inventory-bounded by the solver at quote time.
 
-  Everything else -- WETH/ETH, USDT on Base, USDG inbound, and any unlisted route
-  -- is declined.
+  Everything else -- WETH/ETH and any unlisted route -- is declined.
 
   ## Enforcement
 
@@ -34,32 +33,23 @@ defmodule Raxol.ACP.Xochi.CorridorAllowlist do
   in dev/test unless `config :raxol_acp, :stablecoin_corridors_only, true`, so the
   broader token-fillable behavior remains available for non-launch contexts.
 
-  TODO(xochi-fi/xochi#135 item 2): replace this hardcoded matrix with the solver's
+  This static matrix tracks the deployed Riddler route tables + cross-token pairs
+  (`ansible-riddler` `host_vars/riddler-axol.yml`); the finer per-corridor
+  inventory ceilings stay with the solver, which declines a drained float at quote
+  time. TODO(xochi-fi/xochi#135 item 2): replace it with the solver's
   machine-readable capability endpoint when it ships, so the gate tracks the
-  solver's real routes instead of a static list. Riddler already fills more USDG
-  hubs than the launch scope lists here (any USDC chain, not just Arb/Base); widen
-  once the endpoint confirms them.
+  solver's real routes instead of a static list.
   """
 
   # The five CCTP chains for USDC (full mesh). Mirrors Riddler's `@usdc_chains`.
   @usdc_chains [1, 10, 137, 8453, 42_161]
 
-  # The explicit USDT relay corridors (origin/dest both USDT). Arbitrum (42161)
-  # and Polygon (137) are the USDT0 sources; OP (10) and Ethereum (1) are hub
-  # exits. Byte-for-byte with Riddler's `Relay.Routes` `@usdt_corridors`.
-  @usdt_corridors [
-    {42_161, 137},
-    {137, 42_161},
-    {137, 10},
-    {137, 1}
-  ]
+  # USDT is a full any-direction relay mesh across the same five EVM chains (Base
+  # included). Mirrors Riddler's `Relay.Routes` `@usdt_chains` (riddler #526).
+  @usdt_chains [1, 10, 137, 8453, 42_161]
 
-  # USDG drain from Robinhood Chain (4663) to a USDC hub. Drain direction only --
-  # Robinhood is USDG-in with no inbound route.
-  @usdg_corridors [
-    {4663, 42_161},
-    {4663, 8453}
-  ]
+  # Robinhood Chain: USDG lives only here, so every USDG leg pivots on 4663.
+  @robinhood 4663
 
   @doc """
   Whether the corridor `from -> to` is allowed for the given resolved leg symbols.
@@ -72,9 +62,23 @@ defmodule Raxol.ACP.Xochi.CorridorAllowlist do
   def allowed?("USDC", "USDC", from, to),
     do: from != to and from in @usdc_chains and to in @usdc_chains
 
-  def allowed?("USDT", "USDT", from, to), do: {from, to} in @usdt_corridors
+  def allowed?("USDT", "USDT", from, to),
+    do: from != to and from in @usdt_chains and to in @usdt_chains
 
-  def allowed?("USDG", "USDC", from, to), do: {from, to} in @usdg_corridors
+  # USDG exit drain: Robinhood -> USDC or USDT on any mesh chain.
+  def allowed?("USDG", "USDC", @robinhood, to), do: to in @usdc_chains
+  def allowed?("USDG", "USDT", @robinhood, to), do: to in @usdt_chains
+
+  # USDG inbound entry: USDC or USDT on a mesh chain -> Robinhood USDG.
+  def allowed?("USDC", "USDG", from, @robinhood), do: from in @usdc_chains
+  def allowed?("USDT", "USDG", from, @robinhood), do: from in @usdt_chains
+
+  # USDC <-> USDT cross-asset conversion across the mesh, either direction.
+  def allowed?("USDC", "USDT", from, to),
+    do: from != to and from in @usdc_chains and to in @usdt_chains
+
+  def allowed?("USDT", "USDC", from, to),
+    do: from != to and from in @usdt_chains and to in @usdc_chains
 
   def allowed?(_src, _dst, _from, _to), do: false
 
@@ -99,11 +103,21 @@ defmodule Raxol.ACP.Xochi.CorridorAllowlist do
   """
   @spec corridors() :: [{String.t(), String.t(), pos_integer(), pos_integer()}]
   def corridors do
-    usdc =
-      for from <- @usdc_chains, to <- @usdc_chains, from != to, do: {"USDC", "USDC", from, to}
+    usdc = for from <- @usdc_chains, to <- @usdc_chains, from != to, do: {"USDC", "USDC", from, to}
+    usdt = for from <- @usdt_chains, to <- @usdt_chains, from != to, do: {"USDT", "USDT", from, to}
 
-    usdt = for {from, to} <- @usdt_corridors, do: {"USDT", "USDT", from, to}
-    usdg = for {from, to} <- @usdg_corridors, do: {"USDG", "USDC", from, to}
-    usdc ++ usdt ++ usdg
+    usdg_out =
+      (for to <- @usdc_chains, do: {"USDG", "USDC", @robinhood, to}) ++
+        (for to <- @usdt_chains, do: {"USDG", "USDT", @robinhood, to})
+
+    usdg_in =
+      (for from <- @usdc_chains, do: {"USDC", "USDG", from, @robinhood}) ++
+        (for from <- @usdt_chains, do: {"USDT", "USDG", from, @robinhood})
+
+    cross =
+      (for from <- @usdc_chains, to <- @usdt_chains, from != to, do: {"USDC", "USDT", from, to}) ++
+        (for from <- @usdt_chains, to <- @usdc_chains, from != to, do: {"USDT", "USDC", from, to})
+
+    usdc ++ usdt ++ usdg_out ++ usdg_in ++ cross
   end
 end

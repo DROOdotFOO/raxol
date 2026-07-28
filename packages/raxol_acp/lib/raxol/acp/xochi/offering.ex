@@ -76,8 +76,14 @@ defmodule Raxol.ACP.Xochi.Offering do
         "Cross-chain stablecoin settlement storefront. The buyer signs a Xochi " <>
           "intent, the storefront relays it and returns the settlement tx hashes; " <>
           "the buyer escrows only the storefront fee (a plain job, no fund hook). " <>
-          "The buyer may settle to a different recipient or an ERC-5564 stealth " <>
-          "address by signing it into their intent; the storefront relays it verbatim.",
+          "Supported settlement: USDC and USDT each across the full 5-chain EVM mesh " <>
+          "(Ethereum, Optimism, Polygon, Base, Arbitrum); USDG on Robinhood Chain (4663), " <>
+          "cross-asset in both directions (USDC/USDT in -> USDG, and USDG -> USDC/USDT out " <>
+          "on any mesh chain); and USDC<->USDT cross-asset conversion. Order size min " <>
+          "$1.00, max bounded by the solver's per-token caps (e.g. USDT ~$1,000, USDG " <>
+          "~$10,000). The buyer may settle publicly to a wallet, or privately to a " <>
+          "one-time ERC-5564 stealth address on Ethereum L1, by signing the choice into " <>
+          "their intent; the storefront relays it verbatim.",
       # No funds move through ACP: the buyer's capital moves via their signed Xochi
       # intent (off-ACP), so the job takes no fund hook. The listed fee is a
       # percentage (0.10 = 10 bps); price carries the value, not a USDC amount.
@@ -88,7 +94,18 @@ defmodule Raxol.ACP.Xochi.Offering do
       sla_minutes: 10,
       requirement_schema: requirement_schema(),
       deliverable_schema: deliverable_schema(),
-      tags: ["payments", "cross-chain", "stablecoin", "xochi"]
+      tags: [
+        "payments",
+        "cross-chain",
+        "stablecoin",
+        "xochi",
+        "usdc",
+        "usdt",
+        "usdg",
+        "robinhood",
+        "stealth",
+        "privacy"
+      ]
     }
   end
 
@@ -111,29 +128,40 @@ defmodule Raxol.ACP.Xochi.Offering do
       "properties" => %{
         "src_chain_id" => %{
           "type" => "integer",
-          "description" => "Source chain ID (e.g. 8453 for Base mainnet)."
+          "description" =>
+            "Source chain ID. Supported: 1 (Ethereum), 10 (Optimism), 137 (Polygon), " <>
+              "8453 (Base), 42161 (Arbitrum), and 4663 (Robinhood Chain). USDG lives " <>
+              "only on 4663."
         },
         "dst_chain_id" => %{
           "type" => "integer",
-          "description" => "Destination chain ID."
+          "description" =>
+            "Destination chain ID. Supported: 1 (Ethereum), 10 (Optimism), 137 " <>
+              "(Polygon), 8453 (Base), 42161 (Arbitrum), and 4663 (Robinhood Chain, as a " <>
+              "USDG destination). Stealth settles on Ethereum L1 (1)."
         },
         "src_token" => %{
           "type" => "string",
           "pattern" =>
             "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
           "description" =>
-            "Token address being sent on src_chain_id: 0x-hex (EVM), " <>
-              "Base58Check (Tron), or base58 mint (Solana). Validated " <>
-              "per-chain against the solver capability matrix before escrow."
+            "Token address being sent on src_chain_id, as a 0x-hex EVM address. " <>
+              "Supported tokens: USDC, USDT, and USDG (USDG on Robinhood Chain 4663 " <>
+              "only). All supported chains are EVM; non-EVM legs (Tron, Solana) are not " <>
+              "yet supported and are rejected before escrow. Validated per-chain against " <>
+              "the solver capability matrix before escrow."
         },
         "dst_token" => %{
           "type" => "string",
           "pattern" =>
             "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
           "description" =>
-            "Token address to be received on dst_chain_id: 0x-hex (EVM), " <>
-              "Base58Check (Tron), or base58 mint (Solana). Validated " <>
-              "per-chain against the solver capability matrix before escrow."
+            "Token address to be received on dst_chain_id, as a 0x-hex EVM address. " <>
+              "Supported tokens: USDC, USDT, and USDG (USDG only on Robinhood Chain " <>
+              "4663). Legs may be cross-asset (USDG in/out, or USDC<->USDT). All " <>
+              "supported chains are EVM; non-EVM legs (Tron, Solana) are not yet " <>
+              "supported and are rejected before escrow. Validated per-chain against the " <>
+              "solver capability matrix before escrow."
         },
         "amount_atomic" => %{
           "type" => "string",
@@ -192,8 +220,9 @@ defmodule Raxol.ACP.Xochi.Offering do
             "^(0x[0-9a-fA-F]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$",
           "description" =>
             "Optional: the recipient the buyer signed into their Xochi intent, for " <>
-              "the buyer's or evaluator's audit trail. raxol does not use or enforce " <>
-              "it; the destination is fixed by the buyer's signature."
+              "the buyer's or evaluator's audit trail, as a 0x-hex EVM address (all " <>
+              "supported chains are EVM). raxol does not use or enforce it; the " <>
+              "destination is fixed by the buyer's signature."
         },
         "slippage_bps" => %{
           "type" => "integer",
@@ -208,8 +237,9 @@ defmodule Raxol.ACP.Xochi.Offering do
           "default" => "public",
           "description" =>
             "Optional audit hint of the privacy tier the buyer signed. \"stealth\" " <>
-              "records an ERC-5564 stealth delivery: the buyer signed the stealth " <>
-              "spending/viewing keys and an ephemeral recipient into their Xochi " <>
+              "records an ERC-5564 stealth delivery to a one-time address on Ethereum " <>
+              "L1 (chain 1; cross-chain stealth is not yet live): the buyer signed the " <>
+              "stealth spending/viewing keys and an ephemeral recipient into their Xochi " <>
               "intent, so funds land at a stealth address they control. raxol relays " <>
               "whatever the buyer signed and does not gate on this."
         }

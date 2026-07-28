@@ -359,11 +359,10 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
       assert {:accept, ^to_base} = TransferOffering.handle_request(to_base, @ctx)
     end
 
-    test "USDT on Base is declined -- not a relay corridor" do
+    test "USDT on Base is now a corridor (full 5-chain relay mesh)" do
       r = req(%{"src_token" => @usdt_base, "dst_token" => @usdt_arb})
 
-      assert {:reject, {:unsupported_corridor, 8453, 42_161}} =
-               TransferOffering.handle_request(r, @ctx)
+      assert {:accept, ^r} = TransferOffering.handle_request(r, @ctx)
     end
 
     test "WETH is declined -- volatile, not a launch stablecoin" do
@@ -373,7 +372,7 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
                TransferOffering.handle_request(r, @ctx)
     end
 
-    test "USDG inbound to Robinhood is declined -- drain direction only" do
+    test "USDG inbound to Robinhood is now accepted (cross-token entry)" do
       r =
         req(%{
           "src_chain_id" => 42_161,
@@ -382,8 +381,7 @@ defmodule Raxol.ACP.Xochi.TransferOfferingTest do
           "dst_token" => @usdg_robinhood
         })
 
-      assert {:reject, {:unsupported_corridor, 42_161, 4663}} =
-               TransferOffering.handle_request(r, @ctx)
+      assert {:accept, ^r} = TransferOffering.handle_request(r, @ctx)
     end
   end
 end
