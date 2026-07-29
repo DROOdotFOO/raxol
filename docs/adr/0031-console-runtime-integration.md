@@ -158,6 +158,13 @@ registration remain):
   transformed params are re-authorized. `Dynamic.from_mcp/3` / `from_client/2` wrap a
   `Raxol.MCP.Client` server's tool listing (invoke calls `call_tool/3`). This is the piece the
   external-MCP path was missing; the full raxol_agent suite (1958) stays green.
+- MCP server bundling (2026-07-30): `Raxol.Agent.McpBundle` starts a set of external MCP servers from
+  specs and wraps each server's tools as `Dynamic` values, fail-open per server (a broken or
+  uninstalled server is skipped, never denying the rest). `default_servers/1` is the recommended
+  catalog (filesystem, fetch, git, time, sequential-thinking). Client start is injectable, so it is
+  unit-tested against an in-process fake server (no npx/uvx dependency). This is step (2) of the
+  40-plus route; `raxol_console`'s `Boot` will call `McpBundle.load(McpBundle.default_servers(...))`
+  at provision and add the tools to the agent's `:actions`.
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 

@@ -84,7 +84,7 @@ Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/ac
 | `:raxol` package target | Generator emits a raxol-targeted `soul.md`/`AGENTS.md`/`tasks.json`/`skills/`; `Console.Package` parses it back (round-trip tested) | S | DONE |
 | Stage-3 seam | A scheduled task runs under the soul.md persona and delivers to a gateway channel (`Fire.runner` + `Scheduler.Delivery.gateway`), proven end-to-end | S | DONE |
 | `raxol_console` loader | New top-of-graph package: `Package` -> `RuntimeConfig` -> `Boot` on the gateway stack, plus a `Console.Bench.Adapter` for self-validation | M | Next |
-| Tool breadth to 40+ | MCP dynamic-dispatch seam DONE (`Action.Dynamic` runs external MCP-server tools through the ReAct loop's authorizer + hook chain). Remaining: bundle a default `.mcp.json` (filesystem/fetch/git) at provision. 25 built-ins today | S | In progress |
+| Tool breadth to 40+ | DONE: dynamic-dispatch seam (`Action.Dynamic`) + `Agent.McpBundle` (starts a default server set fail-open, wraps each server's tools). 25 built-ins + a bundled filesystem/fetch/git/... set -> ~50 callable tools. `raxol_console` `Boot` calls `McpBundle.load(default_servers(...))` at provision | S | Built (Boot wiring pending) |
 | Native ACP registration | Scaffold now: `Chain` registry-address field, `JobApi.HTTP` `POST /agents`, seller `register_me` callback (reuses `Auth` JWT). Then on-chain `HookClient.register_agent` + identity (ERC-8004/8183) | M | Partial / partner-blocked |
 | TEA app_module handler | Optional `Handler.Lifecycle` runtime mode for a stateful per-chat UI (issue #763) | M | Deferred |
 
