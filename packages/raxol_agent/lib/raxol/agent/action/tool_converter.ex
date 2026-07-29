@@ -9,20 +9,28 @@ defmodule Raxol.Agent.Action.ToolConverter do
   the LLM's tool call response back to the matching Action module.
   """
 
+  alias Raxol.Agent.Action.Dynamic
   alias Raxol.Agent.ToolCall.Hook
   alias Raxol.Agent.ToolPolicy
 
+  @typedoc """
+  A tool the loop can offer and dispatch: an Action module, or a
+  `Raxol.Agent.Action.Dynamic` (a runtime-discovered tool, e.g. an MCP tool).
+  """
+  @type tool :: module() | Dynamic.t()
+
   @doc """
-  Convert action modules to tool definitions for LLM API calls.
+  Convert tools (Action modules and/or `Dynamic` tools) to LLM tool definitions.
 
   Returns a list of JSON Schema function tool definitions.
   """
-  @spec to_tool_definitions([module()]) :: [map()]
-  def to_tool_definitions(action_modules) when is_list(action_modules) do
-    Enum.map(action_modules, fn module ->
-      module.to_tool_definition()
-    end)
+  @spec to_tool_definitions([tool()]) :: [map()]
+  def to_tool_definitions(tools) when is_list(tools) do
+    Enum.map(tools, &tool_definition/1)
   end
+
+  defp tool_definition(%Dynamic{} = tool), do: Dynamic.to_tool_definition(tool)
+  defp tool_definition(module) when is_atom(module), do: module.to_tool_definition()
 
   # Max nesting depth for LLM-supplied argument maps
   @max_arg_depth 4
@@ -66,17 +74,17 @@ defmodule Raxol.Agent.Action.ToolConverter do
   """
   @type effect :: Raxol.Agent.Directive.t()
 
-  @spec dispatch_tool_call(map(), [module()], map()) ::
+  @spec dispatch_tool_call(map(), [tool()], map()) ::
           {:ok, map()} | {:ok, map(), [effect()]} | {:error, term()}
-  def dispatch_tool_call(tool_call, action_modules, context \\ %{}) do
+  def dispatch_tool_call(tool_call, tools, context \\ %{}) do
     name = Map.get(tool_call, "name") || Map.get(tool_call, :name)
     raw_args = Map.get(tool_call, "arguments") || Map.get(tool_call, :arguments, %{})
 
-    with {:ok, module} <- find_action(name, action_modules),
-         {:ok, params} <- parse_arguments(raw_args, module),
+    with {:ok, tool} <- find_action(name, tools),
+         {:ok, params} <- parse_arguments(raw_args, tool),
          :ok <- validate_arg_limits(params),
-         :ok <- authorize_tool(module, params, context) do
-      run_hooked(module, params, name, tool_call, action_modules, context)
+         :ok <- authorize_tool(tool, params, context) do
+      run_hooked(tool, params, name, tool_call, tools, context)
     end
   end
 
@@ -86,14 +94,14 @@ defmodule Raxol.Agent.Action.ToolConverter do
   # pipeline (Raxol.Agent.ToolCall.Hook) runs immediately before the Action --
   # hooks may transform the call or veto it. Zero registered hooks takes the
   # fast path (behavior unchanged).
-  defp run_hooked(module, params, name, tool_call, action_modules, context) do
+  defp run_hooked(tool, params, name, tool_call, tools, context) do
     case Hook.from_context(context) do
       [] ->
-        module.call(params, context)
+        invoke(tool, params, context)
 
       hooks ->
         call = %{
-          action: module,
+          action: tool,
           name: name,
           params: params,
           call_id: Map.get(tool_call, "id") || Map.get(tool_call, :id)
@@ -101,7 +109,7 @@ defmodule Raxol.Agent.Action.ToolConverter do
 
         case Hook.run_before(hooks, call, context) do
           {:cont, final_call} ->
-            run_authorized_call(module, params, final_call, action_modules, context, hooks)
+            run_authorized_call(tool, params, final_call, tools, context, hooks)
 
           {:halt, reason} ->
             {:error, {:vetoed, reason}}
@@ -140,18 +148,18 @@ defmodule Raxol.Agent.Action.ToolConverter do
   #      amount, not cheap-skipped on action identity alone (U8 fund-movement
   #      approval builds on this).
   defp run_authorized_call(
-         orig_module,
+         orig_tool,
          orig_params,
          %{action: action, params: params} = final_call,
-         action_modules,
+         tools,
          context,
          hooks
        ) do
-    with :ok <- ensure_in_toolset(orig_module, action, action_modules),
+    with :ok <- ensure_in_toolset(orig_tool, action, tools),
          :ok <- assert_callable(action),
          :ok <- validate_arg_limits(params),
-         :ok <- reauthorize_if_transformed(orig_module, orig_params, action, params, context) do
-      result = action.call(params, context)
+         :ok <- reauthorize_if_transformed(orig_tool, orig_params, action, params, context) do
+      result = invoke(action, params, context)
       Hook.run_after(hooks, final_call, result, context)
     end
   end
@@ -159,19 +167,24 @@ defmodule Raxol.Agent.Action.ToolConverter do
   # The original module came from find_action/2, so it is in-set by
   # construction (repeated var = unchanged action -> skip). A swap must be a
   # member of the declared set.
-  defp ensure_in_toolset(same, same, _action_modules), do: :ok
+  defp ensure_in_toolset(same, same, _tools), do: :ok
 
-  defp ensure_in_toolset(_orig, new_module, action_modules) do
-    if new_module in action_modules,
+  defp ensure_in_toolset(_orig, new_tool, tools) do
+    if new_tool in tools,
       do: :ok,
-      else: {:error, {:tool_not_in_toolset, new_module}}
+      else: {:error, {:tool_not_in_toolset, new_tool}}
   end
 
-  defp assert_callable(action) do
+  defp assert_callable(%Dynamic{invoke: fun}) when is_function(fun, 2), do: :ok
+  defp assert_callable(%Dynamic{}), do: {:error, {:invalid_action, :dynamic}}
+
+  defp assert_callable(action) when is_atom(action) do
     if function_exported?(action, :call, 2),
       do: :ok,
       else: {:error, {:invalid_action, action}}
   end
+
+  defp assert_callable(_other), do: {:error, {:invalid_action, :not_callable}}
 
   # Cheap-skip ONLY when the whole (action, params) pair is byte-identical to
   # what the pre-hook authorize_tool already cleared (repeated vars = equality).
@@ -188,19 +201,19 @@ defmodule Raxol.Agent.Action.ToolConverter do
   # (fund-movers) while allowing read-only tools. Set a `:tool_authorizer` to
   # override (e.g. `ToolPolicy.allow_all/0` for a trusted operator). See
   # `Raxol.Agent.ToolPolicy`.
-  defp authorize_tool(module, params, %{tool_authorizer: fun} = context)
+  defp authorize_tool(tool, params, %{tool_authorizer: fun} = context)
        when is_function(fun, 3) do
-    run_authorizer(fun, module, params, context)
+    run_authorizer(fun, tool, params, context)
   end
 
-  defp authorize_tool(module, params, context) do
-    run_authorizer(ToolPolicy.deny_sensitive(), module, params, context)
+  defp authorize_tool(tool, params, context) do
+    run_authorizer(ToolPolicy.deny_sensitive(), tool, params, context)
   end
 
-  defp run_authorizer(fun, module, params, context) do
-    case fun.(module, params, context) do
+  defp run_authorizer(fun, tool, params, context) do
+    case fun.(tool, params, context) do
       :ok -> :ok
-      {:deny, reason} -> {:error, {:tool_denied, module.__action_meta__().name, reason}}
+      {:deny, reason} -> {:error, {:tool_denied, tool_name(tool), reason}}
     end
   end
 
@@ -272,12 +285,19 @@ defmodule Raxol.Agent.Action.ToolConverter do
 
   # -- Private ---------------------------------------------------------------
 
-  defp find_action(name, action_modules) do
-    case Enum.find(action_modules, fn mod -> mod.__action_meta__().name == name end) do
+  defp find_action(name, tools) do
+    case Enum.find(tools, fn tool -> tool_name(tool) == name end) do
       nil -> {:error, {:unknown_tool, name}}
-      module -> {:ok, module}
+      tool -> {:ok, tool}
     end
   end
+
+  # A tool is an Action module (atom) or a `Dynamic` (runtime-discovered).
+  defp tool_name(%Dynamic{name: name}), do: name
+  defp tool_name(module) when is_atom(module), do: module.__action_meta__().name
+
+  defp invoke(%Dynamic{invoke: fun}, params, context), do: fun.(params, context)
+  defp invoke(module, params, context) when is_atom(module), do: module.call(params, context)
 
   defp parse_arguments(args, _action_module) when is_map(args) do
     {:ok, atomize_keys(args)}
