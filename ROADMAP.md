@@ -75,6 +75,21 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
 
+### Console runtime (Virtuals ACP)
+
+Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/acp/new`), beside Hermes and OpenClaw, with web3 native to the runtime (native `raxol_acp` plus the payment rails) rather than a bolted-on skill. Design in ADR-0031. It is the inverse of the `custom_console_agent` offering that already generates deployment packages for the other two runtimes.
+
+| Item | What | Effort | Status |
+| ---- | ---- | ------ | ------ |
+| `:raxol` package target | Generator emits a raxol-targeted `soul.md`/`AGENTS.md`/`tasks.json`/`skills/`; `Console.Package` parses it back (round-trip tested) | S | DONE |
+| Stage-3 seam | A scheduled task runs under the soul.md persona and delivers to a gateway channel (`Fire.runner` + `Scheduler.Delivery.gateway`), proven end-to-end | S | DONE |
+| `raxol_console` loader | New top-of-graph package: `Package` -> `RuntimeConfig` -> `Boot` on the gateway stack, plus a `Console.Bench.Adapter` for self-validation | M | Next |
+| Tool breadth to 40+ | Bundle standard external MCP servers through `MCP.Client` at provision time (infra exists) | S | Next |
+| Native ACP registration | On-chain Service Registry seller registration plus identity (ERC-8004/8183) | M | Blocked (partner) |
+| TEA app_module handler | Optional `Handler.Lifecycle` runtime mode for a stateful per-chat UI (issue #763) | M | Deferred |
+
+The load-bearing unknown is external: the Console's third-party runtime-registration and container contract is undocumented, escalated to Virtuals (`~/Desktop/virtuals-console-runtime-questions.md`).
+
 ### FATE-style Cross-Platform Test Bench
 
 Model: FFmpeg's FATE (end-to-end reference-hash suite over a distributed runner network) plus checkasm (a pure reference *oracle* that an optimized path must match byte-for-byte), adapted to Nix-pinned self-hosted runners spanning x86_64 and aarch64 (Linux + Darwin) over a Tailscale mesh. The flake *is* the bench: `checks.<system>`, `packages.raxol-burrito-<triple>`, and a NixOS runner config are all flake outputs, so every runner is reproducible and architecture is the only variable, not environment drift. Closes three current gaps: the `termbox2` NIF is skipped in all CI today (`SKIP_TERMBOX2_TESTS=true`), there is no aarch64-linux tier, and the swarm/CRDT paths never run against a real multi-node cluster. All four layers are planned.
