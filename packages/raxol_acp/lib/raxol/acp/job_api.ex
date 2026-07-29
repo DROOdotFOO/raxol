@@ -56,6 +56,18 @@ defmodule Raxol.ACP.JobApi do
               deliverable :: term()
             ) :: :ok | {:error, term()}
 
+  @doc """
+  Register or update this agent's off-chain record (name, description, cluster,
+  offerings). Optional: an adapter that does not implement it makes
+  `register_agent/2` return `{:error, :registration_unsupported}`. The exact
+  endpoint and payload are pending confirmation from Virtuals; `Mock` implements
+  it for the registration flow (`Raxol.ACP.Seller.Registration`).
+  """
+  @callback register_agent(t(), registration :: map()) ::
+              {:ok, agent_detail()} | {:error, term()}
+
+  @optional_callbacks register_agent: 2
+
   # -- Dispatch --
 
   @spec browse_agents(t(), String.t(), browse_params()) ::
@@ -80,5 +92,12 @@ defmodule Raxol.ACP.JobApi do
           :ok | {:error, term()}
   def post_deliverable(api, chain_id, job_id, deliverable) do
     api.adapter.post_deliverable(api, chain_id, job_id, deliverable)
+  end
+
+  @spec register_agent(t(), map()) :: {:ok, agent_detail()} | {:error, term()}
+  def register_agent(api, registration) do
+    if function_exported?(api.adapter, :register_agent, 2),
+      do: api.adapter.register_agent(api, registration),
+      else: {:error, :registration_unsupported}
   end
 end

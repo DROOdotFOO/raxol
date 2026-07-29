@@ -165,6 +165,15 @@ registration remain):
   unit-tested against an in-process fake server (no npx/uvx dependency). This is step (2) of the
   40-plus route; `raxol_console`'s `Boot` will call `McpBundle.load(McpBundle.default_servers(...))`
   at provision and add the tools to the agent's `:actions`.
+- ACP registration scaffolding (2026-07-30): the non-blocked structure is in place. `Chain` gains
+  `service_registry_address` / `identity_registry_address` (nil until Virtuals publishes them) plus a
+  `require_service_registry/1` fail-closed gate; `JobApi` gains an optional `register_agent/2`
+  callback (implemented by `Mock`, unsupported-by-default on the `HTTP` adapter); and
+  `Raxol.ACP.Seller.Registration.ensure_registered/3` encodes the idempotent, fail-closed
+  check-then-register logic. The two Virtuals-gated pieces (the registry address and the registration
+  endpoint or ABI) are isolated behind the `Chain` gate and the `JobApi` seam, so confirming them is a
+  config + adapter change, not a rewrite. Not wired at boot yet: with a nil address it would only ever
+  fail closed.
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 

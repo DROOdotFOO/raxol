@@ -91,7 +91,24 @@ defmodule Raxol.ACP.JobApi.Mock do
   @impl Raxol.ACP.JobApi
   def get_me(%{config: %{table: table}}) do
     [{:me, me}] = :ets.lookup(table, :me)
-    {:ok, me}
+
+    case me do
+      nil -> {:error, :not_found}
+      {:error, _} = err -> err
+      detail -> {:ok, detail}
+    end
+  end
+
+  @impl Raxol.ACP.JobApi
+  def register_agent(%{config: %{table: table}}, registration) do
+    detail =
+      Map.merge(
+        %{wallet_address: "0x" <> String.duplicate("ab", 20), name: "raxol-agent"},
+        registration
+      )
+
+    :ets.insert(table, {:me, detail})
+    {:ok, detail}
   end
 
   @impl Raxol.ACP.JobApi
