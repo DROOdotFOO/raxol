@@ -152,19 +152,33 @@ registration remain):
   full console suite is 25 tests green.
 - The Stage-3 persona and delivery seam is proven end-to-end (see "Validation").
 
-Two audit findings (2026-07-29) shape the remaining work:
+Two audit findings (2026-07-29, deep read) shape the remaining work:
 
-- Native ACP has the transacting path (chain config with the verified `acp_core_address`,
-  `HookClient`, `ProviderAdapter`) and client-side discovery (`Agent.browse_agents`), but on-chain
-  Service Registry *seller* registration (wallet id, signer, builder or attribution code) and
-  on-chain identity or reputation (ERC-8004 versus ERC-8183, unresolved) are gaps. Both depend on the
-  Virtuals answers (which standard, the exact registry address and ABI). Note: `chain.ex` carries the
-  fund-transfer hook at `0x0EaD2515...`, verified against `acp-node-v2`; trust it over other cited
-  values.
-- Built-in tools number roughly 25 to 30 verbs across about 13 Action modules, under the advertised
-  40-plus. `Raxol.MCP.Client` and `Agent.MCPClient` already let the runtime consume external MCP
-  servers, so the cheap and correct route to 40-plus is bundling standard MCP servers at provision
-  time rather than writing more built-in tools.
+- **ACP registration.** The transacting path exists (`chain.ex` with the verified `acp_core_address`,
+  `HookClient`, `ProviderAdapter`) and buyer-side discovery exists (`Agent.browse_agents`;
+  `JobApi.get_me` only *reads* the agent record). Seller registration is delegated out of the runtime
+  today: the `acp-cli` / dashboard per RUNBOOK, and `mix acp.register_offering` only emits JSON for
+  manual upload (it POSTs nowhere). Gaps: `chain.ex` has no `service_registry_address` field, there is
+  no seller `register_me` / `upsert_agent` call, and no on-chain identity or reputation is modeled.
+  ERC-8004 is absent from the codebase; only ERC-8183 is named, and only in `MIGRATION_V2.md` prose.
+  Scaffoldable now behind the unknowns: a registry-address config field in `Chain`, a `POST /agents`
+  path in `JobApi.HTTP`, and a seller self-registration `JobApi` callback reusing the existing `Auth`
+  JWT (`POST /auth/agent`). Blocked on Virtuals: the on-chain `HookClient.register_agent` (needs the
+  canonical standard, the registry address, and its ABI) and modeling identity/reputation. Note:
+  `chain.ex` carries the fund-transfer hook at `0x0EaD2515...`, verified against `acp-node-v2`; trust
+  it over other cited values.
+- **Tool count.** 25 distinct built-in tool names (31 counting the `cronjob` action's internal
+  verbs); the default coding agent advertises only ~9 to 10, and the MCP surface adds a fixed ~9
+  (`agent.list` / `send` / `get_model`, `discover_tools`, five adaptive), so the best fixed case is
+  ~34, under the advertised 40-plus. Component-tree tool derivation (ADR-0012) adds real `tools/list`
+  entries per interactive widget, but they are dynamic and view-specific, not a stable product-level
+  tally. `Raxol.MCP.Client` can connect to and *list* external MCP servers, but their tools are **not
+  yet callable from the agent's ReAct loop**: the loop dispatches only to `Action` modules, and the
+  dynamic-dispatch seam for runtime-discovered tools is a documented, unbuilt follow-up
+  (`agent/code/mcp_config.ex`). So the cheapest defensible route to 40-plus is (1) build that one
+  dispatch seam, then (2) bundle a default set of standard MCP servers (filesystem, fetch, git, and
+  optionally time / sequential-thinking) at provision time, which clears 40-plus with real
+  capabilities rather than ~15 hand-written Actions.
 
 ## Consequences
 

@@ -84,8 +84,8 @@ Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/ac
 | `:raxol` package target | Generator emits a raxol-targeted `soul.md`/`AGENTS.md`/`tasks.json`/`skills/`; `Console.Package` parses it back (round-trip tested) | S | DONE |
 | Stage-3 seam | A scheduled task runs under the soul.md persona and delivers to a gateway channel (`Fire.runner` + `Scheduler.Delivery.gateway`), proven end-to-end | S | DONE |
 | `raxol_console` loader | New top-of-graph package: `Package` -> `RuntimeConfig` -> `Boot` on the gateway stack, plus a `Console.Bench.Adapter` for self-validation | M | Next |
-| Tool breadth to 40+ | Bundle standard external MCP servers through `MCP.Client` at provision time (infra exists) | S | Next |
-| Native ACP registration | On-chain Service Registry seller registration plus identity (ERC-8004/8183) | M | Blocked (partner) |
+| Tool breadth to 40+ | Build the MCP dynamic-dispatch seam (runtime-discovered tools into the ReAct loop; documented follow-up), then bundle default MCP servers (filesystem/fetch/git) at provision. 25 built-ins today | S/M | Next |
+| Native ACP registration | Scaffold now: `Chain` registry-address field, `JobApi.HTTP` `POST /agents`, seller `register_me` callback (reuses `Auth` JWT). Then on-chain `HookClient.register_agent` + identity (ERC-8004/8183) | M | Partial / partner-blocked |
 | TEA app_module handler | Optional `Handler.Lifecycle` runtime mode for a stateful per-chat UI (issue #763) | M | Deferred |
 
 The load-bearing unknown is external: the Console's third-party runtime-registration and container contract is undocumented, escalated to Virtuals (`~/Desktop/virtuals-console-runtime-questions.md`).
