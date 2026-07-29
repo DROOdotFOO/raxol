@@ -31,7 +31,7 @@ defmodule Raxol.ACP.Console.Generator do
   @skill_name ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
 
   @type package :: %{
-          runtime: :hermes | :openclaw,
+          runtime: :hermes | :openclaw | :raxol,
           files: %{String.t() => binary()},
           tasks: [map()]
         }
@@ -77,7 +77,7 @@ defmodule Raxol.ACP.Console.Generator do
     You author configuration packages for hosted autonomous agents on the
     Virtuals Console (runtime: #{runtime}). Respond with ONE JSON object and
     nothing else — no prose, no code fences. Shape:
-    {"soul_md": string, #{if runtime == :openclaw, do: ~s("agents_md": string, ), else: ""}\
+    {"soul_md": string, #{if runtime in [:openclaw, :raxol], do: ~s("agents_md": string, ), else: ""}\
     "tasks": [{"name": snake_case string, "description": string,
     "cron": 5-field numeric cron string, "prompt": string}],
     "skills": [{"name": snake_case string, "skill_md": string}]}
@@ -177,7 +177,7 @@ defmodule Raxol.ACP.Console.Generator do
     end
   end
 
-  defp put_agents_md(files, :openclaw, env) do
+  defp put_agents_md(files, runtime, env) when runtime in [:openclaw, :raxol] do
     case Map.get(env, "agents_md") do
       md when is_binary(md) and md != "" -> Map.put(files, "AGENTS.md", md)
       _ -> files

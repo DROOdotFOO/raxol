@@ -23,9 +23,14 @@ defmodule Raxol.ACP.Console.Spec do
   # time, so the string->atom conversion below never depends on the atom having
   # been created elsewhere first (a bare `String.to_existing_atom/1` on
   # "openclaw" would raise if no other module happened to reference it yet).
-  @runtime_atom %{"hermes" => :hermes, "openclaw" => :openclaw, "either" => :either}
+  @runtime_atom %{
+    "hermes" => :hermes,
+    "openclaw" => :openclaw,
+    "raxol" => :raxol,
+    "either" => :either
+  }
   @validation_atom %{"bench_validated" => :bench_validated, "package_only" => :package_only}
-  @runtimes ~w(hermes openclaw either)
+  @runtimes ~w(hermes openclaw raxol either)
   @validations ~w(bench_validated package_only)
   @agent_name ~r/^[a-z][a-z0-9_-]{2,29}$/
 
@@ -41,7 +46,7 @@ defmodule Raxol.ACP.Console.Spec do
   @type cadence :: {:cron, String.t()} | {:nl, String.t()}
   @type t :: %__MODULE__{
           purpose: String.t(),
-          runtime: :hermes | :openclaw | :either,
+          runtime: :hermes | :openclaw | :raxol | :either,
           agent_name: String.t() | nil,
           persona: String.t() | nil,
           scheduled_tasks: [%{description: String.t(), cadence: cadence()}],

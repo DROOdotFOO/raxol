@@ -65,7 +65,7 @@ defmodule Raxol.ACP.Console.AgentOffering do
         "manifest" => %{
           "type" => "object",
           "properties" => %{
-            "runtime" => %{"type" => "string", "enum" => ["hermes", "openclaw"]},
+            "runtime" => %{"type" => "string", "enum" => ["hermes", "openclaw", "raxol"]},
             "files" => %{"type" => "array", "items" => %{"type" => "string"}}
           }
         },
