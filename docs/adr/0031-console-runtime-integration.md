@@ -151,6 +151,13 @@ registration remain):
   test (driven by the `Inference.Static` stub) guards the format and its parser against drift. The
   full console suite is 25 tests green.
 - The Stage-3 persona and delivery seam is proven end-to-end (see "Validation").
+- MCP dynamic-dispatch seam (2026-07-30): `Raxol.Agent.Action.Dynamic` is a runtime-discovered tool
+  value (an external MCP tool has no Action module). `ToolConverter` offers and dispatches it through
+  the SAME authorizer and tool-call hook chain as a module Action, so it is not a security bypass;
+  the default authorizer still denies a `sensitive` tool, hooks can veto or transform it, and
+  transformed params are re-authorized. `Dynamic.from_mcp/3` / `from_client/2` wrap a
+  `Raxol.MCP.Client` server's tool listing (invoke calls `call_tool/3`). This is the piece the
+  external-MCP path was missing; the full raxol_agent suite (1958) stays green.
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 
@@ -178,7 +185,8 @@ Two audit findings (2026-07-29, deep read) shape the remaining work:
   (`agent/code/mcp_config.ex`). So the cheapest defensible route to 40-plus is (1) build that one
   dispatch seam, then (2) bundle a default set of standard MCP servers (filesystem, fetch, git, and
   optionally time / sequential-thinking) at provision time, which clears 40-plus with real
-  capabilities rather than ~15 hand-written Actions.
+  capabilities rather than ~15 hand-written Actions. **(1) is now built** (see the dynamic-dispatch
+  seam above); (2), bundling a default server set at provision, remains.
 
 ## Consequences
 
