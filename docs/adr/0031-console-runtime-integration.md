@@ -190,6 +190,17 @@ registration remain):
   keyed by task name), tested against a real scheduler. Remaining in `raxol_console`: the gateway channel
   subtree, wiring the bundled MCP tools into the gateway handler's `:actions`, a `Console.Application`
   container entrypoint, and `Console.Bench.Adapter`.
+- `raxol_console` gateway channel subtree + MCP-into-handler (2026-07-30): `Boot.connect_channels/1`
+  connects channel specs into the gateway adapters map (used for both chat replies and scheduled
+  delivery). `Boot.start/2` loads the MCP bundle, joins its tools with the base `:actions`, and starts
+  a `Raxol.Gateway.Supervisor` under `Console.Supervisor` when a channel is present: per-chat sessions
+  run the agent handler with the runtime's persona and the combined toolset, outbound via the same
+  adapters map. This required a small enhancement to `Raxol.Gateway.Handler.Agent`: it now runs the
+  ReAct loop (`Stream.react`) when `:actions` are configured, so a chat turn can call tools (a plain
+  `Stream.run` completion never dispatches them) -- a completion otherwise. End-to-end tested: a chat
+  event boots through the Console tree, runs the persona turn, dispatches a dynamic tool, and replies
+  on the channel. Remaining in `raxol_console`: a `Console.Application` container entrypoint and
+  `Console.Bench.Adapter`.
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 
