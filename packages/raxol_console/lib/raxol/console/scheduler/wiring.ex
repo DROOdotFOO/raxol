@@ -1,22 +1,18 @@
 defmodule Raxol.Console.Scheduler.Wiring do
   @moduledoc """
-  PROTOTYPE -- Console runtime integration spike, Stage 3 (persona/delivery seam).
-
-  Composes the two scheduler primitives a Console agent needs into the option
-  set `Raxol.Agent.Scheduler` expects, so a provisioned agent's scheduled tasks
-  run with its `soul.md` persona and deliver results to its messaging channels:
+  Compose the two scheduler primitives a Console agent needs into the option set
+  `Raxol.Agent.Scheduler` expects, so a provisioned agent's scheduled tasks run
+  with its `soul.md` persona and deliver results to its messaging channels:
 
     * runner  -- `Raxol.Agent.Scheduler.Fire.runner/1` with `:system_prompt`
-      (the resolved soul.md) and `:agent_opts` (the executor). Each fire is a
+      (the resolved persona) and `:agent_opts` (the executor). Each fire is a
       fresh, history-free agent turn; the job's skills are injected on top.
     * deliver -- `Raxol.Agent.Scheduler.Delivery.gateway/1`, which routes a
       job's `"platform:chat_id"` target through `Raxol.Gateway.Delivery` against
       the gateway's connected-adapters map.
 
-  Both halves already ship with the cron scheduler; this module is pure
-  composition -- the Stage-3 finding is that no net-new runtime code is needed,
-  only the wiring below. It lives in test/support for the spike and graduates to
-  `packages/raxol_console/` (the loader's `Boot` stage) when that package lands.
+  Both halves ship with the cron scheduler; this is pure composition, consumed
+  by `Raxol.Console.Boot` to build `config :raxol_agent, :scheduler`.
   """
 
   alias Raxol.Agent.Scheduler.{Delivery, Fire}
@@ -35,7 +31,7 @@ defmodule Raxol.Console.Scheduler.Wiring do
   `Raxol.Agent.Scheduler` from a Console runtime config.
 
   Merge the result into the scheduler's start opts (`:name`, `:now_fn`, DETS
-  store, ...). `Boot` will feed this into `config :raxol_agent, :scheduler`.
+  store, ...).
   """
   @spec scheduler_opts(config()) :: keyword()
   def scheduler_opts(%{adapters: adapters} = config) do

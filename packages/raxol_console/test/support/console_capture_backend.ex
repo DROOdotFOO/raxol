@@ -1,18 +1,9 @@
 defmodule Raxol.Console.Test.CaptureBackend do
   @moduledoc """
   A real `Raxol.Agent.AIBackend` that records the messages it is asked to
-  complete and returns a canned response. Used by the Stage-3 prototype to prove
-  the soul.md persona actually reaches the model on a scheduled fire -- the
-  external LLM boundary is the only part faked; `Scheduler`, `Fire`, `Stream`,
-  `Delivery`, and the gateway adapter are all real.
-
-  Options (via `backend_opts`):
-
-    * `:sink`     -- pid the completed `messages` list is sent to as
-      `{:backend_messages, messages}` (default: none).
-    * `:response` -- the assistant content to return (default: `"ok"`).
-    * `:error`    -- when set, return `{:error, reason}` instead (for the
-      delivery-failure path).
+  complete and returns a canned response. Lets the scheduler-wiring test prove
+  the persona reaches the model on a scheduled fire, with only the LLM faked at
+  the external boundary.
   """
 
   @behaviour Raxol.Agent.AIBackend
