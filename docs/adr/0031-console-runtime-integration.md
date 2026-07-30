@@ -174,6 +174,14 @@ registration remain):
   endpoint or ABI) are isolated behind the `Chain` gate and the `JobApi` seam, so confirming them is a
   config + adapter change, not a rewrite. Not wired at boot yet: with a nil address it would only ever
   fail closed.
+- `raxol_console` package scaffolding (2026-07-30): the new top-of-graph package exists and compiles
+  against the full dependency chain (raxol_agent + raxol_gateway + raxol_acp, which transitively pull
+  main raxol and the termbox NIF). `Raxol.Console.RuntimeConfig.build/2` is the pure package + env ->
+  config mapping (persona binary from soul.md + AGENTS.md with an sha256 identity; `tasks.json` ->
+  `Scheduler.create` attrs keyed by task name; default MCP servers via `McpBundle`). The proven
+  Stage-3 `Scheduler.Wiring` graduated from the gateway prototype into `raxol_console` (the gateway
+  copy was removed). Remaining: `Boot` / `Supervisor` / `Application` (effectful: set app env, start
+  the agent + gateway subtrees, reconcile scheduler jobs) and `Console.Bench.Adapter`.
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 
