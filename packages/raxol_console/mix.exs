@@ -21,9 +21,15 @@ defmodule RaxolConsole.MixProject do
   end
 
   def application do
-    [
-      extra_applications: [:logger]
-    ]
+    app = [extra_applications: [:logger]]
+
+    # Self-start the runtime outside :test only; in :test the app is a passive
+    # dependency so booting is driven explicitly by the suite.
+    if Mix.env() != :test do
+      Keyword.put(app, :mod, {Raxol.Console.Application, []})
+    else
+      app
+    end
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -37,7 +43,6 @@ defmodule RaxolConsole.MixProject do
       raxol_dep(:raxol_agent, "~> 2.6", "../raxol_agent"),
       raxol_dep(:raxol_gateway, "~> 0.1", "../raxol_gateway"),
       raxol_dep(:raxol_acp, "~> 0.2", "../raxol_acp"),
-
       {:jason, "~> 1.4"},
 
       # Dev/test only

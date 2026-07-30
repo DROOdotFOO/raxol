@@ -5,10 +5,12 @@
 Proposed, 2026-07-29. Builds on the agent runtime (`Raxol.Agent.Session`, `Raxol.Agent.Stream`),
 the cron scheduler (ADR-0025), the unified messaging gateway (ADR-0023), the agent skill runtime
 (ADR-0021), the agent persona seam (`Raxol.Agent.SystemPrompt`), and the Virtuals ACP stack
-(`raxol_acp`, ADR-0016/0030). The `:raxol` runtime target and the package parser have landed and
-are tested (see "Implementation status"); the Stage-3 persona and delivery seam is proven by a green
-prototype in `packages/raxol_gateway/test/` (see "Validation"); the `raxol_console` loader package
-and native ACP registration remain.
+(`raxol_acp`, ADR-0016/0030). The `:raxol` runtime target, the package parser, and the full
+`raxol_console` loader (`RuntimeConfig` -> `Boot`/`Supervisor`/`Reconciler` + gateway channel subtree
++ `Console.Bench.Adapter` + `Console.Application` container entrypoint) have landed and are tested
+(see "Implementation status"); the Stage-3 persona and delivery seam is proven by a green prototype in
+`packages/raxol_gateway/test/` (see "Validation"). The only remaining work is partner-blocked and
+external: native ACP registration and the Console's container/runtime-registration contract.
 
 ## Context
 
@@ -201,6 +203,36 @@ registration remain):
   event boots through the Console tree, runs the persona turn, dispatches a dynamic tool, and replies
   on the channel. Remaining in `raxol_console`: a `Console.Application` container entrypoint and
   `Console.Bench.Adapter`.
+- `raxol_console` `Console.Bench.Adapter` (2026-07-30): the `:raxol` implementation of the
+  `Raxol.ACP.Console.Bench` behaviour, wired into `raxol_acp` by
+  `config :raxol_acp, :console_bench_module` (the package above injects it, so `raxol_acp` only knows
+  the behaviour and there is no compile cycle). Where `Bench.Local` shells a wrapper over a `Port`,
+  the native adapter loads the package, builds a headless `RuntimeConfig` (no channels, no bundled MCP
+  servers), boots `Console.Supervisor`, and runs the three checks against the real runtime: `:boot`
+  (the supervised persona-wired scheduler + reconciler stand up), `:prompt`, and `:task_dry_run` (the
+  first task's real prompt) both fired through the same `Fire.runner/1` primitive a scheduled task
+  runs, under a per-check timeout, with only the LLM faked at the boundary. Typed failures
+  (`:bench_load_failed` / `:bench_config_failed` / `{:bench_failed, check, _}` / `{:bench_timeout, check}`)
+  block delivery; the transcript is capped at 64 KiB like `Local`. Tested against a real boot with a
+  capture backend (6 tests; the console suite is 20 green). Remaining in `raxol_console`: a
+  `Console.Application` container entrypoint.
+- `raxol_console` `Console.Application` (2026-07-30): the container entrypoint, wired as the OTP `mod:`
+  callback outside `:test` (in `:test` the app is a passive dependency, driven by the suite). `plan/1`
+  is a pure decision over `Application.get_all_env(:raxol_console)` plus the `RAXOL_CONSOLE_PACKAGE`
+  env var (the path a container injects): `:none` when no package is located -> an empty supervisor,
+  so pulling `raxol_console` in as a dep never self-boots; `{:ok, dir, opts}` otherwise. `boot/2` then
+  loads the package (`Package.load`), builds the `RuntimeConfig` from the deployment options
+  (`:channels` / `:agent_opts` / `:default_target` / `:workspace` / `:bundle_default_mcp`), and calls
+  `Boot.start/2`, returning the supervisor the application owns; a configured-but-invalid package fails
+  the boot loudly with a typed `{:package_load_failed, _}` / `{:runtime_config_failed, _}` so the
+  orchestrator restarts and surfaces it. The three deployment-owned inputs the Console injects
+  (credentials, channels, inference) arrive through those config keys, not this module; their exact
+  injection contract -- env var names, mount points, ports, health/log conventions -- is the one
+  undocumented Console-integration seam (see open questions), and health/port wiring is deferred with
+  it (the package bundles no web server). Tested end-to-end: pure `plan/1` decisions and a real
+  `boot/2` against a materialized package with a capture backend (7 tests; the console suite is 27
+  green). **This closes the `raxol_console` loader.** The only remaining Console-runtime work is
+  partner-blocked (native ACP registration + the container-registration contract, both external).
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 
