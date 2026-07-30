@@ -64,7 +64,9 @@ defmodule Raxol.Console.RuntimeConfig do
     * `:workspace` -- scopes the bundled filesystem server (default `"."`).
   """
   @spec build(Package.t(), keyword()) :: {:ok, t()} | {:error, term()}
-  def build(%Package{} = pkg, opts \\ []) do
+  def build(package, opts \\ [])
+
+  def build(%Package{} = pkg, opts) do
     with {:ok, persona} <- persona(pkg) do
       {:ok,
        %__MODULE__{
