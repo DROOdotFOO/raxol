@@ -182,6 +182,14 @@ registration remain):
   Stage-3 `Scheduler.Wiring` graduated from the gateway prototype into `raxol_console` (the gateway
   copy was removed). Remaining: `Boot` / `Supervisor` / `Application` (effectful: set app env, start
   the agent + gateway subtrees, reconcile scheduler jobs) and `Console.Bench.Adapter`.
+- `raxol_console` `Boot` (2026-07-30): `Raxol.Console.Boot.start/2` brings up `Raxol.Console.Supervisor`
+  (`:rest_for_one`): a `Raxol.Agent.Scheduler` wired with the agent's persona + executor (`:runner`) and
+  gateway delivery (`:deliver`) via `Scheduler.Wiring`, plus a `Raxol.Console.Reconciler` that converges
+  the scheduler's jobs to the runtime config's `tasks.json` set once the scheduler is up.
+  `Boot.reconcile_jobs/2` is the idempotent convergence (create missing, update changed, remove stale,
+  keyed by task name), tested against a real scheduler. Remaining in `raxol_console`: the gateway channel
+  subtree, wiring the bundled MCP tools into the gateway handler's `:actions`, a `Console.Application`
+  container entrypoint, and `Console.Bench.Adapter`.
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 
