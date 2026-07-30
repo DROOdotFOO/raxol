@@ -233,6 +233,27 @@ registration remain):
   `boot/2` against a materialized package with a capture backend (7 tests; the console suite is 27
   green). **This closes the `raxol_console` loader.** The only remaining Console-runtime work is
   partner-blocked (native ACP registration + the container-registration contract, both external).
+- `raxol_console` boot hardening (2026-07-30, three refinements from a `droo-stack` quality pass):
+  - **Skills activation.** A package's `skills/` were parsed into `RuntimeConfig` but never consumed
+    (`Skills.Store` is disk-backed; nothing seeded it). Boot now starts a per-Console
+    `Raxol.Agent.Skills.Store` as the first `:rest_for_one` child, pointed at the materialized
+    package's `skills/` directory as a read-only `external_dir` (managed root scoped to an unused
+    package sibling, so the developer's global `~/.raxol` / `~/.agents` skills never leak -- the
+    runtime is hermetic). The store name threads into the scheduler (`Wiring` `:skills_store` ->
+    `Fire.runner`) and the chat handler (`context[:skills]` as the `{module, opts}` pair the skill
+    Actions expect), and read-only `Actions.Skills.{List,View}` join the chat toolset by default so
+    the agent can consult package skills on demand (authoring stays a deployment opt-in). Activated
+    only when `:skills_dir` points at a real directory (`Console.Application` derives it); omitted ->
+    no store. Proven end-to-end: a chat turn views a package skill and the real store's `view_count`
+    increments.
+  - **MCP supervision.** Bundled MCP server clients were linked to the transient boot caller. They now
+    start under a dedicated `DynamicSupervisor` (`:transient` restart, returned as `:mcp_supervisor`),
+    so a crashed client restarts; empty server set -> no supervisor. Fail-open preserved (a client
+    that will not start is skipped, the supervisor stays up).
+  - **Reconcile tolerance.** `reconcile_jobs/2` hard-matched scheduler results inside `Reconciler.init`,
+    so one bad task crashed the reconciler and (`:rest_for_one`) hot-looped the tree. A failing op now
+    lands in a new `:failed` report bucket (`{id, reason}`) instead of raising.
+  Whole `raxol_console` suite: 33 tests, credo-strict + warnings-as-errors clean.
 
 Two audit findings (2026-07-29, deep read) shape the remaining work:
 

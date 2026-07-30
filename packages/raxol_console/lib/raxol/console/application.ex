@@ -75,7 +75,12 @@ defmodule Raxol.Console.Application do
   def boot(dir, opts) do
     with {:ok, pkg} <- load(dir),
          {:ok, rc} <- build(pkg, opts) do
-      Boot.start(rc, Keyword.take(opts, [:actions]))
+      boot_opts =
+        opts
+        |> Keyword.take([:actions])
+        |> Keyword.put(:skills_dir, Path.join(dir, "skills"))
+
+      Boot.start(rc, boot_opts)
     end
   end
 
@@ -117,7 +122,8 @@ defmodule Raxol.Console.Application do
     Logger.info(
       "[Raxol.Console] booted: " <>
         "jobs created=#{length(report.jobs.created)} updated=#{length(report.jobs.updated)} " <>
-        "removed=#{length(report.jobs.removed)}, mcp tools=#{report.mcp.tools}, " <>
+        "removed=#{length(report.jobs.removed)} failed=#{length(report.jobs.failed)}, " <>
+        "mcp tools=#{report.mcp.tools}, skills=#{report.skills.count}, " <>
         "channels=#{inspect(report.channels)}"
     )
 

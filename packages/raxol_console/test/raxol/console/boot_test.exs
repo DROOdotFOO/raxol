@@ -45,7 +45,7 @@ defmodule Raxol.Console.BootTest do
       Boot.reconcile_jobs(s, jobs)
       report = Boot.reconcile_jobs(s, jobs)
 
-      assert report == %{created: [], updated: [], removed: []}
+      assert report == %{created: [], updated: [], removed: [], failed: []}
     end
 
     test "updates changed jobs, creates new, removes stale" do
@@ -65,6 +65,17 @@ defmodule Raxol.Console.BootTest do
 
       {:ok, a} = Scheduler.get(s, "a")
       assert a.prompt == "pa-CHANGED"
+    end
+
+    test "records a failing job op in :failed instead of crashing" do
+      s = start_scheduler(:recon_fail)
+
+      report =
+        Boot.reconcile_jobs(s, [job("ok", "p", "0 9 * * *"), job("bad", "p", "not-a-schedule")])
+
+      assert report.created == ["ok"]
+      assert [{"bad", _reason}] = report.failed
+      assert ids(s) == ["ok"]
     end
   end
 
@@ -116,8 +127,7 @@ defmodule Raxol.Console.BootTest do
         end
       }
 
-      {:ok, counter} = Agent.start_link(fn -> 0 end)
-      on_exit(fn -> if Process.alive?(counter), do: Agent.stop(counter) end)
+      counter = start_supervised!({Agent, fn -> 0 end})
 
       tool_calls_fn = fn ->
         n = Agent.get_and_update(counter, fn n -> {n, n + 1} end)
@@ -178,5 +188,169 @@ defmodule Raxol.Console.BootTest do
       assert "hi" in Map.values(params)
       assert_receive {:gateway_sent, ^route, "final answer"}
     end
+  end
+
+  describe "mcp supervision" do
+    test "supervises bundled servers under a dynamic supervisor, fail-open" do
+      pkg = %Package{
+        runtime: :raxol,
+        soul_md: "# Bot\n\nHi.",
+        agents_md: nil,
+        tasks: [],
+        skills: []
+      }
+
+      {:ok, rc} = RuntimeConfig.build(pkg, mcp_servers: [%{name: :fake, command: "noop"}])
+
+      # A client that never starts: the server is skipped (fail-open) while the
+      # dynamic supervisor stays up.
+      {:ok, report} =
+        Boot.start(rc,
+          name: :mcp_dyn,
+          scheduler_name: :mcp_dyn_sched,
+          reconciler_name: :mcp_dyn_recon,
+          mcp_start: fn _opts -> {:error, :unavailable} end
+        )
+
+      on_exit(fn ->
+        stop(:mcp_dyn)
+        stop(report.mcp_supervisor)
+      end)
+
+      assert is_pid(report.mcp_supervisor)
+      assert Process.alive?(report.mcp_supervisor)
+      assert report.mcp.tools == 0
+      assert [{:fake, :unavailable}] = report.mcp.failed
+    end
+
+    test "no dynamic supervisor when the package bundles no servers" do
+      pkg = %Package{
+        runtime: :raxol,
+        soul_md: "# Bot\n\nHi.",
+        agents_md: nil,
+        tasks: [],
+        skills: []
+      }
+
+      {:ok, rc} = RuntimeConfig.build(pkg, bundle_default_mcp: false)
+
+      {:ok, report} =
+        Boot.start(rc, name: :mcp_none, scheduler_name: :mcp_none_s, reconciler_name: :mcp_none_r)
+
+      on_exit(fn -> stop(:mcp_none) end)
+
+      assert report.mcp_supervisor == nil
+    end
+  end
+
+  describe "skills activation" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "console_skills_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(root, "skills/greet"))
+
+      File.write!(Path.join(root, "skills/greet/SKILL.md"), """
+      ---
+      name: greet
+      description: How to greet users warmly
+      ---
+      Always open with a friendly hello.
+      """)
+
+      on_exit(fn -> File.rm_rf!(root) end)
+      {:ok, skills_dir: Path.join(root, "skills")}
+    end
+
+    defp bot_package do
+      %Package{runtime: :raxol, soul_md: "# Bot\n\nHi.", agents_md: nil, tasks: [], skills: []}
+    end
+
+    test "indexes the package's skills into a per-console store", %{skills_dir: skills_dir} do
+      {:ok, rc} = RuntimeConfig.build(bot_package(), bundle_default_mcp: false)
+
+      {:ok, report} =
+        Boot.start(rc,
+          name: :skills_sup,
+          scheduler_name: :skills_sched,
+          reconciler_name: :skills_recon,
+          skills_dir: skills_dir
+        )
+
+      on_exit(fn -> stop(:skills_sup) end)
+
+      assert report.skills == %{store: :"skills_sup.skills", count: 1}
+      assert [%{name: "greet"}] = Raxol.Agent.Skills.Store.list(server: :"skills_sup.skills")
+    end
+
+    test "no store is started when the skills dir is absent" do
+      {:ok, rc} = RuntimeConfig.build(bot_package(), bundle_default_mcp: false)
+
+      {:ok, report} =
+        Boot.start(rc,
+          name: :skills_none,
+          scheduler_name: :skills_none_sched,
+          reconciler_name: :skills_none_recon,
+          skills_dir: "/does/not/exist"
+        )
+
+      on_exit(fn -> stop(:skills_none) end)
+
+      assert report.skills == %{store: nil, count: 0}
+    end
+
+    test "a chat turn views a package skill through the store", %{skills_dir: skills_dir} do
+      pid = self()
+      counter = start_supervised!({Agent, fn -> 0 end})
+
+      tool_calls_fn = fn ->
+        n = Agent.get_and_update(counter, fn n -> {n, n + 1} end)
+
+        if n == 0,
+          do: [%{"name" => "skill_view", "arguments" => %{"name" => "greet"}, "id" => "c1"}],
+          else: nil
+      end
+
+      {:ok, rc} =
+        RuntimeConfig.build(bot_package(),
+          bundle_default_mcp: false,
+          channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}],
+          agent_opts: [
+            backend: Raxol.Agent.Backend.Mock,
+            backend_opts: [tool_calls_fn: tool_calls_fn, response: "greeted"]
+          ]
+        )
+
+      {:ok, _report} =
+        Boot.start(rc,
+          name: :skills_gw,
+          scheduler_name: :skills_gw_sched,
+          reconciler_name: :skills_gw_recon,
+          skills_dir: skills_dir
+        )
+
+      on_exit(fn -> stop(:skills_gw) end)
+
+      raw = %{
+        platform: :in_memory,
+        chat_type: :dm,
+        chat_id: "c",
+        user_id: "u",
+        event: %{text: "hi"}
+      }
+
+      {:ok, route, event} = InMemory.normalize_event(raw)
+      assert :ok = SessionRouter.route(:"skills_gw.router", route, event)
+
+      assert_receive {:gateway_sent, ^route, "greeted"}
+
+      # The view Action reached the real store through context[:skills].
+      assert {:ok, %{view_count: 1}} =
+               Raxol.Agent.Skills.Store.usage("greet", server: :"skills_gw.skills")
+    end
+  end
+
+  defp stop(name) do
+    Supervisor.stop(name)
+  catch
+    :exit, _ -> :ok
   end
 end
