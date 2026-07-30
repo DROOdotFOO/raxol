@@ -10,7 +10,7 @@ defmodule Raxol.Console.Boot do
   DETS-persisted and replays on start).
   """
 
-  alias Raxol.Agent.Scheduler
+  alias Raxol.Agent.{McpBundle, Scheduler}
 
   @type jobs_report :: %{
           created: [String.t()],
@@ -18,7 +18,12 @@ defmodule Raxol.Console.Boot do
           removed: [String.t()]
         }
 
-  @type report :: %{supervisor: pid(), jobs: jobs_report()}
+  @type report :: %{
+          supervisor: pid(),
+          jobs: jobs_report(),
+          mcp: %{tools: non_neg_integer(), failed: [{atom(), term()}]},
+          channels: [atom()]
+        }
 
   @doc """
   Start the Console runtime tree for `runtime_config` and reconcile its jobs.
@@ -31,11 +36,90 @@ defmodule Raxol.Console.Boot do
   def start(runtime_config, opts \\ []) do
     reconciler = Keyword.get(opts, :reconciler_name, Raxol.Console.Reconciler)
 
-    case Raxol.Console.Supervisor.start_link([{:runtime_config, runtime_config} | opts]) do
-      {:ok, sup} -> {:ok, %{supervisor: sup, jobs: Raxol.Console.Reconciler.report(reconciler)}}
-      {:error, _} = error -> error
+    # Start the bundled MCP servers and surface their tools; they join the chat
+    # handler's `:actions` so a chat turn (ReAct) can call them.
+    mcp = McpBundle.load(runtime_config.mcp_servers, mcp_load_opts(opts))
+    actions = Keyword.get(opts, :actions, []) ++ mcp.tools
+
+    with {:ok, adapters} <- connect_channels(runtime_config.channels) do
+      sup_opts =
+        opts
+        |> Keyword.put(:runtime_config, runtime_config)
+        |> Keyword.put(:adapters, adapters)
+        |> put_gateway(runtime_config, adapters, actions, opts)
+
+      case Raxol.Console.Supervisor.start_link(sup_opts) do
+        {:ok, sup} ->
+          {:ok,
+           %{
+             supervisor: sup,
+             jobs: Raxol.Console.Reconciler.report(reconciler),
+             mcp: %{tools: length(mcp.tools), failed: mcp.failed},
+             channels: Map.keys(adapters)
+           }}
+
+        {:error, _} = error ->
+          error
+      end
     end
   end
+
+  @doc """
+  Connect each channel spec (`%{platform:, adapter:, config:}`) into the gateway
+  adapters map `%{platform => {module, conn}}`, used for both chat replies and
+  scheduled-task delivery. `{:error, {platform, reason}}` on the first failure.
+  """
+  @spec connect_channels([map()]) :: {:ok, map()} | {:error, term()}
+  def connect_channels(channels) when is_list(channels) do
+    Enum.reduce_while(channels, {:ok, %{}}, fn ch, {:ok, acc} ->
+      case ch.adapter.connect(ch.config) do
+        {:ok, conn} -> {:cont, {:ok, Map.put(acc, ch.platform, {ch.adapter, conn})}}
+        {:error, reason} -> {:halt, {:error, {ch.platform, reason}}}
+      end
+    end)
+  end
+
+  def connect_channels(_), do: {:ok, %{}}
+
+  defp mcp_load_opts(opts) do
+    case Keyword.get(opts, :mcp_start) do
+      fun when is_function(fun, 1) -> [start: fun]
+      _ -> []
+    end
+  end
+
+  # Build the gateway subtree opts only when at least one channel is connected;
+  # a headless (scheduler-only) runtime skips it. The chat handler runs the
+  # agent's persona + the combined toolset, and outbound goes through the same
+  # adapters map the scheduler delivers to.
+  defp put_gateway(sup_opts, _rc, adapters, _actions, _opts) when map_size(adapters) == 0,
+    do: sup_opts
+
+  defp put_gateway(sup_opts, rc, adapters, actions, opts) do
+    base = Keyword.get(opts, :name, Raxol.Console)
+
+    handler =
+      {Raxol.Gateway.Handler.Agent,
+       [
+         system_prompt: rc.system_prompt,
+         agent_opts: Keyword.put(rc.agent_opts, :actions, actions)
+       ]}
+
+    gateway = [
+      handler: handler,
+      deliver: fn route, rendered ->
+        Raxol.Gateway.Delivery.deliver(adapters, {:direct, route}, rendered)
+      end,
+      name: gw_name(base, "gateway"),
+      router_name: gw_name(base, "router"),
+      pairing_name: gw_name(base, "pairing"),
+      sessions_sup: gw_name(base, "sessions")
+    ]
+
+    Keyword.put(sup_opts, :gateway, gateway)
+  end
+
+  defp gw_name(base, suffix), do: :"#{base}.#{suffix}"
 
   @doc """
   Converge the scheduler's jobs to `desired`.

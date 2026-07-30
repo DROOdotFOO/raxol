@@ -39,11 +39,22 @@ defmodule Raxol.Console.Supervisor do
       |> Wiring.scheduler_opts()
       |> Keyword.put(:name, scheduler_name)
 
-    children = [
-      {Raxol.Agent.Scheduler, scheduler_opts},
-      {Reconciler, name: reconciler_name, scheduler: scheduler_name, jobs: config.scheduler_jobs}
-    ]
+    children =
+      [
+        {Raxol.Agent.Scheduler, scheduler_opts},
+        {Reconciler,
+         name: reconciler_name, scheduler: scheduler_name, jobs: config.scheduler_jobs}
+      ] ++ gateway_child(opts)
 
     Supervisor.init(children, strategy: :rest_for_one)
+  end
+
+  # The gateway subtree (channels + per-chat sessions running the agent handler)
+  # is present only when `Raxol.Console.Boot` connected at least one channel.
+  defp gateway_child(opts) do
+    case Keyword.get(opts, :gateway) do
+      nil -> []
+      gateway_opts -> [{Raxol.Gateway.Supervisor, gateway_opts}]
+    end
   end
 end
