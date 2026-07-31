@@ -11,16 +11,14 @@ defmodule Raxol.Payments.Test.CliSignerTest do
         Path.expand("../../../../riddler-client", __DIR__)
 
     cli_available? =
-      File.dir?(cwd) and File.exists?(Path.join([cwd, "src", "index.js"]))
+      File.dir?(cwd) and
+        File.exists?(Path.join([cwd, "packages", "sdk-taker", "src", "cli.ts"]))
 
     if cli_available? do
       # Check whether the CLI on disk has the sign-only/acp-buyer-auth
-      # subcommands we depend on. They land in
-      # https://github.com/axol-io/riddler-client/pull/21; while it's
-      # unmerged, the dev checkout must be on that branch for these tests to
-      # exercise the spawn path.
+      # subcommands we depend on (acp.ts in the riddler-sdk package).
       has_subcommands? =
-        File.exists?(Path.join([cwd, "src", "acp.js"]))
+        File.exists?(Path.join([cwd, "packages", "sdk-taker", "src", "acp.ts"]))
 
       {:ok, cli_dir: cwd, cli_available?: cli_available? and has_subcommands?}
     else
@@ -29,7 +27,7 @@ defmodule Raxol.Payments.Test.CliSignerTest do
   end
 
   describe "run/3 against a real CLI" do
-    test "invokes `node src/index.js help` and exits 0", %{
+    test "invokes `npx tsx packages/sdk-taker/src/cli.ts help` and exits 0", %{
       cli_dir: cwd,
       cli_available?: cli_available?
     } do
