@@ -2,10 +2,10 @@ name: Release raxol_console npm package
 
 # Builds the self-contained Console runtime binaries and assembles the
 # `raxol-console` npm package, so the Virtuals Console's acp-cli installs and runs
-# Raxol like a Node runtime. Linux binaries are built natively per arch (Docker on
-# an amd64 runner and an arm64 runner); the macOS binary is added locally via
-# `npm/scripts/pack.sh` before a public publish (its cross-compile hazard on Linux
-# is why it is not built here -- see docker/Dockerfile.raxol-console).
+# Raxol like a Node runtime. Every binary is built natively for its arch: Linux
+# amd64/arm64 via Docker on their own runners, macOS arm64 on a macOS runner (each
+# arch builds natively to avoid the termbox NIF cross-compile hazard -- see
+# docker/Dockerfile.raxol-console).
 #
 # The npm tarball is always produced as an artifact. Publishing to the registry is
 # gated: a `raxol-console-v*` tag, or a manual run with `publish: true` and an
@@ -67,9 +67,52 @@ jobs:
           path: out/raxol_console_*
           if-no-files-found: error
 
+  macos-build:
+    name: macos-arm64
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Precompiled, pinned OTP/Elixir for Apple Silicon (no source build).
+      - name: Set up Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '29.0.3'
+          elixir-version: '1.20.2'
+
+      # Burrito requires an exact Zig; install it pinned rather than via Homebrew,
+      # whose zig tracks latest. The macOS target builds natively here (this is an
+      # arm64 runner), so its NIF links correctly -- the reason it is not built on
+      # the Linux side (see docker/Dockerfile.raxol-console).
+      - name: Install pinned Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz" \
+            | tar -xJ -C "$HOME"
+          echo "$HOME/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Build runtime binary
+        working-directory: packages/raxol_console
+        env:
+          MIX_ENV: prod
+          BURRITO_TARGET: macos
+        run: |
+          zig version
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix release raxol_console --overwrite
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-macos-arm64
+          path: packages/raxol_console/burrito_out/raxol_console_macos
+          if-no-files-found: error
+
   package:
     name: assemble npm package
-    needs: linux-build
+    needs: [linux-build, macos-build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
