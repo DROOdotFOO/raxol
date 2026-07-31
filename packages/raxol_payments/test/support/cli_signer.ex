@@ -49,6 +49,9 @@ defmodule Raxol.Payments.Test.CliSigner do
 
   @result_json_regex ~r/^RESULT_JSON:\s*(\{.*\})\s*$/m
 
+  # Path (relative to the riddler-client repo root) of the CLI entry point.
+  @cli_entry "packages/sdk-taker/src/cli.ts"
+
   @type flag :: {atom() | String.t(), String.t() | integer() | boolean()}
   @type opts :: [
           private_key: String.t(),
@@ -76,10 +79,12 @@ defmodule Raxol.Payments.Test.CliSigner do
           {:ok, result()} | {:error, {:cli_failed, integer(), String.t()}}
   def run(subcommand, flags, opts \\ []) do
     cwd = resolve_cwd(opts)
-    args = ["src/index.js", subcommand | encode_flags(flags)]
+    # riddler-client is now a monorepo; the CLI lives in the riddler-sdk package
+    # and is TypeScript, so it is run from source via tsx (no build step needed).
+    args = ["tsx", @cli_entry, subcommand | encode_flags(flags)]
     env = build_env(opts)
 
-    {stdout, exit_code} = System.cmd("node", args, cd: cwd, env: env, stderr_to_stdout: true)
+    {stdout, exit_code} = System.cmd("npx", args, cd: cwd, env: env, stderr_to_stdout: true)
 
     case exit_code do
       0 ->
@@ -130,7 +135,7 @@ defmodule Raxol.Payments.Test.CliSigner do
         System.get_env("RIDDLER_CLI_DIR") ||
         sibling_default()
 
-    if cwd && File.dir?(cwd) && File.exists?(Path.join([cwd, "src", "index.js"])) do
+    if cwd && File.dir?(cwd) && File.exists?(Path.join([cwd | Path.split(@cli_entry)])) do
       cwd
     else
       raise CliNotFoundError,
