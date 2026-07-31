@@ -42,11 +42,17 @@ defmodule RaxolConsole.MixProject do
     ]
   end
 
+  # `skip_nifs: true`: each target is built natively (the Dockerfile/CI build the
+  # target that matches the build host's arch), so the termbox NIF compiled during
+  # `mix release` assemble already matches the target. Burrito's own NIF rebuild
+  # would run `make` in the wrong dir (the NIF's Makefile lives under `make_cwd:
+  # "c_src"`) and fail. Skipping it keeps the correct native artifact. This holds
+  # ONLY for native builds; a cross-compile would need Burrito to rebuild the NIF.
   defp burrito_targets do
     [
-      linux: [os: :linux, cpu: :x86_64],
-      linux_arm: [os: :linux, cpu: :aarch64],
-      macos: [os: :darwin, cpu: :aarch64]
+      linux: [os: :linux, cpu: :x86_64, skip_nifs: true],
+      linux_arm: [os: :linux, cpu: :aarch64, skip_nifs: true],
+      macos: [os: :darwin, cpu: :aarch64, skip_nifs: true]
     ]
   end
 
