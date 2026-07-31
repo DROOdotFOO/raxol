@@ -12,11 +12,25 @@ defmodule RaxolConsole.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      releases: releases(),
       description: description(),
       package: package(),
       docs: docs(),
       name: "RaxolConsole",
       source_url: @source_url
+    ]
+  end
+
+  # The deployable runtime. A managed Console provisions a self-contained release
+  # (`bin/raxol_console`) and hands it a package via `RAXOL_CONSOLE_PACKAGE`;
+  # `:permanent` means a runtime crash takes the node down so the orchestrator
+  # restarts it rather than leaving a half-booted agent running.
+  defp releases do
+    [
+      raxol_console: [
+        include_executables_for: [:unix],
+        applications: [raxol_console: :permanent]
+      ]
     ]
   end
 
