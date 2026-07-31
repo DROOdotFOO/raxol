@@ -1,0 +1,5 @@
+# Burrito (release packaging) requires an exact Zig version to cross-compile the
+# BEAM release + NIFs into a single self-contained executable. Pinned here so any
+# build host (local or CI) wraps with the same toolchain.
+[tools]
+zig = "0.16.0"

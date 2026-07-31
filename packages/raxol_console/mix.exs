@@ -21,16 +21,32 @@ defmodule RaxolConsole.MixProject do
     ]
   end
 
-  # The deployable runtime. A managed Console provisions a self-contained release
-  # (`bin/raxol_console`) and hands it a package via `RAXOL_CONSOLE_PACKAGE`;
+  # The deployable runtime. Burrito wraps the assembled release into a single
+  # self-contained executable per target (embedded ERTS), the artifact an npm
+  # wrapper ships so the Console's acp-cli installs and runs it out of the box.
   # `:permanent` means a runtime crash takes the node down so the orchestrator
   # restarts it rather than leaving a half-booted agent running.
+  #
+  # Build one target with `BURRITO_TARGET=<name> MIX_ENV=prod mix release`.
+  # Linux binaries build on Linux (Docker/CI): the termbox NIF's Makefile keys
+  # its `-undefined dynamic_lookup` link flag off the build host's `uname`, so a
+  # macOS->Linux cross-compile would inject a Mach-O flag into an ELF link.
   defp releases do
     [
       raxol_console: [
         include_executables_for: [:unix],
-        applications: [raxol_console: :permanent]
+        applications: [raxol_console: :permanent],
+        steps: [:assemble, &Burrito.wrap/1],
+        burrito: [targets: burrito_targets()]
       ]
+    ]
+  end
+
+  defp burrito_targets do
+    [
+      linux: [os: :linux, cpu: :x86_64],
+      linux_arm: [os: :linux, cpu: :aarch64],
+      macos: [os: :darwin, cpu: :aarch64]
     ]
   end
 
@@ -58,6 +74,10 @@ defmodule RaxolConsole.MixProject do
       raxol_dep(:raxol_gateway, "~> 0.1", "../raxol_gateway"),
       raxol_dep(:raxol_acp, "~> 0.2", "../raxol_acp"),
       {:jason, "~> 1.4"},
+
+      # Packaging: wraps the release into a single self-contained executable per
+      # target. Build-time only (invoked by the release `:steps`).
+      {:burrito, "~> 1.6", runtime: false},
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},

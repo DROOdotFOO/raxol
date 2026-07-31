@@ -67,7 +67,10 @@ The loader boots a runtime, so it needs `raxol_agent` and `raxol_gateway` at run
 `raxol_agent` only at compile time (through `raxol_payments`, `runtime: false`), and main `raxol` does
 not depend on `raxol_agent` at all, so neither can host the loader. `raxol_console` sits above them
 all, depending on `raxol_agent`, `raxol_gateway`, `raxol_acp`, `raxol_payments`, and `raxol_mcp`. It is
-also the package the Console would provision, so placement and packaging are solved together.
+also the package the Console would provision: it ships as a self-contained executable (Burrito wraps
+the release with an embedded ERTS, no host Erlang required) inside an npm wrapper, so an `acp-cli`
+that installs Node packages installs and runs it like the incumbents. Placement and packaging are
+solved together.
 
 ### 2. The loader: three pure stages plus effectful boot
 
@@ -188,8 +191,10 @@ against a real scheduler, a chat turn that dispatches a bundled MCP tool and rep
 
 ### Risks and open questions
 
-- **Package and start contract for a non-Node runtime.** How the `acp-cli` starts a BEAM release, given
-  that the incumbents are Node packages. This is the load-bearing unknown for an Elixir runtime.
+- **Package and start contract for a non-Node runtime.** The runtime is packaged as a Burrito-built
+  self-contained binary in an npm wrapper (`packages/raxol_console/npm`), which installs and starts
+  like a Node package (`npx raxol-console start`). The remaining unknown is whether the Console's
+  `acp-cli` accepts this form and what manifest, if any, it expects to register a non-Node runtime.
 - **Primitive injection interface.** How the `acp-cli` hands the provisioned wallet keys, email, card,
   and ACP identity to the runtime process: environment variables, a mounted secrets file, or a
   metadata endpoint. `Console.Application` reads deployment inputs (credentials, channels, inference)
