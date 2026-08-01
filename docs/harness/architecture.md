@@ -18,7 +18,7 @@ them, `raxol_symphony` orchestrates many such agent runs. The same contract also
 lets the engine drive *external* agent CLIs — `Raxol.Agent.Backend.ClaudeCode`
 and `Raxol.Agent.Backend.Cursor` wrap `claude` / `cursor` as harness sessions.
 "Harness" here is the session engine; it is unrelated to the `--backend` flag
-(which picks an LLM backend) and to the FATE render-determinism suite.
+(which picks an LLM backend) and to the RATE render-determinism suite.
 
 ## The event contract
 

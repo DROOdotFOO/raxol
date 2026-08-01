@@ -25,7 +25,7 @@ defmodule Mix.Tasks.Raxol.Harness.Goldens.Bless do
   `Raxol.Harness.Surface.Golden`'s moduledoc, "Bless status
   conventions").
 
-  Mirrors the FATE `--gen` precedent (`mix raxol.fate --gen`) and the
+  Mirrors the RATE `--gen` precedent (`mix raxol.rate --gen`) and the
   `mix raxol.harness.fixtures.bless` precedent one layer further down the
   stack: fixture/session-level snapshots there, raw degradation-ladder
   bytes here. One golden per fixture x degradation tier

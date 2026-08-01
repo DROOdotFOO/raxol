@@ -1,10 +1,10 @@
-name: FATE self-hosted
+name: RATE self-hosted
 
 # Builds the termbox2 NIF and exercises the tty-dependent suite on the homelab's
 # Nix-pinned self-hosted runners (aarch64-linux + x86_64-linux). GitHub-hosted CI
 # skips these via SKIP_TERMBOX2_TESTS; this workflow leaves it unset and runs the
 # NIF for real on both Linux architectures, plus a golden render comparison so the
-# aarch64-linux hash is checked against priv/fate/golden.refs.
+# aarch64-linux hash is checked against priv/rate/golden.refs.
 #
 # Security: raxol is a public repository, so these jobs must never run untrusted
 # code on the homelab. Triggers are limited to manual dispatch, pushes to master,
@@ -19,12 +19,12 @@ on:
       - "packages/raxol_terminal/**"
       - "flake.nix"
       - "flake.lock"
-      - ".github/workflows/fate-selfhosted.yml"
+      - ".github/workflows/rate-selfhosted.yml"
   schedule:
     - cron: "0 7 * * *"
 
 concurrency:
-  group: fate-selfhosted-${{ github.ref }}
+  group: rate-selfhosted-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -75,8 +75,8 @@ jobs:
 
       # Pure render, no pseudo-terminal needed. First comparison of the
       # aarch64-linux golden hash against the committed references.
-      - name: FATE golden render on this architecture
+      - name: RATE golden render on this architecture
         run: |
           nix develop --command bash -lc '
-            MIX_ENV=test mix test test/fate/golden_test.exs --no-deps-check
+            MIX_ENV=test mix test test/rate/golden_test.exs --no-deps-check
           '

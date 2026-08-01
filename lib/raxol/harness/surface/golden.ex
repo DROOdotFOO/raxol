@@ -6,8 +6,8 @@ defmodule Raxol.Harness.Surface.Golden do
   `:flat`) at fixed geometry, and blesses/checks the raw emitted byte
   stream against a checked-in golden file per fixture x mode pair.
 
-  Mirrors the FATE `--gen` / `Raxol.Harness.Fixture.Bless` precedent one
-  layer further down the stack: FATE hashes rendered frames, `Fixture.Bless`
+  Mirrors the RATE `--gen` / `Raxol.Harness.Fixture.Bless` precedent one
+  layer further down the stack: RATE hashes rendered frames, `Fixture.Bless`
   snapshots the journal-fold projection, and this module snapshots the raw
   *bytes* a real terminal would receive -- the level below both, where a
   degradation-tier regression (a stray `\\e[2J`, a footer bleed, a changed

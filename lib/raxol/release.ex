@@ -3,7 +3,7 @@ defmodule Raxol.Release do
   Release entrypoints for the `raxol` OTP release.
 
   `playground/0` boots the component playground TUI and blocks until the user
-  quits. `golden/0` runs the FATE golden render smoke and exits non-zero on any
+  quits. `golden/0` runs the RATE golden render smoke and exits non-zero on any
   mismatch, so it doubles as a per-architecture determinism check.
 
   Both are invoked from the release (see the `releases/0` entry in `mix.exs`),
@@ -24,21 +24,21 @@ defmodule Raxol.Release do
   end
 
   @doc """
-  Run the FATE golden render, printing `name  hash` per fixture.
+  Run the RATE golden render, printing `name  hash` per fixture.
 
   Halts with exit code 0 when every fixture matches its committed reference and
   exit code 1 on any mismatch or missing reference.
   """
   @spec golden() :: no_return()
   def golden do
-    # Raxol.FATE.run/0 self-starts UserPreferences and is otherwise a pure
+    # Raxol.RATE.run/0 self-starts UserPreferences and is otherwise a pure
     # render (no NIF, tty, wall clock, or randomness), so the full application
     # does not need to be started for the golden smoke.
-    Enum.each(Raxol.FATE.run(), fn {name, hash} ->
+    Enum.each(Raxol.RATE.run(), fn {name, hash} ->
       IO.puts("#{name}  #{hash}")
     end)
 
-    case Raxol.FATE.verify() do
+    case Raxol.RATE.verify() do
       {:ok, _results} ->
         System.halt(0)
 

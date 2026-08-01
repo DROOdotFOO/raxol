@@ -1,10 +1,10 @@
-defmodule Mix.Tasks.Raxol.Fate do
-  @shortdoc "Golden render-determinism suite (FATE-style)"
+defmodule Mix.Tasks.Raxol.Rate do
+  @shortdoc "Golden render-determinism suite (RATE)"
   @moduledoc """
-  Render the fixture corpus and compare each hash against `priv/fate/golden.refs`.
+  Render the fixture corpus and compare each hash against `priv/rate/golden.refs`.
 
-      $ mix raxol.fate          # compare, exit non-zero on any mismatch
-      $ mix raxol.fate --gen    # regenerate the references
+      $ mix raxol.rate          # compare, exit non-zero on any mismatch
+      $ mix raxol.rate --gen    # regenerate the references
 
   Hashes are architecture-independent; a mismatch on one arch and not another
   points at a real render determinism bug.
@@ -17,19 +17,19 @@ defmodule Mix.Tasks.Raxol.Fate do
     Mix.Task.run("app.start")
 
     if "--gen" in args do
-      Raxol.FATE.generate()
-      report(Raxol.FATE.run(), :generated)
+      Raxol.RATE.generate()
+      report(Raxol.RATE.run(), :generated)
     else
-      case Raxol.FATE.verify() do
+      case Raxol.RATE.verify() do
         {:ok, results} ->
           report(results, :ok)
 
         {:error, %{mismatches: mismatches, missing: missing}} ->
-          report(Raxol.FATE.run(), :ok)
+          report(Raxol.RATE.run(), :ok)
           print_failures(mismatches, missing)
 
           Mix.raise(
-            "raxol.fate: #{length(mismatches)} mismatch(es), #{length(missing)} missing"
+            "raxol.rate: #{length(mismatches)} mismatch(es), #{length(missing)} missing"
           )
       end
     end

@@ -2,6 +2,7 @@ defmodule Raxol.Agent.CommandTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Agent.Command
+  alias Raxol.Agent.Journal.FileStore
 
   describe "decode/1 — loud typed rejects" do
     test "malformed JSON string is a typed error, no crash" do
@@ -66,9 +67,7 @@ defmodule Raxol.Agent.CommandTest do
   describe "decode/1 — prompt" do
     test "valid prompt JSON decodes to a typed struct" do
       assert {:ok, %Command{type: :prompt, payload: %{text: "hello world"}}} =
-               Command.decode(
-                 ~s({"type":"prompt","payload":{"text":"hello world"}})
-               )
+               Command.decode(~s({"type":"prompt","payload":{"text":"hello world"}}))
     end
 
     test "accepts a plain map with atom keys" do
@@ -200,7 +199,7 @@ defmodule Raxol.Agent.CommandTest do
     end
   end
 
-  describe "decode/1 — attach / seek (decode fully, route stubbed)" do
+  describe "decode/1 — attach / seek (decode fully)" do
     test "attach decodes to a valid struct with defaulted history_policy" do
       assert {:ok,
               %Command{
@@ -293,8 +292,7 @@ defmodule Raxol.Agent.CommandTest do
 
       assert action == {:interrupt, "sess-1", %{turn_id: "turn-3"}}
 
-      assert_receive {:harness_command,
-                      {:interrupt, "sess-1", %{turn_id: "turn-3"}}}
+      assert_receive {:harness_command, {:interrupt, "sess-1", %{turn_id: "turn-3"}}}
     end
 
     test "steer routes to the session as {:harness_command, {:steer, ...}}" do
@@ -310,33 +308,90 @@ defmodule Raxol.Agent.CommandTest do
       action = Command.route(cmd, %{session_id: "sess-1", pid: self()})
 
       assert action ==
-               {:steer, "sess-1",
-                %{text: "go left instead", expected_turn_id: "turn-1"}}
+               {:steer, "sess-1", %{text: "go left instead", expected_turn_id: "turn-1"}}
 
       assert_receive {:harness_command,
-                      {:steer, "sess-1",
-                       %{text: "go left instead", expected_turn_id: "turn-1"}}}
+                      {:steer, "sess-1", %{text: "go left instead", expected_turn_id: "turn-1"}}}
     end
 
-    test "attach routes to not_implemented" do
+    test "attach (:replay) subscribes the session pid and replays durable records from the offset" do
+      session_id = "cmd-attach-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+
+      {:ok, cmd} =
+        Command.decode(%{"type" => "attach", "payload" => %{"from_offset" => 1}})
+
+      # :replay is the default policy; :attach performs the reattach directly
+      # and does NOT dispatch a {:harness_command, _} action.
+      assert {:ok, %{history: []}} =
+               Command.route(cmd, %{session_id: session_id, pid: self()})
+
+      refute_receive {:harness_command, _}
+      assert_receive {:reattach_live, ^session_id, %{"id" => 1}}, 500
+      assert_receive {:reattach_live, ^session_id, %{"id" => 2}}, 500
+
+      FileStore.close(j)
+    end
+
+    test "attach (:live) streams only records above the decision-time watermark" do
+      session_id = "cmd-live-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+
+      # from_offset in the payload is ignored for :live — the watermark (1) is.
       {:ok, cmd} =
         Command.decode(%{
           "type" => "attach",
-          "payload" => %{"from_offset" => 0}
+          "payload" => %{"from_offset" => 0, "history_policy" => "live"}
         })
 
-      assert {:error, :not_implemented} =
-               Command.route(cmd, %{session_id: "sess-1", pid: self()})
+      assert {:ok, %{history: []}} =
+               Command.route(cmd, %{session_id: session_id, pid: self()})
 
-      refute_receive {:harness_command, _}
+      # The existing record (id 1, at/below the watermark) is NOT streamed.
+      refute_receive {:reattach_live, ^session_id, %{"id" => 1}}, 100
+
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+      assert_receive {:reattach_live, ^session_id, %{"id" => 2}}, 500
+
+      FileStore.close(j)
     end
 
-    test "seek routes to not_implemented" do
+    test "attach (:snapshot) is not yet supported" do
       {:ok, cmd} =
-        Command.decode(%{"type" => "seek", "payload" => %{"offset" => 5}})
+        Command.decode(%{
+          "type" => "attach",
+          "payload" => %{"from_offset" => 0, "history_policy" => "snapshot"}
+        })
 
-      assert {:error, :not_implemented} =
-               Command.route(cmd, %{session_id: "sess-1"})
+      assert {:error, {:unsupported_history_policy, :snapshot}} =
+               Command.route(cmd, %{session_id: "cmd-snap", pid: self()})
+    end
+
+    test "seek folds durable events up to the offset into a projection" do
+      session_id = "cmd-seek-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+      {:ok, 3} = FileStore.append(j, loop_event("turn_started", "t2"))
+      FileStore.close(j)
+
+      # offset 0 folds nothing.
+      {:ok, cmd0} = Command.decode(%{"type" => "seek", "payload" => %{"offset" => 0}})
+      assert {:ok, %{source_events: []}} = Command.route(cmd0, %{session_id: session_id})
+
+      # offset 2 folds ids 1..2 (durable, tier-retained in source_events).
+      {:ok, cmd2} = Command.decode(%{"type" => "seek", "payload" => %{"offset" => 2}})
+      assert {:ok, %{source_events: evs}} = Command.route(cmd2, %{session_id: session_id})
+      assert length(evs) == 2
+
+      # offset past the end folds the whole durable stream.
+      {:ok, cmd9} = Command.decode(%{"type" => "seek", "payload" => %{"offset" => 9}})
+      assert {:ok, %{source_events: all}} = Command.route(cmd9, %{session_id: session_id})
+      assert length(all) == 3
     end
   end
 
@@ -348,5 +403,16 @@ defmodule Raxol.Agent.CommandTest do
       assert {:start_turn, "s", %{text: "hi"}} =
                Command.route(cmd, %{session_id: "s"})
     end
+  end
+
+  defp loop_event(type, turn_id \\ "t1") do
+    %{
+      "kind" => "event",
+      "family" => "loop",
+      "type" => type,
+      "tier" => "durable",
+      "turn_id" => turn_id,
+      "payload" => %{}
+    }
   end
 end

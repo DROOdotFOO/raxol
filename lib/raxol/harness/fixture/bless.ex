@@ -3,8 +3,8 @@ defmodule Raxol.Harness.Fixture.Bless do
   Regenerates `<name>.blocks.json` snapshots by running a pluggable
   projector over each golden fixture session in a directory.
 
-  Mirrors the FATE precedent (`priv/fate/golden.refs` +
-  `mix raxol.fate --gen` + `assert FATE.run() == FATE.run()`,
+  Mirrors the RATE precedent (`priv/rate/golden.refs` +
+  `mix raxol.rate --gen` + `assert RATE.run() == RATE.run()`,
   06-projection §7 open question 6) at the fixture/session level rather
   than the pixel-hash level. Adversarial fixtures are skipped — they are
   authored to be semantically pathological for a projection consumer, not

@@ -40,16 +40,16 @@ cd packages/raxol_agent    && MIX_ENV=test mix test
 a clean local run is the strongest signal your branch will pass CI.
 
 ```bash
-mix raxol.check                        # lockfile, compile, format, credo, dialyzer, security, docs, fate, test
+mix raxol.check                        # lockfile, compile, format, credo, dialyzer, security, docs, rate, test
 mix raxol.check --quick                # skip dialyzer
 mix raxol.check --only format,credo   # specific checks only
 mix raxol.check --skip test            # skip specific checks
 ```
 
-The `fate` step runs the golden render harness (`mix raxol.fate`): it hashes a fixture
-corpus and compares each hash against `priv/fate/golden.refs`, failing the gate on any
+The `rate` step runs the golden render harness (`mix raxol.rate`): it hashes a fixture
+corpus and compares each hash against `priv/rate/golden.refs`, failing the gate on any
 mismatch. When you change rendering on purpose, regenerate the references with
-`mix raxol.fate --gen` and commit them. The hashes are architecture-independent, so a
+`mix raxol.rate --gen` and commit them. The hashes are architecture-independent, so a
 mismatch that appears on one platform while another stays green points at a determinism
 bug worth tracking down.
 

@@ -43,6 +43,45 @@ defmodule Raxol.Agent.Journal.FileStore do
   @session_id_re ~r/\A[A-Za-z0-9._-]+\z/
 
   @doc """
+  Resolve `session_id` to its on-disk session directory under the configured
+  base (`:base_dir` option, `$RAXOL_SESSIONS_DIR`, or `~/.raxol/sessions`).
+
+  This is the single resolution point `open/2` and the read-side reattach path
+  (`Raxol.Agent.Reattach.FileReader`) share, so a session opened for writing and
+  one reattached read-side always name the same directory.
+  """
+  @spec session_dir(String.t(), keyword()) :: Path.t()
+  def session_dir(session_id, opts \\ []) when is_binary(session_id) do
+    Path.join(base_dir(opts), session_id)
+  end
+
+  @doc """
+  The current durable high-watermark (highest offset) for `session_id`, read
+  read-side via the tolerant Reader — `0` for an empty/absent/damaged journal.
+
+  Used by the `attach` command's `:live` history policy to stream only records
+  above the decision-time watermark (`from_offset = high_watermark + 1`).
+  """
+  @spec high_watermark(String.t(), keyword()) :: non_neg_integer()
+  def high_watermark(session_id, opts \\ []) when is_binary(session_id) do
+    Reader.last_offset(session_dir(session_id, opts))
+  end
+
+  @doc """
+  Read `session_id`'s durable records read-side via the tolerant Reader
+  (writerless-safe — no Writer needed). `{:error, :damaged}` on interior
+  corruption (the damaged content is never surfaced). Used by the read-side
+  reattach and seek paths.
+  """
+  @spec read_records(String.t(), keyword()) :: {:ok, [map()]} | {:error, :damaged}
+  def read_records(session_id, opts \\ []) when is_binary(session_id) do
+    case Reader.scan(session_dir(session_id, opts)) do
+      {:ok, records} -> {:ok, records}
+      {:damaged, _partial} -> {:error, :damaged}
+    end
+  end
+
+  @doc """
   Open (creating if needed) the journal for `session_id`.
 
   Options:
@@ -56,7 +95,7 @@ defmodule Raxol.Agent.Journal.FileStore do
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
-    dir = Path.join(base_dir(opts), session_id)
+    dir = session_dir(session_id, opts)
 
     # Pre-flight the session layout HERE, where a failure is a plain
     # `{:error, reason}` return. A raising `Writer.init` (e.g. the session dir

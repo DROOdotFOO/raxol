@@ -19,10 +19,11 @@ defmodule Raxol.Agent.Command do
     * `:interrupt` — supervised kill of the running turn (AD-1); payload `%{}`,
       optionally `%{turn_id: ...}`. The real cancel lands in U5.
     * `:attach`    — subscribe + replay durable events from an offset; payload
-      `%{from_offset: integer, history_policy: atom}`. Decodes fully; routing
-      is stubbed (U4).
+      `%{from_offset: integer, history_policy: atom}`. Routes to
+      `Raxol.Agent.Reattach` (`:replay`/`:live`; `:snapshot` unsupported).
     * `:seek`      — time-travel a read-model to a journal offset; payload
-      `%{offset: integer}`. Decodes fully; routing is stubbed.
+      `%{offset: integer}`. Folds durable events with id <= offset into the
+      `Raxol.Harness.Projection` block read-model.
     * `:steer`     — redirect a running turn without killing it; payload
       `%{text: binary, expected_turn_id: term}` (both required), optional
       `:client_msg_id`. Decodes and routes; EXECUTING it (the compare-and-swap
@@ -52,6 +53,11 @@ defmodule Raxol.Agent.Command do
   exact path `mix raxol.p` already drives. Actually spawning that turn subtree
   is U5's job; here we validate and dispatch.
   """
+
+  alias Raxol.Agent.Code.EventCodec
+  alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.Reattach
+  alias Raxol.Harness.Projection
 
   @enforce_keys [:type]
   defstruct type: nil, payload: %{}
@@ -152,13 +158,22 @@ defmodule Raxol.Agent.Command do
   * `:steer`     → `{:steer, session_id, payload}` — dispatched the same way;
     the session runtime resolves the compare-and-swap against the running
     turn (`Raxol.Agent.Steer.resolve/2`).
-  * `:attach` / `:seek` → `{:error, :not_implemented}` — decoded, not yet routed.
+  * `:attach`    → subscribes the session pid to the durable stream via
+    `Raxol.Agent.Reattach.attach/4` and replays from `from_offset`
+    (`history_policy: :replay`) or from the live watermark (`:live`); records
+    arrive as `{:reattach_live, session_id, record}`. `:snapshot` is not yet
+    supported (`{:error, {:unsupported_history_policy, :snapshot}}`).
+  * `:seek`      → `{:ok, projection}` — folds durable events with id <= offset
+    into the `Raxol.Harness.Projection` block read-model (read-side, pure);
+    `{:error, :damaged}` on a corrupt journal.
 
   When `session` carries a `:pid`, the action is also delivered to that process
   as `{:harness_command, action}` (the real OTP dispatch); the action tuple is
-  returned regardless, for synchronous callers and tests.
+  returned regardless, for synchronous callers and tests. (`:attach` and `:seek`
+  are the exceptions — each performs its read-side operation directly and
+  returns the result.)
   """
-  @spec route(t(), session()) :: action() | {:error, :not_implemented}
+  @spec route(t(), session()) :: action() | {:ok, term()} | {:error, term()}
   def route(%__MODULE__{type: :prompt, payload: payload}, session) do
     dispatch(session, {:start_turn, session_id(session), payload})
   end
@@ -182,9 +197,59 @@ defmodule Raxol.Agent.Command do
     dispatch(session, {:approval_decision, session_id(session), payload})
   end
 
-  def route(%__MODULE__{type: type}, _session) when type in [:attach, :seek] do
-    {:error, :not_implemented}
+  def route(%__MODULE__{type: :attach, payload: payload}, session) do
+    reattach(session, payload)
   end
+
+  def route(%__MODULE__{type: :seek, payload: %{offset: offset}}, session) do
+    seek(session, offset)
+  end
+
+  # AD-15 seek: time-travel the read-model to a journal offset — fold the
+  # durable events with id <= offset into the block projection. Read-side and
+  # pure: reads via the tolerant Reader (writerless-safe), decodes with the
+  # wire-safe `EventCodec` (unknown types stay strings, no atom minted from
+  # disk), folds with `Raxol.Harness.Projection`. Returns `{:ok, projection}` or
+  # `{:error, :damaged}`.
+  defp seek(session, offset) do
+    case FileStore.read_records(session_id(session)) do
+      {:ok, records} ->
+        projection =
+          records
+          |> Enum.filter(fn %{"id" => id} -> id <= offset end)
+          |> EventCodec.decode_all()
+          |> Projection.project()
+
+        {:ok, projection}
+
+      {:error, :damaged} = err ->
+        err
+    end
+  end
+
+  # AD-15 attach: subscribe `session.pid` to the durable stream and replay from
+  # an offset. `:replay` streams durable records id >= from_offset (then live);
+  # `:live` streams only records above the decision-time high-watermark;
+  # `:snapshot` needs U9 snapshot restore and is not yet supported. Delivery is
+  # `{:reattach_live, session_id, record}` to the subscriber (the session pid, or
+  # the calling process when the session carries none).
+  defp reattach(session, %{from_offset: from_offset, history_policy: :replay}) do
+    attach_from(session, from_offset)
+  end
+
+  defp reattach(session, %{history_policy: :live}) do
+    attach_from(session, FileStore.high_watermark(session_id(session)) + 1)
+  end
+
+  defp reattach(_session, %{history_policy: policy}) do
+    {:error, {:unsupported_history_policy, policy}}
+  end
+
+  defp attach_from(session, from_offset) do
+    Reattach.attach(session_id(session), from_offset, :none, subscriber: subscriber(session))
+  end
+
+  defp subscriber(session), do: session_pid(session) || self()
 
   # -- Decode internals -------------------------------------------------------
 
