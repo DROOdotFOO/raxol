@@ -1,0 +1,167 @@
+name: Release raxol_console npm package
+
+# Builds the self-contained Console runtime binaries and assembles the
+# `raxol-console` npm package, so the Virtuals Console's acp-cli installs and runs
+# Raxol like a Node runtime. Every binary is built natively for its arch: Linux
+# amd64/arm64 via Docker on their own runners, macOS arm64 on a macOS runner (each
+# arch builds natively to avoid the termbox NIF cross-compile hazard -- see
+# docker/Dockerfile.raxol-console).
+#
+# The npm tarball is always produced as an artifact. Publishing to the registry is
+# gated: a `raxol-console-v*` tag, or a manual run with `publish: true` and an
+# `NPM_TOKEN` secret.
+
+on:
+  push:
+    tags:
+      - 'raxol-console-v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to npm (off = build the tarball artifact only)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-raxol-console-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux-build:
+    name: linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Native build for the runner's arch (no --platform): amd64 -> raxol_console_linux,
+      # arm64 -> raxol_console_linux_arm. Exports the binary via the `export` stage.
+      - name: Build runtime binary
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.raxol-console
+          target: export
+          outputs: type=local,dest=out
+          cache-from: type=gha,scope=console-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=console-${{ matrix.arch }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-linux-${{ matrix.arch }}
+          path: out/raxol_console_*
+          if-no-files-found: error
+
+  macos-build:
+    name: macos-arm64
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Precompiled, pinned OTP/Elixir for Apple Silicon (no source build).
+      - name: Set up Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '29.0.3'
+          elixir-version: '1.20.2'
+
+      # Burrito requires an exact Zig; install it pinned rather than via Homebrew,
+      # whose zig tracks latest. The macOS target builds natively here (this is an
+      # arm64 runner), so its NIF links correctly -- the reason it is not built on
+      # the Linux side (see docker/Dockerfile.raxol-console).
+      - name: Install pinned Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz" \
+            | tar -xJ -C "$HOME"
+          echo "$HOME/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Build runtime binary
+        working-directory: packages/raxol_console
+        env:
+          MIX_ENV: prod
+          BURRITO_TARGET: macos
+        run: |
+          zig version
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix release raxol_console --overwrite
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-macos-arm64
+          path: packages/raxol_console/burrito_out/raxol_console_macos
+          if-no-files-found: error
+
+  package:
+    name: assemble npm package
+    needs: [linux-build, macos-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download built binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          merge-multiple: true
+          path: packages/raxol_console/npm/vendor
+
+      - name: Stage binaries
+        working-directory: packages/raxol_console/npm
+        run: |
+          chmod +x vendor/raxol_console_* || true
+          echo "Vendored binaries:"
+          ls -lh vendor/
+
+      - name: Pack tarball
+        working-directory: packages/raxol_console/npm
+        run: npm pack
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: raxol-console-npm-tarball
+          path: packages/raxol_console/npm/*.tgz
+          if-no-files-found: error
+
+      # Publish only on a tag, or a manual run that opted in. Needs NPM_TOKEN.
+      - name: Resolve publish flag
+        id: flags
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish }}" = "true" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.flags.outputs.publish == 'true'
+        working-directory: packages/raxol_console/npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

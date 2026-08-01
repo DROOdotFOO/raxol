@@ -43,6 +43,8 @@ defmodule Raxol.ACP.Chain do
           multi_hook_router_address: String.t() | nil,
           subscription_hook_address: String.t() | nil,
           subscription_state_address: String.t() | nil,
+          service_registry_address: String.t() | nil,
+          identity_registry_address: String.t() | nil,
           acp_socket_url: String.t() | nil,
           acp_server_url: String.t() | nil,
           x402_facilitator_url: String.t() | nil
@@ -66,6 +68,11 @@ defmodule Raxol.ACP.Chain do
     multi_hook_router_address: "0x77F67252a8d3A6b049f4383FD50Fb9Bf784D29D1",
     subscription_hook_address: "0xD087363615f36F2b0265Bb4AC78Cd730C6C0cc1D",
     subscription_state_address: "0x52c2C68f4f7fF3C70760E3D0B9b2FA91CFE443Ad",
+    # ACP Service/Identity Registry addresses: not yet published by Virtuals
+    # (registration is currently done out-of-band via the acp-cli / dashboard).
+    # Set via `chain_overrides` once confirmed; see `Raxol.ACP.Seller.Registration`.
+    service_registry_address: nil,
+    identity_registry_address: nil,
     # Legacy Socket.IO endpoint (v1). v2 uses SSE via acp_server_url.
     acp_socket_url: "https://acpx.virtuals.io",
     acp_server_url: "https://api.acp.virtuals.io",
@@ -88,6 +95,8 @@ defmodule Raxol.ACP.Chain do
     multi_hook_router_address: "0x5Af0589bD265d2B5Abb617570Ceef8f34Ac6BcdD",
     subscription_hook_address: "0x6eA4c9C6dA120B193e3C2249CCA81ead3Cfb318f",
     subscription_state_address: "0x6f254046aA8A9c253f839eb64Da1FE284930100F",
+    service_registry_address: nil,
+    identity_registry_address: nil,
     acp_socket_url: "https://acpx.virtuals.gg",
     acp_server_url: "https://api-dev.acp.virtuals.io",
     x402_facilitator_url: "https://dev-acp-x402.virtuals.io"
@@ -111,6 +120,18 @@ defmodule Raxol.ACP.Chain do
   def get(:mainnet), do: {:ok, mainnet()}
   def get(:sepolia), do: {:ok, sepolia()}
   def get(_), do: {:error, :unknown_network}
+
+  @doc """
+  Return the Service Registry address, or `{:error, :service_registry_not_configured}`
+  when it is unset (the default until Virtuals publishes it). Lets a registration
+  path fail closed rather than target a nil address.
+  """
+  @spec require_service_registry(config()) ::
+          {:ok, String.t()} | {:error, :service_registry_not_configured}
+  def require_service_registry(%{service_registry_address: addr}) when is_binary(addr),
+    do: {:ok, addr}
+
+  def require_service_registry(_config), do: {:error, :service_registry_not_configured}
 
   defp with_overrides(network, base) do
     overrides =

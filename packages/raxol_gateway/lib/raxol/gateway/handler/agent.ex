@@ -158,6 +158,17 @@ defmodule Raxol.Gateway.Handler.Agent do
 
   defp default_now, do: System.monotonic_time(:millisecond)
 
+  # Tools require the ReAct loop; a plain completion (`Stream.run`) never
+  # dispatches them. When `:actions` are configured (e.g. bundled MCP tools),
+  # run the tool loop; otherwise a single completion. Both drain via
+  # `Stream.collect/1` (the same pairing `Scheduler.Fire` uses).
+  defp turn_stream(messages, run_opts) do
+    case Keyword.get(run_opts, :actions, []) do
+      [] -> Raxol.Agent.Stream.run(messages, run_opts)
+      list when is_list(list) -> Raxol.Agent.Stream.react(messages, run_opts)
+    end
+  end
+
   # A backend that raises/exits mid-enumeration would otherwise crash the
   # session and drop this chat's events for the router's cooldown window.
   defp run_turn(messages, state) do
@@ -166,7 +177,7 @@ defmodule Raxol.Gateway.Handler.Agent do
     result =
       ErrorHandling.safe_call(fn ->
         messages
-        |> Raxol.Agent.Stream.run(run_opts)
+        |> turn_stream(run_opts)
         |> Raxol.Agent.Stream.collect()
       end)
 

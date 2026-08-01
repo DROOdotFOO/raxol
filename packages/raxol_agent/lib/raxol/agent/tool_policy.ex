@@ -19,7 +19,8 @@ defmodule Raxol.Agent.ToolPolicy do
   from here is a follow-up.
   """
 
-  @type authorizer :: (module(), map(), map() -> :ok | {:deny, term()})
+  @type authorizer ::
+          (module() | Raxol.Agent.Action.Dynamic.t(), map(), map() -> :ok | {:deny, term()})
 
   @doc "Allow every tool call."
   @spec allow_all() :: authorizer()
@@ -76,7 +77,10 @@ defmodule Raxol.Agent.ToolPolicy do
     end
   end
 
+  defp action_name(%Raxol.Agent.Action.Dynamic{name: name}), do: name
   defp action_name(module), do: module.__action_meta__().name
+
+  defp sensitive?(%Raxol.Agent.Action.Dynamic{sensitive: sensitive}), do: sensitive == true
 
   defp sensitive?(module),
     do: Map.get(module.__action_meta__(), :sensitive, false) == true

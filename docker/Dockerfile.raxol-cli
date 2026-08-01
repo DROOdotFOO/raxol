@@ -1,0 +1,64 @@
+# Builds the native-arch Linux binary for the `raxol` command (raxol_cli) and
+# exports it (a build recipe, not a runnable image).
+#
+# Run once per target arch. Each container builds the Burrito target matching its
+# OWN arch NATIVELY, so the termbox C NIF is compiled by the normal toolchain and
+# linked against the container's own ERTS -- no cross-compile, no NIF hazards. CI
+# runs this on both an amd64 and an arm64 runner and merges the results.
+#
+#   docker buildx build -f docker/Dockerfile.raxol-cli \
+#     --platform linux/amd64 --target export --output type=local,dest=./out .
+#   -> ./out/raxol_cli_linux        (on amd64)
+#   -> ./out/raxol_cli_linux_arm    (on arm64)
+#
+# Note on glibc: the termbox NIF is compiled against this builder's glibc (Debian
+# trixie). Burrito bundles its own ERTS, so only the NIF is host-glibc-sensitive;
+# a runtime host with an equal-or-newer glibc runs it. Bump the base down if an
+# older target is required.
+
+ARG ELIXIR_IMAGE=elixir:1.20.0-otp-29
+ARG ZIG_VERSION=0.16.0
+
+FROM ${ELIXIR_IMAGE} AS builder
+ARG ZIG_VERSION
+
+# build-essential + git: the termbox2 C NIF (transitive) compiles here natively;
+# ca-certificates: rustler_precompiled and Burrito download over TLS; xz-utils:
+# Burrito compresses payloads with xz; curl: fetch Zig.
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates xz-utils curl && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Zig (the exact version Burrito requires), matching the build arch.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  zarch=x86_64 ;; \
+      aarch64) zarch=aarch64 ;; \
+      *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${zarch}-linux-${ZIG_VERSION}.tar.xz" \
+      | tar -xJ -C /opt; \
+    ln -s "/opt/zig-${zarch}-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig; \
+    zig version
+
+ENV MIX_ENV=prod
+RUN mix local.hex --force && mix local.rebar --force
+
+WORKDIR /app
+COPY . .
+
+WORKDIR /app/packages/raxol_cli
+RUN mix deps.get --only prod
+
+# Build the Burrito target matching this container's arch (native, no cross).
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  target=linux ;; \
+      aarch64) target=linux_arm ;; \
+    esac; \
+    BURRITO_TARGET="$target" mix release raxol_cli --overwrite
+
+# Export stage: the single built binary, selected by `--output type=local`.
+FROM scratch AS export
+COPY --from=builder /app/packages/raxol_cli/burrito_out/ /

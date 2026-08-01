@@ -91,7 +91,13 @@ defmodule Raxol.Demo.GameOfLifeTest do
 
   describe "render/3" do
     test "returns ANSI-formatted string" do
-      grid = GameOfLife.create_grid(5, 3, 0.5)
+      # Live cells (age >= 1) emit ANSI; a random grid can come up all-dead.
+      # Build an all-live grid so the escape assertion is deterministic.
+      grid =
+        for x <- 0..4, y <- 0..2, into: %{} do
+          {{x, y}, 1}
+        end
+
       output = GameOfLife.render(grid, 5, 3)
 
       assert is_binary(output)

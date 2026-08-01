@@ -36,6 +36,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0028](0028-auxiliary-model-routing.md) | Auxiliary-model routing | Accepted | 2026-06-21 |
 | [0029](0029-the-terminal-cell-model.md) | The Terminal Cell Model | Accepted | 2026-07-14 |
 | [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Proposed | 2026-07-18 |
+| [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
 
 ## Template
 

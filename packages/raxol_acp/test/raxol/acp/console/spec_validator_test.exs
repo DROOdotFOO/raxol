@@ -41,8 +41,8 @@ defmodule Raxol.ACP.Console.SpecValidatorTest do
       assert {:error, {:invalid_requirement, "purpose", :missing}} =
                Spec.validate(Map.delete(@valid, "purpose"))
 
-      assert {:error, {:invalid_requirement, "runtime", {:not_in_enum, "raxol"}}} =
-               Spec.validate(%{@valid | "runtime" => "raxol"})
+      assert {:error, {:invalid_requirement, "runtime", {:not_in_enum, "nope"}}} =
+               Spec.validate(%{@valid | "runtime" => "nope"})
 
       assert {:error, {:invalid_requirement, :agent_name, _}} =
                Spec.validate(Map.put(@valid, "agent_name", "Bad Name!"))

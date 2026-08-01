@@ -1,0 +1,4 @@
+# Built runtime binaries are large build artifacts, populated by scripts/pack.sh
+# from ../burrito_out and shipped in the published tarball, not committed.
+vendor/
+*.tgz

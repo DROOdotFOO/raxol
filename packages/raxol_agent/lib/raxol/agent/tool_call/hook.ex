@@ -249,19 +249,24 @@ defmodule Raxol.Agent.ToolCall.Hook do
   # pre-hook call; only keys the hook actually set take effect. This
   # tolerates a hook building a fresh map and forgetting e.g. call_id,
   # without masking a genuinely malformed return. A returned `:action` must
-  # be an atom (a bare `_` here would let a hook hand back a non-atom action
-  # that later crashes `action.call/2` with an uncontained error); when the
-  # hook omits `:action` altogether, the original call's action carries
-  # through unchanged and is trivially a valid atom.
+  # be a callable tool -- an Action module (atom) or a
+  # `Raxol.Agent.Action.Dynamic` (a runtime-discovered tool). A bare `_` here
+  # would let a hook hand back some other term that later crashes the tool
+  # invocation with an uncontained error; `ToolConverter.assert_callable/1`
+  # re-checks the executing action regardless. When the hook omits `:action`,
+  # the original call's action carries through unchanged.
   defp backfill_cont(hook, call, returned) do
     action = Map.get(returned, :action, call.action)
 
-    if is_atom(action) do
+    if callable_action?(action) do
       {:cont, Map.merge(call, Map.take(returned, [:action, :name, :params, :call_id]))}
     else
       {:error, {:invalid_hook_return, hook, {:cont, returned}}}
     end
   end
+
+  defp callable_action?(action),
+    do: is_atom(action) or match?(%Raxol.Agent.Action.Dynamic{}, action)
 
   defp invoke_exit(hook, reason) do
     Logger.error(fn -> "tool-call hook #{inspect(hook)} exited: #{inspect(reason)}" end)

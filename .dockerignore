@@ -68,3 +68,7 @@ priv/static/
 priv/plts/
 demos/
 doc/
+# Console packaging artifacts (host-built binaries must not enter the build context)
+**/burrito_out/
+**/vendor/
+**/node_modules/
