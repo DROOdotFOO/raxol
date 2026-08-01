@@ -223,6 +223,38 @@ defmodule Raxol.Console.BootTest do
       assert [{:fake, :unavailable}] = report.mcp.failed
     end
 
+    test "the mcp supervisor is owned by the tree and torn down when it stops" do
+      pkg = %Package{
+        runtime: :raxol,
+        soul_md: "# Bot\n\nHi.",
+        agents_md: nil,
+        tasks: [],
+        skills: []
+      }
+
+      {:ok, rc} = RuntimeConfig.build(pkg, mcp_servers: [%{name: :fake, command: "noop"}])
+
+      {:ok, report} =
+        Boot.start(rc,
+          name: :mcp_owned,
+          scheduler_name: :mcp_owned_sched,
+          reconciler_name: :mcp_owned_recon,
+          mcp_start: fn _opts -> {:error, :unavailable} end
+        )
+
+      mcp_sup = report.mcp_supervisor
+      ref = Process.monitor(mcp_sup)
+
+      # It is a child of the root Console.Supervisor (adopted), not dangling.
+      child_pids = for {_, pid, _, _} <- Supervisor.which_children(:mcp_owned), do: pid
+      assert mcp_sup in child_pids
+
+      # Stopping the runtime tree tears the MCP supervisor down with it.
+      Supervisor.stop(:mcp_owned)
+      assert_receive {:DOWN, ^ref, :process, ^mcp_sup, _}
+      refute Process.alive?(mcp_sup)
+    end
+
     test "no dynamic supervisor when the package bundles no servers" do
       pkg = %Package{
         runtime: :raxol,

@@ -4,17 +4,26 @@ defmodule Raxol.Console.Supervisor do
 
   Children (`:rest_for_one`):
 
+    * MCP `DynamicSupervisor` -- present only when `Raxol.Console.Boot` bundled
+      MCP servers (`:mcp_supervisor_name` set). Started empty here and owned by
+      this tree (so it is torn down on stop, not leaked on the boot caller); Boot
+      then loads the server clients into it. It is the FIRST, `:temporary` child,
+      so no unrelated restart terminates it (`:rest_for_one` only restarts
+      children started AFTER a crash), and if it ever dies it stays dead rather
+      than restarting empty.
     * `Raxol.Agent.Skills.Store` -- present only when the package ships skills
       (`:skills_store` + `:skills_dir` set); a read-only index over the package's
-      `skills/` directory. First child, so it is up before the scheduler and chat
-      handler that reference it.
+      `skills/` directory. Up before the scheduler and chat handler that
+      reference it.
     * `Raxol.Agent.Scheduler` -- wired with the agent's persona + executor
       (`:runner`), gateway delivery (`:deliver`), and the skills store (when
       present) via `Raxol.Console.Scheduler.Wiring`.
     * `Raxol.Console.Reconciler` -- converges the scheduler's jobs to the runtime
       config's `tasks.json` jobs once the scheduler is up.
-    * `Raxol.Gateway.Supervisor` -- the channel subtree, present only when
-      `Raxol.Console.Boot` connected at least one channel.
+
+  The gateway channel subtree is NOT a static child: `Raxol.Console.Boot` adds it
+  dynamically as the last child once MCP tools resolve (its chat handler needs
+  them at build time), present only when at least one channel is connected.
   """
 
   use Supervisor
@@ -45,18 +54,40 @@ defmodule Raxol.Console.Supervisor do
       |> Keyword.put(:name, scheduler_name)
 
     children =
-      skills_child(opts) ++
+      mcp_child(opts) ++
+        skills_child(opts) ++
         [
           {Raxol.Agent.Scheduler, scheduler_opts},
           {Reconciler,
            name: reconciler_name, scheduler: scheduler_name, jobs: config.scheduler_jobs}
-        ] ++ gateway_child(opts)
+        ]
 
     Supervisor.init(children, strategy: :rest_for_one)
   end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # Start the MCP DynamicSupervisor empty as the first, `:temporary` child (Boot
+  # loads clients into it by name in its second phase). Owned by this tree so it
+  # is torn down on stop rather than leaking on the boot caller. `:temporary`: it
+  # holds already-resolved clients, so restarting it empty would be useless -- if
+  # it ever dies, leave it dead rather than cascade-restart the tree toolless.
+  defp mcp_child(opts) do
+    case Keyword.get(opts, :mcp_supervisor_name) do
+      nil ->
+        []
+
+      name ->
+        [
+          Supervisor.child_spec(
+            {DynamicSupervisor, strategy: :one_for_one, name: name},
+            id: :mcp_supervisor,
+            restart: :temporary
+          )
+        ]
+    end
+  end
 
   # The skills store indexes the package's `skills/` directory read-only. Its
   # managed root points at an unused sibling dir so the store never falls back to
@@ -72,15 +103,6 @@ defmodule Raxol.Console.Supervisor do
 
       _ ->
         []
-    end
-  end
-
-  # The gateway subtree (channels + per-chat sessions running the agent handler)
-  # is present only when `Raxol.Console.Boot` connected at least one channel.
-  defp gateway_child(opts) do
-    case Keyword.get(opts, :gateway) do
-      nil -> []
-      gateway_opts -> [{Raxol.Gateway.Supervisor, gateway_opts}]
     end
   end
 end

@@ -159,6 +159,48 @@ defmodule Raxol.ACP.Console.PackageTest do
       assert {:error, {:invalid_package, :dir, {:not_a_directory, "/no/such/dir"}}} =
                Package.load("/no/such/dir")
     end
+
+    test "skips symlinked entries so a package cannot smuggle host files" do
+      dir = Path.join(System.tmp_dir!(), "console_pkg_#{System.unique_integer([:positive])}")
+
+      secret =
+        Path.join(System.tmp_dir!(), "console_secret_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(Path.join(dir, "skills/evil"))
+      File.write!(secret, "TOP SECRET HOST FILE")
+
+      on_exit(fn ->
+        File.rm_rf(dir)
+        File.rm_rf(secret)
+      end)
+
+      File.write!(Path.join(dir, "soul.md"), "# Bot")
+      # A symlinked SKILL.md pointing at a host file: must NOT be read in.
+      File.ln_s!(secret, Path.join(dir, "skills/evil/SKILL.md"))
+
+      assert {:ok, pkg} = Package.load(dir)
+      assert pkg.skills == []
+    end
+
+    test "a symlinked required file fails closed rather than reading the target" do
+      dir = Path.join(System.tmp_dir!(), "console_pkg_#{System.unique_integer([:positive])}")
+
+      secret =
+        Path.join(System.tmp_dir!(), "console_secret_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(dir)
+      File.write!(secret, "TOP SECRET")
+
+      on_exit(fn ->
+        File.rm_rf(dir)
+        File.rm_rf(secret)
+      end)
+
+      # soul.md is a symlink to a host file: skipped, so the package is missing it.
+      File.ln_s!(secret, Path.join(dir, "soul.md"))
+
+      assert {:error, {:invalid_package, "soul.md", :missing}} = Package.load(dir)
+    end
   end
 
   defp restore(key, nil), do: Application.delete_env(:raxol_acp, key)

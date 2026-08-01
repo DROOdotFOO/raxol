@@ -180,7 +180,7 @@ defmodule Raxol.ACP.Console.Package do
       dir
       |> Path.join("**/*")
       |> Path.wildcard(match_dot: false)
-      |> Enum.filter(&File.regular?/1)
+      |> Enum.filter(&regular_file?/1)
       |> Enum.reduce_while({:ok, %{}}, fn path, {:ok, acc} ->
         case File.read(path) do
           {:ok, bin} -> {:cont, {:ok, Map.put(acc, Path.relative_to(path, dir), bin)}}
@@ -189,6 +189,18 @@ defmodule Raxol.ACP.Console.Package do
       end)
     else
       {:error, {:invalid_package, :dir, {:not_a_directory, dir}}}
+    end
+  end
+
+  # A regular file that is NOT a symlink. `File.regular?/1` follows symlinks, so a
+  # package could smuggle host files (`soul.md` -> /etc/passwd, a symlinked
+  # SKILL.md) into the parsed struct. `lstat` does not follow, so a symlinked
+  # entry reports `:symlink` and is skipped -- a symlinked required file
+  # (soul.md) then reads as missing and fails closed, which is the safe outcome.
+  defp regular_file?(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular}} -> true
+      _ -> false
     end
   end
 end

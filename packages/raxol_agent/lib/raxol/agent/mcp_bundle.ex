@@ -13,6 +13,10 @@ defmodule Raxol.Agent.McpBundle do
   Loading is FAIL-OPEN per server: a server that fails to start or list its
   tools is logged and skipped, so one broken or uninstalled server never denies
   the agent the rest of its tools.
+
+  Discovered tools are `sensitive: true` unless a spec says otherwise, so the
+  default `ToolPolicy.deny_sensitive` authorizer gates a bundled tool until an
+  operator opts in. See `default_servers/1` for the per-server posture.
   """
 
   require Logger
@@ -21,7 +25,9 @@ defmodule Raxol.Agent.McpBundle do
 
   # An MCP client reports `{:not_ready, :initializing}` until its initialize
   # handshake round-trips; without waiting, a freshly started server lists zero
-  # tools. Poll readiness up to this budget before giving up (fail-open).
+  # tools. Poll readiness up to this budget before giving up (fail-open). The
+  # budget is a SINGLE shared deadline across the whole bundle (clients start
+  # concurrently first), so N slow servers cannot stall boot for N * timeout.
   @default_ready_timeout_ms 15_000
   @default_ready_interval_ms 100
 
@@ -29,7 +35,8 @@ defmodule Raxol.Agent.McpBundle do
           required(:name) => atom(),
           required(:command) => String.t(),
           optional(:args) => [String.t()],
-          optional(:env) => [{String.t(), String.t()}]
+          optional(:env) => [{String.t(), String.t()}],
+          optional(:sensitive) => boolean()
         }
 
   @type loaded :: %{
@@ -46,9 +53,10 @@ defmodule Raxol.Agent.McpBundle do
     * `:start` -- `(keyword() -> {:ok, pid()} | {:error, term()})`, how a client
       is started (default `&Raxol.MCP.Client.start_link/1`). Injectable for
       tests and for a supervised start.
-    * `:ready_timeout` -- ms to wait for a server's initialize handshake before
-      listing its tools (default #{@default_ready_timeout_ms}). A server not
-      ready in time fails open (skipped), as any load failure does.
+    * `:ready_timeout` -- ms for the WHOLE bundle's initialize handshakes, a
+      single shared deadline (default #{@default_ready_timeout_ms}). A server not
+      ready before the shared deadline fails open (skipped), as any load failure
+      does; N slow servers cost ~timeout total, not N * timeout.
     * `:ready_interval` -- ms between readiness polls (default
       #{@default_ready_interval_ms}).
 
@@ -62,16 +70,20 @@ defmodule Raxol.Agent.McpBundle do
     timeout = Keyword.get(opts, :ready_timeout, @default_ready_timeout_ms)
     interval = Keyword.get(opts, :ready_interval, @default_ready_interval_ms)
 
+    # One shared deadline for the whole bundle: clients start concurrently below,
+    # so awaiting them against a single absolute deadline bounds total boot delay
+    # at ~timeout rather than summing a fresh per-server budget.
+    deadline = System.monotonic_time(:millisecond) + timeout
+
     # Start every client first so their initialize handshakes run concurrently,
     # then await each and list its tools. Start-then-await keeps one server's
     # (multi-second) cold start from serializing the whole bundle's boot.
     specs
     |> Enum.map(&{&1, start_client(&1, start)})
-    |> Enum.reduce(%{tools: [], servers: [], failed: []}, fn {spec, started},
-                                                             acc ->
+    |> Enum.reduce(%{tools: [], servers: [], failed: []}, fn {spec, started}, acc ->
       name = spec_name(spec)
 
-      case resolve(started, name, timeout, interval) do
+      case resolve(started, name, deadline, interval, spec) do
         {:ok, server, tools} ->
           %{
             acc
@@ -109,28 +121,23 @@ defmodule Raxol.Agent.McpBundle do
 
   defp start_client(spec, _start), do: {:error, {:invalid_spec, spec}}
 
-  defp resolve({:ok, server}, name, timeout, interval) do
-    case await_tools(server, name, timeout, interval) do
+  defp resolve({:ok, server}, name, deadline, interval, spec) do
+    case poll_tools(server, name, deadline, interval, spec) do
       {:ok, tools} -> {:ok, server, tools}
       {:error, _} = err -> err
     end
   end
 
-  defp resolve({:error, _} = err, _name, _timeout, _interval), do: err
+  defp resolve({:error, _} = err, _name, _deadline, _interval, _spec), do: err
 
   # Retry listing tools while the client is still initializing, until ready or
-  # the deadline. Any non-`:not_ready` error fails open immediately.
-  defp await_tools(server, name, timeout, interval) do
-    poll_tools(
-      server,
-      name,
-      System.monotonic_time(:millisecond) + timeout,
-      interval
-    )
-  end
+  # the shared deadline. Any non-`:not_ready` error fails open immediately. A
+  # server's own `:sensitive` flag (default true) is stamped onto its tools so
+  # the ToolConverter authorizer gates them appropriately.
+  defp poll_tools(server, name, deadline, interval, spec) do
+    sensitive = Map.get(spec, :sensitive, true)
 
-  defp poll_tools(server, name, deadline, interval) do
-    case Dynamic.from_client(server, name) do
+    case Dynamic.from_client(server, name, sensitive: sensitive) do
       {:ok, tools} ->
         {:ok, tools}
 
@@ -141,7 +148,7 @@ defmodule Raxol.Agent.McpBundle do
       when status in [:starting, :initializing] ->
         if System.monotonic_time(:millisecond) < deadline do
           Process.sleep(interval)
-          poll_tools(server, name, deadline, interval)
+          poll_tools(server, name, deadline, interval, spec)
         else
           err
         end
@@ -151,12 +158,29 @@ defmodule Raxol.Agent.McpBundle do
     end
   end
 
+  # Exact versions for the default catalog. `npx`/`uvx` otherwise resolve
+  # "latest" at boot and fetch-and-run whatever the registry serves right then,
+  # which is unpinned remote code execution in a credential-holding runtime. Pin
+  # every server so a boot is reproducible and a poisoned "latest" cannot slip
+  # in; bump these deliberately. Verify against the npm/PyPI registries on bump.
+  @fs_version "2026.7.10"
+  @seq_version "2026.7.4"
+  @fetch_version "2026.7.10"
+  @git_version "2026.7.10"
+  @time_version "2026.7.10"
+
   @doc """
   The recommended default server catalog.
 
   `:workspace` scopes the filesystem server's allowed root (default `"."`).
   `npx` / `uvx` must be on PATH at runtime; a missing one fails open (that server
-  is skipped, per `load/2`).
+  is skipped, per `load/2`). Every server is version-pinned (see the module
+  attributes) so boot never fetches an unpinned "latest".
+
+  Sensitivity reflects capability: filesystem (writes), fetch (arbitrary network
+  / SSRF), and git are `sensitive: true`, so the default `deny_sensitive`
+  authorizer gates them until an operator opts in. `time` and
+  `sequential_thinking` are pure/read-only and stay callable by default.
   """
   @spec default_servers(keyword()) :: [server_spec()]
   def default_servers(opts \\ []) do
@@ -166,15 +190,27 @@ defmodule Raxol.Agent.McpBundle do
       %{
         name: :filesystem,
         command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-filesystem", workspace]
+        args: ["-y", "@modelcontextprotocol/server-filesystem@#{@fs_version}", workspace],
+        sensitive: true
       },
-      %{name: :fetch, command: "uvx", args: ["mcp-server-fetch"]},
-      %{name: :git, command: "uvx", args: ["mcp-server-git"]},
-      %{name: :time, command: "uvx", args: ["mcp-server-time"]},
+      %{
+        name: :fetch,
+        command: "uvx",
+        args: ["mcp-server-fetch@#{@fetch_version}"],
+        sensitive: true
+      },
+      %{name: :git, command: "uvx", args: ["mcp-server-git@#{@git_version}"], sensitive: true},
+      %{
+        name: :time,
+        command: "uvx",
+        args: ["mcp-server-time@#{@time_version}"],
+        sensitive: false
+      },
       %{
         name: :sequential_thinking,
         command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+        args: ["-y", "@modelcontextprotocol/server-sequential-thinking@#{@seq_version}"],
+        sensitive: false
       }
     ]
   end

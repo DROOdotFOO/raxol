@@ -25,9 +25,7 @@ defmodule Raxol.Agent.McpBundleTest.FakeServer do
   def handle_call({:call_tool, name, args}, _from, state) do
     if state.test_pid, do: send(state.test_pid, {:fake_called, name, args})
 
-    {:reply,
-     {:ok, %{"content" => [%{"type" => "text", "text" => "ok:#{name}"}]}},
-     state}
+    {:reply, {:ok, %{"content" => [%{"type" => "text", "text" => "ok:#{name}"}]}}, state}
   end
 end
 
@@ -52,9 +50,7 @@ defmodule Raxol.Agent.McpBundleTest.SlowServer do
 
   @impl true
   def handle_call(:list_tools, _from, %{not_ready: n} = state) when n > 0,
-    do:
-      {:reply, {:error, {:not_ready, :initializing}},
-       %{state | not_ready: n - 1}}
+    do: {:reply, {:error, {:not_ready, :initializing}}, %{state | not_ready: n - 1}}
 
   def handle_call(:list_tools, _from, state),
     do: {:reply, {:ok, state.tools}, state}
@@ -82,6 +78,7 @@ defmodule Raxol.Agent.McpBundleTest do
   alias Raxol.Agent.Action.ToolConverter
   alias Raxol.Agent.McpBundle
   alias Raxol.Agent.McpBundleTest.FakeServer
+  alias Raxol.Agent.ToolPolicy
 
   # A start fn that maps a spec name to a fake server with canned tools, and
   # fails the `:bad` server so the fail-open path is exercised.
@@ -160,12 +157,40 @@ defmodule Raxol.Agent.McpBundleTest do
         "id" => "c1"
       }
 
+      # Bundled tools are sensitive by default, so an operator authorizer is
+      # needed to dispatch them; this exercises the boundary plumbing.
+      ctx = %{tool_authorizer: ToolPolicy.allow_all()}
+
       assert {:ok, %{"content" => _}} =
-               ToolConverter.dispatch_tool_call(tool_call, loaded.tools, %{})
+               ToolConverter.dispatch_tool_call(tool_call, loaded.tools, ctx)
 
       # The server receives the ORIGINAL tool name, not the namespaced one, with
       # string-keyed args.
       assert_receive {:fake_called, "status", %{"path" => "."}}
+    end
+
+    test "bundled tools are sensitive by default and gated; a sensitive:false spec is callable" do
+      # Same fake git server, once with the default (sensitive) posture and once
+      # explicitly marked non-sensitive.
+      gated = McpBundle.load([%{name: :git, command: "x"}], start: start_fn(self()))
+      [gated_tool] = gated.tools
+      assert gated_tool.sensitive == true
+
+      open =
+        McpBundle.load([%{name: :git, command: "x", sensitive: false}], start: start_fn(self()))
+
+      [open_tool] = open.tools
+      assert open_tool.sensitive == false
+
+      call = %{"name" => "mcp__git__status", "arguments" => %{}, "id" => "c1"}
+
+      # Default authorizer (deny_sensitive) blocks the sensitive tool...
+      assert {:error, {:tool_denied, "mcp__git__status", :sensitive_tool}} =
+               ToolConverter.dispatch_tool_call(call, gated.tools, %{})
+
+      # ...but the sensitive:false server's tool dispatches with no authorizer.
+      assert {:ok, %{"content" => _}} =
+               ToolConverter.dispatch_tool_call(call, open.tools, %{})
     end
 
     test "an empty spec list loads nothing" do

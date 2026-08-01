@@ -12,9 +12,13 @@ defmodule Raxol.Console.Boot do
   report's `:failed` bucket rather than raised, so one bad task cannot crash the
   reconciler (and, under `:rest_for_one`, hot-loop the whole tree).
 
-  Bundled MCP servers, when present, are started under a dedicated
-  `DynamicSupervisor` (returned as `:mcp_supervisor`) so a crashed server client
-  is restarted rather than left dangling on the boot caller.
+  Bundled MCP servers, when present, run under a dedicated `DynamicSupervisor`
+  (returned as `:mcp_supervisor`) that `Raxol.Console.Supervisor` starts as its
+  own child, so it is torn down when the runtime stops and never leaks on the
+  boot caller; a crashed server client is restarted by it rather than left
+  dangling. Boot is two-phase: it starts the tree (with the empty MCP supervisor)
+  first, then loads the servers into it and starts the gateway last, so the chat
+  handler captures the resolved tools.
   """
 
   alias Raxol.Agent.{McpBundle, Scheduler}
@@ -51,36 +55,45 @@ defmodule Raxol.Console.Boot do
   @spec start(Raxol.Console.RuntimeConfig.t(), keyword()) :: {:ok, report()} | {:error, term()}
   def start(runtime_config, opts \\ []) do
     base = Keyword.get(opts, :name, Raxol.Console)
-    {mcp_sup, mcp, skills, actions} = prepare(runtime_config, opts, base)
+    skills = resolve_skills(opts, base)
+    mcp_name = name(base, "mcp")
 
     with {:ok, adapters} <- connect_channels(runtime_config.channels),
-         sup_opts = build_sup_opts(opts, runtime_config, adapters, actions, base, skills),
-         {:ok, sup} <- Raxol.Console.Supervisor.start_link(sup_opts) do
-      {:ok, report(sup, mcp_sup, mcp, adapters, skills, opts)}
-    else
-      {:error, _} = error ->
-        # A failed channel connect or tree start must not leak the MCP subtree.
-        stop_supervisor(mcp_sup)
-        error
+         core_opts = core_sup_opts(opts, runtime_config, adapters, skills, mcp_name),
+         {:ok, sup} <- Raxol.Console.Supervisor.start_link(core_opts) do
+      # Phase two: the tree (incl. the empty MCP DynamicSupervisor, owned by the
+      # root supervisor so its lifecycle is the runtime's) is up. Load servers
+      # into that supervised MCP subtree, then start the gateway last, so its chat
+      # handler captures the resolved tools. A phase-two failure tears the tree
+      # (and the MCP subtree with it) down rather than leaving it half-booted.
+      mcp = load_mcp(runtime_config, opts, mcp_name)
+      mcp_sup = mcp_supervisor_pid(runtime_config, mcp_name)
+      actions = Keyword.get(opts, :actions, []) ++ mcp.tools
+
+      case start_gateway(sup, runtime_config, adapters, actions, base, skills) do
+        :ok -> {:ok, report(sup, mcp_sup, mcp, adapters, skills, opts)}
+        {:error, _} = error -> stop_supervisor(sup) && error
+      end
     end
   end
 
-  # Start the MCP subtree and resolve the skills store + combined toolset before
-  # the tree comes up (the gateway child spec needs the tools at build time).
-  defp prepare(runtime_config, opts, base) do
-    {mcp_sup, mcp} = start_mcp(runtime_config, opts, base)
-    skills = resolve_skills(opts, base)
-    actions = Keyword.get(opts, :actions, []) ++ mcp.tools
-    {mcp_sup, mcp, skills, actions}
-  end
-
-  defp build_sup_opts(opts, runtime_config, adapters, actions, base, skills) do
+  # The core supervisor opts: everything the tree starts synchronously at init --
+  # the (empty) MCP DynamicSupervisor when servers are bundled, the skills store,
+  # the scheduler, and the reconciler. The gateway is NOT here; it is added after
+  # MCP tools resolve (see `start_gateway/6`).
+  defp core_sup_opts(opts, runtime_config, adapters, skills, mcp_name) do
     opts
     |> Keyword.put(:runtime_config, runtime_config)
     |> Keyword.put(:adapters, adapters)
+    |> Keyword.put(:mcp_supervisor_name, mcp_enabled_name(runtime_config, mcp_name))
     |> put_skills(skills)
-    |> put_gateway(runtime_config, adapters, actions, base, skills)
   end
+
+  defp mcp_enabled_name(%{mcp_servers: []}, _mcp_name), do: nil
+  defp mcp_enabled_name(_rc, mcp_name), do: mcp_name
+
+  defp mcp_supervisor_pid(%{mcp_servers: []}, _mcp_name), do: nil
+  defp mcp_supervisor_pid(_rc, mcp_name), do: Process.whereis(mcp_name)
 
   defp report(sup, mcp_sup, mcp, adapters, skills, opts) do
     reconciler = Keyword.get(opts, :reconciler_name, Raxol.Console.Reconciler)
@@ -114,28 +127,24 @@ defmodule Raxol.Console.Boot do
 
   # -- MCP servers ------------------------------------------------------------
 
-  # Start the bundled MCP servers under a dedicated DynamicSupervisor so a
-  # crashed client is restarted rather than left dangling on the boot caller. An
-  # empty server set skips the supervisor (`mcp_supervisor: nil`); `:mcp_start`
-  # overrides how each client is started (tests) but still runs under the tree.
-  defp start_mcp(rc, opts, base) do
-    if rc.mcp_servers == [] do
-      {nil, McpBundle.load([], [])}
-    else
-      {:ok, sup} =
-        DynamicSupervisor.start_link(strategy: :one_for_one, name: name(base, "mcp"))
+  # Load the bundled MCP servers into the MCP DynamicSupervisor the root tree
+  # already started (named `mcp_name`), so every client runs under the runtime's
+  # supervision, not the transient boot caller's. An empty server set is a no-op.
+  # `:mcp_start` overrides how each client is started (tests) but it still runs
+  # under the supervised tree.
+  defp load_mcp(%{mcp_servers: []}, _opts, _mcp_name), do: McpBundle.load([], [])
 
-      client_start = Keyword.get(opts, :mcp_start, &Raxol.MCP.Client.start_link/1)
-      {sup, McpBundle.load(rc.mcp_servers, start: supervised_client_start(sup, client_start))}
-    end
+  defp load_mcp(rc, opts, mcp_name) do
+    client_start = Keyword.get(opts, :mcp_start, &Raxol.MCP.Client.start_link/1)
+    McpBundle.load(rc.mcp_servers, start: supervised_client_start(mcp_name, client_start))
   end
 
-  # Wrap the client-start as a supervised child so `DynamicSupervisor` owns the
-  # client pid (the wrapped fn -- real `MCP.Client.start_link/1` or an injected
-  # one -- runs in the supervisor and links its process there).
-  defp supervised_client_start(sup, client_start) do
+  # Wrap the client-start as a supervised child so the MCP `DynamicSupervisor`
+  # (addressed by name) owns the client pid (the wrapped fn -- real
+  # `MCP.Client.start_link/1` or an injected one -- runs under and links into it).
+  defp supervised_client_start(mcp_name, client_start) do
     fn client_opts ->
-      DynamicSupervisor.start_child(sup, %{
+      DynamicSupervisor.start_child(mcp_name, %{
         id: :mcp_client,
         start: {:erlang, :apply, [client_start, [client_opts]]},
         restart: :transient
@@ -170,16 +179,29 @@ defmodule Raxol.Console.Boot do
 
   # -- gateway ----------------------------------------------------------------
 
-  # Build the gateway subtree opts only when at least one channel is connected;
-  # a headless (scheduler-only) runtime skips it. The chat handler runs the
-  # agent's persona + the combined toolset (with read-only skill access + the
-  # skills store in context when the package ships skills), outbound through the
-  # same adapters map the scheduler delivers to.
-  defp put_gateway(sup_opts, _rc, adapters, _actions, _base, _skills)
+  # Start the gateway subtree as the LAST child of the running tree, only when at
+  # least one channel is connected; a headless (scheduler-only) runtime skips it.
+  # It is added dynamically (after MCP tools resolve) so the chat handler can
+  # carry the combined toolset. As the last-started child under `:rest_for_one`,
+  # this matches the ordering a static gateway child would have had. The chat
+  # handler runs the agent's persona + the combined toolset (read-only skill
+  # access + the skills store in context when the package ships skills), outbound
+  # through the same adapters map the scheduler delivers to.
+  defp start_gateway(_sup, _rc, adapters, _actions, _base, _skills)
        when map_size(adapters) == 0,
-       do: sup_opts
+       do: :ok
 
-  defp put_gateway(sup_opts, rc, adapters, actions, base, skills) do
+  defp start_gateway(sup, rc, adapters, actions, base, skills) do
+    case Supervisor.start_child(
+           sup,
+           {Raxol.Gateway.Supervisor, gateway_opts(rc, adapters, actions, base, skills)}
+         ) do
+      {:ok, _pid} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  defp gateway_opts(rc, adapters, actions, base, skills) do
     agent_opts =
       rc.agent_opts
       |> Keyword.put(:actions, skill_actions(skills) ++ actions)
@@ -188,7 +210,7 @@ defmodule Raxol.Console.Boot do
     handler =
       {Raxol.Gateway.Handler.Agent, [system_prompt: rc.system_prompt, agent_opts: agent_opts]}
 
-    gateway = [
+    [
       handler: handler,
       deliver: fn route, rendered ->
         Raxol.Gateway.Delivery.deliver(adapters, {:direct, route}, rendered)
@@ -198,8 +220,6 @@ defmodule Raxol.Console.Boot do
       pairing_name: name(base, "pairing"),
       sessions_sup: name(base, "sessions")
     ]
-
-    Keyword.put(sup_opts, :gateway, gateway)
   end
 
   defp skill_actions(nil), do: []

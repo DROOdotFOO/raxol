@@ -96,8 +96,17 @@ defmodule Raxol.Agent.Action.DynamicToolTest do
       assert tool.name == Raxol.MCP.Client.tool_name(:git, "status")
       assert tool.description == "show status"
       assert tool.input_schema == %{"type" => "object"}
-      assert tool.sensitive == false
+      # Discovered tools are sensitive by default (unknown capabilities), so the
+      # default authorizer gates them until an operator opts in.
+      assert tool.sensitive == true
       assert is_function(tool.invoke, 2)
+    end
+
+    test "sensitive: false marks the wrapped tools non-sensitive" do
+      tools = [%{"name" => "now", "description" => "time", "inputSchema" => %{}}]
+
+      assert [tool] = Dynamic.from_mcp(:fake_server, :time, tools, sensitive: false)
+      assert tool.sensitive == false
     end
   end
 

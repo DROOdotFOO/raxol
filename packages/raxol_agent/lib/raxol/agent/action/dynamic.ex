@@ -15,6 +15,13 @@ defmodule Raxol.Agent.Action.Dynamic do
   tool-call hook chain as a module Action -- it is not a bypass. Put dynamic
   tools in the `:actions` list handed to `Raxol.Agent.Stream.react/2`.
 
+  A discovered tool is `sensitive: true` by default: an external MCP server's
+  capabilities (filesystem writes, network fetch, git, ...) are unknown, so the
+  safe posture is that the default authorizer (`ToolPolicy.deny_sensitive`) gates
+  them until an operator opts in (a `:tool_authorizer` in context, or a spec that
+  marks the server non-sensitive). A caller that knows a tool is read-only can
+  pass `sensitive: false` to `from_mcp/4`.
+
   Dynamic tools are a framework-react concern: a native (vendor-owns-loop)
   backend reaches its MCP servers directly, so it does not consume these.
   """
@@ -59,9 +66,14 @@ defmodule Raxol.Agent.Action.Dynamic do
   `invoke` calls `Raxol.MCP.Client.call_tool/3` with the ORIGINAL (un-namespaced)
   tool name and string-keyed arguments. `tools` is the raw list from
   `Raxol.MCP.Client.list_tools/1` (string- or atom-keyed maps).
+
+  `:sensitive` (default `true`) sets every wrapped tool's sensitivity; pass
+  `false` only for a server known to be read-only/harmless.
   """
-  @spec from_mcp(GenServer.server(), atom(), [map()]) :: [t()]
-  def from_mcp(server, server_name, tools) when is_list(tools) do
+  @spec from_mcp(GenServer.server(), atom(), [map()], keyword()) :: [t()]
+  def from_mcp(server, server_name, tools, opts \\ []) when is_list(tools) do
+    sensitive = Keyword.get(opts, :sensitive, true)
+
     Enum.map(tools, fn tool ->
       raw = to_string(get(tool, :name) || "")
 
@@ -69,7 +81,7 @@ defmodule Raxol.Agent.Action.Dynamic do
         name: Raxol.MCP.Client.tool_name(server_name, raw),
         description: to_string(get(tool, :description) || ""),
         input_schema: input_schema(tool),
-        sensitive: false,
+        sensitive: sensitive,
         invoke: fn params, _context ->
           Raxol.MCP.Client.call_tool(server, raw, stringify(params))
         end
@@ -82,10 +94,10 @@ defmodule Raxol.Agent.Action.Dynamic do
 
   `{:ok, [t()]}`, or the `{:error, reason}` from `Raxol.MCP.Client.list_tools/1`.
   """
-  @spec from_client(GenServer.server(), atom()) :: {:ok, [t()]} | {:error, term()}
-  def from_client(server, server_name) do
+  @spec from_client(GenServer.server(), atom(), keyword()) :: {:ok, [t()]} | {:error, term()}
+  def from_client(server, server_name, opts \\ []) do
     case Raxol.MCP.Client.list_tools(server) do
-      {:ok, tools} -> {:ok, from_mcp(server, server_name, tools)}
+      {:ok, tools} -> {:ok, from_mcp(server, server_name, tools, opts)}
       {:error, _} = err -> err
     end
   end
