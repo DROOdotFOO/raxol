@@ -1,5 +1,5 @@
 # Golden reference hashes must stay byte-stable across platforms (no CRLF).
-priv/fate/golden.refs text eol=lf
+priv/rate/golden.refs text eol=lf
 
 # Harness degradation-tier goldens are raw terminal byte streams compared
 # byte-for-byte in tests -- their \r\n sequences are sealed-line protocol

@@ -2,7 +2,7 @@ if !Raxol.Terminal.TerminalUtils.real_tty?() do
   defmodule Raxol.Terminal.OracleEquivalenceTest do
     use ExUnit.Case
     @moduletag :docker
-    @tag skip: "requires a real TTY (self-hosted FATE runner under a PTY)"
+    @tag skip: "requires a real TTY (self-hosted RATE runner under a PTY)"
     test "oracle equivalence skipped without a TTY" do
       assert true
     end
@@ -16,7 +16,7 @@ else
     attribute saturation, out-of-bounds writes, print clipping, newlines).
 
     Needs a real terminal (`tb_init` opens the controlling tty), so it runs on the
-    self-hosted FATE runners under a pseudo-terminal, not on GitHub-hosted CI.
+    self-hosted RATE runners under a pseudo-terminal, not on GitHub-hosted CI.
     """
     use ExUnit.Case
 

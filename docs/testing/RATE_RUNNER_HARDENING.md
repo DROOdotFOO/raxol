@@ -1,10 +1,10 @@
-# Hardening the FATE self-hosted runners
+# Hardening the RATE self-hosted runners
 
-The FATE bench runs on self-hosted GitHub Actions runners on the homelab tailnet. On a
+The RATE bench runs on self-hosted GitHub Actions runners on the homelab tailnet. On a
 public repository a self-hosted runner is a remote-code-execution surface: every job
 runs repository code and its full dependency tree, and once a runner sits on the tailnet
 a compromised job can pivot to other nodes. This guide is the paranoid baseline. Register
-runners with the walkthrough in `FATE_BENCH.md`, then apply every layer here.
+runners with the walkthrough in `RATE_BENCH.md`, then apply every layer here.
 
 ## Threat model
 
@@ -24,7 +24,7 @@ make one contained, ephemeral, and unable to move laterally or persist.
 
 ### 0. Trigger fencing (shipped in the workflow)
 
-`fate-selfhosted.yml` never runs untrusted code: triggers are `workflow_dispatch`,
+`rate-selfhosted.yml` never runs untrusted code: triggers are `workflow_dispatch`,
 `push` to `master`, and `schedule` only (no `pull_request`), with
 `if: github.repository_owner == 'DROOdotFOO'`. Fork code cannot reach the runners. This
 is the first gate; everything below assumes it can still fail (a compromised dependency
@@ -88,7 +88,7 @@ a default-deny policy in the Tailscale admin console:
     // Admins reach the runners for management. Runners get no blanket tailnet access.
     { "action": "accept", "src": ["autogroup:admin", "tag:admin"], "dst": ["tag:ci:*"] }
 
-    // Layer 3 (swarm-FATE) only: uncomment to allow runner-to-runner BEAM
+    // Layer 3 (swarm-RATE) only: uncomment to allow runner-to-runner BEAM
     // distribution (epmd + a pinned distribution port range), nothing else.
     // { "action": "accept", "src": ["tag:ci"], "dst": ["tag:ci:4369", "tag:ci:9100-9200"] }
   ],
@@ -143,7 +143,7 @@ Deny inbound at the host too, so a misconfigured ACL is not the only barrier.
 
 ### NixOS host
 
-Import `nixosModules.githubRunner` and set the paranoid knobs (see `FATE_BENCH.md` for the
+Import `nixosModules.githubRunner` and set the paranoid knobs (see `RATE_BENCH.md` for the
 full stanza + agenix secrets):
 
 ```nix
