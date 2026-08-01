@@ -1,6 +1,6 @@
 defmodule Raxol.Agent.Reattach do
   @moduledoc """
-  U4 — reattach / replay surface (AD-15 / FI-12). **SKELETON ONLY.**
+  U4 — reattach / replay surface (AD-15 / FI-12).
 
   A client (re)connects to a session and receives, in one coherent stream:
 
@@ -35,9 +35,13 @@ defmodule Raxol.Agent.Reattach do
 
   ## Status
 
-  Not yet implemented. `attach/3` returns `{:error, :not_implemented}`; the U4-R
-  red suite (`test/raxol/agent/red/u4_reattach_red_test.exs`) drives this surface
-  and goes green when U4 lands. The `@callback` freezes the shape the reds assume.
+  Landed. `attach/3` dispatches to the read-side `Raxol.Agent.Reattach.FileReader`
+  by default (`config :raxol_agent, :reattach_impl` overrides it), which reads
+  durable history via the tolerant Reader and follows the live tail via
+  `Raxol.Agent.Reattach.Tailer`. The U4-R suite
+  (`test/raxol/agent/red/u4_reattach_red_test.exs`) runs GREEN against it; the
+  `@callback` freezes the shape. `Raxol.Agent.Reattach.NotImplemented` remains as
+  an explicit opt-out impl.
   """
 
   @typedoc "How much history to replay before the live tail begins."
@@ -117,7 +121,7 @@ defmodule Raxol.Agent.Reattach do
   end
 
   defp impl do
-    Application.get_env(:raxol_agent, :reattach_impl, __MODULE__.NotImplemented)
+    Application.get_env(:raxol_agent, :reattach_impl, __MODULE__.FileReader)
   end
 end
 

@@ -2,18 +2,16 @@ Code.require_file("support/u4_red_support.ex", __DIR__)
 
 defmodule Raxol.Agent.Red.U4ReattachRedTest do
   @moduledoc """
-  U4-R — the PERMANENT FAILING-FIRST red suite for U4 "Reattach/replay"
-  (AD-15 / FI-12), authored against the ratified JS-FREEZE contract
+  U4-R — the failing-first suite for U4 "Reattach/replay" (AD-15 / FI-12),
+  authored against the ratified JS-FREEZE contract
   (`docs/proposals/in-flight/harness-freeze-contracts.md` §1) BEFORE any
-  implementation exists.
+  implementation existed.
 
-  Every test here is `@moduletag :harness_red`, excluded in `test_helper.exs`,
-  and FAILS today by design: `Raxol.Agent.Reattach.attach/3` is a skeleton
-  returning `{:error, :not_implemented}`. When U4 lands, the tag is removed
-  and these become the unit's acceptance suite — the assertions are the full
-  contract, not placeholders. Run them with:
-
-      MIX_ENV=test mix test test/raxol/agent/red/u4_reattach_red_test.exs --include harness_red
+  These tests assert the *correct* reattach behaviour. U4 has since landed:
+  `Raxol.Agent.Reattach.attach/3` dispatches to the real read-side
+  `Raxol.Agent.Reattach.FileReader` by default, the `:harness_red` exclusion was
+  dropped, and this suite now runs GREEN in CI unchanged — the assertions are the
+  full contract, not placeholders.
 
   ## The frozen surface these reds drive
 
@@ -70,7 +68,6 @@ defmodule Raxol.Agent.Red.U4ReattachRedTest do
   alias Raxol.Agent.Reattach
   alias Raxol.Agent.Red.U4Support
 
-  @moduletag :harness_red
   @moduletag :capture_log
 
   setup do

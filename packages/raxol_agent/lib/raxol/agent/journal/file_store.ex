@@ -43,6 +43,19 @@ defmodule Raxol.Agent.Journal.FileStore do
   @session_id_re ~r/\A[A-Za-z0-9._-]+\z/
 
   @doc """
+  Resolve `session_id` to its on-disk session directory under the configured
+  base (`:base_dir` option, `$RAXOL_SESSIONS_DIR`, or `~/.raxol/sessions`).
+
+  This is the single resolution point `open/2` and the read-side reattach path
+  (`Raxol.Agent.Reattach.FileReader`) share, so a session opened for writing and
+  one reattached read-side always name the same directory.
+  """
+  @spec session_dir(String.t(), keyword()) :: Path.t()
+  def session_dir(session_id, opts \\ []) when is_binary(session_id) do
+    Path.join(base_dir(opts), session_id)
+  end
+
+  @doc """
   Open (creating if needed) the journal for `session_id`.
 
   Options:
@@ -56,7 +69,7 @@ defmodule Raxol.Agent.Journal.FileStore do
   """
   @impl Raxol.Agent.Journal
   def open(session_id, opts \\ []) when is_binary(session_id) do
-    dir = Path.join(base_dir(opts), session_id)
+    dir = session_dir(session_id, opts)
 
     # Pre-flight the session layout HERE, where a failure is a plain
     # `{:error, reason}` return. A raising `Writer.init` (e.g. the session dir
