@@ -20,7 +20,8 @@ defmodule Raxol.Agent.Command do
       optionally `%{turn_id: ...}`. The real cancel lands in U5.
     * `:attach`    — subscribe + replay durable events from an offset; payload
       `%{from_offset: integer, history_policy: atom}`. Routes to
-      `Raxol.Agent.Reattach` (`:replay`/`:live`; `:snapshot` unsupported).
+      `Raxol.Agent.Reattach` (`:replay`/`:live`) or, for `:snapshot`, restores a
+      folded model from the newest U9 checkpoint and tails from its fold horizon.
     * `:seek`      — time-travel a read-model to a journal offset; payload
       `%{offset: integer}`. Folds durable events with id <= offset into the
       `Raxol.Harness.Projection` block read-model.
@@ -56,6 +57,7 @@ defmodule Raxol.Agent.Command do
 
   alias Raxol.Agent.Code.EventCodec
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.Journal.Records.Checkpoint
   alias Raxol.Agent.Reattach
   alias Raxol.Harness.Projection
 
@@ -161,8 +163,13 @@ defmodule Raxol.Agent.Command do
   * `:attach`    → subscribes the session pid to the durable stream via
     `Raxol.Agent.Reattach.attach/4` and replays from `from_offset`
     (`history_policy: :replay`) or from the live watermark (`:live`); records
-    arrive as `{:reattach_live, session_id, record}`. `:snapshot` is not yet
-    supported (`{:error, {:unsupported_history_policy, :snapshot}}`).
+    arrive as `{:reattach_live, session_id, record}`. `:snapshot` restores a
+    folded model from the newest U9 checkpoint and returns it in the result under
+    a `:snapshot` key (`{:ok, %{snapshot: model, from_offset: H+1, live: pid,
+    history: []}}`, OQ-JS7), then tails records from the model's fold horizon
+    `H+1`. A session with no checkpoint is `{:error, :no_checkpoint}` (use
+    `:replay`/`:live` instead); a missing/corrupt snapshot surfaces
+    `{:error, :snapshot_missing}` / `{:error, :snapshot_corrupt}` (N-JS3).
   * `:seek`      → `{:ok, projection}` — folds durable events with id <= offset
     into the `Raxol.Harness.Projection` block read-model (read-side, pure);
     `{:error, :damaged}` on a corrupt journal.
@@ -230,7 +237,8 @@ defmodule Raxol.Agent.Command do
   # AD-15 attach: subscribe `session.pid` to the durable stream and replay from
   # an offset. `:replay` streams durable records id >= from_offset (then live);
   # `:live` streams only records above the decision-time high-watermark;
-  # `:snapshot` needs U9 snapshot restore and is not yet supported. Delivery is
+  # `:snapshot` restores a folded model from the newest U9 checkpoint and tails
+  # from the model's fold horizon (OQ-JS7, below). Record delivery is
   # `{:reattach_live, session_id, record}` to the subscriber (the session pid, or
   # the calling process when the session carries none).
   defp reattach(session, %{from_offset: from_offset, history_policy: :replay}) do
@@ -241,8 +249,66 @@ defmodule Raxol.Agent.Command do
     attach_from(session, FileStore.high_watermark(session_id(session)) + 1)
   end
 
+  defp reattach(session, %{history_policy: :snapshot}) do
+    snapshot_attach(session)
+  end
+
   defp reattach(_session, %{history_policy: policy}) do
     {:error, {:unsupported_history_policy, policy}}
+  end
+
+  # OQ-JS7 :snapshot: restore the folded model from the newest U9 checkpoint,
+  # deliver it synchronously under `:snapshot`, and tail the records the model
+  # does not yet cover, from its fold horizon `H+1`.
+  #
+  # Anchored on ONE decision-time read: the same record set both restores the
+  # model (`restore_checkpoint/3`) and fixes `H` (`snapshot_horizon/2`), so a
+  # concurrent append lands strictly above `H` and is delivered live exactly once
+  # -- no record is both folded and streamed (no dup), and none is dropped (no
+  # gap). The horizon is checkpoint-kind-specific because U9 restore is: a
+  # snapshot-backed checkpoint folds its tail forward (H = record horizon), a
+  # tip-only pointer folds `0..tip` only (H = tip_offset, tail streams live).
+  defp snapshot_attach(session) do
+    sid = session_id(session)
+
+    with {:ok, records} <- FileStore.read_records(sid),
+         {:ok, checkpoint} <- newest_checkpoint(records),
+         {:ok, model} <- restore_model(sid, records, checkpoint),
+         horizon = snapshot_horizon(records, checkpoint),
+         {:ok, attachment} <- attach_from(session, horizon + 1) do
+      {:ok, Map.put(attachment, :snapshot, model)}
+    end
+  end
+
+  defp newest_checkpoint(records) do
+    case Enum.filter(records, &(Map.get(&1, "kind") == Checkpoint.kind())) do
+      [] -> {:error, :no_checkpoint}
+      cps -> {:ok, Enum.max_by(cps, &Map.get(&1, "id", -1))}
+    end
+  end
+
+  # Read-side model restore: `restore_checkpoint/3` dereferences only the
+  # journal's `dir` (to read the content-addressed snapshot file) -- it never
+  # touches `.writer` -- so the handle is built from the resolved session dir
+  # WITHOUT opening the single Writer, keeping `:snapshot` as writerless-safe as
+  # `:replay`/`:live`. Restore errors (`:snapshot_missing`/`:snapshot_corrupt`/
+  # `:malformed_checkpoint`/...) propagate through `snapshot_attach`'s `with`.
+  defp restore_model(sid, records, checkpoint) do
+    journal = %FileStore{session_id: sid, dir: FileStore.session_dir(sid), writer: self()}
+    Checkpoint.restore_checkpoint(journal, records, checkpoint)
+  end
+
+  # The offset up to which the restored model already reflects the journal (see
+  # `snapshot_attach/1`). A tip-only pointer's model covers `0..tip_offset`; a
+  # snapshot-backed checkpoint's model covers the whole read (`0..T`).
+  defp snapshot_horizon(_records, %{"snapshot_ref" => nil} = checkpoint) do
+    Map.fetch!(checkpoint, "tip_offset")
+  end
+
+  defp snapshot_horizon(records, _checkpoint), do: record_horizon(records)
+
+  defp record_horizon(records) do
+    records |> Enum.map(&Map.get(&1, "id", 0)) |> Enum.max()
   end
 
   defp attach_from(session, from_offset) do

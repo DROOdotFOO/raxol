@@ -747,6 +747,14 @@ The must-fail red is **N-JS-skew** (§1.3).
   Ratification targets THAT artifact (per the pointer), not a bespoke bus
   module. Full frozen shape, the two-wire boundary ruling, and the contour
   pointers are in **"AD-15 second half — admission + fan-out bus"** below.
+- **OQ-JS7 (`:snapshot` reattach delivery) — RATIFIED (V, 2026-08-02).** The
+  BEAM-local `:snapshot` history policy delivers a RESTORED MODEL (U9 checkpoint
+  fold) synchronously in the attach RESULT map under a new `:snapshot` key,
+  alongside a live record tail beginning at the model's fold horizon. The model
+  rides a NEW channel (the synchronous result), never the `{:reattach_live, …}`
+  tuple (OQ-JS4 forbids widening it). Full frozen shape + the fold-horizon
+  no-gap/no-dup law + the no-checkpoint ruling are in **"`:snapshot` reattach
+  delivery"** below.
 
 #### AD-15 second half — admission + fan-out bus (RATIFIED 2026-08-01)
 
@@ -821,6 +829,81 @@ filter on delivery (breaks closure), widening/reordering the frozen
 `{:reattach_live, session_id, record}` tuple (OQ-JS4 — new per-delivery data
 rides inside `record` or as a NEW message type), an `alg`/header field on the
 token, or optional→required on any grant/claim field.
+
+#### `:snapshot` reattach delivery (RATIFIED 2026-08-02)
+
+Ratifies OQ-JS7. `:replay` and `:live` stream raw durable **records**; the
+`:snapshot` history policy instead restores a folded **model** from the newest
+U9 checkpoint and streams only the record tail the model does not yet cover. The
+model is folded state, not a record, so OQ-JS4's `{:reattach_live, session_id,
+record}` tuple cannot carry it — it rides a NEW channel. This ratifies THAT
+channel and the anchoring law, for the BEAM-local wire
+(`Raxol.Agent.Command.route(:attach, …)` → `Raxol.Agent.Reattach`).
+
+**Frozen shape (the delivery).**
+
+- **Model in the synchronous result (grow-only map, not a message).**
+  `route/2` of an `:attach` command with `history_policy: :snapshot` returns
+  `{:ok, %{snapshot: model, history: [], from_offset: H+1, live: pid}}` — the
+  restored model under a new **`:snapshot`** key, ADDITIVE on the `attachment()`
+  map `:replay`/`:live` already return (§0 only-grows). The `:snapshot` key is a
+  synchronous sibling of the `:history` list `:replay` already delivers in the
+  result (folded state is synchronous, like `history` — it is not an event), so
+  it belongs in the result, never on the message channel. The
+  `{:reattach_live, …}` tuple and the message wire are UNTOUCHED.
+- **Live tail unchanged.** The record tail streams from `H+1` as the frozen
+  `{:reattach_live, session_id, record}` tuple (OQ-JS4), delivered by the same
+  read-side `Raxol.Agent.Reattach` tailer `:replay`/`:live` use.
+
+**The fold-horizon law (no gap, no dup).** `H` is the offset up to which the
+restored model already reflects the journal; the model ⊕ the live tail from
+`H+1` reconstruct current-plus-future state with **no record both folded and
+streamed** (no dup) and **none dropped** (no gap). `H` follows the landed U9
+restore semantics, which are asymmetric by checkpoint kind:
+
+- **snapshot-backed checkpoint** — restore folds the post-checkpoint tail
+  forward, so `model == fold(0..T)` (P-JS4) and `H = T`, the RECORD horizon
+  (highest record id at the decision-time read).
+- **tip-only pointer** (`snapshot_ref: nil`, OQ-JS1) — restore folds `0..tip`
+  only, so `model == fold(0..tip_offset)` and `H = tip_offset`; the
+  post-checkpoint tail (`tip+1..`) is streamed live.
+
+Anchored on ONE decision-time read: the SAME record set restores the model and
+computes `H`, so a concurrent append lands strictly above `H` and is delivered
+live exactly once — the P-JS5 closure law (§1.2) realized for the model channel.
+A FIXED anchor is the named failure mode: always-`tip+1` double-delivers a
+snapshot-backed checkpoint's tail (dup); always-`T+1` drops a tip-only pointer's
+tail (gap).
+
+**No-checkpoint ruling (strict).** A session with NO checkpoint returns
+`{:error, :no_checkpoint}` — `:snapshot` is a restore-from-checkpoint fast path,
+not a general resume. A caller without a checkpoint uses `:replay` (raw replay
+from an offset) or `:live` (tail only); a caller that wants the fast path first
+writes a checkpoint (`Raxol.Agent.Journal.Records.Checkpoint.write/3`) at a turn
+boundary, then attaches `:snapshot`. A missing/corrupt snapshot surfaces
+`{:error, :snapshot_missing}` / `{:error, :snapshot_corrupt}` (N-JS3) — NEVER a
+silent fallback to replay (the N-JS3 dead injector).
+
+**The two-wire boundary (mirrors OQ-JS6).** This frozen shape is the BEAM-local
+`(term × process)` wire: `model` is Elixir-side folded state delivered in-process.
+The cross-language surface carries the equivalent semantics over the ACP
+`_raxol/*` extension (a `session/load` that returns folded state), NOT this
+map/tuple — do not freeze this shape as the portable wire.
+
+**Read-side, writerless-safe.** `:snapshot` reads through the tolerant Reader and
+folds via the checkpoint restore seam (`restore_checkpoint/3`, which dereferences
+only the session dir), opening no Writer — as writerless-safe as `:replay`/`:live`
+(§1.1's reattach-is-read-side rule).
+
+**Positive contour.** `snapshot ⊕ attach_live(H+1..) ==` the current model
+folded forward over future records; no record is both folded into `snapshot` and
+delivered live; the first live id is `> H`.
+
+**Forward-compat.** Grows by: new optional keys on the attachment map (`:snapshot`
+added here; a future `:lens`/projection key rides the same way). Never:
+widening/reordering `{:reattach_live, …}` (OQ-JS4), making `:snapshot` a required
+key on the `:replay`/`:live` results, or a silent no-checkpoint / corrupt-snapshot
+fallback (the strict rulings above).
 
 ---
 

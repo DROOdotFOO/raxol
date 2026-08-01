@@ -3,6 +3,7 @@ defmodule Raxol.Agent.CommandTest do
 
   alias Raxol.Agent.Command
   alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.Journal.Records.Checkpoint
 
   describe "decode/1 — loud typed rejects" do
     test "malformed JSON string is a typed error, no crash" do
@@ -360,15 +361,125 @@ defmodule Raxol.Agent.CommandTest do
       FileStore.close(j)
     end
 
-    test "attach (:snapshot) is not yet supported" do
+    test "attach (:snapshot) restores a snapshot-backed model and tails from the record horizon" do
+      session_id = "cmd-snap-ref-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+
+      # A snapshot-backed checkpoint at the turn boundary (tip = 2).
+      {:ok, 3} = Checkpoint.write(j, %{"applied" => [1, 2]}, reason: "manual")
+
+      # Conversational tail after the checkpoint (T = 5, the record horizon).
+      {:ok, 4} = FileStore.append(j, loop_event("turn_started", "t2"))
+      {:ok, 5} = FileStore.append(j, loop_event("turn_completed", "t2"))
+
       {:ok, cmd} =
         Command.decode(%{
           "type" => "attach",
           "payload" => %{"from_offset" => 0, "history_policy" => "snapshot"}
         })
 
-      assert {:error, {:unsupported_history_policy, :snapshot}} =
-               Command.route(cmd, %{session_id: "cmd-snap", pid: self()})
+      assert {:ok, %{snapshot: model, from_offset: 6, history: [], live: live}} =
+               Command.route(cmd, %{session_id: session_id, pid: self()})
+
+      assert is_pid(live)
+
+      # Restore folded the post-checkpoint tail forward: fold(0..T) == full fold.
+      assert model == %{"applied" => [1, 2, 4, 5]}
+
+      # No record at/below the horizon is delivered live (no dup: 4 and 5 are
+      # already folded into the model).
+      refute_receive {:reattach_live, ^session_id, %{"id" => 4}}, 100
+      refute_receive {:reattach_live, ^session_id, %{"id" => 5}}, 100
+
+      # A record appended above the horizon streams live (no gap).
+      {:ok, 6} = FileStore.append(j, loop_event("turn_started", "t3"))
+      assert_receive {:reattach_live, ^session_id, %{"id" => 6}}, 500
+
+      FileStore.close(j)
+    end
+
+    test "attach (:snapshot) on a tip-only pointer folds 0..tip and tails from tip+1" do
+      session_id = "cmd-snap-tip-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+
+      # A tip-only pointer (nil model, snapshot_ref: nil) at tip = 2.
+      {:ok, 3} = Checkpoint.write(j, nil, reason: "manual")
+
+      {:ok, 4} = FileStore.append(j, loop_event("turn_started", "t2"))
+      {:ok, 5} = FileStore.append(j, loop_event("turn_completed", "t2"))
+
+      {:ok, cmd} =
+        Command.decode(%{
+          "type" => "attach",
+          "payload" => %{"from_offset" => 0, "history_policy" => "snapshot"}
+        })
+
+      # Tip-only restore folds 0..tip only (H = tip_offset = 2), so the tail
+      # streams live from tip+1 (= 3), including the checkpoint pointer record.
+      assert {:ok, %{snapshot: model, from_offset: 3, history: []}} =
+               Command.route(cmd, %{session_id: session_id, pid: self()})
+
+      assert model == %{"applied" => [1, 2]}
+
+      refute_receive {:reattach_live, ^session_id, %{"id" => 2}}, 100
+      assert_receive {:reattach_live, ^session_id, %{"id" => 3}}, 500
+      assert_receive {:reattach_live, ^session_id, %{"id" => 4}}, 500
+      assert_receive {:reattach_live, ^session_id, %{"id" => 5}}, 500
+
+      FileStore.close(j)
+    end
+
+    test "attach (:snapshot) with no checkpoint returns {:error, :no_checkpoint}" do
+      session_id = "cmd-snap-none-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+      FileStore.close(j)
+
+      {:ok, cmd} =
+        Command.decode(%{
+          "type" => "attach",
+          "payload" => %{"from_offset" => 0, "history_policy" => "snapshot"}
+        })
+
+      # A session with events but no checkpoint: :snapshot is the
+      # restore-from-checkpoint fast path, so it reports no checkpoint rather
+      # than silently degrading (the caller uses :replay/:live instead).
+      assert {:error, :no_checkpoint} =
+               Command.route(cmd, %{session_id: session_id, pid: self()})
+
+      refute_receive {:reattach_live, ^session_id, _}, 100
+    end
+
+    test "attach (:snapshot) surfaces a corrupt snapshot (N-JS3), no silent fallback" do
+      session_id = "cmd-snap-corrupt-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+      {:ok, 3} = Checkpoint.write(j, %{"applied" => [1, 2]}, reason: "manual")
+
+      # Flip the snapshot bytes so sha256 no longer matches snapshot_hash.
+      {:ok, records} = FileStore.read(j)
+      cp = Enum.find(records, &(&1["kind"] == "checkpoint"))
+      snap_path = Path.join(FileStore.session_dir(session_id), cp["snapshot_ref"])
+      File.write!(snap_path, File.read!(snap_path) <> "corruption")
+
+      {:ok, cmd} =
+        Command.decode(%{
+          "type" => "attach",
+          "payload" => %{"from_offset" => 0, "history_policy" => "snapshot"}
+        })
+
+      assert {:error, :snapshot_corrupt} =
+               Command.route(cmd, %{session_id: session_id, pid: self()})
+
+      refute_receive {:reattach_live, ^session_id, _}, 100
+
+      FileStore.close(j)
     end
 
     test "seek folds durable events up to the offset into a projection" do
