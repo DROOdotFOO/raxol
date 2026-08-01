@@ -56,6 +56,18 @@ defmodule Raxol.Agent.Journal.FileStore do
   end
 
   @doc """
+  The current durable high-watermark (highest offset) for `session_id`, read
+  read-side via the tolerant Reader — `0` for an empty/absent/damaged journal.
+
+  Used by the `attach` command's `:live` history policy to stream only records
+  above the decision-time watermark (`from_offset = high_watermark + 1`).
+  """
+  @spec high_watermark(String.t(), keyword()) :: non_neg_integer()
+  def high_watermark(session_id, opts \\ []) when is_binary(session_id) do
+    Reader.last_offset(session_dir(session_id, opts))
+  end
+
+  @doc """
   Open (creating if needed) the journal for `session_id`.
 
   Options:

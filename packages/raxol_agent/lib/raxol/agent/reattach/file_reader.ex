@@ -32,11 +32,12 @@ defmodule Raxol.Agent.Reattach.FileReader do
   def attach(session_id, from_offset, policy, opts \\ []) do
     # `opts` may carry :base_dir (OQ-JS5); session_dir/2 reads only that key.
     dir = FileStore.session_dir(session_id, opts)
+    subscriber = Keyword.get(opts, :subscriber, self())
 
     with :ok <- validate_policy(policy),
          {:ok, records} <- read(dir) do
       history = history_slice(records, from_offset, policy)
-      {:ok, live} = Tailer.start(dir, session_id, from_offset, self())
+      {:ok, live} = Tailer.start(dir, session_id, from_offset, subscriber)
       {:ok, %{history: history, from_offset: from_offset, live: live}}
     end
   end

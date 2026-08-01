@@ -70,8 +70,15 @@ defmodule Raxol.Agent.Reattach do
       `RAXOL_SESSIONS_DIR`-resolved path `FileStore` honors.
     * `:authorize` — an `authorize_fun/0` gating who may attach; default admits
       (the BEAM-local wire is in-process-trusted).
+    * `:subscriber` — the pid that receives `{:reattach_live, session_id, record}`
+      messages; default `self()` (the attaching process). The `attach` command
+      wire sets it to the session's client pid.
   """
-  @type attach_opts :: [base_dir: Path.t(), authorize: authorize_fun()]
+  @type attach_opts :: [
+          base_dir: Path.t(),
+          authorize: authorize_fun(),
+          subscriber: pid()
+        ]
 
   @doc """
   Attach to `session_id`: replay history per `policy`, then follow the live
