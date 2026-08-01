@@ -68,6 +68,20 @@ defmodule Raxol.Agent.Journal.FileStore do
   end
 
   @doc """
+  Read `session_id`'s durable records read-side via the tolerant Reader
+  (writerless-safe — no Writer needed). `{:error, :damaged}` on interior
+  corruption (the damaged content is never surfaced). Used by the read-side
+  reattach and seek paths.
+  """
+  @spec read_records(String.t(), keyword()) :: {:ok, [map()]} | {:error, :damaged}
+  def read_records(session_id, opts \\ []) when is_binary(session_id) do
+    case Reader.scan(session_dir(session_id, opts)) do
+      {:ok, records} -> {:ok, records}
+      {:damaged, _partial} -> {:error, :damaged}
+    end
+  end
+
+  @doc """
   Open (creating if needed) the journal for `session_id`.
 
   Options:

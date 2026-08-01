@@ -371,12 +371,27 @@ defmodule Raxol.Agent.CommandTest do
                Command.route(cmd, %{session_id: "cmd-snap", pid: self()})
     end
 
-    test "seek routes to not_implemented" do
-      {:ok, cmd} =
-        Command.decode(%{"type" => "seek", "payload" => %{"offset" => 5}})
+    test "seek folds durable events up to the offset into a projection" do
+      session_id = "cmd-seek-#{System.unique_integer([:positive])}"
+      {:ok, j} = FileStore.open(session_id)
+      {:ok, 1} = FileStore.append(j, loop_event("turn_started"))
+      {:ok, 2} = FileStore.append(j, loop_event("turn_completed"))
+      {:ok, 3} = FileStore.append(j, loop_event("turn_started", "t2"))
+      FileStore.close(j)
 
-      assert {:error, :not_implemented} =
-               Command.route(cmd, %{session_id: "sess-1"})
+      # offset 0 folds nothing.
+      {:ok, cmd0} = Command.decode(%{"type" => "seek", "payload" => %{"offset" => 0}})
+      assert {:ok, %{source_events: []}} = Command.route(cmd0, %{session_id: session_id})
+
+      # offset 2 folds ids 1..2 (durable, tier-retained in source_events).
+      {:ok, cmd2} = Command.decode(%{"type" => "seek", "payload" => %{"offset" => 2}})
+      assert {:ok, %{source_events: evs}} = Command.route(cmd2, %{session_id: session_id})
+      assert length(evs) == 2
+
+      # offset past the end folds the whole durable stream.
+      {:ok, cmd9} = Command.decode(%{"type" => "seek", "payload" => %{"offset" => 9}})
+      assert {:ok, %{source_events: all}} = Command.route(cmd9, %{session_id: session_id})
+      assert length(all) == 3
     end
   end
 
@@ -390,7 +405,14 @@ defmodule Raxol.Agent.CommandTest do
     end
   end
 
-  defp loop_event(type) do
-    %{"kind" => "event", "family" => "loop", "type" => type, "payload" => %{}}
+  defp loop_event(type, turn_id \\ "t1") do
+    %{
+      "kind" => "event",
+      "family" => "loop",
+      "type" => type,
+      "tier" => "durable",
+      "turn_id" => turn_id,
+      "payload" => %{}
+    }
   end
 end
