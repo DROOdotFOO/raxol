@@ -1,0 +1,159 @@
+name: Release raxol npm package
+
+# Builds the self-contained `raxol` command binaries and assembles the `raxol`
+# npm package, so `npm i -g raxol` puts `raxol` on the PATH (no Erlang/Elixir).
+# Every binary is built natively for its arch: Linux amd64/arm64 via Docker on
+# their own runners, macOS arm64 on a macOS runner (native builds avoid the
+# termbox NIF cross-compile hazard -- see docker/Dockerfile.raxol-cli).
+#
+# The npm tarball is always produced as an artifact. Publishing is gated: a
+# `raxol-cli-v*` tag, or a manual run with `publish: true` and an `NPM_TOKEN`.
+
+on:
+  push:
+    tags:
+      - 'raxol-cli-v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to npm (off = build the tarball artifact only)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-raxol-cli-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux-build:
+    name: linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Native build for the runner's arch (no --platform): amd64 -> raxol_cli_linux,
+      # arm64 -> raxol_cli_linux_arm. Exports the binary via the `export` stage.
+      - name: Build runtime binary
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.raxol-cli
+          target: export
+          outputs: type=local,dest=out
+          cache-from: type=gha,scope=cli-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=cli-${{ matrix.arch }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-linux-${{ matrix.arch }}
+          path: out/raxol_cli_*
+          if-no-files-found: error
+
+  macos-build:
+    name: macos-arm64
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '29.0.3'
+          elixir-version: '1.20.2'
+
+      - name: Install pinned Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz" \
+            | tar -xJ -C "$HOME"
+          echo "$HOME/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Build runtime binary
+        working-directory: packages/raxol_cli
+        env:
+          MIX_ENV: prod
+          BURRITO_TARGET: macos
+        run: |
+          zig version
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix release raxol_cli --overwrite
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-macos-arm64
+          path: packages/raxol_cli/burrito_out/raxol_cli_macos
+          if-no-files-found: error
+
+  package:
+    name: assemble npm package
+    needs: [linux-build, macos-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download built binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: packages/raxol_cli/npm/vendor
+
+      - name: Stage binaries
+        working-directory: packages/raxol_cli/npm
+        run: |
+          chmod +x vendor/raxol_cli_* || true
+          echo "Vendored binaries:"
+          ls -lh vendor/
+
+      - name: Pack tarball
+        working-directory: packages/raxol_cli/npm
+        run: npm pack
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: raxol-npm-tarball
+          path: packages/raxol_cli/npm/*.tgz
+          if-no-files-found: error
+
+      - name: Resolve publish flag
+        id: flags
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish }}" = "true" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.flags.outputs.publish == 'true'
+        working-directory: packages/raxol_cli/npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
