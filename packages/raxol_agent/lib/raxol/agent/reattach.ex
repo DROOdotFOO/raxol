@@ -57,6 +57,22 @@ defmodule Raxol.Agent.Reattach do
           live: term()
         }
 
+  @typedoc """
+  Admission seam (AD-15 second half, OQ-JS6): `ctx -> verdict`. A `{:ok, grant}`
+  verdict admits; anything else denies. Run fail-closed BEFORE any read.
+  """
+  @type authorize_fun :: (map() -> {:ok, term()} | term())
+
+  @typedoc """
+  Reattach options (ratified OQ-JS5 arity growth + the admission seam):
+
+    * `:base_dir` — session-dir root override; default = the
+      `RAXOL_SESSIONS_DIR`-resolved path `FileStore` honors.
+    * `:authorize` — an `authorize_fun/0` gating who may attach; default admits
+      (the BEAM-local wire is in-process-trusted).
+  """
+  @type attach_opts :: [base_dir: Path.t(), authorize: authorize_fun()]
+
   @doc """
   Attach to `session_id`: replay history per `policy`, then follow the live
   durable stream from `from_offset`.
@@ -68,12 +84,16 @@ defmodule Raxol.Agent.Reattach do
       empty when the branch has no tip
     * `:none` — no history; deliver only the live tail from `from_offset`
 
+  `opts` carries `:base_dir` (session-dir root override) and any impl-specific
+  keys; the facade has already run admission before this is called.
+
   Returns `{:ok, attachment()}` or `{:error, term()}`.
   """
   @callback attach(
               session_id :: String.t(),
               from_offset :: non_neg_integer(),
-              policy :: history_policy()
+              policy :: history_policy(),
+              opts :: attach_opts()
             ) :: {:ok, attachment()} | {:error, term()}
 
   # A session_id names an on-disk session directory on the read path, so the
@@ -99,26 +119,61 @@ defmodule Raxol.Agent.Reattach do
   end
 
   @doc """
-  Facade `attach/3` — validates `session_id` (see `valid_session_id?/1`;
-  ill-formed ids are rejected as `{:error, :invalid_session_id}` before any
-  dispatch), then dispatches to the configured implementation
-  (`config :raxol_agent, :reattach_impl`), defaulting to
-  `Raxol.Agent.Reattach.NotImplemented` until U4 lands.
+  Facade `attach/4` (OQ-JS5 arity; `attach/3` preserved via `opts \\ []`).
 
-  The red suite drives this exact arity/shape; when the concrete reattach
-  reader is configured (or replaces the default), the reds turn green with no
-  test rewrite.
+  Runs two fail-closed gates BEFORE any read, then dispatches to the configured
+  implementation (`config :raxol_agent, :reattach_impl`, default
+  `Raxol.Agent.Reattach.FileReader`):
+
+    1. **session-id hygiene** (`valid_session_id?/1`) — an ill-formed id is
+       rejected as `{:error, :invalid_session_id}`.
+    2. **admission** (AD-15 second half, OQ-JS6) — `opts[:authorize]` is called
+       with the attach `ctx`; anything but a `{:ok, grant}` verdict denies with
+       `{:error, :attach_denied}` and nothing is read or tailed.
+
+  `opts[:authorize]` defaults to admit: the BEAM-local wire is in-process-trusted
+  (a caller can `Reader.scan` the session dir directly, so a gate here is a seam
+  for hosts that front reattach with their own transport, not a security
+  boundary). The hardened cross-process funnel is
+  `Raxol.AgentClientProtocol.Ext.AttachPolicy.Runner` at the ACP boundary, where
+  attaches from untrusted peers must present an `RXC1` capability token.
+
+  `ctx` is a grow-only map `%{session_id:, from_offset:, policy:, surface:
+  :beam_local}`; an `:authorize` fun MUST tolerate unknown keys.
   """
-  @spec attach(String.t(), non_neg_integer(), history_policy()) ::
+  @spec attach(String.t(), non_neg_integer(), history_policy(), attach_opts()) ::
           {:ok, attachment()} | {:error, term()}
-  def attach(session_id, from_offset, policy)
-      when is_binary(session_id) and is_integer(from_offset) and from_offset >= 0 do
-    if valid_session_id?(session_id) do
-      impl().attach(session_id, from_offset, policy)
-    else
-      {:error, :invalid_session_id}
+  def attach(session_id, from_offset, policy, opts \\ [])
+      when is_binary(session_id) and is_integer(from_offset) and from_offset >= 0 and
+             is_list(opts) do
+    with :ok <- validate_session_id(session_id),
+         :ok <- authorize(session_id, from_offset, policy, opts) do
+      impl().attach(session_id, from_offset, policy, opts)
     end
   end
+
+  defp validate_session_id(session_id) do
+    if valid_session_id?(session_id), do: :ok, else: {:error, :invalid_session_id}
+  end
+
+  # Fail-closed admission seam: the default admits (in-process trust); a host
+  # injects `:authorize` to gate reattach behind its own transport. Any verdict
+  # other than `{:ok, grant}` denies — the seam cannot "mostly" admit.
+  defp authorize(session_id, from_offset, policy, opts) do
+    ctx = %{
+      session_id: session_id,
+      from_offset: from_offset,
+      policy: policy,
+      surface: :beam_local
+    }
+
+    case Keyword.get(opts, :authorize, &default_authorize/1).(ctx) do
+      {:ok, _grant} -> :ok
+      _denied -> {:error, :attach_denied}
+    end
+  end
+
+  defp default_authorize(_ctx), do: {:ok, :in_process}
 
   defp impl do
     Application.get_env(:raxol_agent, :reattach_impl, __MODULE__.FileReader)
@@ -135,5 +190,5 @@ defmodule Raxol.Agent.Reattach.NotImplemented do
   @behaviour Raxol.Agent.Reattach
 
   @impl Raxol.Agent.Reattach
-  def attach(_session_id, _from_offset, _policy), do: {:error, :not_implemented}
+  def attach(_session_id, _from_offset, _policy, _opts), do: {:error, :not_implemented}
 end

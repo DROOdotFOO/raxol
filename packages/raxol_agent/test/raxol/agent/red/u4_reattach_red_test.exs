@@ -693,6 +693,49 @@ defmodule Raxol.Agent.Red.U4ReattachGuardsTest do
     end
   end
 
+  describe "admission seam + base_dir opts (OQ-JS5 / OQ-JS6 second half, runs in CI)" do
+    # The facade admission gate is fail-closed: any verdict but {:ok, grant}
+    # denies with {:error, :attach_denied} BEFORE any read or tail. The default
+    # admits (in-process trust); a host injects :authorize to gate reattach
+    # behind its own transport (the ACP boundary uses AttachPolicy.Runner).
+    test "a denying :authorize verdict returns :attach_denied and tails nothing",
+         %{base: base} do
+      {j, session, _dir} = U4Support.open!(base)
+      U4Support.append_all!(j, [U4Support.conv_event("turn_started", marker: "auth-1")])
+      :ok = FileStore.close(j)
+
+      deny = fn _ctx -> {:denied, :nope} end
+
+      assert Reattach.attach(session, 1, {:from_offset, 1}, base_dir: base, authorize: deny) ==
+               {:error, :attach_denied}
+
+      refute_receive {:reattach_live, ^session, _}, 50
+    end
+
+    # base_dir override end-to-end: the session lives under the per-test `base`,
+    # NOT the ambient RAXOL_SESSIONS_DIR — an ignored :base_dir would resolve
+    # elsewhere and yield an empty history, so the non-empty slice proves it.
+    test "an admitting :authorize verdict reattaches under an explicit :base_dir",
+         %{base: base} do
+      {j, session, _dir} = U4Support.open!(base)
+
+      U4Support.append_all!(j, [
+        U4Support.conv_event("turn_started", marker: "auth-2a"),
+        U4Support.conv_event("turn_completed", marker: "auth-2b")
+      ])
+
+      :ok = FileStore.close(j)
+
+      # Also asserts the ctx shape the seam passes (session_id + surface).
+      admit = fn %{session_id: ^session, surface: :beam_local} -> {:ok, :test_grant} end
+
+      assert {:ok, %{history: history}} =
+               Reattach.attach(session, 3, {:from_offset, 1}, base_dir: base, authorize: admit)
+
+      assert Enum.map(history, & &1["id"]) == [1, 2]
+    end
+  end
+
   describe "dead injectors (m4 negative controls — each must break its red)" do
     test "N-JS7 emit-ahead-of-journal: the live id surfaces before the record is readable (I3 window)",
          %{base: base} do

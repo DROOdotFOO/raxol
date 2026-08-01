@@ -29,8 +29,9 @@ defmodule Raxol.Agent.Reattach.FileReader do
   alias Raxol.Agent.Reattach.Tailer
 
   @impl Raxol.Agent.Reattach
-  def attach(session_id, from_offset, policy) do
-    dir = FileStore.session_dir(session_id)
+  def attach(session_id, from_offset, policy, opts \\ []) do
+    # `opts` may carry :base_dir (OQ-JS5); session_dir/2 reads only that key.
+    dir = FileStore.session_dir(session_id, opts)
 
     with :ok <- validate_policy(policy),
          {:ok, records} <- read(dir) do
