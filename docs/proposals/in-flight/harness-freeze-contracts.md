@@ -736,23 +736,91 @@ The must-fail red is **N-JS-skew** (§1.3).
   additive (optional-with-default, never optional→required). The U4-R
   self-containment red already pins the `RAXOL_SESSIONS_DIR` resolution; the
   `:base_dir` opt is the same seam made explicit.
-- **OQ-JS6 (broadcast/permission bus — AD-15 second half) — OPEN.** No frozen
-  contract surface yet: the mechanism that fans `{:reattach_live, …}` to N
-  subscribers and gates who may attach/receive. Under active design (dual
-  research + design pass, 2026-07-16); ratified separately. Until then U4-I
-  builds only the read-side + single-subscriber live tail against OQ-JS4; the
-  bus is deferred, not assumed.
-  - *Status pointer (2026-07-17, still OPEN — changes no law):* the admission
-    design is now being built concretely as `AttachPolicy` (fail-closed
-    `authorize_attach/1`: anything but a literal `{:ok, grant}` denies) +
-    offline-verifiable Ed25519 capability tokens (claims
-    `{session_id, actor, issued, expiry}`, grow-only; verifiable writerless
-    from a tar'd dir) inside the `raxol_agent_client_protocol` package,
-    riding the ACP `_raxol/*` extension surface, per the V-ratified bus
-    specs (`harness-bus-protocol.md` §3, annotate-not-filter taint §6).
-    When that package's permission layer lands and survives its gates,
-    ratification of OQ-JS6 should target THAT artifact rather than a
-    bespoke bus module.
+  - *Implemented 2026-08-01.* `Raxol.Agent.Reattach.attach/4` now carries
+    `opts \\ []` (`attach/3` preserved, so the U4-R suite is unchanged);
+    `:base_dir` is threaded through `FileStore.session_dir/2` to both the
+    history read and the live-tail dir. The same `opts` carries the OQ-JS6
+    admission seam (`:authorize`, below).
+- **OQ-JS6 (broadcast/permission bus — AD-15 second half) — RATIFIED
+  (2026-08-01).** The status pointer's condition is met: the admission +
+  fan-out layer landed in `raxol_agent_client_protocol` and survived its gates.
+  Ratification targets THAT artifact (per the pointer), not a bespoke bus
+  module. Full frozen shape, the two-wire boundary ruling, and the contour
+  pointers are in **"AD-15 second half — admission + fan-out bus"** below.
+
+#### AD-15 second half — admission + fan-out bus (RATIFIED 2026-08-01)
+
+Ratifies OQ-JS6. The mechanism that gates **who** may attach and fans
+`{:reattach_live, …}` to N subscribers is the `_raxol/*` extension in
+`raxol_agent_client_protocol` — it survived its gates: 113 extension tests
+(reattach 33, token 33, journal_writer 21, attach_policy 19, journal 7),
+invariant families `J1–J12`, `P-BUS*`, `INV-AP1–20`, `CDI-*`, each positive
+contour shipping a **named dead-injector**, drift-audited by
+`torture/pbus_coverage_audit_test.exs`. The design specs it was built from
+(`acp-*-design.md`, `harness-bus-protocol.md`) are deliberately un-checked-in;
+the binding contract is the package `test/INVARIANTS.md` + the cited moduledocs.
+
+**Frozen shape (the mechanism).**
+
+- **One fail-closed funnel (CDI-1).** `Ext.AttachPolicy.Runner` is the SOLE
+  admission point: it isolates the policy in a `Task.Supervisor.async_nolink`
+  task with a bounded `yield` + `shutdown(:brutal_kill)`, so a hostile policy
+  can neither block nor crash the bus, and every non-`{:ok, %Grant{}}` outcome
+  DENIES (`-32000 "attach denied"`, CDI-5, no `data` — anti-oracle). One
+  decision gates BOTH history and live (an attach = read access to the full
+  durable record stream). The default policy `LocalNode` is deny-by-default;
+  there is NO `AllowAll` module — the absent module is the guarantee (INV-AP3).
+- **`RXC1` capability token (INV-AP*).** Offline-verifiable detached Ed25519
+  over `"RXC1." <> b64url(claims)`; the `RXC1` prefix (inside the signed bytes)
+  IS the algorithm binding — no `alg` field anywhere, so the `alg:none` /
+  downgrade class is structurally unexpressible. `verify/4` is total + pure
+  (clock injected, no I/O, never raises, never mints an atom). Authorizes an
+  attach to a **writerless tar'd dir** from the token bytes + a shipped pubkey
+  alone. Restrictive claims narrow access, never widen (enforce-if-present).
+- **Register-before-`h` bus seam (J1/J2, bus §4).** Per attach: authorize →
+  REGISTER (subscribe) FIRST → snapshot `h` (decision-time, read from the store,
+  never a cached counter) → the monotone gate is armed with `h` BEFORE any live
+  receive → emit `history(max(from,1)..h)` → reply (replay-before-respond) →
+  steady state (`offset ≤ h` dropped forever, `offset > h` forwarded once).
+  `from > h+1` is rejected (minting a gap is illegal). This is the wire-level
+  realization of the P-JS5 closure law (§1.2).
+- **Taint annotates, NEVER filters (J5, §6).** Every delivered frame carries the
+  record's taint; no path drops/withholds/reroutes by taint — a taint filter
+  would break `history ++ live == durable substream`. Kind-projection (§3.4) is
+  the only projection, applied identically to history and live. `grant.lens` is
+  reserved (v1 nil), threaded opaquely, never interpreted.
+- **Mid-attach expiry (CDI-6).** A token grant's `exp` arms a per-subscriber
+  timer that force-closes the held live tail at `expires_at`; process identity
+  closes the timer-vs-reconnect race (each attach is its own subscriber whose
+  timer targets only itself).
+
+**The two-wire boundary ruling.** Admission is enforced at the process/trust
+boundary, NOT symmetrically on every wire:
+
+- **ACP boundary (untrusted peers) — HARD-GATED.** `session/load` (+ rider) and
+  `_raxol/session.load` converge on `Ext.Reattach.attach/1`, which runs the
+  Runner funnel before any read. An untrusted peer is admitted only via a valid
+  `RXC1` capability (Token policy) or a transport `LocalNode` trusts. This is the
+  security boundary.
+- **BEAM-local `Raxol.Agent.Reattach` (in-process) — OPTIONAL SEAM, default
+  trusted.** `attach/4` carries `opts[:authorize]` (an `authorize_fun`, default
+  `{:ok, :in_process}`). Rationale: an in-process caller can
+  `FileStore.Reader.scan` the session dir directly, so a gate on the function is
+  bypassable — it is a SEAM for a host that fronts reattach with its own
+  transport (inject a policy that defers to the ACP Runner / `AttachPolicy`), not
+  a boundary. The seam is fail-closed (any verdict but `{:ok, grant}` →
+  `{:error, :attach_denied}`, nothing read or tailed) so an injected policy
+  cannot "mostly" admit. Negative control: the `:authorize`-denial test in the
+  U4-R guards suite.
+
+**Forward-compat.** Grows by: new `Grant` fields (optional; `lens` already
+reserved), new token claims (grow-only, restrictive-narrowing), new `scope`
+allow-list atoms, new `via` provenance, a future `RXC2` token version (new
+prefix — never a signed-in `alg`). Never: an `AllowAll` policy module, a taint
+filter on delivery (breaks closure), widening/reordering the frozen
+`{:reattach_live, session_id, record}` tuple (OQ-JS4 — new per-delivery data
+rides inside `record` or as a NEW message type), an `alg`/header field on the
+token, or optional→required on any grant/claim field.
 
 ---
 
