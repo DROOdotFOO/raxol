@@ -19,7 +19,7 @@ defmodule Mix.Tasks.Raxol.Harness.Fixtures.Bless do
   placeholder ahead of the real journal-fold projection (roadmap T7).
   Adversarial fixtures are skipped (see `Raxol.Harness.Fixture.Bless`).
 
-  Mirrors the FATE `--gen` precedent (`mix raxol.fate --gen`) at the
+  Mirrors the RATE `--gen` precedent (`mix raxol.rate --gen`) at the
   fixture/session level rather than the pixel-hash level: snapshot churn
   in a PR that didn't mean to touch the projection is the review
   tripwire.

@@ -67,9 +67,9 @@
         }
       );
 
-      # Self-hosted GitHub Actions runner for the FATE bench, as a reusable
+      # Self-hosted GitHub Actions runner for the RATE bench, as a reusable
       # NixOS module. A host imports it and sets the token/key files (via
-      # agenix); see docs/testing/FATE_BENCH.md for a full host example. Shipped
+      # agenix); see docs/testing/RATE_BENCH.md for a full host example. Shipped
       # as a module rather than a nixosConfigurations entry so the hosted flake
       # check stays green without this repo carrying a machine's hardware config.
       nixosModules.githubRunner =
@@ -128,7 +128,7 @@
               description = ''
                 Tailscale tags the runner advertises so the tailnet ACL can fence
                 it off: deny lateral movement, allow only admin SSH inbound. See
-                docs/testing/FATE_RUNNER_HARDENING.md for the policy.
+                docs/testing/RATE_RUNNER_HARDENING.md for the policy.
               '';
             };
 

@@ -1,7 +1,7 @@
-# FATE Cross-Platform Test Bench
+# RATE Cross-Platform Test Bench
 
-The FATE bench (after FFmpeg's Fast Audio Video Evaluation, plus checkasm's
-reference-oracle idea) proves Raxol behaves identically across architectures, with
+The RATE bench (Raxol Automated Testing Environment, modeled on FFmpeg's FATE
+plus checkasm's reference-oracle idea) proves Raxol behaves identically across architectures, with
 Nix pinning the toolchain so architecture is the only variable. The high-level layer
 map lives in [ROADMAP.md](../../ROADMAP.md); this guide is the operator runbook for
 Layer 1: running the `termbox2` NIF suite on self-hosted runners.
@@ -10,20 +10,20 @@ Layer 1: running the `termbox2` NIF suite on self-hosted runners.
 
 GitHub-hosted CI sets `SKIP_TERMBOX2_TESTS=true` everywhere, so the `termbox2` NIF is
 never built or exercised, and there is no aarch64-linux tier at all. Self-hosted
-runners with real terminals close both gaps. The `.github/workflows/fate-selfhosted.yml`
+runners with real terminals close both gaps. The `.github/workflows/rate-selfhosted.yml`
 workflow builds the NIF and runs the tty-dependent suite on both Linux architectures,
-then compares the golden render hashes against `priv/fate/golden.refs`.
+then compares the golden render hashes against `priv/rate/golden.refs`.
 
 ## The workflow
 
-`fate-selfhosted.yml` runs one matrix job per architecture (`ARM64`, `X64`) on runners
+`rate-selfhosted.yml` runs one matrix job per architecture (`ARM64`, `X64`) on runners
 carrying the `self-hosted`, `linux`, arch, and `raxol` labels. Each job, inside
 `nix develop` (so the toolchain is flake-pinned and identical on every host):
 
 1. Builds the NIF and runs the `:docker` suite under a pseudo-terminal (loading
    tests, the direct NIF tests, and the oracle equivalence test below).
 2. Runs the platform `:requires_terminal` suite under a pseudo-terminal.
-3. Runs the FATE golden render (pure, no terminal) to compare this architecture's
+3. Runs the RATE golden render (pure, no terminal) to compare this architecture's
    hashes against the committed references.
 
 Two mechanics matter:
@@ -52,7 +52,7 @@ path) must produce the same back buffer as a pure reference for the same op stre
 - A `tb_cell_buffer/0` NIF reads the back buffer back as a row-major list of
   `{ch, fg, bg}`. `oracle_equivalence_test.exs` applies each fixture op stream to the
   NIF and to the model and asserts the grids are identical, covering the explicit
-  edges FATE requires: empty, wide CJK codepoints, attribute saturation, out-of-bounds
+  edges RATE requires: empty, wide CJK codepoints, attribute saturation, out-of-bounds
   writes, print clipping, and newlines. It needs `tb_init`, so it runs on the runners
   under the pseudo-terminal alongside the other `:docker` tests.
 
@@ -70,7 +70,7 @@ under an unprivileged user with no cloud credentials on the box.
 
 Trigger fencing is only the first gate. A self-hosted runner is a remote-code-execution
 surface and, on the tailnet, a lateral-movement pivot. Apply every layer in
-[FATE_RUNNER_HARDENING.md](FATE_RUNNER_HARDENING.md) (ephemeral runners, process
+[RATE_RUNNER_HARDENING.md](RATE_RUNNER_HARDENING.md) (ephemeral runners, process
 isolation, resource caps, a default-deny Tailscale ACL, host firewall, minimal PAT scope)
 before pointing real jobs at the hardware.
 
@@ -163,10 +163,10 @@ defeats "architecture is the only variable."
 
 Trigger from the Actions tab (`Run workflow`), or let the nightly schedule run it.
 Acceptance: on both `ARM64` and `X64`, the NIF (`termbox2_nif.so`) builds, the
-`:docker` and `:requires_terminal` suites pass, and `test/fate/golden_test.exs` matches
-`priv/fate/golden.refs`.
+`:docker` and `:requires_terminal` suites pass, and `test/rate/golden_test.exs` matches
+`priv/rate/golden.refs`.
 
 When you change rendering on purpose and the golden step fails, regenerate the
-references with `mix raxol.fate --gen` and commit them. The hashes are
+references with `mix raxol.rate --gen` and commit them. The hashes are
 architecture-independent, so a mismatch that appears on one architecture while another
 stays green points at a determinism bug worth tracking down.

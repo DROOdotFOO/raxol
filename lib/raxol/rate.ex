@@ -1,24 +1,24 @@
-defmodule Raxol.FATE do
+defmodule Raxol.RATE do
   @moduledoc """
-  FATE-style golden render harness (after FFmpeg's Fast Audio Video Evaluation).
+  RATE: Raxol Automated Testing Environment (golden render harness).
 
-  Renders a corpus of deterministic fixtures through the pure
-  `Raxol.UI.Renderer.render_to_cells/1` path, canonically serializes the
-  resulting cell grid, and hashes it (SHA-256). Reference hashes are committed
-  under `priv/fate/golden.refs`; `verify/0` compares the current render against
-  them.
+  Modeled on FFmpeg's FATE, adapted for Raxol. Renders a corpus of
+  deterministic fixtures through the pure `Raxol.UI.Renderer.render_to_cells/1`
+  path, canonically serializes the resulting cell grid, and hashes it
+  (SHA-256). Reference hashes are committed under `priv/rate/golden.refs`;
+  `verify/0` compares the current render against them.
 
   The render path uses no NIF, wall clock, or randomness, so a fixture hashes
   identically across architectures; an x86_64/aarch64 divergence is a determinism bug.
 
-  Run via `mix raxol.fate` (compare) or `mix raxol.fate --gen` (regenerate
-  references). The golden test in `test/fate/golden_test.exs` runs the same
+  Run via `mix raxol.rate` (compare) or `mix raxol.rate --gen` (regenerate
+  references). The golden test in `test/rate/golden_test.exs` runs the same
   corpus inside the normal suite, so CI exercises it on every arch it builds on.
   """
 
   alias Raxol.UI.Renderer
 
-  @refs_rel "fate/golden.refs"
+  @refs_rel "rate/golden.refs"
 
   @doc "Render every fixture, returning `[{name, hash}]` sorted by name."
   @spec run() :: [{String.t(), String.t()}]
@@ -58,7 +58,7 @@ defmodule Raxol.FATE do
     end
   end
 
-  @doc "Regenerate `priv/fate/golden.refs` from the current render (dev only)."
+  @doc "Regenerate `priv/rate/golden.refs` from the current render (dev only)."
   @spec generate() :: :ok
   def generate do
     body = Enum.map_join(run(), "\n", fn {name, hash} -> "#{name}  #{hash}" end)
