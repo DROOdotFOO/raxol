@@ -9,43 +9,65 @@ defmodule Mix.Tasks.RaxolAcp.Order do
 
   Flow (mirrors `acp-node-v2` `createJobFromOffering`):
 
-    1. Sign a Xochi intent for the transfer (`quote_and_sign`, off-chain EIP-712).
+    1. Sign a Xochi intent for the transfer AS the buyer agent (off-chain EIP-712;
+       an SCA signs ERC-1271).
     2. `createJob(provider, evaluator=0x0, expiredAt, description, hook=0x0)` on the
-       ACP Core (a real Base tx; the buyer EOA pays gas).
+       ACP Core.
     3. Resolve the assigned `jobId` from the `createJob` receipt.
-    4. `send_message(jobId, requirement, "requirement")` -- retried, since the
-       off-chain chat room lags the on-chain job.
+    4. `send_message(jobId, requirement, "requirement")` to the chat room (retried,
+       since it lags the on-chain job).
     5. Poll `getJob(jobId).budget` until the provider sets it, and assert it is
        `fee_bps` of the principal.
-    6. With `--fund`: `fund(jobId, budget)` so the provider is paid and settlement
-       proceeds (a second Base tx).
+    6. With `--fund`: approve + `fund(jobId, budget)` so the provider is paid and
+       settlement proceeds.
 
-  MOVES REAL FUNDS: `createJob`/`fund` cost gas; the Xochi settlement pull moves
-  the principal (gasless via ERC-3009). `--dry-run` stops after signing (step 1),
-  no on-chain writes.
+  ## Signer backends (`--signer`)
+
+  The buyer must be a REGISTERED Virtuals agent to post messages, so the default
+  drives a managed SCA agent:
+
+    * `privy` (default) -- Virtuals-delegated signing via the Node signer sidecar
+      (`priv/signer_sidecar`); gas is Alchemy-sponsored (no ETH needed). The buyer
+      is the managed SCA at `RAXOL_ACP_WALLET_ADDRESS`; the intent is signed locally
+      as that SCA (`ORDER_KEY` session key -> ERC-1271).
+    * `sca` -- direct ERC-4337: the `ORDER_KEY` session key signs UserOps submitted
+      to your own bundler + paymaster (`ORDER_BUNDLER_URL`, `ORDER_PAYMASTER_POLICY`).
+    * `eoa` -- raw EOA from `ORDER_KEY`. NOT a registered agent (messaging 404s);
+      on-chain-only testing.
+
+  MOVES REAL FUNDS on `--fund` (the fee escrow + the Xochi settlement pull). Gas is
+  sponsored under `privy`. `--dry-run` stops after signing (step 1).
 
   ## Env
 
-      ORDER_KEY         buyer EOA private key (0x-hex). Signs the intent AND the
-                        createJob/fund txs.
-      ORDER_RPC_8453    Base JSON-RPC URL (to broadcast createJob/fund).
-      ORDER_XOCHI_URL   Xochi worker (default https://api.xochi.fi).
-      ORDER_XOCHI_TOKEN Xochi Member token.
+      ORDER_KEY          session-key EOA (0x-hex): signs the intent, and -- under
+                         sca/eoa -- the on-chain txs.
+      ORDER_RPC_8453     Base JSON-RPC (reads; eoa/sca broadcast). Default: mainnet.
+      ORDER_XOCHI_TOKEN  Xochi Member token.  ORDER_XOCHI_URL default api.xochi.fi.
+
+      # `privy` backend (delegated sidecar) -- from the agent's op item:
+      RAXOL_ACP_WALLET_ADDRESS      the managed SCA agent (the buyer).
+      RAXOL_ACP_WALLET_ID           Privy wallet id.
+      RAXOL_ACP_SIGNER_PRIVATE_KEY  P-256 authorization key (base64 PKCS#8).
+      PRIVY_APP_ID                  Virtuals Privy app id.
 
   ## Flags
 
-      --amount N        principal in USDC (default 3.00; note the solver's dynamic
-                        gas floor rejects sub-~$3 today).
-      --corridor F>T    origin>destination chain ids (default 8453>42161).
-      --provider 0x..   the agent (seller) wallet to hire (default the raxol agent).
-      --fee-bps N       expected take-rate to assert (default 8).
-      --fund            after budget is observed, fund the escrow (extra Base tx).
-      --dry-run         sign only, no on-chain writes.
+      --signer B         privy (default) | sca | eoa
+      --amount N         principal in USDC (default 3.00; the solver's dynamic gas
+                         floor rejects sub-~$3 today).
+      --corridor F>T     origin>destination chain ids (default 8453>42161).
+      --provider 0x..    the agent (seller) wallet to hire (default the raxol agent).
+      --fee-bps N        expected take-rate to assert (default 8).
+      --job-id N         resume an existing job (skip createJob).
+      --fund             after budget is observed, fund the escrow + settle.
+      --dry-run          sign only, no on-chain writes.
 
-  ## Example
+  ## Example (delegated Privy, the default)
 
-      ORDER_KEY=0x... ORDER_RPC_8453=https://mainnet.base.org \\
-      ORDER_XOCHI_TOKEN=<member token> \\
+      ORDER_KEY=0x<session key> ORDER_XOCHI_TOKEN=<member token> \\
+      RAXOL_ACP_WALLET_ADDRESS=0x<agent> RAXOL_ACP_WALLET_ID=<id> \\
+      RAXOL_ACP_SIGNER_PRIVATE_KEY=<p256> PRIVY_APP_ID=<app id> \\
         mix raxol_acp.order --amount 3.00
   """
 
@@ -306,10 +328,13 @@ defmodule Mix.Tasks.RaxolAcp.Order do
     }
 
     case Req.post(cfg.rpc, json: body) do
-      {:ok, %{status: 200, body: %{"result" => "0x" <> hex}}} when byte_size(hex) >= 14 * 64 ->
+      {:ok, %{status: 200, body: %{"result" => "0x" <> hex}}} when byte_size(hex) >= 8 * 64 ->
         raw = Base.decode16!(hex, case: :mixed)
 
-        <<_head::binary-size(6 * 32), budget::unsigned-big-integer-size(256), _rest::binary>> =
+        # Dynamic-struct return: a leading offset word, then the head (client,
+        # status, provider, expiredAt, evaluator, hook, budget). budget is word 7
+        # -- skip the offset word + the six preceding fields.
+        <<_lead::binary-size(7 * 32), budget::unsigned-big-integer-size(256), _rest::binary>> =
           raw
 
         {:ok, budget}
