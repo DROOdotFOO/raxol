@@ -361,6 +361,170 @@ defmodule Raxol.ACP.Xochi.SolverAgentTest do
     end
   end
 
+  describe "reattach after restart (deployed funded->settle path)" do
+    # Regression for #772: the deployed solver set the budget, then RESTARTED
+    # (deploy/reschedule) before the buyer funded. Its in-memory session was gone
+    # and the live-only SSE stream never replays the earlier entries, so the
+    # funded job stayed stuck at `funded` forever -- settle was never reached.
+    #
+    # This exercises the SolverAgent's own `handle_job_funded/2` with NO prior
+    # session, proving it rebuilds from job history and settles. (The passing
+    # `--route acp` gate drives `JobSession.Provider.deliver` directly, never this
+    # path -- which is why the bug shipped.)
+
+    # Raw wire-shaped history entries: a system `job.created` (nested event map,
+    # onChainJobId) and a `requirement` message. Parser.normalize/1 folds these
+    # into the shape the reattach reads, same as the live stream.
+    defp history_created(job_id, provider) do
+      %{
+        "kind" => "system",
+        "event" => %{"type" => "job.created", "provider" => provider, "onChainJobId" => job_id},
+        "chainId" => 8453
+      }
+    end
+
+    defp history_requirement(job_id) do
+      req = %{
+        "src_chain_id" => 8453,
+        "dst_chain_id" => 10,
+        "src_token" => "0x" <> String.duplicate("11", 20),
+        "dst_token" => "0x" <> String.duplicate("22", 20),
+        "amount_atomic" => "1000000",
+        "signed_intent" => %{
+          "intent_id" => "xi_1",
+          "quote_id" => "xq_1",
+          "signature" => "0x" <> String.duplicate("11", 65),
+          "nonce" => 7,
+          "pull_signature" => "0x" <> String.duplicate("22", 65)
+        }
+      }
+
+      %{
+        "kind" => "message",
+        "contentType" => "requirement",
+        "chainId" => 8453,
+        "onChainJobId" => job_id,
+        "content" => Jason.encode!(req)
+      }
+    end
+
+    defp funded(job_id) do
+      %{"kind" => "system", "event" => "job.funded", "chainId" => 8453, "jobId" => job_id}
+    end
+
+    test "rebuilds the session from history and settles a funded job the solver never saw created",
+         ctx do
+      test_pid = self()
+
+      settle_stub = fn args ->
+        send(test_pid, {:settled, args})
+
+        {:ok,
+         %{
+           intent_id: "xochi-reattach",
+           settlement_tx_hash: "0x" <> String.duplicate("a", 64),
+           receiving_tx_hash: "0x" <> String.duplicate("b", 64),
+           status: "settled"
+         }}
+      end
+
+      # The ACP server holds the job's history; the solver's memory does not.
+      Transport.Mock.set_history(ctx.transport, {8453, 70_759}, [
+        history_created(70_759, @solver_wallet),
+        history_requirement(70_759)
+      ])
+
+      {:ok, solver} = start_solver([settle_fn: settle_stub], ctx)
+      Agent.start_stream(ctx.agent)
+
+      # ONLY a funded event arrives (post-restart) -- no job.created, no requirement.
+      Transport.Mock.deliver(ctx.transport, funded(70_759))
+      Process.sleep(80)
+
+      # The relay ran on the recovered signed intent...
+      assert_received {:settled, %{signed_intent: %{"intent_id" => "xi_1"}}}
+
+      # ...and the job advanced to submitted on-chain.
+      session = SolverAgent.session(solver, {8453, 70_759})
+      assert session.status == :submitted
+      assert session.deliverable.intent_id == "xochi-reattach"
+
+      # Only the submit call -- setBudget already happened before the restart, so
+      # reattach does NOT re-propose the budget.
+      assert [{8453, [call]}] = ProviderAdapter.Mock.sent_calls(ctx.provider)
+      assert call.to == @acp_core
+    end
+
+    test "a duplicate funded event does not re-settle an already-submitted job", ctx do
+      settle_count = :counters.new(1, [])
+
+      settle_stub = fn _ ->
+        :counters.add(settle_count, 1, 1)
+
+        {:ok,
+         %{
+           intent_id: "xochi-dup",
+           settlement_tx_hash: "0x" <> String.duplicate("a", 64),
+           receiving_tx_hash: "0x" <> String.duplicate("b", 64),
+           status: "settled"
+         }}
+      end
+
+      Transport.Mock.set_history(ctx.transport, {8453, 70_760}, [
+        history_created(70_760, @solver_wallet),
+        history_requirement(70_760)
+      ])
+
+      {:ok, solver} = start_solver([settle_fn: settle_stub], ctx)
+      Agent.start_stream(ctx.agent)
+
+      Transport.Mock.deliver(ctx.transport, funded(70_760))
+      Process.sleep(80)
+      assert SolverAgent.session(solver, {8453, 70_760}).status == :submitted
+
+      # A replayed funded event must not spend again.
+      Transport.Mock.deliver(ctx.transport, funded(70_760))
+      Process.sleep(80)
+
+      assert :counters.get(settle_count, 1) == 1
+    end
+
+    test "reattach fails closed when the funded job is not ours (no settle)", ctx do
+      settle_stub = fn _ -> flunk("must not settle a job we did not provide") end
+
+      Transport.Mock.set_history(ctx.transport, {8453, 70_761}, [
+        history_created(70_761, "0xother0000000000000000000000000000000000"),
+        history_requirement(70_761)
+      ])
+
+      {:ok, solver} = start_solver([settle_fn: settle_stub], ctx)
+      Agent.start_stream(ctx.agent)
+
+      Transport.Mock.deliver(ctx.transport, funded(70_761))
+      Process.sleep(80)
+
+      assert SolverAgent.session(solver, {8453, 70_761}) == nil
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+
+    test "reattach fails closed when history has no requirement (no settle)", ctx do
+      settle_stub = fn _ -> flunk("must not settle without a recovered requirement") end
+
+      Transport.Mock.set_history(ctx.transport, {8453, 70_762}, [
+        history_created(70_762, @solver_wallet)
+      ])
+
+      {:ok, solver} = start_solver([settle_fn: settle_stub], ctx)
+      Agent.start_stream(ctx.agent)
+
+      Transport.Mock.deliver(ctx.transport, funded(70_762))
+      Process.sleep(80)
+
+      assert SolverAgent.session(solver, {8453, 70_762}) == nil
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+  end
+
   describe "completion" do
     test "job.completed event updates session status", ctx do
       {:ok, solver} = start_solver([], ctx)
