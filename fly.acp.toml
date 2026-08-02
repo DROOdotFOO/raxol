@@ -91,7 +91,7 @@ kill_timeout = '60s'
   # Storefront fee in basis points. SolverApplication defaults to 50 (0.5%); the
   # launch target is 8. Pinned here (non-secret) so the fee is independent of any
   # script. A change requires a redeploy (parsed via String.to_integer at boot).
-  XOCHI_FEE_BPS = '10'
+  XOCHI_FEE_BPS = '8'
 
   # --- Delegated (Privy + Alchemy managed wallet) signing config (non-secret) ---
   # The Virtuals ACP server that proxies wallet signing to Privy; the sidecar signs its

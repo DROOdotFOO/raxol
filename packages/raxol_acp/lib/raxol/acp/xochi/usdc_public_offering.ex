@@ -33,7 +33,7 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOffering do
 
   use Raxol.ACP.Offering,
     name: "xochi_usdc_public",
-    fee_bps: 10,
+    fee_bps: 8,
     sla_minutes: 10,
     cluster: "on_chain"
 
