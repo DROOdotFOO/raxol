@@ -296,6 +296,44 @@ defmodule Raxol.AgentClientProtocol.RouterTest do
     end
   end
 
+  # -- stale-codegen guard: the generated surface must track MethodTable --------
+  #
+  # These iterate the WHOLE table, so any future row is auto-covered. They RED
+  # exactly the `_raxol/session.steer` #650 failure mode: a table row present but
+  # absent from the compiled Router/Agent/Client surface because an incremental
+  # build did not recompile the codegen consumers. `MethodTable.depend_on_source/0`
+  # (an `@external_resource` on the table source) keeps them in lockstep; these
+  # assert the lockstep holds (and RED loudly + generically if it ever breaks).
+  describe "generated surface tracks MethodTable (stale-codegen guard)" do
+    alias Raxol.AgentClientProtocol.{Agent, Client, MethodTable}
+
+    test "result_marker/1 returns {:decode, result} for every request app row" do
+      for %{wire: wire, result: result} <-
+            Enum.filter(MethodTable.rows(), &(&1.kind == :request and &1.layer == :app)) do
+        assert Router.result_marker(wire) == {:decode, result},
+               "Router.result_marker(#{inspect(wire)}) is stale vs MethodTable " <>
+                 "(expected {:decode, #{inspect(result)}}) -- run `mix clean`?"
+      end
+    end
+
+    test "every app-callback row appears in the handling side's callback surface" do
+      agent_surface = MapSet.new(Agent.callbacks())
+      client_surface = MapSet.new(Client.callbacks())
+
+      for row <- MethodTable.rows(), row.layer == :app and row.callback != nil do
+        arity = if row.params == nil, do: 1, else: 2
+        entry = {row.callback, arity, row.wire}
+
+        surface =
+          if row.direction == :agent_to_client, do: client_surface, else: agent_surface
+
+        assert MapSet.member?(surface, entry),
+               "#{inspect(entry)} missing from the generated callback surface " <>
+                 "(stale codegen vs MethodTable -- run `mix clean`?)"
+      end
+    end
+  end
+
   # -- capability gating is out of scope for Router ----------------------------
   #
   # Per the design doc's D1-3 fix, Connection must consult MethodTable's

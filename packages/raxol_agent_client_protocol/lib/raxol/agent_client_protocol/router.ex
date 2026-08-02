@@ -272,8 +272,15 @@ defmodule Raxol.AgentClientProtocol.Router do
   """
 
   require Raxol.AgentClientProtocol.Router.Codegen
+  require Raxol.AgentClientProtocol.MethodTable
   alias Raxol.AgentClientProtocol.MethodTable
   alias Raxol.AgentClientProtocol.Router.Codegen
+
+  # This module bakes `MethodTable.rows/0` data into its decode/dispatch/
+  # result_marker clauses, so it MUST recompile when the table source changes
+  # (a `rows/0` call alone is only an exports dependency). See
+  # `MethodTable.depend_on_source/0`.
+  MethodTable.depend_on_source()
 
   @typedoc "Which side is decoding/dispatching: the side that HANDLES the row (see `MethodTable.rows_for_side/1`)."
   @type side :: :agent | :client

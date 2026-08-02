@@ -596,6 +596,28 @@ defmodule Raxol.AgentClientProtocol.MethodTable do
 
   # -- Public API ---------------------------------------------------------------
 
+  # The absolute path of THIS module's source, captured at compile time.
+  @table_source __ENV__.file
+
+  @doc """
+  Register a compile-time dependency on this table's SOURCE FILE into the calling
+  module.
+
+  Any module that expands `rows/0` data into its own compiled output — the
+  `Router` decode/dispatch/result_marker clauses, the `Agent`/`Client` `@callback`
+  surface — MUST call this in its module body. A plain `rows/0` call is only an
+  EXPORTS dependency (recompile when `rows/0`'s API changes); a row-DATA edit does
+  not change that signature, so without this an incremental build leaves the
+  generated code stale (the `_raxol/session.steer` #650 staleness class: a new row
+  present in the table but absent from `Router`/`Agent` until a `mix clean`).
+  `@external_resource` forces the caller to recompile whenever this file changes.
+  """
+  defmacro depend_on_source do
+    quote do
+      @external_resource unquote(@table_source)
+    end
+  end
+
   @doc "All table rows, in declaration order (agent methods, then client methods, then protocol methods)."
   @spec rows() :: [row()]
   def rows, do: @rows

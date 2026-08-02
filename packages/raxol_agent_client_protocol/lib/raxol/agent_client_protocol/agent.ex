@@ -230,10 +230,16 @@ defmodule Raxol.AgentClientProtocol.Agent do
   """
 
   require Raxol.AgentClientProtocol.Handler.Codegen
+  require Raxol.AgentClientProtocol.MethodTable
 
   alias Raxol.AgentClientProtocol.Connection
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Handler.Codegen
+  alias Raxol.AgentClientProtocol.MethodTable
+
+  # This module bakes the `MethodTable` `@callback` surface at compile time, so it
+  # MUST recompile when the table source changes. See `MethodTable.depend_on_source/0`.
+  MethodTable.depend_on_source()
 
   @typedoc "Per-dispatch context (IC-2). See `Raxol.AgentClientProtocol.Connection.Ctx`."
   @type ctx :: Connection.Ctx.t()
