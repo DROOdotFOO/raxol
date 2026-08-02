@@ -15,6 +15,12 @@
 #            seller settles on delivery. Runs the raxol_acp order test.
 #   relay -- EVM->Tron rail via the Riddler solver (riddler.axol.io/relay). Runs
 #            the raxol_acp relay test. Tron-settled, so USDC/USDT only.
+#   fee   -- take-rate validation (opt-in; NOT in "all"). Drives the real
+#            SolverAgent: a buyer signs a live Xochi intent for a known
+#            principal, the solver proposes the budget, and the test asserts the
+#            on-chain setBudget == GATE_FEE_BPS (default 8) bps of the principal.
+#            Moves NO funds (off-chain signature + captured on-chain write), but
+#            needs a real GATE_KEY to sign. Runs the raxol_acp solver-fee test.
 #
 # The asset x route grid, and the corridor each cell rides, is fixed here to
 # match what Riddler and Xochi actually support (see the asset_cfg table):
@@ -78,6 +84,9 @@
 #   # Just the ACP order path for USDC:
 #   GATE_KEY=0x<funded> ./scripts/run_live_gates.sh --asset USDC --route acp
 #
+#   # Validate the live take-rate is 8 bps (NO funds; needs a real signing key):
+#   GATE_KEY=0x<key> GATE_FEE_BPS=8 ./scripts/run_live_gates.sh --asset USDC --route fee
+#
 #   # USDG drain rehearsal (Robinhood -> Base), acp route:
 #   GATE_KEY=0x<funded seller w/ USDG on 4663> GATE_RPC_4663=https://rpc.mainnet.chain.robinhood.com \
 #     ./scripts/run_live_gates.sh --asset USDG --route xochi,acp --dry-run
@@ -92,6 +101,7 @@ ACP_DIR="$REPO_ROOT/packages/raxol_acp"
 XOCHI_TEST="test/raxol/payments/xochi/live_xochi_test.exs"
 ORDER_TEST="test/raxol/acp/xochi/live_order_test.exs"
 RELAY_TEST="test/raxol/acp/relay/live_relay_test.exs"
+SOLVER_FEE_TEST="test/raxol/acp/xochi/solver_fee_live_test.exs"
 
 # --- defaults / env inputs ---
 ASSETS=""
@@ -116,8 +126,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: scripts/run_live_gates.sh --asset A[,A...] [--route R[,R...]] [options]
 
-  --asset   USDC|USDT|USDG|all   (required)
-  --route   xochi|acp|relay|all  (default all)
+  --asset   USDC|USDT|USDG|all      (required)
+  --route   xochi|acp|relay|fee|all (default all; fee is opt-in, fund-free)
   --amount  N                    human stablecoin amount for xochi/acp (default 5.00)
   --corridors SPEC               override corridors, "from>to,from>to" or "mesh"
   --auth    mandate|member       Xochi auth mode (default mandate)
@@ -162,7 +172,7 @@ for a in $ASSET_LIST; do
   case "$a" in USDC|USDT|USDG) ;; *) err "unknown asset: $a (want USDC|USDT|USDG)"; exit 2 ;; esac
 done
 for r in $ROUTE_LIST; do
-  case "$r" in xochi|acp|relay) ;; *) err "unknown route: $r (want xochi|acp|relay)"; exit 2 ;; esac
+  case "$r" in xochi|acp|relay|fee) ;; *) err "unknown route: $r (want xochi|acp|relay|fee)"; exit 2 ;; esac
 done
 
 # --- input validation (cheap, before any work) ---
@@ -214,7 +224,7 @@ rpc_for() { local v="GATE_RPC_$1"; printf '%s' "${!v:-}"; }
 # --- secret loading (lazy: only what the selected routes need) ---
 need_xochi=false; need_relay=false
 for r in $ROUTE_LIST; do
-  case "$r" in xochi|acp) need_xochi=true ;; relay) need_relay=true ;; esac
+  case "$r" in xochi|acp|fee) need_xochi=true ;; relay) need_relay=true ;; esac
 done
 
 # Funded key: required for a real run; dummy is fine for dry-run (tests compile
@@ -370,6 +380,43 @@ run_relay() {
   env MIX_ENV=test mix test --include live_relay "$RELAY_TEST"
 }
 
+# Take-rate validation. Drives the REAL SolverAgent: a buyer signs a live Xochi
+# intent for a known principal, the solver resolves the authoritative amount off
+# Xochi and proposes the budget, and the test asserts the on-chain setBudget
+# calldata == GATE_FEE_BPS (default 8) bps of the principal. Moves NO funds --
+# the intent signature is off-chain and the on-chain write is captured, not sent
+# -- so it runs the same whether or not --dry-run is set. It DOES need a real
+# signing key (a valid EOA; funding not required) to produce the intent.
+run_fee() {
+  local asset="$1" cfg tok corr _p2 _pc corridors
+  cfg="$(asset_cfg "$asset")"
+  IFS='|' read -r tok corr _p2 _pc <<<"$cfg"
+  corridors="${CORRIDORS_OVERRIDE:-$corr}"
+
+  if [[ "$KEY" == "0xdummy" ]]; then
+    log "fee $asset: SKIP -- needs a real GATE_KEY to sign the intent (no funds move)."
+    return 10
+  fi
+
+  export XOCHI_ORDER_LIVE_URL="$XOCHI_URL" XOCHI_ORDER_LIVE_KEY="$KEY" XOCHI_ORDER_LIVE_TOKEN="$XOCHI_TOKEN"
+  export XOCHI_ORDER_AMOUNT="$AMOUNT" XOCHI_ORDER_CORRIDORS="$corridors"
+  export XOCHI_FEE_BPS="${GATE_FEE_BPS:-8}"
+
+  cd "$ACP_DIR"
+  log "fee $asset: assert on-chain budget == ${XOCHI_FEE_BPS} bps of the live-signed principal [$corridors] (NO funds)..."
+  env MIX_ENV=test mix test --only live_solver_fee "$SOLVER_FEE_TEST"
+}
+
+# The routes that actually settle (and so gate on the funded-run confirmation).
+# `fee` is fund-free, so a fee-only run skips the prompt.
+has_settling_route() {
+  local r
+  for r in $ROUTE_LIST; do
+    case "$r" in xochi|acp|relay) return 0 ;; esac
+  done
+  return 1
+}
+
 # ================= plan / spend preview =================
 # corridor count for a spec: a "from>to" pair has one '>', mesh is the 5-chain
 # CCTP grid (20 ordered pairs).
@@ -415,6 +462,7 @@ confirm_funded() {
           else
             log "  $a / relay  -> Base $tok -> Tron USDT (~$RELAY_AMOUNT)"
           fi ;;
+        fee) log "  $a / fee  -> take-rate check [$eff] (NO funds)" ;;
         *) log "  $a / $r  -> [$eff] token=$tok (~$AMOUNT/corridor)" ;;
       esac
     done
@@ -455,6 +503,7 @@ run_cell() {
       xochi) run_xochi "$asset" ;;
       acp)   run_acp   "$asset" ;;
       relay) run_relay "$asset" ;;
+      fee)   run_fee   "$asset" ;;
     esac
   )
   rc=$?
@@ -466,7 +515,7 @@ run_cell() {
   esac
 }
 
-[[ -z "$DRY_RUN" ]] && confirm_funded
+[[ -z "$DRY_RUN" ]] && has_settling_route && confirm_funded
 
 log "live gates: assets=[$ASSET_LIST] routes=[$ROUTE_LIST] amount=$AMOUNT auth=$AUTH${DRY_RUN:+ dry-run}"
 for asset in $ASSET_LIST; do
