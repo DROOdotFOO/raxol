@@ -431,7 +431,12 @@ defmodule Mix.Tasks.RaxolAcp.Order do
         chains: %{from => rpc}
       )
 
-    {provider, address, ScaWallet}
+    # The 7702 buyer's ONLY authorized signer is its own managed authority, so the
+    # intent (and origin-pull) signature must be produced by the sidecar, not a
+    # local session key. Sma7702Wallet resolves this provider at call time.
+    :persistent_term.put({__MODULE__, :privy_provider}, provider)
+
+    {provider, address, Sma7702Wallet}
   end
 
   # A (--signer sca): direct ERC-4337 -- the EOA session key signs UserOps,
@@ -466,6 +471,12 @@ defmodule Mix.Tasks.RaxolAcp.Order do
   defp build_signer(other, _from, _rpc),
     do: Mix.raise("unknown --signer #{inspect(other)} (want privy | sca | eoa)")
 
+  # The managed Privy provider is runtime state; Sma7702Wallet resolves it here at
+  # call time so the wallet stays a plain behaviour module.
+  @doc false
+  @spec privy_provider() :: Raxol.ACP.ProviderAdapter.adapter()
+  def privy_provider, do: :persistent_term.get({__MODULE__, :privy_provider})
+
   # The buyer signs the Xochi intent with the same ORDER_KEY the provider adapter uses.
   # The EOA session key (0x10910...) -- signs on behalf of the SCA agent.
   defmodule Signer do
@@ -473,9 +484,9 @@ defmodule Mix.Tasks.RaxolAcp.Order do
     use Raxol.Payments.Wallets.Env, env_var: "ORDER_KEY"
   end
 
-  # The managed SCA agent (0x468a... "testing agent"): the Xochi intent is signed
-  # AS this account (EOA session key -> ERC-1271), regardless of which on-chain
-  # signer backend submits createJob/fund.
+  # The managed SCA agent (0x468a... "testing agent") as a DEPLOYED Modular
+  # Account v2 (the --signer sca path): the intent is signed by the session key
+  # through the installed single-signer validation module.
   defmodule ScaWallet do
     @moduledoc false
     use Raxol.ACP.Wallet.SCA,
@@ -483,6 +494,18 @@ defmodule Mix.Tasks.RaxolAcp.Order do
       chain_id: 8453,
       signer: Signer,
       signer_entity_id: 0
+  end
+
+  # The managed SCA agent as an EIP-7702 Semi-Modular Account (the default --signer
+  # privy path): the intent is signed AS the account by its managed authority via
+  # the Privy sidecar, wrapped for the account's native ERC-1271 fallback path. A
+  # local session key is NOT an authorized signer on a 7702 account.
+  defmodule Sma7702Wallet do
+    @moduledoc false
+    use Raxol.ACP.Wallet.Sma7702,
+      account_address: "0x468aeae798b3a6548ac2401d276f83afdc172283",
+      chain_id: 8453,
+      provider: {Mix.Tasks.RaxolAcp.Order, :privy_provider}
   end
 
   # Trust the verified XochiPull contracts so the intent's origin-pull authorization
