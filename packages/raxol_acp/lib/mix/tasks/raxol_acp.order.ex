@@ -66,8 +66,12 @@ defmodule Mix.Tasks.RaxolAcp.Order do
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
   alias Raxol.Payments.Xochi.{PullContracts, Schemas.QuoteRequest}
 
+  # Nested wallet modules (defined below) -- alias so they resolve everywhere.
+  alias __MODULE__.{ScaWallet, Signer}
+
   # The raxol agent (seller) wallet -- the provider a buyer hires by default.
   @default_provider "0x939ead944b5d28b86d91af1961812d3bbc46cac1"
+  @sca_account "0x468aeae798b3a6548ac2401d276f83afdc172283"
   @offering "xochi_crosschain"
   @sla_minutes 5
 
@@ -82,7 +86,8 @@ defmodule Mix.Tasks.RaxolAcp.Order do
           fee_bps: :integer,
           fund: :boolean,
           dry_run: :boolean,
-          job_id: :integer
+          job_id: :integer,
+          signer: :string
         ]
       )
 
@@ -181,7 +186,7 @@ defmodule Mix.Tasks.RaxolAcp.Order do
       slippage_bps: 50
     }
 
-    XochiProtocol.quote_and_sign(cfg.xochi_config, request, cfg.wallet_mod)
+    XochiProtocol.quote_and_sign(cfg.xochi_config, request, cfg.intent_wallet)
   end
 
   defp requirement(cfg, bundle) do
@@ -334,8 +339,7 @@ defmodule Mix.Tasks.RaxolAcp.Order do
   # -- Config / helpers --
 
   defp build_config(opts) do
-    key_hex = fetch_env!("ORDER_KEY")
-    rpc = fetch_env!("ORDER_RPC_8453")
+    rpc = System.get_env("ORDER_RPC_8453", Chain.mainnet().rpc_url)
     {from, to} = parse_corridor(Keyword.get(opts, :corridor, "8453>42161"))
     amount = Keyword.get(opts, :amount, "3.00")
 
@@ -343,12 +347,13 @@ defmodule Mix.Tasks.RaxolAcp.Order do
     {:ok, dst_token} = Assets.address(to, "USDC")
     principal_atomic = Assets.to_atomic(Decimal.new(amount), Assets.decimals(from, src_token))
 
-    provider_adapter =
-      ProviderAdapter.JSONRPC.new(chains: %{from => rpc}, private_key: decode_key(key_hex))
+    signer = Keyword.get(opts, :signer, "privy")
+    {provider_adapter, buyer, intent_wallet} = build_signer(signer, from, rpc)
+    log("signer backend: #{signer}")
 
     %{
-      buyer: wallet_mod().address(),
-      wallet_mod: wallet_mod(),
+      buyer: buyer,
+      intent_wallet: intent_wallet,
       provider_adapter: provider_adapter,
       provider: Keyword.get(opts, :provider, @default_provider),
       from: from,
@@ -368,13 +373,79 @@ defmodule Mix.Tasks.RaxolAcp.Order do
     }
   end
 
+  # -- Signer backends --
+
+  # B (default): Virtuals-delegated Privy signing via the Node sidecar; gas is
+  # Alchemy-sponsored. The buyer is the managed SCA agent. Needs (env, from op):
+  # RAXOL_ACP_WALLET_ADDRESS / RAXOL_ACP_WALLET_ID / RAXOL_ACP_SIGNER_PRIVATE_KEY
+  # (+ PRIVY_APP_ID). The intent is still signed locally as the SCA (EOA -> 1271).
+  defp build_signer("privy", from, rpc) do
+    _ = fetch_env!("RAXOL_ACP_WALLET_ID")
+    _ = fetch_env!("RAXOL_ACP_SIGNER_PRIVATE_KEY")
+    address = fetch_env!("RAXOL_ACP_WALLET_ADDRESS")
+
+    {:ok, _} = Raxol.ACP.SignerSidecar.start_link([])
+
+    provider =
+      ProviderAdapter.Privy.new(
+        sidecar_url: Raxol.ACP.SignerSidecar.base_url([]),
+        address: address,
+        chains: %{from => rpc}
+      )
+
+    {provider, address, ScaWallet}
+  end
+
+  # A (--signer sca): direct ERC-4337 -- the EOA session key signs UserOps,
+  # submitted to your own bundler + paymaster. Needs ORDER_BUNDLER_URL (and
+  # ORDER_PAYMASTER_POLICY for sponsorship, else the SCA must hold ETH).
+  defp build_signer("sca", from, rpc) do
+    bundler = fetch_env!("ORDER_BUNDLER_URL")
+    policy = System.get_env("ORDER_PAYMASTER_POLICY")
+
+    provider =
+      ProviderAdapter.SCA.new(
+        wallet: ScaWallet,
+        chains: %{from => rpc},
+        wallet_opts: [bundler_url: bundler, paymaster_policy_id: policy]
+      )
+
+    {provider, @sca_account, ScaWallet}
+  end
+
+  # EOA (--signer eoa): raw EOA. NOT a registered agent, so createJob works but
+  # send_message 404s -- kept for on-chain-only testing.
+  defp build_signer("eoa", from, rpc) do
+    provider =
+      ProviderAdapter.JSONRPC.new(
+        chains: %{from => rpc},
+        private_key: decode_key(fetch_env!("ORDER_KEY"))
+      )
+
+    {provider, Signer.address(), Signer}
+  end
+
+  defp build_signer(other, _from, _rpc),
+    do: Mix.raise("unknown --signer #{inspect(other)} (want privy | sca | eoa)")
+
   # The buyer signs the Xochi intent with the same ORDER_KEY the provider adapter uses.
-  defmodule Wallet do
+  # The EOA session key (0x10910...) -- signs on behalf of the SCA agent.
+  defmodule Signer do
     @moduledoc false
     use Raxol.Payments.Wallets.Env, env_var: "ORDER_KEY"
   end
 
-  defp wallet_mod, do: Wallet
+  # The managed SCA agent (0x468a... "testing agent"): the Xochi intent is signed
+  # AS this account (EOA session key -> ERC-1271), regardless of which on-chain
+  # signer backend submits createJob/fund.
+  defmodule ScaWallet do
+    @moduledoc false
+    use Raxol.ACP.Wallet.SCA,
+      account_address: "0x468aeae798b3a6548ac2401d276f83afdc172283",
+      chain_id: 8453,
+      signer: Signer,
+      signer_entity_id: 0
+  end
 
   # Trust the verified XochiPull contracts so the intent's origin-pull authorization
   # passes the anti-drain pin (Riddler #591; same set config/runtime.exs uses).
