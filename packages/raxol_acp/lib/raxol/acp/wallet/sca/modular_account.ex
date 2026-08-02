@@ -166,34 +166,37 @@ defmodule Raxol.ACP.Wallet.SCA.ModularAccount do
   end
 
   @doc """
-  Compute the EIP-712 `ReplaySafeHash` digest a single-signer entity
-  signs for EIP-1271 (e.g. JWT auth challenges).
+  Compute the EIP-712 `ReplaySafeHash` digest a Semi-Modular Account's native
+  fallback signer signs for EIP-1271.
 
-  The domain binds the signature to the single-signer validation module
-  and the specific account via a salt of `bytes12(0) || accountAddress`:
+  A raxol-provisioned account is a Semi-Modular Account (7702 or the deployed
+  bytecode variant); its intent/message signatures validate through the entity-0
+  fallback path, whose replay-safe hash is bound to the ACCOUNT's own EIP-712
+  domain -- `EIP712Domain(uint256 chainId, address verifyingContract)` with
+  `verifyingContract = the account` and NO salt (verified byte-for-byte against
+  the live `SemiModularAccountBase._domainSeparator`/`_replaySafeHash` on Base):
 
-      domain  = EIP712Domain(uint256 chainId, address verifyingContract, bytes32 salt)
-                where verifyingContract = single-signer validation module,
-                      salt = 0x000000000000000000000000 || accountAddress
+      domain  = EIP712Domain(uint256 chainId, address verifyingContract)
+                where verifyingContract = the account itself
       struct  = ReplaySafeHash(bytes32 hash)
       digest  = keccak256(0x1901 || domainSeparator || structHash)
 
-  `inner_hash` is the application hash (e.g. `hashTypedData` of the
-  challenge, or `hashMessage` of a personal-sign payload).
+  `inner_hash` is the application hash (e.g. `hashTypedData` of the challenge, or
+  `hashMessage` of a personal-sign payload). This is NOT the single-signer
+  validation MODULE's replay-safe hash (module domain + account salt); an
+  installed single-signer module would compute that instead, but the fallback
+  path -- which every raxol SMA signature uses -- does not.
   """
   @spec replay_safe_digest(<<_::256>>, pos_integer(), String.t()) :: binary()
   def replay_safe_digest(inner_hash, chain_id, account_address) do
     domain_type_hash =
-      ExKeccak.hash_256("EIP712Domain(uint256 chainId,address verifyingContract,bytes32 salt)")
-
-    salt = <<0::96, decode_address!(account_address)::binary-size(20)>>
+      ExKeccak.hash_256("EIP712Domain(uint256 chainId,address verifyingContract)")
 
     domain_separator =
       ExKeccak.hash_256(
         domain_type_hash <>
           <<chain_id::unsigned-big-256>> <>
-          encode_address(@single_signer_validation) <>
-          salt
+          encode_address(account_address)
       )
 
     struct_hash =
