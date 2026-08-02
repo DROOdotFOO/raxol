@@ -18,7 +18,7 @@ if config_env() == :prod do
   # a per-chain var is here for each of the five supported chains in case they
   # ever diverge. Permit2 is fail-closed regardless; set
   # XOCHI_PULL_REQUIRE_SOLVER_PIN=true to hard-pin ERC-3009 too.
-  xochi_solver_allowlist =
+  xochi_env_solvers =
     ~w(XOCHI_SOLVER_ETH XOCHI_SOLVER_BASE XOCHI_SOLVER_ARBITRUM XOCHI_SOLVER_OPTIMISM XOCHI_SOLVER_POLYGON)
     |> Enum.map(&System.get_env/1)
     |> Enum.reject(&(is_nil(&1) or &1 == ""))
@@ -32,10 +32,21 @@ if config_env() == :prod do
   # release without the payments app (the module is absent) skips the check.
   if Code.ensure_loaded?(Raxol.Payments.Protocols.Xochi) do
     Raxol.Payments.Protocols.Xochi.assert_origin_pull_pinned!(
-      xochi_solver_allowlist,
+      xochi_env_solvers,
       xochi_require_solver_pin
     )
   end
+
+  # With XochiPull enabled (Riddler #591), the origin pull routes to the verified
+  # per-chain pull contracts, not the bare solver EOA. Trust those verified
+  # recipients in addition to any XOCHI_SOLVER_* addresses so a real settlement
+  # signs against the deployed contract instead of a rejected `to`/`spender`.
+  xochi_solver_allowlist =
+    if Code.ensure_loaded?(Raxol.Payments.Xochi.PullContracts) do
+      Enum.uniq(xochi_env_solvers ++ Raxol.Payments.Xochi.PullContracts.pull_recipients())
+    else
+      xochi_env_solvers
+    end
 
   config :raxol_payments,
     pull_solver_allowlist: xochi_solver_allowlist,
