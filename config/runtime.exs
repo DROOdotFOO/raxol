@@ -43,7 +43,10 @@ if config_env() == :prod do
   # signs against the deployed contract instead of a rejected `to`/`spender`.
   xochi_solver_allowlist =
     if Code.ensure_loaded?(Raxol.Payments.Xochi.PullContracts) do
-      Enum.uniq(xochi_env_solvers ++ Raxol.Payments.Xochi.PullContracts.pull_recipients())
+      Enum.uniq(
+        xochi_env_solvers ++
+          Raxol.Payments.Xochi.PullContracts.pull_recipients()
+      )
     else
       xochi_env_solvers
     end
