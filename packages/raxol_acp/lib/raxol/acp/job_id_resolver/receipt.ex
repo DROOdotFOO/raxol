@@ -9,30 +9,31 @@ defmodule Raxol.ACP.JobIdResolver.Receipt do
   `JobApi.get_active_jobs` and matches the one whose `description` carries the
   buyer's `request_tag` -- the recovery path when a crash lost the tx hash.
 
-  ## CONFIRM IN THE SEPOLIA DRY-RUN
+  ## Event signature (verified)
 
-  These defaults are placeholders and are NOT yet verified against the deployed
-  `AgenticCommerceV3`. Override via the resolver config before a funded run:
+  The defaults below are verified against the deployed `AgenticCommerceV3`
+  (Base `0x8e86FbEf...B77BC`, behind the ACP Core proxy): `JobCreated` carries
+  six params, with `jobId` the first indexed one, so topic 0 is
+  `keccak256("JobCreated(uint256,address,address,address,uint256,address)")`
+  and `jobId` is `topics[1]`. Override via the resolver config only if the core
+  is upgraded and the event changes:
 
       %{adapter: Raxol.ACP.JobIdResolver.Receipt,
         config: %{
-          event_signature: "JobCreated(uint256)",  # canonical name + arg types
+          event_signature: "JobCreated(uint256,address,address,address,uint256,address)",
           topic_index: 1                            # 1-based; topic 0 is the hash
         }}
 
-  Open items for the dry-run: (1) the exact `JobCreated` signature (its topic0
-  hash), (2) that `jobId` is the INDEXED parameter at `topic_index` (indexed
-  primitives live in `topics[]`, not `data`; this decoder only reads topics),
-  (3) which contract emits it, and (4) that `createJob`'s `description` string
-  round-trips on-chain and is readable back through `get_active_jobs` -- the
-  reconcile path depends on it.
+  `reconcile/4`'s recovery path depends on `createJob`'s `description` string
+  round-tripping on-chain and being readable back through `get_active_jobs`.
   """
 
   @behaviour Raxol.ACP.JobIdResolver
 
   alias Raxol.ACP.{JobApi, Onchain.LogDecoder, ProviderAdapter}
 
-  @default_event_signature "JobCreated(uint256)"
+  # Verified against the deployed AgenticCommerceV3 (see moduledoc).
+  @default_event_signature "JobCreated(uint256,address,address,address,uint256,address)"
   @default_topic_index 1
 
   @impl Raxol.ACP.JobIdResolver
