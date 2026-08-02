@@ -150,7 +150,7 @@ defmodule Raxol.ACP.Transport.SSE do
   def post_message(%{config: cfg}, {chain_id, job_id}, content, content_type) do
     case Auth.token(cfg.auth) do
       {:ok, token} ->
-        url = cfg.server_url <> "/jobs/#{chain_id}/#{job_id}/messages"
+        url = cfg.server_url <> "/chats/#{chain_id}/#{job_id}/message"
 
         body = %{"content" => content, "contentType" => content_type}
 
