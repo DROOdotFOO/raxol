@@ -187,11 +187,41 @@ defmodule Mix.Tasks.RaxolAcp.Order do
     job_id
   end
 
+  # approve (USDC) + fund (ACP Core) batched into ONE UserOp, per acp-node-v2. A
+  # standalone approve to a token contract is not sponsored by the Virtuals
+  # paymaster; batched with the ACP-core fund call, the whole UserOp is.
   defp fund_job(cfg, job_id, budget) do
-    log("funding escrow: approving #{budget} USDC to the ACP Core, then fund(#{job_id})...")
-    :ok = approve_usdc(cfg, budget)
-    {:ok, tx} = HookClient.fund(cfg.provider_adapter, cfg.from, cfg.core, job_id, budget)
-    log("fund tx: #{explorer(cfg.from)}#{tx} -- provider will now settle + deliver")
+    log("funding escrow: batched approve + fund(#{job_id}) in one sponsored UserOp...")
+
+    calls = [
+      %{
+        to: cfg.src_token,
+        data:
+          Raxol.ACP.ABI.encode_call("approve(address,uint256)", [
+            {"address", cfg.core},
+            {"uint256", budget}
+          ]),
+        value: 0
+      },
+      %{
+        to: cfg.core,
+        data:
+          Raxol.ACP.ABI.encode_call("fund(uint256,uint256,bytes)", [
+            {"uint256", job_id},
+            {"uint256", budget},
+            {"bytes", <<>>}
+          ]),
+        value: 0
+      }
+    ]
+
+    case ProviderAdapter.send_calls(cfg.provider_adapter, cfg.from, calls) do
+      {:ok, txs} ->
+        log("funded (approve+fund batched): #{inspect(txs)} -- provider will settle + deliver")
+
+      err ->
+        Mix.raise("fund failed: #{inspect(err)}")
+    end
   end
 
   # -- Steps --
@@ -341,23 +371,6 @@ defmodule Mix.Tasks.RaxolAcp.Order do
 
       _ ->
         :not_ready
-    end
-  end
-
-  defp approve_usdc(cfg, amount) do
-    call = %{
-      to: cfg.src_token,
-      data:
-        Raxol.ACP.ABI.encode_call("approve(address,uint256)", [
-          {"address", cfg.core},
-          {"uint256", amount}
-        ]),
-      value: 0
-    }
-
-    case ProviderAdapter.send_calls(cfg.provider_adapter, cfg.from, [call]) do
-      {:ok, _} -> :ok
-      err -> Mix.raise("USDC approve failed: #{inspect(err)}")
     end
   end
 
