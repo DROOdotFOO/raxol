@@ -820,6 +820,14 @@ boundary, NOT symmetrically on every wire:
   `{:error, :attach_denied}`, nothing read or tailed) so an injected policy
   cannot "mostly" admit. Negative control: the `:authorize`-denial test in the
   U4-R guards suite.
+  - *Implemented 2026-08-02.* The ready-made policy-deferring authorizer is
+    `Raxol.AgentClientProtocol.Ext.AttachPolicy.Bridge.authorizer/1`: it
+    translates the BEAM-local attach ctx into the CDI-2 Runner ctx and returns
+    the Runner's verdict verbatim, so a host wires
+    `Reattach.attach(…, authorize: Bridge.authorizer(policy:, transport:))` to
+    gate in-process attaches through the SAME fail-closed funnel. It lives in
+    `raxol_agent_client_protocol` (which owns the Runner) and produces a plain
+    closure, so the dep graph is unchanged (`raxol_agent` does not depend on it).
 
 **Forward-compat.** Grows by: new `Grant` fields (optional; `lens` already
 reserved), new token claims (grow-only, restrictive-narrowing), new `scope`

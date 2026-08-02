@@ -69,7 +69,10 @@ defmodule Raxol.Agent.Reattach do
     * `:base_dir` — session-dir root override; default = the
       `RAXOL_SESSIONS_DIR`-resolved path `FileStore` honors.
     * `:authorize` — an `authorize_fun/0` gating who may attach; default admits
-      (the BEAM-local wire is in-process-trusted).
+      (the BEAM-local wire is in-process-trusted). To gate in-process attaches
+      through the SAME fail-closed funnel the ACP boundary uses, inject
+      `Raxol.AgentClientProtocol.Ext.AttachPolicy.Bridge.authorizer/1` (in
+      raxol_agent_client_protocol) — it defers to the AttachPolicy Runner.
     * `:subscriber` — the pid that receives `{:reattach_live, session_id, record}`
       messages; default `self()` (the attaching process). The `attach` command
       wire sets it to the session's client pid.
