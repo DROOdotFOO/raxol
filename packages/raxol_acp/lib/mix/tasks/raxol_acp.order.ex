@@ -81,7 +81,8 @@ defmodule Mix.Tasks.RaxolAcp.Order do
           provider: :string,
           fee_bps: :integer,
           fund: :boolean,
-          dry_run: :boolean
+          dry_run: :boolean,
+          job_id: :integer
         ]
       )
 
@@ -102,32 +103,21 @@ defmodule Mix.Tasks.RaxolAcp.Order do
     if opts[:dry_run] do
       log("--dry-run: signed only, no on-chain writes. requirement=#{inspect(requirement)}")
     else
-      place(cfg, requirement, Keyword.get(opts, :fund, false))
+      place(cfg, requirement, opts)
     end
   end
 
   # -- Orchestration --
 
-  defp place(cfg, requirement, fund?) do
+  defp place(cfg, requirement, opts) do
     {agent, resolver} = start_buyer(cfg)
 
-    # 2. createJob on-chain.
-    expired_at = System.system_time(:second) + @sla_minutes * 60 + 60
-
-    {:ok, tx} =
-      HookClient.create_job(cfg.provider_adapter, cfg.from, cfg.core, %{
-        provider: cfg.provider,
-        evaluator: zero_address(),
-        expired_at: expired_at,
-        hook_address: zero_address(),
-        description: @offering
-      })
-
-    log("createJob tx: #{explorer(cfg.from)}#{tx}")
-
-    # 3. Resolve the on-chain jobId from the receipt (retries until mined).
-    job_id = await_job_id(resolver, cfg, tx)
-    log("jobId: #{job_id}")
+    # 2. createJob on-chain (or resume an existing job with --job-id).
+    job_id =
+      case Keyword.get(opts, :job_id) do
+        nil -> create_and_resolve(cfg, resolver)
+        existing -> tap(existing, fn id -> log("resuming job #{id} (skip createJob)") end)
+      end
 
     # 4. Send the requirement (retry: the chat room lags the on-chain job).
     :ok = send_requirement(agent, cfg.from, job_id, requirement)
@@ -148,7 +138,26 @@ defmodule Mix.Tasks.RaxolAcp.Order do
 
     log("job #{job_id} is live -- view it at https://app.virtuals.io/acp")
 
-    if fund?, do: fund_job(cfg, job_id, budget)
+    if Keyword.get(opts, :fund, false), do: fund_job(cfg, job_id, budget)
+  end
+
+  defp create_and_resolve(cfg, resolver) do
+    expired_at = System.system_time(:second) + @sla_minutes * 60 + 60
+
+    {:ok, tx} =
+      HookClient.create_job(cfg.provider_adapter, cfg.from, cfg.core, %{
+        provider: cfg.provider,
+        evaluator: zero_address(),
+        expired_at: expired_at,
+        hook_address: zero_address(),
+        description: @offering
+      })
+
+    log("createJob tx: #{explorer(cfg.from)}#{tx}")
+
+    job_id = await_job_id(resolver, cfg, tx)
+    log("jobId: #{job_id}")
+    job_id
   end
 
   defp fund_job(cfg, job_id, budget) do
@@ -239,7 +248,7 @@ defmodule Mix.Tasks.RaxolAcp.Order do
 
   # Retry, per acp-node-v2: the off-chain chat room may not exist immediately
   # after the on-chain createJob.
-  defp send_requirement(agent, chain_id, job_id, requirement, tries \\ 6)
+  defp send_requirement(agent, chain_id, job_id, requirement, tries \\ 12)
 
   defp send_requirement(_agent, _chain_id, job_id, _requirement, 0),
     do: Mix.raise("could not deliver requirement for job #{job_id} (chat room never ready)")
@@ -254,8 +263,9 @@ defmodule Mix.Tasks.RaxolAcp.Order do
       :ok ->
         :ok
 
-      _err ->
-        Process.sleep(2_000)
+      err ->
+        log("send_message attempt #{13 - tries} failed: #{inspect(err)}")
+        Process.sleep(3_000)
         send_requirement(agent, chain_id, job_id, requirement, tries - 1)
     end
   end
