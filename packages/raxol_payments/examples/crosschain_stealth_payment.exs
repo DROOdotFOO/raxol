@@ -133,7 +133,7 @@ defmodule CrosschainStealthPayment do
   # settlement, so a stealth request to a Tron destination FAILS CLOSED -- no
   # silent privacy downgrade; the operator must re-request public explicitly.
   # The public deposit is then funded by the injected broadcaster (the InMemory
-  # one here; the assembled build wires Raxol.ACP.Relay.OnchainBroadcaster).
+  # one here; the assembled build wires Raxol.Earn.Relay.OnchainBroadcaster).
   defp tron_leg(context) do
     IO.puts("\n== tron leg: relay rail (public-only) ==")
     IO.puts("route:    Base(#{@base}) -> Tron(#{@tron})  USDC -> USDT\n")

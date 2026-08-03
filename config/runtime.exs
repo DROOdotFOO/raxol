@@ -61,14 +61,14 @@ if config_env() == :prod do
   # and receipts over public RPC and never moves funds (the Riddler auto-rebalancer
   # executes). Enable with RAXOL_ACCOUNTING_ENABLED=true and set the RPC_* + solver
   # address vars. The env contract lives in Raxol.Payments.Accounting so this file and
-  # the raxol_acp sidecar release config read it identically. Guarded so a release
+  # the raxol_earn sidecar release config read it identically. Guarded so a release
   # without the payments app (the module is absent) skips it.
   if Code.ensure_loaded?(Raxol.Payments.Accounting) do
     {accounting_opts, accounting_enabled} =
       Raxol.Payments.Accounting.env_config()
 
     config :raxol_payments, :accounting, accounting_opts
-    config :raxol_acp, accounting_enabled: accounting_enabled
+    config :raxol_earn, accounting_enabled: accounting_enabled
   end
 
   # Configure terminal settings from environment

@@ -2,7 +2,7 @@ defmodule Raxol.Symphony.PauseReasonConventionTest do
   @moduledoc """
   ADR-0018 §1 mechanical enforcement: every interrupt-reason atom a
   runner declares via the optional `Raxol.Symphony.Runner.pause_reasons/0`
-  callback, AND every atom in `Raxol.ACP.Job.Workflow.pause_reasons/0`,
+  callback, AND every atom in `Raxol.Earn.Job.Workflow.pause_reasons/0`,
   MUST satisfy `Raxol.Symphony.PauseReason.awaiting?/1`.
 
   The convention is `:awaiting_<subject>` where `<subject>` names the
@@ -78,10 +78,10 @@ defmodule Raxol.Symphony.PauseReasonConventionTest do
     end
   end
 
-  describe "Raxol.ACP.Job.Workflow.pause_reasons/0" do
+  describe "Raxol.Earn.Job.Workflow.pause_reasons/0" do
     test "every atom matches :awaiting_<subject>" do
-      if Code.ensure_loaded?(Raxol.ACP.Job.Workflow) do
-        atoms = Raxol.ACP.Job.Workflow.pause_reasons()
+      if Code.ensure_loaded?(Raxol.Earn.Job.Workflow) do
+        atoms = Raxol.Earn.Job.Workflow.pause_reasons()
 
         for atom <- atoms do
           assert PauseReason.awaiting?(atom),
@@ -91,8 +91,8 @@ defmodule Raxol.Symphony.PauseReasonConventionTest do
     end
 
     test "the four canonical ACP reasons are present" do
-      if Code.ensure_loaded?(Raxol.ACP.Job.Workflow) do
-        atoms = Raxol.ACP.Job.Workflow.pause_reasons()
+      if Code.ensure_loaded?(Raxol.Earn.Job.Workflow) do
+        atoms = Raxol.Earn.Job.Workflow.pause_reasons()
 
         expected = [
           :awaiting_request_response,

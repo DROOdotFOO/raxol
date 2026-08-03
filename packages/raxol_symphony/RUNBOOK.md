@@ -114,8 +114,8 @@ HEX_BUILD=1 mix hex.publish
 ```
 
 `HEX_BUILD=1` strips the local `path:` deps so the build sees only Hex
-packages. `raxol_symphony` publishes **independently of `raxol_acp`**: the
-`raxol_acp` dependency is `only: :test` (`mix.exs`), so it is not a published
+packages. `raxol_symphony` publishes **independently of `raxol_earn`**: the
+`raxol_earn` dependency is `only: :test` (`mix.exs`), so it is not a published
 requirement. All published requirements (`raxol_core`, `raxol`, `raxol_agent`,
 `raxol_mcp`) are already on Hex at `~> 2.6`.
 

@@ -10,7 +10,7 @@ defmodule Raxol.Payments.EIP712 do
   secp256k1 signer) to produce the EIP-712 signature.
 
   Used by wallet implementations (`Raxol.Payments.Wallets.Env`,
-  `Raxol.Payments.Wallets.Op`) and by ACP memo signing in `raxol_acp`.
+  `Raxol.Payments.Wallets.Op`) and by ACP memo signing in `raxol_earn`.
 
   ## Example
 

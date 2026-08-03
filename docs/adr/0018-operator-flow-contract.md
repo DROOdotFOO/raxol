@@ -6,7 +6,7 @@ Proposed, 2026-06-16. Direct follow-up to ADR-0017 (paused-run query and pause-c
 
 ## Context
 
-ADR-0017 made paused runs first-class in the Workflow runtime: pause checkpoints with `interrupt_reason` metadata, the `c:list_paused/2` Saver callback, and `[:raxol, :workflow, :run, :paused | :resumed]` lifecycle telemetry. ADR-0016 Phase B added a `Job.Server.list_paused/0,1` facade on raxol_acp. The Symphony orchestrator's pause/resume machinery (`park_paused/4`, `dispatch_resumption/3`, `resume_run/3`) was wired but untested before this session and is now covered by lifecycle tests. The Codex runner converts `:approval_required` errors into `{:pause, :awaiting_approval, token}`. The Symphony MCP surface gained `symphony_list_paused` and `symphony_resume_run`. The Terminal, LiveView, Telegram, and Watch surfaces all render the paused set with the same `interrupt_reason` vocabulary and the same `sym:resume:<issue_id>:<decision>` callback shape.
+ADR-0017 made paused runs first-class in the Workflow runtime: pause checkpoints with `interrupt_reason` metadata, the `c:list_paused/2` Saver callback, and `[:raxol, :workflow, :run, :paused | :resumed]` lifecycle telemetry. ADR-0016 Phase B added a `Job.Server.list_paused/0,1` facade on raxol_earn. The Symphony orchestrator's pause/resume machinery (`park_paused/4`, `dispatch_resumption/3`, `resume_run/3`) was wired but untested before this session and is now covered by lifecycle tests. The Codex runner converts `:approval_required` errors into `{:pause, :awaiting_approval, token}`. The Symphony MCP surface gained `symphony_list_paused` and `symphony_resume_run`. The Terminal, LiveView, Telegram, and Watch surfaces all render the paused set with the same `interrupt_reason` vocabulary and the same `sym:resume:<issue_id>:<decision>` callback shape.
 
 That is six channels (eight if you count the Workflow `[:raxol, :workflow, :*]` telemetry stream and the per-run `{:command_result, ...}` message stream as separate consumers) that all converge on the same operator-flow vocabulary. The pattern is real, repeated, and works. It is not documented.
 
@@ -31,14 +31,14 @@ ADR-0017 documents the Workflow runtime and Saver: the pause checkpoint, the `c:
 
 Pause reasons follow the pattern `:awaiting_<subject>` where `<subject>` names the *external party* the run is waiting on, not the action the run will take.
 
-Canonical set today (from `Raxol.ACP.Job.Workflow.pause_reasons/0` plus the Symphony runners):
+Canonical set today (from `Raxol.Earn.Job.Workflow.pause_reasons/0` plus the Symphony runners):
 
 | Atom | External party | Source |
 | --- | --- | --- |
-| `:awaiting_request_response` | seller decides accept/reject | `Raxol.ACP.Job.Workflow` |
-| `:awaiting_buyer_payment` | buyer authorizes payment | `Raxol.ACP.Job.Workflow` |
-| `:awaiting_delivery` | seller delivers (buyer waits) | `Raxol.ACP.Job.Workflow` |
-| `:awaiting_evaluator_approval` | evaluator approves the deliverable | `Raxol.ACP.Job.Workflow` |
+| `:awaiting_request_response` | seller decides accept/reject | `Raxol.Earn.Job.Workflow` |
+| `:awaiting_buyer_payment` | buyer authorizes payment | `Raxol.Earn.Job.Workflow` |
+| `:awaiting_delivery` | seller delivers (buyer waits) | `Raxol.Earn.Job.Workflow` |
+| `:awaiting_evaluator_approval` | evaluator approves the deliverable | `Raxol.Earn.Job.Workflow` |
 | `:awaiting_approval` | operator approves Codex command/file change | `Raxol.Symphony.Runners.Codex` |
 | `:awaiting_review` | operator/PR reviewer responds (Noop test runner uses this) | `Raxol.Symphony.Runners.Noop` |
 
@@ -148,7 +148,7 @@ A channel that wants to expose pause state programmatically (an HTTP API, a quer
 - **The Workflow runtime mechanics**. Pause checkpoints, the `c:list_paused/2` Saver callback, resume semantics: all in ADR-0017. This ADR sits on top.
 - **The Symphony Orchestrator's internal pause map shape**. `Orchestrator.State.paused: %{}` is an implementation detail. The contract is what the snapshot exposes externally.
 - **The runner protocol's pause shape**. `{:pause, reason, token}` is documented in `Raxol.Symphony.Runner` (`@type result`). Changes there are out of scope.
-- **The PausedSaver Postgrex schema**. The Symphony PausedSaver is parallel work to ADR-0017's Workflow Saver; it persists Symphony's `:paused` map separately. The two pause-persistence stories (Workflow Saver for raxol_acp Jobs, PausedSaver for Symphony Orchestrator) coexist intentionally because they live at different abstraction levels.
+- **The PausedSaver Postgrex schema**. The Symphony PausedSaver is parallel work to ADR-0017's Workflow Saver; it persists Symphony's `:paused` map separately. The two pause-persistence stories (Workflow Saver for raxol_earn Jobs, PausedSaver for Symphony Orchestrator) coexist intentionally because they live at different abstraction levels.
 - **Authentication / authorization for resume callbacks**. Who is allowed to call `symphony_resume_run` or click an Approve button is out of scope; the contract assumes the channel has already authenticated the operator.
 - **Idempotency of resume callbacks**. Clicking Approve twice should not double-resume, but the de-duplication strategy (`Orchestrator.resume_run/3` returning `{:error, :not_paused}` on the second call) is implementation, not contract.
 
@@ -196,12 +196,12 @@ How we know the contract is right:
 ## References
 
 - ADR-0015: Workflow Graph (the runtime foundation)
-- ADR-0016: raxol_acp Job migration to Raxol.Workflow (the first runtime consumer)
+- ADR-0016: raxol_earn Job migration to Raxol.Workflow (the first runtime consumer)
 - ADR-0017: paused-run query and pause-checkpoint contract (the runtime-level pause primitive)
 - ADR-0012: MCP as Rendering Target (the precedent for cross-channel uniformity via the model-as-resource pattern)
 - ADR-0013: Event-dispatch Backpressure (the precedent for run-event message semantics)
 - `lib/raxol/workflow/runtime.ex` (pause checkpoint write + `:paused`/`:resumed` telemetry)
-- `packages/raxol_acp/lib/raxol/acp/job/workflow.ex` (`pause_reasons/0`)
+- `packages/raxol_earn/lib/raxol/acp/job/workflow.ex` (`pause_reasons/0`)
 - `packages/raxol_symphony/lib/raxol/symphony/orchestrator.ex` (`park_paused/4`, `dispatch_resumption/3`, `resume_run/3`)
 - `packages/raxol_symphony/lib/raxol/symphony/runners/codex.ex` (`pause_for_approval/3`)
 - `packages/raxol_symphony/lib/raxol/symphony/surfaces/{terminal,web/dashboard_live,mcp,telegram/formatter,watch/formatter}.ex` (the six channels)

@@ -5,7 +5,7 @@ defmodule Raxol.Payments.Relay.Broadcaster do
   the gasless pull is unavailable; see axol-io/Riddler#120).
 
   raxol's `Wallet` signs but does not broadcast, and the proven EVM transaction
-  stack (EIP-1559 signing, RLP, nonce, JSON-RPC submit) lives in `raxol_acp`,
+  stack (EIP-1559 signing, RLP, nonce, JSON-RPC submit) lives in `raxol_earn`,
   which depends on this package. So rather than duplicate fund-moving transaction
   code here, the deposit broadcast is injected: a caller that can see that stack
   supplies a module implementing this behaviour, and `ExecuteRelayTransfer` uses

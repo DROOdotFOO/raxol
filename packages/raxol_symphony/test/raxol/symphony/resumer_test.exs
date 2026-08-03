@@ -5,7 +5,7 @@ defmodule Raxol.Symphony.ResumerTest do
   alias Raxol.Symphony.Runners.Noop
   alias Raxol.Symphony.Trackers.Memory
 
-  @telemetry_event [:raxol, :acp, :job, :transition]
+  @telemetry_event [:raxol, :earn, :job, :transition]
 
   setup do
     start_supervised!({Task.Supervisor, name: Raxol.Symphony.TaskSupervisor})

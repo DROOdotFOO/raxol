@@ -21,7 +21,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0013](0013-event-dispatch-backpressure.md) | Event-dispatch Backpressure | Implemented | 2026-06-03 |
 | [0014](0014-telegram-ai-guardian.md) | Telegram AI Guardian admin behaviour | Accepted | 2026-06-13 |
 | [0015](0015-workflow-graph.md) | Workflow Graph (`Raxol.Workflow.*`) | Accepted | 2026-06-15 |
-| [0016](0016-acp-job-workflow.md) | raxol_acp Job migration to `Raxol.Workflow` | Superseded (v1->v2) | 2026-06-16 |
+| [0016](0016-acp-job-workflow.md) | raxol_earn Job migration to `Raxol.Workflow` | Superseded (v1->v2) | 2026-06-16 |
 | [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Superseded (v1->v2) | 2026-06-16 |
 | [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
 | [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/4`) | Accepted | 2026-06-16 |
@@ -114,7 +114,7 @@ They preserve context for why decisions were made, help new contributors underst
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
-- [0016: raxol_acp Job migration to Workflow](0016-acp-job-workflow.md)
+- [0016: raxol_earn Job migration to Workflow](0016-acp-job-workflow.md)
 - [0017: Workflow paused-run query and pause-checkpoint contract](0017-acp-workflow-paused-jobs.md)
 - [0018: Operator-flow contract for paused runs](0018-operator-flow-contract.md)
 - [0030: ACP session/update delivery ordering contract](0030-acp-session-update-delivery-ordering.md)
@@ -133,4 +133,4 @@ They preserve context for why decisions were made, help new contributors underst
 
 ## Coverage
 
-28 authored ADRs (26 active; 0016 and 0017 are superseded by the raxol_acp v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, and the ACP session/update delivery-ordering contract. (Numbers 0004 and 0006 are withdrawn placeholders.)
+28 authored ADRs (26 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, and the ACP session/update delivery-ordering contract. (Numbers 0004 and 0006 are withdrawn placeholders.)

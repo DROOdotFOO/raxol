@@ -2,7 +2,7 @@ defmodule Raxol.Console.Bench.Adapter do
   @moduledoc """
   Native Console bench: validate a generated package by booting the real Raxol
   runtime in-process and running the boot / prompt / task-dry-run checks against
-  it. This is the `:raxol` counterpart to `Raxol.ACP.Console.Bench.Local`.
+  it. This is the `:raxol` counterpart to `Raxol.Earn.Console.Bench.Local`.
 
   Where `Bench.Local` shells out to an operator wrapper over a `Port` (the
   incumbent runtimes are moving targets, so their glue stays runtime-agnostic),
@@ -13,10 +13,10 @@ defmodule Raxol.Console.Bench.Adapter do
   checks observe the real inference path with only the LLM faked at the boundary
   by the deployment's configured backend. No dashboard auth, no per-job hosting.
 
-  Wired into `raxol_acp` by config from the package above it (which avoids a
-  compile cycle: `raxol_acp` only knows the `Raxol.ACP.Console.Bench` behaviour):
+  Wired into `raxol_earn` by config from the package above it (which avoids a
+  compile cycle: `raxol_earn` only knows the `Raxol.Earn.Console.Bench` behaviour):
 
-      config :raxol_acp, :console_bench_module, Raxol.Console.Bench.Adapter
+      config :raxol_earn, :console_bench_module, Raxol.Console.Bench.Adapter
 
   Inference and check tuning come from `config :raxol_console, :bench`:
 
@@ -36,9 +36,9 @@ defmodule Raxol.Console.Bench.Adapter do
   returns a typed `{:error, _}` that blocks delivery.
   """
 
-  @behaviour Raxol.ACP.Console.Bench
+  @behaviour Raxol.Earn.Console.Bench
 
-  alias Raxol.ACP.Console.Package
+  alias Raxol.Earn.Console.Package
   alias Raxol.Agent.Scheduler.Fire
   alias Raxol.Console.{Boot, RuntimeConfig}
 
@@ -88,7 +88,7 @@ defmodule Raxol.Console.Bench.Adapter do
 
   # Boot proves the supervised tree (persona-wired scheduler + reconciler
   # converging the package's tasks) stands up. Unique names let benches run
-  # concurrently (see `Raxol.ACP.Console.BenchSlots`).
+  # concurrently (see `Raxol.Earn.Console.BenchSlots`).
   defp boot(rc) do
     suffix = System.unique_integer([:positive])
 

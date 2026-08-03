@@ -41,7 +41,7 @@ defmodule Raxol.Console.Application do
   use Application
   require Logger
 
-  alias Raxol.ACP.Console.Package
+  alias Raxol.Earn.Console.Package
   alias Raxol.Console.{Boot, RuntimeConfig}
 
   @rc_keys [:channels, :agent_opts, :default_target, :workspace, :bundle_default_mcp]

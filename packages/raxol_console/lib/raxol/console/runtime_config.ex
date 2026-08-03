@@ -1,6 +1,6 @@
 defmodule Raxol.Console.RuntimeConfig do
   @moduledoc """
-  Pure mapping from a parsed Console package (`Raxol.ACP.Console.Package`) plus
+  Pure mapping from a parsed Console package (`Raxol.Earn.Console.Package`) plus
   deployment options into the config `Raxol.Console.Boot` starts a runtime from.
 
   The package carries persona + behavior (soul.md, AGENTS.md, tasks.json,
@@ -21,7 +21,7 @@ defmodule Raxol.Console.RuntimeConfig do
       the boot bundles as dynamic tools, unless disabled.
   """
 
-  alias Raxol.ACP.Console.Package
+  alias Raxol.Earn.Console.Package
   alias Raxol.Agent.McpBundle
 
   @type scheduler_job :: %{

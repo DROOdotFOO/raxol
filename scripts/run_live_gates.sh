@@ -12,15 +12,15 @@
 #   xochi -- direct Xochi intent path (api.xochi.fi). Agent quotes/signs/executes
 #            and polls, moving funds itself. Runs the raxol_payments matrix test.
 #   acp   -- another agent ORDERS our cross-chain service through the ACP; the
-#            seller settles on delivery. Runs the raxol_acp order test.
+#            seller settles on delivery. Runs the raxol_earn order test.
 #   relay -- EVM->Tron rail via the Riddler solver (riddler.axol.io/relay). Runs
-#            the raxol_acp relay test. Tron-settled, so USDC/USDT only.
+#            the raxol_earn relay test. Tron-settled, so USDC/USDT only.
 #   fee   -- take-rate validation (opt-in; NOT in "all"). Drives the real
 #            SolverAgent: a buyer signs a live Xochi intent for a known
 #            principal, the solver proposes the budget, and the test asserts the
 #            on-chain setBudget == GATE_FEE_BPS (default 8) bps of the principal.
 #            Moves NO funds (off-chain signature + captured on-chain write), but
-#            needs a real GATE_KEY to sign. Runs the raxol_acp solver-fee test.
+#            needs a real GATE_KEY to sign. Runs the raxol_earn solver-fee test.
 #
 # The asset x route grid, and the corridor each cell rides, is fixed here to
 # match what Riddler and Xochi actually support (see the asset_cfg table):
@@ -96,7 +96,7 @@ CANONICAL_SOLVER="0x97D447561fDe10E959E782a29411D8F89586d80b"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PAYMENTS_DIR="$REPO_ROOT/packages/raxol_payments"
-ACP_DIR="$REPO_ROOT/packages/raxol_acp"
+ACP_DIR="$REPO_ROOT/packages/raxol_earn"
 
 XOCHI_TEST="test/raxol/payments/xochi/live_xochi_test.exs"
 ORDER_TEST="test/raxol/acp/xochi/live_order_test.exs"

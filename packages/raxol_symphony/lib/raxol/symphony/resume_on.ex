@@ -9,7 +9,7 @@ defmodule Raxol.Symphony.ResumeOn do
 
       {:pause, :awaiting_buyer_payment,
        %{resume_on: %{
-           telemetry: [:raxol, :acp, :job_session, :transition],
+           telemetry: [:raxol, :earn, :job_session, :transition],
            match: %{job_id: "j-1", to: :funded}
          }}}
 
@@ -21,8 +21,8 @@ defmodule Raxol.Symphony.ResumeOn do
 
   `acp_transition/2` covers the common "wait for ACP job X to advance
   to status Y" case. It always targets the
-  `[:raxol, :acp, :job_session, :transition]` telemetry event emitted by
-  `Raxol.ACP.JobSession` on every status change.
+  `[:raxol, :earn, :job_session, :transition]` telemetry event emitted by
+  `Raxol.Earn.JobSession` on every status change.
 
   Compose `acp_pause/2` with `Orchestrator.resume_run/3` like so:
 
@@ -36,7 +36,7 @@ defmodule Raxol.Symphony.ResumeOn do
 
       Raxol.Symphony.Resumer.start_link(
         orchestrator: Raxol.Symphony.Orchestrator,
-        telemetry_event: [:raxol, :acp, :job_session, :transition]
+        telemetry_event: [:raxol, :earn, :job_session, :transition]
       )
 
   When the ACP JobSession fires `:transition` with metadata
@@ -45,7 +45,7 @@ defmodule Raxol.Symphony.ResumeOn do
   resume value.
   """
 
-  @acp_transition_event [:raxol, :acp, :job_session, :transition]
+  @acp_transition_event [:raxol, :earn, :job_session, :transition]
 
   @type resume_on :: %{
           telemetry: [atom(), ...],
@@ -68,7 +68,7 @@ defmodule Raxol.Symphony.ResumeOn do
   Build a `resume_on` map for "wait until ACP job `job_id` transitions
   to status `to`".
 
-  The `:to` status is a `Raxol.ACP.JobSession.Status.t/0` atom: one of
+  The `:to` status is a `Raxol.Earn.JobSession.Status.t/0` atom: one of
   `:budget_set`, `:funded`, `:submitted`, `:completed`, `:rejected`,
   `:expired`.
 
@@ -83,13 +83,13 @@ defmodule Raxol.Symphony.ResumeOn do
 
       iex> Raxol.Symphony.ResumeOn.acp_transition("j-1", to: :funded)
       %{
-        telemetry: [:raxol, :acp, :job_session, :transition],
+        telemetry: [:raxol, :earn, :job_session, :transition],
         match: %{job_id: "j-1", to: :funded}
       }
 
       iex> Raxol.Symphony.ResumeOn.acp_transition("j-2", to: :completed, from: :submitted)
       %{
-        telemetry: [:raxol, :acp, :job_session, :transition],
+        telemetry: [:raxol, :earn, :job_session, :transition],
         match: %{job_id: "j-2", to: :completed, from: :submitted}
       }
   """

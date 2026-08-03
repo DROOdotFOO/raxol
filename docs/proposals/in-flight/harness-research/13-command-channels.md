@@ -87,7 +87,7 @@ Three things to notice: (1) approval responses can carry **policy amendments** �
 
 ## 2. Zed's ACP — Agent Client Protocol
 
-(Always "Zed's ACP" in raxol docs — raxol_acp = Agent *Commerce* Protocol.) Spec: https://agentclientprotocol.com; repo migrated `zed-industries/` → `agentclientprotocol/agent-client-protocol`; JetBrains co-governs (Oct 2025), plus a Jan 2026 joint ACP Agent Registry.
+(Always "Zed's ACP" in raxol docs — raxol_earn = Agent *Commerce* Protocol.) Spec: https://agentclientprotocol.com; repo migrated `zed-industries/` → `agentclientprotocol/agent-client-protocol`; JetBrains co-governs (Oct 2025), plus a Jan 2026 joint ACP Agent Registry.
 
 **Verb set** (https://agentclientprotocol.com/protocol/schema):
 - Agent-side baseline: `initialize` (`{protocolVersion, clientCapabilities?, clientInfo?}` → `{protocolVersion, agentCapabilities, agentInfo?, authMethods[]}`), `session/new` (`{cwd, mcpServers[], additionalDirectories?}` → `{sessionId, configOptions?, modes?}`), `session/prompt` (`{sessionId, prompt: ContentBlock[]}` → `{stopReason}`).

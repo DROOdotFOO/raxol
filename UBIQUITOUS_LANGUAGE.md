@@ -259,7 +259,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 | **Ledger**           | The append-only ETS-backed record of every payment attempt, executed or denied.                        | log, history, journal                      |
 | **Job**              | One unit of paid agent work in the Agent Commerce Protocol (ACP); flows through a state machine.       | task, request, order                       |
 | **Memo**             | An EIP-712 typed-data record signed during ACP Job state transitions.                                  | receipt, attestation                       |
-| **Offering**         | A sellable agent service registered via `use Raxol.ACP.Offering`.                                      | listing, product, service                  |
+| **Offering**         | A sellable agent service registered via `use Raxol.Earn.Offering`.                                      | listing, product, service                  |
 | **Stealth address**  | An ERC-5564 / ERC-6538 one-time recipient address derived via ECDH for privacy-preserving payments.    | shielded address, anonymous address        |
 | **Privacy tier**     | One of 6 levels in the Glass Cube model mapping trust score to disclosure level.                       | privacy level, anonymity tier              |
 

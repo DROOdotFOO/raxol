@@ -168,8 +168,8 @@ packages/*/doc/
 # Fable capabilities patch (folded into planning docs; apply during the refactoring)
 raxol-capabilities-items1-2.patch
 
-# Generated ACP offering metadata (regenerable via mix acp.register_offering)
-packages/raxol_acp/xochi-offering.json
+# Generated ACP offering metadata (regenerable via mix earn.register_offering)
+packages/raxol_earn/xochi-offering.json
 .idea/
 .ai/
 mise.local.toml

@@ -1,0 +1,19 @@
+{
+  "name": "raxol-earn-signer-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Localhost signing sidecar for the raxol_earn solver: wraps @virtuals-protocol/acp-node-v2 PrivyAlchemyEvmProviderAdapter so the Elixir release can sign/settle as a Virtuals-managed (Privy+Alchemy) agent wallet without holding a raw key.",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@account-kit/infra": "^4.84.1",
+    "@virtuals-protocol/acp-node-v2": "0.1.8",
+    "viem": "^2.47.0"
+  }
+}

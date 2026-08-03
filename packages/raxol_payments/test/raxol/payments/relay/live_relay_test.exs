@@ -4,7 +4,7 @@ defmodule Raxol.Payments.Relay.LiveRelayTest do
 
   Requests a `/relay/quote` and asserts the route returns a fillable quote with a
   deposit address. A quote moves no funds, so it is safe against mainnet. The
-  full EVM->Tron settlement, which broadcasts an on-chain deposit, is a raxol_acp
+  full EVM->Tron settlement, which broadcasts an on-chain deposit, is a raxol_earn
   `:live_relay` test (broadcasting needs the EVM transaction stack in that
   package).
 

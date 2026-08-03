@@ -4,7 +4,7 @@
 > ([agentclientprotocol.com](https://agentclientprotocol.com)): the JSON-RPC protocol
 > between a code editor and an AI coding agent, implemented in `raxol_agent_client_protocol`
 > (module root `Raxol.AgentClientProtocol`). It is unrelated to the
-> [Agent Commerce Protocol](ACP.md) (`Raxol.ACP`, the Virtuals on-chain payments protocol).
+> [Agent Commerce Protocol](ACP.md) (`Raxol.Earn`, the Virtuals on-chain payments protocol).
 > Different acronym expansion, different domain.
 
 The Agent Client Protocol is to agentic coding what LSP is to language tooling: a JSON-RPC

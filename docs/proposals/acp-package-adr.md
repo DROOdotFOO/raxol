@@ -142,8 +142,8 @@ Apache-2.0 material internally.
 ### 6. Module root name — one-way door
 
 `Raxol.AgentClientProtocol` is the module root, deliberately spelled out
-(not `Raxol.ACP`) because Raxol already has an unrelated package,
-`Raxol.ACP` (`packages/raxol_acp/`, the Virtuals **Agent Commerce**
+(not `Raxol.Earn`) because Raxol already has an unrelated package,
+`Raxol.Earn` (`packages/raxol_earn/`, the Virtuals **Agent Commerce**
 Protocol — on-chain payments, nothing to do with editor↔agent JSON-RPC).
 Reusing the `ACP` abbreviation for a second, unrelated protocol in the same
 umbrella project would create a permanent naming collision risk in this
@@ -243,9 +243,9 @@ inline throughout `lib/`, `grep -rn '\[G5' lib/` to enumerate every site):
   wrapping `acpex` would have been — every OTP correctness property
   (response-count invariant, no publish-ahead, single-publisher journal)
   had to be independently designed and proven, not inherited.
-- The full package name (`Raxol.AgentClientProtocol`, not `Raxol.ACP`) is
+- The full package name (`Raxol.AgentClientProtocol`, not `Raxol.Earn`) is
   more verbose at every call site; accepted as the cost of avoiding a
-  permanent collision with `Raxol.ACP` (Decision 6).
+  permanent collision with `Raxol.Earn` (Decision 6).
 
 ## Validation
 

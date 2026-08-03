@@ -92,7 +92,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     %{
       q: "Is this production-ready?",
       a:
-        "raxol, raxol_core, raxol_terminal, raxol_agent, raxol_mcp, raxol_liveview, raxol_plugin, and raxol_sensor are at v2.5 on Hex; raxol_speech, raxol_telegram, and raxol_watch at 0.2; raxol_payments at 0.1. raxol_acp and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
+        "raxol, raxol_core, raxol_terminal, raxol_agent, raxol_mcp, raxol_liveview, raxol_plugin, and raxol_sensor are at v2.5 on Hex; raxol_speech, raxol_telegram, and raxol_watch at 0.2; raxol_payments at 0.1. raxol_earn and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
     },
     %{
       q: "What does the SSH demo give me?",

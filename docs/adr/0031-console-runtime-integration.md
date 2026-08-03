@@ -10,7 +10,7 @@ the Console's package/runtime-registration contract.
 
 Builds on the agent runtime (`Raxol.Agent.Session`, `Raxol.Agent.Stream`), the cron scheduler
 (ADR-0025), the unified messaging gateway (ADR-0023), the agent skill runtime (ADR-0021), the agent
-persona seam (`Raxol.Agent.SystemPrompt`), and the Virtuals ACP stack (`raxol_acp`, ADR-0016/0030).
+persona seam (`Raxol.Agent.SystemPrompt`), and the Virtuals ACP stack (`raxol_earn`, ADR-0016/0030).
 
 ## Context
 
@@ -24,14 +24,14 @@ tasks), and the Console hosts it. Today the picker offers two open-source runtim
   channels and ACP skills built in.
 
 Raxol is already in this ecosystem on the selling side, not the runtime side.
-`Raxol.ACP.Console.AgentOffering` (the `custom_console_agent` offering) generates deployment-ready
+`Raxol.Earn.Console.AgentOffering` (the `custom_console_agent` offering) generates deployment-ready
 packages (`soul.md`, `AGENTS.md`, `tasks.json`, `skills/<name>/SKILL.md`, `manifest.json`) for Hermes
 or OpenClaw. The runtime enum is a fixed `hermes | openclaw | either`
-(`packages/raxol_acp/lib/raxol/acp/console/spec.ex`).
+(`packages/raxol_earn/lib/raxol/acp/console/spec.ex`).
 
 We want the inverse: Raxol itself as a third selectable runtime, with web3 capabilities native to the
 runtime rather than bolted on as a skill. This is the differentiator. The incumbents talk ACP by
-shelling out to a CLI; Raxol speaks the ACP v2 hook model natively (`raxol_acp`) and carries
+shelling out to a CLI; Raxol speaks the ACP v2 hook model natively (`raxol_earn`) and carries
 cross-chain settlement, stealth or private payments, and spend gating (`raxol_payments`) as
 first-class runtime primitives.
 
@@ -56,17 +56,17 @@ Three facts frame the decision:
 
 ## Decision
 
-Add a new deployable package, `raxol_console`, that is the inverse of `Raxol.ACP.Console.Generator`:
+Add a new deployable package, `raxol_console`, that is the inverse of `Raxol.Earn.Console.Generator`:
 it loads a Console agent package and boots a running Raxol runtime on the gateway stack. ACP is wired
-natively through `raxol_acp`. The one non-mechanical seam, a scheduled task running under the agent's
+natively through `raxol_earn`. The one non-mechanical seam, a scheduled task running under the agent's
 persona and delivering to its channels, is pure composition of primitives that already ship.
 
 ### 1. Placement: a new top-of-graph package
 
-The loader boots a runtime, so it needs `raxol_agent` and `raxol_gateway` at runtime. `raxol_acp` has
+The loader boots a runtime, so it needs `raxol_agent` and `raxol_gateway` at runtime. `raxol_earn` has
 `raxol_agent` only at compile time (through `raxol_payments`, `runtime: false`), and main `raxol` does
 not depend on `raxol_agent` at all, so neither can host the loader. `raxol_console` sits above them
-all, depending on `raxol_agent`, `raxol_gateway`, `raxol_acp`, `raxol_payments`, and `raxol_mcp`. It is
+all, depending on `raxol_agent`, `raxol_gateway`, `raxol_earn`, `raxol_payments`, and `raxol_mcp`. It is
 also the package the Console would provision: it ships as a self-contained executable (Burrito wraps
 the release with an embedded ERTS, no host Erlang required) inside an npm wrapper, so an `acp-cli`
 that installs Node packages installs and runs it like the incumbents. Placement and packaging are
@@ -75,7 +75,7 @@ solved together.
 ### 2. The loader: three pure stages plus effectful boot
 
 - `Raxol.Console.Package.load/1` (pure): read a package directory or tarball into a `%Package{}`, or a
-  typed error. Reuses the generator's format knowledge, including `Raxol.ACP.Console.Cron.valid?/1` for
+  typed error. Reuses the generator's format knowledge, including `Raxol.Earn.Console.Cron.valid?/1` for
   each task cron and the generator's skill-name slug regex, so a hostile `skills/../x` path cannot
   escape the workspace.
 - `Raxol.Console.RuntimeConfig.build/2` (pure): merge the package (persona and behavior) with the
@@ -85,7 +85,7 @@ solved together.
   `Handler.Agent` and `Stream.run` take a single `:system_prompt` binary applied to every turn.
 - `Raxol.Console.Boot.start/1` (effectful, idempotent): set the agent app env, then start
   `Raxol.Agent.Supervisor` (scheduler, skills, memory), `Raxol.Gateway.Supervisor` (channels), the
-  `raxol_acp` runtime, and a reconciler. App env must be set before the agent subtree starts, because
+  `raxol_earn` runtime, and a reconciler. App env must be set before the agent subtree starts, because
   `Raxol.Agent.Supervisor` reads it at init and starts a child only when its key is configured.
 
 ### 3. Boot target: the gateway stack
@@ -112,10 +112,10 @@ is reported, not raised, so one bad task cannot restart-loop the supervision tre
 
 ### 5. ACP and EconomyOS primitives
 
-`Raxol.Console.Supervisor` starts the `raxol_acp` seller and buyer runtime directly; on-chain writes go
+`Raxol.Console.Supervisor` starts the `raxol_earn` seller and buyer runtime directly; on-chain writes go
 through the existing `HookClient` and `ProviderAdapter` against ACP Core. The Console's `acp-cli`
 provisions the EconomyOS primitives (wallet keys, email, card, ACP identity) into the runtime
-environment. The split is therefore both-and: the `acp-cli` supplies the credentials, and `raxol_acp`
+environment. The split is therefore both-and: the `acp-cli` supplies the credentials, and `raxol_earn`
 consumes them natively for the ACP v2 job hook model. The differentiator holds (native hooks,
 cross-chain settlement, and spend gating are runtime primitives rather than a per-job CLI shell-out),
 but the runtime does not route around the `acp-cli` for the primitives themselves. The interface by
@@ -123,12 +123,12 @@ which those credentials arrive is an open question (see below).
 
 ### 6. Making `:raxol` a real target and self-validating
 
-Small edits in `raxol_acp` add the runtime: `"raxol"` in the `Console.Spec` runtime enum and type,
+Small edits in `raxol_earn` add the runtime: `"raxol"` in the `Console.Spec` runtime enum and type,
 `Console.Generator` handling `:raxol` (emitting `AGENTS.md` as for OpenClaw, since the loader consumes
 both), and `"raxol"` in the `AgentOffering` deliverables enum. `Console.Bench` is a config-injected
-behaviour (`config :raxol_acp, :console_bench_module`), so a `Raxol.Console.Bench.Adapter` that boots
+behaviour (`config :raxol_earn, :console_bench_module`), so a `Raxol.Console.Bench.Adapter` that boots
 `Console.Boot` in a sandbox and runs the boot, prompt, and task-dry-run checks lives in `raxol_console`
-and is wired by config. This avoids a compile cycle: `raxol_acp` knows only the behaviour, and the
+and is wired by config. This avoids a compile cycle: `raxol_earn` knows only the behaviour, and the
 implementation is injected from the package above it.
 
 ## Alternatives considered
@@ -204,7 +204,7 @@ against a real scheduler, a chat turn that dispatches a bundled MCP tool and rep
 - **On-chain identity standard for ACP registration.** Unresolved in public sources (ERC-8004 versus
   ERC-8183). Seller registration is currently delegated outside the runtime; the scaffolding is in
   place (`Chain` registry-address fields behind a fail-closed gate, an optional `JobApi.register_agent/2`
-  callback, and idempotent `Raxol.ACP.Seller.Registration.ensure_registered/3`), but the on-chain
+  callback, and idempotent `Raxol.Earn.Seller.Registration.ensure_registered/3`), but the on-chain
   register call is blocked on the canonical standard, the registry address, and its ABI. Confirm before
   wiring Service Registry registration.
 

@@ -271,7 +271,7 @@ Rejected. Per-dimension modules let each dimension carry its own validation sema
 
 ### Put `ThreadLog` in `raxol_core`, not `raxol_agent`
 
-The durable-audit-log primitive is generic. `raxol_payments` could use it for transaction logs; `raxol_acp` for memo dispatch logs.
+The durable-audit-log primitive is generic. `raxol_payments` could use it for transaction logs; `raxol_earn` for memo dispatch logs.
 
 Rejected for now. The `ThreadLog` is tied to agent semantics (`kind: :tool_call | :tool_result | :message | :summary`): the schema reflects agent activity. A generic durable log (`Raxol.AppendOnlyLog`) could be extracted later if a non-agent consumer needs it, but starting with the agent-specific shape avoids a premature abstraction.
 

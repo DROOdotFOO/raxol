@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# deploy-raxol-solver.sh -- seed the raxol_acp Xochi solver's runtime secrets into a
+# deploy-raxol-solver.sh -- seed the raxol_earn Xochi solver's runtime secrets into a
 # DEDICATED, isolated fly.io app ('raxol-solver') and ship a single rolling deploy.
 #
 # CANONICAL SAFE PATTERN (mirrors ansible vars/vault_axol.yml op:// refs): nothing secret
@@ -36,7 +36,7 @@ die() {
   exit 1
 }
 
-# Run from the repo root so `fly deploy -c fly.acp.toml` and the Docker build context resolve.
+# Run from the repo root so `fly deploy -c fly.earn.toml` and the Docker build context resolve.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
@@ -45,7 +45,7 @@ cd "${REPO_ROOT}"
 
 # Target fly.io app + its config file. Dedicated + isolated -- NOT the public 'raxol' app.
 readonly APP="raxol-solver"
-readonly FLY_CONFIG="fly.acp.toml"
+readonly FLY_CONFIG="fly.earn.toml"
 
 # PLACEHOLDER op:// references -- REPLACE with your real vault/item/field names.
 # (../raxol is a PUBLIC repo: never commit real vault names, addresses, or tokens here.)
@@ -96,7 +96,7 @@ preflight() {
 # Stage all solver secrets from 1Password, out of argv. printf is a bash builtin, so the
 # resolved plaintext never lands in another process's command line; --stage defers the
 # rollout to the single `fly deploy` below. (XOCHI_BASE_URL / XOCHI_FEE_BPS / the enable
-# flag are NON-secret and live in fly.acp.toml [env].)
+# flag are NON-secret and live in fly.earn.toml [env].)
 #
 # Each op read is a discrete, CHECKED assignment before the printf -- not inlined as
 # `printf "KEY=$(op read ...)"`. A failed op read inside a printf-arg substitution is
@@ -121,7 +121,7 @@ stage_secrets() {
     | fly secrets import --stage -a "${APP}"
 }
 
-# Ship the image + fly.acp.toml [env] (incl. XOCHI_SOLVER_ENABLED) and apply the staged
+# Ship the image + fly.earn.toml [env] (incl. XOCHI_SOLVER_ENABLED) and apply the staged
 # secrets, as a single-machine deploy. `fly secrets set` alone would NOT apply [env] from a
 # non-default config filename, and would leave the solver flag unset (boots healthy-but-inert).
 deploy_single_machine() {
@@ -165,7 +165,7 @@ main() {
   stage_secrets
   deploy_single_machine
   enforce_single_machine
-  printf 'Done. raxol-solver deployed with staged secrets + fly.acp.toml [env].\n'
+  printf 'Done. raxol-solver deployed with staged secrets + fly.earn.toml [env].\n'
 }
 
 main "$@"
