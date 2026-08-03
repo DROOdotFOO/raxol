@@ -85,10 +85,13 @@ defmodule Raxol.Property.CoreTest do
         base_time = min_batch_time(fn -> Parser.parse(small_input) end)
         scaled_time = min_batch_time(fn -> Parser.parse(large_input) end)
 
-        # If truly quadratic, ratio would be (size/100)^2
-        # Allow up to 10x the linear expectation for GC, scheduling variance
+        # If truly quadratic, ratio would be (size/100)^2 -- at these sizes
+        # that is 44x-100x the linear expectation. Allow up to 20x linear for
+        # GC/scheduling variance on loaded runners: still far below quadratic,
+        # but with enough headroom that microsecond-denominator noise (which
+        # blew the old 10x ceiling at ~10.7x) cannot flake the nightly.
         scale_factor = size / 100
-        max_ratio = scale_factor * 10
+        max_ratio = scale_factor * 20
         effective_base = max(base_time, 1)
         ratio = scaled_time / effective_base
         assert ratio < max_ratio
