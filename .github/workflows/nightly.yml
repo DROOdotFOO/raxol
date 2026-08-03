@@ -114,6 +114,22 @@ jobs:
           mix deps.get
           mix deps.compile
 
+      # The local terminal input path traces prim_tty's reader (an OTP-internal
+      # private protocol). Run the real-pty canary on every OTP in the matrix so
+      # ambient drift is caught here even between the per-PR OTP bumps.
+      - name: raxol_terminal prim_tty input canary
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y tmux expect
+          else
+            brew install tmux expect || true
+          fi
+          cd packages/raxol_terminal
+          mix deps.get
+          MIX_ENV=test TMPDIR=/tmp mix test \
+            test/raxol/terminal/input_protocol_canary_test.exs \
+            --only input_protocol_canary
+
       - name: Run full test suite
         run: |
           # --exclude property: the emulator-replay-heavy property tests
