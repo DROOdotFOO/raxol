@@ -149,12 +149,12 @@ defmodule Raxol.Earn.Seller.Backend.WebSocket.Connection do
         {:noreply, Enum.reduce(reorder_upgrade(responses), state, &handle_response/2)}
 
       {:error, conn, %Mint.TransportError{reason: reason}, _responses} ->
-        Logger.warning("[acp.ws] transport error: #{inspect(reason)}")
+        Logger.warning("[earn.ws] transport error: #{inspect(reason)}")
         state = %{state | conn: conn}
         {:noreply, schedule_reconnect(teardown(state, {:transport, reason}))}
 
       {:error, conn, error, _responses} ->
-        Logger.warning("[acp.ws] mint error: #{inspect(error)}")
+        Logger.warning("[earn.ws] mint error: #{inspect(error)}")
         state = %{state | conn: conn}
         {:noreply, schedule_reconnect(teardown(state, {:mint, error}))}
 
@@ -166,7 +166,7 @@ defmodule Raxol.Earn.Seller.Backend.WebSocket.Connection do
   def handle_info(:reconnect, state), do: {:noreply, attempt_connect(state)}
 
   def handle_info(other, state) do
-    Logger.debug("[acp.ws] unexpected message: #{inspect(other)}")
+    Logger.debug("[earn.ws] unexpected message: #{inspect(other)}")
     {:noreply, state}
   end
 
@@ -178,7 +178,7 @@ defmodule Raxol.Earn.Seller.Backend.WebSocket.Connection do
         %{state | phase: :upgrading, reconnect_attempts: 0}
 
       {:error, reason} ->
-        Logger.warning("[acp.ws] connect failed: #{inspect(reason)}")
+        Logger.warning("[earn.ws] connect failed: #{inspect(reason)}")
         schedule_reconnect(state)
     end
   end
@@ -215,7 +215,7 @@ defmodule Raxol.Earn.Seller.Backend.WebSocket.Connection do
         %{state | conn: conn, ws: ws, phase: :awaiting_open}
 
       {:error, conn, reason} ->
-        Logger.warning("[acp.ws] upgrade failed: #{inspect(reason)}")
+        Logger.warning("[earn.ws] upgrade failed: #{inspect(reason)}")
         %{state | conn: conn} |> teardown({:upgrade_failed, reason}) |> schedule_reconnect()
     end
   end
@@ -228,7 +228,7 @@ defmodule Raxol.Earn.Seller.Backend.WebSocket.Connection do
         Enum.reduce(frames, state, &handle_frame/2)
 
       {:error, ws, reason} ->
-        Logger.warning("[acp.ws] frame decode error: #{inspect(reason)}")
+        Logger.warning("[earn.ws] frame decode error: #{inspect(reason)}")
         %{state | ws: ws} |> teardown({:decode, reason}) |> schedule_reconnect()
     end
   end
@@ -279,17 +279,17 @@ defmodule Raxol.Earn.Seller.Backend.WebSocket.Connection do
         teardown(state, :server_close) |> schedule_reconnect()
 
       {:connect_error, reason} ->
-        Logger.warning("[acp.ws] connect_error: #{inspect(reason)}")
+        Logger.warning("[earn.ws] connect_error: #{inspect(reason)}")
         teardown(state, {:connect_error, reason}) |> schedule_reconnect()
 
       {:unknown, raw} ->
-        Logger.debug("[acp.ws] unknown frame: #{inspect(raw)}")
+        Logger.debug("[earn.ws] unknown frame: #{inspect(raw)}")
         state
     end
   end
 
   defp handle_frame({:close, code, reason}, state) do
-    Logger.debug("[acp.ws] websocket closed: #{inspect(code)} #{inspect(reason)}")
+    Logger.debug("[earn.ws] websocket closed: #{inspect(code)} #{inspect(reason)}")
     teardown(state, {:ws_close, code, reason}) |> schedule_reconnect()
   end
 
@@ -307,7 +307,7 @@ defmodule Raxol.Earn.Seller.Backend.WebSocket.Connection do
         %{state | conn: conn, ws: ws}
 
       {:error, conn, reason} ->
-        Logger.warning("[acp.ws] send failed: #{inspect(reason)}")
+        Logger.warning("[earn.ws] send failed: #{inspect(reason)}")
         %{state | conn: conn, ws: ws} |> teardown({:send, reason}) |> schedule_reconnect()
     end
   end

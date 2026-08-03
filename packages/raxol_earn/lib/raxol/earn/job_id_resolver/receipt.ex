@@ -91,8 +91,18 @@ defmodule Raxol.Earn.JobIdResolver.Receipt do
 
   defp description_matches?(job, request_tag) when is_map(job) do
     description = job["description"] || job[:description] || ""
-    is_binary(description) and String.contains?(description, request_tag)
+
+    is_binary(description) and
+      (String.contains?(description, request_tag) or
+         String.contains?(description, legacy_request_tag(request_tag)))
   end
+
+  # Jobs created before the raxol_acp -> raxol_earn rename stamped their
+  # description with the old "raxol-acp:" prefix. Match those too so a rename
+  # deploy does not strand in-flight jobs on the reconcile-by-tag recovery path.
+  # Retire once no legacy-tagged jobs remain in flight.
+  defp legacy_request_tag("raxol-earn:" <> rest), do: "raxol-acp:" <> rest
+  defp legacy_request_tag(tag), do: tag
 
   defp job_id_or_none(nil), do: :none
 

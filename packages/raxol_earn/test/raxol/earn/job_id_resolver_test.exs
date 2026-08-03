@@ -93,5 +93,19 @@ defmodule Raxol.Earn.JobIdResolverTest do
 
       assert :none = JobIdResolver.reconcile(resolver, api, @chain, "raxol-earn:nomatch")
     end
+
+    test "reconcile correlates a legacy raxol-acp:-tagged job against the new tag" do
+      api = Raxol.Earn.JobApi.Mock.new()
+
+      :ok =
+        Raxol.Earn.JobApi.Mock.put_active_jobs(api, [
+          %{"onChainJobId" => "17", "description" => "buy [raxol-acp:deadbeef00000000]"}
+        ])
+
+      resolver = %{adapter: Receipt}
+
+      assert {:ok, 17} =
+               JobIdResolver.reconcile(resolver, api, @chain, "raxol-earn:deadbeef00000000")
+    end
   end
 end
