@@ -53,9 +53,14 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
 
   require Logger
 
-  alias Raxol.ACP.{Agent, HookClient}
+  alias Raxol.ACP.{Agent, HookClient, ProviderAdapter}
   alias Raxol.ACP.Transport.SSE.Parser
   alias Raxol.ACP.Xochi.{IntentDeriver, Offering}
+
+  # On-chain AgenticCommerceV3 JobStatus for a funded job. Verified on Base
+  # mainnet (job 70759: `getJob().status == 1` once funded). The memoryless
+  # reattach path settles only at exactly this status.
+  @onchain_status_funded 1
 
   @type session_status ::
           :awaiting_requirement
@@ -298,24 +303,82 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
   # Rebuild the lost session from the ACP job history and settle it. The history
   # (fetched off the Virtuals server) is authoritative: it carries the original
   # `job.created` (confirming this solver is the provider) and the buyer's
-  # `requirement` message (carrying the signed intent bundle we relay). Fails
-  # closed and stays silent on-chain if any of that can't be recovered or the
-  # job isn't ours -- reattach never invents a settlement.
+  # `requirement` message (carrying the signed intent bundle we relay). Before
+  # spending, it independently confirms on-chain that the job is actually funded
+  # (`confirm_funded_onchain/3`). Fails closed and stays silent on-chain if any of
+  # that can't be recovered, the job isn't ours, or it isn't funded on-chain --
+  # reattach never invents a settlement.
   defp reattach_and_settle(entry, key, state) do
     Logger.info("[xochi.solver] no live session for #{inspect(key)}; reattaching from history")
 
-    case rebuild_session(entry, key, state) do
-      {:ok, session} ->
-        emit(state, key, :reattached, :from_history)
-        Logger.info("[xochi.solver] reattached #{inspect(key)} from history; settling")
-        settle(put_session(state, key, session), key, session)
-
+    with {:ok, session} <- rebuild_session(entry, key, state),
+         :ok <- confirm_funded_onchain(state, key, session) do
+      emit(state, key, :reattached, :from_history)
+      Logger.info("[xochi.solver] reattached #{inspect(key)} from history; settling")
+      settle(put_session(state, key, session), key, session)
+    else
       {:error, reason} ->
         emit(state, key, :reattach_failed, reason)
-        Logger.warning("[xochi.solver] reattach failed for #{inspect(key)}: #{inspect(reason)}")
+        Logger.warning("[xochi.solver] reattach aborted for #{inspect(key)}: #{inspect(reason)}")
         state
     end
   end
+
+  # Defense-in-depth for the memoryless reattach path: `job.funded` is the trusted
+  # SSE trigger, but reattach fires for a job this process has no record of, so
+  # before settle/3 spends real funds it reads `getJob(jobId).status` on-chain and
+  # proceeds only when it is EXACTLY `funded`. A status below funded means the
+  # event was premature; a status past funded (submitted/completed) means the job
+  # was already settled -- both fail closed. An unreadable status fails closed too.
+  # The in-memory happy path (a live :budget_proposed/:awaiting_fund session) does
+  # not run this and is unchanged.
+  defp confirm_funded_onchain(state, key, %{job_id_uint: job_id_uint}) do
+    case job_status_onchain(state, job_id_uint) do
+      {:ok, @onchain_status_funded} ->
+        :ok
+
+      {:ok, other} ->
+        Logger.warning(
+          "[xochi.solver] reattach #{inspect(key)}: on-chain status #{inspect(other)} != funded; not settling"
+        )
+
+        {:error, {:not_funded_onchain, other}}
+
+      {:error, reason} ->
+        {:error, {:job_status_unavailable, reason}}
+    end
+  end
+
+  # Read `getJob(jobId).status` off the ACP Core via the provider's eth_call seam.
+  defp job_status_onchain(state, job_id_uint) do
+    params = %{
+      address: state.acp_core_address,
+      signature: "getJob(uint256)",
+      args: [{"uint256", job_id_uint}]
+    }
+
+    with {:ok, raw} <- ProviderAdapter.read_contract(state.provider, state.chain_id, params) do
+      decode_job_status(raw)
+    end
+  end
+
+  # getJob(uint256) -> (client, status, provider, expiredAt, evaluator, hook,
+  # budget, description): a dynamic-struct return, so a leading offset word
+  # precedes the head. `status` is head field 1, i.e. word index 2 overall --
+  # skip the offset word + `client`. An integer is accepted for a canned mock read.
+  defp decode_job_status(status) when is_integer(status) and status >= 0, do: {:ok, status}
+
+  defp decode_job_status("0x" <> hex) do
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, <<_::binary-size(2 * 32), status::unsigned-big-integer-size(256), _::binary>>} ->
+        {:ok, status}
+
+      _ ->
+        {:error, :undecodable_job_status}
+    end
+  end
+
+  defp decode_job_status(other), do: {:error, {:unexpected_job_status, other}}
 
   defp rebuild_session(entry, key, state) do
     with {:ok, entries} <- fetch_history(state, key),
