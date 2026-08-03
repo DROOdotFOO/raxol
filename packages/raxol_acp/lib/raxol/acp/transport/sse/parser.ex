@@ -63,24 +63,30 @@ defmodule Raxol.ACP.Transport.SSE.Parser do
   defp extract_data_line("data:" <> rest), do: [String.trim_leading(rest, " ")]
   defp extract_data_line(_), do: []
 
-  # Normalize the wire shape of an ACP SSE entry into the shape the Agent +
-  # SolverAgent consume. The Virtuals server sends system events as
-  # `%{"kind" => "system", "event" => %{"type" => "job.created", "provider" => ...,
-  # "onChainJobId" => ...}}`, but our dispatch matches `"event" => "job.created"`
-  # (a string) and reads top-level `jobId`/`provider`. So for system entries we hoist
-  # the nested event map's fields to the top level and replace `event` with its type
-  # string. Message entries already carry top-level `content`/`contentType`/`from`.
-  # Both get `jobId` lifted from `onChainJobId`. This is the single boundary where the
-  # wire shape meets our code (the gate drives the provider in-process and never hits
-  # this path, which is why the mismatch went unseen until a real marketplace job).
-  defp normalize(%{"kind" => "system", "event" => %{"type" => type} = ev} = entry) do
+  @doc """
+  Normalize the wire shape of an ACP SSE entry into the shape the Agent +
+  SolverAgent consume. The Virtuals server sends system events as
+  `%{"kind" => "system", "event" => %{"type" => "job.created", "provider" => ...,
+  "onChainJobId" => ...}}`, but our dispatch matches `"event" => "job.created"`
+  (a string) and reads top-level `jobId`/`provider`. So for system entries we hoist
+  the nested event map's fields to the top level and replace `event` with its type
+  string. Message entries already carry top-level `content`/`contentType`/`from`.
+  Both get `jobId` lifted from `onChainJobId`. This is the single boundary where the
+  wire shape meets our code (the gate drives the provider in-process and never hits
+  this path, which is why the mismatch went unseen until a real marketplace job).
+
+  Also reused when replaying `get_history/2` entries (raw server JSON) so the
+  SolverAgent reattach path reads them through the same shape as the live stream.
+  """
+  @spec normalize(map()) :: map()
+  def normalize(%{"kind" => "system", "event" => %{"type" => type} = ev} = entry) do
     entry
     |> Map.merge(ev)
     |> Map.put("event", type)
     |> Map.put("jobId", job_id(entry, ev))
   end
 
-  defp normalize(%{} = entry) do
+  def normalize(%{} = entry) do
     Map.put(entry, "jobId", job_id(entry, entry["event"]))
   end
 

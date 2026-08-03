@@ -114,12 +114,29 @@ defmodule Raxol.ACP.Wallet.SCA.ModularAccountTest do
 
       # Different chain id -> different digest
       assert base != ModularAccount.replay_safe_digest(inner, 1, account)
-      # Different account -> different digest (enters via the salt)
+      # Different account -> different digest (the account is the domain's verifyingContract)
       assert base !=
                ModularAccount.replay_safe_digest(inner, 8453, "0x" <> String.duplicate("22", 20))
 
       # Different inner hash -> different digest
       assert base != ModularAccount.replay_safe_digest(:binary.copy(<<0x33>>, 32), 8453, account)
+    end
+
+    test "matches the live SemiModularAccount _replaySafeHash (viem known-answer)" do
+      # For the account domain {chainId 8453, verifyingContract = the account} over
+      # ReplaySafeHash(hash = D), viem's hashTypedData -- and the live account's
+      # isValidSignature -- produce this exact digest. Signing it yields 0x1626ba7e.
+      inner =
+        Base.decode16!("0e76dbb9fde2c3fc894f0cb717cdeb91eabc3a06f50f9671bc4135d32c5710e7",
+          case: :mixed
+        )
+
+      account = "0x468aeae798b3a6548ac2401d276f83afdc172283"
+
+      assert ModularAccount.replay_safe_digest(inner, 8453, account) ==
+               Base.decode16!("f6897fc7499e39a29f708aee463fb6a8b1e59ada5e520b7ee1547905cdeabf7c",
+                 case: :mixed
+               )
     end
   end
 end

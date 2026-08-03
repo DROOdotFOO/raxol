@@ -139,6 +139,18 @@ defmodule Raxol.ACP.Agent do
   @spec sessions(GenServer.server()) :: %{Transport.job_key() => pid()}
   def sessions(server), do: GenServer.call(server, :sessions)
 
+  @doc """
+  Fetch a job's entry history via the transport (one-shot REST read).
+
+  Used by the reattach path (`Raxol.ACP.Xochi.SolverAgent`) to recover a job's
+  requirement after a restart dropped the in-memory session. The SSE stream is
+  live-only and does not replay past entries on reconnect, so this is the only
+  way to see entries that predate the current connection.
+  """
+  @spec get_history(GenServer.server(), Transport.job_key()) ::
+          {:ok, [Transport.entry()]} | {:error, term()}
+  def get_history(server, key), do: GenServer.call(server, {:get_history, key})
+
   @doc "Convenience wrapper around `JobApi.browse_agents/3`."
   @spec browse_agents(GenServer.server(), String.t(), map()) ::
           {:ok, [JobApi.agent_detail()]} | {:error, term()}
@@ -225,6 +237,10 @@ defmodule Raxol.ACP.Agent do
   end
 
   def handle_call(:sessions, _from, state), do: {:reply, state.sessions, state}
+
+  def handle_call({:get_history, key}, _from, state) do
+    {:reply, Transport.get_history(state.transport, key), state}
+  end
 
   def handle_call({:browse_agents, keyword, params}, _from, state) do
     {:reply, JobApi.browse_agents(state.api, keyword, params), state}
