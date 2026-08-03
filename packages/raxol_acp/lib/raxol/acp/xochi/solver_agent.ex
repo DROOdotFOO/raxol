@@ -51,7 +51,10 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
 
   use GenServer
 
+  require Logger
+
   alias Raxol.ACP.{Agent, HookClient}
+  alias Raxol.ACP.Transport.SSE.Parser
   alias Raxol.ACP.Xochi.{IntentDeriver, Offering}
 
   @type session_status ::
@@ -85,6 +88,10 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
           acp_core_address: String.t(),
           fee_bps: non_neg_integer(),
           settle_fn: fun(),
+          history_fn:
+            (Raxol.ACP.Transport.job_key() ->
+               {:ok, [map()]} | {:error, term()})
+            | nil,
           xochi_config: map(),
           sessions: %{Raxol.ACP.Transport.job_key() => session_state()}
         }
@@ -98,6 +105,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
     :acp_core_address,
     :xochi_config,
     settle_fn: nil,
+    history_fn: nil,
     fee_bps: 8,
     sessions: %{}
   ]
@@ -137,6 +145,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
       acp_core_address: Keyword.fetch!(opts, :acp_core_address),
       fee_bps: Keyword.get(opts, :fee_bps, 8),
       settle_fn: Keyword.get(opts, :settle_fn, &default_settle/1),
+      history_fn: Keyword.get(opts, :history_fn),
       xochi_config: Keyword.get(opts, :xochi_config, %{})
     }
 
@@ -216,6 +225,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
       }
 
       emit(state, key, :job_created, :await_requirement)
+      Logger.info("[xochi.solver] accepted job.created key=#{inspect(key)}; awaiting requirement")
       put_session(state, key, session)
     else
       state
@@ -245,9 +255,143 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
   # never fan-settle every pending session -- doing so spends real funds via
   # settle/3 for jobs that were not funded.
   defp handle_job_funded(entry, state) do
-    case settle_target(state.sessions, job_key(entry)) do
-      {:ok, key, session} -> settle(state, key, session)
-      :none -> state
+    key = job_key(entry)
+    live_status = live_session_status(state, key)
+
+    emit(state, key, :job_funded, %{session_status: live_status})
+
+    Logger.info(
+      "[xochi.solver] job.funded key=#{inspect(key)} live_session=#{inspect(live_status)}"
+    )
+
+    case settle_target(state.sessions, key) do
+      {:ok, key, session} ->
+        settle(state, key, session)
+
+      :none ->
+        # No settleable in-memory session. If the solver restarted between
+        # setBudget and fund (deploy/reschedule), the session is gone and the
+        # live-only SSE stream never replays the earlier entries -- so without a
+        # reattach the funded job stays stuck forever (issue #772). Rebuild from
+        # job history and settle. A session that exists but is NOT fundable
+        # (already settling/submitted/completed/failed) is a duplicate/late
+        # funded event and is left untouched.
+        if live_status == :absent do
+          reattach_and_settle(entry, key, state)
+        else
+          Logger.info(
+            "[xochi.solver] job.funded ignored for #{inspect(key)} (session #{inspect(live_status)})"
+          )
+
+          state
+        end
+    end
+  end
+
+  defp live_session_status(state, key) do
+    case Map.fetch(state.sessions, key) do
+      {:ok, %{status: status}} -> status
+      :error -> :absent
+    end
+  end
+
+  # Rebuild the lost session from the ACP job history and settle it. The history
+  # (fetched off the Virtuals server) is authoritative: it carries the original
+  # `job.created` (confirming this solver is the provider) and the buyer's
+  # `requirement` message (carrying the signed intent bundle we relay). Fails
+  # closed and stays silent on-chain if any of that can't be recovered or the
+  # job isn't ours -- reattach never invents a settlement.
+  defp reattach_and_settle(entry, key, state) do
+    Logger.info("[xochi.solver] no live session for #{inspect(key)}; reattaching from history")
+
+    case rebuild_session(entry, key, state) do
+      {:ok, session} ->
+        emit(state, key, :reattached, :from_history)
+        Logger.info("[xochi.solver] reattached #{inspect(key)} from history; settling")
+        settle(put_session(state, key, session), key, session)
+
+      {:error, reason} ->
+        emit(state, key, :reattach_failed, reason)
+        Logger.warning("[xochi.solver] reattach failed for #{inspect(key)}: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp rebuild_session(entry, key, state) do
+    with {:ok, entries} <- fetch_history(state, key),
+         normalized = Enum.map(entries, &Parser.normalize/1),
+         :ok <- confirm_provider(normalized, state),
+         {:ok, requirement} <- requirement_from_history(normalized),
+         {:ok, %{from_amount: transfer_atomic}} <-
+           IntentDeriver.resolve(state.xochi_config, requirement) do
+      {:ok, reattached_session(entry, key, requirement, transfer_atomic)}
+    else
+      # IntentDeriver returns {:reject, _} | {:error, _}; the history seams return
+      # {:error, _}. Normalize all to {:error, reason} so reattach fails closed.
+      {_reject_or_error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp reattached_session(entry, {chain_id, job_id}, requirement, transfer_atomic) do
+    id = entry["jobId"] || job_id
+
+    %{
+      job_id: id,
+      chain_id: entry["chainId"] || chain_id,
+      job_id_uint: parse_job_id(id),
+      status: :awaiting_fund,
+      requirement: requirement,
+      transfer_amount_atomic: transfer_atomic
+    }
+  end
+
+  defp fetch_history(%{history_fn: history_fn}, key) when is_function(history_fn, 1) do
+    history_fn.(key)
+  end
+
+  defp fetch_history(state, key), do: Agent.get_history(state.agent, key)
+
+  # Only settle a job whose recorded provider is this solver -- reattach must not
+  # spend on a job we never accepted. The provider is read from the historical
+  # `job.created` entry (authoritative), not the funded event, which may not
+  # carry it.
+  defp confirm_provider(entries, state) do
+    created =
+      Enum.find(entries, fn
+        %{"kind" => "system", "event" => "job.created"} -> true
+        _ -> false
+      end)
+
+    case created do
+      %{"provider" => provider} when is_binary(provider) ->
+        if normalize_address(provider) == state.wallet_address,
+          do: :ok,
+          else: {:error, :not_our_job}
+
+      _ ->
+        {:error, :no_created_in_history}
+    end
+  end
+
+  # The buyer's requirement (carrying the signed intent bundle) is the last
+  # valid `requirement` message in the history.
+  defp requirement_from_history(entries) do
+    entries
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %{"kind" => "message", "contentType" => "requirement", "content" => content} ->
+        case decode_requirement(content) do
+          {:ok, requirement} -> {:ok, requirement}
+          {:error, _} -> nil
+        end
+
+      _ ->
+        nil
+    end)
+    |> case do
+      {:ok, requirement} -> {:ok, requirement}
+      nil -> {:error, :no_requirement_in_history}
     end
   end
 
@@ -342,6 +486,10 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
       {:ok, tx_hash} ->
         emit(state, key, :budget_proposed, %{tx_hash: tx_hash, budget_atomic: budget_atomic})
 
+        Logger.info(
+          "[xochi.solver] setBudget #{budget_atomic} for #{inspect(key)} tx=#{tx_hash}; awaiting fund"
+        )
+
         updated =
           session
           |> Map.put(:status, :budget_proposed)
@@ -363,6 +511,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
     session = %{session | status: :settling}
     state = put_session(state, key, session)
     emit(state, key, :settling, :start)
+    Logger.info("[xochi.solver] settling #{inspect(key)} via Xochi relay")
 
     case state.settle_fn.(%{
            requirement: session.requirement,
@@ -370,10 +519,12 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
            transfer_amount_atomic: session.transfer_amount_atomic
          }) do
       {:ok, %{intent_id: intent_id} = deliverable} ->
+        Logger.info("[xochi.solver] settled #{inspect(key)} intent=#{intent_id}; submitting")
         submit_deliverable(state, key, session, deliverable, intent_id)
 
       {:error, reason} ->
         emit(state, key, :settle_error, reason)
+        Logger.error("[xochi.solver] settle failed for #{inspect(key)}: #{inspect(reason)}")
         put_session(state, key, %{session | status: :failed})
     end
   end
@@ -390,6 +541,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
          ) do
       {:ok, tx_hash} ->
         emit(state, key, :submitted, %{tx_hash: tx_hash, intent_id: intent_id})
+        Logger.info("[xochi.solver] submitted deliverable for #{inspect(key)} tx=#{tx_hash}")
 
         session =
           session
@@ -404,6 +556,7 @@ defmodule Raxol.ACP.Xochi.SolverAgent do
 
       {:error, reason} ->
         emit(state, key, :submit_error, reason)
+        Logger.error("[xochi.solver] submit failed for #{inspect(key)}: #{inspect(reason)}")
         put_session(state, key, %{session | status: :failed})
     end
   end
