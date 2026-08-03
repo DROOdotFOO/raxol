@@ -29,4 +29,23 @@ defmodule Raxol.Agent.Skills do
   def provider_context(provider \\ Store, opts \\ [])
   def provider_context(nil, _opts), do: nil
   def provider_context(provider, opts) when is_atom(provider), do: {provider, opts}
+
+  @doc """
+  The skill actions to expose on a surface, or `[]` when skills are disabled.
+
+  `skills_list` / `skill_view` / `skill_manage` are appended to a surface's
+  action list only when a provider is configured (`config :raxol_agent,
+  skills_provider: ...`), so a runtime can splice this in unconditionally.
+  """
+  @spec enabled_actions() :: [module()]
+  def enabled_actions do
+    if default_provider(), do: Raxol.Agent.Actions.Skills.actions(), else: []
+  end
+
+  @doc """
+  The `context[:skills]` tuple for the configured provider, or `nil` when skills
+  are disabled. Shorthand for `provider_context(default_provider())`.
+  """
+  @spec default_context() :: {module(), keyword()} | nil
+  def default_context, do: provider_context(default_provider())
 end
