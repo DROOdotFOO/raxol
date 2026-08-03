@@ -5,6 +5,9 @@
 #   :live_xochi_order / :live_xochi_order_preflight -- a buyer orders the
 #     xochi_cross_chain_transfer offering; the settle variant moves real funds
 #     (see scripts/run_live_gates.sh --route acp). The preflight variant is read-only.
+#   :live_solver_fee -- validates the solver sizes the on-chain ACP budget at
+#     XOCHI_FEE_BPS of the live-signed principal (take-rate). Moves NO funds
+#     (off-chain intent signature + captured on-chain write).
 #   :cli_signer -- spawns the riddler-client CLI; auto-enabled when
 #     RIDDLER_CLI_DIR is set.
 #
@@ -16,7 +19,8 @@ live_exclude = [
   :live_acp_dev,
   :live_relay,
   :live_xochi_order,
-  :live_xochi_order_preflight
+  :live_xochi_order_preflight,
+  :live_solver_fee
 ]
 
 cli_exclude = if System.get_env("RIDDLER_CLI_DIR"), do: [], else: [:cli_signer]

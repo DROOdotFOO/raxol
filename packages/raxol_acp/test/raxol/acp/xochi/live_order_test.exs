@@ -311,7 +311,11 @@ defmodule Raxol.ACP.Xochi.LiveOrderTest do
         prior_allowlist = Application.get_env(:raxol_payments, :pull_solver_allowlist)
         prior_require = Application.get_env(:raxol_payments, :pull_require_solver_pin)
 
-        Application.put_env(:raxol_payments, :pull_solver_allowlist, [solver])
+        # With XochiPull enabled the origin pull routes to the verified per-chain
+        # pull contracts, not the bare solver EOA -- trust those alongside the
+        # pinned solver (Riddler #591; Raxol.Payments.Xochi.PullContracts).
+        allowlist = Enum.uniq([solver | Raxol.Payments.Xochi.PullContracts.pull_recipients()])
+        Application.put_env(:raxol_payments, :pull_solver_allowlist, allowlist)
         Application.put_env(:raxol_payments, :pull_require_solver_pin, true)
 
         on_exit(fn ->

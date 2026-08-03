@@ -172,7 +172,7 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOfferingTest do
       }
     end
 
-    test "derives the corridor from Xochi and sizes the fee at 10 bps of the principal" do
+    test "derives the corridor from Xochi and sizes the fee at 8 bps of the principal" do
       ctx = accept_ctx(intent_plug(intent_json()))
 
       assert {:ok, resolved, budget} = UsdcPublicOffering.resolve_accept(req(%{}), ctx)
@@ -184,8 +184,8 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOfferingTest do
       assert resolved["dst_token"] == @usdc_arb
       assert resolved["amount_atomic"] == "1000000000"
 
-      # 10 bps of 1_000 USDC = 1 USDC = 1_000_000 base units.
-      assert budget.raw_amount == 1_000_000
+      # 8 bps of 1_000 USDC = 0.8 USDC = 800_000 base units.
+      assert budget.raw_amount == 800_000
       assert budget.symbol == "USDC"
     end
 
@@ -198,7 +198,7 @@ defmodule Raxol.ACP.Xochi.UsdcPublicOfferingTest do
                UsdcPublicOffering.resolve_accept(req(%{"amount_atomic" => "1"}), ctx)
 
       assert resolved["amount_atomic"] == "1000000000"
-      assert budget.raw_amount == 1_000_000
+      assert budget.raw_amount == 800_000
     end
 
     test "the derived request still passes the USDC + order-band gate" do
