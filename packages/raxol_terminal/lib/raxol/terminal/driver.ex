@@ -4,7 +4,8 @@ defmodule Raxol.Terminal.Driver do
 
   Responsibilities:
   - Setting terminal mode (raw, echo)
-  - Reading input events via termbox2_nif NIF
+  - Reading input from OTP's prim_tty reader (see `start_stdin_reader/1`); the
+    termbox2 NIF is output-only
   - Parsing input events into `Raxol.Core.Events.Event` structs
   - Detecting terminal resize events
   - Sending parsed events to the `Dispatcher`
@@ -24,12 +25,10 @@ defmodule Raxol.Terminal.Driver do
   alias Raxol.Terminal.Capabilities.Probe
   alias Raxol.Terminal.Driver.BackgroundQuery
   alias Raxol.Terminal.Driver.Dispatch
-  alias Raxol.Terminal.Driver.EventTranslator
   alias Raxol.Terminal.Driver.InputBuffer
   alias Raxol.Terminal.Driver.TermboxLifecycle
 
   @compile {:no_warn_undefined, Raxol.Terminal.Driver.Dispatch}
-  @compile {:no_warn_undefined, Raxol.Terminal.Driver.EventTranslator}
   @compile {:no_warn_undefined, Raxol.Terminal.Driver.InputBuffer}
   @compile {:no_warn_undefined, Raxol.Terminal.Driver.TermboxLifecycle}
 
@@ -158,9 +157,7 @@ defmodule Raxol.Terminal.Driver do
       {_, _, nil} ->
         # No dispatcher — this is the Application supervisor's placeholder Driver.
         # Don't set up the terminal; the Lifecycle's Driver will do that.
-        Raxol.Core.Runtime.Log.info(
-          "[TerminalDriver] No dispatcher, skipping terminal setup."
-        )
+        Raxol.Core.Runtime.Log.info("[TerminalDriver] No dispatcher, skipping terminal setup.")
 
         {:ok, state}
 
@@ -280,49 +277,6 @@ defmodule Raxol.Terminal.Driver do
   end
 
   @impl true
-  def handle_manager_info(
-        {:termbox_event, event_map},
-        %{termbox_state: :initialized, dispatcher_pid: dispatcher_pid} = state
-      ) do
-    Raxol.Core.Runtime.Log.debug(
-      "Received termbox event: #{inspect(event_map)}"
-    )
-
-    case EventTranslator.translate(event_map) do
-      {:ok, %Event{} = event} ->
-        # Only send if dispatcher_pid is known
-        case dispatcher_pid do
-          nil -> :ok
-          pid -> Dispatch.send_event_to_dispatcher(pid, event)
-        end
-
-        {:noreply, state}
-
-      :ignore ->
-        # Event type we don't care about
-        Raxol.Core.Runtime.Log.debug(
-          "[Driver] Ignoring termbox event: #{inspect(event_map)}"
-        )
-
-        {:noreply, state}
-
-      {:error, reason} ->
-        Raxol.Core.Runtime.Log.warning_with_context(
-          "Failed to translate termbox event: #{inspect(reason)}. Event: #{inspect(event_map)}",
-          %{}
-        )
-
-        {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_manager_info({:termbox_event, _event_map}, state) do
-    # Ignore events if termbox is not initialized
-    {:noreply, state}
-  end
-
-  @impl true
   def handle_manager_info({:termbox_error, reason}, state) do
     Raxol.Core.Runtime.Log.error(
       "Received termbox error: #{inspect(reason)}. Attempting recovery..."
@@ -383,9 +337,7 @@ defmodule Raxol.Terminal.Driver do
       "[TerminalDriver.handle_cast - :test_input] Parsed event: #{inspect(event)}"
     )
 
-    Raxol.Core.Runtime.Log.debug(
-      "[TEST] Dispatching simulated event: #{inspect(event)}"
-    )
+    Raxol.Core.Runtime.Log.debug("[TEST] Dispatching simulated event: #{inspect(event)}")
 
     _ =
       Backpressure.cast(state.dispatcher_pid, {:dispatch, event},
@@ -794,9 +746,7 @@ defmodule Raxol.Terminal.Driver do
   end
 
   def terminate(_reason, _state) do
-    Raxol.Core.Runtime.Log.info(
-      "Terminal Driver terminating (not initialized)."
-    )
+    Raxol.Core.Runtime.Log.info("Terminal Driver terminating (not initialized).")
 
     :ok
   end

@@ -12,93 +12,77 @@ defmodule Raxol.Terminal.Driver.InputBufferingTest do
     Helper.setup_terminal()
   end
 
+  # Decode coverage exercising the driver's input buffering: bytes fed via the
+  # real {:trace,...} path accumulate in the driver's buffer until a complete
+  # ANSI sequence is present, then dispatch as one decoded event.
   describe "Input Buffering" do
-    test ~c"correctly requests more input if buffer is empty" do
+    test ~c"dispatches a single complete key byte" do
       test_pid = self()
       driver_pid = Helper.start_driver(test_pid)
 
-      # Wait for driver to be ready and consume initial resize
       Helper.wait_for_driver_ready(driver_pid)
       Helper.consume_initial_resize()
 
-      # Send a key event
-      Helper.simulate_key_event(driver_pid, ?x)
-      Helper.assert_key_event("x")
+      Helper.feed_input(driver_pid, "x")
+      Helper.assert_char_key("x")
 
       Process.exit(driver_pid, :shutdown)
     end
 
-    test ~c"correctly buffers partial input sequences" do
+    test ~c"buffers a partial escape sequence split across reads" do
       test_pid = self()
       driver_pid = Helper.start_driver(test_pid)
 
-      # Wait for driver to be ready and consume initial resize
       Helper.wait_for_driver_ready(driver_pid)
       Helper.consume_initial_resize()
 
-      # Send partial escape sequence. The raw ESC byte (27) is a REAL
-      # TB_KEY_ESC control-key code (see event_translator.ex's moduledoc),
-      # so it now correctly normalizes to `key: :escape` rather than
-      # leaking through as a printable `char: "\e"` -- the exact
-      # control-byte-as-text bug the T27 review caught.
-      Helper.simulate_key_event(driver_pid, ?\e)
-      Helper.assert_key_event(nil, :escape)
+      # "\e[A" arrives one byte per read. The driver buffers the incomplete
+      # ESC and ESC[ prefixes, and only once the final byte "A" completes the
+      # CSI sequence does it decode+dispatch a single :up key event.
+      Helper.feed_input(driver_pid, "\e")
+      Helper.feed_input(driver_pid, "[")
+      Helper.feed_input(driver_pid, "A")
 
-      Helper.simulate_key_event(driver_pid, ?[)
-      Helper.assert_key_event("[")
-
-      Helper.simulate_key_event(driver_pid, ?A)
-      Helper.assert_key_event("A")
+      Helper.assert_special_key(:up)
 
       Process.exit(driver_pid, :shutdown)
     end
 
-    test ~c"handles intermingled input correctly" do
+    test ~c"decodes intermingled printable and escape input in order" do
       test_pid = self()
       driver_pid = Helper.start_driver(test_pid)
 
-      # Wait for driver to be ready and consume initial resize
       Helper.wait_for_driver_ready(driver_pid)
       Helper.consume_initial_resize()
 
-      # Send mixed input sequence: "x\e[Ay"
-      Helper.simulate_key_event(driver_pid, ?x)
-      Helper.assert_key_event("x")
+      # Printable char, then an arrow escape sequence, then another char --
+      # each decoded and dispatched in arrival order.
+      Helper.feed_input(driver_pid, "x")
+      Helper.assert_char_key("x")
 
-      Helper.simulate_key_event(driver_pid, ?\e)
-      Helper.assert_key_event(nil, :escape)
+      Helper.feed_input(driver_pid, "\e[A")
+      Helper.assert_special_key(:up)
 
-      Helper.simulate_key_event(driver_pid, ?[)
-      Helper.assert_key_event("[")
-
-      # Up arrow -- real TB_KEY_ARROW_UP code (0xffff - 18), not the ANSI
-      # CSI final byte 65 this test used to send.
-      Helper.simulate_key_event(driver_pid, 0, 65_517)
-      Helper.assert_key_event(nil, :up)
-
-      Helper.simulate_key_event(driver_pid, ?y)
-      Helper.assert_key_event("y")
+      Helper.feed_input(driver_pid, "y")
+      Helper.assert_char_key("y")
 
       Process.exit(driver_pid, :shutdown)
     end
 
-    test ~c"handles rapid input sequences" do
+    test ~c"decodes rapid input in order" do
       test_pid = self()
       driver_pid = Helper.start_driver(test_pid)
 
-      # Wait for driver to be ready and consume initial resize
       Helper.wait_for_driver_ready(driver_pid)
       Helper.consume_initial_resize()
 
-      # Send multiple key events in quick succession
-      Helper.simulate_key_event(driver_pid, ?a)
-      Helper.simulate_key_event(driver_pid, ?b)
-      Helper.simulate_key_event(driver_pid, ?c)
+      Helper.feed_input(driver_pid, "a")
+      Helper.feed_input(driver_pid, "b")
+      Helper.feed_input(driver_pid, "c")
 
-      # Verify all events were processed in order
-      Helper.assert_key_event("a")
-      Helper.assert_key_event("b")
-      Helper.assert_key_event("c")
+      Helper.assert_char_key("a")
+      Helper.assert_char_key("b")
+      Helper.assert_char_key("c")
 
       Process.exit(driver_pid, :shutdown)
     end

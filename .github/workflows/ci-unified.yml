@@ -287,6 +287,56 @@ jobs:
         working-directory: packages/${{ matrix.package }}
         run: mix test
 
+  # The local terminal input path is BEAM/OTP-coupled: keystrokes arrive by
+  # tracing prim_tty's reader (a private protocol). Every unit test fabricates
+  # that trace message, so none can catch an OTP change to it. This canary types
+  # real keystrokes into a real pty and asserts they decode -- so the PR that
+  # bumps OTP_VERSION fails here, loudly and per-PR, instead of on the nightly
+  # matrix at 2am. Sub-second decode; the pty boot is the only cost.
+  input-canary:
+    name: Input protocol canary
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pty drivers + NIF build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux expect build-essential autoconf m4 \
+            libncurses5-dev libssl-dev
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ needs.setup.outputs.elixir-version }}
+          otp-version: ${{ needs.setup.outputs.otp-version }}
+
+      - name: Install hex and rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Cache raxol_terminal deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            packages/raxol_terminal/deps
+            packages/raxol_terminal/_build
+          key: pkg-raxol_terminal-canary-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-${{ hashFiles('packages/raxol_terminal/mix.lock') }}
+          restore-keys: |
+            pkg-raxol_terminal-canary-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-
+
+      - name: Run input protocol canary
+        working-directory: packages/raxol_terminal
+        env:
+          MIX_ENV: test
+          TMPDIR: /tmp
+        run: |
+          mix deps.get
+          mix test test/raxol/terminal/input_protocol_canary_test.exs \
+            --only input_protocol_canary
+
   test-integration:
     name: Integration Tests
     needs: [setup, compile]
@@ -675,7 +725,7 @@ jobs:
   # ========================================
   ci-status:
     name: CI Status
-    needs: [format, compile, test-unit, package-tests, credo, security]
+    needs: [format, compile, test-unit, package-tests, input-canary, credo, security]
     runs-on: ubuntu-latest
     if: always()
 
@@ -702,7 +752,12 @@ jobs:
             echo "❌ Package tests failed"
             exit 1
           fi
-          
+
+          if [ "${{ needs.input-canary.result }}" != "success" ]; then
+            echo "❌ Input protocol canary failed"
+            exit 1
+          fi
+
           if [ "${{ needs.security.result }}" != "success" ]; then
             echo "⚠️ Security scan found issues (non-blocking)"
           fi

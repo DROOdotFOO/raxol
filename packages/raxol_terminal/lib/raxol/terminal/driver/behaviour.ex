@@ -191,18 +191,9 @@ defmodule Raxol.Terminal.Driver.Behaviour do
   """
   @callback reset_style(state()) :: {:ok, state()} | {:error, term()}
 
-  # ============================================================================
-  # Input Handling
-  # ============================================================================
-
-  @doc """
-  Poll for input events.
-
-  Returns the next available event or `:timeout` if no event is available
-  within the specified timeout (in milliseconds).
-  """
-  @callback poll_event(state(), timeout :: non_neg_integer()) ::
-              {:ok, event(), state()} | {:timeout, state()} | {:error, term()}
+  # Input is not polled through this behaviour. On Unix the local driver receives
+  # keystrokes as messages from OTP's prim_tty reader (see Driver's `{:trace, ...}`
+  # handler); SSH and LiveView input ride their own transports.
 
   # ============================================================================
   # Optional Callbacks

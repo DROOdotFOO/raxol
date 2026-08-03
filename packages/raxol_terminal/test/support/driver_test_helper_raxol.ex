@@ -4,6 +4,14 @@ import ExUnit.Callbacks
 defmodule Raxol.Terminal.DriverTestHelper do
   @moduledoc """
   Helper module for terminal driver tests providing common test utilities and fixtures.
+
+  `feed_input/2` feeds fabricated `{:trace, ...}` messages -- the same shape
+  prim_tty's reader emits -- to drive the REAL input path: Driver
+  `buffer_and_dispatch` -> `Raxol.Terminal.ANSI.InputParser` -> dispatch of a
+  decoded `%Raxol.Core.Events.Event{}` to the driver's dispatcher pid. These
+  helpers exercise DECODE coverage (byte string in, decoded event out); they
+  do NOT verify the prim_tty trace wire protocol itself -- that lives in
+  `input_protocol_canary_test`.
   """
 
   alias Raxol.Core.Events.Event
@@ -55,61 +63,40 @@ defmodule Raxol.Terminal.DriverTestHelper do
     assert_receive {:"$gen_cast", {:dispatch, %Event{type: :resize}}}, timeout
   end
 
-  def simulate_sigwinch(driver_pid) do
-    send(
-      driver_pid,
-      {:termbox_event, %{type: :resize, width: 90, height: 30}}
-    )
+  @doc """
+  Feeds raw input bytes to the driver via the REAL input path.
+
+  Wraps the bytes in the `{:trace, ...}` message shape prim_tty's reader
+  emits, so the driver runs `buffer_and_dispatch/2` ->
+  `Raxol.Terminal.ANSI.InputParser` -> dispatch, exactly as in production.
+  """
+  def feed_input(driver_pid, bytes) when is_binary(bytes) do
+    send(driver_pid, {:trace, self(), :send, {make_ref(), {:data, bytes}}, self()})
   end
 
-  def simulate_key_event(driver_pid, char, key \\ 0, mod \\ 0) do
-    send(
-      driver_pid,
-      {:termbox_event, %{type: :key, key: key, char: char, mod: mod}}
-    )
+  @doc """
+  Asserts a decoded printable-character key event.
+
+  The parser emits `%{key: :char, char: <<byte>>}` with no modifier fields
+  when none are set (`InputParser.key_event/2` drops false modifiers).
+  """
+  def assert_char_key(char) when is_binary(char) do
+    assert_receive {:"$gen_cast",
+                    {:dispatch, %Event{type: :key, data: %{key: :char, char: ^char}}}},
+                   500
   end
 
-  def simulate_mouse_event(driver_pid, x, y, button) do
-    send(
-      driver_pid,
-      {:termbox_event, %{type: :mouse, x: x, y: y, button: button}}
-    )
-  end
+  @doc """
+  Asserts a decoded special (non-printable) key event, e.g. `:up`, `:escape`.
 
-  def simulate_resize_event(driver_pid, width, height) do
-    send(
-      driver_pid,
-      {:termbox_event, %{type: :resize, width: width, height: height}}
-    )
-  end
+  The parser emits `%{key: key}` with no `:char` field for these.
+  """
+  def assert_special_key(key) when is_atom(key) do
+    assert_receive {:"$gen_cast", {:dispatch, %Event{type: :key, data: %{key: ^key} = data}}},
+                   500
 
-  def assert_key_event(char, key \\ nil, modifiers \\ %{}) do
-    modifiers =
-      Map.merge(
-        %{shift: false, ctrl: false, alt: false, meta: false},
-        modifiers
-      )
-
-    _ =
-      assert_receive {:"$gen_cast",
-                      {:dispatch,
-                       %Event{
-                         type: :key,
-                         data: %{
-                           char: ^char,
-                           key: ^key,
-                           shift: shift,
-                           ctrl: ctrl,
-                           alt: alt,
-                           meta: meta
-                         }
-                       }}},
-                     500
-
-    assert shift == modifiers.shift
-    assert ctrl == modifiers.ctrl
-    assert alt == modifiers.alt
-    assert meta == modifiers.meta
+    refute Map.has_key?(data, :char),
+           "special key #{inspect(key)} unexpectedly carried a :char field"
   end
 
   def assert_mouse_event(x, y, button) do

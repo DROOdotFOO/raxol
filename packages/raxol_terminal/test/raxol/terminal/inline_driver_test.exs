@@ -9,6 +9,15 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
   `async: false`: `Raxol.Terminal.Capabilities` caches into
   `:persistent_term`, which is process-global.
+
+  Scope note: the `install_reader?: false` cases here fabricate the
+  `{:trace, _, :send, {_ref, {:data, data}}, _}` message and feed it to the
+  driver directly. That is decode-layer coverage of `ANSI.InputParser` and the
+  driver's dispatch plumbing -- it does NOT verify the prim_tty trace protocol
+  itself (the message shape, the `{:read, :infinity}` re-arm). A test that
+  builds the shape it asserts on can only fail if the handler changes, never if
+  OTP does. The single test permitted to claim protocol coverage is the real-pty
+  canary in `input_protocol_canary_test.exs`.
   """
 
   use ExUnit.Case, async: false
@@ -298,8 +307,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
       send(pid, {:trace, self(), :send, {make_ref(), {:data, "a"}}, self()})
 
-      assert_receive {:inline_input,
-                      %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
                      1_000
 
       GenServer.stop(pid)
@@ -323,8 +331,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
       send(pid, {port, {:data, "q"}})
 
-      assert_receive {:inline_input,
-                      %Raxol.Core.Events.Event{type: :key, data: %{char: "q"}}},
+      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "q"}}},
                      1_000
 
       Port.close(port)
@@ -350,8 +357,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
       # The raw chunk arrives exactly as read, before parsing split it.
       assert_receive {:inline_raw_input, ^chunk}, 1_000
       # And the parsed event path is unchanged.
-      assert_receive {:inline_input,
-                      %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
                      1_000
 
       GenServer.stop(pid)
@@ -418,8 +424,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
     end
 
     defp feed_chunk(pid, data),
-      do:
-        send(pid, {:trace, self(), :send, {make_ref(), {:data, data}}, self()})
+      do: send(pid, {:trace, self(), :send, {make_ref(), {:data, data}}, self()})
 
     test "a paste split mid-body (before its first newline) does not submit",
          %{pid: pid} do
@@ -464,8 +469,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
       # hostage by the pending paste tail.
       feed_chunk(pid, "a\e[200~partial")
 
-      assert_receive {:inline_input,
-                      %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
+      assert_receive {:inline_input, %Raxol.Core.Events.Event{type: :key, data: %{char: "a"}}},
                      1_000
 
       feed_chunk(pid, " rest\e[201~")
@@ -740,8 +744,7 @@ defmodule Raxol.Terminal.InlineDriverTest do
 
       feed_chunk(pid, "\e")
 
-      assert_receive {:inline_input,
-                      %Raxol.Core.Events.Event{data: %{key: :escape}}},
+      assert_receive {:inline_input, %Raxol.Core.Events.Event{data: %{key: :escape}}},
                      1_000
 
       refute_receive {:inline_input, _}, 60
