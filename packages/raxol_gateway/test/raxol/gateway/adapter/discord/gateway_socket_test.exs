@@ -194,7 +194,9 @@ defmodule Raxol.Gateway.Adapter.Discord.GatewaySocketTest do
       capture_log(fn ->
         dispatch(pid, "MESSAGE_CREATE", %{"content" => "boom"}, 9)
         dispatch(pid, "TYPING_START", %{}, 10)
-        assert_receive {:event, %{"t" => "TYPING_START"}}
+        # Generous timeout: this runs inside capture_log after a deliberate
+        # raise, and the default 100ms is too tight on loaded CI runners.
+        assert_receive {:event, %{"t" => "TYPING_START"}}, 1000
       end)
 
     assert log =~ "sink exploded"
