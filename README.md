@@ -25,7 +25,7 @@ Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define 
 
 ## Built with Raxol
 
-**[Xochi](https://xochi.fi)** is a private cross-chain DEX: intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol. A trader terminal serves over SSH with a dark-pool aesthetic, the same TEA module renders as a LiveView web UI, a solver-agent surface lets Riddler's sub-2ms solver consume auto-derived MCP tools to bid on intents, and an ops cockpit runs sensor fusion on solver health. The solver agent and the human trader read the same Component tree through different projections.
+**[Xochi](https://xochi.fi)** is a private cross-chain DEX: intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol. A trader terminal serves over SSH with a dark-pool aesthetic, the same TEA module renders as a LiveView web UI, a solver-agent surface projects the same Component tree for Riddler's sub-2ms solver, and an ops cockpit runs sensor fusion on solver health. Bidding and settlement deliberately bypass the MCP surface: they run through pre-signed intents behind a separate fail-closed stack (SpendGate, deployment guards), so fund-moving actions are never exposed as callable tools. The solver agent and the human trader read the same Component tree through different projections.
 
 **[foglet-bbs](https://github.com/bmanturner/foglet-bbs)** by [Brendan Turner](https://foglet.io) is an SSH-only retro bulletin board ([bbs.foglet.io](https://bbs.foglet.io), `ssh bbs.foglet.io`) that stress-tested raxol's SSH path into shape.
 
@@ -55,7 +55,7 @@ Both surfaces sit on the **Harness** — the agent-session engine (`Raxol.Harnes
 The agent subsystems ship as standalone packages:
 
 - **Pay** ([`raxol_payments`](docs/features/AGENTIC_COMMERCE.md)): wallets, ledger-enforced spending limits, and transparent auto-pay when an agent hits an HTTP 402, across five protocols (x402, MPP, Xochi cross-chain, Permit2, Riddler).
-- **Earn** (`raxol_acp`): the sell side. Declare an offering, implement two callbacks, and a buyer agent discovers it, escrows funds, and settles on-chain through the [Virtuals](https://virtuals.io) ACP job lifecycle (request, negotiation, transaction, evaluation, completed), one supervised process per job. Pre-alpha.
+- **Earn** (`raxol_earn`): the sell side. Declare an offering, implement two callbacks, and a buyer agent discovers it, escrows funds, and settles on-chain through the [Virtuals](https://virtuals.io) ACP job lifecycle (request, negotiation, transaction, evaluation, completed), one supervised process per job. Pre-alpha.
 - **Improve** ([`raxol_agent`](docs/features/SELF_IMPROVEMENT.md)): a solved task becomes a reusable `SKILL.md`. A background reviewer runs on a cheap model after each turn, writing durable memory and new skills without spending the live turn's latency or context.
 - **Reach** (`raxol_gateway`): one adapter contract to many chat platforms, process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
 - **Orchestrate** (`raxol_symphony`): an OTP port of [OpenAI Symphony](https://github.com/openai/symphony) that polls a tracker, isolates each issue in its own workspace, and runs a coding agent, feeding six surfaces (terminal, LiveView, MCP, Telegram, Watch, JSON API) from one snapshot.

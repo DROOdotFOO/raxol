@@ -12,7 +12,7 @@ Accepted, 2026-07-22 (implemented in `Raxol.Workflow.Graph` via `add_channel/3` 
 
 The deferral is intentional. ADR-0015 prioritized a working runtime with checkpoints, interrupts, retry, compensate, and Postgrex durability over a richer execution model. Phase 25 shipped four months of capability inside that constraint; the deferred concurrency primitive is now the natural next chunk because every consumer that's piled on top of the runtime has the same shape:
 
-- **raxol_acp** Job.Workflow is a 10-node graph that walks one phase ladder. Cross-chain settlement (Xochi mandates, multi-party escrow) wants two on-chain calls in parallel followed by a reduction.
+- **raxol_earn** Job.Workflow is a 10-node graph that walks one phase ladder. Cross-chain settlement (Xochi mandates, multi-party escrow) wants two on-chain calls in parallel followed by a reduction.
 - **Symphony** GraphAdapter is a 5-node strictly-sequential pipeline (`tracker_poll -> candidate_selection -> runner_dispatch -> evidence_collection -> completion` at `packages/raxol_symphony/lib/raxol/symphony/workflow/graph_adapter.ex:18-30`). The orchestrator gets concurrency at the *process* level by spawning multiple workers (`DynamicSupervisor` + `max_concurrent_agents`), each running the graph independently. The graph itself can't fan out.
 - **Future Phase 26 sandboxed agents** will want to dispatch sub-tasks in parallel inside one workflow run rather than orchestrating that at the agent's `update/2` callback.
 
@@ -137,7 +137,7 @@ Compile failures match the existing error tuple shape from ADR-0015's `compile/2
 
 ### What becomes possible
 
-- **raxol_acp cross-chain settlement** can express two on-chain calls (e.g., `createMemo` on chain A and `createMemo` on chain B) as parallel branches, with a join that reconciles their tx_hashes before advancing the phase. Today this requires either two sequential calls (slower) or a Task.async_stream inside one node (loses retry + compensate + checkpoint per call).
+- **raxol_earn cross-chain settlement** can express two on-chain calls (e.g., `createMemo` on chain A and `createMemo` on chain B) as parallel branches, with a join that reconciles their tx_hashes before advancing the phase. Today this requires either two sequential calls (slower) or a Task.async_stream inside one node (loses retry + compensate + checkpoint per call).
 - **Symphony GraphAdapter** can fan out across multiple candidate issues inside one workflow run rather than relying on `DynamicSupervisor` slot management. The orchestrator-level concurrency stays; the graph-level concurrency becomes available for cases where the parallel work is logically one unit.
 - **Phase 26 sandboxed agents** can dispatch parallel sub-tasks (one shell command per branch, one file edit per branch) inside one workflow with uniform sandbox + thread-log + policy semantics. The agent doesn't have to choose between "the runtime gives me retry/compensate" and "I can do things in parallel."
 - **Channels generalize.** A workflow that wants "the latest of N branches" uses `with: fn _old, new -> new end`. "Sum of partial counts" uses `with: &Kernel.+/2`. "Topic with append-only history" uses `with: fn old, new -> old ++ [new] end`. One declaration shape covers what LangGraph splits into 4+ channel types.
@@ -206,7 +206,7 @@ How we know the design is right:
 
 - **The sequential test suite passes unchanged.** Every existing workflow test in `test/raxol/workflow/` (143 today) runs against the new runtime without modification. The parallel code paths are dormant until a graph uses `add_join/4`.
 - **A reference parallel workflow lands as `test/raxol/workflow/parallel_test.exs`.** Two-branch fan-out, three-branch fan-out, mixed channel reducers, branch-failure-during-fan-out, pause-inside-branch, retry-per-branch, compensate-across-branches. ~12 tests covering the new surface.
-- **`raxol_acp` adopts joins for a cross-chain settlement demo.** ACP today doesn't need joins (each ACP job walks one chain). A demo workflow under `packages/raxol_acp/examples/` that simulates a two-chain settlement validates the API ergonomics from a real consumer's perspective.
+- **`raxol_earn` adopts joins for a cross-chain settlement demo.** ACP today doesn't need joins (each ACP job walks one chain). A demo workflow under `packages/raxol_earn/examples/` that simulates a two-chain settlement validates the API ergonomics from a real consumer's perspective.
 - **Symphony GraphAdapter stays sequential.** No changes required. The ADR-0019 work doesn't touch Symphony's graph; that adoption is a separate follow-up gated on Symphony's PausedSaver work landing.
 - **Telemetry round-trip:** a fan-out -> join run emits `[:raxol, :workflow, :node, :*]` events with `branch_id` set on the parallel branches and `nil` on the rest. Property test verifies branch_id is set if and only if the node is downstream of a `ConditionalEdge` whose chooser returned a list.
 - **Compile errors match the ADR-0015 shape:** structured tuples, no exceptions thrown, every invalid join configuration produces an actionable error.

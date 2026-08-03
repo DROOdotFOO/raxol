@@ -4,8 +4,8 @@ defmodule Raxol.Payments.ChainReader.JSONRPC do
 
   Implements only the two read-only methods the accounting layer needs
   (`eth_getTransactionReceipt`, `eth_getBalance`). Self-contained on purpose:
-  `raxol_payments` cannot depend on `raxol_acp`'s RPC (that package depends on
-  this one), so this mirrors the shape of `Raxol.ACP.Onchain.RPC` without the
+  `raxol_payments` cannot depend on `raxol_earn`'s RPC (that package depends on
+  this one), so this mirrors the shape of `Raxol.Earn.Onchain.RPC` without the
   dependency.
   """
 

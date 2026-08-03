@@ -24,7 +24,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 **Commerce rails:** agent payments with wallets (env + 1Password), ledger-enforced spending limits, and transparent HTTP-402 auto-pay across five protocols (x402, MPP, Xochi, Permit2, Riddler). Xochi is the cross-chain default (tier fees 0.10-0.40%, quote -> sign -> execute -> poll). PXE-bridge settlement (Glass Cube, 6 privacy tiers), ERC-5564/6538 stealth (`Xochi.Stealth`), ZKSAR attestation (6 proof types) + trust-tier routing. Riddler solver wired (ADR-0005, 9 endpoints, fee policy + privacy premiums). ~347 payments tests.
 
-**`raxol_acp` v0.2 (pre-alpha):** first Elixir/OTP-native Virtuals Agent Commerce Protocol, v2 hook/event model on the deployed Base contracts (v1 memo model retired). `JobSession` state machine (`:open -> :budget_set -> :funded -> :submitted -> :completed` plus `:rejected`/`:expired`), on-chain writes via `HookClient` -> `AgenticCommerceV3` through an injected `ProviderAdapter` (SCA sponsored UserOps / JSONRPC EOA with `NonceServer` / Mock), full ERC-4337 SCA wallet (Alchemy Modular Account v2), Seller stack (`Backend.{InMemory, WebSocket}` + `Queue` + `Runtime`), `mix raxol_acp.bench`. 509 tests. Graduates on the first live Base-mainnet offering.
+**`raxol_earn` v0.2 (pre-alpha):** first Elixir/OTP-native Virtuals Agent Commerce Protocol, v2 hook/event model on the deployed Base contracts (v1 memo model retired). `JobSession` state machine (`:open -> :budget_set -> :funded -> :submitted -> :completed` plus `:rejected`/`:expired`), on-chain writes via `HookClient` -> `AgenticCommerceV3` through an injected `ProviderAdapter` (SCA sponsored UserOps / JSONRPC EOA with `NonceServer` / Mock), full ERC-4337 SCA wallet (Alchemy Modular Account v2), Seller stack (`Backend.{InMemory, WebSocket}` + `Queue` + `Runtime`), `mix raxol_earn.bench`. 509 tests. Graduates on the first live Base-mainnet offering.
 
 **Surfaces:** `raxol_telegram` (bot, per-chat router, inline keyboards; 34 tests), `raxol_speech` (TTS + Whisper STT + 21 voice commands; 28 tests), `raxol_watch` (APNS/FCM push, glanceable summaries, tap-to-event; 34 tests). `raxol_symphony` (0.2.0, pre-alpha): OTP port of OpenAI Symphony, a tracker-driven coding-agent orchestrator with two runners (`raxol_agent` + `codex`), three workflow modes (`default`/`graph`/`graph_parallel` batch fan-out), six surfaces, workflow hot-reload, evidence framework; 738 tests. Release-packaged; graduates on the first live run + Hex publish.
 
@@ -34,11 +34,11 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) at v2.6.0, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) at v0.2.0. `raxol_acp` (0.2.0), `raxol_symphony` (0.2.0), and `raxol_gateway` stay pre-alpha and unpublished until they graduate.
+The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) at v2.6.0, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) at v0.2.0. `raxol_earn` (0.2.0), `raxol_symphony` (0.2.0), and `raxol_gateway` stay pre-alpha and unpublished until they graduate.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |
-| Graduate `raxol_acp`      | Live run on Base mainnet with one offering, then the first Hex release | Medium |
+| Graduate `raxol_earn`      | Live run on Base mainnet with one offering, then the first Hex release | Medium |
 | Graduate `raxol_symphony` | Parallel dispatch + 0.2.0 packaging landed; remaining: a live run against a real repo (see the package `RUNBOOK.md`), then `mix hex.publish` | Medium |
 
 ### Fast-Follow: Hermes Parity
@@ -70,14 +70,14 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 - **FLAME** elastic exec on Fly Machines (BEAM-native idle hibernation, replaces Modal/Daytona).
 - More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
 - i18n: wire the present `gettext` through surface rendering, extract locale files.
-- Agent Client Protocol adapter (`raxol_agent` inside Zed/VS Code/JetBrains panels; distinct from `raxol_acp`).
+- Agent Client Protocol adapter (`raxol_agent` inside Zed/VS Code/JetBrains panels; distinct from `raxol_earn`).
 - Expose the sandboxed REPL as an agent action for scripted single-turn tool pipelines.
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
 
 ### Console runtime (Virtuals ACP)
 
-Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/acp/new`), beside Hermes and OpenClaw, with web3 native to the runtime (native `raxol_acp` plus the payment rails) rather than a bolted-on skill. Design in ADR-0031. It is the inverse of the `custom_console_agent` offering that already generates deployment packages for the other two runtimes.
+Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/acp/new`), beside Hermes and OpenClaw, with web3 native to the runtime (native `raxol_earn` plus the payment rails) rather than a bolted-on skill. Design in ADR-0031. It is the inverse of the `custom_console_agent` offering that already generates deployment packages for the other two runtimes.
 
 | Item | What | Effort | Status |
 | ---- | ---- | ------ | ------ |

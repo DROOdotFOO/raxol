@@ -1,18 +1,18 @@
 # Agent Commerce Protocol (ACP)
 
-`raxol_acp` is an Elixir/OTP implementation of the [Virtuals ACP](https://www.virtuals.io/) for selling agent services on Base. Where `raxol_payments` is about *paying* (an agent that buys things), `raxol_acp` is about *being paid* (an agent that offers a service and accepts on-chain settlement).
+`raxol_earn` is an Elixir/OTP implementation of the [Virtuals ACP](https://www.virtuals.io/) for selling agent services on Base. Where `raxol_payments` is about *paying* (an agent that buys things), `raxol_earn` is about *being paid* (an agent that offers a service and accepts on-chain settlement).
 
-Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_acp/`.
+Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_earn/`.
 
 > **Two protocols share the letters "ACP".** This page is the **Agent Commerce Protocol**
-> (`Raxol.ACP`, on-chain payments for selling agent services). It is unrelated to the
+> (`Raxol.Earn`, on-chain payments for selling agent services). It is unrelated to the
 > [Editor Agent Client Protocol](EDITOR_ACP.md) (`Raxol.AgentClientProtocol`, the JSON-RPC
 > protocol between a code editor and an AI coding agent). Different acronym expansion,
 > different domain.
 
 ## Job Lifecycle
 
-Every job is a state machine. One supervised `Raxol.ACP.JobSession` runs per active job, registered by `{chain_id, job_id}`:
+Every job is a state machine. One supervised `Raxol.Earn.JobSession` runs per active job, registered by `{chain_id, job_id}`:
 
 ```
 :open -> :budget_set -> :funded -> :submitted -> :completed
@@ -20,11 +20,11 @@ Every job is a state machine. One supervised `Raxol.ACP.JobSession` runs per act
 (any non-terminal) -> :expired
 ```
 
-`Raxol.ACP.JobSession.Status` is a pure module holding the status enum and the legal transition graph. `JobSession` is the GenServer: it tracks role-aware status, keeps a chronological entry log, notifies subscribers, and emits `[:raxol, :acp, :job_session, :transition]` telemetry on every change. `apply_event/3` applies an OBSERVED status (an on-chain or SSE event) directly, bypassing role and adjacency gating.
+`Raxol.Earn.JobSession.Status` is a pure module holding the status enum and the legal transition graph. `JobSession` is the GenServer: it tracks role-aware status, keeps a chronological entry log, notifies subscribers, and emits `[:raxol, :earn, :job_session, :transition]` telemetry on every change. `apply_event/3` applies an OBSERVED status (an on-chain or SSE event) directly, bypassing role and adjacency gating.
 
 ```elixir
 {:ok, _pid} =
-  Raxol.ACP.JobSession.Supervisor.start_session(
+  Raxol.Earn.JobSession.Supervisor.start_session(
     chain_id: 8453,
     job_id: "job-42",
     role: :provider
@@ -32,19 +32,19 @@ Every job is a state machine. One supervised `Raxol.ACP.JobSession` runs per act
 
 # Provider actions transition the session; the Provider driver (below)
 # pairs each with the matching hook write on-chain.
-{:ok, :budget_set} = Raxol.ACP.JobSession.set_budget({8453, "job-42"}, budget)
-{:ok, :submitted} = Raxol.ACP.JobSession.submit({8453, "job-42"}, deliverable)
+{:ok, :budget_set} = Raxol.Earn.JobSession.set_budget({8453, "job-42"}, budget)
+{:ok, :submitted} = Raxol.Earn.JobSession.submit({8453, "job-42"}, deliverable)
 ```
 
-The seller-side glue is `Raxol.ACP.JobSession.Provider`: for each lifecycle step it invokes the offering `Handler` (via `JobSession.HandlerSeam`), writes the hook call on-chain through `HookClient` + `ProviderAdapter` (the commit point -- a failed write leaves the session untouched), then mirrors the resulting status with `apply_event/3`.
+The seller-side glue is `Raxol.Earn.JobSession.Provider`: for each lifecycle step it invokes the offering `Handler` (via `JobSession.HandlerSeam`), writes the hook call on-chain through `HookClient` + `ProviderAdapter` (the commit point -- a failed write leaves the session untouched), then mirrors the resulting status with `apply_event/3`.
 
 ## Offerings
 
 An offering is a service the agent sells. Declared via the `Offering` DSL:
 
 ```elixir
-defmodule Raxol.ACP.Offerings.SentimentAnalysis do
-  use Raxol.ACP.Offering,
+defmodule Raxol.Earn.Offerings.SentimentAnalysis do
+  use Raxol.Earn.Offering,
     name: "Sentiment Analysis",
     price_usdc: 10,
     sla_minutes: 5,
@@ -69,34 +69,34 @@ The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed
 
 ## Xochi Cross-Chain Transfer (the first offering)
 
-`Raxol.ACP.Xochi.TransferOffering` is the first offering: a **pure storefront** for cross-chain stablecoin transfers. raxol never signs or holds the buyer's funds.
+`Raxol.Earn.Xochi.TransferOffering` is the first offering: a **pure storefront** for cross-chain stablecoin transfers. raxol never signs or holds the buyer's funds.
 
 - The buyer quotes and signs a Xochi intent themselves (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`) and puts the signed bundle in the job requirement's `signed_intent`.
-- On delivery, `Raxol.ACP.Xochi.Settler` relays that bundle to Xochi via `execute_signed/2` (no re-signing) and polls it to settlement; the deliverable is the on-chain settlement tx hashes.
+- On delivery, `Raxol.Earn.Xochi.Settler` relays that bundle to Xochi via `execute_signed/2` (no re-signing) and polls it to settlement; the deliverable is the on-chain settlement tx hashes.
 - The transfer settles through Xochi off-escrow, so the ACP core's take never bites it. The job is a **plain job** (`hook = address(0)`); the ACP budget is only raxol's storefront fee -- **8 bps of the transfer**, set via `:fee_bps`. On completion the provider nets `budget * 0.90`.
 
-`packages/raxol_acp/examples/buyer_signed_intent.exs` shows the buyer flow and the requirement/deliverable schemas to register on the marketplace.
+`packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow and the requirement/deliverable schemas to register on the marketplace.
 
 ## Launch liquidity gate
 
 `TransferOffering.handle_request/2` accepts a job only for a corridor it can settle now, so a customer gets a clean rejection **before escrow** rather than an accept that fails at settlement. Four layers, all config-driven and inert by default:
 
 - **Corridor support**: the live `Raxol.Payments.Xochi.Capabilities` matrix (which chains/tokens the solver fills), degrading to the static `Raxol.Payments.Assets` set when the endpoint is unreachable.
-- **Per-order caps** (`config :raxol_acp, :destination_caps`): a max order size per destination `{chain, token_address}`; `0` closes the corridor. Rejects `{:over_capacity, chain, token}`.
-- **Closed origins** (`config :raxol_acp, :closed_origins`): src chains to refuse outright (e.g. Robinhood while the USDG exit is down). Rejects `{:origin_closed, chain}`.
-- **Rolling aggregate**: `Raxol.ACP.Xochi.CapacityLedger` bounds the *running total* committed per destination across concurrent jobs: reserve at accept, confirm at settle, release on failure, TTL-sweep if a job never settles. Opt-in via `capacity_gate_enabled: true`, which adds `Raxol.ACP.Xochi.CapacityGate` (the ledger + a periodic `CapacityRefresher`) to the seller tree.
+- **Per-order caps** (`config :raxol_earn, :destination_caps`): a max order size per destination `{chain, token_address}`; `0` closes the corridor. Rejects `{:over_capacity, chain, token}`.
+- **Closed origins** (`config :raxol_earn, :closed_origins`): src chains to refuse outright (e.g. Robinhood while the USDG exit is down). Rejects `{:origin_closed, chain}`.
+- **Rolling aggregate**: `Raxol.Earn.Xochi.CapacityLedger` bounds the *running total* committed per destination across concurrent jobs: reserve at accept, confirm at settle, release on failure, TTL-sweep if a job never settles. Opt-in via `capacity_gate_enabled: true`, which adds `Raxol.Earn.Xochi.CapacityGate` (the ledger + a periodic `CapacityRefresher`) to the seller tree.
 
-`mix raxol_acp.derive_caps` reads the solver's live `balanceOf` per corridor and emits both maps (`--order-frac`/`--aggregate-frac`/`--min-usd`, per-chain RPC via `DERIVE_RPC_<chain>`). The `CapacityRefresher` runs the same reads on an interval, so aggregate capacity tracks the chain as fills drain inventory. Starting point in `packages/raxol_acp/config/destination_caps.example.exs`.
+`mix raxol_earn.derive_caps` reads the solver's live `balanceOf` per corridor and emits both maps (`--order-frac`/`--aggregate-frac`/`--min-usd`, per-chain RPC via `DERIVE_RPC_<chain>`). The `CapacityRefresher` runs the same reads on an interval, so aggregate capacity tracks the chain as fills drain inventory. Starting point in `packages/raxol_earn/config/destination_caps.example.exs`.
 
 ## On-Chain Writes
 
-The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.ACP.ContractClient` write surface and the `:acp_version` switch were retired -- see `MIGRATION_V2.md`). `Raxol.ACP.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.ACP.ProviderAdapter`:
+The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.Earn.ContractClient` write surface and the `:acp_version` switch were retired -- see `MIGRATION_V2.md`). `Raxol.Earn.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.Earn.ProviderAdapter`:
 
-- `SCA`: sponsored ERC-4337 v0.7 UserOps via `Raxol.ACP.Wallet.SCA` (Alchemy Modular Account v2 + paymaster). Self-deploys the account on the first write.
-- `JSONRPC`: a plain EOA signing EIP-1559 typed transactions (`Raxol.ACP.Onchain.{RPC, Transaction, RLP}`), with nonce assignment serialized through `Raxol.ACP.Wallet.NonceServer`.
-- `Mock`: in-process, for tests and `mix raxol_acp.bench`.
+- `SCA`: sponsored ERC-4337 v0.7 UserOps via `Raxol.Earn.Wallet.SCA` (Alchemy Modular Account v2 + paymaster). Self-deploys the account on the first write.
+- `JSONRPC`: a plain EOA signing EIP-1559 typed transactions (`Raxol.Earn.Onchain.{RPC, Transaction, RLP}`), with nonce assignment serialized through `Raxol.Earn.Wallet.NonceServer`.
+- `Mock`: in-process, for tests and `mix raxol_earn.bench`.
 
-`Raxol.ACP.ABI` hand-rolls the Solidity encoder for the ACP methods. Real ABIs are vendored under `priv/abi/`; verified Base addresses live in `Raxol.ACP.Chain` (the active `acp_core_address` plus the hook/router/subscription addresses; the legacy `acp_contract_address`/`acp_router_address` remain only for indexer back-compat).
+`Raxol.Earn.ABI` hand-rolls the Solidity encoder for the ACP methods. Real ABIs are vendored under `priv/abi/`; verified Base addresses live in `Raxol.Earn.Chain` (the active `acp_core_address` plus the hook/router/subscription addresses; the legacy `acp_contract_address`/`acp_router_address` remain only for indexer back-compat).
 
 ## Expiry
 
@@ -104,7 +104,7 @@ The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there
 
 ## Nonce Serialization
 
-The `Raxol.ACP.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox, so two concurrent EOA writes from one wallet can never sign the same nonce. `ProviderAdapter.JSONRPC` routes every send through it. A send that fails before broadcast resyncs the counter, so the next send re-fetches the pending nonce from chain and re-fills the gap rather than leaving a hole that would strand every later transaction. The SCA/UserOp path uses ERC-4337 EntryPoint nonces and is unaffected.
+The `Raxol.Earn.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox, so two concurrent EOA writes from one wallet can never sign the same nonce. `ProviderAdapter.JSONRPC` routes every send through it. A send that fails before broadcast resyncs the counter, so the next send re-fetches the pending nonce from chain and re-fills the gap rather than leaving a hole that would strand every later transaction. The SCA/UserOp path uses ERC-4337 EntryPoint nonces and is unaffected.
 
 ## Seller Stack
 
@@ -119,7 +119,7 @@ Opt-in via `:seller_enabled` in config:
 
 ## Status
 
-Pre-alpha, not yet on Hex. The `Wallet.SCA` ERC-4337 stack, the real vendored ABIs (`priv/abi/`), and the `Backend.WebSocket` Socket.IO client are implemented; the on-chain paths are fork-validated against the real deployed core on Base. `mix raxol_acp.bench` runs end-to-end against the InMemory backend.
+Pre-alpha, not yet on Hex. The `Wallet.SCA` ERC-4337 stack, the real vendored ABIs (`priv/abi/`), and the `Backend.WebSocket` Socket.IO client are implemented; the on-chain paths are fork-validated against the real deployed core on Base. `mix raxol_earn.bench` runs end-to-end against the InMemory backend.
 
 ## See Also
 

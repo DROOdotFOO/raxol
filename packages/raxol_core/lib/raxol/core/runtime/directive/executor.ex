@@ -6,7 +6,7 @@ defprotocol Raxol.Core.Runtime.Directive.Executor do
   Packages register additional directive types by defining a struct and
   implementing this protocol for it. raxol_agent provides impls for
   `Raxol.Agent.Directive.{Async, Shell, SendAgent}`; raxol_payments and
-  raxol_acp provide their own.
+  raxol_earn provide their own.
 
   ## Context
 

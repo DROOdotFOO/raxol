@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
   @moduledoc """
-  End-to-end test: a real `Raxol.ACP.JobSession` transition fires
+  End-to-end test: a real `Raxol.Earn.JobSession` transition fires
   canonical telemetry; the `Raxol.Symphony.Resumer` watches that
   telemetry; a paused Symphony run whose `resume_on` spec matches the
   event auto-resumes.
@@ -10,7 +10,7 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
     * `Raxol.Symphony.ResumeOn.acp_pause/2` -- shape the runner emits
     * `Raxol.Symphony.Orchestrator` -- park + resume
     * `Raxol.Symphony.Resumer` -- telemetry bridge
-    * `Raxol.ACP.JobSession` -- real event source on `[:raxol, :acp,
+    * `Raxol.Earn.JobSession` -- real event source on `[:raxol, :earn,
       :job_session, :transition]`
     * `Raxol.Symphony.Runners.Noop` -- minimal pauseable runner
 
@@ -22,22 +22,22 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
 
   use ExUnit.Case, async: false
 
-  alias Raxol.ACP.JobSession
+  alias Raxol.Earn.JobSession
   alias Raxol.Symphony.{Config, Issue, Orchestrator, ResumeOn, Resumer}
   alias Raxol.Symphony.Runners.Noop
   alias Raxol.Symphony.Trackers.Memory
 
-  @acp_event [:raxol, :acp, :job_session, :transition]
+  @acp_event [:raxol, :earn, :job_session, :transition]
   @chain_id 8453
 
   setup do
-    # raxol_acp's RaxolAcp.Application auto-starts the supervision tree
+    # raxol_earn's RaxolEarn.Application auto-starts the supervision tree
     # when the dep is loaded (it's only gated off when ACP itself is in
     # :test env; here ACP is loaded as a dep so its app starts). If
     # something interrupted that, fall back to start_supervised so the
     # test always sees a live JobSession.Supervisor.
-    unless Process.whereis(Raxol.ACP.JobSession.Supervisor) do
-      start_supervised!(Raxol.ACP.Supervisor)
+    unless Process.whereis(Raxol.Earn.JobSession.Supervisor) do
+      start_supervised!(Raxol.Earn.Supervisor)
     end
 
     terminate_sessions()
@@ -185,7 +185,7 @@ defmodule Raxol.Symphony.Integration.AcpResumeE2ETest do
       assert match.to == :funded
 
       # 5. Drive the REAL ACP JobSession forward. The session emits
-      # [:raxol, :acp, :job_session, :transition] telemetry; the Resumer's
+      # [:raxol, :earn, :job_session, :transition] telemetry; the Resumer's
       # handler catches it and calls Orchestrator.resume_run/3.
       {:ok, :funded} = JobSession.apply_event({@chain_id, acp_job_id}, :funded, %{})
 

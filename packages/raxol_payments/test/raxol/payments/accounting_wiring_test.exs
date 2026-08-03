@@ -1,7 +1,7 @@
 defmodule Raxol.Payments.AccountingWiringTest do
   # Proves the runtime wiring the host supervisor sets up: a named SettlementLedger
   # plus a SettlementAccountant and RebalanceMonitor that reference it *by name*
-  # (as Raxol.ACP.Supervisor does), interoperating end-to-end.
+  # (as Raxol.Earn.Supervisor does), interoperating end-to-end.
   use ExUnit.Case, async: false
 
   alias Raxol.Payments.{RebalanceMonitor, RebalancePolicy, SettlementAccountant, SettlementLedger}

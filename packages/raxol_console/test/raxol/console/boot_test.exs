@@ -1,7 +1,7 @@
 defmodule Raxol.Console.BootTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.ACP.Console.Package
+  alias Raxol.Earn.Console.Package
   alias Raxol.Agent.Action.Dynamic
   alias Raxol.Agent.Scheduler
   alias Raxol.Console.{Boot, RuntimeConfig}

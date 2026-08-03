@@ -6,7 +6,7 @@ Zed and a growing ecosystem of editors/agents speak).
 
 **Status: pre-alpha (`0.1.0-rc.0`), not yet published to Hex.**
 
-> Not to be confused with `Raxol.ACP` (`packages/raxol_acp/`) — the Virtuals
+> Not to be confused with `Raxol.Earn` (`packages/raxol_earn/`) — the Virtuals
 > **Agent Commerce Protocol**, an unrelated on-chain payments protocol. This
 > package is the **Agent Client Protocol**: editor↔agent JSON-RPC.
 

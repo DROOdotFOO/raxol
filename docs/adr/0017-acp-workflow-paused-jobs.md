@@ -2,9 +2,9 @@
 
 ## Status
 
-**Superseded (2026-07-08)** by the seller-stack v1->v2 migration: the `Raxol.ACP.Job.Server` `:via_workflow` path this ADR extends was deleted in Phases 3-4 (#389/#391). The v2 `Raxol.ACP.JobSession` model handles pause/resume through its status + the `[:raxol, :acp, :job_session, :transition]` telemetry event, which `raxol_symphony`'s `Resumer` consumes. Retained as historical record.
+**Superseded (2026-07-08)** by the seller-stack v1->v2 migration: the `Raxol.Earn.Job.Server` `:via_workflow` path this ADR extends was deleted in Phases 3-4 (#389/#391). The v2 `Raxol.Earn.JobSession` model handles pause/resume through its status + the `[:raxol, :acp, :job_session, :transition]` telemetry event, which `raxol_symphony`'s `Resumer` consumes. Retained as historical record.
 
-Proposed, 2026-06-16. Direct follow-up to ADR-0016 Phase B. ADR-0015 (Workflow Graph) and ADR-0016 (raxol_acp Job migration) are the load-bearing priors. The same PR series that ships this ADR also flips `Raxol.ACP.Job.Server`'s `:via_workflow` default to `true` and introduces a per-process ephemeral Saver for `persist?: false`; both changes follow from the contract proposed here.
+Proposed, 2026-06-16. Direct follow-up to ADR-0016 Phase B. ADR-0015 (Workflow Graph) and ADR-0016 (raxol_earn Job migration) are the load-bearing priors. The same PR series that ships this ADR also flips `Raxol.Earn.Job.Server`'s `:via_workflow` default to `true` and introduces a per-process ephemeral Saver for `persist?: false`; both changes follow from the contract proposed here.
 
 ## Context
 
@@ -25,7 +25,7 @@ This ADR makes those details concrete and decides the contract.
 
 ### Why the work belongs in the Workflow runtime, not the ACP layer
 
-raxol_acp could maintain its own ETS index of paused jobs, mirroring every transition into a side table. That would leave `Raxol.Workflow.*` untouched, and the same dashboard would work.
+raxol_earn could maintain its own ETS index of paused jobs, mirroring every transition into a side table. That would leave `Raxol.Workflow.*` untouched, and the same dashboard would work.
 
 The problem with the local-index approach is that it splits the source of truth. A paused job is a Workflow concept: the runtime is the only thing that can definitively say "this node interrupted, this is the reason, the state is durably persisted." An ACP-local mirror is downstream of that fact and has to handle reconciliation when the workflow runtime sees something the mirror missed (a crash mid-write, a resume on a different node, a checkpoint replay). Every consumer that wants paused-job enumeration would need its own mirror; raxol_payments will want one, raxol_symphony already builds something analogous around runs. The substrate is the right level.
 
@@ -33,7 +33,7 @@ Phase 24's CloudEvents envelope and the Phase 25 Saver behaviour already give th
 
 ## Decision
 
-**Three coordinated changes in the Workflow runtime, plus a public `Job.Server.list_paused/0,1` facade in raxol_acp.**
+**Three coordinated changes in the Workflow runtime, plus a public `Job.Server.list_paused/0,1` facade in raxol_earn.**
 
 ### 1. Pause checkpoint
 
@@ -100,7 +100,7 @@ The three in-tree adapters implement it directly:
 
 The canonical reason term still lives in the bytea metadata blob; the text column is a denormalized projection used only for `WHERE` filtering. Reads round-trip the term faithfully via `binary_to_term`.
 
-### 5. Public facade: `Raxol.ACP.Job.Server.list_paused/0,1`
+### 5. Public facade: `Raxol.Earn.Job.Server.list_paused/0,1`
 
 ```elixir
 @spec list_paused() :: [paused_job()]
@@ -117,21 +117,21 @@ The canonical reason term still lives in the bytea metadata blob; the text colum
 
 Options: `:limit` (default 100) and `:reason` (filter by phase-typed atom, e.g. `:awaiting_buyer_payment`).
 
-The facade reads the configured Saver via `configured_workflow_saver/0`, calls `WorkflowSaver.list_paused/2`, and translates each `paused()` row into a `paused_job()` by reading `current_state` and `memos` out of the pause checkpoint's `state` (the workflow runtime stores the full `Raxol.ACP.Job.Workflow.state()` map there). No N+1 calls; one Saver round-trip per dashboard render.
+The facade reads the configured Saver via `configured_workflow_saver/0`, calls `WorkflowSaver.list_paused/2`, and translates each `paused()` row into a `paused_job()` by reading `current_state` and `memos` out of the pause checkpoint's `state` (the workflow runtime stores the full `Raxol.Earn.Job.Workflow.state()` map there). No N+1 calls; one Saver round-trip per dashboard render.
 
-The function lives on `Job.Server` because that module is already the public facade per ADR-0016. The `Raxol.ACP.Job.*` namespace stays a namespace; no new callable `Raxol.ACP.Job` module is introduced.
+The function lives on `Job.Server` because that module is already the public facade per ADR-0016. The `Raxol.Earn.Job.*` namespace stays a namespace; no new callable `Raxol.Earn.Job` module is introduced.
 
-### 6. Phase-typed reasons in raxol_acp
+### 6. Phase-typed reasons in raxol_earn
 
-`Raxol.ACP.Job.Workflow` renames the two reasons whose waiter is ambiguous in the bare-event name: `:awaiting_payment` -> `:awaiting_buyer_payment` and `:awaiting_approval` -> `:awaiting_evaluator_approval`. `:awaiting_request_response` (seller decides) and `:awaiting_delivery` (both sides wait) stay unchanged.
+`Raxol.Earn.Job.Workflow` renames the two reasons whose waiter is ambiguous in the bare-event name: `:awaiting_payment` -> `:awaiting_buyer_payment` and `:awaiting_approval` -> `:awaiting_evaluator_approval`. `:awaiting_request_response` (seller decides) and `:awaiting_delivery` (both sides wait) stay unchanged.
 
-A module-level `Raxol.ACP.Job.Workflow.pause_reasons/0` returns the canonical four atoms in phase-ladder order so dashboards can enumerate the expected reasons without scraping module source.
+A module-level `Raxol.Earn.Job.Workflow.pause_reasons/0` returns the canonical four atoms in phase-ladder order so dashboards can enumerate the expected reasons without scraping module source.
 
 ## Consequences
 
 ### What becomes possible
 
-- **Queryable paused jobs.** `Raxol.ACP.Job.Server.list_paused/0` returns one row per in-flight ACP job and the canonical phase the job is waiting on. Seller dashboards stop needing a side index.
+- **Queryable paused jobs.** `Raxol.Earn.Job.Server.list_paused/0` returns one row per in-flight ACP job and the canonical phase the job is waiting on. Seller dashboards stop needing a side index.
 - **Cross-node visibility.** With `Saver.Postgrex` configured, two BEAM nodes sharing a database see the same paused jobs. The partial index keeps the query cheap regardless of how many completed jobs the table holds.
 - **Resume from the interrupting node.** Today the workflow runtime can only resume by traversing past a successfully-completed checkpoint. After this ADR it can resume *into* an interrupting node, which is what `Workflow.interrupt/1`'s callers semantically need. The four ACP `:wait_*` nodes are the immediate beneficiary; future consumers (raxol_payments cross-chain settlement, raxol_symphony approval gates) get the same primitive.
 - **Lifecycle observability.** `:paused` and `:resumed` events bracket the durable pause window. Telemetry consumers can compute "how long was this run paused" without needing process-level instrumentation.
@@ -147,7 +147,7 @@ A module-level `Raxol.ACP.Job.Workflow.pause_reasons/0` returns the canonical fo
 
 ### What this ADR supersedes
 
-- **ADR-0016 section B's 3-reason list.** The prose said `:awaiting_buyer_payment | :awaiting_evaluator_approval | :awaiting_delivery`. The implemented contract is the four reasons in `Raxol.ACP.Job.Workflow.pause_reasons/0`: `:awaiting_request_response, :awaiting_buyer_payment, :awaiting_delivery, :awaiting_evaluator_approval`. The four-reason form is canonical; the three-reason prose was a sketch.
+- **ADR-0016 section B's 3-reason list.** The prose said `:awaiting_buyer_payment | :awaiting_evaluator_approval | :awaiting_delivery`. The implemented contract is the four reasons in `Raxol.Earn.Job.Workflow.pause_reasons/0`: `:awaiting_request_response, :awaiting_buyer_payment, :awaiting_delivery, :awaiting_evaluator_approval`. The four-reason form is canonical; the three-reason prose was a sketch.
 - **The implicit "latest checkpoint is the predecessor of the interrupting node" invariant.** After this ADR, the latest checkpoint of a paused run is the interrupting node itself, distinguished by `metadata.interrupt_reason`. Resume routes accordingly. The change is surgically scoped to checkpoints whose metadata carries the marker.
 - **`:value` as the canonical metadata key on `:interrupted`.** Both `value` and `interrupt_reason` are emitted from this PR; `value` is removed in the next breaking release. Consumers should migrate to `interrupt_reason`.
 
@@ -155,7 +155,7 @@ A module-level `Raxol.ACP.Job.Workflow.pause_reasons/0` returns the canonical fo
 
 ### ACP-local ETS index
 
-Maintain a `Raxol.ACP.Job.PausedRegistry` ETS table inside raxol_acp, mirrored from every Job.Server transition. `list_paused/0` reads the registry. The Workflow runtime stays untouched.
+Maintain a `Raxol.Earn.Job.PausedRegistry` ETS table inside raxol_earn, mirrored from every Job.Server transition. `list_paused/0` reads the registry. The Workflow runtime stays untouched.
 
 Rejected. The mirror is downstream of the workflow runtime's view of paused-ness, and reconciling drift between the two sources of truth on crashes is exactly the kind of incidental complexity the Saver-as-SSoT model eliminates. The same dashboard would have to be rebuilt for every consumer that wants paused-run enumeration (raxol_payments has the same need for mandate-settlement gates; raxol_symphony already maintains analogous run state). Solving the problem once at the substrate level is cheaper than solving it once per consumer.
 
@@ -179,9 +179,9 @@ Rejected. It doubles the Saver's surface area for what is structurally the same 
 
 ### Defer until Phase 24F lands
 
-Wait until the `Raxol.Core.Runtime.Command` struct is deleted and raxol_acp adopts Phase 24 Directives end-to-end, then revisit pause semantics.
+Wait until the `Raxol.Core.Runtime.Command` struct is deleted and raxol_earn adopts Phase 24 Directives end-to-end, then revisit pause semantics.
 
-Rejected. Phase 24F is gated on raxol_acp's Directive migration (D-6), which is its own multi-session effort. The paused-jobs dashboard is a near-term seller need; tying it to the Command-deletion timeline indefinitely defers a small, well-scoped improvement. The two are independent.
+Rejected. Phase 24F is gated on raxol_earn's Directive migration (D-6), which is its own multi-session effort. The paused-jobs dashboard is a near-term seller need; tying it to the Command-deletion timeline indefinitely defers a small, well-scoped improvement. The two are independent.
 
 ## Validation
 
@@ -191,16 +191,16 @@ How we know Phase B is done correctly:
 - The Ets and Dets `list_paused/2` round-trip tests pass: write 3 threads, pause 2 with distinct reasons, leave 1 running, list, assert exactly the 2 paused are returned with correct reason/timestamp ordering. Resume one, re-list, assert it disappears.
 - The Postgrex SQL-shape tests pin `select_paused_sql/1`'s `DISTINCT ON` + outer filter pattern. The live-Postgres integration tests (gated on `RAXOL_WORKFLOW_PG_URL`) extend to round-trip the new columns.
 - The runtime telemetry tests assert: `:paused` fires after the pause checkpoint commits, `:paused` is suppressed without a Saver, `:resumed` fires at the top of `resume/4` carrying the original `interrupt_reason`, `:interrupted` keeps firing and carries both `value` and `interrupt_reason`.
-- The new `packages/raxol_acp/test/raxol/acp/job/server_paused_test.exs` exercises three concurrent jobs paused in three different phases, lists them, filters by `:reason`, resumes one to terminal state, re-lists, asserts it dropped.
-- The Phase A oracle (`packages/raxol_acp/test/raxol/acp/job/store_test.exs` transient-restart hydration) continues to pass unchanged.
+- The new `packages/raxol_earn/test/raxol/acp/job/server_paused_test.exs` exercises three concurrent jobs paused in three different phases, lists them, filters by `:reason`, resumes one to terminal state, re-lists, asserts it dropped.
+- The Phase A oracle (`packages/raxol_earn/test/raxol/acp/job/store_test.exs` transient-restart hydration) continues to pass unchanged.
 
 ## References
 
 - ADR-0015: Workflow Graph (Phase 25 runtime)
-- ADR-0016: raxol_acp Job migration to Raxol.Workflow (Phase A delivered in PR #298)
+- ADR-0016: raxol_earn Job migration to Raxol.Workflow (Phase A delivered in PR #298)
 - PR #296: Postgrex saver landing
 - `lib/raxol/workflow/runtime.ex:502-516, 629-696` (interrupt catch and pause-checkpoint write)
 - `lib/raxol/workflow/checkpoint/saver.ex:16-22` (append-only contract)
 - `lib/raxol/workflow/checkpoint/saver/postgrex.ex` (schema, select_paused_sql/1)
-- `packages/raxol_acp/lib/raxol/acp/job/workflow.ex` (canonical pause-reason atoms)
-- `packages/raxol_acp/lib/raxol/acp/job/server.ex:220-281` (`list_paused/0,1` facade)
+- `packages/raxol_earn/lib/raxol/acp/job/workflow.ex` (canonical pause-reason atoms)
+- `packages/raxol_earn/lib/raxol/acp/job/server.ex:220-281` (`list_paused/0,1` facade)

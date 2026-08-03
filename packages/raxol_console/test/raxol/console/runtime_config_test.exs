@@ -1,7 +1,7 @@
 defmodule Raxol.Console.RuntimeConfigTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.ACP.Console.Package
+  alias Raxol.Earn.Console.Package
   alias Raxol.Console.RuntimeConfig
 
   defp package(attrs \\ %{}) do

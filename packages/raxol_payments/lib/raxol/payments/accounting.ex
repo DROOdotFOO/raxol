@@ -5,8 +5,8 @@ defmodule Raxol.Payments.Accounting do
   The accounting sidecar (a read-only container that books each Xochi settlement
   into `Raxol.Payments.SettlementLedger`) is configured entirely through env vars.
   Two deployments read the same contract: the main `raxol` release (root
-  `config/runtime.exs`) and the slim `raxol_acp` sidecar release
-  (`packages/raxol_acp/config/runtime.exs`). Both call `env_config/0` so the
+  `config/runtime.exs`) and the slim `raxol_earn` sidecar release
+  (`packages/raxol_earn/config/runtime.exs`). Both call `env_config/0` so the
   contract lives in one place and the two config files cannot drift.
 
   ## Contract
@@ -22,7 +22,7 @@ defmodule Raxol.Payments.Accounting do
   Read-only by construction: no wallet key is read here and none of the started
   processes move funds (the Riddler auto-rebalancer executes; the monitor only
   recommends). Omitting `XOCHI_SOLVER_ADDRESS` yields ledger-only mode -- the
-  `RebalanceMonitor` is not started (see `Raxol.ACP.Supervisor`).
+  `RebalanceMonitor` is not started (see `Raxol.Earn.Supervisor`).
   """
 
   # Chain id => env var holding that chain's RPC URL.
@@ -43,7 +43,7 @@ defmodule Raxol.Payments.Accounting do
 
   Returns `{accounting_opts, accounting_enabled?}` where `accounting_opts` is the
   keyword list for `config :raxol_payments, :accounting` and `accounting_enabled?`
-  is the boolean for `config :raxol_acp, accounting_enabled:`.
+  is the boolean for `config :raxol_earn, accounting_enabled:`.
   """
   @spec env_config() :: {keyword(), boolean()}
   def env_config do

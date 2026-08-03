@@ -9,7 +9,7 @@ defmodule Raxol.Payments.SettlementAccountant do
   `:pending` (`record_pending: true`) and backfilled later by
   `SettlementLedger.amend_gas/4`.
 
-  Started by a host supervisor (e.g. `Raxol.ACP.Supervisor`), like `Ledger` --
+  Started by a host supervisor (e.g. `Raxol.Earn.Supervisor`), like `Ledger` --
   `raxol_payments` has no supervision tree of its own.
 
   ## Options

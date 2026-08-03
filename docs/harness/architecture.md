@@ -165,8 +165,8 @@ Agent Client Protocol (the editor ↔ agent protocol at agentclientprotocol.com)
 both roles, with a durable-resumable-sessions vendor extension: `Ext.Journal`
 is an append-only offset journal, `Ext.Reattach` does offset-based replay, and
 `Ext.AttachPolicy` issues `RXC1` Ed25519 capability tokens — the journal/offset
-model exported onto the ACP wire. It is distinct from `Raxol.ACP`
-(`packages/raxol_acp/`, the unrelated Virtuals commerce protocol). Steer
+model exported onto the ACP wire. It is distinct from `Raxol.Earn`
+(`packages/raxol_earn/`, the unrelated Virtuals commerce protocol). Steer
 bridges through it: `Raxol.Agent.Harness.SessionLane.steer/2` dispatches to a
 live `Raxol.AgentClientProtocol.Session`'s compare-and-swap when the session
 handle is ACP-backed, and returns the honest `:no_steer_channel` refusal when

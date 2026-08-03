@@ -9,7 +9,7 @@ defmodule Raxol.Workflow.Node do
     * `TypedNode` -- a struct with a `Raxol.Workflow.Node.Executor`
       protocol implementation. Mirrors the `Raxol.Core.Runtime.Directive`
       pattern: lets external packages register typed nodes
-      (e.g. `%Raxol.ACP.Workflow.Node.CreateMemo{...}`) with custom
+      (e.g. `%Raxol.Earn.Workflow.Node.CreateMemo{...}`) with custom
       telemetry and validation.
 
   Node functions return one of:

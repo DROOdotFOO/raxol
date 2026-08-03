@@ -2,7 +2,7 @@ name: Release
 
 # Creates a GitHub Release with auto-generated notes when a version tag is
 # pushed. Hex publishing is done manually in dependency order (see CLAUDE.md);
-# the raxol_acp sidecar image has its own workflow (release-raxol-acp.yml); the
+# the raxol_earn sidecar image has its own workflow (release-raxol-earn.yml); the
 # web app deploys via docker/Dockerfile.web. There is no root binary release.
 
 permissions:

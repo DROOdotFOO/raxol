@@ -8,7 +8,7 @@ defmodule Raxol.Payments.Test.CliSigner do
   caller passes), and parses the last `RESULT_JSON:` line into a map.
 
   Used by raxol_payments conformance and integration tests, and by
-  raxol_acp end-to-end tests that exercise the buyer-side authorization
+  raxol_earn end-to-end tests that exercise the buyer-side authorization
   path.
 
   ## Resolving the CLI repo

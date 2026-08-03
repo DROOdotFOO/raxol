@@ -28,7 +28,7 @@ A harness = a bundle of **seams** (LLM↔harness, harness↔tools, harness↔UI,
 - **⭐ NO official Elixir MCP SDK. Hermes MCP is dead (404), forked to `zoedsoupe/anubis-mcp` (license changed MIT→LGPL-3.0 — legal flag). Implement the JSON-RPC wire yourself — the stateless RC makes that EASIER.**
 
 ## Zed's ACP
-- **Name collision: FOUR "ACP"s.** Zed's Agent Client Protocol / IBM's Agent Communication Protocol (defunct) / **raxol's own `raxol_acp` = Agent Commerce Protocol** / adjacent A2A. **Always write "Zed's ACP" on first mention in raxol docs.**
+- **Name collision: FOUR "ACP"s.** Zed's Agent Client Protocol / IBM's Agent Communication Protocol (defunct) / **raxol's own `raxol_earn` = Agent Commerce Protocol** / adjacent A2A. **Always write "Zed's ACP" on first mention in raxol docs.**
 - JSON-RPC over stdio, "LSP but for agents." Native: Zed, JetBrains (co-governs), Gemini CLI, Cursor CLI, opencode. **Claude Code NOT native (Zed-maintained bridge). Codex bridged. VS Code zero native support.**
 - **Load-bearing subtlety: ACP sits ON TOP of vendor protocols, doesn't replace them.** Embedding Claude/Codex at full fidelity still means their native protocols underneath.
 

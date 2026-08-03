@@ -10,7 +10,7 @@ raxol has two consumers today that need a multi-step, observably-orchestrated, o
 
 `raxol_symphony` parses a `WORKFLOW.md` into a flat `%{config, prompt_template}` map (`Raxol.Symphony.Workflow`). The `Orchestrator` polls a tracker, claims a candidate issue, dispatches it to a Runner (RaxolAgent or Codex), and watches the run to completion. The "workflow" is a single prompt expanded by `PromptBuilder`. Multi-step flows, branching, joins, durable checkpoints, and human-in-the-loop interrupts all sit outside that primitive. Symphony has been honest about this: the README calls the current path "prompt-only" and treats anything richer as future work.
 
-`raxol_acp` Jobs already model a phased lifecycle (`request -> negotiation -> transaction -> evaluation -> completed`) with `Job.Server` and `Job.StateMachine`, but the per-job process is the only durability story. A `Job.Server` crash mid-`createMemo` re-enters from `Store.load/1`, which restores memo history but not the in-flight on-chain operation. ACP jobs that span hours (waiting on buyer signature) or days (cross-chain settlement) effectively rebuild their own resumption story per phase. There's no shared substrate to lean on.
+`raxol_earn` Jobs already model a phased lifecycle (`request -> negotiation -> transaction -> evaluation -> completed`) with `Job.Server` and `Job.StateMachine`, but the per-job process is the only durability story. A `Job.Server` crash mid-`createMemo` re-enters from `Store.load/1`, which restores memo history but not the in-flight on-chain operation. ACP jobs that span hours (waiting on buyer signature) or days (cross-chain settlement) effectively rebuild their own resumption story per phase. There's no shared substrate to lean on.
 
 The forces shaping this ADR:
 
@@ -24,13 +24,13 @@ The shape we pick has to fit alongside the existing TEA runtime, the existing ag
 
 ### Why the workflow primitive does not live in a new package
 
-`raxol_acp` and `raxol_symphony` are the two motivating consumers. `raxol_agent` will benefit too (Pipelines + Actions become composable inside a graph). All three already depend on main raxol. A new `raxol_workflow` package would require either (a) duplicating the dispatcher's directive plumbing or (b) re-exporting `Raxol.Core.Runtime.Directive` from a third package; both options widen the dep graph for no real isolation gain. The Workflow primitive uses `Directive.Executor` directly, leverages `TraceContext.with_span`, and emits via `TelemetryAdapter`. That coupling is intrinsic, not incidental.
+`raxol_earn` and `raxol_symphony` are the two motivating consumers. `raxol_agent` will benefit too (Pipelines + Actions become composable inside a graph). All three already depend on main raxol. A new `raxol_workflow` package would require either (a) duplicating the dispatcher's directive plumbing or (b) re-exporting `Raxol.Core.Runtime.Directive` from a third package; both options widen the dep graph for no real isolation gain. The Workflow primitive uses `Directive.Executor` directly, leverages `TraceContext.with_span`, and emits via `TelemetryAdapter`. That coupling is intrinsic, not incidental.
 
 The dep graph from CLAUDE.md is already non-trivial (`raxol -> {core, terminal, sensor, mcp, liveview, plugin}`, `agent -> raxol`, `payments -> agent runtime: false`, `acp -> payments + agent runtime: false`). Adding a sixth top-level package for a primitive that piggybacks on the runtime would be cargo-culted modularity.
 
 ### Why the workflow primitive does not live inside `raxol_symphony`
 
-Symphony is one consumer. ACP's resumable jobs are the bigger and more architecturally interesting use case (real money, real chain state, longer wall-clock). Placing the primitive inside `raxol_symphony` would force `raxol_acp` to take a Symphony dependency to use Workflow, which violates the established direction of arrows (`acp -> payments`, no Symphony coupling) and pulls Tracker, Orchestrator, and Codex Runner into ACP's compile tree for no reason.
+Symphony is one consumer. ACP's resumable jobs are the bigger and more architecturally interesting use case (real money, real chain state, longer wall-clock). Placing the primitive inside `raxol_symphony` would force `raxol_earn` to take a Symphony dependency to use Workflow, which violates the established direction of arrows (`acp -> payments`, no Symphony coupling) and pulls Tracker, Orchestrator, and Codex Runner into ACP's compile tree for no reason.
 
 Furthermore, the Workflow primitive is genuinely orthogonal to Symphony's *job dispatch* model. Symphony picks one workflow per issue and runs it to completion; Workflow is the *engine* underneath. The right shape is: Workflow lives where the runtime lives; Symphony plugs into it via an optional adapter.
 
@@ -91,7 +91,7 @@ Nodes are one of three shapes:
 
 - **FunctionNode**: a 1-arity function `(state -> {:ok, state} | {:interrupt, value} | {:error, reason} | {:effects, [directive], state})`
 - **BehaviourNode**: a module implementing `Raxol.Workflow.Node` (callbacks: `init/1`, `run/2`, optional `compensate/2`)
-- **TypedNode**: a struct with a `Raxol.Workflow.Node.Executor` protocol impl (mirrors the Directive pattern; lets `raxol_acp` register typed nodes like `%Workflow.Node.ACPCreateMemo{...}` with custom telemetry)
+- **TypedNode**: a struct with a `Raxol.Workflow.Node.Executor` protocol impl (mirrors the Directive pattern; lets `raxol_earn` register typed nodes like `%Workflow.Node.ACPCreateMemo{...}` with custom telemetry)
 
 Edges are static (`add_edge/3`), guarded by a predicate (`add_guarded_edge/4`), or conditional fan-out (`add_conditional_edge/3` returning a list of next nodes). Join nodes (`add_join/4`) act as barriers: multiple incoming edges feed an N-arity reducer that produces the next state.
 
@@ -130,7 +130,7 @@ Failure policy (`:retry`, `:halt`, `:compensate`), per-step timeout (`step_timeo
 Two adapters ship in this phase:
 
 - **Ets**: in-process ETS table, cleared at app stop. Default for tests and short-lived runs.
-- **Dets**: file-backed DETS, survives BEAM restarts. Default for `raxol_acp` durable jobs.
+- **Dets**: file-backed DETS, survives BEAM restarts. Default for `raxol_earn` durable jobs.
 
 A `Saver.Postgrex` adapter is a natural follow-up for shared deployments but is *not* in scope for Phase 25. The behaviour shape is meant to support it without modification.
 
@@ -160,9 +160,9 @@ This shape gives human-in-the-loop approval gates a clean idiom: a node that nee
 
 This boundary is firm: nothing in the Phase 25 core touches `raxol_symphony`. The adapter is purely additive on the Symphony side, and the Workflow core has no awareness of Symphony's existence.
 
-### `raxol_acp` adoption (later phase)
+### `raxol_earn` adoption (later phase)
 
-`raxol_acp` Jobs are not migrated in Phase 25. The Workflow primitive becomes *available* to ACP; a follow-up phase (likely 27 or 28) replaces or augments the existing `Job.Server` state machine with a Workflow-backed implementation. The reason for the gap: ACP just landed canonical alignment, and a Job migration is a real piece of work that deserves its own ADR.
+`raxol_earn` Jobs are not migrated in Phase 25. The Workflow primitive becomes *available* to ACP; a follow-up phase (likely 27 or 28) replaces or augments the existing `Job.Server` state machine with a Workflow-backed implementation. The reason for the gap: ACP just landed canonical alignment, and a Job migration is a real piece of work that deserves its own ADR.
 
 ## Consequences
 
@@ -184,7 +184,7 @@ This boundary is firm: nothing in the Phase 25 core touches `raxol_symphony`. Th
 
 ### What this ADR does not decide
 
-- The exact shape of the `raxol_acp` Job migration. That's a separate phase with its own ADR.
+- The exact shape of the `raxol_earn` Job migration. That's a separate phase with its own ADR.
 - Postgrex Saver shape or schema. The behaviour leaves room; a future PR adds the adapter.
 - Whether `Raxol.Agent.Action.Pipeline` becomes a thin wrapper over `Raxol.Workflow.Graph`. Probably not, but worth revisiting once the Workflow runtime is real.
 - Whether Symphony's `WORKFLOW.md` format evolves to expose graph constructs directly. The first GraphAdapter translates the existing flat config; a richer `WORKFLOW.md` schema is a downstream decision.

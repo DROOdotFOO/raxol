@@ -173,5 +173,5 @@ with telemetry (small), and the property/adversarial tests above.
   `d70c0dfd`, and the posted adversarial re-reviews.
 - ADR-0013: Event-dispatch backpressure — the in-repo pattern for bounded, observable,
   deterministic-under-overload dispatch this contract adopts.
-- `packages/raxol_acp` client delivery path: `extract_update_seq/1`, `emit_update/3`,
+- `packages/raxol_earn` client delivery path: `extract_update_seq/1`, `emit_update/3`,
   `cascade_release/2`, `@update_settle_ms`.

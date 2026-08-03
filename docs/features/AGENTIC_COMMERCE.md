@@ -64,7 +64,7 @@ For a storefront that settles on a buyer's behalf, the signing and the submissio
 - `execute_signed/2` (relay side) posts a pre-signed bundle to Xochi **without re-signing**, so the relay never holds the buyer's key.
 - `execute/4` is the two composed: `sign_intent` then `execute_signed`.
 
-The Xochi Cross-Chain Transfer ACP offering (in `raxol_acp`, see [ACP](ACP.md)) is built on this split -- the buyer signs, raxol relays. `packages/raxol_acp/examples/buyer_signed_intent.exs` shows the buyer flow.
+The Xochi Cross-Chain Transfer ACP offering (in `raxol_earn`, see [ACP](ACP.md)) is built on this split -- the buyer signs, raxol relays. `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow.
 
 Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design: the protocol takes a fee, the agent pays it, done.
 
@@ -233,7 +233,7 @@ v1 follows the locked design at `xochi/docs/planning/agent-auth.md`. On the agen
 A deployed agent may carry two capability-delegation credentials, and they govern two different surfaces. Keep them distinct in an ops runbook so a de-authorization is complete:
 
 - **Xochi Mandate** (`Raxol.Payments.Mandate`, this package) governs Xochi API calls. A Member signs an EIP-712 envelope binding an agent wallet to a scoped budget; the agent presents it per call via `Req.Mandate`. Revoke it by letting it expire, or (once Xochi ships the revoke endpoint) by `H(envelope)`; a `410 Gone` prunes the local copy.
-- **ERC-4337 SCA session key** (`Raxol.ACP.Wallet.SCA`, in `raxol_acp`) governs Base/ACP UserOps. A session key installed on the modular account via `installValidation` signs sponsored UserOps for on-chain ACP job actions.
+- **ERC-4337 SCA session key** (`Raxol.Earn.Wallet.SCA`, in `raxol_earn`) governs Base/ACP UserOps. A session key installed on the modular account via `installValidation` signs sponsored UserOps for on-chain ACP job actions.
 
 The two are independent: revoking one does not revoke the other. An agent that must be fully de-authorized needs both its Mandate revoked or expired **and** its SCA session key uninstalled. The Mandate is a Xochi-side credential scoped to Xochi endpoints; the session key is a Base-side signer scoped to the modular account. A leaked key revoked on Xochi but still holding a valid session key can still act through the ACP path, and vice versa.
 

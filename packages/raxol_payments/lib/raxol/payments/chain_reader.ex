@@ -8,8 +8,8 @@ defmodule Raxol.Payments.ChainReader do
   deterministic in-memory stub are fully substitutable -- tests inject
   `Raxol.Payments.ChainReader.Stub`, the live path injects
   `Raxol.Payments.ChainReader.JSONRPC`. `raxol_payments` deliberately owns a small
-  `Req`-based adapter rather than reaching into `raxol_acp`'s RPC, because
-  `raxol_acp` depends on `raxol_payments` and the reverse alias would be a cycle.
+  `Req`-based adapter rather than reaching into `raxol_earn`'s RPC, because
+  `raxol_earn` depends on `raxol_payments` and the reverse alias would be a cycle.
   """
 
   @type state :: term()

@@ -723,7 +723,7 @@ The must-fail red is **N-JS-skew** (§1.3).
     offset params riding `_meta["raxol.io"]`**. Everything ratified here
     stands unchanged; do NOT freeze this tuple as the cross-language wire —
     that role belongs to the ACP extension surface. (ACP here = Agent
-    *Client* Protocol; unrelated to `raxol_acp` = Agent *Commerce* Protocol.)
+    *Client* Protocol; unrelated to `raxol_earn` = Agent *Commerce* Protocol.)
 - **OQ-JS5 (`attach` base-dir) — RULED: GROW THE ARITY NOW (V, 2026-07-16).**
   `attach/3`'s frozen shape gains a trailing optional `opts` keyword:
   `attach(session_id, offset, historyPolicy, opts \\ [])` where `opts` may

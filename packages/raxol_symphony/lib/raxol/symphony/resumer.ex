@@ -9,7 +9,7 @@ defmodule Raxol.Symphony.Resumer do
       {:pause, :awaiting_buyer_payment,
        %{
          resume_on: %{
-           telemetry: [:raxol, :acp, :job, :transition],
+           telemetry: [:raxol, :earn, :job, :transition],
            match: %{job_id: "job-1", to: :transaction}
          }
        }}
@@ -19,7 +19,7 @@ defmodule Raxol.Symphony.Resumer do
 
       Raxol.Symphony.Resumer.start_link(
         orchestrator: Raxol.Symphony.Orchestrator,
-        telemetry_event: [:raxol, :acp, :job, :transition]
+        telemetry_event: [:raxol, :earn, :job, :transition]
       )
 
   On every emitted telemetry event matching that prefix the Resumer

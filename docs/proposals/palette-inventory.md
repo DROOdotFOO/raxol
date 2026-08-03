@@ -529,7 +529,7 @@ into one function without a design decision), but worth a follow-up: a single
 `Palette.status_color(:error | :warning | :success | :info)` would remove this whole class
 of drift.
 
-Also worth recording for completeness/rigor: `raxol_acp`, `raxol_agent`, `raxol_gateway`,
+Also worth recording for completeness/rigor: `raxol_earn`, `raxol_agent`, `raxol_gateway`,
 `raxol_mcp`, `raxol_plugin`, `raxol_speech`, `raxol_telegram`, and `raxol_watch` were swept
 and contain **no** hardcoded color primitives of their own — they either have no rendering
 surface or fully inherit theming from `raxol`/`raxol_liveview`.
@@ -576,5 +576,5 @@ no primitives to catalog), `test/raxol/ui/theming/{salience_test,salience_theme_
 Plus a targeted grep sweep across the rest of `lib/` (all subdirectories) and every
 `packages/*/lib/` for `#[0-9a-fA-F]{6}` and ANSI-atom style attributes — including
 `raxol_sensor`, `raxol_symphony`, `raxol_payments` (real hits) and confirming
-`raxol_acp`/`raxol_agent`/`raxol_gateway`/`raxol_mcp`/`raxol_plugin`/`raxol_speech`/
+`raxol_earn`/`raxol_agent`/`raxol_gateway`/`raxol_mcp`/`raxol_plugin`/`raxol_speech`/
 `raxol_telegram`/`raxol_watch` are clean (§8).

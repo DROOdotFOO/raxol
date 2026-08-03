@@ -8,7 +8,7 @@ defmodule Raxol.Symphony.ResumeOnTest do
   describe "acp_transition/2" do
     test "builds a resume_on map for the default ACP transition event" do
       assert %{
-               telemetry: [:raxol, :acp, :job_session, :transition],
+               telemetry: [:raxol, :earn, :job_session, :transition],
                match: %{job_id: "j-1", to: :funded}
              } = ResumeOn.acp_transition("j-1", to: :funded)
     end
@@ -38,7 +38,7 @@ defmodule Raxol.Symphony.ResumeOnTest do
 
       assert %{
                resume_on: %{
-                 telemetry: [:raxol, :acp, :job_session, :transition],
+                 telemetry: [:raxol, :earn, :job_session, :transition],
                  match: %{job_id: "j-1", to: :funded}
                }
              } = token

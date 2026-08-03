@@ -7,7 +7,7 @@ defmodule Raxol.Console.Bench.AdapterTest do
   """
   use ExUnit.Case, async: true
 
-  alias Raxol.ACP.Console.Spec
+  alias Raxol.Earn.Console.Spec
   alias Raxol.Console.Bench.Adapter
   alias Raxol.Console.Test.CaptureBackend
 
