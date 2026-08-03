@@ -184,15 +184,31 @@ defmodule Mix.Tasks.Raxol.P do
   # and denied under the default policy — so it also installs an allow-all
   # authorizer to actually let them run in this unattended headless flow.
   defp actions_for(false),
-    do: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.read_only()
+    do:
+      Raxol.Agent.Actions.Fs.all() ++
+        Raxol.Agent.Actions.Code.read_only() ++ Raxol.Agent.Skills.enabled_actions()
 
   defp actions_for(true),
-    do: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all()
+    do:
+      Raxol.Agent.Actions.Fs.all() ++
+        Raxol.Agent.Actions.Code.all() ++ Raxol.Agent.Skills.enabled_actions()
 
-  defp context_for(false), do: []
+  defp context_for(false), do: maybe_skills_context(%{})
 
   defp context_for(true),
-    do: [context: %{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()}]
+    do: maybe_skills_context(%{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()})
+
+  # Add the configured skills store under context[:skills]; keep the empty-context
+  # `[]` shape when nothing (skills or authorizer) needs to be passed.
+  defp maybe_skills_context(base) do
+    base =
+      case Raxol.Agent.Skills.default_context() do
+        nil -> base
+        skills -> Map.put(base, :skills, skills)
+      end
+
+    if map_size(base) == 0, do: [], else: [context: base]
+  end
 
   defp maybe_put(kw, _key, nil), do: kw
   defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)

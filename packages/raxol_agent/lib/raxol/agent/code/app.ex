@@ -548,7 +548,17 @@ defmodule Raxol.Agent.Code.App do
         model: model.model_override
       }
     }
+    |> maybe_add_skills()
     |> maybe_add_hooks(model)
+  end
+
+  # Wire the configured skills store under context[:skills] so the skill actions
+  # can reach it. No-op when skills are disabled (default_context returns nil).
+  defp maybe_add_skills(context) do
+    case Raxol.Agent.Skills.default_context() do
+      nil -> context
+      skills -> Map.put(context, :skills, skills)
+    end
   end
 
   defp maybe_add_hooks(context, %{hooks: nil}), do: context
@@ -1705,7 +1715,8 @@ defmodule Raxol.Agent.Code.App do
   defp default_actions do
     Raxol.Agent.Actions.Fs.all() ++
       Raxol.Agent.Actions.Code.all() ++
-      Raxol.Agent.Actions.Task.all()
+      Raxol.Agent.Actions.Task.all() ++
+      Raxol.Agent.Skills.enabled_actions()
   end
 
   defp default_system do
