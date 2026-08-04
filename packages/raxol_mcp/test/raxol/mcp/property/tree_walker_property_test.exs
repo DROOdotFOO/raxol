@@ -50,7 +50,9 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
     def handle_tool_call("type_into", %{"text" => t}, _),
       do: {:ok, "Typed '#{t}'", [{:change, t}]}
 
-    def handle_tool_call("get_value", _, ctx), do: {:ok, ctx.widget_state[:attrs][:value] || ""}
+    def handle_tool_call("get_value", _, ctx),
+      do: {:ok, ctx.widget_state[:attrs][:value] || ""}
+
     def handle_tool_call(_, _, _), do: {:error, :unknown}
   end
 
@@ -67,9 +69,8 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
     end
   end
 
-  defp button_gen do
+  defp button_gen(id) do
     gen all(
-          id <- widget_id_gen(),
           label <- string(:printable, min_length: 1, max_length: 30),
           disabled <- boolean()
         ) do
@@ -77,33 +78,57 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
     end
   end
 
-  defp input_gen do
-    gen all(
-          id <- widget_id_gen(),
-          value <- string(:printable, max_length: 50)
-        ) do
+  defp input_gen(id) do
+    gen all(value <- string(:printable, max_length: 50)) do
       %{type: :text_input, id: id, attrs: %{value: value}}
     end
   end
 
-  defp widget_gen do
+  defp widget_gen(id) do
     frequency([
-      {3, button_gen()},
-      {2, input_gen()}
+      {3, button_gen(id)},
+      {2, input_gen(id)}
     ])
   end
 
+  # Widgets carrying DISTINCT ids.
+  #
+  # Tool names are derived from the widget id, so two widgets sharing an id
+  # legitimately produce the same tool names -- that is the walker reporting the
+  # tree it was handed, not a defect it introduced. Ids used to be drawn
+  # independently per widget, and since `widget_id_gen/0` shrinks toward a
+  # one-character suffix, a tree of up to 8 widgets hit the birthday problem and
+  # generated `btn_h` twice often enough to red the uniqueness property roughly
+  # once in six runs. Draw the ids as a set instead, so the property tests what
+  # it means to: the WALKER never invents a collision.
+  defp widget_list_gen(min_length, max_length) do
+    gen all(
+          ids <-
+            uniq_list_of(widget_id_gen(),
+              min_length: min_length,
+              max_length: max_length
+            ),
+          widgets <- fixed_list(Enum.map(ids, &widget_gen/1))
+        ) do
+      widgets
+    end
+  end
+
   defp flat_tree_gen do
-    gen all(widgets <- list_of(widget_gen(), min_length: 1, max_length: 8)) do
+    gen all(widgets <- widget_list_gen(1, 8)) do
       %{type: :column, children: widgets}
     end
   end
 
   defp nested_tree_gen do
+    # One id pool across both levels: a collision between an outer and an inner
+    # widget is the same false failure as one within a level.
     gen all(
-          top_widgets <- list_of(widget_gen(), min_length: 0, max_length: 3),
-          inner_widgets <- list_of(widget_gen(), min_length: 1, max_length: 4)
+          widgets <- widget_list_gen(1, 7),
+          top_count <- integer(0..min(3, length(widgets) - 1))
         ) do
+      {top_widgets, inner_widgets} = Enum.split(widgets, top_count)
+
       %{
         type: :column,
         children:
@@ -154,8 +179,16 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
               tree <- flat_tree_gen(),
               max_runs: 300
             ) do
-        t1 = TreeWalker.derive_tools(tree, context()) |> Enum.map(& &1.name) |> Enum.sort()
-        t2 = TreeWalker.derive_tools(tree, context()) |> Enum.map(& &1.name) |> Enum.sort()
+        t1 =
+          TreeWalker.derive_tools(tree, context())
+          |> Enum.map(& &1.name)
+          |> Enum.sort()
+
+        t2 =
+          TreeWalker.derive_tools(tree, context())
+          |> Enum.map(& &1.name)
+          |> Enum.sort()
+
         assert t1 == t2
       end
     end
@@ -262,7 +295,8 @@ defmodule Raxol.MCP.Property.TreeWalkerTest do
 
   # -- Helpers --
 
-  defp collect_widgets(%{type: type, id: id} = node) when is_binary(id) and id != "" do
+  defp collect_widgets(%{type: type, id: id} = node)
+       when is_binary(id) and id != "" do
     children_widgets = collect_widgets(node[:children] || [])
 
     if type in [:button, :text_input] do
