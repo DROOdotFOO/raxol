@@ -11,9 +11,13 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   enum-value removal, or event-type removal. Additions never fail — growth is
   legal without touching the snapshot.
 
-  `fixtures/golden/v1.0.0/` is a REAL journal written by the current Writer —
-  the corpus seed for future upcast-on-read properties: every future schema
-  version must still open, replay, and validate this journal.
+  `fixtures/golden/v<version>/` holds one REAL journal per `schema_version`,
+  written by the Writer that was current when the version was — the corpus
+  seed for future upcast-on-read properties: every future schema version must
+  still open, replay, and validate these journals. A version is frozen once and
+  never edited (`scripts/freeze_golden_journal.exs`); `MANIFEST.json` pins the
+  bytes and `scripts/check_journal_goldens.exs` enforces that a bump arrives
+  with a fixture for the version it leaves behind.
   """
   use ExUnit.Case, async: false
 
@@ -33,6 +37,22 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
             |> File.read!()
             |> Jason.decode!()
   @golden Path.join(@fixtures, "golden/v1.0.0/golden-v1")
+
+  # The corpus for whatever the Writer currently defaults to, resolved through
+  # the same manifest `scripts/check_journal_goldens.exs` enforces — so a
+  # `schema_version` bump that skips freezing fails here too, not only in CI
+  # (`raxol_agent` is a local gate, not a per-PR CI package).
+  @manifest @fixtures
+            |> Path.join("golden/MANIFEST.json")
+            |> File.read!()
+            |> Jason.decode!()
+  @current_version Raxol.Agent.Journal.FileStore.Writer.default_schema_version()
+  @current_session get_in(@manifest, ["versions", @current_version, "session"])
+  @current_golden Path.join([
+                    @fixtures,
+                    "golden/v#{@current_version}",
+                    @current_session || ""
+                  ])
 
   setup do
     FaultJournal.ensure_registry(:duplicate, EmitBus.registry_name())
@@ -374,6 +394,126 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
       # The current writer continues the historical sequence.
       assert {:ok, 9} = FileStore.append(j, %{"type" => "chunk", "n" => 9})
+      :ok = FileStore.close(j)
+    end
+  end
+
+  describe "I9 — golden journal fixture for the current schema_version" do
+    test "the writer's current default has a frozen corpus the manifest pins" do
+      assert @current_session,
+             "the Writer defaults to schema_version #{@current_version} but " <>
+               "fixtures/golden/MANIFEST.json pins no corpus for it — freeze one " <>
+               "(packages/raxol_agent/scripts/freeze_golden_journal.exs) before the " <>
+               "version moves on and the material becomes unrecoverable"
+
+      assert @manifest["current_schema_version"] == @current_version
+      assert File.dir?(@current_golden)
+    end
+
+    test "the frozen corpus opens, replays, and carries every shape the version added",
+         %{base: base} do
+      File.cp_r!(@current_golden, Path.join(base, @current_session))
+
+      {:ok, j} = FileStore.open(@current_session, base_dir: base)
+      assert {:ok, records} = FileStore.read(j)
+      assert FileStore.status(j) == :ok
+
+      n = length(records)
+      assert Enum.map(records, & &1["id"]) == Enum.to_list(1..n)
+
+      for record <- records do
+        for key <- @snapshot["journal_record"]["required"] do
+          assert Map.has_key?(record, key),
+                 "current reader dropped required key #{key} from a #{@current_version} record"
+        end
+
+        assert record["type"] in @snapshot["enums"]["type"]
+        assert record["tier"] == "durable"
+        assert record["family"] in @snapshot["enums"]["family"]
+        assert record["schema_version"] == @current_version
+        assert is_integer(record["ts"]) and is_map(record["payload"])
+      end
+
+      # item_delta is ephemeral and never journaled; everything else must be
+      # in the corpus, so a future upcast cannot skip a type by luck.
+      corpus_types = records |> Enum.map(& &1["type"]) |> MapSet.new()
+
+      for type <- @snapshot["enums"]["type"], type != "item_delta" do
+        assert type in corpus_types,
+               "the #{@current_version} corpus is missing #{type}"
+      end
+
+      corpus_item_types =
+        for %{"type" => "item_completed", "payload" => %{"item_type" => it}} <-
+              records,
+            into: MapSet.new(),
+            do: it
+
+      for it <- @snapshot["enums"]["item_type"] do
+        assert it in corpus_item_types,
+               "the #{@current_version} corpus is missing item_type #{it}"
+      end
+
+      assert {:ok, _next} =
+               FileStore.append(j, %{"type" => "chunk", "n" => n + 1})
+
+      :ok = FileStore.close(j)
+    end
+
+    test "the corpus carries all three evidence states, and each one decodes",
+         %{base: base} do
+      File.cp_r!(@current_golden, Path.join(base, @current_session))
+      {:ok, j} = FileStore.open(@current_session, base_dir: base)
+      {:ok, records} = FileStore.read(j)
+
+      dones =
+        Enum.filter(records, fn r ->
+          r["type"] == "turn_completed" and r["payload"]["final"] == true
+        end)
+
+      statuses = Map.new(dones, &{Contract.evidence_status(&1["payload"]), &1})
+
+      # The 1.1.0 marker's whole point: a rejected done and a never-offered
+      # done stopped being wire-identical. A corpus that cannot tell them
+      # apart is not test material for the upcast that has to preserve them.
+      for state <- [:accepted, :rejected, :absent] do
+        assert Map.has_key?(statuses, state),
+               "the #{@current_version} corpus has no turn_completed decoding as #{state} — " <>
+                 "it cannot exercise the marker it was frozen to preserve"
+      end
+
+      # accepted: refs is untouched as the carrier, and names real records.
+      accepted = statuses[:accepted]
+      assert is_list(accepted["payload"]["refs"])
+      assert accepted["payload"]["refs"] != []
+
+      by_id = Map.new(records, &{&1["id"], &1})
+
+      for ref <- accepted["payload"]["refs"] do
+        cited = Map.fetch!(by_id, ref)
+
+        assert cited["payload"]["item_type"] == "tool_result",
+               "an accepted ref must name evidence, not a self-report"
+
+        assert cited["turn_id"] == accepted["turn_id"],
+               "an accepted ref must belong to the claiming turn"
+      end
+
+      # rejected: the verdict is flattened onto the wire, never inspect/1'd.
+      detail = statuses[:rejected]["payload"]["evidence_rejected"]
+      assert %{"refs" => refs, "reason" => reason, "ref" => ref} = detail
+      assert is_list(refs) and is_integer(ref)
+      refute reason =~ "{"
+      refute reason =~ ":"
+
+      assert Map.has_key?(by_id, ref),
+             "the offending ref must name a real record"
+
+      # absent: no detail, no refs — the turn offered nothing.
+      absent = statuses[:absent]["payload"]
+      refute Map.has_key?(absent, "refs")
+      refute Map.has_key?(absent, "evidence_rejected")
+
       :ok = FileStore.close(j)
     end
   end

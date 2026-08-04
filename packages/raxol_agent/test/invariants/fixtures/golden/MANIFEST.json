@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Frozen golden journal corpora, one per schema_version. Pinned by",
+    "scripts/check_journal_goldens.exs: a schema_version bump without a new",
+    "frozen fixture fails CI, and these bytes are immutable history.",
+    "Freeze a new version with packages/raxol_agent/scripts/freeze_golden_journal.exs, then re-bless."
+  ],
+  "current_schema_version": "1.1.0",
+  "versions": {
+    "1.0.0": {
+      "session": "golden-v1",
+      "files": {
+        "HEAD": "b1405282538c08c28d52e7e7ff3ab647ba984e98ed01e26fc82868511c460e3f",
+        "journal/000001.jsonl": "da9403d4f18aaebf213a7441c48bf51962234678a82b6d7645dd1e0fbd54a3bc",
+        "meta.json": "89825e8ff09ff339beb1d3d00196ee57348c3171afb38eb687d7dd8595f2a181"
+      }
+    },
+    "1.1.0": {
+      "session": "golden-v11",
+      "files": {
+        "HEAD": "3e225008209b368041d013771dbf15ceb8fa14833c306d51b4cf1274d23c54a5",
+        "journal/000001.jsonl": "047a4ba0482e7b90c25620f25b5cf6cfc1c2b1c2efa1a4326e94fa1cbe4bbaa4",
+        "meta.json": "7bbee0994644dfcf3a69b746d39b85e55b9f658a26c607e5e4330e666d763756"
+      }
+    }
+  }
+}
