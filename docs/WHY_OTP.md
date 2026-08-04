@@ -29,6 +29,21 @@ process_component(UnstableWidget, %{path: "/dev/random"})
 
 The supervisor restarts the component and renders the next frame. OTP was built for this.
 
+There is one place this stops. On Unix and macOS the terminal backend is a
+[termbox2](../packages/raxol_terminal/lib/termbox2_nif/) NIF, and a NIF runs
+inside the VM's own address space. Segfault there and the whole node goes down,
+supervisor or not.
+
+The blast radius is small, though. That NIF only draws: cell writes, cursor
+moves, present. Input never touches it. Keystrokes arrive over OTP's own
+`prim_tty`, and a [canary in CI](../.github/workflows/ci-unified.yml) watches
+that path in case OTP moves it. Windows skips the NIF entirely and falls back to
+the pure Elixir `IOTerminal`, so nothing native is loaded there at all.
+
+When the VM does die that way it dies without putting your terminal back. Run
+`reset`; there is [a note in the
+quickstart](getting-started/QUICKSTART.md#if-the-terminal-is-left-in-a-bad-state).
+
 ### Hot reload
 
 Erlang's code server supports hot swapping at the module level. Save a file, and the running app picks up the new `view/1` on the next render cycle. No reconnection, no state loss. Same mechanism that lets telecom switches upgrade without dropping calls.

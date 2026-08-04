@@ -187,17 +187,24 @@ mix run --no-halt
 
 ## If the terminal is left in a bad state
 
-A Raxol app puts the terminal into raw mode and (for full-screen apps) the alternate screen, and restores both on exit. If the app dies *hard* — a `kill -9`, a VM crash, a segfault in the native rendering backend — nothing runs the restore, and you are left in a shell with no echo, no line editing, and possibly no visible cursor.
+A Raxol app puts your terminal into raw mode, and full-screen apps also switch to
+the alternate screen. Both get restored on the way out. But if the app dies hard,
+a `kill -9` or a VM crash, nothing runs that restore and you land back in a shell
+with no echo and no line editing.
 
-Nothing is broken. Reset the terminal:
+Nothing is broken. Reset it:
 
 ```bash
 reset
 ```
 
-If the shell is so far gone that you cannot see what you type, `reset` still works blind — type it and press Enter. `stty sane` is a lighter alternative that fixes echo and line editing without clearing the screen.
+If you cannot see what you are typing, that still works blind. Type it and hit
+Enter. `stty sane` is the lighter version, and it fixes echo without clearing the
+screen.
 
-This is a property of every full-screen terminal program (vim and tmux leave the same mess when SIGKILLed), not something specific to Raxol. See [the NIF asterisk](../../README.md#the-nif-asterisk) for what can and cannot take the VM down in the first place.
+vim and tmux leave the same mess when you SIGKILL them. It comes with the
+territory for full-screen terminal programs. [Why OTP](../WHY_OTP.md#crash-isolation)
+covers what can take the VM down that way in the first place.
 
 ## What You Just Built
 
