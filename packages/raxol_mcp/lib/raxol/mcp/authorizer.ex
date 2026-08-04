@@ -12,11 +12,15 @@ defmodule Raxol.MCP.Authorizer do
   ## Decisions
 
     * `:allow` -- run the tool.
-    * `{:ask, prompt}` -- the action would need interactive approval. `tools/call`
-      has no interactive channel, so the server DENIES with a machine-readable
-      `authorization_required` result (deny-on-ASK). A client that advertises
-      elicitation can upgrade this to a real prompt later; that is a follow-up,
-      not part of this seam.
+    * `{:ask, prompt}` -- the action needs interactive approval. What the server
+      does with it depends on whether the client can be asked:
+      - a client that advertised the `elicitation` capability at `initialize`
+        (and has a subscribed transport) is sent a real `elicitation/create`
+        request carrying `prompt`, and the call is parked until it answers;
+      - anything else gets the machine-readable `authorization_required` result
+        (deny-on-ASK), which is also what a decline, a cancel, an error, and a
+        timeout resolve to. Only an explicit approval runs the tool.
+      See `Raxol.MCP.Server`'s "Elicitation" section.
     * `{:deny, reason}` -- refuse, machine-readably.
 
   A `nil` authorizer means allow: a stdio transport already inherits the OS
