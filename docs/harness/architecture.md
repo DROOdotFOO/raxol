@@ -76,6 +76,36 @@ order; `BlockBuilder` folds each turn's items into blocks. Because the model is
 a pure fold over the event stream, a snapshot of it is complete — time-travel
 debugging (`time_travel: true`) is free.
 
+### Frozen golden corpora
+
+Every record carries the `schema_version` the Writer stamped. Upcast-on-read —
+letting a current reader open a journal written by an older version — can only
+be tested against real journals those versions actually wrote, and those become
+unrecoverable the moment the default moves on: nothing regenerates a 1.0.0
+journal once the writer emits 1.2.0.
+
+So each version is frozen exactly once, while it is current, under
+`packages/raxol_agent/test/invariants/fixtures/golden/v<version>/`. A corpus is
+produced by the real pipeline — `Contract.pump/3` generates the payloads,
+`EmitBus` -> `EmitBridge` -> `FileStore.Writer` writes the journal — with only
+`ts`, `turn_id`, and `meta.json`'s `created_at` normalized so the bytes are
+reproducible.
+
+| step | command |
+| --- | --- |
+| freeze the current version | `cd packages/raxol_agent && MIX_ENV=test mix run scripts/freeze_golden_journal.exs` |
+| re-pin the manifest | `elixir scripts/check_journal_goldens.exs --bless` |
+| verify (CI, `format` job) | `elixir scripts/check_journal_goldens.exs` |
+
+`scripts/check_journal_goldens.exs` enforces three rules against
+`fixtures/golden/MANIFEST.json`: the current `@default_schema_version` has a
+frozen corpus (so a bump fails until one is frozen), every pinned corpus still
+exists with the exact same bytes (history is not editable or deletable), and
+nothing on disk is unpinned. `Raxol.Agent.Invariants.ContractInvariantsTest`
+replays the current corpus through the live reader and asserts the shapes its
+version added — for 1.1.0, that all three `evidence` states are present and
+decode.
+
 ### Multi-surface parity
 
 `Raxol.Harness.Surface.Parity` is the check behind "one TEA module renders to
@@ -123,7 +153,6 @@ Snapshot bytes are a function of content alone: `Fixture.Bless` stringifies
 every key before encoding, because an atom-keyed map iterates in atom-table
 order and a recompile that shifts which module interned an atom first would
 otherwise reorder the JSON and report drift that is not there.
-
 ## Process topology
 
 Two independent supervision facts, often conflated:

@@ -19,15 +19,20 @@ Your application is a single [TEA](https://guide.elm-lang.org/architecture/) mod
                           +---> Agent (MCP tools)
 ```
 
-The interesting part is the runtime. Your app gets crash isolation per Component, hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured Component trees instead of scraping pixels. Those are BEAM properties, from a VM built for systems that can't go down, can't lose state, and hot-swap code while running.
+The interesting part is the runtime. Your app gets crash isolation per Component[\*](#the-nif-asterisk), hot code reload without restart, distributed clustering with CRDTs, and an agent surface where LLMs interact with structured Component trees instead of scraping pixels. Those are BEAM properties, from a VM built for systems that can't go down, can't lose state, and hot-swap code while running.
+
+### The NIF asterisk
+
+Crash isolation is a BEAM property, and it holds for every line of Elixir you write: a Component that raises takes down its own process, its supervisor restarts it, and the rest of the app keeps painting.
+
+It does not extend to native code. On Unix/macOS the terminal backend is a [termbox2](packages/raxol_terminal/lib/termbox2_nif/) NIF, which runs in the VM's address space — a segfault there takes down the whole node, and no supervisor can catch it. Two things bound that risk:
+
+- **The NIF only renders.** Input arrives over OTP's own `prim_tty`, not the NIF, so a keystroke never crosses the native boundary. A [per-PR canary](.github/workflows/ci-unified.yml) pins that input path against OTP changes.
+- **A build without the NIF has no asterisk.** The backend is picked at compile time by whether `:termbox2_nif` loaded; when it did not — Windows, or any build that skipped it — the driver falls back to the pure-Elixir `IOTerminal`, and nothing native is in the address space.
+
+If the VM does die hard, it dies without restoring your terminal. See [If the terminal is left in a bad state](docs/getting-started/QUICKSTART.md#if-the-terminal-is-left-in-a-bad-state).
 
 Bubble Tea, Ratatui, and Textual are excellent renderers. A2UI and AG-UI define agent-UI wire formats. Raxol is the runtime that renders all four surfaces from one source module. See [Why OTP](docs/WHY_OTP.md) for the framework comparison, and [Why Raxol](docs/WHY_RAXOL.md) for how the runtime compares to Python agent stacks like Hermes and Omnigent.
-
-## Built with Raxol
-
-**[Xochi](https://xochi.fi)** is a private cross-chain DEX: intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs. Its entire trading surface is raxol. A trader terminal serves over SSH with a dark-pool aesthetic, the same TEA module renders as a LiveView web UI, a solver-agent surface projects the same Component tree for Riddler's sub-2ms solver, and an ops cockpit runs sensor fusion on solver health. The solver executes behind a dedicated fail-closed stack (buyer-pre-signed intents, ledger-enforced spend gates, deployment guards that refuse to run unconfigured), kept deliberately off the MCP surface, so no fund-moving action is reachable as a generic tool call. The solver agent and the human trader read the same Component tree through different projections.
-
-**[foglet-bbs](https://github.com/bmanturner/foglet-bbs)** by [Brendan Turner](https://foglet.io) is an SSH-only retro bulletin board ([bbs.foglet.io](https://bbs.foglet.io), `ssh bbs.foglet.io`) that stress-tested raxol's SSH path into shape.
 
 ## Agents
 
@@ -160,6 +165,12 @@ mix raxol.demo               # run built-in demos
 ## Origin
 
 Raxol started as two converging ideas: a terminal for AGI, where AI agents interact with a real terminal emulator the same way humans do; and an interface for the cockpit of a Gundam Wing Suit, where fault isolation, real-time responsiveness, and sensor fusion are survival-critical. The Gundam thing sounds like a joke. Then you look at the constraint set and it's exactly what OTP was built for: systems that can't go down, can't lose state, and have to hot-swap components while running.
+
+## Built with Raxol
+
+**[Xochi](https://xochi.fi)** is a private cross-chain DEX (intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs) whose entire trading surface is raxol. One Component tree projects four ways: an SSH trader terminal, a LiveView web UI, a solver-agent surface for Riddler's sub-2ms solver, and an ops cockpit running sensor fusion on solver health. The solver executes behind a dedicated fail-closed stack (buyer-pre-signed intents, ledger-enforced spend gates, deployment guards that refuse to run unconfigured), kept deliberately off the MCP surface, so no fund-moving action is reachable as a generic tool call.
+
+**[foglet-bbs](https://github.com/bmanturner/foglet-bbs)** by [Brendan Turner](https://foglet.io) is an SSH-only retro bulletin board ([bbs.foglet.io](https://bbs.foglet.io), `ssh bbs.foglet.io`) that stress-tested raxol's SSH path into shape.
 
 ## License
 

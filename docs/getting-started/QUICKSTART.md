@@ -185,6 +185,20 @@ This generates an Application module with a supervision tree. Run with:
 mix run --no-halt
 ```
 
+## If the terminal is left in a bad state
+
+A Raxol app puts the terminal into raw mode and (for full-screen apps) the alternate screen, and restores both on exit. If the app dies *hard* — a `kill -9`, a VM crash, a segfault in the native rendering backend — nothing runs the restore, and you are left in a shell with no echo, no line editing, and possibly no visible cursor.
+
+Nothing is broken. Reset the terminal:
+
+```bash
+reset
+```
+
+If the shell is so far gone that you cannot see what you type, `reset` still works blind — type it and press Enter. `stty sane` is a lighter alternative that fixes echo and line editing without clearing the screen.
+
+This is a property of every full-screen terminal program (vim and tmux leave the same mess when SIGKILLed), not something specific to Raxol. See [the NIF asterisk](../../README.md#the-nif-asterisk) for what can and cannot take the VM down in the first place.
+
 ## What You Just Built
 
 That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
