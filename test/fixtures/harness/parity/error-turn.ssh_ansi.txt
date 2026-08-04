@@ -1,0 +1,12 @@
+ESC[1;1H
+ESC[30m
+"▾ ⚙ http_get(url: \"https://example.com/flaky\")"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"▾ ◆ [error] (empty)"
+ESC[0m

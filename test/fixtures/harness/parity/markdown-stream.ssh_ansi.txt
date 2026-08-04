@@ -1,0 +1,68 @@
+ESC[1;1H
+ESC[30m
+"▾ » # Diagnostic Report"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"# Diagnostic Report"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"Summary of the **run**: all checks passed, one _warning_ not"
+ESC[0m
+ESC[6;1H
+ESC[30m
+"## Steps"
+ESC[0m
+ESC[8;1H
+ESC[30m
+"1. Compile the project"
+ESC[0m
+ESC[9;1H
+ESC[30m
+"2. Run the test suite"
+ESC[0m
+ESC[10;1H
+ESC[30m
+"3. Collect timing"
+ESC[0m
+ESC[12;1H
+ESC[30m
+"## Code"
+ESC[0m
+ESC[14;1H
+ESC[30m
+"```elixir"
+ESC[0m
+ESC[15;1H
+ESC[30m
+"defmodule Raxol.Diagnostic do"
+ESC[0m
+ESC[16;1H
+ESC[30m
+"  def run do"
+ESC[0m
+ESC[17;1H
+ESC[30m
+"    :ok"
+ESC[0m
+ESC[18;1H
+ESC[30m
+"  end"
+ESC[0m
+ESC[19;1H
+ESC[30m
+"end"
+ESC[0m
+ESC[20;1H
+ESC[30m
+"```"
+ESC[0m
+ESC[22;1H
+ESC[30m
+"## Results"
+ESC[0m
+ESC[24;1H
+ESC[30m
+"| check | status | ms |"
+ESC[0m

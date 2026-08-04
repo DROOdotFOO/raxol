@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ » Hello!</span>
+<span style="color: #000000">Hello!</span>
+<span style="color: #000000">300ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            </pre>

@@ -76,6 +76,46 @@ order; `BlockBuilder` folds each turn's items into blocks. Because the model is
 a pure fold over the event stream, a snapshot of it is complete — time-travel
 debugging (`time_travel: true`) is free.
 
+### Multi-surface parity
+
+`Raxol.Harness.Surface.Parity` is the check behind "one TEA module renders to
+terminal, browser, SSH, and MCP". Every fixture is rendered ONCE and projected
+four ways, so a divergence is always the projection's fault and never the
+input's:
+
+```
+session (.jsonl) -> Projection.project/2 -> [Block.t()] -> Block.render/2
+  -> LayoutEngine.apply_layout/2 -> Renderer.render_to_cells/2   (the grid)
+```
+
+| surface | projection | from |
+| --- | --- | --- |
+| `:cells` | canonical row-major cell dump | the grid |
+| `:liveview_dom` | `TerminalBridge.buffer_to_html/2` | the grid |
+| `:ssh_ansi` | `Core.Renderer.render_diff/2` + `apply_diff/1` | the grid |
+| `:structured_json` | `MCP.StructuredScreenshot.from_view_tree/2` | the view tree |
+
+`:structured_json` is taken from the view tree deliberately: that is the MCP
+surface's actual input, and pinning it from the grid would test a pipeline
+nothing runs.
+
+Two independent properties, both in `test/harness/surface_parity_test.exs`:
+
+- **Drift** — each fixture x surface artifact
+  (`test/fixtures/harness/parity/`) still matches a fresh render, and
+  `priv/harness/parity.refs` still hashes the artifacts. Bless with
+  `mix raxol.harness.parity.bless` (`--check` for the CI half).
+- **Parity** — the surfaces agree. The three grid-derived surfaces must be
+  character-for-character equal; `:structured_json`'s block headers must match
+  the screen's, as a prefix (the viewport clips a long session). This is the
+  property a single-surface golden cannot have: an encoder that drops a wide
+  character still hashes consistently with itself and only diverges against a
+  sibling.
+
+The corpus convention: **every rendering bug fixed leaves a fixture behind.**
+Fixtures with a `.notes.md` sidecar are adversarial (they exist to be rejected
+by the loader) and are skipped — there is no render to pin.
+
 ## Process topology
 
 Two independent supervision facts, often conflated:

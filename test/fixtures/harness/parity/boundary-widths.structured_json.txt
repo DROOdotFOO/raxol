@@ -1,0 +1,110 @@
+[
+  {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA…",
+            "id": null,
+            "label": "▾ » AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA…",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "id": "block-2-3-line-0",
+            "label": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "id": "block-2-3-line-1",
+            "label": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            "id": "block-2-3-line-2",
+            "label": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » (empty)",
+            "id": null,
+            "label": "▾ » (empty)",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ ⚙ echo(text: \"DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD…",
+            "id": null,
+            "label": "▾ ⚙ echo(text: \"DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD…",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "no evidence provided",
+            "id": null,
+            "label": "no evidence provided",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      }
+    ],
+    "id": null,
+    "role": "group",
+    "type": "column"
+  }
+]

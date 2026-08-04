@@ -1,0 +1,96 @@
+ESC[1;1H
+ESC[30m
+"▾ ⚙ run_diagnostic(target: \"subsystem-1\")"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #1: OK (1 ms)"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #2: OK (2 ms)"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #3: OK (3 ms)"
+ESC[0m
+ESC[5;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #4: OK (4 ms)"
+ESC[0m
+ESC[6;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #5: OK (5 ms)"
+ESC[0m
+ESC[7;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #6: OK (6 ms)"
+ESC[0m
+ESC[8;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #7: OK (7 ms)"
+ESC[0m
+ESC[9;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #8: OK (8 ms)"
+ESC[0m
+ESC[10;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #9: OK (9 ms)"
+ESC[0m
+ESC[11;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #10: OK (10 ms)"
+ESC[0m
+ESC[12;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #11: OK (11 ms)"
+ESC[0m
+ESC[13;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #12: OK (12 ms)"
+ESC[0m
+ESC[14;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #13: OK (13 ms)"
+ESC[0m
+ESC[15;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #14: OK (14 ms)"
+ESC[0m
+ESC[16;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #15: OK (15 ms)"
+ESC[0m
+ESC[17;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #16: OK (16 ms)"
+ESC[0m
+ESC[18;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #17: OK (17 ms)"
+ESC[0m
+ESC[19;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #18: OK (18 ms)"
+ESC[0m
+ESC[20;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #19: OK (19 ms)"
+ESC[0m
+ESC[21;1H
+ESC[30m
+"[diagnostic] subsystem-1 check #20: OK (20 ms)"
+ESC[0m
+ESC[22;1H
+ESC[30m
+"300ms"
+ESC[0m
+ESC[23;1H
+ESC[30m
+"▾ ⚙ run_diagnostic(target: \"subsystem-2\")"
+ESC[0m
+ESC[24;1H
+ESC[30m
+"[diagnostic] subsystem-2 check #1: OK (2 ms)"
+ESC[0m

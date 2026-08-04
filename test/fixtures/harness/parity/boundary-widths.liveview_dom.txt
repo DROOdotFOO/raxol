@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ » AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA…</span>
+<span style="color: #000000">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA</span>
+<span style="color: #000000">BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</span>
+<span style="color: #000000">CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">▾ » (empty)</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">▾ ⚙ echo(text: &quot;DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD…</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            </pre>

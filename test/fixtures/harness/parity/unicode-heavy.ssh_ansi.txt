@@ -1,0 +1,36 @@
+ESC[1;1H
+ESC[30m
+"▾ » 你好世界 👨\u200D👩\u200D👧\u200D👦 école مرحبا שלום 🎉 done!"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"你好世界 👨\u200D👩\u200D👧\u200D👦 école مرحبا שלום 🎉 done!"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"▾ ⚙ list_dir(path: \".\")"
+ESC[0m
+ESC[5;1H
+ESC[30m
+"日本語.txt"
+ESC[0m
+ESC[6;1H
+ESC[30m
+"📁 emoji-folder"
+ESC[0m
+ESC[7;1H
+ESC[30m
+"Résumé.pdf"
+ESC[0m
+ESC[8;1H
+ESC[30m
+"300ms"
+ESC[0m
+ESC[9;1H
+ESC[30m
+"no evidence provided"
+ESC[0m

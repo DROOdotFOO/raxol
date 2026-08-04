@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ ◆ [hologram] a shape no current reader knows</span>
+<span style="color: #000000">a shape no current reader knows</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">▾ » Rendered what I could.</span>
+<span style="color: #000000">Rendered what I could.</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            </pre>

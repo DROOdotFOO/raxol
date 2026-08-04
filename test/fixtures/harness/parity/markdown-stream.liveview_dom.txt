@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ » # Diagnostic Report</span>
+<span style="color: #000000"># Diagnostic Report</span>
+
+<span style="color: #000000">Summary of the **run**: all checks passed, one _warning_ not</span>
+
+<span style="color: #000000">## Steps</span>
+
+<span style="color: #000000">1. Compile the project</span>
+<span style="color: #000000">2. Run the test suite</span>
+<span style="color: #000000">3. Collect timing</span>
+
+<span style="color: #000000">## Code</span>
+
+<span style="color: #000000">```elixir</span>
+<span style="color: #000000">defmodule Raxol.Diagnostic do</span>
+<span style="color: #000000">  def run do</span>
+<span style="color: #000000">    :ok</span>
+<span style="color: #000000">  end</span>
+<span style="color: #000000">end</span>
+<span style="color: #000000">```</span>
+
+<span style="color: #000000">## Results</span>
+
+<span style="color: #000000">| check | status | ms |</span>                                     </pre>

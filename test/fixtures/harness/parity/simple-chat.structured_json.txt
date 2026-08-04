@@ -1,0 +1,48 @@
+[
+  {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » Hello!",
+            "id": null,
+            "label": "▾ » Hello!",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "Hello!",
+            "id": "block-2-5-line-0",
+            "label": "Hello!",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "300ms",
+            "id": null,
+            "label": "300ms",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "no evidence provided",
+            "id": null,
+            "label": "no evidence provided",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      }
+    ],
+    "id": null,
+    "role": "group",
+    "type": "column"
+  }
+]

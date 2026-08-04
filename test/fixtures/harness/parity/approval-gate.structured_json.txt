@@ -1,0 +1,86 @@
+[
+  {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▸ ∴ This deletes files. I should ask first.",
+            "id": null,
+            "label": "▸ ∴ This deletes files. I should ask first.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ ⚑ shell",
+            "id": null,
+            "label": "▾ ⚑ shell",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » Waiting for your approval.",
+            "id": null,
+            "label": "▾ » Waiting for your approval.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "Waiting for your approval.",
+            "id": "block-5-6-line-0",
+            "label": "Waiting for your approval.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "no evidence provided",
+            "id": null,
+            "label": "no evidence provided",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      }
+    ],
+    "id": null,
+    "role": "group",
+    "type": "column"
+  }
+]

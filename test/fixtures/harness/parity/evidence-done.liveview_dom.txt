@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ ⚙ mix_test</span>
+<span style="color: #000000">42 tests, 0 failures</span>
+<span style="color: #000000">300ms</span>
+<span style="color: #000000">▾ » All 42 tests passed.</span>
+<span style="color: #000000">All 42 tests passed.</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">1 evidence ref: 1 tool result</span>
+<span style="color: #000000">· mix_test — 42 tests, 0 failures</span>
+<span style="color: #000000">▾ » Sounds good, wrapping up now.</span>
+<span style="color: #000000">Sounds good, wrapping up now.</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+
+
+
+
+
+                                                            </pre>

@@ -1,0 +1,280 @@
+[
+  {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » # Diagnostic Report",
+            "id": null,
+            "label": "▾ » # Diagnostic Report",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "# Diagnostic Report",
+            "id": "block-2-20-line-0",
+            "label": "# Diagnostic Report",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-1",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "Summary of the **run**: all checks passed, one _warning_ noted.",
+            "id": "block-2-20-line-2",
+            "label": "Summary of the **run**: all checks passed, one _warning_ noted.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-3",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "## Steps",
+            "id": "block-2-20-line-4",
+            "label": "## Steps",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-5",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "1. Compile the project",
+            "id": "block-2-20-line-6",
+            "label": "1. Compile the project",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "2. Run the test suite",
+            "id": "block-2-20-line-7",
+            "label": "2. Run the test suite",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "3. Collect timing",
+            "id": "block-2-20-line-8",
+            "label": "3. Collect timing",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-9",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "## Code",
+            "id": "block-2-20-line-10",
+            "label": "## Code",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-11",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "```elixir",
+            "id": "block-2-20-line-12",
+            "label": "```elixir",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "defmodule Raxol.Diagnostic do",
+            "id": "block-2-20-line-13",
+            "label": "defmodule Raxol.Diagnostic do",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "  def run do",
+            "id": "block-2-20-line-14",
+            "label": "  def run do",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "    :ok",
+            "id": "block-2-20-line-15",
+            "label": "    :ok",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "  end",
+            "id": "block-2-20-line-16",
+            "label": "  end",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "end",
+            "id": "block-2-20-line-17",
+            "label": "end",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "```",
+            "id": "block-2-20-line-18",
+            "label": "```",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-19",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "## Results",
+            "id": "block-2-20-line-20",
+            "label": "## Results",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-21",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "| check | status | ms |",
+            "id": "block-2-20-line-22",
+            "label": "| check | status | ms |",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "|---|---|---|",
+            "id": "block-2-20-line-23",
+            "label": "|---|---|---|",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "| compile | ok | 812 |",
+            "id": "block-2-20-line-24",
+            "label": "| compile | ok | 812 |",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "| test | ok | 4021 |",
+            "id": "block-2-20-line-25",
+            "label": "| test | ok | 4021 |",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "| lint | warn | 233 |",
+            "id": "block-2-20-line-26",
+            "label": "| lint | warn | 233 |",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-27",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "Done.",
+            "id": "block-2-20-line-28",
+            "label": "Done.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "",
+            "id": "block-2-20-line-29",
+            "label": "",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "800ms",
+            "id": null,
+            "label": "800ms",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "no evidence provided",
+            "id": null,
+            "label": "no evidence provided",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      }
+    ],
+    "id": null,
+    "role": "group",
+    "type": "column"
+  }
+]

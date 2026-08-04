@@ -1,0 +1,48 @@
+ESC[1;1H
+ESC[30m
+"▾ ⚙ mix_test"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"42 tests, 0 failures"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"300ms"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"▾ » All 42 tests passed."
+ESC[0m
+ESC[5;1H
+ESC[30m
+"All 42 tests passed."
+ESC[0m
+ESC[6;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[7;1H
+ESC[30m
+"1 evidence ref: 1 tool result"
+ESC[0m
+ESC[8;1H
+ESC[30m
+"· mix_test — 42 tests, 0 failures"
+ESC[0m
+ESC[9;1H
+ESC[30m
+"▾ » Sounds good, wrapping up now."
+ESC[0m
+ESC[10;1H
+ESC[30m
+"Sounds good, wrapping up now."
+ESC[0m
+ESC[11;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[12;1H
+ESC[30m
+"no evidence provided"
+ESC[0m

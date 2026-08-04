@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▸ ∴ This deletes files. I should ask first.</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">▾ ⚑ shell</span>
+<span style="color: #000000">▾ » Waiting for your approval.</span>
+<span style="color: #000000">Waiting for your approval.</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            </pre>

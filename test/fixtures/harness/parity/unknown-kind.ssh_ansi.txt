@@ -1,0 +1,28 @@
+ESC[1;1H
+ESC[30m
+"▾ ◆ [hologram] a shape no current reader knows"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"a shape no current reader knows"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"▾ » Rendered what I could."
+ESC[0m
+ESC[5;1H
+ESC[30m
+"Rendered what I could."
+ESC[0m
+ESC[6;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[7;1H
+ESC[30m
+"no evidence provided"
+ESC[0m
