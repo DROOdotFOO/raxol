@@ -9,6 +9,7 @@ const { spawnSync } = require("node:child_process");
 const { join } = require("node:path");
 const { existsSync } = require("node:fs");
 const os = require("node:os");
+const { withTerminalRestore } = require("./tty");
 
 // Maps `${platform}-${arch}` to the Burrito output name (`raxol_cli_<target>`).
 const BINARIES = {
@@ -49,7 +50,11 @@ function main() {
   // starve the interactive agent), and `--no-halt` stops it halting the VM. The
   // binary strips the `--no-halt --` prefix when reading its arguments.
   const args = ["--no-halt", "--", ...process.argv.slice(2)];
-  const result = spawnSync(binary, args, { stdio: "inherit" });
+  // The interactive agent puts the tty in raw mode; if the BEAM child dies there
+  // (crash, SIGSEGV), restore the shell's line settings so it isn't left wedged.
+  const result = withTerminalRestore(() =>
+    spawnSync(binary, args, { stdio: "inherit" }),
+  );
 
   if (result.error) {
     console.error(`raxol: failed to launch: ${result.error.message}`);
