@@ -565,6 +565,80 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
     end
   end
 
+  defmodule GatedProbe do
+    @moduledoc """
+    A cache-riding probe whose `build/1` blocks until the test releases it.
+
+    Exists so "submit never blocks" can be pinned CAUSALLY instead of with a
+    wall-clock bound. `Raxol.Agent.Probe.Runner.Pool.one_call/1` calls
+    `build/1` STRICTLY BEFORE it touches the provider, so while the gate is
+    shut no run can reach the provider -- `provider_calls == 0` is then a fact
+    about ordering, not a race. A submit that returned under those conditions
+    provably did not run its own probe inline.
+
+    Set `context[:gate]` to the pid to hand control to. `build/1` announces
+    itself as `{:probe_gated, self()}` and waits for `:release`. With no
+    `:gate` in the context it behaves exactly like `CacheRideProbe`, so the
+    probe is safe to reuse anywhere.
+
+    The `receive` has a long backstop so a test that forgets to release cannot
+    wedge a pool worker forever -- the pool is a shared singleton and a stuck
+    worker would starve every other async test.
+    """
+    @behaviour Raxol.Agent.Probe
+
+    @gate_backstop_ms 30_000
+
+    @impl true
+    def spec do
+      %{
+        id: :c1_gate,
+        mode: :cache_riding,
+        max_calls: 1,
+        timeout_ms: 60_000,
+        default_budget: 500,
+        max_parked: 64,
+        park_timeout_ms: 60_000
+      }
+    end
+
+    @impl true
+    def build(context) do
+      await_release(Map.get(context, :gate))
+
+      {:ok,
+       %{
+         suffix: [%{role: "user", content: "gate?"}],
+         output: :structured,
+         max_output_tokens: 256
+       }}
+    end
+
+    @impl true
+    def interpret(_response, context) do
+      {:ok,
+       [
+         %{
+           type: :gate_decision,
+           refs: [context.tip_offset],
+           payload: %{choice: :allow}
+         }
+       ]}
+    end
+
+    defp await_release(gate) when is_pid(gate) do
+      send(gate, {:probe_gated, self()})
+
+      receive do
+        :release -> :ok
+      after
+        @gate_backstop_ms -> :ok
+      end
+    end
+
+    defp await_release(_no_gate), do: :ok
+  end
+
   defmodule ShortParkProbe do
     @moduledoc """
     A cache-riding probe with a SHORT `park_timeout_ms` (and small `max_parked`)
