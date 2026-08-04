@@ -119,14 +119,11 @@ defmodule Raxol.Harness.Fixture.Bless do
       blocks_path = Path.rootname(path) <> ".blocks.json"
 
       json =
-        Jason.encode!(
-          %{
-            schema: @blocks_schema,
-            projector: inspect(projector),
-            blocks: blocks
-          },
-          pretty: true
-        ) <> "\n"
+        stable_json(%{
+          schema: @blocks_schema,
+          projector: inspect(projector),
+          blocks: blocks
+        })
 
       status = write_or_check(blocks_path, json, check?)
 
@@ -143,6 +140,31 @@ defmodule Raxol.Harness.Fixture.Bless do
        %{name: name, path: path, blocks_path: nil, count: 0, status: :skipped}}
     end
   end
+
+  # Encode with keys that sort the SAME way on every build.
+  #
+  # An atom-keyed map iterates in atom-table order -- creation order, not
+  # alphabetical -- so the encoded key order can change when a recompile shifts
+  # which module interned an atom first. Nothing about the snapshot changed, but
+  # `--check` reports drift, and the fix looks like "re-bless and move on" until
+  # it happens again. (This is how `projection-panels` and the newer fixtures
+  # came to disagree with their own committed snapshots.)
+  #
+  # Binary keys sort by byte value, which no compilation order can perturb, so
+  # stringifying every key first makes the bytes a function of the content
+  # alone.
+  defp stable_json(data) do
+    Jason.encode!(stringify_keys(data), pretty: true) <> "\n"
+  end
+
+  defp stringify_keys(%{} = map) when not is_struct(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), stringify_keys(v)} end)
+  end
+
+  defp stringify_keys(list) when is_list(list),
+    do: Enum.map(list, &stringify_keys/1)
+
+  defp stringify_keys(other), do: other
 
   defp write_or_check(blocks_path, json, false) do
     File.write!(blocks_path, json)

@@ -1,0 +1,79 @@
+[
+  {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ ◆ [hologram] a shape no current reader knows",
+            "id": null,
+            "label": "▾ ◆ [hologram] a shape no current reader knows",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "a shape no current reader knows",
+            "id": "block-2-3-line-0",
+            "label": "a shape no current reader knows",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » Rendered what I could.",
+            "id": null,
+            "label": "▾ » Rendered what I could.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "Rendered what I could.",
+            "id": "block-4-5-line-0",
+            "label": "Rendered what I could.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "no evidence provided",
+            "id": null,
+            "label": "no evidence provided",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      }
+    ],
+    "id": null,
+    "role": "group",
+    "type": "column"
+  }
+]

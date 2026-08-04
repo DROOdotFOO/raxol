@@ -1,0 +1,28 @@
+ESC[1;1H
+ESC[30m
+"▸ ∴ This deletes files. I should ask first."
+ESC[0m
+ESC[2;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"▾ ⚑ shell"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"▾ » Waiting for your approval."
+ESC[0m
+ESC[5;1H
+ESC[30m
+"Waiting for your approval."
+ESC[0m
+ESC[6;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[7;1H
+ESC[30m
+"no evidence provided"
+ESC[0m

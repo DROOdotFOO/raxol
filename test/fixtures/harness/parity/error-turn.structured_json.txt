@@ -1,0 +1,47 @@
+[
+  {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ ⚙ http_get(url: \"https://example.com/flaky\")",
+            "id": null,
+            "label": "▾ ⚙ http_get(url: \"https://example.com/flaky\")",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ ◆ [error] (empty)",
+            "id": null,
+            "label": "▾ ◆ [error] (empty)",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      }
+    ],
+    "id": null,
+    "role": "group",
+    "type": "column"
+  }
+]

@@ -1,0 +1,16 @@
+ESC[1;1H
+ESC[30m
+"▾ » Hello!"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"Hello!"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"300ms"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"no evidence provided"
+ESC[0m

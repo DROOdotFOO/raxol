@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ ⚙ run_diagnostic(target: &quot;subsystem-1&quot;)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #1: OK (1 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #2: OK (2 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #3: OK (3 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #4: OK (4 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #5: OK (5 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #6: OK (6 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #7: OK (7 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #8: OK (8 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #9: OK (9 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #10: OK (10 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #11: OK (11 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #12: OK (12 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #13: OK (13 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #14: OK (14 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #15: OK (15 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #16: OK (16 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #17: OK (17 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #18: OK (18 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #19: OK (19 ms)</span>
+<span style="color: #000000">[diagnostic] subsystem-1 check #20: OK (20 ms)</span>
+<span style="color: #000000">300ms</span>
+<span style="color: #000000">▾ ⚙ run_diagnostic(target: &quot;subsystem-2&quot;)</span>
+<span style="color: #000000">[diagnostic] subsystem-2 check #1: OK (2 ms)</span>                </pre>

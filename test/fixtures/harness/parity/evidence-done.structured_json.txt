@@ -1,0 +1,126 @@
+[
+  {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ ⚙ mix_test",
+            "id": null,
+            "label": "▾ ⚙ mix_test",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "42 tests, 0 failures",
+            "id": "block-2-3-4-5-line-0",
+            "label": "42 tests, 0 failures",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "300ms",
+            "id": null,
+            "label": "300ms",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » All 42 tests passed.",
+            "id": null,
+            "label": "▾ » All 42 tests passed.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "All 42 tests passed.",
+            "id": "block-6-7-line-0",
+            "label": "All 42 tests passed.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "1 evidence ref: 1 tool result",
+            "id": null,
+            "label": "1 evidence ref: 1 tool result",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "· mix_test — 42 tests, 0 failures",
+            "id": null,
+            "label": "· mix_test — 42 tests, 0 failures",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "content": "▾ » Sounds good, wrapping up now.",
+            "id": null,
+            "label": "▾ » Sounds good, wrapping up now.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "Sounds good, wrapping up now.",
+            "id": "block-10-11-line-0",
+            "label": "Sounds good, wrapping up now.",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "100ms",
+            "id": null,
+            "label": "100ms",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "no evidence provided",
+            "id": null,
+            "label": "no evidence provided",
+            "role": "text",
+            "type": "text"
+          }
+        ],
+        "id": null,
+        "role": "group",
+        "type": "column"
+      }
+    ],
+    "id": null,
+    "role": "group",
+    "type": "column"
+  }
+]

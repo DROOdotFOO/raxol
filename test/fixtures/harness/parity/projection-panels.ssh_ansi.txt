@@ -1,0 +1,32 @@
+ESC[1;1H
+ESC[30m
+"▾ » Working on it"
+ESC[0m
+ESC[2;1H
+ESC[30m
+"Working on it"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"400ms"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"no evidence provided"
+ESC[0m
+ESC[5;1H
+ESC[30m
+"▾ » Almost done"
+ESC[0m
+ESC[6;1H
+ESC[30m
+"Almost done"
+ESC[0m
+ESC[7;1H
+ESC[30m
+"200ms"
+ESC[0m
+ESC[8;1H
+ESC[30m
+"no evidence provided"
+ESC[0m

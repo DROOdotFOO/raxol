@@ -20,33 +20,17 @@
       "family": "loop",
       "id": 3,
       "offset": 4,
-      "tier": "ephemeral",
-      "turn_id": "t1",
-      "type": "item_delta"
-    },
-    {
-      "family": "loop",
-      "id": 4,
-      "offset": 5,
-      "tier": "ephemeral",
-      "turn_id": "t1",
-      "type": "item_delta"
-    },
-    {
-      "family": "loop",
-      "id": 5,
-      "offset": 6,
       "tier": "durable",
       "turn_id": "t1",
       "type": "item_completed"
     },
     {
       "family": "loop",
-      "id": 6,
-      "offset": 7,
+      "id": 4,
+      "offset": 5,
       "tier": "durable",
       "turn_id": "t1",
-      "type": "turn_completed"
+      "type": "error"
     }
   ],
   "projector": "Raxol.Harness.Fixture.Projectors.Identity",

@@ -1,0 +1,198 @@
+{
+  "blocks": [
+    {
+      "family": "loop",
+      "id": 1,
+      "offset": 2,
+      "tier": "durable",
+      "turn_id": "t1",
+      "type": "turn_started"
+    },
+    {
+      "family": "loop",
+      "id": 2,
+      "offset": 3,
+      "tier": "durable",
+      "turn_id": "t1",
+      "type": "item_started"
+    },
+    {
+      "family": "meta",
+      "id": 3,
+      "offset": 4,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "loop",
+      "id": 4,
+      "offset": 5,
+      "tier": "ephemeral",
+      "turn_id": "t1",
+      "type": "item_delta"
+    },
+    {
+      "family": "meta",
+      "id": 5,
+      "offset": 6,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "loop",
+      "id": 6,
+      "offset": 7,
+      "tier": "durable",
+      "turn_id": "t1",
+      "type": "item_completed"
+    },
+    {
+      "family": "meta",
+      "id": 7,
+      "offset": 8,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 8,
+      "offset": 9,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 9,
+      "offset": 10,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 10,
+      "offset": 11,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 11,
+      "offset": 12,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "loop",
+      "id": 12,
+      "offset": 13,
+      "tier": "durable",
+      "turn_id": "t1",
+      "type": "turn_completed"
+    },
+    {
+      "family": "loop",
+      "id": 13,
+      "offset": 14,
+      "tier": "durable",
+      "turn_id": "t2",
+      "type": "turn_started"
+    },
+    {
+      "family": "meta",
+      "id": 14,
+      "offset": 15,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 15,
+      "offset": 16,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 16,
+      "offset": 17,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 17,
+      "offset": 18,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 18,
+      "offset": 19,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 19,
+      "offset": 20,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "meta",
+      "id": 20,
+      "offset": 21,
+      "tier": "durable",
+      "turn_id": null,
+      "type": "extract"
+    },
+    {
+      "family": "loop",
+      "id": 21,
+      "offset": 22,
+      "tier": "durable",
+      "turn_id": "t2",
+      "type": "item_started"
+    },
+    {
+      "family": "loop",
+      "id": 22,
+      "offset": 23,
+      "tier": "ephemeral",
+      "turn_id": "t2",
+      "type": "item_delta"
+    },
+    {
+      "family": "loop",
+      "id": 23,
+      "offset": 24,
+      "tier": "durable",
+      "turn_id": "t2",
+      "type": "item_completed"
+    },
+    {
+      "family": "loop",
+      "id": 24,
+      "offset": 25,
+      "tier": "durable",
+      "turn_id": "t2",
+      "type": "turn_completed"
+    }
+  ],
+  "projector": "Raxol.Harness.Fixture.Projectors.Identity",
+  "schema": "harness-fixture-blocks/1"
+}

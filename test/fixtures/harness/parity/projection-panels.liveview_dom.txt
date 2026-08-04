@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ » Working on it</span>
+<span style="color: #000000">Working on it</span>
+<span style="color: #000000">400ms</span>
+<span style="color: #000000">no evidence provided</span>
+<span style="color: #000000">▾ » Almost done</span>
+<span style="color: #000000">Almost done</span>
+<span style="color: #000000">200ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            </pre>

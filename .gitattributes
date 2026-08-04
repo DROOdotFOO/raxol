@@ -14,3 +14,12 @@ test/fixtures/harness/goldens/*.golden binary
 # `*.golden.txt` (verified via `git check-attr`), so this line is the
 # only one governing these files.
 test/fixtures/harness/goldens/*.golden.txt text eol=lf
+
+# Multi-surface parity artifacts (Raxol.Harness.Surface.Parity) are compared
+# byte-for-byte against a fresh render, and the refs file hashes those exact
+# bytes. A CRLF checkout on Windows makes every one of them "drift" for a
+# reason that has nothing to do with rendering, so pin LF everywhere. They are
+# pure escaped text (no raw CR), so `text` is safe here where the degradation
+# goldens above need `binary`.
+test/fixtures/harness/parity/*.txt text eol=lf
+priv/harness/parity.refs text eol=lf

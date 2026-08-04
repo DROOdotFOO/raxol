@@ -1,0 +1,68 @@
+ESC[1;1H
+ESC[30m
+"▸ ∴ I should list the directory first, then read mix.exs."
+ESC[0m
+ESC[2;1H
+ESC[30m
+"100ms"
+ESC[0m
+ESC[3;1H
+ESC[30m
+"▾ ⚙ list_dir(path: \".\")"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"mix.exs"
+ESC[0m
+ESC[5;1H
+ESC[30m
+"lib/"
+ESC[0m
+ESC[6;1H
+ESC[30m
+"test/"
+ESC[0m
+ESC[7;1H
+ESC[30m
+"README.md"
+ESC[0m
+ESC[8;1H
+ESC[30m
+"300ms"
+ESC[0m
+ESC[9;1H
+ESC[30m
+"▾ ⚙ read_file(path: \"mix.exs\")"
+ESC[0m
+ESC[10;1H
+ESC[30m
+"defmodule Raxol.MixProject do"
+ESC[0m
+ESC[11;1H
+ESC[30m
+"  use Mix.Project"
+ESC[0m
+ESC[12;1H
+ESC[30m
+"end"
+ESC[0m
+ESC[13;1H
+ESC[30m
+"300ms"
+ESC[0m
+ESC[14;1H
+ESC[30m
+"▾ » Root has mix.exs, lib/, test/, README.md."
+ESC[0m
+ESC[15;1H
+ESC[30m
+"Root has mix.exs, lib/, test/, README.md."
+ESC[0m
+ESC[16;1H
+ESC[30m
+"200ms"
+ESC[0m
+ESC[17;1H
+ESC[30m
+"no evidence provided"
+ESC[0m

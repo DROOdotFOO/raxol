@@ -20,17 +20,17 @@
       "family": "loop",
       "id": 3,
       "offset": 4,
-      "tier": "ephemeral",
+      "tier": "durable",
       "turn_id": "t1",
-      "type": "item_delta"
+      "type": "item_completed"
     },
     {
       "family": "loop",
       "id": 4,
       "offset": 5,
-      "tier": "ephemeral",
+      "tier": "durable",
       "turn_id": "t1",
-      "type": "item_delta"
+      "type": "approval_requested"
     },
     {
       "family": "loop",
@@ -38,12 +38,20 @@
       "offset": 6,
       "tier": "durable",
       "turn_id": "t1",
-      "type": "item_completed"
+      "type": "item_started"
     },
     {
       "family": "loop",
       "id": 6,
       "offset": 7,
+      "tier": "durable",
+      "turn_id": "t1",
+      "type": "item_completed"
+    },
+    {
+      "family": "loop",
+      "id": 7,
+      "offset": 8,
       "tier": "durable",
       "turn_id": "t1",
       "type": "turn_completed"

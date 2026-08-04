@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▾ » 你好世界 👨‍👩‍👧‍👦 école مرحبا שלום 🎉 done!</span>
+<span style="color: #000000">你好世界 👨‍👩‍👧‍👦 école مرحبا שלום 🎉 done!</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">▾ ⚙ list_dir(path: &quot;.&quot;)</span>
+<span style="color: #000000">日本語.txt</span>
+<span style="color: #000000">📁 emoji-folder</span>
+<span style="color: #000000">Résumé.pdf</span>
+<span style="color: #000000">300ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            </pre>

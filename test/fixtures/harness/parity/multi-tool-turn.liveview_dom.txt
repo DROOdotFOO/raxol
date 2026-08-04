@@ -1,0 +1,25 @@
+<pre class="raxol-terminal" role="application">
+<span style="color: #000000">▸ ∴ I should list the directory first, then read mix.exs.</span>
+<span style="color: #000000">100ms</span>
+<span style="color: #000000">▾ ⚙ list_dir(path: &quot;.&quot;)</span>
+<span style="color: #000000">mix.exs</span>
+<span style="color: #000000">lib/</span>
+<span style="color: #000000">test/</span>
+<span style="color: #000000">README.md</span>
+<span style="color: #000000">300ms</span>
+<span style="color: #000000">▾ ⚙ read_file(path: &quot;mix.exs&quot;)</span>
+<span style="color: #000000">defmodule Raxol.MixProject do</span>
+<span style="color: #000000">  use Mix.Project</span>
+<span style="color: #000000">end</span>
+<span style="color: #000000">300ms</span>
+<span style="color: #000000">▾ » Root has mix.exs, lib/, test/, README.md.</span>
+<span style="color: #000000">Root has mix.exs, lib/, test/, README.md.</span>
+<span style="color: #000000">200ms</span>
+<span style="color: #000000">no evidence provided</span>
+
+
+
+
+
+
+                                                            </pre>
