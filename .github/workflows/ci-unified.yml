@@ -162,6 +162,12 @@ jobs:
       - name: Check singleton allowlist
         run: bash scripts/check_singletons.sh
 
+      # raxol_agent is a local gate, not a per-PR CI package — but a
+      # schema_version bump that ships without a frozen golden journal is
+      # unrecoverable, so the guard runs here. Dependency-free by design.
+      - name: Check journal golden fixtures
+        run: elixir scripts/check_journal_goldens.exs
+
   compile:
     name: Compilation Check
     needs: setup

@@ -44,6 +44,17 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   # --- API -------------------------------------------------------------------
 
+  @doc """
+  The `schema_version` stamped on records written without an explicit override.
+
+  Bumping this is a freeze event: `scripts/check_journal_goldens.exs` refuses a
+  bump that arrives without a frozen golden corpus for the version being left
+  behind, so every historical shape stays replayable by a future
+  upcast-on-read. Freeze one with `scripts/freeze_golden_journal.exs`.
+  """
+  @spec default_schema_version() :: String.t()
+  def default_schema_version, do: @default_schema_version
+
   def start_link(opts) do
     dir = Keyword.fetch!(opts, :dir)
     # Single-writer invariant: at most one Writer per physical journal dir,
@@ -121,7 +132,8 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       offset: offset,
       schema_version: schema_version,
       immediate_types: immediate_types,
-      sync_ceiling_ms: Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms)
+      sync_ceiling_ms:
+        Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms)
     }
 
     write_head(state)
@@ -184,7 +196,11 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     case :file.write(state.io, line) do
       :ok ->
         state =
-          %{state | offset: offset, seg_size: state.seg_size + IO.iodata_length(line)}
+          %{
+            state
+            | offset: offset,
+              seg_size: state.seg_size + IO.iodata_length(line)
+          }
           |> maybe_rotate()
           |> sync_after_append(immediate?(record, state))
 
@@ -256,7 +272,13 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     :ok = :file.datasync(state.io)
     :ok = :file.close(state.io)
     seg_num = state.seg_num + 1
-    %{state | io: open_segment(state.journal_dir, seg_num), seg_num: seg_num, seg_size: 0}
+
+    %{
+      state
+      | io: open_segment(state.journal_dir, seg_num),
+        seg_num: seg_num,
+        seg_size: 0
+    }
   end
 
   defp maybe_rotate(state), do: state
@@ -275,7 +297,10 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
       segments ->
         path = List.last(segments)
-        num = path |> Path.basename() |> String.slice(0, 6) |> String.to_integer()
+
+        num =
+          path |> Path.basename() |> String.slice(0, 6) |> String.to_integer()
+
         size = File.stat!(path).size
         if size >= seg_cap, do: {num + 1, 0}, else: {num, size}
     end
@@ -349,7 +374,8 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   end
 
   defp atomic_write!(path, data) do
-    tmp = path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive]))
+    tmp =
+      path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive]))
 
     File.open!(tmp, [:write, :raw, :binary], fn io ->
       :ok = :file.write(io, data)
