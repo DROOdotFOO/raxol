@@ -32,12 +32,14 @@ defmodule Raxol.MCP.Server do
 
   @compile {:no_warn_undefined, Raxol.Headless}
 
+  alias Raxol.MCP.Authorizer
   alias Raxol.MCP.Protocol
   alias Raxol.MCP.Registry
   alias Raxol.MCP.ResourceRouter
 
   defstruct [
     :registry,
+    :authorizer,
     initialized: false,
     log_level: :info,
     subscribers: [],
@@ -46,6 +48,7 @@ defmodule Raxol.MCP.Server do
 
   @type t :: %__MODULE__{
           registry: GenServer.server(),
+          authorizer: Authorizer.t() | nil,
           initialized: boolean(),
           log_level:
             :debug | :info | :notice | :warning | :error | :critical | :alert | :emergency,
@@ -93,18 +96,36 @@ defmodule Raxol.MCP.Server do
     GenServer.cast(server, {:notify, method, params})
   end
 
+  @doc """
+  Whether an authorizer is configured on this server. Network transport boot
+  guards use this to fail closed (see `Raxol.MCP.Deployment`). Returns `false` if
+  the server is unreachable.
+  """
+  @spec authorization_configured?(GenServer.server()) :: boolean()
+  def authorization_configured?(server \\ __MODULE__) do
+    GenServer.call(server, :authorization_configured?)
+  catch
+    :exit, _ -> false
+  end
+
   # -- GenServer Callbacks -------------------------------------------------------
 
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
     registry = Keyword.get(opts, :registry, Registry)
-    {:ok, %__MODULE__{registry: registry}}
+    authorizer = Keyword.get(opts, :authorizer)
+    {:ok, %__MODULE__{registry: registry, authorizer: authorizer}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:handle_message, message}, _from, state) do
     {response, state} = dispatch(message, state)
     {:reply, {:reply, response}, state}
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_call(:authorization_configured?, _from, state) do
+    {:reply, state.authorizer != nil, state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -161,31 +182,22 @@ defmodule Raxol.MCP.Server do
     name = Map.get(params, "name") || Map.get(params, :name, "")
     arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
 
-    case Registry.call_tool(state.registry, name, arguments) do
-      {:ok, result} ->
-        content = normalize_content(result)
-        {Protocol.response(id, %{content: content}), state}
+    # Authorize before the tool runs. A nil authorizer allows (stdio inherits the
+    # OS boundary); ASK is denied here because tools/call has no interactive
+    # channel (deny-on-ASK) -- elicitation is a follow-up.
+    response =
+      case Authorizer.decide(state.authorizer, name, arguments, %{}) do
+        :allow ->
+          call_tool_response(id, name, Registry.call_tool(state.registry, name, arguments))
 
-      {:error, :tool_not_found} ->
-        error =
-          Protocol.error_response(id, Protocol.method_not_found(), "Tool not found: #{name}")
+        {:ask, prompt} ->
+          authorization_required(id, name, :ask, prompt)
 
-        {error, state}
+        {:deny, reason} ->
+          authorization_required(id, name, :deny, reason)
+      end
 
-      {:error, :circuit_open} ->
-        content = [
-          %{
-            type: "text",
-            text: "Tool temporarily unavailable (circuit open after repeated failures)"
-          }
-        ]
-
-        {Protocol.response(id, %{content: content, isError: true}), state}
-
-      {:error, reason} ->
-        content = [%{type: "text", text: "Error: #{inspect(reason)}"}]
-        {Protocol.response(id, %{content: content, isError: true}), state}
-    end
+    {response, state}
   end
 
   # -- Resources ---
@@ -354,6 +366,47 @@ defmodule Raxol.MCP.Server do
       {:error, _} -> {inspect(data, pretty: true), "text/plain"}
     end
   end
+
+  defp call_tool_response(id, name, result) do
+    case result do
+      {:ok, result} ->
+        Protocol.response(id, %{content: normalize_content(result)})
+
+      {:error, :tool_not_found} ->
+        Protocol.error_response(id, Protocol.method_not_found(), "Tool not found: #{name}")
+
+      {:error, :circuit_open} ->
+        content = [
+          %{
+            type: "text",
+            text: "Tool temporarily unavailable (circuit open after repeated failures)"
+          }
+        ]
+
+        Protocol.response(id, %{content: content, isError: true})
+
+      {:error, reason} ->
+        content = [%{type: "text", text: "Error: #{inspect(reason)}"}]
+        Protocol.response(id, %{content: content, isError: true})
+    end
+  end
+
+  # A denied tool call returns a machine-readable error result the agent can act
+  # on (learn the tool is gated) instead of a silent failure or a retry loop.
+  defp authorization_required(id, tool, decision, detail) do
+    payload = %{
+      "error" => "authorization_required",
+      "tool" => tool,
+      "decision" => Atom.to_string(decision),
+      "detail" => authz_detail(detail)
+    }
+
+    content = [%{type: "text", text: Jason.encode!(payload)}]
+    Protocol.response(id, %{content: content, isError: true})
+  end
+
+  defp authz_detail(detail) when is_binary(detail), do: detail
+  defp authz_detail(detail), do: inspect(detail)
 
   defp normalize_content(result) when is_list(result), do: result
   defp normalize_content(text) when is_binary(text), do: [%{type: "text", text: text}]

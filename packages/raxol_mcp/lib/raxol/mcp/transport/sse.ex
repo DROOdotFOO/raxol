@@ -22,14 +22,26 @@ if Code.ensure_loaded?(Plug.Router) do
     use Plug.Router
     require Logger
 
-    alias Raxol.MCP.{Protocol, Server}
+    alias Raxol.MCP.{Deployment, Protocol, Server}
 
     plug(:match)
     plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
     plug(:dispatch)
 
+    # SSE exposes tools over the network, so unlike stdio it fails closed: outside
+    # dev/test it refuses to boot unless the server it fronts has an authorizer
+    # configured. Override with `config :raxol_mcp, require_authorization: false`.
     @doc false
-    def init(opts), do: opts
+    def init(opts) do
+      server = Keyword.get(opts, :server, Server)
+
+      Deployment.enforce_authorization!(
+        Server.authorization_configured?(server),
+        "MCP SSE transport"
+      )
+
+      opts
+    end
 
     post "/mcp" do
       server = conn.private[:mcp_server] || Server
@@ -64,7 +76,10 @@ if Code.ensure_loaded?(Plug.Router) do
         rescue
           e ->
             Logger.error("[MCP.SSE] Error handling message: #{Exception.message(e)}")
-            error = Protocol.error_response(nil, Protocol.internal_error(), "Internal server error")
+
+            error =
+              Protocol.error_response(nil, Protocol.internal_error(), "Internal server error")
+
             json = Jason.encode!(error)
 
             conn
