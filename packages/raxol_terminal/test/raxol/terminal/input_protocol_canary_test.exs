@@ -7,8 +7,16 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
   protocol underneath us (the reader's message shape, the `{:read, :infinity}`
   re-arm). This one drives a REAL pty: it boots the actual `InlineDriver` stdin
   reader inside a terminal multiplexer, types real keystrokes, and asserts they
-  decode into events. Its failure means "OTP moved" -- which is exactly the
-  signal a bump of `OTP_VERSION` in CI should surface loudly instead of shipping.
+  decode into events. That makes it the one test a bump of `OTP_VERSION` in CI
+  should surface loudly instead of shipping.
+
+  A red here does NOT on its own mean "OTP moved". Several things sit between a
+  keystroke and a decoded event, and most of them are ours: the app has to boot
+  and arm, the multiplexer has to accept the keystroke, and the reader has to be
+  traced. Only when all of those held and the bytes still did not arrive is the
+  protocol the remaining explanation. The failure report names the stage that
+  actually broke and prints what the app could see from inside its own VM, so
+  the two are told apart instead of guessed at.
 
   Two keystrokes (not one) with a gap between them: a drift that delivers the
   first read but breaks re-arming would sail through a single-byte test.
@@ -32,37 +40,106 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
   # select loop is armed. Retry a few times to absorb cold-boot pty timing slop.
   @settle_ms 250
   @max_attempts 3
+  @ready_suffix ".ready"
+  @ready_tries 900
+  @output_tries 60
 
   test "real keystrokes decode through the live prim_tty reader" do
     driver = pty_driver()
 
     if driver == nil do
-      IO.puts(:stderr, "[input canary] skipped: neither tmux nor expect on PATH")
+      IO.puts(
+        :stderr,
+        "[input canary] skipped: neither tmux nor expect on PATH"
+      )
     else
-      {tokens, attempt} = drive_until(driver, @max_attempts)
+      {result, attempt} = drive_until(driver, @max_attempts)
 
-      assert tokens == ["a", "b"], """
-      prim_tty input protocol canary FAILED on OTP #{System.otp_release()} (driver: #{driver}) after #{attempt} attempt(s).
-      Expected two real keystrokes to decode as ["a", "b"], got #{inspect(tokens)}.
-      This retries #{@max_attempts}x, so a transient pty/tmux timing race would have
-      passed on a retry -- an empty [] after all attempts is a REAL failure. It
-      almost always means OTP changed the prim_tty reader's private message
-      protocol or its re-arm contract -- see Raxol.Terminal.Driver's `{:trace, ...}`
-      handler and `start_stdin_reader/1`.
-      """
+      assert result.tokens == ["a", "b"],
+             failure_report(result, driver, attempt)
     end
   end
+
+  # Name the stage that actually failed. Every one of these used to surface as
+  # `got []`, which said "OTP moved the protocol" no matter which of them it
+  # was -- and for most of them that claim is simply false.
+  defp failure_report(result, driver, attempt) do
+    """
+    prim_tty input protocol canary FAILED on OTP #{System.otp_release()} \
+    (driver: #{driver}) after #{attempt} attempt(s), at stage: #{result.stage}.
+    Expected ["a", "b"], got #{inspect(result.tokens)}.
+
+    #{stage_explanation(result.stage)}
+
+    In-VM diagnostics from the app (#{@ready_suffix} file):
+      #{result.diag}
+    """
+  end
+
+  defp stage_explanation(:ready_timeout) do
+    """
+    The app never signalled ready, so NO keystroke was ever sent. This is not a
+    protocol break: the app failed to boot or to arm its reader within the
+    #{@ready_tries * 100}ms budget. Look at the app's own startup, not at the
+    trace handler.
+    """
+  end
+
+  defp stage_explanation(:send_failed) do
+    """
+    The pty driver refused to deliver a keystroke (non-zero exit from send-keys).
+    Nothing reached the app, so this says nothing about the input path -- suspect
+    the tmux session or the CI environment.
+    """
+  end
+
+  defp stage_explanation(:no_output) do
+    """
+    Keystrokes were sent, but the app never wrote its output file at all -- it
+    is still blocked or it died before finishing. Check whether the app crashed
+    inside the pty.
+    """
+  end
+
+  defp stage_explanation(:partial) do
+    """
+    The FIRST keystroke decoded and a later one did not. This is the re-arm
+    break the two-keystroke design exists to catch: the reader delivered one
+    read and never re-armed. See `start_stdin_reader/1`'s `{:read, :infinity}`.
+    """
+  end
+
+  defp stage_explanation(:empty) do
+    """
+    The app armed and ran, keystrokes were sent, and it decoded NOTHING. Read
+    the diagnostics below before blaming the protocol:
+
+      * `reader=absent` -- `:user_drv_reader` was not registered, so
+        `start_stdin_reader/1` silently traced nothing. Not a protocol change.
+      * `reader=untraced...` -- the trace never attached.
+      * `raw=...isig_off=false` -- the tty was NOT in raw mode, so a bare
+        keystroke is held in the line discipline until a newline. This canary
+        types `a` and `b` with no newline, so nothing is delivered. A raw-mode
+        problem, not a protocol one.
+      * `reader=traced` AND `isig_off=true` -- everything this side controls was
+        in place and the bytes still did not arrive. THAT is the case that
+        points at OTP moving the reader's private message shape or its re-arm
+        contract (`Raxol.Terminal.Driver`'s `{:trace, ...}` handler).
+    """
+  end
+
+  defp stage_explanation(other), do: "Unrecognized stage: #{inspect(other)}."
 
   # A cold pty boot inside tmux/expect can drop the first keystroke if it lands
   # before the reader has armed its select loop -- a timing flake, not a protocol
   # failure. Retry the whole drive: a real OTP break fails every attempt, a race
   # succeeds on a later one.
   defp drive_until(driver, attempts_left, attempt \\ 1) do
-    tokens = attempt_drive(driver)
+    result = attempt_drive(driver)
 
     cond do
-      tokens == ["a", "b"] -> {tokens, attempt}
-      attempts_left <= 1 -> {tokens, attempt}
+      result.tokens == ["a", "b"] -> {result, attempt}
+      attempts_left <= 1 -> {result, attempt}
       true -> drive_until(driver, attempts_left - 1, attempt + 1)
     end
   end
@@ -71,15 +148,36 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
     out = Path.join(System.tmp_dir!(), "raxol_input_canary_#{unique()}")
 
     try do
-      drive(driver, out)
+      stage = drive(driver, out)
+      diag = read_diagnostics(out)
 
-      case File.read(out) do
-        {:ok, body} -> String.split(body, "\n", trim: true)
-        {:error, _} -> []
+      case {stage, File.read(out)} do
+        {:sent, {:ok, body}} ->
+          tokens = String.split(body, "\n", trim: true)
+          %{tokens: tokens, stage: classify(tokens), diag: diag}
+
+        {:sent, {:error, _}} ->
+          %{tokens: [], stage: :no_output, diag: diag}
+
+        {stage, _} ->
+          %{tokens: [], stage: stage, diag: diag}
       end
     after
       File.rm(out)
-      File.rm(out <> ".ready")
+      File.rm(out <> @ready_suffix)
+    end
+  end
+
+  defp classify(["a", "b"]), do: :ok
+  defp classify([]), do: :empty
+  defp classify(_partial), do: :partial
+
+  # The app's own account of what it established. Absent when it never got far
+  # enough to write one, which is itself the answer.
+  defp read_diagnostics(out) do
+    case File.read(out <> @ready_suffix) do
+      {:ok, body} -> String.trim(body)
+      {:error, _} -> "(no ready file -- the app never signalled)"
     end
   end
 
@@ -107,15 +205,43 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
 
       # Only type once the reader signalled ready, then settle briefly so its
       # select loop is armed. `-l` sends the bytes literally (not as key names).
-      if wait_for_ready(out) == :ok do
-        Process.sleep(@settle_ms)
-        System.cmd("tmux", ["send-keys", "-t", session, "-l", "a"], stderr_to_stdout: true)
-        Process.sleep(@gap_ms)
-        System.cmd("tmux", ["send-keys", "-t", session, "-l", "b"], stderr_to_stdout: true)
-        wait_for_output(out)
+      case wait_for_ready(out) do
+        :ok ->
+          Process.sleep(@settle_ms)
+          type_both(session, out)
+
+        :timeout ->
+          :ready_timeout
       end
     after
-      System.cmd("tmux", ["kill-session", "-t", session], stderr_to_stdout: true)
+      System.cmd("tmux", ["kill-session", "-t", session],
+        stderr_to_stdout: true
+      )
+    end
+  end
+
+  defp type_both(session, out) do
+    with :ok <- send_key(session, "a"),
+         :ok <- gap_then_send(session, "b") do
+      wait_for_output(out)
+      :sent
+    end
+  end
+
+  defp gap_then_send(session, key) do
+    Process.sleep(@gap_ms)
+    send_key(session, key)
+  end
+
+  # A refused keystroke must not read as a decode failure. The exit status was
+  # dropped once, which made a dead tmux session and a moved protocol produce
+  # the same empty result.
+  defp send_key(session, key) do
+    case System.cmd("tmux", ["send-keys", "-t", session, "-l", key],
+           stderr_to_stdout: true
+         ) do
+      {_, 0} -> :ok
+      {_out, _status} -> :send_failed
     end
   end
 
@@ -136,11 +262,15 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
     """
 
     System.cmd("expect", ["-c", script], cd: @pkg_dir, stderr_to_stdout: true)
+
+    # `expect` does its own waiting inside the script, so reaching here means
+    # the keystrokes were written to the pty.
+    :sent
   end
 
   # Type only once the reader is armed, so we never send before the pty listens.
-  defp wait_for_ready(out), do: poll(out <> ".ready", 900)
-  defp wait_for_output(out), do: poll(out, 60)
+  defp wait_for_ready(out), do: poll(out <> @ready_suffix, @ready_tries)
+  defp wait_for_output(out), do: poll(out, @output_tries)
 
   defp poll(_path, 0), do: :timeout
 

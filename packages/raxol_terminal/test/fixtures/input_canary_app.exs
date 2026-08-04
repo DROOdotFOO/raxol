@@ -10,7 +10,7 @@ defmodule InputCanaryApp do
     out = System.get_env("CANARY_OUT") || raise "CANARY_OUT not set"
     n = String.to_integer(System.get_env("CANARY_N") || "2")
 
-    {:ok, _pid} =
+    {:ok, pid} =
       Raxol.Terminal.InlineDriver.start_link(
         device: :standard_io,
         subscriber: self(),
@@ -20,15 +20,60 @@ defmodule InputCanaryApp do
         probe?: false
       )
 
-    # Signal that the reader is armed, so the driver sends keystrokes only after
-    # the pty is ready to receive them (avoids a send-before-listen race).
-    File.write!(out <> ".ready", "ok")
+    # Signal readiness -- and say what was actually established, not just that
+    # start_link returned. The driving test cannot see into this VM, so when it
+    # ends up with no keystrokes this file is the only evidence of whether the
+    # reader was armed and whether the tty was actually in raw mode. Without it
+    # a missed keystroke and a moved OTP protocol look identical.
+    File.write!(out <> ".ready", diagnostics(pid))
 
     tokens = collect(n, [])
     File.write!(out, Enum.join(tokens, "\n"))
+
     # Exit immediately so the pty closes and the driving test's `eof`/output wait
     # returns at once instead of blocking on a slow BEAM/mix shutdown.
     System.halt(0)
+  end
+
+  # What this VM can see about its own input path, as one greppable line.
+  defp diagnostics(pid) do
+    "otp=#{System.otp_release()} reader=#{reader_status()} raw=#{raw_status(pid)}"
+  end
+
+  # Is the prim_tty reader actually being traced? `start_stdin_reader/1` only
+  # traces `:user_drv_reader` `if reader` -- when the process is not registered
+  # it silently no-ops and the driver comes up looking healthy while no input
+  # can ever arrive. That distinction is invisible from outside the VM.
+  defp reader_status do
+    case Process.whereis(:user_drv_reader) do
+      nil ->
+        "absent"
+
+      reader ->
+        case :erlang.trace_info(reader, :flags) do
+          {:flags, flags} ->
+            if :send in flags, do: "traced", else: "untraced#{inspect(flags)}"
+
+          other ->
+            "unknown#{inspect(other)}"
+        end
+    end
+  end
+
+  # Raw mode is what makes a bare keystroke deliverable: in canonical mode the
+  # reader hands nothing over until a newline, and this canary types `a` and `b`
+  # with no newline. `boot_confirmed?` is the driver's own verify-then-assert
+  # result; `isig_off?` is the live flags.
+  defp raw_status(pid) do
+    case Raxol.Terminal.InlineDriver.isig_report(pid) do
+      %{boot_confirmed?: confirmed, isig_off?: off} ->
+        "boot_confirmed=#{confirmed},isig_off=#{off}"
+
+      other ->
+        "unexpected#{inspect(other)}"
+    end
+  catch
+    kind, reason -> "unavailable(#{inspect(kind)},#{inspect(reason)})"
   end
 
   defp collect(n, acc) when length(acc) >= n, do: Enum.reverse(acc)
