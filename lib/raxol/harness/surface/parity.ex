@@ -66,6 +66,7 @@ defmodule Raxol.Harness.Surface.Parity do
   alias Raxol.Core.Buffer
   alias Raxol.Core.Renderer, as: CoreRenderer
   alias Raxol.Harness.Fixture
+  alias Raxol.Harness.Fixture.Session
   alias Raxol.Harness.Projection
   alias Raxol.LiveView.TerminalBridge
   alias Raxol.MCP.StructuredScreenshot
@@ -113,18 +114,30 @@ defmodule Raxol.Harness.Surface.Parity do
   @doc """
   Every projectable fixture in `test/fixtures/harness/sessions`, sorted.
 
-  A fixture with a `.notes.md` sidecar is an adversarial/decode-level corpus
-  entry (`Raxol.Harness.Fixture.Bless` skips these for the same reason): it
-  exists to be rejected by the loader, so there is no render to pin.
+  Membership is decided by `Raxol.Harness.Fixture.Session.golden?/1` -- the
+  same predicate `Raxol.Harness.Fixture.Bless` uses, so the two corpora cannot
+  drift apart. An `kind: "adversarial"` fixture exists to be REJECTED by the
+  loader, so there is no render to pin.
+
+  Note this is a header field, not a filename convention: a `.notes.md`
+  sidecar is documentation and says nothing about whether a fixture renders
+  (`projection-panels` is hand-authored, documented, and golden).
   """
   @spec fixtures() :: [String.t()]
   def fixtures do
     @sessions_dir
     |> Path.join("*.jsonl")
     |> Path.wildcard()
+    |> Enum.filter(&golden_fixture?/1)
     |> Enum.map(&Path.basename(&1, ".jsonl"))
-    |> Enum.reject(&File.exists?(Path.join(@sessions_dir, "#{&1}.notes.md")))
     |> Enum.sort()
+  end
+
+  defp golden_fixture?(path) do
+    case Fixture.load(path) do
+      {:ok, session} -> Session.golden?(session)
+      {:error, _} -> false
+    end
   end
 
   @doc "On-disk path for a fixture x surface artifact."

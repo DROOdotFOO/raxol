@@ -1,70 +1,70 @@
 {
   "blocks": [
     {
+      "family": "loop",
       "id": 1,
       "offset": 2,
-      "type": "turn_started",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "turn_started"
     },
     {
+      "family": "loop",
       "id": 2,
       "offset": 3,
-      "type": "item_started",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "item_started"
     },
     {
+      "family": "loop",
       "id": 3,
       "offset": 4,
-      "type": "item_completed",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "item_completed"
     },
     {
+      "family": "loop",
       "id": 4,
       "offset": 5,
-      "type": "item_started",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "item_started"
     },
     {
+      "family": "loop",
       "id": 5,
       "offset": 6,
-      "type": "item_completed",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "item_completed"
     },
     {
+      "family": "loop",
       "id": 6,
       "offset": 7,
-      "type": "item_started",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "item_started"
     },
     {
+      "family": "loop",
       "id": 7,
       "offset": 8,
-      "type": "item_completed",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "item_completed"
     },
     {
+      "family": "loop",
       "id": 8,
       "offset": 9,
-      "type": "turn_completed",
-      "family": "loop",
       "tier": "durable",
-      "turn_id": "t1"
+      "turn_id": "t1",
+      "type": "turn_completed"
     }
   ],
-  "schema": "harness-fixture-blocks/1",
-  "projector": "Raxol.Harness.Fixture.Projectors.Identity"
+  "projector": "Raxol.Harness.Fixture.Projectors.Identity",
+  "schema": "harness-fixture-blocks/1"
 }

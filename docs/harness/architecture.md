@@ -113,8 +113,16 @@ Two independent properties, both in `test/harness/surface_parity_test.exs`:
   sibling.
 
 The corpus convention: **every rendering bug fixed leaves a fixture behind.**
-Fixtures with a `.notes.md` sidecar are adversarial (they exist to be rejected
-by the loader) and are skipped — there is no render to pin.
+Membership is `Fixture.Session.golden?/1`, the same predicate the fixture bless
+uses, so the two corpora cannot drift apart; a `kind: "adversarial"` fixture
+exists to be rejected by the loader, so there is no render to pin. That is a
+header field, not a filename convention — a `.notes.md` sidecar is
+documentation and says nothing about whether a fixture renders.
+
+Snapshot bytes are a function of content alone: `Fixture.Bless` stringifies
+every key before encoding, because an atom-keyed map iterates in atom-table
+order and a recompile that shifts which module interned an atom first would
+otherwise reorder the JSON and report drift that is not there.
 
 ## Process topology
 
