@@ -24,6 +24,41 @@ defmodule Raxol.MCP.Server do
 
   The server can push notifications to connected transports. Transports
   subscribe via `subscribe/2` and receive `{:mcp_notification, map()}` messages.
+
+  ## Elicitation
+
+  When `Raxol.MCP.Authorizer` returns `{:ask, prompt}`, what happens depends on
+  whether the client can be asked. A client that advertised the `elicitation`
+  capability at `initialize` (and has a subscribed transport) is sent a real
+  `elicitation/create` request; anything else gets the machine-readable
+  `authorization_required` deny.
+
+  The shape matters, because the transport seam is synchronous. `tools/call`
+  returns `nil` **immediately** and the call is parked:
+
+      client                     server                    transport
+      tools/call  ------------->  ASK -> park, return nil ->  (unblocked)
+                 <-------------  elicitation/create (push)
+      response   ------------->  resume, return nil
+                 <-------------  tools/call response (push)
+
+  Returning `nil` is what keeps this from deadlocking: the transport's
+  `handle_message` does not block, so it stays free to READ the client's
+  answer. Both the prompt and the eventual response ride the subscriber
+  channel, so no transport change was needed.
+
+  A parked call is always closed, exactly once, by one of four paths: an
+  approval (runs the tool), a decline/cancel/unapproved accept, an error
+  response, or a timeout (`:elicitation_timeout_ms`, default 60s). Every path
+  but approval resolves to the same deny -- silence is not consent.
+
+  ## Sensitive tools
+
+  A tool annotated `destructiveHint: true` or `sensitive: true` (see
+  `Raxol.MCP.ToolDef.sensitive?/1`) must not be served without an authorizer.
+  The server REFUSES TO BOOT when one is already registered, and denies at
+  `tools/call` for one registered afterwards -- the boot check alone would be
+  bypassable by registering late.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -36,6 +71,12 @@ defmodule Raxol.MCP.Server do
   alias Raxol.MCP.Protocol
   alias Raxol.MCP.Registry
   alias Raxol.MCP.ResourceRouter
+  alias Raxol.MCP.ToolDef
+
+  # A client that advertises elicitation but never answers must not park a
+  # `tools/call` forever: on expiry the call is answered with the same
+  # machine-readable deny it would have received without elicitation.
+  @default_elicitation_timeout_ms 60_000
 
   defstruct [
     :registry,
@@ -43,7 +84,11 @@ defmodule Raxol.MCP.Server do
     initialized: false,
     log_level: :info,
     subscribers: [],
-    resource_subscriptions: %{}
+    resource_subscriptions: %{},
+    client_capabilities: %{},
+    pending_elicitations: %{},
+    elicitation_seq: 0,
+    elicitation_timeout_ms: @default_elicitation_timeout_ms
   ]
 
   @type t :: %__MODULE__{
@@ -53,7 +98,22 @@ defmodule Raxol.MCP.Server do
           log_level:
             :debug | :info | :notice | :warning | :error | :critical | :alert | :emergency,
           subscribers: [pid()],
-          resource_subscriptions: %{String.t() => boolean()}
+          resource_subscriptions: %{String.t() => boolean()},
+          client_capabilities: map(),
+          pending_elicitations: %{String.t() => pending_elicitation()},
+          elicitation_seq: non_neg_integer(),
+          elicitation_timeout_ms: pos_integer()
+        }
+
+  @typedoc """
+  A `tools/call` parked awaiting the client's elicitation answer. `request_id`
+  is the ORIGINAL call's id -- the one the client is still waiting on.
+  """
+  @type pending_elicitation :: %{
+          request_id: term(),
+          tool: String.t(),
+          arguments: map(),
+          timer: reference()
         }
 
   @log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
@@ -114,7 +174,16 @@ defmodule Raxol.MCP.Server do
   def init_manager(opts) do
     registry = Keyword.get(opts, :registry, Registry)
     authorizer = Keyword.get(opts, :authorizer)
-    {:ok, %__MODULE__{registry: registry, authorizer: authorizer}}
+
+    refuse_unguarded_sensitive_tools!(registry, authorizer)
+
+    {:ok,
+     %__MODULE__{
+       registry: registry,
+       authorizer: authorizer,
+       elicitation_timeout_ms:
+         Keyword.get(opts, :elicitation_timeout_ms, @default_elicitation_timeout_ms)
+     }}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -149,18 +218,46 @@ defmodule Raxol.MCP.Server do
     {:noreply, %{state | subscribers: List.delete(state.subscribers, pid)}}
   end
 
+  # The client advertised elicitation, was asked, and never answered. Close the
+  # parked call with the same deny it would have got had it never advertised --
+  # an unanswered prompt is not an approval.
+  def handle_manager_info({:elicitation_timeout, id}, state) do
+    case Map.fetch(state.pending_elicitations, id) do
+      {:ok, pending} ->
+        {_pending, state} = take_pending(state, id)
+
+        broadcast(
+          state.subscribers,
+          authorization_required(pending.request_id, pending.tool, :ask, "elicitation timed out")
+        )
+
+        {:noreply, state}
+
+      :error ->
+        {:noreply, state}
+    end
+  end
+
   def handle_manager_info(_msg, state), do: {:noreply, state}
 
   # -- Dispatch -----------------------------------------------------------------
 
-  defp dispatch(%{method: "initialize", id: id}, state) do
+  defp dispatch(%{method: "initialize", id: id} = msg, state) do
     result = %{
       protocolVersion: Protocol.mcp_protocol_version(),
       capabilities: capabilities(),
       serverInfo: server_info()
     }
 
-    {Protocol.response(id, result), %{state | initialized: true}}
+    # Remember what the CLIENT can do. `elicitation` is the one that changes
+    # behaviour: it is the difference between denying an ASK and asking.
+    client_capabilities =
+      msg
+      |> Map.get(:params, %{})
+      |> fetch_field("capabilities", %{})
+
+    state = %{state | initialized: true, client_capabilities: client_capabilities}
+    {Protocol.response(id, result), state}
   end
 
   defp dispatch(%{method: "notifications/initialized"}, state) do
@@ -182,22 +279,38 @@ defmodule Raxol.MCP.Server do
     name = Map.get(params, "name") || Map.get(params, :name, "")
     arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
 
-    # Authorize before the tool runs. A nil authorizer allows (stdio inherits the
-    # OS boundary); ASK is denied here because tools/call has no interactive
-    # channel (deny-on-ASK) -- elicitation is a follow-up.
-    response =
-      case Authorizer.decide(state.authorizer, name, arguments, %{}) do
-        :allow ->
-          call_tool_response(id, name, Registry.call_tool(state.registry, name, arguments))
+    # A sensitive tool with no authorizer never runs, whatever the transport.
+    # The boot check catches this for tools present at start; this catches one
+    # registered afterwards, which would otherwise slip past it.
+    if state.authorizer == nil and sensitive_tool?(state.registry, name) do
+      {authorization_required(id, name, :deny, :sensitive_tool_unguarded), state}
+    else
+      authorize_and_call(id, name, arguments, state)
+    end
+  end
 
-        {:ask, prompt} ->
-          authorization_required(id, name, :ask, prompt)
+  # The client's answer to an `elicitation/create` we sent. It arrives as an
+  # ordinary inbound message, so it is dispatched like one -- but it is a
+  # RESPONSE (id + result, no method), and it resumes a `tools/call` that is
+  # still parked. Placed above the catch-all; an id we did not mint falls
+  # through to it and is ignored.
+  defp dispatch(%{id: id, result: result}, state)
+       when is_map_key(state.pending_elicitations, id) do
+    {pending, state} = take_pending(state, id)
+    Process.cancel_timer(pending.timer)
+    {nil, answer_parked(state, resume(pending, result, state))}
+  end
 
-        {:deny, reason} ->
-          authorization_required(id, name, :deny, reason)
-      end
+  # An error response to our elicitation is a refusal, not a crash.
+  defp dispatch(%{id: id, error: _}, state) when is_map_key(state.pending_elicitations, id) do
+    {pending, state} = take_pending(state, id)
+    Process.cancel_timer(pending.timer)
 
-    {response, state}
+    {nil,
+     answer_parked(
+       state,
+       authorization_required(pending.request_id, pending.tool, :ask, "elicitation failed")
+     )}
   end
 
   # -- Resources ---
@@ -333,6 +446,15 @@ defmodule Raxol.MCP.Server do
     {error, state}
   end
 
+  # An inbound RESPONSE (id + result/error, no method) whose id we did not mint:
+  # a late answer to an elicitation that already timed out, or a stray. JSON-RPC
+  # says ignore it. Answering "Missing method" would bounce an error response AT
+  # a response, which a strict peer can answer in turn -- a loop. Must sit above
+  # the malformed-message clause, which would otherwise claim it.
+  defp dispatch(msg, state) when is_map_key(msg, :result) or is_map_key(msg, :error) do
+    {nil, state}
+  end
+
   # Malformed message
   defp dispatch(%{id: id}, state) do
     error = Protocol.error_response(id, Protocol.invalid_request(), "Missing method")
@@ -411,6 +533,177 @@ defmodule Raxol.MCP.Server do
   defp normalize_content(result) when is_list(result), do: result
   defp normalize_content(text) when is_binary(text), do: [%{type: "text", text: text}]
   defp normalize_content(other), do: [%{type: "text", text: inspect(other, pretty: true)}]
+
+  # -- Sensitive-tool guard -----------------------------------------------------
+
+  defp authorize_and_call(id, name, arguments, state) do
+    # Authorize before the tool runs. A nil authorizer allows (stdio inherits
+    # the OS boundary).
+    case Authorizer.decide(state.authorizer, name, arguments, %{}) do
+      :allow ->
+        {call_tool_response(id, name, Registry.call_tool(state.registry, name, arguments)), state}
+
+      {:ask, prompt} ->
+        ask(id, name, arguments, prompt, state)
+
+      {:deny, reason} ->
+        {authorization_required(id, name, :deny, reason), state}
+    end
+  end
+
+  # Registering a tool that declares itself destructive/sensitive while no
+  # authorizer is configured is a REFUSAL, not a warning: the whole point of the
+  # annotation is that this tool must not run unattended, and booting anyway
+  # would serve it wide open. The fix is one line at the call site -- pass an
+  # authorizer (`Raxol.MCP.Authorizer.allow_all/0` if that is genuinely what you
+  # want, which is at least then visible in the code).
+  defp refuse_unguarded_sensitive_tools!(_registry, authorizer) when authorizer != nil, do: :ok
+
+  defp refuse_unguarded_sensitive_tools!(registry, _authorizer) do
+    case sensitive_tool_names(registry) do
+      [] ->
+        :ok
+
+      names ->
+        raise ArgumentError,
+              "Raxol.MCP.Server refuses to boot: #{length(names)} tool(s) are annotated " <>
+                "sensitive/destructive but no :authorizer is configured -- " <>
+                "#{Enum.join(names, ", ")}. Pass an authorizer to start_link/1 " <>
+                "(Raxol.MCP.Authorizer.allow_all/0 opts out, explicitly)."
+    end
+  end
+
+  defp sensitive_tool_names(registry) do
+    registry
+    |> Registry.list_tools()
+    |> Enum.filter(&ToolDef.sensitive?/1)
+    |> Enum.map(&(Map.get(&1, :name) || Map.get(&1, "name")))
+  catch
+    # A registry that is not up yet cannot be scanned. Absence of evidence is
+    # not evidence of absence, but refusing to boot on it would make the server
+    # un-startable in every registry-after-server tree -- the runtime backstop
+    # in tools/call is what actually holds the line there.
+    :exit, _ -> []
+  end
+
+  defp sensitive_tool?(registry, name) do
+    registry
+    |> Registry.list_tools()
+    |> Enum.any?(fn tool ->
+      (Map.get(tool, :name) || Map.get(tool, "name")) == name and ToolDef.sensitive?(tool)
+    end)
+  catch
+    :exit, _ -> false
+  end
+
+  # -- Elicitation --------------------------------------------------------------
+
+  # An ASK with no way to ask is a deny. Elicitation needs BOTH a client that
+  # advertised the capability AND a transport subscribed to carry the request --
+  # without a subscriber the prompt would go nowhere and the call would park
+  # until it timed out, which is strictly worse than answering now.
+  defp ask(id, tool, arguments, prompt, state) do
+    if elicitation_capable?(state) do
+      start_elicitation(id, tool, arguments, prompt, state)
+    else
+      {authorization_required(id, tool, :ask, prompt), state}
+    end
+  end
+
+  defp elicitation_capable?(state) do
+    state.subscribers != [] and
+      fetch_field(state.client_capabilities, "elicitation", nil) != nil
+  end
+
+  # Park the call and ask. Returning `nil` is what makes this safe on a
+  # synchronous transport: the transport's `handle_message` returns immediately
+  # instead of blocking, so it stays free to READ the client's answer. Both the
+  # prompt and the eventual response go out over the subscriber channel.
+  defp start_elicitation(request_id, tool, arguments, prompt, state) do
+    seq = state.elicitation_seq + 1
+    elicit_id = "raxol-elicit-#{seq}"
+
+    timer =
+      Process.send_after(self(), {:elicitation_timeout, elicit_id}, state.elicitation_timeout_ms)
+
+    pending = %{request_id: request_id, tool: tool, arguments: arguments, timer: timer}
+
+    state = %{
+      state
+      | elicitation_seq: seq,
+        pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending)
+    }
+
+    broadcast(state.subscribers, elicitation_request(elicit_id, tool, prompt))
+    {nil, state}
+  end
+
+  # A server-initiated id lives in the SERVER's id space; a string prefix keeps
+  # it from ever colliding with a client's integer request ids.
+  defp elicitation_request(elicit_id, tool, prompt) do
+    Protocol.request(elicit_id, "elicitation/create", %{
+      message: prompt,
+      requestedSchema: %{
+        type: "object",
+        properties: %{
+          approve: %{
+            type: "boolean",
+            description: "Approve running the #{tool} tool"
+          }
+        },
+        required: ["approve"]
+      }
+    })
+  end
+
+  # The parked call is answered by PUSH, never as the reply to the message that
+  # unparked it: what arrived was a JSON-RPC *response*, and a response never
+  # gets a reply. This also makes all three resolutions -- answered, errored,
+  # timed out -- take one identical path out.
+  defp answer_parked(state, response) do
+    broadcast(state.subscribers, response)
+    state
+  end
+
+  defp take_pending(state, id) do
+    {pending, rest} = Map.pop(state.pending_elicitations, id)
+    {pending, %{state | pending_elicitations: rest}}
+  end
+
+  # Only an explicit accept-with-approval runs the tool. Decline, cancel, a
+  # missing action, and accept-without-approval all fail closed -- the same
+  # direction absence takes everywhere else in this seam.
+  defp resume(pending, result, state) do
+    action = fetch_field(result, "action", nil)
+    content = fetch_field(result, "content", %{})
+
+    if action == "accept" and fetch_field(content, "approve", false) == true do
+      call_tool_response(
+        pending.request_id,
+        pending.tool,
+        Registry.call_tool(state.registry, pending.tool, pending.arguments)
+      )
+    else
+      authorization_required(
+        pending.request_id,
+        pending.tool,
+        :ask,
+        "user #{action || "declined"}"
+      )
+    end
+  end
+
+  # Decoded wire maps carry atom keys; hand-built ones may carry strings.
+  defp fetch_field(map, key, default) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, String.to_existing_atom(key), default)
+    end
+  rescue
+    ArgumentError -> default
+  end
+
+  defp fetch_field(_map, _key, default), do: default
 
   defp broadcast(subscribers, notification) do
     for pid <- subscribers, Process.alive?(pid) do

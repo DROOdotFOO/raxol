@@ -312,8 +312,7 @@ defmodule Raxol.MCP.Registry do
   def handle_manager_call({:register_resources, resources}, _from, state) do
     for resource <- resources do
       entry =
-        {:resource, resource.uri, resource_definition(resource),
-         resource.callback}
+        {:resource, resource.uri, resource_definition(resource), resource.callback}
 
       :ets.insert(state.table, {resource_key(resource.uri), entry})
     end
@@ -356,7 +355,12 @@ defmodule Raxol.MCP.Registry do
   defp prompt_key(name), do: {:prompt, name}
 
   defp tool_definition(tool) do
-    Map.take(tool, [:name, :description, :inputSchema])
+    # `:annotations` is an MCP spec field (destructiveHint, readOnlyHint, ...)
+    # and must survive onto the listed definition: clients read the hints from
+    # `tools/list`, and `Raxol.MCP.Server`'s sensitive-tool guard reads them
+    # back from here to decide what may run unguarded. `Map.take/2` ignores an
+    # absent key, so an unannotated tool is unchanged.
+    Map.take(tool, [:name, :description, :inputSchema, :annotations])
   end
 
   defp resource_definition(resource) do

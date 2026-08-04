@@ -58,6 +58,7 @@ defmodule Raxol.MCP.ToolDef do
     description = Keyword.get(opts, :description)
     callback = Keyword.get(opts, :callback)
     schema = Keyword.get(opts, :input_schema) || Keyword.get(opts, :inputSchema)
+    annotations = Keyword.get(opts, :annotations)
 
     errors =
       []
@@ -69,13 +70,14 @@ defmodule Raxol.MCP.ToolDef do
 
     case errors do
       [] ->
-        {:ok,
-         %{
-           name: name,
-           description: description,
-           inputSchema: schema,
-           callback: callback
-         }}
+        tool = %{
+          name: name,
+          description: description,
+          inputSchema: schema,
+          callback: callback
+        }
+
+        {:ok, put_annotations(tool, annotations)}
 
       errors ->
         {:error, errors}
@@ -162,4 +164,39 @@ defmodule Raxol.MCP.ToolDef do
   end
 
   defp validate_schema(errors, _), do: [:missing_input_schema | errors]
+
+  @doc """
+  Whether `tool` declares itself sensitive -- destructive, or otherwise
+  something that must not run unattended (moving money is the motivating case).
+
+  Recognized, any of which is enough:
+
+    * `annotations.destructiveHint == true` -- the MCP-standard hint;
+    * `annotations.sensitive == true` -- for a tool that is not destructive in
+      the MCP sense but still must be gated.
+
+  This predicate is deliberately **one-directional: an annotation can only ever
+  ADD an obligation, never remove one.** A tool claiming `destructiveHint:
+  false` or `readOnlyHint: true` gets no exemption from anything -- it is a
+  self-report, and the harness already rules elsewhere (U21-R3) that a
+  self-reported `mutating: false` cannot remove a call from the mutation set.
+  Declaring yourself dangerous is credible; declaring yourself safe is not.
+  """
+  @spec sensitive?(map()) :: boolean()
+  def sensitive?(%{} = tool) do
+    annotations = Map.get(tool, :annotations) || Map.get(tool, "annotations") || %{}
+
+    flag(annotations, :destructiveHint) or flag(annotations, :sensitive)
+  end
+
+  def sensitive?(_), do: false
+
+  defp flag(annotations, key) when is_map(annotations) do
+    (Map.get(annotations, key) || Map.get(annotations, Atom.to_string(key))) == true
+  end
+
+  defp flag(_annotations, _key), do: false
+
+  defp put_annotations(tool, nil), do: tool
+  defp put_annotations(tool, annotations), do: Map.put(tool, :annotations, annotations)
 end
