@@ -72,6 +72,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     HangingProbe,
     LoopDraftProbe,
     MultiCallProbe,
+    GatedProbe,
     ShortParkProbe,
     SlowMultiCallProbe,
     TaintedTrustProbe,
@@ -148,21 +149,94 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     end
   end
 
+  # Submit `n` runs whose `build/1` is blocked on a gate this process owns, and
+  # return the submit results. The gate stays SHUT on return, so the caller can
+  # assert against a pool where no run has reached the provider.
+  #
+  # The 15s bound is a LIVENESS deadline, not a latency budget: it only elapses
+  # if a submit genuinely never returns (i.e. it ran the gated probe inline).
+  # Nothing here asserts how fast a submit is -- that was the flaw in the
+  # wall-clock form this replaced.
+  defp submit_gated!(rig, prefix, n) do
+    gate = self()
+    context = Map.put(ctx(), :gate, gate)
+
+    task =
+      Task.async(fn ->
+        for i <- 1..n do
+          Runner.submit("#{prefix}-#{i}", GatedProbe, submit_opts(rig, context))
+        end
+      end)
+
+    case Task.yield(task, 15_000) do
+      {:ok, results} ->
+        results
+
+      _ ->
+        Task.shutdown(task, :brutal_kill)
+
+        flunk(
+          "submit blocked: #{n} submit(s) never returned while every run was " <>
+            "held in build/1 — submit is waiting for the run"
+        )
+    end
+  end
+
+  # Open the gate and keep it open until every run is terminal. This is cleanup
+  # with teeth: the pool is a shared SINGLETON, so leaving workers parked in
+  # `build/1` would starve every other async test — exactly the cross-test
+  # interference this rewrite exists to stop causing.
+  defp release_gated(bus, run_ids) do
+    drain_and_release(
+      bus,
+      MapSet.new(run_ids),
+      System.monotonic_time(:millisecond) + 10_000
+    )
+  end
+
+  defp drain_and_release(bus, wanted, deadline) do
+    receive do
+      {:probe_gated, pid} ->
+        send(pid, :release)
+        drain_and_release(bus, wanted, deadline)
+    after
+      25 ->
+        cond do
+          all_terminal?(bus, wanted) -> :ok
+          System.monotonic_time(:millisecond) > deadline -> :ok
+          true -> drain_and_release(bus, wanted, deadline)
+        end
+    end
+  end
+
+  defp all_terminal?(bus, wanted) do
+    terminal =
+      for %{kind: :probe_run, run_id: id, status: s} <- L.events(bus),
+          s in L.terminal_statuses(),
+          into: MapSet.new(),
+          do: id
+
+    MapSet.subset?(wanted, terminal)
+  end
+
   describe "submit is non-blocking and total (red until U12 lands)" do
-    test "submit returns {:ok, run_id} immediately — never blocks, never returns results inline" do
+    test "submit returns {:ok, run_id} without waiting for the run" do
       rig = rig()
 
-      {micros, result} =
-        :timer.tc(fn ->
-          Runner.submit("u12-red", CacheRideProbe, submit_opts(rig, ctx()))
-        end)
+      # Causal, not timed. The run blocks inside `build/1`, which the Pool calls
+      # STRICTLY BEFORE the provider -- so a submit that returns here provably
+      # did not run its own probe inline. The old form asserted `micros <
+      # 50_000`, which measured `GenServer.call` queueing on a pool that is a
+      # shared singleton every other async test also submits to; that is
+      # contention, not the design property, and it flaked accordingly.
+      {:ok, run_id} = submit_gated!(rig, "u12-red", 1) |> hd()
 
-      assert {:ok, run_id} = result
       assert is_binary(run_id)
-      # Non-blocking: submit returns before any provider call completes.
-      assert micros < 50_000, "submit blocked for #{micros}µs"
-      # Never inline: the ok tuple carries a run_id and nothing else.
-      assert {:ok, _run_id} = result
+
+      assert L.provider_calls(rig.provider) == 0,
+             "submit returned only after the run reached the provider — it blocked"
+
+      release_gated(rig.bus, [run_id])
     end
 
     test "only an unknown probe fails submit — {:error, :unknown_probe}" do
@@ -249,38 +323,28 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
       assert L.lifecycle_complete(events, [run_id]) == :ok
     end
 
-    test "submit under saturation never blocks (seed-reproducible burst)" do
+    test "submit under saturation never waits for the run (burst)" do
       rig = rig()
-      :rand.seed(:exsss, {@seed, @seed, @seed})
       n = 16
 
-      results =
-        for i <- 1..n do
-          Process.sleep(:rand.uniform(2) - 1)
-
-          {micros, result} =
-            :timer.tc(fn ->
-              Runner.submit(
-                "u12-red-#{i}",
-                CacheRideProbe,
-                submit_opts(rig, ctx())
-              )
-            end)
-
-          assert micros < 50_000,
-                 "seed=#{@seed}: submit ##{i} blocked for #{micros}µs"
-
-          result
-        end
+      # Real saturation, held open: every run is stuck in `build/1` for the
+      # whole burst, so the pool cannot drain between submits the way it could
+      # when the runs were instant. All 16 submits still return.
+      results = submit_gated!(rig, "u12-red", n)
 
       assert Enum.all?(results, &match?({:ok, _}, &1)),
-             "seed=#{@seed}: submit failed under saturation: #{inspect(results)}"
+             "submit failed under saturation: #{inspect(results)}"
 
-      assert results
-             |> Enum.map(fn {:ok, id} -> id end)
-             |> Enum.uniq()
-             |> length() == n,
-             "seed=#{@seed}: run_ids must be unique"
+      run_ids = Enum.map(results, fn {:ok, id} -> id end)
+      assert length(Enum.uniq(run_ids)) == n, "run_ids must be unique"
+
+      # THE PROPERTY, stated causally: 16 submits returned while not one run had
+      # reached the provider. A submit that ran its probe inline could not have
+      # gotten past the first shut gate, let alone returned 16 times.
+      assert L.provider_calls(rig.provider) == 0,
+             "a submit returned only after its run reached the provider — it blocked"
+
+      release_gated(rig.bus, run_ids)
     end
   end
 
