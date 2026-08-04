@@ -372,12 +372,12 @@ defmodule Raxol.Agent.Session.SupervisorTest do
       life2 = lifecycle_pid(sid)
       assert life2 != life0
 
-      wait_until(fn ->
-        match?(
-          %{lifecycle_pid: ^life2},
-          :sys.get_state(Session.Supervisor.whereis(sid))
-        )
-      end)
+      # The session is the LAST `:rest_for_one` child, so it comes back AFTER
+      # the lifecycle it depends on — there is a real window here where `life2`
+      # already exists and the session does not. Resolve through a total helper:
+      # a bare `:sys.get_state(nil)` EXITS out of the predicate, which reads as
+      # a test failure rather than as "not restarted yet".
+      wait_until(fn -> session_lifecycle_pid(sid) == life2 end)
 
       # The crux: the fresh lifecycle carries the app's INIT model, NOT the
       # accumulated ["kept"] — proving it did not reattach to the dead runtime.
@@ -617,6 +617,19 @@ defmodule Raxol.Agent.Session.SupervisorTest do
     GenServer.call(session, :get_model)
   catch
     :exit, _ -> {:error, :down}
+  end
+
+  # The lifecycle the session has RESOLVED, or nil when there is no session to
+  # ask. Total by construction: absent (`whereis` -> nil), and dying between the
+  # lookup and the call, both read as nil so a caller polling on it keeps
+  # waiting instead of exiting.
+  defp session_lifecycle_pid(sid) do
+    case Session.Supervisor.whereis(sid) do
+      pid when is_pid(pid) -> Map.get(:sys.get_state(pid), :lifecycle_pid)
+      _ -> nil
+    end
+  catch
+    :exit, _ -> nil
   end
 
   defp registry_lookup(key), do: Registry.lookup(Raxol.Agent.Registry, key)
