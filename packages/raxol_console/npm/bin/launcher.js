@@ -9,6 +9,7 @@ const { spawnSync } = require("node:child_process");
 const { join } = require("node:path");
 const { existsSync } = require("node:fs");
 const os = require("node:os");
+const { withTerminalRestore } = require("./tty");
 
 // Maps `${platform}-${arch}` to the Burrito output name (`raxol_console_<target>`).
 const BINARIES = {
@@ -53,7 +54,11 @@ function main() {
     args = [];
   }
 
-  const result = spawnSync(binary, args, { stdio: "inherit" });
+  // Restore the shell's tty settings if the runtime child dies in raw mode, so
+  // an abnormal exit (crash, SIGSEGV) never leaves the terminal wedged.
+  const result = withTerminalRestore(() =>
+    spawnSync(binary, args, { stdio: "inherit" }),
+  );
   if (result.error) {
     console.error(`raxol-console: failed to launch runtime: ${result.error.message}`);
     process.exit(1);
