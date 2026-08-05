@@ -20,7 +20,7 @@ Raxol uses a hybrid terminal backend: a native NIF when available, with automati
 +-------+  +-----------+
 ```
 
-## How Fallback Works
+## How fallback works
 
 ### Compile-Time Detection
 
@@ -33,7 +33,7 @@ Raxol uses a hybrid terminal backend: a native NIF when available, with automati
 
 This module attribute gets baked into the BEAM bytecode, so there's no runtime overhead for the detection.
 
-### Runtime Backend Selection
+### Runtime backend selection
 
 When `Driver` initializes, it picks the backend:
 
@@ -122,7 +122,7 @@ end
 
 This prevents terminal initialization in CI pipelines, Docker containers without a TTY, and piped IEx sessions. The actual function name is `has_terminal_device?/0`.
 
-## Terminal Emulator Compatibility
+## Terminal emulator compatibility
 
 Raxol works with any terminal that supports basic ANSI escape sequences. Advanced features like inline images are auto-detected per-emulator.
 
@@ -175,7 +175,7 @@ Application.put_env(:raxol, :terminal_backend, :io_terminal)
 
 ## Troubleshooting
 
-### NIF Not Loading
+### NIF not loading
 
 If termbox2_nif fails to load:
 
@@ -215,7 +215,7 @@ reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1
 
 **Raw mode not working**: requires OTP 28+. Check with `elixir --version`.
 
-### Checking Current Backend
+### Checking current backend
 
 ```elixir
 iex> Code.ensure_loaded?(:termbox2_nif)

@@ -39,7 +39,7 @@ Each round is a local patch. The pattern underneath is a design decision that ha
 never been made explicitly: **what assigns the ordering key, and is that assigner
 inside or outside the trust boundary?**
 
-Round 3 lands on the worst answer: the ordering key is chosen by the **peer** — the
+Round 3 lands on the worst answer: the ordering key is chosen by the **peer**: the
 untrusted counterparty on the other end of the ACP connection. A no-drop + in-order
 guarantee whose correctness depends on a value the counterparty supplies is not a
 guarantee. A buggy peer that never increments its counter, or a malicious peer that
@@ -63,7 +63,7 @@ observes after it has already delivered the terminal result for that turn.
 
 1. **Receiver-assigned, contiguous ordering key (decided).** The ordering key is a
    monotonic per-session counter **stamped by the receiver at the single sequential
-   point where inbound frames are demultiplexed — before any async, per-session
+   point where inbound frames are demultiplexed: before any async, per-session
    dispatch fan-out**. It is never read from, nor validated against, the peer's `_meta`.
    Arrival-order-per-connection is explicitly rejected as the key, because it is not
    stable across a reattach/replay onto a new connection (see clause 5 and the
@@ -74,12 +74,12 @@ observes after it has already delivered the terminal result for that turn.
 
    A consequence worth stating: because the receiver assigns *contiguous* ordinals, the
    peer cannot manufacture a gap. On a single reliable, ordered transport (TCP/WS) a gap
-   in receiver-stamped ordinals can arise only from genuine connection loss — not from
+   in receiver-stamped ordinals can arise only from genuine connection loss, not from
    peer whim. This removes the "withhold one ordinal to force the degraded path" primitive
    that a peer-supplied key would have handed over.
 
 2. **Bounded reorder buffer, observable.** The reorder buffer has a watermark; its
-   occupancy and every drop/gap decision emit `:telemetry` — never a silent drop, never
+   occupancy and every drop/gap decision emit `:telemetry`, never a silent drop, never
    an unbounded park. Event name `[:raxol, :acp, :delivery]`, metadata
    `%{session, turn, decision: :emit | :buffer | :gap | :fail, buffered: n, ordinal: k}`,
    mirroring ADR-0013's convention. Default watermark: 1_024 buffered updates per turn
@@ -90,10 +90,10 @@ observes after it has already delivered the terminal result for that turn.
 3. **Overflow-bounded resolution, not timer-bounded.** In-order delivery is released as
    the next contiguous ordinal arrives; there is **no wall-clock settle window** and the
    no-drop guarantee never depends on a timer (this is the `@update_settle_ms` mistake
-   the ADR criticizes — a bounded interval is still a wall-clock timeout). A gap is bounded
+   the ADR criticizes: a bounded interval is still a wall-clock timeout). A gap is bounded
    by the buffer watermark, not by elapsed time: while the buffer is under watermark the
    receiver holds the tail and keeps waiting for the missing contiguous ordinal; only two
-   events resolve a gap — (a) the missing ordinal arrives (normal case, release the tail),
+   events resolve a gap: (a) the missing ordinal arrives (normal case, release the tail),
    or (b) the connection to that session drops or the buffer hits its watermark, in which
    case the turn **fails** with a `:fail` telemetry event. **Fail-the-turn is the only
    lossless resolution and is the default.** A `:gap`-marker (deliver the tail past a hole)
@@ -116,7 +116,7 @@ observes after it has already delivered the terminal result for that turn.
 ### Reconciliation with reattach/replay (#569 / #586)
 
 Reattach/replay delivers a turn's updates on a **new** connection, so there is no single
-per-connection arrival sequence spanning the original turn and its replay — which is why
+per-connection arrival sequence spanning the original turn and its replay, which is why
 clause 1 rejects arrival-order as the key. The per-session counter is the reconciliation:
 ordinals are stamped once, in the session's monotonic space, and replay re-delivers
 **already-stamped** ordinals rather than re-numbering by new-connection arrival. Delivery
@@ -133,7 +133,7 @@ renumbering.
 - **No silent drop**: every update either reaches the handler or is accounted for by
   exactly one `:gap`/`:fail` telemetry event; delivered + failed = sent.
 - **No timer in the guarantee**: injecting arbitrary scheduler delay between updates
-  changes latency but never the delivered set or order (pins clause 3 — no wall-clock
+  changes latency but never the delivered set or order (pins clause 3, no wall-clock
   settle window).
 - **Bounded memory**: buffer occupancy never exceeds the watermark; hitting the
   watermark fails the turn rather than growing the buffer or silently trimming it.
@@ -152,7 +152,7 @@ renumbering.
   not closed it; the fourth would too, because the trust-boundary decision is unmade.
 - **Trust the peer's `_meta` seq but validate monotonicity.** Rejected: validation can
   detect a bad sequence but cannot reconstruct the intended order from an untrusted
-  source, so it degrades to "fail the turn" — which is clause 2/3 anyway, minus the
+  source, so it degrades to "fail the turn", which is clause 2/3 anyway, minus the
   false sense that the peer key is authoritative.
 - **Drop the no-drop guarantee; best-effort delivery.** Viable and simpler, but it is a
   product decision, not a silent side effect of a buffer bug. If chosen, it must be
@@ -171,7 +171,7 @@ with telemetry (small), and the property/adversarial tests above.
 
 - PR #640 (`DROOdotFOO/raxol`): three review rounds; commits `732070c2`, `94c47a32`,
   `d70c0dfd`, and the posted adversarial re-reviews.
-- ADR-0013: Event-dispatch backpressure — the in-repo pattern for bounded, observable,
+- ADR-0013: Event-dispatch backpressure: the in-repo pattern for bounded, observable,
   deterministic-under-overload dispatch this contract adopts.
 - `packages/raxol_earn` client delivery path: `extract_update_seq/1`, `emit_update/3`,
   `cascade_release/2`, `@update_settle_ms`.

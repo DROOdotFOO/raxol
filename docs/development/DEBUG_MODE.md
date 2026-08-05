@@ -77,7 +77,7 @@ end)
 
 ## Advanced
 
-### Process State Dump
+### Process state dump
 
 ```elixir
 Raxol.Debug.dump_process_state(:terminal)
@@ -197,7 +197,7 @@ end
 
 Each `time_debug/3` call logs its own timing line at `:verbose` level, so the durations show up inline in the log stream.
 
-## Removing Debug Code in Production
+## Removing debug code in production
 
 Use a module attribute to capture the environment at compile time (calling `Mix.env()` in a function body will crash in releases):
 

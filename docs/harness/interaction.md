@@ -1,18 +1,18 @@
-# Harness Interaction — speakers, input, commands, approvals
+# Harness Interaction: speakers, input, commands, approvals
 
 ## Speaker separation
 
 Mirrored outer-contour chevrons carry authorship, and nothing else does. The
 user is `❯` at column 0, touching the border; the assistant is `❮` at the same
 outer position; all dialogue content sits at one uniform 2-cell indent. Both
-sigils are **bold** (the structure channel) with **zero color** — color encodes
+sigils are **bold** (the structure channel) with **zero color**: color encodes
 state, never speaker.
 
 - The pair degrades together: `❯`/`❮` fall back to `>`/`<` under
   `unicode: :none`, and all four are single-cell (pinned through
   `Raxol.UI.TextMeasure`).
 - There is one sigil source per speaker (`model.sigil` / `model.reply_sigil`),
-  and the live composer's `❯` shares that constant — so a sealed chevron in the
+  and the live composer's `❯` shares that constant, so a sealed chevron in the
   transcript can never drift from the prompt that produced it.
 - Machinery blocks (a tool `⚙`, system glyphs) keep the plain margin: dialogue
   is marked at the contour, machinery stays inside the frame. A blank-row rhythm
@@ -26,8 +26,8 @@ The primitive is `Raxol.UI.Components.Harness.Indication.speaker/3`, laid out by
 `Raxol.UI.Components.Harness.Composer` wraps
 `Raxol.UI.Components.Input.MultiLineInput` with harness submit semantics; it
 does not reimplement editing. The composer is the single truth of the *logical*
-draft — the visual rows are re-derived from a WrapMap on every render and never
-written back — so readers read the logical value and writers make surgical
+draft (the visual rows are re-derived from a WrapMap on every render and never
+written back) so readers read the logical value and writers make surgical
 logical edits, never whole-buffer rewrites.
 
 - **Submit.** Enter submits when the draft is a single logical line.
@@ -46,14 +46,14 @@ logical edits, never whole-buffer rewrites.
 
 - **Keymap first.** `Raxol.UI.Harness.Keymap.resolve/2` is a pure
   `(InputEvent, context) -> command | :passthrough` over a data table, not a
-  `cond` ladder — a chord later grows a match field without restructuring
+  `cond` ladder: a chord later grows a match field without restructuring
   dispatch. The always-live binds (ESC = interrupt, Tab = steer, Ctrl+E = edit
   the draft in `$EDITOR`) fire regardless of `composing?`, because ESC must
   never be swallowed by whatever holds focus: interrupt is a supervised kill,
   not a cooperative flag queued behind typing.
 - **Command bifurcation.** Lane-crossing commands (interrupt, steer, submit,
   approval) leave as `Raxol.Harness.Directive.Lane`; fold, jump, and scroll
-  stay surface-local. `update/2` checks belief *before* minting a directive —
+  stay surface-local. `update/2` checks belief *before* minting a directive: 
   a submit during a running turn, or a second steer while one is in flight,
   renders an honest notice instead of a directive.
 - ^C is always a double-press; `q`-on-empty is a single-press. A fresh session
@@ -62,7 +62,7 @@ logical edits, never whole-buffer rewrites.
   vocabulary. `/help`, the autocomplete popup
   (`Raxol.UI.Components.Harness.CommandAutocomplete`), and the executed behavior
   all read the same registry, so what the popup offers is provably what
-  `run/1` would find — the popup can never show a command that would not run.
+  `run/1` would find. The popup can never show a command that would not run.
 
 ## The approval footer
 
@@ -80,25 +80,25 @@ replaced).
 - **Idle** (empty draft): `[enter]` confirms and `[escape]` cancels, from
   anywhere.
 - **Typing** (non-empty draft): the hints disappear because the keys are
-  repurposed — Enter submits the draft, Escape clears it (and the hints
+  repurposed: Enter submits the draft, Escape clears it (and the hints
   return). Shift/Alt+Enter inserts a newline; the third way is a real
   multi-line `Composer`, so it is never more than one keystroke away.
 - **Arrows** move focus `confirm ⇅ cancel ⇅ input`; inside a multi-line draft
   the arrows navigate the text first and only hop out at the boundary.
 
-The component is controlled — state in via props, commands out
-(`{:component_event, id, :confirm | :cancel | {:submit, text}}`) — and the host
+The component is controlled (state in via props, commands out
+(`{:component_event, id, :confirm | :cancel | {:submit, text}}`)) and the host
 owns the lifecycle. The answer resolves through the existing approval pipeline:
 `Raxol.Agent.Harness.SessionInbox` parked the tool loop on a blocking await
 keyed by `request_id`, and the answer replies to it and unblocks the tool.
 Prominence follows the question: the focused row's chevron and the `[enter]` /
-`[escape]` hints are bold at full strength — they are the answer affordances —
+`[escape]` hints are bold at full strength (they are the answer affordances) 
 while unfocused rows and the placeholder sit at the faded register.
 
 ## Navigation
 
 - One picker shape serves every pick-one-of-N:
-  `Raxol.UI.Components.Harness.Picker` over `Raxol.UI.ListScorer` — the command
+  `Raxol.UI.Components.Harness.Picker` over `Raxol.UI.ListScorer`: the command
   palette, jump, the session picker, and transcript search (fuzzy over block
   content) are all the same code path. One overlay is open at a time.
 - Returning is evidential: `Raxol.Harness.UnreadDivider` marks where you left

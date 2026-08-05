@@ -1,7 +1,7 @@
 # SSH Deployment
 
 Serve Raxol apps over SSH. Each connection gets its own process: one app, many users.
-This is one of the things that falls out naturally from running on the BEAM, where Erlang's SSH server does the heavy lifting.
+Erlang ships `:ssh` in the standard library, so this is a wrapper rather than a server: no extra dependency, no separate daemon.
 
 ## Quick Start
 
@@ -80,7 +80,7 @@ mix run lib/my_ssh_app.exs
 
 This is a simplified version of `examples/ssh/ssh_counter.exs`.
 
-## How It Works
+## How it works
 
 ```
 SSH Client  --->  :ssh.daemon (Erlang)

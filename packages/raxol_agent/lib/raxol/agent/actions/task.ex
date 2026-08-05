@@ -31,7 +31,7 @@ defmodule Raxol.Agent.Actions.Task do
           "and return its final answer. Use for focused investigation " <>
           "(searching, reading, summarizing across many files) that would " <>
           "otherwise clutter the main conversation. The sub-agent has no " <>
-          "prior context and cannot write files or run commands — give it " <>
+          "prior context and cannot write files or run commands: give it " <>
           "everything it needs in `prompt`.",
       schema: [
         input: [

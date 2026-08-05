@@ -25,7 +25,7 @@ end
 Raxol.Agent.Session.send_message(:my_agent, {:analyze, "lib/raxol.ex"})
 ```
 
-## How It Works
+## How it works
 
 ```elixir
 use Raxol.Agent
@@ -127,7 +127,7 @@ Commands returned from `update/2` are processed by Lifecycle:
 
 When `view/1` returns `nil` (the default), no rendering happens. The agent is a pure message-processing loop, good for background workers, data pipelines, or agents that only talk to other agents.
 
-## AI Backend Streaming
+## AI backend streaming
 
 `Raxol.Agent.Backend.HTTP` does real SSE streaming to LLM providers:
 
@@ -186,7 +186,7 @@ The agent *module* declares which providers it wants through zero-arity callback
 *caller* supplies the running server instances through opts. Turn is the canonical driver
 other runtimes can adopt.
 
-## Native Multi-Vendor Harness
+## Native multi-vendor harness
 
 An agent can run its own reasoning loop, or hand the loop to a vendor CLI (Claude Code,
 Cursor) and expose Raxol's tools to it over MCP. `Raxol.Agent.ExecutorConfig`

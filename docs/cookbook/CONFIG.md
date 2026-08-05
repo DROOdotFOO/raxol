@@ -154,7 +154,7 @@ terminal_config = Raxol.Config.get([:terminal])
 all_config = Raxol.Config.all()
 ```
 
-### Writing Values at Runtime
+### Writing values at runtime
 
 ```elixir
 Raxol.Config.set([:terminal, :width], 120)

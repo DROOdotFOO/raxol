@@ -56,7 +56,7 @@ defmodule MyComponent do
 end
 ```
 
-### Virtual Terminal Benefits
+### Virtual terminal benefits
 
 - Only re-renders changed portions of the screen
 - Components are testable without an actual terminal

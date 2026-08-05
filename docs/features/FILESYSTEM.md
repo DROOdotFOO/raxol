@@ -58,7 +58,7 @@ Helpers print their output via IO (captured by the evaluator) and return the VFS
 | `tree(vfs)` / `tree(vfs, path, depth)` | Print directory tree | No |
 | `stat(vfs, path)` | Print node metadata | No |
 
-Under the hood, the `Evaluator.prelude` field runs an import of VfsHelpers before every eval. That's why bare function names like `ls` and `mkdir` just work without any aliasing.
+The `Evaluator.prelude` field imports VfsHelpers before every eval, which is why bare names like `ls` and `mkdir` work without any aliasing.
 
 ## Agent Actions
 

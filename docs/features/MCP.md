@@ -118,7 +118,7 @@ The tree is streamed as diffs over the MCP connection, so agents track changes i
 
 `Raxol.MCP.ToolProvider` is functor-law-tested: tool derivation commutes with Component composition. If you compose two Components, the derived tools are the same as the tools you'd get by deriving them separately and merging. This catches bugs where a wrapping Component would accidentally hide tools from a child.
 
-## What This Enables
+## What this enables
 
 The same TEA module the human uses, the agent uses too. Same source of truth, different projections. That's the pitch a framework can only make if MCP is a first-class rendering target rather than an afterthought.
 

@@ -40,9 +40,9 @@ mix raxol.gen.specs lib/raxol/critical_module.ex --backup
 # Restore: cp lib/raxol/critical_module.ex.backup lib/raxol/critical_module.ex
 ```
 
-## Type Inference Rules
+## Type inference rules
 
-### Function Name -> Return Type
+### Function name -> return type
 
 | Pattern | Inferred Return Type |
 |---------|---------------------|
@@ -60,7 +60,7 @@ mix raxol.gen.specs lib/raxol/critical_module.ex --backup
 | `*?` | `boolean()` |
 | `*!` | `any() \| no_return()` |
 
-### Argument Name -> Type
+### Argument name -> type
 
 | Pattern | Inferred Type |
 |---------|--------------|
@@ -79,7 +79,7 @@ mix raxol.gen.specs lib/raxol/critical_module.ex --backup
 | `pid` | `pid()` |
 | `ref` | `reference()` |
 
-### Guard Clauses and Pattern Matching
+### Guard clauses and pattern matching
 
 The generator handles these correctly:
 

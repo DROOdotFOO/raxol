@@ -4,7 +4,7 @@ Tooling to detect and prevent duplicate filenames across `lib/` and `test/`.
 
 Multiple files named `manager.ex` or `handler.ex` break IDE navigation, produce ambiguous search results, and make code review confusing.
 
-## Example Problematic Pattern
+## Example problematic pattern
 
 ```bash
 # Before - confusing duplicate names

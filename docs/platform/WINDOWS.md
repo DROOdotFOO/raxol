@@ -7,7 +7,7 @@ Raxol works on Windows through a pure Elixir terminal driver. No native compilat
 **Requirements**: Windows 10+ with VT100 terminal emulation
 **Performance**: ~500us per frame (plenty for 60fps)
 
-## How It Works
+## How it works
 
 Raxol picks the terminal backend automatically:
 
@@ -109,7 +109,7 @@ Supported but limited. Unicode may have issues. Use Windows Terminal or PowerShe
 
 ## Troubleshooting
 
-### Colors Not Displaying
+### Colors not displaying
 
 ```powershell
 # Check VT100 status
@@ -119,7 +119,7 @@ reg query HKCU\Console /v VirtualTerminalLevel
 reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1 /f
 ```
 
-### Unicode Characters Not Rendering
+### Unicode characters not rendering
 
 - Use a font that supports unicode (Cascadia Code, Consolas)
 - Use Windows Terminal instead of cmd.exe

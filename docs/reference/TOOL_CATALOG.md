@@ -34,7 +34,7 @@ The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval U
 | `skill_manage` | no | Create, patch, or delete a skill (procedural memory). action create: write a new skill; patch/edit: update an existing one; delete: remove it. | `action` (string, required), `name` (string, required), `description` (string), `category` (string), `version` (string), `body` (string), `metadata` (map) |
 | `skill_view` | no | Read a skill's contents by name. Omit `path` to read the SKILL.md body; pass a relative `path` to read one supporting file inside the skill directory. | `name` (string, required), `path` (string) |
 | `skills_list` | no | List available skills as metadata only (name, category, description, state). Call skill_view with a name to read a skill's contents. | (none) |
-| `task` | no | Delegate a self-contained subtask to a fresh read-only sub-agent and return its final answer. Use for focused investigation (searching, reading, summarizing across many files) that would otherwise clutter the main conversation. The sub-agent has no prior context and cannot write files or run commands — give it everything it needs in `prompt`. | `prompt` (string, required), `max_iterations` (integer) |
+| `task` | no | Delegate a self-contained subtask to a fresh read-only sub-agent and return its final answer. Use for focused investigation (searching, reading, summarizing across many files) that would otherwise clutter the main conversation. The sub-agent has no prior context and cannot write files or run commands: give it everything it needs in `prompt`. | `prompt` (string, required), `max_iterations` (integer) |
 | `vfs_change_dir` | no | Change the current working directory in the virtual filesystem | `path` (string, required) |
 | `vfs_get_tree` | no | Get a directory tree representation from the virtual filesystem | `path` (string), `depth` (integer) |
 | `vfs_list_dir` | no | List files and directories at a path in the virtual filesystem | `path` (string) |
@@ -42,7 +42,7 @@ The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval U
 | `vfs_read_file` | no | Read the contents of a file in the virtual filesystem | `path` (string, required) |
 | `vfs_remove` | no | Remove a file or empty directory from the virtual filesystem | `path` (string, required) |
 | `vfs_write_file` | no | Create a file with content in the virtual filesystem | `path` (string, required), `content` (string, required) |
-| `write_file` | yes | Create a file (relative to the current working directory) with the given content. Refuses to clobber an existing file unless `overwrite` is true — use `edit_file` for targeted changes. Parent directories are created as needed. | `path` (string, required), `content` (string, required), `overwrite` (boolean) |
+| `write_file` | yes | Create a file (relative to the current working directory) with the given content. Refuses to clobber an existing file unless `overwrite` is true: use `edit_file` for targeted changes. Parent directories are created as needed. | `path` (string, required), `content` (string, required), `overwrite` (boolean) |
 
 ## Payment tools (`raxol_payments`)
 
@@ -58,6 +58,6 @@ The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval U
 | `payment_list_mandates` | no | List Xochi Mandate envelopes stored locally. role="member" lists envelopes the local wallet issued; role="agent" lists envelopes addressed to the local wallet. | `role` (string, required) |
 | `payment_poll_relay_status` | no | Poll a Relay (Tron) transfer by id until it reaches a terminal status (completed, failed, or refunded). Returns the final status and tx hash. | `transfer_id` (string, required), `timeout_ms` (integer), `interval_ms` (integer) |
 | `payment_poll_xochi_status` | no | Poll a Xochi intent by id until it reaches a terminal status (completed, failed, expired, refunded). Returns the final status and settlement details. | `intent_id` (string, required), `timeout_ms` (integer), `interval_ms` (integer) |
-| `payment_revoke_mandate` | no | Locally delete a stored Xochi Mandate envelope so it can no longer be selected for outbound requests. Note: Xochi's server-side budget counter for this envelope remains until expires_at -- per agent-auth.md (2026-04-27), no server revoke endpoint exists in v1. | `envelope_hash` (string, required) |
+| `payment_revoke_mandate` | no | Locally delete a stored Xochi Mandate envelope so it can no longer be selected for outbound requests. Note: Xochi's server-side budget counter for this envelope remains until expires_at, per agent-auth.md (2026-04-27), no server revoke endpoint exists in v1. | `envelope_hash` (string, required) |
 | `payment_spending_status` | no | Check current spending against budget limits | (none) |
 | `payment_transfer` | yes | Authorize an explicit same-chain transfer to an address: runs the spend gate and reserves budget, but does NOT broadcast. Use payment_execute_xochi_intent to actually move funds cross-chain or with privacy. | `to` (string, required), `amount` (string, required), `currency` (string) |

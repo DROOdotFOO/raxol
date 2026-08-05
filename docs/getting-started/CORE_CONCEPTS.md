@@ -19,7 +19,7 @@ See the [Quickstart](QUICKSTART.md) for a full walkthrough, or browse the [Examp
 
 ---
 
-## Buffers: The Canvas Underneath
+## Buffers: The canvas underneath
 
 Most Raxol apps never touch buffers directly. The View DSL and layout engine handle all of this for you. But understanding the layer underneath helps when debugging, optimizing, or building custom renderers.
 
@@ -75,9 +75,9 @@ buffer = Buffer.write_at(buffer, 10, 5, "Hello")
 
 ---
 
-## The Rendering Pipeline
+## The rendering pipeline
 
-### Stage 1: Buffer Construction
+### Stage 1: Buffer construction
 
 Build the buffer by combining operations:
 
@@ -104,7 +104,7 @@ diff = Renderer.render_diff(old_buffer, new_buffer)
 
 Without diffing you'd clear and redraw everything. With diffing, only changed cells are written, bringing typical updates to ~2ms.
 
-### Stage 3: Output Generation
+### Stage 3: Output generation
 
 ```elixir
 # Full output (for debugging)
@@ -117,7 +117,7 @@ IO.write(Renderer.apply_diff(diff))
 html = TerminalBridge.buffer_to_html(buffer)
 ```
 
-### The Complete Pipeline
+### The complete pipeline
 
 ```
 [User Code]

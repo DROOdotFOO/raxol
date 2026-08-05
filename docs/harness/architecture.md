@@ -10,12 +10,12 @@ same truth, because the truth was never in the surface.
 ## Where this sits
 
 The harness is the **engine**, not a product you run directly (there is no
-`mix raxol.harness` — the `raxol.harness.*.bless` tasks only regenerate this
+`mix raxol.harness`: the `raxol.harness.*.bless` tasks only regenerate this
 engine's golden/fixture test snapshots). The products are the surfaces built on
 the contract: `mix raxol.code` is the interactive coding-agent TUI and
 `mix raxol.p` is its headless twin, both in the `raxol_agent` package. Above
 them, `raxol_symphony` orchestrates many such agent runs. The same contract also
-lets the engine drive *external* agent CLIs — `Raxol.Agent.Backend.ClaudeCode`
+lets the engine drive *external* agent CLIs: `Raxol.Agent.Backend.ClaudeCode`
 and `Raxol.Agent.Backend.Cursor` wrap `claude` / `cursor` as harness sessions.
 "Harness" here is the session engine; it is unrelated to the `--backend` flag
 (which picks an LLM backend) and to the RATE render-determinism suite.
@@ -25,19 +25,19 @@ and `Raxol.Agent.Backend.Cursor` wrap `claude` / `cursor` as harness sessions.
 Events flow core → surface; commands flow surface → core.
 
 An event carries `id`, `turn_id`, `ts`, `family`, `type`, `tier`, `scope`,
-`provenance`, and `payload` — the shape `Raxol.Harness.Projection`,
+`provenance`, and `payload`: the shape `Raxol.Harness.Projection`,
 `Raxol.Harness.EventBoundary`, and `Raxol.UI.Components.Harness.Block.from_events/3`
 all consume. Two properties of that shape are load-bearing:
 
 - **Two families.** `:loop` events are the agent's turns; `:meta` events are
   everything else. Only `:loop` events become transcript blocks.
 - **Two tiers.** Durable events are journaled before they reach the surface.
-  `item_delta` is the one ephemeral event — it feeds the live tail, is never
+  `item_delta` is the one ephemeral event: it feeds the live tail, is never
   journaled, and is reconstructable from the matching `item_completed`, so no
   durable state ever depends on having seen every chunk.
 
-Commands are the built lane vocabulary — submit, steer, interrupt, approval
-answer, halt — carried as `Raxol.Harness.Directive.Lane` structs and decoded
+Commands are the built lane vocabulary (submit, steer, interrupt, approval
+answer, halt) carried as `Raxol.Harness.Directive.Lane` structs and decoded
 through `Raxol.Agent.Command`.
 
 **The contract only grows.** Producers are strict; readers are tolerant and
@@ -47,8 +47,8 @@ must never need a lockstep update to keep painting.
 
 ## The security seam
 
-A live event crosses a process boundary — `Raxol.Harness.SessionLane`'s
-`subscribe/1` delivers events from a process this side does not control — so it
+A live event crosses a process boundary (`Raxol.Harness.SessionLane`'s
+`subscribe/1` delivers events from a process this side does not control) so it
 is untrusted input, not merely differently-shaped input.
 `Raxol.Harness.EventBoundary.normalize/1` enforces four properties on the way
 in: it never mints an atom from wire strings (no growing the atom table by
@@ -62,7 +62,7 @@ permanent transcript).
 
 The durable journal is the source of truth. `Raxol.Agent.Journal` is the
 append-only behaviour; `Raxol.Agent.Journal.FileStore` is the file-backed
-implementation — one directory per session under `~/.raxol/sessions/<id>/`,
+implementation: one directory per session under `~/.raxol/sessions/<id>/`,
 size-capped `NNNNNN.jsonl` segments, each event assigned a monotonic offset
 that is its id, torn-tail recovery on replay, and fail-closed on interior
 corruption (a gap is diagnosed, never silently healed).
@@ -73,21 +73,21 @@ of the fold: `filter_ids/1` drops duplicate/out-of-order records and marks a
 forward gap `damaged?` without withholding the survivors; `partition_families`
 keeps only `:loop` events; `bucket_by_turn` groups by `turn_id` in first-seen
 order; `BlockBuilder` folds each turn's items into blocks. Because the model is
-a pure fold over the event stream, a snapshot of it is complete — time-travel
+a pure fold over the event stream, a snapshot of it is complete: time-travel
 debugging (`time_travel: true`) is free.
 
 ### Frozen golden corpora
 
-Every record carries the `schema_version` the Writer stamped. Upcast-on-read —
-letting a current reader open a journal written by an older version — can only
+Every record carries the `schema_version` the Writer stamped. Upcast-on-read (
+letting a current reader open a journal written by an older version) can only
 be tested against real journals those versions actually wrote, and those become
 unrecoverable the moment the default moves on: nothing regenerates a 1.0.0
 journal once the writer emits 1.2.0.
 
 So each version is frozen exactly once, while it is current, under
 `packages/raxol_agent/test/invariants/fixtures/golden/v<version>/`. A corpus is
-produced by the real pipeline — `Contract.pump/3` generates the payloads,
-`EmitBus` -> `EmitBridge` -> `FileStore.Writer` writes the journal — with only
+produced by the real pipeline (`Contract.pump/3` generates the payloads,
+`EmitBus` -> `EmitBridge` -> `FileStore.Writer` writes the journal) with only
 `ts`, `turn_id`, and `meta.json`'s `created_at` normalized so the bytes are
 reproducible.
 
@@ -103,7 +103,7 @@ frozen corpus (so a bump fails until one is frozen), every pinned corpus still
 exists with the exact same bytes (history is not editable or deletable), and
 nothing on disk is unpinned. `Raxol.Agent.Invariants.ContractInvariantsTest`
 replays the current corpus through the live reader and asserts the shapes its
-version added — for 1.1.0, that all three `evidence` states are present and
+version added, for 1.1.0, that all three `evidence` states are present and
 decode.
 
 ### Multi-surface parity
@@ -131,11 +131,11 @@ nothing runs.
 
 Two independent properties, both in `test/harness/surface_parity_test.exs`:
 
-- **Drift** — each fixture x surface artifact
+- **Drift**: each fixture x surface artifact
   (`test/fixtures/harness/parity/`) still matches a fresh render, and
   `priv/harness/parity.refs` still hashes the artifacts. Bless with
   `mix raxol.harness.parity.bless` (`--check` for the CI half).
-- **Parity** — the surfaces agree. The three grid-derived surfaces must be
+- **Parity**: the surfaces agree. The three grid-derived surfaces must be
   character-for-character equal; `:structured_json`'s block headers must match
   the screen's, as a prefix (the viewport clips a long session). This is the
   property a single-surface golden cannot have: an encoder that drops a wide
@@ -146,7 +146,7 @@ The corpus convention: **every rendering bug fixed leaves a fixture behind.**
 Membership is `Fixture.Session.golden?/1`, the same predicate the fixture bless
 uses, so the two corpora cannot drift apart; a `kind: "adversarial"` fixture
 exists to be rejected by the loader, so there is no render to pin. That is a
-header field, not a filename convention — a `.notes.md` sidecar is
+header field, not a filename convention: a `.notes.md` sidecar is
 documentation and says nothing about whether a fixture renders.
 
 Snapshot bytes are a function of content alone: `Fixture.Bless` stringifies
@@ -159,7 +159,7 @@ Two independent supervision facts, often conflated:
 
 - **The agent session.** `Raxol.Agent.Session` runs under
   `Raxol.Agent.Session.Supervisor`'s `:rest_for_one` tree together with its
-  Lifecycle, ordered so a restart is deterministic — the Lifecycle starts
+  Lifecycle, ordered so a restart is deterministic: the Lifecycle starts
   first and the session re-resolves a fresh Lifecycle pid on restart rather
   than racing a stale one.
 - **The live surface stack.** `Raxol.Harness.Live` boots
@@ -167,7 +167,7 @@ Two independent supervision facts, often conflated:
   alt-screen bracket, and the clock, and in turn boots
   `Lifecycle(environment: :harness)` running `Raxol.Harness.HarnessApp`.
   `Raxol.Harness.DeliveryShim` casts every pump term into the Dispatcher as
-  `{:harness, term}` — except a `:resize` event, which rides the system-event
+  `{:harness, term}`: except a `:resize` event, which rides the system-event
   path so the Rendering Engine's size sync sees it. `HarnessApp.update/2` folds
   those messages and returns `Directive.{Lane,Editor}` back to the pump, which
   performs the lane mechanics and answers with the matching result message.
@@ -193,12 +193,12 @@ under adversarial input cannot be trusted to enforce them:
   path exists.
 - **Steer as compare-and-swap.** `Raxol.Agent.Steer` carries an
   `expected_turn_id`; a stale-turn rejection changes nothing and is
-  non-journaled. Interrupt and steer are deliberately asymmetric — interrupt is
+  non-journaled. Interrupt and steer are deliberately asymmetric: interrupt is
   fire-and-forget and its acknowledgment is the event stream; steer returns a
   synchronous typed decision, because a silently-dropped steer would leave the
   surface unable to tell "accepted" from "lost" (see `Raxol.Harness.SessionLane`).
 - **Atomic spend and blast-radius gates.** `Raxol.Agent.SpendGate` reserves
-  before the call and fails closed — no reserve, no call — using the same
+  before the call and fails closed (no reserve, no call) using the same
   atomic `try_spend` shape as `Raxol.Payments.Ledger`.
   `Raxol.Agent.Authorization.BlastRadiusGate` gates scope the same way. A
   string denylist is provably incomplete; enforce typed intent instead.
@@ -206,7 +206,7 @@ under adversarial input cannot be trusted to enforce them:
 ## The live TUI chain
 
 ```
-Raxol.Harness.SessionLane   (behaviour in main raxol — the seam main satisfies
+Raxol.Harness.SessionLane   (behaviour in main raxol: the seam main satisfies
                              without depending on raxol_agent)
   ← Raxol.Agent.Harness.SessionLane   (agent-side impl: SessionStreamer out,
                                        Raxol.Agent.Command in)
@@ -224,7 +224,7 @@ runs one turn at a time (a submit mid-turn is queued for the next boundary),
 parks the tool loop on a blocking await keyed by `request_id` before a
 consequential tool and replies when the keyboard answer arrives, and drives the
 staged kill against the live shell tool. `StreamCadence` load-sheds rather than
-applies backpressure — the newest deltas are the live tail's value, and
+applies backpressure: the newest deltas are the live tail's value, and
 blocking the SSE reader would cascade into transport timeouts, so visibly lossy
 above the watermark beats dead. `StallDetector` never acts on the agent;
 judgment over visible output belongs to the human it reports to.
@@ -241,7 +241,7 @@ parse NDJSON through `Raxol.Agent.Harness.StreamJson`.
 Agent Client Protocol (the editor ↔ agent protocol at agentclientprotocol.com),
 both roles, with a durable-resumable-sessions vendor extension: `Ext.Journal`
 is an append-only offset journal, `Ext.Reattach` does offset-based replay, and
-`Ext.AttachPolicy` issues `RXC1` Ed25519 capability tokens — the journal/offset
+`Ext.AttachPolicy` issues `RXC1` Ed25519 capability tokens: the journal/offset
 model exported onto the ACP wire. It is distinct from `Raxol.Earn`
 (`packages/raxol_earn/`, the unrelated Virtuals commerce protocol). Steer
 bridges through it: `Raxol.Agent.Harness.SessionLane.steer/2` dispatches to a

@@ -32,7 +32,7 @@ The dep graph from CLAUDE.md is already non-trivial (`raxol -> {core, terminal, 
 
 Symphony is one consumer. ACP's resumable jobs are the bigger and more architecturally interesting use case (real money, real chain state, longer wall-clock). Placing the primitive inside `raxol_symphony` would force `raxol_earn` to take a Symphony dependency to use Workflow, which violates the established direction of arrows (`acp -> payments`, no Symphony coupling) and pulls Tracker, Orchestrator, and Codex Runner into ACP's compile tree for no reason.
 
-Furthermore, the Workflow primitive is genuinely orthogonal to Symphony's *job dispatch* model. Symphony picks one workflow per issue and runs it to completion; Workflow is the *engine* underneath. The right shape is: Workflow lives where the runtime lives; Symphony plugs into it via an optional adapter.
+The Workflow primitive is also orthogonal to Symphony's *job dispatch* model. Symphony picks one workflow per issue and runs it to completion; Workflow is the *engine* underneath. The right shape is: Workflow lives where the runtime lives; Symphony plugs into it via an optional adapter.
 
 ### Why not extend `raxol_agent`'s `Action` + `Pipeline`
 

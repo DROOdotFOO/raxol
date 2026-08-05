@@ -2,11 +2,11 @@
 
 ## Options
 
-### [Fly.io](FLY_IO.md): Primary Production
+### [Fly.io](FLY_IO.md): Primary production
 
 Phoenix LiveView playground with full backend. Auto-scaling, WebSocket support, PostgreSQL.
 
-- **URL**: https://raxol.io
+- **URL** (https://raxol.io)
 - **Deploy**: `flyctl deploy`
 
 ## Quick Start

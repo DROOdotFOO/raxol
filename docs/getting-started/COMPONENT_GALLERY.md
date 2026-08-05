@@ -637,7 +637,7 @@ Options: `color`, `width`, `offset`, `style` (`:solid`), `components` (list of c
 
 ---
 
-## Using Components Directly
+## Using components directly
 
 The View DSL functions cover most needs. When you need full control (handling events, managing component state, accessing all options) use the component modules directly:
 

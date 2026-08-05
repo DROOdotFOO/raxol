@@ -6,7 +6,7 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 
 - [Why OTP](WHY_OTP.md): why the BEAM runtime changes what's possible
 - [Why Raxol](WHY_RAXOL.md): how the runtime compares to Python agent stacks (Hermes, Omnigent)
-- [Philosophy](PHILOSOPHY.md): the one law behind every rendering decision -- what is shown must be a provable projection of what is, and the wrong thing must be unrepresentable
+- [Philosophy](PHILOSOPHY.md): the one law behind every rendering decision: what is shown must be a provable projection of what is, and the wrong thing must be unrepresentable
 - [Quickstart](getting-started/QUICKSTART.md): build your first terminal app
 - [Build Your First Agent](getting-started/BUILD_AN_AGENT.md): tools, memory, and a learning loop
 - [Core Concepts](getting-started/CORE_CONCEPTS.md): architecture and design
