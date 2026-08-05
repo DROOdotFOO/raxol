@@ -4,17 +4,22 @@ name: Lockstep Deps
 # of the package it points at. Prevents the class of bug where a bumped family
 # member (e.g. raxol_core 2.6.0) is depended on with a stale "~> 2.4", so
 # HEX_BUILD publishes against the old published sibling.
+#
+# Markdown is in scope too: every README install snippet is a constraint a user
+# will copy, and those drift silently. One sweep found 17 stale snippets.
 
 on:
   pull_request:
     paths:
       - "**/mix.exs"
+      - "**/*.md"
       - "scripts/check-lockstep-deps.sh"
       - ".github/workflows/lockstep-deps.yml"
   push:
     branches: [master]
     paths:
       - "**/mix.exs"
+      - "**/*.md"
 
 permissions:
   contents: read

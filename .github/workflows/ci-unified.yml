@@ -168,6 +168,13 @@ jobs:
       - name: Check journal golden fixtures
         run: elixir scripts/check_journal_goldens.exs
 
+      # Prose rules over every tracked .md: unicode punctuation, ` -- ` as an
+      # em-dash substitute, and broken relative links/anchors. These regressed
+      # repeatedly while they lived only in a style note, and the manual sweeps
+      # that cleaned docs/ never covered packages/.
+      - name: Check documentation
+        run: mix raxol.check_docs
+
   compile:
     name: Compilation Check
     needs: setup
