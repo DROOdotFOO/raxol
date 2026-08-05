@@ -98,15 +98,15 @@ defmodule DuplicateFileChecker do
   defp display_duplicates(duplicates, show_suggestions) do
     Enum.each(duplicates, fn {basename, paths} ->
       problem_level = cond do
-        basename in @problematic_patterns -> "🔴 CRITICAL"
-        length(paths) > 3 -> "🟡 WARNING"
-        true -> "🔵 INFO"
+        basename in @problematic_patterns -> "[CRITICAL]"
+        length(paths) > 3 -> "[WARNING]"
+        true -> "[INFO]"
       end
       
       IO.puts("#{problem_level} - '#{basename}' (#{length(paths)} files):")
       
       Enum.each(paths, fn path ->
-        IO.puts("  • #{path}")
+        IO.puts("  - #{path}")
       end)
       
       if show_suggestions and basename in @problematic_patterns do
@@ -122,7 +122,7 @@ defmodule DuplicateFileChecker do
     
     Enum.each(paths, fn path ->
       suggestion = generate_rename_suggestion(path, basename)
-      IO.puts("    #{path} → #{suggestion}")
+      IO.puts("    #{path} -> #{suggestion}")
     end)
   end
 

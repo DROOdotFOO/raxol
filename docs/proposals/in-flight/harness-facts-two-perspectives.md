@@ -1,6 +1,6 @@
 # Harness Facts: Two Perspectives (facts only, zero processing)
 
-Extraction over `../archive/harness-research/01,03,04,05,06,07,08,09` (challenger 02 arrived
+Extraction over `harness-research/01,03,04,05,06,07,08,09` (challenger 02 arrived
 after; folded into the addendum). Two vantages so the reader synthesizes, not the
 extractors. No suggestions, no "raxol should," no rankings-by-solution-value, only
 evidence-weight.

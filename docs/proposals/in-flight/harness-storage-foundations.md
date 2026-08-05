@@ -6,12 +6,12 @@ storage-shaping feature that becomes a structural rewrite if added after the
 red suites lock. Same catch-class as thread-branching and YOLO-safe: find it
 while JS-FREEZE can still absorb it additively.
 
-Sources: `../archive/harness-research/10-storage-leaders.md`, `11-storage-challengers.md`,
+Sources: `harness-research/10-storage-leaders.md`, `11-storage-challengers.md`,
 `14-beam-storage.md`, `15-storage-horror-formats.md`, `12-state-frameworks.md`,
 `13-command-channels.md`, `harness-storage-research.md` (AD-9..15, FI-7..12),
 `harness-freeze-contracts.md` (JS-FREEZE, U11, U12), `harness-invariants.md`
 (I1-I10), `harness-roadmap.md`, `harness-spec-{protocol,backend}.md`,
-`../archive/harness-research/{05,06,07,16}.md`, UI lane scanned for storage demands only.
+`harness-research/{05,06,07,16}.md`, UI lane scanned for storage demands only.
 
 ---
 

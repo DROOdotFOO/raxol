@@ -232,7 +232,7 @@ migration, and it only makes an existing transitive edge explicit.
 - Every migrated path site becomes **stricter**. That is the point, but it is also the
   risk surface (below): inputs previously accepted will be rejected.
 
-## Risk + Validation
+## Risk + validation
 
 **Proof strategy per class:**
 

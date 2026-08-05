@@ -1,7 +1,7 @@
 # Cohort Research Round 2: Journal, Storage, Commands
 
 Date: 2026-07-15 · Phases 1-2 (frame + priors, written BEFORE research returns).
-Protocol: dappsnap `cohort-research` skill. Round 1 = `../archive/harness-cohort-research.md`
+Protocol: dappsnap `cohort-research` skill. Round 1 = `harness-cohort-research.md`
 (general features). This round: the durable seams: where U2 (journal), U4
 (reattach), U9/U10 (checkpoint/compaction), U3/U5/U6 (commands) commit to shapes
 that are painful to retrofit. Mandate: **steal foundations, don't invent**: 
@@ -80,7 +80,7 @@ OpenHands event-sourcing ? · BEAM storage picks ? · journal-is-empty ✓ (medi
 | 14 | BEAM local-first storage (DETS/Mnesia/CubDB/SQLite-NIF/file-append) | domain |
 | 15 | Storage horror stories + file-format theory (SQLite-as-app-file-format, JSONL conventions, asciinema v2) | cautionary/theory |
 
-Briefs saved to `../archive/harness-research/10..15-*.md`. Phase 5-6 synthesis below.
+Briefs saved to `harness-research/10..15-*.md`. Phase 5-6 synthesis below.
 
 ---
 

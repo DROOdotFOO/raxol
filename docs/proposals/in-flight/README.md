@@ -23,9 +23,25 @@ tables below to find where any tag you hit (`AD-6a`, `FI-8`, `AF-3`, `I3`,
 | `harness-yolo-safe-research.md` | YOLO-safe-by-construction research/design: the auto-approve predicate (`effect_class`/`egress`) frozen in `harness-freeze-contracts.md` §5.2 traces back here. |
 | `harness-design.md` | Design record: the seven concepts + architecture narrative. Companion to `harness-synthesis.md` and `harness-baseline-features.md`. |
 | `harness-baseline-features.md` | Reference list of "table stakes" features (the floor, not the differentiators). |
-| `harness-facts-two-perspectives.md` | Raw fact extraction (operator + systems vantage) over `../archive/harness-research/01-09`, zero processing: an input to `harness-design.md` and `harness-synthesis.md`. |
-| `../archive/harness-cohort-research.md` | Phase 1-2 (frame + priors) for the first cohort-research round, written before research returned. |
-| `../archive/harness-research/` | **Archived.** Raw per-topic research briefs (01-09, plus later additions) underlying `harness-facts-two-perspectives.md` and `harness-synthesis.md`. Consumed; kept for provenance. See `../archive/README.md`. |
+| `harness-facts-two-perspectives.md` | Raw fact extraction (operator + systems vantage) over `harness-research/01-09`, zero processing: an input to `harness-design.md` and `harness-synthesis.md`. |
+
+### Retirement policy
+
+When a document's findings are ratified into `harness-freeze-contracts.md`,
+delete it and keep the citation. Git is the archive. Research kept "for
+provenance" only accumulates: the previous archive reached 24 files and 4,926
+lines before it was removed, every one of them already consumed.
+
+`harness-cohort-research.md` (phase 1-2 frame and priors for the first
+cohort-research round) and `harness-research/` (the raw per-topic briefs `01`-`09`
+from the first cohort, `10`-`16` from the storage round, `spike-u5-kill.md`, and
+the `audit-trail/` rulings) went that way. Citations to them below are provenance
+labels, not live paths. Retrieve any of it from git:
+
+```bash
+git log --diff-filter=D --format='%H %s' -- docs/proposals/archive/
+git show <sha>^:docs/proposals/archive/harness-research/06-horror-stories.md
+```
 
 Non-`harness-*` files in this directory (`palette-inventory.md`, `t0-runbook.md`,
 `t0-verdict-schema.md`) belong to the UI/rendering lane, not this constitution;

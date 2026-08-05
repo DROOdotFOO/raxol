@@ -3,7 +3,7 @@
 Purpose: not "is today's behavior correct" but "these properties can never be
 accidentally broken by a future refactor." Born from the review-round
 convergence (three independent reviewers, same defects, all in untested
-failure arms) + grok-4.5 ideation (`../archive/harness-research/16-invariant-ideation-grok45.md`,
+failure arms) + grok-4.5 ideation (`harness-research/16-invariant-ideation-grok45.md`,
 full 38-item list + holes analysis there).
 
 Suite home: `packages/raxol_agent/test/invariants/` (property-based, StreamData),
