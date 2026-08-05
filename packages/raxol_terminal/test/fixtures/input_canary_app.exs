@@ -81,8 +81,7 @@ defmodule InputCanaryApp do
   defp collect(n, acc) do
     receive do
       {:inline_input, %Raxol.Core.Events.Event{type: :key, data: data}} ->
-        token = to_string(data[:char] || data[:key])
-        collect(n, [token | acc])
+        collect(n, [token(data) | acc])
 
       _ ->
         collect(n, acc)
@@ -90,6 +89,13 @@ defmodule InputCanaryApp do
       4000 -> Enum.reverse(acc)
     end
   end
+
+  # `ctrl` is carried separately from the char, and byte 0x03 parses to
+  # `%{ctrl: true, char: "c"}` -- the same char a bare `c` keystroke
+  # produces. Without the prefix a decoded ^C and a typed `c` are the
+  # same token, which is exactly the distinction the isig test turns on.
+  defp token(%{ctrl: true} = data), do: "ctrl-" <> to_string(data[:char] || data[:key])
+  defp token(data), do: to_string(data[:char] || data[:key])
 end
 
 InputCanaryApp.run()

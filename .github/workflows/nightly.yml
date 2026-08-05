@@ -115,8 +115,11 @@ jobs:
           mix deps.compile
 
       # The local terminal input path traces prim_tty's reader (an OTP-internal
-      # private protocol). Run the real-pty canary on every OTP in the matrix so
-      # ambient drift is caught here even between the per-PR OTP bumps.
+      # private protocol) and depends on a raw termios `user_drv` only hands out
+      # from OTP 28 on. Run the real-pty tests on every OTP in the matrix so
+      # ambient drift is caught here even between the per-PR OTP bumps. Both
+      # files carry the same tag; they are listed explicitly because a new one
+      # would otherwise be silently skipped.
       - name: raxol_terminal prim_tty input canary
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -128,6 +131,7 @@ jobs:
           mix deps.get
           MIX_ENV=test TMPDIR=/tmp mix test \
             test/raxol/terminal/input_protocol_canary_test.exs \
+            test/raxol/terminal/input_isig_contract_test.exs \
             --only input_protocol_canary
 
       - name: Run full test suite
