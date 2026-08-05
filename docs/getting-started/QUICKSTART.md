@@ -1,12 +1,7 @@
-# Quickstart Guide
+# Quickstart
 
-Let's build a raxol app. By the end of this page you'll have a working counter running in your terminal.
-
-What you'll learn:
-
-- The four callbacks every Raxol app implements
-- How to handle keyboard input and button clicks
-- How the View DSL builds layouts
+A counter app, running in your terminal, using the four callbacks every Raxol
+app implements.
 
 ## Install
 
@@ -98,8 +93,6 @@ receive do
   {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
 end
 ```
-
-**What's happening here?**
 
 - `init/1` returns a plain map, which is your entire app state
 - `update/2` pattern-matches on messages and returns `{new_state, commands}`. The empty list `[]` means "no side effects"
@@ -206,37 +199,35 @@ vim and tmux leave the same mess when you SIGKILL them. It comes with the
 territory for full-screen terminal programs. [Why OTP](../WHY_OTP.md#crash-isolation)
 covers what can take the VM down that way in the first place.
 
-## What you just built
+## Where to go next
 
-That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
+That counter is a complete Raxol app. `init/update/view` is the whole API, and
+everything else builds on this loop.
 
-Try `mix raxol.playground` for an interactive catalog of 40 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
+- [Component Gallery](COMPONENT_GALLERY.md): all Components with examples
+- [Core Concepts](CORE_CONCEPTS.md): buffers, the rendering pipeline, and how they fit together
+- [Building Apps](../cookbook/BUILDING_APPS.md): state machines, scrollable lists, keyboard shortcuts
 
-**Next steps:**
+`mix raxol.playground` browses 40 Component demos interactively, with search and
+filtering.
 
-- [Component Gallery](COMPONENT_GALLERY.md): All Components with examples
-- [Core Concepts](CORE_CONCEPTS.md): Buffers, rendering pipeline, and how it all fits together
-- [Building Apps](../cookbook/BUILDING_APPS.md): Patterns for real apps (state machines, scrollable lists, keyboard shortcuts)
+### Things to try
 
-### Explore Further
-
-Features worth exploring:
-
-**SSH App Serving**: Serve your app over SSH. Each connection gets its own process:
+**SSH serving.** Serve your app over SSH. Each connection gets its own process:
 
 ```bash
 mix run examples/ssh/ssh_counter.exs
 # Then: ssh localhost -p 2222
 ```
 
-**Hot Code Reload**: Edit your view function while the app is running:
+**Hot code reload.** Edit your view function while the app is running:
 
 ```bash
 iex -S mix run examples/dev/hot_reload_demo.exs
 # Edit the view/1 function and save; UI updates automatically
 ```
 
-**Crash Isolation**: Components run in separate processes. One crash doesn't take down the app:
+**Crash isolation.** Components run in separate processes. One crash doesn't take down the app:
 
 ```bash
 mix run examples/components/process_component_demo.exs

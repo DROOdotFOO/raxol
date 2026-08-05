@@ -1,8 +1,8 @@
 # Agent Harness: Cohort Research Synthesis (Phase 5-6)
 
 Date: 2026-07-15
-Inputs: 9 forum-first Sonnet research briefs (`../archive/harness-research/01`-`09`), priors in
-`../archive/harness-cohort-research.md` written before dispatch.
+Inputs: 9 forum-first Sonnet research briefs (`harness-research/01`-`09`), priors in
+`harness-cohort-research.md` written before dispatch.
 Status: challenger tier (02) re-running after a stall; covered secondhand here,
 refine on landing.
 

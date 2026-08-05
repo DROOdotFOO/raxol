@@ -1,7 +1,5 @@
 # Core Concepts
 
-The fundamentals of Raxol's architecture.
-
 ## The Elm Architecture (TEA)
 
 Most Raxol apps use TEA, four callbacks that form a loop:
@@ -25,7 +23,7 @@ Most Raxol apps never touch buffers directly. The View DSL and layout engine han
 
 A buffer is a 2D grid of cells representing terminal content, a canvas for text.
 
-### Buffer Structure
+### Buffer structure
 
 ```elixir
 %{
@@ -45,7 +43,7 @@ A buffer is a 2D grid of cells representing terminal content, a canvas for text.
 
 Each buffer has width x height dimensions in characters. Lines are rows top to bottom. Each cell contains a `char` (single grapheme) and a `style` map (colors, bold, etc.).
 
-### Immutable & Functional
+### Immutable and functional
 
 ```elixir
 # Each operation returns a NEW buffer
@@ -53,9 +51,10 @@ new_buffer = Buffer.write_at(old_buffer, 5, 3, "Text")
 # old_buffer is unchanged
 ```
 
-No server processes required. Pure data structure operations. Optimal for diffing and caching.
+These are pure data structure operations, with no server process behind them,
+which is what makes diffing and caching cheap.
 
-### Cell Coordinates
+### Cell coordinates
 
 Buffers use **(x, y)** coordinates, both 0-indexed:
 
@@ -140,7 +139,7 @@ html = TerminalBridge.buffer_to_html(buffer)
 
 ---
 
-## State Management
+## State management
 
 **TEA is the canonical app model.** A Raxol application is a single module with `init/1`, `update/2`, and `view/1`, started via `Raxol.start_link/2`. One model, one update function, one view. Don't reach for alternatives unless TEA genuinely doesn't fit.
 
@@ -186,7 +185,7 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 ---
 
-## Performance Model
+## Performance model
 
 ### Targets
 
@@ -200,7 +199,7 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 60 FPS = 16ms frame budget.
 
-### Optimization Tips
+### Optimization tips
 
 **Pipeline operations** instead of intermediate variables. Elixir optimizes pipelines better.
 
@@ -208,7 +207,7 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 **Reuse style references.** Avoid allocating duplicate style maps.
 
-**Use `fill_area`** instead of looping `set_cell`. Significantly faster for area fills.
+**Use `fill_area`** instead of looping `set_cell`. Much faster for area fills.
 
 ### Memory
 
@@ -220,11 +219,10 @@ Keep buffers reasonably sized. Don't hold references to old buffers you no longe
 
 ---
 
-## Design Philosophy
+## Design principles
 
-**Functional first.** All buffer operations return new buffers, never mutate. Easier to reason about, no hidden side effects, safe for concurrent access.
-
-**Composable.** Complex UIs are compositions of simple operations:
+Buffer operations return new buffers and never mutate, so they compose by
+piping:
 
 ```elixir
 def create_dashboard(buffer, data) do
@@ -236,34 +234,34 @@ def create_dashboard(buffer, data) do
 end
 ```
 
-**Minimal dependencies (core).** Raxol.Core depends only on telemetry at runtime. Minimal install size, no conflicts, works everywhere Elixir runs.
+`Raxol.Core` depends only on telemetry at runtime, so it runs anywhere Elixir
+does. Adoption is incremental: buffers and rendering for scripts, the View DSL
+for interactive apps, the full framework when you want LiveView and SSH.
 
-**Incremental adoption.** Use what you need. Buffers and rendering for scripts, the View DSL for interactive apps, or the full framework with LiveView and SSH.
+The design law behind all of this is in [Philosophy](../PHILOSOPHY.md).
 
 ---
 
-## Common Questions
+## Common questions
 
 ### Why not just write ANSI codes directly?
 
-Buffers enable diffing. By maintaining the full state, we can calculate minimal updates instead of redrawing everything.
+Buffers enable diffing. Holding the full state lets the renderer calculate
+minimal updates instead of redrawing everything.
 
 ### Can I skip buffers entirely?
 
-You can! Buffers are optional. But they give you automatic diffing, state inspection, HTML rendering, and testing utilities.
+Yes, they are optional. You give up automatic diffing, state inspection, HTML
+rendering, and the testing utilities that read cells.
 
-### How does Raxol compare to ncurses, Bubble Tea, etc.?
+### How does Raxol compare to ncurses, Bubble Tea, and Ratatui?
 
-| Feature      | Raxol          | ncurses     | blessed    |
-| ------------ | -------------- | ----------- | ---------- |
-| Language     | Elixir         | C           | Node.js    |
-| Paradigm     | Functional     | Imperative  | Imperative |
-| Web Support  | Yes (LiveView) | No          | No         |
-| Dependencies | telemetry      | System libs | Many       |
+See [Why OTP](../WHY_OTP.md) for the TUI framework comparison, and
+[Why Raxol](../WHY_RAXOL.md) for the agent runtime one.
 
 ### Can I use Raxol alongside other libraries?
 
-Yes. Raxol.Core is just data structures:
+Yes. `Raxol.Core` is just data structures:
 
 ```elixir
 buffer = Buffer.create_blank_buffer(80, 24)
@@ -275,11 +273,11 @@ MyCustomRenderer.render(output)
 
 ---
 
-## Next Steps
+## Next steps
 
-- [Quickstart](QUICKSTART.md) - Build your first app
-- [Cookbook](../cookbook/README.md) - Practical patterns and recipes
-- [API Reference](../core/BUFFER_API.md) - Complete function documentation
-- [Architecture](../core/ARCHITECTURE.md) - Implementation details
+- [Quickstart](QUICKSTART.md): build your first app
+- [Cookbook](../cookbook/README.md): practical patterns and recipes
+- [Buffer API](../core/BUFFER_API.md): complete function documentation
+- [Architecture](../core/ARCHITECTURE.md): implementation details
 
-For a full working example showing dashboard layout, live stats, and OTP differentiators, see `examples/demo.exs`.
+`examples/demo.exs` is a full working app with dashboard layout and live stats.

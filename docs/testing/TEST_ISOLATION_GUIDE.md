@@ -1,6 +1,6 @@
 # Test Isolation Guide
 
-## The Problem
+## The problem
 
 Tests fail when run as a full suite but pass individually. The root causes:
 
@@ -194,7 +194,7 @@ defmodule RaxolWeb.TerminalChannelTest do
 end
 ```
 
-## Verifying the Fixes
+## Verifying the fixes
 
 After applying changes, run the suite multiple times with different seeds to catch ordering issues:
 

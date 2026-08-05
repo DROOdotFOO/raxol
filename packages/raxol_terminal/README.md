@@ -5,10 +5,10 @@ Terminal emulation and driver infrastructure for Raxol. Depends on raxol_core fo
 ## Install
 
 ```elixir
-{:raxol_terminal, "~> 2.4"}
+{:raxol_terminal, "~> 2.6"}
 ```
 
-## What's Included
+## What's included
 
 - **ANSI**: Full ANSI/VT100 sequence parsing, graphics, mouse, Kitty protocol, Sixel
 - **Buffer**: Screen buffer, cell operations, damage tracking

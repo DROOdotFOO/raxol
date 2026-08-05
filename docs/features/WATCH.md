@@ -2,7 +2,7 @@
 
 `raxol_watch` pushes glanceable summaries from a Raxol app to iOS or Android devices. Accessibility announcements become notifications; taps come back as Raxol events. It's a low-bandwidth surface for status updates rather than full UI.
 
-## Quick Start
+## Quick start
 
 ```elixir
 children = [
@@ -24,7 +24,7 @@ Supported opts: `muted: false`, `high_priority_only: false`.
 
 When the app announces something via Accessibility, registered devices get a push.
 
-## Push Backends
+## Push backends
 
 | Backend  | Notes                                |
 | -------- | ------------------------------------ |
@@ -42,7 +42,7 @@ High-priority announcements (errors, alerts) bypass the debounce and push immedi
 
 Parallel send across devices via `Task.async_stream`. Failures log per-device but don't block the others.
 
-## Tap Actions
+## Tap actions
 
 When a user taps a notification, `ActionHandler.handle_action/2` translates the action ID into a `Raxol.Core.Events.Event`. Default mapping:
 
@@ -74,7 +74,7 @@ Custom event types beyond `:key` work too: any `{type, data}` where `type` is an
 chat tap-back set (`reply` + `mute` + `pin` + `delete` + `dismiss`) to
 chat-style notifications.
 
-## Quick-Reply (Text Input)
+## Quick reply (text input)
 
 iOS `UNTextInputNotificationAction` and Android `RemoteInput` prompt the user for text before the action arrives back at the app. `handle_reply_action/3` translates the action ID + typed text into a `:reply` event:
 
@@ -89,7 +89,7 @@ Raxol.Watch.ActionHandler.dispatch_reply("reply", "Sounds good!", to: MyApp.TEA)
 
 Replies use the same `{:watch_action, event}` channel as other tap-backs, so consumers pattern-match on `event.type == :reply` rather than a separate message tag.
 
-## Notification Categories
+## Notification categories
 
 `Raxol.Watch.Categories` returns pure data for the host iOS / Android apps to register at launch:
 
@@ -155,13 +155,13 @@ Notification fields exposed: `body_long`, `audio_url`, `image_url`, `media_type`
 
 The host iOS / Wear OS app downloads the media and renders the notification: `UNNotificationServiceExtension` on iOS, `NotificationCompat` + `BigPictureStyle` / `MessagingStyle` on Android.
 
-## Device Registry
+## Device registry
 
 `DeviceRegistry` is ETS-backed with `read_concurrency: true`. Crash-safe init means the registry recovers cleanly if the GenServer restarts.
 
 Devices don't expire automatically. Hook `unregister/1` into your auth layer when sessions end.
 
-## See Also
+## See also
 
 - [Telegram](TELEGRAM.md): interactive messaging surface
 - [Speech](SPEECH.md): the other accessibility-driven surface

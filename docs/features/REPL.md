@@ -2,7 +2,7 @@
 
 Interactive Elixir REPL with AST-based sandboxing. Three safety levels: wide open for local use, locked down for SSH. Bindings persist between evaluations, IO gets captured, and runaway code hits a timeout.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix raxol.repl
@@ -44,7 +44,7 @@ evaluator = Evaluator.reset_bindings(evaluator)  # clears bindings, keeps histor
 evaluator = Evaluator.clear_history(evaluator)    # clears history, keeps bindings
 ```
 
-## Sandbox Levels
+## Sandbox levels
 
 `Raxol.REPL.Sandbox` walks the AST with `Macro.prewalk` and rejects code that calls blocked modules or functions, before it ever runs.
 
@@ -75,6 +75,6 @@ mix raxol.playground --ssh
 
 Use `:strict` sandbox for anything exposed to the network.
 
-## Playground Demo
+## Playground demo
 
 The REPL is one of the playground demos (`mix raxol.playground` -> REPL). It has input history (up/down), formatted output, a bindings panel, and shows the active sandbox level.

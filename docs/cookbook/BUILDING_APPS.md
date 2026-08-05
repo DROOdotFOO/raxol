@@ -1,12 +1,13 @@
 # Building Apps
 
-You've built a counter. Now let's look at patterns you'll reach for in real apps.
+Patterns you reach for once the counter from the
+[Quickstart](../getting-started/QUICKSTART.md) grows into a real app.
 
 > All code below assumes `use Raxol.Core.Runtime.Application`, which aliases
 > `Raxol.Core.Events.Event` as `Event`. You can write `%Event{...}` instead of
 > the full module path.
 
-## State Design
+## State design
 
 ### Flat state with derived values
 
@@ -61,7 +62,7 @@ def view(%{mode: :searching} = model), do: render_search(model)
 def view(%{mode: :editing} = model), do: render_editor(model)
 ```
 
-## Common Recipes
+## Common recipes
 
 Use **state machines** when your app has distinct modes (browsing vs editing vs searching). Use **scrollable lists** when you have more items than fit on screen. Use **keychord sequences** for Vim-style multi-key commands.
 
@@ -176,7 +177,7 @@ def view(%{confirm: msg} = model) when is_binary(msg) do
 end
 ```
 
-### Multi-panel layout with Tab switching
+### Multi-panel layout with tab switching
 
 ```elixir
 @panels [:files, :preview, :log]
@@ -252,7 +253,7 @@ end
 text("[#{progress_bar(75, 100, 30)}] 75%", fg: :cyan)
 ```
 
-## Keyboard Patterns
+## Keyboard patterns
 
 ### Vim-style keybindings
 
@@ -295,7 +296,7 @@ def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: c}}, m
 end
 ```
 
-## Styling Patterns
+## Styling patterns
 
 ### Color by value
 
@@ -400,9 +401,7 @@ test "search mode filters items" do
 end
 ```
 
-## Next Steps
+## Next steps
 
-- [SSH Deployment](./SSH_DEPLOYMENT.md): Serve apps over SSH
-- [Theming](./THEMING.md): Custom color schemes
-- [Performance](./PERFORMANCE_OPTIMIZATION.md): 60fps techniques
-- [Component Gallery](../getting-started/COMPONENT_GALLERY.md): All Components with examples
+- [Component Gallery](../getting-started/COMPONENT_GALLERY.md): every Component with examples
+- [Cookbook index](./README.md): the other recipes

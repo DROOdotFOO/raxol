@@ -5,7 +5,7 @@ MCP (Model Context Protocol) server and client for Elixir. JSON-RPC 2.0 protocol
 ## Install
 
 ```elixir
-{:raxol_mcp, "~> 2.4"}
+{:raxol_mcp, "~> 2.6"}
 ```
 
 ## Features
@@ -20,7 +20,7 @@ MCP (Model Context Protocol) server and client for Elixir. JSON-RPC 2.0 protocol
 - **Test Harness**: pipe-friendly API (`click`, `type_into`, `assert_component`), functor law property tests
 - **Circuit Breaker**: 3-state ETS machine for flaky tool callbacks
 
-## Quick Start
+## Quick start
 
 ```elixir
 # Register a tool

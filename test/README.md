@@ -1,19 +1,19 @@
-# [TEST] Raxol Test Suite
+# Raxol test suite
 
 Welcome! This directory contains Raxol's comprehensive test suite, designed for reliability, speed, and maintainability.
 
 ---
 
-## [STRUCTURE] Test Structure
+## Test structure
 
-- `test/support/` — Test helpers and support modules
-  - `data_case.ex` — Database test setup
-  - `test_helpers.ex` — Common test utilities
-- `test/` — Test files organized by module or feature
+- `test/support/`: test helpers and support modules
+  - `data_case.ex`: database test setup
+  - `test_helpers.ex`: common test utilities
+- `test/`: test files organized by module or feature
 
 ---
 
-## [BEST PRACTICES] Best Practices
+## Best practices
 
 - **No `Process.sleep`:**
   Use event-based synchronization (`assert_receive`) or `Raxol.TestHelpers.wait_for_state/2` for polling.
@@ -28,7 +28,7 @@ Welcome! This directory contains Raxol's comprehensive test suite, designed for 
 
 ---
 
-## [CATEGORIES] Test Categories
+## Test categories
 
 - **Unit Tests:**
   Test individual functions/modules (`ExUnit.Case`, `async: true`).
@@ -41,7 +41,7 @@ Welcome! This directory contains Raxol's comprehensive test suite, designed for 
 
 ---
 
-## ▶️ Running Tests
+## Running tests
 
 ```bash
 mix test                      # Run all tests
@@ -51,7 +51,7 @@ mix test test/path/to/test.exs:123  # Run a specific test
 
 ---
 
-## [CONFIG] Test Configuration
+## Test configuration
 
 Configuration is in `config/test.exs`. Key settings:
 
@@ -63,7 +63,7 @@ Configuration is in `config/test.exs`. Key settings:
 
 ---
 
-## ➕ Adding New Tests
+## Adding new tests
 
 1. Choose the right test case (`ExUnit.Case`, `Raxol.DataCase`, or `Raxol.ConnCase`).
 2. Follow best practices above.
@@ -73,7 +73,7 @@ Configuration is in `config/test.exs`. Key settings:
 
 ---
 
-## [HELPERS] Test Helpers
+## Test helpers
 
 - **Raxol.TestHelpers:**
   Event-based sync, process/ETS/registry cleanup, temp file handling.

@@ -36,11 +36,10 @@ adapter contract.
 
 ## One fan-out, not N adapters
 
-The reason this holds together is architectural. A Raxol app is one OTP process publishing
-its state; each surface is a subscriber that projects that state its own way. Adding a
-surface adds a subscriber, not a rewrite. The terminal, the LiveView, and the SSH session
-can render the same running module at the same time, each staying in sync through
-Phoenix.PubSub.
+A Raxol app is one OTP process publishing its state, and each surface is a subscriber that
+projects that state its own way. Adding a surface adds a subscriber, not a rewrite. The
+terminal, the LiveView, and the SSH session can render the same running module at the same
+time, each staying in sync through Phoenix.PubSub.
 
 That is a different model from a chat bot framework, where each platform is a separate
 integration that reimplements the conversation. Here the conversation, the state, and the
@@ -56,13 +55,13 @@ surfaces that cannot compute frames server-side (the terminal). The same declara
 differently per surface, with `prefers-reduced-motion` respected. Hints are declarative
 metadata, never imperative commands.
 
-## The agent surface is first-class
+## The agent surface
 
-The MCP surface is not a bolt-on. Component types implement a `ToolProvider` behaviour, so
-the framework derives an agent's toolset from the same component tree it renders for a human,
-and a focus lens narrows it to the roughly 15 relevant tools per interaction. An LLM
-`type_into` a field and `click` a button through the exact structure a person sees. See
-[MCP as a Rendering Target](../features/MCP.md).
+MCP is built the same way as the others. Component types implement a `ToolProvider`
+behaviour, so the framework derives an agent's toolset from the same component tree it
+renders for a human, and a focus lens narrows it to the roughly 15 relevant tools per
+interaction. An LLM `type_into` a field and `click` a button through the exact structure a
+person sees. See [MCP as a Rendering Target](../features/MCP.md).
 
 ## See also
 

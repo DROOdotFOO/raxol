@@ -1,26 +1,25 @@
 #!/usr/bin/env bash
-# Blocks commits that change mix.exs/mix.lock without a consistent lockfile.
-# Catches the failure mode where a dep is added or a transitive bump drifts
-# the root mix.lock but it is not committed, which only surfaces in CI's
-# `mix deps.get --check-locked` step after the push to master.
+# Pre-commit gates. Each runs only when the files it guards are staged, so a
+# commit that touches neither pays nothing.
+#
+#   1. mix.lock consistency, when mix.exs/mix.lock is staged.
+#   2. Markdown prose rules, when any .md is staged.
 #
 # Installed via `git config core.hooksPath .githooks` (run by `mix setup`).
 set -euo pipefail
 
 staged="$(git diff --cached --name-only --diff-filter=ACM)"
+status=0
 
-if ! printf '%s\n' "$staged" | grep -qE '(^|/)mix\.(exs|lock)$'; then
-  exit 0
-fi
-
-echo "pre-commit: verifying mix.lock is consistent (mix.exs/mix.lock staged)..."
-
-if output="$(mix deps.get --check-locked 2>&1)"; then
-  exit 0
-fi
-
-echo "$output" >&2
-cat >&2 <<'MSG'
+# --- 1. lockfile ---------------------------------------------------------
+# Catches the failure mode where a dep is added or a transitive bump drifts the
+# root mix.lock but it is not committed, which only surfaces in CI's
+# `mix deps.get --check-locked` step after the push to master.
+if printf '%s\n' "$staged" | grep -qE '(^|/)mix\.(exs|lock)$'; then
+  echo "pre-commit: verifying mix.lock is consistent..."
+  if ! output="$(mix deps.get --check-locked 2>&1)"; then
+    echo "$output" >&2
+    cat >&2 <<'MSG'
 
 pre-commit: mix.lock is out of date.
 
@@ -28,6 +27,39 @@ pre-commit: mix.lock is out of date.
 
     mix deps.get && git add mix.lock
 
-  (Bypass with `git commit --no-verify` only if you know why.)
 MSG
-exit 1
+    status=1
+  fi
+fi
+
+# --- 2. markdown prose ---------------------------------------------------
+# Unicode punctuation, ` -- ` as an em-dash substitute, and broken relative
+# links. The rules kept regressing while they lived only in a style note, so
+# they are enforced here and in CI. Heading case is a warning-only sweep
+# (`mix raxol.check_docs --headings`) and is deliberately not gated.
+md_files="$(printf '%s\n' "$staged" | grep -E '\.md$' | grep -v 'node_modules/' || true)"
+
+if [[ -n "$md_files" ]]; then
+  echo "pre-commit: linting staged Markdown..."
+  args=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && args+=(--files "$f")
+  done <<<"$md_files"
+
+  if ! mix raxol.check_docs --only prose "${args[@]}"; then
+    cat >&2 <<'MSG'
+
+pre-commit: Markdown prose check failed.
+
+  Fix the findings above, or see `mix help raxol.check_docs` for the rules.
+
+MSG
+    status=1
+  fi
+fi
+
+if [[ "$status" -ne 0 ]]; then
+  echo "(Bypass with \`git commit --no-verify\` only if you know why.)" >&2
+fi
+
+exit "$status"

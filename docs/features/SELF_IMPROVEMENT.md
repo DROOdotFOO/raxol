@@ -110,10 +110,9 @@ curation.
 Consolidation (model-driven merge of near-duplicate skills) is opt-in and not yet
 implemented.
 
-## Why OTP makes this stronger
+## What supervision buys
 
-Hermes markets itself as "the only agent with a built-in learning loop," backed by a
-single-process SQLite store. Raxol's loop is built on supervision instead:
+Three properties fall out of running the loop on OTP rather than in-process:
 
 - The reviewer is an isolated, unlinked `Task`. A model error or parse failure is logged and
   the turn is unaffected.
@@ -122,11 +121,9 @@ single-process SQLite store. Raxol's loop is built on supervision instead:
   and the supervisor restarts the manager.
 - Every Curator mutation is preceded by a backup and is reversible.
 
-A learning loop that cannot lose state because it is backed by OTP supervision is a
-concrete, defensible position, not a slogan.
-
 ## See also
 
 - [Memory](MEMORY.md): the recall layer the reviewer writes facts into.
 - [Agent Framework](AGENT_FRAMEWORK.md): the Turn driver that wires self-improvement into a
   turn, and auxiliary-model routing.
+- [Why Raxol](../WHY_RAXOL.md): how this loop compares to the Python agent stacks.

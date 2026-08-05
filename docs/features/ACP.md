@@ -10,7 +10,7 @@ Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_earn/`.
 > protocol between a code editor and an AI coding agent). Different acronym expansion,
 > different domain.
 
-## Job Lifecycle
+## Job lifecycle
 
 Every job is a state machine. One supervised `Raxol.Earn.JobSession` runs per active job, registered by `{chain_id, job_id}`:
 
@@ -88,7 +88,7 @@ The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed
 
 `mix raxol_earn.derive_caps` reads the solver's live `balanceOf` per corridor and emits both maps (`--order-frac`/`--aggregate-frac`/`--min-usd`, per-chain RPC via `DERIVE_RPC_<chain>`). The `CapacityRefresher` runs the same reads on an interval, so aggregate capacity tracks the chain as fills drain inventory. Starting point in `packages/raxol_earn/config/destination_caps.example.exs`.
 
-## On-Chain Writes
+## On-chain writes
 
 The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.Earn.ContractClient` write surface and the `:acp_version` switch were retired: see `MIGRATION_V2.md`). `Raxol.Earn.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.Earn.ProviderAdapter`:
 
@@ -102,11 +102,11 @@ The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there
 
 `JobSession` reaches the terminal `:expired` status via `expire/2` from any non-terminal status, so a job whose counterparty abandoned it can be closed rather than left wedged. `:expired`, `:completed`, and `:rejected` are terminal: the session process stops with `:normal` once it reaches one. On-chain escrow handling on expiry is the `AgenticCommerceV3` core's responsibility.
 
-## Nonce Serialization
+## Nonce serialization
 
 The `Raxol.Earn.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox, so two concurrent EOA writes from one wallet can never sign the same nonce. `ProviderAdapter.JSONRPC` routes every send through it. A send that fails before broadcast resyncs the counter, so the next send re-fetches the pending nonce from chain and re-fills the gap rather than leaving a hole that would strand every later transaction. The SCA/UserOp path uses ERC-4337 EntryPoint nonces and is unaffected.
 
-## Seller Stack
+## Seller stack
 
 Opt-in via `:seller_enabled` in config:
 
@@ -121,7 +121,7 @@ Opt-in via `:seller_enabled` in config:
 
 Pre-alpha, not yet on Hex. The `Wallet.SCA` ERC-4337 stack, the real vendored ABIs (`priv/abi/`), and the `Backend.WebSocket` Socket.IO client are implemented; the on-chain paths are fork-validated against the real deployed core on Base. `mix raxol_earn.bench` runs end-to-end against the InMemory backend.
 
-## See Also
+## See also
 
 - [Agentic Commerce](AGENTIC_COMMERCE.md): the buyer side (raxol_payments)
 - [Agent Framework](AGENT_FRAMEWORK.md): the runtime hosting the seller

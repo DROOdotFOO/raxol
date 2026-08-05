@@ -34,7 +34,7 @@ Game development patterns and real-time updates.
 
 These examples demonstrate:
 
-### Architectural Patterns
+### Architectural patterns
 - **MVC/MVP patterns** - Clean separation of concerns
 - **Plugin architecture** - Extensible application design
 - **Event-driven architecture** - Decoupled component communication
@@ -46,7 +46,7 @@ These examples demonstrate:
 - **Concurrent processing** - Handle multiple operations efficiently
 - **Caching strategies** - Smart caching for better performance
 
-### Advanced UI Patterns
+### Advanced UI patterns
 - **Complex layouts** - Multi-pane and dynamic layouts
 - **Real-time updates** - Live data streaming and updates
 - **Accessibility** - Advanced accessibility features

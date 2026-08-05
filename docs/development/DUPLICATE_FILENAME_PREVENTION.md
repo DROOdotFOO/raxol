@@ -22,23 +22,23 @@ lib/raxol/core/events/event_manager.ex
 
 ## Tools
 
-### Standalone Script
+### Standalone script
 
-`scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs` scans `lib/` and `test/`, categorizes duplicates by severity (`[CRITICAL]`, `[WARNING]`, `[INFO]`), suggests rename targets, and exits non-zero on findings for CI integration.
+`scripts/check_duplicate_filenames.exs` scans `lib/` and `test/`, categorizes duplicates by severity (`[CRITICAL]`, `[WARNING]`, `[INFO]`), suggests rename targets, and exits non-zero on findings for CI integration.
 
 ```bash
-mix run scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs
-mix run scripts/archived/replaced_by_mix_tasks/check_duplicate_filenames.exs --fix-suggestions
+mix run scripts/check_duplicate_filenames.exs
+mix run scripts/check_duplicate_filenames.exs --fix-suggestions
 ```
 
 ## Status
 
-This check is not currently wired into `mix credo` or `mix raxol.check`, and there is
-no `.credo.exs` entry for it. The archived standalone script above is the only tool;
-run it manually, or add it to a pre-commit hook or CI step. Prevention otherwise rests
+This check is not wired into `mix credo` or `mix raxol.check`, and there is no
+`.credo.exs` entry for it. The standalone script above is the only tool; run it
+manually, or add it to a pre-commit hook or CI step. Prevention otherwise rests
 on the naming convention below.
 
-## Problematic Patterns
+## Problematic patterns
 
 The check flags these commonly duplicated filenames:
 
@@ -54,7 +54,7 @@ Any filename with 4+ duplicates regardless of name.
 
 Filenames with 2-3 duplicates. May be acceptable depending on context.
 
-## Naming Conventions
+## Naming conventions
 
 Pattern: `{context}_{function}.ex`. Instead of generic names, use domain-specific prefixes:
 
@@ -66,7 +66,7 @@ Pattern: `{context}_{function}.ex`. Instead of generic names, use domain-specifi
 | `processor.ex`  | `terminal/ansi/`     | `ansi_processor.ex`   |
 | `validator.ex`  | `terminal/config/`   | `config_validator.ex` |
 
-## Example Output
+## Example output
 
 ```bash
 [CHECK] Checking for duplicate filenames...

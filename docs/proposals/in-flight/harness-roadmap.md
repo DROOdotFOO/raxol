@@ -249,7 +249,7 @@ explicitly excluded, not silently mangled; secrets never hit the snapshot.
 
 ### Wave 2a: safety/usability spine (run FIRST)
 
-**U5-spike: kill dynamics** · ✅ DONE (`../archive/harness-research/spike-u5-kill.md`)
+**U5-spike: kill dynamics** · ✅ DONE (`harness-research/spike-u5-kill.md`)
 Ran clean, twice. Verdict below resolves U5.
 - **Kill latency ~2-4 ms** (SIGKILL→gone); the only real cost is the chosen
   grace window.
@@ -618,4 +618,3 @@ don't block the red suites themselves but do block their respective impl
 units: see `harness-parked.md` for the full tracked list (restore-path
 hardening, per-unit freeze addenda, the U21 gating-strength ruling, wiring
 debt, and deferred test tags).
-```

@@ -3,12 +3,12 @@
 How to take the `custom_console_agent` offering from a clean checkout to a live,
 funded, registered seller on Base Sepolia (chain `84532`), then promote to Base
 mainnet (`8453`). The console offering sells a validated Hermes/OpenClaw agent
-package as a **plain job** (`requiredFunds: false`) -- no escrowed principal, no
+package as a **plain job** (`requiredFunds: false`): no escrowed principal, no
 corridor liquidity.
 
 Everything that moves funds or talks to Virtuals is an OPERATOR step (needs a
-funded wallet + network egress). The steps up to that -- code, config, offline
-rehearsal -- are reproducible offline.
+funded wallet + network egress). The steps up to that (code, config, offline
+rehearsal) are reproducible offline.
 
 ## 0. Prerequisites
 
@@ -16,7 +16,7 @@ rehearsal -- are reproducible offline.
 - A wallet the agent signs with. Default: a bring-your-own Alchemy Modular
   Account v2 SCA (`ProviderAdapter.SCA`); fallback: the Privy signer sidecar
   (`ProviderAdapter.Privy`) if sandbox registration insists on a Virtuals-issued
-  wallet. Keys come from `Raxol.Payments.Wallets.{Env, Op}` -- never a literal.
+  wallet. Keys come from `Raxol.Payments.Wallets.{Env, Op}`, never a literal.
 - The `@virtuals-protocol/acp-cli` for one-time identity provisioning only (it is
   NOT in the runtime path).
 - For `bench_validated` delivery: an operator wrapper per runtime that boots the
@@ -40,7 +40,7 @@ Copy the keys you need from `config/console_offering.example.exs` into your
 
 | Setting            | Sepolia dry-run                                   | Mainnet promote            |
 | ------------------ | ------------------------------------------------- | -------------------------- |
-| `seller_chain_id`  | `84_532` (Queue defaults to 8453 -- MUST set)     | `8453`                     |
+| `seller_chain_id`  | `84_532` (Queue defaults to 8453: MUST set)     | `8453`                     |
 | ACP server / relay | `api-dev.acp.virtuals.io` / `acpx.virtuals.gg`    | `api.acp.virtuals.io`      |
 | USDC               | Virtuals sandbox test USDC via `chain_overrides`  | canonical Circle USDC      |
 | adapter            | `ProviderAdapter.SCA` (or `.Privy`)               | same, mainnet bundler keys |
@@ -64,7 +64,7 @@ mix earn.register_offering --offering console --pretty --out console_offering.js
 Emits the marketplace document (name `custom_console_agent`, `priceType: fixed`,
 `price: 10`, `requiredFunds: false`, `slaMinutes: 60`, and the `requirement` JSON
 Schema). Upload it in the dashboard ("Add Job"). Network/contract addresses are
-deliberately NOT in this document -- they live in the agent runtime.
+deliberately NOT in this document; they live in the agent runtime.
 
 ## 4. Offline rehearsal (no funds, no network)
 
@@ -85,7 +85,7 @@ on-chain submit through to completion.
 ## 5. Live dry-run on Sepolia (operator)
 
 With the seller configured and running (`seller_enabled: true`), a scripted mock
-buyer -- a second wallet driving `HookClient.create_job` / `fund` / `complete` --
+buyer (a second wallet driving `HookClient.create_job` / `fund` / `complete`)
 exercises the registered offering. Confirm the deliverable hash lands on-chain via
 `submit` and the body is posted out-of-band; then approve to complete.
 
@@ -141,14 +141,14 @@ originates a real job against the registered offering. **Confirm during the run*
 (the reason `buyer_job_id_resolver` is a seam):
 
 1. The `JobCreated` event signature / indexed `jobId` position the
-   `JobIdResolver.Receipt` decodes -- override `event_signature`/`topic_index`
+   `JobIdResolver.Receipt` decodes; override `event_signature`/`topic_index`
    in config if they differ from the placeholder.
 2. That `createJob`'s `description` round-trips on-chain and is readable via
-   `get_active_jobs` -- the crash reconcile-by-tag path depends on it.
+   `get_active_jobs`; the crash reconcile-by-tag path depends on it.
 3. The job-id form matches across the receipt, the REST API, and session keys.
 
 Kill the BEAM mid-flight (between reserve -> create -> fund) and restart: with
-`checkpoint` wired, `buy/1` resumes from the recorded phase -- exactly one
+`checkpoint` wired, `buy/1` resumes from the recorded phase: exactly one
 `createJob` (reconciled by the request tag) and one `fund`, budget reserved once.
 
 ## 7. Promote to mainnet

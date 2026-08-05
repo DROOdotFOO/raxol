@@ -89,7 +89,7 @@ The unified development script that provides convenient access to common tasks:
 ### `archived/` - Archived Scripts
 Contains deprecated, experimental, and refactoring scripts from previous sprints. These are kept for reference but are not actively maintained.
 
-## Usage Examples
+## Usage examples
 
 ```bash
 # Run all tests

@@ -1,12 +1,11 @@
 # VM-Singleton GenServer Audit
 
-This document catalogs every named-singleton (`name: __MODULE__`) process in
-the Raxol codebase, classifies each as **intentional** or **questionable**,
-and records the reasoning. Issues #228 and #229 surfaced because the runtime
-had *latent* singletons: modules registered as VM-wide names that were
-actually meant to support multiple concurrent instances. This audit makes
-the contract explicit so the same class of bug can't repeat without a
-deliberate decision.
+Every named-singleton (`name: __MODULE__`) process in the Raxol codebase,
+classified **intentional** or **questionable**, with the reasoning. Issues
+#228 and #229 surfaced because the runtime had *latent* singletons: modules
+registered as VM-wide names that were actually meant to support multiple
+concurrent instances. Making the contract explicit means the same class of
+bug cannot repeat without a deliberate decision.
 
 ## Why this matters
 

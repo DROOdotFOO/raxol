@@ -3,7 +3,7 @@
 Date: 2026-07-16 · Status: **research / design (v1)** · Owner: V + Claude
 Parent: `harness-roadmap.md` (U5/U6/U7/U8/U18/U21), `harness-freeze-contracts.md`
 (JS-FREEZE, U11-CONTRACT, U12-CONTRACT), `harness-invariants.md` (contour style).
-Prior art distilled in-repo: `../archive/harness-research/{06-horror-stories,07-permissioning}.md`,
+Prior art distilled in-repo: `harness-research/{06-horror-stories,07-permissioning}.md`,
 `harness-facts-two-perspectives.md`.
 
 **One-line thesis:** YOLO-safe = replace the human-in-the-loop *approver* with a

@@ -2,7 +2,7 @@
 
 `Raxol.Debug` provides runtime debugging with four verbosity levels, performance monitoring, and structured logging. It integrates with BaseManager and supports timer management.
 
-## Debug Levels
+## Debug levels
 
 | Level | What it does | When to use |
 |-------|-------------|-------------|
@@ -11,7 +11,7 @@
 | `:detailed` | Verbose logs with metadata | Troubleshooting |
 | `:verbose` | Everything, including perf metrics | Performance analysis |
 
-## Quick Start
+## Quick start
 
 ```elixir
 Raxol.Debug.enable(:basic)
@@ -91,7 +91,7 @@ Raxol.Debug.debug_breakpoint(:terminal, "Before state mutation")
 # In IEx, pauses and waits for Enter
 ```
 
-### Performance Monitoring
+### Performance monitoring
 
 At `:detailed` or `:verbose` levels, metrics are collected every 100ms automatically:
 ```
@@ -99,7 +99,7 @@ At `:detailed` or `:verbose` levels, metrics are collected every 100ms automatic
 [DEBUG] Performance: run_queue=0
 ```
 
-### Inspecting Configuration
+### Inspecting configuration
 
 ```elixir
 Raxol.Debug.debug_config()
@@ -137,7 +137,7 @@ level = Raxol.Config.get([:debug, :level], default: "off")
 Raxol.Debug.enable(level)
 ```
 
-### Environment Variable
+### Environment variable
 
 ```bash
 DEBUG_LEVEL=verbose iex -S mix
@@ -148,9 +148,9 @@ debug_level = System.get_env("DEBUG_LEVEL", "off") |> String.to_atom()
 Raxol.Debug.enable(debug_level)
 ```
 
-## Usage Examples
+## Usage examples
 
-### Development Workflow
+### Development workflow
 
 ```elixir
 defmodule MyModule do
@@ -170,7 +170,7 @@ defmodule MyModule do
 end
 ```
 
-### Terminal Troubleshooting
+### Terminal troubleshooting
 
 ```elixir
 Raxol.Debug.enable(:verbose)
@@ -183,7 +183,7 @@ emulator
 end)
 ```
 
-### Performance Analysis
+### Performance analysis
 
 ```elixir
 Raxol.Debug.enable(:verbose)
@@ -215,7 +215,7 @@ defmodule MyModule do
 end
 ```
 
-## Logger Integration
+## Logger integration
 
 | Debug Level | Logger Level | Metadata |
 |-------------|-------------|----------|
@@ -224,7 +224,7 @@ end
 | `:detailed` | `:debug` | `[:module, :function, :line, :pid]` |
 | `:verbose` | `:debug` | All metadata |
 
-## Performance Impact
+## Performance impact
 
 | Level | CPU | Memory |
 |-------|-----|--------|
@@ -233,7 +233,7 @@ end
 | `:detailed` | ~5-10% | ~1MB for logs |
 | `:verbose` | ~15-20% | ~5MB for logs and traces |
 
-## Best Practices
+## Best practices
 
 Guard expensive debug operations behind level checks:
 ```elixir

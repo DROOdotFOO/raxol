@@ -49,8 +49,8 @@ The agent-framework primitives run from inside the `raxol_agent` package (they n
 `Raxol.Agent`, which the main app does not load). See
 `packages/raxol_agent/examples/agents/`:
 
-- `react_agent.exs` -- Actions + ReAct strategy + tools + shell commands
-- `agent_team.exs` -- `Agent.Team` supervision + inter-agent messaging
+- `react_agent.exs`: Actions + ReAct strategy + tools + shell commands
+- `agent_team.exs`: `Agent.Team` supervision + inter-agent messaging
 
 ## Interactive Playground
 
@@ -61,7 +61,7 @@ mix raxol.playground                # Terminal mode
 mix raxol.playground --ssh          # SSH mode (port 2222)
 ```
 
-## Directory Guide
+## Directory guide
 
 - `getting_started/`: First examples: TEA callbacks, events, state
 - `scripts/`: Focused concept demos: subscriptions, event shapes
@@ -76,7 +76,7 @@ mix raxol.playground --ssh          # SSH mode (port 2222)
 - `swarm/`: Distributed CRDTs, discovery, topology
 - `workflow/`: Saga compensation and retry strategies
 - `subsystems/`: Subsystem demos (sensor fusion, adaptive UI)
-- `reference/`: Low-level Buffer/Box API and LiveView (needs a Phoenix host -- not `mix run`)
+- `reference/`: Low-level Buffer/Box API and LiveView (needs a Phoenix host, not `mix run`)
 
 ## Related
 

@@ -16,7 +16,7 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 - **`pr-comment.yml`**: Automated PR feedback and status updates
 - **`deploy-web.yml`**: Web application deployment
 
-### Legacy/Testing Workflows
+### Legacy/Testing workflows
 - **`ci.yml`**: Original CI workflow (deprecated in favor of main CI pipeline)
 - **`ci-local.yml`**: Simplified CI for local `act` testing
 - **`ci-local-deps.yml`**: Tests dependencies locally
@@ -75,14 +75,14 @@ The `dummy-test.yml` workflow uses mock setups for quick verification without ru
 - Verifying local setup.
 - Testing new workflow steps quickly.
 
-## Reusable Actions
+## Reusable actions
 
 The `.github/actions/` directory contains reusable composite actions:
 
 - **`setup-elixir`**: Sets up Elixir/OTP with caching
 - **`run-tests`**: Runs tests with coverage and artifact upload
 
-## CI/CD Architecture
+## CI/CD architecture
 
 ### Main CI Pipeline (`ci-unified.yml`)
 - **Parallel test execution**: Tests split into unit, integration, and property tests
@@ -90,7 +90,7 @@ The `.github/actions/` directory contains reusable composite actions:
 - **Conditional execution**: Heavy checks only run when needed
 - **Fast feedback**: Format and compile checks run first
 
-### Regression Testing (`regression-testing.yml`)
+### Regression testing (`regression-testing.yml`)
 - **Combined testing**: Performance and memory regression testing in a single workflow
 - **Flexible execution**: Can run performance, memory, or both test types
 - **Comprehensive analysis**: Automated regression detection and reporting

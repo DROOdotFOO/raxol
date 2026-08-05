@@ -10,7 +10,7 @@ Minimal example showing how to embed a Raxol terminal in Phoenix LiveView.
 # mix.exs
 def deps do
   [
-    {:raxol, "~> 2.0"}
+    {:raxol, "~> 2.6"}
   ]
 end
 ```
@@ -59,7 +59,7 @@ Then visit http://localhost:4000/terminal
 - Displays a welcome message
 - Updates a counter every second
 
-## Next Steps
+## Next steps
 
 - Add keyboard input handling
 - Implement command processing

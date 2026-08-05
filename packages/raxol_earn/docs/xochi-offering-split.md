@@ -4,7 +4,7 @@
 
 Today there is one settlement-agnostic offering, `Raxol.Earn.Xochi.TransferOffering`
 (`xochi_cross_chain_transfer`). It relays whatever the buyer signed and deliberately
-does **not** gate on settlement type — Riddler verifies the signed intent, so there is
+does **not** gate on settlement type; Riddler verifies the signed intent, so there is
 nothing raxol could misroute. That is correct for safety, but it hurts **agent DX**:
 
 - One broad job-offering JSON is hard for buyer agents to conform to reliably.
@@ -14,7 +14,7 @@ nothing raxol could misroute. That is correct for safety, but it hurts **agent D
   that are noise for a public transfer.
 
 Splitting into two narrower offerings gives agents **focused, self-describing schemas
-and actionable pre-escrow errors** — e.g. an agent requesting a stealth settlement to an
+and actionable pre-escrow errors**: e.g. an agent requesting a stealth settlement to an
 L2 destination gets a clean `stealth_requires_l1_destination` rejection instead of an
 ambiguous downstream failure. This mirrors the Xochi frontend, which now gates stealth to
 L1 destinations (stealth is an **X→L1 / L1↔L1** product; cross-chain stealth is roadmap).
@@ -39,7 +39,7 @@ USDC-only listing stays at `priv/offering.usdc_public.json`.
 | settlement | public wallet on the destination chain | ERC-5564 stealth address on **Ethereum L1** |
 | `dst_chain_id` | any supported chain | **must be `1`** (Ethereum L1) |
 | `settlement_preference` | enum fixed `["public"]`, default `public` | enum fixed `["stealth"]`, default `stealth` |
-| extra required field | — | `stealth_meta_address { spending_pub_key, viewing_pub_key }` |
+| extra required field | - | `stealth_meta_address { spending_pub_key, viewing_pub_key }` |
 | deliverable | omits stealth announcement fields | **requires** `settlement_type:"stealth"`, `stealth_address`, `ephemeral_pub_key`, `view_tag` |
 | price_usdc / sla | unchanged (`0.25` / 10) | unchanged (`0.25` / 10) |
 | tags | `[payments, cross-chain, stablecoin, xochi, public]` | `[payments, cross-chain, stablecoin, xochi, stealth, privacy]` |
@@ -122,7 +122,7 @@ mode == :stealth and not valid_stealth_meta?(req["stealth_meta_address"]) ->
 ```
 
 `declared_settlement/1` reads the requirement's `settlement_preference` (default
-`"public"`). Note this gates on the **declared** field, not the opaque signature — raxol
+`"public"`). Note this gates on the **declared** field, not the opaque signature; raxol
 still can't inspect the signed intent, but the declared field + `dst_chain_id` are enough
 to give the agent a focused pre-escrow rejection and keep the wrong request out of escrow.
 Riddler remains the source of truth at fill.

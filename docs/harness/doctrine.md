@@ -2,9 +2,9 @@
 
 The one law, *what is shown must be a provable projection of what is, and the
 wrong thing must be unrepresentable*, is stated once, at every scale, in
-[../PHILOSOPHY.md](../PHILOSOPHY.md). This document is that law applied to the
-harness surface: the concrete visual constraints a harness change must satisfy,
-and why. Read PHILOSOPHY first; this does not repeat it.
+[../PHILOSOPHY.md](../PHILOSOPHY.md). Read that first; what follows is the same
+law narrowed to the harness surface, as concrete visual constraints a harness
+change must satisfy.
 
 The harness optimizes three operator moments, and anything serving none of them
 is suspect:

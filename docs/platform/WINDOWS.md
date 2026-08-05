@@ -31,7 +31,7 @@ Standard installation, nothing special for Windows:
 
 ```powershell
 # Add to mix.exs
-{:raxol, "~> 2.4"}
+{:raxol, "~> 2.6"}
 
 # Install dependencies
 mix deps.get
@@ -80,9 +80,9 @@ Everything works the same on Windows:
 
 This is more than enough for 60fps terminal UIs (16ms frame budget), interactive apps, text editors, and dashboards.
 
-## Terminal Emulators
+## Terminal emulators
 
-### Windows Terminal (recommended)
+### Windows terminal (recommended)
 
 Full unicode, true color (24-bit), GPU-accelerated rendering.
 
@@ -103,7 +103,7 @@ Get-ItemProperty HKCU:\Console VirtualTerminalLevel
 Set-ItemProperty HKCU:\Console VirtualTerminalLevel -Type DWORD 1
 ```
 
-### Command Prompt (cmd.exe)
+### Command prompt (cmd.exe)
 
 Supported but limited. Unicode may have issues. Use Windows Terminal or PowerShell for a better experience.
 
@@ -125,7 +125,7 @@ reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1 /f
 - Use Windows Terminal instead of cmd.exe
 - Verify the system locale supports UTF-8
 
-### Sluggish Rendering
+### Sluggish rendering
 
 - Use Windows Terminal (GPU-accelerated)
 - Reduce UI complexity
@@ -140,7 +140,7 @@ This is expected. Windows uses IOTerminal, not the NIF. Just make sure:
 - IOTerminal module is available
 - No C compilation errors during `mix deps.compile`
 
-## Running Tests
+## Running tests
 
 ```powershell
 mix test --exclude slow --exclude integration
@@ -164,7 +164,7 @@ Logger.info("termbox2_nif available: #{Code.ensure_loaded?(:termbox2_nif)}")
 Logger.info("IOTerminal available: #{Code.ensure_loaded?(Raxol.Terminal.IOTerminal)}")
 ```
 
-## Implementation Details
+## Implementation details
 
 ### IOTerminal
 
@@ -185,7 +185,7 @@ IOTerminal.get_terminal_size()
 IOTerminal.set_title(title)
 ```
 
-### Backend Selection
+### Backend selection
 
 The Driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex`) handles this automatically:
 
@@ -203,7 +203,7 @@ The Driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex`) handles this
   end
 ```
 
-## Windows vs Unix Comparison
+## Windows vs Unix comparison
 
 | Feature     | Windows (IOTerminal) | Unix (termbox2 NIF) |
 | ----------- | -------------------- | ------------------- |
@@ -216,7 +216,7 @@ The Driver (`packages/raxol_terminal/lib/raxol/terminal/driver.ex`) handles this
 | Mouse       | Supported            | Supported           |
 | API         | Identical            | Identical           |
 
-## Future Work
+## Future work
 
 Potential optimizations, none currently needed:
 

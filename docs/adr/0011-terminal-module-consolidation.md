@@ -32,7 +32,7 @@ defmodule Raxol.Terminal.Format do
 end
 ```
 
-### Unified Caching
+### Unified caching
 
 `Raxol.Performance.Cache` for all caching needs:
 

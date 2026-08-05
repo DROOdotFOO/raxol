@@ -4,7 +4,7 @@
 
 Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_symphony/`.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix raxol.symphony --workflow ./WORKFLOW.md
@@ -76,7 +76,7 @@ Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, s
 - **Watch**: debounced push to APNS/FCM, tap-to-approve actions.
 - **JSON API**: `GET /api/v1/state`, `GET /api/v1/runs/:issue_id`, `POST /api/v1/refresh`, `POST /api/v1/runs/:issue_id/stop`.
 
-## Evidence Collection
+## Evidence collection
 
 `Raxol.Symphony.Evidence.collect/3` runs per dispatch. It pulls:
 
@@ -86,7 +86,7 @@ Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, s
 
 Set `recording.enabled: true` in the workflow to capture casts. The `Evidence.Capture` GenServer writes one `.cast` per run under `evidence.dir`.
 
-## Retry Behaviour
+## Retry behaviour
 
 Three retry classes, configured per workflow:
 
@@ -127,7 +127,7 @@ retry:
 ---
 ```
 
-## See Also
+## See also
 
 - [Agent Framework](AGENT_FRAMEWORK.md): the runtime each agent runs in
 - [MCP](MCP.md): how the orchestrator's MCP surface is derived

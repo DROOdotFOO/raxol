@@ -1,8 +1,8 @@
 # TOML Configuration
 
-Raxol uses TOML files for configuration, managed by `Raxol.Config` (backed by UnifiedConfigManager with BaseManager pattern). It supports environment-specific overrides, runtime updates, validation, hot-reload, and sensible defaults.
+Raxol reads TOML configuration through `Raxol.Config` (backed by UnifiedConfigManager on the BaseManager pattern), with environment-specific overrides, runtime updates, validation, and hot reload.
 
-## File Structure
+## File structure
 
 ```bash
 config/
@@ -15,7 +15,7 @@ config/
 
 Test settings live in `config/test.exs`, not a TOML file.
 
-### Loading Order
+### Loading order
 
 1. `config/raxol.toml`: base
 2. `config/environments/{env}.toml`: environment overrides
@@ -23,7 +23,7 @@ Test settings live in `config/test.exs`, not a TOML file.
 
 Later values win.
 
-## Full Schema
+## Full schema
 
 ```toml
 # Terminal
@@ -140,7 +140,7 @@ children = [
 ]
 ```
 
-### Reading Values
+### Reading values
 
 ```elixir
 width = Raxol.Config.get([:terminal, :width])
@@ -165,7 +165,7 @@ Raxol.Config.set([:rendering], %{
 })
 ```
 
-### Loading and Reloading
+### Loading and reloading
 
 ```elixir
 {:ok, config} = Raxol.Config.load_file("config/custom.toml")
@@ -190,7 +190,7 @@ end
 :ok = Raxol.Config.export("config/current.toml")
 ```
 
-## Environment Overrides
+## Environment overrides
 
 ### Development
 
@@ -246,7 +246,7 @@ enable_audit = true
 enable_2fa = true
 ```
 
-## Integration Examples
+## Integration examples
 
 ```elixir
 # Terminal emulator
@@ -279,7 +279,7 @@ defmodule PluginLoader do
 end
 ```
 
-## Watching for Changes
+## Watching for changes
 
 ```elixir
 defmodule ConfigWatcher do
@@ -306,7 +306,7 @@ defmodule ConfigWatcher do
 end
 ```
 
-## Validation Rules
+## Validation rules
 
 Built-in validation covers:
 
@@ -316,7 +316,7 @@ Built-in validation covers:
 
 Extend validation by modifying `validate_config/1` in `Raxol.Config`.
 
-## Best Practices
+## Best practices
 
 **Keep env-specific values out of the main config.** Put them in `environments/*.toml`.
 

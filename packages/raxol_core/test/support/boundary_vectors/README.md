@@ -14,7 +14,7 @@ byte-for-byte into another package's test tree.
 ## The drift guard
 
 Under the ratified dependency decision (proposal option **b**), the Agent Client Protocol package
-`raxol_agent_client_protocol` keeps its own tested `FsSandbox` copy — it must
+`raxol_agent_client_protocol` keeps its own tested `FsSandbox` copy; it must
 stay zero-raxol-dep, so it cannot consume `raxol_core`. To prevent the two
 implementations silently forking, **both bind to these same path vectors**:
 
@@ -24,7 +24,7 @@ implementations silently forking, **both bind to these same path vectors**:
   own test tree and assert its `FsSandbox.resolve/2` agrees:
   - map `FsSandbox`'s `Error` `data.reason` onto the vector's `expect` atom
     (`path_traversal` / `symlink_escape` / `too_many_symlinks`);
-  - **skip** any vector carrying `ref_format` — the PA-6 ref-shape gate is a
+  - **skip** any vector carrying `ref_format`: the PA-6 ref-shape gate is a
     `Path.confine/3`-only feature `FsSandbox` does not implement.
 
 A divergence between the two implementations then shows up as a red test in one

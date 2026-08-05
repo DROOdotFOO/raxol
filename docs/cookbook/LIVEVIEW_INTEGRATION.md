@@ -6,7 +6,7 @@ Two approaches: the **TEA bridge** (`Raxol.LiveView.TEALive`) runs a full TEA ap
 
 ## Basic terminal embedding
 
-### Static Terminal
+### Static terminal
 
 ```elixir
 defmodule MyAppWeb.SimpleTerminalLive do
@@ -38,7 +38,7 @@ defmodule MyAppWeb.SimpleTerminalLive do
 end
 ```
 
-### Periodic Updates
+### Periodic updates
 
 ```elixir
 defmodule MyAppWeb.ClockLive do
@@ -69,9 +69,9 @@ end
 
 ---
 
-## Event Handling
+## Event handling
 
-### Keyboard Input
+### Keyboard input
 
 ```elixir
 def render(assigns) do
@@ -97,7 +97,7 @@ def handle_event("handle_keypress", %{"key" => key}, socket) do
 end
 ```
 
-### Mouse Clicks
+### Mouse clicks
 
 ```elixir
 def render(assigns) do
@@ -118,7 +118,7 @@ def handle_event("handle_click", %{"x" => x, "y" => y}, socket) do
 end
 ```
 
-### Paste Support
+### Paste support
 
 ```elixir
 <.live_component
@@ -132,7 +132,7 @@ end
 
 ---
 
-## State Synchronization
+## State synchronization
 
 ### Two-way data binding
 
@@ -196,9 +196,9 @@ defp cpu_color(_), do: %{fg_color: :green}
 
 ---
 
-## Multiple Terminals
+## Multiple terminals
 
-### Split Screen
+### Split screen
 
 ```elixir
 def render(assigns) do
@@ -230,7 +230,7 @@ end
 
 ---
 
-## Error Boundaries
+## Error boundaries
 
 Catch rendering errors without crashing:
 
@@ -268,7 +268,7 @@ def handle_info(:tick, socket) do
 end
 ```
 
-### Debounced Updates
+### Debounced updates
 
 Avoid excessive re-renders:
 
@@ -293,7 +293,7 @@ end
 
 ---
 
-## Animation Hints
+## Animation hints
 
 When a TEA app uses `Raxol.Animation.Helpers.animate/2` in its `view/1`, the rendering engine passes those hints through to `TerminalBridge`, which emits CSS `transition` rules targeting `data-raxol-id` selectors. The browser handles interpolation, with no per-frame server re-renders needed.
 
@@ -350,8 +350,7 @@ The terminal backend ignores hints entirely and relies on server-computed frames
 
 (These need a Phoenix host: they are reference modules, not `mix run` scripts.)
 
-## Next Steps
+## Next steps
 
-- [Performance Cookbook](./PERFORMANCE_OPTIMIZATION.md)
-- [Theming Cookbook](./THEMING.md)
-- [API Reference](../core/BUFFER_API.md)
+- [Buffer API](../core/BUFFER_API.md): the primitives behind `buffer_to_html/2`
+- [Cookbook index](./README.md): the other recipes

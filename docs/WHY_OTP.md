@@ -92,13 +92,13 @@ An agent is a TEA module where input comes from LLMs. Same `init/update/view`, s
 
 Agents are processes. Teams are supervision trees.
 
-## The Tradeoff
+## The tradeoff
 
 Raxol is slower per-operation than Rust (Ratatui) or Go (Bubble Tea). Buffer creation is 25us vs 0.5us. But a full frame still completes in 2.1ms, leaving 87% of the 60fps budget for your code. Numbers and methodology are in [Benchmarks](bench/README.md).
 
 You give up raw microbenchmark speed. You get process isolation, hot reload, distribution, SSH, and multi-target rendering. For anything that has to keep running while you change it, that's a good trade.
 
-## Further Reading
+## Further reading
 
 - [Architecture](core/ARCHITECTURE.md): how the render pipeline works
 - [Agent Framework](features/AGENT_FRAMEWORK.md): AI agents as TEA apps

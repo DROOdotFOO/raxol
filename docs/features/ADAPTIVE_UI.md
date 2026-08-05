@@ -16,7 +16,7 @@ FeedbackLoop (tracks accept/reject, optional Nx retraining)
 
 Three GenServers under `Raxol.Adaptive.Supervisor` (`:one_for_one`). BehaviorTracker feeds windowed aggregates to LayoutRecommender, which emits suggestions. FeedbackLoop records whether you accepted or rejected them, and can retrain an Nx model if available.
 
-## Quick Start
+## Quick start
 
 ```elixir
 {:ok, _} = Raxol.Adaptive.Supervisor.start_link()
@@ -34,7 +34,7 @@ Raxol.Adaptive.FeedbackLoop.accept(recommendation_id)
 Raxol.Adaptive.FeedbackLoop.reject(recommendation_id)
 ```
 
-## Behavior Tracking
+## Behavior tracking
 
 `Raxol.Adaptive.BehaviorTracker` logs timestamped events and computes windowed aggregates: pane dwell times, command frequency, that sort of thing.
 
@@ -57,7 +57,7 @@ BehaviorTracker.subscribe()
 
 Event types: `:pane_focus`, `:pane_dwell`, `:command_issued`, `:alert_response`, `:scroll_pattern`, `:takeover_start`, `:takeover_end`, `:layout_override`.
 
-## Layout Recommendations
+## Layout recommendations
 
 `Raxol.Adaptive.LayoutRecommender` looks at behavior aggregates and suggests layout changes. Uses rule-based logic by default, with optional Nx model support for learned recommendations.
 
@@ -75,7 +75,7 @@ LayoutRecommender.set_model_params(trained_params)
 
 Actions it can recommend: `:hide`, `:show`, `:expand`, `:shrink`.
 
-## Feedback Loop
+## Feedback loop
 
 `Raxol.Adaptive.FeedbackLoop` keeps a sliding window of accept/reject decisions so you can track how well the recommendations are doing.
 
@@ -94,7 +94,7 @@ history = FeedbackLoop.get_history(20)
 {:ok, :rule_based_mode} = FeedbackLoop.force_retrain()
 ```
 
-## Layout Transitions
+## Layout transitions
 
 `Raxol.Adaptive.LayoutTransition` animates between layouts with easing. Pure functions, no GenServer. Call `tick/2` each frame.
 

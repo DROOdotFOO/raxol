@@ -6,10 +6,9 @@ Raxol has one law, applied at every scale:
 > thing must be unrepresentable.**
 
 Everything else in this repository is that law showing up at a different
-altitude. This document names the law once, shows where it recurs, and states
-what it implies for anything visual built on the framework. It is the "why"
-behind the rules that other documents state as "what" (ADR-0029,
-`docs/WHY_OTP.md`, `docs/core/RENDERING.md`, the design-science material).
+altitude. It is the "why" behind the rules other documents state as "what"
+(ADR-0029, `docs/WHY_OTP.md`, `docs/core/RENDERING.md`, the design-science
+material).
 
 ## The law at each scale
 

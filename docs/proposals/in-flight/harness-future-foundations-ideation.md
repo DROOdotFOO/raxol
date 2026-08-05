@@ -8,7 +8,7 @@ Sources: `harness-freeze-contracts.md` (JS-FREEZE §0-4, U11, U12),
 `harness-storage-foundations.md` (G1-G6, §4 shape law, item table),
 `harness-yolo-safe-research.md` (§3 branch model, §8 C1-C3),
 `harness-roadmap.md` (U0-U22, NC guards), corpus sweep of
-`../archive/harness-research/{01,03,05,06,07,08,09,12,13}.md`, `harness-design.md`,
+`harness-research/{01,03,05,06,07,08,09,12,13}.md`, `harness-design.md`,
 `harness-synthesis.md`, `harness-facts-two-perspectives.md`, `tui-steal-list.md`,
 plus main-repo capabilities (swarm/CRDT, time-travel, recording, gateway
 handoff, ADR-0012 MCP-as-surface).

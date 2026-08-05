@@ -2,7 +2,7 @@
 
 `raxol_telegram` runs a TEA app as a Telegram bot. Each chat gets a session with its own TEA model; inline keyboards become Button Components; HTML `<pre>` blocks render the buffer.
 
-## Quick Start
+## Quick start
 
 ```elixir
 # Add the supervisor with your TEA app module
@@ -28,11 +28,11 @@ The Telegex polling handler uses Telegex's own config (`config :telegex, token: 
 
 Send a message to the bot from an allowed chat and the router spawns a `Session` for that chat. The session hosts a Lifecycle with `environment: :telegram`.
 
-## Access Control
+## Access control
 
 `allowed_chat_ids` is optional. If set, the `Bot` update handler drops messages from other chats before they reach the router. Leave it out to accept all chats, not recommended unless the bot is public-facing.
 
-## Session Lifecycle
+## Session lifecycle
 
 `SessionRouter` keeps a per-chat session map, capped at 1000 entries. New chats get a new session; existing chats route to the running one. Sessions idle out after 10 minutes of no traffic. A 5s cooldown between session creations rate-limits accidental floods.
 
@@ -61,13 +61,13 @@ Message edit dedup prevents redundant API calls when the rendered output doesn't
 
 The bot token is the only secret. Don't commit it; load via `System.fetch_env!/1` at runtime.
 
-## Bot API 10.x Surface (2026-06)
+## Bot API 10.x surface (2026-06)
 
 Telegram's June 2026 release added rich-text messages, admin bots for `chat_join_request` updates, and poll hyperlinks. `raxol_telegram` 0.2 covers all three plus an MCP export path for the Guardian decisions.
 
 These features ride on top of the per-chat Session model above. They use `Raxol.Telegram.HTTP` (shared raw `Req` transport with `post_fn` injection for tests) because Telegex 1.8 predates Bot API 10.1 and does not expose the new endpoints. The package adds `req ~> 0.5` as an optional dep; without it, the HTTP-bound modules return `{:error, :req_not_available}` and consumers can call `to_payload/3` themselves to get the JSON body.
 
-### Rich Messages (`Raxol.Telegram.RichMessage`)
+### Rich messages (`Raxol.Telegram.RichMessage`)
 
 Builders for Bot API 10.1's `sendRichMessage` family. Paragraph, heading (1-6), table + cell, list + list_item (ordered / unordered), details (collapsible "Show More"), math (block + inline), thinking. Inline formatting: bold, italic, underline, strikethrough, code, spoiler, subscript, superscript.
 
@@ -133,7 +133,7 @@ Guardian telemetry: `[:raxol_telegram, :guardian, :received | :approved | :decli
 
 Registration is opt-in and requires `raxol_mcp` at runtime; without it, `register/0` returns `{:error, :raxol_mcp_not_available}` and the rest of the package keeps working. No compile-time dep on `raxol_mcp`.
 
-### Polls with Hyperlinks (`Raxol.Telegram.Poll`)
+### Polls with hyperlinks (`Raxol.Telegram.Poll`)
 
 `send_poll/4` accepts options as plain `String.t()`, `{:link, label, url}` tuples (entire text is one hyperlink), or `%{text: ..., entities: [...]}` maps for arbitrary entity layouts. `link_entity/3` builds a `text_link` entity at a specific UTF-16 offset.
 
@@ -180,7 +180,7 @@ router or `Bot.handle_update/2`. Callbacks, keyboards, and media stay on the
 TEA surface (this package's `Session`); the gateway path is text-first. See
 [Gateway](GATEWAY.md) for the full wiring example.
 
-## See Also
+## See also
 
 - [Gateway](GATEWAY.md): multi-platform gateway; Telegram is the first adapter behind the frozen contract
 - [Watch](WATCH.md): another push surface for mobile

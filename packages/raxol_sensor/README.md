@@ -5,17 +5,17 @@ Sensor fusion framework for Elixir built on OTP. Poll sensors, fuse readings wit
 ## Install
 
 ```elixir
-{:raxol_sensor, "~> 2.4"}
+{:raxol_sensor, "~> 2.6"}
 ```
 
 Optional Nx backend for vectorized fusion:
 
 ```elixir
-{:raxol_sensor, "~> 2.4"},
+{:raxol_sensor, "~> 2.6"},
 {:nx, "~> 0.9"}
 ```
 
-## Quick Start
+## Quick start
 
 ```elixir
 defmodule CpuSensor do
@@ -41,7 +41,7 @@ Raxol.Sensor.Fusion.subscribe(:cpu, fn reading ->
 end)
 ```
 
-## HUD Widgets
+## HUD widgets
 
 Pure functional rendering for terminal dashboards:
 

@@ -3,7 +3,7 @@
 Date: 2026-07-15
 Status: **design discussion captured; no decisions final except those marked LOCKED.**
 Companion docs: `harness-synthesis.md` (research Phase 5-6), `harness-facts-two-perspectives.md`
-(operator + systems facts), `../archive/harness-research/01-09` (raw briefs), `harness-baseline-features.md`
+(operator + systems facts), `harness-research/01-09` (raw briefs), `harness-baseline-features.md`
 (baseline floor lists).
 
 This is the design conversation written down before compaction eats it, which is itself the

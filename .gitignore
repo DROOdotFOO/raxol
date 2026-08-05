@@ -54,6 +54,8 @@ raxol-*/
 !/tmp/.gitkeep
 test/fixtures/scripts/exported.ex.json
 packages/raxol_terminal/test/fixtures/scripts/
+# Symphony's workspace/config tests write per-test-case directories here.
+packages/raxol_symphony/tmp/
 
 # Environment files
 .env
