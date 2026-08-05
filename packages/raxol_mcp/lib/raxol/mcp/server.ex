@@ -96,7 +96,14 @@ defmodule Raxol.MCP.Server do
           authorizer: Authorizer.t() | nil,
           initialized: boolean(),
           log_level:
-            :debug | :info | :notice | :warning | :error | :critical | :alert | :emergency,
+            :debug
+            | :info
+            | :notice
+            | :warning
+            | :error
+            | :critical
+            | :alert
+            | :emergency,
           subscribers: [pid()],
           resource_subscriptions: %{String.t() => boolean()},
           client_capabilities: map(),
@@ -116,7 +123,16 @@ defmodule Raxol.MCP.Server do
           timer: reference()
         }
 
-  @log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
+  @log_levels [
+    :debug,
+    :info,
+    :notice,
+    :warning,
+    :error,
+    :critical,
+    :alert,
+    :emergency
+  ]
   @level_map Map.new(@log_levels, fn l -> {Atom.to_string(l), l} end)
 
   # -- Client API ---------------------------------------------------------------
@@ -182,7 +198,11 @@ defmodule Raxol.MCP.Server do
        registry: registry,
        authorizer: authorizer,
        elicitation_timeout_ms:
-         Keyword.get(opts, :elicitation_timeout_ms, @default_elicitation_timeout_ms)
+         Keyword.get(
+           opts,
+           :elicitation_timeout_ms,
+           @default_elicitation_timeout_ms
+         )
      }}
   end
 
@@ -228,7 +248,12 @@ defmodule Raxol.MCP.Server do
 
         broadcast(
           state.subscribers,
-          authorization_required(pending.request_id, pending.tool, :ask, "elicitation timed out")
+          authorization_required(
+            pending.request_id,
+            pending.tool,
+            :ask,
+            "elicitation timed out"
+          )
         )
 
         {:noreply, state}
@@ -256,7 +281,12 @@ defmodule Raxol.MCP.Server do
       |> Map.get(:params, %{})
       |> fetch_field("capabilities", %{})
 
-    state = %{state | initialized: true, client_capabilities: client_capabilities}
+    state = %{
+      state
+      | initialized: true,
+        client_capabilities: client_capabilities
+    }
+
     {Protocol.response(id, result), state}
   end
 
@@ -283,7 +313,8 @@ defmodule Raxol.MCP.Server do
     # The boot check catches this for tools present at start; this catches one
     # registered afterwards, which would otherwise slip past it.
     if state.authorizer == nil and sensitive_tool?(state.registry, name) do
-      {authorization_required(id, name, :deny, :sensitive_tool_unguarded), state}
+      {authorization_required(id, name, :deny, :sensitive_tool_unguarded),
+       state}
     else
       authorize_and_call(id, name, arguments, state)
     end
@@ -302,14 +333,20 @@ defmodule Raxol.MCP.Server do
   end
 
   # An error response to our elicitation is a refusal, not a crash.
-  defp dispatch(%{id: id, error: _}, state) when is_map_key(state.pending_elicitations, id) do
+  defp dispatch(%{id: id, error: _}, state)
+       when is_map_key(state.pending_elicitations, id) do
     {pending, state} = take_pending(state, id)
     Process.cancel_timer(pending.timer)
 
     {nil,
      answer_parked(
        state,
-       authorization_required(pending.request_id, pending.tool, :ask, "elicitation failed")
+       authorization_required(
+         pending.request_id,
+         pending.tool,
+         :ask,
+         "elicitation failed"
+       )
      )}
   end
 
@@ -322,13 +359,25 @@ defmodule Raxol.MCP.Server do
 
   defp dispatch(%{method: "resources/subscribe", id: id, params: params}, state) do
     uri = Map.get(params, "uri") || Map.get(params, :uri, "")
-    # Track that this URI has active subscribers. Notifications for
-    # subscribed URIs go to all transport-level subscribers.
-    new_subs = Map.put_new(state.resource_subscriptions, uri, true)
-    {Protocol.response(id, %{}), %{state | resource_subscriptions: new_subs}}
+
+    case authorize_read("resources/subscribe", %{"uri" => uri}, state) do
+      :allow ->
+        # Track that this URI has active subscribers. Notifications for
+        # subscribed URIs go to all transport-level subscribers.
+        new_subs = Map.put_new(state.resource_subscriptions, uri, true)
+
+        {Protocol.response(id, %{}),
+         %{state | resource_subscriptions: new_subs}}
+
+      {:deny, detail} ->
+        {authz_error_response(id, "resources/subscribe", detail), state}
+    end
   end
 
-  defp dispatch(%{method: "resources/unsubscribe", id: id, params: params}, state) do
+  defp dispatch(
+         %{method: "resources/unsubscribe", id: id, params: params},
+         state
+       ) do
     uri = Map.get(params, "uri") || Map.get(params, :uri, "")
     new_subs = Map.delete(state.resource_subscriptions, uri)
     {Protocol.response(id, %{}), %{state | resource_subscriptions: new_subs}}
@@ -337,35 +386,12 @@ defmodule Raxol.MCP.Server do
   defp dispatch(%{method: "resources/read", id: id, params: params}, state) do
     uri = Map.get(params, "uri") || Map.get(params, :uri, "")
 
-    case ResourceRouter.resolve(state.registry, uri) do
-      {:ok, content} ->
-        {text, mime} = format_resource_content(content)
+    case authorize_read("resources/read", %{"uri" => uri}, state) do
+      :allow ->
+        {do_read_resource(id, uri, state), state}
 
-        result = %{
-          contents: [%{uri: uri, text: text, mimeType: mime}]
-        }
-
-        {Protocol.response(id, result), state}
-
-      {:error, :resource_not_found} ->
-        error =
-          Protocol.error_response(id, Protocol.invalid_params(), "Resource not found: #{uri}")
-
-        {error, state}
-
-      {:error, :circuit_open} ->
-        error =
-          Protocol.error_response(
-            id,
-            Protocol.internal_error(),
-            "Resource temporarily unavailable (circuit open)"
-          )
-
-        {error, state}
-
-      {:error, reason} ->
-        error = Protocol.error_response(id, Protocol.internal_error(), inspect(reason))
-        {error, state}
+      {:deny, detail} ->
+        {authz_error_response(id, "resources/read", detail), state}
     end
   end
 
@@ -380,23 +406,16 @@ defmodule Raxol.MCP.Server do
     name = Map.get(params, "name") || Map.get(params, :name, "")
     arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
 
-    case Registry.get_prompt(state.registry, name, arguments) do
-      {:ok, messages} ->
-        {Protocol.response(id, %{messages: messages}), state}
+    case authorize_read(
+           "prompts/get",
+           %{"name" => name, "arguments" => arguments},
+           state
+         ) do
+      :allow ->
+        {do_get_prompt(id, name, arguments, state), state}
 
-      {:error, :prompt_not_found} ->
-        error =
-          Protocol.error_response(
-            id,
-            Protocol.method_not_found(),
-            "Prompt not found: #{name}"
-          )
-
-        {error, state}
-
-      {:error, reason} ->
-        error = Protocol.error_response(id, Protocol.internal_error(), inspect(reason))
-        {error, state}
+      {:deny, detail} ->
+        {authz_error_response(id, "prompts/get", detail), state}
     end
   end
 
@@ -436,13 +455,20 @@ defmodule Raxol.MCP.Server do
   # -- Catch-all ---
 
   # Notifications we don't handle -- no response
-  defp dispatch(%{method: _method} = msg, state) when not is_map_key(msg, :id) do
+  defp dispatch(%{method: _method} = msg, state)
+       when not is_map_key(msg, :id) do
     {nil, state}
   end
 
   # Unknown method with an id -- error response
   defp dispatch(%{method: method, id: id}, state) do
-    error = Protocol.error_response(id, Protocol.method_not_found(), "Unknown method: #{method}")
+    error =
+      Protocol.error_response(
+        id,
+        Protocol.method_not_found(),
+        "Unknown method: #{method}"
+      )
+
     {error, state}
   end
 
@@ -451,13 +477,16 @@ defmodule Raxol.MCP.Server do
   # says ignore it. Answering "Missing method" would bounce an error response AT
   # a response, which a strict peer can answer in turn -- a loop. Must sit above
   # the malformed-message clause, which would otherwise claim it.
-  defp dispatch(msg, state) when is_map_key(msg, :result) or is_map_key(msg, :error) do
+  defp dispatch(msg, state)
+       when is_map_key(msg, :result) or is_map_key(msg, :error) do
     {nil, state}
   end
 
   # Malformed message
   defp dispatch(%{id: id}, state) do
-    error = Protocol.error_response(id, Protocol.invalid_request(), "Missing method")
+    error =
+      Protocol.error_response(id, Protocol.invalid_request(), "Missing method")
+
     {error, state}
   end
 
@@ -480,7 +509,8 @@ defmodule Raxol.MCP.Server do
     %{name: "raxol", version: RaxolMcp.version()}
   end
 
-  defp format_resource_content(text) when is_binary(text), do: {text, "text/plain"}
+  defp format_resource_content(text) when is_binary(text),
+    do: {text, "text/plain"}
 
   defp format_resource_content(data) do
     case Jason.encode(data, pretty: true) do
@@ -495,13 +525,18 @@ defmodule Raxol.MCP.Server do
         Protocol.response(id, %{content: normalize_content(result)})
 
       {:error, :tool_not_found} ->
-        Protocol.error_response(id, Protocol.method_not_found(), "Tool not found: #{name}")
+        Protocol.error_response(
+          id,
+          Protocol.method_not_found(),
+          "Tool not found: #{name}"
+        )
 
       {:error, :circuit_open} ->
         content = [
           %{
             type: "text",
-            text: "Tool temporarily unavailable (circuit open after repeated failures)"
+            text:
+              "Tool temporarily unavailable (circuit open after repeated failures)"
           }
         ]
 
@@ -511,6 +546,85 @@ defmodule Raxol.MCP.Server do
         content = [%{type: "text", text: "Error: #{inspect(reason)}"}]
         Protocol.response(id, %{content: content, isError: true})
     end
+  end
+
+  defp do_read_resource(id, uri, state) do
+    case ResourceRouter.resolve(state.registry, uri) do
+      {:ok, content} ->
+        {text, mime} = format_resource_content(content)
+
+        result = %{
+          contents: [%{uri: uri, text: text, mimeType: mime}]
+        }
+
+        Protocol.response(id, result)
+
+      {:error, :resource_not_found} ->
+        Protocol.error_response(
+          id,
+          Protocol.invalid_params(),
+          "Resource not found: #{uri}"
+        )
+
+      {:error, :circuit_open} ->
+        Protocol.error_response(
+          id,
+          Protocol.internal_error(),
+          "Resource temporarily unavailable (circuit open)"
+        )
+
+      {:error, reason} ->
+        Protocol.error_response(id, Protocol.internal_error(), inspect(reason))
+    end
+  end
+
+  defp do_get_prompt(id, name, arguments, state) do
+    case Registry.get_prompt(state.registry, name, arguments) do
+      {:ok, messages} ->
+        Protocol.response(id, %{messages: messages})
+
+      {:error, :prompt_not_found} ->
+        Protocol.error_response(
+          id,
+          Protocol.method_not_found(),
+          "Prompt not found: #{name}"
+        )
+
+      {:error, reason} ->
+        Protocol.error_response(id, Protocol.internal_error(), inspect(reason))
+    end
+  end
+
+  # Read surfaces (resources/read, resources/subscribe, prompts/get) consult
+  # the same authorizer as tools/call. There is no elicitation path here: ASK
+  # resolves to deny, because the elicitation flow is shaped around approving
+  # a tool RUN, and parking a read on a human prompt is a worse failure mode
+  # than a machine-readable refusal. A nil authorizer allows, matching the
+  # tools/call stance (stdio inherits the OS boundary).
+  defp authorize_read(_op, _detail, %{authorizer: nil}), do: :allow
+
+  defp authorize_read(op, detail, state) do
+    case Authorizer.decide(state.authorizer, op, detail, %{}) do
+      :allow -> :allow
+      {:ask, prompt} -> {:deny, {:ask_denied, prompt}}
+      {:deny, reason} -> {:deny, reason}
+    end
+  end
+
+  # Read-surface denials are JSON-RPC errors (there is no tool-result shape to
+  # carry an isError payload on these methods); the machine-readable detail
+  # rides in the error `data` field.
+  defp authz_error_response(id, method, detail) do
+    Protocol.error_response(
+      id,
+      Protocol.internal_error(),
+      "authorization_required: #{method}",
+      %{
+        "error" => "authorization_required",
+        "method" => method,
+        "detail" => authz_detail(detail)
+      }
+    )
   end
 
   # A denied tool call returns a machine-readable error result the agent can act
@@ -531,8 +645,12 @@ defmodule Raxol.MCP.Server do
   defp authz_detail(detail), do: inspect(detail)
 
   defp normalize_content(result) when is_list(result), do: result
-  defp normalize_content(text) when is_binary(text), do: [%{type: "text", text: text}]
-  defp normalize_content(other), do: [%{type: "text", text: inspect(other, pretty: true)}]
+
+  defp normalize_content(text) when is_binary(text),
+    do: [%{type: "text", text: text}]
+
+  defp normalize_content(other),
+    do: [%{type: "text", text: inspect(other, pretty: true)}]
 
   # -- Sensitive-tool guard -----------------------------------------------------
 
@@ -541,7 +659,11 @@ defmodule Raxol.MCP.Server do
     # the OS boundary).
     case Authorizer.decide(state.authorizer, name, arguments, %{}) do
       :allow ->
-        {call_tool_response(id, name, Registry.call_tool(state.registry, name, arguments)), state}
+        {call_tool_response(
+           id,
+           name,
+           Registry.call_tool(state.registry, name, arguments)
+         ), state}
 
       {:ask, prompt} ->
         ask(id, name, arguments, prompt, state)
@@ -557,7 +679,8 @@ defmodule Raxol.MCP.Server do
   # would serve it wide open. The fix is one line at the call site -- pass an
   # authorizer (`Raxol.MCP.Authorizer.allow_all/0` if that is genuinely what you
   # want, which is at least then visible in the code).
-  defp refuse_unguarded_sensitive_tools!(_registry, authorizer) when authorizer != nil, do: :ok
+  defp refuse_unguarded_sensitive_tools!(_registry, authorizer)
+       when authorizer != nil, do: :ok
 
   defp refuse_unguarded_sensitive_tools!(registry, _authorizer) do
     case sensitive_tool_names(registry) do
@@ -590,7 +713,8 @@ defmodule Raxol.MCP.Server do
     registry
     |> Registry.list_tools()
     |> Enum.any?(fn tool ->
-      (Map.get(tool, :name) || Map.get(tool, "name")) == name and ToolDef.sensitive?(tool)
+      (Map.get(tool, :name) || Map.get(tool, "name")) == name and
+        ToolDef.sensitive?(tool)
     end)
   catch
     :exit, _ -> false
@@ -624,14 +748,24 @@ defmodule Raxol.MCP.Server do
     elicit_id = "raxol-elicit-#{seq}"
 
     timer =
-      Process.send_after(self(), {:elicitation_timeout, elicit_id}, state.elicitation_timeout_ms)
+      Process.send_after(
+        self(),
+        {:elicitation_timeout, elicit_id},
+        state.elicitation_timeout_ms
+      )
 
-    pending = %{request_id: request_id, tool: tool, arguments: arguments, timer: timer}
+    pending = %{
+      request_id: request_id,
+      tool: tool,
+      arguments: arguments,
+      timer: timer
+    }
 
     state = %{
       state
       | elicitation_seq: seq,
-        pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending)
+        pending_elicitations:
+          Map.put(state.pending_elicitations, elicit_id, pending)
     }
 
     broadcast(state.subscribers, elicitation_request(elicit_id, tool, prompt))

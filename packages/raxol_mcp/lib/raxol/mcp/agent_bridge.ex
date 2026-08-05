@@ -24,7 +24,9 @@ defmodule Raxol.MCP.AgentBridge do
   Each Action module must implement `__action_meta__/0` and `call/2`.
   Tools are namespaced with `agent.` prefix.
   """
-  @spec actions_to_mcp_tools([module()], map()) :: [Raxol.MCP.Registry.tool_def()]
+  @spec actions_to_mcp_tools([module()], map()) :: [
+          Raxol.MCP.Registry.tool_def()
+        ]
   def actions_to_mcp_tools(action_modules, context \\ %{}) do
     Enum.map(action_modules, fn module ->
       meta = module.__action_meta__()
@@ -60,7 +62,8 @@ defmodule Raxol.MCP.AgentBridge do
     [
       %{
         name: "agent.list",
-        description: "List all active agent sessions with their IDs and status.",
+        description:
+          "List all active agent sessions with their IDs and status.",
         inputSchema: %{type: "object", properties: %{}},
         callback: &list_agents/1
       },
@@ -72,7 +75,10 @@ defmodule Raxol.MCP.AgentBridge do
           required: ["id", "message"],
           properties: %{
             id: %{type: "string", description: "Agent session ID"},
-            message: %{type: "string", description: "Message to send to the agent"}
+            message: %{
+              type: "string",
+              description: "Message to send to the agent"
+            }
           }
         },
         callback: &send_to_agent/1
@@ -125,12 +131,24 @@ defmodule Raxol.MCP.AgentBridge do
   defp send_to_agent(%{id: id, message: message}) do
     if Code.ensure_loaded?(Raxol.Headless) and
          function_exported?(Raxol.Headless, :send_key, 3) do
-      # Send the message as individual keystrokes
-      for char <- String.graphemes(message) do
-        Raxol.Headless.send_key(String.to_atom(id), char, [])
-      end
+      case existing_session_atom(id) do
+        {:ok, session} ->
+          # Send the message as individual keystrokes
+          for char <- String.graphemes(message) do
+            Raxol.Headless.send_key(session, char, [])
+          end
 
-      {:ok, [%{type: "text", text: "Sent #{String.length(message)} characters to agent #{id}"}]}
+          {:ok,
+           [
+             %{
+               type: "text",
+               text: "Sent #{String.length(message)} characters to agent #{id}"
+             }
+           ]}
+
+        {:error, :unknown_session} ->
+          {:error, "Unknown agent session: #{id}"}
+      end
     else
       {:error, "Headless module not available"}
     end
@@ -143,12 +161,13 @@ defmodule Raxol.MCP.AgentBridge do
   defp get_agent_model(%{id: id}) do
     if Code.ensure_loaded?(Raxol.Headless) and
          function_exported?(Raxol.Headless, :get_model, 1) do
-      case Raxol.Headless.get_model(String.to_atom(id)) do
-        {:ok, model} ->
-          {:ok, [%{type: "text", text: inspect(model, pretty: true, limit: :infinity)}]}
-
-        {:error, reason} ->
-          {:error, reason}
+      with {:ok, session} <- existing_session_atom(id),
+           {:ok, model} <- Raxol.Headless.get_model(session) do
+        {:ok,
+         [%{type: "text", text: inspect(model, pretty: true, limit: :infinity)}]}
+      else
+        {:error, :unknown_session} -> {:error, "Unknown agent session: #{id}"}
+        {:error, reason} -> {:error, reason}
       end
     else
       {:error, "Headless module not available"}
@@ -179,10 +198,25 @@ defmodule Raxol.MCP.AgentBridge do
       end)
 
     schema = %{type: "object", properties: properties}
-    if required != [], do: Map.put(schema, :required, Enum.reverse(required)), else: schema
+
+    if required != [],
+      do: Map.put(schema, :required, Enum.reverse(required)),
+      else: schema
   end
 
   defp build_input_schema(_), do: %{type: "object", properties: %{}}
+
+  # Session ids arrive as caller-supplied strings on an externally callable
+  # surface. A live headless session's id atom already exists in this VM, so
+  # to_existing_atom succeeds exactly when the session could exist; minting a
+  # new atom here (String.to_atom) would let callers grow the atom table.
+  defp existing_session_atom(id) when is_binary(id) do
+    {:ok, String.to_existing_atom(id)}
+  rescue
+    ArgumentError -> {:error, :unknown_session}
+  end
+
+  defp existing_session_atom(id) when is_atom(id), do: {:ok, id}
 
   defp atomize_keys(map) when is_map(map) do
     Map.new(map, fn
