@@ -79,9 +79,19 @@ defmodule Mix.Tasks.Raxol.Bench.MemoryAnalysis do
       warmup: 0.5,
       formatters: [
         Benchee.Formatters.Console,
-        {Benchee.Formatters.HTML, file: output_path}
+        output_formatter(output_path)
       ]
     ]
+  end
+
+  # Honour the extension the caller asked for. The regression workflow passes
+  # a .json path and feeds the result to analyze_memory_regression.exs, so
+  # writing an HTML report there produced a file that could never parse.
+  defp output_formatter(path) do
+    case Path.extname(path) do
+      ".json" -> {Benchee.Formatters.JSON, file: path}
+      _ -> {Benchee.Formatters.HTML, file: path}
+    end
   end
 
   defp print_config_info(config) do

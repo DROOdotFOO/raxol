@@ -229,31 +229,45 @@ defmodule Mix.Tasks.Raxol.Memory.Gates do
       end
 
     if benchmark_file && File.exists?(benchmark_file) do
-      try do
-        # Run the benchmark with JSON output
-        {output, _exit_code} =
-          System.cmd(
-            "mix",
-            [
-              "run",
-              benchmark_file,
-              "--json",
-              "--time",
-              to_string(config.time),
-              "--memory-time",
-              to_string(config.memory_time)
-            ],
-            stderr_to_stdout: true
-          )
+      {output, exit_code} =
+        System.cmd(
+          "mix",
+          [
+            "run",
+            benchmark_file,
+            "--json",
+            "--time",
+            to_string(config.time),
+            "--memory-time",
+            to_string(config.memory_time)
+          ],
+          stderr_to_stdout: true
+        )
 
-        # Parse JSON output
-        Jason.decode!(output)
-      rescue
-        _ -> %{}
-      end
+      decode_benchmark_output(benchmark_file, output, exit_code)
     else
-      Mix.shell().info("  No benchmark file found for #{scenario}")
-      %{}
+      Mix.raise("No memory benchmark file for scenario #{scenario}")
+    end
+  end
+
+  # The benchmark shares stdout with compiler and logger noise, so only the
+  # last line is the JSON document. A crash here used to be rescued to `%{}`,
+  # which reported a clean gate for a benchmark that never ran.
+  defp decode_benchmark_output(benchmark_file, output, exit_code) do
+    last_line =
+      output |> String.trim_trailing() |> String.split("\n") |> List.last()
+
+    case exit_code == 0 && Jason.decode(last_line || "") do
+      {:ok, data} ->
+        data
+
+      _ ->
+        Mix.raise("""
+        #{benchmark_file} did not produce valid JSON (exit #{exit_code}).
+
+        Last line was:
+        #{String.slice(last_line || "", 0, 200)}
+        """)
     end
   end
 

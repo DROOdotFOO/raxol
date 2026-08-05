@@ -1,21 +1,30 @@
 #!/usr/bin/env elixir
 
 # Terminal Memory Benchmark
-# Tests memory usage patterns for terminal operations
-# NOTE: Run with `mix run bench/memory/terminal_memory_benchmark.exs`
+# Measures memory usage for buffer, ANSI parsing, and cursor operations.
+# Run with `mix run bench/memory/terminal_memory_benchmark.exs`
+# Emit machine-readable output with `-- --json`.
 
 defmodule TerminalMemoryBenchmark do
   @moduledoc """
-  Memory benchmarks for terminal operations.
-
-  This benchmark suite tests memory usage patterns for:
-  - Buffer operations (creation, updates, rendering)
-  - ANSI sequence processing
-  - Cursor management
-  - Large terminal operations
+  Memory benchmarks for the terminal core: buffer allocation at three sizes,
+  writes, ANSI sequence parsing through the real emulator, cursor movement,
+  and a full-screen render.
   """
 
-  alias Raxol.Terminal.{Buffer, ANSI.AnsiParser, Cursor.Manager}
+  alias Raxol.Core.Buffer
+  alias Raxol.Terminal.{Emulator, TerminalParser}
+  alias Raxol.Terminal.Cursor.Manager, as: Cursor
+
+  @scenarios %{
+    "small_buffer_create" => :small_buffer_create,
+    "medium_buffer_create" => :medium_buffer_create,
+    "large_buffer_create" => :large_buffer_create,
+    "buffer_write_operations" => :buffer_write_operations,
+    "ansi_sequence_processing" => :ansi_sequence_processing,
+    "cursor_management" => :cursor_management,
+    "large_screen_render" => :large_screen_render
+  }
 
   def run_benchmarks(opts \\ []) do
     config =
@@ -23,67 +32,40 @@ defmodule TerminalMemoryBenchmark do
         time: 3,
         memory_time: 2,
         warmup: 1,
-        formatters: [
-          Benchee.Formatters.HTML,
-          Benchee.Formatters.Console,
-          {Benchee.Formatters.JSON, file: "bench/output/terminal_memory.json"}
-        ]
+        formatters: [Benchee.Formatters.Console]
       ]
       |> Keyword.merge(opts)
 
     IO.puts("Running Terminal Memory Benchmarks...")
-    IO.puts("Config: #{inspect(config)}")
 
-    Benchee.run(
-      %{
-        "small_buffer_create" => fn -> create_small_buffer() end,
-        "medium_buffer_create" => fn -> create_medium_buffer() end,
-        "large_buffer_create" => fn -> create_large_buffer() end,
-        "buffer_write_operations" => fn -> buffer_write_operations() end,
-        "ansi_sequence_processing" => fn -> ansi_sequence_processing() end,
-        "cursor_management" => fn -> cursor_management_operations() end,
-        "large_screen_render" => fn -> large_screen_render() end,
-        "memory_intensive_ops" => fn -> memory_intensive_operations() end
-      },
-      config
-    )
+    jobs =
+      Map.new(@scenarios, fn {name, fun} ->
+        {name, fn -> apply(__MODULE__, fun, []) end}
+      end)
+
+    Benchee.run(jobs, config)
   end
 
-  # Small buffer (80x24 - typical terminal size)
-  defp create_small_buffer do
-    {:ok, buffer} = Buffer.create(80, 24)
-    buffer
-  end
+  def small_buffer_create, do: Buffer.create_blank_buffer(80, 24)
+  def medium_buffer_create, do: Buffer.create_blank_buffer(120, 40)
+  def large_buffer_create, do: Buffer.create_blank_buffer(200, 60)
 
-  # Medium buffer (120x40 - larger terminal)
-  defp create_medium_buffer do
-    {:ok, buffer} = Buffer.create(120, 40)
-    buffer
-  end
+  def buffer_write_operations do
+    buffer = Buffer.create_blank_buffer(80, 24)
 
-  # Large buffer (200x60 - very large terminal)
-  defp create_large_buffer do
-    {:ok, buffer} = Buffer.create(200, 60)
-    buffer
-  end
-
-  # Test buffer write operations
-  defp buffer_write_operations do
-    {:ok, buffer} = Buffer.create(80, 24)
-
-    # Write multiple lines
-    Enum.reduce(1..10, buffer, fn line_num, acc_buffer ->
-      content = "Line #{line_num}: #{String.duplicate("test ", 10)}"
-
-      case Buffer.write_at(acc_buffer, 0, line_num - 1, content) do
-        {:ok, new_buffer} -> new_buffer
-        _ -> acc_buffer
-      end
+    Enum.reduce(0..9, buffer, fn row, acc ->
+      Buffer.write_at(
+        acc,
+        0,
+        row,
+        "Line #{row}: #{String.duplicate("test ", 10)}"
+      )
     end)
   end
 
-  # Test ANSI sequence processing memory usage
-  defp ansi_sequence_processing do
+  def ansi_sequence_processing do
+    emulator = Emulator.new(80, 24)
+
     sequences = [
       "\e[31mRed text\e[0m",
       "\e[1;32mBold green\e[0m",
@@ -92,69 +74,42 @@ defmodule TerminalMemoryBenchmark do
       "\e[48;5;214mOrange background\e[0m"
     ]
 
-    Enum.map(sequences, fn seq ->
-      AnsiParser.parse(seq)
+    Enum.reduce(sequences, emulator, fn sequence, acc ->
+      acc |> TerminalParser.parse(sequence) |> elem(0)
     end)
   end
 
-  # Test cursor management operations
-  defp cursor_management_operations do
-    {:ok, cursor} = Manager.new()
+  def cursor_management do
+    cursor = Cursor.new(0, 0)
 
-    # Perform various cursor operations
-    cursor
-    |> Manager.move_to(10, 5)
-    |> Manager.move_relative(5, 3)
-    |> Manager.move_to_column(20)
-    |> Manager.move_to_row(15)
-    |> Manager.save_position()
-    |> Manager.restore_position()
+    Enum.reduce(1..20, cursor, fn i, acc ->
+      Cursor.move_to(acc, rem(i * 3, 24), rem(i * 7, 80))
+    end)
   end
 
-  # Test large screen rendering
-  defp large_screen_render do
-    {:ok, buffer} = Buffer.create(200, 60)
+  def large_screen_render do
+    buffer = Buffer.create_blank_buffer(200, 60)
+    row_text = String.duplicate("#", 200)
 
-    # Fill buffer with content
-    filled_buffer =
-      Enum.reduce(0..59, buffer, fn row, acc_buffer ->
-        content = String.duplicate("█", 200)
-
-        case Buffer.write_at(acc_buffer, 0, row, content) do
-          {:ok, new_buffer} -> new_buffer
-          _ -> acc_buffer
-        end
+    filled =
+      Enum.reduce(0..59, buffer, fn row, acc ->
+        Buffer.write_at(acc, 0, row, row_text)
       end)
 
-    # Render the buffer
-    Buffer.render(filled_buffer)
-  end
-
-  # Memory intensive operations that stress the system
-  defp memory_intensive_operations do
-    # Create multiple buffers
-    buffers =
-      Enum.map(1..5, fn _i ->
-        {:ok, buffer} = Buffer.create(100, 30)
-        buffer
-      end)
-
-    # Process complex ANSI sequences
-    complex_sequences =
-      Enum.map(1..100, fn i ->
-        "\e[#{rem(i, 8) + 30}m\e[#{rem(i, 2) + 1}mComplex #{i}\e[0m"
-      end)
-
-    parsed_sequences = Enum.map(complex_sequences, &AnsiParser.parse/1)
-
-    # Return both to ensure they're not garbage collected during benchmark
-    {buffers, parsed_sequences}
+    Buffer.to_string(filled)
   end
 end
 
-# Parse command line arguments
+# `mix run file.exs -- --json` leaves the literal "--" in argv, and
+# OptionParser reads that as end-of-options, dropping every flag after it.
+argv =
+  case System.argv() do
+    ["--" | rest] -> rest
+    argv -> argv
+  end
+
 {opts, _args, _invalid} =
-  OptionParser.parse(System.argv(),
+  OptionParser.parse(argv,
     switches: [
       json: :boolean,
       time: :integer,
@@ -163,36 +118,28 @@ end
     ]
   )
 
-# Configure benchmark options
-benchmark_opts = []
+# Built in one pass: rebinding inside `if` does not escape the block in Elixir,
+# which is how this file previously ignored every flag.
+benchmark_opts =
+  Enum.reduce(opts, [], fn
+    {:json, true}, acc ->
+      Keyword.put(acc, :formatters, [
+        {Benchee.Formatters.JSON, file: "/dev/stdout"}
+      ])
 
-if opts[:json] do
-  benchmark_opts =
-    Keyword.put(benchmark_opts, :formatters, [
-      {Benchee.Formatters.JSON, file: "/dev/stdout"}
-    ])
-end
+    {:time, value}, acc ->
+      Keyword.put(acc, :time, value)
 
-if opts[:time] do
-  benchmark_opts = Keyword.put(benchmark_opts, :time, opts[:time])
-end
+    {:memory_time, value}, acc ->
+      Keyword.put(acc, :memory_time, value)
 
-if opts[:memory_time] do
-  benchmark_opts = Keyword.put(benchmark_opts, :memory_time, opts[:memory_time])
-end
+    {:warmup, value}, acc ->
+      Keyword.put(acc, :warmup, value)
 
-if opts[:warmup] do
-  benchmark_opts = Keyword.put(benchmark_opts, :warmup, opts[:warmup])
-end
+    _other, acc ->
+      acc
+  end)
 
-# Ensure output directory exists
 File.mkdir_p("bench/output")
 
-# Run the benchmarks
-try do
-  TerminalMemoryBenchmark.run_benchmarks(benchmark_opts)
-rescue
-  error ->
-    IO.puts("Error running terminal memory benchmarks: #{inspect(error)}")
-    System.halt(1)
-end
+TerminalMemoryBenchmark.run_benchmarks(benchmark_opts)
