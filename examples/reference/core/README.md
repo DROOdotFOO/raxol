@@ -6,7 +6,7 @@ Basic usage of Raxol's core modules. For a complete interactive catalog of all w
 mix raxol.playground
 ```
 
-## Running Examples
+## Running examples
 
 ```bash
 # Minimal counter (TEA pattern)
@@ -25,4 +25,4 @@ mix run examples/demo.exs
 mix raxol.demo
 ```
 
-See the [Quickstart](../../docs/getting-started/QUICKSTART.md) for a walkthrough of the TEA model.
+See the [Quickstart](../../../docs/getting-started/QUICKSTART.md) for a walkthrough of the TEA model.

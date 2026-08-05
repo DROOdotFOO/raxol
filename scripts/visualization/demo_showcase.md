@@ -4,7 +4,7 @@
 
 ### Playground
 
-28 demos across 8 categories with live preview:
+40 demos across 8 categories with live preview:
 
 ```bash
 mix raxol.playground
@@ -25,7 +25,7 @@ Live BEAM dashboard with scheduler utilization, memory sparklines, and a process
 mix run examples/demo.exs
 ```
 
-### ZERO System Cockpit
+### ZERO System cockpit
 
 The launch cockpit: boot self-check, swarm funnel deploy, a private cross-chain
 settlement with streaming LLM reasoning, crash-mid-settlement ledger reconcile, and
@@ -52,7 +52,7 @@ Use the demo recording script to capture asciinema recordings and convert to GIF
 ./scripts/visualization/demo_videos.sh
 ```
 
-## More Examples
+## More examples
 
 - `examples/getting_started/counter.exs`: minimal TEA counter
 - `examples/getting_started/todo_app.exs`: todo list

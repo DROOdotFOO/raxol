@@ -1,6 +1,6 @@
 # Testing Guide
 
-## Running Tests
+## Running tests
 
 `SKIP_TERMBOX2_TESTS=true` and `TMPDIR=/tmp` are set automatically via `.claude/settings.json`,
 so you can omit them locally.
@@ -59,7 +59,7 @@ bug worth tracking down.
 mix test --cover
 ```
 
-## Test Tags
+## Test tags
 
 Tests are tagged to allow selective exclusion. The standard run excludes `:slow`,
 `:integration`, and `:docker` automatically.
@@ -85,7 +85,7 @@ Run only a specific tag:
 MIX_ENV=test mix test --only integration
 ```
 
-## Testing TEA Modules
+## Testing TEA modules
 
 TEA modules have pure `init/1`, `update/2`, and `view/1` functions. Test them directly
 without any rendering infrastructure:
@@ -129,7 +129,7 @@ test "search dispatches async command" do
 end
 ```
 
-## Test Helpers
+## Test helpers
 
 Test helpers live in `test/support/`.
 
@@ -166,7 +166,7 @@ end
 | `test/support/buffer_helper.ex` | Screen buffer assertions |
 | `test/support/event_macro_helpers.ex` | Event construction shortcuts |
 
-## Property-Based Tests
+## Property-Based tests
 
 Property tests live in `test/property/` and use
 [StreamData](https://hexdocs.pm/stream_data) via `ExUnitProperties`.

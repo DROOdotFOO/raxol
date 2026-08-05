@@ -57,9 +57,9 @@ echo -e "Checks Passed: ${GREEN}$CHECKS_PASSED${NC}"
 echo -e "Checks Failed: ${RED}$CHECKS_FAILED${NC}"
 
 if [ $CHECKS_FAILED -eq 0 ]; then
-    echo -e "\n${GREEN}✅ All validation checks passed!${NC}"
+    echo -e "\n${GREEN}OK: all validation checks passed${NC}"
     exit 0
 else
-    echo -e "\n${RED}❌ Validation failed with $CHECKS_FAILED errors${NC}"
+    echo -e "\n${RED}FAIL: validation failed with $CHECKS_FAILED errors${NC}"
     exit 1
 fi

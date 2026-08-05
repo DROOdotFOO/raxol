@@ -11,7 +11,7 @@ disambiguation is load-bearing.
 
 ---
 
-## Application Model
+## Application model
 
 | Term           | Definition                                                                                               | Aliases to avoid                              |
 | -------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
@@ -210,7 +210,7 @@ role/label/state form that Surfaces serialize for assistive technology.
 
 ---
 
-## Commands & Actions (cross-cutting)
+## Commands & actions (cross-cutting)
 
 | Term             | Definition                                                                                         | Aliases to avoid               |
 | ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |

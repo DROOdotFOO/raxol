@@ -2,7 +2,7 @@
 
 Techniques for achieving 60fps terminal rendering.
 
-## Performance Targets
+## Performance targets
 
 | Operation         | Budget  | Typical | Excellent |
 | ----------------- | ------- | ------- | --------- |
@@ -17,7 +17,7 @@ Techniques for achieving 60fps terminal rendering.
 
 ---
 
-## Buffer Diffing
+## Buffer diffing
 
 Only update what changed.
 
@@ -38,7 +38,7 @@ end
 
 Without diffing: ~15ms for 80x24 buffer (clear + full redraw). Diff rendering brings typical updates to ~2ms.
 
-### Smart Diffing
+### Smart diffing
 
 Full render every N frames or when buffer dimensions change:
 
@@ -52,9 +52,9 @@ end
 
 ---
 
-## Caching Strategies
+## Caching strategies
 
-### Style Caching
+### Style caching
 
 Reuse style maps via module attributes (compile-time):
 
@@ -75,7 +75,7 @@ defp message_style(_), do: %{}
 
 10-20% faster by avoiding style allocation.
 
-### Buffer Caching
+### Buffer caching
 
 Cache static parts of the UI:
 
@@ -91,11 +91,11 @@ Cache static parts of the UI:
 
 ---
 
-## Lazy Rendering
+## Lazy rendering
 
 Only render visible content.
 
-### Viewport Rendering
+### Viewport rendering
 
 ```elixir
 defmodule ViewportRenderer do
@@ -115,7 +115,7 @@ end
 
 100x faster for large datasets (render 24 rows instead of 1000+).
 
-### Virtual Scrolling
+### Virtual scrolling
 
 Only render visible rows in scrollable lists:
 
@@ -134,7 +134,7 @@ end
 
 ---
 
-## 60fps Checklist
+## 60fps checklist
 
 - [ ] Use diff rendering. Don't redraw everything
 - [ ] Cache static content. Reuse unchanged buffers
@@ -165,7 +165,7 @@ end
 
 ---
 
-## Common Pitfalls
+## Common pitfalls
 
 ### Creating styles repeatedly
 
@@ -232,7 +232,7 @@ Benchee.run(%{
 }, time: 5, memory_time: 2)
 ```
 
-### Performance Tests
+### Performance tests
 
 ```elixir
 test "full frame render meets 60fps budget" do
@@ -248,8 +248,7 @@ end
 
 See `docs/bench/README.md` for the full benchmark suite comparing Raxol against Ratatui, Bubble Tea, and Textual.
 
-## Next Steps
+## Next steps
 
-- [LiveView Cookbook](./LIVEVIEW_INTEGRATION.md)
-- [Theming Cookbook](./THEMING.md)
-- [API Reference](../core/BUFFER_API.md)
+- [Buffer API](../core/BUFFER_API.md): the primitives these techniques operate on
+- [Cookbook index](./README.md): the other recipes

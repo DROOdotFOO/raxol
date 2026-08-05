@@ -25,7 +25,7 @@ Bracketed ASCII tags replace emojis throughout the codebase. Keeps output profes
 - `[DISK]`: disk
 - `[NET]`: network
 
-### UI Components
+### UI components
 - `[BTN]`: button
 - `[FORM]`: form
 - `[TEXT]`: text

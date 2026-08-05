@@ -23,7 +23,7 @@ end
 | `Raxol.Plugin.Testing` | ExUnit helpers: `setup_plugin`, `assert_handles_event`, `simulate_lifecycle` |
 | `mix raxol.gen.plugin` | Generator: creates plugin module + test file skeleton |
 
-## Quick Start
+## Quick start
 
 Generate a plugin:
 

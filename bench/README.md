@@ -2,7 +2,7 @@
 
 Benchmarking files for Raxol.
 
-## Directory Structure
+## Directory structure
 
 ```
 bench/
@@ -24,7 +24,7 @@ bench/
 └── snapshots/          # Performance snapshots for regression testing
 ```
 
-## Quick Start
+## Quick start
 
 ```bash
 # Run parser benchmarks
@@ -79,7 +79,7 @@ See [docs/bench/README.md](../docs/bench/README.md) for comprehensive documentat
 - Results: `results/` directory (.benchee, JSON files)
 - Baselines: `baselines/` directory
 
-## Best Practices
+## Best practices
 
 1. Run benchmarks before performance changes
 2. Use descriptive timestamped names

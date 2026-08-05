@@ -9,14 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Raxol.Watch.ActionHandler.dispatch/2` -- routes a tap action's resulting
+- `Raxol.Watch.ActionHandler.dispatch/2`: routes a tap action's resulting
   `Event` to a configured dispatcher (pid, registered atom name, `{mod, fun}`,
   `{mod, fun, extra_args}`, or 1-arity function). Falls back to
   `Application.get_env(:raxol_watch, :action_dispatcher)` when `:to` is not
   passed. Returns `{:ok, event}` / `{:ok, nil}` / `{:error, reason, event}`.
-- `Raxol.Watch.DeviceRegistry.clear_all/0` -- removes every registered
+- `Raxol.Watch.DeviceRegistry.clear_all/0`: removes every registered
   device. Useful on user logout, and to reset state between tests.
-- `Raxol.Watch.DeviceRegistry.unregister/2` -- the new optional `reason`
+- `Raxol.Watch.DeviceRegistry.unregister/2`: the new optional `reason`
   argument is forwarded to telemetry. Defaults to `:explicit`. The Notifier
   uses `:delivery_failed` when auto-pruning after a permanent APNS/FCM error.
 - **Auto-prune** on permanent delivery failures. When a push backend returns
@@ -27,18 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`:too_many_requests`, `:internal_server_error`, etc.) leave the device
   registered.
 - **Telemetry events** (`telemetry` is now an explicit dependency):
-  - `[:raxol_watch, :push, :start | :stop | :exception]` -- `:telemetry.span`
+  - `[:raxol_watch, :push, :start | :stop | :exception]`: `:telemetry.span`
     around each per-device push. Metadata: `%{token, platform, priority,
     backend, result}`. Result is `:ok` or `{:error, reason}`.
-  - `[:raxol_watch, :device, :registered]` -- on register. Metadata:
+  - `[:raxol_watch, :device, :registered]`: on register. Metadata:
     `%{token, platform, prefs}`.
-  - `[:raxol_watch, :device, :unregistered]` -- on unregister. Metadata:
+  - `[:raxol_watch, :device, :unregistered]`: on unregister. Metadata:
     `%{token, reason}` where reason is `:explicit | :delivery_failed`.
-  - `[:raxol_watch, :device, :cleared]` -- on `clear_all/0`. Measurements:
+  - `[:raxol_watch, :device, :cleared]`: on `clear_all/0`. Measurements:
     `%{count}`.
-  - `[:raxol_watch, :notifier, :coalesced]` -- when a normal-priority
+  - `[:raxol_watch, :notifier, :coalesced]`: when a normal-priority
     announcement replaces a pending debounced one. Metadata: `%{priority}`.
-- `examples/watch_demo.exs` -- end-to-end live-test harness targeting a real
+- `examples/watch_demo.exs`: end-to-end live-test harness targeting a real
   paired iPhone + Apple Watch via APNS (designed against Series 4 / Model
   A2094 / watchOS 10.4).
 
@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `Raxol.Watch.Push.APNS` and `Raxol.Watch.Push.FCM` now require
   a Pigeon 2.x dispatcher configured via app env. The old code called
   `Pigeon.APNS.push/1` / `Pigeon.FCM.push/1`, which do not exist in Pigeon 2.0
-  -- the backends were non-functional. Configure with:
+  because the backends were non-functional. Configure with:
 
   ```elixir
   config :raxol_watch, Raxol.Watch.Push.APNS,
@@ -81,27 +81,27 @@ Initial release. Watch surface package for Raxol.
 
 ### Added
 
-- `Raxol.Watch.Notifier` -- GenServer that subscribes to
+- `Raxol.Watch.Notifier`: GenServer that subscribes to
   `Raxol.Core.Accessibility` announcements and pushes to all registered
   devices. 1-second debounce for normal-priority alerts; high-priority
   announcements bypass the debounce. Parallel push via `Task.async_stream`
   with per-device failure logging.
-- `Raxol.Watch.DeviceRegistry` -- ETS-backed device registry with
+- `Raxol.Watch.DeviceRegistry`: ETS-backed device registry with
   `read_concurrency: true`. Crash-safe init (re-uses existing table on
   restart). Supports per-device `high_priority_only` preference.
-- `Raxol.Watch.Formatter` -- builds notification payloads from accessibility
+- `Raxol.Watch.Formatter`: builds notification payloads from accessibility
   announcements and model-state projections. 160-character truncation via
   `String.length` (grapheme-aware). Maps Raxol priority to push priority.
-- `Raxol.Watch.ActionHandler` -- maps watch tap actions back to Raxol events.
+- `Raxol.Watch.ActionHandler`: maps watch tap actions back to Raxol events.
   Tap routes to `:enter`; "previous" maps to shift+tab.
-- `Raxol.Watch.Push.Backend` -- behaviour for push backends.
-- `Raxol.Watch.Push.APNS` -- Apple Push Notification Service backend (uses
+- `Raxol.Watch.Push.Backend`: behaviour for push backends.
+- `Raxol.Watch.Push.APNS`: Apple Push Notification Service backend (uses
   optional `pigeon` dependency).
-- `Raxol.Watch.Push.FCM` -- Firebase Cloud Messaging backend for Wear OS
+- `Raxol.Watch.Push.FCM`: Firebase Cloud Messaging backend for Wear OS
   (uses optional `pigeon` dependency).
-- `Raxol.Watch.Push.Noop` -- no-op backend for tests; logs a warning if
+- `Raxol.Watch.Push.Noop`: no-op backend for tests; logs a warning if
   configured in `:prod`.
-- `Raxol.Watch.Supervisor` -- `:rest_for_one` supervisor wiring
+- `Raxol.Watch.Supervisor`: `:rest_for_one` supervisor wiring
   DeviceRegistry and Notifier (Notifier depends on the registry being up).
 
 ### Notes

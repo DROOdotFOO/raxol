@@ -2,7 +2,7 @@
 
 Current performance measurements and goals for Raxol.
 
-## Measured Results
+## Measured results
 
 | Metric             | Target    | Measured        | Status   |
 | ------------------ | --------- | --------------- | -------- |
@@ -28,14 +28,14 @@ Current performance measurements and goals for Raxol.
 
 **Plugins**: ~10ms average load time. Message passing adds < 100us overhead. Hot reload works without downtime.
 
-## Running Benchmarks
+## Running benchmarks
 
 ```bash
 mix raxol.bench              # Full benchmark suite
 mix raxol.bench.memory       # Memory benchmarks
 ```
 
-## Optimizations Applied
+## Optimizations applied
 
 **Compile-time**: static content inlining, dead code elimination, constant folding, template precompilation.
 

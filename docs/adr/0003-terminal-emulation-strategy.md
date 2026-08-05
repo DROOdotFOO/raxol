@@ -70,7 +70,7 @@ end
 
 The emulator core has zero dependencies on OS APIs, terminal I/O, rendering libraries, or network protocols. This means you can unit test without a terminal, deploy to the web without native dependencies, and develop on any platform.
 
-### Feature Modules
+### Feature modules
 
 ```elixir
 # Sixel graphics: pure Elixir parser, renderers handle display

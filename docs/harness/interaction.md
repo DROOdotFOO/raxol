@@ -103,5 +103,5 @@ while unfocused rows and the placeholder sit at the faded register.
   content) are all the same code path. One overlay is open at a time.
 - Returning is evidential: `Raxol.Harness.UnreadDivider` marks where you left
   off, and the restoration on reattach renders what changed as evidence, never
-  a success toast. An uncertain or gapped tip is rendered first-class rather
+  a success toast. An uncertain or gapped tip is rendered as uncertain rather
   than silently presented as canonical.

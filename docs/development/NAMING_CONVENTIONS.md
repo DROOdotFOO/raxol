@@ -2,7 +2,7 @@
 
 Standardized naming for all modules in the Raxol codebase. Established during Sprint 22-23 refactoring.
 
-## General Rule
+## General rule
 
 All modules follow: `<domain>_<function>.ex`
 
@@ -18,7 +18,7 @@ All modules follow: `<domain>_<function>.ex`
 - `lib/raxol/core/events/manager.ex` -> `Raxol.Core.Events.Manager`
 - `lib/raxol/terminal/buffer/server.ex` -> `Raxol.Terminal.Buffer.Server`
 
-## Specific Patterns
+## Specific patterns
 
 ### Managers: `<domain>_manager.ex`
 
@@ -32,7 +32,7 @@ All modules follow: `<domain>_<function>.ex`
 
 `cursor_handler.ex`, `events_handler.ex`, `device_handler.ex`
 
-### Core Modules: `<domain>_core.ex`
+### Core modules: `<domain>_core.ex`
 
 `terminal_core.ex`, `renderer_core.ex`, `cloud_core.ex`
 
@@ -48,7 +48,7 @@ All modules follow: `<domain>_<function>.ex`
 
 `view_validation.ex`, `config_validation.ex`, `lifecycle_validation.ex`
 
-## Nested Modules
+## Nested modules
 
 Filenames reflect the full context:
 
@@ -59,7 +59,7 @@ lib/raxol/terminal/graphics/kitty/
 └── kitty_config.ex        -> Raxol.Terminal.Graphics.Kitty.KittyConfig
 ```
 
-## What to Avoid
+## What to avoid
 
 Never use bare generic names:
 - `manager.ex` -> use `<domain>_manager.ex`

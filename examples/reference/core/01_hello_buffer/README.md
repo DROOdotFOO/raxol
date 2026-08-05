@@ -2,7 +2,7 @@
 
 A simple example demonstrating basic usage of `Raxol.Core.Buffer`.
 
-## What This Example Shows
+## What this example shows
 
 1. Creating a blank buffer
 2. Writing text at specific coordinates
@@ -21,7 +21,7 @@ mix compile
 elixir examples/reference/core/01_hello_buffer/main.exs
 ```
 
-## Expected Output
+## Expected output
 
 You should see a simple text display with borders, demonstrating the buffer's ability to store and render text in a grid format.
 
@@ -32,6 +32,6 @@ You should see a simple text display with borders, demonstrating the buffer's ab
 - **Cell Structure**: Each cell contains a character and optional style
 - **Performance**: All operations complete in < 1ms for standard buffers
 
-## Next Steps
+## Next steps
 
 See `examples/reference/core/02_box_drawing/` for more advanced drawing capabilities.

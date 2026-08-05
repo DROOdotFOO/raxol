@@ -5,10 +5,10 @@ AI agent framework for Elixir built on OTP. TEA-based agents with crash isolatio
 ## Install
 
 ```elixir
-{:raxol_agent, "~> 2.4"}
+{:raxol_agent, "~> 2.6"}
 ```
 
-## Quick Start
+## Quick start
 
 ```elixir
 defmodule MyAgent do
@@ -38,7 +38,7 @@ Raxol.Agent.Session.send_message(:my_agent, {:analyze, "lib/raxol.ex"})
 - **Shell commands**: Port-based execution with result callbacks
 - **Headless mode**: `view/1` is optional; skip rendering entirely
 
-## Agent Teams
+## Agent teams
 
 ```elixir
 Raxol.Agent.Team.start_link(

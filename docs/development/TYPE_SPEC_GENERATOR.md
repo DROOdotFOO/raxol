@@ -122,11 +122,11 @@ After adding specs, validate with Dialyzer:
 mix dialyzer
 ```
 
-## Extending the Generator
+## Extending the generator
 
 Add project-specific inference patterns by editing `infer_single_arg_type/3` and `infer_return_type/1` in `lib/mix/tasks/raxol.gen.specs.ex`.
 
-## CI Integration
+## CI integration
 
 ```yaml
 # .github/workflows/specs.yml
@@ -137,7 +137,7 @@ Add project-specific inference patterns by editing `infer_single_arg_type/3` and
   run: mix dialyzer
 ```
 
-## Tracking Coverage
+## Tracking coverage
 
 ```bash
 grep -r "@spec" lib/raxol | wc -l                    # functions with specs

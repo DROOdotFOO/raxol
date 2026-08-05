@@ -107,7 +107,7 @@ end)
 
 Operations: `map`, `filter`, `reduce`, `debounce`, `throttle`, `merge`, `combine_latest`, `take`, `drop`, `retry`, `timeout`.
 
-### Data Flow
+### Data flow
 
 ```
 User Actions -> Action Creators -> Store Dispatch -> Reducers -> New State -> Component Re-render

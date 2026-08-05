@@ -3,7 +3,7 @@
 The Raxol runtime for the Virtuals ACP Console, packaged for npm. It wraps a
 self-contained BEAM release (built with [Burrito](https://github.com/burrito-elixir/burrito),
 embedded ERTS, no host Erlang needed) so the Console's `acp-cli` installs and runs
-it out of the box, like the Node incumbents.
+it the same way it runs the Node incumbents.
 
 ## Run
 

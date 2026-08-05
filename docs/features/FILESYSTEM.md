@@ -60,7 +60,7 @@ Helpers print their output via IO (captured by the evaluator) and return the VFS
 
 The `Evaluator.prelude` field imports VfsHelpers before every eval, which is why bare names like `ls` and `mkdir` work without any aliasing.
 
-## Agent Actions
+## Agent actions
 
 The VFS is also wired up as `Raxol.Agent.Action` modules, so LLMs can call them as tools:
 
@@ -90,7 +90,7 @@ new_vfs = result.vfs  # mutating actions return the updated VFS
 
 VFS resolution checks `params[:vfs]` first (so Pipeline composition works), then `context[:vfs]`, and falls back to a fresh filesystem if neither exists.
 
-### Pipeline Composition
+### Pipeline composition
 
 ```elixir
 alias Raxol.Agent.Action.Pipeline
@@ -113,6 +113,6 @@ Internally it's a flat map keyed by absolute path (`%{"/" => node, "/docs" => no
 
 There are also formatting helpers: `format_ls/3` for styled directory listings and `format_cat/3` for line-numbered file output.
 
-## Playground Demo
+## Playground demo
 
 `mix raxol.playground` has a VFS demo with a shell-like interface: `ls`, `cd`, `cat`, `pwd`, `mkdir`, `rm`, `tree`, and `help` all work.

@@ -9,25 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Raxol.Telegram.SessionRouter.stats/0` -- reports active session count
+- `Raxol.Telegram.SessionRouter.stats/0`: reports active session count
   and the size of the per-chat rate-limit cooldown map. Useful for
   monitoring memory under high chat churn.
-- `Raxol.Telegram.SessionRouter.purge_stale_cooldowns/0` -- drops
+- `Raxol.Telegram.SessionRouter.purge_stale_cooldowns/0`: drops
   cooldown entries older than the cooldown window. Called automatically
   on every `track_session/3` so the map cannot grow faster than session
   creation rate. Safe to call as an ops tool too.
 - **Telemetry events** (`telemetry` is now an explicit dependency):
-  - `[:raxol_telegram, :bot, :received]` -- on every allowed update.
+  - `[:raxol_telegram, :bot, :received]`: on every allowed update.
     Metadata: `%{chat_id, kind: :message | :callback, byte_size | data}`.
-  - `[:raxol_telegram, :bot, :denied]` -- when `allowed_chat_ids` filters
+  - `[:raxol_telegram, :bot, :denied]`: when `allowed_chat_ids` filters
     out a request. Also fires for malformed config (graceful denial).
-  - `[:raxol_telegram, :session, :started]` -- on successful session
+  - `[:raxol_telegram, :session, :started]`: on successful session
     creation.
-  - `[:raxol_telegram, :session, :rejected]` -- when session creation
+  - `[:raxol_telegram, :session, :rejected]`: when session creation
     fails. Reasons: `:max_sessions_reached | :rate_limited`.
-  - `[:raxol_telegram, :session, :stopped]` -- on session termination.
+  - `[:raxol_telegram, :session, :stopped]`: on session termination.
     Reasons: `:explicit | :process_down` (with `down_reason` metadata).
-- `examples/telegram_demo.exs` -- end-to-end live-test harness with a
+- `examples/telegram_demo.exs`: end-to-end live-test harness with a
   minimal counter TEA app, Telegex polling setup, and chat-id access
   control via env vars.
 
@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Docs
 
 - Reconcile `docs/features/TELEGRAM.md` with the actual API:
-  - There is no `config :raxol_telegram, ...` block -- the bot token
+  - There is no `config :raxol_telegram, ...` block; the bot token
     belongs to Telegex's own config; `allowed_chat_ids` is passed to
     `Bot.handle_update/2` at the call site.
   - The Supervisor child spec needs `app_module: ...`.
@@ -74,22 +74,22 @@ monospace `<pre>` HTML blocks in Telegram chats with inline keyboard navigation.
 
 ### Added
 
-- `Raxol.Telegram.Bot` -- update handler with optional `allowed_chat_ids`
+- `Raxol.Telegram.Bot`: update handler with optional `allowed_chat_ids`
   access control. Handles `/start` and `/stop` commands and routes other
   messages and inline keyboard taps to per-chat sessions.
-- `Raxol.Telegram.SessionRouter` -- per-chat session management with a
+- `Raxol.Telegram.SessionRouter`: per-chat session management with a
   configurable `max_sessions` cap (default 1000) and a 5-second per-chat
   cooldown for rate limiting.
-- `Raxol.Telegram.Session` -- TEA lifecycle running in the `:telegram`
+- `Raxol.Telegram.Session`: TEA lifecycle running in the `:telegram`
   environment. Includes message edit deduplication (re-renders edit the
   existing message instead of spamming new ones) and a 10-minute idle
   timeout.
-- `Raxol.Telegram.InputAdapter` -- translates Telegram callback queries and
+- `Raxol.Telegram.InputAdapter`: translates Telegram callback queries and
   text messages into Raxol events.
-- `Raxol.Telegram.OutputAdapter` -- renders the screen buffer as
+- `Raxol.Telegram.OutputAdapter`: renders the screen buffer as
   `<pre>`-wrapped HTML and extracts inline keyboard buttons from the view
   tree in document order.
-- `Raxol.Telegram.Supervisor` -- top-level `:rest_for_one` supervisor wiring
+- `Raxol.Telegram.Supervisor`: top-level `:rest_for_one` supervisor wiring
   the router and session components together.
 
 ### Tests

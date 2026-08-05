@@ -24,7 +24,7 @@ The key pieces:
 
 ## Implementation
 
-### Component Structure
+### Component structure
 
 ```elixir
 defmodule MyComponent do

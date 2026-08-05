@@ -1,6 +1,6 @@
 # Packages
 
-Raxol ships as a main package plus 15 focused subsystems. Use the main `raxol` package for the full framework, or grab individual packages for narrower needs.
+Raxol ships as a main package plus 17 focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
 
 ## Main
 
@@ -29,6 +29,8 @@ Raxol ships as a main package plus 15 focused subsystems. Use the main `raxol` p
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
 | `raxol_symphony` (0.2.0, pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
 | `raxol_gateway` (pre-alpha)                                | `path: "packages/raxol_gateway"`  | Unified messaging gateway (multi-platform) |
+| `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command, shipped as a Burrito binary via npm |
+| `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
 
 The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (`Raxol.Harness.*`, agent-session core + contract, in main `raxol`) -> the product surfaces `mix raxol.code` (interactive) and `mix raxol.p` (headless), both in `raxol_agent` -> `raxol_symphony`, which orchestrates many agent runs above them. The Harness is the engine, not a separate product; `mix raxol.harness.*` are only its golden/fixture test tasks.
 
@@ -56,6 +58,8 @@ raxol_payments --> raxol_agent (compile-time only)
 raxol_earn      --> raxol_payments (runtime), raxol_mcp + raxol_agent (compile-time only)
 raxol_agent_client_protocol --> (none; jason only, zero raxol deps)
 raxol_symphony --> raxol_core, raxol_agent, raxol_mcp (all optional)
+raxol_cli      --> raxol, raxol_agent
+raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
 
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
 raxol_telegram --> raxol_core (+ raxol/telegex optional)

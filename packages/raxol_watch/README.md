@@ -14,7 +14,7 @@ A 90-day platform digest (HN + GitHub + Reddit) found near-zero developer-facing
 ## Install
 
 ```elixir
-{:raxol_watch, "~> 0.1"}
+{:raxol_watch, "~> 0.2"}
 ```
 
 For production push notifications, add:
@@ -32,7 +32,7 @@ children = [
 ]
 ```
 
-### Device Registration
+### Device registration
 
 ```elixir
 Raxol.Watch.DeviceRegistry.register("device_token_abc", :apns)
@@ -40,7 +40,7 @@ Raxol.Watch.DeviceRegistry.register("device_token_xyz", :fcm, high_priority_only
 Raxol.Watch.DeviceRegistry.unregister("device_token_abc")
 ```
 
-### Sending Notifications
+### Sending notifications
 
 ```elixir
 # From an accessibility announcement
@@ -58,7 +58,7 @@ Raxol.Watch.Notifier.push_to_all(notification)
 
 The Notifier also subscribes to `Raxol.Core.Accessibility` announcements automatically. High-priority alerts push immediately; normal alerts are debounced (1 second) to respect watch battery.
 
-### Rich Notification Payloads
+### Rich notification payloads
 
 Mirroring the watch surface capabilities Telegram shipped on Apple Watch / Wear OS in June 2026, `Formatter` builds notifications with optional voice, image, sticker, location, and long-body attachments. Every constructor preserves the full text under `:body_long` while keeping `:body` truncated to 160 chars for the watch-face glance.
 
@@ -103,7 +103,7 @@ Raxol.Watch.Formatter.format_chat_message("Alice", "Hey, you free?")
 
 The host iOS / Wear OS app is responsible for actually downloading the media and rendering the rich UI. `UNNotificationServiceExtension` on iOS, `NotificationCompat` + `BigPictureStyle` / `MessagingStyle` on Wear OS.
 
-### Chat Tap-Back Actions
+### Chat tap-back actions
 
 The default action map now includes chat-style actions alongside the existing navigation set:
 
@@ -119,7 +119,7 @@ The default action map now includes chat-style actions alongside the existing na
 
 TEA apps pattern-match on `event.type` and `event.data.action` to handle chat tap-backs. The dispatcher channel (`{:watch_action, event}`) is unchanged so existing handlers keep working.
 
-### Quick-Reply (Text Input)
+### Quick reply (text input)
 
 iOS `UNTextInputNotificationAction` and Android `RemoteInput` prompt the user for text before the action arrives back. `handle_reply_action/3` and `dispatch_reply/3` translate the action ID + typed text into an `:reply` event:
 
@@ -133,7 +133,7 @@ Raxol.Watch.ActionHandler.dispatch_reply("reply", "Sounds good!", to: MyApp.TEA)
 # Sends {:watch_action, %Event{type: :reply, ...}} to MyApp.TEA
 ```
 
-### Notification Categories
+### Notification categories
 
 `Raxol.Watch.Categories` exposes the iOS `UNNotificationCategory` and Android notification-action data the host apps need to register at launch. Pure data, no platform calls:
 
@@ -147,7 +147,7 @@ chat_actions = Raxol.Watch.Categories.android_actions("raxol_chat")
 
 Three category buckets matching the `:category` field on notifications: `"raxol_alert"`, `"raxol_status"`, `"raxol_chat"` (with `reply` text-input action).
 
-### Tap Actions
+### Tap actions
 
 Watch notification actions map back to Raxol events via `ActionHandler`:
 
@@ -156,7 +156,7 @@ event = Raxol.Watch.ActionHandler.handle_action("details")
 # => Event with key :enter
 ```
 
-### Custom Push Backend
+### Custom push backend
 
 Implement the `Raxol.Watch.Push.Backend` behaviour. Use `Raxol.Watch.Push.Noop` for testing.
 
@@ -176,11 +176,11 @@ Attach to these events to observe push lifecycle and device churn:
 
 `reason` on `:unregistered` is `:explicit` for user-driven removal and `:delivery_failed` when the Notifier auto-prunes a device after a permanent APNS/FCM error.
 
-### Auto-prune on Delivery Failure
+### Auto-prune on delivery failure
 
 When the push backend returns a permanent failure reason (APNS: `:bad_device_token`, `:device_token_not_for_topic`, `:unregistered`, `:expired_token`; FCM: `:invalid_argument`, `:sender_id_mismatch`), the Notifier automatically unregisters the device. Transient failures (`:too_many_requests`, `:internal_server_error`, etc.) leave the device registered.
 
-### Tap-back Dispatch
+### Tap-back dispatch
 
 `ActionHandler.handle_action/2` returns an `Event` but does not route it. Use `ActionHandler.dispatch/2` to forward the Event to a TEA process:
 
@@ -196,7 +196,7 @@ Application.put_env(:raxol_watch, :action_dispatcher, MyApp.TEA)
 Raxol.Watch.ActionHandler.dispatch("details")
 ```
 
-### Live Testing on Apple Watch
+### Live testing on Apple Watch
 
 Apple Watch hardware can't run BEAM. Pushes go via APNS to the paired iPhone, which mirrors notifications to the watch per the user's iOS Watch settings. Confirmed paths against watchOS 10.4 (Series 4 / A2094).
 
@@ -204,7 +204,7 @@ See [`examples/watch_demo.exs`](examples/watch_demo.exs) for an end-to-end runne
 
 Prerequisites: Apple Developer account, App ID + bundle identifier, APNs Auth Key (`.p8`) + Key ID + Team ID, and a device token captured from a paired iPhone app that called `registerForRemoteNotifications`.
 
-### APNS Configuration
+### APNS configuration
 
 The APNS backend uses Pigeon 2.x dispatchers. In your app, define a dispatcher module and wire it via app env:
 

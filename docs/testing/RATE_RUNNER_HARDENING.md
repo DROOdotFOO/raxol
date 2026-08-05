@@ -131,7 +131,7 @@ Deny inbound at the host too, so a misconfigured ACL is not the only barrier.
 - The runner drives its toolchain through `nix develop` against the committed
   `flake.lock`, so two runs on two arches differ only by architecture.
 
-### 7. Monitoring and incident response
+### 7. monitoring and incident response
 
 - Ship the runner's journald + auth logs off-box (or at least review them); alert on
   unexpected outbound connections and on `config.sh`/runner-registration events.

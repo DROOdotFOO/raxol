@@ -1,6 +1,6 @@
 # Pinned ACP Schema Oracle
 
-Dev/test oracle ONLY (Apache-2.0 upstream) — validate against it in tests; NEVER ship it in
+Dev/test oracle ONLY (Apache-2.0 upstream): validate against it in tests; NEVER ship it in
 the hex package (excluded via `mix.exs` `:files`).
 
 ## Source
@@ -9,7 +9,7 @@ the hex package (excluded via `mix.exs` `:files`).
 - Pinned tag: `schema-v1.19.0` (stable release, not a draft/prerelease; published
   2026-07-06T12:35:36Z; commit `e4dcf39453b5a092082e0f662d2be94ac89a4504`)
 - Schema version embedded in `meta.json`: `1` (protocol schema major version 1; note the
-  upstream repo also carries a parallel `schema/v2/` tree as of this tag — not pinned here,
+  upstream repo also carries a parallel `schema/v2/` tree as of this tag, not pinned here,
   since this package targets the v1/stable protocol surface)
 
 ## Downloaded artifacts
@@ -22,7 +22,7 @@ the hex package (excluded via `mix.exs` `:files`).
 Downloaded: 2026-07-16T16:43:00Z
 
 Note: upstream also publishes `schema.unstable.json` / `meta.unstable.json` alongside the
-stable pair at this tag — those are explicitly the unstable/draft variants and are NOT
+stable pair at this tag; those are explicitly the unstable/draft variants and are NOT
 pinned here on purpose.
 
 ## SHA256 checksums

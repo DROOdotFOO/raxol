@@ -44,7 +44,7 @@ session
 
 **Code** is the coding-agent product, in two surfaces: `mix raxol.code` is the interactive terminal TUI (the axol face `≡··≡`), and `mix raxol.p` is its headless twin (prompt in on argv, answer to stdout, contract events to stderr) for pipes and CI. Every mutating tool call is gated by an ALLOW/ASK/DENY authorization engine.
 
-Both surfaces sit on the **Harness** — the agent-session engine (`Raxol.Harness.*`): a durable event journal, a typed event/command contract, and pure replay-from-offset surfaces, with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
+Both surfaces sit on the **Harness**, the agent-session engine (`Raxol.Harness.*`): a durable event journal, a typed event/command contract, and pure replay-from-offset surfaces, with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
 
 The agent subsystems ship as standalone packages:
 
@@ -53,7 +53,7 @@ The agent subsystems ship as standalone packages:
 - **Improve** ([`raxol_agent`](docs/features/SELF_IMPROVEMENT.md)): a solved task becomes a reusable `SKILL.md`. A background reviewer runs on a cheap model after each turn, writing durable memory and new skills without spending the live turn's latency or context.
 - **Reach** (`raxol_gateway`): one adapter contract to many chat platforms, process-per-chat sessions, DM pairing for authorization, and `/handoff` to move a conversation across platforms with its history intact.
 - **Orchestrate** (`raxol_symphony`): an OTP port of [OpenAI Symphony](https://github.com/openai/symphony) that polls a tracker, isolates each issue in its own workspace, and runs a coding agent, feeding six surfaces (terminal, LiveView, MCP, Telegram, Watch, JSON API) from one snapshot.
-- **Bridge** (`raxol_agent_client_protocol`): Elixir/OTP implementation of the [Agent Client Protocol](https://agentclientprotocol.com) — the JSON-RPC 2.0 wire protocol between code editors and AI coding agents (the protocol Zed and a growing ecosystem speak). Bidirectional agent/client roles, pluggable transports (stdio, in-process), and durable resumable sessions (offset-based reattach/replay) as a vendor extension. Zero raxol-internal deps. Pre-alpha.
+- **Bridge** (`raxol_agent_client_protocol`): Elixir/OTP implementation of the [Agent Client Protocol](https://agentclientprotocol.com): the JSON-RPC 2.0 wire protocol between code editors and AI coding agents (the protocol Zed and a growing ecosystem speak). Bidirectional agent/client roles, pluggable transports (stdio, in-process), and durable resumable sessions (offset-based reattach/replay) as a vendor extension. Zero raxol-internal deps. Pre-alpha.
 
 ## Install
 

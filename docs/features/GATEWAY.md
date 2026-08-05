@@ -131,7 +131,7 @@ above the longest expected turn.
 ## TEA app handler
 
 `Raxol.Gateway.Handler.Lifecycle` runs a full TEA app per chat under
-`environment: :gateway` (a first-class Lifecycle environment: no terminal driver, no
+`environment: :gateway` (a registered Lifecycle environment: no terminal driver, no
 plugin manager, unnamed processes, so any number of chats can run the same app module
 concurrently). Each inbound `%{text: t}` event becomes a Raxol event (char key or paste,
 mirroring the Telegram input adapter), and the reply is the app's next rendered frame as

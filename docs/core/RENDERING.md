@@ -1,8 +1,8 @@
 # Rendering: how paint works, and the rules that keep it honest
 
 The *why* lives in [ADR-0029: The Terminal Cell Model](../adr/0029-the-terminal-cell-model.md).
-This is the working reference: what to do, what not to do, and the traps that
-have actually bitten us.
+What follows is the working reference, including the traps that have actually
+bitten us.
 
 ---
 

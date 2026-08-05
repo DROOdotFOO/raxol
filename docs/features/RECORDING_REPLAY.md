@@ -2,7 +2,7 @@
 
 Record terminal sessions to asciinema v2 `.cast` files. Play them back with pause, seek, and speed controls. If your app crashes mid-recording, the session auto-saves so you can see what happened.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix raxol.record my_session.cast
@@ -76,7 +76,7 @@ The format is a JSON header followed by newline-delimited event arrays:
 
 Upload `.cast` files to [asciinema.org](https://asciinema.org) to share them.
 
-## Programmatic Usage
+## Programmatic usage
 
 ```elixir
 {:ok, _} = Raxol.Recording.Recorder.start_link()

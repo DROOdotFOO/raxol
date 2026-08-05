@@ -480,7 +480,7 @@ alias Raxol.UI.Components.Modal
 
 ---
 
-## Progress Indicators
+## Progress indicators
 
 Show how far along something is, or that work is happening.
 
@@ -664,7 +664,7 @@ All component modules follow the same pattern: `init/1` -> `handle_event/3` -> `
 
 ---
 
-## Quick Reference
+## Quick reference
 
 | Component     | DSL function      | Module path            | Interactive? |
 | ------------- | ----------------- | ---------------------- | ------------ |
@@ -706,7 +706,7 @@ All component module paths are under `Raxol.UI.Components.*`.
 
 ---
 
-## Running Examples
+## Running examples
 
 ```bash
 # Interactive playground with all demos
