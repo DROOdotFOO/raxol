@@ -56,6 +56,9 @@ defmodule Raxol.Plugins.Lifecycle do
       {:error, :missing_dependencies, missing, chain} ->
         {:error, {:missing_dependencies, missing, chain}}
 
+      {:error, :version_mismatch, mismatches, chain} ->
+        {:error, {:version_mismatch, mismatches, chain}}
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -63,6 +66,10 @@ defmodule Raxol.Plugins.Lifecycle do
 
   defp format_load_error({:missing_dependencies, missing, chain}, module) do
     ErrorHandling.format_missing_dependencies_error(missing, chain, module)
+  end
+
+  defp format_load_error({:version_mismatch, mismatches, chain}, module) do
+    ErrorHandling.format_version_mismatch_error(mismatches, chain, module)
   end
 
   defp format_load_error(reason, module) do

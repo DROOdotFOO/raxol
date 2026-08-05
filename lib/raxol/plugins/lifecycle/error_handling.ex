@@ -28,8 +28,22 @@ defmodule Raxol.Plugins.Lifecycle.ErrorHandling do
   def format_error({:error, reason}, module),
     do: "Failed to initialize plugin #{module}: #{inspect(reason)}"
 
+  def format_error({:circular_dependency, cycle}, _module) when is_list(cycle),
+    do: "Dependency cycle detected involving #{Enum.join(cycle, " -> ")}"
+
   def format_error({:circular_dependency, name}, _module),
     do: "Dependency cycle detected involving #{name}"
+
+  def format_version_mismatch_error(mismatches, chain, module) do
+    chain_str = Enum.join(chain, " -> ")
+
+    mismatches_str =
+      Enum.map_join(mismatches, ", ", fn {name, requirement, actual} ->
+        "#{name} requires #{requirement} but #{actual || "no version"} is loaded"
+      end)
+
+    "Plugin #{module} has incompatible dependencies: #{mismatches_str}. Dependency chain: #{chain_str}"
+  end
 
   def format_missing_dependencies_error(missing, chain, module) do
     chain_str = Enum.join(chain, " -> ")
