@@ -3,7 +3,7 @@
 Serve Raxol apps over SSH. Each connection gets its own process: one app, many users.
 Erlang ships `:ssh` in the standard library, so this is a wrapper rather than a server: no extra dependency, no separate daemon.
 
-## Quick Start
+## Quick start
 
 Any TEA app can be served over SSH. Authentication is required unless anonymous access is explicitly requested, so a fund-bearing surface is never silently anonymous:
 
@@ -25,7 +25,7 @@ ssh localhost -p 2222
 
 No client-side dependencies. Any SSH client works: PuTTY, OpenSSH, even `ssh` from a phone.
 
-## Full Example
+## Full example
 
 ```elixir
 # lib/my_ssh_app.exs
@@ -209,8 +209,7 @@ SSH beats web dashboards when you want zero client setup: no HTTPS certs, no bro
 - **IoT/embedded**: Run on a Raspberry Pi. SSH in from anywhere to check sensor readings.
 - **Bastion host UIs**: Replace clunky web admin panels with fast terminal interfaces.
 
-## Next Steps
+## Next steps
 
-- [Building Apps](./BUILDING_APPS.md): TEA patterns and recipes
-- [Theming](./THEMING.md): Custom color schemes
-- [Architecture](../core/ARCHITECTURE.md): How the render pipeline works
+- [Architecture](../core/ARCHITECTURE.md): how the render pipeline works
+- [Cookbook index](./README.md): the other recipes

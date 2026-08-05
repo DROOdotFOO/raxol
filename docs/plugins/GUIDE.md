@@ -2,7 +2,7 @@
 
 How to build Raxol plugins with lifecycle management, event filtering, and process isolation. The canonical entry point is `use Raxol.Plugin` from the [`raxol_plugin`](../features/PLUGIN_SDK.md) package; the underlying `Raxol.Core.Runtime.Plugins.Plugin` behaviour stays a runtime concern.
 
-## Quick Start
+## Quick start
 
 ```elixir
 defmodule YourApp.Plugins.MyPlugin do
@@ -33,16 +33,16 @@ mix raxol.gen.plugin my_plugin
 
 See [PLUGIN_TEMPLATES.md](PLUGIN_TEMPLATES.md) for complete working examples, including stateful plugins, event filtering, and timer-driven plugins.
 
-## Plugin Lifecycle
+## Plugin lifecycle
 
-### States & Transitions
+### States and transitions
 
 ```
 Discovery -> Loading -> Starting -> Running -> Stopping -> Stopped -> Terminated
              | init    | enable              | disable              | terminate
 ```
 
-### Loading Phase (init/1)
+### Loading phase (init/1)
 
 ```elixir
 @impl true
@@ -55,7 +55,7 @@ def init(config) do
 end
 ```
 
-### Starting Phase (enable/1)
+### Starting phase (enable/1)
 
 ```elixir
 @impl true
@@ -66,7 +66,7 @@ def enable(state) do
 end
 ```
 
-### Stopping Phase (disable/1)
+### Stopping phase (disable/1)
 
 ```elixir
 @impl true
@@ -86,7 +86,7 @@ def terminate(_reason, state) do
 end
 ```
 
-## Plugin Manifest
+## Plugin manifest
 
 The manifest is built into a `Raxol.Core.Runtime.Plugins.Manifest` struct. Supported fields:
 
@@ -114,9 +114,9 @@ end
 
 There is no `dependencies:` map for Hex packages, no `capabilities:` enforcement, no `trust_level:` field, and no `config_schema:`. Plugin config is whatever map the host passes to `init/1`.
 
-## Event System
+## Event system
 
-### Event Types
+### Event types
 
 Events arrive as `%Raxol.Core.Events.Event{}` structs:
 
@@ -125,7 +125,7 @@ Events arrive as `%Raxol.Core.Events.Event{}` structs:
 - **System**: `{:file_change, path}`, `{:process_exit, pid, reason}`
 - **Plugin**: `{:plugin_loaded, name}`, `{:plugin_unloaded, name}`
 
-### Event Flow
+### Event flow
 
 ```
 System Event -> filter_event/2 (priority order) -> Core Processing
@@ -133,7 +133,7 @@ System Event -> filter_event/2 (priority order) -> Core Processing
               Can modify, pass through, or halt
 ```
 
-### Event Filtering
+### Event filtering
 
 Implement `filter_event/2` to intercept, modify, or block events:
 
@@ -152,7 +152,7 @@ end
 def filter_event(event, _state), do: {:ok, event}
 ```
 
-### Command Handling
+### Command handling
 
 ```elixir
 @callback handle_command(command(), list(), state()) ::
@@ -168,7 +168,7 @@ def get_commands do
 end
 ```
 
-### Plugin Priority
+### Plugin priority
 
 Control event processing order with `priority` in the manifest:
 
@@ -197,7 +197,7 @@ Plugins declare what they offer in the manifest's `provides:` list. The list is 
 
 There is no UI rendering callback on the Plugin behaviour. Plugins influence the UI by emitting commands or events that an app or Component consumes. To embed Components, build a `Raxol.UI.Components.Base.Component` and have the plugin update its model.
 
-### Keyboard Input
+### Keyboard input
 
 ```elixir
 def manifest do
@@ -209,7 +209,7 @@ def filter_event({:key_press, hotkey}, state) when hotkey == state.config.hotkey
 end
 ```
 
-### File Watcher
+### File watcher
 
 ```elixir
 def init(config) do
@@ -223,17 +223,17 @@ def filter_event({:file_event, _watcher, {path, _events}}, state) do
 end
 ```
 
-## State Management
+## State management
 
 Plugin state is managed through an ETS-backed `StateManager` for concurrent access and crash recovery. Each plugin's state is isolated. State updates from `filter_event/2` and `handle_command/3` are automatically persisted.
 
 State persists across hot reloads. If a plugin crashes, its last known state is preserved and restored on restart.
 
-## Security Analysis
+## Security analysis
 
 Raxol automatically analyzes plugin BEAM bytecode to detect security-sensitive operations.
 
-### Detected Capabilities
+### Detected capabilities
 
 | Capability         | Detected Operations                            |
 | ------------------ | ---------------------------------------------- |
@@ -242,7 +242,7 @@ Raxol automatically analyzes plugin BEAM bytecode to detect security-sensitive o
 | `:code_injection`  | `Code.eval_*`, `Module.create`, `:erl_eval.*`  |
 | `:system_commands` | `System.cmd`, `Port.open`, `:os.cmd`           |
 
-### Security Policies
+### Security policies
 
 ```elixir
 alias Raxol.Core.Runtime.Plugins.Security.CapabilityDetector
@@ -263,7 +263,7 @@ end
 
 The bytecode analyzer detects what the plugin actually does. Validation compares those detected capabilities against the policy, regardless of what the manifest claims.
 
-## Process Isolation
+## Process isolation
 
 Plugin operations run under `PluginSupervisor` for crash isolation. Plugin crashes don't affect the core application.
 

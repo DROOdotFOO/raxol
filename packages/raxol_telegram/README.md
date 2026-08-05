@@ -14,7 +14,7 @@ The Telegram bot ecosystem is moving in three directions at once: bots-as-group-
 ## Install
 
 ```elixir
-{:raxol_telegram, "~> 0.1"}
+{:raxol_telegram, "~> 0.2"}
 ```
 
 For runtime Telegram API access, add:
@@ -32,7 +32,7 @@ children = [
 ]
 ```
 
-### Rich Messages (Bot API 10.1)
+### Rich messages (Bot API 10.1)
 
 Bot API 10.1 (released 2026-06-11) added `sendRichMessage` for structured content beyond MarkdownV2: tables, collapsible sections, headings, math, sub/superscript, and an expanded 32,768 character cap with a Show More boundary.
 
@@ -70,10 +70,10 @@ Raxol.Telegram.RichMessage.Sender.send(chat_id, msg,
 
 **Wire format caveat.** Bot API 10.1's `RichMessage` / `RichText` / `RichBlock` class names are documented; the exact JSON discriminator field convention was inferred from the existing MessageEntity precedent (snake_case `type` values: `"bold"`, `"table_cell"`, `"details"`, etc). If Telegram's wire format differs once schemas are published in full, the only adjustment is the discriminator string in each builder.
 
-### Polls with Hyperlinks
+### Polls with hyperlinks
 
 Telegram's June 2026 release surfaced hyperlinks in poll options as a
-first-class UX. Underlying Bot API exposed `text_entities` on
+supported UX. Underlying Bot API exposed `text_entities` on
 `InputPollOption` before that; `Raxol.Telegram.Poll` gives it a typed
 Elixir surface.
 
@@ -106,7 +106,7 @@ specific UTF-16 offset.
 **HTTP transport.** Uses `Raxol.Telegram.HTTP` like other 10.x endpoints,
 so `:bot_token`, `:api_base`, and `:post_fn` work uniformly.
 
-### AI Guardian (Chat Join Request Screening)
+### AI guardian (chat join request screening)
 
 Bot API 10.0 added `chat_join_request` updates and 10.1 added
 `answerChatJoinRequestQuery`. Bots that hold admin permissions in a group
@@ -171,7 +171,7 @@ and requires `raxol_mcp` at runtime; without it, `register/0` returns
 `{:error, :raxol_mcp_not_available}` and the rest of the package keeps
 working.
 
-### Bot Integration
+### Bot integration
 
 Wire `Raxol.Telegram.Bot.handle_update/1` into your Telegex polling loop or webhook handler:
 
@@ -183,7 +183,7 @@ end
 
 The bot handles `/start` and `/stop` commands. Other messages and inline keyboard taps are translated to Raxol events and routed to per-chat TEA sessions.
 
-### How It Works
+### How it works
 
 1. Each Telegram chat gets an independent TEA lifecycle (session)
 2. The screen buffer renders as `<pre>` HTML in Telegram messages
@@ -192,7 +192,7 @@ The bot handles `/start` and `/stop` commands. Other messages and inline keyboar
 5. Sessions auto-expire after 10 minutes of inactivity
 6. Message editing avoids spam (re-renders edit the existing message)
 
-### Session Limits
+### Session limits
 
 The `SessionRouter` enforces a configurable `max_sessions` cap (default: 1000) to prevent resource exhaustion:
 
@@ -214,7 +214,7 @@ Attach to these events for observability:
 | `[:raxol_telegram, :session, :rejected]` | `system_time` | `chat_id, reason: :max_sessions_reached \| :rate_limited` |
 | `[:raxol_telegram, :session, :stopped]` | `system_time` | `chat_id, reason: :explicit \| :process_down` (with `down_reason`) |
 
-### Live Test
+### Live test
 
 `examples/telegram_demo.exs` runs a real Telegram bot against a counter TEA app. Requires a token from @BotFather:
 

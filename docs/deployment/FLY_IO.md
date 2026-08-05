@@ -28,7 +28,7 @@ flyctl logs --app raxol
 
 Custom domain support for raxol.io is available. Auto-start/stop keeps costs down when idle.
 
-## Cloudflare Pages (Optional)
+## Cloudflare Pages (optional)
 
 Static file CDN. Configured but not required for primary functionality.
 
@@ -97,7 +97,7 @@ flyctl secrets set DATABASE_URL=...
 - `.github/workflows/performance-tracking.yml`: metrics
 - `.github/workflows/security.yml`: security scanning
 
-## Environment Config
+## Environment config
 
 ```toml
 # fly.toml
@@ -140,7 +140,7 @@ flyctl releases rollback --version X  # specific version
 
 Backups: app state via Fly.io snapshots, config in git, DB via Fly.io PostgreSQL automatic backups, secrets in Fly.io (not in git).
 
-## Domain Setup
+## Domain setup
 
 `raxol.io` is the live custom domain (set as `PHX_HOST` in `fly.toml`). To recreate or rotate certificates:
 

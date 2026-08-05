@@ -2,7 +2,7 @@
 
 Performance measurements for Raxol's core operations.
 
-## Quick Start
+## Quick start
 
 ```bash
 # Framework comparison (vs Ratatui, Bubble Tea, Textual)
@@ -18,11 +18,11 @@ mix raxol.bench rendering          # Rendering only
 mix raxol.bench --quick            # Shorter runs
 ```
 
-## Latest Results
+## Latest results
 
 Measured on Apple M1 Pro, Elixir 1.19.0 / OTP 27.
 
-### Core Operations
+### Core operations
 
 | Operation                       | Time    | Throughput    |
 | ------------------------------- | ------- | ------------- |
@@ -37,7 +37,7 @@ Measured on Apple M1 Pro, Elixir 1.19.0 / OTP 27.
 | Tree diff (1 node changed)      | 0.34 us | 3M ops/sec    |
 | Tree diff (100 nodes, 1 change) | 4.0 us  | 252K ops/sec  |
 
-### Frame Budget
+### Frame budget
 
 | Metric                            | Value   |
 | --------------------------------- | ------- |
@@ -46,7 +46,7 @@ Measured on Apple M1 Pro, Elixir 1.19.0 / OTP 27.
 | Headroom for app logic            | 13.9 ms |
 | Memory per 80x24 buffer           | 216 KB  |
 
-### Cross-Framework Comparison
+### Cross-framework comparison
 
 | Operation           | Raxol   | Ratatui (Rust) | Bubble Tea (Go) | Textual (Python) |
 | ------------------- | ------- | -------------- | --------------- | ---------------- |
@@ -81,7 +81,7 @@ The BEAM is fast enough for 60fps terminal rendering while also providing fault 
 | Rendering  | `bench/suites/rendering/`  | UI rendering, tree diffing  |
 | Core       | `bench/suites/core/`       | System-wide operations      |
 
-## Running Benchmarks
+## Running benchmarks
 
 ```bash
 # Specific suite files
@@ -95,7 +95,7 @@ mix raxol.bench --regression    # Check for regressions (5% threshold)
 mix raxol.bench --compare       # Compare with previous run
 ```
 
-## Performance Targets
+## Performance targets
 
 | Operation             | Target         | Status         |
 | --------------------- | -------------- | -------------- |

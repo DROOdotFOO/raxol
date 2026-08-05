@@ -66,7 +66,7 @@ issues through one graph run per tick (no pause support). Use `default` for
 the simplest inline path, or `graph` for the per-node checkpointed pipeline
 with runner pause/resume.
 
-## 4. Start the orchestrator
+## 4. start the orchestrator
 
 ```elixir
 # from packages/raxol_symphony, `iex -S mix`
@@ -83,7 +83,7 @@ Raxol.Symphony.Orchestrator.snapshot()
 ```
 
 Or attach a richer surface (terminal dashboard / LiveView / MCP / Telegram /
-Watch / JSON API) -- all six consume the same snapshot over `Phoenix.PubSub`.
+Watch / JSON API). All six consume the same snapshot over `Phoenix.PubSub`.
 
 ## 5. Capture evidence
 

@@ -1,6 +1,6 @@
 # Test Isolation - Quick Reference
 
-## Common Patterns
+## Common patterns
 
 ### Testing module exports
 
@@ -90,7 +90,7 @@ When tests pass individually but fail in the suite:
 - [ ] Clean up dynamic modules in `on_exit`
 - [ ] Check for shared ETS tables or registries
 
-## Warning Signs
+## Warning signs
 
 Things that indicate isolation problems:
 

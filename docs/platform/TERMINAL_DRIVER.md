@@ -22,7 +22,7 @@ Raxol uses a hybrid terminal backend: a native NIF when available, with automati
 
 ## How fallback works
 
-### Compile-Time Detection
+### Compile-Time detection
 
 `Driver.ex` checks at compile time whether the termbox2_nif module is available:
 
@@ -61,7 +61,7 @@ defp get_termbox_width do
 end
 ```
 
-## Platform Support
+## Platform support
 
 | Platform        | Primary Backend | Fallback           | Performance  |
 | --------------- | --------------- | ------------------ | ------------ |
@@ -79,7 +79,7 @@ When the NIF is unavailable, `IOTerminal` provides terminal support using:
 - **IO.ANSI**: Escape sequences for colors and cursor control
 - **:io module**: Terminal configuration via `:io.setopts/1`
 
-### Feature Comparison
+### Feature comparison
 
 | Feature            | termbox2_nif | IOTerminal  |
 | ------------------ | ------------ | ----------- |
@@ -95,7 +95,7 @@ When the NIF is unavailable, `IOTerminal` provides terminal support using:
 \*Key input in IOTerminal uses `IO.getn/2` which may buffer differently.
 \*\*Mouse support depends on terminal emulator ANSI support.
 
-### Example Usage
+### Example usage
 
 ```elixir
 {:ok, state} = Raxol.Terminal.IOTerminal.init()
@@ -107,7 +107,7 @@ When the NIF is unavailable, `IOTerminal` provides terminal support using:
 :ok = IOTerminal.shutdown()
 ```
 
-## TTY Detection
+## TTY detection
 
 The driver checks whether it's running in a real TTY:
 
@@ -139,7 +139,7 @@ Raxol works with any terminal that supports basic ANSI escape sequences. Advance
 
 Detection uses `TERM_PROGRAM` and `TERM` environment variables. See `Raxol.Terminal.Image.detect_protocol/0` and `Raxol.Terminal.ANSI.KittyGraphics.detect_support/0`.
 
-## Graceful Degradation
+## Graceful degradation
 
 When no TTY is available:
 
@@ -161,7 +161,7 @@ case {@mix_env, has_terminal_device?()} do
 end
 ```
 
-## Forcing a Backend
+## Forcing a backend
 
 For testing or other specific cases:
 
@@ -199,7 +199,7 @@ If termbox2_nif fails to load:
    # Should contain termbox2_nif.so
    ```
 
-### IOTerminal Issues
+### IOTerminal issues
 
 **No color output**: make sure ANSI is enabled:
 

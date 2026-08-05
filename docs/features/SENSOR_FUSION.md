@@ -2,7 +2,7 @@
 
 Poll hardware sensors, batch their readings, fuse them with weighted averaging, and render the results as gauges and sparklines. The whole pipeline is supervised, so feeds crash and reconnect independently.
 
-## Quick Start
+## Quick start
 
 ```elixir
 # 1. Implement a sensor
@@ -33,7 +33,7 @@ Raxol.Sensor.Fusion.subscribe()
 # Receive: {:fused_update, %{sensors: %{temp: %{values: ..., alerts: ...}}, ...}}
 ```
 
-## Implementing a Sensor
+## Implementing a sensor
 
 Sensors implement `Raxol.Sensor.Behaviour`:
 
@@ -152,7 +152,7 @@ cells = Raxol.Sensor.HUD.render_sparkline(
 )
 ```
 
-### Threat Indicator
+### Threat indicator
 
 ```elixir
 cells = Raxol.Sensor.HUD.render_threat(
@@ -178,7 +178,7 @@ cells = Raxol.Sensor.HUD.render_minimap(
 )
 ```
 
-## Supervision Tree
+## Supervision tree
 
 `:rest_for_one` strategy:
 

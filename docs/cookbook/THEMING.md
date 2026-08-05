@@ -2,7 +2,7 @@
 
 Color schemes and styling for terminal and LiveView apps.
 
-## Terminal Theming
+## Terminal theming
 
 ### Inline colors
 
@@ -81,7 +81,7 @@ end
 
 ---
 
-## Theme System
+## Theme system
 
 ### ThemeManager
 
@@ -137,7 +137,7 @@ ls priv/themes/
 
 ---
 
-## LiveView Theming
+## LiveView theming
 
 When using the LiveView bridge, theming is applied via CSS classes on the terminal container div. Set a `data-theme` attribute (or a theme CSS class) on the container element, then define per-theme CSS rules targeting that class:
 
@@ -190,7 +190,7 @@ end
 
 ---
 
-## Color Palettes
+## Color palettes
 
 Popular palettes mapped to ANSI for quick reference:
 
@@ -247,8 +247,7 @@ text("...", fg: :black, bg: :yellow)   # ~10.2:1
 - `examples/demo.exs`: Flagship demo using Synthwave '84 mapped to ANSI
 - `examples/advanced/color_system_demo.ex`: Color system with adaptive downsampling
 
-## Next Steps
+## Next steps
 
 - [Building Apps](./BUILDING_APPS.md): TEA patterns and recipes
-- [SSH Deployment](./SSH_DEPLOYMENT.md): Serve apps over SSH
-- [Performance](./PERFORMANCE_OPTIMIZATION.md): 60fps techniques
+- [Cookbook index](./README.md): the other recipes

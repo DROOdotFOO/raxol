@@ -173,7 +173,7 @@ result = Style.merge(base, override)
 # Second map wins on conflicts
 ```
 
-### Color Types
+### Color types
 
 - Named: `:black`, `:red`, `:green`, `:yellow`, `:blue`, `:magenta`, `:cyan`, `:white`
 - RGB: `Style.rgb(255, 100, 50)` returns `{255, 100, 50}`
@@ -220,7 +220,7 @@ Performance: ~44us for 10x10, ~1.3ms for full 80x24.
 
 ---
 
-## Performance Targets
+## Performance targets
 
 All operations designed for < 1ms on standard 80x24 buffers:
 
@@ -236,7 +236,7 @@ All operations designed for < 1ms on standard 80x24 buffers:
 
 See `bench/core/` for detailed benchmarks.
 
-## Error Handling
+## Error handling
 
 All functions use defensive programming. Out-of-bounds coordinates are silently ignored. No exceptions for normal usage. Pattern matching validates input types at compile time.
 

@@ -2,7 +2,7 @@
 
 Cluster BEAM nodes with automatic discovery, track their health, elect a commander, and sync shared state with CRDTs. Works with libcluster's gossip, epmd, and DNS strategies, plus a custom Tailscale strategy for zero-config encrypted mesh.
 
-## Quick Start
+## Quick start
 
 ```elixir
 # Gossip: LAN multicast, no config needed
@@ -16,7 +16,7 @@ Cluster BEAM nodes with automatic discovery, track their health, elect a command
 )
 ```
 
-## Discovery Strategies
+## Discovery strategies
 
 `Raxol.Swarm.Discovery` wraps libcluster with preset strategies:
 
@@ -41,7 +41,7 @@ Raxol.Swarm.Discovery.start_link(
 )
 ```
 
-### Tailscale Strategy
+### Tailscale strategy
 
 `Raxol.Swarm.Strategy.Tailscale` shells out to `tailscale status --json`, grabs online peers, filters by tag if configured, and builds BEAM node names from the results.
 
@@ -55,7 +55,7 @@ Raxol.Swarm.Discovery.start_link(
 )
 ```
 
-## Node Monitoring
+## Node monitoring
 
 `Raxol.Swarm.NodeMonitor` watches cluster nodes via `:net_kernel.monitor_nodes/1`, pings them on a timer, and tracks RTT history.
 
@@ -132,7 +132,7 @@ ORSet.size(set)                # => 1
 merged = ORSet.merge(local_set, remote_set)
 ```
 
-## Tactical Overlay
+## Tactical overlay
 
 `Raxol.Swarm.TacticalOverlay` is the shared state layer. Entities are LWW registers, waypoints are OR-sets. It syncs deltas between nodes periodically and does full anti-entropy exchanges to catch anything missed.
 

@@ -185,7 +185,7 @@ mix raxol.lsp --help
 
 3. Verify project structure has `mix.exs` or `.raxol.exs`
 
-### Treesitter Issues
+### Treesitter issues
 
 1. Ensure Elixir parser is installed:
 

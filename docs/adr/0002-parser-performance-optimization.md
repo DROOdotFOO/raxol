@@ -59,7 +59,7 @@ defmodule Raxol.Terminal.EmulatorLite do
 end
 ```
 
-## Performance Results
+## Performance results
 
 | Operation         | Before | After   | Improvement |
 | ----------------- | ------ | ------- | ----------- |

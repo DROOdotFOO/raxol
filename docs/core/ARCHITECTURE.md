@@ -17,7 +17,7 @@ Your App (TEA)          Raxol (Framework)           Rendering Targets
 
 Your app provides pure functions. Raxol manages the runtime loop, layout, rendering, and I/O. You never write ANSI escape codes.
 
-## Application Model: TEA
+## Application model: TEA
 
 Every Raxol app implements The Elm Architecture:
 
@@ -32,7 +32,7 @@ def subscribe(model) -> [subscription]        # External events
 
 The runtime calls `view(model)` after every `update`, diffs the resulting Element tree against the previous one, and renders only what changed. Same diffing idea as React's virtual DOM, but the Element tree describes terminal cells, not HTML nodes.
 
-## Layer Stack
+## Layer stack
 
 ### 1. View DSL -> element tree
 
@@ -103,7 +103,7 @@ Platform-detected backend writes ANSI escape sequences:
 
 ### MCP as rendering target (ADR-0012)
 
-MCP is a first-class rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the Component tree.
+MCP is a rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the Component tree.
 
 ```
 view(model) -> Component tree -> ToolProvider per Component -> MCP tool set
@@ -114,7 +114,7 @@ Each Component type implements `Raxol.MCP.ToolProvider`, mapping its state to MC
 
 This means every Raxol app is AI-controllable with zero glue code. Package: `raxol_mcp` (depends on `raxol_core`). See `docs/adr/0012-mcp-as-rendering-target.md` for full details.
 
-## Event Flow
+## Event flow
 
 ```
 Terminal Input
@@ -129,7 +129,7 @@ Terminal Input
 
 Events bubble through the view tree. Any handler can return `:stop` to halt propagation or `:passthrough` to continue. Unhandled events reach `update/2`.
 
-## OTP Architecture
+## OTP architecture
 
 Every Raxol app runs as a supervision tree:
 
@@ -158,7 +158,7 @@ The component gets its own GenServer under a DynamicSupervisor. If it crashes, i
 
 `Raxol.Dev.CodeReloader` watches `.ex` files via FileSystem, debounces changes, recompiles, and sends `:render_needed` to the Lifecycle. Your app updates in-place without restart.
 
-## Performance Design
+## Performance design
 
 - **Two-phase rendering**: Text measurement (expensive, Unicode-aware) is cached separately from layout (cheap arithmetic). On resize, only layout re-runs.
 - **Buffer diff**: Only changed cells are written. ~2ms for 80x24.
@@ -168,13 +168,13 @@ The component gets its own GenServer under a DynamicSupervisor. If it crashes, i
 - **Color downsampling**: `Raxol.Style.Colors.Adaptive` detects terminal capabilities and maps 24-bit colors to 256 or 16 colors automatically.
 - **Lazy scroll content**: `ScrollContent` behaviour enables cursor-based streaming for large datasets in `Viewport`; only the visible slice is materialized.
 
-## Terminal Compatibility
+## Terminal compatibility
 
 - **Unicode width**: `TextMeasure` delegates to `CharacterHandling` for correct CJK double-width, combining characters, fullwidth symbols, and emoji width calculation across layout, rendering, and text wrapping
 - **Border fallback**: Box drawing uses ASCII (`+-|`) when Unicode isn't supported
 - **Color detection**: `COLORTERM`, `TERM`, capability queries for truecolor/256/16/mono
 
-## Key Modules
+## Key modules
 
 | Module                                 | Role                                |
 | -------------------------------------- | ----------------------------------- |

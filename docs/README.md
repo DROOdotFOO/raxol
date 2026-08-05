@@ -1,8 +1,8 @@
 # Raxol Documentation
 
-Complete guide to Raxol: multi-surface application runtime for Elixir.
+Raxol is a multi-surface application runtime for Elixir. One TEA module renders to terminal, browser, SSH, and MCP.
 
-## Start Here
+## Start here
 
 - [Why OTP](WHY_OTP.md): why the BEAM runtime changes what's possible
 - [Why Raxol](WHY_RAXOL.md): how the runtime compares to Python agent stacks (Hermes, Omnigent)
@@ -26,7 +26,7 @@ Complete guide to Raxol: multi-surface application runtime for Elixir.
 - [Agentic Commerce](features/AGENTIC_COMMERCE.md): agent wallets, payments, Xochi
 - [Agent Commerce Protocol](features/ACP.md): sell agent services on Base (pre-alpha)
 - [Symphony](features/SYMPHONY.md): coding-agent orchestrator (pre-alpha)
-- [MCP](features/MCP.md): MCP as a first-class rendering target
+- [MCP](features/MCP.md): MCP as a rendering target
 - [Plugin SDK](features/PLUGIN_SDK.md): writing plugins
 - [Sensor Fusion](features/SENSOR_FUSION.md): polling, fusion, HUD rendering
 - [Distributed Swarm](features/DISTRIBUTED_SWARM.md): CRDTs, discovery, topology

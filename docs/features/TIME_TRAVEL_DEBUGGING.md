@@ -85,7 +85,7 @@ Save a debugging session to disk and load it later:
 
 Uses Erlang's binary term format.
 
-## Manual Recording
+## Manual recording
 
 `TimeTravel.record/4` is called by the Dispatcher automatically, but you can also record snapshots yourself:
 

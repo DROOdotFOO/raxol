@@ -9,7 +9,7 @@ Phoenix LiveView playground with full backend. Auto-scaling, WebSocket support, 
 - **URL** (https://raxol.io)
 - **Deploy**: `flyctl deploy`
 
-## Quick Start
+## Quick start
 
 ```bash
 brew install flyctl

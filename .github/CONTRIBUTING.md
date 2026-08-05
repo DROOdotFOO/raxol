@@ -8,7 +8,7 @@ Contributions welcome.
 2. Clone locally: `git clone https://github.com/YOUR_USERNAME/raxol.git`
 3. Add upstream: `git remote add upstream https://github.com/DROOdotFOO/raxol.git`
 
-## Development Setup
+## Development setup
 
 ### Prerequisites
 - Elixir 1.17.3
@@ -16,7 +16,7 @@ Contributions welcome.
 - Node.js 20+ (for VSCode extension dev)
 - PostgreSQL 15+
 
-### Initial Setup
+### Initial setup
 ```bash
 mix deps.get
 mix compile
@@ -112,7 +112,7 @@ defmodule Raxol.ExampleTest do
 end
 ```
 
-## Submitting Changes
+## Submitting changes
 
 1. Rebase on upstream: `git fetch upstream && git rebase upstream/master`
 2. Push: `git push origin feature/name`

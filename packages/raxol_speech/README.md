@@ -8,7 +8,7 @@ Speech surface for Raxol. TTS reads accessibility announcements aloud, STT captu
 ## Install
 
 ```elixir
-{:raxol_speech, "~> 0.1"}
+{:raxol_speech, "~> 0.2"}
 ```
 
 For speech-to-text, add the optional ML dependencies:
@@ -51,7 +51,7 @@ Raxol.Speech.Listener.start_recording()
 
 Recognized text is translated to Raxol events via `InputAdapter`. Voice commands like "quit", "up", "scroll down" map to key events.
 
-### Custom TTS Backend
+### Custom TTS backend
 
 Implement the `Raxol.Speech.TTS.Backend` behaviour:
 
@@ -88,7 +88,7 @@ Attach to these events to observe TTS and STT lifecycle:
 
 `source` on `:tts.speak` is `:api` for direct `Speaker.speak/1` calls, `:announcement` for accessibility-driven speech.
 
-### Live Test
+### Live test
 
 `examples/speech_demo.exs` exercises TTS + STT on the dev machine. Requires `say` (macOS, built-in) or `espeak`/`espeak-ng` (Linux), plus `sox` on PATH for STT.
 

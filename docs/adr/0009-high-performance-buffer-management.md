@@ -88,15 +88,15 @@ end)
 
 Batching reduces GenServer message overhead. Atomic transactions ensure consistency. Damage calculation is part of the operation pipeline.
 
-#### Memory Management
+#### Memory management
 
 Sparse buffer representation for empty regions, copy-on-write for snapshots, automatic GC of old damage regions, configurable memory limits with graceful degradation.
 
-#### Performance Monitoring
+#### Performance monitoring
 
 Telemetry-based metrics for operation latency and memory consumption via `:telemetry.execute/3`.
 
-### Design Patterns
+### Design patterns
 
 **Async-first**: writes are `cast`, reads are `call`, batches combine both.
 

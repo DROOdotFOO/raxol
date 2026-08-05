@@ -10,13 +10,13 @@ Guide to testing Raxol plugins: unit, integration, and property-based approaches
 # In your plugin's mix.exs
 defp deps do
   [
-    {:raxol, "~> 2.4", only: [:dev, :test]},
+    {:raxol, "~> 2.6", only: [:dev, :test]},
     {:mox, "~> 1.0", only: :test}  # For mocking
   ]
 end
 ```
 
-### Test Configuration
+### Test configuration
 
 ```elixir
 # config/test.exs
@@ -31,9 +31,9 @@ config :my_plugin,
   mock_external_services: true
 ```
 
-## Unit Tests
+## Unit tests
 
-### Manifest and Structure
+### Manifest and structure
 
 ```elixir
 defmodule MyPluginTest do
@@ -114,7 +114,7 @@ defmodule MyPluginTest do
 end
 ```
 
-### Command Handling
+### Command handling
 
 ```elixir
 defmodule MyPluginCommandTest do
@@ -241,7 +241,7 @@ defmodule MyPluginCommandTest do
 end
 ```
 
-### Event Filtering
+### Event filtering
 
 ```elixir
 defmodule MyPluginEventTest do
@@ -360,7 +360,7 @@ defmodule MyPluginEventTest do
 end
 ```
 
-## Integration Tests
+## Integration tests
 
 These drive the real `Raxol.Core.Runtime.Plugins.PluginManager`. Its public
 surface is `load_plugin/1,2`, `load_plugin_by_module/2`, `unload_plugin/1`,
@@ -435,7 +435,7 @@ plugin that depends on itself. See the note in
 [ADR-0005](../adr/0005-runtime-plugin-system-architecture.md).
 
 
-### Terminal Integration
+### Terminal integration
 
 ```elixir
 defmodule MyPluginTerminalTest do
@@ -470,7 +470,7 @@ defmodule MyPluginTerminalTest do
 end
 ```
 
-## Test Helpers
+## Test helpers
 
 ### Plugin test helper module
 
@@ -592,7 +592,7 @@ defmodule Raxol.PluginTestMocks do
 end
 ```
 
-## Property-Based Testing
+## Property-Based testing
 
 ```elixir
 defmodule MyPluginPropertyTest do
@@ -699,7 +699,7 @@ test/
     └── my_plugin_performance_test.exs
 ```
 
-## CI Integration
+## CI integration
 
 ```yaml
 # .github/workflows/plugin_tests.yml

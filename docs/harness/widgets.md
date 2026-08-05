@@ -39,7 +39,7 @@ the transcript is deterministic from offset 0. Expanded bodies mount through
 `Raxol.UI.Components.Harness.BodyProvider`, which validates a per-kind content
 schema and rescues a crashing body to an error block: a schema-valid but
 crashing body must never escape into the render loop. A flat, linear mode is a
-first-class rendering (the accessibility and pipe answer at once).
+supported rendering, which answers accessibility and piping at once.
 
 ## Tool renders
 

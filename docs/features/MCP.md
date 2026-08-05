@@ -1,8 +1,8 @@
 # MCP as a Rendering Target
 
-Most frameworks bolt MCP on as a side channel. Raxol treats it as a first-class rendering target alongside terminal, browser, and SSH. The Component tree is the source of truth; MCP tools and resources are projections of it. See [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md) for the design rationale.
+MCP is a rendering target alongside terminal, browser, and SSH. The Component tree is the source of truth, and MCP tools and resources are projections of it, so the same running module serves a human and an agent without either seeing a different truth. See [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md) for the design rationale.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix mcp.server
@@ -27,7 +27,7 @@ session
 
 The agent sees a structured Component tree, not a flat screenshot. It picks the action it wants from a typed schema.
 
-## Tool Derivation
+## Tool derivation
 
 Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exposes semantic actions per Component:
 
@@ -43,7 +43,7 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
-## Focus Lens
+## Focus lens
 
 A Component tree with 50 Components generates 100+ tools. That's too many for an LLM to reason about. The focus lens filters to ~15 tools per interaction based on:
 
@@ -80,7 +80,7 @@ end
 
 The MCP client can read `myapp://state/cart` to inspect what the agent is working with. Updates stream as diffs through `Raxol.MCP.Diff`, so the agent doesn't need to re-fetch the full state every turn.
 
-## Test Harness
+## Test harness
 
 `Raxol.MCP.Test` is a pipe-friendly test harness:
 
@@ -102,7 +102,7 @@ end
 
 The harness goes through the same MCP transport as a real client, so what your tests exercise is what an agent will hit.
 
-## Context Tree
+## Context tree
 
 `Raxol.MCP.ContextTree` assembles a unified view of state from:
 
@@ -114,15 +114,11 @@ The harness goes through the same MCP transport as a real client, so what your t
 
 The tree is streamed as diffs over the MCP connection, so agents track changes incrementally rather than polling.
 
-## Property Tests
+## Property tests
 
 `Raxol.MCP.ToolProvider` is functor-law-tested: tool derivation commutes with Component composition. If you compose two Components, the derived tools are the same as the tools you'd get by deriving them separately and merging. This catches bugs where a wrapping Component would accidentally hide tools from a child.
 
-## What this enables
-
-The same TEA module the human uses, the agent uses too. Same source of truth, different projections. That's the pitch a framework can only make if MCP is a first-class rendering target rather than an afterthought.
-
-## See Also
+## See also
 
 - [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md): design rationale
 - [Agent Framework](AGENT_FRAMEWORK.md): agents that consume MCP

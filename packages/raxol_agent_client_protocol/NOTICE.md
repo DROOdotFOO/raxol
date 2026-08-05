@@ -13,7 +13,7 @@ This package is MIT-licensed. Its provenance is deliberately layered:
   [`openclaw/acpx`](https://github.com/openclaw/acpx)
   (MIT License, Copyright (c) 2025 OpenClaw Team).
 
-## Design references only (Apache-2.0 — ideas, never code)
+## Design references only (Apache-2.0: ideas, never code)
 
 The OTP runtime (connection, supervision, sessions, transports) is a clean-room
 implementation. The following Apache-2.0 projects were studied as *design

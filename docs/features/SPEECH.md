@@ -37,9 +37,9 @@ Push-to-talk: `start_recording/0` opens the mic, `stop_recording/0` closes it an
 
 Optional deps: `bumblebee`, `nx`, `exla`. Without them, `Recognizer.recognize/1` returns `{:error, :bumblebee_not_available}`.
 
-## Voice Commands
+## Voice commands
 
-`InputAdapter` maps transcribed phrases to Raxol events. 20 default phrases ship out of the box (see `InputAdapter.default_commands/0` for the full list):
+`InputAdapter` maps transcribed phrases to Raxol events. 20 phrases ship by default (`InputAdapter.default_commands/0` has the full list):
 
 | Phrase                         | Event                                |
 | ------------------------------ | ------------------------------------ |
@@ -72,7 +72,7 @@ Raxol.Speech.InputAdapter.translate(text,
 
 `Listener` validates `record_command` against an allowlist before spawning the Port. Don't expose this surface to untrusted networks; the threat model assumes a trusted local user holding a microphone.
 
-## See Also
+## See also
 
 - [Watch](WATCH.md): the other accessibility-aware surface (push notifications)
-- [Accessibility](#): announcements that Speaker subscribes to
+- `Raxol.Core.Accessibility`: the announcement source Speaker subscribes to

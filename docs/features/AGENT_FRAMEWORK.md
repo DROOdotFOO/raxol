@@ -4,7 +4,7 @@ An agent is a TEA module where input comes from LLMs and tools instead of a keyb
 
 For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md). For the interactive coding agent built on this framework, see [Coding Agent](CODING_AGENT.md). For the learning and recall layers an agent can opt into, see [Self-Improvement](SELF_IMPROVEMENT.md) and [Memory](MEMORY.md).
 
-## Quick Start
+## Quick start
 
 ```elixir
 defmodule MyAgent do
@@ -51,7 +51,7 @@ Commands: async/1, shell/1, send_agent/2
 
 All callbacks are overridable. `view/1` defaults to `nil`, which means no rendering. Useful for headless agents that only process messages.
 
-## Agent Session
+## Agent session
 
 `Raxol.Agent.Session` is the GenServer hosting a single agent. It wraps `Lifecycle` with `environment: :agent`, which skips the terminal driver and plugin manager.
 
@@ -113,7 +113,7 @@ alias Raxol.Agent.Comm
 
 Coordinator starts first. With `:rest_for_one`, a coordinator crash restarts all workers. Workers crash independently.
 
-## Command Types
+## Command types
 
 Commands returned from `update/2` are processed by Lifecycle:
 
@@ -123,7 +123,7 @@ Commands returned from `update/2` are processed by Lifecycle:
 | Shell      | `shell("ls -la")`             | `{:command_result, {:shell_result, %{output: ..., exit_status: ...}}}` |
 | Send Agent | `send_agent(:target, msg)`    | Delivered to target as `{:agent_message, from, msg}`                 |
 
-## Headless Agents
+## Headless agents
 
 When `view/1` returns `nil` (the default), no rendering happens. The agent is a pure message-processing loop, good for background workers, data pipelines, or agents that only talk to other agents.
 
@@ -154,7 +154,7 @@ The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI
 
 The `:longcat` harness targets Meituan's LongCat (`https://api.longcat.chat/openai`, model `LongCat-2.0`), also OpenAI-compatible. It rides the `:openai` request/SSE path, which already handles LongCat's non-standard frames (a full `message` chunk instead of `delta`, the `reasoning_content` channel, and the underscore-less `finishreason` key). Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
 
-## Turn Driver
+## Turn driver
 
 `Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Turn` drives a whole
 self-improving turn: it assembles tool context from the agent module's callbacks, runs the
@@ -223,7 +223,7 @@ injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-confi
   composes the engine into the `CommandHook` chain at the `:tool_call` phase, resolving an
   ASK through a synchronous prompter.
 
-## Conversation Item-Log
+## Conversation item-log
 
 `Raxol.Agent.Conversation` is a durable, append-only record of what an agent did, separate
 from its compacted working memory.
@@ -240,7 +240,7 @@ from its compacted working memory.
 - `Recorder` bridges `Stream` events into items (tool_use to tool_call, done to message, and
   so on). [Session search](MEMORY.md#session-search) indexes this log.
 
-## Tunnel (Reverse Co-Drive)
+## Tunnel (reverse co-drive)
 
 `Raxol.Agent.Tunnel` lets a teammate attach to an agent running on your machine over a single
 outbound link, without your files or credentials leaving it. The host dials out to a server;

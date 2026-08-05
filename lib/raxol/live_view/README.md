@@ -12,7 +12,7 @@ High-performance Phoenix LiveView components for rendering terminal buffers in w
 - **Accessibility**: ARIA attributes, screen reader support, keyboard navigation
 - **CRT Effects**: Optional scanline and flicker effects for retro aesthetic
 
-## Quick Start
+## Quick start
 
 ### Installation
 
@@ -58,7 +58,7 @@ buffer = %{
 
 ## Architecture
 
-### Core Modules
+### Core modules
 
 #### `Raxol.LiveView.Renderer`
 
@@ -195,7 +195,7 @@ Emitted when rendering fails.
 **Metadata:**
 - `reason` - Error reason (`:nil_buffer` or `:validation_failed`)
 
-### Telemetry Setup
+### Telemetry setup
 
 ```elixir
 :telemetry.attach(
@@ -216,7 +216,7 @@ Emitted when rendering fails.
 
 ## Testing
 
-### Unit Tests
+### Unit tests
 
 Test coverage by module:
 
@@ -224,7 +224,7 @@ Test coverage by module:
 - **Themes**: 20 tests for all built-in themes and validation
 - **TerminalComponent**: 22 tests for component lifecycle and props
 
-### Property-Based Tests
+### Property-Based tests
 
 Using StreamData for generative testing:
 
@@ -251,9 +251,9 @@ Results on Apple Silicon:
 - 120x40 styled: 1.03ms (969fps) ✓
 - Cached (no changes): 0.0ms (instant) ✓
 
-## Performance Guide
+## Performance guide
 
-### Optimization Tips
+### Optimization tips
 
 1. **Reuse Renderer Instances**
    ```elixir
@@ -282,7 +282,7 @@ Results on Apple Silicon:
    end
    ```
 
-### Memory Usage
+### Memory usage
 
 - Renderer instance: ~10KB
 - Cache grows with unique (char, style) combinations

@@ -18,10 +18,10 @@ metadata:
 
 Multi-surface runtime for Elixir on OTP. One TEA module renders to terminal, browser (LiveView), SSH, MCP, Telegram, and watch surfaces.
 
-## Quick Start
+## Quick start
 
 ```bash
-# Zero install -- try it now
+# Zero install, try it now
 ssh -p 2222 playground@raxol.io
 
 # Or add to your project
@@ -29,29 +29,29 @@ mix new my_app && cd my_app
 ```
 
 ```elixir
-# mix.exs -- pick what you need
-{:raxol, "~> 2.4"}         # Full framework (TUI + rendering + widgets)
-{:raxol_agent, "~> 2.4"}   # Agent framework only (teams, strategies, streaming)
-{:raxol_mcp, "~> 2.4"}     # MCP server + tool derivation only
+# mix.exs: pick what you need
+{:raxol, "~> 2.6"}         # Full framework (TUI + rendering + widgets)
+{:raxol_agent, "~> 2.6"}   # Agent framework only (teams, strategies, streaming)
+{:raxol_mcp, "~> 2.6"}     # MCP server + tool derivation only
 ```
 
-## What You Get
+## What you get
 
-- **TEA apps** -- `init/1`, `update/2`, `view/1` with OTP crash isolation and hot reload
-- **AI agents** -- TEA apps where input comes from LLMs, supervised and streaming
-- **Agent teams** -- Coordinator/worker groups under one supervisor
-- **6 surfaces** -- Same module renders to terminal, browser, SSH, MCP, Telegram, watch
-- **Agent payments** -- Autonomous transactions via x402, MPP, Xochi cross-chain
-- **MCP tools** -- Auto-derived from widget tree; headless sessions for programmatic UI
-- **Distributed swarm** -- CRDTs, elections, gossip/DNS/Tailscale discovery
+- **TEA apps**: `init/1`, `update/2`, `view/1` with OTP crash isolation and hot reload
+- **AI agents**: TEA apps where input comes from LLMs, supervised and streaming
+- **Agent teams**: coordinator/worker groups under one supervisor
+- **6 surfaces**: same module renders to terminal, browser, SSH, MCP, Telegram, watch
+- **Agent payments**: autonomous transactions via x402, MPP, Xochi cross-chain
+- **MCP tools**: auto-derived from widget tree; headless sessions for programmatic UI
+- **Distributed swarm**: CRDTs, elections, gossip/DNS/Tailscale discovery
 
-## See Also
+## See also
 
-- `raxol` skill -- Full framework internals (TEA agents, process agents, orchestration)
-- `droo-stack` -- General Elixir patterns (pipes, pattern matching, ExUnit)
-- `claude-api` -- Anthropic SDK integration
+- `raxol` skill: full framework internals (TEA agents, process agents, orchestration)
+- `droo-stack`: general Elixir patterns (pipes, pattern matching, ExUnit)
+- `claude-api`: Anthropic SDK integration
 
-## Build an Agent
+## Build an agent
 
 ```elixir
 # Correct: always return {model, commands} from update/2
@@ -82,7 +82,7 @@ def update(:some_msg, model), do: model
 def update(:some_msg, model), do: {model, []}
 ```
 
-## Agent Teams
+## Agent teams
 
 ```elixir
 Raxol.Agent.Team.start_link(
@@ -92,7 +92,7 @@ Raxol.Agent.Team.start_link(
 )
 ```
 
-## Agent Commands
+## Agent commands
 
 | Command | What It Does | Return Shape |
 |---------|-------------|-------------|
@@ -100,7 +100,7 @@ Raxol.Agent.Team.start_link(
 | `async(fn)` | Async with streaming callback | `{:async_result, result}` |
 | `send_agent(id, payload)` | Inter-agent message via Registry | Arrives as `{:agent_message, from, payload}` |
 
-## Agent Strategies
+## Agent strategies
 
 | Strategy | When to Use |
 |----------|------------|
@@ -127,7 +127,7 @@ Built-in tools: `raxol_start`, `raxol_screenshot`, `raxol_send_key`, `raxol_get_
 }
 ```
 
-## Agent Payments
+## Agent payments
 
 Agents that can pay for things autonomously:
 
@@ -139,7 +139,7 @@ Agents that can pay for things autonomously:
 
 Spending controls: per-request/session/lifetime limits via `SpendingPolicy` + `Ledger`.
 
-## Headless Sessions
+## Headless sessions
 
 ```elixir
 # Correct: start headless, interact programmatically
@@ -157,22 +157,22 @@ Raxol.Headless.send_key(session, :tab)
 Raxol.Headless.send_key(session, "q")
 ```
 
-## Which Package Do I Need?
+## Which package do I need?
 
 | I want to... | Add this dep |
 |-------------|-------------|
-| Build a TUI app | `{:raxol, "~> 2.4"}` |
-| Build an AI agent | `{:raxol_agent, "~> 2.4"}` |
-| Serve MCP tools | `{:raxol_mcp, "~> 2.4"}` |
-| Render in LiveView | `{:raxol_liveview, "~> 2.4"}` |
-| Add agent payments | `{:raxol_payments, "~> 0.1"}` |
-| Use sensor fusion | `{:raxol_sensor, "~> 2.4"}` (zero deps) |
-| Build a plugin | `{:raxol_plugin, "~> 2.4"}` |
-| Add voice commands | `{:raxol_speech, "~> 0.1"}` |
-| Telegram bot surface | `{:raxol_telegram, "~> 0.1"}` |
-| Watch/push surface | `{:raxol_watch, "~> 0.1"}` |
+| Build a TUI app | `{:raxol, "~> 2.6"}` |
+| Build an AI agent | `{:raxol_agent, "~> 2.6"}` |
+| Serve MCP tools | `{:raxol_mcp, "~> 2.6"}` |
+| Render in LiveView | `{:raxol_liveview, "~> 2.6"}` |
+| Add agent payments | `{:raxol_payments, "~> 0.2"}` |
+| Use sensor fusion | `{:raxol_sensor, "~> 2.6"}` (zero deps) |
+| Build a plugin | `{:raxol_plugin, "~> 2.6"}` |
+| Add voice commands | `{:raxol_speech, "~> 0.2"}` |
+| Telegram bot surface | `{:raxol_telegram, "~> 0.2"}` |
+| Watch/push surface | `{:raxol_watch, "~> 0.2"}` |
 
-## Common Pitfalls
+## Common pitfalls
 
 | Mistake | Why It Fails | Fix |
 |---------|-------------|-----|
@@ -183,7 +183,7 @@ Raxol.Headless.send_key(session, "q")
 | Using real LLM backends in tests | Flaky, slow, costs money | Always use `Backend.Mock` in tests |
 | `view/1` returning complex tree for headless | Wastes cycles rendering to nothing | Return `nil` from `view/1` |
 
-## Key Conventions
+## Key conventions
 
 - All agents auto-register in `Raxol.Agent.Registry` by `:id`
 - Always return `{model, commands}` from `update/2`, never bare `model`

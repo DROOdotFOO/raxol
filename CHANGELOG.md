@@ -6,7 +6,7 @@
 
 ### Removed
 
-- **`Raxol.UI.ThemeResolverCached`** (delegating shim) removed. Use `Raxol.UI.ThemeResolver.<fn>(..., cache: true)` -- a one-to-one replacement documented in that module.
+- **`Raxol.UI.ThemeResolverCached`** (delegating shim) removed. Use `Raxol.UI.ThemeResolver.<fn>(..., cache: true)`, a one-to-one replacement documented in that module.
 
 ## [2.6.0] - 2026-07-11
 
@@ -268,7 +268,7 @@
   - Fixed Elixir 1.19.0 LiveComponent lifecycle
   - Result: 43% -> 93% CI success rate
 
-### CI/CD Workflow Fixes
+### CI/CD workflow fixes
 
 Fixed failing GitHub Actions workflows and updated to latest Elixir/OTP versions.
 
@@ -419,7 +419,7 @@ Complete v2.0 transformation with modular package architecture for incremental a
 All 6 phases implemented: Core modules, LiveView integration, Spotify plugin showcase,
 documentation overhaul, package split, and feature additions.
 
-### Package Structure
+### Package structure
 
 Four independent packages now available:
 
@@ -484,7 +484,7 @@ Four independent packages now available:
 - Cursor Effects: rainbow, comet, minimal presets with smooth interpolation
 - Complete test coverage (180/180 feature tests passing)
 
-### Test Results
+### Test results
 
 - Total: 2147 tests (2147 passing, 0 failing, 49 skipped)
 - Test pass rate: 100%
@@ -502,7 +502,7 @@ Four independent packages now available:
 - Filesystem operations: ~10μs per command
 - Cursor effects: ~7μs per update
 
-### Breaking Changes
+### Breaking changes
 
 - None - v2.0 packages are additive
 - Existing v1.x code continues to work with root package
@@ -782,7 +782,7 @@ Four independent packages now available:
   - Created DevHints system for real-time performance monitoring
   - Added performance profiling tools with `mix raxol.perf`
 
-### Performance & Architecture
+### Performance & architecture
 
 - **Performance Metrics**: Parser 3.3μs/op | Memory <2.8MB | Render <1ms
 - **Code Reduction**: 722 lines removed, 150+ duplicate patterns eliminated
@@ -1062,7 +1062,7 @@ mix credo
   - Disabled documentation generation for faster builds
   - Compilation time reduced from timeout-prone to ~25 seconds
 
-### Multi-Framework Architecture - Complete
+### Multi-Framework architecture - Complete
 
 - **First Terminal Framework Supporting 5 UI Paradigms**
   - React-style components with hooks and state management
@@ -1099,7 +1099,7 @@ mix credo
   - Fixed grid spacing calculation to return proper tuple format
   - Resolved flexbox child layout calculation issues
 
-### Known Issues - To Be Addressed
+### Known issues - To Be Addressed
 
 - 54 compilation warnings remaining (mostly unused variables in Svelte modules)
 - Property tests still showing some failures in component composition

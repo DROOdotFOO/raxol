@@ -25,7 +25,7 @@ Wallet signs the transaction (EIP-712)
 Ledger records the spend
 ```
 
-## Wallet Backends
+## Wallet backends
 
 Two wallet implementations behind the `Raxol.Payments.Wallet` behaviour:
 
@@ -72,7 +72,7 @@ Xochi is the default for cross-chain and privacy (stealth addresses, shielded tr
 
 Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics. The `Protocols.Riddler` module itself is deprecated and now delegates to Xochi internally; prefer `Protocols.Xochi` directly.
 
-## Trust and Compliance (ZKSAR)
+## Trust and compliance (ZKSAR)
 
 ZKSAR (Zero-Knowledge Sanctions/AML Reporting) lets an agent prove compliance facts without
 revealing the underlying data, and turns those proofs into a trust score that unlocks lower
@@ -123,7 +123,7 @@ Signature verification is implemented and on by default, but the digest scheme i
 byte-for-byte with the live Xochi oracle signer, so it fails closed on mismatch (rejecting
 real attestations rather than accepting forged ones) until a production vector is pinned.
 
-## Spending Controls
+## Spending controls
 
 Three layers of limits in `SpendingPolicy`:
 
@@ -135,7 +135,7 @@ The `Ledger` is an ETS-backed GenServer that tracks cumulative spend. `SpendingH
 
 Both spend paths reserve atomically before signing: the `SpendGate` choke point (payment Actions) and `SpendingHook` (Pay directives) call `Ledger.try_spend`, which checks the caps and records in one step, and refund via `Ledger.release` when execution then fails, so two commands cannot both pass a check before either records. A non-positive or non-finite amount is rejected up front (it can never lower the running total). A missing policy leaves the gate permissive in development, but a deployed release fails closed: `require_policy` defaults to true in production (a deployed OTP release, detected by `Raxol.Payments.Deployment` via `RELEASE_NAME`) and false in development and tests, so a production `SpendGate` with no `SpendingPolicy` rejects the spend rather than allowing unlimited spend. Set the context flag or `config :raxol_payments, :require_policy` to override.
 
-## Crash Recovery
+## Crash recovery
 
 Cross-chain settlement is asynchronous: there is a window between dispatching an intent (sign + submit) and confirming it landed. A crash in that window, on a runtime with no fault isolation, makes the restarted agent re-quote and sign a second time, paying twice.
 
@@ -151,7 +151,7 @@ Without a checkpoint, `ExecuteXochiIntent` in development still proceeds but emi
 
 The relay rail keys on the logical payment rather than its client-minted `transfer_id`, so a resume reuses the same `transfer_id` and an idempotent broadcaster dedupes a retried deposit. A definite execution failure (nothing dispatched) drops the checkpoint so a later retry starts clean. Set `context[:idempotency_key]` to force two otherwise-identical payments apart.
 
-## Production Safety
+## Production safety
 
 A process that holds a signing key is the crown jewel, so the fund-moving defaults are paranoid in a deployed release and permissive in development and tests. `Raxol.Payments.Deployment.production?/0` decides which: it is true for a deployed OTP release (detected by the `RELEASE_NAME` the release boot script sets, which survives into the running node where `Mix.env/0` does not), and can be forced either way with `config :raxol_payments, :deployment` or `RAXOL_PAYMENTS_DEPLOYMENT`.
 
@@ -175,7 +175,7 @@ Raxol.Payments.Deployment.assert_signing_isolated!()
 # capability-escape surface: keep the REPL on a node that cannot sign.
 ```
 
-## Agent Actions
+## Agent actions
 
 Thirteen actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
 
@@ -195,7 +195,7 @@ Thirteen actions registered via the `Raxol.Agent.Action` behaviour, callable by 
 | `payment_execute_relay_transfer` | Initiate a Tron transfer via Riddler Relay (checkpointed); Tron is public-only |
 | `payment_poll_relay_status` | Poll a dispatched relay (Tron) transfer to a terminal status |
 
-## Mandate (Xochi Delegation Envelope)
+## Mandate (Xochi delegation envelope)
 
 `Raxol.Payments.Mandate` is a per-request EIP-712 envelope that lets an AI agent transact on Xochi under a human Member's identity, inheriting that Member's Trust Tier and Privacy Level. The Member signs an envelope binding a specific agent wallet to a scoped budget; the agent presents `X-Xochi-Delegation: base64url(envelope)` on every protected Xochi call. Xochi verifies the signature server-side and decrements the budget in KV per call. No persistent session.
 
@@ -237,7 +237,7 @@ A deployed agent may carry two capability-delegation credentials, and they gover
 
 The two are independent: revoking one does not revoke the other. An agent that must be fully de-authorized needs both its Mandate revoked or expired **and** its SCA session key uninstalled. The Mandate is a Xochi-side credential scoped to Xochi endpoints; the session key is a Base-side signer scoped to the modular account. A leaked key revoked on Xochi but still holding a valid session key can still act through the ACP path, and vice versa.
 
-## AutoPay (Req Plugin)
+## AutoPay (Req plugin)
 
 `Raxol.Payments.Req.AutoPay` is a Req response step. Add it to any Req client and HTTP 402 responses get handled transparently:
 
@@ -249,11 +249,11 @@ client = Req.new(base_url: "https://api.example.com")
 {:ok, response} = Req.get(client, url: "/expensive-endpoint")
 ```
 
-## Package Details
+## Package details
 
 Standalone package at `packages/raxol_payments/`. Depends on `raxol_agent` at compile time only (`runtime: false`) for the Action macro and CommandHook behaviour. Runtime deps: `req`, `ex_secp256k1`, `ex_keccak`, `jason`, `decimal`.
 
-## See Also
+## See also
 
 - [Agent Framework](AGENT_FRAMEWORK.md): how agents work (TEA, sessions, teams, commands)
 - [Distributed Swarm](DISTRIBUTED_SWARM.md): multi-node agent coordination

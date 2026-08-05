@@ -87,7 +87,7 @@ They preserve context for why decisions were made, help new contributors underst
 
 ## By Category
 
-### Core Architecture
+### Core architecture
 - [0001: Component-Based Architecture](0001-component-based-architecture.md)
 - [0003: Terminal Emulation Strategy](0003-terminal-emulation-strategy.md)
 - [0007: State Management Strategy](0007-state-management-strategy.md)

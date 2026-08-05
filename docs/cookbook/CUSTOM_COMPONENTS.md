@@ -9,7 +9,7 @@ Most apps only need view helpers. Use the Component behaviour when you need inte
 
 ---
 
-## View Helpers (Recommended Start)
+## View helpers (start here)
 
 Extract parts of your `view/1` into private functions. These are plain Elixir, with no special framework support needed.
 
@@ -84,11 +84,11 @@ View helpers are composable, testable (call them and inspect the return value), 
 
 ---
 
-## Component Behaviour
+## Component behaviour
 
 For Components that need their own state and event handling, use the Component behaviour. Built-in Components like `Button`, `TextInput`, `Checkbox`, `Table`, `SelectList`, and `Modal` all use this pattern.
 
-### The Behaviour
+### The behaviour
 
 `Raxol.UI.Components.Base.Component` defines these callbacks:
 
@@ -101,7 +101,7 @@ For Components that need their own state and event handling, use the Component b
 | `mount/1` | No | Setup after init (subscriptions, etc). Default: `{state, []}` |
 | `unmount/1` | No | Cleanup on removal. Default: `state` |
 
-### Minimal Example
+### Minimal example
 
 ```elixir
 defmodule MyApp.Components.Counter do
@@ -239,7 +239,7 @@ Key patterns:
 
 ## Guidelines
 
-### State Shape
+### State shape
 
 All components should include these standard keys:
 
@@ -255,7 +255,7 @@ All components should include these standard keys:
 
 Add component-specific keys alongside these.
 
-### Event Handling
+### Event handling
 
 Events arrive as `%Raxol.Core.Events.Event{}` structs:
 
@@ -310,7 +310,7 @@ Start with view helpers. Graduate to the Component behaviour when you find yours
 
 ---
 
-## Further Reading
+## Further reading
 
 - [Component Gallery](../getting-started/COMPONENT_GALLERY.md): All built-in Components with examples
 - [Building Apps](../cookbook/BUILDING_APPS.md): TEA patterns and recipes

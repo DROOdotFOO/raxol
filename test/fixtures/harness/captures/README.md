@@ -1,10 +1,10 @@
-# `captures/` — capability-capture schema
+# `captures/`: capability-capture schema
 
 This directory hosts the capability capture fixtures described in
 `docs/proposals/in-flight/harness-ui-testing/04-capability.md` §2 (T1
 capability slice + T3 degradation ladder test design). It is prepared
 here, ahead of T0/T1, so that unit lands with a stable, documented
-directory contract instead of inventing one under time pressure — no
+directory contract instead of inventing one under time pressure: no
 capture files are checked in yet; T0 writes real ones here, and T1
 consumes them.
 
@@ -16,10 +16,10 @@ consumes them.
   writes one `capture/<terminal>-<context>.json` per run.
 - Hand-authored **edge fixtures** use the same schema with
   `"terminal": "synthetic"` and live alongside as `capture/synthetic-*.json`
-  (silence, reorder, echo-leak, partial-EOF — the constructed conditions
+  (silence, reorder, echo-leak, partial-EOF: the constructed conditions
   a real terminal won't reliably reproduce on demand).
 - **T1**'s positive suite (`CAP-P-01` et al.) table-drives over every file
-  in this directory with zero code added per new capture — see
+  in this directory with zero code added per new capture; see
   `Raxol.Test.CapabilityFixtures.load!/1` (T1's loader, not built by this
   unit).
 
@@ -45,7 +45,7 @@ binary via `Base.decode16!(s, case: :lower)`.
   "query_hex": "1b5d31313b3f071b5b3f753...", // exact batched write (reference)
   "reply_hex": "1b5d31313b7267623a...",      // exact bytes read back, in order, sentinel included
   "notes": "DECRQM 2026 value stuck at 2 (never flips to 1 after set).",
-  "expected": {                              // golden -- asserted by CAP-P-*
+  "expected": {                              // golden, asserted by CAP-P-*
     "identity":       ["Alacritty", "0.13.2"],
     "tier":           "modern",
     "unicode":        "wide",
@@ -67,12 +67,12 @@ Design points (from 04-capability.md §2, reproduced here so this
 directory is self-explanatory without cross-referencing the proposal):
 
 - `reply_hex` is the **whole raw read**, exactly as the tty delivered it,
-  including any interleaving the capture happened to catch — a capture is
+  including any interleaving the capture happened to catch. A capture is
   a complete end-to-end regression, not a curated snippet.
 - `expected` is authored once from the first trusted capture and becomes
   the pinned regression; a terminal upgrade that changes replies fails
   loudly against it (the "terminal drift" signal).
-- `context` drives which risks a fixture exercises — `tmux` / `ssh+tmux`
+- `context` drives which risks a fixture exercises: `tmux` / `ssh+tmux`
   captures are where passthrough-off garble and the conservative clamp
   live.
 

@@ -16,13 +16,13 @@ Working templates for common plugin types: basic, background (periodic tasks), a
 
 Testing strategies: unit and integration tests, event filtering tests, property-based testing, performance testing.
 
-## Quick Start
+## Quick start
 
 1. Read [GUIDE.md](GUIDE.md) for the full lifecycle and development model
 2. Pick a template from [PLUGIN_TEMPLATES.md](PLUGIN_TEMPLATES.md)
 3. Write tests using patterns from [TESTING.md](TESTING.md)
 
-## Example Plugins
+## Example plugins
 
 Runnable starting points live in [`examples/plugins/`](../../examples/plugins/): a
 [basic plugin](../../examples/plugins/basic_plugin.exs), a
@@ -33,21 +33,21 @@ Runnable starting points live in [`examples/plugins/`](../../examples/plugins/):
 
 ## Plugin system architecture
 
-### Core Components
+### Core components
 
 - **[Plugin Manager](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_manager.ex)** - Lifecycle and dependency management
 - **[Plugin Behaviour](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin.ex)** - Interface all plugins must implement
 - **[Plugin Reloader](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_reloader.ex)** - Live plugin updates
 - **[Plugin Registry](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_registry.ex)** - Plugin registration and lookup
 
-## Create a Plugin
+## Create a plugin
 
 ```bash
 cp lib/raxol/plugins/examples/rainbow_theme_plugin.ex lib/raxol/plugins/my_plugin.ex
 MIX_ENV=test mix test test/raxol/plugins/my_plugin_test.exs
 ```
 
-## Further Reading
+## Further reading
 
 - Study existing plugins in `lib/raxol/plugins/examples/`
 - Review test patterns in `test/raxol/plugins/`

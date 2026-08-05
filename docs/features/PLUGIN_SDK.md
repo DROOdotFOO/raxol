@@ -2,7 +2,7 @@
 
 `raxol_plugin` is the developer-facing SDK over the 40-module plugin system in `raxol_core`. If you're writing a plugin, this is the package you depend on. If you're consuming plugins from your app, you don't need it; the runtime is in `raxol_core`.
 
-## Quick Start
+## Quick start
 
 ```elixir
 defmodule MyPlugin do
@@ -102,7 +102,7 @@ The 40-module runtime (plugin manager, dependency resolver, lifecycle, capabilit
 
 The split exists so apps that *use* plugins don't need to depend on the SDK that *creates* them.
 
-## See Also
+## See also
 
 - [GUIDE](https://github.com/DROOdotFOO/raxol/blob/master/docs/plugins/GUIDE.md): step-by-step plugin authoring
 - [PLUGIN_TEMPLATES](https://github.com/DROOdotFOO/raxol/blob/master/docs/plugins/PLUGIN_TEMPLATES.md): ready-made starters

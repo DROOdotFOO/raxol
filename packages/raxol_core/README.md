@@ -5,10 +5,10 @@ Core behaviours, utilities, events, config, accessibility, and plugin infrastruc
 ## Install
 
 ```elixir
-{:raxol_core, "~> 2.4"}
+{:raxol_core, "~> 2.6"}
 ```
 
-## What's Included
+## What's included
 
 - **Behaviours**: BaseManager, BaseRegistry, BaseServer, Lifecycle, Metrics, StateManager
 - **Runtime.Log**: Centralized structured logging with context, timing, and module detection
