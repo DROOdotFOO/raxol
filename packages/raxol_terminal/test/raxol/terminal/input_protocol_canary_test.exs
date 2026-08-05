@@ -1,6 +1,13 @@
 defmodule Raxol.Terminal.InputProtocolCanaryTest do
   @moduledoc """
-  The one test permitted to claim prim_tty PROTOCOL coverage.
+  The real-pty input tests -- the only ones permitted to claim prim_tty PROTOCOL
+  coverage or a live `-isig` guarantee.
+
+  Two separate claims, sharing one harness because both need a REAL terminal and
+  neither can be had without one:
+
+    * the protocol canary -- keystrokes decode through the live reader;
+    * the `-isig` contract -- ^C arrives as byte 0x03 rather than a SIGINT.
 
   Every other input test fabricates the `{:trace, ...}` message it asserts on, so
   it can only fail if our handler changes -- never if OTP moves the private
@@ -49,30 +56,85 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
   @ready_tries 900
   @output_tries 60
 
-  test "real keystrokes decode through the live prim_tty reader" do
-    driver = pty_driver()
+  @plain_keys [{:literal, "a"}, {:literal, "b"}]
+  @ctrl_c_keys [{:named, "C-c"}]
 
-    if driver == nil do
-      IO.puts(
-        :stderr,
-        "[input canary] skipped: neither tmux nor expect on PATH"
-      )
-    else
-      {result, attempt} = drive_until(driver, @max_attempts)
+  test "real keystrokes decode through the live prim_tty reader" do
+    with_pty(fn driver ->
+      {result, attempt} = drive_until(driver, @plain_keys, ["a", "b"], @max_attempts)
 
       assert result.tokens == ["a", "b"],
-             failure_report(result, driver, attempt)
+             failure_report(result, driver, attempt, ["a", "b"])
+    end)
+  end
+
+  # The `-isig` half of the raw-mode contract, which nothing else covers end to
+  # end. `Stty.raw!/0` asks for `-isig` so that ^C reaches the app as byte 0x03
+  # and the arm-quit protocol owns it, rather than the kernel turning it into a
+  # SIGINT the app never sees.
+  #
+  # This is worth a real pty because the two outcomes are not "assert true vs
+  # false" -- they are different PROCESS fates. With ISIG off, 0x03 is delivered
+  # and decodes to a ctrl-c key event. With ISIG on, the line discipline raises
+  # SIGINT on the foreground group instead, and the app dies (or drops into the
+  # VM BREAK menu) without ever writing its output file -- so a regression
+  # surfaces as `:no_output`/`:ready_timeout`, not as a wrong token.
+  #
+  # It also pins the thing that made this contract vacuous for so long: the
+  # in-VM diagnostics must show the termios was actually ESTABLISHED. Every
+  # `stty` call used to no-op silently (it targeted `/dev/tty`, which a port
+  # child in a fresh session cannot open), so `isig_off` read false on every
+  # OTP while the suite stayed green. Asserting the flags -- not just the
+  # decode -- is what stops that from going quiet again.
+  test "^C arrives as byte 0x03 instead of raising SIGINT (-isig holds)" do
+    with_pty(fn driver ->
+      {result, attempt} = drive_until(driver, @ctrl_c_keys, ["ctrl-c"], @max_attempts)
+
+      assert result.tokens == ["ctrl-c"],
+             failure_report(result, driver, attempt, ["ctrl-c"])
+
+      assert result.diag =~ "isig_off=true",
+             """
+             ^C decoded, but the app reports ISIG still ON. The keystroke got \
+             through on something other than the `-isig` this contract promises, \
+             so the guarantee is not actually in force.
+
+             #{result.diag}
+             """
+
+      assert result.diag =~ "boot_confirmed=true",
+             """
+             `-isig` was never confirmed during boot: the verify-then-assert loop \
+             (`reassert_raw_until_isig_off/1`) gave up. That is the signature of \
+             `stty` silently no-oping -- check `Stty.tty_device/0` resolution \
+             before anything else.
+
+             #{result.diag}
+             """
+    end)
+  end
+
+  defp with_pty(fun) do
+    case pty_driver() do
+      nil ->
+        IO.puts(
+          :stderr,
+          "[input canary] skipped: neither tmux nor expect on PATH"
+        )
+
+      driver ->
+        fun.(driver)
     end
   end
 
   # Name the stage that actually failed. Every one of these used to surface as
   # `got []`, which said "OTP moved the protocol" no matter which of them it
   # was -- and for most of them that claim is simply false.
-  defp failure_report(result, driver, attempt) do
+  defp failure_report(result, driver, attempt, expected) do
     """
-    prim_tty input protocol canary FAILED on OTP #{System.otp_release()} \
+    prim_tty real-pty input test FAILED on OTP #{System.otp_release()} \
     (driver: #{driver}) after #{attempt} attempt(s), at stage: #{result.stage}.
-    Expected ["a", "b"], got #{inspect(result.tokens)}.
+    Expected #{inspect(expected)}, got #{inspect(result.tokens)}.
 
     #{stage_explanation(result.stage)}
 
@@ -145,27 +207,27 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
   # before the reader has armed its select loop -- a timing flake, not a protocol
   # failure. Retry the whole drive: a real OTP break fails every attempt, a race
   # succeeds on a later one.
-  defp drive_until(driver, attempts_left, attempt \\ 1) do
-    result = attempt_drive(driver)
+  defp drive_until(driver, keys, expected, attempts_left, attempt \\ 1) do
+    result = attempt_drive(driver, keys)
 
     cond do
-      result.tokens == ["a", "b"] -> {result, attempt}
+      result.tokens == expected -> {result, attempt}
       attempts_left <= 1 -> {result, attempt}
-      true -> drive_until(driver, attempts_left - 1, attempt + 1)
+      true -> drive_until(driver, keys, expected, attempts_left - 1, attempt + 1)
     end
   end
 
-  defp attempt_drive(driver) do
+  defp attempt_drive(driver, keys) do
     out = Path.join(System.tmp_dir!(), "raxol_input_canary_#{unique()}")
 
     try do
-      stage = drive(driver, out)
+      stage = drive(driver, out, keys)
       diag = read_diagnostics(out)
 
       case {stage, File.read(out)} do
         {:sent, {:ok, body}} ->
           tokens = String.split(body, "\n", trim: true)
-          %{tokens: tokens, stage: classify(tokens), diag: diag}
+          %{tokens: tokens, stage: classify(tokens, keys), diag: diag}
 
         {:sent, {:error, _}} ->
           %{tokens: [], stage: :no_output, diag: diag}
@@ -179,9 +241,9 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
     end
   end
 
-  defp classify(["a", "b"]), do: :ok
-  defp classify([]), do: :empty
-  defp classify(_partial), do: :partial
+  defp classify([], _keys), do: :empty
+  defp classify(tokens, keys) when length(tokens) < length(keys), do: :partial
+  defp classify(_tokens, _keys), do: :ok
 
   # The app's own account of what it established. Absent when it never got far
   # enough to write one, which is itself the answer.
@@ -200,11 +262,12 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
     end
   end
 
-  defp drive(:tmux, out) do
+  defp drive(:tmux, out, keys) do
     session = "raxol-input-canary-#{unique()}"
 
     cmd =
-      "cd #{@pkg_dir} && CANARY_OUT=#{out} CANARY_N=2 MIX_ENV=test mix run --no-compile #{@app}"
+      "cd #{@pkg_dir} && CANARY_OUT=#{out} CANARY_N=#{length(keys)} " <>
+        "MIX_ENV=test mix run --no-compile #{@app}"
 
     try do
       {_, 0} =
@@ -215,11 +278,11 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
         )
 
       # Only type once the reader signalled ready, then settle briefly so its
-      # select loop is armed. `-l` sends the bytes literally (not as key names).
+      # select loop is armed.
       case wait_for_ready(out) do
         :ok ->
           Process.sleep(@settle_ms)
-          type_both(session, out)
+          type_all(session, out, keys)
 
         :timeout ->
           :ready_timeout
@@ -229,19 +292,22 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
     end
   end
 
-  defp drive(:expect, out) do
+  defp drive(:expect, out, keys) do
     # The canary app `System.halt/0`s right after writing output, so `eof`
     # returns promptly. `--no-compile`: the parent test already compiled, so the
     # nested run must not recompile under lock contention.
+    sends =
+      keys
+      |> Enum.map(&~s|send "#{expect_bytes(&1)}"\nafter #{@gap_ms}|)
+      |> Enum.join("\n")
+
     script = """
     set timeout 120
-    spawn env CANARY_OUT=#{out} CANARY_N=2 MIX_ENV=test mix run --no-compile #{@app}
+    spawn env CANARY_OUT=#{out} CANARY_N=#{length(keys)} MIX_ENV=test mix run --no-compile #{@app}
     set t 0
     while {![file exists "#{out}.ready"] && $t < 900} { after 100; incr t }
     after #{@settle_ms}
-    send "a"
-    after #{@gap_ms}
-    send "b"
+    #{sends}
     expect eof
     """
 
@@ -252,28 +318,51 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
     :sent
   end
 
-  defp type_both(session, out) do
-    with :ok <- send_key(session, "a"),
-         :ok <- gap_then_send(session, "b") do
-      wait_for_output(out)
-      :sent
-    end
-  end
+  defp type_all(session, out, keys) do
+    result =
+      Enum.reduce_while(keys, :ok, fn key, _acc ->
+        case send_key(session, key) do
+          :ok ->
+            Process.sleep(@gap_ms)
+            {:cont, :ok}
 
-  defp gap_then_send(session, key) do
-    Process.sleep(@gap_ms)
-    send_key(session, key)
+          other ->
+            {:halt, other}
+        end
+      end)
+
+    case result do
+      :ok ->
+        wait_for_output(out)
+        :sent
+
+      other ->
+        other
+    end
   end
 
   # A refused keystroke must not read as a decode failure. The exit status was
   # dropped once, which made a dead tmux session and a moved protocol produce
   # the same empty result.
+  #
+  # `-l` sends the bytes literally; a `{:named, _}` key is a tmux key NAME
+  # (`C-c`), which must NOT be sent literally or tmux types the three
+  # characters `C`, `-`, `c` instead of the control byte.
   defp send_key(session, key) do
-    case System.cmd("tmux", ["send-keys", "-t", session, "-l", key], stderr_to_stdout: true) do
+    args =
+      case key do
+        {:literal, k} -> ["send-keys", "-t", session, "-l", k]
+        {:named, k} -> ["send-keys", "-t", session, k]
+      end
+
+    case System.cmd("tmux", args, stderr_to_stdout: true) do
       {_, 0} -> :ok
       {_out, _status} -> :send_failed
     end
   end
+
+  defp expect_bytes({:literal, k}), do: k
+  defp expect_bytes({:named, "C-c"}), do: "\\003"
 
   # Type only once the reader is armed, so we never send before the pty listens.
   defp wait_for_ready(out), do: poll(out <> @ready_suffix, @ready_tries)
