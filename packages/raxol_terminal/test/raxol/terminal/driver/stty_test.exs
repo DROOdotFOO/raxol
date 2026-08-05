@@ -12,6 +12,18 @@ defmodule Raxol.Terminal.Driver.SttyTest do
 
   alias Raxol.Terminal.Driver.Stty
 
+  # These tests really do invoke `stty`, and it now targets a resolved
+  # device instead of failing to open `/dev/tty` -- so without this it
+  # would apply a foreign saved-settings dump to whichever terminal is
+  # running the suite. Point it somewhere that is not a tty: the argv is
+  # still built and executed (which is what the injection test proves),
+  # the command just cannot touch a real session.
+  setup do
+    Application.put_env(:raxol_terminal, :stty_device, "/dev/null")
+    on_exit(fn -> Application.delete_env(:raxol_terminal, :stty_device) end)
+    :ok
+  end
+
   @tag :unix_only
   test "an injection payload does not execute -- falls through to sane! instead" do
     marker =
@@ -57,28 +69,56 @@ defmodule Raxol.Terminal.Driver.SttyTest do
     assert :ok = Stty.restore("")
   end
 
-  describe "command construction targets /dev/tty by device flag, never a shell redirect" do
+  describe "command construction targets the tty by device flag, never a shell redirect" do
     # The real-terminal ^C trap regression class: a `sh -c "stty ... <
     # /dev/tty"` invocation silently no-ops wherever the shell child
     # cannot open a controlling tty, and rides through /bin/sh where the
     # argv form needs no shell at all. Every mutating/reading stty
-    # command must be the argv form `stty -f|-F /dev/tty ...` (BSD/GNU
+    # command must be the argv form `stty -f|-F DEVICE ...` (BSD/GNU
     # device flag -- the same form restore/1 already uses).
-    test "raw! argv includes the device flag, /dev/tty, and -isig" do
+    test "raw! argv includes the device flag, the device, and -isig" do
       args = Stty.command_args(:raw)
 
-      assert Enum.take(args, 2) in [["-f", "/dev/tty"], ["-F", "/dev/tty"]]
+      assert [flag, device | _rest] = args
+      assert flag in ["-f", "-F"]
+      assert device == Stty.tty_device()
       assert "-isig" in args
       assert "raw" in args
     end
 
-    test "save/sane/size/flags argv all carry the device flag + /dev/tty" do
+    test "save/sane/size/flags argv all carry the device flag + the device" do
       for op <- [:save, :sane, :size, :flags] do
         args = Stty.command_args(op)
 
-        assert Enum.take(args, 2) in [["-f", "/dev/tty"], ["-F", "/dev/tty"]],
-               "#{op} must operate on /dev/tty via the device flag, got #{inspect(args)}"
+        assert [flag, device | _rest] = args
+        assert flag in ["-f", "-F"], "#{op} must use the device flag, got #{inspect(args)}"
+
+        assert device == Stty.tty_device(),
+               "#{op} must operate on the resolved device, got #{inspect(args)}"
       end
+    end
+
+    # The device is never the literal `/dev/tty` when one can be
+    # resolved: a `System.cmd`-spawned stty is in a fresh session with no
+    # controlling terminal, so `/dev/tty` fails ENXIO for it and every
+    # operation in this module silently no-ops. That is the bug this
+    # resolution exists to close, so pin that it produces a real path
+    # wherever the test host has a tty at all.
+    @tag :unix_only
+    test "tty_device/0 resolves a concrete device path, or falls back honestly" do
+      Application.delete_env(:raxol_terminal, :stty_device)
+
+      device = Stty.tty_device()
+
+      assert String.starts_with?(device, "/dev/")
+      assert device == Stty.tty_device(), "must be stable across calls (cached)"
+    end
+
+    test "the configured device overrides resolution" do
+      Application.put_env(:raxol_terminal, :stty_device, "/dev/null")
+
+      assert Stty.tty_device() == "/dev/null"
+      assert Enum.take(Stty.command_args(:raw), 2) |> List.last() == "/dev/null"
     end
 
     @tag :unix_only

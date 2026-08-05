@@ -1052,6 +1052,22 @@ defmodule Raxol.Terminal.InlineDriver do
     _ -> start_stdin_reader(%{state | reader_mode: :prim_tty})
   end
 
+  # `input: :raw` is honoured from OTP 28 on and IGNORED before it. OTP 28's
+  # user_drv reads it for the noshell branch (`prim_tty:reinit(TTY, #{input =>
+  # Input, output => raw})`), which is what puts the tty in raw mode. OTP 26/27
+  # has no such branch: `initial_shell: :noshell` makes its `StartShell` false
+  # and it reinits with `#{tty => false}` unconditionally, never looking at
+  # `input` at all -- so the tty is left COOKED and every bare keystroke sits in
+  # the line discipline until a newline. Asking for a raw shell instead is not
+  # the way out: that spawns a real shell and drops user_drv into a JCL prompt
+  # that swallows all input.
+  #
+  # So on OTP 26/27 raw mode is ours to establish, and the post-arm
+  # `maybe_confirm_isig_boot/1` re-assert is what actually establishes it (it
+  # runs AFTER this reinit, so it wins). That only works because `Stty` targets
+  # the resolved device rather than `/dev/tty` -- see its moduledoc; with the
+  # `/dev/tty` form every stty here silently no-oped and OTP 26/27 decoded
+  # nothing at all.
   defp start_stdin_reader(%State{reader_mode: :prim_tty} = state) do
     user_drv = Process.whereis(:user_drv)
 

@@ -31,7 +31,7 @@ defmodule Raxol.Terminal.InlineDriver.ReaderGate do
   `ref = monitor(process, reader, alias: :reply_demonitor)`, send
   `{ref, :disable | :enable}`, await `{ref, reply}`. While disabled the
   reader blocks in a selective receive waiting ONLY for the enable
-  message (verified against OTP kernel `prim_tty.erl`'s `reader_loop/2`):
+  message (verified against OTP kernel `prim_tty.erl`'s reader loop):
   it consumes no tty bytes, so kernel input queues for the editor. Its
   armed `{:read, :infinity}` state and the erlang trace flag both
   persist across the disable/enable bracket (same process, state map
@@ -58,23 +58,30 @@ defmodule Raxol.Terminal.InlineDriver.ReaderGate do
   ## Version coupling: pinned range and the drift failure mode
 
   This wire protocol is OTP-private. Tested/verified range: **OTP 26
-  through 29** (the disable/enable branch of `reader_loop/2` is
-  byte-identical across them; prim_tty itself first shipped the reader
-  in OTP 26). Below the floor, `disable/2`/`enable/2` refuse with
-  `{:error, {:unsupported_otp, release}}` rather than sending a message
-  whose receiver semantics were never verified.
+  through 29** (prim_tty itself first shipped the reader in OTP 26).
+  The reader loop was rewritten in OTP 28 -- `reader_loop/6` on OTP
+  26/27, `reader_loop/2` on 28+ -- but the disable/enable branch this
+  module speaks survived that rewrite unchanged, which is what makes
+  one implementation correct across the whole range. Below the floor,
+  `disable/2`/`enable/2` refuse with `{:error, {:unsupported_otp,
+  release}}` rather than sending a message whose receiver semantics
+  were never verified.
 
   If a FUTURE OTP changes the reader's message shape, the failure mode
-  is fail-closed by construction, not silent corruption: `reader_loop`'s
-  catch-all clause ignores unknown messages, so the gate's call times
-  out (`{:error, :timeout}`, bounded), and the one caller that matters
-  treats a disable failure as ABORT-the-suspend -- the tty is never
-  handed to an editor with the gate in an unknown state. Bumping the
-  pinned range above is a deliberate act: re-read `prim_tty.erl`'s
-  `reader_loop/2` for the new release and extend the ceiling in this
-  doc; the protocol suite (`reader_gate_test.exs`, scripted readers)
-  pins the wire shape this module SPEAKS, and the pty round-trip test
-  exercises it against the REAL reader.
+  is fail-closed by construction, not silent corruption: the gate's
+  call times out (`{:error, :timeout}`, bounded), and the one caller
+  that matters treats a disable failure as ABORT-the-suspend -- the tty
+  is never handed to an editor with the gate in an unknown state. What
+  becomes of the unmatched message differs by release and neither case
+  weakens that: OTP 28+ has a catch-all clause that discards it, while
+  OTP 26/27 has none, so it simply sits in the reader's mailbox. The
+  gate sends at most one message per call, so that is a bounded
+  remainder, not a leak. Bumping the pinned range above is a deliberate
+  act: re-read `prim_tty.erl`'s reader loop for the new release (the
+  OTP 28 rewrite is the precedent for how much can move) and extend the
+  ceiling in this doc; the protocol suite (`reader_gate_test.exs`,
+  scripted readers) pins the wire shape this module SPEAKS, and the pty
+  round-trip test exercises it against the REAL reader.
   """
 
   @default_timeout_ms 2_000
