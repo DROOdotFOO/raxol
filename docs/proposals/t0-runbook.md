@@ -1,4 +1,4 @@
-# T0 runbook — running the keystone matrix
+# T0 runbook: running the keystone matrix
 
 Date: 2026-07-15 · Status: **v1**. Companion to
 `t0-verdict-schema.md` (the file this writes to), and
@@ -7,7 +7,7 @@ Date: 2026-07-15 · Status: **v1**. Companion to
 This is the "Ring B" half of T0: real-terminal measurement a human runs by
 hand. Ring A (CI headless) and the automated Ring-B proxy cells (tmux, the
 `emu` structural cell) already ran in the sandboxed environment that built
-this unit — see §1. Everything past §1 is **not yet run** and needs a human
+this unit: see §1. Everything past §1 is **not yet run** and needs a human
 at a real keyboard in front of each terminal.
 
 ---
@@ -15,13 +15,13 @@ at a real keyboard in front of each terminal.
 ## 0. Prerequisites
 
 - This repo checked out, `mix deps.get` run once (`packages/raxol_terminal`
-  compiles termbox2 — normal, not an error).
+  compiles termbox2: normal, not an error).
 - `tmux` >= 3.x on `$PATH` (macOS: `brew install tmux`).
 - `jq` on `$PATH` (macOS: `brew install jq`; used by every script here).
 - `python3` on `$PATH` (used by `lib/read_reply.py` for raw DECRQM capture).
 - For SSH cells: a loopback or LAN target reachable via `ssh`, with this
   repo checked out there too (or just the `scripts/harness/t0/` directory
-  copied over — the probe scripts have no other dependency).
+  copied over: the probe scripts have no other dependency).
 
 All commands below assume `cd` to the repo root first, or use the absolute
 paths shown.
@@ -38,7 +38,7 @@ This is a **full rebuild** of `scripts/harness/t0/t0-verdict.json`: it
 re-runs every tmux proxy cell (C1/C2/C3/C5/C6×4-exit-classes/C7/
 C8×2-algorithms/N06/N07), re-runs the `emu` structural cell via
 `MIX_ENV=test mix run`, and re-emits the 224 `planned` placeholder rows for
-the real-terminal matrix this environment can't drive. It is idempotent —
+the real-terminal matrix this environment can't drive. It is idempotent: 
 safe to re-run any time; **any real rows a human already appended via
 `append_result.sh` (§2 below) get REPLACED by this rebuild**, so if you've
 been filling in Ring B results, don't re-run `run_matrix.sh` afterward
@@ -58,7 +58,7 @@ Check the current D-PA resolution at any point:
 elixir scripts/harness/t0/verdict_resolver.exs scripts/harness/t0/t0-verdict.json
 ```
 
-(As of this unit's first run: `"dpa": "pending"` — zero tier-1 real
+(As of this unit's first run: `"dpa": "pending"`: zero tier-1 real
 terminals measured yet. That is the correct, honest answer until §2 below
 adds real rows.)
 
@@ -76,7 +76,7 @@ adds real rows.)
    `01-t0-matrix.md`, restated in `t0-verdict-schema.md` §3).
 4. Record it: `scripts/harness/t0/append_result.sh TERMINAL CONTEXT
    TRANSPORT CLAIM VERDICT OBSERVABLE CAPTURE_METHOD AUTOMATION
-   EVIDENCE_PATH [NOTES]` — this auto-appends/upserts the row into
+   EVIDENCE_PATH [NOTES]`: this auto-appends/upserts the row into
    `t0-verdict.json` (replacing the matching `planned` placeholder).
 
 **Probe scripts available** (all in `scripts/harness/t0/probes/`, all
@@ -103,7 +103,7 @@ kitten @ get-text --extent=all > /tmp/t0-kitty-c2.txt
 grep -c '^LINE-' /tmp/t0-kitty-c2.txt   # expect 100
 # Also count the TAIL WINDOW: how many sealed LINE-* rows are still on the
 # VISIBLE screen above the footer (kitten @ get-text without --extent, count
-# LINE-* rows). Record it in the observable -- D-PA option (B) requires a
+# LINE-* rows). Record it in the observable: D-PA option (B) requires a
 # measured non-zero window on every tier-1 terminal; without it the resolver
 # can at best answer (A).
 bash scripts/harness/t0/append_result.sh kitty plain local C2 fed \
@@ -113,7 +113,7 @@ bash scripts/harness/t0/append_result.sh kitty plain local C2 fed \
 ```
 
 Note the coherence rule (t0-verdict-schema.md): the `VERDICT` argument and
-the observable's `status` must agree (`fed`/`fed`) — the resolver excludes
+the observable's `status` must agree (`fed`/`fed`): the resolver excludes
 mismatched rows as malformed rather than guessing which field to trust.
 
 Repeat with `p01_region_footer.sh` -> C1 (diff the footer rows before/after
@@ -164,24 +164,24 @@ iterm2.run_until_complete(main)
 
 Then the same `append_result.sh ... terminal=iterm2 ... native_gettext ...`
 call as §2.1, reading `/tmp/t0-iterm2-c2.txt`. `async_get_screen_contents`
-only returns the VISIBLE screen by default — for scrollback, iTerm2's API
+only returns the VISIBLE screen by default, for scrollback, iTerm2's API
 needs `session.async_get_contents(...)` with a wider range, or fall back to
 the tmux-hosted recipe (§2.5) for iTerm2's C2 cell specifically.
 
-### 2.4 Ghostty, Alacritty, VTE (GNOME Terminal) — via tmux (§2.5)
+### 2.4 Ghostty, Alacritty, VTE (GNOME Terminal): via tmux (§2.5)
 
 Per `01-t0-matrix.md` §2's capture table, none of these three have a stable
-get-text API as of 2026 — run every probe **inside a tmux session hosted by
+get-text API as of 2026: run every probe **inside a tmux session hosted by
 that terminal** and capture with `tmux capture-pane`, exactly like the
 sandboxed tmux proxy cell this unit already automated, except now tmux's
 OUTER terminal is real. This is the only way to get:
 
 - C1/C2/C3/C6/C7/C8/N06/N07 for these three terminals (same commands as
-  the sandboxed run, just executed with that terminal as the visible host —
+  the sandboxed run, just executed with that terminal as the visible host: 
   see §2.5's generic recipe).
 - **The part the sandbox COULD NOT measure**: whether OSC 133 marks and the
   DECRQM 2026 reply reach the outer terminal (C5, C7's
-  `osc133_host_visible`/`decrqm_passthrough` fields) — this requires
+  `osc133_host_visible`/`decrqm_passthrough` fields): this requires
   `allow-passthrough on` in tmux and a REAL terminal above it, which is
   exactly what's available here and wasn't in the sandbox.
 
@@ -191,18 +191,18 @@ tmux set -g allow-passthrough on   # required for the host-visibility check
 
 Provenance caveat (resolver rule, t0-verdict-schema.md §4.1): rows captured
 via `tmux capture-pane` are recorded with `context=tmux` and measure tmux's
-own emulator — they never count as the host terminal's `plain` cells. For
+own emulator: they never count as the host terminal's `plain` cells. For
 Ghostty/Alacritty/VTE's **plain**-context C2 (the cells D-PA actually
 reads), use the §2.6 human-eye recipe (`capture=human_eye` is accepted
 ground truth); Ghostty stays partial/human-verified until someone does that
-pass — that is expected, not a process failure.
+pass. That is expected, not a process failure.
 
 ### 2.5 Generic tmux-hosted recipe (reuse for Ghostty/Alacritty/VTE, and for
 ### a second independent measurement on kitty/iTerm2/WezTerm inside tmux)
 
 ```bash
 # Open a tmux session in the target terminal (Ghostty/Alacritty/VTE/etc),
-# then from a shell inside that terminal (NOT nested tmux -- this new
+# then from a shell inside that terminal (NOT nested tmux, this new
 # session IS your one level of tmux):
 tmux new-session -s t0cell -x 80 -y 24 \
   'bash scripts/harness/t0/probes/p02_scrollback_feed.sh; sleep 3'
@@ -218,15 +218,15 @@ bash scripts/harness/t0/append_result.sh ghostty tmux local C2 fed fed \
 Swap `ghostty` for `alacritty`/`vte`/`kitty`/`iterm2`/`wezterm` and rerun in
 each terminal for that terminal's `context=tmux` rows. Swap the probe
 script per claim per §2's table (C1/C3/C5/C6/C7/C8/N06/N07 all follow the
-exact same shape — only the judgment logic per claim differs; see
+exact same shape, only the judgment logic per claim differs; see
 `scripts/harness/t0/tmux/run_cell.sh`'s `cell_*` functions for the EXACT
-judgment logic this unit already validated in the sandbox — port the same
+judgment logic this unit already validated in the sandbox, port the same
 `grep`/diff checks, just against a real host).
 
 **C5/C7 host-visibility, specifically** (the thing the sandbox flagged as
 untestable, `t0-verdict-schema.md` §4): after the tmux session above exits,
 check whether `kitten @`/`wezterm cli`/etc. on the HOST (outside tmux) saw
-the OSC 133 marks or the DECRQM reply — if the host terminal's own log/API
+the OSC 133 marks or the DECRQM reply, if the host terminal's own log/API
 shows nothing, that confirms R-04 §D's expectation (`:inert`); if it does,
 that's new information worth flagging back to the roadmap owner before T1
 finalizes its tmux quirk table.
@@ -254,7 +254,7 @@ tell application "Terminal"
 end tell
 ```
 
-`contents of` only returns the VISIBLE screen (per §2's capture table) —
+`contents of` only returns the VISIBLE screen (per §2's capture table): 
 Apple Terminal's C2 cell needs either the tmux-hosted recipe (§2.5, which
 gives you real scrollback via `capture-pane`) or a manual scrollback check
 + screenshot (§2.6's pattern), recorded with `capture=human_eye` if manual,
@@ -268,21 +268,21 @@ Identical recipes, prefixed with `ssh`:
 ssh myhost 'bash ~/raxol/scripts/harness/t0/probes/p02_scrollback_feed.sh'
 ```
 
-Capture from the LOCAL terminal (the one you're physically looking at —
+Capture from the LOCAL terminal (the one you're physically looking at: 
 SSH transport tests whether the round-trip adds latency/corruption, not a
 different terminal). Record with the same `append_result.sh` call, setting
 `TRANSPORT=ssh`. Also time the DECRQM round-trip for C5
 (`time bash probes/p05_mode2026_probe.sh 2.0` over the SSH session) and
-note the added latency in the `NOTES` field — this feeds T1's SSH-widened
+note the added latency in the `NOTES` field: this feeds T1's SSH-widened
 timeout constant.
 
 ---
 
-## 3. C-4 (resize) — the one claim this unit's automation does not cover
+## 3. C-4 (resize): the one claim this unit's automation does not cover
 
 Neither the tmux proxy cell nor the `emu` cell can produce C4 evidence
 (tmux resize doesn't reproduce a real terminal's SIGWINCH reflow policy;
-the emulator has no scrollback to corrupt — both documented `n/a` in
+the emulator has no scrollback to corrupt, both documented `n/a` in
 `t0-verdict-schema.md` §4). This is a Ring-B-only claim on every real
 terminal:
 
@@ -304,7 +304,7 @@ bash scripts/harness/t0/append_result.sh kitty plain local C4 reflow reflow \
   native_gettext human /tmp/t0-kitty-c4.txt "80->120->60 resize during stream; clean reflow, no ghosting"
 ```
 
-(`automation: human` even though capture is native — the JUDGMENT here
+(`automation: human` even though capture is native: the JUDGMENT here
 needs a human's eyes on the resize transition, not just the final grid.)
 
 ---
@@ -317,18 +317,18 @@ elixir scripts/harness/t0/verdict_resolver.exs scripts/harness/t0/t0-verdict.jso
 
 The resolver enforces its own floors in code (see t0-verdict-schema.md
 §4.1): fewer than 2 measured tier-1 terminals → `dpa: "pending"` with no
-provisional at all; 2–3 measured → still `"pending"` but with a
+provisional at all; 2-3 measured → still `"pending"` but with a
 `provisional` suggestion; a definitive `"A"/"B"/"C"` plus the §7.4
 `go: "go"/"no_go"` gate only comes from the fully measured tier-1 set
 (kitty/iTerm2/WezTerm/Ghostty). A terminal only counts as measured when it
-has BOTH a ground-truth C2 row and a C1 row — remember to record C1 first
+has BOTH a ground-truth C2 row and a C1 row: remember to record C1 first
 or the terminal stays in `missing` no matter how good its C2 evidence is.
 Paste the resolver's JSON output into the roadmap's D-PA decision record
-once tier-1 is complete — the `reason` field is written to be pasted
+once tier-1 is complete: the `reason` field is written to be pasted
 verbatim.
 
 The resolver's own regression suite (13 synthetic fixtures locking the
-soundness rules — run after any resolver change):
+soundness rules: run after any resolver change):
 
 ```bash
 elixir scripts/harness/t0/test/resolver_test.exs
@@ -348,7 +348,7 @@ bash scripts/harness/t0/capture_writer.sh kitty bare "0.32" \
 ```
 
 These land in `scripts/harness/t0/capture/<terminal>-<context>.json`
-(schema: `harness-ui-testing/04-capability.md` §2) — T1's builder copies or
+(schema: `harness-ui-testing/04-capability.md` §2): T1's builder copies or
 symlinks this directory in once `Raxol.Test.CapabilityFixtures.load!/1`
 exists (that doc's §10.3 recommends T0 write there directly; this unit's
 write-set does not include `test/fixtures/`, so captures stay under
