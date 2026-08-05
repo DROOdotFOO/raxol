@@ -154,7 +154,7 @@ send_poll(chat_id, "Which doc?",
 
 Option count is validated client-side (2-10); other constraints (text length, entity bounds) are left to the API.
 
-### Self-Hosted Bot API Server
+### Self-hosted bot API server
 
 For groups expecting >30 req/s during join floods (Telegram's public API rate cap), point `:api_base` at a [gramiojs/telegram-bot-api](https://github.com/gramiojs/telegram-bot-api) Docker image:
 
@@ -167,7 +167,7 @@ Raxol.Telegram.RichMessage.Sender.send(chat_id, msg,
 
 The same `:api_base` option works on `Raxol.Telegram.Poll.send_poll/4` and `Raxol.Telegram.Guardian.apply_decision/3` (shared `HTTP` transport).
 
-## As a Gateway Adapter
+## As a gateway adapter
 
 `Raxol.Telegram.GatewayAdapter` puts Telegram behind the frozen
 `Raxol.Gateway.Adapter` contract (requires the optional `raxol_gateway`

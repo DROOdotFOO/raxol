@@ -146,7 +146,7 @@ Raxol.Gateway.Supervisor.start_link(
 
 Turns are collected deterministically (event fold barrier, then a synchronous engine
 render), and `:event_fn` / `:format_fn` are injectable for custom event mapping or frame
-formatting. Frames the app renders between turns are discarded -- a chat surface replies
+formatting. Frames the app renders between turns are discarded: a chat surface replies
 to messages; spontaneous pushes are `Raxol.Gateway.Delivery`'s job. The handler's
 `terminate/2` (a new optional `Handler` callback the session invokes on clean stops)
 stops the per-chat Lifecycle so it cannot outlive its chat.

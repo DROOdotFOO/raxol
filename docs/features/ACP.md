@@ -36,7 +36,7 @@ Every job is a state machine. One supervised `Raxol.Earn.JobSession` runs per ac
 {:ok, :submitted} = Raxol.Earn.JobSession.submit({8453, "job-42"}, deliverable)
 ```
 
-The seller-side glue is `Raxol.Earn.JobSession.Provider`: for each lifecycle step it invokes the offering `Handler` (via `JobSession.HandlerSeam`), writes the hook call on-chain through `HookClient` + `ProviderAdapter` (the commit point -- a failed write leaves the session untouched), then mirrors the resulting status with `apply_event/3`.
+The seller-side glue is `Raxol.Earn.JobSession.Provider`: for each lifecycle step it invokes the offering `Handler` (via `JobSession.HandlerSeam`), writes the hook call on-chain through `HookClient` + `ProviderAdapter` (the commit point: a failed write leaves the session untouched), then mirrors the resulting status with `apply_event/3`.
 
 ## Offerings
 
@@ -67,13 +67,13 @@ end
 
 The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed `Registry`. `JobSession.Provider` invokes the handler at each lifecycle step and writes the matching hook call on-chain with the configured wallet.
 
-## Xochi Cross-Chain Transfer (the first offering)
+## Xochi cross-chain transfer (the first offering)
 
 `Raxol.Earn.Xochi.TransferOffering` is the first offering: a **pure storefront** for cross-chain stablecoin transfers. raxol never signs or holds the buyer's funds.
 
 - The buyer quotes and signs a Xochi intent themselves (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`) and puts the signed bundle in the job requirement's `signed_intent`.
 - On delivery, `Raxol.Earn.Xochi.Settler` relays that bundle to Xochi via `execute_signed/2` (no re-signing) and polls it to settlement; the deliverable is the on-chain settlement tx hashes.
-- The transfer settles through Xochi off-escrow, so the ACP core's take never bites it. The job is a **plain job** (`hook = address(0)`); the ACP budget is only raxol's storefront fee -- **8 bps of the transfer**, set via `:fee_bps`. On completion the provider nets `budget * 0.90`.
+- The transfer settles through Xochi off-escrow, so the ACP core's take never bites it. The job is a **plain job** (`hook = address(0)`); the ACP budget is only raxol's storefront fee: **8 bps of the transfer**, set via `:fee_bps`. On completion the provider nets `budget * 0.90`.
 
 `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow and the requirement/deliverable schemas to register on the marketplace.
 
@@ -90,7 +90,7 @@ The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed
 
 ## On-Chain Writes
 
-The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.Earn.ContractClient` write surface and the `:acp_version` switch were retired -- see `MIGRATION_V2.md`). `Raxol.Earn.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.Earn.ProviderAdapter`:
+The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.Earn.ContractClient` write surface and the `:acp_version` switch were retired: see `MIGRATION_V2.md`). `Raxol.Earn.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.Earn.ProviderAdapter`:
 
 - `SCA`: sponsored ERC-4337 v0.7 UserOps via `Raxol.Earn.Wallet.SCA` (Alchemy Modular Account v2 + paymaster). Self-deploys the account on the first write.
 - `JSONRPC`: a plain EOA signing EIP-1559 typed transactions (`Raxol.Earn.Onchain.{RPC, Transaction, RLP}`), with nonce assignment serialized through `Raxol.Earn.Wallet.NonceServer`.
@@ -100,7 +100,7 @@ The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there
 
 ## Expiry
 
-`JobSession` reaches the terminal `:expired` status via `expire/2` from any non-terminal status, so a job whose counterparty abandoned it can be closed rather than left wedged. `:expired`, `:completed`, and `:rejected` are terminal -- the session process stops with `:normal` once it reaches one. On-chain escrow handling on expiry is the `AgenticCommerceV3` core's responsibility.
+`JobSession` reaches the terminal `:expired` status via `expire/2` from any non-terminal status, so a job whose counterparty abandoned it can be closed rather than left wedged. `:expired`, `:completed`, and `:rejected` are terminal: the session process stops with `:normal` once it reaches one. On-chain escrow handling on expiry is the `AgenticCommerceV3` core's responsibility.
 
 ## Nonce Serialization
 

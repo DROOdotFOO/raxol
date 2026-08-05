@@ -223,7 +223,7 @@ lib/raxol/
 
 **BaseManager Pattern**: GenServers use `use Raxol.Core.Behaviours.BaseManager` for consistent lifecycle management.
 
-**State Management**: ETS-backed UnifiedStateManager
+**State Management**: `Raxol.Core.StateManager` (`lib/raxol/core/state_manager.ex`), which selects between functional (map-based), process-based, and ETS-backed strategies. It replaced the two duplicate `UnifiedStateManager` modules deleted in `5f2fb352d`.
 
 **Configuration**: TOML-based (`config/raxol.example.toml` as template) with environment overrides in `config/environments/`
 

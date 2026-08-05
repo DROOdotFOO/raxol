@@ -145,7 +145,7 @@ end
 - [ ] Set frame budget. Warn if > 16ms
 - [ ] Test on slow hardware
 
-### Frame Budget Monitor
+### Frame budget monitor
 
 ```elixir
 defmodule FrameBudget do

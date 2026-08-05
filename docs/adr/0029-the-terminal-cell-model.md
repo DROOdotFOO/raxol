@@ -18,7 +18,7 @@ terminal *were* a canvas, and every one of them shared a signature:
 
 An opaque black terminal running the default theme hides a remarkable number of
 mistakes. Painting an opaque black background where you meant "leave it alone"
-looks *exactly* correct — until somebody turns on transparency. Draw a
+looks *exactly* correct, until somebody turns on transparency. Draw a
 background around a box's border instead of inside it and, on a dark theme, the
 result is plausible. The bugs only surface when a user changes something the
 author never varied.
@@ -47,12 +47,12 @@ fact to design against.
 
 Its sharpest consequence is that a **border glyph occupies a whole cell**, so a
 background cannot stop halfway through it. The border cell is either inside the
-background or outside it — which is a genuine choice, and CSS already named it:
+background or outside it, which is a genuine choice, and CSS already named it:
 
-- `background_clip: :border_box` **(default)** — the background extends under the
+- `background_clip: :border_box` **(default)**: the background extends under the
   border. A box that declares a background is a filled panel, and its frame is
   that panel's edge.
-- `background_clip: :padding_box` — the background stops at the border's inner
+- `background_clip: :padding_box`: the background stops at the border's inner
   edge, so the fill is inset and the outline sits on whatever is behind it.
 
 `:border_box` is the default because the alternative cuts a one-cell channel
@@ -62,7 +62,7 @@ colours fixes that; the more the box and the backdrop differ, the worse it looks
 ### 2. Transparency is an absence, not a value
 
 There is no alpha. A cell is transparent **precisely when we emit no background
-SGR for it**. Transparency is therefore not something you set — it is something
+SGR for it**. Transparency is therefore not something you set. It is something
 you *refrain from doing*.
 
 It follows that **you must never paint a background equal to the terminal's own**.
@@ -77,7 +77,7 @@ Painting it is the same mistake one layer up.
 
 Cells do not composite. Writing a cell **replaces** what was there. So an
 unpainted background cannot simply be written, or it will *erase* the background
-already at that coordinate — punching a hole through a filled parent.
+already at that coordinate, punching a hole through a filled parent.
 
 An unpainted background therefore **inherits the background already at that
 coordinate**. One rule; both cases fall out of it:
@@ -94,7 +94,7 @@ The user chose their terminal's background. We adapt to it rather than replace
 it. This is already the premise of the H-K colour work: `Raxol.UI.CellDim`
 detects the real ground via **OSC 11** and *solves* colours against it.
 
-So: **themes colour content** — foreground, accents, borders. They do not paint
+So: **themes colour content**: foreground, accents, borders. They do not paint
 the canvas. Foreground keeps a theme fallback (text needs a colour); background
 does not (a background is optional). An application that genuinely wants a
 different canvas sets a background explicitly, and that still paints.
@@ -105,7 +105,7 @@ only *assume* and a surface we deliberately *paint*:
 | theme colour  | what it is                                        | painted? |
 | ------------- | ------------------------------------------------- | -------- |
 | `:background` | this theme's assumption about the terminal's own canvas | **no**   |
-| `:surface`    | a raised opaque thing — a dialog, a panel          | **yes**  |
+| `:surface`    | a raised opaque thing: a dialog, a panel          | **yes**  |
 
 A modal needs to be opaque: it sits above dimmed content and that content must not
 read through it. But it cannot get its opacity from `:background`, because
@@ -113,7 +113,7 @@ read through it. But it cannot get its opacity from `:background`, because
 colour whose *job* is to be painted. Hence `:surface`.
 
 Opaque is right; the literal is not. A component that wants a solid panel asks the
-theme for `:surface` — not for `:background`, and not for a hard-coded `:black`.
+theme for `:surface`, not for `:background`, and not for a hard-coded `:black`.
 
 ### 5. The frame owns its own geometry
 
@@ -125,7 +125,7 @@ our behalf:
   column right.
 - **DECAWM (autowrap) is disabled** (`\e[?7l`). With autowrap on, the last cell of
   a full-width row advances the cursor by itself and the row separator advances
-  it *again* — every content row costs two physical lines, halving the visible
+  it *again*: every content row costs two physical lines, halving the visible
   frame.
 - Each styled run is terminated with `\e[0m`. This is what makes invariant 2 safe:
   emitting no background code cannot leak the previous run's background.
@@ -142,7 +142,7 @@ that a background is optional in a way a foreground is not. The compositing rule
 cost in the hot path.
 
 **Related.** The layout counterpart to this ADR is that **only `:box` produces a
-positioned element** — `:flex`/`:row`/`:column` dissolve into their children's
+positioned element**: `:flex`/`:row`/`:column` dissolve into their children's
 positions. Anything that must be addressable (identity, bounds, clipping, CSS
 keying, an accessibility role) has to be a box. See `docs/core/LAYOUT.md`.
 
@@ -155,12 +155,12 @@ Every bug above is an instance of one pattern:
 - `:black` meant *unpainted* **and** *black*
 - `nil` meant *transparent* **and** *erase what's beneath*
 - a box's `bg` meant *fill* **and** *border paint*
-- `gap` was read from `attrs` **and** the top level — but not from `style`, where
+- `gap` was read from `attrs` **and** the top level, but not from `style`, where
   people naturally put it
 - a border `variant` was *a known style* **and** *silently invisible* (an
   unrecognised value fell through to `:none`, whose horizontal run is a space)
 - the theme's `:background` meant *the canvas we assume* **and** *the colour a
-  panel paints itself with* — which is why a modal reached for it, and why
+  panel paints itself with*, which is why a modal reached for it, and why
   invariant 4 could not hold until `:surface` split them
 
 In each case the two meanings were indistinguishable by the time they reached the
@@ -171,6 +171,6 @@ The last entry in that list was found *in review of this ADR*, by someone readin
 the invariants against the code they were supposed to describe. That is the
 intended use.
 
-When adding to the paint path, the question to ask is not "does this look right?"
-— on the default configuration it will. The question is: **what is this value's
+When adding to the paint path, the question to ask is not "does this look right?",
+on the default configuration it will. The question is: **what is this value's
 one job, and what happens when the user's terminal is not mine?**

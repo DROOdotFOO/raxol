@@ -59,7 +59,7 @@ defmodule Raxol.Agent.Actions.Code do
       description:
         "Create a file (relative to the current working directory) with " <>
           "the given content. Refuses to clobber an existing file unless " <>
-          "`overwrite` is true — use `edit_file` for targeted changes. " <>
+          "`overwrite` is true: use `edit_file` for targeted changes. " <>
           "Parent directories are created as needed.",
       schema: [
         input: [

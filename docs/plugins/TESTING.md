@@ -362,7 +362,17 @@ end
 
 ## Integration Tests
 
-### Plugin System Integration
+These drive the real `Raxol.Core.Runtime.Plugins.PluginManager`. Its public
+surface is `load_plugin/1,2`, `load_plugin_by_module/2`, `unload_plugin/1`,
+`reload_plugin/1`, `enable_plugin/1`, `disable_plugin/1`, `get_plugin/1`,
+`get_plugin_state/1`, `get_loaded_plugins/1`, `get_plugin_config/1`, and
+`update_plugin_config/2`.
+
+`get_plugin/1` returns `%{id, module, metadata, enabled}` or `nil`.
+`get_plugin_state/1` returns the plugin's state or `nil`. Loading replies `:ok`
+or `{:error, reason}`.
+
+### Plugin system integration
 
 ```elixir
 defmodule MyPluginIntegrationTest do
@@ -373,122 +383,57 @@ defmodule MyPluginIntegrationTest do
   @moduletag :integration
 
   setup do
-    {:ok, _pid} = PluginManager.start_link(test_mode: true)
-
-    on_exit(fn ->
-      try do
-        PluginManager.stop()
-      catch
-        :exit, _ -> :ok
-      end
-    end)
-
+    start_supervised!(PluginManager)
+    :ok = PluginManager.load_plugin_by_module(MyPlugin, %{enabled: true})
     :ok
   end
 
-  describe "plugin loading" do
-    test "plugin can be loaded into system" do
-      plugin_manifest = MyPlugin.manifest()
+  test "the plugin is loaded and reports its module" do
+    entry = PluginManager.get_plugin("my-plugin")
 
-      result = PluginManager.load_plugin("my-plugin", %{
-        manifest: plugin_manifest,
-        module: MyPlugin
-      })
-
-      assert :ok = result
-
-      {:ok, status} = PluginManager.get_plugin_status("my-plugin")
-      assert status.status in [:loaded, :running]
-    end
-
-    test "plugin dependencies are resolved" do
-      manifest = MyPlugin.manifest()
-
-      case PluginManager.resolve_dependencies(manifest) do
-        {:ok, resolved} ->
-          assert "raxol-core" in Map.keys(resolved)
-
-        {:error, conflicts} ->
-          assert is_list(conflicts)
-          Enum.each(conflicts, fn conflict ->
-            assert is_map(conflict)
-            assert Map.has_key?(conflict, :plugin)
-            assert Map.has_key?(conflict, :requirement)
-          end)
-      end
-    end
-
-    test "plugin hot reload works" do
-      assert :ok = PluginManager.load_plugin("my-plugin")
-
-      {:ok, initial_status} = PluginManager.get_plugin_status("my-plugin")
-
-      assert :ok = PluginManager.hot_reload_plugin("my-plugin")
-
-      {:ok, reloaded_status} = PluginManager.get_plugin_status("my-plugin")
-      assert reloaded_status.status == :running
-      assert reloaded_status.last_reload != initial_status.last_reload
-    end
+    refute is_nil(entry), "plugin was not registered"
+    assert entry.module == MyPlugin
+    assert is_boolean(entry.enabled)
   end
 
-  describe "command integration" do
-    setup do
-      PluginManager.load_plugin("my-plugin")
-      :ok
-    end
+  test "enable and disable move the entry between states" do
+    :ok = PluginManager.enable_plugin("my-plugin")
+    assert PluginManager.get_plugin("my-plugin").enabled
 
-    test "plugin commands are registered" do
-      commands = MyPlugin.get_commands()
-
-      Enum.each(commands, fn {name, _, _} ->
-        command_name = "my-plugin:#{name}"
-
-        case Raxol.Commands.execute(command_name) do
-          {:ok, _result} -> :ok
-          {:error, :not_found} -> flunk("Command not registered: #{command_name}")
-          {:error, _other} -> :ok
-        end
-      end)
-    end
+    :ok = PluginManager.disable_plugin("my-plugin")
+    refute PluginManager.get_plugin("my-plugin").enabled
   end
 
-  describe "performance monitoring" do
-    setup do
-      PluginManager.load_plugin("my-plugin")
-      :ok
-    end
+  test "reload keeps the plugin registered" do
+    :ok = PluginManager.reload_plugin("my-plugin")
 
-    test "plugin performance is monitored" do
-      {:ok, status} = PluginManager.get_plugin_status("my-plugin")
+    entry = PluginManager.get_plugin("my-plugin")
+    refute is_nil(entry)
+    assert entry.module == MyPlugin
+  end
 
-      assert is_map(status.performance_metrics)
+  test "unload removes it" do
+    :ok = PluginManager.unload_plugin("my-plugin")
+    assert is_nil(PluginManager.get_plugin("my-plugin"))
+  end
 
-      expected_metrics = [
-        :memory_usage_mb,
-        :cpu_usage_percent,
-        :event_processing_time_ms,
-        :command_execution_count
-      ]
+  test "config round-trips" do
+    :ok = PluginManager.update_plugin_config("my-plugin", %{debug: true})
+    assert PluginManager.get_plugin_config("my-plugin").debug
+  end
 
-      Enum.each(expected_metrics, fn metric ->
-        assert Map.has_key?(status.performance_metrics, metric),
-          "Missing performance metric: #{metric}"
-      end)
-    end
-
-    test "plugin stays within its resource budget" do
-      manifest = MyPlugin.manifest()
-      budget = Map.get(manifest, :resource_budget, %{})
-
-      {:ok, status} = PluginManager.get_plugin_status("my-plugin")
-
-      if max_mb = budget[:max_memory_mb] do
-        assert status.performance_metrics.memory_usage_mb < max_mb
-      end
-    end
+  test "loading an unknown plugin returns an error rather than raising" do
+    assert {:error, _reason} = PluginManager.load_plugin("no-such-plugin")
   end
 end
 ```
+
+There is no dependency-resolution or per-plugin metrics API to test against:
+`resolve_plugin_order/1` in `Raxol.Plugins.Lifecycle.Dependencies` returns
+plugins in received order, and circular-dependency detection only catches a
+plugin that depends on itself. See the note in
+[ADR-0005](../adr/0005-runtime-plugin-system-architecture.md).
+
 
 ### Terminal Integration
 
@@ -527,7 +472,7 @@ end
 
 ## Test Helpers
 
-### Plugin Test Helper Module
+### Plugin test helper module
 
 ```elixir
 defmodule Raxol.PluginTestHelpers do
@@ -603,7 +548,7 @@ defmodule Raxol.PluginTestHelpers do
 end
 ```
 
-### Mock and Fixture Support
+### Mock and fixture support
 
 ```elixir
 defmodule Raxol.PluginTestMocks do
@@ -734,7 +679,7 @@ defmodule MyPluginPropertyTest do
 end
 ```
 
-## Test File Organization
+## Test file organization
 
 ```
 test/

@@ -16,7 +16,7 @@ defmodule Raxol.Payments.Actions.Payments.RevokeMandate do
   use Raxol.Agent.Action,
     name: "payment_revoke_mandate",
     description:
-      "Locally delete a stored Xochi Mandate envelope so it can no longer be selected for outbound requests. Note: Xochi's server-side budget counter for this envelope remains until expires_at -- per agent-auth.md (2026-04-27), no server revoke endpoint exists in v1.",
+      "Locally delete a stored Xochi Mandate envelope so it can no longer be selected for outbound requests. Note: Xochi's server-side budget counter for this envelope remains until expires_at, per agent-auth.md (2026-04-27), no server revoke endpoint exists in v1.",
     schema: [
       input: [
         envelope_hash: [

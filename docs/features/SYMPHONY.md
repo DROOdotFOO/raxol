@@ -63,7 +63,7 @@ process. `mode: inherit` (the default) injects nothing and preserves the
 ambient-env behavior. `require_login: true` makes an unauthenticated spawn fail
 preflight with `{:error, :codex_unauthenticated}` instead of stalling mid-turn.
 Each spawn emits `[:raxol, :symphony, :codex, :auth]` telemetry
-(`%{mode, authenticated?, source}` -- never the secret).
+(`%{mode, authenticated?, source}`, never the secret).
 
 ## Surfaces
 

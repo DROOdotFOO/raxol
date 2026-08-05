@@ -175,7 +175,7 @@ counter = MyApp.Components.Counter.update(:increment, model.counter)
 MyApp.Components.Counter.render(model.counter, %{})
 ```
 
-### Real-World Pattern: Checkbox
+### Real-world pattern: Checkbox
 
 Here's how the built-in Checkbox is structured (simplified):
 
@@ -297,7 +297,7 @@ test "disabled checkbox ignores events" do
 end
 ```
 
-### When to Use What
+### When to use what
 
 | Need | Approach |
 |------|----------|

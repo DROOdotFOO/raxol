@@ -1,14 +1,14 @@
-# Agent Harness — Cohort Research (Phase 1–2: frame + priors)
+# Agent Harness: Cohort Research (Phase 1-2: frame + priors)
 
 Date: 2026-07-15
 Status: priors written BEFORE research returned (calibration discipline).
 Protocol: cohort-research skill (dappsnap). Research horde: 9 Sonnet agents, forum-first.
 
-## Phase 1 — Frame
+## Phase 1: Frame
 
 **User pain, not feature:** A developer hands multi-step work to an agent
 ("fix this bug", "run this migration", "watch this deploy") and needs to
-trust it to finish — without losing the plot mid-task, without wrecking
+trust it to finish, without losing the plot mid-task, without wrecking
 the workspace, without burning $40 in a loop, and without demanding an
 approval click every 20 seconds. The *harness* is everything between the
 raw LLM API and that trust: the loop, tool dispatch, context lifecycle,
@@ -16,34 +16,34 @@ permissioning, checkpointing, steering, observability.
 
 Raxol context: `raxol_agent` has the parts (Strategy.ReAct, Turn,
 Authorization.Engine, ToolPolicy, Actions, backends w/ SSE, Curator,
-Teams) but no assembled harness — nothing owns the loop end-to-end the
+Teams) but no assembled harness, nothing owns the loop end-to-end the
 way Claude Code / Codex / OpenHands own theirs. The Selector already
 reserves `:claude_native` / `:codex` / `:cursor` as "vendor owns the
-loop" — so the standing architectural fork is: **build our own loop,
+loop", so the standing architectural fork is: **build our own loop,
 host vendor loops, or both.**
 
 **JTBD frame:** "I want to delegate real work to an agent running on my
 infra, steer it while it runs, and survive its mistakes."
 
-## Phase 2 — Priors (marked confident vs guessing)
+## Phase 2: Priors (marked confident vs guessing)
 
 ### Expected decomposition (7 concerns)
 
-1. **Context lifecycle** — window fill, compaction losing the plot,
+1. **Context lifecycle**: window fill, compaction losing the plot,
    session resume, memory. Expect this to be pain #1. [CONFIDENT]
-2. **Autonomy dial / permissioning** — approval-fatigue ↔ YOLO
+2. **Autonomy dial / permissioning**: approval-fatigue ↔ YOLO
    disasters; users train themselves to blind-click. [CONFIDENT]
-3. **Tool substrate reliability** — schema validation, retries,
+3. **Tool substrate reliability**: schema validation, retries,
    hallucinated tools, MCP servers eating context, local models unable
    to tool-call. [CONFIDENT-ish]
-4. **Loop control** — stall detection, turn budgets, cost caps, stop
+4. **Loop control**: stall detection, turn budgets, cost caps, stop
    conditions. [GUESSING at how it clusters]
-5. **Workspace safety** — checkpoint/rollback, git integration,
+5. **Workspace safety**: checkpoint/rollback, git integration,
    sandboxing. [GUESSING whether users see this as harness's job or git's]
-6. **Observability & steering** — streaming, plan visibility,
+6. **Observability & steering**: streaming, plan visibility,
    mid-run interruption/redirect, transcripts/replay. [GUESSING]
-7. **Parallelism/session model** — subagents, background tasks,
-   worktrees. [GUESSING — may be niche power-user concern]
+7. **Parallelism/session model**: subagents, background tasks,
+   worktrees. [GUESSING: may be niche power-user concern]
 
 ### Expected complaints
 
@@ -55,14 +55,14 @@ infra, steer it while it runs, and survive its mistakes."
 - Local models (Ollama/LM Studio) break on tool-calls
 - Observability = raw JSON logs, no replay
 
-### Expected differentiation (DOMAIN-INTERNAL BIAS — research must test)
+### Expected differentiation (DOMAIN-INTERNAL BIAS: research must test)
 
 BEAM/OTP: crash-isolated turns under supervision, process-per-agent
 parallelism, state-machine checkpointing, hot reload mid-session.
 Raxol-specific: terminal UI first-class, MCP-as-rendering-target,
 time-travel debugger already in repo (potential killer observability).
 Suspicion: cohort-empty space around *durable/resumable agent runs as
-supervised processes* — everyone else is a single OS process that dies.
+supervised processes*: everyone else is a single OS process that dies.
 
 ### Expected failure modes
 
@@ -80,7 +80,7 @@ client), not reimplementing ReAct. Or: own-loop matters precisely for
 the non-coding agents (ops, payments, sensors) where vendor loops don't
 go. Research should test which.
 
-## Phase 3 — Cohort (9 briefs)
+## Phase 3: Cohort (9 briefs)
 
 1. Leaders: Claude Code, Codex CLI/app-server
 2. Challengers: Gemini CLI, opencode, amp, goose, Aider, OpenHands
@@ -95,7 +95,7 @@ go. Research should test which.
 ## Synthesis checklist (Phase 5 gate)
 
 - [ ] Priors corrected somewhere? (If only confirmed → ran it wrong)
-- [ ] 5–8 pain clusters, not feature clusters
+- [ ] 5-8 pain clusters, not feature clusters
 - [ ] Surprises explicitly listed
 - [ ] Per finding: decision / foundation-invariant / non-commitment
 - [ ] Category-empty opportunities named

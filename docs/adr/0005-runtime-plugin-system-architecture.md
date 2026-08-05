@@ -40,7 +40,20 @@ Build a runtime plugin system on Elixir's native code loading with lifecycle man
 
 **Process Isolation** (`lib/raxol/core/runtime/plugins/plugin_supervisor.ex`): crash isolation via Task.Supervisor. Configurable timeouts (default 5000ms). Individual failure isolation.
 
-**Dependency Management** (`lib/raxol/core/runtime/plugins/dependency_manager.ex`): topological sorting for load order, circular dependency detection, version compatibility checking.
+**Dependency Management** (`lib/raxol/plugins/lifecycle/dependencies.ex`): topological sorting for load order, circular dependency detection, and version compatibility checking.
+
+`resolve_plugin_order/1` is Kahn's algorithm, stable across equally-ready plugins so the
+order is deterministic; dependencies outside the batch being loaded are treated as already
+satisfied and constrain nothing. `check_for_circular_dependency/2` walks the transitive
+graph, so `a -> b -> a` is rejected and not only self-reference. `check_dependencies/2`
+honours the requirement half of a `{name, requirement}` tuple through `Version.match?/2`,
+and fails closed when a version or requirement cannot be parsed.
+
+> **History.** These three capabilities were silently lost when the
+> `Raxol.Core.Runtime.Plugins.DependencyManager` subsystem was deleted in `ac583975d`, a
+> commit whose subject was about emulator state fields, and the reduced successor kept the
+> function names but not the behaviour. Restored in [#799](https://github.com/DROOdotFOO/raxol/issues/799);
+> `test/raxol/plugins/lifecycle/dependencies_test.exs` pins all three.
 
 **Security**: BEAM bytecode analysis detects security-sensitive operations (file access, network access, code injection, system commands). Configurable policies validate plugins before loading. Capability-based permissions with audit logging.
 
@@ -73,7 +86,7 @@ end
 Raxol.Plugins.reload("my_plugin")
 ```
 
-### Hot Reloading Flow
+### Hot reloading flow
 
 1. File watcher detects changes
 2. Snapshot current plugin state
@@ -145,7 +158,7 @@ The runtime approach lets plugins hot-load without process restarts and uses BEA
 - [Plugin Behaviour](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin.ex)
 - [Lifecycle Management](../../packages/raxol_core/lib/raxol/core/runtime/plugins/lifecycle.ex)
 - [State Management](../../packages/raxol_core/lib/raxol/core/runtime/plugins/state_manager.ex)
-- [Dependency Manager](../../lib/raxol/core/runtime/plugins/dependency_manager.ex)
+- [Plugin Dependencies](../../lib/raxol/plugins/lifecycle/dependencies.ex) (reduced successor to the deleted `DependencyManager`; see the note above)
 - [Plugin Supervisor](../../packages/raxol_core/lib/raxol/core/runtime/plugins/plugin_supervisor.ex)
 - [BEAM Analyzer](../../packages/raxol_core/lib/raxol/core/runtime/plugins/security/beam_analyzer.ex)
 - [Capability Detector](../../packages/raxol_core/lib/raxol/core/runtime/plugins/security/capability_detector.ex)

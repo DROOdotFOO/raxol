@@ -67,7 +67,7 @@ Never use bare generic names:
 - `handler.ex` -> use `<domain>_handler.ex`
 - `core.ex` -> use `<domain>_core.ex`
 
-## Why This Matters
+## Why this matters
 
 - No filename collisions across the codebase
 - Purpose is clear from the filename alone

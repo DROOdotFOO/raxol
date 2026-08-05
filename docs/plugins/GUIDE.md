@@ -187,7 +187,7 @@ Plugins without explicit priority default to `1000`.
 
 Dependencies are automatically sorted, so dependent plugins see events after their dependencies have processed them.
 
-### Error Handling in Filters
+### Error handling in filters
 
 Filter errors are logged but don't stop event propagation. Filters run under `PluginSupervisor` with a 1-second timeout by default. If a filter crashes, the event passes through to the next plugin.
 
@@ -315,4 +315,4 @@ end
 
 ## Examples
 
-- [Spotify Plugin](examples/SPOTIFY.md): sample plugin with OAuth, state management, and API integration
+- [Plugin Templates](PLUGIN_TEMPLATES.md): four runnable starting points under `examples/plugins/`

@@ -2,7 +2,7 @@
 
 Agents that can pay for things. `raxol_payments` gives any Raxol agent autonomous payment capabilities (wallet identity, quotes, transfers, spending limits) across chains and protocols.
 
-## How It Works
+## How it works
 
 An agent returns payment commands from `update/2` the same way it returns shell or async commands. The `SpendingHook` intercepts commands before execution, checks them against the `SpendingPolicy`, and the `Ledger` tracks what's been spent.
 
@@ -60,11 +60,11 @@ Flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712 intent) -> `poll_status
 
 For a storefront that settles on a buyer's behalf, the signing and the submission split into a buyer-side half and a relay-side half:
 
-- `sign_intent/2,3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting** -- the buyer hands this to the storefront.
+- `sign_intent/2,3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting**: the buyer hands this to the storefront.
 - `execute_signed/2` (relay side) posts a pre-signed bundle to Xochi **without re-signing**, so the relay never holds the buyer's key.
 - `execute/4` is the two composed: `sign_intent` then `execute_signed`.
 
-The Xochi Cross-Chain Transfer ACP offering (in `raxol_earn`, see [ACP](ACP.md)) is built on this split -- the buyer signs, raxol relays. `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow.
+The Xochi Cross-Chain Transfer ACP offering (in `raxol_earn`, see [ACP](ACP.md)) is built on this split: the buyer signs, raxol relays. `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow.
 
 Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design: the protocol takes a fee, the agent pays it, done.
 

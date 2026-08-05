@@ -4,7 +4,7 @@ Two approaches: the **TEA bridge** (`Raxol.LiveView.TEALive`) runs a full TEA ap
 
 > **Note:** Direct buffer manipulation via `Raxol.Core.{Buffer, Box}` is an advanced, low-level approach. The canonical Raxol API is TEA-based: your `view/1` callback returns an element tree and the framework handles rendering. Prefer the TEA bridge for new integrations.
 
-## Basic Terminal Embedding
+## Basic terminal embedding
 
 ### Static Terminal
 
@@ -134,7 +134,7 @@ end
 
 ## State Synchronization
 
-### Two-Way Data Binding
+### Two-way data binding
 
 Keep socket state in sync with terminal display:
 
@@ -167,7 +167,7 @@ defmodule MyAppWeb.CounterLive do
 end
 ```
 
-### External State Changes
+### External state changes
 
 Subscribe to PubSub for external updates:
 
@@ -257,7 +257,7 @@ end
 
 ---
 
-## Performance: Diff Rendering
+## Performance: Diff rendering
 
 `TerminalComponent` diffs buffers automatically on each render, so you do not need to track `previous_buffer` yourself. Simply assign the new buffer and the component handles the rest:
 

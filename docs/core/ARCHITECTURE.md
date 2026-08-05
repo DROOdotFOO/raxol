@@ -2,7 +2,7 @@
 
 How Raxol works, from application model to terminal output.
 
-## The Big Picture
+## The big picture
 
 ```elixir
 Your App (TEA)          Raxol (Framework)           Rendering Targets
@@ -34,7 +34,7 @@ The runtime calls `view(model)` after every `update`, diffs the resulting Elemen
 
 ## Layer Stack
 
-### 1. View DSL -> Element Tree
+### 1. View DSL -> element tree
 
 The `view/1` callback uses macros to build a tree of plain maps:
 
@@ -51,7 +51,7 @@ end
 
 Produces: `%{type: :column, children: [%{type: :text, ...}, %{type: :row, ...}], ...}`
 
-### 2. Preparer -> Measured Element Tree
+### 2. Preparer -> measured element tree
 
 `Raxol.UI.Layout.Preparer` walks the element tree and pre-measures all text nodes via `Raxol.UI.TextMeasure`, producing a `PreparedElement` tree with cached display widths. This is the "prepare" phase of a two-phase prepare/layout architecture (inspired by [Pretext](https://github.com/nicklockwood/Pretext)):
 
@@ -60,7 +60,7 @@ Produces: `%{type: :column, children: [%{type: :text, ...}, %{type: :row, ...}],
 - `prepare_incremental/2` compares content hashes to skip re-measurement of unchanged nodes
 - `PreparedElement` also carries `animation_hints`, declarative metadata attached via `Raxol.Animation.Helpers.animate/2` in `view/1`. These hints flow through to backends untouched; the Preparer just preserves them alongside measurements
 
-### 3. Layout Engine -> Positioned Elements
+### 3. Layout engine -> positioned elements
 
 `Raxol.UI.Layout.Engine` takes the element tree and computes `{x, y, width, height}` for every node. Uses cached measurements from the Preparer when available. Supports:
 
@@ -76,7 +76,7 @@ automatic minimum-size floor derived from min-content measurement. See
 [LAYOUT.md](./LAYOUT.md) for the full supported-property reference,
 divergence table, and the text-wrapping API (`Raxol.UI.TextLayout`).
 
-### 4. Composer -> Cell Grid
+### 4. Composer -> cell grid
 
 `Raxol.UI.Rendering.Composer` walks the positioned tree and produces cell tuples:
 
@@ -86,11 +86,11 @@ divergence table, and the text-wrapping API (`Raxol.UI.TextLayout`).
 
 Each cell is one character at one position with its styling. Cell x-positions account for character display width: CJK characters advance x by 2, not 1.
 
-### 5. Screen Buffer -> Diff
+### 5. Screen buffer -> diff
 
 `Raxol.Terminal.ScreenBuffer` holds the current and previous frame. Only changed cells produce output.
 
-### 6. Terminal Backend -> Output
+### 6. Terminal backend -> output
 
 Platform-detected backend writes ANSI escape sequences:
 
@@ -101,7 +101,7 @@ Platform-detected backend writes ANSI escape sequences:
 - **Telegram**: Buffer-to-plaintext via an `io_writer` callback (`Raxol.Core.Runtime.Rendering.Backends.render_to_telegram/2`)
 - **MCP**: Tool/resource derivation from Component tree (`Raxol.MCP.Server`, see ADR-0012). `StructuredScreenshot` includes animation hints in JSON Component summaries so agents can reason about animated state.
 
-### MCP as Rendering Target (ADR-0012)
+### MCP as rendering target (ADR-0012)
 
 MCP is a first-class rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the Component tree.
 
@@ -154,7 +154,7 @@ process_component(ExpensiveChart, data: sensor_feed)
 
 The component gets its own GenServer under a DynamicSupervisor. If it crashes, it restarts without affecting the rest of the UI. State is preserved in ETS across restarts.
 
-### Hot Code Reload (Dev Only)
+### Hot code reload (dev only)
 
 `Raxol.Dev.CodeReloader` watches `.ex` files via FileSystem, debounces changes, recompiles, and sends `:render_needed` to the Lifecycle. Your app updates in-place without restart.
 

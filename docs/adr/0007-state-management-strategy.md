@@ -165,7 +165,9 @@ The multi-layered approach gives the right tool for each scenario while keeping 
 
 ## References
 
-- [Unified State Manager](../../lib/raxol/core/unified_state_manager.ex)
+- [State Manager](../../lib/raxol/core/state_manager.ex) (`Raxol.Core.StateManager`; the
+  `Raxol.Core.UnifiedStateManager` this ADR was written against was deleted in `5f2fb352d`
+  along with its duplicate, and this module is the survivor)
 
 ---
 

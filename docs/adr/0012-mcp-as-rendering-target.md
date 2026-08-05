@@ -15,7 +15,7 @@ The real problem: MCP shouldn't be bolted onto the side. Every Raxol app is a st
 
 Treat MCP as a first-class rendering target. The framework derives the MCP surface (tools, resources, prompts) automatically from the Component tree and model. App authors write zero MCP glue code. Build a TUI app, get an AI interface for free.
 
-### Category Theory Framing
+### Category theory framing
 
 This isn't a metaphor. The rendering targets are literally functors from the same source category:
 

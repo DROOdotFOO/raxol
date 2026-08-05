@@ -11,7 +11,7 @@ Tests fail when run as a full suite but pass individually. The root causes:
 
 ## Fixes
 
-### 1. Isolate Plugin Tests with Module Prefixes
+### 1. Isolate plugin tests with module prefixes
 
 Plugin fixtures redefine the same module names repeatedly. Use unique module names per test.
 
@@ -35,7 +35,7 @@ setup do
 end
 ```
 
-### 2. Use `start_supervised!` for Process Management
+### 2. Use `start_supervised!` for process management
 
 Manual start/stop of GenServers causes conflicts between tests. Let ExUnit manage the lifecycle instead.
 
@@ -56,7 +56,7 @@ setup do
 end
 ```
 
-### 3. Make Global Processes Test-Specific
+### 3. Make global processes test-specific
 
 The `test_helper.exs` starts global processes that tests share. Move them to individual test `setup` blocks.
 
@@ -78,7 +78,7 @@ setup do
 end
 ```
 
-### 4. Add Explicit Module Loading Checks
+### 4. Add explicit module loading checks
 
 `function_exported?` races with dynamic compilation. Ensure modules are loaded first.
 
@@ -96,7 +96,7 @@ test "defines handle_in/3 callback" do
 end
 ```
 
-### 5. Use `async: true` Where Safe
+### 5. Use `async: true` where safe
 
 Tests without shared state can run in parallel.
 
@@ -120,7 +120,7 @@ defmodule Raxol.PluginServerTest do
 end
 ```
 
-### 6. Clean Up Dynamic Modules
+### 6. Clean up dynamic modules
 
 Plugin tests leave modules defined in memory. Purge them after each test.
 
@@ -157,7 +157,7 @@ end
 
 5. **Enable more async tests** - Audit tests for async safety and convert where possible.
 
-## Full Example: TerminalChannelTest
+## Full example: TerminalChannelTest
 
 ```elixir
 defmodule RaxolWeb.TerminalChannelTest do

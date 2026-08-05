@@ -303,42 +303,54 @@ jobs:
       run: |
         echo "Running current memory benchmarks for scenario: ${{ matrix.scenario }}"
 
-        # Run memory analysis if task exists
+        # Run memory analysis. The task has its own scenario vocabulary
+        # (terminal_operations, buffer_management, realistic_usage,
+        # memory_patterns, all) which does not cover every matrix scenario,
+        # so an unsupported one produces no file and is not an error. What is
+        # an error is producing a file that will not parse.
+        ANALYSIS=regression/memory/current/${{ matrix.scenario }}_analysis.json
+
         if mix help raxol.bench.memory_analysis &>/dev/null; then
           mix raxol.bench.memory_analysis \
             --scenario ${{ matrix.scenario }} \
             --time 3 \
             --memory_time 2 \
-            --output regression/memory/current/${{ matrix.scenario }}_analysis.json || true
-        else
-          echo "Memory analysis task not found, creating placeholder..."
-          echo '{}' > regression/memory/current/${{ matrix.scenario }}_analysis.json
+            --output "$ANALYSIS" \
+            || echo "::notice::no memory analysis for scenario ${{ matrix.scenario }}"
         fi
 
-        # Run specific memory benchmarks
+        if [ -f "$ANALYSIS" ]; then
+          python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$ANALYSIS" \
+            || { echo "Memory analysis did not emit valid JSON: $ANALYSIS" >&2; exit 1; }
+        else
+          echo '{}' > "$ANALYSIS"
+        fi
+
+        # Run specific memory benchmarks. No error swallowing here: a crashing
+        # benchmark must fail the job, not write a corrupt file that the
+        # analyzer then silently treats as "no data".
         case "${{ matrix.scenario }}" in
-          "terminal_operations")
-            if [ -f "bench/memory/terminal_memory_benchmark.exs" ]; then
-              mix run bench/memory/terminal_memory_benchmark.exs -- --json 2>/dev/null | tail -1 > regression/memory/current/${{ matrix.scenario }}_memory.json || true
-            else
-              echo '{}' > regression/memory/current/${{ matrix.scenario }}_memory.json
-            fi
-            ;;
-          "plugin_system")
-            if [ -f "bench/memory/plugin_memory_benchmark.exs" ]; then
-              mix run bench/memory/plugin_memory_benchmark.exs -- --json 2>/dev/null | tail -1 > regression/memory/current/${{ matrix.scenario }}_memory.json || true
-            else
-              echo '{}' > regression/memory/current/${{ matrix.scenario }}_memory.json
-            fi
-            ;;
-          "load_testing")
-            if [ -f "bench/memory/load_memory_benchmark.exs" ]; then
-              mix run bench/memory/load_memory_benchmark.exs -- --json 2>/dev/null | tail -1 > regression/memory/current/${{ matrix.scenario }}_memory.json || true
-            else
-              echo '{}' > regression/memory/current/${{ matrix.scenario }}_memory.json
-            fi
-            ;;
+          "terminal_operations") BENCH=bench/memory/terminal_memory_benchmark.exs ;;
+          "plugin_system")       BENCH=bench/memory/plugin_memory_benchmark.exs ;;
+          "load_testing")        BENCH=bench/memory/load_memory_benchmark.exs ;;
+          *)                     BENCH="" ;;
         esac
+
+        OUT=regression/memory/current/${{ matrix.scenario }}_memory.json
+
+        if [ -z "$BENCH" ] || [ ! -f "$BENCH" ]; then
+          echo "No memory benchmark for scenario ${{ matrix.scenario }}" >&2
+          exit 1
+        fi
+
+        mix run "$BENCH" -- --json > "$OUT.raw"
+        tail -1 "$OUT.raw" > "$OUT"
+        rm -f "$OUT.raw"
+
+        # The benchmark must emit parseable JSON. Without this the gate can
+        # pass while measuring nothing at all.
+        python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" \
+          || { echo "Benchmark did not emit valid JSON: $OUT" >&2; exit 1; }
 
         echo "Current memory benchmarks complete for ${{ matrix.scenario }}"
 
@@ -357,42 +369,55 @@ jobs:
 
         echo "Running baseline memory benchmarks for scenario: ${{ matrix.scenario }}"
 
-        # Run baseline memory analysis if task exists
+        # Baseline analysis is best-effort for the same reason as the
+        # baseline benchmark below: the ref may predate the task emitting
+        # JSON for a .json path, and history cannot be fixed retroactively.
+        # Record no baseline rather than an unparseable one.
+        ANALYSIS=regression/memory/baselines/${{ matrix.scenario }}_analysis.json
+
         if mix help raxol.bench.memory_analysis &>/dev/null; then
           mix raxol.bench.memory_analysis \
             --scenario ${{ matrix.scenario }} \
             --time 3 \
             --memory_time 2 \
-            --output regression/memory/baselines/${{ matrix.scenario }}_analysis.json || true
+            --output "$ANALYSIS" || echo "::warning::Baseline analysis failed"
+          if [ -f "$ANALYSIS" ] && ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$ANALYSIS"; then
+            echo "::warning::Baseline analysis emitted no valid JSON; recording no baseline"
+            rm -f "$ANALYSIS"
+          fi
         else
-          echo "Memory analysis task not found, creating placeholder..."
-          echo '{}' > regression/memory/baselines/${{ matrix.scenario }}_analysis.json
+          echo "Memory analysis task not found on baseline ref; recording no baseline"
         fi
 
-        # Run baseline specific memory benchmarks
+        # Baseline benchmarks are best-effort, unlike the current-run ones.
+        # The baseline is whatever the ref already contains and cannot be
+        # fixed retroactively, so a ref that predates working benchmarks
+        # records no baseline rather than a corrupt one. The analyzer treats
+        # an absent file as "nothing to compare" and passes, but a file that
+        # is present and unparseable as a failure, so dropping it here is the
+        # honest outcome and still cannot hide a regression on this branch.
         case "${{ matrix.scenario }}" in
-          "terminal_operations")
-            if [ -f "bench/memory/terminal_memory_benchmark.exs" ]; then
-              mix run bench/memory/terminal_memory_benchmark.exs -- --json 2>/dev/null | tail -1 > regression/memory/baselines/${{ matrix.scenario }}_memory.json || true
-            else
-              echo '{}' > regression/memory/baselines/${{ matrix.scenario }}_memory.json
-            fi
-            ;;
-          "plugin_system")
-            if [ -f "bench/memory/plugin_memory_benchmark.exs" ]; then
-              mix run bench/memory/plugin_memory_benchmark.exs -- --json 2>/dev/null | tail -1 > regression/memory/baselines/${{ matrix.scenario }}_memory.json || true
-            else
-              echo '{}' > regression/memory/baselines/${{ matrix.scenario }}_memory.json
-            fi
-            ;;
-          "load_testing")
-            if [ -f "bench/memory/load_memory_benchmark.exs" ]; then
-              mix run bench/memory/load_memory_benchmark.exs -- --json 2>/dev/null | tail -1 > regression/memory/baselines/${{ matrix.scenario }}_memory.json || true
-            else
-              echo '{}' > regression/memory/baselines/${{ matrix.scenario }}_memory.json
-            fi
-            ;;
+          "terminal_operations") BENCH=bench/memory/terminal_memory_benchmark.exs ;;
+          "plugin_system")       BENCH=bench/memory/plugin_memory_benchmark.exs ;;
+          "load_testing")        BENCH=bench/memory/load_memory_benchmark.exs ;;
+          *)                     BENCH="" ;;
         esac
+
+        OUT=regression/memory/baselines/${{ matrix.scenario }}_memory.json
+
+        if [ -z "$BENCH" ] || [ ! -f "$BENCH" ]; then
+          echo "::warning::Baseline ref has no benchmark for ${{ matrix.scenario }}; recording no baseline"
+        elif ! mix run "$BENCH" -- --json > "$OUT.raw" 2>"$OUT.err"; then
+          echo "::warning::Baseline benchmark failed on $BASELINE_REF; recording no baseline"
+          tail -5 "$OUT.err" || true
+        else
+          tail -1 "$OUT.raw" > "$OUT"
+          if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT"; then
+            echo "::warning::Baseline benchmark emitted no valid JSON; recording no baseline"
+            rm -f "$OUT"
+          fi
+        fi
+        rm -f "$OUT.raw" "$OUT.err"
 
         echo "Baseline memory benchmarks complete for ${{ matrix.scenario }}"
 

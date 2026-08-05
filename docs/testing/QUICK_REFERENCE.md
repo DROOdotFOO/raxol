@@ -2,7 +2,7 @@
 
 ## Common Patterns
 
-### Testing Module Exports
+### Testing module exports
 
 ```elixir
 # BAD - Can race with module compilation
@@ -17,7 +17,7 @@ test "defines function" do
 end
 ```
 
-### Starting GenServers in Tests
+### Starting GenServers in tests
 
 ```elixir
 # BAD - Manual cleanup, name conflicts
@@ -35,7 +35,7 @@ setup do
 end
 ```
 
-### Testing with Dynamic Modules
+### Testing with dynamic modules
 
 ```elixir
 # BAD - Modules persist across tests
@@ -57,7 +57,7 @@ setup do
 end
 ```
 
-### Async vs Sync Tests
+### Async vs sync tests
 
 ```elixir
 # Safe for async - pure functions, no shared state
@@ -79,7 +79,7 @@ defmodule MyServerTest do
 end
 ```
 
-## Flaky Test Checklist
+## Flaky test checklist
 
 When tests pass individually but fail in the suite:
 

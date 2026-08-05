@@ -22,7 +22,7 @@ The goal was to replace imperative patterns with functional alternatives while m
 
 Complete functional transformation across the codebase.
 
-### Core Error Handling Module
+### Core error handling module
 
 ```elixir
 defmodule Raxol.Core.ErrorHandling do

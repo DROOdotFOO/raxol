@@ -2,7 +2,7 @@
 
 Most UI frameworks implement crash recovery with try/catch, state management with global stores, concurrency with goroutines or async/await, distribution with gRPC. Raxol gets all of that from OTP.
 
-## The Natural Mapping
+## The natural mapping
 
 | OTP concept   | TUI equivalent            | What you get                                                     |
 | ------------- | ------------------------- | ---------------------------------------------------------------- |
@@ -17,7 +17,7 @@ Most UI frameworks implement crash recovery with try/catch, state management wit
 
 These aren't analogies. They're the actual implementations.
 
-## What This Means in Practice
+## What this means in practice
 
 ### Crash isolation
 
@@ -94,7 +94,7 @@ Agents are processes. Teams are supervision trees.
 
 ## The Tradeoff
 
-Raxol is slower per-operation than Rust (Ratatui) or Go (Bubble Tea). Buffer creation is 25us vs 0.5us. But a full frame still completes in 2.1ms, leaving 87% of the 60fps budget for your code.
+Raxol is slower per-operation than Rust (Ratatui) or Go (Bubble Tea). Buffer creation is 25us vs 0.5us. But a full frame still completes in 2.1ms, leaving 87% of the 60fps budget for your code. Numbers and methodology are in [Benchmarks](bench/README.md).
 
 You give up raw microbenchmark speed. You get process isolation, hot reload, distribution, SSH, and multi-target rendering. For anything that has to keep running while you change it, that's a good trade.
 

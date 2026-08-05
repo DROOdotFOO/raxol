@@ -4,7 +4,7 @@ This directory covers plugin development for the Raxol terminal emulator.
 
 ## Guides
 
-### [GUIDE.md](GUIDE.md) - Development Guide
+### [GUIDE.md](GUIDE.md) - development guide
 
 Plugin development from basics to advanced: quick start, lifecycle states, event system, the manifest schema, security analysis, and process isolation.
 
@@ -12,7 +12,7 @@ Plugin development from basics to advanced: quick start, lifecycle states, event
 
 Working templates for common plugin types: basic, background (periodic tasks), and file system (file watching).
 
-### [TESTING.md](TESTING.md) - Testing Guide
+### [TESTING.md](TESTING.md) - testing guide
 
 Testing strategies: unit and integration tests, event filtering tests, property-based testing, performance testing.
 
@@ -24,9 +24,14 @@ Testing strategies: unit and integration tests, event filtering tests, property-
 
 ## Example Plugins
 
-- **[Spotify Plugin](examples/SPOTIFY.md)** - Sample plugin with OAuth, state management, and API integration
+Runnable starting points live in [`examples/plugins/`](../../examples/plugins/): a
+[basic plugin](../../examples/plugins/basic_plugin.exs), a
+[background task plugin](../../examples/plugins/background_task_plugin.exs), a
+[file system plugin](../../examples/plugins/file_system_plugin.exs), and a
+[test suite](../../examples/plugins/plugin_test.exs). See
+[Plugin Templates](PLUGIN_TEMPLATES.md).
 
-## Plugin System Architecture
+## Plugin system architecture
 
 ### Core Components
 

@@ -27,7 +27,7 @@ def deps do
 end
 ```
 
-## Your First App
+## Your first app
 
 Every Raxol app follows The Elm Architecture (TEA) with four callbacks:
 
@@ -112,7 +112,7 @@ Save as `lib/my_app.ex` and run:
 mix run lib/my_app.ex
 ```
 
-## How It Works
+## How it works
 
 ```
                 +---> view(model) ---> Terminal
@@ -155,7 +155,7 @@ divider()                              # Horizontal line
 spacer()                               # Flexible space
 ```
 
-## Adding Live Updates
+## Adding live updates
 
 Use `subscribe/1` to get periodic messages:
 
@@ -206,7 +206,7 @@ vim and tmux leave the same mess when you SIGKILL them. It comes with the
 territory for full-screen terminal programs. [Why OTP](../WHY_OTP.md#crash-isolation)
 covers what can take the VM down that way in the first place.
 
-## What You Just Built
+## What you just built
 
 That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
 

@@ -117,7 +117,7 @@ Pure data, no platform calls. The host app translates to `UNNotificationCategory
 
 The full untruncated text is preserved under `:body_long` on every constructor, for the watch detail view that fetches when the user taps "expand".
 
-### Rich Notification Constructors (W1)
+### Rich notification constructors (W1)
 
 | Constructor             | Carries                                    |
 | ----------------------- | ------------------------------------------ |
@@ -132,7 +132,7 @@ The full untruncated text is preserved under `:body_long` on every constructor, 
 
 Notification fields exposed: `body_long`, `audio_url`, `image_url`, `media_type` (`:sticker | :photo | :video_thumb`), `location`. Existing constructors stay backward-compatible (new fields nil-defaulted).
 
-## APNS Payload Encoding (W2)
+## APNS payload encoding (W2)
 
 `Raxol.Watch.Push.APNS.build_payload/1` emits the JSON payload with:
 
@@ -142,7 +142,7 @@ Notification fields exposed: `body_long`, `audio_url`, `image_url`, `media_type`
 
 `build_payload/1` is `@doc`-public so consumers can introspect or test the payload shape without Pigeon mocking.
 
-## FCM Payload Encoding (W3)
+## FCM payload encoding (W3)
 
 `Raxol.Watch.Push.FCM.build_notification_object/1` and `build_data_payload/1` emit the FCM body:
 
