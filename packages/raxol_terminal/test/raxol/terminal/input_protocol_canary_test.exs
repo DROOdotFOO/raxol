@@ -24,6 +24,11 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
   Driver: tmux when present (same mechanism the Terminal-Bench harness uses to
   drive agents), else `expect` as a portable fallback. Skips only when neither
   is installed. `unix_only` -- there is no pty to drive on Windows.
+
+  Runs on every OTP in the matrix, including those where `user_drv` will not
+  hand out a raw noshell tty and `Raxol.Terminal.Driver.Stty` has to establish
+  raw mode itself (OTP 26/27 -- see `Stty`'s moduledoc). Keeping it unskipped
+  there is the point: that path has no other end-to-end coverage.
   """
   use ExUnit.Case, async: false
 
@@ -117,14 +122,20 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
       * `reader=absent` -- `:user_drv_reader` was not registered, so
         `start_stdin_reader/1` silently traced nothing. Not a protocol change.
       * `reader=untraced...` -- the trace never attached.
-      * `raw=...isig_off=false` -- the tty was NOT in raw mode, so a bare
-        keystroke is held in the line discipline until a newline. This canary
-        types `a` and `b` with no newline, so nothing is delivered. A raw-mode
-        problem, not a protocol one.
-      * `reader=traced` AND `isig_off=true` -- everything this side controls was
-        in place and the bytes still did not arrive. THAT is the case that
-        points at OTP moving the reader's private message shape or its re-arm
-        contract (`Raxol.Terminal.Driver`'s `{:trace, ...}` handler).
+      * `reader=traced` -- everything this side controls was in place and the
+        bytes still did not arrive. THAT is the case that points at OTP moving
+        the reader's private message shape or its re-arm contract
+        (`Raxol.Terminal.Driver`'s `{:trace, ...}` handler).
+
+    Do NOT read `isig_off=false` as "not in raw mode, so of course nothing
+    arrived". It is not that evidence, in either direction. Once the reader is
+    armed, prim_tty owns the termios and re-applies ITS raw mode, which keeps
+    ISIG ENABLED (the whole reason `reassert_raw_until_isig_off/1` exists) --
+    so `isig_off=false` is the ordinary steady state, and keystrokes decode
+    through it perfectly well. It means "prim_tty won the termios race",
+    nothing more. `-icanon` is what governs whether a bare keystroke is
+    deliverable, and prim_tty's own raw mode sets it whether or not our `stty`
+    ever ran.
     """
   end
 
@@ -214,34 +225,7 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
           :ready_timeout
       end
     after
-      System.cmd("tmux", ["kill-session", "-t", session],
-        stderr_to_stdout: true
-      )
-    end
-  end
-
-  defp type_both(session, out) do
-    with :ok <- send_key(session, "a"),
-         :ok <- gap_then_send(session, "b") do
-      wait_for_output(out)
-      :sent
-    end
-  end
-
-  defp gap_then_send(session, key) do
-    Process.sleep(@gap_ms)
-    send_key(session, key)
-  end
-
-  # A refused keystroke must not read as a decode failure. The exit status was
-  # dropped once, which made a dead tmux session and a moved protocol produce
-  # the same empty result.
-  defp send_key(session, key) do
-    case System.cmd("tmux", ["send-keys", "-t", session, "-l", key],
-           stderr_to_stdout: true
-         ) do
-      {_, 0} -> :ok
-      {_out, _status} -> :send_failed
+      System.cmd("tmux", ["kill-session", "-t", session], stderr_to_stdout: true)
     end
   end
 
@@ -266,6 +250,29 @@ defmodule Raxol.Terminal.InputProtocolCanaryTest do
     # `expect` does its own waiting inside the script, so reaching here means
     # the keystrokes were written to the pty.
     :sent
+  end
+
+  defp type_both(session, out) do
+    with :ok <- send_key(session, "a"),
+         :ok <- gap_then_send(session, "b") do
+      wait_for_output(out)
+      :sent
+    end
+  end
+
+  defp gap_then_send(session, key) do
+    Process.sleep(@gap_ms)
+    send_key(session, key)
+  end
+
+  # A refused keystroke must not read as a decode failure. The exit status was
+  # dropped once, which made a dead tmux session and a moved protocol produce
+  # the same empty result.
+  defp send_key(session, key) do
+    case System.cmd("tmux", ["send-keys", "-t", session, "-l", key], stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {_out, _status} -> :send_failed
+    end
   end
 
   # Type only once the reader is armed, so we never send before the pty listens.
