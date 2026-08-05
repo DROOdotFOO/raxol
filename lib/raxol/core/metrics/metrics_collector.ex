@@ -79,6 +79,9 @@ defmodule Raxol.Core.Metrics.MetricsCollector do
     # Trim old entries periodically (every 100 inserts)
     maybe_trim_history(type, name)
 
+    # Forward to cloud export when it is running (no-op otherwise).
+    Raxol.Core.Metrics.Cloud.record(type, name, value, tags)
+
     :ok
   end
 
