@@ -68,15 +68,29 @@ defmodule Raxol.Agent.Session do
     # it, so once it reads empty our registration cannot collide.
     await_free(id)
 
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Raxol.Agent.Registry, id}})
+    GenServer.start_link(__MODULE__, opts,
+      name: {:via, Registry, {Raxol.Agent.Registry, id}}
+    )
   end
 
-  @doc "Send a message into the agent's TEA loop."
-  @spec send_message(term(), term()) :: :ok | {:error, :not_found}
-  def send_message(agent_id, message) do
+  @doc """
+  Send a message into the agent's TEA loop.
+
+  Pass `from: sender_agent_id` to attribute the message; it arrives in
+  `update/2` as `{:agent_message, sender_agent_id, message}`. Without it
+  the `from` position is `nil` (unknown sender), never a guess.
+  """
+  @spec send_message(term(), term(), keyword()) :: :ok | {:error, :not_found}
+  def send_message(agent_id, message, opts \\ []) do
     case Registry.lookup(Raxol.Agent.Registry, agent_id) do
-      [{pid, _}] -> GenServer.cast(pid, {:send_message, message})
-      [] -> {:error, :not_found}
+      [{pid, _}] ->
+        case Keyword.get(opts, :from) do
+          nil -> GenServer.cast(pid, {:send_message, message})
+          from -> GenServer.cast(pid, {:send_message, message, %{from: from}})
+        end
+
+      [] ->
+        {:error, :not_found}
     end
   end
 
@@ -193,6 +207,20 @@ defmodule Raxol.Agent.Session do
      }}
   end
 
+  # Team broadcasts are filtered here, not at the broadcaster: only a
+  # session started with a matching :team_id forwards the message.
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(
+        {:send_message, {:team_broadcast, team_id, _} = message},
+        state
+      ) do
+    if state.team_id == team_id do
+      forward_to_dispatcher(state, message, %{})
+    else
+      {:noreply, state}
+    end
+  end
+
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:send_message, message, metadata}, state)
       when is_map(metadata) do
@@ -213,7 +241,11 @@ defmodule Raxol.Agent.Session do
         :ok
 
       dispatcher_pid ->
-        payload = {:agent_message, state.id, message}
+        # `from` is the SENDER's id when the sender attributed itself; nil
+        # otherwise. It must never default to state.id — that is the
+        # receiver, and stamping it here would fabricate a sender.
+        {from, metadata} = Map.pop(metadata, :from)
+        payload = {:agent_message, from, message}
 
         cast =
           if map_size(metadata) == 0,
@@ -636,7 +668,8 @@ defmodule Raxol.Agent.Session do
   defp bridge_name_opts(session_id) do
     if Process.whereis(Raxol.Agent.Registry) do
       [
-        name: {:via, Registry, {Raxol.Agent.Registry, {:emit_bridge, session_id}}}
+        name:
+          {:via, Registry, {Raxol.Agent.Registry, {:emit_bridge, session_id}}}
       ]
     else
       []
