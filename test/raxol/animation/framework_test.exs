@@ -47,7 +47,9 @@ defmodule Raxol.Animation.FrameworkTest do
 
     # Reset or stop default AccessibilityServer to avoid stale state from prior tests
     case Process.whereis(Raxol.Core.Accessibility.AccessibilityServer) do
-      nil -> :ok
+      nil ->
+        :ok
+
       pid ->
         try do
           GenServer.stop(pid, :normal, 1000)
@@ -67,10 +69,14 @@ defmodule Raxol.Animation.FrameworkTest do
     Logger.debug("UserPreferences started successfully")
 
     # Start AccessibilityServer for the test with unique name to avoid conflicts
-    accessibility_server_name = :"accessibility_server_#{System.unique_integer([:positive])}"
-    {:ok, _accessibility_pid} = Raxol.Core.Accessibility.AccessibilityServer.start_link(
-      name: accessibility_server_name
-    )
+    accessibility_server_name =
+      :"accessibility_server_#{System.unique_integer([:positive])}"
+
+    {:ok, _accessibility_pid} =
+      Raxol.Core.Accessibility.AccessibilityServer.start_link(
+        name: accessibility_server_name
+      )
+
     Logger.debug("AccessibilityServer started successfully")
 
     Framework.init(%{}, local_user_prefs_name)
@@ -105,6 +111,7 @@ defmodule Raxol.Animation.FrameworkTest do
       catch
         :exit, _ -> :ok
       end
+
       Logger.debug("Framework stopped in on_exit")
 
       try do
@@ -119,7 +126,11 @@ defmodule Raxol.Animation.FrameworkTest do
       Logger.debug("EventManager cleanup completed")
     end)
 
-    {:ok, %{user_preferences_pid: user_prefs_pid, user_preferences_name: local_user_prefs_name}}
+    {:ok,
+     %{
+       user_preferences_pid: user_prefs_pid,
+       user_preferences_name: local_user_prefs_name
+     }}
   end
 
   describe "Animation Framework" do
@@ -514,6 +525,9 @@ defmodule Raxol.Animation.FrameworkTest do
                100
     end
 
+    # Wall-clock bound with only 2x headroom (500ms cap over a ~250ms
+    # floor: 150ms sleep + 100ms animation); flakes on loaded CI runners.
+    @tag :skip_on_ci
     test "meets performance requirements", %{
       user_preferences_pid: user_preferences_pid
     } do

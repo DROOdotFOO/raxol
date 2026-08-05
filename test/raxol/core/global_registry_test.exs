@@ -1,5 +1,6 @@
 defmodule Raxol.Core.GlobalRegistryTest do
-  use ExUnit.Case, async: false  # GenServer tests should not be async
+  # GenServer tests should not be async
+  use ExUnit.Case, async: false
 
   alias Raxol.Core.GlobalRegistry
 
@@ -20,7 +21,10 @@ defmodule Raxol.Core.GlobalRegistryTest do
       stop_supervised(GlobalRegistry)
 
       config = %{max_entries: 1000, cleanup_interval: 60_000}
-      start_supervised!({GlobalRegistry, [name: GlobalRegistry, config: config]})
+
+      start_supervised!(
+        {GlobalRegistry, [name: GlobalRegistry, config: config]}
+      )
 
       assert Process.whereis(GlobalRegistry) != nil
     end
@@ -51,7 +55,9 @@ defmodule Raxol.Core.GlobalRegistryTest do
       command_name = "test_command"
       command_handler = fn -> :executed end
 
-      assert :ok = GlobalRegistry.register(:commands, command_name, command_handler)
+      assert :ok =
+               GlobalRegistry.register(:commands, command_name, command_handler)
+
       assert {:ok, entry} = GlobalRegistry.lookup(:commands, command_name)
 
       assert is_function(entry)
@@ -71,18 +77,26 @@ defmodule Raxol.Core.GlobalRegistryTest do
       component_id = "button_component"
       component_data = %{type: :button, props: %{text: "Click me"}}
 
-      assert :ok = GlobalRegistry.register(:components, component_id, component_data)
+      assert :ok =
+               GlobalRegistry.register(
+                 :components,
+                 component_id,
+                 component_data
+               )
+
       assert {:ok, entry} = GlobalRegistry.lookup(:components, component_id)
 
       assert entry == component_data
     end
 
     test "lookup returns error for non-existent entry" do
-      assert {:error, :not_found} = GlobalRegistry.lookup(:sessions, "non_existent")
+      assert {:error, :not_found} =
+               GlobalRegistry.lookup(:sessions, "non_existent")
     end
 
     test "lookup returns error for invalid registry type" do
-      assert {:error, :unknown_registry_type} = GlobalRegistry.lookup(:invalid, "test")
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.lookup(:invalid, "test")
     end
 
     test "register overwrites existing entry" do
@@ -115,7 +129,8 @@ defmodule Raxol.Core.GlobalRegistryTest do
     end
 
     test "unregister returns error for invalid registry type" do
-      assert {:error, :unknown_registry_type} = GlobalRegistry.unregister(:invalid, "test")
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.unregister(:invalid, "test")
     end
   end
 
@@ -163,10 +178,22 @@ defmodule Raxol.Core.GlobalRegistryTest do
   describe "search/2" do
     setup do
       # Register some test data
-      GlobalRegistry.register(:commands, "user_login", %{description: "Handle user login"})
-      GlobalRegistry.register(:commands, "user_logout", %{description: "Handle user logout"})
-      GlobalRegistry.register(:commands, "admin_panel", %{description: "Show admin interface"})
-      GlobalRegistry.register(:commands, "file_upload", %{description: "Upload file to server"})
+      GlobalRegistry.register(:commands, "user_login", %{
+        description: "Handle user login"
+      })
+
+      GlobalRegistry.register(:commands, "user_logout", %{
+        description: "Handle user logout"
+      })
+
+      GlobalRegistry.register(:commands, "admin_panel", %{
+        description: "Show admin interface"
+      })
+
+      GlobalRegistry.register(:commands, "file_upload", %{
+        description: "Upload file to server"
+      })
+
       :ok
     end
 
@@ -190,15 +217,28 @@ defmodule Raxol.Core.GlobalRegistryTest do
     end
 
     test "search returns error for invalid registry type" do
-      assert {:error, :unknown_registry_type} = GlobalRegistry.search(:invalid, "pattern")
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.search(:invalid, "pattern")
     end
   end
 
   describe "filter/2" do
     setup do
-      GlobalRegistry.register(:sessions, "session1", %{active: true, user: "alice"})
-      GlobalRegistry.register(:sessions, "session2", %{active: false, user: "bob"})
-      GlobalRegistry.register(:sessions, "session3", %{active: true, user: "charlie"})
+      GlobalRegistry.register(:sessions, "session1", %{
+        active: true,
+        user: "alice"
+      })
+
+      GlobalRegistry.register(:sessions, "session2", %{
+        active: false,
+        user: "bob"
+      })
+
+      GlobalRegistry.register(:sessions, "session3", %{
+        active: true,
+        user: "charlie"
+      })
+
       :ok
     end
 
@@ -219,7 +259,9 @@ defmodule Raxol.Core.GlobalRegistryTest do
 
     test "filter returns error for invalid registry type" do
       filter_fn = fn _ -> true end
-      assert {:error, :unknown_registry_type} = GlobalRegistry.filter(:invalid, filter_fn)
+
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.filter(:invalid, filter_fn)
     end
   end
 
@@ -262,7 +304,9 @@ defmodule Raxol.Core.GlobalRegistryTest do
 
     test "bulk_register returns error for invalid registry type" do
       entries = [{"test", %{}}]
-      assert {:error, :unknown_registry_type} = GlobalRegistry.bulk_register(:invalid, entries)
+
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.bulk_register(:invalid, entries)
     end
 
     test "bulk_register handles empty list" do
@@ -279,6 +323,7 @@ defmodule Raxol.Core.GlobalRegistryTest do
         {"remove3", %{data: 3}},
         {"keep", %{data: 4}}
       ]
+
       GlobalRegistry.bulk_register(:sessions, entries)
       :ok
     end
@@ -294,7 +339,8 @@ defmodule Raxol.Core.GlobalRegistryTest do
     end
 
     test "bulk_unregister returns error for invalid registry type" do
-      assert {:error, :unknown_registry_type} = GlobalRegistry.bulk_unregister(:invalid, ["test"])
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.bulk_unregister(:invalid, ["test"])
     end
 
     test "bulk_unregister handles empty list" do
@@ -365,7 +411,9 @@ defmodule Raxol.Core.GlobalRegistryTest do
       command_name = "test_cmd"
       command_handler = fn -> :executed end
 
-      assert :ok = GlobalRegistry.register_command(command_name, command_handler)
+      assert :ok =
+               GlobalRegistry.register_command(command_name, command_handler)
+
       assert {:ok, entry} = GlobalRegistry.lookup_command(command_name)
 
       assert is_function(entry)
@@ -399,12 +447,20 @@ defmodule Raxol.Core.GlobalRegistryTest do
 
   describe "error handling" do
     test "handles invalid registry types gracefully" do
-      assert {:error, :unknown_registry_type} = GlobalRegistry.register(:invalid, "id", %{})
-      assert {:error, :unknown_registry_type} = GlobalRegistry.lookup(:invalid, "id")
-      assert {:error, :unknown_registry_type} = GlobalRegistry.unregister(:invalid, "id")
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.register(:invalid, "id", %{})
+
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.lookup(:invalid, "id")
+
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.unregister(:invalid, "id")
+
       assert {:error, :unknown_registry_type} = GlobalRegistry.list(:invalid)
       assert 0 = GlobalRegistry.count(:invalid)
-      assert {:error, :unknown_registry_type} = GlobalRegistry.search(:invalid, "pattern")
+
+      assert {:error, :unknown_registry_type} =
+               GlobalRegistry.search(:invalid, "pattern")
     end
 
     test "handles GenServer failures gracefully" do
@@ -423,11 +479,13 @@ defmodule Raxol.Core.GlobalRegistryTest do
   describe "concurrency and state management" do
     test "handles concurrent registrations correctly" do
       # Test concurrent access
-      tasks = 1..10 |> Enum.map(fn i ->
-        Task.async(fn ->
-          GlobalRegistry.register(:sessions, "session_#{i}", %{number: i})
+      tasks =
+        1..10
+        |> Enum.map(fn i ->
+          Task.async(fn ->
+            GlobalRegistry.register(:sessions, "session_#{i}", %{number: i})
+          end)
         end)
-      end)
 
       results = Task.await_many(tasks, 5000)
       assert Enum.all?(results, &(&1 == :ok))
@@ -473,18 +531,23 @@ defmodule Raxol.Core.GlobalRegistryTest do
   end
 
   describe "performance and scalability" do
+    # Wall-clock bounds (10ms single lookup / 1s bulk); flake on loaded
+    # CI runners.
+    @tag :skip_on_ci
     test "handles large numbers of entries efficiently" do
       # Register many entries to test performance
-      entries = 1..100 |> Enum.map(fn i ->
-        {"entry_#{i}", %{index: i, data: "test_data_#{i}"}}
-      end)
+      entries =
+        1..100
+        |> Enum.map(fn i ->
+          {"entry_#{i}", %{index: i, data: "test_data_#{i}"}}
+        end)
 
       start_time = System.monotonic_time(:millisecond)
       assert {:ok, 100} = GlobalRegistry.bulk_register(:components, entries)
       end_time = System.monotonic_time(:millisecond)
 
       # Should complete reasonably quickly (less than 1 second)
-      assert (end_time - start_time) < 1000
+      assert end_time - start_time < 1000
 
       # Verify all entries are registered
       assert 100 = GlobalRegistry.count(:components)
@@ -495,12 +558,15 @@ defmodule Raxol.Core.GlobalRegistryTest do
       end_time = System.monotonic_time(:millisecond)
 
       # Lookups should be very fast (less than 10ms)
-      assert (end_time - start_time) < 10
+      assert end_time - start_time < 10
     end
 
+    # Wall-clock bound (100ms search); flakes on loaded CI runners.
+    @tag :skip_on_ci
     test "search performance is acceptable" do
       # Register entries with searchable content
-      1..50 |> Enum.each(fn i ->
+      1..50
+      |> Enum.each(fn i ->
         GlobalRegistry.register(:commands, "test_command_#{i}", %{
           description: "Test command number #{i}"
         })
@@ -514,16 +580,17 @@ defmodule Raxol.Core.GlobalRegistryTest do
       assert length(results) == 50
 
       # Search should complete quickly (less than 100ms)
-      assert (end_time - start_time) < 100
+      assert end_time - start_time < 100
     end
   end
 
   describe "module behaviour compliance" do
     test "implements RegistryBehaviour correctly" do
       # Verify all behaviour callbacks are implemented
-      behaviours = GlobalRegistry.__info__(:attributes)
-                  |> Enum.filter(fn {attr, _} -> attr == :behaviour end)
-                  |> Enum.flat_map(fn {_, behaviours} -> behaviours end)
+      behaviours =
+        GlobalRegistry.__info__(:attributes)
+        |> Enum.filter(fn {attr, _} -> attr == :behaviour end)
+        |> Enum.flat_map(fn {_, behaviours} -> behaviours end)
 
       assert GlobalRegistry.RegistryBehaviour in behaviours
     end

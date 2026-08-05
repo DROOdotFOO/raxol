@@ -7,7 +7,18 @@ defmodule Raxol.Terminal.DriverIOTerminalTest do
   @moduletag :driver_io_terminal
   @moduletag :skip_on_ci
 
+  # These tests exercise the IOTerminal fallback, which only runs where the
+  # termbox2 NIF is absent. With the NIF loaded they must SKIP visibly in
+  # ExUnit's report -- not run zero assertions and count as passed.
+  @termbox_available Code.ensure_loaded?(:termbox2_nif) and
+                       function_exported?(:termbox2_nif, :tb_init, 0)
+
   describe "Driver with IOTerminal backend" do
+    if @termbox_available do
+      @tag skip:
+             "termbox2 NIF loaded; Driver only falls back to IOTerminal without it"
+    end
+
     test "initializes with IOTerminal when termbox2_nif not available" do
       # This test verifies the Driver can initialize using IOTerminal
       # Skip if termbox2_nif is actually available
@@ -107,41 +118,34 @@ defmodule Raxol.Terminal.DriverIOTerminalTest do
   end
 
   describe "terminal operations without termbox2_nif" do
+    if @termbox_available do
+      @describetag skip:
+                     "termbox2 NIF loaded; IOTerminal-only path not reachable here"
+    end
+
     setup do
-      # Only run these tests if termbox2_nif is not available
-      if Code.ensure_loaded?(:termbox2_nif) and
-           function_exported?(:termbox2_nif, :tb_init, 0) do
-        {:ok, skip: true}
-      else
-        {:ok, _state} = IOTerminal.init()
-        on_exit(fn -> IOTerminal.shutdown() end)
-        {:ok, skip: false}
-      end
+      {:ok, _state} = IOTerminal.init()
+      on_exit(fn -> IOTerminal.shutdown() end)
+      :ok
     end
 
-    test "can perform basic terminal operations", %{skip: skip} do
-      unless skip do
-        # These should work via IOTerminal
-        assert :ok = IOTerminal.clear_screen()
-        assert :ok = IOTerminal.hide_cursor()
-        assert :ok = IOTerminal.set_cell(0, 0, "A", 15, 0)
-        assert :ok = IOTerminal.present()
-        assert :ok = IOTerminal.show_cursor()
-      end
+    test "can perform basic terminal operations" do
+      # These should work via IOTerminal
+      assert :ok = IOTerminal.clear_screen()
+      assert :ok = IOTerminal.hide_cursor()
+      assert :ok = IOTerminal.set_cell(0, 0, "A", 15, 0)
+      assert :ok = IOTerminal.present()
+      assert :ok = IOTerminal.show_cursor()
     end
 
-    test "can get terminal size", %{skip: skip} do
-      unless skip do
-        assert {:ok, {width, height}} = IOTerminal.get_terminal_size()
-        assert width > 0
-        assert height > 0
-      end
+    test "can get terminal size" do
+      assert {:ok, {width, height}} = IOTerminal.get_terminal_size()
+      assert width > 0
+      assert height > 0
     end
 
-    test "can set terminal title", %{skip: skip} do
-      unless skip do
-        assert :ok = IOTerminal.set_title("Test Title")
-      end
+    test "can set terminal title" do
+      assert :ok = IOTerminal.set_title("Test Title")
     end
   end
 end
