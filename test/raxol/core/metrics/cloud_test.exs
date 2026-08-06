@@ -28,30 +28,28 @@ defmodule Raxol.Core.Metrics.CloudTest do
          }}
       )
 
-      send_resp(conn, 200, "")
+      send_resp(conn, opts[:status] || 200, "")
     end
   end
 
   # A real HTTP listener on an ephemeral port; requests are relayed to the
   # test process for assertion.
-  defp start_capture_server do
+  defp start_capture_server(plug_opts \\ []) do
     ref = :"cloud_capture_#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      Plug.Cowboy.http(CapturePlug, [test_pid: self()], port: 0, ref: ref)
+      Plug.Cowboy.http(CapturePlug, [test_pid: self()] ++ plug_opts,
+        port: 0,
+        ref: ref
+      )
 
     on_exit(fn -> Plug.Cowboy.shutdown(ref) end)
     :ranch.get_port(ref)
   end
 
-  # Bind an ephemeral port, then release it: gives a port that is very
-  # likely closed, for the connection-refused path.
-  defp closed_port do
-    {:ok, socket} = :gen_tcp.listen(0, [])
-    {:ok, port} = :inet.port(socket)
-    :gen_tcp.close(socket)
-    port
-  end
+  # Port 1 is reserved and unserved: connects are refused immediately and
+  # deterministically (no bind-then-release reuse race).
+  @refused_port 1
 
   defp start_cloud(opts) do
     start_supervised!({Cloud, [name: Cloud] ++ opts})
@@ -268,7 +266,7 @@ defmodule Raxol.Core.Metrics.CloudTest do
 
     test "a failed export returns the error and retains the batch for retry" do
       port = start_capture_server()
-      start_cloud(quiet_opts(closed_port()))
+      start_cloud(quiet_opts(@refused_port))
 
       Cloud.record(:performance, :tick, 7, [])
       assert {:error, _reason} = Cloud.flush_metrics()
@@ -284,6 +282,100 @@ defmodule Raxol.Core.Metrics.CloudTest do
 
       [metric | _] = req.body |> Jason.decode!() |> otlp_metrics()
       assert metric["name"] == "raxol.performance.tick"
+    end
+  end
+
+  describe "failure containment" do
+    test "one failed batch does not turn every metric into an export attempt" do
+      # Server answers 500: attempts are observable as received requests.
+      port = start_capture_server(status: 500)
+      start_cloud(quiet_opts(port, batch_size: 1))
+
+      Cloud.record(:performance, :tick, 1, [])
+
+      # First record triggers exactly one (failing) attempt...
+      assert_receive {:http_request, _}, 2_000
+
+      # ...and further records are buffered under backoff: no per-metric
+      # retry storm. Only the periodic timer (60s here) may retry.
+      Cloud.record(:performance, :tick, 2, [])
+      Cloud.record(:performance, :tick, 3, [])
+      refute_receive {:http_request, _}, 400
+    end
+
+    test "non-numeric values are dropped instead of crashing the exporter" do
+      port = start_capture_server()
+      start_cloud(quiet_opts(port))
+
+      Cloud.record(:resource, :latency_stats, %{p50: 1, p99: 9}, [])
+      Cloud.record(:performance, :tick, 5, [])
+
+      assert :ok == Cloud.flush_metrics()
+      assert_receive {:http_request, req}, 2_000
+
+      [metric] = req.body |> Jason.decode!() |> otlp_metrics()
+      assert metric["name"] == "raxol.performance.tick"
+    end
+
+    test "invalid boot config refuses to start" do
+      # start_link: trap the exit so the refused boot reaches us as a
+      # return value instead of killing the test process.
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {:invalid_cloud_config, :cloudwatch_not_supported}} =
+               Cloud.start_link(name: :cloud_boot_bad, service: :cloudwatch)
+    end
+
+    test "crash reports and sys status redact the api key" do
+      start_cloud(quiet_opts(0, api_key: "sekret-key-value"))
+      pid = Process.whereis(Cloud)
+
+      status = inspect(:sys.get_status(pid), limit: :infinity)
+      assert status =~ "[REDACTED]"
+      refute status =~ "sekret-key-value"
+    end
+  end
+
+  describe "wire-format safety" do
+    test "prometheus escapes hostile label values" do
+      port = start_capture_server()
+
+      start_cloud(
+        quiet_opts(port,
+          service: :prometheus,
+          endpoint: "http://127.0.0.1:#{port}/metrics/job/raxol"
+        )
+      )
+
+      Cloud.record(:performance, :tick, 1, [{:note, ~s(a"b\nevil_metric 999)}])
+      assert :ok == Cloud.flush_metrics()
+
+      assert_receive {:http_request, req}, 2_000
+
+      assert req.body ==
+               ~s(raxol_performance_tick{note="a\\"b\\nevil_metric 999"} 1.0\n)
+
+      refute req.body =~ "\nevil_metric"
+    end
+
+    test "prometheus dedupes by rendered labels, not raw tag terms" do
+      port = start_capture_server()
+
+      start_cloud(
+        quiet_opts(port,
+          service: :prometheus,
+          endpoint: "http://127.0.0.1:#{port}/metrics/job/raxol"
+        )
+      )
+
+      # :slow and {:slow, "true"} render to the identical label set; a
+      # duplicate sample would get the whole push rejected by a gateway.
+      Cloud.record(:performance, :tick, 1, [:slow])
+      Cloud.record(:performance, :tick, 2, [{:slow, "true"}])
+      assert :ok == Cloud.flush_metrics()
+
+      assert_receive {:http_request, req}, 2_000
+      assert req.body == ~s(raxol_performance_tick{slow="true"} 2.0\n)
     end
   end
 

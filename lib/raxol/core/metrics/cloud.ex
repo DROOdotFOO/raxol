@@ -12,23 +12,40 @@ defmodule Raxol.Core.Metrics.Cloud do
     * `:prometheus` — Prometheus Pushgateway text exposition (`POST`; point
       the endpoint at `/metrics/job/<job>`).
 
-  OTLP and Datadog export every recorded data point. Prometheus is a
-  snapshot format (repeating a `{name, labels}` sample is invalid), so it
-  exports the latest value per label set.
+  OTLP and Datadog export every recorded data point (nanosecond
+  timestamps). Prometheus is a snapshot format (repeating a
+  `{name, labels}` sample is invalid), so it exports the latest value per
+  rendered label set.
+
+  ## Ingestion and flushing
 
   Metrics enter through `record/4` (or the equivalent
   `{:metrics, type, name, value, tags}` message), which
   `Raxol.Core.Metrics.MetricsCollector.record_metric/4` forwards
-  automatically whenever this process is running. Batches flush when they
-  reach `batch_size` or every `flush_interval` ms; a failed export keeps
-  the batch for the next flush, capped at ten batches to bound memory.
+  automatically whenever this process is running. Only numeric values are
+  exported; non-numeric values (the collector also accepts maps) are
+  dropped at ingestion rather than crashing the exporter at flush time.
+
+  Automatic exports — the batch-size trigger and the periodic timer — run
+  in a monitored helper process, so a slow or unreachable collector never
+  blocks metric ingestion, and a crash in export code cannot take the
+  exporter down. At most one export is in flight at a time. After a failed
+  export the batch is retained (capped at #{10} batches) and the batch-size
+  trigger backs off; the periodic timer is the retry cadence, so an outage
+  costs one attempt per `flush_interval`, not one per metric.
+
+  `flush_metrics/0` is the manual/synchronous path (tests, shutdown
+  hooks): it exports in the server and returns the transport result, or
+  `{:error, :export_in_flight}` if an async export is running.
 
   HTTP transport is `Req`, an optional dependency; without it every export
   returns `{:error, :http_client_unavailable}`.
 
+  Crash reports redact `api_key` (see `format_status/1`).
+
   CloudWatch is not supported: it needs SigV4 request signing, which means
-  an AWS dependency this library does not take. (An earlier version
-  accepted `:cloudwatch` and silently dropped the metrics.)
+  an AWS dependency this library does not take; it is rejected at
+  configuration time rather than silently dropping metrics.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -58,15 +75,18 @@ defmodule Raxol.Core.Metrics.Cloud do
   }
 
   # On export failure the buffer is retained for retry, but never beyond
-  # this many batches.
+  # this many batches (newest kept).
   @max_buffered_batches 10
 
   @doc """
   Records a metric for cloud export. A no-op returning `:ok` when the
-  Cloud process is not running, so producers can call it unconditionally.
+  Cloud process is not running or the value is not a number, so producers
+  can call it unconditionally.
   """
-  @spec record(atom(), atom() | String.t(), number(), list()) :: :ok
-  def record(type, name, value, tags \\ []) do
+  @spec record(atom(), atom() | String.t(), term(), list()) :: :ok
+  def record(type, name, value, tags \\ [])
+
+  def record(type, name, value, tags) when is_number(value) do
     case Process.whereis(__MODULE__) do
       nil -> :ok
       pid -> Kernel.send(pid, {:metrics, type, name, value, tags})
@@ -75,8 +95,12 @@ defmodule Raxol.Core.Metrics.Cloud do
     :ok
   end
 
+  def record(_type, _name, _value, _tags), do: :ok
+
   @doc """
-  Configures the cloud metrics service.
+  Configures the cloud metrics service. The new keys are validated against
+  the configuration that would result (current config merged with the
+  changes), not against defaults.
   """
   @spec configure(map()) :: :ok | {:error, term()}
   def configure(config) when is_map(config) do
@@ -92,37 +116,59 @@ defmodule Raxol.Core.Metrics.Cloud do
   end
 
   @doc """
-  Flushes buffered metrics to the cloud service now. Returns the export
-  result: `:ok` (also for an empty buffer) or `{:error, reason}`.
+  Flushes buffered metrics to the cloud service now, synchronously in the
+  server. Returns the export result: `:ok` (also for an empty buffer),
+  `{:error, :export_in_flight}` when an async export is running, or the
+  transport error.
   """
   @spec flush_metrics() :: :ok | {:error, term()}
   def flush_metrics do
-    GenServer.call(__MODULE__, :flush_metrics)
+    GenServer.call(__MODULE__, :flush_metrics, 15_000)
   end
 
   @impl true
   def init_manager(opts) do
     config = Map.merge(@default_config, Map.new(opts))
 
-    state = %{
-      config: config,
-      metrics_buffer: [],
-      last_flush: System.system_time(:millisecond)
-    }
+    case validate_cloud_config(config) do
+      :ok ->
+        state = %{
+          config: config,
+          metrics_buffer: [],
+          buffer_count: 0,
+          inflight: nil,
+          last_failure_ms: nil
+        }
 
-    schedule_flush(config.flush_interval)
-    {:ok, state}
+        schedule_flush(config.flush_interval)
+        {:ok, state}
+
+      {:error, reason} ->
+        {:stop, {:invalid_cloud_config, reason}}
+    end
+  end
+
+  # Redact the API key from crash reports and :sys.get_status output.
+  @impl GenServer
+  def format_status(status) do
+    redact = fn
+      %{config: %{} = config} = state ->
+        %{state | config: Map.replace(config, :api_key, "[REDACTED]")}
+
+      other ->
+        other
+    end
+
+    Map.update(status, :state, nil, redact)
   end
 
   @impl true
   def handle_manager_call({:configure, new_config}, _from, state) do
-    case validate_cloud_config(new_config) do
-      :ok ->
-        new_state = %{state | config: Map.merge(state.config, new_config)}
-        {:reply, :ok, new_state}
+    merged = Map.merge(state.config, new_config)
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+    case validate_cloud_config(merged) do
+      :ok -> {:reply, :ok, %{state | config: merged}}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -133,72 +179,166 @@ defmodule Raxol.Core.Metrics.Cloud do
 
   @impl true
   def handle_manager_call(:flush_metrics, _from, state) do
-    {new_state, result} = flush_metrics_to_cloud(state)
-    {:reply, result, new_state}
+    cond do
+      state.inflight != nil ->
+        {:reply, {:error, :export_in_flight}, state}
+
+      state.metrics_buffer == [] ->
+        {:reply, :ok, state}
+
+      true ->
+        entries = Enum.reverse(state.metrics_buffer)
+
+        case send_metrics_to_cloud(entries, state.config) do
+          :ok ->
+            {:reply, :ok, clear_buffer(%{state | last_failure_ms: nil})}
+
+          {:error, _reason} = error ->
+            {:reply, error,
+             retain_after_failure(state, state.metrics_buffer, error)}
+        end
+    end
   end
 
   @impl true
   def handle_manager_info(:flush_metrics, state) do
-    {new_state, _result} = flush_metrics_to_cloud(state)
-    schedule_flush(new_state.config.flush_interval)
-    {:noreply, new_state}
+    state =
+      if state.inflight == nil and state.metrics_buffer != [] do
+        start_export(state)
+      else
+        state
+      end
+
+    schedule_flush(state.config.flush_interval)
+    {:noreply, state}
   end
 
   @impl true
-  def handle_manager_info({:metrics, type, name, value, tags}, state) do
+  def handle_manager_info({:metrics, type, name, value, tags}, state)
+      when is_number(value) do
     metric = %{
       type: type,
       name: name,
       value: value,
       tags: tags,
-      timestamp: System.system_time(:second)
+      timestamp: System.system_time(:nanosecond)
     }
 
-    new_buffer = [metric | state.metrics_buffer]
+    state = %{
+      state
+      | metrics_buffer: [metric | state.metrics_buffer],
+        buffer_count: state.buffer_count + 1
+    }
 
-    if length(new_buffer) >= state.config.batch_size do
-      {new_state, _result} =
-        flush_metrics_to_cloud(%{state | metrics_buffer: new_buffer})
-
-      {:noreply, new_state}
+    # Batch-size trigger: only when no export is in flight and we are not
+    # backing off after a failure -- otherwise a dead collector would turn
+    # every metric into an export attempt. The periodic timer retries.
+    if state.buffer_count >= state.config.batch_size and
+         state.inflight == nil and backoff_elapsed?(state) do
+      {:noreply, start_export(state)}
     else
-      {:noreply, %{state | metrics_buffer: new_buffer}}
+      {:noreply, state}
     end
   end
 
-  defp flush_metrics_to_cloud(%{metrics_buffer: []} = state), do: {state, :ok}
+  # Non-numeric values (maps etc.) are dropped: the collector's local ETS
+  # store accepts them, the wire formats do not.
+  @impl true
+  def handle_manager_info({:metrics, _type, _name, _value, _tags}, state) do
+    {:noreply, state}
+  end
 
-  defp flush_metrics_to_cloud(state) do
-    # Chronological order; each formatter does its own backend-correct
-    # grouping over the raw entries.
-    metrics = Enum.reverse(state.metrics_buffer)
+  @impl true
+  def handle_manager_info(
+        {:export_result, pid, result},
+        %{inflight: %{pid: pid}} = state
+      ) do
+    Process.demonitor(state.inflight.mref, [:flush])
 
-    case send_metrics_to_cloud(metrics, state.config) do
+    case result do
       :ok ->
-        {%{
-           state
-           | metrics_buffer: [],
-             last_flush: System.system_time(:millisecond)
-         }, :ok}
+        {:noreply, %{state | inflight: nil, last_failure_ms: nil}}
 
-      {:error, reason} = error ->
-        Log.warning(
-          "[Metrics.Cloud] export to #{state.config.service} failed: #{inspect(reason)}; " <>
-            "retaining #{length(state.metrics_buffer)} metrics for retry"
-        )
-
-        capped =
-          Enum.take(
-            state.metrics_buffer,
-            @max_buffered_batches * state.config.batch_size
-          )
-
-        {%{
-           state
-           | metrics_buffer: capped,
-             last_flush: System.system_time(:millisecond)
-         }, error}
+      {:error, _reason} = error ->
+        {:noreply,
+         retain_after_failure(
+           %{state | inflight: nil},
+           state.inflight.snapshot,
+           error
+         )}
     end
+  end
+
+  @impl true
+  def handle_manager_info(
+        {:DOWN, mref, :process, pid, reason},
+        %{inflight: %{mref: mref, pid: pid}} = state
+      ) do
+    {:noreply,
+     retain_after_failure(
+       %{state | inflight: nil},
+       state.inflight.snapshot,
+       {:error, {:export_crashed, reason}}
+     )}
+  end
+
+  # Stray messages (e.g. a DOWN for an export whose result was already
+  # consumed) must not crash the exporter.
+  @impl true
+  def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  # -- Export orchestration ------------------------------------------------------
+
+  # Run the export in a monitored helper process: a slow endpoint never
+  # blocks ingestion, and a crash in formatting/transport is contained
+  # (reported back as a failed export via :DOWN).
+  defp start_export(state) do
+    snapshot = state.metrics_buffer
+    entries = Enum.reverse(snapshot)
+    config = state.config
+    parent = self()
+
+    {pid, mref} =
+      spawn_monitor(fn ->
+        result = send_metrics_to_cloud(entries, config)
+        Kernel.send(parent, {:export_result, self(), result})
+      end)
+
+    clear_buffer(%{
+      state
+      | inflight: %{pid: pid, mref: mref, snapshot: snapshot}
+    })
+  end
+
+  defp clear_buffer(state), do: %{state | metrics_buffer: [], buffer_count: 0}
+
+  defp retain_after_failure(state, failed_entries, {:error, reason}) do
+    Log.warning(
+      "[Metrics.Cloud] export to #{state.config.service} failed: #{inspect(reason)}; " <>
+        "retaining #{length(failed_entries)} metrics for retry"
+    )
+
+    # Newer entries (recorded during the export) stay in front; the failed
+    # snapshot is older. Cap keeps the newest.
+    combined =
+      Enum.take(
+        state.metrics_buffer ++ failed_entries,
+        @max_buffered_batches * state.config.batch_size
+      )
+
+    %{
+      state
+      | metrics_buffer: combined,
+        buffer_count: length(combined),
+        last_failure_ms: System.monotonic_time(:millisecond)
+    }
+  end
+
+  defp backoff_elapsed?(%{last_failure_ms: nil}), do: true
+
+  defp backoff_elapsed?(state) do
+    System.monotonic_time(:millisecond) - state.last_failure_ms >=
+      state.config.flush_interval
   end
 
   defp send_metrics_to_cloud(metrics, config) do
@@ -299,7 +439,7 @@ defmodule Raxol.Core.Metrics.Cloud do
   defp otlp_data_point(entry) do
     %{
       asDouble: entry.value * 1.0,
-      timeUnixNano: entry.timestamp * 1_000_000_000,
+      timeUnixNano: entry.timestamp,
       attributes:
         Enum.map(entry.tags, fn tag ->
           {key, value} = tag_pair(tag)
@@ -317,7 +457,10 @@ defmodule Raxol.Core.Metrics.Cloud do
       |> Enum.map(fn {{type, name, tags}, group} ->
         %{
           metric: metric_name(type, name),
-          points: Enum.map(group, fn e -> [e.timestamp, e.value * 1.0] end),
+          points:
+            Enum.map(group, fn e ->
+              [div(e.timestamp, 1_000_000_000), e.value * 1.0]
+            end),
           type: "gauge",
           tags:
             Enum.map(tags, fn tag ->
@@ -331,26 +474,31 @@ defmodule Raxol.Core.Metrics.Cloud do
   end
 
   # Prometheus text exposition format for a Pushgateway. The format is a
-  # snapshot -- repeating a {name, labels} sample is invalid -- so the most
-  # recent value per label set wins (gauge semantics).
+  # snapshot -- repeating a {name, labels} sample is invalid -- so entries
+  # are grouped by their RENDERED name+labels (tag terms that render
+  # identically must not produce duplicate samples) and the most recent
+  # value per group wins.
   defp format_for_prometheus(entries) do
     entries
-    |> Enum.group_by(&{&1.type, &1.name, &1.tags})
-    |> Enum.map_join("", fn {{type, name, tags}, group} ->
-      entry = List.last(group)
+    |> Enum.map(fn entry ->
+      name = prometheus_name(metric_name(entry.type, entry.name))
 
       labels =
-        Enum.map_join(tags, ",", fn tag ->
+        Enum.map_join(entry.tags, ",", fn tag ->
           {key, value} = tag_pair(tag)
-          ~s(#{prometheus_name(key)}="#{value}")
+          ~s(#{prometheus_name(key)}="#{escape_label_value(value)}")
         end)
 
-      prom_name = prometheus_name(metric_name(type, name))
+      {{name, labels}, entry}
+    end)
+    |> Enum.group_by(fn {key, _} -> key end, fn {_, entry} -> entry end)
+    |> Enum.map_join("", fn {{name, labels}, group} ->
+      entry = List.last(group)
       value = entry.value * 1.0
 
       case labels do
-        "" -> "#{prom_name} #{value}\n"
-        _ -> "#{prom_name}{#{labels}} #{value}\n"
+        "" -> "#{name} #{value}\n"
+        _ -> "#{name}{#{labels}} #{value}\n"
       end
     end)
   end
@@ -361,20 +509,40 @@ defmodule Raxol.Core.Metrics.Cloud do
     String.replace(to_string(name), ~r/[^a-zA-Z0-9_:]/, "_")
   end
 
-  # Tags are either bare flags (`:slow`) or `{key, value}` pairs.
-  defp tag_pair({key, value}), do: {to_string(key), to_string(value)}
-  defp tag_pair(tag), do: {to_string(tag), "true"}
+  # Label VALUES are quoted strings in the exposition format; backslash,
+  # double quote, and newline must be escaped or a hostile value injects
+  # arbitrary samples into the push body.
+  defp escape_label_value(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\"", "\\\"")
+    |> String.replace("\n", "\\n")
+  end
+
+  # Tags are either bare flags (`:slow`) or `{key, value}` pairs. Terms
+  # without a String.Chars implementation are inspected rather than
+  # crashing the export.
+  defp tag_pair({key, value}), do: {safe_string(key), safe_string(value)}
+  defp tag_pair(tag), do: {safe_string(tag), "true"}
+
+  defp safe_string(term) when is_binary(term), do: term
+
+  defp safe_string(term) when is_atom(term) or is_number(term),
+    do: to_string(term)
+
+  defp safe_string(term), do: inspect(term)
 
   # -- Config validation ---------------------------------------------------------
 
+  # Validates a COMPLETE config map (defaults or current config merged with
+  # changes) -- callers do the merge, so validation always judges the
+  # configuration that would actually apply.
   defp validate_cloud_config(config) do
-    config_with_defaults = Map.merge(@default_config, config)
-
-    with :ok <- validate_service(config_with_defaults.service),
-         :ok <- validate_endpoint(config_with_defaults.endpoint),
-         :ok <- validate_api_key(config_with_defaults.api_key),
-         :ok <- validate_batch_size(config_with_defaults.batch_size) do
-      validate_flush_interval(config_with_defaults.flush_interval)
+    with :ok <- validate_service(config.service),
+         :ok <- validate_endpoint(config.endpoint),
+         :ok <- validate_api_key(config.api_key),
+         :ok <- validate_batch_size(config.batch_size) do
+      validate_flush_interval(config.flush_interval)
     end
   end
 
