@@ -34,15 +34,19 @@ defmodule Raxol.MCP.Authorizer do
     * `:authorizer` -- guards `tools/call` (this module's original purpose).
       Receives the TOOL name.
     * `:read_authorizer` -- guards the read/metadata surfaces
-      (`resources/read`, `resources/subscribe`, `resources/list`,
-      `prompts/get`, `prompts/list`, `completion/complete`). Receives the
-      METHOD name in the tool-name position, e.g. `"resources/read"` with
-      `%{"uri" => uri}` as the arguments.
+      (`resources/read`, `resources/subscribe`, `resources/unsubscribe`,
+      `resources/list`, `prompts/get`, `prompts/list`, `tools/list`,
+      `completion/complete`). Receives the METHOD name in the tool-name
+      position, e.g. `"resources/read"` with `%{"uri" => uri}` as the
+      arguments.
 
   They are deliberately separate: a tool allowlist knows nothing about
   method names and would otherwise deny every read. On read surfaces an
   `{:ask, _}` decision resolves to deny (no elicitation for reads) and the
-  prompt is not echoed to the client.
+  prompt is not echoed to the client. Network deployments should configure
+  BOTH seams -- the SSE boot guard (`Raxol.MCP.Deployment`) enforces only
+  `:authorizer`, and a nil `:read_authorizer` serves model state to any
+  connected client.
   """
 
   @type context :: map()

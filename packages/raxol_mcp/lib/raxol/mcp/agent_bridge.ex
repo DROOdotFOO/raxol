@@ -104,8 +104,10 @@ defmodule Raxol.MCP.AgentBridge do
     sessions =
       if Code.ensure_loaded?(Raxol.Headless) and
            function_exported?(Raxol.Headless, :list, 0) do
+        # Headless.list/0 returns a bare list (and [] on exit).
         case Raxol.Headless.list() do
-          {:ok, list} -> list
+          list when is_list(list) -> list
+          {:ok, list} when is_list(list) -> list
           _ -> []
         end
       else
@@ -147,7 +149,7 @@ defmodule Raxol.MCP.AgentBridge do
                  %{
                    type: "text",
                    text:
-                     "Sent #{String.length(message)} characters to agent #{id}"
+                     "Enqueued #{String.length(message)} keystrokes for agent #{id}"
                  }
                ]}
 

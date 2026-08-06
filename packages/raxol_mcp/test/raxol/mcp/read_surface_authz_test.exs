@@ -3,7 +3,7 @@ defmodule Raxol.MCP.ReadSurfaceAuthzTest do
 
   alias Raxol.MCP.{Authorizer, Registry, Server}
 
-  @authz_denied_code -32001
+  @authz_denied_code -32090
 
   defp start_pair(server_opts) do
     registry_name = :"registry_#{System.unique_integer([:positive])}"
@@ -82,6 +82,26 @@ defmodule Raxol.MCP.ReadSurfaceAuthzTest do
         Server.handle_message(s, %{id: 3, method: "resources/list", params: %{}})
 
       assert resp.error.data["method"] == "resources/list"
+    end
+
+    test "resources/unsubscribe is refused (subscriptions are URI-global)", %{
+      server: s
+    } do
+      {:reply, resp} =
+        Server.handle_message(s, %{
+          id: 14,
+          method: "resources/unsubscribe",
+          params: %{"uri" => "raxol://x"}
+        })
+
+      assert resp.error.data["method"] == "resources/unsubscribe"
+    end
+
+    test "tools/list is refused (same enumeration class)", %{server: s} do
+      {:reply, resp} =
+        Server.handle_message(s, %{id: 15, method: "tools/list", params: %{}})
+
+      assert resp.error.data["method"] == "tools/list"
     end
 
     test "prompts/get and prompts/list are refused", %{server: s} do

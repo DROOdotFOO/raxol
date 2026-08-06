@@ -321,9 +321,17 @@ defmodule Raxol.MCP.Server do
 
   # -- Tools ---
 
+  # tools/list is a read/metadata surface too: names, descriptions, and
+  # input schemas are the same enumeration class the other gates close.
   defp dispatch(%{method: "tools/list", id: id}, state) do
-    tools = Registry.list_tools(state.registry)
-    {Protocol.response(id, %{tools: tools}), state}
+    case authorize_read("tools/list", %{}, state) do
+      :allow ->
+        tools = Registry.list_tools(state.registry)
+        {Protocol.response(id, %{tools: tools}), state}
+
+      {:deny, detail} ->
+        {authz_error_response(id, "tools/list", detail), state}
+    end
   end
 
   defp dispatch(%{method: "tools/call", id: id, params: params}, state) do
@@ -401,13 +409,25 @@ defmodule Raxol.MCP.Server do
     end
   end
 
+  # Gated like subscribe: subscriptions are URI-global (one set for all
+  # transport subscribers), so an ungated unsubscribe would let a
+  # denied-everything client delete another client's subscription.
   defp dispatch(
          %{method: "resources/unsubscribe", id: id, params: params},
          state
        ) do
     uri = Map.get(params, "uri") || Map.get(params, :uri, "")
-    new_subs = Map.delete(state.resource_subscriptions, uri)
-    {Protocol.response(id, %{}), %{state | resource_subscriptions: new_subs}}
+
+    case authorize_read("resources/unsubscribe", %{"uri" => uri}, state) do
+      :allow ->
+        new_subs = Map.delete(state.resource_subscriptions, uri)
+
+        {Protocol.response(id, %{}),
+         %{state | resource_subscriptions: new_subs}}
+
+      {:deny, detail} ->
+        {authz_error_response(id, "resources/unsubscribe", detail), state}
+    end
   end
 
   defp dispatch(%{method: "resources/read", id: id, params: params}, state) do
@@ -656,8 +676,12 @@ defmodule Raxol.MCP.Server do
 
   # JSON-RPC application-defined error code for an authorization denial on a
   # read surface. Distinct from internal_error (-32603) so a policy denial
-  # is never mistaken for a transient server fault and retry-looped.
-  @authz_denied_code -32001
+  # is never mistaken for a transient server fault and retry-looped. NOT
+  # -32000/-32001/-32002: the MCP SDKs already use those (ConnectionClosed,
+  # RequestTimeout, resource-not-found), and a client keying off them would
+  # classify the denial as a transient fault -- the exact retry loop this
+  # code exists to prevent.
+  @authz_denied_code -32090
 
   # Read-surface denials are JSON-RPC errors (there is no tool-result shape to
   # carry an isError payload on these methods); the machine-readable detail
