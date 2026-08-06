@@ -94,6 +94,30 @@ defmodule Raxol.Agent.CommTest do
     test "to an unknown agent returns not_found" do
       assert {:error, :not_found} = Comm.call(:comm_call_nobody, :question, 100)
     end
+
+    test "a target dying mid-call fails fast with agent_down" do
+      parent = self()
+
+      target =
+        spawn(fn ->
+          {:ok, _} =
+            Registry.register(Raxol.Agent.Registry, :comm_dying, :session)
+
+          send(parent, :registered)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :registered, 1_000
+
+      caller =
+        Task.async(fn -> Comm.call(:comm_dying, :question, 5_000) end)
+
+      Process.sleep(50)
+      Process.exit(target, :kill)
+
+      # Fails on the monitor, long before the 5s timeout.
+      assert {:error, :agent_down} = Task.await(caller, 1_000)
+    end
   end
 
   describe "broadcast_team/2" do
@@ -131,6 +155,38 @@ defmodule Raxol.Agent.CommTest do
       Process.sleep(150)
       {:ok, b1} = Session.get_model(:comm_bt_b1)
       assert b1.inbox == []
+    end
+
+    test "the metadata-carrying cast shape cannot cross teams either" do
+      {:ok, _} =
+        Session.start_link(
+          app_module: EchoAgent,
+          id: :comm_meta_a,
+          team_id: :alpha
+        )
+
+      {:ok, _} =
+        Session.start_link(
+          app_module: EchoAgent,
+          id: :comm_meta_b,
+          team_id: :beta
+        )
+
+      [{a_pid, _}] = Registry.lookup(Raxol.Agent.Registry, :comm_meta_a)
+      [{b_pid, _}] = Registry.lookup(Raxol.Agent.Registry, :comm_meta_b)
+
+      # The 3-tuple (metadata) cast is what Comm.send with :from and the
+      # SendAgent directive produce; it must hit the same team filter.
+      msg = {:team_broadcast, :alpha, :sneak}
+      GenServer.cast(a_pid, {:send_message, msg, %{from: :evil}})
+      GenServer.cast(b_pid, {:send_message, msg, %{from: :evil}})
+
+      a = await_inbox(:comm_meta_a, 1)
+      assert [{:evil, {:team_broadcast, :alpha, :sneak}}] = a.inbox
+
+      Process.sleep(150)
+      {:ok, b} = Session.get_model(:comm_meta_b)
+      assert b.inbox == []
     end
   end
 end

@@ -37,24 +37,46 @@ defmodule Raxol.Agent.Comm do
   Synchronous request-reply with another agent.
 
   The target agent must answer with `reply/3` (see the module doc);
-  otherwise this returns `{:error, :timeout}`.
+  otherwise this returns `{:error, :timeout}`. A target that dies before
+  replying fails fast with `{:error, :agent_down}` instead of waiting out
+  the timeout.
   """
   @spec call(term(), term(), timeout()) ::
-          {:ok, term()} | {:error, :timeout | :not_found}
+          {:ok, term()} | {:error, :timeout | :not_found | :agent_down}
   def call(target_id, message, timeout \\ 5_000) do
     case Registry.lookup(Raxol.Agent.Registry, target_id) do
       [{pid, _}] ->
+        mref = Process.monitor(pid)
         ref = make_ref()
         GenServer.cast(pid, {:send_message, {:call, self(), ref, message}})
 
         receive do
-          {:agent_reply, ^ref, reply} -> {:ok, reply}
+          {:agent_reply, ^ref, reply} ->
+            Process.demonitor(mref, [:flush])
+            {:ok, reply}
+
+          {:DOWN, ^mref, :process, ^pid, _reason} ->
+            {:error, :agent_down}
         after
-          timeout -> {:error, :timeout}
+          timeout ->
+            Process.demonitor(mref, [:flush])
+            flush_reply(ref)
+            {:error, :timeout}
         end
 
       [] ->
         {:error, :not_found}
+    end
+  end
+
+  # Best-effort sweep of a reply that raced the timeout. A reply arriving
+  # after this returns is abandoned in the caller's mailbox; callers doing
+  # selective receives should treat stray {:agent_reply, _, _} as noise.
+  defp flush_reply(ref) do
+    receive do
+      {:agent_reply, ^ref, _} -> :ok
+    after
+      0 -> :ok
     end
   end
 
@@ -75,11 +97,13 @@ defmodule Raxol.Agent.Comm do
   """
   @spec broadcast_team(term(), term()) :: :ok
   def broadcast_team(team_id, message) do
+    # Sessions register with the value :session; auxiliary entries in the
+    # same Registry (lifecycles, emit bridges) carry other values and must
+    # not receive the cast. uniq_by guards against a pid registered under
+    # more than one session key.
     Registry.select(Raxol.Agent.Registry, [
-      {{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}
+      {{:"$1", :"$2", :session}, [], [{{:"$1", :"$2"}}]}
     ])
-    # A process can be registered under more than one key (session id plus
-    # auxiliary entries); one broadcast per pid, not per key.
     |> Enum.uniq_by(fn {_id, pid} -> pid end)
     |> Enum.each(fn {_id, pid} ->
       GenServer.cast(pid, {:send_message, {:team_broadcast, team_id, message}})

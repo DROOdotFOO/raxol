@@ -62,7 +62,9 @@ All callbacks are overridable. `view/1` defaults to `nil`, which means no render
   app_module: CodeReviewAgent
 )
 
-# Send a message (async, arrives as {:agent_message, from, payload} in update/2)
+# Send a message (async, arrives as {:agent_message, from, payload} in
+# update/2; from is the sender's id when attributed with the :from option,
+# nil otherwise -- the framework never guesses a sender)
 :ok = Raxol.Agent.Session.send_message(:code_reviewer, {:review, "lib/app.ex"})
 
 # Read the agent's current model
@@ -81,18 +83,24 @@ Agents auto-register in `Raxol.Agent.Registry` by their `:id`. If the agent is d
 ```elixir
 alias Raxol.Agent.Comm
 
-# Fire and forget
-:ok = Comm.send(:target_agent, {:task, data})
-# Arrives in target's update/2 as {:agent_message, from_id, {:task, data}}
+# Fire and forget. Pass from: to identify yourself; without it the
+# target sees from = nil (attribution is caller-asserted, not verified).
+:ok = Comm.send(:target_agent, {:task, data}, from: :my_agent)
+# Arrives in target's update/2 as {:agent_message, :my_agent, {:task, data}}
 
-# Synchronous call with timeout
+# Synchronous call with timeout. The target must answer with
+# Comm.reply(caller, ref, response) from its update/2:
+#   def update({:agent_message, _from, {:call, caller, ref, q}}, model) do
+#     Comm.reply(caller, ref, answer(q, model))
+#     {model, []}
+#   end
 {:ok, reply} = Comm.call(:target_agent, {:query, params}, 5_000)
-# Caller blocks until {:agent_reply, ref, reply}
 
-# Broadcast to every agent in a team
+# Broadcast to every agent in a team (delivery filtered by the receiving
+# session's team_id)
 :ok = Comm.broadcast_team(:my_team, {:status_update, status})
 # Arrives in each teammate's update/2 as
-# {:agent_message, from_id, {:team_broadcast, :my_team, {:status_update, status}}}
+# {:agent_message, nil, {:team_broadcast, :my_team, {:status_update, status}}}
 ```
 
 ## Teams

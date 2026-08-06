@@ -91,15 +91,21 @@ defmodule Raxol.Agent.Directive do
   defmodule SendAgent do
     @moduledoc """
     Route a message to another agent by id. The target is looked up in
-    `Raxol.Agent.Registry`; on success the message arrives as
-    `{:send_message, message}` via `GenServer.cast/2`; on failure the
-    sender receives `{:command_result, {:send_agent_error, :not_found, target_id}}`.
+    `Raxol.Agent.Registry`; on success the message arrives in the target's
+    `update/2` as `{:agent_message, from, message}` -- `from` is this
+    directive's `:from` field when set (`Directive.send_agent/3` with
+    `from: my_id`), `nil` otherwise. On failure the sender receives
+    `{:command_result, {:send_agent_error, :not_found, target_id}}`.
     """
 
-    @type t :: %__MODULE__{target_id: term(), message: term()}
+    @type t :: %__MODULE__{
+            target_id: term(),
+            message: term(),
+            from: term() | nil
+          }
 
     @enforce_keys [:target_id, :message]
-    defstruct [:target_id, :message]
+    defstruct [:target_id, :message, :from]
   end
 
   @doc "Construct an Async directive with a sender-callback function."
@@ -119,10 +125,20 @@ defmodule Raxol.Agent.Directive do
     %Shell{command: command, opts: opts}
   end
 
-  @doc "Construct a SendAgent directive."
-  @spec send_agent(term(), term()) :: SendAgent.t()
-  def send_agent(target_id, message),
-    do: %SendAgent{target_id: target_id, message: message}
+  @doc """
+  Construct a SendAgent directive.
+
+  Pass `from: my_agent_id` to identify the sender; it arrives as the
+  second element of the target's `:agent_message` tuple (`nil` when
+  omitted -- the framework never guesses a sender).
+  """
+  @spec send_agent(term(), term(), keyword()) :: SendAgent.t()
+  def send_agent(target_id, message, opts \\ []),
+    do: %SendAgent{
+      target_id: target_id,
+      message: message,
+      from: Keyword.get(opts, :from)
+    }
 
   @doc "Delegates to `Raxol.Core.Runtime.Directive.schedule/2`."
   @spec schedule(non_neg_integer(), term()) :: CoreDirective.Schedule.t()

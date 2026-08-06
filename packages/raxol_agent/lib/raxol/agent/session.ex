@@ -69,7 +69,11 @@ defmodule Raxol.Agent.Session do
     await_free(id)
 
     GenServer.start_link(__MODULE__, opts,
-      name: {:via, Registry, {Raxol.Agent.Registry, id}}
+      # The :session value marks this entry as an agent session, so
+      # broadcasts can target sessions without hitting the auxiliary
+      # entries ({:lifecycle, id}, {:emit_bridge, id}) in the same
+      # Registry.
+      name: {:via, Registry, {Raxol.Agent.Registry, id, :session}}
     )
   end
 
@@ -208,7 +212,10 @@ defmodule Raxol.Agent.Session do
   end
 
   # Team broadcasts are filtered here, not at the broadcaster: only a
-  # session started with a matching :team_id forwards the message.
+  # session started with a matching :team_id forwards the message. BOTH
+  # cast shapes must hit the filter -- the metadata-carrying 3-tuple
+  # (Comm.send with :from, the SendAgent directive) would otherwise
+  # smuggle a foreign team's broadcast past it.
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast(
         {:send_message, {:team_broadcast, team_id, _} = message},
@@ -216,6 +223,19 @@ defmodule Raxol.Agent.Session do
       ) do
     if state.team_id == team_id do
       forward_to_dispatcher(state, message, %{})
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_cast(
+        {:send_message, {:team_broadcast, team_id, _} = message, metadata},
+        state
+      )
+      when is_map(metadata) do
+    if state.team_id == team_id do
+      forward_to_dispatcher(state, message, metadata)
     else
       {:noreply, state}
     end
@@ -238,6 +258,13 @@ defmodule Raxol.Agent.Session do
   defp forward_to_dispatcher(state, message, metadata) do
     case get_dispatcher(state.lifecycle_pid) do
       nil ->
+        # The sender already got :ok from the cast; leave a trace so a
+        # dropped message during lifecycle startup/restart is diagnosable.
+        Logger.debug(
+          "[Agent.Session] #{inspect(state.id)} dropped message (no dispatcher): " <>
+            inspect(message, limit: 5)
+        )
+
         :ok
 
       dispatcher_pid ->
