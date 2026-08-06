@@ -194,8 +194,16 @@ defmodule Raxol.Core.Metrics.Cloud do
             {:reply, :ok, clear_buffer(%{state | last_failure_ms: nil})}
 
           {:error, _reason} = error ->
+            # Clear BEFORE retaining: retain_after_failure appends the
+            # failed entries to whatever is buffered, and here they are
+            # the same list -- without the clear each failed manual flush
+            # would double every retained entry.
             {:reply, error,
-             retain_after_failure(state, state.metrics_buffer, error)}
+             retain_after_failure(
+               clear_buffer(state),
+               state.metrics_buffer,
+               error
+             )}
         end
     end
   end
@@ -220,7 +228,7 @@ defmodule Raxol.Core.Metrics.Cloud do
       type: type,
       name: name,
       value: value,
-      tags: tags,
+      tags: normalize_tags(tags),
       timestamp: System.system_time(:nanosecond)
     }
 
@@ -391,7 +399,15 @@ defmodule Raxol.Core.Metrics.Cloud do
 
   defp http_post(url, opts) do
     if Code.ensure_loaded?(Req) do
-      case Req.post(url, opts ++ [retry: false, receive_timeout: 5_000]) do
+      case Req.post(
+             url,
+             opts ++
+               [
+                 retry: false,
+                 receive_timeout: 5_000,
+                 connect_options: [timeout: 5_000]
+               ]
+           ) do
         {:ok, %{status: status}} when status in 200..299 -> :ok
         {:ok, %{status: status}} -> {:error, {:http_status, status}}
         {:error, exception} -> {:error, exception}
@@ -441,8 +457,7 @@ defmodule Raxol.Core.Metrics.Cloud do
       asDouble: entry.value * 1.0,
       timeUnixNano: entry.timestamp,
       attributes:
-        Enum.map(entry.tags, fn tag ->
-          {key, value} = tag_pair(tag)
+        Enum.map(entry.tags, fn {key, value} ->
           %{key: key, value: %{stringValue: value}}
         end)
     }
@@ -462,11 +477,7 @@ defmodule Raxol.Core.Metrics.Cloud do
               [div(e.timestamp, 1_000_000_000), e.value * 1.0]
             end),
           type: "gauge",
-          tags:
-            Enum.map(tags, fn tag ->
-              {key, value} = tag_pair(tag)
-              "#{key}:#{value}"
-            end)
+          tags: Enum.map(tags, fn {key, value} -> "#{key}:#{value}" end)
         }
       end)
 
@@ -484,9 +495,8 @@ defmodule Raxol.Core.Metrics.Cloud do
       name = prometheus_name(metric_name(entry.type, entry.name))
 
       labels =
-        Enum.map_join(entry.tags, ",", fn tag ->
-          {key, value} = tag_pair(tag)
-          ~s(#{prometheus_name(key)}="#{escape_label_value(value)}")
+        Enum.map_join(entry.tags, ",", fn {key, value} ->
+          ~s(#{prometheus_label_name(key)}="#{escape_label_value(value)}")
         end)
 
       {{name, labels}, entry}
@@ -505,9 +515,27 @@ defmodule Raxol.Core.Metrics.Cloud do
 
   defp metric_name(type, name), do: "raxol.#{type}.#{name}"
 
+  # Metric names allow [a-zA-Z_:][a-zA-Z0-9_:]*.
   defp prometheus_name(name) do
-    String.replace(to_string(name), ~r/[^a-zA-Z0-9_:]/, "_")
+    to_string(name)
+    |> String.replace(~r/[^a-zA-Z0-9_:]/, "_")
+    |> prefix_if_leading_digit()
   end
+
+  # Label names are STRICTER than metric names: no colon, no leading digit
+  # ([a-zA-Z_][a-zA-Z0-9_]*). A label name in metric-name charset gets the
+  # whole push rejected by the gateway.
+  defp prometheus_label_name(name) do
+    name
+    |> String.replace(~r/[^a-zA-Z0-9_]/, "_")
+    |> prefix_if_leading_digit()
+  end
+
+  defp prefix_if_leading_digit(<<digit, _::binary>> = name)
+       when digit in ?0..?9,
+       do: "_" <> name
+
+  defp prefix_if_leading_digit(name), do: name
 
   # Label VALUES are quoted strings in the exposition format; backslash,
   # double quote, and newline must be escaped or a hostile value injects
@@ -519,7 +547,18 @@ defmodule Raxol.Core.Metrics.Cloud do
     |> String.replace("\n", "\\n")
   end
 
-  # Tags are either bare flags (`:slow`) or `{key, value}` pairs. Terms
+  # Tags are normalized ONCE at ingestion into a sorted list of
+  # {string_key, string_value} pairs: formatters can never crash on a tag
+  # term, duplicate keys collapse (last wins), and the canonical order
+  # makes grouping/dedupe stable under caller tag reordering. A non-list
+  # tags argument becomes [].
+  defp normalize_tags(tags) when is_list(tags) do
+    tags |> Enum.map(&tag_pair/1) |> Map.new() |> Enum.sort()
+  end
+
+  defp normalize_tags(_tags), do: []
+
+  # A tag is either a bare flag (`:slow`) or a `{key, value}` pair. Terms
   # without a String.Chars implementation are inspected rather than
   # crashing the export.
   defp tag_pair({key, value}), do: {safe_string(key), safe_string(value)}

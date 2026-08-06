@@ -303,6 +303,42 @@ defmodule Raxol.Core.Metrics.CloudTest do
       refute_receive {:http_request, _}, 400
     end
 
+    test "repeated failed manual flushes do not duplicate the batch" do
+      port = start_capture_server()
+      start_cloud(quiet_opts(@refused_port))
+
+      Cloud.record(:performance, :tick, 7, [])
+
+      # Two failed manual flushes: the retained batch must stay ONE entry,
+      # not double on each failure.
+      assert {:error, _} = Cloud.flush_metrics()
+      assert {:error, _} = Cloud.flush_metrics()
+
+      assert :ok ==
+               Cloud.configure(%{
+                 endpoint: "http://127.0.0.1:#{port}/v1/metrics"
+               })
+
+      assert :ok == Cloud.flush_metrics()
+      assert_receive {:http_request, req}, 2_000
+
+      [metric] = req.body |> Jason.decode!() |> otlp_metrics()
+      assert [%{"asDouble" => 7.0}] = metric["gauge"]["dataPoints"]
+    end
+
+    test "a non-list tags argument is normalized away, not crashed on" do
+      port = start_capture_server()
+      start_cloud(quiet_opts(port))
+
+      Cloud.record(:performance, :tick, 1, :oops)
+      assert :ok == Cloud.flush_metrics()
+
+      assert_receive {:http_request, req}, 2_000
+      [metric] = req.body |> Jason.decode!() |> otlp_metrics()
+      [point] = metric["gauge"]["dataPoints"]
+      assert point["attributes"] == []
+    end
+
     test "non-numeric values are dropped instead of crashing the exporter" do
       port = start_capture_server()
       start_cloud(quiet_opts(port))
@@ -356,6 +392,48 @@ defmodule Raxol.Core.Metrics.CloudTest do
                ~s(raxol_performance_tick{note="a\\"b\\nevil_metric 999"} 1.0\n)
 
       refute req.body =~ "\nevil_metric"
+    end
+
+    test "prometheus label names use the label charset, not the metric one" do
+      port = start_capture_server()
+
+      start_cloud(
+        quiet_opts(port,
+          service: :prometheus,
+          endpoint: "http://127.0.0.1:#{port}/metrics/job/raxol"
+        )
+      )
+
+      # ':' is legal in metric names but NOT label names; leading digits
+      # are legal in neither. Both would get the whole push rejected.
+      Cloud.record(:performance, :tick, 1, [{"cache:hit", "x"}, {"9lives", "y"}])
+
+      assert :ok == Cloud.flush_metrics()
+
+      assert_receive {:http_request, req}, 2_000
+
+      assert req.body ==
+               ~s(raxol_performance_tick{_9lives="y",cache_hit="x"} 1.0\n)
+    end
+
+    test "prometheus dedupe is stable under tag reordering" do
+      port = start_capture_server()
+
+      start_cloud(
+        quiet_opts(port,
+          service: :prometheus,
+          endpoint: "http://127.0.0.1:#{port}/metrics/job/raxol"
+        )
+      )
+
+      # The same label SET in different caller order must render one
+      # sample, not two (duplicate samples reject the whole push).
+      Cloud.record(:performance, :tick, 1, [{:a, "1"}, {:b, "2"}])
+      Cloud.record(:performance, :tick, 2, [{:b, "2"}, {:a, "1"}])
+      assert :ok == Cloud.flush_metrics()
+
+      assert_receive {:http_request, req}, 2_000
+      assert req.body == ~s(raxol_performance_tick{a="1",b="2"} 2.0\n)
     end
 
     test "prometheus dedupes by rendered labels, not raw tag terms" do
