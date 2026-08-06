@@ -16,6 +16,7 @@ defmodule Raxol.RATE do
   corpus inside the normal suite, so CI exercises it on every arch it builds on.
   """
 
+  alias Raxol.StableInspect
   alias Raxol.UI.Renderer
 
   @refs_rel "rate/golden.refs"
@@ -99,12 +100,14 @@ defmodule Raxol.RATE do
     |> Base.encode16(case: :lower)
   end
 
-  # Row-major serialization; sort makes the hash independent of emission order.
+  # Row-major serialization; sort makes the hash independent of emission
+  # order. Cell text goes through `StableInspect.quoted/1`, never `inspect/1`,
+  # whose escaping varies across Elixir releases and would fork the hash.
   defp serialize(cells) do
     cells
     |> Enum.sort_by(fn {x, y, _c, _fg, _bg, _a} -> {y, x} end)
     |> Enum.map_join("\n", fn {x, y, char, fg, bg, attrs} ->
-      "#{y},#{x} #{inspect(char)} #{token(fg)} #{token(bg)} #{inspect(Enum.sort(List.wrap(attrs)))}"
+      "#{y},#{x} #{StableInspect.quoted(char)} #{token(fg)} #{token(bg)} #{inspect(Enum.sort(List.wrap(attrs)))}"
     end)
   end
 

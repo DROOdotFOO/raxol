@@ -70,6 +70,7 @@ defmodule Raxol.Harness.Surface.Parity do
   alias Raxol.Harness.Projection
   alias Raxol.LiveView.TerminalBridge
   alias Raxol.MCP.StructuredScreenshot
+  alias Raxol.StableInspect
   alias Raxol.UI.Components.Harness.Block
   alias Raxol.UI.Layout.Engine, as: LayoutEngine
   alias Raxol.UI.Renderer, as: UIRenderer
@@ -379,12 +380,13 @@ defmodule Raxol.Harness.Surface.Parity do
 
   # Row-major, one cell per line, style tokens spelled out. Mirrors
   # `Raxol.RATE`'s serialization so a cell-level divergence reads the same way
-  # in both matrices.
+  # in both matrices. Cell text goes through `StableInspect.quoted/1`, never
+  # `inspect/1`, so the artifact bytes match on every CI Elixir.
   defp cells_artifact(cells) do
     cells
     |> Enum.sort_by(fn {x, y, _c, _fg, _bg, _a} -> {y, x} end)
     |> Enum.map_join("\n", fn {x, y, char, fg, bg, attrs} ->
-      "#{y},#{x} #{inspect(char)} #{token(fg)} #{token(bg)} " <>
+      "#{y},#{x} #{StableInspect.quoted(char)} #{token(fg)} #{token(bg)} " <>
         inspect(Enum.sort(List.wrap(attrs)))
     end)
     |> newline_terminated()
@@ -415,7 +417,7 @@ defmodule Raxol.Harness.Surface.Parity do
     |> Regex.split(ansi, include_captures: true, trim: true)
     |> Enum.map_join("\n", fn
       <<0x1B, rest::binary>> -> "ESC" <> rest
-      text -> inspect(text)
+      text -> StableInspect.quoted(text)
     end)
     |> newline_terminated()
   end
