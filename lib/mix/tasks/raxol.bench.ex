@@ -30,6 +30,12 @@ defmodule Mix.Tasks.Raxol.Bench do
       # Full benchmarks with regression detection
       mix raxol.bench --regression
 
+  Note: `--regression` compares against `bench/output/enhanced/baseline.json`.
+  A run with no baseline on disk saves one and passes -- in CI the baseline
+  must be persisted (cache/artifact) across runs or the gate compares
+  nothing. The comparison covers jobs present in both runs; renames are
+  reported, not silently skipped.
+
       # Parser benchmarks with dashboard generation
       mix raxol.bench parser --dashboard
 

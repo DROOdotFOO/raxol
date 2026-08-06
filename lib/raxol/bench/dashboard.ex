@@ -103,17 +103,51 @@ defmodule Raxol.Bench.Dashboard do
 
       baseline ->
         regressions = detect_regressions(current, baseline)
-
-        Mix.shell().info(
-          "Compared #{count_jobs(current)} jobs against baseline (#{count_jobs(baseline)} jobs)"
-        )
-
+        report_match_coverage(current, baseline)
         handle_regression_results(regressions)
     end
   end
 
-  defp count_jobs(metrics),
-    do: metrics |> Map.values() |> Enum.map(&map_size/1) |> Enum.sum()
+  # The gate only compares jobs present in BOTH runs. Say so explicitly:
+  # a renamed job silently leaving the comparison is exactly how a gate
+  # goes vacuous while its output still reads as thorough.
+  defp report_match_coverage(current, baseline) do
+    current_jobs = job_set(current)
+    baseline_jobs = job_set(baseline)
+    matched = MapSet.intersection(current_jobs, baseline_jobs)
+    only_current = MapSet.difference(current_jobs, baseline_jobs)
+    only_baseline = MapSet.difference(baseline_jobs, current_jobs)
+
+    Mix.shell().info(
+      "Compared #{MapSet.size(matched)} matched jobs " <>
+        "(current run: #{MapSet.size(current_jobs)}, baseline: #{MapSet.size(baseline_jobs)})"
+    )
+
+    if MapSet.size(only_current) > 0 do
+      Mix.shell().info(
+        "  Not in baseline (uncompared): #{Enum.join(Enum.sort(only_current), ", ")}"
+      )
+    end
+
+    if MapSet.size(only_baseline) > 0 do
+      Mix.shell().info(
+        "  In baseline but gone from this run: #{Enum.join(Enum.sort(only_baseline), ", ")}"
+      )
+    end
+
+    if MapSet.size(matched) == 0 do
+      Mix.shell().error(
+        "  ZERO jobs matched the baseline -- the gate compared nothing. " <>
+          "If jobs were renamed, refresh the baseline (delete #{@baseline_file})."
+      )
+    end
+  end
+
+  defp job_set(metrics) do
+    for {suite, jobs} <- metrics, {job, _} <- jobs, into: MapSet.new() do
+      "#{suite}/#{job}"
+    end
+  end
 
   # Median-based: means hide tail noise, and the median is Benchee's most
   # stable point statistic across repetitions.
