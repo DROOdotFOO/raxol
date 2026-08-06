@@ -133,18 +133,29 @@ defmodule Raxol.MCP.AgentBridge do
          function_exported?(Raxol.Headless, :send_key, 3) do
       case existing_session_atom(id) do
         {:ok, session} ->
-          # Send the message as individual keystrokes
-          for char <- String.graphemes(message) do
-            Raxol.Headless.send_key(session, char, [])
-          end
+          # Send the message as individual keystrokes, and report honestly:
+          # a failed keystroke must not be summarized as success.
+          results =
+            for char <- String.graphemes(message) do
+              Raxol.Headless.send_key(session, char, [])
+            end
 
-          {:ok,
-           [
-             %{
-               type: "text",
-               text: "Sent #{String.length(message)} characters to agent #{id}"
-             }
-           ]}
+          case Enum.reject(results, &(&1 == :ok)) do
+            [] ->
+              {:ok,
+               [
+                 %{
+                   type: "text",
+                   text:
+                     "Sent #{String.length(message)} characters to agent #{id}"
+                 }
+               ]}
+
+            failures ->
+              {:error,
+               "#{length(failures)}/#{length(results)} keystrokes failed for " <>
+                 "agent #{id}: #{inspect(List.first(failures))}"}
+          end
 
         {:error, :unknown_session} ->
           {:error, "Unknown agent session: #{id}"}

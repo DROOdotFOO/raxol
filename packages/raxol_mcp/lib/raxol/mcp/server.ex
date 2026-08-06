@@ -81,6 +81,7 @@ defmodule Raxol.MCP.Server do
   defstruct [
     :registry,
     :authorizer,
+    :read_authorizer,
     initialized: false,
     log_level: :info,
     subscribers: [],
@@ -94,6 +95,7 @@ defmodule Raxol.MCP.Server do
   @type t :: %__MODULE__{
           registry: GenServer.server(),
           authorizer: Authorizer.t() | nil,
+          read_authorizer: Authorizer.t() | nil,
           initialized: boolean(),
           log_level:
             :debug
@@ -190,6 +192,7 @@ defmodule Raxol.MCP.Server do
   def init_manager(opts) do
     registry = Keyword.get(opts, :registry, Registry)
     authorizer = Keyword.get(opts, :authorizer)
+    read_authorizer = Keyword.get(opts, :read_authorizer)
 
     refuse_unguarded_sensitive_tools!(registry, authorizer)
 
@@ -197,6 +200,7 @@ defmodule Raxol.MCP.Server do
      %__MODULE__{
        registry: registry,
        authorizer: authorizer,
+       read_authorizer: read_authorizer,
        elicitation_timeout_ms:
          Keyword.get(
            opts,
@@ -225,6 +229,23 @@ defmodule Raxol.MCP.Server do
       Process.monitor(pid)
       {:noreply, %{state | subscribers: [pid | state.subscribers]}}
     end
+  end
+
+  # Resource-updated notifications honor resources/subscribe: with no
+  # subscription for the URI, the notification is not broadcast. This is
+  # what makes the subscribe call (and its authorization gate) meaningful
+  # rather than write-only state.
+  def handle_manager_cast(
+        {:notify, "notifications/resources/updated" = method, params},
+        state
+      ) do
+    uri = Map.get(params, "uri") || Map.get(params, :uri)
+
+    if uri != nil and Map.has_key?(state.resource_subscriptions, uri) do
+      broadcast(state.subscribers, Protocol.notification(method, params))
+    end
+
+    {:noreply, state}
   end
 
   def handle_manager_cast({:notify, method, params}, state) do
@@ -353,8 +374,14 @@ defmodule Raxol.MCP.Server do
   # -- Resources ---
 
   defp dispatch(%{method: "resources/list", id: id}, state) do
-    resources = Registry.list_resources(state.registry)
-    {Protocol.response(id, %{resources: resources}), state}
+    case authorize_read("resources/list", %{}, state) do
+      :allow ->
+        resources = Registry.list_resources(state.registry)
+        {Protocol.response(id, %{resources: resources}), state}
+
+      {:deny, detail} ->
+        {authz_error_response(id, "resources/list", detail), state}
+    end
   end
 
   defp dispatch(%{method: "resources/subscribe", id: id, params: params}, state) do
@@ -398,8 +425,14 @@ defmodule Raxol.MCP.Server do
   # -- Prompts ---
 
   defp dispatch(%{method: "prompts/list", id: id}, state) do
-    prompts = Registry.list_prompts(state.registry)
-    {Protocol.response(id, %{prompts: prompts}), state}
+    case authorize_read("prompts/list", %{}, state) do
+      :allow ->
+        prompts = Registry.list_prompts(state.registry)
+        {Protocol.response(id, %{prompts: prompts}), state}
+
+      {:deny, detail} ->
+        {authz_error_response(id, "prompts/list", detail), state}
+    end
   end
 
   defp dispatch(%{method: "prompts/get", id: id, params: params}, state) do
@@ -443,13 +476,20 @@ defmodule Raxol.MCP.Server do
 
   # -- Completion ---
 
+  # Gated as a read surface: completions enumerate tool names, resource
+  # URIs, prompt names, and LIVE headless session ids.
   defp dispatch(%{method: "completion/complete", id: id, params: params}, state) do
     ref = Map.get(params, "ref") || Map.get(params, :ref, %{})
     argument = Map.get(params, "argument") || Map.get(params, :argument, %{})
 
-    completions = compute_completions(ref, argument, state)
+    case authorize_read("completion/complete", %{"ref" => ref}, state) do
+      :allow ->
+        completions = compute_completions(ref, argument, state)
+        {Protocol.response(id, %{completion: %{values: completions}}), state}
 
-    {Protocol.response(id, %{completion: %{values: completions}}), state}
+      {:deny, detail} ->
+        {authz_error_response(id, "completion/complete", detail), state}
+    end
   end
 
   # -- Catch-all ---
@@ -595,21 +635,29 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  # Read surfaces (resources/read, resources/subscribe, prompts/get) consult
-  # the same authorizer as tools/call. There is no elicitation path here: ASK
-  # resolves to deny, because the elicitation flow is shaped around approving
-  # a tool RUN, and parking a read on a human prompt is a worse failure mode
-  # than a machine-readable refusal. A nil authorizer allows, matching the
-  # tools/call stance (stdio inherits the OS boundary).
-  defp authorize_read(_op, _detail, %{authorizer: nil}), do: :allow
+  # Read surfaces (resources/read, resources/subscribe, resources/list,
+  # prompts/get, prompts/list, completion/complete) consult the DEDICATED
+  # :read_authorizer, not the tools/call authorizer: an existing tool
+  # allowlist knows nothing about method names like "resources/read" and
+  # would deny every read if the seams were shared. A nil read_authorizer
+  # allows, which is the pre-gate behavior (reads open; stdio inherits the
+  # OS boundary). There is no elicitation path here: ASK resolves to deny,
+  # because the elicitation flow is shaped around approving a tool RUN --
+  # and the operator-facing prompt is NOT echoed to the denied client.
+  defp authorize_read(_op, _detail, %{read_authorizer: nil}), do: :allow
 
   defp authorize_read(op, detail, state) do
-    case Authorizer.decide(state.authorizer, op, detail, %{}) do
+    case Authorizer.decide(state.read_authorizer, op, detail, %{}) do
       :allow -> :allow
-      {:ask, prompt} -> {:deny, {:ask_denied, prompt}}
+      {:ask, _prompt} -> {:deny, :interactive_approval_unsupported}
       {:deny, reason} -> {:deny, reason}
     end
   end
+
+  # JSON-RPC application-defined error code for an authorization denial on a
+  # read surface. Distinct from internal_error (-32603) so a policy denial
+  # is never mistaken for a transient server fault and retry-looped.
+  @authz_denied_code -32001
 
   # Read-surface denials are JSON-RPC errors (there is no tool-result shape to
   # carry an isError payload on these methods); the machine-readable detail
@@ -617,7 +665,7 @@ defmodule Raxol.MCP.Server do
   defp authz_error_response(id, method, detail) do
     Protocol.error_response(
       id,
-      Protocol.internal_error(),
+      @authz_denied_code,
       "authorization_required: #{method}",
       %{
         "error" => "authorization_required",
