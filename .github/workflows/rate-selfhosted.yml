@@ -62,7 +62,7 @@ jobs:
               test/termbox2_nif/termbox_model_test.exs \
               test/termbox2_nif/termbox2_loading_test.exs \
               test/termbox2_nif/termbox2_nif_test.exs \
-              test/termbox2_nif/oracle_equivalence_test.exs --no-deps-check" /dev/null
+              test/termbox2_nif/oracle_equivalence_test.exs" /dev/null
           '
 
       - name: Platform :requires_terminal suite (under a pseudo-terminal)
@@ -70,7 +70,7 @@ jobs:
           nix develop --command bash -lc '
             MIX_ENV=test mix deps.get
             script -qec "MIX_ENV=test mix test \
-              test/platform/terminal_test.exs --no-deps-check" /dev/null
+              test/platform/terminal_test.exs" /dev/null
           '
 
       # Pure render, no pseudo-terminal needed. First comparison of the
@@ -78,5 +78,5 @@ jobs:
       - name: RATE golden render on this architecture
         run: |
           nix develop --command bash -lc '
-            MIX_ENV=test mix test test/rate/golden_test.exs --no-deps-check
+            MIX_ENV=test mix test test/rate/golden_test.exs
           '
