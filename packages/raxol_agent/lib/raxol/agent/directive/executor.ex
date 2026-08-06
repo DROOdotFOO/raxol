@@ -1,4 +1,5 @@
-defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Async do
+defimpl Raxol.Core.Runtime.Directive.Executor,
+  for: Raxol.Agent.Directive.Async do
   alias Raxol.Agent.Directive.Async
 
   def execute(%Async{fun: fun}, context) do
@@ -23,7 +24,8 @@ defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Async 
   end
 end
 
-defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Shell do
+defimpl Raxol.Core.Runtime.Directive.Executor,
+  for: Raxol.Agent.Directive.Shell do
   alias Raxol.Agent.Directive.Shell
 
   def execute(%Shell{command: command, opts: opts}, context) do
@@ -82,13 +84,23 @@ defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.Shell 
   end
 end
 
-defimpl Raxol.Core.Runtime.Directive.Executor, for: Raxol.Agent.Directive.SendAgent do
+defimpl Raxol.Core.Runtime.Directive.Executor,
+  for: Raxol.Agent.Directive.SendAgent do
   alias Raxol.Agent.Directive.SendAgent
 
-  def execute(%SendAgent{target_id: target_id, message: message}, context) do
+  def execute(
+        %SendAgent{target_id: target_id, message: message} = directive,
+        context
+      ) do
     with pid when is_pid(pid) <- Process.whereis(Raxol.Agent.Registry),
          [{agent_pid, _}] <- Registry.lookup(Raxol.Agent.Registry, target_id) do
-      GenServer.cast(agent_pid, {:send_message, message, causation_metadata()})
+      metadata =
+        case directive.from do
+          nil -> causation_metadata()
+          from -> Map.put(causation_metadata(), :from, from)
+        end
+
+      GenServer.cast(agent_pid, {:send_message, message, metadata})
     else
       _ ->
         send(

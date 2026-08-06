@@ -212,6 +212,9 @@ defmodule Raxol.Animation.EasingTest do
   end
 
   describe "Performance" do
+    # Wall-clock bound (1ms for 5 calls); a single scheduler preemption
+    # busts it on loaded CI runners.
+    @tag :skip_on_ci
     test ~c"easing functions meet performance requirements" do
       # Test all easing functions
       easing_functions = [

@@ -1,39 +1,108 @@
 defmodule Raxol.Core.Metrics.Cloud do
   @moduledoc """
-  Cloud integration for the Raxol metrics system.
+  Cloud export for the Raxol metrics system.
 
-  This module handles:
-  - Sending metrics to cloud services
-  - Metric aggregation for cloud transmission
-  - Cloud service configuration
-  - Metric batching and compression
+  Buffers metrics and ships them over HTTP to a configured backend:
+
+    * `:otlp` / `:signoz` — OTLP/HTTP JSON to an OpenTelemetry collector
+      (`POST` to the configured endpoint, default `/v1/metrics`). For
+      `:signoz`, a configured `api_key` is sent as `signoz-access-token`.
+    * `:datadog` — the v1 series API (`DD-API-KEY` header, requires
+      `api_key`).
+    * `:prometheus` — Prometheus Pushgateway text exposition (`POST`; point
+      the endpoint at `/metrics/job/<job>`).
+
+  OTLP and Datadog export every recorded data point (nanosecond
+  timestamps). Prometheus is a snapshot format (repeating a
+  `{name, labels}` sample is invalid), so it exports the latest value per
+  rendered label set.
+
+  ## Ingestion and flushing
+
+  Metrics enter through `record/4` (or the equivalent
+  `{:metrics, type, name, value, tags}` message), which
+  `Raxol.Core.Metrics.MetricsCollector.record_metric/4` forwards
+  automatically whenever this process is running. Only numeric values are
+  exported; non-numeric values (the collector also accepts maps) are
+  dropped at ingestion rather than crashing the exporter at flush time.
+
+  Automatic exports — the batch-size trigger and the periodic timer — run
+  in a monitored helper process, so a slow or unreachable collector never
+  blocks metric ingestion, and a crash in export code cannot take the
+  exporter down. At most one export is in flight at a time. After a failed
+  export the batch is retained (capped at #{10} batches) and the batch-size
+  trigger backs off; the periodic timer is the retry cadence, so an outage
+  costs one attempt per `flush_interval`, not one per metric.
+
+  `flush_metrics/0` is the manual/synchronous path (tests, shutdown
+  hooks): it exports in the server and returns the transport result, or
+  `{:error, :export_in_flight}` if an async export is running.
+
+  HTTP transport is `Req`, an optional dependency; without it every export
+  returns `{:error, :http_client_unavailable}`.
+
+  Crash reports redact `api_key` (see `format_status/1`).
+
+  CloudWatch is not supported: it needs SigV4 request signing, which means
+  an AWS dependency this library does not take; it is rejected at
+  configuration time rather than silently dropping metrics.
   """
 
   use Raxol.Core.Behaviours.BaseManager
 
-  @type cloud_service :: :otlp | :signoz | :datadog | :prometheus | :cloudwatch
+  alias Raxol.Core.Runtime.Log
+
+  @compile {:no_warn_undefined, Req}
+
+  @type cloud_service :: :otlp | :signoz | :datadog | :prometheus
   @type cloud_config :: %{
           service: cloud_service(),
           endpoint: String.t(),
-          api_key: String.t(),
+          api_key: String.t() | nil,
           batch_size: pos_integer(),
           flush_interval: pos_integer(),
           compression: boolean()
         }
 
-  # Default to OTLP (SigNoz / any OpenTelemetry collector). Datadog remains a valid
-  # pluggable backend but is no longer the default.
+  # Default to OTLP (SigNoz / any OpenTelemetry collector).
   @default_config %{
     service: :otlp,
     endpoint: "http://localhost:4318/v1/metrics",
+    api_key: nil,
     batch_size: 100,
     flush_interval: 10_000,
     compression: true
   }
 
+  # On export failure the buffer is retained for retry, but never beyond
+  # this many batches (newest kept).
+  @max_buffered_batches 10
+
   @doc """
-  Configures the cloud metrics service.
+  Records a metric for cloud export. A no-op returning `:ok` when the
+  Cloud process is not running or the value is not a number, so producers
+  can call it unconditionally.
   """
+  @spec record(atom(), atom() | String.t(), term(), list()) :: :ok
+  def record(type, name, value, tags \\ [])
+
+  def record(type, name, value, tags) when is_number(value) do
+    case Process.whereis(__MODULE__) do
+      nil -> :ok
+      pid -> Kernel.send(pid, {:metrics, type, name, value, tags})
+    end
+
+    :ok
+  end
+
+  def record(_type, _name, _value, _tags), do: :ok
+
+  @doc """
+  Configures the cloud metrics service. The new keys are validated against
+  the configuration that would result (current config merged with the
+  changes), not against defaults.
+  """
+  @spec configure(map()) :: :ok | {:error, term()}
   def configure(config) when is_map(config) do
     GenServer.call(__MODULE__, {:configure, config})
   end
@@ -41,42 +110,65 @@ defmodule Raxol.Core.Metrics.Cloud do
   @doc """
   Gets the current cloud configuration.
   """
+  @spec get_config() :: cloud_config()
   def get_config do
     GenServer.call(__MODULE__, :get_config)
   end
 
   @doc """
-  Manually triggers a metrics flush to the cloud service.
+  Flushes buffered metrics to the cloud service now, synchronously in the
+  server. Returns the export result: `:ok` (also for an empty buffer),
+  `{:error, :export_in_flight}` when an async export is running, or the
+  transport error.
   """
+  @spec flush_metrics() :: :ok | {:error, term()}
   def flush_metrics do
-    GenServer.call(__MODULE__, :flush_metrics)
+    GenServer.call(__MODULE__, :flush_metrics, 15_000)
   end
 
   @impl true
   def init_manager(opts) do
     config = Map.merge(@default_config, Map.new(opts))
-    test_pid = Keyword.get(opts, :test_pid)
 
-    state = %{
-      config: config,
-      metrics_buffer: [],
-      last_flush: System.system_time(:millisecond),
-      test_pid: test_pid
-    }
+    case validate_cloud_config(config) do
+      :ok ->
+        state = %{
+          config: config,
+          metrics_buffer: [],
+          buffer_count: 0,
+          inflight: nil,
+          last_failure_ms: nil
+        }
 
-    schedule_flush()
-    {:ok, state}
+        schedule_flush(config.flush_interval)
+        {:ok, state}
+
+      {:error, reason} ->
+        {:stop, {:invalid_cloud_config, reason}}
+    end
+  end
+
+  # Redact the API key from crash reports and :sys.get_status output.
+  @impl GenServer
+  def format_status(status) do
+    redact = fn
+      %{config: %{} = config} = state ->
+        %{state | config: Map.replace(config, :api_key, "[REDACTED]")}
+
+      other ->
+        other
+    end
+
+    Map.update(status, :state, nil, redact)
   end
 
   @impl true
   def handle_manager_call({:configure, new_config}, _from, state) do
-    case validate_cloud_config(new_config) do
-      :ok ->
-        new_state = %{state | config: Map.merge(state.config, new_config)}
-        {:reply, :ok, new_state}
+    merged = Map.merge(state.config, new_config)
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+    case validate_cloud_config(merged) do
+      :ok -> {:reply, :ok, %{state | config: merged}}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -87,232 +179,428 @@ defmodule Raxol.Core.Metrics.Cloud do
 
   @impl true
   def handle_manager_call(:flush_metrics, _from, state) do
-    {new_state, result} = flush_metrics_to_cloud(state)
-    {:reply, result, new_state}
+    cond do
+      state.inflight != nil ->
+        {:reply, {:error, :export_in_flight}, state}
+
+      state.metrics_buffer == [] ->
+        {:reply, :ok, state}
+
+      true ->
+        entries = Enum.reverse(state.metrics_buffer)
+
+        case send_metrics_to_cloud(entries, state.config) do
+          :ok ->
+            {:reply, :ok, clear_buffer(%{state | last_failure_ms: nil})}
+
+          {:error, _reason} = error ->
+            # Clear BEFORE retaining: retain_after_failure appends the
+            # failed entries to whatever is buffered, and here they are
+            # the same list -- without the clear each failed manual flush
+            # would double every retained entry.
+            {:reply, error,
+             retain_after_failure(
+               clear_buffer(state),
+               state.metrics_buffer,
+               error
+             )}
+        end
+    end
   end
 
   @impl true
   def handle_manager_info(:flush_metrics, state) do
-    {new_state, _result} = flush_metrics_to_cloud(state)
-    schedule_flush()
-    {:noreply, new_state}
+    state =
+      if state.inflight == nil and state.metrics_buffer != [] do
+        start_export(state)
+      else
+        state
+      end
+
+    schedule_flush(state.config.flush_interval)
+    {:noreply, state}
   end
 
   @impl true
-  def handle_manager_info({:metrics, type, name, value, tags}, state) do
+  def handle_manager_info({:metrics, type, name, value, tags}, state)
+      when is_number(value) do
     metric = %{
       type: type,
       name: name,
       value: value,
-      tags: tags,
-      timestamp: System.system_time(:second)
+      tags: normalize_tags(tags),
+      timestamp: System.system_time(:nanosecond)
     }
 
-    new_buffer = [metric | state.metrics_buffer]
+    state = %{
+      state
+      | metrics_buffer: [metric | state.metrics_buffer],
+        buffer_count: state.buffer_count + 1
+    }
 
-    case length(new_buffer) >= state.config.batch_size do
-      true ->
-        {new_state, _result} =
-          flush_metrics_to_cloud(%{state | metrics_buffer: new_buffer})
-
-        {:noreply, new_state}
-
-      false ->
-        {:noreply, %{state | metrics_buffer: new_buffer}}
+    # Batch-size trigger: only when no export is in flight and we are not
+    # backing off after a failure -- otherwise a dead collector would turn
+    # every metric into an export attempt. The periodic timer retries.
+    if state.buffer_count >= state.config.batch_size and
+         state.inflight == nil and backoff_elapsed?(state) do
+      {:noreply, start_export(state)}
+    else
+      {:noreply, state}
     end
   end
 
+  # Non-numeric values (maps etc.) are dropped: the collector's local ETS
+  # store accepts them, the wire formats do not.
   @impl true
-  def handle_manager_info({:metrics_formatted, _formatted_metrics}, state) do
-    # Ignore metrics_formatted messages - they are sent back to the process
-    # that initiated the metrics processing for testing purposes
+  def handle_manager_info({:metrics, _type, _name, _value, _tags}, state) do
     {:noreply, state}
   end
 
   @impl true
-  def handle_manager_info({:metrics_sent, _result}, state) do
-    # Ignore metrics_sent messages - they are sent back to the process
-    # that initiated the metrics processing for testing purposes
-    {:noreply, state}
-  end
+  def handle_manager_info(
+        {:export_result, pid, result},
+        %{inflight: %{pid: pid}} = state
+      ) do
+    Process.demonitor(state.inflight.mref, [:flush])
 
-  defp flush_metrics_to_cloud(state) do
-    case state.metrics_buffer == [] do
-      true ->
-        {state, :ok}
+    case result do
+      :ok ->
+        {:noreply, %{state | inflight: nil, last_failure_ms: nil}}
 
-      false ->
-        metrics = prepare_metrics_for_cloud(state.metrics_buffer)
-        result = send_metrics_to_cloud(metrics, state)
-
-        # Send message back to test process if present, else to self
-        recipient = state.test_pid || self()
-        send(recipient, {:metrics_sent, result})
-
-        new_state = %{
-          state
-          | metrics_buffer: [],
-            last_flush: System.system_time(:millisecond)
-        }
-
-        {new_state, result}
+      {:error, _reason} = error ->
+        {:noreply,
+         retain_after_failure(
+           %{state | inflight: nil},
+           state.inflight.snapshot,
+           error
+         )}
     end
   end
 
-  defp prepare_metrics_for_cloud(metrics) do
-    metrics
-    |> Enum.group_by(&{&1.type, &1.name})
-    |> Enum.map(fn {{type, name}, values} ->
-      %{
-        type: type,
-        name: name,
-        values: Enum.map(values, & &1.value),
-        tags: List.first(values).tags,
-        timestamp: List.first(values).timestamp
-      }
-    end)
+  @impl true
+  def handle_manager_info(
+        {:DOWN, mref, :process, pid, reason},
+        %{inflight: %{mref: mref, pid: pid}} = state
+      ) do
+    {:noreply,
+     retain_after_failure(
+       %{state | inflight: nil},
+       state.inflight.snapshot,
+       {:error, {:export_crashed, reason}}
+     )}
   end
 
-  defp send_metrics_to_cloud(metrics, state) do
+  # Stray messages (e.g. a DOWN for an export whose result was already
+  # consumed) must not crash the exporter.
+  @impl true
+  def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  # -- Export orchestration ------------------------------------------------------
+
+  # Run the export in a monitored helper process: a slow endpoint never
+  # blocks ingestion, and a crash in formatting/transport is contained
+  # (reported back as a failed export via :DOWN).
+  defp start_export(state) do
+    snapshot = state.metrics_buffer
+    entries = Enum.reverse(snapshot)
     config = state.config
-    recipient = state.test_pid || self()
+    parent = self()
 
+    {pid, mref} =
+      spawn_monitor(fn ->
+        result = send_metrics_to_cloud(entries, config)
+        Kernel.send(parent, {:export_result, self(), result})
+      end)
+
+    clear_buffer(%{
+      state
+      | inflight: %{pid: pid, mref: mref, snapshot: snapshot}
+    })
+  end
+
+  defp clear_buffer(state), do: %{state | metrics_buffer: [], buffer_count: 0}
+
+  defp retain_after_failure(state, failed_entries, {:error, reason}) do
+    Log.warning(
+      "[Metrics.Cloud] export to #{state.config.service} failed: #{inspect(reason)}; " <>
+        "retaining #{length(failed_entries)} metrics for retry"
+    )
+
+    # Newer entries (recorded during the export) stay in front; the failed
+    # snapshot is older. Cap keeps the newest.
+    combined =
+      Enum.take(
+        state.metrics_buffer ++ failed_entries,
+        @max_buffered_batches * state.config.batch_size
+      )
+
+    %{
+      state
+      | metrics_buffer: combined,
+        buffer_count: length(combined),
+        last_failure_ms: System.monotonic_time(:millisecond)
+    }
+  end
+
+  defp backoff_elapsed?(%{last_failure_ms: nil}), do: true
+
+  defp backoff_elapsed?(state) do
+    System.monotonic_time(:millisecond) - state.last_failure_ms >=
+      state.config.flush_interval
+  end
+
+  defp send_metrics_to_cloud(metrics, config) do
     case config.service do
       service when service in [:otlp, :signoz] ->
-        formatted = format_for_otlp(metrics)
-        send(recipient, {:metrics_formatted, formatted})
-        send_to_otlp(config, metrics)
+        post_json(
+          config.endpoint,
+          format_for_otlp(metrics),
+          otlp_headers(config)
+        )
 
       :datadog ->
-        formatted = format_for_datadog(metrics)
-        send(recipient, {:metrics_formatted, formatted})
-        send_to_datadog(config, metrics)
+        with :ok <- require_api_key(config) do
+          post_json(config.endpoint, format_for_datadog(metrics), [
+            {"dd-api-key", config.api_key}
+          ])
+        end
 
       :prometheus ->
-        formatted = format_for_prometheus(metrics)
-        send(recipient, {:metrics_formatted, formatted})
-        send_to_prometheus(config, metrics)
-
-      :cloudwatch ->
-        formatted = format_for_cloudwatch(metrics)
-        send(recipient, {:metrics_formatted, formatted})
-        send_to_cloudwatch(config, metrics)
+        post_text(config.endpoint, format_for_prometheus(metrics))
 
       _ ->
         {:error, :invalid_service}
     end
   end
 
-  def send_to_otlp(_config, _metrics) do
-    # Send metrics via OTLP to the collector (SigNoz / any OpenTelemetry backend)
-    :ok
+  defp otlp_headers(%{service: :signoz, api_key: key})
+       when is_binary(key) and key != "",
+       do: [{"signoz-access-token", key}]
+
+  defp otlp_headers(_config), do: []
+
+  defp require_api_key(%{api_key: key}) when is_binary(key) and key != "",
+    do: :ok
+
+  defp require_api_key(_config), do: {:error, :missing_api_key}
+
+  # -- HTTP transport (Req, optional dependency) --------------------------------
+
+  defp post_json(url, body, headers) do
+    http_post(url, json: body, headers: headers)
   end
 
-  def send_to_datadog(_config, _metrics) do
-    # Send metrics to Datadog
-    :ok
+  defp post_text(url, body) do
+    http_post(url,
+      body: body,
+      headers: [{"content-type", "text/plain; version=0.0.4"}]
+    )
   end
 
-  def send_to_prometheus(_config, _metrics) do
-    # Send metrics to Prometheus
-    :ok
+  defp http_post(url, opts) do
+    if Code.ensure_loaded?(Req) do
+      case Req.post(
+             url,
+             opts ++
+               [
+                 retry: false,
+                 receive_timeout: 5_000,
+                 connect_options: [timeout: 5_000]
+               ]
+           ) do
+        {:ok, %{status: status}} when status in 200..299 -> :ok
+        {:ok, %{status: status}} -> {:error, {:http_status, status}}
+        {:error, exception} -> {:error, exception}
+      end
+    else
+      {:error, :http_client_unavailable}
+    end
   end
 
-  def send_to_cloudwatch(_config, _metrics) do
-    # Send metrics to CloudWatch
-    :ok
-  end
+  # -- Wire formats --------------------------------------------------------------
 
-  # OTLP metrics shape (SigNoz / OpenTelemetry collector): each metric a gauge data
-  # point. A stub structure, mirroring the other formatters.
-  defp format_for_otlp(metrics) do
-    data_points =
-      Enum.map(metrics, fn metric ->
-        avg_value = Enum.sum(metric.values) / length(metric.values)
-
+  # OTLP/HTTP JSON (opentelemetry-proto MetricsData): one gauge per metric
+  # name, one data point per recorded value, each carrying its own
+  # timestamp and attributes. Nothing is aggregated away.
+  defp format_for_otlp(entries) do
+    otlp_metrics =
+      entries
+      |> Enum.group_by(&{&1.type, &1.name})
+      |> Enum.map(fn {{type, name}, group} ->
         %{
-          metric: to_string(metric.name),
-          value: avg_value,
-          time_unix_nano: metric.timestamp,
-          attributes: metric.tags
+          name: metric_name(type, name),
+          gauge: %{dataPoints: Enum.map(group, &otlp_data_point/1)}
         }
       end)
 
-    %{resource_metrics: [%{scope_metrics: [%{metrics: data_points}]}]}
+    %{
+      resourceMetrics: [
+        %{
+          resource: %{
+            attributes: [
+              %{key: "service.name", value: %{stringValue: "raxol"}}
+            ]
+          },
+          scopeMetrics: [
+            %{
+              scope: %{name: "raxol.core.metrics"},
+              metrics: otlp_metrics
+            }
+          ]
+        }
+      ]
+    }
   end
 
-  defp format_for_datadog(metrics) do
-    # Format metrics for Datadog API
-    series =
-      Enum.map(metrics, fn metric ->
-        avg_value = Enum.sum(metric.values) / length(metric.values)
+  defp otlp_data_point(entry) do
+    %{
+      asDouble: entry.value * 1.0,
+      timeUnixNano: entry.timestamp,
+      attributes:
+        Enum.map(entry.tags, fn {key, value} ->
+          %{key: key, value: %{stringValue: value}}
+        end)
+    }
+  end
 
+  # Datadog v1 series API: one series per {metric, tags} with every point;
+  # timestamps in seconds, tags as "key:value" strings.
+  defp format_for_datadog(entries) do
+    series =
+      entries
+      |> Enum.group_by(&{&1.type, &1.name, &1.tags})
+      |> Enum.map(fn {{type, name, tags}, group} ->
         %{
-          metric: to_string(metric.name),
-          points: [[metric.timestamp, avg_value]],
+          metric: metric_name(type, name),
+          points:
+            Enum.map(group, fn e ->
+              [div(e.timestamp, 1_000_000_000), e.value * 1.0]
+            end),
           type: "gauge",
-          tags: metric.tags
+          tags: Enum.map(tags, fn {key, value} -> "#{key}:#{value}" end)
         }
       end)
 
     %{series: series}
   end
 
-  defp format_for_prometheus(metrics) do
-    # Format metrics for Prometheus
-    Enum.map_join(metrics, "\n", fn metric ->
-      avg_value = Enum.sum(metric.values) / length(metric.values)
-      tags_str = Enum.map_join(metric.tags, ",", &to_string/1)
-      "frame_time{#{tags_str}} #{avg_value} _"
+  # Prometheus text exposition format for a Pushgateway. The format is a
+  # snapshot -- repeating a {name, labels} sample is invalid -- so entries
+  # are grouped by their RENDERED name+labels (tag terms that render
+  # identically must not produce duplicate samples) and the most recent
+  # value per group wins.
+  defp format_for_prometheus(entries) do
+    entries
+    |> Enum.map(fn entry ->
+      name = prometheus_name(metric_name(entry.type, entry.name))
+
+      labels =
+        Enum.map_join(entry.tags, ",", fn {key, value} ->
+          ~s(#{prometheus_label_name(key)}="#{escape_label_value(value)}")
+        end)
+
+      {{name, labels}, entry}
+    end)
+    |> Enum.group_by(fn {key, _} -> key end, fn {_, entry} -> entry end)
+    |> Enum.map_join("", fn {{name, labels}, group} ->
+      entry = List.last(group)
+      value = entry.value * 1.0
+
+      case labels do
+        "" -> "#{name} #{value}\n"
+        _ -> "#{name}{#{labels}} #{value}\n"
+      end
     end)
   end
 
-  defp format_for_cloudwatch(metrics) do
-    # Format metrics for CloudWatch
-    metric_data =
-      Enum.map(metrics, fn metric ->
-        avg_value = Enum.sum(metric.values) / length(metric.values)
+  defp metric_name(type, name), do: "raxol.#{type}.#{name}"
 
-        %{
-          MetricName: to_string(metric.name),
-          Value: avg_value,
-          Unit: "Count",
-          Timestamp: metric.timestamp,
-          Dimensions:
-            Enum.map(metric.tags, fn tag ->
-              %{Name: to_string(tag), Value: "true"}
-            end)
-        }
-      end)
-
-    %{MetricData: metric_data}
+  # Metric names allow [a-zA-Z_:][a-zA-Z0-9_:]*.
+  defp prometheus_name(name) do
+    to_string(name)
+    |> String.replace(~r/[^a-zA-Z0-9_:]/, "_")
+    |> prefix_if_leading_digit()
   end
 
-  defp validate_cloud_config(config) do
-    # Merge with defaults to ensure all required fields are present
-    config_with_defaults = Map.merge(@default_config, config)
+  # Label names are STRICTER than metric names: no colon, no leading digit
+  # ([a-zA-Z_][a-zA-Z0-9_]*). A label name in metric-name charset gets the
+  # whole push rejected by the gateway.
+  defp prometheus_label_name(name) do
+    name
+    |> String.replace(~r/[^a-zA-Z0-9_]/, "_")
+    |> prefix_if_leading_digit()
+  end
 
-    with :ok <- validate_service(config_with_defaults.service),
-         :ok <- validate_endpoint(config_with_defaults.endpoint),
-         :ok <- validate_api_key(config_with_defaults.api_key),
-         :ok <- validate_batch_size(config_with_defaults.batch_size),
-         :ok <- validate_flush_interval(config_with_defaults.flush_interval) do
-      :ok
-    else
-      {:error, reason} -> {:error, reason}
+  defp prefix_if_leading_digit(<<digit, _::binary>> = name)
+       when digit in ?0..?9,
+       do: "_" <> name
+
+  defp prefix_if_leading_digit(name), do: name
+
+  # Label VALUES are quoted strings in the exposition format; backslash,
+  # double quote, and newline must be escaped or a hostile value injects
+  # arbitrary samples into the push body.
+  defp escape_label_value(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\"", "\\\"")
+    |> String.replace("\n", "\\n")
+  end
+
+  # Tags are normalized ONCE at ingestion into a sorted list of
+  # {string_key, string_value} pairs: formatters can never crash on a tag
+  # term, duplicate keys collapse (last wins), and the canonical order
+  # makes grouping/dedupe stable under caller tag reordering. A non-list
+  # tags argument becomes [].
+  defp normalize_tags(tags) when is_list(tags) do
+    tags |> Enum.map(&tag_pair/1) |> Map.new() |> Enum.sort()
+  end
+
+  defp normalize_tags(_tags), do: []
+
+  # A tag is either a bare flag (`:slow`) or a `{key, value}` pair. Terms
+  # without a String.Chars implementation are inspected rather than
+  # crashing the export.
+  defp tag_pair({key, value}), do: {safe_string(key), safe_string(value)}
+  defp tag_pair(tag), do: {safe_string(tag), "true"}
+
+  defp safe_string(term) when is_binary(term), do: term
+
+  defp safe_string(term) when is_atom(term) or is_number(term),
+    do: to_string(term)
+
+  defp safe_string(term), do: inspect(term)
+
+  # -- Config validation ---------------------------------------------------------
+
+  # Validates a COMPLETE config map (defaults or current config merged with
+  # changes) -- callers do the merge, so validation always judges the
+  # configuration that would actually apply.
+  defp validate_cloud_config(config) do
+    with :ok <- validate_service(config.service),
+         :ok <- validate_endpoint(config.endpoint),
+         :ok <- validate_api_key(config.api_key),
+         :ok <- validate_batch_size(config.batch_size) do
+      validate_flush_interval(config.flush_interval)
     end
   end
 
   defp validate_service(service)
-       when service in [:otlp, :signoz, :datadog, :prometheus, :cloudwatch],
+       when service in [:otlp, :signoz, :datadog, :prometheus],
        do: :ok
 
+  defp validate_service(:cloudwatch), do: {:error, :cloudwatch_not_supported}
   defp validate_service(_), do: {:error, :invalid_service}
 
   defp validate_endpoint(endpoint) when is_binary(endpoint) and endpoint != "",
     do: :ok
 
   defp validate_endpoint(_), do: {:error, :invalid_endpoint}
+
+  # api_key is optional (OTLP collectors and pushgateways commonly need
+  # none); when present it must be a non-empty string. Datadog enforces
+  # presence at send time.
+  defp validate_api_key(nil), do: :ok
 
   defp validate_api_key(api_key) when is_binary(api_key) and api_key != "",
     do: :ok
@@ -331,13 +619,7 @@ defmodule Raxol.Core.Metrics.Cloud do
 
   defp validate_flush_interval(_), do: {:error, :invalid_flush_interval}
 
-  defp schedule_flush do
-    timer_id = System.unique_integer([:positive])
-
-    Process.send_after(
-      self(),
-      {:flush_metrics, timer_id},
-      @default_config.flush_interval
-    )
+  defp schedule_flush(interval) do
+    Process.send_after(self(), :flush_metrics, interval)
   end
 end

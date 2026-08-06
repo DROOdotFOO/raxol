@@ -26,6 +26,27 @@ defmodule Raxol.MCP.Authorizer do
   A `nil` authorizer means allow: a stdio transport already inherits the OS
   process boundary. The SSE transport, which exposes tools over the network, is
   guarded separately -- see `Raxol.MCP.Deployment`.
+
+  ## Two seams: tools and reads
+
+  `Raxol.MCP.Server` evaluates authorizers at two independent seams:
+
+    * `:authorizer` -- guards `tools/call` (this module's original purpose).
+      Receives the TOOL name.
+    * `:read_authorizer` -- guards the read/metadata surfaces
+      (`resources/read`, `resources/subscribe`, `resources/unsubscribe`,
+      `resources/list`, `prompts/get`, `prompts/list`, `tools/list`,
+      `completion/complete`). Receives the METHOD name in the tool-name
+      position, e.g. `"resources/read"` with `%{"uri" => uri}` as the
+      arguments.
+
+  They are deliberately separate: a tool allowlist knows nothing about
+  method names and would otherwise deny every read. On read surfaces an
+  `{:ask, _}` decision resolves to deny (no elicitation for reads) and the
+  prompt is not echoed to the client. Network deployments should configure
+  BOTH seams -- the SSE boot guard (`Raxol.MCP.Deployment`) enforces only
+  `:authorizer`, and a nil `:read_authorizer` serves model state to any
+  connected client.
   """
 
   @type context :: map()
@@ -38,7 +59,8 @@ defmodule Raxol.MCP.Authorizer do
 
   @doc "Deny every call with `reason`."
   @spec deny_all(term()) :: t()
-  def deny_all(reason \\ :denied), do: fn _tool, _args, _ctx -> {:deny, reason} end
+  def deny_all(reason \\ :denied),
+    do: fn _tool, _args, _ctx -> {:deny, reason} end
 
   @doc """
   Allow only tools whose name is in `names`; deny the rest. This is the allowlist
@@ -57,5 +79,7 @@ defmodule Raxol.MCP.Authorizer do
   @doc "Evaluate an authorizer, treating `nil` as `:allow`."
   @spec decide(t() | nil, String.t(), map(), context()) :: decision()
   def decide(nil, _tool, _args, _ctx), do: :allow
-  def decide(fun, tool, args, ctx) when is_function(fun, 3), do: fun.(tool, args, ctx)
+
+  def decide(fun, tool, args, ctx) when is_function(fun, 3),
+    do: fun.(tool, args, ctx)
 end

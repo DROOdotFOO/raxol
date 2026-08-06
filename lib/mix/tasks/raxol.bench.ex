@@ -30,6 +30,12 @@ defmodule Mix.Tasks.Raxol.Bench do
       # Full benchmarks with regression detection
       mix raxol.bench --regression
 
+  Note: `--regression` compares against `bench/output/enhanced/baseline.json`.
+  A run with no baseline on disk saves one and passes -- in CI the baseline
+  must be persisted (cache/artifact) across runs or the gate compares
+  nothing. The comparison covers jobs present in both runs; renames are
+  reported, not silently skipped.
+
       # Parser benchmarks with dashboard generation
       mix raxol.bench parser --dashboard
 
@@ -114,6 +120,16 @@ defmodule Mix.Tasks.Raxol.Bench do
     Mix.shell().info("Running Raxol Performance Benchmarks...")
 
     if opts[:quick] do
+      ignored = Enum.filter([:regression, :compare, :dashboard], &opts[&1])
+
+      if ignored != [] do
+        flags = Enum.map_join(ignored, "/", &"--#{&1}")
+
+        Mix.shell().info(
+          "Note: #{flags} require a full run and are ignored with --quick"
+        )
+      end
+
       run_quick_benchmarks()
     else
       run_comprehensive_benchmarks(opts)
@@ -157,14 +173,18 @@ defmodule Mix.Tasks.Raxol.Bench do
         run_concurrent_benchmarks(standard_config(timestamp))
       )
 
-    if opts[:regression], do: Dashboard.check_for_regressions(results)
+    _metrics = Dashboard.snapshot_metrics(results, timestamp)
+
+    if opts[:compare], do: Dashboard.run_comparison_analysis(results, timestamp)
 
     if opts[:dashboard],
       do: Dashboard.generate_enhanced_dashboard(results, timestamp)
 
-    if opts[:compare], do: Dashboard.run_comparison_analysis(results, timestamp)
-
     Dashboard.print_results_summary(results, timestamp)
+
+    # Last: this raises on a regression, and the artifacts above should
+    # exist for the post-mortem when it does.
+    if opts[:regression], do: Dashboard.check_for_regressions(results)
   end
 
   defp run_parser_only(opts) do
@@ -242,19 +262,43 @@ defmodule Mix.Tasks.Raxol.Bench do
   end
 
   defp run_rendering_benchmarks(config) do
-    alias Raxol.UI.Rendering.RenderBatcher
+    alias Raxol.Terminal.ScreenBuffer
+    alias Raxol.UI.Rendering.TreeDiffer
 
-    {_small_buffer, medium_buffer, large_buffer} =
+    {_small_buffer, medium_buffer, _large_buffer} =
       TestData.create_test_buffers()
 
+    tree = %{
+      type: :view,
+      children:
+        Enum.map(1..100, fn i ->
+          %{type: :text, attrs: %{content: "Row #{i}"}}
+        end)
+    }
+
+    modified =
+      put_in(tree, [:children, Access.at(50), :attrs, :content], "Modified")
+
     jobs = %{
-      "render_with_damage_tracking" => fn ->
-        RenderBatcher.batch_render(medium_buffer,
-          changed_regions: [{0, 0, 10, 10}]
-        )
+      "render_tree_diff_100_nodes" => fn ->
+        TreeDiffer.diff_trees(tree, modified)
       end,
-      "render_full_redraw" => fn ->
-        RenderBatcher.batch_render(large_buffer, full_redraw: true)
+      "render_full_frame" => fn ->
+        buf = ScreenBuffer.new(80, 24)
+
+        _filled =
+          Enum.reduce(0..23, buf, fn y, outer ->
+            Enum.reduce(0..79, outer, fn x, b ->
+              ScreenBuffer.write_char(b, x, y, "X")
+            end)
+          end)
+
+        TreeDiffer.diff_trees(tree, modified)
+      end,
+      "render_partial_update" => fn ->
+        Enum.reduce(0..9, medium_buffer, fn x, b ->
+          Raxol.Terminal.ScreenBufferAdapter.write_char(b, x, 0, "Y")
+        end)
       end
     }
 
@@ -371,7 +415,8 @@ defmodule Mix.Tasks.Raxol.Bench do
         {Benchee.Formatters.JSON,
          file: "bench/output/enhanced/json/benchmark_#{ts}.json"},
         {Benchee.Formatters.HTML,
-         file: "bench/output/enhanced/html/benchmark_#{ts}.html"}
+         file: "bench/output/enhanced/html/benchmark_#{ts}.html",
+         auto_open: false}
       ],
       save: [path: "bench/output/enhanced/benchee_#{ts}.benchee"],
       load: "bench/output/enhanced/*.benchee"

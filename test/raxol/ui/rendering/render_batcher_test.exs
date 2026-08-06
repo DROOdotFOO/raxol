@@ -493,6 +493,8 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
       assert stats.updates_batched == 1
     end
 
+    # Wall-clock bound (100ms submit+flush); flakes on loaded CI runners.
+    @tag :skip_on_ci
     test "handles timing calculations correctly", %{batcher: batcher} do
       # Test timing-related arithmetic
       start_time = System.monotonic_time(:millisecond)
