@@ -96,14 +96,18 @@ Headless environment (CI, containers, agents)? The [Development](#development) s
 
 ## Performance
 
-Full frame in 2.1ms on Apple M1 Pro (Elixir 1.19 / OTP 27), 13% of the 60fps budget.
+Full frame in 5.0ms on Apple M1 (Elixir 1.20 / OTP 29), 31% of the 60fps budget.
 
-| What                              | Time    |
-| --------------------------------- | ------- |
-| Full frame (create + fill + diff) | 2.1 ms  |
-| Tree diff (100 nodes)             | 4 us    |
-| Cell write                        | 0.97 us |
-| ANSI parse                        | 38 us   |
+| What                                     | Time    |
+| ---------------------------------------- | ------- |
+| Full frame (create + fill + diff)        | 5.0 ms  |
+| Tree diff (100 nodes, 1 changed)         | 32 us   |
+| Cell write (single)                      | 1.4 us  |
+| Buffer create (80x24)                    | 0.32 us |
+| Emulator ingest (parse + apply, plain)   | 1.7 ms  |
+| Memory per 80x24 buffer                  | 2 KB    |
+
+Measured 2026-08-07 at `fce2465bb` with `mix run bench/suites/comparison/framework_comparison.exs` (full mode). The ingest row is the whole emulator path (parse plus state application), not the standalone ANSI lexer, which handles plain text in under a microsecond (`mix raxol.bench parser`).
 
 Unix/macOS backend uses a termbox2 NIF; Windows uses a pure Elixir driver (usable, not yet tuned). See the [benchmark suite](docs/bench/README.md).
 
