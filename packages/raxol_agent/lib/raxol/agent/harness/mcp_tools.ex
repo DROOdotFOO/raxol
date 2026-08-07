@@ -186,6 +186,12 @@ defmodule Raxol.Agent.Harness.McpTools do
 
       timeout_ms = timeout_ms(args)
 
+      # The streamer is ensured HERE (the long-lived server process), never
+      # in the worker: a killed worker must not take a streamer it happened
+      # to have started (and be linked to) down with it, dropping every
+      # other consumer's subscriptions.
+      ensure_streamer!()
+
       case await_worker(prompt, stream_opts, timeout_ms) do
         {:ok, state} -> persist_turn(key, session, messages, state)
         {:error, reason} -> {:error, reason}
@@ -226,7 +232,6 @@ defmodule Raxol.Agent.Harness.McpTools do
   # error paths; a crash path is covered by the worker's exit (monitor
   # cleanup) plus the next release of the same id being a no-op.
   defp turn_worker(prompt, stream_opts, timeout_ms) do
-    ensure_streamer!()
     pump_id = "mcp-#{System.unique_integer([:positive])}"
     :ok = SessionStreamer.subscribe(pump_id)
 

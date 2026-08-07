@@ -14,6 +14,11 @@ defmodule Raxol.Agent.Harness.McpToolsTest do
   )
 
   setup do
+    # The named streamer under the test supervisor, so a turn's
+    # ensure_streamer! finds it running and no test-linked instance leaks
+    # into later suites (the keystone tests start_supervised! the same name).
+    start_supervised!(Raxol.Agent.SessionStreamer)
+
     saved = Map.new(@managed_env, fn key -> {key, System.get_env(key)} end)
     Enum.each(@managed_env, &System.delete_env/1)
 
