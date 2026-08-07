@@ -848,6 +848,9 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("context", _arg, model),
     do: {notice(model, context_text(model)), []}
 
+  defp apply_command("usage", _arg, model),
+    do: {notice(model, usage_text(model)), []}
+
   defp apply_command("compact", _arg, model), do: {compact(model), []}
 
   defp apply_command("sessions", _arg, model),
@@ -1455,9 +1458,51 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp context_text(model) do
+    {_turns, usage} = fold_usage(model.events)
+
     "messages: #{length(model.messages)} · events: #{length(model.events)} · " <>
+      "tokens: #{usage.input_tokens} in / #{usage.output_tokens} out · " <>
       "plan: #{if model.plan_mode, do: "on", else: "off"} · " <>
       "model: #{model.model_override || "default"} · session: #{model.session_key}"
+  end
+
+  # Session token totals folded from the turn_completed events the model
+  # already holds (the same events the transcript rebuilds from), so /usage
+  # works on a resumed session too. Cost appears only when per-mtok rates
+  # are configured (RAXOL_COST_PER_MTOK_IN/OUT).
+  defp usage_text(model) do
+    {turns, usage} = fold_usage(model.events)
+
+    base =
+      "turns: #{turns} · input tokens: #{usage.input_tokens} · " <>
+        "output tokens: #{usage.output_tokens}"
+
+    case session_cost(usage) do
+      nil -> base <> " · cost: set RAXOL_COST_PER_MTOK_IN/OUT to estimate"
+      cost -> base <> " · est. cost: $#{:erlang.float_to_binary(cost, decimals: 4)}"
+    end
+  end
+
+  defp fold_usage(events) do
+    Enum.reduce(events, {0, %{input_tokens: 0, output_tokens: 0}}, fn
+      %{type: :turn_completed, payload: payload}, {turns, acc} ->
+        usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
+        {turns + 1, Raxol.Agent.BenchmarkProfile.add_usage(acc, usage)}
+
+      _event, acc ->
+        acc
+    end)
+  end
+
+  defp session_cost(usage) do
+    case Raxol.Agent.BenchmarkProfile.from_env() do
+      {:ok, %{cost_per_mtok_in: rin, cost_per_mtok_out: rout} = profile}
+      when is_number(rin) and is_number(rout) ->
+        Raxol.Agent.BenchmarkProfile.cost_usd(profile, usage)
+
+      _ ->
+        nil
+    end
   end
 
   defp sessions_text(model) do
@@ -1481,6 +1526,7 @@ defmodule Raxol.Agent.Code.App do
     /plan              toggle plan mode
     /compact           shrink the conversation history
     /context           session stats
+    /usage             session token and cost totals
     /sessions          list saved sessions
     /mcp               list configured MCP servers
     /hooks             show configured lifecycle hooks

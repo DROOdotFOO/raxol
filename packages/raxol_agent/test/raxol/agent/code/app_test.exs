@@ -688,6 +688,65 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "sessions: #{model.sessions_dir}"
       assert model.running? == false
     end
+
+    test "/usage folds token totals across provider vocabularies" do
+      model =
+        new_model()
+        |> send_ev(
+          ev(1, :turn_completed, %{
+            final: true,
+            usage: %{"input_tokens" => 100, "output_tokens" => 20}
+          })
+        )
+        |> send_ev(
+          ev(2, :turn_completed, %{
+            final: true,
+            usage: %{prompt_tokens: 50, completion_tokens: 5}
+          })
+        )
+
+      {model, []} = submit(model, "/usage")
+      assert model.notice =~ "turns: 2"
+      assert model.notice =~ "input tokens: 150"
+      assert model.notice =~ "output tokens: 25"
+      assert model.notice =~ "RAXOL_COST_PER_MTOK_IN"
+    end
+
+    test "/usage shows an estimated cost when rates are configured" do
+      System.put_env("RAXOL_COST_PER_MTOK_IN", "1.0")
+      System.put_env("RAXOL_COST_PER_MTOK_OUT", "2.0")
+
+      on_exit(fn ->
+        System.delete_env("RAXOL_COST_PER_MTOK_IN")
+        System.delete_env("RAXOL_COST_PER_MTOK_OUT")
+      end)
+
+      model =
+        send_ev(
+          new_model(),
+          ev(1, :turn_completed, %{
+            final: true,
+            usage: %{input_tokens: 1_000_000, output_tokens: 500_000}
+          })
+        )
+
+      {model, []} = submit(model, "/usage")
+      assert model.notice =~ "est. cost: $2.0000"
+    end
+
+    test "/context includes token totals" do
+      model =
+        send_ev(
+          new_model(),
+          ev(1, :turn_completed, %{
+            final: true,
+            usage: %{input_tokens: 10, output_tokens: 3}
+          })
+        )
+
+      {model, []} = submit(model, "/context")
+      assert model.notice =~ "tokens: 10 in / 3 out"
+    end
   end
 
   describe "delegation + config (Phase 5)" do
