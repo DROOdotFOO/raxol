@@ -917,6 +917,78 @@ defmodule Raxol.Agent.Code.AppTest do
       assert text =~ "new turn"
     end
 
+    test "a killed Writer neither kills the fold nor loses the record" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      # Abnormal Writer death (disk trouble, kill): the fold must survive
+      # (the Writer is unlinked) and the next event must reopen + retry.
+      Process.exit(model.journal.writer, :kill)
+
+      model =
+        Enum.reduce(message_turn("t2", "two"), model, &send_ev(&2, &1))
+
+      records = journal_records(model, base)
+      types = Enum.map(records, & &1["type"])
+      # Both turns' records present — including the one that hit the
+      # dead Writer and was retried after reopen.
+      assert Enum.count(types, &(&1 == "turn_started")) == 2
+      assert Enum.count(types, &(&1 == "turn_completed")) == 2
+    end
+
+    test "journal records carry provenance so replay cannot launder taint" do
+      {model, base} = journal_model()
+
+      tainted =
+        %{
+          tev("t1", 1, :item_completed, %{
+            item_id: "i1",
+            item_type: :tool_result,
+            content: "wire content"
+          })
+          | provenance: %{source: :primary, trust: :tainted}
+        }
+
+      model = send_ev(model, tainted)
+      [record] = journal_records(model, base)
+
+      assert record["provenance"] == %{
+               "source" => "primary",
+               "trust" => "tainted"
+             }
+
+      [decoded] = Raxol.Agent.Code.EventCodec.decode_all([record])
+      assert decoded.provenance.trust == :tainted
+    end
+
+    test "read_records tolerates a torn tail without truncating the file" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      close_journal!(model)
+
+      segment =
+        Path.join([base, model.session_key, "journal", "000001.jsonl"])
+
+      # Simulate a crash mid-write: an unterminated partial line.
+      File.write!(segment, "{\"partial", [:append])
+      size_before = File.stat!(segment).size
+
+      {:ok, records} =
+        Raxol.Agent.Journal.FileStore.read_records(
+          model.session_key,
+          base_dir: base
+        )
+
+      assert length(records) == 4
+      # Read-side scan must not self-heal: the file is untouched.
+      assert File.stat!(segment).size == size_before
+    end
+
     test "a failing journal degrades to a status warning, never blocks the fold" do
       base = tmp_dir()
       # The base dir path is occupied by a regular file, so the session

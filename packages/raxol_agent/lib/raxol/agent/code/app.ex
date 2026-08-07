@@ -896,17 +896,24 @@ defmodule Raxol.Agent.Code.App do
   # fold, so the durable-tier stamp holds even if the process dies mid-turn
   # (the JSON store only persists on turn boundaries). Journal trouble never
   # blocks the fold: the event stays in the model either way and the failure
-  # surfaces on the status line. A lost Writer drops the handle so the next
-  # durable event reopens it.
-  defp journal_durable(model, %{tier: :durable} = normalized) do
+  # surfaces on the status line.
+  defp journal_durable(model, %{tier: :durable} = normalized),
+    do: journal_append(model, journal_record(model, normalized))
+
+  defp journal_durable(model, _ephemeral), do: {model, nil}
+
+  # Ensure + append with a single writer-down retry: a lost Writer (a
+  # sharing owner closed it, or it crashed) reopens once so the record
+  # is not silently missing from the journal. Returns {model, warning}.
+  defp journal_append(model, record) do
     case ensure_journal(model) do
       {:ok, model} ->
-        case FileStore.append(model.journal, journal_record(model, normalized)) do
+        case FileStore.append(model.journal, record) do
           {:ok, _offset} ->
             {model, nil}
 
           {:error, {:writer_down, _reason}} ->
-            {%{model | journal: nil}, "journal writer lost — will reopen"}
+            retry_journal_append(%{model | journal: nil}, record)
 
           {:error, reason} ->
             {model, "journal append failed: #{inspect(reason)}"}
@@ -917,7 +924,21 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp journal_durable(model, _ephemeral), do: {model, nil}
+  defp retry_journal_append(model, record) do
+    case ensure_journal(model) do
+      {:ok, model} ->
+        case FileStore.append(model.journal, record) do
+          {:ok, _offset} ->
+            {model, nil}
+
+          {:error, _reason} ->
+            {%{model | journal: nil}, "journal writer lost — will reopen"}
+        end
+
+      {:error, reason} ->
+        {model, "journal unavailable: #{inspect(reason)}"}
+    end
+  end
 
   defp ensure_journal(%{journal: %FileStore{}} = model), do: {:ok, model}
 
@@ -929,6 +950,7 @@ defmodule Raxol.Agent.Code.App do
 
     case FileStore.open(model.session_key, opts) do
       {:ok, journal} ->
+        adopt_writer(journal)
         model = %{model | journal: journal}
         if empty_before?, do: backfill_journal(model)
         {:ok, model}
@@ -937,6 +959,29 @@ defmodule Raxol.Agent.Code.App do
         error
     end
   end
+
+  # `FileStore.open` links the Writer to this process. Unlink so an
+  # abnormal Writer crash (a raising flush on a full disk, say) degrades
+  # to the writer-down append arm instead of killing the whole session;
+  # a janitor still stops the Writer on ANY exit of this process (SSH
+  # disconnect, crash), while the explicit close paths (/clear, /resume,
+  # /fork, Ctrl+C) just get there first.
+  defp adopt_writer(%FileStore{owner?: true} = journal) do
+    Process.unlink(journal.writer)
+    app = self()
+
+    spawn(fn ->
+      ref = Process.monitor(app)
+
+      receive do
+        {:DOWN, ^ref, :process, ^app, _reason} -> close_journal(journal)
+      end
+    end)
+
+    :ok
+  end
+
+  defp adopt_writer(_joiner), do: :ok
 
   # A fork and a session recorded before journaling hold their history
   # only in the JSON store, but --replay reads the journal first and a
@@ -954,6 +999,9 @@ defmodule Raxol.Agent.Code.App do
 
   # The Writer stamps `id` (the journal offset) and stringifies keys; the
   # payload is already JSON-safe from the EventBoundary normalization.
+  # Scope and provenance ride along so a replay cannot launder a tainted
+  # event back to trusted (EventCodec defaults MISSING provenance to
+  # trusted).
   defp journal_record(model, normalized) do
     %{
       v: 0,
@@ -963,11 +1011,20 @@ defmodule Raxol.Agent.Code.App do
       family: normalized.family,
       type: normalized.type,
       tier: :durable,
+      scope: normalized.scope,
+      provenance: normalized.provenance,
       payload: normalized.payload
     }
   end
 
-  defp close_journal(%FileStore{} = journal), do: FileStore.close(journal)
+  defp close_journal(%FileStore{} = journal) do
+    FileStore.close(journal)
+  catch
+    # A close-time flush can exit if the Writer is already dying; losing
+    # that flush is survivable, killing the session is not.
+    :exit, _reason -> :ok
+  end
+
   defp close_journal(_none), do: :ok
 
   # -- /rewind ----------------------------------------------------------------
@@ -1084,29 +1141,23 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp journal_rewind_marker(model, turn_id) do
-    case ensure_journal(model) do
-      {:ok, model} ->
-        record = %{
-          v: 0,
-          session_id: model.session_key,
-          turn_id: nil,
-          ts: System.system_time(:microsecond),
-          family: :meta,
-          type: :rewind,
-          tier: :durable,
-          payload: %{"dropped_turn" => turn_id}
-        }
+    record = %{
+      v: 0,
+      session_id: model.session_key,
+      turn_id: nil,
+      ts: System.system_time(:microsecond),
+      family: :meta,
+      type: :rewind,
+      tier: :durable,
+      payload: %{"dropped_turn" => turn_id}
+    }
 
-        case FileStore.append(model.journal, record) do
-          {:ok, _offset} ->
-            {model, nil}
+    case journal_append(model, record) do
+      {model, nil} ->
+        {model, nil}
 
-          {:error, _reason} ->
-            {model, "journal marker failed — --replay may still show it"}
-        end
-
-      {:error, _reason} ->
-        {model, "journal unavailable — --replay may still show it"}
+      {model, _warning} ->
+        {model, "journal marker failed — --replay may still show it"}
     end
   end
 

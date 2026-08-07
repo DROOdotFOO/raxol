@@ -73,9 +73,14 @@ defmodule Raxol.Agent.Journal.FileStore do
   corruption (the damaged content is never surfaced). Used by the read-side
   reattach and seek paths.
   """
-  @spec read_records(String.t(), keyword()) :: {:ok, [map()]} | {:error, :damaged}
+  @spec read_records(String.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :damaged}
   def read_records(session_id, opts \\ []) when is_binary(session_id) do
-    case Reader.scan(session_dir(session_id, opts)) do
+    # Read-side only: never self-heal (physically truncate) a torn tail
+    # here — the dir may belong to a live Writer in another OS process
+    # (a concurrent `--replay`), or sit on read-only media. The partial
+    # line is tolerated in-memory; the Writer heals it at its own boot.
+    case Reader.scan(session_dir(session_id, opts), heal: false) do
       {:ok, records} -> {:ok, records}
       {:damaged, _partial} -> {:error, :damaged}
     end
