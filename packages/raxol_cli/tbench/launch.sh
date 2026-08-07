@@ -62,8 +62,17 @@ forward() {
   local sig="$1" target=""
   if [[ -n "$child" ]]; then
     # The Burrito launcher's child is erlexec, which execs the BEAM in
-    # place -- one hop down is the VM itself.
-    target="$(first_child_of "$child" || true)"
+    # place -- one hop down is the VM itself. During the first-run payload
+    # extraction (~1-3s) the BEAM does not exist yet, so retry briefly
+    # rather than signaling the extraction helper or the launcher raw and
+    # reopening the orphaned-BEAM hole. Installers should still pre-extract
+    # by running the binary once (`raxol help`).
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      target="$(first_child_of "$child" || true)"
+      [[ -n "$target" ]] && break
+      kill -0 "$child" 2>/dev/null || break
+      sleep 0.2
+    done
     kill -s "$sig" "${target:-$child}" 2>/dev/null || true
   fi
 }

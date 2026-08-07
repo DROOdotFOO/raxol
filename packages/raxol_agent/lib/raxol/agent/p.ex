@@ -50,9 +50,7 @@ defmodule Raxol.Agent.P do
         usage_error!("unknown options: #{inspect(invalid)}")
 
       prompt == "" ->
-        usage_error!(
-          "no prompt given. Usage: raxol p [options] \"prompt\""
-        )
+        usage_error!("no prompt given. Usage: raxol p [options] \"prompt\"")
 
       true ->
         run_prompt(prompt, opts)
@@ -81,9 +79,31 @@ defmodule Raxol.Agent.P do
         {:error, message} -> usage_error!(message)
       end
 
+    # Privilege escalation must never be invisible: RAXOL_PROFILE=benchmark
+    # arms allow-all tools (including bash) from ambient env alone, so the
+    # very first stderr line states it -- an event log that never mentions
+    # the profile was a run that never had it.
+    if profile.active? do
+      IO.puts(
+        :stderr,
+        ~s({"type":"benchmark_profile","payload":{"authorizer":"allow_all","write_tools":true,"skills":"off"}})
+      )
+    end
+
     # Claim SIGTERM unconditionally: the BEAM default turns it into a clean
-    # exit 0, which a harness reads as success. We flush and exit 143.
-    SignalTrap.install(self())
+    # exit 0, which a harness reads as success. We flush and exit 143. A
+    # failed install degrades to the BEAM default -- say so rather than
+    # silently losing the signal contract.
+    case SignalTrap.install(self()) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        IO.puts(
+          :stderr,
+          ~s({"type":"error","payload":{"reason":"signal_trap_unavailable","detail":#{inspect(inspect(reason))}}})
+        )
+    end
 
     ensure_streamer!()
 
