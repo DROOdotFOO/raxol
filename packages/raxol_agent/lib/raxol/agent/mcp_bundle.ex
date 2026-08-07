@@ -137,7 +137,7 @@ defmodule Raxol.Agent.McpBundle do
   defp poll_tools(server, name, deadline, interval, spec) do
     sensitive = Map.get(spec, :sensitive, true)
 
-    case Dynamic.from_client(server, name, sensitive: sensitive) do
+    case list_tools(server, name, sensitive) do
       {:ok, tools} ->
         {:ok, tools}
 
@@ -156,6 +156,16 @@ defmodule Raxol.Agent.McpBundle do
       {:error, _} = err ->
         err
     end
+  end
+
+  # A client that crashed after start_link (a missing npx/uvx binary dies in
+  # handle_continue, past the start return) makes the listing call EXIT with
+  # :noproc rather than return an error. Absorb it so fail-open stays
+  # per-server instead of taking the whole bundle load down.
+  defp list_tools(server, name, sensitive) do
+    Dynamic.from_client(server, name, sensitive: sensitive)
+  catch
+    :exit, reason -> {:error, {:client_down, reason}}
   end
 
   # Exact versions for the default catalog. `npx`/`uvx` otherwise resolve

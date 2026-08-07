@@ -39,7 +39,8 @@ defmodule Mix.Tasks.Raxol.Code do
   `task` tool. A `.raxol/hooks.json` in the working directory declares
   shell commands to run before/after tool calls and at turn end (a
   non-zero pre-tool hook vetoes the tool). A `.mcp.json` declares external
-  MCP servers, surfaced by `/mcp` (live tool-bridging is a follow-up). A
+  MCP servers whose tools join the toolset as `mcp__<server>__<tool>`
+  (approval-gated; `/mcp` shows connection state). A
   `.raxol/config.json` pins a default `provider`/`model` for the repo
   (references only, never a raw key), used when no `--backend`/`--model` flag
   is given — see `Raxol.Agent.Code.ProjectConfig`.

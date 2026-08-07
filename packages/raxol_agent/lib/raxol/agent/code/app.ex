@@ -169,6 +169,14 @@ defmodule Raxol.Agent.Code.App do
           :inspection_fetcher,
           &__MODULE__.default_inspection_fetcher/4
         ),
+      # `.mcp.json` servers bridge into the toolset asynchronously: armed at
+      # init, launched on the first update (the dispatcher process, where the
+      # result message must land), folded into `:actions` when tools arrive.
+      # Injectable, mirroring `:models_fetcher`.
+      mcp_ref: nil,
+      mcp_status: nil,
+      mcp_clients: [],
+      mcp_loader: Keyword.get(options, :mcp_loader, &__MODULE__.default_mcp_loader/3),
       # The onboarding wizard overlay: nil (connected), or a step map
       # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
       # save-to-1Password prompt). Set in init when no provider is connected.
@@ -245,7 +253,7 @@ defmodule Raxol.Agent.Code.App do
 
   @impl true
   def update(%Raxol.Core.Events.Event{} = event, model) do
-    model = maybe_launch_validation(model)
+    model = model |> maybe_launch_validation() |> maybe_launch_mcp()
     norm = InputEvent.normalize(event)
 
     cond do
@@ -341,7 +349,64 @@ defmodule Raxol.Agent.Code.App do
       else: {model, []}
   end
 
+  # The async `.mcp.json` bundle result: fold the discovered tools into the
+  # toolset and record per-server state for `/mcp`. Same ref discipline.
+  def update({:command_result, {:mcp_loaded, ref, result}}, model) do
+    if ref == model.mcp_ref do
+      model = %{
+        model
+        | mcp_ref: nil,
+          mcp_clients: result.servers,
+          mcp_status: %{
+            connected: Enum.map(result.servers, fn {name, _pid} -> name end),
+            failed: result.failed,
+            tools: length(result.tools)
+          },
+          actions: model.actions ++ result.tools
+      }
+
+      {put_status(model, mcp_loaded_line(result)), []}
+    else
+      {model, []}
+    end
+  end
+
   def update(_message, model), do: {model, []}
+
+  # Fire the armed `.mcp.json` bundle load on the first update (the
+  # dispatcher process, where the `:mcp_loaded` result must land). Loading
+  # is off-process, so a slow server handshake never stalls boot or input.
+  defp maybe_launch_mcp(%{mcp_servers: []} = model), do: model
+
+  defp maybe_launch_mcp(%{mcp_ref: nil, mcp_status: nil} = model) do
+    ref = make_ref()
+    model.mcp_loader.(model.mcp_servers, ref, self())
+
+    %{model | mcp_ref: ref, mcp_status: :loading}
+  end
+
+  defp maybe_launch_mcp(model), do: model
+
+  @doc false
+  # Default loader: bridge the configured servers off the app process; the
+  # result rides back as an `:mcp_loaded` message `update/2` folds.
+  def default_mcp_loader(servers, ref, app) do
+    spawn(fn ->
+      result = Raxol.Agent.Code.McpLoader.load(servers)
+      send(app, {:command_result, {:mcp_loaded, ref, result}})
+    end)
+  end
+
+  defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+
+  defp mcp_loaded_line(%{tools: tools, servers: servers, failed: []}) do
+    "mcp: #{length(tools)} tools from #{length(servers)} servers"
+  end
+
+  defp mcp_loaded_line(%{tools: tools, failed: failed}) do
+    names = Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
+    "mcp: #{length(tools)} tools · failed: #{names}"
+  end
 
   # Fire the armed launch validation on the first update (dispatcher process).
   defp maybe_launch_validation(%{pending_validation: nil} = model), do: model
@@ -365,6 +430,10 @@ defmodule Raxol.Agent.Code.App do
   # -- key handlers -----------------------------------------------------------
 
   defp handle_shortcut(%{char: "c", mods: %{ctrl: true}}, model) do
+    # MCP clients live under the agent DynamicSupervisor (not this app's
+    # link scope), so quitting must terminate the ones this session started
+    # or their OS processes outlive the TUI.
+    Raxol.Agent.Code.McpLoader.stop_clients(model.mcp_clients)
     {model, [Directive.stop()]}
   end
 
@@ -771,19 +840,20 @@ defmodule Raxol.Agent.Code.App do
 
   # -- authorization ----------------------------------------------------------
 
+  @doc false
   # The `:tool_authorizer`: runs inside the react loop's process and defers
   # every sensitive tool call to the app for an Engine verdict, blocking until
   # the app answers. Non-sensitive tools are allowed without a round-trip.
-  defp tool_authorizer(app) do
-    fn module, _params, _context ->
-      meta = module.__action_meta__()
+  def tool_authorizer(app) do
+    fn action, _params, _context ->
+      {name, sensitive?} = action_identity(action)
 
-      if Map.get(meta, :sensitive, false) do
+      if sensitive? do
         ref = make_ref()
 
         send(
           app,
-          {:command_result, {:authorize_request, ref, self(), meta.name}}
+          {:command_result, {:authorize_request, ref, self(), name}}
         )
 
         receive do
@@ -796,6 +866,19 @@ defmodule Raxol.Agent.Code.App do
         :ok
       end
     end
+  end
+
+  # Module Actions carry their identity in `__action_meta__/0`;
+  # runtime-discovered MCP tools are `%Action.Dynamic{}` structs and carry it
+  # on the struct (sensitive by default, so an external server's tool is
+  # approval-gated per call — and denied outright in plan mode, since its
+  # effects are unknown).
+  defp action_identity(%Raxol.Agent.Action.Dynamic{name: name, sensitive: sensitive?}),
+    do: {name, sensitive?}
+
+  defp action_identity(module) when is_atom(module) do
+    meta = module.__action_meta__()
+    {meta.name, Map.get(meta, :sensitive, false)}
   end
 
   # The ALLOW/ASK/DENY policy the Engine folds. Only sensitive (mutating)
@@ -906,10 +989,26 @@ defmodule Raxol.Agent.Code.App do
 
   defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
 
-  defp mcp_text(%{mcp_servers: servers}) do
+  defp mcp_text(%{mcp_servers: servers} = model) do
     Enum.map_join(servers, "\n", fn s ->
-      "#{s.name}  →  #{s.command} #{Enum.join(s.args, " ")}"
+      "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
+        "#{s.command} #{Enum.join(s.args, " ")}"
     end)
+  end
+
+  defp server_mark(:loading, _name), do: "…"
+  defp server_mark(nil, _name), do: "○"
+
+  defp server_mark(%{connected: connected, failed: failed}, name) do
+    atom = String.to_existing_atom(name)
+
+    cond do
+      atom in connected -> "●"
+      Enum.any?(failed, fn {n, _reason} -> n == atom end) -> "✗"
+      true -> "○"
+    end
+  rescue
+    ArgumentError -> "○"
   end
 
   defp hooks_text(%{hooks: nil}), do: "no hooks configured (.raxol/hooks.json)"

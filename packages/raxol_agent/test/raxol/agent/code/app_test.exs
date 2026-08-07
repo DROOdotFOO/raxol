@@ -775,6 +775,106 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "est. cost: $2.0000"
     end
 
+    test "mcp servers bridge into the toolset asynchronously" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}
+            })
+        })
+
+      test_pid = self()
+
+      model =
+        new_model(
+          cwd: dir,
+          mcp_loader: fn servers, ref, app ->
+            send(test_pid, {:mcp_spawned, servers, ref, app})
+          end
+        )
+
+      # Armed at init, fired on the first update (the dispatcher process).
+      {model, []} = App.update(key("x"), model)
+
+      assert_received {:mcp_spawned, servers, ref, app}
+      assert [%{name: "fs"}] = servers
+      assert app == self()
+      assert model.mcp_status == :loading
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__read",
+        invoke: fn _params, _context -> {:ok, %{}} end,
+        sensitive: false
+      }
+
+      result = %{tools: [tool], servers: [{:fs, self()}], failed: []}
+
+      {model, []} =
+        App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      assert tool in model.actions
+      assert model.mcp_status.connected == [:fs]
+      assert model.status_line =~ "mcp: 1 tools from 1 servers"
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "● fs"
+    end
+
+    test "a failed mcp server shows in the status line and /mcp" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"ghost" => %{"command" => "nope"}}
+            })
+        })
+
+      model =
+        new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      result = %{tools: [], servers: [], failed: [{:ghost, :enoent}]}
+
+      {model, []} =
+        App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      assert model.status_line =~ "failed: ghost"
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "✗ ghost"
+    end
+
+    test "the tool authorizer gates a sensitive Dynamic MCP tool" do
+      auth = App.tool_authorizer(self())
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__write",
+        invoke: fn _params, _context -> :ok end,
+        sensitive: true
+      }
+
+      task = Task.async(fn -> auth.(tool, %{}, %{}) end)
+
+      assert_receive {:command_result, {:authorize_request, ref, from, "mcp__fs__write"}}
+      send(from, {:authorize_decision, ref, {:deny, :test_denied}})
+      assert Task.await(task) == {:deny, :test_denied}
+    end
+
+    test "a read-only Dynamic tool runs without an approval round-trip" do
+      auth = App.tool_authorizer(self())
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__read",
+        invoke: fn _params, _context -> :ok end,
+        sensitive: false
+      }
+
+      assert auth.(tool, %{}, %{}) == :ok
+      refute_received {:command_result, _}
+    end
+
     test "/context includes token totals" do
       model =
         send_ev(

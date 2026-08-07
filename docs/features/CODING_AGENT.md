@@ -234,9 +234,13 @@ Two optional per-project files, both read from `<cwd>/`:
   `match` is an exact tool name or `"*"`) plus `stop` commands. A pre-hook that exits non-zero
   vetoes the tool (30-second timeout, `RAXOL_TOOL_NAME` in the environment); post-hooks are
   advisory; stop commands run at turn end.
-- `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format. Today
-  this is discovery only (surfaced by `/mcp`); bridging those servers' tools into the live
-  toolset is a follow-up.
+- `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format.
+  Configured servers are started (supervised, off the boot path) and their tools join the
+  live toolset as `mcp__<server>__<tool>`, sensitive by default: each call is
+  approval-gated like any mutating tool, and plan mode denies them outright since an
+  external tool's effects are unknown. `/mcp` shows per-server connection state
+  (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
+  a note, never fatal.
 
 ## Driving the harness over MCP
 
