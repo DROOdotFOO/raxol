@@ -276,24 +276,10 @@ defmodule Raxol.Core.Renderer.BufferTest do
       assert MapSet.member?(back_damage, {0, 0})
       assert MapSet.member?(back_damage, {1, 1})
 
-      # Debug: Print buffer struct before swap (limited)
-      IO.puts("DEBUG: Buffer struct before swap: #{inspect(buffer, limit: 5, printable_limit: 50)}")
-
       # Swap buffers to move cells to front buffer
       now = System.monotonic_time(:millisecond)
       buffer_before_swap = %{buffer | last_frame_time: now - 1000}
       {buffer_after_swap, _} = Buffer.swap_buffers(buffer_before_swap)
-
-      # Debug: Print buffer struct after swap (limited)
-      IO.puts("DEBUG: Buffer struct after swap: #{inspect(buffer_after_swap, limit: 5, printable_limit: 50)}")
-
-      IO.puts(
-        "DEBUG: Front buffer cells: #{inspect(buffer_after_swap.front_buffer.cells, limit: 5, printable_limit: 50)}"
-      )
-
-      IO.puts(
-        "DEBUG: Front buffer damage: #{inspect(buffer_after_swap.front_buffer.damage, limit: 5, printable_limit: 50)}"
-      )
 
       # Directly inspect the front buffer's damage set after swap
       damage_set = buffer_after_swap.front_buffer.damage

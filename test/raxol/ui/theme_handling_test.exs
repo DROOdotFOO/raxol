@@ -21,11 +21,6 @@ defmodule Raxol.UI.ThemeHandlingTest do
     element = Helper.create_test_box(0, 0, 5, 5, %{theme: "nonexistent"})
     cells = Renderer.render_to_cells(element)
 
-    # Debug: print what cells were rendered
-    IO.puts("DEBUG: Element: #{inspect(element)}")
-    IO.puts("DEBUG: Cells rendered: #{length(cells)}")
-    IO.puts("DEBUG: First few cells: #{inspect(Enum.take(cells, 5))}")
-
     # Should use default theme
     cell = Helper.get_cell_at(cells, 0, 0)
     Helper.assert_cell_style(cell, :white, nil)
