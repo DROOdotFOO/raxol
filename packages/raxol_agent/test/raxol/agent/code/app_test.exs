@@ -681,12 +681,53 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "unknown command"
     end
 
-    test "/inspect shows the full config snapshot" do
-      {model, []} = submit(new_model(), "/inspect")
-      assert model.notice =~ "inspecting: #{model.cwd}"
-      assert model.notice =~ "providers (op CLI:"
-      assert model.notice =~ "sessions: #{model.sessions_dir}"
-      assert model.running? == false
+    test "/inspect fetches the snapshot off the app process" do
+      test_pid = self()
+
+      model =
+        new_model(
+          inspection_fetcher: fn cwd, dir, ref, app ->
+            send(test_pid, {:inspect_spawned, cwd, dir, ref, app})
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+
+      assert_received {:inspect_spawned, cwd, dir, ref, app}
+      assert cwd == model.cwd
+      assert dir == model.sessions_dir
+      assert model.inspection_ref == ref
+      assert app == self()
+
+      {model, []} =
+        App.update({:command_result, {:inspection_result, ref, "SNAPSHOT"}}, model)
+
+      assert model.notice == "SNAPSHOT"
+      assert model.inspection_ref == nil
+    end
+
+    test "a stale /inspect result is ignored" do
+      model = %{new_model() | inspection_ref: make_ref()}
+
+      {model2, []} =
+        App.update(
+          {:command_result, {:inspection_result, make_ref(), "STALE"}},
+          model
+        )
+
+      assert model2.notice != "STALE"
+    end
+
+    test "the default /inspect fetcher delivers the full snapshot" do
+      ref = make_ref()
+      model = new_model()
+
+      App.default_inspection_fetcher(model.cwd, model.sessions_dir, ref, self())
+
+      assert_receive {:command_result, {:inspection_result, ^ref, text}}, 10_000
+      assert text =~ "inspecting: #{model.cwd}"
+      assert text =~ "providers (op CLI:"
+      assert text =~ "sessions: #{model.sessions_dir}"
     end
 
     test "/usage folds token totals across provider vocabularies" do

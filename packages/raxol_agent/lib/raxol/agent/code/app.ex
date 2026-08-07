@@ -158,6 +158,17 @@ defmodule Raxol.Agent.Code.App do
           :models_fetcher,
           &__MODULE__.default_models_fetcher/3
         ),
+      # `/inspect` gathers off the app process (provider probing may shell
+      # out to `op`, which must never stall the update loop); the rendered
+      # snapshot rides back as an `:inspection_result` message matched by
+      # this ref. Injectable, mirroring `:models_fetcher`.
+      inspection_ref: nil,
+      inspection_fetcher:
+        Keyword.get(
+          options,
+          :inspection_fetcher,
+          &__MODULE__.default_inspection_fetcher/4
+        ),
       # The onboarding wizard overlay: nil (connected), or a step map
       # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
       # save-to-1Password prompt). Set in init when no provider is connected.
@@ -320,6 +331,13 @@ defmodule Raxol.Agent.Code.App do
   def update({:command_result, {:models_list, ref, result}}, model) do
     if ref == model.models_ref,
       do: {apply_models_result(model, result), []},
+      else: {model, []}
+  end
+
+  # An async `/inspect` snapshot. Same ref discipline as `:models_list`.
+  def update({:command_result, {:inspection_result, ref, text}}, model) do
+    if ref == model.inspection_ref,
+      do: {notice(%{model | inspection_ref: nil, status_line: nil}, text), []},
       else: {model, []}
   end
 
@@ -862,19 +880,28 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("hooks", _arg, model),
     do: {notice(model, hooks_text(model)), []}
 
-  defp apply_command("inspect", _arg, model),
-    do: {notice(model, inspection_text(model)), []}
+  defp apply_command("inspect", _arg, model) do
+    ref = make_ref()
+    model.inspection_fetcher.(model.cwd, model.sessions_dir, ref, self())
+    {%{model | inspection_ref: ref} |> put_status("inspecting…"), []}
+  end
 
   defp apply_command(other, _arg, model),
     do: {notice(model, "unknown command: /#{other} — try /help"), []}
 
-  # A fresh disk snapshot (not the model's boot-time copy), so /inspect shows
-  # the config files as they are now — the same snapshot `mix raxol.inspect`
-  # prints.
-  defp inspection_text(model) do
-    model.cwd
-    |> Raxol.Agent.Code.Inspection.gather(sessions_dir: model.sessions_dir)
-    |> Raxol.Agent.Code.Inspection.render()
+  @doc false
+  # Default fetcher: gather + render the snapshot off the app process (a
+  # fresh disk read, the same snapshot `mix raxol.inspect` prints); the
+  # result rides back as an `:inspection_result` message `update/2` folds.
+  def default_inspection_fetcher(cwd, sessions_dir, ref, app) do
+    spawn(fn ->
+      text =
+        cwd
+        |> Raxol.Agent.Code.Inspection.gather(sessions_dir: sessions_dir)
+        |> Raxol.Agent.Code.Inspection.render()
+
+      send(app, {:command_result, {:inspection_result, ref, text}})
+    end)
   end
 
   defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
