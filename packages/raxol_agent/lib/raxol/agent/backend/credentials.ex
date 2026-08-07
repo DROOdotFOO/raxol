@@ -295,9 +295,9 @@ defmodule Raxol.Agent.Backend.Credentials do
     ]
 
     case run_op(args) do
+      {:error, reason} -> {:error, reason}
       {out, 0} -> created_ref(out, vault)
       {out, code} -> {:error, {:op_create_failed, code, String.trim(out)}}
-      {:error, reason} -> {:error, reason}
     end
   end
 

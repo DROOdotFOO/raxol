@@ -167,12 +167,18 @@ defmodule Raxol.Agent.Code.App do
       # `:sessions_list` message matched by this ref. Injectable,
       # mirroring `:models_fetcher`.
       sessions_ref: nil,
+      sessions_mode: :picker,
       sessions_fetcher:
         Keyword.get(
           options,
           :sessions_fetcher,
           &__MODULE__.default_sessions_fetcher/3
         ),
+      # Unsaved-changes flag: set when the conversation or transcript
+      # moves, cleared by persist. Guards the departing persist on a
+      # session switch so merely peeking at a session never bumps its
+      # updated_at (which would hijack --continue).
+      dirty: false,
       # `/inspect` gathers off the app process (provider probing may shell
       # out to `op`, which must never stall the update loop); the rendered
       # snapshot rides back as an `:inspection_result` message matched by
@@ -566,6 +572,13 @@ defmodule Raxol.Agent.Code.App do
        when step in [:browse, :models, :sessions],
        do: {wizard_move(model, +1), []}
 
+  # The sessions picker owns Enter outright — unlike :browse (which must
+  # keep `/login <provider> ...` typeable), nothing in it needs the
+  # prompt path, and a stray typed character must not turn Enter into a
+  # paid LLM turn under the picker. Typed input survives the switch.
+  defp handle_key(:enter, %{wizard: %{step: :sessions}} = model),
+    do: {maybe_wizard_select(model), []}
+
   defp handle_key(:enter, model) do
     case String.trim(model.input) do
       "" -> {maybe_wizard_select(model), []}
@@ -672,6 +685,7 @@ defmodule Raxol.Agent.Code.App do
         worker: worker,
         session_id: session_id,
         messages: messages,
+        dirty: true,
         turn_answer: "",
         face_state: :thinking,
         face_frame: 0,
@@ -803,6 +817,7 @@ defmodule Raxol.Agent.Code.App do
       model
       | events: events,
         next_event_id: model.next_event_id + 1,
+        dirty: true,
         face_state: face_for_event(event, model.face_state),
         face_frame: model.face_frame + 1,
         running?: running?,
@@ -1255,7 +1270,7 @@ defmodule Raxol.Agent.Code.App do
            parent: model.parent
          }) do
       :ok ->
-        model
+        %{model | dirty: false}
 
       {:error, reason} ->
         %{model | status_line: "session save failed: #{inspect(reason)}"}
@@ -1453,8 +1468,10 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("logout", arg, model),
     do: {logout(model, String.trim(arg)), []}
 
+  # Listing reads (and fully decodes) every session file, so it runs off
+  # the app process like the /resume picker — one fetcher, two modes.
   defp apply_command("sessions", _arg, model),
-    do: {notice(model, sessions_text(model)), []}
+    do: {arm_sessions_fetch(model, :list), []}
 
   defp apply_command("mcp", _arg, model),
     do: {notice(model, mcp_text(model)), []}
@@ -1977,6 +1994,7 @@ defmodule Raxol.Agent.Code.App do
   # A fresh session preserves the old file on disk and starts a new key, so
   # clearing is never destructive to a prior conversation. The old journal
   # closes (flushing its Writer); the new session lazily opens its own.
+  # Approval grants and plan mode are per-session, so they reset too.
   defp clear_session(model) do
     close_journal(model.journal)
 
@@ -1986,12 +2004,16 @@ defmodule Raxol.Agent.Code.App do
         events: [],
         journal: nil,
         next_event_id: 1,
+        dirty: false,
         turn_answer: "",
         face_state: :idle,
         face_frame: 0,
         session_key: mint_session_key(),
         title: "",
         parent: nil,
+        plan_mode: false,
+        always_allow: MapSet.new(),
+        auth_state: Engine.new(),
         notice: "cleared — new session"
     }
   end
@@ -2006,10 +2028,14 @@ defmodule Raxol.Agent.Code.App do
 
   # -- /resume + /fork --------------------------------------------------------
 
-  defp open_session_picker(model) do
+  defp open_session_picker(model), do: arm_sessions_fetch(model, :picker)
+
+  defp arm_sessions_fetch(model, mode) do
     ref = make_ref()
     model.sessions_fetcher.(model.sessions_dir, ref, self())
-    %{model | sessions_ref: ref} |> put_status("listing sessions…")
+
+    %{model | sessions_ref: ref, sessions_mode: mode}
+    |> put_status("listing sessions…")
   end
 
   @doc false
@@ -2030,20 +2056,35 @@ defmodule Raxol.Agent.Code.App do
     |> notice("no saved sessions")
   end
 
-  defp apply_sessions_result(model, sessions) do
-    entries =
+  defp apply_sessions_result(%{sessions_mode: :list} = model, sessions) do
+    text =
       sessions
-      |> Enum.take(20)
-      |> Enum.map(&%{id: &1.id, label: session_line(&1)})
+      |> Enum.take(10)
+      |> Enum.map_join("\n", &session_line/1)
 
-    cursor = Enum.find_index(entries, &(&1.id == model.session_key)) || 0
+    %{model | sessions_ref: nil, status_line: nil} |> notice(text)
+  end
 
-    %{
-      model
-      | sessions_ref: nil,
-        status_line: nil,
-        wizard: %{step: :sessions, entries: entries, cursor: cursor}
-    }
+  defp apply_sessions_result(model, sessions) do
+    if modal_wizard?(model) do
+      # A modal step (masked credential entry) owns the screen; opening
+      # the picker over it would discard half-typed secret input.
+      %{model | sessions_ref: nil, status_line: nil}
+    else
+      entries =
+        sessions
+        |> Enum.take(20)
+        |> Enum.map(&%{id: &1.id, label: session_line(&1)})
+
+      cursor = Enum.find_index(entries, &(&1.id == model.session_key)) || 0
+
+      %{
+        model
+        | sessions_ref: nil,
+          status_line: nil,
+          wizard: %{step: :sessions, entries: entries, cursor: cursor}
+      }
+    end
   end
 
   # Switching persists the departing session first (nothing is lost),
@@ -2058,7 +2099,10 @@ defmodule Raxol.Agent.Code.App do
   defp switch_session(model, key) do
     case Raxol.Agent.Code.Store.load(model.sessions_dir, key) do
       {:ok, saved} ->
-        model = if session_dirty?(model), do: persist(model), else: model
+        # Persist the departing session only when it holds unsaved
+        # changes — a save always bumps updated_at, and merely peeking
+        # at a session must not make it the --continue target.
+        model = if model.dirty, do: persist(model), else: model
         close_journal(model.journal)
         events = renumber_events(saved.events)
 
@@ -2068,11 +2112,16 @@ defmodule Raxol.Agent.Code.App do
             messages: saved.messages,
             events: events,
             next_event_id: length(events) + 1,
+            dirty: false,
             journal: nil,
             title: saved.title,
             parent: saved.parent,
             turn_answer: "",
             face_state: :idle,
+            # Approval grants and plan mode are per-session.
+            plan_mode: false,
+            always_allow: MapSet.new(),
+            auth_state: Engine.new(),
             wizard: nil
         }
         |> notice("resumed #{key} (#{length(saved.messages)} messages)")
@@ -2414,18 +2463,6 @@ defmodule Raxol.Agent.Code.App do
     case cost_profile(model) do
       nil -> nil
       profile -> Raxol.Agent.BenchmarkProfile.cost_usd(profile, usage)
-    end
-  end
-
-  defp sessions_text(model) do
-    case Raxol.Agent.Code.Store.list(model.sessions_dir) do
-      [] ->
-        "no saved sessions"
-
-      sessions ->
-        sessions
-        |> Enum.take(10)
-        |> Enum.map_join("\n", &session_line/1)
     end
   end
 

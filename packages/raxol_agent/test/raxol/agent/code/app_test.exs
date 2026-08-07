@@ -1114,6 +1114,122 @@ defmodule Raxol.Agent.Code.AppTest do
              ]
     end
 
+    test "typed input does not hijack Enter while the picker is open" do
+      dir = tmp_dir()
+
+      other = new_model(sessions_dir: dir)
+      {other, []} = submit(other, "ask other")
+
+      other =
+        Enum.reduce(message_turn("t1", "other answer"), other, &send_ev(&2, &1))
+
+      model =
+        new_model(
+          sessions_dir: dir,
+          sessions_fetcher: fn _dir, _ref, _app -> :ok end
+        )
+
+      {model, []} = submit(model, "/resume")
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:sessions_list, model.sessions_ref,
+            Raxol.Agent.Code.Store.list(dir)}},
+          model
+        )
+
+      assert model.wizard.step == :sessions
+
+      # A stray typed character must not turn Enter into a prompt submit.
+      model = %{model | input: "stray"}
+      {model, []} = App.update(key(:enter), model)
+
+      refute model.running?
+      assert model.session_key == other.session_key
+      assert model.input == "stray"
+    end
+
+    test "a sessions list never replaces the modal credential wizard" do
+      model =
+        new_model(sessions_fetcher: fn _dir, _ref, _app -> :ok end)
+
+      {model, []} = submit(model, "/resume")
+      ref = model.sessions_ref
+
+      model = %{
+        model
+        | wizard: %{step: :credential, harness: :openai, buffer: "sk-half"}
+      }
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:sessions_list, ref,
+            [%{id: "x", updated_at: 1, message_count: 0, cwd: "", title: ""}]}},
+          model
+        )
+
+      assert model.wizard.step == :credential
+      assert model.wizard.buffer == "sk-half"
+    end
+
+    test "peeking at a session does not bump its updated_at" do
+      dir = tmp_dir()
+
+      target = new_model(sessions_dir: dir)
+      {target, []} = submit(target, "ask a")
+
+      target =
+        Enum.reduce(message_turn("t1", "answer a"), target, &send_ev(&2, &1))
+
+      peeker = new_model(sessions_dir: dir)
+      {peeker, []} = submit(peeker, "ask b")
+
+      peeker =
+        Enum.reduce(message_turn("t2", "answer b"), peeker, &send_ev(&2, &1))
+
+      # The finalized turn persisted; the peeker holds no unsaved changes.
+      refute peeker.dirty
+      peeker_path = Path.join(dir, peeker.session_key <> ".json")
+      File.rm!(peeker_path)
+
+      {_switched, []} = submit(peeker, "/resume #{target.session_key}")
+
+      # No departing persist happened — the file was not recreated.
+      refute File.exists?(peeker_path)
+    end
+
+    test "approval grants and plan mode are per-session" do
+      dir = tmp_dir()
+
+      target = new_model(sessions_dir: dir)
+      {target, []} = submit(target, "ask")
+
+      target =
+        Enum.reduce(message_turn("t1", "answer"), target, &send_ev(&2, &1))
+
+      model = %{
+        new_model(sessions_dir: dir)
+        | always_allow: MapSet.new(["bash"]),
+          plan_mode: true
+      }
+
+      {switched, []} = submit(model, "/resume #{target.session_key}")
+      assert switched.always_allow == MapSet.new()
+      refute switched.plan_mode
+
+      cleared_src = %{
+        new_model()
+        | always_allow: MapSet.new(["bash"]),
+          plan_mode: true
+      }
+
+      {cleared, []} = submit(cleared_src, "/clear")
+      assert cleared.always_allow == MapSet.new()
+      refute cleared.plan_mode
+    end
+
     test "an empty store notices instead of opening the picker" do
       model = new_model()
       {model, []} = submit(model, "/resume")
@@ -1361,11 +1477,20 @@ defmodule Raxol.Agent.Code.AppTest do
       assert resumed.title == "keep me"
     end
 
-    test "/sessions lists title, age, and cwd" do
+    test "/sessions lists title, age, and cwd off the app process" do
       dir = tmp_dir()
       model = new_model(sessions_dir: dir)
       {model, []} = submit(model, "/rename my title")
       {model, []} = submit(model, "/sessions")
+
+      # The default fetcher spawns and sends the list back to the app
+      # process (here: the test); fold it like the dispatcher would.
+      ref = model.sessions_ref
+      assert ref != nil
+      assert_receive {:command_result, {:sessions_list, ^ref, sessions}}, 1_000
+
+      {model, []} =
+        App.update({:command_result, {:sessions_list, ref, sessions}}, model)
 
       assert model.notice =~ ~s("my title")
       assert model.notice =~ "msgs"
