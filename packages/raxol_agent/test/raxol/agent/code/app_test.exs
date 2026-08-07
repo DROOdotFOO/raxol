@@ -760,6 +760,133 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
+  describe "durable journal" do
+    alias Raxol.Agent.Journal.FileStore
+
+    defp journal_model(extra \\ []) do
+      base = tmp_dir()
+      {new_model([journal_opts: [base_dir: base]] ++ extra), base}
+    end
+
+    defp journal_records(model, base) do
+      close_journal!(model)
+      {:ok, records} = FileStore.read_records(model.session_key, base_dir: base)
+      records
+    end
+
+    defp close_journal!(%{journal: nil}), do: :ok
+    defp close_journal!(%{journal: journal}), do: FileStore.close(journal)
+
+    test "durable events land in the journal as they fold" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "answer"), model, &send_ev(&2, &1))
+
+      records = journal_records(model, base)
+
+      assert Enum.map(records, & &1["id"]) == [1, 2, 3, 4]
+
+      assert Enum.map(records, & &1["type"]) == [
+               "turn_started",
+               "item_started",
+               "item_completed",
+               "turn_completed"
+             ]
+
+      assert Enum.all?(records, &(&1["session_id"] == model.session_key))
+    end
+
+    test "ephemeral events are never journaled" do
+      {model, base} = journal_model()
+
+      model =
+        model
+        |> send_ev(tev("t1", 1, :turn_started, %{prompt: "hi"}))
+        |> send_ev(
+          tev(
+            "t1",
+            2,
+            :item_delta,
+            %{item_id: "i1", chunk: "partial"},
+            :ephemeral
+          )
+        )
+        |> send_ev(tev("t1", 3, :turn_completed, %{final: true, usage: %{}}))
+
+      records = journal_records(model, base)
+
+      assert Enum.map(records, & &1["type"]) == [
+               "turn_started",
+               "turn_completed"
+             ]
+    end
+
+    test "the journal spans turns with session-monotonic offsets" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(
+          message_turn("t1", "one") ++ message_turn("t2", "two"),
+          model,
+          &send_ev(&2, &1)
+        )
+
+      records = journal_records(model, base)
+      assert Enum.map(records, & &1["id"]) == Enum.to_list(1..8)
+    end
+
+    test "/clear closes the journal and the next turn opens a fresh one" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      old_key = model.session_key
+      old_writer = model.journal.writer
+
+      {cleared, []} = submit(model, "/clear")
+      assert cleared.journal == nil
+      refute Process.alive?(old_writer)
+
+      cleared =
+        Enum.reduce(message_turn("t1", "two"), cleared, &send_ev(&2, &1))
+
+      refute cleared.session_key == old_key
+      records = journal_records(cleared, base)
+      assert Enum.map(records, & &1["id"]) == [1, 2, 3, 4]
+    end
+
+    test "a failing journal degrades to a status warning, never blocks the fold" do
+      base = tmp_dir()
+      # The base dir path is occupied by a regular file, so the session
+      # layout cannot be created and every open fails.
+      File.mkdir_p!(Path.dirname(base))
+      File.write!(base, "not a dir")
+
+      model = new_model(journal_opts: [base_dir: base])
+
+      model =
+        Enum.reduce(message_turn("t1", "answer"), model, &send_ev(&2, &1))
+
+      assert model.journal == nil
+      assert length(model.events) == 4
+      assert model.status_line =~ "journal unavailable"
+    end
+
+    test "ctrl+c closes the journal" do
+      {model, _base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      writer = model.journal.writer
+      {_model, commands} = App.update(key("c", [:ctrl]), model)
+      assert commands != []
+      refute Process.alive?(writer)
+    end
+  end
+
   describe "slash commands" do
     test "/help shows a notice and does not start a turn" do
       {model, []} = submit(new_model(), "/help")

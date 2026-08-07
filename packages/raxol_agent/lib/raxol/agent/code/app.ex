@@ -57,6 +57,7 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.Agent.Authorization.Policy
   alias Raxol.Agent.Authorization.Verdict
   alias Raxol.Agent.Contract
+  alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Harness.EventBoundary
   alias Raxol.Harness.Projection
@@ -190,6 +191,11 @@ defmodule Raxol.Agent.Code.App do
       # Injectable so the save-to-1Password flow is testable without mutating a
       # real vault; the default shells out to `op item create`.
       op_saver: Keyword.get(options, :op_saver, &__MODULE__.default_op_saver/2),
+      # The durable journal handle, opened lazily on the first durable
+      # event so idle sessions never spawn a Writer. `:journal_opts` is
+      # forwarded to `FileStore.open/2` (tests set `:base_dir` here).
+      journal: nil,
+      journal_opts: Keyword.get(options, :journal_opts, []),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -450,10 +456,12 @@ defmodule Raxol.Agent.Code.App do
   # -- key handlers -----------------------------------------------------------
 
   defp handle_shortcut(%{char: "c", mods: %{ctrl: true}}, model) do
-    # Fast-path cleanup: stop the MCP janitor (and its clients) on an
-    # explicit quit. The janitor also monitors this process, so any other
-    # exit path (SSH disconnect, crash) tears the clients down too.
+    # Fast-path cleanup: stop the MCP janitor (and its clients) and flush
+    # the journal on an explicit quit. Both also survive any other exit
+    # path — the janitor monitors this process, and the journal Writer is
+    # linked to it (its terminate flushes).
     Raxol.Agent.Code.McpLoader.stop(model.mcp_janitor)
+    close_journal(model.journal)
     {model, [Directive.stop()]}
   end
 
@@ -709,6 +717,8 @@ defmodule Raxol.Agent.Code.App do
     # folded event is re-stamped from a session counter.
     normalized = %{normalized | id: model.next_event_id}
 
+    {model, journal_warning} = journal_durable(model, normalized)
+
     # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
     events = model.events ++ [normalized]
 
@@ -720,13 +730,73 @@ defmodule Raxol.Agent.Code.App do
         face_frame: model.face_frame + 1,
         running?: running?,
         worker: if(running?, do: model.worker, else: nil),
-        status_line: if(running?, do: model.status_line, else: nil)
+        status_line:
+          journal_warning ||
+            if(running?, do: model.status_line, else: nil)
     }
 
     model
     |> accumulate_answer(event)
     |> finalize_turn(event)
   end
+
+  # -- durable journal --------------------------------------------------------
+
+  # Durable events land in the session's offset-addressed journal as they
+  # fold, so the durable-tier stamp holds even if the process dies mid-turn
+  # (the JSON store only persists on turn boundaries). Journal trouble never
+  # blocks the fold: the event stays in the model either way and the failure
+  # surfaces on the status line. A lost Writer drops the handle so the next
+  # durable event reopens it.
+  defp journal_durable(model, %{tier: :durable} = normalized) do
+    case ensure_journal(model) do
+      {:ok, model} ->
+        case FileStore.append(model.journal, journal_record(model, normalized)) do
+          {:ok, _offset} ->
+            {model, nil}
+
+          {:error, {:writer_down, _reason}} ->
+            {%{model | journal: nil}, "journal writer lost — will reopen"}
+
+          {:error, reason} ->
+            {model, "journal append failed: #{inspect(reason)}"}
+        end
+
+      {:error, reason} ->
+        {model, "journal unavailable: #{inspect(reason)}"}
+    end
+  end
+
+  defp journal_durable(model, _ephemeral), do: {model, nil}
+
+  defp ensure_journal(%{journal: %FileStore{}} = model), do: {:ok, model}
+
+  defp ensure_journal(model) do
+    opts = Keyword.merge([cwd: model.cwd], model.journal_opts)
+
+    case FileStore.open(model.session_key, opts) do
+      {:ok, journal} -> {:ok, %{model | journal: journal}}
+      {:error, _} = error -> error
+    end
+  end
+
+  # The Writer stamps `id` (the journal offset) and stringifies keys; the
+  # payload is already JSON-safe from the EventBoundary normalization.
+  defp journal_record(model, normalized) do
+    %{
+      v: 0,
+      session_id: model.session_key,
+      turn_id: normalized.turn_id,
+      ts: normalized.ts,
+      family: normalized.family,
+      type: normalized.type,
+      tier: :durable,
+      payload: normalized.payload
+    }
+  end
+
+  defp close_journal(%FileStore{} = journal), do: FileStore.close(journal)
+  defp close_journal(_none), do: :ok
 
   # A completed message item is assistant answer text — accumulate it so the
   # conversation memory gets the reply when the turn closes.
@@ -1501,12 +1571,16 @@ defmodule Raxol.Agent.Code.App do
   defp notice(model, text), do: %{model | notice: text}
 
   # A fresh session preserves the old file on disk and starts a new key, so
-  # clearing is never destructive to a prior conversation.
+  # clearing is never destructive to a prior conversation. The old journal
+  # closes (flushing its Writer); the new session lazily opens its own.
   defp clear_session(model) do
+    close_journal(model.journal)
+
     %{
       model
       | messages: [],
         events: [],
+        journal: nil,
         next_event_id: 1,
         turn_answer: "",
         face_state: :idle,
