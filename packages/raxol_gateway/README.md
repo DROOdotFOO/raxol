@@ -42,8 +42,10 @@ same history.
 - Discord: `Raxol.Gateway.Adapter.Discord` (REST sends, optional `req`) +
   `Raxol.Gateway.Adapter.Discord.GatewaySocket` (Gateway v10 WebSocket feed,
   optional `mint_web_socket`).
-- Email: `Raxol.Gateway.Adapter.Email` (outbound-only SMTP submission via
-  optional `gen_smtp`; inbound is a follow-up).
+- Email: `Raxol.Gateway.Adapter.Email` (bidirectional via optional
+  `gen_smtp`: outbound SMTP submission, inbound RFC822 parsing through
+  `normalize_event/1`, with `Adapter.Email.Inbox` as the sink-agnostic poll
+  feed and `Adapter.Email.ThreadStore` for reply threading; the mailbox
+  transport itself, IMAP/POP/Gmail, is deployment-supplied).
 
-Inbound email is the remaining follow-up; see
-`docs/adr/0023-unified-messaging-gateway.md`.
+See `docs/adr/0023-unified-messaging-gateway.md`.

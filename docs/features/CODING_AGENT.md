@@ -31,9 +31,17 @@ The `bin/raxol-code` shim runs the task from the package while keeping the calle
 directory as the agent's workspace (the file and shell tools are scoped to it via
 `RAXOL_CLI_CWD`). It `exec`s `mix` so the full-screen UI inherits the real terminal.
 
+Not sure what to try first? These all work on this repo from a cold start:
+
+```
+summarize mix.exs
+what are the three largest files under lib?
+find every module that starts a GenServer
+```
+
 ## Connecting a provider
 
-With no `--harness`, the agent auto-detects a provider through the shared
+With no `--backend`, the agent auto-detects a provider through the shared
 `Raxol.Agent.Backend.Resolver`, in this precedence order:
 
 1. an explicit `--api-key` (or an `:api_key` opt),
@@ -80,22 +88,35 @@ models, and base URLs, never raw keys. Zero-config env usage still works: set
 Supported providers: `anthropic`, `openai`, `kimi`, `openrouter`, `longcat`,
 `lumo`, `ollama`, `lm_studio`, `llm7`, `mock`.
 
+A repo can also pin its default provider and model in `.raxol/config.json`
+(read from the working directory, references only, raw keys deliberately
+ignored):
+
+```json
+{ "provider": "anthropic", "model": "claude-sonnet-5" }
+```
+
+Precedence is explicit flag, then the repo pin, then environment
+auto-detection. `mix raxol.inspect` (or `/inspect` in the TUI) shows exactly
+what would resolve in the current directory and why.
+
 ## Flags
 
 | Flag | Effect |
 |------|--------|
-| `--harness NAME` | Pin a backend harness (auto-detected if omitted). Validated against `Backend.Selector.supported_harnesses/0`. |
+| `--backend NAME` | Pin an LLM backend (auto-detected if omitted). Validated against `Backend.Selector.supported_backends/0`. `--harness` is a deprecated alias. |
 | `--model NAME` | Model override. |
-| `--api-key KEY` | API key for the selected harness (else resolved from op/env). |
+| `--api-key KEY` | API key for the selected backend (else resolved from op/env). |
 | `--base-url URL` | Override the backend base URL. |
 | `--system TEXT` | System-prompt override. |
 | `--continue` | Resume the most recently updated session. |
 | `--resume ID` | Resume a specific session by id. |
 | `--sessions` | Print saved sessions and exit (no TUI). |
 | `--ascii` | ASCII-only face for terminals without a UTF-8 font. |
+| `-h`, `--help` | Print usage and exit. |
 
 ```bash
-mix raxol.code --harness anthropic --model claude-sonnet-5
+mix raxol.code --backend anthropic --model claude-sonnet-5
 mix raxol.code --continue
 mix raxol.code --resume sess-1234-5
 mix raxol.code --sessions
@@ -125,13 +146,15 @@ Typing, Enter, plan-mode toggles, and backspace are accepted only when the agent
 | `/help` | Show help |
 | `/login [provider]` | Connect an LLM provider (1Password reference, session key, or local server) |
 | `/clear` | Start a new session (the old file stays on disk) |
-| `/model <name>` | Switch model for the next turns (bare `/model` shows current) |
+| `/model <name>` | Switch model for the next turns (bare `/model` on a connected provider opens a live model picker) |
 | `/plan` | Toggle plan mode |
 | `/compact` | Shrink history: keep the last 6 messages, replace older ones with a compaction marker, then persist |
-| `/context` | Session stats (message and event counts, plan on/off, model, session key) |
+| `/context` | Session stats (message, event, and token counts, plan on/off, model, session key) |
+| `/usage` | Session token totals per direction, plus an estimated cost when `RAXOL_COST_PER_MTOK_IN`/`RAXOL_COST_PER_MTOK_OUT` are set |
 | `/sessions` | List up to 10 saved sessions |
 | `/mcp` | List MCP servers configured in `.mcp.json` |
 | `/hooks` | Show pre/post/stop hook counts |
+| `/inspect` | Show every config source in use: provider resolution and why, the repo pin, hook rules, MCP servers, skills roots, session store (same output as `mix raxol.inspect`) |
 
 ## Tools
 
@@ -209,6 +232,17 @@ Two optional per-project files, both read from `<cwd>/`:
 - `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format. Today
   this is discovery only (surfaced by `/mcp`); bridging those servers' tools into the live
   toolset is a follow-up.
+
+## Driving the harness over MCP
+
+`Raxol.Agent.Harness.McpTools` exposes the harness itself as MCP tools:
+`harness_start_session`, `harness_send_prompt`, `harness_read_transcript`,
+and `harness_list_sessions`. They share the TUI's session store, so a
+session driven by an MCP client resumes in the TUI with `--resume` and vice
+versa. Turns are read-only unless the caller passes `write: true` (an
+explicit opt-in that runs mutating tools under an allow-all policy; there is
+no human to answer approvals on this surface). Run `mix mcp.server` from
+`packages/raxol_agent` to serve them.
 
 ## See also
 

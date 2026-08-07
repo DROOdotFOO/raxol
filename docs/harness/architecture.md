@@ -205,6 +205,14 @@ under adversarial input cannot be trusted to enforce them:
 
 ## The live TUI chain
 
+> **Status: partially staged.** Some modules named in this chain
+> (`Raxol.Harness.Live`, `SessionPump`, `DeliveryShim`, `HarnessApp`,
+> `Directive.Lane`) are design targets that do not exist in the tree yet.
+> The shipped live driver is `Raxol.Harness.LiveSessionDriver` (fixture
+> replay), and the shipped coding TUI (`mix raxol.code`) drives
+> `Raxol.Agent.Code.App` directly. The event contract, journal/projection,
+> and safety substrate sections above are shipped code.
+
 ```
 Raxol.Harness.SessionLane   (behaviour in main raxol: the seam main satisfies
                              without depending on raxol_agent)

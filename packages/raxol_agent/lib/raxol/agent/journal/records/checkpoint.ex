@@ -10,12 +10,13 @@ defmodule Raxol.Agent.Journal.Records.Checkpoint do
   offset from the one id space (JS-FREEZE §1.1 — the offset law;
   single-counter lockstep).
 
-  This module is the **enabler skeleton** for the permanent U9-R red suite: the
-  frozen record shape (`t/0`) and the `write/3` / `restore/2` seam are declared
-  here, ahead of implementation, so the red suite compiles and pins the contract.
-  Both entry points return `{:error, :not_implemented}` until U9 lands — the red
-  suite (`@moduletag :harness_red`, excluded from CI) asserts the *correct*
-  behaviour and is therefore RED against this skeleton by construction.
+  This module began as the enabler skeleton for the permanent U9-R red suite:
+  the frozen record shape (`t/0`) and the `write/3` / `restore/2` seam were
+  declared ahead of implementation so the red suite could compile and pin the
+  contract. The implementation has since landed: the default backend (no
+  registration) is the file-store `FileBackend` below, and `write`/`restore`
+  dispatch to it. `{:error, :not_implemented}` remains only the explicit
+  nil-backend opt-out.
 
   ## Write discipline (frozen — JS-FREEZE §1.1)
 

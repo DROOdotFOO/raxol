@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed, 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
+Accepted; implemented 2026-07-26 (`Raxol.Agent.Scheduler` + `Raxol.Agent.Schedule` in PR #723,
+the `cronjob` Action + `Scheduler.Fire`/`Scheduler.Delivery` in PR #725). Originally proposed
+2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
 H2.2). Builds on the agent skill runtime (ADR-0021), the unified messaging gateway (ADR-0023, for
 delivery), and `Raxol.Core.Stores.Dets` (the shared ETS+DETS store).
 

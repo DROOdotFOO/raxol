@@ -109,7 +109,7 @@ Determinism discipline (the FATE rule, "flaky is deterministic, dig in"): render
 
 Supported now:
 
-- **Mock** (default): instant offline demo, no API key
+- **Mock** (fallback for the example agents and `raxol` chat; the coding-agent surfaces auto-detect a real provider and error with a setup hint when none is configured): instant offline demo, no API key
 - **Proton Lumo** (`PROTON_UID=... PROTON_ACCESS_TOKEN=...`): zero-access encrypted AI, full U2L encryption via `Backend.Lumo`
 - **Proton Lumo via lumo-tamer** (`LUMO_TAMER_URL=http://localhost:3000`): OpenAI-compatible proxy fallback
 - **Kimi K2.5** (`KIMI_API_KEY=...`): Moonshot AI, $0.60/M input, 256K context, named `:kimi` provider
