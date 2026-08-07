@@ -501,9 +501,7 @@ defmodule Raxol.Agent.Code.App do
       SessionStreamer.subscribe(session_id)
 
       Task.async(fn ->
-        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts),
-          prompt: prompt
-        )
+        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts), prompt: prompt)
       end)
 
       relay(session_id, app)
@@ -620,8 +618,7 @@ defmodule Raxol.Agent.Code.App do
       :message ->
         %{
           model
-          | turn_answer:
-              model.turn_answer <> to_string(payload_content(payload))
+          | turn_answer: model.turn_answer <> to_string(payload_content(payload))
         }
 
       _other ->
@@ -862,8 +859,20 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("hooks", _arg, model),
     do: {notice(model, hooks_text(model)), []}
 
+  defp apply_command("inspect", _arg, model),
+    do: {notice(model, inspection_text(model)), []}
+
   defp apply_command(other, _arg, model),
     do: {notice(model, "unknown command: /#{other} — try /help"), []}
+
+  # A fresh disk snapshot (not the model's boot-time copy), so /inspect shows
+  # the config files as they are now — the same snapshot `mix raxol.inspect`
+  # prints.
+  defp inspection_text(model) do
+    model.cwd
+    |> Raxol.Agent.Code.Inspection.gather(sessions_dir: model.sessions_dir)
+    |> Raxol.Agent.Code.Inspection.render()
+  end
 
   defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
 
@@ -1048,9 +1057,7 @@ defmodule Raxol.Agent.Code.App do
     ping_opts =
       opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
 
-    interpret_ping(
-      backend.complete([%{role: :user, content: "ping"}], ping_opts)
-    )
+    interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
   end
 
   @doc false
@@ -1138,18 +1145,14 @@ defmodule Raxol.Agent.Code.App do
     %{model | wizard: %{wizard | cursor: next}}
   end
 
-  defp maybe_wizard_select(
-         %{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model
-       ) do
+  defp maybe_wizard_select(%{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model) do
     case Enum.at(entries, cursor) do
       nil -> model
       entry -> select_provider(model, entry.harness, entry.keyless?)
     end
   end
 
-  defp maybe_wizard_select(
-         %{wizard: %{step: :models, entries: entries, cursor: cursor}} = model
-       ) do
+  defp maybe_wizard_select(%{wizard: %{step: :models, entries: entries, cursor: cursor}} = model) do
     case Enum.at(entries, cursor) do
       nil ->
         model
@@ -1251,8 +1254,7 @@ defmodule Raxol.Agent.Code.App do
       %{
         model
         | wizard: %{step: :confirm_save, harness: harness, key: key},
-          notice:
-            "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
+          notice: "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
       }
     else
       close_wizard(model)
@@ -1271,9 +1273,7 @@ defmodule Raxol.Agent.Code.App do
       {:error, reason} ->
         model
         |> close_wizard()
-        |> notice(
-          "could not save to 1Password: #{inspect(reason)} — key kept for this session"
-        )
+        |> notice("could not save to 1Password: #{inspect(reason)} — key kept for this session")
     end
   end
 
@@ -1484,6 +1484,7 @@ defmodule Raxol.Agent.Code.App do
     /sessions          list saved sessions
     /mcp               list configured MCP servers
     /hooks             show configured lifecycle hooks
+    /inspect           show every config source in use (providers, pin, hooks, MCP, skills, sessions)
     """
     |> String.trim_trailing()
   end

@@ -261,8 +261,7 @@ defmodule Raxol.Agent.Code.AppTest do
 
       {model, []} =
         App.update(
-          {:command_result,
-           {:models_list, ref, {:ok, ["gpt-4o-mini", "gpt-4o"]}}},
+          {:command_result, {:models_list, ref, {:ok, ["gpt-4o-mini", "gpt-4o"]}}},
           model
         )
 
@@ -284,8 +283,7 @@ defmodule Raxol.Agent.Code.AppTest do
 
       {model, []} =
         App.update(
-          {:command_result,
-           {:models_list, model.models_ref, {:ok, ["a", "b", "c"]}}},
+          {:command_result, {:models_list, model.models_ref, {:ok, ["a", "b", "c"]}}},
           model
         )
 
@@ -334,9 +332,7 @@ defmodule Raxol.Agent.Code.AppTest do
       test_pid = self()
 
       model =
-        connected_model(
-          models_fetcher: fn _o, _r, _a -> send(test_pid, :fetched) end
-        )
+        connected_model(models_fetcher: fn _o, _r, _a -> send(test_pid, :fetched) end)
 
       {model, []} = slash(model, "/model claude-sonnet-5")
 
@@ -683,6 +679,14 @@ defmodule Raxol.Agent.Code.AppTest do
     test "an unknown command reports itself" do
       {model, []} = submit(new_model(), "/frobnicate")
       assert model.notice =~ "unknown command"
+    end
+
+    test "/inspect shows the full config snapshot" do
+      {model, []} = submit(new_model(), "/inspect")
+      assert model.notice =~ "inspecting: #{model.cwd}"
+      assert model.notice =~ "providers (op CLI:"
+      assert model.notice =~ "sessions: #{model.sessions_dir}"
+      assert model.running? == false
     end
   end
 
