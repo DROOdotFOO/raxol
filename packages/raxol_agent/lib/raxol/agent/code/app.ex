@@ -959,42 +959,92 @@ defmodule Raxol.Agent.Code.App do
     do: notice(model, "cannot rewind while a turn is running")
 
   defp rewind(model) do
-    case last_turn_id(model.events) do
-      nil ->
+    cond do
+      orphan_prompt?(model) ->
+        # An aborted turn (Esc before its first event, or an eagerly
+        # crashed worker) left the user prompt in the conversation but
+        # no events; the trailing EVENTS belong to the previous turn.
+        # Rewinding must undo the abort, not destroy the prior turn.
+        [_orphan | rest] = Enum.reverse(model.messages)
+
+        %{model | messages: Enum.reverse(rest)}
+        |> persist()
+        |> notice("rewound — removed the un-run prompt")
+
+      model.events == [] ->
         notice(model, "nothing to rewind")
 
-      turn_id ->
-        {dropped, kept} =
-          Enum.split_with(model.events, &(&1.turn_id == turn_id))
-
-        {messages, dropped_messages} = drop_turn_messages(model.messages)
-        {model, marker_warning} = journal_rewind_marker(model, turn_id)
-
-        model =
-          persist(%{
-            model
-            | events: kept,
-              messages: messages,
-              turn_answer: "",
-              face_state: :idle
-          })
-
-        note =
-          "rewound — dropped #{length(dropped)} events, " <>
-            "#{dropped_messages} messages"
-
-        notice(model, join_notes(note, marker_warning))
+      true ->
+        rewind_last_turn(model)
     end
+  end
+
+  defp rewind_last_turn(model) do
+    {kept, dropped} = split_trailing_turn(model.events)
+    turn_id = List.last(model.events).turn_id
+    {messages, dropped_messages} = drop_turn_messages(model.messages)
+    {model, marker_warning} = journal_rewind_marker(model, turn_id)
+
+    model =
+      persist(%{
+        model
+        | events: kept,
+          next_event_id: next_id_after(kept),
+          messages: messages,
+          turn_answer: "",
+          face_state: :idle
+      })
+
+    note =
+      "rewound — dropped #{length(dropped)} events, " <>
+        "#{dropped_messages} messages"
+
+    notice(model, join_notes(note, marker_warning))
+  end
+
+  # Turn ids are only unique within one VM run (`Contract.pump` mints
+  # them from `System.unique_integer`), so a session grown across
+  # restarts can hold the same turn_id twice. Rewinding therefore drops
+  # only the CONTIGUOUS trailing run of the last turn's events — never a
+  # global match over the whole session — and the replay marker applies
+  # the same trailing-run rule.
+  defp split_trailing_turn([]), do: {[], []}
+
+  defp split_trailing_turn(events) do
+    turn_id = List.last(events).turn_id
+
+    {dropped_rev, kept_rev} =
+      events
+      |> Enum.reverse()
+      |> Enum.split_while(&(&1.turn_id == turn_id))
+
+    {Enum.reverse(kept_rev), Enum.reverse(dropped_rev)}
+  end
+
+  defp next_id_after([]), do: 1
+  defp next_id_after(kept), do: List.last(kept).id + 1
+
+  # The abort signature: the conversation ends in a user prompt that no
+  # event belongs to — the trailing events (if any) are a COMPLETED
+  # turn, so the prompt was appended by a turn that never emitted.
+  defp orphan_prompt?(model) do
+    trailing_user? = match?([%{role: :user} | _], Enum.reverse(model.messages))
+
+    completed_tail? =
+      case List.last(model.events) do
+        nil -> true
+        %{type: :turn_completed} -> true
+        _other -> false
+      end
+
+    trailing_user? and completed_tail?
   end
 
   defp join_notes(note, nil), do: note
   defp join_notes(note, warning), do: note <> " · " <> warning
 
-  defp last_turn_id(events),
-    do: events |> Enum.reverse() |> Enum.find_value(& &1.turn_id)
-
-  # The turn's conversation tail is at most one user prompt plus one
-  # assistant reply (an errored turn appends no reply).
+  # The rewound turn's conversation tail is at most one user prompt plus
+  # one assistant reply (an errored or interrupted turn appends no reply).
   defp drop_turn_messages(messages) do
     case Enum.reverse(messages) do
       [%{role: :assistant}, %{role: :user} | rest] ->

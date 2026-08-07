@@ -174,6 +174,40 @@ defmodule Raxol.Agent.Code.ReplayTest do
     assert text =~ "second"
   end
 
+  test "a rewind marker only drops the trailing run of a colliding turn id" do
+    base = tmp_dir()
+    {:ok, journal} = FileStore.open("sess-coll", base_dir: base)
+
+    events =
+      message_turn("turn-9", "old", "old answer") ++
+        message_turn("t-mid", "mid", "mid answer") ++
+        message_turn("turn-9", "new", "new answer")
+
+    Enum.each(events, fn event ->
+      {:ok, _offset} = FileStore.append(journal, event)
+    end)
+
+    marker = %{
+      v: 0,
+      session_id: "sess-coll",
+      turn_id: nil,
+      ts: 13,
+      family: :meta,
+      type: :rewind,
+      tier: :durable,
+      payload: %{"dropped_turn" => "turn-9"}
+    }
+
+    {:ok, _offset} = FileStore.append(journal, marker)
+    :ok = FileStore.close(journal)
+
+    {:ok, text} = Replay.run("sess-coll", base_dir: base)
+
+    assert text =~ "old answer"
+    assert text =~ "mid answer"
+    refute text =~ "new answer"
+  end
+
   test "a damaged journal errors instead of rendering partial state" do
     base = tmp_dir()
     seed_journal(base, "sess-d", message_turn("t1", "p", "a"))

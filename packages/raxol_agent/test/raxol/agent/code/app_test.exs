@@ -1296,6 +1296,67 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "nothing to rewind"
     end
 
+    # Turn ids restart across VM runs (Contract.pump mints them from
+    # System.unique_integer), so a resumed session can hold the same
+    # turn_id twice; only the trailing run may be dropped.
+    test "a colliding older turn survives a rewind of the newer one" do
+      model = new_model()
+
+      events =
+        message_turn("turn-9", "old answer") ++
+          message_turn("t-mid", "middle answer") ++
+          message_turn("turn-9", "new answer")
+
+      model = Enum.reduce(events, model, &send_ev(&2, &1))
+      assert length(model.events) == 12
+
+      {model, []} = submit(model, "/rewind")
+
+      assert length(model.events) == 8
+      texts = Enum.map(model.events, & &1.turn_id)
+      assert "turn-9" in texts
+      assert model.notice =~ "dropped 4 events"
+    end
+
+    test "rewind resets the id counter so the next turn has no gap" do
+      model =
+        Enum.reduce(
+          message_turn("t1", "one") ++ message_turn("t2", "two"),
+          new_model(),
+          &send_ev(&2, &1)
+        )
+
+      {model, []} = submit(model, "/rewind")
+      assert model.next_event_id == 5
+
+      model = Enum.reduce(message_turn("t3", "three"), model, &send_ev(&2, &1))
+
+      projection = Raxol.Harness.Projection.project(model.events)
+      assert projection.diagnostics == []
+      refute projection.damaged
+    end
+
+    test "rewind after an aborted turn removes only the orphan prompt" do
+      model = run_turn(new_model(), "t1", "ask", "one")
+
+      # A turn that dies before emitting any event: submit then Esc.
+      {model, []} = submit(model, "doomed prompt")
+      assert model.running?
+      {model, []} = App.update(key(:escape), model)
+      refute model.running?
+
+      events_before = model.events
+      {model, []} = submit(model, "/rewind")
+
+      assert model.notice =~ "un-run prompt"
+      assert model.events == events_before
+
+      assert Enum.map(model.messages, & &1.content) == [
+               "ask",
+               "one"
+             ]
+    end
+
     test "refuses while a turn is running" do
       model = %{new_model() | running?: false}
       {model, []} = submit(model, "ask")

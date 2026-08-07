@@ -87,14 +87,19 @@ defmodule Raxol.Agent.Code.Replay do
   defp event_record?(record),
     do: Map.get(record, "kind", "event") == "event"
 
-  # A meta `:rewind` marker (written by the TUI's /rewind) drops every
-  # prior record of the turn it names; the marker itself never renders.
+  # A meta `:rewind` marker (written by the TUI's /rewind) drops the
+  # CONTIGUOUS trailing run of records carrying the turn it names — the
+  # same rule the live rewind applies. Turn ids are only unique within
+  # one VM run, so a global turn_id match could destroy an unrelated
+  # older turn that happens to share the id; the trailing-run rule stops
+  # at the first non-matching record. The marker itself never renders.
   defp apply_rewinds(records) do
     records
     |> Enum.reduce([], fn
       %{"family" => "meta", "type" => "rewind"} = marker, acc ->
+        # acc is reversed (latest first), so the trailing run is its head.
         dropped_turn = get_in(marker, ["payload", "dropped_turn"])
-        Enum.reject(acc, &(&1["turn_id"] == dropped_turn))
+        Enum.drop_while(acc, &(&1["turn_id"] == dropped_turn))
 
       record, acc ->
         [record | acc]
