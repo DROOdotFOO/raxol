@@ -670,6 +670,13 @@ defmodule Raxol.Application do
            Raxol.MCP.AdaptiveTools.available?() do
         Raxol.MCP.AdaptiveTools.register(Raxol.MCP.Registry)
       end
+
+      # The coding-agent harness tools live in raxol_agent, which main raxol
+      # does not depend on; they register only when that package is loaded
+      # in this VM (e.g. `mix mcp.server` run from packages/raxol_agent).
+      if Code.ensure_loaded?(Raxol.Agent.Harness.McpTools) do
+        apply(Raxol.Agent.Harness.McpTools, :register, [Raxol.MCP.Registry])
+      end
     end
 
     :ok

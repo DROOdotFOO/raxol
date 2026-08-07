@@ -1,0 +1,362 @@
+defmodule Raxol.Agent.Harness.McpTools do
+  @moduledoc """
+  The coding-agent harness as MCP tools: any MCP client (Claude Code, an
+  editor, another agent) can start, drive, and read Raxol agent sessions.
+
+  Four tools register with `Raxol.MCP.Registry`:
+
+    * `harness_start_session` — mint a persisted session, return its id
+    * `harness_send_prompt`   — run one synchronous turn in a session
+    * `harness_read_transcript` — the session's conversation so far
+    * `harness_list_sessions` — saved sessions, most recent first
+
+  Sessions share the TUI's store (`Raxol.Agent.Code.Store`, one JSON file
+  per session under `~/.raxol/code_sessions`), so a session started over
+  MCP resumes in the TUI with `mix raxol.code --resume <id>`, and a TUI
+  session can be continued over MCP.
+
+  Authorization: turns run the read-only toolset by default. `write: true`
+  is an explicit opt-in that exposes the mutating tools under an allow-all
+  policy, mirroring `raxol.p --write` — there is no human to answer an
+  approval prompt on this surface.
+
+  Registration rides the main application's MCP seam
+  (`maybe_register_mcp_tools`), which fires only when this module is
+  loaded — so `mix mcp.server` run from `packages/raxol_agent` serves
+  these tools, and a deployment without raxol_agent never sees them.
+  """
+
+  alias Raxol.Agent.Backend.Cli
+  alias Raxol.Agent.Code.Store
+  alias Raxol.Agent.Contract
+  alias Raxol.Agent.SessionStreamer
+  alias Raxol.Harness.EventBoundary
+
+  @default_timeout_s 120
+  @max_timeout_s 600
+
+  @doc "The four harness tool definitions."
+  @spec tools() :: [map()]
+  def tools do
+    [
+      %{
+        name: "harness_start_session",
+        description: """
+        Starts a new persisted coding-agent session and returns its id.
+        The session is resumable in the TUI: mix raxol.code --resume <id>.
+        """,
+        inputSchema: %{type: "object", properties: %{}},
+        callback: &start_session/1
+      },
+      %{
+        name: "harness_send_prompt",
+        description: """
+        Runs one synchronous agent turn in a session and returns the
+        assistant's answer. Conversation history persists across calls.
+        Tools are read-only unless write: true (explicit opt-in; mutating
+        tools then run unprompted under an allow-all policy).
+        """,
+        inputSchema: %{
+          type: "object",
+          required: ["session_id", "prompt"],
+          properties: %{
+            session_id: %{type: "string", description: "Session id from harness_start_session"},
+            prompt: %{type: "string", description: "The user prompt for this turn"},
+            backend: %{
+              type: "string",
+              description: "LLM backend override (auto-detected when omitted)"
+            },
+            model: %{type: "string", description: "Model override"},
+            write: %{
+              type: "boolean",
+              description: "Expose write_file/edit_file/bash under an allow-all policy"
+            },
+            timeout_s: %{
+              type: "integer",
+              description: "Per-turn timeout in seconds (default #{@default_timeout_s})"
+            }
+          }
+        },
+        callback: &send_prompt/1
+      },
+      %{
+        name: "harness_read_transcript",
+        description: "Returns a session's conversation (role-prefixed messages).",
+        inputSchema: %{
+          type: "object",
+          required: ["session_id"],
+          properties: %{
+            session_id: %{type: "string", description: "Session id"}
+          }
+        },
+        callback: &read_transcript/1
+      },
+      %{
+        name: "harness_list_sessions",
+        description: "Lists saved coding-agent sessions, most recently updated first.",
+        inputSchema: %{type: "object", properties: %{}},
+        callback: &list_sessions/1
+      }
+    ]
+  end
+
+  @doc "Register the harness tools with an MCP registry."
+  @spec register(GenServer.server()) :: :ok
+  def register(registry \\ Raxol.MCP.Registry) do
+    Raxol.MCP.Registry.register_tools(registry, tools())
+  end
+
+  # -- callbacks --------------------------------------------------------------
+
+  defp start_session(_args) do
+    key = mint_session_key()
+
+    case Store.save(Store.default_dir(), key, %{
+           messages: [],
+           events: [],
+           cwd: Raxol.Agent.Actions.Fs.working_dir()
+         }) do
+      :ok -> {:ok, key}
+      {:error, reason} -> {:error, "cannot create session: #{inspect(reason)}"}
+    end
+  end
+
+  defp list_sessions(_args) do
+    case Store.list(Store.default_dir()) do
+      [] ->
+        {:ok, "no saved sessions"}
+
+      sessions ->
+        {:ok,
+         Enum.map_join(sessions, "\n", fn s ->
+           "#{s.id}  (#{s.message_count} msgs)"
+         end)}
+    end
+  end
+
+  defp read_transcript(args) do
+    with {:ok, key} <- session_key(args) do
+      case Store.load(Store.default_dir(), key) do
+        {:error, :not_found} ->
+          {:error, "unknown session #{inspect(key)}"}
+
+        {:ok, %{messages: []}} ->
+          {:ok, "(empty session)"}
+
+        {:ok, session} ->
+          {:ok,
+           Enum.map_join(session.messages, "\n\n", fn m ->
+             "#{m.role}: #{m.content}"
+           end)}
+      end
+    end
+  end
+
+  defp send_prompt(args) do
+    with {:ok, key} <- session_key(args),
+         {:ok, prompt} <- required(args, "prompt") do
+      case Store.load(Store.default_dir(), key) do
+        {:error, :not_found} ->
+          {:error, "unknown session #{inspect(key)}; call harness_start_session first"}
+
+        {:ok, session} ->
+          run_turn(key, session, prompt, args)
+      end
+    end
+  end
+
+  # -- the synchronous turn ---------------------------------------------------
+
+  defp run_turn(key, session, prompt, args) do
+    with {:ok, executor, _source} <- resolve_executor(args) do
+      write? = args["write"] == true
+      messages = session.messages ++ [%{role: :user, content: prompt}]
+
+      stream_opts =
+        [
+          executor: executor,
+          system_prompt: system_prompt(),
+          actions: actions_for(write?),
+          messages: messages
+        ] ++ context_for(write?)
+
+      ensure_streamer!()
+      pump_id = "mcp-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(pump_id)
+
+      # The stream must be created and consumed in the same process
+      # (Stream.react sends its react events to the stream's creator), so
+      # the pump task owns both; this process collects from the streamer.
+      runner =
+        Task.async(fn ->
+          Contract.pump(
+            pump_id,
+            Raxol.Agent.Stream.react(prompt, stream_opts),
+            prompt: prompt
+          )
+        end)
+
+      outcome =
+        collect(pump_id, runner, timeout_ms(args), %{answer: "", events: []})
+
+      case outcome do
+        {:ok, state} ->
+          persist_turn(key, session, messages, state)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp resolve_executor(args) do
+    opts =
+      []
+      |> maybe_put(:backend, args["backend"])
+      |> maybe_put(:model, args["model"])
+
+    case Cli.resolve_executor(opts, nil) do
+      {:ok, executor, source} -> {:ok, executor, source}
+      {:error, message} -> {:error, message}
+    end
+  end
+
+  defp collect(pump_id, runner, timeout_ms, state) do
+    receive do
+      {:session_event, ^pump_id, %Contract.Event{} = event} ->
+        state = state |> accumulate_answer(event) |> record_event(event)
+
+        case event do
+          %{type: :turn_completed, payload: %{final: true}} ->
+            Task.await(runner, 5_000)
+            {:ok, state}
+
+          %{type: :error, payload: payload} ->
+            Task.await(runner, 5_000)
+            {:error, "turn failed: #{inspect(Map.get(payload, :reason))}"}
+
+          _ ->
+            collect(pump_id, runner, timeout_ms, state)
+        end
+    after
+      timeout_ms ->
+        Task.shutdown(runner, :brutal_kill)
+        {:error, "turn timed out after #{div(timeout_ms, 1000)}s"}
+    end
+  end
+
+  defp accumulate_answer(
+         state,
+         %{type: :item_completed, payload: %{item_type: :message, content: content}}
+       ) do
+    %{state | answer: state.answer <> to_string(content)}
+  end
+
+  defp accumulate_answer(state, _event), do: state
+
+  # Persist the same shape the TUI persists: EventBoundary-normalized
+  # durable events, so `--resume` rebuilds the scrollback for this turn too.
+  defp record_event(state, event) do
+    case EventBoundary.normalize(event) do
+      {:ok, %{tier: :durable} = normalized} ->
+        %{state | events: [normalized | state.events]}
+
+      _other ->
+        state
+    end
+  end
+
+  defp persist_turn(key, session, messages, state) do
+    messages = messages ++ [%{role: :assistant, content: state.answer}]
+    events = session.events ++ Enum.reverse(state.events)
+
+    case Store.save(Store.default_dir(), key, %{
+           messages: messages,
+           events: events,
+           cwd: session.cwd
+         }) do
+      :ok -> {:ok, state.answer}
+      {:error, reason} -> {:error, "answer produced but session save failed: #{inspect(reason)}"}
+    end
+  end
+
+  # -- toolset (mirrors raxol.p) ----------------------------------------------
+
+  defp actions_for(false),
+    do:
+      Raxol.Agent.Actions.Fs.all() ++
+        Raxol.Agent.Actions.Code.read_only() ++
+        Raxol.Agent.Skills.enabled_actions()
+
+  defp actions_for(true),
+    do:
+      Raxol.Agent.Actions.Fs.all() ++
+        Raxol.Agent.Actions.Code.all() ++
+        Raxol.Agent.Skills.enabled_actions()
+
+  defp context_for(false), do: skills_context(%{})
+
+  defp context_for(true),
+    do: skills_context(%{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()})
+
+  defp skills_context(base) do
+    base =
+      case Raxol.Agent.Skills.default_context() do
+        nil -> base
+        skills -> Map.put(base, :skills, skills)
+      end
+
+    if map_size(base) == 0, do: [], else: [context: base]
+  end
+
+  defp system_prompt do
+    "You are a helpful coding assistant running headlessly at the user's " <>
+      "working directory. Use the available tools to inspect files when " <>
+      "the question is about them. Be concise."
+  end
+
+  # -- helpers ----------------------------------------------------------------
+
+  defp mint_session_key,
+    do: "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
+
+  # Session ids come off the wire: basename-sanitize so a crafted id cannot
+  # escape the sessions directory (same rule the TUI store applies).
+  defp session_key(args) do
+    with {:ok, raw} <- required(args, "session_id") do
+      {:ok, Path.basename(raw)}
+    end
+  end
+
+  defp required(args, name) do
+    case Map.get(args, name) do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _other -> {:error, "missing required argument #{inspect(name)}"}
+    end
+  end
+
+  defp timeout_ms(args) do
+    seconds =
+      case Map.get(args, "timeout_s") do
+        n when is_integer(n) and n > 0 -> min(n, @max_timeout_s)
+        _other -> @default_timeout_s
+      end
+
+    seconds * 1_000
+  end
+
+  defp ensure_streamer! do
+    case SessionStreamer.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> raise "cannot start SessionStreamer: #{inspect(reason)}"
+    end
+  end
+
+  defp maybe_put(kw, _key, nil), do: kw
+
+  defp maybe_put(kw, key, value) when is_binary(value) and value != "",
+    do: Keyword.put(kw, key, value)
+
+  defp maybe_put(kw, _key, _value), do: kw
+end
