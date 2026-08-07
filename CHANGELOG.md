@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [2.6.1] - 2026-08-08
+
+### Fixed
+
+- **Benchmark regression machinery is real (#805)**: `--regression` detects (5% median gate, persisted baselines), `--compare` diffs the previous snapshot, the summary and dashboard report measured values, and the mix-task rendering suite benches the real buffer/tree-diff pipeline instead of a stub. The comparison suite's memory row uses `erts_debug.size`.
+- **benchee HTML reports no longer auto-open** in any suite (#810, #812): `System.cmd("xdg-open", ...)` crashed headless Linux runs and opened browsers mid-test on macOS.
+- **Cloud metrics export is real (#805)**: OTLP/HTTP JSON, Datadog v1 series, and Prometheus pushgateway senders replace `:ok` stubs, with async monitored export, ingestion-time validation, label escaping, and api_key redaction.
+- **postgrex 0.22.4** (EEF-CVE-2026-66838, SQL injection via the `:comment` option) (#812).
+
+### Changed
+
+- **README and QUICKSTART document the headless from-source path** (#810, #815): C-toolchain prerequisite, non-interactive Hex bootstrap, the full test-exclusion set (`SKIP_TERMBOX2_TESTS=true`), RATE, `MIX_HOME`/`HEX_HOME` for read-only sandboxes, and the PostgreSQL requirement of unexcluded integration suites.
+- **Performance tables republished from a measured run** (#813): single-provenance numbers (commit, hardware, command), emulator-ingest rows labeled as the full parse+apply path distinct from the sub-microsecond lexer, and the cross-framework ANSI row removed as lexer-vs-ingest comparisons mislead.
+
 ### Deprecated
 
 - **`Raxol.UI.VisualTest`, `Raxol.UI.ComponentTest`, `Raxol.UI.IntegrationTest`, `Raxol.UI.PerformanceTest`** are deprecated and scheduled for removal in 3.0. They have no callers; no replacement is planned.

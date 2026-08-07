@@ -92,7 +92,17 @@ mix run examples/demo.exs
 
 See [examples/README.md](examples/README.md) for the full learning path, including agent examples, swarm demos, and the sandboxed REPL.
 
-Headless environment (CI, containers, agents)? The [Development](#development) section is the terminal-free path: clone, compile, test, and the RATE golden suite all run without a tty.
+Headless environment (CI, containers, agents)? The whole build-and-test path needs no tty:
+
+```bash
+mix local.hex --force        # fresh machines and CI: install Hex without a prompt
+mix deps.get
+mix compile                  # termbox2 NIF needs make + a C compiler
+SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker
+MIX_ENV=test mix raxol.rate  # RATE: render-determinism golden suite
+```
+
+Prerequisites, the quality gate, and constrained-sandbox notes are in [Development](#development).
 
 ## Performance
 
