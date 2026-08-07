@@ -242,6 +242,19 @@ Two optional per-project files, both read from `<cwd>/`:
   (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
   a note, never fatal.
 
+## Editors over ACP
+
+`mix raxol.acp` serves the agent loop over the
+[Agent Client Protocol](https://agentclientprotocol.com) on stdio, so an
+ACP-speaking editor (Zed and its ecosystem) can spawn and drive it: each
+`session/new` gets a real `Raxol.AgentClientProtocol.Session` running
+`Raxol.Agent.ClientProtocol.TurnRunner` over the same provider resolution
+as every other entrypoint. Turns are read-only on this surface until ACP's
+permission flow is bridged to the authorization engine. The task ships with
+the repo checkout (the protocol package is a dev/test path dependency); a
+Hex install adds `:raxol_agent_client_protocol` itself. `mix help
+raxol.acp` has the Zed `agent_servers` snippet.
+
 ## Serving over SSH
 
 `mix raxol.code --ssh --authorized-keys ~/.ssh/agent_keys` serves the same
