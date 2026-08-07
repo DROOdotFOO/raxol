@@ -1,7 +1,7 @@
 defmodule Raxol.Adaptive.LayoutRecommenderTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.Adaptive.LayoutRecommender
+  alias Raxol.Adaptive.{BehaviorTracker, LayoutRecommender}
 
   defp make_aggregate(dwell_times, opts \\ []) do
     avg_alert = Keyword.get(opts, :avg_alert_response_ms, 0.0)
@@ -13,8 +13,25 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
       command_frequency: %{},
       avg_alert_response_ms: avg_alert,
       most_used_panes: [],
-      least_used_panes: least_used
+      least_used_panes: least_used,
+      scroll_frequency: Keyword.get(opts, :scroll_frequency, %{}),
+      scroll_velocity: Keyword.get(opts, :scroll_velocity, %{}),
+      takeover_duration_ms: Keyword.get(opts, :takeover_duration_ms, %{}),
+      layout_override_count: Keyword.get(opts, :layout_override_count, 0),
+      command_concentration: Keyword.get(opts, :command_concentration, %{})
     }
+  end
+
+  describe "fixture parity with the real producer" do
+    test "make_aggregate carries the same keys BehaviorTracker emits" do
+      {:ok, tracker} = BehaviorTracker.start_link(name: nil)
+      BehaviorTracker.record(tracker, :pane_dwell, %{pane_id: :scout, ms: 100})
+      send(tracker, :aggregate_window)
+      [real | _] = BehaviorTracker.get_aggregates(tracker, 1)
+
+      assert Enum.sort(Map.keys(make_aggregate(%{}))) ==
+               Enum.sort(Map.keys(real))
+    end
   end
 
   describe "rule-based recommendations" do
