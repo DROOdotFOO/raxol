@@ -887,6 +887,48 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
+  describe "/rename and enriched /sessions" do
+    test "/rename titles the session and persists it" do
+      model = new_model()
+      {model, []} = submit(model, "/rename fix the auth bug")
+
+      assert model.title == "fix the auth bug"
+      assert model.notice =~ "renamed"
+
+      {:ok, saved} =
+        Raxol.Agent.Code.Store.load(model.sessions_dir, model.session_key)
+
+      assert saved.title == "fix the auth bug"
+    end
+
+    test "/rename without a title shows usage" do
+      {model, []} = submit(new_model(), "/rename")
+      assert model.notice =~ "usage: /rename"
+    end
+
+    test "a resumed session keeps its title" do
+      dir = tmp_dir()
+      model = new_model(sessions_dir: dir)
+      {model, []} = submit(model, "/rename keep me")
+
+      resumed =
+        new_model(sessions_dir: dir, session_key: model.session_key)
+
+      assert resumed.title == "keep me"
+    end
+
+    test "/sessions lists title, age, and cwd" do
+      dir = tmp_dir()
+      model = new_model(sessions_dir: dir)
+      {model, []} = submit(model, "/rename my title")
+      {model, []} = submit(model, "/sessions")
+
+      assert model.notice =~ ~s("my title")
+      assert model.notice =~ "msgs"
+      assert model.notice =~ "just now"
+    end
+  end
+
   describe "/rewind" do
     defp run_turn(model, turn_id, prompt, answer) do
       {model, []} = submit(model, prompt)

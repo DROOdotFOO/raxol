@@ -73,8 +73,7 @@ defmodule Raxol.Agent.Code.App do
   def init(context) do
     options = Map.get(context, :options, [])
 
-    {sessions_dir, session_key, messages, events, resume_notice} =
-      init_session(options)
+    session = init_session(options)
 
     cwd = Keyword.get(options, :cwd) || Raxol.Agent.Actions.Fs.working_dir()
     {hooks, hooks_note} = load_hooks(cwd)
@@ -85,12 +84,14 @@ defmodule Raxol.Agent.Code.App do
       # Seeded from a resumed session so the transcript + conversation
       # rebuild immediately; a fresh session starts these empty. Resumed
       # events arrive renumbered 1..n, so the live fold continues at n+1.
-      events: events,
-      next_event_id: length(events) + 1,
-      messages: messages,
-      status_line: combine_notes([resume_notice, hooks_note, mcp_note]),
-      session_key: session_key,
-      sessions_dir: sessions_dir,
+      events: session.events,
+      next_event_id: length(session.events) + 1,
+      messages: session.messages,
+      status_line: combine_notes([session.notice, hooks_note, mcp_note]),
+      session_key: session.key,
+      sessions_dir: session.dir,
+      title: session.title,
+      parent: session.parent,
       cwd: cwd,
       hooks: hooks,
       mcp_servers: mcp_servers
@@ -217,18 +218,41 @@ defmodule Raxol.Agent.Code.App do
 
     case Keyword.get(options, :session_key) do
       nil ->
-        {dir, mint_session_key(), [], [], nil}
+        fresh_session(dir)
 
       key ->
         case Raxol.Agent.Code.Store.load(dir, key) do
-          {:ok, %{messages: messages, events: events}} ->
-            {dir, key, messages, renumber_events(events),
-             "resumed #{length(messages)} messages"}
+          {:ok, %{messages: messages, events: events} = saved} ->
+            %{
+              dir: dir,
+              key: key,
+              messages: messages,
+              events: renumber_events(events),
+              notice: "resumed #{length(messages)} messages",
+              title: Map.get(saved, :title, ""),
+              parent: Map.get(saved, :parent)
+            }
 
           {:error, _} ->
-            {dir, key, [], [], "session #{key} not found — starting fresh"}
+            %{
+              fresh_session(dir)
+              | key: key,
+                notice: "session #{key} not found — starting fresh"
+            }
         end
     end
+  end
+
+  defp fresh_session(dir) do
+    %{
+      dir: dir,
+      key: mint_session_key(),
+      messages: [],
+      events: [],
+      notice: nil,
+      title: "",
+      parent: nil
+    }
   end
 
   # Stored ids are whatever the producer stamped at the time (historically
@@ -976,7 +1000,10 @@ defmodule Raxol.Agent.Code.App do
   defp persist(model) do
     case Raxol.Agent.Code.Store.save(model.sessions_dir, model.session_key, %{
            messages: model.messages,
-           events: durable_events(model.events)
+           events: durable_events(model.events),
+           cwd: model.cwd,
+           title: model.title,
+           parent: model.parent
          }) do
       :ok ->
         model
@@ -1149,6 +1176,9 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("compact", _arg, model), do: {compact(model), []}
 
   defp apply_command("rewind", _arg, model), do: {rewind(model), []}
+
+  defp apply_command("rename", arg, model),
+    do: {rename(model, String.trim(arg)), []}
 
   defp apply_command("sessions", _arg, model),
     do: {notice(model, sessions_text(model)), []}
@@ -1678,9 +1708,19 @@ defmodule Raxol.Agent.Code.App do
         face_state: :idle,
         face_frame: 0,
         session_key: mint_session_key(),
+        title: "",
+        parent: nil,
         notice: "cleared — new session"
     }
   end
+
+  # `/rename` titles the session; the title shows in `/sessions` and the
+  # `/resume` picker, and persists with the session file.
+  defp rename(model, ""), do: notice(model, "usage: /rename <title>")
+
+  defp rename(model, title),
+    do:
+      %{model | title: title} |> persist() |> notice(~s(renamed to "#{title}"))
 
   # `/model` with no arg on a connected provider fetches its model list and
   # opens a selectable picker; otherwise it just shows the current model.
@@ -1852,9 +1892,51 @@ defmodule Raxol.Agent.Code.App do
       sessions ->
         sessions
         |> Enum.take(10)
-        |> Enum.map_join("\n", fn s -> "#{s.id}  (#{s.message_count} msgs)" end)
+        |> Enum.map_join("\n", &session_line/1)
     end
   end
+
+  defp session_line(session) do
+    details =
+      [
+        title_note(session),
+        "#{session.message_count} msgs",
+        format_age(session.updated_at),
+        shorten_home(session.cwd)
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join(" · ")
+
+    "#{session.id}  (#{details})"
+  end
+
+  defp title_note(%{title: title}) when is_binary(title) and title != "",
+    do: ~s("#{title}")
+
+  defp title_note(_session), do: nil
+
+  defp format_age(updated_at)
+       when is_integer(updated_at) and updated_at > 0 do
+    diff = System.system_time(:second) - updated_at
+
+    cond do
+      diff < 60 -> "just now"
+      diff < 3600 -> "#{div(diff, 60)}m ago"
+      diff < 86_400 -> "#{div(diff, 3600)}h ago"
+      true -> "#{div(diff, 86_400)}d ago"
+    end
+  end
+
+  defp format_age(_updated_at), do: nil
+
+  defp shorten_home(cwd) when is_binary(cwd) and cwd != "" do
+    case System.user_home() do
+      nil -> cwd
+      home -> String.replace_prefix(cwd, home, "~")
+    end
+  end
+
+  defp shorten_home(_cwd), do: nil
 
   defp help_text do
     """
@@ -1868,6 +1950,7 @@ defmodule Raxol.Agent.Code.App do
     /context           session stats
     /usage             session token and cost totals
     /sessions          list saved sessions
+    /rename <title>    title this session (shown in /sessions)
     /mcp               list configured MCP servers
     /hooks             show configured lifecycle hooks
     /inspect           show every config source in use (providers, pin, hooks, MCP, skills, sessions)

@@ -16,13 +16,19 @@ defmodule Raxol.Agent.Code.Store do
   """
 
   @role_to_string %{user: "user", assistant: "assistant", system: "system"}
-  @string_to_role %{"user" => :user, "assistant" => :assistant, "system" => :system}
+  @string_to_role %{
+    "user" => :user,
+    "assistant" => :assistant,
+    "system" => :system
+  }
 
   @type message :: %{role: :user | :assistant | :system, content: String.t()}
   @type session :: %{
           id: String.t(),
           updated_at: integer(),
           cwd: String.t(),
+          title: String.t(),
+          parent: String.t() | nil,
           messages: [message()],
           events: [map()]
         }
@@ -47,7 +53,11 @@ defmodule Raxol.Agent.Code.Store do
           "id" => session_key,
           "updated_at" => System.system_time(:second),
           "cwd" => Map.get(attrs, :cwd, ""),
-          "messages" => attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1),
+          "title" => Map.get(attrs, :title, ""),
+          # A forked session records the id it was copied from.
+          "parent" => Map.get(attrs, :parent),
+          "messages" =>
+            attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1),
           # Durable projection events, stored as-is (already JSON-encodable);
           # EventCodec decodes them back to projection shape on load.
           "events" => Map.get(attrs, :events, [])
@@ -73,12 +83,15 @@ defmodule Raxol.Agent.Code.Store do
       id: Map.get(json, "id", session_key),
       updated_at: Map.get(json, "updated_at", 0),
       cwd: Map.get(json, "cwd", ""),
+      title: string_or_empty(Map.get(json, "title")),
+      parent: string_or_nil(Map.get(json, "parent")),
       messages:
         json
         |> Map.get("messages", [])
         |> Enum.map(&decode_message/1)
         |> Enum.reject(&is_nil/1),
-      events: Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
+      events:
+        Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
     }
   end
 
@@ -91,9 +104,18 @@ defmodule Raxol.Agent.Code.Store do
     end
   end
 
-  @doc "Saved sessions, most-recently-updated first: `%{id, updated_at, message_count}`."
+  @doc """
+  Saved sessions, most-recently-updated first:
+  `%{id, updated_at, message_count, cwd, title}`.
+  """
   @spec list(String.t()) :: [
-          %{id: String.t(), updated_at: integer(), message_count: non_neg_integer()}
+          %{
+            id: String.t(),
+            updated_at: integer(),
+            message_count: non_neg_integer(),
+            cwd: String.t(),
+            title: String.t()
+          }
         ]
   def list(dir) do
     case File.ls(dir) do
@@ -112,22 +134,39 @@ defmodule Raxol.Agent.Code.Store do
   defp summarize(dir, id) do
     case load(dir, id) do
       {:ok, session} ->
-        %{id: id, updated_at: session.updated_at, message_count: length(session.messages)}
+        %{
+          id: id,
+          updated_at: session.updated_at,
+          message_count: length(session.messages),
+          cwd: session.cwd,
+          title: session.title
+        }
 
       {:error, _} ->
         nil
     end
   end
 
+  defp string_or_empty(value) when is_binary(value), do: value
+  defp string_or_empty(_other), do: ""
+
+  defp string_or_nil(value) when is_binary(value) and value != "", do: value
+  defp string_or_nil(_other), do: nil
+
   # `Path.basename/1` neutralizes any path separators / `..` in a caller- or
   # disk-supplied id, so a session key can never point outside `dir`.
-  defp path(dir, session_key), do: Path.join(dir, Path.basename(session_key) <> ".json")
+  defp path(dir, session_key),
+    do: Path.join(dir, Path.basename(session_key) <> ".json")
 
   defp encode_message(%{role: role, content: content}) do
-    %{"role" => Map.get(@role_to_string, role, "user"), "content" => to_string(content)}
+    %{
+      "role" => Map.get(@role_to_string, role, "user"),
+      "content" => to_string(content)
+    }
   end
 
-  defp decode_message(%{"role" => role, "content" => content}) when is_binary(content) do
+  defp decode_message(%{"role" => role, "content" => content})
+       when is_binary(content) do
     case Map.get(@string_to_role, role) do
       nil -> nil
       atom -> %{role: atom, content: content}

@@ -4,9 +4,41 @@ defmodule Raxol.Agent.Code.StoreTest do
   alias Raxol.Agent.Code.Store
 
   setup do
-    dir = Path.join(System.tmp_dir!(), "raxol-store-#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol-store-#{System.unique_integer([:positive])}"
+      )
+
     on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir}
+  end
+
+  test "title, parent, and cwd round-trip and appear in list/1", %{dir: dir} do
+    :ok =
+      Store.save(dir, "sess-t", %{
+        messages: [],
+        events: [],
+        cwd: "/work",
+        title: "fix bug",
+        parent: "sess-orig"
+      })
+
+    assert {:ok, session} = Store.load(dir, "sess-t")
+    assert session.title == "fix bug"
+    assert session.parent == "sess-orig"
+    assert session.cwd == "/work"
+
+    assert [summary] = Store.list(dir)
+    assert summary.title == "fix bug"
+    assert summary.cwd == "/work"
+  end
+
+  test "sessions saved without title/parent load with defaults", %{dir: dir} do
+    :ok = Store.save(dir, "sess-old", %{messages: []})
+    assert {:ok, session} = Store.load(dir, "sess-old")
+    assert session.title == ""
+    assert session.parent == nil
   end
 
   test "save then load round-trips messages and roles", %{dir: dir} do
@@ -42,7 +74,9 @@ defmodule Raxol.Agent.Code.StoreTest do
     assert [%{id: 1, type: :turn_completed, tier: :durable}] = session.events
   end
 
-  test "an unknown role is dropped on load (no atom minted from disk)", %{dir: dir} do
+  test "an unknown role is dropped on load (no atom minted from disk)", %{
+    dir: dir
+  } do
     File.mkdir_p!(dir)
 
     File.write!(
@@ -67,7 +101,10 @@ defmodule Raxol.Agent.Code.StoreTest do
     Store.save(dir, "old", %{messages: [%{role: :user, content: "a"}]})
 
     Store.save(dir, "new", %{
-      messages: [%{role: :user, content: "b"}, %{role: :assistant, content: "c"}]
+      messages: [
+        %{role: :user, content: "b"},
+        %{role: :assistant, content: "c"}
+      ]
     })
 
     listed = Store.list(dir)
