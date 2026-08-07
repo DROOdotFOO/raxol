@@ -25,6 +25,49 @@ defmodule Raxol.Agent.SessionStreamerTest do
       refute_receive {:session_event, :agent_1, _}, 100
     end
 
+    test "release drops the subscription entry and the session's history", %{
+      streamer: streamer
+    } do
+      SessionStreamer.subscribe(:ephemeral_run, streamer)
+      SessionStreamer.emit(:ephemeral_run, {:text_delta, "chunk"}, streamer)
+      assert_receive {:session_event, :ephemeral_run, _}
+
+      assert SessionStreamer.history(:ephemeral_run, streamer) != []
+      assert :ephemeral_run in SessionStreamer.list_sessions(streamer)
+
+      :ok = SessionStreamer.release(:ephemeral_run, streamer)
+
+      assert SessionStreamer.history(:ephemeral_run, streamer) == []
+      refute :ephemeral_run in SessionStreamer.list_sessions(streamer)
+    end
+
+    test "release keeps history while another subscriber remains", %{
+      streamer: streamer
+    } do
+      parent = self()
+
+      other =
+        spawn(fn ->
+          SessionStreamer.subscribe(:shared_run, streamer)
+          send(parent, :subscribed)
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive :subscribed
+
+      SessionStreamer.subscribe(:shared_run, streamer)
+      SessionStreamer.emit(:shared_run, {:text_delta, "chunk"}, streamer)
+      assert_receive {:session_event, :shared_run, _}
+
+      :ok = SessionStreamer.release(:shared_run, streamer)
+
+      assert SessionStreamer.history(:shared_run, streamer) != []
+      send(other, :stop)
+    end
+
     test "multiple subscribers receive the same event", %{streamer: streamer} do
       parent = self()
 

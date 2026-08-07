@@ -15,10 +15,18 @@ defmodule Raxol.Agent.Harness.McpTools do
   MCP resumes in the TUI with `mix raxol.code --resume <id>`, and a TUI
   session can be continued over MCP.
 
-  Authorization: turns run the read-only toolset by default. `write: true`
-  is an explicit opt-in that exposes the mutating tools under an allow-all
-  policy, mirroring `raxol.p --write` — there is no human to answer an
-  approval prompt on this surface.
+  Authorization: this surface is read-only on the workspace. Turns get the
+  read-file/grep/glob tools plus the read-only skill actions; the mutating
+  tools (`write_file`/`edit_file`/`bash`, `skill_manage`) are not in the
+  toolset at all. A write-capable MCP surface waits on the MCP authorizer
+  wiring (deny-on-ask), so a mutating call can ride the same fail-closed
+  discipline every other sensitive MCP tool does — there is no human on
+  this surface to answer an approval prompt.
+
+  Each turn runs in an unlinked worker process: the worker owns the
+  streamer subscription (so the long-lived MCP server never accumulates
+  streamer state), a crashing turn cannot take the server down, and
+  `timeout_s` is a total-turn deadline, not an inter-event idle timer.
 
   Registration rides the main application's MCP seam
   (`maybe_register_mcp_tools`), which fires only when this module is
@@ -53,8 +61,8 @@ defmodule Raxol.Agent.Harness.McpTools do
         description: """
         Runs one synchronous agent turn in a session and returns the
         assistant's answer. Conversation history persists across calls.
-        Tools are read-only unless write: true (explicit opt-in; mutating
-        tools then run unprompted under an allow-all policy).
+        The toolset is read-only on the workspace (read/grep/glob; no
+        write_file, edit_file, or bash on this surface).
         """,
         inputSchema: %{
           type: "object",
@@ -67,13 +75,10 @@ defmodule Raxol.Agent.Harness.McpTools do
               description: "LLM backend override (auto-detected when omitted)"
             },
             model: %{type: "string", description: "Model override"},
-            write: %{
-              type: "boolean",
-              description: "Expose write_file/edit_file/bash under an allow-all policy"
-            },
             timeout_s: %{
               type: "integer",
-              description: "Per-turn timeout in seconds (default #{@default_timeout_s})"
+              description:
+                "Total turn deadline in seconds (default #{@default_timeout_s}, max #{@max_timeout_s})"
             }
           }
         },
@@ -169,80 +174,110 @@ defmodule Raxol.Agent.Harness.McpTools do
 
   defp run_turn(key, session, prompt, args) do
     with {:ok, executor, _source} <- resolve_executor(args) do
-      write? = args["write"] == true
       messages = session.messages ++ [%{role: :user, content: prompt}]
 
       stream_opts =
         [
           executor: executor,
           system_prompt: system_prompt(),
-          actions: actions_for(write?),
+          actions: turn_actions(),
           messages: messages
-        ] ++ context_for(write?)
+        ] ++ turn_context()
 
-      ensure_streamer!()
-      pump_id = "mcp-#{System.unique_integer([:positive])}"
-      :ok = SessionStreamer.subscribe(pump_id)
+      timeout_ms = timeout_ms(args)
 
-      # The stream must be created and consumed in the same process
-      # (Stream.react sends its react events to the stream's creator), so
-      # the pump task owns both; this process collects from the streamer.
-      runner =
-        Task.async(fn ->
-          Contract.pump(
-            pump_id,
-            Raxol.Agent.Stream.react(prompt, stream_opts),
-            prompt: prompt
-          )
-        end)
-
-      outcome =
-        collect(pump_id, runner, timeout_ms(args), %{answer: "", events: []})
-
-      case outcome do
-        {:ok, state} ->
-          persist_turn(key, session, messages, state)
-
-        {:error, reason} ->
-          {:error, reason}
+      case await_worker(prompt, stream_opts, timeout_ms) do
+        {:ok, state} -> persist_turn(key, session, messages, state)
+        {:error, reason} -> {:error, reason}
       end
     end
   end
 
-  defp resolve_executor(args) do
-    opts =
-      []
-      |> maybe_put(:backend, args["backend"])
-      |> maybe_put(:model, args["model"])
+  # The whole turn (streamer subscription, pump, collection) runs in an
+  # UNLINKED worker: its exit triggers the streamer's monitor cleanup, and a
+  # crashing pump kills the worker, never the long-lived MCP server this
+  # callback runs in. The deadline here is the belt over the worker's own.
+  defp await_worker(prompt, stream_opts, timeout_ms) do
+    parent = self()
+    tag = make_ref()
 
-    case Cli.resolve_executor(opts, nil) do
-      {:ok, executor, source} -> {:ok, executor, source}
-      {:error, message} -> {:error, message}
+    {worker, mref} =
+      spawn_monitor(fn ->
+        send(parent, {tag, turn_worker(prompt, stream_opts, timeout_ms)})
+      end)
+
+    receive do
+      {^tag, outcome} ->
+        Process.demonitor(mref, [:flush])
+        outcome
+
+      {:DOWN, ^mref, :process, ^worker, reason} ->
+        {:error, "turn crashed: #{inspect(reason)}"}
+    after
+      timeout_ms + 5_000 ->
+        Process.exit(worker, :kill)
+        Process.demonitor(mref, [:flush])
+        {:error, "turn timed out after #{div(timeout_ms, 1000)}s"}
     end
   end
 
-  defp collect(pump_id, runner, timeout_ms, state) do
-    receive do
-      {:session_event, ^pump_id, %Contract.Event{} = event} ->
-        state = state |> accumulate_answer(event) |> record_event(event)
+  # Runs in the worker process. `release/1` clears the streamer's
+  # subscription and history for the throwaway pump id on the success and
+  # error paths; a crash path is covered by the worker's exit (monitor
+  # cleanup) plus the next release of the same id being a no-op.
+  defp turn_worker(prompt, stream_opts, timeout_ms) do
+    ensure_streamer!()
+    pump_id = "mcp-#{System.unique_integer([:positive])}"
+    :ok = SessionStreamer.subscribe(pump_id)
 
-        case event do
-          %{type: :turn_completed, payload: %{final: true}} ->
-            Task.await(runner, 5_000)
-            {:ok, state}
+    runner =
+      Task.async(fn ->
+        Contract.pump(
+          pump_id,
+          Raxol.Agent.Stream.react(prompt, stream_opts),
+          prompt: prompt
+        )
+      end)
 
-          %{type: :error, payload: payload} ->
-            Task.await(runner, 5_000)
-            {:error, "turn failed: #{inspect(Map.get(payload, :reason))}"}
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    outcome = collect(pump_id, runner, deadline, %{answer: "", events: []})
+    SessionStreamer.release(pump_id)
+    outcome
+  end
 
-          _ ->
-            collect(pump_id, runner, timeout_ms, state)
-        end
-    after
-      timeout_ms ->
-        Task.shutdown(runner, :brutal_kill)
-        {:error, "turn timed out after #{div(timeout_ms, 1000)}s"}
+  # Total-turn deadline: `after` uses the REMAINING budget, so a chatty
+  # stream (deltas every few seconds) cannot re-arm the timer forever.
+  defp collect(pump_id, runner, deadline, state) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      timeout(runner, deadline)
+    else
+      receive do
+        {:session_event, ^pump_id, %Contract.Event{} = event} ->
+          state = state |> accumulate_answer(event) |> record_event(event)
+
+          case event do
+            %{type: :turn_completed, payload: %{final: true}} ->
+              Task.await(runner, 5_000)
+              {:ok, state}
+
+            %{type: :error, payload: payload} ->
+              Task.await(runner, 5_000)
+              {:error, "turn failed: #{inspect(Map.get(payload, :reason))}"}
+
+            _ ->
+              collect(pump_id, runner, deadline, state)
+          end
+      after
+        remaining -> timeout(runner, deadline)
+      end
     end
+  end
+
+  defp timeout(runner, _deadline) do
+    Task.shutdown(runner, :brutal_kill)
+    {:error, "turn deadline exceeded"}
   end
 
   defp accumulate_answer(
@@ -275,38 +310,44 @@ defmodule Raxol.Agent.Harness.McpTools do
            events: events,
            cwd: session.cwd
          }) do
-      :ok -> {:ok, state.answer}
-      {:error, reason} -> {:error, "answer produced but session save failed: #{inspect(reason)}"}
+      :ok ->
+        {:ok, state.answer}
+
+      {:error, reason} ->
+        {:error, "answer produced but session save failed: #{inspect(reason)}"}
     end
   end
 
-  # -- toolset (mirrors raxol.p) ----------------------------------------------
+  defp resolve_executor(args) do
+    opts =
+      []
+      |> maybe_put(:backend, args["backend"])
+      |> maybe_put(:model, args["model"])
 
-  defp actions_for(false),
-    do:
-      Raxol.Agent.Actions.Fs.all() ++
-        Raxol.Agent.Actions.Code.read_only() ++
-        Raxol.Agent.Skills.enabled_actions()
+    case Cli.resolve_executor(opts, nil) do
+      {:ok, executor, source} -> {:ok, executor, source}
+      {:error, message} -> {:error, message}
+    end
+  end
 
-  defp actions_for(true),
-    do:
-      Raxol.Agent.Actions.Fs.all() ++
-        Raxol.Agent.Actions.Code.all() ++
-        Raxol.Agent.Skills.enabled_actions()
+  # -- toolset ----------------------------------------------------------------
 
-  defp context_for(false), do: skills_context(%{})
+  # Read-only on the workspace: no write_file/edit_file/bash, and no
+  # skill_manage (it writes under ~/.raxol/skills).
+  defp turn_actions do
+    Raxol.Agent.Actions.Fs.all() ++
+      Raxol.Agent.Actions.Code.read_only() ++ read_only_skills()
+  end
 
-  defp context_for(true),
-    do: skills_context(%{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()})
+  defp read_only_skills do
+    Raxol.Agent.Skills.enabled_actions() -- [Raxol.Agent.Actions.Skills.Manage]
+  end
 
-  defp skills_context(base) do
-    base =
-      case Raxol.Agent.Skills.default_context() do
-        nil -> base
-        skills -> Map.put(base, :skills, skills)
-      end
-
-    if map_size(base) == 0, do: [], else: [context: base]
+  defp turn_context do
+    case Raxol.Agent.Skills.default_context() do
+      nil -> []
+      skills -> [context: %{skills: skills}]
+    end
   end
 
   defp system_prompt do

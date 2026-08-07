@@ -87,6 +87,21 @@ defmodule Raxol.Agent.SessionStreamer do
     GenServer.call(server, {:unsubscribe, session_id, self()})
   end
 
+  @doc """
+  Finish an ephemeral session: unsubscribe the caller and, when no
+  subscribers remain, drop the subscription entry and the session's event
+  history.
+
+  Per-run session ids (CLI pumps, MCP turns) mint a fresh id per run, and
+  plain `unsubscribe/2` leaves the empty subscription entry and the bounded
+  history queue behind — state this long-lived server would otherwise
+  accumulate forever, one entry per run.
+  """
+  @spec release(session_id(), GenServer.server()) :: :ok
+  def release(session_id, server \\ __MODULE__) do
+    GenServer.call(server, {:release, session_id, self()})
+  end
+
   @doc "Emit an event for a session (broadcast to all subscribers)."
   @spec emit(session_id(), event(), GenServer.server()) :: :ok
   def emit(session_id, event, server \\ __MODULE__) do
@@ -132,6 +147,26 @@ defmodule Raxol.Agent.SessionStreamer do
       end)
 
     {:reply, :ok, %{state | subscriptions: subs}}
+  end
+
+  def handle_manager_call({:release, session_id, pid}, _from, state) do
+    remaining =
+      state.subscriptions
+      |> Map.get(session_id, MapSet.new())
+      |> MapSet.delete(pid)
+
+    state =
+      if MapSet.size(remaining) == 0 do
+        %{
+          state
+          | subscriptions: Map.delete(state.subscriptions, session_id),
+            history: Map.delete(state.history, session_id)
+        }
+      else
+        %{state | subscriptions: Map.put(state.subscriptions, session_id, remaining)}
+      end
+
+    {:reply, :ok, state}
   end
 
   def handle_manager_call({:history, session_id}, _from, state) do
