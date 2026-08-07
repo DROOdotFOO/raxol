@@ -67,6 +67,7 @@ defmodule Mix.Tasks.Raxol.Code do
     * `--resume ID`— resume a specific session by id
     * `--sessions` — print saved sessions and exit
     * `--ascii`    — ASCII-only face (no `≡`/`·`)
+    * `-h`/`--help` — print usage and exit
   """
 
   use Mix.Task
@@ -84,14 +85,41 @@ defmodule Mix.Tasks.Raxol.Code do
     continue: :boolean,
     resume: :string,
     sessions: :boolean,
-    ascii: :boolean
+    ascii: :boolean,
+    help: :boolean
   ]
+
+  @aliases [h: :help]
+
+  @usage """
+  Usage: mix raxol.code [options]
+
+  Interactive coding agent TUI (the axol face). Package-scoped: run from
+  packages/raxol_agent, or from anywhere via bin/raxol-code.
+
+  Options:
+    --backend NAME   LLM backend (auto-detected if omitted; --harness is a
+                     deprecated alias)
+    --model NAME     model override
+    --api-key KEY    API key for the selected backend (else op/env)
+    --base-url URL   override the backend base URL
+    --system TEXT    system prompt override
+    --continue       resume the most recently updated session
+    --resume ID      resume a specific session by id
+    --sessions       print saved sessions and exit
+    --ascii          ASCII-only face for terminals without a UTF-8 font
+    -h, --help       print this help
+
+  Full docs: mix help raxol.code
+  """
 
   @impl Mix.Task
   def run(argv) do
-    {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)
+    {opts, _args, invalid} =
+      OptionParser.parse(argv, strict: @switches, aliases: @aliases)
 
     cond do
+      Keyword.get(opts, :help, false) -> IO.puts(@usage)
       invalid != [] -> usage_error("unknown options: #{inspect(invalid)}")
       Keyword.get(opts, :sessions, false) -> print_sessions()
       true -> launch(opts)
@@ -226,7 +254,7 @@ defmodule Mix.Tasks.Raxol.Code do
   end
 
   defp usage_error(message) do
-    IO.puts(:stderr, "raxol.code: #{message}")
+    IO.puts(:stderr, "raxol.code: #{message}\n\n#{@usage}")
     exit({:shutdown, 64})
   end
 

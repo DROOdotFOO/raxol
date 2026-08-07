@@ -39,6 +39,7 @@ defmodule Mix.Tasks.Raxol.P do
     * `--timeout`  — per-run timeout in seconds (default 180)
     * `--write`    — expose write_file/edit_file/bash (opt-in; unattended)
     * `--no-tools` — plain completion, no tool loop
+    * `-h`/`--help` — print usage and exit
 
   ## Benchmark / harness env contract
 
@@ -68,7 +69,8 @@ defmodule Mix.Tasks.Raxol.P do
     # Boot without recompiling (bin/raxol precompiles silently) so stdout
     # stays clean for the answer, then hand off to the shared runner --
     # `Raxol.Agent.P` contains no Mix calls, so the same code path serves
-    # the Burrito-packaged `raxol p` where Mix does not exist.
+    # the Burrito-packaged `raxol p` where Mix does not exist. `--help` and
+    # usage errors are answered by the runner, so every entrypoint agrees.
     Mix.Task.run("app.start", [
       "--no-compile",
       "--no-deps-check",

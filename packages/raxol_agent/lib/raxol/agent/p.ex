@@ -35,29 +35,58 @@ defmodule Raxol.Agent.P do
     system: :string,
     timeout: :integer,
     write: :boolean,
-    tools: :boolean
+    tools: :boolean,
+    help: :boolean
   ]
+
+  @aliases [h: :help]
+
+  @usage """
+  Usage: raxol p [options] "prompt"    (dev: mix raxol.p [options] "prompt")
+
+  One-shot headless agent run: answer to stdout, one JSON contract event
+  per line to stderr.
+
+  Options:
+    --backend NAME   LLM backend (--harness is a deprecated alias)
+    --model NAME     model override
+    --base-url URL   override the backend base URL
+    --system TEXT    system prompt override
+    --timeout SECS   per-run timeout in seconds (default 180)
+    --write          expose write_file/edit_file/bash (opt-in; unattended)
+    --no-tools       plain completion, no tool loop
+    -h, --help       print this help
+
+  Exit codes: 0 success, 1 run error, 2 timeout or budget exhausted,
+  64 usage error, 143 terminated (SIGTERM)
+  Full docs: mix help raxol.p
+  """
 
   @doc "Run one headless turn from `argv`; returns the process exit code."
   @spec run([String.t()]) :: non_neg_integer()
   def run(argv) do
-    {opts, args, invalid} = OptionParser.parse(argv, strict: @switches)
+    {opts, args, invalid} =
+      OptionParser.parse(argv, strict: @switches, aliases: @aliases)
 
     prompt = Enum.join(args, " ") |> String.trim()
 
     cond do
+      Keyword.get(opts, :help, false) ->
+        IO.puts(@usage)
+        0
+
       invalid != [] ->
         usage_error!("unknown options: #{inspect(invalid)}")
 
       prompt == "" ->
-        usage_error!("no prompt given. Usage: raxol p [options] \"prompt\"")
+        usage_error!("no prompt given")
 
       true ->
         run_prompt(prompt, opts)
     end
   catch
     {:raxol_p_usage, message} ->
-      IO.puts(:stderr, "raxol-p: #{message}")
+      IO.puts(:stderr, "raxol-p: #{message}\n\n#{@usage}")
       64
   end
 
