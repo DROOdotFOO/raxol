@@ -118,7 +118,7 @@ Benchee.run(
   formatters: [
     Benchee.Formatters.Console,
     {Benchee.Formatters.HTML,
-     file: "bench/output/performance_improvements.html"},
+     file: "bench/output/performance_improvements.html", auto_open: false},
     {Benchee.Formatters.JSON,
      file: "bench/output/performance_improvements.json"}
   ],

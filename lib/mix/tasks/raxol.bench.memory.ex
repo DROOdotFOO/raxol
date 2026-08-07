@@ -457,7 +457,8 @@ defmodule Mix.Tasks.Raxol.Bench.Memory do
       warmup: if(opts[:quick], do: 0.5, else: 1),
       formatters: [
         Benchee.Formatters.Console,
-        {Benchee.Formatters.HTML, file: "bench/output/memory_benchmarks.html"}
+        {Benchee.Formatters.HTML,
+         file: "bench/output/memory_benchmarks.html", auto_open: false}
       ]
     ]
 

@@ -22,6 +22,25 @@ def deps do
 end
 ```
 
+## Headless / CI setup
+
+The tutorial app below needs a real terminal, but building and testing Raxol
+does not. Prerequisites: Elixir/OTP (versions in the repo's `.tool-versions`)
+and a C toolchain for the termbox2 NIF (`make` + `cc`; on Debian/Ubuntu,
+`apt-get install build-essential`). From a fresh clone:
+
+```bash
+mix local.hex --force        # fresh machines and CI: install Hex without a prompt
+mix deps.get
+mix compile                  # builds the termbox2 NIF
+SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker
+MIX_ENV=test mix raxol.rate  # RATE: render-determinism golden suite
+```
+
+`SKIP_TERMBOX2_TESTS=true` excludes the tests that need a real local terminal;
+CI sets the same variable. If `HOME` is read-only in your sandbox, point
+`MIX_HOME` and `HEX_HOME` at a writable directory first.
+
 ## Your first app
 
 Every Raxol app follows The Elm Architecture (TEA) with four callbacks:

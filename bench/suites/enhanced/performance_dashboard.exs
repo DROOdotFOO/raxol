@@ -19,63 +19,74 @@ defmodule PerformanceDashboard do
   alias Raxol.Terminal.Cursor.CursorManager
 
   @targets %{
-    "plain_text_parse" => 50,     # μs
-    "ansi_parse" => 10,           # μs  
-    "sgr_process" => 1,           # μs
-    "cursor_move" => 5,           # μs
-    "buffer_write" => 20,         # μs
-    "emulator_create" => 1000     # μs
+    # μs
+    "plain_text_parse" => 50,
+    # μs  
+    "ansi_parse" => 10,
+    # μs
+    "sgr_process" => 1,
+    # μs
+    "cursor_move" => 5,
+    # μs
+    "buffer_write" => 20,
+    # μs
+    "emulator_create" => 1000
   }
 
   def run do
     IO.puts("\n" <> String.duplicate("=", 100))
     IO.puts("              [RAXOL] RAXOL PERFORMANCE DASHBOARD v1.5.4")
     IO.puts(String.duplicate("=", 100))
-    
+
     # Create output directory structure
     File.mkdir_p!("bench/output/enhanced")
     File.mkdir_p!("bench/output/enhanced/json")
     File.mkdir_p!("bench/output/enhanced/html")
-    
+
     timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-    
+
     # Run all benchmark suites
     results = %{
       parser: run_parser_benchmarks(timestamp),
-      terminal: run_terminal_benchmarks(timestamp), 
+      terminal: run_terminal_benchmarks(timestamp),
       rendering: run_rendering_benchmarks(timestamp),
       memory: run_memory_benchmarks(timestamp)
     }
-    
+
     # Generate comprehensive reports
     generate_dashboard_report(results, timestamp)
     generate_regression_report(results, timestamp)
     generate_performance_insights(results, timestamp)
-    
+
     IO.puts("\n[OK] Performance dashboard complete!")
     IO.puts("[REPORT] Reports available in bench/output/enhanced/")
-    IO.puts("[WEB] Open bench/output/enhanced/dashboard.html for interactive view")
+
+    IO.puts(
+      "[WEB] Open bench/output/enhanced/dashboard.html for interactive view"
+    )
   end
 
   defp run_parser_benchmarks(timestamp) do
     IO.puts("\n[BENCHMARK] Running Parser Benchmarks...")
-    
+
     emulator = Emulator.new(80, 24)
-    
+
     # Test scenarios with realistic terminal content
     scenarios = %{
       "plain_text_short" => "Hello, World!",
-      "plain_text_long" => String.duplicate("Lorem ipsum dolor sit amet. ", 100),
+      "plain_text_long" =>
+        String.duplicate("Lorem ipsum dolor sit amet. ", 100),
       "ansi_basic_color" => "\e[31mRed Text\e[0m",
       "ansi_complex_sgr" => "\e[1;4;31;48;5;196mComplex Formatting\e[0m",
       "ansi_cursor_movement" => "\e[2J\e[H\e[10;20H\e[KCursor commands",
-      "ansi_scroll_region" => "\e[5;20r\e[?25l\e[33mScroll region\e[?25h\e[0;0r",
+      "ansi_scroll_region" =>
+        "\e[5;20r\e[?25l\e[33mScroll region\e[?25h\e[0;0r",
       "mixed_content" => mix_realistic_content(),
       "large_ansi_dump" => generate_large_ansi_content(),
       "rapid_color_changes" => generate_rapid_color_sequence(),
       "terminal_app_sim" => simulate_terminal_app_output()
     }
-    
+
     config = [
       time: 5,
       memory_time: 2,
@@ -83,63 +94,78 @@ defmodule PerformanceDashboard do
       pre_check: true,
       parallel: 1,
       formatters: [
-        {Benchee.Formatters.JSON, 
+        {Benchee.Formatters.JSON,
          file: "bench/output/enhanced/json/parser_#{timestamp}.json"},
-        {Benchee.Formatters.HTML, 
+        {Benchee.Formatters.HTML,
          file: "bench/output/enhanced/html/parser_#{timestamp}.html",
-         title: "Raxol Parser Performance - #{timestamp}"}
+         title: "Raxol Parser Performance - #{timestamp}",
+         auto_open: false}
       ]
     ]
-    
-    jobs = Enum.into(scenarios, %{}, fn {name, content} ->
-      {name, fn -> Parser.parse(emulator, content) end}
-    end)
-    
+
+    jobs =
+      Enum.into(scenarios, %{}, fn {name, content} ->
+        {name, fn -> Parser.parse(emulator, content) end}
+      end)
+
     Benchee.run(jobs, config)
   end
 
   defp run_terminal_benchmarks(timestamp) do
     IO.puts("\n[FAST] Running Terminal Component Benchmarks...")
-    
+
     buffer = Raxol.Terminal.ScreenBuffer.new(80, 24)
     cursor = CursorManager.new()
     style = %Raxol.Terminal.ANSI.TextFormatting{}
-    
+
     jobs = %{
       "emulator_creation" => fn -> Emulator.new(80, 24) end,
       "buffer_write_char" => fn -> Writer.write_char(buffer, 10, 5, "A") end,
-      "buffer_write_string" => fn -> Writer.write_string(buffer, 0, 0, "Hello World") end,
-      "cursor_move_simple" => fn -> CursorManager.set_position(cursor, 10, 5) end,
-      "cursor_move_bounds" => fn -> CursorManager.move_to_bounds(cursor, 40, 12, 80, 24) end,
-      "sgr_single_color" => fn -> SGRProcessor.process_sgr_codes([31], style) end,
-      "sgr_complex_format" => fn -> SGRProcessor.process_sgr_codes([1, 4, 31, 48, 5, 196], style) end,
-      "sgr_rgb_color" => fn -> SGRProcessor.process_sgr_codes([38, 2, 255, 128, 64], style) end
+      "buffer_write_string" => fn ->
+        Writer.write_string(buffer, 0, 0, "Hello World")
+      end,
+      "cursor_move_simple" => fn ->
+        CursorManager.set_position(cursor, 10, 5)
+      end,
+      "cursor_move_bounds" => fn ->
+        CursorManager.move_to_bounds(cursor, 40, 12, 80, 24)
+      end,
+      "sgr_single_color" => fn ->
+        SGRProcessor.process_sgr_codes([31], style)
+      end,
+      "sgr_complex_format" => fn ->
+        SGRProcessor.process_sgr_codes([1, 4, 31, 48, 5, 196], style)
+      end,
+      "sgr_rgb_color" => fn ->
+        SGRProcessor.process_sgr_codes([38, 2, 255, 128, 64], style)
+      end
     }
-    
+
     config = [
       time: 3,
       memory_time: 1,
       warmup: 0.5,
       formatters: [
-        {Benchee.Formatters.JSON, 
+        {Benchee.Formatters.JSON,
          file: "bench/output/enhanced/json/terminal_#{timestamp}.json"},
-        {Benchee.Formatters.HTML, 
+        {Benchee.Formatters.HTML,
          file: "bench/output/enhanced/html/terminal_#{timestamp}.html",
-         title: "Raxol Terminal Components - #{timestamp}"}
+         title: "Raxol Terminal Components - #{timestamp}",
+         auto_open: false}
       ]
     ]
-    
+
     Benchee.run(jobs, config)
   end
 
   defp run_rendering_benchmarks(timestamp) do
     IO.puts("\n[RENDER] Running Rendering Performance Benchmarks...")
-    
+
     # Simulate different rendering scenarios
     small_buffer = Raxol.Terminal.ScreenBuffer.new(20, 10)
     medium_buffer = Raxol.Terminal.ScreenBuffer.new(80, 24)
     large_buffer = Raxol.Terminal.ScreenBuffer.new(200, 50)
-    
+
     jobs = %{
       "render_small_buffer" => fn -> simulate_render(small_buffer) end,
       "render_medium_buffer" => fn -> simulate_render(medium_buffer) end,
@@ -147,63 +173,66 @@ defmodule PerformanceDashboard do
       "render_with_colors" => fn -> simulate_colored_render(medium_buffer) end,
       "render_with_unicode" => fn -> simulate_unicode_render(medium_buffer) end
     }
-    
+
     config = [
       time: 4,
       memory_time: 2,
       warmup: 1,
       formatters: [
-        {Benchee.Formatters.JSON, 
+        {Benchee.Formatters.JSON,
          file: "bench/output/enhanced/json/rendering_#{timestamp}.json"},
-        {Benchee.Formatters.HTML, 
+        {Benchee.Formatters.HTML,
          file: "bench/output/enhanced/html/rendering_#{timestamp}.html",
-         title: "Raxol Rendering Performance - #{timestamp}"}
+         title: "Raxol Rendering Performance - #{timestamp}",
+         auto_open: false}
       ]
     ]
-    
+
     Benchee.run(jobs, config)
   end
 
   defp run_memory_benchmarks(timestamp) do
     IO.puts("\n[MEMORY] Running Memory Usage Benchmarks...")
-    
+
     jobs = %{
-      "memory_emulator_80x24" => fn -> 
+      "memory_emulator_80x24" => fn ->
         emulator = Emulator.new(80, 24)
         # Force some memory allocation
         Parser.parse(emulator, generate_large_ansi_content())
       end,
       "memory_emulator_200x50" => fn ->
-        emulator = Emulator.new(200, 50) 
+        emulator = Emulator.new(200, 50)
         Parser.parse(emulator, generate_large_ansi_content())
       end,
       "memory_buffer_operations" => fn ->
         buffer = Raxol.Terminal.ScreenBuffer.new(100, 30)
+
         Enum.each(1..100, fn i ->
           Writer.write_string(buffer, 0, rem(i, 30), "Memory test line #{i}")
         end)
       end
     }
-    
+
     config = [
       time: 2,
       memory_time: 3,
       warmup: 0.5,
       formatters: [
-        {Benchee.Formatters.JSON, 
+        {Benchee.Formatters.JSON,
          file: "bench/output/enhanced/json/memory_#{timestamp}.json"},
-        {Benchee.Formatters.HTML, 
+        {Benchee.Formatters.HTML,
          file: "bench/output/enhanced/html/memory_#{timestamp}.html",
-         title: "Raxol Memory Usage - #{timestamp}"}
+         title: "Raxol Memory Usage - #{timestamp}",
+         auto_open: false}
       ]
     ]
-    
+
     Benchee.run(jobs, config)
   end
 
   defp generate_dashboard_report(results, timestamp) do
     IO.puts("\n[DASHBOARD] Generating Performance Dashboard...")
-    
+
     # Create a comprehensive HTML dashboard
     html_content = """
     <!DOCTYPE html>
@@ -318,89 +347,96 @@ defmodule PerformanceDashboard do
     </body>
     </html>
     """
-    
+
     File.write!("bench/output/enhanced/dashboard.html", html_content)
   end
 
   defp generate_regression_report(results, timestamp) do
     IO.puts("\n[BENCHMARK] Generating Regression Analysis...")
-    
+
     # Load previous results if they exist for comparison
     previous_files = Path.wildcard("bench/output/enhanced/json/parser_*.json")
-    
-    regression_data = if length(previous_files) > 1 do
-      # Sort by timestamp and get the previous one
-      sorted_files = Enum.sort(previous_files, :desc)
-      previous_file = Enum.at(sorted_files, 1) # Second most recent
-      
-      if previous_file do
-        case File.read(previous_file) do
-          {:ok, content} ->
-            case Jason.decode(content) do
-              {:ok, data} -> analyze_regressions(data)
-              _ -> "No previous data available for comparison"
-            end
-          _ -> "Could not read previous benchmark data"
+
+    regression_data =
+      if length(previous_files) > 1 do
+        # Sort by timestamp and get the previous one
+        sorted_files = Enum.sort(previous_files, :desc)
+        # Second most recent
+        previous_file = Enum.at(sorted_files, 1)
+
+        if previous_file do
+          case File.read(previous_file) do
+            {:ok, content} ->
+              case Jason.decode(content) do
+                {:ok, data} -> analyze_regressions(data)
+                _ -> "No previous data available for comparison"
+              end
+
+            _ ->
+              "Could not read previous benchmark data"
+          end
+        else
+          "No previous benchmark data found"
         end
       else
-        "No previous benchmark data found"
+        "This is the first benchmark run - no regression analysis available"
       end
-    else
-      "This is the first benchmark run - no regression analysis available"
-    end
-    
+
     report = """
     # Raxol Performance Regression Report
-    
+
     **Generated:** #{timestamp}
     **Version:** v1.5.4
-    
+
     ## Regression Analysis
-    
+
     #{regression_data}
-    
+
     ## Performance Thresholds
-    
+
     The following performance regressions are flagged:
     - Parser operations > 10% slower than previous run
     - Memory usage > 15% higher than previous run  
     - Rendering > 5% slower than previous run
-    
+
     ## Recommendations
-    
+
     [OK] All performance targets are currently being met
     [OK] Parser performance: 3.3μs/op (target: <10μs)
     [OK] Memory usage: <2.8MB (target: <5MB)
     [OK] Render performance: <1ms (target: <2ms)
     """
-    
-    File.write!("bench/output/enhanced/regression_report_#{timestamp}.md", report)
+
+    File.write!(
+      "bench/output/enhanced/regression_report_#{timestamp}.md",
+      report
+    )
   end
 
   defp generate_performance_insights(results, timestamp) do
     IO.puts("\n[ANALYSIS] Generating Performance Insights...")
-    
+
     insights = """
     # Raxol Performance Insights - #{timestamp}
-    
+
     ## Key Performance Achievements
-    
+
     ### [RAXOL] Parser Optimizations (30x improvement)
     - **Before:** ~100μs per ANSI sequence
     - **After:** ~3.3μs per ANSI sequence  
     - **Method:** Pattern matching vs map lookups for SGR codes
-    
+
     ### [FAST] Emulator Creation (4.6x improvement)  
     - **Before:** Heavy GenServer initialization
     - **After:** Minimal GenServer usage in critical paths
     - **Method:** Created EmulatorLite for performance scenarios
-    
+
     ### [MEMORY] Memory Efficiency
     - **Current:** <2.8MB for 80x24 terminal
     - **Optimization:** Efficient buffer management and cell structure
-    
+
     ## Performance Characteristics by Operation
-    
+
     | Operation | Time (μs) | Target (μs) | Status |
     |-----------|-----------|-------------|---------|
     | Plain text parse | ~34 | <50 | [OK] |
@@ -409,35 +445,35 @@ defmodule PerformanceDashboard do
     | Cursor movement | ~2 | <5 | [OK] |
     | Buffer write | ~8 | <20 | [OK] |
     | Emulator creation | ~58 | <1000 | [OK] |
-    
+
     ## Optimization Recommendations
-    
+
     1. **Continue monitoring parser performance** - maintain <10μs target
     2. **Memory usage tracking** - watch for memory leaks in long sessions  
     3. **Rendering optimization** - consider further buffer optimizations
     4. **Profiling in production** - monitor real-world performance patterns
-    
+
     ## Testing Performance
-    
+
     Current test suite performance:
     - **Total tests:** 2086
     - **Passing:** 2076 (99.5%)
     - **Performance tests:** Excluded from main suite
     - **Memory tests:** <2.8MB per session verified
-    
+
     ## Next Steps
-    
+
     - [ ] Implement continuous performance monitoring
     - [ ] Add performance regression CI checks  
     - [x] Create performance baseline for v1.5.4
     - [ ] Monitor production performance metrics
     """
-    
+
     File.write!("bench/output/enhanced/insights_#{timestamp}.md", insights)
   end
 
   # Helper functions for generating test content
-  
+
   defp mix_realistic_content do
     """
     \e[2J\e[H\e[1;37;44m Terminal Application \e[0m
@@ -450,20 +486,22 @@ defmodule PerformanceDashboard do
     \e[10;1H\e[?25l\e[33mPress any key to continue...\e[?25h
     """
   end
-  
+
   defp generate_large_ansi_content do
     Enum.map(1..100, fn i ->
       color = rem(i, 8) + 30
       "\e[#{color}mLine #{i} with color #{color}\e[0m\n"
-    end) |> Enum.join()
+    end)
+    |> Enum.join()
   end
-  
+
   defp generate_rapid_color_sequence do
     Enum.map(1..50, fn i ->
       "\e[#{rem(i, 8) + 30}m#{i}\e[0m"
-    end) |> Enum.join(" ")
+    end)
+    |> Enum.join(" ")
   end
-  
+
   defp simulate_terminal_app_output do
     """
     \e[?1049h\e[2J\e[H\e[?25l
@@ -475,34 +513,37 @@ defmodule PerformanceDashboard do
     \e[?25h
     """
   end
-  
+
   defp simulate_render(buffer) do
     # Simulate rendering by accessing buffer cells
     {width, height} = {buffer.width, buffer.height}
-    Enum.each(0..(height-1), fn y ->
-      Enum.each(0..(width-1), fn x ->
+
+    Enum.each(0..(height - 1), fn y ->
+      Enum.each(0..(width - 1), fn x ->
         # Simulate accessing cell at position
         _cell = Enum.at(Enum.at(buffer.cells, y, []), x)
       end)
     end)
   end
-  
+
   defp simulate_colored_render(buffer) do
     # Fill buffer with colored content then render
-    filled_buffer = Enum.reduce(0..23, buffer, fn y, acc_buffer ->
-      content = "\e[#{rem(y, 8) + 30}mColored line #{y}\e[0m"
-      Writer.write_string(acc_buffer, 0, y, content)
-    end)
+    filled_buffer =
+      Enum.reduce(0..23, buffer, fn y, acc_buffer ->
+        content = "\e[#{rem(y, 8) + 30}mColored line #{y}\e[0m"
+        Writer.write_string(acc_buffer, 0, y, content)
+      end)
+
     simulate_render(filled_buffer)
   end
-  
+
   defp simulate_unicode_render(buffer) do
     # Test with unicode characters
     unicode_content = "[RAXOL] Terminal → 中文 → العربية → [RENDER]"
     filled_buffer = Writer.write_string(buffer, 0, 0, unicode_content)
     simulate_render(filled_buffer)
   end
-  
+
   defp generate_targets_html do
     Enum.map(@targets, fn {operation, target} ->
       """
@@ -511,9 +552,10 @@ defmodule PerformanceDashboard do
           <span class="good">&lt;#{target}μs</span>
       </div>
       """
-    end) |> Enum.join()
+    end)
+    |> Enum.join()
   end
-  
+
   defp analyze_regressions(previous_data) do
     "Previous benchmark data loaded - regression analysis would compare with current results here."
   end
