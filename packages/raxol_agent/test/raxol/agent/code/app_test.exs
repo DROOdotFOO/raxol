@@ -1032,6 +1032,61 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
+  describe "cost estimation" do
+    setup do
+      saved =
+        Map.new(
+          ~w(RAXOL_COST_PER_MTOK_IN RAXOL_COST_PER_MTOK_OUT),
+          &{&1, System.get_env(&1)}
+        )
+
+      Enum.each(Map.keys(saved), &System.delete_env/1)
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {key, nil} -> System.delete_env(key)
+          {key, val} -> System.put_env(key, val)
+        end)
+      end)
+
+      :ok
+    end
+
+    test "/usage estimates cost from the price table without env rates" do
+      model = connected_model()
+
+      events = [
+        tev("t1", 1, :turn_started, %{prompt: "ask"}),
+        tev("t1", 2, :turn_completed, %{
+          final: true,
+          usage: %{input_tokens: 1_000_000, output_tokens: 100_000}
+        })
+      ]
+
+      model = Enum.reduce(events, model, &send_ev(&2, &1))
+      {model, []} = submit(model, "/usage")
+
+      # gpt-4o: 1M in at $2.50 + 100k out at $10/M = $3.50
+      assert model.notice =~ "est. cost: $3.5000"
+    end
+
+    test "/usage on an unknown model points at the env rates" do
+      model = new_model()
+
+      model =
+        send_ev(
+          model,
+          tev("t1", 1, :turn_completed, %{
+            final: true,
+            usage: %{input_tokens: 10, output_tokens: 10}
+          })
+        )
+
+      {model, []} = submit(model, "/usage")
+      assert model.notice =~ "RAXOL_COST_PER_MTOK"
+    end
+  end
+
   describe "/export /transcript /copy /find /logout" do
     defp answered_model(opts \\ []) do
       model = new_model(opts)

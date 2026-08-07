@@ -214,6 +214,12 @@ defmodule Raxol.Agent.Code.App do
       # forwarded to `FileStore.open/2` (tests set `:base_dir` here).
       journal: nil,
       journal_opts: Keyword.get(options, :journal_opts, []),
+      # LLM cost accounting into a shared Raxol.Payments.Ledger (wired by
+      # the host app; see Raxol.Agent.Code.CostLedger). Without a ledger,
+      # cost still shows in /usage via env rates or the price table.
+      ledger: Keyword.get(options, :ledger),
+      spending_policy: Keyword.get(options, :spending_policy),
+      ledger_agent_id: Keyword.get(options, :agent_id, "raxol-code"),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -595,10 +601,31 @@ defmodule Raxol.Agent.Code.App do
   # run, so `/login` itself is always reachable).
   defp submit_prompt(model, prompt) do
     if provider_ready?(model) do
-      start_turn(model, prompt)
+      # The budget gates the NEXT turn — cost is only known after a call
+      # has already been made, so enforcement means refusing to start
+      # another one once the shared ledger says the budget is spent.
+      case budget_exhausted(model) do
+        :ok ->
+          start_turn(model, prompt)
+
+        {:over, limit} ->
+          notice(
+            model,
+            "spending budget exhausted (#{limit}) — adjust the policy " <>
+              "to continue"
+          )
+      end
     else
       notice(model, provider_setup_hint(model))
     end
+  end
+
+  defp budget_exhausted(model) do
+    Raxol.Agent.Code.CostLedger.check(
+      model.ledger,
+      model.ledger_agent_id,
+      model.spending_policy
+    )
   end
 
   defp provider_ready?(%{provider_status: :ready}), do: true
@@ -787,8 +814,81 @@ defmodule Raxol.Agent.Code.App do
 
     model
     |> accumulate_answer(event)
+    |> record_turn_cost(event)
     |> finalize_turn(event)
   end
+
+  # Every turn_completed is one provider call; its cost (env rates or the
+  # price table) is recorded against the shared ledger as it happens, so
+  # LLM spend and payment spend draw on one budget. Fire-and-forget: a
+  # ledger problem never blocks the fold.
+  defp record_turn_cost(model, %{type: :turn_completed, payload: payload}) do
+    usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
+    cost = turn_cost_usd(model, usage)
+
+    Raxol.Agent.Code.CostLedger.record(
+      model.ledger,
+      model.ledger_agent_id,
+      cost,
+      %{
+        type: :llm_turn,
+        currency: "USD",
+        session: model.session_key,
+        model: current_model(model)
+      }
+    )
+
+    model
+  end
+
+  defp record_turn_cost(model, _event), do: model
+
+  defp turn_cost_usd(model, usage) do
+    case cost_profile(model) do
+      nil ->
+        0.0
+
+      profile ->
+        acc =
+          Raxol.Agent.BenchmarkProfile.add_usage(
+            %{input_tokens: 0, output_tokens: 0},
+            usage
+          )
+
+        Raxol.Agent.BenchmarkProfile.cost_usd(profile, acc)
+    end
+  end
+
+  # Env rates (RAXOL_COST_PER_MTOK_IN/OUT) win; else the static price
+  # table for the connected model. nil = no estimate possible.
+  defp cost_profile(model) do
+    case Raxol.Agent.BenchmarkProfile.from_env() do
+      {:ok, %{cost_per_mtok_in: rin, cost_per_mtok_out: rout} = profile}
+      when is_number(rin) and is_number(rout) ->
+        profile
+
+      _ ->
+        table_profile(model)
+    end
+  end
+
+  defp table_profile(model) do
+    backend = model.executor && model.executor.backend
+
+    case Raxol.Agent.LlmPrices.rates(backend, current_model(model)) do
+      {:ok, {rin, rout}} ->
+        %Raxol.Agent.BenchmarkProfile{
+          cost_per_mtok_in: rin,
+          cost_per_mtok_out: rout
+        }
+
+      :unknown ->
+        nil
+    end
+  end
+
+  defp current_model(model),
+    do: model.model_override || (model.executor && model.executor.model)
 
   # -- durable journal --------------------------------------------------------
 
@@ -2144,8 +2244,9 @@ defmodule Raxol.Agent.Code.App do
 
   # Session token totals folded from the turn_completed events the model
   # already holds (the same events the transcript rebuilds from), so /usage
-  # works on a resumed session too. Cost appears only when per-mtok rates
-  # are configured (RAXOL_COST_PER_MTOK_IN/OUT).
+  # works on a resumed session too. Cost estimates from env rates or the
+  # static price table; a wired Payments ledger adds the shared-budget
+  # totals (LLM + payment spend together).
   defp usage_text(model) do
     {turns, usage} = fold_usage(model.events)
 
@@ -2153,13 +2254,26 @@ defmodule Raxol.Agent.Code.App do
       "turns: #{turns} · input tokens: #{usage.input_tokens} · " <>
         "output tokens: #{usage.output_tokens}"
 
-    case session_cost(usage) do
-      nil ->
-        base <> " · cost: set RAXOL_COST_PER_MTOK_IN/OUT to estimate"
+    cost_part =
+      case session_cost(model, usage) do
+        nil ->
+          " · cost: unknown model — set RAXOL_COST_PER_MTOK_IN/OUT"
 
-      cost ->
-        base <> " · est. cost: $#{:erlang.float_to_binary(cost, decimals: 4)}"
-    end
+        cost ->
+          " · est. cost: $#{:erlang.float_to_binary(cost, decimals: 4)}"
+      end
+
+    ledger_part =
+      case Raxol.Agent.Code.CostLedger.totals_text(
+             model.ledger,
+             model.ledger_agent_id,
+             model.spending_policy
+           ) do
+        nil -> ""
+        text -> " · " <> text
+      end
+
+    base <> cost_part <> ledger_part
   end
 
   defp fold_usage(events) do
@@ -2173,14 +2287,10 @@ defmodule Raxol.Agent.Code.App do
     end)
   end
 
-  defp session_cost(usage) do
-    case Raxol.Agent.BenchmarkProfile.from_env() do
-      {:ok, %{cost_per_mtok_in: rin, cost_per_mtok_out: rout} = profile}
-      when is_number(rin) and is_number(rout) ->
-        Raxol.Agent.BenchmarkProfile.cost_usd(profile, usage)
-
-      _ ->
-        nil
+  defp session_cost(model, usage) do
+    case cost_profile(model) do
+      nil -> nil
+      profile -> Raxol.Agent.BenchmarkProfile.cost_usd(profile, usage)
     end
   end
 
