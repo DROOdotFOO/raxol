@@ -1,0 +1,36 @@
+#!/bin/sh
+# raxol-acp — serve the coding agent over the Agent Client Protocol on stdio,
+# for ACP-speaking editors (Zed and its ecosystem). Point the editor's
+# agent_servers command at this shim.
+#
+#   raxol-acp
+#   raxol-acp --backend anthropic --model claude-sonnet-5
+#
+# mix raxol.acp lives in the raxol_agent package. This shim runs it from the
+# package while keeping the CALLER's cwd as the agent's workspace (fs tools
+# scope to it via RAXOL_CLI_CWD) — the editor should spawn this with its
+# project directory as cwd.
+#
+# Why a shim: `mix raxol.acp` compiles the project on first run and Mix prints
+# "Compiling N files" to STDOUT, which would corrupt the NDJSON wire before
+# the task starts. This compiles quietly first, THEN execs the task, so stdout
+# carries only protocol frames.
+# Requires deps compiled once: (cd packages/raxol_agent && mix deps.get)
+
+set -e
+
+# shellcheck disable=SC1007  # CDPATH= is an intentional env prefix for a safe cd
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(dirname -- "$SCRIPT_DIR")
+CALLER_CWD=$(pwd)
+
+cd "$REPO_ROOT/packages/raxol_agent"
+
+# Compile quietly (to stderr) so no build chatter reaches the stdout wire.
+# MAKEFLAGS=-s silences the termbox2 NIF make check.
+MAKEFLAGS=-s mix compile >&2 || {
+  echo "raxol-acp: compile failed; run (cd packages/raxol_agent && mix compile) for details" >&2
+  exit 70
+}
+
+exec env MAKEFLAGS=-s RAXOL_CLI_CWD="$CALLER_CWD" mix raxol.acp "$@"

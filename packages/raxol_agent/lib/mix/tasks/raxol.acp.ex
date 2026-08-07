@@ -17,22 +17,34 @@ defmodule Mix.Tasks.Raxol.Acp do
 
   ## Editor wiring (Zed)
 
+  Point the editor at the `bin/raxol-acp` shim, not `mix` directly: `mix`
+  prints compile output to stdout on first run, which would corrupt the
+  NDJSON wire. The shim compiles quietly first, then serves. Set the
+  editor's `cwd` to your project so the file tools scope there.
+
       // settings.json
       "agent_servers": {
         "Raxol": {
-          "command": "mix",
-          "args": ["raxol.acp"],
-          "cwd": "/path/to/raxol/packages/raxol_agent"
+          "command": "/path/to/raxol/bin/raxol-acp",
+          "args": [],
+          "cwd": "/path/to/your/project"
         }
       }
 
+  The session's file tools scope to that process working directory
+  (`RAXOL_CLI_CWD`, which the shim sets to its own cwd). ACP's per-session
+  `cwd` field is not yet honored as a distinct root; run one server per
+  project.
+
   ## Availability
 
-  The ACP protocol package (`raxol_agent_client_protocol`) is a dev/test
-  path dependency of raxol_agent: this task works from a repo checkout.
-  A Hex install of raxol_agent must add `:raxol_agent_client_protocol` to
-  its own deps to use it; without the package the task exits 1 with this
-  explanation.
+  This is a repo-checkout feature. The ACP protocol package
+  (`raxol_agent_client_protocol`) is a dev/test path dependency, so
+  `Raxol.Agent.ClientProtocol.StdioAgent` compiles only when raxol_agent is
+  built from source with that package present. A Hex install of raxol_agent
+  is compiled without it, so the module is absent and this task exits 1 with
+  an explanation — adding the dep downstream does not retroactively enable
+  it. Build raxol_agent from the repo to use ACP.
 
   ## Options
 
@@ -110,9 +122,11 @@ defmodule Mix.Tasks.Raxol.Acp do
         {:error, message} -> config_error(message)
       end
 
-    # stdout is the wire: NDJSON only. Logs to stderr, no terminal driver,
-    # no web endpoint — the same boot moves as `mix mcp.server`.
-    :logger.update_handler_config(:default, :config, %{type: :standard_error})
+    # stdout is the wire: NDJSON only, so every log line goes to stderr.
+    # `update_handler_config(:config, ...)` is rejected by logger_std_h as an
+    # illegal runtime type change, so remove the default handler and re-add it
+    # bound to standard_error. No terminal driver, no web endpoint.
+    reroute_logs_to_stderr()
     Application.put_env(:raxol, :skip_endpoint, true)
     Application.put_env(:raxol, :startup_mode, :mcp)
     System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
@@ -139,6 +153,12 @@ defmodule Mix.Tasks.Raxol.Acp do
         "You are a coding assistant driven by an editor over ACP. Use the " <>
           "available read-only tools to inspect files. Be concise."
     ]
+  end
+
+  defp reroute_logs_to_stderr do
+    _ = :logger.remove_handler(:default)
+    _ = :logger.add_handler(:default, :logger_std_h, %{config: %{type: :standard_error}})
+    :ok
   end
 
   defp usage_error(message) do
