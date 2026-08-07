@@ -90,7 +90,7 @@ defmodule Mix.Tasks.Raxol.Bench.MemoryAnalysis do
   defp output_formatter(path) do
     case Path.extname(path) do
       ".json" -> {Benchee.Formatters.JSON, file: path}
-      _ -> {Benchee.Formatters.HTML, file: path}
+      _ -> {Benchee.Formatters.HTML, file: path, auto_open: false}
     end
   end
 

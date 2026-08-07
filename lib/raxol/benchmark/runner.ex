@@ -17,7 +17,8 @@ defmodule Raxol.Benchmark.Runner do
     parallel: 1,
     formatters: [
       Benchee.Formatters.Console,
-      {Benchee.Formatters.HTML, file: "bench/output/report.html"}
+      {Benchee.Formatters.HTML,
+       file: "bench/output/report.html", auto_open: false}
     ],
     save: [path: "bench/snapshots/", tag: "latest"],
     load: "bench/snapshots/*.benchee"

@@ -509,7 +509,7 @@ defmodule Raxol.Benchmark.Config do
       Benchee.Formatters.Console,
       {Benchee.Formatters.JSON, file: paths.json},
       {Benchee.Formatters.HTML,
-       file: paths.html, title: "Raxol Performance Report"}
+       file: paths.html, title: "Raxol Performance Report", auto_open: false}
     ]
   end
 

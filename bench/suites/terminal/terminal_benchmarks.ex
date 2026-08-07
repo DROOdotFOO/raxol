@@ -58,7 +58,8 @@ defmodule Raxol.Benchmark.Suites.TerminalBenchmarks do
       },
       formatters: [
         {Benchee.Formatters.Console, extended_statistics: true},
-        {Benchee.Formatters.HTML, file: "bench/output/terminal_benchmarks.html"}
+        {Benchee.Formatters.HTML,
+         file: "bench/output/terminal_benchmarks.html", auto_open: false}
       ]
     ]
   end

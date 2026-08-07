@@ -20,7 +20,7 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
       warmup: Keyword.get(opts, :warmup, 2),
       memory_time: Keyword.get(opts, :memory_time, 1),
       formatters: [
-        Benchee.Formatters.HTML,
+        {Benchee.Formatters.HTML, auto_open: false},
         Benchee.Formatters.Console
       ]
     }
@@ -30,7 +30,9 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
         # Rendering benchmarks
         "Protocol: Render String" => fn data -> render_protocol_string(data) end,
         "Protocol: Render Map" => fn data -> render_protocol_map(data) end,
-        "Protocol: Render ScreenBuffer" => fn data -> render_protocol_buffer(data) end,
+        "Protocol: Render ScreenBuffer" => fn data ->
+          render_protocol_buffer(data)
+        end,
         "Protocol: Render Theme" => fn data -> render_protocol_theme(data) end,
 
         # Styling benchmarks
@@ -44,18 +46,25 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
         "Protocol: Subscribe" => fn data -> event_protocol_subscribe(data) end,
 
         # Serialization benchmarks
-        "Protocol: Serialize JSON" => fn data -> serialize_protocol_json(data) end,
-        "Protocol: Serialize Binary" => fn data -> serialize_protocol_binary(data) end,
+        "Protocol: Serialize JSON" => fn data ->
+          serialize_protocol_json(data)
+        end,
+        "Protocol: Serialize Binary" => fn data ->
+          serialize_protocol_binary(data)
+        end,
 
         # Traditional behaviour equivalents for comparison
-        "Behaviour: Render Buffer" => fn data -> render_behaviour_buffer(data) end,
+        "Behaviour: Render Buffer" => fn data ->
+          render_behaviour_buffer(data)
+        end,
         "Behaviour: Apply Theme" => fn data -> style_behaviour_theme(data) end
       },
-      before_scenario: fn _input ->
-        setup_benchmark_data()
-      end,
-      inputs: generate_benchmark_inputs(),
-      **config
+      [
+        before_scenario: fn _input ->
+          setup_benchmark_data()
+        end,
+        inputs: generate_benchmark_inputs()
+      ] ++ Map.to_list(config)
     )
   end
 
@@ -66,18 +75,19 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
     buffer = ScreenBuffer.new(80, 24)
     renderer = Renderer.new(buffer)
 
-    theme = Theme.new(%{
-      name: "Benchmark Theme",
-      colors: %{
-        primary: "#FF0000",
-        secondary: "#00FF00",
-        background: "#000000"
-      },
-      component_styles: %{
-        button: %{background: :blue, foreground: :white},
-        text: %{foreground: :black}
-      }
-    })
+    theme =
+      Theme.new(%{
+        name: "Benchmark Theme",
+        colors: %{
+          primary: "#FF0000",
+          secondary: "#00FF00",
+          background: "#000000"
+        },
+        component_styles: %{
+          button: %{background: :blue, foreground: :white},
+          text: %{foreground: :black}
+        }
+      })
 
     component = %{
       type: :test_component,
@@ -209,29 +219,31 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
     iterations = Keyword.get(opts, :iterations, 1000)
 
     # Protocol memory usage
-    protocol_memory = measure_memory_usage(fn ->
-      data = setup_benchmark_data()
+    protocol_memory =
+      measure_memory_usage(fn ->
+        data = setup_benchmark_data()
 
-      Enum.each(1..iterations, fn _i ->
-        Renderable.render(data.string_data)
-        Styleable.apply_style(data.map_data, data.style_data)
-        EventHandler.handle_event(data.component, data.event, %{})
-        Serializable.serialize(data.theme, :json)
+        Enum.each(1..iterations, fn _i ->
+          Renderable.render(data.string_data)
+          Styleable.apply_style(data.map_data, data.style_data)
+          EventHandler.handle_event(data.component, data.event, %{})
+          Serializable.serialize(data.theme, :json)
+        end)
       end)
-    end)
 
     # Behaviour memory usage
-    behaviour_memory = measure_memory_usage(fn ->
-      data = setup_benchmark_data()
+    behaviour_memory =
+      measure_memory_usage(fn ->
+        data = setup_benchmark_data()
 
-      Enum.each(1..iterations, fn _i ->
-        Renderer.render(data.renderer)
-        Theme.get_color(data.theme, :primary)
-        # Traditional event handling would be function calls
-        data.component.event_handlers.click.(data.component, data.event, %{})
-        Jason.encode!(data.theme)
+        Enum.each(1..iterations, fn _i ->
+          Renderer.render(data.renderer)
+          Theme.get_color(data.theme, :primary)
+          # Traditional event handling would be function calls
+          data.component.event_handlers.click.(data.component, data.event, %{})
+          Jason.encode!(data.theme)
+        end)
       end)
-    end)
 
     %{
       protocol_memory: protocol_memory,
@@ -257,20 +269,23 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
     end)
 
     # Measure protocol dispatch latency
-    protocol_times = Enum.map(1..test_iterations, fn _i ->
-      start_time = System.monotonic_time(:nanosecond)
-      Renderable.render(data.string_data)
-      end_time = System.monotonic_time(:nanosecond)
-      end_time - start_time
-    end)
+    protocol_times =
+      Enum.map(1..test_iterations, fn _i ->
+        start_time = System.monotonic_time(:nanosecond)
+        Renderable.render(data.string_data)
+        end_time = System.monotonic_time(:nanosecond)
+        end_time - start_time
+      end)
 
     # Measure function call latency for comparison
-    function_times = Enum.map(1..test_iterations, fn _i ->
-      start_time = System.monotonic_time(:nanosecond)
-      to_string(data.string_data)  # Direct function call
-      end_time = System.monotonic_time(:nanosecond)
-      end_time - start_time
-    end)
+    function_times =
+      Enum.map(1..test_iterations, fn _i ->
+        start_time = System.monotonic_time(:nanosecond)
+        # Direct function call
+        to_string(data.string_data)
+        end_time = System.monotonic_time(:nanosecond)
+        end_time - start_time
+      end)
 
     %{
       protocol_latency: calculate_stats(protocol_times),
@@ -285,18 +300,20 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
   def scalability_benchmark do
     sizes = [10, 50, 100, 500, 1000, 5000, 10000]
 
-    results = Enum.map(sizes, fn size ->
-      items = generate_items(size)
+    results =
+      Enum.map(sizes, fn size ->
+        items = generate_items(size)
 
-      time = measure_time(fn ->
-        Enum.each(items, fn item ->
-          Renderable.render(item)
-          Styleable.apply_style(item, %{bold: true})
-        end)
+        time =
+          measure_time(fn ->
+            Enum.each(items, fn item ->
+              Renderable.render(item)
+              Styleable.apply_style(item, %{bold: true})
+            end)
+          end)
+
+        {size, time}
       end)
-
-      {size, time}
-    end)
 
     %{
       results: results,
@@ -352,7 +369,9 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
   defp calculate_scaling_factor(results) do
     # Calculate if scaling is linear, logarithmic, etc.
     case length(results) do
-      n when n < 2 -> :insufficient_data
+      n when n < 2 ->
+        :insufficient_data
+
       _ ->
         {sizes, times} = Enum.unzip(results)
         correlation = calculate_correlation(sizes, times)
@@ -371,13 +390,17 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
     mean_x = Enum.sum(xs) / n
     mean_y = Enum.sum(ys) / n
 
-    numerator = xs
-    |> Enum.zip(ys)
-    |> Enum.map(fn {x, y} -> (x - mean_x) * (y - mean_y) end)
-    |> Enum.sum()
+    numerator =
+      xs
+      |> Enum.zip(ys)
+      |> Enum.map(fn {x, y} -> (x - mean_x) * (y - mean_y) end)
+      |> Enum.sum()
 
-    sum_sq_x = xs |> Enum.map(fn x -> (x - mean_x) * (x - mean_x) end) |> Enum.sum()
-    sum_sq_y = ys |> Enum.map(fn y -> (y - mean_y) * (y - mean_y) end) |> Enum.sum()
+    sum_sq_x =
+      xs |> Enum.map(fn x -> (x - mean_x) * (x - mean_x) end) |> Enum.sum()
+
+    sum_sq_y =
+      ys |> Enum.map(fn y -> (y - mean_y) * (y - mean_y) end) |> Enum.sum()
 
     denominator = :math.sqrt(sum_sq_x * sum_sq_y)
 
@@ -406,7 +429,8 @@ defmodule Raxol.Bench.ProtocolPerformanceBenchmark do
       memory_benchmark: memory_results,
       latency_benchmark: latency_results,
       scalability_benchmark: scaling_results,
-      summary: generate_summary(memory_results, latency_results, scaling_results)
+      summary:
+        generate_summary(memory_results, latency_results, scaling_results)
     }
 
     case Jason.encode(report, pretty: true) do

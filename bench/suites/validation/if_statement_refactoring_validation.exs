@@ -199,7 +199,7 @@ Benchee.run(
   formatters: [
     Benchee.Formatters.Console,
     {Benchee.Formatters.HTML,
-     file: "bench/output/if_refactoring_validation.html"},
+     file: "bench/output/if_refactoring_validation.html", auto_open: false},
     {Benchee.Formatters.JSON,
      file: "bench/output/if_refactoring_validation.json"}
   ],

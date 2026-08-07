@@ -39,7 +39,8 @@ defmodule ANSIParserBenchmark do
       memory_time: 2,
       formatters: [
         Benchee.Formatters.Console,
-        {Benchee.Formatters.HTML, file: "bench/output/ansi_parser.html"}
+        {Benchee.Formatters.HTML,
+         file: "bench/output/ansi_parser.html", auto_open: false}
       ]
     )
   end
