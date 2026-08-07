@@ -75,8 +75,7 @@ defmodule Raxol.Agent.Backend.Cli do
 
   defp no_key_message(harness) do
     "no credential resolved for #{harness}; run " <>
-      "`mix raxol.setup --provider #{harness}`, set its API key env var, " <>
-      "or pass --api-key"
+      "`mix raxol.setup --provider #{harness}` or set its API key env var"
   end
 
   # `--backend` is canonical; `--harness` is the deprecated alias (backend wins).

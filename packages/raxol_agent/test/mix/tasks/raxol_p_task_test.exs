@@ -98,4 +98,15 @@ defmodule Mix.Tasks.Raxol.PTaskTest do
     assert stderr =~ "mix raxol.setup"
     assert stderr =~ "--backend lm_studio"
   end
+
+  test "an unknown backend NAME is a usage error: exit 64, like raxol.code" do
+    stderr =
+      capture_io(:stderr, fn ->
+        assert catch_exit(Mix.Tasks.Raxol.P.run(["--backend", "bogus", "hi"])) ==
+                 {:shutdown, 64}
+      end)
+
+    assert stderr =~ ~s(unknown backend "bogus")
+    assert stderr =~ "Usage: raxol p"
+  end
 end

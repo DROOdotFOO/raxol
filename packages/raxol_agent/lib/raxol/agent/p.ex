@@ -105,6 +105,30 @@ defmodule Raxol.Agent.P do
   defp config_error!(message), do: throw({:raxol_p_config, message})
 
   defp run_prompt(prompt, opts) do
+    # Claim SIGTERM before anything else -- provider resolution below may
+    # shell out to `op`, and until the trap is installed the BEAM default
+    # turns a harness kill into a clean exit 0, which reads as success.
+    # A failed install degrades to the BEAM default -- say so rather than
+    # silently losing the signal contract.
+    case SignalTrap.install(self()) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        IO.puts(
+          :stderr,
+          ~s({"type":"error","payload":{"reason":"signal_trap_unavailable","detail":#{inspect(inspect(reason))}}})
+        )
+    end
+
+    # A bad flag NAME is a usage error (64), decided before any resolution.
+    # stderr is reserved for the JSONL event stream once the run starts, so
+    # pass prog: nil to suppress the plain-text deprecation notice.
+    case Raxol.Agent.Backend.Cli.flag(opts, nil) do
+      {:ok, _backend} -> :ok
+      {:error, message} -> usage_error!(message)
+    end
+
     # Resolve the profile and the provider before booting anything: a
     # machine with no provider configured gets an actionable error and
     # exit 1, not a connection refusal against a placeholder endpoint
@@ -129,8 +153,6 @@ defmodule Raxol.Agent.P do
       )
     end
 
-    # stderr is reserved for the JSONL event stream, so pass prog: nil to
-    # suppress the plain-text deprecation notice that would corrupt it.
     executor =
       case Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
         {:ok, executor, _source} -> executor
@@ -144,21 +166,6 @@ defmodule Raxol.Agent.P do
     System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
     Logger.configure(level: :error)
     {:ok, _} = Application.ensure_all_started(:raxol_agent)
-
-    # Claim SIGTERM unconditionally: the BEAM default turns it into a clean
-    # exit 0, which a harness reads as success. We flush and exit 143. A
-    # failed install degrades to the BEAM default -- say so rather than
-    # silently losing the signal contract.
-    case SignalTrap.install(self()) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        IO.puts(
-          :stderr,
-          ~s({"type":"error","payload":{"reason":"signal_trap_unavailable","detail":#{inspect(inspect(reason))}}})
-        )
-    end
 
     ensure_streamer!()
 
