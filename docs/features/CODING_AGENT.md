@@ -239,10 +239,11 @@ Two optional per-project files, both read from `<cwd>/`:
 `harness_start_session`, `harness_send_prompt`, `harness_read_transcript`,
 and `harness_list_sessions`. They share the TUI's session store, so a
 session driven by an MCP client resumes in the TUI with `--resume` and vice
-versa. Turns are read-only unless the caller passes `write: true` (an
-explicit opt-in that runs mutating tools under an allow-all policy; there is
-no human to answer approvals on this surface). Run `mix mcp.server` from
-`packages/raxol_agent` to serve them.
+versa. Turns are read-only on the workspace (read/grep/glob; no
+`write_file`, `edit_file`, or `bash` on this surface): there is no human
+here to answer an approval prompt, so write capability waits on the MCP
+authorizer wiring rather than shipping behind an allow-all flag. Run
+`mix mcp.server` from `packages/raxol_agent` to serve them.
 
 ## See also
 

@@ -18,11 +18,13 @@ support commitment yet.
 
 ## Scope worth knowing about
 
-- The coding agent (`mix raxol.code` / `mix raxol.p`) gates every mutating
-  tool call through an ALLOW/ASK/DENY authorization engine, scopes file and
-  shell tools to the working directory, and never persists raw API keys
-  (1Password references only). Findings that bypass any of those properties
-  are in scope and high priority.
+- The coding agent's interactive surface (`mix raxol.code`) gates every
+  mutating tool call through an ALLOW/ASK/DENY authorization engine; its
+  headless twin (`mix raxol.p`) denies mutating tools by default and only
+  exposes them behind the explicit `--write` opt-in. File tools scope to
+  the working directory, and raw API keys are never persisted (1Password
+  references only). Findings that bypass any of those properties are in
+  scope and high priority.
 - `packages/raxol_payments` and `packages/raxol_earn` move funds on
   mainnets. Anything touching signing, spend limits, or settlement is in
   scope and highest priority.

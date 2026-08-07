@@ -49,7 +49,7 @@ session
 bin/raxol-code                              # the TUI, your cwd as the workspace
 ```
 
-No API key configured? The TUI opens on a provider wizard instead of failing. `mix raxol.inspect` shows every config source the agent will use in the current directory.
+No API key configured? The TUI opens on a provider wizard instead of failing. `/inspect` (or `mix raxol.inspect` from `packages/raxol_agent`) shows every config source the agent will use in the current directory.
 
 Both surfaces sit on the **Harness**, the agent-session engine (`Raxol.Harness.*`): a durable event journal, a typed event/command contract, and pure replay-from-offset surfaces, with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
 
