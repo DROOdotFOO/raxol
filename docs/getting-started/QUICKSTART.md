@@ -38,8 +38,11 @@ MIX_ENV=test mix raxol.rate  # RATE: render-determinism golden suite
 ```
 
 `SKIP_TERMBOX2_TESTS=true` excludes the tests that need a real local terminal;
-CI sets the same variable. If `HOME` is read-only in your sandbox, point
-`MIX_HOME` and `HEX_HOME` at a writable directory first.
+CI sets the same variable. Plain `mix test` without the exclude flags also
+runs integration suites that need external services (PostgreSQL for the
+workflow checkpoint tests), so stick to the command above. If `HOME` is
+read-only in your sandbox, point `MIX_HOME` and `HEX_HOME` at a writable
+directory first.
 
 ## Your first app
 

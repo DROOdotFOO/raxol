@@ -167,9 +167,12 @@ mix raxol.demo               # built-in demos (needs a terminal)
 ```
 
 `SKIP_TERMBOX2_TESTS=true` excludes the tests that need a real local terminal
-(pty lifecycle, timing-sensitive suites); CI sets the same variable. In
-sandboxes where `HOME` is read-only, point `MIX_HOME` and `HEX_HOME` at a
-writable directory before running mix.
+(pty lifecycle, timing-sensitive suites); CI sets the same variable. Plain
+`mix test` without the exclude flags also runs integration suites that need
+external services (the workflow checkpoint tests want PostgreSQL via
+`RAXOL_WORKFLOW_PG_URL`), so stick to the command above unless you have
+them. In sandboxes where `HOME` is read-only, point `MIX_HOME` and
+`HEX_HOME` at a writable directory before running mix.
 
 ## Origin
 
