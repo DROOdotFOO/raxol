@@ -859,6 +859,64 @@ defmodule Raxol.Agent.Code.AppTest do
       assert Enum.map(records, & &1["id"]) == [1, 2, 3, 4]
     end
 
+    test "a fork's journal backfills inherited history, so --replay keeps it" do
+      base = tmp_dir()
+      model = new_model(journal_opts: [base_dir: base])
+
+      model =
+        Enum.reduce(
+          message_turn("t1", "inherited answer") ++
+            message_turn("t2", "rewound answer"),
+          model,
+          &send_ev(&2, &1)
+        )
+
+      {forked, []} = submit(model, "/fork")
+      # /rewind on the fresh fork: without backfill the fork's journal
+      # would hold ONLY the rewind marker and replay nothing.
+      {forked, []} = submit(forked, "/rewind")
+
+      {:ok, text} =
+        Raxol.Agent.Code.Replay.run(forked.session_key, base_dir: base)
+
+      assert text =~ "inherited answer"
+      refute text =~ "rewound answer"
+      refute text =~ "no replayable events"
+    end
+
+    test "a pre-journal session backfills on its first new turn" do
+      base = tmp_dir()
+      dir = tmp_dir()
+
+      # A session persisted by the pre-journal TUI: store only.
+      old = new_model(sessions_dir: dir)
+
+      old =
+        Enum.reduce(message_turn("t1", "old history"), old, &send_ev(&2, &1))
+
+      close_journal!(old)
+      key = old.session_key
+
+      # Resume it with a journal base that has nothing for this session.
+      resumed =
+        new_model(
+          sessions_dir: dir,
+          session_key: key,
+          journal_opts: [base_dir: base]
+        )
+
+      resumed =
+        Enum.reduce(
+          message_turn("t2", "new turn"),
+          resumed,
+          &send_ev(&2, &1)
+        )
+
+      {:ok, text} = Raxol.Agent.Code.Replay.run(key, base_dir: base)
+      assert text =~ "old history"
+      assert text =~ "new turn"
+    end
+
     test "a failing journal degrades to a status warning, never blocks the fold" do
       base = tmp_dir()
       # The base dir path is occupied by a regular file, so the session

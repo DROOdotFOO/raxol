@@ -924,10 +924,32 @@ defmodule Raxol.Agent.Code.App do
   defp ensure_journal(model) do
     opts = Keyword.merge([cwd: model.cwd], model.journal_opts)
 
+    empty_before? =
+      FileStore.high_watermark(model.session_key, model.journal_opts) == 0
+
     case FileStore.open(model.session_key, opts) do
-      {:ok, journal} -> {:ok, %{model | journal: journal}}
-      {:error, _} = error -> error
+      {:ok, journal} ->
+        model = %{model | journal: journal}
+        if empty_before?, do: backfill_journal(model)
+        {:ok, model}
+
+      {:error, _} = error ->
+        error
     end
+  end
+
+  # A fork and a session recorded before journaling hold their history
+  # only in the JSON store, but --replay reads the journal first and a
+  # NON-empty journal never falls back — so an empty journal is seeded
+  # with the model's durable history before anything else lands in it.
+  # One-time cost proportional to the inherited history; best-effort
+  # (the regular append path surfaces journal trouble loudly).
+  defp backfill_journal(model) do
+    model.events
+    |> durable_events()
+    |> Enum.each(fn normalized ->
+      FileStore.append(model.journal, journal_record(model, normalized))
+    end)
   end
 
   # The Writer stamps `id` (the journal offset) and stringifies keys; the
