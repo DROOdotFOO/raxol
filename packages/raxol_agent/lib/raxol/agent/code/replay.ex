@@ -130,6 +130,21 @@ defmodule Raxol.Agent.Code.Replay do
   defp bound(events, to_offset) when is_integer(to_offset),
     do: Enum.filter(events, &(&1.id <= to_offset))
 
+  @doc """
+  Render already-decoded projection events as the plain-text transcript
+  body (no header) — shared by `run/2`, the TUI's `/export`, and
+  `/transcript`.
+  """
+  @spec transcript_text([map()]) :: String.t()
+  def transcript_text(events) do
+    projection = Projection.project(events)
+
+    case transcript(events, projection) do
+      [] -> "(no replayable events)"
+      lines -> lines |> Enum.join("\n") |> String.trim_leading()
+    end
+  end
+
   # -- rendering --------------------------------------------------------------
 
   defp render(session_id, source, events, projection) do

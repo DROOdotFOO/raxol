@@ -203,6 +203,12 @@ defmodule Raxol.Agent.Code.App do
       # Injectable so the save-to-1Password flow is testable without mutating a
       # real vault; the default shells out to `op item create`.
       op_saver: Keyword.get(options, :op_saver, &__MODULE__.default_op_saver/2),
+      # `/copy` and `/logout <provider>` reach system state (clipboard,
+      # the stored-credentials file); injectable so tests stay hermetic.
+      clipboard:
+        Keyword.get(options, :clipboard, &Raxol.System.Clipboard.copy/1),
+      credential_remover:
+        Keyword.get(options, :credential_remover, &Raxol.Agent.Setup.remove/1),
       # The durable journal handle, opened lazily on the first durable
       # event so idle sessions never spawn a Writer. `:journal_opts` is
       # forwarded to `FileStore.open/2` (tests set `:base_dir` here).
@@ -1210,6 +1216,20 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("fork", arg, model),
     do: {fork_session(model, String.trim(arg)), []}
 
+  defp apply_command("export", arg, model),
+    do: {export_session(model, String.trim(arg)), []}
+
+  defp apply_command("transcript", _arg, model),
+    do: {write_transcript(model), []}
+
+  defp apply_command("copy", _arg, model), do: {copy_last_answer(model), []}
+
+  defp apply_command("find", arg, model),
+    do: {find_in_transcript(model, String.trim(arg)), []}
+
+  defp apply_command("logout", arg, model),
+    do: {logout(model, String.trim(arg)), []}
+
   defp apply_command("sessions", _arg, model),
     do: {notice(model, sessions_text(model)), []}
 
@@ -1868,6 +1888,140 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # -- /export /transcript /copy /find /logout --------------------------------
+
+  # `/export [path]` writes the transcript as plain text; the default
+  # lands beside the work as `<session_key>.txt` in the cwd.
+  defp export_session(model, path_arg) do
+    path =
+      case path_arg do
+        "" -> Path.join(model.cwd, "#{model.session_key}.txt")
+        given -> Path.expand(given, model.cwd)
+      end
+
+    write_transcript_file(model, path, "exported to #{path}")
+  end
+
+  # `/transcript` writes to a temp file and points a pager at it. The TUI
+  # cannot suspend the terminal to host `$PAGER` itself (the driver owns
+  # the tty), so the hint is the honest version.
+  defp write_transcript(model) do
+    path =
+      Path.join(System.tmp_dir!(), "#{model.session_key}-transcript.txt")
+
+    write_transcript_file(
+      model,
+      path,
+      "transcript written — view with: ${PAGER:-less} #{path}"
+    )
+  end
+
+  defp write_transcript_file(model, path, success_note) do
+    text = Raxol.Agent.Code.Replay.transcript_text(model.events)
+
+    case File.write(path, text <> "\n") do
+      :ok -> notice(model, success_note)
+      {:error, reason} -> notice(model, "write failed: #{inspect(reason)}")
+    end
+  end
+
+  defp copy_last_answer(model) do
+    case model.messages
+         |> Enum.reverse()
+         |> Enum.find(&(&1.role == :assistant)) do
+      nil ->
+        notice(model, "no assistant reply to copy yet")
+
+      %{content: content} ->
+        case model.clipboard.(content) do
+          :ok ->
+            notice(model, "copied last reply (#{byte_size(content)} bytes)")
+
+          {:error, reason} ->
+            notice(model, "copy failed: #{inspect(reason)}")
+        end
+    end
+  end
+
+  @find_match_cap 8
+
+  defp find_in_transcript(model, ""), do: notice(model, "usage: /find <text>")
+
+  defp find_in_transcript(model, needle) do
+    down_needle = String.downcase(needle)
+
+    matches =
+      Projection.project(model.events).blocks
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {block, _index} ->
+        block
+        |> Block.search_text()
+        |> String.downcase()
+        |> String.contains?(down_needle)
+      end)
+
+    case matches do
+      [] ->
+        notice(model, "no matches for \"#{needle}\"")
+
+      matches ->
+        lines =
+          matches
+          |> Enum.take(@find_match_cap)
+          |> Enum.map(fn {block, index} ->
+            "#{index}. [#{block.kind}] " <>
+              excerpt(Block.search_text(block), down_needle)
+          end)
+
+        header = "#{length(matches)} match(es) for \"#{needle}\":"
+        notice(model, Enum.join([header | lines], "\n"))
+    end
+  end
+
+  # A one-line window around the first hit, newlines flattened.
+  defp excerpt(text, down_needle) do
+    flat = text |> String.replace(~r/\s+/, " ") |> String.trim()
+
+    start =
+      case :binary.match(String.downcase(flat), down_needle) do
+        {at, _len} -> max(at - 20, 0)
+        :nomatch -> 0
+      end
+
+    prefix = if start > 0, do: "…", else: ""
+    prefix <> String.slice(flat, start, 70)
+  end
+
+  # `/logout` disconnects the session's provider (the setup panel
+  # reopens); `/logout <provider>` additionally deletes that provider's
+  # stored credential reference.
+  defp logout(%{executor: nil} = model, ""),
+    do: notice(model, "no provider connected")
+
+  defp logout(model, "") do
+    %{model | executor: nil, provider_status: :no_provider}
+    |> open_browse()
+    |> notice("logged out — /login reconnects")
+  end
+
+  defp logout(model, provider) do
+    case model.credential_remover.(provider) do
+      {:ok, harness} ->
+        model
+        |> disconnect_if_current(harness)
+        |> notice("removed stored credential for #{harness}")
+
+      {:error, reason} ->
+        notice(model, "logout failed: #{inspect(reason)}")
+    end
+  end
+
+  defp disconnect_if_current(%{executor: %{backend: harness}} = model, harness) do
+    %{model | executor: nil, provider_status: :no_provider} |> open_browse()
+  end
+
+  defp disconnect_if_current(model, _harness), do: model
+
   # `/model` with no arg on a connected provider fetches its model list and
   # opens a selectable picker; otherwise it just shows the current model.
   defp set_model(%{executor: %{}} = model, "") do
@@ -2099,6 +2253,11 @@ defmodule Raxol.Agent.Code.App do
     /resume [id]       switch session (no id = pick from a list)
     /fork [title]      branch a copy of this session and continue there
     /rename <title>    title this session (shown in /sessions)
+    /export [path]     write the transcript to a file (default: cwd)
+    /transcript        write the transcript to a temp file for paging
+    /copy              copy the last reply to the clipboard
+    /find <text>       search the transcript blocks
+    /logout [provider] disconnect (with a name: forget its credential)
     /mcp               list configured MCP servers
     /hooks             show configured lifecycle hooks
     /inspect           show every config source in use (providers, pin, hooks, MCP, skills, sessions)

@@ -232,17 +232,16 @@ defmodule Raxol.Agent.Code.AppTest do
   alias Raxol.Agent.ExecutorConfig
 
   defp connected_model(opts \\ []) do
-    fetcher =
-      Keyword.get(opts, :models_fetcher, fn _opts, _ref, _app -> :ok end)
-
-    new_model(
+    [
       executor: ExecutorConfig.new(backend: :openai, model: "gpt-4o"),
       provider_status: {:ready, :openai, :env},
       # A connected provider has a current model (set on connect from the
       # executor); reflected here so the picker cursor has something to land on.
       model: "gpt-4o",
-      models_fetcher: fetcher
-    )
+      models_fetcher: fn _opts, _ref, _app -> :ok end
+    ]
+    |> Keyword.merge(opts)
+    |> new_model()
   end
 
   defp slash(model, command),
@@ -1030,6 +1029,120 @@ defmodule Raxol.Agent.Code.AppTest do
     test "an empty session has nothing to fork" do
       {model, []} = submit(new_model(), "/fork")
       assert model.notice =~ "nothing to fork"
+    end
+  end
+
+  describe "/export /transcript /copy /find /logout" do
+    defp answered_model(opts \\ []) do
+      model = new_model(opts)
+      {model, []} = submit(model, "ask")
+
+      Enum.reduce(
+        message_turn("t1", "the special answer"),
+        model,
+        &send_ev(&2, &1)
+      )
+    end
+
+    test "/export writes the transcript beside the work" do
+      cwd = tmp_dir()
+      File.mkdir_p!(cwd)
+      model = answered_model(cwd: cwd)
+
+      {model, []} = submit(model, "/export")
+
+      assert model.notice =~ "exported to"
+      path = Path.join(cwd, "#{model.session_key}.txt")
+      assert File.exists?(path)
+      content = File.read!(path)
+      assert content =~ "> ask"
+      assert content =~ "the special answer"
+    end
+
+    test "/export honors a given path relative to the cwd" do
+      cwd = tmp_dir()
+      File.mkdir_p!(cwd)
+      model = answered_model(cwd: cwd)
+
+      {_model, []} = submit(model, "/export session.log")
+      assert File.read!(Path.join(cwd, "session.log")) =~ "the special answer"
+    end
+
+    test "/transcript writes a temp file and hints at a pager" do
+      model = answered_model()
+      {model, []} = submit(model, "/transcript")
+
+      assert model.notice =~ "PAGER"
+
+      path =
+        Path.join(System.tmp_dir!(), "#{model.session_key}-transcript.txt")
+
+      assert File.read!(path) =~ "the special answer"
+    end
+
+    test "/copy pushes the last reply through the clipboard seam" do
+      test_pid = self()
+
+      model =
+        answered_model(
+          clipboard: fn text ->
+            send(test_pid, {:copied, text})
+            :ok
+          end
+        )
+
+      {model, []} = submit(model, "/copy")
+
+      assert model.notice =~ "copied last reply"
+      assert_received {:copied, "the special answer"}
+    end
+
+    test "/copy with no assistant reply notices" do
+      {model, []} = submit(new_model(), "/copy")
+      assert model.notice =~ "no assistant reply"
+    end
+
+    test "/find reports matching blocks and misses honestly" do
+      model = answered_model()
+
+      {model, []} = submit(model, "/find special")
+      assert model.notice =~ "1 match(es) for \"special\""
+      assert model.notice =~ "[message]"
+
+      {model, []} = submit(model, "/find zzz-not-there")
+      assert model.notice =~ "no matches"
+
+      {model, []} = submit(model, "/find")
+      assert model.notice =~ "usage: /find"
+    end
+
+    test "/logout disconnects the provider and reopens the setup panel" do
+      model = connected_model()
+      {model, []} = submit(model, "/logout")
+
+      assert model.executor == nil
+      assert model.provider_status == :no_provider
+      assert model.wizard.step == :browse
+      assert model.notice =~ "logged out"
+    end
+
+    test "/logout <provider> removes the credential through the seam" do
+      test_pid = self()
+
+      model =
+        connected_model(
+          credential_remover: fn provider ->
+            send(test_pid, {:removed, provider})
+            {:ok, :openai}
+          end
+        )
+
+      {model, []} = submit(model, "/logout openai")
+
+      assert_received {:removed, "openai"}
+      assert model.notice =~ "removed stored credential for openai"
+      # The removed provider was the connected one — disconnected too.
+      assert model.executor == nil
     end
   end
 
