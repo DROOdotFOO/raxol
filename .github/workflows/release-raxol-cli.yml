@@ -58,6 +58,22 @@ jobs:
           cache-from: type=gha,scope=cli-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=cli-${{ matrix.arch }}
 
+      # The T-Bench contract on the arch that built it: a headless benchmark
+      # run in a clean container answers on stdout, writes the trajectory,
+      # and exits 0. Catches launcher/ERTS/arch breakage before any artifact
+      # ships (local amd64 verification is impossible on Apple hosts: the
+      # x86_64 BEAM does not boot under Rosetta emulation).
+      - name: Smoke headless benchmark contract
+        run: |
+          bin="$(basename "$(ls out/raxol_cli_*)")"
+          docker run --rm -v "$PWD/out:/work:ro" \
+            -e RAXOL_PROFILE=benchmark -e RAXOL_MODEL=mock/test \
+            -e RAXOL_MAX_TURNS=10 -e RAXOL_TRAJECTORY_PATH=/tmp/t.json \
+            debian:trixie sh -c \
+            "/work/$bin p --no-tools smoke > /tmp/answer.txt \
+             && grep -q raxol-trajectory /tmp/t.json \
+             && test -s /tmp/answer.txt && echo SMOKE-OK"
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:

@@ -8,12 +8,16 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent playground new help)
+  @commands ~w(agent p playground new help)
 
   @doc "Dispatch `argv`, returning an exit code."
   @spec main([String.t()]) :: non_neg_integer()
   def main([]), do: run_agent([])
   def main(["agent" | rest]), do: run_agent(rest)
+  # Headless one-shot: prompt on argv, answer to stdout, contract events to
+  # stderr. `-p` matches the historical `bin/raxol -p` wrapper spelling.
+  def main(["p" | rest]), do: Raxol.Agent.P.run(rest)
+  def main(["-p" | rest]), do: Raxol.Agent.P.run(rest)
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
   def main([help]) when help in ~w(help --help -h), do: help()
@@ -149,6 +153,7 @@ defmodule Raxol.CLI do
 
     Commands:
       agent         Interactive AI agent session (default)
+      p "prompt"    Headless one-shot: answer to stdout, events to stderr
       playground    Browse the interactive component catalog
       new [name]    Scaffold a new Raxol application
       help          Show this help

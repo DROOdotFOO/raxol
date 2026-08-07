@@ -40,60 +40,35 @@ defmodule Mix.Tasks.Raxol.P do
     * `--write`    — expose write_file/edit_file/bash (opt-in; unattended)
     * `--no-tools` — plain completion, no tool loop
 
+  ## Benchmark / harness env contract
+
+  Unattended callers (benchmark harnesses, CI) configure the run via env
+  instead of flags -- see `Raxol.Agent.BenchmarkProfile`:
+
+      RAXOL_MODEL            provider/model (e.g. anthropic/claude-sonnet-4-6)
+      RAXOL_PROFILE          "benchmark" (allow-all tools, skills off)
+      RAXOL_MAX_TURNS        hard turn cap -> exit 2
+      RAXOL_MAX_COST_USD     hard spend cap -> exit 2 (needs RAXOL_COST_PER_MTOK_IN/OUT)
+      RAXOL_TRAJECTORY_PATH  trajectory JSON written on every exit path
+
+  CLI flags win over env. SIGTERM flushes the trajectory, emits a final
+  `error` event with reason `terminated`, and exits 143 -- a harness kill
+  is never mistaken for success.
+
   ## Exit codes
 
-  `0` success · `1` run error · `2` timeout · `64` usage error
+  `0` success · `1` run error · `2` timeout or budget exhausted ·
+  `64` usage error · `143` terminated (SIGTERM)
   """
 
   use Mix.Task
 
-  alias Raxol.Agent.Contract
-  alias Raxol.Agent.SessionStreamer
-
-  @default_timeout_s 180
-
-  @switches [
-    backend: :string,
-    # `--harness` is a deprecated alias for `--backend`.
-    harness: :string,
-    model: :string,
-    base_url: :string,
-    system: :string,
-    timeout: :integer,
-    write: :boolean,
-    tools: :boolean
-  ]
-
   @impl Mix.Task
   def run(argv) do
-    {opts, args, invalid} = OptionParser.parse(argv, strict: @switches)
-
-    prompt = Enum.join(args, " ") |> String.trim()
-
-    cond do
-      invalid != [] ->
-        usage_error("unknown options: #{inspect(invalid)}")
-
-      prompt == "" ->
-        usage_error("no prompt given. Usage: mix raxol.p [options] \"prompt\"")
-
-      true ->
-        run_prompt(prompt, opts)
-    end
-  end
-
-  defp usage_error(message) do
-    IO.puts(:stderr, "raxol.p: #{message}")
-    exit({:shutdown, 64})
-  end
-
-  defp run_prompt(prompt, opts) do
-    # Agent environment only — no terminal driver, no UI. stdout belongs to
-    # the answer: boot without recompiling (bin/raxol precompiles silently)
-    # and keep Logger quiet below :error.
-    System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
-    Logger.configure(level: :error)
-
+    # Boot without recompiling (bin/raxol precompiles silently) so stdout
+    # stays clean for the answer, then hand off to the shared runner --
+    # `Raxol.Agent.P` contains no Mix calls, so the same code path serves
+    # the Burrito-packaged `raxol p` where Mix does not exist.
     Mix.Task.run("app.start", [
       "--no-compile",
       "--no-deps-check",
@@ -101,165 +76,6 @@ defmodule Mix.Tasks.Raxol.P do
       "--no-elixir-version-check"
     ])
 
-    ensure_streamer!()
-
-    session_id = "cli-#{System.unique_integer([:positive])}"
-    :ok = SessionStreamer.subscribe(session_id)
-
-    stream_opts = build_stream_opts(prompt, opts)
-    use_tools = Keyword.get(opts, :tools, true)
-
-    runner =
-      Task.async(fn ->
-        stream =
-          if use_tools do
-            Raxol.Agent.Stream.react(prompt, stream_opts)
-          else
-            Raxol.Agent.Stream.run(prompt, stream_opts)
-          end
-
-        Contract.pump(session_id, stream, prompt: prompt)
-      end)
-
-    timeout_ms = Keyword.get(opts, :timeout, @default_timeout_s) * 1_000
-    status = consume(session_id, runner, timeout_ms, %{wrote_stdout: false})
-    exit({:shutdown, status})
+    exit({:shutdown, Raxol.Agent.P.run(argv)})
   end
-
-  # SessionStreamer is not in any package supervision tree yet (the CLI is
-  # its first live consumer); start it idempotently.
-  defp ensure_streamer! do
-    case SessionStreamer.start_link([]) do
-      {:ok, _pid} ->
-        :ok
-
-      {:error, {:already_started, _pid}} ->
-        :ok
-
-      {:error, reason} ->
-        raise "cannot start SessionStreamer: #{inspect(reason)}"
-    end
-  end
-
-  defp build_stream_opts(_prompt, opts) do
-    # raxol.p reserves stderr for the JSONL event stream, so pass prog: nil to
-    # suppress the plain-text deprecation notice that would corrupt it.
-    backend =
-      case Raxol.Agent.Backend.Cli.resolve(opts, nil) do
-        {:ok, backend} -> backend
-        {:error, message} -> usage_error(message)
-      end
-
-    executor_attrs =
-      [backend: backend]
-      |> maybe_put(:model, Keyword.get(opts, :model))
-
-    executor = Raxol.Agent.ExecutorConfig.new(executor_attrs)
-
-    backend_opts =
-      []
-      |> maybe_put(:base_url, Keyword.get(opts, :base_url))
-
-    system =
-      Keyword.get(
-        opts,
-        :system,
-        "You are a helpful assistant running in a terminal at the user's " <>
-          "current working directory. Use the available tools to inspect " <>
-          "files when the question is about them. Be concise."
-      )
-
-    write? = Keyword.get(opts, :write, false)
-
-    [
-      executor: executor,
-      backend_opts: backend_opts,
-      system_prompt: system,
-      actions: actions_for(write?)
-    ] ++ context_for(write?)
-  end
-
-  # Read-only by default (fs read tools + grep/glob). `--write` adds the
-  # mutating coding tools (write_file/edit_file/bash), which are `sensitive`
-  # and denied under the default policy — so it also installs an allow-all
-  # authorizer to actually let them run in this unattended headless flow.
-  defp actions_for(false),
-    do:
-      Raxol.Agent.Actions.Fs.all() ++
-        Raxol.Agent.Actions.Code.read_only() ++ Raxol.Agent.Skills.enabled_actions()
-
-  defp actions_for(true),
-    do:
-      Raxol.Agent.Actions.Fs.all() ++
-        Raxol.Agent.Actions.Code.all() ++ Raxol.Agent.Skills.enabled_actions()
-
-  defp context_for(false), do: maybe_skills_context(%{})
-
-  defp context_for(true),
-    do: maybe_skills_context(%{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()})
-
-  # Add the configured skills store under context[:skills]; keep the empty-context
-  # `[]` shape when nothing (skills or authorizer) needs to be passed.
-  defp maybe_skills_context(base) do
-    base =
-      case Raxol.Agent.Skills.default_context() do
-        nil -> base
-        skills -> Map.put(base, :skills, skills)
-      end
-
-    if map_size(base) == 0, do: [], else: [context: base]
-  end
-
-  defp maybe_put(kw, _key, nil), do: kw
-  defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
-
-  # -- Event consumption: contract events in, stdout/stderr out --------------
-
-  defp consume(session_id, runner, timeout_ms, state) do
-    receive do
-      {:session_event, ^session_id, %Contract.Event{} = event} ->
-        IO.write(:stderr, Contract.encode_line(event))
-        state = render_stdout(event, state)
-
-        case event do
-          %{type: :turn_completed, payload: %{final: true}} ->
-            Task.await(runner, 5_000)
-            if state.wrote_stdout, do: IO.write("\n")
-            0
-
-          %{type: :error} ->
-            Task.await(runner, 5_000)
-            1
-
-          _ ->
-            consume(session_id, runner, timeout_ms, state)
-        end
-    after
-      timeout_ms ->
-        IO.puts(:stderr, ~s({"type":"error","payload":{"reason":"timeout"}}))
-        Task.shutdown(runner, :brutal_kill)
-        2
-    end
-  end
-
-  # stdout carries the ANSWER only. Stream deltas as they arrive; if the
-  # run produced no deltas (non-streaming react loop), print the final
-  # message content once.
-  defp render_stdout(%{type: :item_delta, payload: %{chunk: chunk}}, state) do
-    IO.write(chunk)
-    %{state | wrote_stdout: true}
-  end
-
-  defp render_stdout(
-         %{
-           type: :item_completed,
-           payload: %{item_type: :message, content: content}
-         },
-         %{wrote_stdout: false} = state
-       ) do
-    IO.write(content)
-    %{state | wrote_stdout: true}
-  end
-
-  defp render_stdout(_event, state), do: state
 end

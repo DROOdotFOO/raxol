@@ -117,7 +117,7 @@ defmodule Raxol.CLI.New do
     """
   end
 
-  defp readme(name, mod) do
+  defp readme(_name, mod) do
     """
     # #{mod}
 
