@@ -6,8 +6,11 @@ name: Release raxol npm package
 # their own runners, macOS arm64 on a macOS runner (native builds avoid the
 # termbox NIF cross-compile hazard -- see docker/Dockerfile.raxol-cli).
 #
-# The npm tarball is always produced as an artifact. Publishing is gated: a
-# `raxol-cli-v*` tag, or a manual run with `publish: true` and an `NPM_TOKEN`.
+# The npm tarball is always produced as an artifact. The two ship paths are
+# independent: a `raxol-cli-v*` tag attaches the binaries + checksums to a
+# GitHub Release (stable public URLs for the T-Bench installer), while npm
+# publishing happens only on a manual run with `publish: true` and an
+# `NPM_TOKEN`.
 
 on:
   push:
@@ -158,18 +161,56 @@ jobs:
           path: packages/raxol_cli/npm/*.tgz
           if-no-files-found: error
 
-      - name: Resolve publish flag
-        id: flags
-        run: |
-          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish }}" = "true" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          fi
-
+      # npm publish is deliberately NOT wired to the tag. A `raxol-cli-v*` tag
+      # ships the release binaries (see the `release` job); claiming the `raxol`
+      # name on npm is a separate, deliberate act. Publish with a manual run:
+      #   gh workflow run release-raxol-cli.yml -f publish=true
       - name: Publish to npm
-        if: steps.flags.outputs.publish == 'true'
+        if: inputs.publish == true
         working-directory: packages/raxol_cli/npm
-        run: npm publish --access public
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::publish=true but the NPM_TOKEN secret is unset or empty." >&2
+            exit 1
+          fi
+          npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # A `raxol-cli-v*` tag attaches the per-arch binaries to a GitHub Release, so
+  # they have stable unauthenticated download URLs. Actions artifacts cannot
+  # serve this: they need a token to fetch and expire after 90 days, and the
+  # T-Bench install script curls them from inside an arbitrary task container.
+  # The root `release.yml` does not cover these tags -- its filter is `v*`,
+  # which does not match `raxol-cli-v*`.
+  release:
+    name: attach release assets
+    needs: [linux-build, macos-build]
+    if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksum
+        working-directory: dist
+        run: |
+          chmod +x raxol_cli_*
+          sha256sum raxol_cli_* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: |
+            dist/raxol_cli_*
+            dist/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
