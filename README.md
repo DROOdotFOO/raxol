@@ -92,6 +92,8 @@ mix run examples/demo.exs
 
 See [examples/README.md](examples/README.md) for the full learning path, including agent examples, swarm demos, and the sandboxed REPL.
 
+Headless environment (CI, containers, agents)? The [Development](#development) section is the terminal-free path: clone, compile, test, and the RATE golden suite all run without a tty.
+
 ## Performance
 
 Full frame in 2.1ms on Apple M1 Pro (Elixir 1.19 / OTP 27), 13% of the 60fps budget.
@@ -141,15 +143,29 @@ Unix/macOS backend uses a termbox2 NIF; Windows uses a pure Elixir driver (usabl
 
 ## Development
 
+Working from source needs Elixir/OTP (versions in `.tool-versions`) and a C
+toolchain: the termbox2 NIF compiles with `make` and `cc` (on Debian/Ubuntu,
+`apt-get install build-essential`). `nix develop` provides all of it in one
+shell. Every command below runs headless: no terminal is required for the
+build, the test suite, or the golden checks.
+
 ```bash
 git clone https://github.com/DROOdotFOO/raxol.git
 cd raxol
+mix local.hex --force        # fresh machines and CI: install Hex without a prompt
 mix deps.get
-MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker
-mix raxol.check              # format, compile, credo, dialyzer, security, docs, rate, test
+mix compile                  # builds the termbox2 NIF
+SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker
+MIX_ENV=test mix raxol.rate  # RATE: render-determinism golden suite
+mix raxol.check              # full gate: format, compile, credo, dialyzer, security, docs, rate, test
 mix raxol.check --quick      # skip dialyzer
-mix raxol.demo               # run built-in demos
+mix raxol.demo               # built-in demos (needs a terminal)
 ```
+
+`SKIP_TERMBOX2_TESTS=true` excludes the tests that need a real local terminal
+(pty lifecycle, timing-sensitive suites); CI sets the same variable. In
+sandboxes where `HOME` is read-only, point `MIX_HOME` and `HEX_HOME` at a
+writable directory before running mix.
 
 ## Origin
 
