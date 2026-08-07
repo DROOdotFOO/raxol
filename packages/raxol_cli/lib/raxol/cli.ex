@@ -8,12 +8,15 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent p playground new help)
+  @commands ~w(agent code p playground new help)
 
   @doc "Dispatch `argv`, returning an exit code."
   @spec main([String.t()]) :: non_neg_integer()
   def main([]), do: run_agent([])
   def main(["agent" | rest]), do: run_agent(rest)
+  # The full coding-agent TUI (approvals, plan mode, sessions, slash
+  # commands) — the same launch path as `mix raxol.code`.
+  def main(["code" | rest]), do: run_code(rest)
   # Headless one-shot: prompt on argv, answer to stdout, contract events to
   # stderr. `-p` matches the historical `bin/raxol -p` wrapper spelling.
   def main(["p" | rest]), do: Raxol.Agent.P.run(rest)
@@ -114,6 +117,25 @@ defmodule Raxol.CLI do
     |> Enum.any?(&(System.get_env(&1) not in [nil, ""]))
   end
 
+  # -- code -------------------------------------------------------------------
+
+  # The fullscreen coding harness. The shared launcher owns flags, provider
+  # resolution, and the session store; the boot step here vetoes when there
+  # is no real terminal (the TUI needs one; `--help`/`--sessions` do not,
+  # and the launcher answers those before boot).
+  defp run_code(args) do
+    Raxol.Agent.Code.Launcher.main(args, boot: &code_boot/0)
+  end
+
+  defp code_boot do
+    if interactive?() do
+      {:ok, _} = Application.ensure_all_started(:raxol_agent)
+      :ok
+    else
+      {:error, "raxol code requires an interactive terminal."}
+    end
+  end
+
   # -- playground -------------------------------------------------------------
 
   # Start the interactive component-catalog TUI. Needs a real terminal; over a
@@ -153,6 +175,7 @@ defmodule Raxol.CLI do
 
     Commands:
       agent         Interactive AI agent session (default)
+      code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
       playground    Browse the interactive component catalog
       new [name]    Scaffold a new Raxol application

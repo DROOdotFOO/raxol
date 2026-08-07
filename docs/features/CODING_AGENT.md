@@ -31,6 +31,11 @@ The `bin/raxol-code` shim runs the task from the package while keeping the calle
 directory as the agent's workspace (the file and shell tools are scoped to it via
 `RAXOL_CLI_CWD`). It `exec`s `mix` so the full-screen UI inherits the real terminal.
 
+The Burrito-packaged `raxol` binary (`packages/raxol_cli`, unpublished until this
+subcommand ships in a release) carries the same TUI as `raxol code`: every entry
+point shares one launch path, `Raxol.Agent.Code.Launcher`, so flags, provider
+resolution, and the session store cannot drift between them.
+
 Not sure what to try first? These all work on this repo from a cold start:
 
 ```
