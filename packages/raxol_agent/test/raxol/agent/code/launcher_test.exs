@@ -158,11 +158,41 @@ defmodule Raxol.Agent.Code.LauncherTest do
       refute Keyword.has_key?(opts[:app_opts], :session_key)
     end
 
+    test "the resolved executor never leaks its api key through app_opts inspect" do
+      System.put_env("ANTHROPIC_API_KEY", "sk-secret-leak-probe")
+      on_exit(fn -> System.delete_env("ANTHROPIC_API_KEY") end)
+
+      serve = fn _app, opts ->
+        send(self(), {:opts, opts}) && {:ok, spawn(fn -> :ok end)}
+      end
+
+      capture_io(fn ->
+        Launcher.main(
+          ["--ssh", "--authorized-keys", "/tmp/k", "--backend", "anthropic"],
+          boot: fn -> :ok end,
+          serve: serve
+        )
+      end)
+
+      assert_received {:opts, opts}
+      executor = opts[:app_opts][:executor]
+      # The key resolved into the executor's auth, but inspect must not show it.
+      assert executor.auth == %{api_key: "sk-secret-leak-probe"}
+      refute inspect(opts) =~ "sk-secret-leak-probe"
+      refute inspect(executor) =~ "sk-secret-leak-probe"
+    end
+
     test "a serve failure prints the reason and returns 1" do
       stderr =
         capture_io(:stderr, fn ->
           assert Launcher.main(
-                   ["--ssh", "--authorized-keys", "/tmp/k", "--backend", "mock"],
+                   [
+                     "--ssh",
+                     "--authorized-keys",
+                     "/tmp/k",
+                     "--backend",
+                     "mock"
+                   ],
                    boot: fn -> :ok end,
                    serve: fn _app, _opts -> {:error, :eaddrinuse} end
                  ) == 1

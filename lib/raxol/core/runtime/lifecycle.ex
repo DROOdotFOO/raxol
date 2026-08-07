@@ -112,7 +112,7 @@ defmodule Raxol.Core.Runtime.Lifecycle do
     # per-app-module name: two concurrent chats/sessions of the same app
     # would collide on it.
     name_option =
-      if environment in [:liveview, :agent, :telegram, :gateway] do
+      if environment in [:liveview, :agent, :ssh, :telegram, :gateway] do
         Keyword.get(options, :name)
       else
         Keyword.get(options, :name, derive_process_name(app_module))

@@ -16,7 +16,9 @@ defmodule Raxol.CLITest do
 
     test "an unknown command prints help and returns 1" do
       stderr =
-        capture_io(:stderr, fn -> capture_io(fn -> assert CLI.main(["bogus"]) == 1 end) end)
+        capture_io(:stderr, fn ->
+          capture_io(fn -> assert CLI.main(["bogus"]) == 1 end)
+        end)
 
       assert stderr =~ "unknown command"
     end
@@ -48,6 +50,19 @@ defmodule Raxol.CLITest do
         end)
 
       assert stderr =~ "interactive terminal"
+    end
+
+    test "code --ssh is NOT vetoed for a missing tty (serving needs none)" do
+      # Without --authorized-keys the launcher rejects --ssh as a usage error
+      # (64), which proves the tty veto (exit 1, "interactive terminal") did
+      # NOT fire first — the SSH path skips the local-terminal check.
+      stderr =
+        capture_io(:stderr, fn ->
+          assert CLI.main(["code", "--ssh"]) == 64
+        end)
+
+      assert stderr =~ "authorized-keys"
+      refute stderr =~ "interactive terminal"
     end
   end
 end

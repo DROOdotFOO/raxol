@@ -108,7 +108,9 @@ defmodule Raxol.CLI do
   defp turn_opts(input, :mock) do
     [
       backend: Raxol.Agent.Backend.Mock,
-      backend_opts: [response: "(mock) Set AI_API_KEY for real replies. You said: #{input}"]
+      backend_opts: [
+        response: "(mock) Set AI_API_KEY for real replies. You said: #{input}"
+      ]
     ]
   end
 
@@ -120,20 +122,26 @@ defmodule Raxol.CLI do
   # -- code -------------------------------------------------------------------
 
   # The fullscreen coding harness. The shared launcher owns flags, provider
-  # resolution, and the session store; the boot step here vetoes when there
-  # is no real terminal (the TUI needs one; `--help`/`--sessions` do not,
-  # and the launcher answers those before boot).
+  # resolution, and the session store. The local TUI boot vetoes when there
+  # is no real terminal (the TUI needs one); `--ssh` serving renders on the
+  # remote client, so it boots without that check. `--help`/`--sessions` are
+  # answered by the launcher before either boot runs.
   defp run_code(args) do
-    Raxol.Agent.Code.Launcher.main(args, boot: &code_boot/0)
+    boot = if "--ssh" in args, do: &serve_boot/0, else: &code_boot/0
+    Raxol.Agent.Code.Launcher.main(args, boot: boot)
   end
 
   defp code_boot do
     if interactive?() do
-      {:ok, _} = Application.ensure_all_started(:raxol_agent)
-      :ok
+      serve_boot()
     else
       {:error, "raxol code requires an interactive terminal."}
     end
+  end
+
+  defp serve_boot do
+    {:ok, _} = Application.ensure_all_started(:raxol_agent)
+    :ok
   end
 
   # -- playground -------------------------------------------------------------

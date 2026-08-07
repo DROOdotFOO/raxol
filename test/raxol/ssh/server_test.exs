@@ -92,6 +92,22 @@ defmodule Raxol.SSH.ServerTest do
       {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
       assert state.app_opts == []
     end
+
+    test "connection transport keys win over server app_opts (first-occurrence)" do
+      # Session prepends transport wiring, so a served app's app_opts cannot
+      # shadow :environment/:io_writer/:width. This mirrors the merge in
+      # Raxol.SSH.Session.init/1.
+      app_opts = [environment: :agent, width: 999, model: "m"]
+
+      merged =
+        [environment: :ssh, io_writer: :chan, width: 80, height: 24] ++ app_opts
+
+      assert Keyword.get(merged, :environment) == :ssh
+      assert Keyword.get(merged, :width) == 80
+      assert Keyword.get(merged, :io_writer) == :chan
+      # A non-colliding app option still flows through.
+      assert Keyword.get(merged, :model) == "m"
+    end
   end
 
   describe "host key generation" do

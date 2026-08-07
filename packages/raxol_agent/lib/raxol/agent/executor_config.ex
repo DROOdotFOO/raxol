@@ -32,6 +32,11 @@ defmodule Raxol.Agent.ExecutorConfig do
   # disk. See `Raxol.Agent.Snapshot.Persist`.
   @derive {Raxol.Agent.Snapshot.Persist,
            persist: [:backend, :model, :opts], redact: [:auth]}
+  # `auth` holds the raw API credential; keep it out of every `inspect/1`
+  # (crash dumps, the Lifecycle's boot-options log line, IEx) — the routing
+  # fields still show. Snapshot redaction above covers the on-disk path;
+  # this covers the in-memory one.
+  @derive {Inspect, except: [:auth]}
   @enforce_keys [:backend]
   defstruct backend: nil, model: nil, auth: %{}, opts: []
 

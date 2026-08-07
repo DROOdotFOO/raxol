@@ -214,7 +214,11 @@ defmodule Raxol.Agent.Code.Launcher do
   # session resolution. Public (hidden) so the SSH serving path can reuse it.
   @spec app_opts(keyword()) :: keyword()
   def app_opts(parsed) do
-    project = Raxol.Agent.Code.ProjectConfig.load(File.cwd!())
+    # The `.raxol/config.json` pin must load from the agent's WORKSPACE (the
+    # caller's dir via RAXOL_CLI_CWD), the same directory the App scopes its
+    # tools to — not the package dir the bin/raxol-code shim cd's into.
+    project =
+      Raxol.Agent.Code.ProjectConfig.load(Raxol.Agent.Actions.Fs.working_dir())
 
     resolution =
       Raxol.Agent.Backend.Resolver.resolve(resolver_opts(parsed, project))
@@ -238,7 +242,10 @@ defmodule Raxol.Agent.Code.Launcher do
       :harness,
       backend_flag(parsed) || Map.get(project, :provider)
     )
-    |> maybe_put(:model, Keyword.get(parsed, :model) || Map.get(project, :model))
+    |> maybe_put(
+      :model,
+      Keyword.get(parsed, :model) || Map.get(project, :model)
+    )
     |> maybe_put(:api_key, Keyword.get(parsed, :api_key))
     |> maybe_put(
       :base_url,
