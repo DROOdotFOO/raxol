@@ -118,13 +118,13 @@ mix raxol.bench --compare       # Compare with previous run
 
 ## Performance targets
 
-| Operation             | Target         | Status         |
-| --------------------- | -------------- | -------------- |
-| Full frame render     | < 16ms (60fps) | 2.1ms (pass)   |
-| Buffer operations     | < 1ms          | 0.97us (pass)  |
-| Tree diff (100 nodes) | < 1ms          | 4us (pass)     |
-| ANSI parse (simple)   | < 100us        | 38us (pass)    |
-| Memory per buffer     | < 500 KB       | 216 KB (pass)  |
+| Operation               | Target         | Status         |
+| ----------------------- | -------------- | -------------- |
+| Full frame render       | < 16ms (60fps) | 5.0ms (pass)   |
+| Buffer operations       | < 1ms          | 1.4us (pass)   |
+| Tree diff (100 nodes)   | < 1ms          | 32us (pass)    |
+| Emulator ingest (plain) | < 5ms          | 1.7ms (pass)   |
+| Memory per buffer       | < 500 KB       | 2 KB (pass)    |
 
 ## Tips
 
