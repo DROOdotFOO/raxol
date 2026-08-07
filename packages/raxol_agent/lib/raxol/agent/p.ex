@@ -48,7 +48,9 @@ defmodule Raxol.Agent.P do
   per line to stderr.
 
   Options:
-    --backend NAME   LLM backend (--harness is a deprecated alias)
+    --backend NAME   LLM backend (auto-detected if omitted; --harness is a
+                     deprecated alias; e.g. --backend lm_studio for a local
+                     server)
     --model NAME     model override
     --base-url URL   override the backend base URL
     --system TEXT    system prompt override
@@ -88,25 +90,33 @@ defmodule Raxol.Agent.P do
     {:raxol_p_usage, message} ->
       IO.puts(:stderr, "raxol-p: #{message}\n\n#{@usage}")
       64
+
+    {:raxol_p_config, message} ->
+      IO.puts(:stderr, "raxol-p: #{message}")
+      1
   end
 
   # Non-local exit for the deep parse/validate sites; caught in run/1.
   defp usage_error!(message), do: throw({:raxol_p_usage, message})
 
-  defp run_prompt(prompt, opts) do
-    # Agent environment only -- no terminal driver, no UI. stdout belongs to
-    # the answer; keep Logger quiet below :error. Under `mix raxol.p` the
-    # task has already booted the app; in the release the boot did. The
-    # ensure_all_started is the idempotent belt for any other caller.
-    System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
-    Logger.configure(level: :error)
-    {:ok, _} = Application.ensure_all_started(:raxol_agent)
+  # A configuration problem (no provider, no credential), not a usage
+  # problem: exit 1. Thrown before the run starts, so no JSONL event stream
+  # exists yet and a plain stderr line cannot corrupt it.
+  defp config_error!(message), do: throw({:raxol_p_config, message})
 
+  defp run_prompt(prompt, opts) do
+    # Resolve the profile and the provider before booting anything: a
+    # machine with no provider configured gets an actionable error and
+    # exit 1, not a connection refusal against a placeholder endpoint
+    # mid-run. CLI flags win over the env profile; the profile wins over
+    # auto-detection.
     profile =
       case BenchmarkProfile.from_env() do
         {:ok, profile} -> profile
         {:error, message} -> usage_error!(message)
       end
+
+    opts = apply_profile_defaults(opts, profile)
 
     # Privilege escalation must never be invisible: RAXOL_PROFILE=benchmark
     # arms allow-all tools (including bash) from ambient env alone, so the
@@ -118,6 +128,22 @@ defmodule Raxol.Agent.P do
         ~s({"type":"benchmark_profile","payload":{"authorizer":"allow_all","write_tools":true,"skills":"off"}})
       )
     end
+
+    # stderr is reserved for the JSONL event stream, so pass prog: nil to
+    # suppress the plain-text deprecation notice that would corrupt it.
+    executor =
+      case Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
+        {:ok, executor, _source} -> executor
+        {:error, message} -> config_error!(message)
+      end
+
+    # Agent environment only -- no terminal driver, no UI. stdout belongs to
+    # the answer; keep Logger quiet below :error. Under `mix raxol.p` the
+    # task has already booted the app; in the release the boot did. The
+    # ensure_all_started is the idempotent belt for any other caller.
+    System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
+    Logger.configure(level: :error)
+    {:ok, _} = Application.ensure_all_started(:raxol_agent)
 
     # Claim SIGTERM unconditionally: the BEAM default turns it into a clean
     # exit 0, which a harness reads as success. We flush and exit 143. A
@@ -139,7 +165,7 @@ defmodule Raxol.Agent.P do
     session_id = "cli-#{System.unique_integer([:positive])}"
     :ok = SessionStreamer.subscribe(session_id)
 
-    stream_opts = build_stream_opts(prompt, opts, profile)
+    stream_opts = build_stream_opts(prompt, opts, profile, executor)
     use_tools = Keyword.get(opts, :tools, true)
 
     # The runner task and the streamer are linked to this process. Without
@@ -167,7 +193,7 @@ defmodule Raxol.Agent.P do
       wrote_stdout: false,
       profile: profile,
       prompt: prompt,
-      backend: Keyword.get(stream_opts, :executor).backend,
+      backend: executor.backend,
       turns: 0,
       usage: %{input_tokens: 0, output_tokens: 0},
       events: if(profile.trajectory_path, do: [], else: nil)
@@ -191,24 +217,7 @@ defmodule Raxol.Agent.P do
     end
   end
 
-  defp build_stream_opts(_prompt, opts, profile) do
-    # stderr is reserved for the JSONL event stream, so pass prog: nil to
-    # suppress the plain-text deprecation notice that would corrupt it.
-    # CLI flags win over the env profile; the profile wins over defaults.
-    opts = apply_profile_defaults(opts, profile)
-
-    backend =
-      case Raxol.Agent.Backend.Cli.resolve(opts, nil) do
-        {:ok, backend} -> backend
-        {:error, message} -> usage_error!(message)
-      end
-
-    executor_attrs =
-      [backend: backend]
-      |> maybe_put(:model, Keyword.get(opts, :model))
-
-    executor = Raxol.Agent.ExecutorConfig.new(executor_attrs)
-
+  defp build_stream_opts(_prompt, opts, profile, executor) do
     backend_opts =
       []
       |> maybe_put(:base_url, Keyword.get(opts, :base_url))

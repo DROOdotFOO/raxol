@@ -39,4 +39,14 @@ defmodule Mix.Tasks.Raxol.CodeTaskTest do
 
     assert out =~ "Usage: mix raxol.code"
   end
+
+  test "an unknown backend errors fast, before the app boots" do
+    stderr =
+      capture_io(:stderr, fn ->
+        assert catch_exit(Mix.Tasks.Raxol.Code.run(["--backend", "nonsense"])) == {:shutdown, 64}
+      end)
+
+    assert stderr =~ ~s(unknown backend "nonsense")
+    assert stderr =~ "supported:"
+  end
 end

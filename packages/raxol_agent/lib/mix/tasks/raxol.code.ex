@@ -72,6 +72,7 @@ defmodule Mix.Tasks.Raxol.Code do
 
   use Mix.Task
 
+  alias Raxol.Agent.Backend.Cli
   alias Raxol.Agent.Code.Store
 
   @switches [
@@ -143,9 +144,13 @@ defmodule Mix.Tasks.Raxol.Code do
   end
 
   defp launch(opts) do
+    # Resolve flags and the provider before booting: an unknown backend
+    # errors fast, without starting the app.
+    app_opts = app_opts(opts)
+
     Mix.Task.run("app.start")
 
-    {:ok, pid} = Raxol.start_link(Raxol.Agent.Code.App, app_opts(opts))
+    {:ok, pid} = Raxol.start_link(Raxol.Agent.Code.App, app_opts)
     ref = Process.monitor(pid)
 
     receive do
@@ -176,7 +181,7 @@ defmodule Mix.Tasks.Raxol.Code do
     []
     |> maybe_put(
       :harness,
-      validated_backend(opts) || Map.get(project, :provider)
+      backend_flag(opts) || Map.get(project, :provider)
     )
     |> maybe_put(:model, Keyword.get(opts, :model) || Map.get(project, :model))
     |> maybe_put(:api_key, Keyword.get(opts, :api_key))
@@ -211,45 +216,14 @@ defmodule Mix.Tasks.Raxol.Code do
     end
   end
 
-  # Validate an explicit `--backend` against the supported set, returning the
-  # atom (or `nil` when omitted, which asks the resolver to auto-detect).
-  defp validated_backend(opts) do
-    case backend_flag(opts) do
-      nil ->
-        nil
-
-      name ->
-        supported = Raxol.Agent.Backend.Selector.supported_backends()
-
-        Enum.find(supported, &(Atom.to_string(&1) == name)) ||
-          usage_error(
-            "unknown backend #{inspect(name)}; supported: " <>
-              Enum.map_join(supported, ", ", &Atom.to_string/1)
-          )
-    end
-  end
-
-  # `--backend` is canonical; `--harness` is the deprecated alias (a stderr
-  # notice is printed, and `--backend` wins if both are given).
+  # Shared `--backend`/`--harness` normalization + validation (deprecation
+  # notices, supported-name check) through `Backend.Cli`, so this task and
+  # `raxol.p` cannot drift. Returns the backend atom, or `nil` when neither
+  # flag is given (which asks the resolver to auto-detect).
   defp backend_flag(opts) do
-    case {Keyword.get(opts, :backend), Keyword.get(opts, :harness)} do
-      {nil, nil} ->
-        nil
-
-      {nil, legacy} ->
-        IO.puts(:stderr, "raxol.code: --harness is deprecated; use --backend")
-        legacy
-
-      {name, nil} ->
-        name
-
-      {name, _both} ->
-        IO.puts(
-          :stderr,
-          "raxol.code: both --backend and --harness given; using --backend"
-        )
-
-        name
+    case Cli.flag(opts, "raxol.code") do
+      {:ok, backend} -> backend
+      {:error, message} -> usage_error(message)
     end
   end
 
