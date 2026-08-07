@@ -358,7 +358,12 @@ defmodule Raxol.MCP.ToolSynchronizer do
       try do
         module.mcp_resources()
       rescue
-        _ -> []
+        e ->
+          Logger.warning(
+            "[MCP.ToolSynchronizer] #{inspect(module)}.mcp_resources/0 raised: #{Exception.message(e)}"
+          )
+
+          []
       end
     else
       []

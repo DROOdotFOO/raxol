@@ -222,9 +222,6 @@ defmodule Raxol.UI.Components.Base.LifecycleTest do
       # Verify the full history
       events = Enum.reverse(unmounted.lifecycle_events)
 
-      # Debug output
-      IO.puts("DEBUG: Events: #{inspect(events)}")
-
       assert Enum.at(events, 0) == {:mount, :called}
       assert Enum.at(events, 1) == {:render, :called}
 
