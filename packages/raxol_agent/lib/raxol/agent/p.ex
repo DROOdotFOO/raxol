@@ -113,6 +113,13 @@ defmodule Raxol.Agent.P do
     stream_opts = build_stream_opts(prompt, opts, profile)
     use_tools = Keyword.get(opts, :tools, true)
 
+    # The runner task and the streamer are linked to this process. Without
+    # trapping, a bug-class raise inside the pump would kill us through the
+    # link -- in the release that crashes Application.start (ugly boot
+    # failure, no trajectory). Trapped, it arrives as an EXIT message and
+    # the consume loop turns it into a flushed exit 1.
+    Process.flag(:trap_exit, true)
+
     runner =
       Task.async(fn ->
         stream =
@@ -297,6 +304,21 @@ defmodule Raxol.Agent.P do
 
         Task.shutdown(runner, :brutal_kill)
         finish(state, 143, :terminated)
+
+      # Linked-process exits (we trap): normal task completion is noise;
+      # anything else -- pump crash, streamer death -- ends the run as a
+      # flushed error instead of killing this process through the link.
+      {:EXIT, _pid, :normal} ->
+        consume(session_id, runner, timeout_ms, state)
+
+      {:EXIT, _pid, reason} ->
+        IO.puts(
+          :stderr,
+          ~s({"type":"error","payload":{"reason":"crashed","detail":#{inspect(inspect(reason))}}})
+        )
+
+        Task.shutdown(runner, :brutal_kill)
+        finish(state, 1, :error)
     after
       timeout_ms ->
         IO.puts(:stderr, ~s({"type":"error","payload":{"reason":"timeout"}}))
