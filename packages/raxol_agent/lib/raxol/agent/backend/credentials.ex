@@ -145,6 +145,78 @@ defmodule Raxol.Agent.Backend.Credentials do
   @spec op_available?() :: boolean()
   def op_available?, do: not is_nil(System.find_executable("op"))
 
+  # `System.cmd` has no timeout, and a locked 1Password vault blocks `op`
+  # on its desktop-app authorization prompt indefinitely — freezing
+  # whatever process asked (the TUI's update loop during /login, every
+  # op-shelling test). This Port-based runner bounds the wait and KILLS
+  # the OS process on timeout; `Port.close/1` alone would leave the hung
+  # `op` (and its auth prompt) alive. Generous default so an interactive
+  # signin approval still fits; `RAXOL_OP_TIMEOUT_MS` overrides.
+  @op_timeout_ms 15_000
+
+  defp op_timeout_ms do
+    case Integer.parse(System.get_env("RAXOL_OP_TIMEOUT_MS") || "") do
+      {ms, ""} when ms > 0 -> ms
+      _ -> @op_timeout_ms
+    end
+  end
+
+  defp run_op(args) do
+    case System.find_executable("op") do
+      nil ->
+        {:error, :op_unavailable}
+
+      op ->
+        port =
+          Port.open(
+            {:spawn_executable, op},
+            [:binary, :exit_status, :stderr_to_stdout, args: args]
+          )
+
+        os_pid =
+          case Port.info(port, :os_pid) do
+            {:os_pid, pid} -> pid
+            _ -> nil
+          end
+
+        deadline = System.monotonic_time(:millisecond) + op_timeout_ms()
+        collect_op(port, os_pid, deadline, [])
+    end
+  end
+
+  defp collect_op(port, os_pid, deadline, acc) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      kill_op(port, os_pid)
+      {:error, :op_timeout}
+    else
+      receive do
+        {^port, {:data, chunk}} ->
+          collect_op(port, os_pid, deadline, [acc | chunk])
+
+        {^port, {:exit_status, code}} ->
+          {IO.iodata_to_binary(acc), code}
+      after
+        remaining ->
+          kill_op(port, os_pid)
+          {:error, :op_timeout}
+      end
+    end
+  end
+
+  defp kill_op(port, os_pid) do
+    # `kill` is non-interactive and never hangs; -9 because a blocked
+    # `op` is holding an auth prompt, not state worth a graceful stop.
+    if os_pid,
+      do: System.cmd("kill", ["-9", to_string(os_pid)], stderr_to_stdout: true)
+
+    Port.close(port)
+    :ok
+  catch
+    :error, :badarg -> :ok
+  end
+
   @doc """
   The 1Password CLI availability + auth state.
 
@@ -160,7 +232,8 @@ defmodule Raxol.Agent.Backend.Credentials do
   def op_status do
     cond do
       not op_available?() -> :absent
-      match?({_out, 0}, System.cmd("op", ["whoami"], stderr_to_stdout: true)) -> :ok
+      match?({_out, 0}, run_op(["whoami"])) -> :ok
+      # A timeout (locked vault) reads as not signed in: unusable either way.
       true -> :not_signed_in
     end
   end
@@ -188,9 +261,16 @@ defmodule Raxol.Agent.Backend.Credentials do
   def create_item(_harness, _key, _opts), do: {:error, :empty_key}
 
   defp do_create_item(harness, key, opts) do
-    vault = Keyword.get(opts, :vault) || System.get_env("RAXOL_OP_VAULT") || "Private"
+    vault =
+      Keyword.get(opts, :vault) || System.get_env("RAXOL_OP_VAULT") || "Private"
+
     template = op_template(harness, key)
-    path = Path.join(System.tmp_dir!(), "raxol-op-#{System.unique_integer([:positive])}.json")
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol-op-#{System.unique_integer([:positive])}.json"
+      )
 
     with :ok <- File.write(path, template),
          _ <- File.chmod(path, 0o600) do
@@ -203,11 +283,21 @@ defmodule Raxol.Agent.Backend.Credentials do
   end
 
   defp run_op_create(template_path, vault) do
-    args = ["item", "create", "--template", template_path, "--vault", vault, "--format", "json"]
+    args = [
+      "item",
+      "create",
+      "--template",
+      template_path,
+      "--vault",
+      vault,
+      "--format",
+      "json"
+    ]
 
-    case System.cmd("op", args, stderr_to_stdout: true) do
+    case run_op(args) do
       {out, 0} -> created_ref(out, vault)
       {out, code} -> {:error, {:op_create_failed, code, String.trim(out)}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -216,7 +306,12 @@ defmodule Raxol.Agent.Backend.Credentials do
       "title" => "Raxol #{harness} API key",
       "category" => "API_CREDENTIAL",
       "fields" => [
-        %{"id" => "credential", "type" => "CONCEALED", "label" => "credential", "value" => key}
+        %{
+          "id" => "credential",
+          "type" => "CONCEALED",
+          "label" => "credential",
+          "value" => key
+        }
       ]
     })
   end
@@ -243,11 +338,7 @@ defmodule Raxol.Agent.Backend.Credentials do
   """
   @spec read_ref(String.t()) :: {:ok, String.t()} | {:error, term()}
   def read_ref("op://" <> _ = ref) do
-    if op_available?() do
-      "op" |> System.cmd(["read", ref], stderr_to_stdout: true) |> interpret_op_output()
-    else
-      {:error, :op_unavailable}
-    end
+    ["read", ref] |> run_op() |> interpret_op_output()
   end
 
   def read_ref(_other), do: {:error, :not_an_op_ref}
@@ -259,5 +350,10 @@ defmodule Raxol.Agent.Backend.Credentials do
     end
   end
 
-  defp interpret_op_output({out, code}), do: {:error, {:op_failed, code, String.trim(out)}}
+  # The timeout/unavailable tuples carry no output: the secret (exit 0
+  # output) must never ride along an error term that callers may log.
+  defp interpret_op_output({:error, reason}), do: {:error, reason}
+
+  defp interpret_op_output({out, code}),
+    do: {:error, {:op_failed, code, String.trim(out)}}
 end
