@@ -43,6 +43,22 @@ defmodule Raxol.Agent.Code.AppTest do
     }
   end
 
+  defp tev(turn_id, id, type, payload, tier \\ :durable),
+    do: %{ev(id, type, payload, tier) | turn_id: turn_id}
+
+  defp message_turn(turn_id, answer) do
+    [
+      tev(turn_id, 1, :turn_started, %{prompt: "ask"}),
+      tev(turn_id, 2, :item_started, %{item_id: "i1", item_type: :message}),
+      tev(turn_id, 3, :item_completed, %{
+        item_id: "i1",
+        item_type: :message,
+        content: answer
+      }),
+      tev(turn_id, 4, :turn_completed, %{final: true, usage: %{}})
+    ]
+  end
+
   defp send_ev(model, event) do
     {model, []} = App.update({:command_result, {:contract_event, event}}, model)
     model
@@ -646,6 +662,101 @@ defmodule Raxol.Agent.Code.AppTest do
 
       # And the resumed model renders.
       assert %{} = App.view(resumed)
+    end
+  end
+
+  describe "event id stamping" do
+    # Contract.pump stamps ids from a fresh per-turn counter, so a second
+    # turn's ids collide with the first's; the projection's id recovery
+    # drops colliding events, losing every turn after the first from the
+    # transcript. The fold re-stamps into one session-monotonic space.
+    test "a second turn with restarted producer ids stays in the transcript" do
+      model = new_model()
+
+      model =
+        Enum.reduce(
+          message_turn("t1", "first answer") ++
+            message_turn("t2", "second answer"),
+          model,
+          &send_ev(&2, &1)
+        )
+
+      assert Enum.map(model.events, & &1.id) == Enum.to_list(1..8)
+
+      projection = Raxol.Harness.Projection.project(model.events)
+      assert projection.diagnostics == []
+
+      texts =
+        Enum.map(
+          projection.blocks,
+          &Raxol.UI.Components.Harness.Block.search_text/1
+        )
+
+      assert Enum.any?(texts, &(&1 =~ "first answer"))
+      assert Enum.any?(texts, &(&1 =~ "second answer"))
+    end
+
+    test "resumed events renumber into the dense session space" do
+      dir = tmp_dir()
+
+      # A stored log with colliding per-turn producer ids, as sessions
+      # persisted before the fold re-stamped ids.
+      stored =
+        [
+          {"t1", 1, "turn_started", %{"prompt" => "one"}},
+          {"t1", 2, "item_started",
+           %{"item_id" => "i1", "item_type" => "message"}},
+          {"t1", 3, "item_completed",
+           %{"item_id" => "i1", "item_type" => "message", "content" => "a"}},
+          {"t1", 4, "turn_completed", %{"final" => true}},
+          {"t2", 1, "turn_started", %{"prompt" => "two"}},
+          {"t2", 2, "item_started",
+           %{"item_id" => "i1", "item_type" => "message"}},
+          {"t2", 3, "item_completed",
+           %{"item_id" => "i1", "item_type" => "message", "content" => "b"}},
+          {"t2", 4, "turn_completed", %{"final" => true}}
+        ]
+        |> Enum.map(fn {turn, id, type, payload} ->
+          %{
+            "id" => id,
+            "turn_id" => turn,
+            "ts" => id,
+            "family" => "loop",
+            "type" => type,
+            "tier" => "durable",
+            "payload" => payload
+          }
+        end)
+
+      :ok =
+        Raxol.Agent.Code.Store.save(dir, "sess-renum", %{
+          messages: [],
+          events: stored
+        })
+
+      model = new_model(sessions_dir: dir, session_key: "sess-renum")
+
+      assert Enum.map(model.events, & &1.id) == Enum.to_list(1..8)
+      assert model.next_event_id == 9
+
+      projection = Raxol.Harness.Projection.project(model.events)
+      assert projection.diagnostics == []
+      refute projection.damaged
+    end
+
+    test "/clear resets the id counter with the session" do
+      model =
+        Enum.reduce(
+          message_turn("t1", "answer"),
+          new_model(),
+          &send_ev(&2, &1)
+        )
+
+      assert model.next_event_id == 5
+
+      {cleared, []} = submit(model, "/clear")
+      assert cleared.next_event_id == 1
+      assert cleared.events == []
     end
   end
 

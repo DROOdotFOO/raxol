@@ -82,8 +82,10 @@ defmodule Raxol.Agent.Code.App do
     config(options, context)
     |> Map.merge(%{
       # Seeded from a resumed session so the transcript + conversation
-      # rebuild immediately; a fresh session starts these empty.
+      # rebuild immediately; a fresh session starts these empty. Resumed
+      # events arrive renumbered 1..n, so the live fold continues at n+1.
       events: events,
+      next_event_id: length(events) + 1,
       messages: messages,
       status_line: combine_notes([resume_notice, hooks_note, mcp_note]),
       session_key: session_key,
@@ -214,12 +216,25 @@ defmodule Raxol.Agent.Code.App do
       key ->
         case Raxol.Agent.Code.Store.load(dir, key) do
           {:ok, %{messages: messages, events: events}} ->
-            {dir, key, messages, events, "resumed #{length(messages)} messages"}
+            {dir, key, messages, renumber_events(events),
+             "resumed #{length(messages)} messages"}
 
           {:error, _} ->
             {dir, key, [], [], "session #{key} not found — starting fresh"}
         end
     end
+  end
+
+  # Stored ids are whatever the producer stamped at the time (historically
+  # per-turn pump counters, which collide across turns) and the durable-only
+  # filter leaves gaps; both make the projection's id recovery drop or
+  # diagnose resumed events on every render. Ids only order the projection
+  # fold, so a resumed log is renumbered into the dense session space the
+  # live fold continues from.
+  defp renumber_events(events) do
+    events
+    |> Enum.with_index(1)
+    |> Enum.map(fn {event, index} -> %{event | id: index} end)
   end
 
   defp mint_session_key do
@@ -687,12 +702,20 @@ defmodule Raxol.Agent.Code.App do
   defp fold_event(event, normalized, model) do
     running? = model.running? and not terminal_event?(event)
 
+    # Producer ids restart every turn (`Contract.pump` stamps from a fresh
+    # per-turn counter), but the projection's id recovery requires one
+    # session-monotonic id space — colliding ids drop whole turns from the
+    # transcript. The model is the id authority for its own event log: every
+    # folded event is re-stamped from a session counter.
+    normalized = %{normalized | id: model.next_event_id}
+
     # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
     events = model.events ++ [normalized]
 
     model = %{
       model
       | events: events,
+        next_event_id: model.next_event_id + 1,
         face_state: face_for_event(event, model.face_state),
         face_frame: model.face_frame + 1,
         running?: running?,
@@ -1484,6 +1507,7 @@ defmodule Raxol.Agent.Code.App do
       model
       | messages: [],
         events: [],
+        next_event_id: 1,
         turn_answer: "",
         face_state: :idle,
         face_frame: 0,
