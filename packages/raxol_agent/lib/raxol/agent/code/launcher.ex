@@ -30,6 +30,8 @@ defmodule Raxol.Agent.Code.Launcher do
     continue: :boolean,
     resume: :string,
     sessions: :boolean,
+    replay: :string,
+    to_offset: :integer,
     ascii: :boolean,
     ssh: :boolean,
     ssh_port: :integer,
@@ -54,6 +56,9 @@ defmodule Raxol.Agent.Code.Launcher do
     --continue       resume the most recently updated session
     --resume ID      resume a specific session by id
     --sessions       print saved sessions and exit
+    --replay ID      print a session's transcript from its durable journal
+                     and exit (falls back to the saved session file)
+    --to-offset N    with --replay: stop at journal offset N
     --ascii          ASCII-only face for terminals without a UTF-8 font
     --ssh            serve the TUI over SSH instead of the local terminal
                      (requires --authorized-keys; one fresh session per
@@ -90,6 +95,12 @@ defmodule Raxol.Agent.Code.Launcher do
       Keyword.get(parsed, :sessions, false) ->
         print_sessions()
 
+      Keyword.get(parsed, :replay) ->
+        run_replay(parsed)
+
+      Keyword.has_key?(parsed, :to_offset) ->
+        usage_error!("--to-offset requires --replay")
+
       Keyword.get(parsed, :ssh, false) ->
         serve_ssh(
           parsed,
@@ -125,6 +136,36 @@ defmodule Raxol.Agent.Code.Launcher do
     end
 
     0
+  end
+
+  # Headless: prints the replayed transcript and exits, never invoking the
+  # boot step (so the CLI's interactive-terminal veto does not apply, the
+  # same way --sessions behaves).
+  defp run_replay(parsed) do
+    cond do
+      Keyword.get(parsed, :ssh, false) ->
+        usage_error!("--replay cannot combine with --ssh")
+
+      Keyword.get(parsed, :continue, false) || Keyword.get(parsed, :resume) ->
+        usage_error!("--replay cannot combine with --continue/--resume")
+
+      true ->
+        replay_result =
+          Raxol.Agent.Code.Replay.run(
+            Keyword.fetch!(parsed, :replay),
+            to_offset: Keyword.get(parsed, :to_offset)
+          )
+
+        case replay_result do
+          {:ok, text} ->
+            IO.puts(text)
+            0
+
+          {:error, message} ->
+            IO.puts(:stderr, "raxol code --replay: #{message}")
+            1
+        end
+    end
   end
 
   defp launch(parsed, boot) do

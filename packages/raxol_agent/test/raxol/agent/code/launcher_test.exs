@@ -88,6 +88,114 @@ defmodule Raxol.Agent.Code.LauncherTest do
     assert out =~ "no saved sessions"
   end
 
+  describe "--replay" do
+    defp seed_store_session(key) do
+      dir = System.get_env("RAXOL_CODE_SESSIONS")
+
+      events = [
+        %{
+          "id" => 1,
+          "turn_id" => "t1",
+          "ts" => 1,
+          "family" => "loop",
+          "type" => "turn_started",
+          "tier" => "durable",
+          "payload" => %{"prompt" => "replayed prompt"}
+        },
+        %{
+          "id" => 2,
+          "turn_id" => "t1",
+          "ts" => 2,
+          "family" => "loop",
+          "type" => "item_started",
+          "payload" => %{"item_id" => "i1", "item_type" => "message"}
+        },
+        %{
+          "id" => 3,
+          "turn_id" => "t1",
+          "ts" => 3,
+          "family" => "loop",
+          "type" => "item_completed",
+          "payload" => %{
+            "item_id" => "i1",
+            "item_type" => "message",
+            "content" => "replayed answer"
+          }
+        },
+        %{
+          "id" => 4,
+          "turn_id" => "t1",
+          "ts" => 4,
+          "family" => "loop",
+          "type" => "turn_completed",
+          "payload" => %{"final" => true}
+        }
+      ]
+
+      :ok =
+        Raxol.Agent.Code.Store.save(dir, key, %{messages: [], events: events})
+    end
+
+    test "prints the transcript and returns 0 without booting" do
+      seed_store_session("sess-replayable")
+
+      out =
+        capture_io(fn ->
+          assert Launcher.main(["--replay", "sess-replayable"],
+                   boot: fn -> flunk("boot ran") end
+                 ) == 0
+        end)
+
+      assert out =~ "replayed prompt"
+      assert out =~ "replayed answer"
+    end
+
+    test "a missing session prints an error and returns 1" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(["--replay", "sess-absent"],
+                   boot: fn -> flunk("boot ran") end
+                 ) == 1
+        end)
+
+      assert stderr =~ "not found"
+    end
+
+    test "--replay with --ssh is a usage error" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(
+                   ["--replay", "x", "--ssh", "--authorized-keys", "/tmp"],
+                   boot: fn -> flunk("boot ran") end
+                 ) == 64
+        end)
+
+      assert stderr =~ "--replay cannot combine with --ssh"
+    end
+
+    test "--replay with --resume is a usage error" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(["--replay", "x", "--resume", "y"],
+                   boot: fn -> flunk("boot ran") end
+                 ) == 64
+        end)
+
+      assert stderr =~ "cannot combine with --continue/--resume"
+    end
+
+    test "--to-offset without --replay is a usage error" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(["--to-offset", "5"],
+                   boot: fn -> flunk("boot ran") end
+                 ) == 64
+        end)
+
+      assert stderr =~ "--to-offset requires --replay"
+    end
+  end
+
   test "a boot veto prints the message and returns 1, before any UI" do
     stderr =
       capture_io(:stderr, fn ->

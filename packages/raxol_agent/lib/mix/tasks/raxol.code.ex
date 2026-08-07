@@ -10,6 +10,7 @@ defmodule Mix.Tasks.Raxol.Code do
       mix raxol.code --continue          # resume the most recent session
       mix raxol.code --resume sess-123-4  # resume a specific session
       mix raxol.code --sessions          # list saved sessions and exit
+      mix raxol.code --replay sess-123-4  # print a session transcript and exit
       mix raxol.code --ascii             # ASCII-only face for legacy terminals
 
   It boots `Raxol.Agent.Code.App`, a TEA app that owns a coding loop over
@@ -68,6 +69,9 @@ defmodule Mix.Tasks.Raxol.Code do
     * `--continue` — resume the most recently updated session
     * `--resume ID`— resume a specific session by id
     * `--sessions` — print saved sessions and exit
+    * `--replay ID` — print a session's transcript from its durable
+      journal and exit (falls back to the saved session file); with
+      `--to-offset N` stops at journal offset N
     * `--ascii`    — ASCII-only face (no `≡`/`·`)
     * `-h`/`--help` — print usage and exit
   """
