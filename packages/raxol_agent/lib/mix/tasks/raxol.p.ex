@@ -40,15 +40,34 @@ defmodule Mix.Tasks.Raxol.P do
     * `--write`    — expose write_file/edit_file/bash (opt-in; unattended)
     * `--no-tools` — plain completion, no tool loop
 
+  ## Benchmark / harness env contract
+
+  Unattended callers (benchmark harnesses, CI) configure the run via env
+  instead of flags -- see `Raxol.Agent.BenchmarkProfile`:
+
+      RAXOL_MODEL            provider/model (e.g. anthropic/claude-sonnet-4-6)
+      RAXOL_PROFILE          "benchmark" (allow-all tools, skills off)
+      RAXOL_MAX_TURNS        hard turn cap -> exit 2
+      RAXOL_MAX_COST_USD     hard spend cap -> exit 2 (needs RAXOL_COST_PER_MTOK_IN/OUT)
+      RAXOL_TRAJECTORY_PATH  trajectory JSON written on every exit path
+
+  CLI flags win over env. SIGTERM flushes the trajectory, emits a final
+  `error` event with reason `terminated`, and exits 143 -- a harness kill
+  is never mistaken for success.
+
   ## Exit codes
 
-  `0` success · `1` run error · `2` timeout · `64` usage error
+  `0` success · `1` run error · `2` timeout or budget exhausted ·
+  `64` usage error · `143` terminated (SIGTERM)
   """
 
   use Mix.Task
 
+  alias Raxol.Agent.BenchmarkProfile
   alias Raxol.Agent.Contract
   alias Raxol.Agent.SessionStreamer
+  alias Raxol.Agent.SignalTrap
+  alias Raxol.Agent.Trajectory
 
   @default_timeout_s 180
 
@@ -101,12 +120,22 @@ defmodule Mix.Tasks.Raxol.P do
       "--no-elixir-version-check"
     ])
 
+    profile =
+      case BenchmarkProfile.from_env() do
+        {:ok, profile} -> profile
+        {:error, message} -> usage_error(message)
+      end
+
+    # Claim SIGTERM unconditionally: the BEAM default turns it into a clean
+    # exit 0, which a harness reads as success. We flush and exit 143.
+    SignalTrap.install(self())
+
     ensure_streamer!()
 
     session_id = "cli-#{System.unique_integer([:positive])}"
     :ok = SessionStreamer.subscribe(session_id)
 
-    stream_opts = build_stream_opts(prompt, opts)
+    stream_opts = build_stream_opts(prompt, opts, profile)
     use_tools = Keyword.get(opts, :tools, true)
 
     runner =
@@ -122,7 +151,18 @@ defmodule Mix.Tasks.Raxol.P do
       end)
 
     timeout_ms = Keyword.get(opts, :timeout, @default_timeout_s) * 1_000
-    status = consume(session_id, runner, timeout_ms, %{wrote_stdout: false})
+
+    state = %{
+      wrote_stdout: false,
+      profile: profile,
+      prompt: prompt,
+      backend: Keyword.get(stream_opts, :executor).backend,
+      turns: 0,
+      usage: %{input_tokens: 0, output_tokens: 0},
+      events: if(profile.trajectory_path, do: [], else: nil)
+    }
+
+    status = consume(session_id, runner, timeout_ms, state)
     exit({:shutdown, status})
   end
 
@@ -141,9 +181,12 @@ defmodule Mix.Tasks.Raxol.P do
     end
   end
 
-  defp build_stream_opts(_prompt, opts) do
+  defp build_stream_opts(_prompt, opts, profile) do
     # raxol.p reserves stderr for the JSONL event stream, so pass prog: nil to
     # suppress the plain-text deprecation notice that would corrupt it.
+    # CLI flags win over the env profile; the profile wins over defaults.
+    opts = apply_profile_defaults(opts, profile)
+
     backend =
       case Raxol.Agent.Backend.Cli.resolve(opts, nil) do
         {:ok, backend} -> backend
@@ -175,27 +218,49 @@ defmodule Mix.Tasks.Raxol.P do
       executor: executor,
       backend_opts: backend_opts,
       system_prompt: system,
-      actions: actions_for(write?)
-    ] ++ context_for(write?)
+      actions: actions_for(write?, profile)
+    ] ++ context_for(write?, profile)
+  end
+
+  defp apply_profile_defaults(opts, %BenchmarkProfile{} = profile) do
+    opts
+    |> maybe_default(:backend, profile.backend && Atom.to_string(profile.backend))
+    |> maybe_default(:model, profile.model)
+  end
+
+  defp maybe_default(opts, _key, nil), do: opts
+
+  defp maybe_default(opts, key, value) do
+    if Keyword.has_key?(opts, key), do: opts, else: Keyword.put(opts, key, value)
   end
 
   # Read-only by default (fs read tools + grep/glob). `--write` adds the
   # mutating coding tools (write_file/edit_file/bash), which are `sensitive`
   # and denied under the default policy — so it also installs an allow-all
   # authorizer to actually let them run in this unattended headless flow.
-  defp actions_for(false),
+  #
+  # The benchmark profile forces write-mode semantics (no human to ask; the
+  # task container is the blast radius) and drops skills entirely: task
+  # attempts must be independent, so no cross-run skill loop.
+  defp actions_for(_write?, %BenchmarkProfile{active?: true}),
+    do: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all()
+
+  defp actions_for(false, _profile),
     do:
       Raxol.Agent.Actions.Fs.all() ++
         Raxol.Agent.Actions.Code.read_only() ++ Raxol.Agent.Skills.enabled_actions()
 
-  defp actions_for(true),
+  defp actions_for(true, _profile),
     do:
       Raxol.Agent.Actions.Fs.all() ++
         Raxol.Agent.Actions.Code.all() ++ Raxol.Agent.Skills.enabled_actions()
 
-  defp context_for(false), do: maybe_skills_context(%{})
+  defp context_for(_write?, %BenchmarkProfile{active?: true}),
+    do: [context: %{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()}]
 
-  defp context_for(true),
+  defp context_for(false, _profile), do: maybe_skills_context(%{})
+
+  defp context_for(true, _profile),
     do: maybe_skills_context(%{tool_authorizer: Raxol.Agent.ToolPolicy.allow_all()})
 
   # Add the configured skills store under context[:skills]; keep the empty-context
@@ -219,27 +284,96 @@ defmodule Mix.Tasks.Raxol.P do
     receive do
       {:session_event, ^session_id, %Contract.Event{} = event} ->
         IO.write(:stderr, Contract.encode_line(event))
-        state = render_stdout(event, state)
+
+        state =
+          event
+          |> render_stdout(state)
+          |> track(event)
 
         case event do
           %{type: :turn_completed, payload: %{final: true}} ->
             Task.await(runner, 5_000)
             if state.wrote_stdout, do: IO.write("\n")
-            0
+            finish(state, 0, :completed)
 
           %{type: :error} ->
             Task.await(runner, 5_000)
-            1
+            finish(state, 1, :error)
 
           _ ->
-            consume(session_id, runner, timeout_ms, state)
+            check_budget_then_continue(session_id, runner, timeout_ms, state)
         end
+
+      {:os_signal, :sigterm} ->
+        IO.puts(
+          :stderr,
+          ~s({"type":"error","payload":{"reason":"terminated"}})
+        )
+
+        Task.shutdown(runner, :brutal_kill)
+        finish(state, 143, :terminated)
     after
       timeout_ms ->
         IO.puts(:stderr, ~s({"type":"error","payload":{"reason":"timeout"}}))
         Task.shutdown(runner, :brutal_kill)
-        2
+        finish(state, 2, :timeout)
     end
+  end
+
+  defp check_budget_then_continue(session_id, runner, timeout_ms, state) do
+    case BenchmarkProfile.budget_status(state.profile, state.turns, state.usage) do
+      :ok ->
+        consume(session_id, runner, timeout_ms, state)
+
+      {:exceeded, cap} ->
+        IO.puts(
+          :stderr,
+          ~s({"type":"error","payload":{"reason":"budget_exhausted","cap":"#{cap}"}})
+        )
+
+        Task.shutdown(runner, :brutal_kill)
+        finish(state, 2, :budget_exhausted)
+    end
+  end
+
+  # Accumulate turn/usage totals and (when a trajectory is requested) the
+  # event list itself.
+  defp track(state, %{type: :turn_completed, payload: payload} = event) do
+    state
+    |> Map.update!(:turns, &(&1 + 1))
+    |> Map.update!(:usage, &BenchmarkProfile.add_usage(&1, Map.get(payload, :usage, %{})))
+    |> record(event)
+  end
+
+  defp track(state, event), do: record(state, event)
+
+  defp record(%{events: nil} = state, _event), do: state
+  defp record(state, event), do: Map.update!(state, :events, &[event | &1])
+
+  # Every exit path flushes the trajectory (when configured) and returns the
+  # status for `exit({:shutdown, status})`.
+  defp finish(state, exit_code, reason) do
+    case state.profile.trajectory_path do
+      nil ->
+        :ok
+
+      path ->
+        trajectory =
+          Trajectory.build(Enum.reverse(state.events || []), %{
+            prompt: state.prompt,
+            backend: state.backend,
+            model: state.profile.model,
+            profile: state.profile,
+            turns: state.turns,
+            usage: state.usage,
+            exit_code: exit_code,
+            reason: reason
+          })
+
+        Trajectory.write(path, trajectory)
+    end
+
+    exit_code
   end
 
   # stdout carries the ANSWER only. Stream deltas as they arrive; if the
