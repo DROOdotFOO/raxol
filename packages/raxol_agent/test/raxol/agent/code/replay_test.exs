@@ -136,6 +136,41 @@ defmodule Raxol.Agent.Code.ReplayTest do
     assert message =~ "invalid session id"
   end
 
+  test "a rewind marker hides the dropped turn; an earlier offset bound does not" do
+    base = tmp_dir()
+    {:ok, journal} = FileStore.open("sess-rw", base_dir: base)
+
+    events =
+      message_turn("t1", "one", "first") ++ message_turn("t2", "two", "second")
+
+    Enum.each(events, fn event ->
+      {:ok, _offset} = FileStore.append(journal, event)
+    end)
+
+    marker = %{
+      v: 0,
+      session_id: "sess-rw",
+      turn_id: nil,
+      ts: 9,
+      family: :meta,
+      type: :rewind,
+      tier: :durable,
+      payload: %{"dropped_turn" => "t2"}
+    }
+
+    {:ok, 9} = FileStore.append(journal, marker)
+    :ok = FileStore.close(journal)
+
+    {:ok, text} = Replay.run("sess-rw", base_dir: base)
+    assert text =~ "4 events"
+    assert text =~ "first"
+    refute text =~ "second"
+
+    # Bounding below the marker's offset replays the pre-rewind state.
+    {:ok, text} = Replay.run("sess-rw", base_dir: base, to_offset: 8)
+    assert text =~ "second"
+  end
+
   test "a damaged journal errors instead of rendering partial state" do
     base = tmp_dir()
     seed_journal(base, "sess-d", message_turn("t1", "p", "a"))

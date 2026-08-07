@@ -887,6 +887,77 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
+  describe "/rewind" do
+    defp run_turn(model, turn_id, prompt, answer) do
+      {model, []} = submit(model, prompt)
+      Enum.reduce(message_turn(turn_id, answer), model, &send_ev(&2, &1))
+    end
+
+    test "drops the last turn from transcript, conversation, store, and marks the journal" do
+      base = tmp_dir()
+      model = new_model(journal_opts: [base_dir: base])
+
+      model =
+        model
+        |> run_turn("t1", "ask one", "first answer")
+        |> run_turn("t2", "ask two", "second answer")
+
+      assert length(model.messages) == 4
+
+      {model, []} = submit(model, "/rewind")
+
+      assert model.notice =~ "rewound"
+      assert Enum.map(model.events, & &1.turn_id) |> Enum.uniq() == ["t1"]
+
+      assert model.messages == [
+               %{role: :user, content: "ask one"},
+               %{role: :assistant, content: "first answer"}
+             ]
+
+      # The store persisted the truncated state.
+      {:ok, saved} =
+        Raxol.Agent.Code.Store.load(model.sessions_dir, model.session_key)
+
+      assert length(saved.events) == 4
+
+      # The append-only journal keeps the turn plus a rewind marker.
+      close_journal!(model)
+
+      {:ok, records} =
+        Raxol.Agent.Journal.FileStore.read_records(
+          model.session_key,
+          base_dir: base
+        )
+
+      assert List.last(records)["type"] == "rewind"
+
+      assert get_in(List.last(records), ["payload", "dropped_turn"]) ==
+               "t2"
+    end
+
+    test "with no turns there is nothing to rewind" do
+      {model, []} = submit(new_model(), "/rewind")
+      assert model.notice =~ "nothing to rewind"
+    end
+
+    test "refuses while a turn is running" do
+      model = %{new_model() | running?: false}
+      {model, []} = submit(model, "ask")
+      assert model.running?
+
+      # Slash input is swallowed mid-turn, so call the command through the
+      # dispatch used when the turn has just ended but running? was stale.
+      {rewound, []} =
+        App.update(
+          key(:enter),
+          %{model | running?: true, input: "/rewind"}
+        )
+
+      # Mid-turn enter is swallowed entirely (input preserved).
+      assert rewound.input == "/rewind"
+    end
+  end
+
   describe "slash commands" do
     test "/help shows a notice and does not start a turn" do
       {model, []} = submit(new_model(), "/help")

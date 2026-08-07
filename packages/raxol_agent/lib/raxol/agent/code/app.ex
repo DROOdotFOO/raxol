@@ -798,6 +798,96 @@ defmodule Raxol.Agent.Code.App do
   defp close_journal(%FileStore{} = journal), do: FileStore.close(journal)
   defp close_journal(_none), do: :ok
 
+  # -- /rewind ----------------------------------------------------------------
+
+  # Drops the last turn from the transcript and the conversation in
+  # lockstep. The journal is append-only, so the drop is recorded there as
+  # a meta `:rewind` marker — replay applies markers in offset order and
+  # so converges with the live session; the JSON store just persists the
+  # truncated state.
+  defp rewind(%{running?: true} = model),
+    do: notice(model, "cannot rewind while a turn is running")
+
+  defp rewind(model) do
+    case last_turn_id(model.events) do
+      nil ->
+        notice(model, "nothing to rewind")
+
+      turn_id ->
+        {dropped, kept} =
+          Enum.split_with(model.events, &(&1.turn_id == turn_id))
+
+        {messages, dropped_messages} = drop_turn_messages(model.messages)
+        {model, marker_warning} = journal_rewind_marker(model, turn_id)
+
+        model =
+          persist(%{
+            model
+            | events: kept,
+              messages: messages,
+              turn_answer: "",
+              face_state: :idle
+          })
+
+        note =
+          "rewound — dropped #{length(dropped)} events, " <>
+            "#{dropped_messages} messages"
+
+        notice(model, join_notes(note, marker_warning))
+    end
+  end
+
+  defp join_notes(note, nil), do: note
+  defp join_notes(note, warning), do: note <> " · " <> warning
+
+  defp last_turn_id(events),
+    do: events |> Enum.reverse() |> Enum.find_value(& &1.turn_id)
+
+  # The turn's conversation tail is at most one user prompt plus one
+  # assistant reply (an errored turn appends no reply).
+  defp drop_turn_messages(messages) do
+    case Enum.reverse(messages) do
+      [%{role: :assistant}, %{role: :user} | rest] ->
+        {Enum.reverse(rest), 2}
+
+      [%{role: :assistant} | rest] ->
+        {Enum.reverse(rest), 1}
+
+      [%{role: :user} | rest] ->
+        {Enum.reverse(rest), 1}
+
+      _other ->
+        {messages, 0}
+    end
+  end
+
+  defp journal_rewind_marker(model, turn_id) do
+    case ensure_journal(model) do
+      {:ok, model} ->
+        record = %{
+          v: 0,
+          session_id: model.session_key,
+          turn_id: nil,
+          ts: System.system_time(:microsecond),
+          family: :meta,
+          type: :rewind,
+          tier: :durable,
+          payload: %{"dropped_turn" => turn_id}
+        }
+
+        case FileStore.append(model.journal, record) do
+          {:ok, _offset} ->
+            {model, nil}
+
+          {:error, _reason} ->
+            {model, "journal marker failed — --replay may still show it"}
+        end
+
+      {:error, _reason} ->
+        {model, "journal unavailable — --replay may still show it"}
+    end
+  end
+
   # A completed message item is assistant answer text — accumulate it so the
   # conversation memory gets the reply when the turn closes.
   defp accumulate_answer(model, %{type: :item_completed, payload: payload}) do
@@ -1057,6 +1147,8 @@ defmodule Raxol.Agent.Code.App do
     do: {notice(model, usage_text(model)), []}
 
   defp apply_command("compact", _arg, model), do: {compact(model), []}
+
+  defp apply_command("rewind", _arg, model), do: {rewind(model), []}
 
   defp apply_command("sessions", _arg, model),
     do: {notice(model, sessions_text(model)), []}
@@ -1772,6 +1864,7 @@ defmodule Raxol.Agent.Code.App do
     /model [name]      switch model (no name = pick from the provider's list)
     /plan              toggle plan mode
     /compact           shrink the conversation history
+    /rewind            drop the last turn (transcript + conversation)
     /context           session stats
     /usage             session token and cost totals
     /sessions          list saved sessions

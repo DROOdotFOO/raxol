@@ -36,7 +36,6 @@ defmodule Raxol.Agent.Code.Replay do
   def run(session_id, opts \\ []) when is_binary(session_id) do
     with :ok <- validate_id(session_id),
          {:ok, source, events} <- load_events(session_id, opts) do
-      events = bound(events, Keyword.get(opts, :to_offset))
       projection = Projection.project(events)
       {:ok, render(session_id, source, events, projection)}
     end
@@ -56,7 +55,17 @@ defmodule Raxol.Agent.Code.Replay do
         store_events(session_id, opts)
 
       {:ok, records} ->
-        {:ok, :journal, EventCodec.decode_all(records)}
+        events =
+          records
+          |> bound_records(Keyword.get(opts, :to_offset))
+          |> apply_rewinds()
+          |> Enum.filter(&event_record?/1)
+          |> EventCodec.decode_all()
+          # Rewind filtering leaves offset gaps that are history, not
+          # damage — renumber densely so id recovery stays quiet.
+          |> renumber()
+
+        {:ok, :journal, events}
 
       {:error, :damaged} ->
         {:error,
@@ -64,12 +73,42 @@ defmodule Raxol.Agent.Code.Replay do
     end
   end
 
+  # `:to_offset` means "the journal as of offset N", so it applies before
+  # rewind markers: a bound below a marker's offset replays the state the
+  # marker had not yet rewound.
+  defp bound_records(records, nil), do: records
+
+  defp bound_records(records, to_offset) when is_integer(to_offset),
+    do: Enum.filter(records, &(&1["id"] <= to_offset))
+
+  # Only event-kind records replay; a missing kind grandfathers to
+  # "event" (the same rule `Journal.Tip` applies). Checkpoint pointers and
+  # other non-event kinds carry no foldable payload.
+  defp event_record?(record),
+    do: Map.get(record, "kind", "event") == "event"
+
+  # A meta `:rewind` marker (written by the TUI's /rewind) drops every
+  # prior record of the turn it names; the marker itself never renders.
+  defp apply_rewinds(records) do
+    records
+    |> Enum.reduce([], fn
+      %{"family" => "meta", "type" => "rewind"} = marker, acc ->
+        dropped_turn = get_in(marker, ["payload", "dropped_turn"])
+        Enum.reject(acc, &(&1["turn_id"] == dropped_turn))
+
+      record, acc ->
+        [record | acc]
+    end)
+    |> Enum.reverse()
+  end
+
   defp store_events(session_id, opts) do
     dir = Keyword.get(opts, :store_dir) || Store.default_dir()
 
     case Store.load(dir, session_id) do
       {:ok, %{events: events}} ->
-        {:ok, :store, renumber(events)}
+        events = events |> renumber() |> bound(Keyword.get(opts, :to_offset))
+        {:ok, :store, events}
 
       {:error, :not_found} ->
         {:error,
