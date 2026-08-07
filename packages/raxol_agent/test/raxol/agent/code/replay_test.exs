@@ -5,10 +5,13 @@ defmodule Raxol.Agent.Code.ReplayTest do
   alias Raxol.Agent.Code.Store
   alias Raxol.Agent.Journal.FileStore
 
+  # Time component: `unique_integer` restarts every BEAM run and these
+  # dirs outlive the run, so reruns could collide with leftovers.
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),
-      "raxol-replay-#{System.unique_integer([:positive])}"
+      "raxol-replay-#{System.os_time(:millisecond)}-" <>
+        "#{System.unique_integer([:positive])}"
     )
   end
 

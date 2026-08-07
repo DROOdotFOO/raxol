@@ -22,10 +22,13 @@ defmodule Raxol.Agent.Code.AppTest do
     App.init(%{options: opts})
   end
 
+  # `unique_integer` restarts every BEAM run and these dirs outlive the
+  # run, so a time component keeps reruns from colliding with leftovers.
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),
-      "raxol-code-app-#{System.unique_integer([:positive])}"
+      "raxol-code-app-#{System.os_time(:millisecond)}-" <>
+        "#{System.unique_integer([:positive])}"
     )
   end
 
@@ -884,6 +887,149 @@ defmodule Raxol.Agent.Code.AppTest do
       {_model, commands} = App.update(key("c", [:ctrl]), model)
       assert commands != []
       refute Process.alive?(writer)
+    end
+  end
+
+  describe "/resume" do
+    test "/resume <id> switches sessions in place, persisting the departing one" do
+      dir = tmp_dir()
+
+      first = new_model(sessions_dir: dir)
+      {first, []} = submit(first, "ask one")
+
+      first =
+        Enum.reduce(message_turn("t1", "first answer"), first, &send_ev(&2, &1))
+
+      first_key = first.session_key
+
+      # A second session in the same store.
+      second = new_model(sessions_dir: dir)
+      {second, []} = submit(second, "ask two")
+
+      second =
+        Enum.reduce(
+          message_turn("t2", "second answer"),
+          second,
+          &send_ev(&2, &1)
+        )
+
+      {switched, []} = submit(second, "/resume #{first_key}")
+
+      assert switched.session_key == first_key
+      assert switched.notice =~ "resumed #{first_key}"
+
+      assert Enum.map(switched.messages, & &1.content) == [
+               "ask one",
+               "first answer"
+             ]
+
+      # The departing session was persisted before switching.
+      {:ok, saved} =
+        Raxol.Agent.Code.Store.load(dir, second.session_key)
+
+      assert Enum.map(saved.messages, & &1.content) == [
+               "ask two",
+               "second answer"
+             ]
+    end
+
+    test "/resume with an unknown id notices without switching" do
+      model = new_model()
+      {after_cmd, []} = submit(model, "/resume sess-does-not-exist")
+      assert after_cmd.session_key == model.session_key
+      assert after_cmd.notice =~ "not found"
+    end
+
+    test "/resume with no arg opens a picker; Enter resumes the selection" do
+      dir = tmp_dir()
+
+      other = new_model(sessions_dir: dir)
+      {other, []} = submit(other, "ask other")
+
+      other =
+        Enum.reduce(message_turn("t1", "other answer"), other, &send_ev(&2, &1))
+
+      test_pid = self()
+
+      model =
+        new_model(
+          sessions_dir: dir,
+          sessions_fetcher: fn dir, ref, _app ->
+            send(test_pid, {:listed, dir, ref})
+          end
+        )
+
+      {model, []} = submit(model, "/resume")
+      assert model.sessions_ref != nil
+      assert_received {:listed, ^dir, ref}
+      assert ref == model.sessions_ref
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}},
+          model
+        )
+
+      assert model.wizard.step == :sessions
+      assert model.sessions_ref == nil
+
+      {model, []} = App.update(key(:enter), model)
+
+      assert model.session_key == other.session_key
+      assert model.wizard == nil
+
+      assert Enum.map(model.messages, & &1.content) == [
+               "ask other",
+               "other answer"
+             ]
+    end
+
+    test "an empty store notices instead of opening the picker" do
+      model = new_model()
+      {model, []} = submit(model, "/resume")
+
+      {model, []} =
+        App.update(
+          {:command_result, {:sessions_list, model.sessions_ref, []}},
+          model
+        )
+
+      assert model.wizard == nil
+      assert model.notice =~ "no saved sessions"
+    end
+  end
+
+  describe "/fork" do
+    test "forks to a fresh key that records its parent, keeping both files" do
+      dir = tmp_dir()
+      model = new_model(sessions_dir: dir)
+      {model, []} = submit(model, "ask")
+
+      model =
+        Enum.reduce(message_turn("t1", "the answer"), model, &send_ev(&2, &1))
+
+      parent_key = model.session_key
+      {forked, []} = submit(model, "/fork side quest")
+
+      assert forked.session_key != parent_key
+      assert forked.parent == parent_key
+      assert forked.title == "side quest"
+      assert forked.notice =~ "forked to #{forked.session_key}"
+
+      # Both files exist; the fork carries the full conversation + parent.
+      {:ok, original} = Raxol.Agent.Code.Store.load(dir, parent_key)
+      {:ok, fork} = Raxol.Agent.Code.Store.load(dir, forked.session_key)
+
+      assert original.parent == nil
+      assert fork.parent == parent_key
+      assert fork.messages == original.messages
+      assert length(fork.events) == 4
+    end
+
+    test "an empty session has nothing to fork" do
+      {model, []} = submit(new_model(), "/fork")
+      assert model.notice =~ "nothing to fork"
     end
   end
 

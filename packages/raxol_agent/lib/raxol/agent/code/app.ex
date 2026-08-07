@@ -162,6 +162,17 @@ defmodule Raxol.Agent.Code.App do
           :models_fetcher,
           &__MODULE__.default_models_fetcher/3
         ),
+      # `/resume` with no arg lists saved sessions off the app process
+      # (Store.list reads every session file); the result rides back as a
+      # `:sessions_list` message matched by this ref. Injectable,
+      # mirroring `:models_fetcher`.
+      sessions_ref: nil,
+      sessions_fetcher:
+        Keyword.get(
+          options,
+          :sessions_fetcher,
+          &__MODULE__.default_sessions_fetcher/3
+        ),
       # `/inspect` gathers off the app process (provider probing may shell
       # out to `op`, which must never stall the update loop); the rendered
       # snapshot rides back as an `:inspection_result` message matched by
@@ -382,6 +393,15 @@ defmodule Raxol.Agent.Code.App do
 
   # An async `/model` model-list fetch result. Applied only when its ref still
   # matches the latest fetch (a newer `/model` supersedes an in-flight one).
+  # An async `/resume` session list. Same ref discipline as `:models_list`.
+  def update({:command_result, {:sessions_list, ref, sessions}}, model) do
+    if ref == model.sessions_ref do
+      {apply_sessions_result(model, sessions), []}
+    else
+      {model, []}
+    end
+  end
+
   def update({:command_result, {:models_list, ref, result}}, model) do
     if ref == model.models_ref,
       do: {apply_models_result(model, result), []},
@@ -527,11 +547,11 @@ defmodule Raxol.Agent.Code.App do
   # selects it. A typed prompt or slash command still takes precedence (so the
   # `/login <provider> ...` text path stays reachable alongside the wizard).
   defp handle_key(:up, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models],
+       when step in [:browse, :models, :sessions],
        do: {wizard_move(model, -1), []}
 
   defp handle_key(:down, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models],
+       when step in [:browse, :models, :sessions],
        do: {wizard_move(model, +1), []}
 
   defp handle_key(:enter, model) do
@@ -559,7 +579,7 @@ defmodule Raxol.Agent.Code.App do
   # Esc closes the browse/model list (reopen with /login or /model); the modal
   # steps handle their own Esc in handle_wizard/2.
   defp handle_key(:escape, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models],
+       when step in [:browse, :models, :sessions],
        do: {close_wizard(model), []}
 
   defp handle_key(_key, model), do: {model, []}
@@ -1180,6 +1200,16 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("rename", arg, model),
     do: {rename(model, String.trim(arg)), []}
 
+  defp apply_command("resume", arg, model) do
+    case String.trim(arg) do
+      "" -> {open_session_picker(model), []}
+      key -> {switch_session(model, key), []}
+    end
+  end
+
+  defp apply_command("fork", arg, model),
+    do: {fork_session(model, String.trim(arg)), []}
+
   defp apply_command("sessions", _arg, model),
     do: {notice(model, sessions_text(model)), []}
 
@@ -1512,6 +1542,15 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp maybe_wizard_select(
+         %{wizard: %{step: :sessions, entries: entries, cursor: cursor}} = model
+       ) do
+    case Enum.at(entries, cursor) do
+      nil -> model
+      entry -> switch_session(%{model | wizard: nil}, entry.id)
+    end
+  end
+
+  defp maybe_wizard_select(
          %{wizard: %{step: :models, entries: entries, cursor: cursor}} = model
        ) do
     case Enum.at(entries, cursor) do
@@ -1721,6 +1760,113 @@ defmodule Raxol.Agent.Code.App do
   defp rename(model, title),
     do:
       %{model | title: title} |> persist() |> notice(~s(renamed to "#{title}"))
+
+  # -- /resume + /fork --------------------------------------------------------
+
+  defp open_session_picker(model) do
+    ref = make_ref()
+    model.sessions_fetcher.(model.sessions_dir, ref, self())
+    %{model | sessions_ref: ref} |> put_status("listing sessions…")
+  end
+
+  @doc false
+  # Lists sessions off the app process (Store.list reads every session
+  # file); the result rides back as a `:sessions_list` message.
+  def default_sessions_fetcher(dir, ref, app) do
+    spawn(fn ->
+      send(
+        app,
+        {:command_result,
+         {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}}
+      )
+    end)
+  end
+
+  defp apply_sessions_result(model, []) do
+    %{model | sessions_ref: nil, status_line: nil}
+    |> notice("no saved sessions")
+  end
+
+  defp apply_sessions_result(model, sessions) do
+    entries =
+      sessions
+      |> Enum.take(20)
+      |> Enum.map(&%{id: &1.id, label: session_line(&1)})
+
+    cursor = Enum.find_index(entries, &(&1.id == model.session_key)) || 0
+
+    %{
+      model
+      | sessions_ref: nil,
+        status_line: nil,
+        wizard: %{step: :sessions, entries: entries, cursor: cursor}
+    }
+  end
+
+  # Switching persists the departing session first (nothing is lost),
+  # closes its journal, and rebuilds transcript + conversation from the
+  # target — the in-place version of `--resume`.
+  defp switch_session(%{running?: true} = model, _key),
+    do: notice(model, "cannot switch sessions while a turn is running")
+
+  defp switch_session(%{session_key: key} = model, key),
+    do: notice(model, "already in session #{key}")
+
+  defp switch_session(model, key) do
+    case Raxol.Agent.Code.Store.load(model.sessions_dir, key) do
+      {:ok, saved} ->
+        model = if session_dirty?(model), do: persist(model), else: model
+        close_journal(model.journal)
+        events = renumber_events(saved.events)
+
+        %{
+          model
+          | session_key: key,
+            messages: saved.messages,
+            events: events,
+            next_event_id: length(events) + 1,
+            journal: nil,
+            title: saved.title,
+            parent: saved.parent,
+            turn_answer: "",
+            face_state: :idle,
+            wizard: nil
+        }
+        |> notice("resumed #{key} (#{length(saved.messages)} messages)")
+
+      {:error, :not_found} ->
+        notice(model, "session #{key} not found — try /sessions")
+    end
+  end
+
+  defp session_dirty?(model), do: model.messages != [] or model.events != []
+
+  # Copy-fork: the conversation and transcript continue under a fresh key
+  # whose store entry names its parent; the original session file stays
+  # intact. The fork's journal starts fresh on its next durable event.
+  defp fork_session(%{running?: true} = model, _title),
+    do: notice(model, "cannot fork while a turn is running")
+
+  defp fork_session(model, title) do
+    if session_dirty?(model) do
+      parent = model.session_key
+      model = persist(model)
+      close_journal(model.journal)
+      new_key = mint_session_key()
+
+      %{
+        model
+        | session_key: new_key,
+          parent: parent,
+          title: if(title == "", do: model.title, else: title),
+          journal: nil
+      }
+      |> persist()
+      |> notice("forked to #{new_key} (from #{parent})")
+    else
+      notice(model, "nothing to fork yet")
+    end
+  end
 
   # `/model` with no arg on a connected provider fetches its model list and
   # opens a selectable picker; otherwise it just shows the current model.
@@ -1950,6 +2096,8 @@ defmodule Raxol.Agent.Code.App do
     /context           session stats
     /usage             session token and cost totals
     /sessions          list saved sessions
+    /resume [id]       switch session (no id = pick from a list)
+    /fork [title]      branch a copy of this session and continue there
     /rename <title>    title this session (shown in /sessions)
     /mcp               list configured MCP servers
     /hooks             show configured lifecycle hooks
@@ -1986,6 +2134,9 @@ defmodule Raxol.Agent.Code.App do
   defp setup_block(%{wizard: %{step: :confirm_save} = wizard}),
     do: confirm_save_panel(wizard)
 
+  defp setup_block(%{wizard: %{step: :sessions} = wizard}),
+    do: sessions_panel(wizard)
+
   defp setup_block(%{wizard: %{step: :models} = wizard}),
     do: models_panel(wizard)
 
@@ -2016,6 +2167,24 @@ defmodule Raxol.Agent.Code.App do
     fg = if selected?, do: :cyan, else: :white
     style = if selected?, do: [:bold], else: []
     text("#{marker} #{entry.label}", fg: fg, style: style)
+  end
+
+  defp sessions_panel(%{entries: entries, cursor: cursor}) do
+    rows =
+      entries
+      |> Enum.with_index()
+      |> Enum.map(fn {entry, index} -> model_row(entry, index == cursor) end)
+
+    box style: %{border: :single, padding: 0} do
+      column style: %{gap: 0} do
+        [
+          text("resume a session  (↑↓ move · Enter resume · Esc cancel)",
+            fg: :yellow,
+            style: [:bold]
+          )
+        ] ++ rows
+      end
+    end
   end
 
   defp browse_panel(%{entries: entries, cursor: cursor}) do
