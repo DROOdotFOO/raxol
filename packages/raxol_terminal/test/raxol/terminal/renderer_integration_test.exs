@@ -31,7 +31,8 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
         bright_black: "#808080"
       },
       background: %{
-        default: "#000000"
+        default: "#000000",
+        blue: "#0000FF"
       }
     }
 
@@ -74,7 +75,10 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
       end
 
       assert output =~ ansi_fg("#FFFFFF")
-      assert output =~ ansi_bg("#000000")
+      # An unpainted background emits no background escape at all --
+      # transparency survives (see build_ansi_prefix/2 in the renderer).
+      refute output =~ "\e[48;2;"
+      refute output =~ ~r/\e\[4[0-7]m/
       assert output =~ @ansi_reset
 
       # Delete text (delete 2 chars at 0,0)
@@ -311,9 +315,11 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
     test "handles empty buffer", %{renderer: renderer} do
       output = Renderer.render(renderer)
 
-      # All cells should have default theme colors
+      # Default foreground paints; unpainted backgrounds emit nothing
+      # so transparency survives.
       assert output =~ ansi_fg("#FFFFFF")
-      assert output =~ ansi_bg("#000000")
+      refute output =~ "\e[48;2;"
+      refute output =~ ~r/\e\[4[0-7]m/
       assert output =~ @ansi_reset
     end
 
@@ -328,7 +334,34 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
       output = Renderer.render(renderer)
 
       assert output =~ ansi_fg("#FFFFFF")
-      assert output =~ ansi_bg("#000000")
+      refute output =~ "\e[48;2;"
+      refute output =~ ~r/\e\[4[0-7]m/
+    end
+
+    test "paints an explicitly set background", %{
+      renderer: renderer,
+      buffer: buffer
+    } do
+      style =
+        struct(
+          Raxol.Terminal.ANSI.TextFormatting,
+          Map.merge(
+            Map.from_struct(Raxol.Terminal.ANSI.TextFormatting.new()),
+            %{background: :blue}
+          )
+        )
+
+      row =
+        [Raxol.Terminal.Cell.new("X", style)] ++
+          List.duplicate(Raxol.Terminal.Cell.new(), buffer.width - 1)
+
+      buffer = %{buffer | cells: [row | Enum.drop(buffer.cells, 1)]}
+      renderer = %{renderer | screen_buffer: buffer}
+
+      output = Renderer.render(renderer)
+
+      # Theme-resolved :blue -> #0000FF -> 24-bit background escape
+      assert output =~ ansi_bg("#0000FF")
     end
 
     test "handles buffer with special characters", %{

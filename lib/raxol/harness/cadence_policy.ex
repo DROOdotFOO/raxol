@@ -169,15 +169,24 @@ defmodule Raxol.Harness.CadencePolicy do
   The number of pending items to drain into a single flush batch: the
   lesser of `pending_count` and the configured max drain.
 
+  The configured cap is clamped to at least 1: a batch that drains
+  nothing makes no forward progress, and `StreamCadence`'s forced full
+  drain loops until pending hits zero -- a zero cap would spin it
+  forever. Zero pending still drains zero; only the cap has a floor.
+
   ## Options
 
     * `:max_drain_per_flush` -- override the module's default per-flush
-      cap.
+      cap (clamped to a minimum of 1).
   """
   @spec drain_count(pending_count :: non_neg_integer(), opts :: keyword()) ::
           non_neg_integer()
   def drain_count(pending_count, opts \\ []) do
-    max_drain = Keyword.get(opts, :max_drain_per_flush, @max_drain_per_flush)
+    max_drain =
+      opts
+      |> Keyword.get(:max_drain_per_flush, @max_drain_per_flush)
+      |> max(1)
+
     min(pending_count, max_drain)
   end
 

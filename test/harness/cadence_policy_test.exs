@@ -129,6 +129,16 @@ defmodule Raxol.Harness.CadencePolicyTest do
     test "override does not raise the cap for small counts" do
       assert CadencePolicy.drain_count(5, max_drain_per_flush: 10) == 5
     end
+
+    # A zero cap would make StreamCadence's forced full drain spin
+    # forever (each pass drains nothing, pending never reaches zero).
+    test "a zero cap is clamped to 1 so every batch makes progress" do
+      assert CadencePolicy.drain_count(5, max_drain_per_flush: 0) == 1
+    end
+
+    test "zero pending drains zero even with a zero cap" do
+      assert CadencePolicy.drain_count(0, max_drain_per_flush: 0) == 0
+    end
   end
 
   describe "decide/5 -- consecutive-yield budget" do
