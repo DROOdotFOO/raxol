@@ -87,7 +87,8 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
            port: port(),
            mode: mode(),
            framer: Framer.t(),
-           closed: boolean()
+           closed: boolean(),
+           pending: [term()]
          }
 
   # -- Construction --------------------------------------------------------
@@ -176,13 +177,17 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
           {:ok, server_state()}
   def init({:self, owner}) do
     port = Port.open({:fd, 0, 1}, [:binary, :eof])
-    {:ok, %{owner: owner, port: port, mode: :self, framer: Framer.new(), closed: false}}
+
+    {:ok,
+     %{owner: owner, port: port, mode: :self, framer: Framer.new(), closed: false, pending: []}}
   end
 
   def init({:spawn, path, args, spawn_opts, owner}) do
     port_opts = [:binary, :exit_status, args: args] ++ build_spawn_opts(spawn_opts)
     port = Port.open({:spawn_executable, String.to_charlist(path)}, port_opts)
-    {:ok, %{owner: owner, port: port, mode: :spawn, framer: Framer.new(), closed: false}}
+
+    {:ok,
+     %{owner: owner, port: port, mode: :spawn, framer: Framer.new(), closed: false, pending: []}}
   end
 
   @spec build_spawn_opts(keyword()) :: keyword()
@@ -196,7 +201,14 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
 
   @impl GenServer
   def handle_call({:set_owner, owner}, _from, state) when is_pid(owner) do
-    {:reply, :ok, %{state | owner: owner}}
+    # Flush frames that arrived before adoption, in arrival order, so a peer
+    # that wrote (e.g. an editor's `initialize`) before the supervisor set an
+    # owner is not silently dropped. `pending` is prepend-built, so reverse.
+    state.pending
+    |> Enum.reverse()
+    |> Enum.each(&send(owner, {:acp_transport, self(), &1}))
+
+    {:reply, :ok, %{state | owner: owner, pending: []}}
   end
 
   def handle_call({:send, _message}, _from, %{closed: true} = state) do
@@ -226,8 +238,13 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   @impl GenServer
   def handle_info({port, {:data, data}}, %{port: port, closed: false} = state) do
     {frames, framer} = Framer.push(state.framer, data)
-    Enum.each(frames, &deliver_frame(state.owner, &1))
-    {:noreply, %{state | framer: framer}}
+
+    state =
+      Enum.reduce(frames, %{state | framer: framer}, fn frame, acc ->
+        emit(acc, frame_payload(frame))
+      end)
+
+    {:noreply, state}
   end
 
   def handle_info({port, {:data, _data}}, %{port: port, closed: true} = state) do
@@ -237,7 +254,7 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   end
 
   def handle_info({port, :eof}, %{port: port, closed: false} = state) do
-    deliver_closed(state.owner, :eof)
+    state = emit(state, {:closed, :eof})
     {:noreply, %{state | closed: true}}
   end
 
@@ -246,7 +263,7 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   end
 
   def handle_info({port, {:exit_status, code}}, %{port: port, closed: false} = state) do
-    deliver_closed(state.owner, {:exit_status, code})
+    state = emit(state, {:closed, {:exit_status, code}})
     {:noreply, %{state | closed: true}}
   end
 
@@ -266,34 +283,32 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
   # text -- decode it) or an oversized-frame error the framer already
   # detected and resynced past (no raw bytes to hand back -- the framer
   # deliberately does not retain them, see its moduledoc).
-  @spec deliver_frame(pid() | nil, Framer.frame_or_error()) :: :ok
-  defp deliver_frame(owner, {:error, {:frame_too_large, _size} = reason}) do
-    deliver_to_owner(owner, {:decode_error, reason, ""})
+  # The `{:acp_transport, ...}` payload for one framer result, without
+  # touching the owner: `emit/2` decides delivery vs buffering.
+  @spec frame_payload(Framer.frame_or_error()) ::
+          {:message, map()} | {:decode_error, term(), binary()}
+  defp frame_payload({:error, {:frame_too_large, _size} = reason}) do
+    {:decode_error, reason, ""}
   end
 
-  defp deliver_frame(owner, line) when is_binary(line) do
+  defp frame_payload(line) when is_binary(line) do
     case Jason.decode(line) do
-      {:ok, map} when is_map(map) -> deliver_to_owner(owner, {:message, map})
-      {:ok, other} -> deliver_to_owner(owner, {:decode_error, {:not_an_object, other}, line})
-      {:error, reason} -> deliver_to_owner(owner, {:decode_error, reason, line})
+      {:ok, map} when is_map(map) -> {:message, map}
+      {:ok, other} -> {:decode_error, {:not_an_object, other}, line}
+      {:error, reason} -> {:decode_error, reason, line}
     end
   end
 
-  @spec deliver_to_owner(pid() | nil, {:message, map()} | {:decode_error, term(), binary()}) ::
-          :ok
-  defp deliver_to_owner(nil, _payload), do: :ok
-
-  defp deliver_to_owner(owner, payload) do
-    send(owner, {:acp_transport, self(), payload})
-    :ok
+  # Send a payload to the owner, or buffer it (prepend, O(1)) when no owner
+  # has adopted the transport yet; `set_owner` flushes the buffer in order.
+  @spec emit(server_state(), term()) :: server_state()
+  defp emit(%{owner: nil} = state, payload) do
+    %{state | pending: [payload | state.pending]}
   end
 
-  @spec deliver_closed(pid() | nil, term()) :: :ok
-  defp deliver_closed(nil, _reason), do: :ok
-
-  defp deliver_closed(owner, reason) do
-    send(owner, {:acp_transport, self(), {:closed, reason}})
-    :ok
+  defp emit(%{owner: owner} = state, payload) do
+    send(owner, {:acp_transport, self(), payload})
+    state
   end
 
   @spec safe_close_port(port()) :: :ok

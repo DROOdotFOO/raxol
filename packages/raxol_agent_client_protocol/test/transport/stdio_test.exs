@@ -116,18 +116,23 @@ defmodule Raxol.AgentClientProtocol.Transport.StdioTest do
   end
 
   describe "ownership" do
-    test "messages arriving before an owner is set are dropped, matching Paired's semantics" do
+    test "frames arriving before an owner is set are buffered and flushed in order on adopt" do
       {:ok, transport} = Stdio.start_spawn("cat")
 
-      {:ok, transport} = Stdio.send_message(transport, %{"early" => true})
-      # Let the ownerless round trip complete before adopting an owner.
+      {:ok, transport} = Stdio.send_message(transport, %{"early" => 1})
+      {:ok, transport} = Stdio.send_message(transport, %{"early" => 2})
+      # Let both ownerless round trips complete before adopting an owner.
       Process.sleep(50)
 
       :ok = Stdio.set_owner(transport, self())
       {:ok, transport} = Stdio.send_message(transport, %{"late" => true})
 
+      # The pre-owner frames are delivered (a real editor's `initialize` sent
+      # before the supervisor adopts the transport is not lost), in order,
+      # ahead of the live frame.
+      assert_receive {:acp_transport, _ref, {:message, %{"early" => 1}}}, 2_000
+      assert_receive {:acp_transport, _ref, {:message, %{"early" => 2}}}, 2_000
       assert_receive {:acp_transport, _ref, {:message, %{"late" => true}}}, 2_000
-      refute_receive {:acp_transport, _ref, {:message, %{"early" => true}}}, 100
 
       :ok = Stdio.close(transport)
     end
