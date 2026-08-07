@@ -261,7 +261,8 @@ defmodule Raxol.Agent.Code.AppTest do
 
       {model, []} =
         App.update(
-          {:command_result, {:models_list, ref, {:ok, ["gpt-4o-mini", "gpt-4o"]}}},
+          {:command_result,
+           {:models_list, ref, {:ok, ["gpt-4o-mini", "gpt-4o"]}}},
           model
         )
 
@@ -283,7 +284,8 @@ defmodule Raxol.Agent.Code.AppTest do
 
       {model, []} =
         App.update(
-          {:command_result, {:models_list, model.models_ref, {:ok, ["a", "b", "c"]}}},
+          {:command_result,
+           {:models_list, model.models_ref, {:ok, ["a", "b", "c"]}}},
           model
         )
 
@@ -332,7 +334,9 @@ defmodule Raxol.Agent.Code.AppTest do
       test_pid = self()
 
       model =
-        connected_model(models_fetcher: fn _o, _r, _a -> send(test_pid, :fetched) end)
+        connected_model(
+          models_fetcher: fn _o, _r, _a -> send(test_pid, :fetched) end
+        )
 
       {model, []} = slash(model, "/model claude-sonnet-5")
 
@@ -700,7 +704,10 @@ defmodule Raxol.Agent.Code.AppTest do
       assert app == self()
 
       {model, []} =
-        App.update({:command_result, {:inspection_result, ref, "SNAPSHOT"}}, model)
+        App.update(
+          {:command_result, {:inspection_result, ref, "SNAPSHOT"}},
+          model
+        )
 
       assert model.notice == "SNAPSHOT"
       assert model.inspection_ref == nil
@@ -808,7 +815,7 @@ defmodule Raxol.Agent.Code.AppTest do
         sensitive: false
       }
 
-      result = %{tools: [tool], servers: [{:fs, self()}], failed: []}
+      result = %{tools: [tool], connected: [:fs], failed: [], janitor: nil}
 
       {model, []} =
         App.update({:command_result, {:mcp_loaded, ref, result}}, model)
@@ -836,7 +843,12 @@ defmodule Raxol.Agent.Code.AppTest do
       {model, []} = App.update(key("x"), model)
       ref = model.mcp_ref
 
-      result = %{tools: [], servers: [], failed: [{:ghost, :enoent}]}
+      result = %{
+        tools: [],
+        connected: [],
+        failed: [{:ghost, :enoent}],
+        janitor: nil
+      }
 
       {model, []} =
         App.update({:command_result, {:mcp_loaded, ref, result}}, model)
@@ -857,7 +869,9 @@ defmodule Raxol.Agent.Code.AppTest do
 
       task = Task.async(fn -> auth.(tool, %{}, %{}) end)
 
-      assert_receive {:command_result, {:authorize_request, ref, from, "mcp__fs__write"}}
+      assert_receive {:command_result,
+                      {:authorize_request, ref, from, "mcp__fs__write"}}
+
       send(from, {:authorize_decision, ref, {:deny, :test_denied}})
       assert Task.await(task) == {:deny, :test_denied}
     end

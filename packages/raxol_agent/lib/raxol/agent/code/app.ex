@@ -175,8 +175,9 @@ defmodule Raxol.Agent.Code.App do
       # Injectable, mirroring `:models_fetcher`.
       mcp_ref: nil,
       mcp_status: nil,
-      mcp_clients: [],
-      mcp_loader: Keyword.get(options, :mcp_loader, &__MODULE__.default_mcp_loader/3),
+      mcp_janitor: nil,
+      mcp_loader:
+        Keyword.get(options, :mcp_loader, &__MODULE__.default_mcp_loader/3),
       # The onboarding wizard overlay: nil (connected), or a step map
       # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
       # save-to-1Password prompt). Set in init when no provider is connected.
@@ -356,9 +357,9 @@ defmodule Raxol.Agent.Code.App do
       model = %{
         model
         | mcp_ref: nil,
-          mcp_clients: result.servers,
+          mcp_janitor: result.janitor,
           mcp_status: %{
-            connected: Enum.map(result.servers, fn {name, _pid} -> name end),
+            connected: result.connected,
             failed: result.failed,
             tools: length(result.tools)
           },
@@ -391,20 +392,24 @@ defmodule Raxol.Agent.Code.App do
   # Default loader: bridge the configured servers off the app process; the
   # result rides back as an `:mcp_loaded` message `update/2` folds.
   def default_mcp_loader(servers, ref, app) do
+    # The janitor monitors `app` (the dispatcher/session process), so the
+    # started clients are torn down whenever this session ends.
     spawn(fn ->
-      result = Raxol.Agent.Code.McpLoader.load(servers)
+      result = Raxol.Agent.Code.McpLoader.load(servers, owner: app)
       send(app, {:command_result, {:mcp_loaded, ref, result}})
     end)
   end
 
   defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
 
-  defp mcp_loaded_line(%{tools: tools, servers: servers, failed: []}) do
-    "mcp: #{length(tools)} tools from #{length(servers)} servers"
+  defp mcp_loaded_line(%{tools: tools, connected: connected, failed: []}) do
+    "mcp: #{length(tools)} tools from #{length(connected)} servers"
   end
 
   defp mcp_loaded_line(%{tools: tools, failed: failed}) do
-    names = Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
+    names =
+      Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
+
     "mcp: #{length(tools)} tools · failed: #{names}"
   end
 
@@ -430,10 +435,10 @@ defmodule Raxol.Agent.Code.App do
   # -- key handlers -----------------------------------------------------------
 
   defp handle_shortcut(%{char: "c", mods: %{ctrl: true}}, model) do
-    # MCP clients live under the agent DynamicSupervisor (not this app's
-    # link scope), so quitting must terminate the ones this session started
-    # or their OS processes outlive the TUI.
-    Raxol.Agent.Code.McpLoader.stop_clients(model.mcp_clients)
+    # Fast-path cleanup: stop the MCP janitor (and its clients) on an
+    # explicit quit. The janitor also monitors this process, so any other
+    # exit path (SSH disconnect, crash) tears the clients down too.
+    Raxol.Agent.Code.McpLoader.stop(model.mcp_janitor)
     {model, [Directive.stop()]}
   end
 
@@ -588,7 +593,9 @@ defmodule Raxol.Agent.Code.App do
       SessionStreamer.subscribe(session_id)
 
       Task.async(fn ->
-        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts), prompt: prompt)
+        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts),
+          prompt: prompt
+        )
       end)
 
       relay(session_id, app)
@@ -705,7 +712,8 @@ defmodule Raxol.Agent.Code.App do
       :message ->
         %{
           model
-          | turn_answer: model.turn_answer <> to_string(payload_content(payload))
+          | turn_answer:
+              model.turn_answer <> to_string(payload_content(payload))
         }
 
       _other ->
@@ -873,8 +881,11 @@ defmodule Raxol.Agent.Code.App do
   # on the struct (sensitive by default, so an external server's tool is
   # approval-gated per call — and denied outright in plan mode, since its
   # effects are unknown).
-  defp action_identity(%Raxol.Agent.Action.Dynamic{name: name, sensitive: sensitive?}),
-    do: {name, sensitive?}
+  defp action_identity(%Raxol.Agent.Action.Dynamic{
+         name: name,
+         sensitive: sensitive?
+       }),
+       do: {name, sensitive?}
 
   defp action_identity(module) when is_atom(module) do
     meta = module.__action_meta__()
@@ -1186,7 +1197,9 @@ defmodule Raxol.Agent.Code.App do
     ping_opts =
       opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
 
-    interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
+    interpret_ping(
+      backend.complete([%{role: :user, content: "ping"}], ping_opts)
+    )
   end
 
   @doc false
@@ -1274,14 +1287,18 @@ defmodule Raxol.Agent.Code.App do
     %{model | wizard: %{wizard | cursor: next}}
   end
 
-  defp maybe_wizard_select(%{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model) do
+  defp maybe_wizard_select(
+         %{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model
+       ) do
     case Enum.at(entries, cursor) do
       nil -> model
       entry -> select_provider(model, entry.harness, entry.keyless?)
     end
   end
 
-  defp maybe_wizard_select(%{wizard: %{step: :models, entries: entries, cursor: cursor}} = model) do
+  defp maybe_wizard_select(
+         %{wizard: %{step: :models, entries: entries, cursor: cursor}} = model
+       ) do
     case Enum.at(entries, cursor) do
       nil ->
         model
@@ -1383,7 +1400,8 @@ defmodule Raxol.Agent.Code.App do
       %{
         model
         | wizard: %{step: :confirm_save, harness: harness, key: key},
-          notice: "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
+          notice:
+            "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
       }
     else
       close_wizard(model)
@@ -1402,7 +1420,9 @@ defmodule Raxol.Agent.Code.App do
       {:error, reason} ->
         model
         |> close_wizard()
-        |> notice("could not save to 1Password: #{inspect(reason)} — key kept for this session")
+        |> notice(
+          "could not save to 1Password: #{inspect(reason)} — key kept for this session"
+        )
     end
   end
 
@@ -1604,8 +1624,11 @@ defmodule Raxol.Agent.Code.App do
         "output tokens: #{usage.output_tokens}"
 
     case session_cost(usage) do
-      nil -> base <> " · cost: set RAXOL_COST_PER_MTOK_IN/OUT to estimate"
-      cost -> base <> " · est. cost: $#{:erlang.float_to_binary(cost, decimals: 4)}"
+      nil ->
+        base <> " · cost: set RAXOL_COST_PER_MTOK_IN/OUT to estimate"
+
+      cost ->
+        base <> " · est. cost: $#{:erlang.float_to_binary(cost, decimals: 4)}"
     end
   end
 
