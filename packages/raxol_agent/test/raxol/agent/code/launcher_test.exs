@@ -98,4 +98,77 @@ defmodule Raxol.Agent.Code.LauncherTest do
 
     assert stderr =~ "raxol code: needs a real terminal"
   end
+
+  describe "--ssh" do
+    test "without --authorized-keys is a fail-closed usage error" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(["--ssh"], boot: fn -> flunk("boot ran") end) ==
+                   64
+        end)
+
+      assert stderr =~ "--authorized-keys"
+      assert stderr =~ "never serves anonymously"
+    end
+
+    test "rejects --resume: sessions are per-connection" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(
+                   ["--ssh", "--authorized-keys", "/tmp/k", "--resume", "s1"],
+                   boot: fn -> flunk("boot ran") end
+                 ) == 64
+        end)
+
+      assert stderr =~ "fresh session"
+    end
+
+    test "serves Code.App with the resolved app opts and blocks on the server" do
+      test_pid = self()
+
+      serve = fn app, opts ->
+        send(test_pid, {:served, app, opts})
+        # A server that exits immediately, so main/2 returns instead of
+        # blocking the test.
+        {:ok, spawn(fn -> :ok end)}
+      end
+
+      out =
+        capture_io(fn ->
+          assert Launcher.main(
+                   [
+                     "--ssh",
+                     "--authorized-keys",
+                     "/tmp/keys",
+                     "--ssh-port",
+                     "2200",
+                     "--backend",
+                     "mock"
+                   ],
+                   boot: fn -> :ok end,
+                   serve: serve
+                 ) == 0
+        end)
+
+      assert out =~ "port 2200"
+      assert_received {:served, Raxol.Agent.Code.App, opts}
+      assert opts[:port] == 2200
+      assert opts[:authorized_keys_dir] == "/tmp/keys"
+      assert opts[:app_opts][:provider_status] == {:ready, :mock, :explicit}
+      refute Keyword.has_key?(opts[:app_opts], :session_key)
+    end
+
+    test "a serve failure prints the reason and returns 1" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(
+                   ["--ssh", "--authorized-keys", "/tmp/k", "--backend", "mock"],
+                   boot: fn -> :ok end,
+                   serve: fn _app, _opts -> {:error, :eaddrinuse} end
+                 ) == 1
+        end)
+
+      assert stderr =~ "eaddrinuse"
+    end
+  end
 end

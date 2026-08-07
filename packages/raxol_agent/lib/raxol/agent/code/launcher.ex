@@ -31,6 +31,9 @@ defmodule Raxol.Agent.Code.Launcher do
     resume: :string,
     sessions: :boolean,
     ascii: :boolean,
+    ssh: :boolean,
+    ssh_port: :integer,
+    authorized_keys: :string,
     help: :boolean
   ]
 
@@ -52,6 +55,12 @@ defmodule Raxol.Agent.Code.Launcher do
     --resume ID      resume a specific session by id
     --sessions       print saved sessions and exit
     --ascii          ASCII-only face for terminals without a UTF-8 font
+    --ssh            serve the TUI over SSH instead of the local terminal
+                     (requires --authorized-keys; one fresh session per
+                     connection)
+    --ssh-port N     SSH listen port (default 2222)
+    --authorized-keys DIR
+                     directory with authorized_keys for publickey auth
     -h, --help       print this help
 
   Full docs: mix help raxol.code
@@ -80,6 +89,13 @@ defmodule Raxol.Agent.Code.Launcher do
 
       Keyword.get(parsed, :sessions, false) ->
         print_sessions()
+
+      Keyword.get(parsed, :ssh, false) ->
+        serve_ssh(
+          parsed,
+          Keyword.get(opts, :boot, &default_boot/0),
+          Keyword.get(opts, :serve, &Raxol.SSH.serve/2)
+        )
 
       true ->
         launch(parsed, Keyword.get(opts, :boot, &default_boot/0))
@@ -134,6 +150,63 @@ defmodule Raxol.Agent.Code.Launcher do
   defp default_boot do
     {:ok, _} = Application.ensure_all_started(:raxol_agent)
     :ok
+  end
+
+  # Single-tenant SSH serving: one daemon, one fresh session per connection.
+  # Fail-closed on auth — this surface reaches write/shell tools, so
+  # anonymous serving is not offered at all; publickey via --authorized-keys
+  # is the only mode.
+  defp serve_ssh(parsed, boot, serve) do
+    cond do
+      Keyword.get(parsed, :authorized_keys) in [nil, ""] ->
+        usage_error!(
+          "--ssh requires --authorized-keys DIR (publickey auth; " <>
+            "this surface never serves anonymously)"
+        )
+
+      Keyword.get(parsed, :continue, false) || Keyword.get(parsed, :resume) ->
+        usage_error!(
+          "--continue/--resume cannot combine with --ssh; every " <>
+            "connection gets a fresh session"
+        )
+
+      true ->
+        # Server-wide app options: provider resolution happens once, here.
+        # No :session_key — each connection's App.init mints its own.
+        app_opts = app_opts(parsed)
+
+        case boot.() do
+          :ok ->
+            serve_result =
+              serve.(Raxol.Agent.Code.App,
+                port: Keyword.get(parsed, :ssh_port, 2222),
+                authorized_keys_dir: Keyword.fetch!(parsed, :authorized_keys),
+                app_opts: app_opts
+              )
+
+            case serve_result do
+              {:ok, pid} ->
+                IO.puts(
+                  "serving the coding agent over SSH on port " <>
+                    "#{Keyword.get(parsed, :ssh_port, 2222)} (Ctrl+C stops)"
+                )
+
+                ref = Process.monitor(pid)
+
+                receive do
+                  {:DOWN, ^ref, :process, ^pid, _reason} -> 0
+                end
+
+              {:error, reason} ->
+                IO.puts(:stderr, "raxol code --ssh: #{inspect(reason)}")
+                1
+            end
+
+          {:error, message} ->
+            IO.puts(:stderr, "raxol code: #{message}")
+            1
+        end
+    end
   end
 
   @doc false

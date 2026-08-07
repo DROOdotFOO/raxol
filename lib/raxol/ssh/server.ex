@@ -195,7 +195,15 @@ defmodule Raxol.SSH.Server do
       [
         system_dir: String.to_charlist(host_keys_dir),
         ssh_cli:
-          {Raxol.SSH.CLIHandler, [app_module: app_module, server: server_name]},
+          {Raxol.SSH.CLIHandler,
+           [
+             app_module: app_module,
+             server: server_name,
+             # Per-server app options, passed into every connection's app
+             # instance (`context.options`); connection-scoped values (size,
+             # io_writer) are added per session.
+             app_opts: Keyword.get(opts, :app_opts, [])
+           ]},
         negotiation_timeout: negotiation_timeout
       ] ++ auth_opts
 

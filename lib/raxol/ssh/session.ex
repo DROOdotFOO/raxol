@@ -36,13 +36,20 @@ defmodule Raxol.SSH.Session do
 
     io_writer = IOAdapter.make_writer(connection_ref, channel_id)
 
+    # Server-level app options first, connection-scoped values (size, IO,
+    # instance name) merged over them so a served app cannot override the
+    # transport wiring.
     {:ok, lifecycle_pid} =
-      Raxol.Core.Runtime.Lifecycle.start_link(app_module,
-        environment: :ssh,
-        io_writer: io_writer,
-        width: width,
-        height: height,
-        name: :"ssh_session_#{inspect(self())}"
+      Raxol.Core.Runtime.Lifecycle.start_link(
+        app_module,
+        Keyword.get(opts, :app_opts, []) ++
+          [
+            environment: :ssh,
+            io_writer: io_writer,
+            width: width,
+            height: height,
+            name: :"ssh_session_#{inspect(self())}"
+          ]
       )
 
     Raxol.Core.Runtime.Log.info(

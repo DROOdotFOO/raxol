@@ -242,6 +242,17 @@ Two optional per-project files, both read from `<cwd>/`:
   (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
   a note, never fatal.
 
+## Serving over SSH
+
+`mix raxol.code --ssh --authorized-keys ~/.ssh/agent_keys` serves the same
+TUI over SSH (default port 2222, `--ssh-port` to change): each connection
+gets its own app instance and a fresh session, with the provider resolved
+once, server-side, at launch. Auth is publickey only; this surface reaches
+write and shell tools, so anonymous serving is not offered at all, and
+`--continue`/`--resume` are rejected in this mode. Single-tenant by design:
+every connection shares the server's filesystem, credentials, and session
+store, so serve it only to keys you would hand a shell.
+
 ## Driving the harness over MCP
 
 `Raxol.Agent.Harness.McpTools` exposes the harness itself as MCP tools:

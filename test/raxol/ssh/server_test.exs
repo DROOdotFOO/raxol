@@ -77,6 +77,23 @@ defmodule Raxol.SSH.ServerTest do
     end
   end
 
+  describe "app_opts threading" do
+    test "the CLI handler retains per-server app options for its sessions" do
+      {:ok, state} =
+        Raxol.SSH.CLIHandler.init(
+          app_module: FakeApp,
+          app_opts: [ascii: true, system: "be terse"]
+        )
+
+      assert state.app_opts == [ascii: true, system: "be terse"]
+    end
+
+    test "app_opts default to empty" do
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      assert state.app_opts == []
+    end
+  end
+
   describe "host key generation" do
     test "generates RSA host key" do
       dir =

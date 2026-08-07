@@ -9,6 +9,7 @@ defmodule Raxol.SSH.CLIHandler do
     :session_pid,
     :channel_id,
     :connection_ref,
+    app_opts: [],
     registered: false
   ]
 
@@ -16,7 +17,10 @@ defmodule Raxol.SSH.CLIHandler do
   def init(opts) do
     app_module = Keyword.fetch!(opts, :app_module)
     server = Keyword.get(opts, :server, Raxol.SSH.Server)
-    {:ok, %__MODULE__{app_module: app_module, server: server}}
+    app_opts = Keyword.get(opts, :app_opts, [])
+
+    {:ok,
+     %__MODULE__{app_module: app_module, server: server, app_opts: app_opts}}
   end
 
   @impl true
@@ -71,6 +75,7 @@ defmodule Raxol.SSH.CLIHandler do
     {:ok, session_pid} =
       Raxol.SSH.Session.start_link(
         app_module: state.app_module,
+        app_opts: state.app_opts,
         connection_ref: state.connection_ref,
         channel_id: state.channel_id,
         width: width,
