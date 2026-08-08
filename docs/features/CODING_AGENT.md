@@ -300,6 +300,26 @@ Onboarding a user is `mkdir -p /data/tenants/<user>/ssh` plus writing
 their `authorized_keys`; then `ssh <user>@host -p 2223` is the whole
 client.
 
+## Sharing a session read-only
+
+`/share` mints a signed, expiring token (24h) for the current session and
+ensures its journal exists for a viewer to replay. Configuration is one
+secret: set `RAXOL_SHARE_SECRET` (or the `:share_secret` app option) on
+both the TUI host and the web host, and mount the viewer in any Phoenix
+app:
+
+    live "/share/:token", Raxol.Agent.Code.ShareLive
+
+The view verifies the token offline (`Raxol.Agent.Code.ShareToken`, HMAC,
+no server state), replays the session's durable journal with the same
+rewind-marker-aware fold `--replay` uses, and follows new records live
+from the journal high-watermark. Transcript only: the surface has no
+input path, and a token grants read access to exactly one session until
+it expires. `RAXOL_SHARE_BASE_URL` turns the `/share` notice into a
+pasteable link. `phoenix_live_view` is an optional dependency; without
+it the viewer module simply is not compiled and `/share` still mints
+tokens. Multiplayer (shared input) is not scheduled.
+
 ## Driving the harness over MCP
 
 `Raxol.Agent.Harness.McpTools` exposes the harness itself as MCP tools:

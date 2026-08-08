@@ -230,6 +230,15 @@ defmodule Raxol.Agent.Code.App do
       # server owner, so operator-typed paths (/export) confine to the
       # workspace like tool paths do.
       jail: Keyword.get(options, :jail, false),
+      # `/share` mints signed read-only tokens for this session; without
+      # a secret there is nothing safe to mint. The base URL turns the
+      # notice into a pasteable link.
+      share_secret:
+        Keyword.get(options, :share_secret) ||
+          System.get_env("RAXOL_SHARE_SECRET"),
+      share_base_url:
+        Keyword.get(options, :share_base_url) ||
+          System.get_env("RAXOL_SHARE_BASE_URL"),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -1481,6 +1490,8 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("logout", arg, model),
     do: {logout(model, String.trim(arg)), []}
 
+  defp apply_command("share", _arg, model), do: {share_session(model), []}
+
   # Listing reads (and fully decodes) every session file, so it runs off
   # the app process like the /resume picker — one fetcher, two modes.
   defp apply_command("sessions", _arg, model),
@@ -2366,6 +2377,40 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # `/share` mints a signed, expiring read-only token for THIS session.
+  # The journal is what the viewer replays, so it is ensured (and
+  # backfilled) here — a share of a never-journaled session would
+  # otherwise open empty.
+  defp share_session(%{share_secret: nil} = model) do
+    notice(
+      model,
+      "sharing not configured — set RAXOL_SHARE_SECRET on the host " <>
+        "(and mount Raxol.Agent.Code.ShareLive in a web app)"
+    )
+  end
+
+  defp share_session(model) do
+    model =
+      case ensure_journal(model) do
+        {:ok, journaled} -> journaled
+        {:error, _reason} -> model
+      end
+
+    token =
+      Raxol.Agent.Code.ShareToken.sign(model.session_key, model.share_secret)
+
+    case model.share_base_url do
+      nil ->
+        notice(model, "share token (read-only, 24h): #{token}")
+
+      base ->
+        notice(
+          model,
+          "read-only link (24h): #{String.trim_trailing(base, "/")}/#{token}"
+        )
+    end
+  end
+
   # `/logout` disconnects the session's provider (the setup panel
   # reopens); `/logout <provider>` additionally deletes that provider's
   # stored credential reference.
@@ -2635,6 +2680,7 @@ defmodule Raxol.Agent.Code.App do
     /copy              copy the last reply to the clipboard
     /find <text>       search the transcript blocks
     /logout [provider] disconnect (with a name: forget its credential)
+    /share             mint a read-only share link for this session
     /mcp               list configured MCP servers
     /hooks             show configured lifecycle hooks
     /inspect           show every config source in use (providers, pin, hooks, MCP, skills, sessions)

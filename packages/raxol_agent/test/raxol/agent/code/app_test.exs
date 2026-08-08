@@ -1475,6 +1475,52 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "logged out"
     end
 
+    test "/share without a secret says how to configure it" do
+      {model, []} = submit(new_model(share_secret: nil), "/share")
+      assert model.notice =~ "sharing not configured"
+    end
+
+    test "/share mints a verifiable token and ensures the journal" do
+      base = tmp_dir()
+
+      model =
+        answered_model(
+          share_secret: "app-share-secret",
+          journal_opts: [base_dir: base]
+        )
+
+      {model, []} = submit(model, "/share")
+
+      assert model.notice =~ "share token"
+      token = model.notice |> String.split(" ") |> List.last()
+
+      assert {:ok, session_id} =
+               Raxol.Agent.Code.ShareToken.verify(token, "app-share-secret")
+
+      assert session_id == model.session_key
+
+      # The journal exists for the viewer to replay.
+      {:ok, records} =
+        Raxol.Agent.Journal.FileStore.read_records(
+          model.session_key,
+          base_dir: base
+        )
+
+      assert records != []
+    end
+
+    test "/share with a base url mints a pasteable link" do
+      model =
+        answered_model(
+          share_secret: "s",
+          share_base_url: "https://example.test/share/"
+        )
+
+      {model, []} = submit(model, "/share")
+      assert model.notice =~ "https://example.test/share/"
+      refute model.notice =~ "share//"
+    end
+
     test "/logout <provider> removes the credential through the seam" do
       test_pid = self()
 

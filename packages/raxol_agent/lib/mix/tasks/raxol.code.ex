@@ -75,6 +75,11 @@ defmodule Mix.Tasks.Raxol.Code do
       journal and exit (falls back to the saved session file); with
       `--to-offset N` stops at journal offset N
     * `--ascii`    — ASCII-only face (no `≡`/`·`)
+    * `--ssh` — serve the TUI over SSH; with `--authorized-keys DIR`
+      single-tenant (one keyring, one principal), with `--ssh-tenants DIR`
+      multi-tenant (per-user keys at `DIR/<user>/ssh/authorized_keys`,
+      per-user cwd jail + session store + spending identity under
+      `DIR/<user>/`)
     * `-h`/`--help` — print usage and exit
   """
 

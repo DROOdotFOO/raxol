@@ -55,17 +55,8 @@ defmodule Raxol.Agent.Code.Replay do
         store_events(session_id, opts)
 
       {:ok, records} ->
-        events =
-          records
-          |> bound_records(Keyword.get(opts, :to_offset))
-          |> apply_rewinds()
-          |> Enum.filter(&event_record?/1)
-          |> EventCodec.decode_all()
-          # Rewind filtering leaves offset gaps that are history, not
-          # damage — renumber densely so id recovery stays quiet.
-          |> renumber()
-
-        {:ok, :journal, events}
+        {:ok, :journal,
+         decode_records(records, to_offset: Keyword.get(opts, :to_offset))}
 
       {:error, :damaged} ->
         {:error,
@@ -134,6 +125,24 @@ defmodule Raxol.Agent.Code.Replay do
 
   defp bound(events, to_offset) when is_integer(to_offset),
     do: Enum.filter(events, &(&1.id <= to_offset))
+
+  @doc """
+  Fold raw journal records (string-keyed, as `FileStore.read_records/2`
+  returns them) into decoded, replay-ready projection events: offset
+  bound applied first, then rewind markers, non-event kinds dropped,
+  and dense renumbering (rewind gaps are history, not damage). Shared
+  by `run/2` and any live consumer of the same journal (the share
+  LiveView).
+  """
+  @spec decode_records([map()], keyword()) :: [map()]
+  def decode_records(records, opts \\ []) do
+    records
+    |> bound_records(Keyword.get(opts, :to_offset))
+    |> apply_rewinds()
+    |> Enum.filter(&event_record?/1)
+    |> EventCodec.decode_all()
+    |> renumber()
+  end
 
   @doc """
   Render already-decoded projection events as the plain-text transcript

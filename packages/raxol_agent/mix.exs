@@ -41,6 +41,9 @@ defmodule RaxolAgent.MixProject do
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
       {:req, "~> 0.5", optional: true},
+      # Optional: only for the read-only session-share LiveView
+      # (Raxol.Agent.Code.ShareLive, compile-gated on its presence).
+      {:phoenix_live_view, "~> 1.0 or ~> 0.20", optional: true},
 
       # Dev/test only. raxol_agent_client_protocol is dev/test-scoped, NOT a
       # published requirement: Raxol.Agent.ClientProtocol.TurnRunner reaches it
@@ -48,7 +51,8 @@ defmodule RaxolAgent.MixProject do
       # + Code.ensure_loaded? guard), so production embedders opt in by adding
       # the package themselves; the dep here exists so this package's own suite
       # can run the runner against the REAL ACP Session.
-      {:raxol_agent_client_protocol, path: "../raxol_agent_client_protocol", only: [:dev, :test]},
+      {:raxol_agent_client_protocol,
+       path: "../raxol_agent_client_protocol", only: [:dev, :test]},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
