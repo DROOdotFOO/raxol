@@ -163,9 +163,23 @@ defmodule Raxol.System.PortCommand do
         {:error, acc}
     after
       timeout ->
+        kill_child(port)
         _ = safe_close(port)
         {:error, "timeout waiting for command"}
     end
+  end
+
+  # On timeout the caller has stopped waiting, but "stopped waiting" must not
+  # orphan the child: `Port.close/1` closes the port yet leaves the OS process
+  # alive. The `sh -c 'exec ...'` shell replaces itself with the command, so the
+  # port's os_pid IS the command — kill it. Best-effort, Unix only.
+  defp kill_child(port) do
+    with {:os_pid, os_pid} <- Port.info(port, :os_pid),
+         kill when is_binary(kill) <- System.find_executable("kill") do
+      _ = System.cmd(kill, ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+    end
+  rescue
+    _ -> :ok
   end
 
   defp safe_close(port) do

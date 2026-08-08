@@ -47,6 +47,27 @@ defmodule Raxol.System.PortCommandTest do
                PortCommand.run("sleep", ["30"], "", timeout: 200)
     end
 
+    test "kills the child on timeout instead of orphaning it" do
+      marker =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol_portcmd_kill_#{System.unique_integer([:positive])}"
+        )
+
+      File.rm(marker)
+
+      assert {:error, "timeout waiting for command"} =
+               PortCommand.run("sh", ["-c", "sleep 0.5 && touch #{marker}"], "",
+                 timeout: 150
+               )
+
+      # A merely-detached shell (Port.close only) would still run `touch` after
+      # its sleep; a real kill prevents the marker from ever appearing.
+      Process.sleep(700)
+      refute File.exists?(marker)
+      File.rm(marker)
+    end
+
     test "does not leak stdin temp files" do
       before = temp_buffers()
       assert {:ok, _} = PortCommand.run("cat", [], "leak check")
