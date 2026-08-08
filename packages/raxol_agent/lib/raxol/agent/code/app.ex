@@ -230,6 +230,9 @@ defmodule Raxol.Agent.Code.App do
       # cost still shows in /usage via env rates or the price table.
       ledger: Keyword.get(options, :ledger),
       spending_policy: Keyword.get(options, :spending_policy),
+      # Set when a metered round burned tokens we could not price. With a
+      # budget wired that is a hole in the cap, so it fails closed.
+      unpriced_model: nil,
       ledger_agent_id: Keyword.get(options, :agent_id, "raxol-code"),
       # Multi-tenant hosts set :jail — the keyboard principal is not the
       # server owner, so operator-typed paths (/export) confine to the
@@ -681,6 +684,9 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  defp budget_exhausted(%{unpriced_model: name}) when is_binary(name),
+    do: {:over, {:unpriced, name}}
+
   defp budget_exhausted(model) do
     Raxol.Agent.Code.CostLedger.check(
       model.ledger,
@@ -697,6 +703,8 @@ defmodule Raxol.Agent.Code.App do
 
   defp budget_notice(:ledger_unreachable),
     do: "spending ledger unreachable — check the wired ledger process"
+
+  defp budget_notice({:unpriced, name}), do: unpriced_notice(name)
 
   defp budget_notice(limit),
     do: "spending budget exhausted (#{limit}) — adjust the policy to continue"
@@ -926,10 +934,12 @@ defmodule Raxol.Agent.Code.App do
   defp record_turn_cost(model, _event), do: model
 
   defp meter_usage(model, usage, billed, type) do
+    cost = turn_cost_usd(model, usage, billed)
+
     Raxol.Agent.Code.CostLedger.record(
       model.ledger,
       model.ledger_agent_id,
-      turn_cost_usd(model, usage, billed),
+      cost,
       %{
         type: type,
         currency: "USD",
@@ -939,7 +949,64 @@ defmodule Raxol.Agent.Code.App do
     )
 
     model
+    |> flag_unpriced(usage, billed, cost)
+    |> enforce_budget()
   end
+
+  # Fail closed. A budget is only a budget if every paid round can be priced:
+  # an unpriced model bills real tokens while the ledger records $0.00, so the
+  # cap reads untouched no matter how much is spent. The first round of a
+  # session is unavoidable -- the billed model is only knowable from a response
+  # -- so this halts the NEXT one rather than pretending to prevent the first.
+  # With no ledger AND policy wired nothing changes: local single-user sessions
+  # keep today's best-effort estimate.
+  defp flag_unpriced(%{ledger: nil} = model, _usage, _billed, _cost), do: model
+
+  defp flag_unpriced(%{spending_policy: nil} = model, _usage, _billed, _cost),
+    do: model
+
+  defp flag_unpriced(model, usage, billed, cost) do
+    if cost == 0.0 and billed_tokens?(usage) do
+      %{model | unpriced_model: billed || "(unnamed)"}
+    else
+      model
+    end
+  end
+
+  defp billed_tokens?(usage) do
+    acc =
+      Raxol.Agent.BenchmarkProfile.add_usage(
+        %{input_tokens: 0, output_tokens: 0},
+        usage
+      )
+
+    acc.input_tokens > 0 or acc.output_tokens > 0
+  end
+
+  # The gate at submit refuses the NEXT prompt; this one stops the turn already
+  # running, which can otherwise make up to max_iterations more provider calls
+  # after the ledger already knows the cap is blown.
+  defp enforce_budget(%{running?: false} = model), do: model
+
+  defp enforce_budget(%{unpriced_model: name} = model) when is_binary(name) do
+    halt_turn(model, unpriced_notice(name))
+  end
+
+  defp enforce_budget(model) do
+    case budget_exhausted(model) do
+      :ok -> model
+      {:over, limit} -> halt_turn(model, budget_notice(limit))
+    end
+  end
+
+  defp halt_turn(model, notice) do
+    %{interrupt(model) | status_line: notice}
+  end
+
+  defp unpriced_notice(name),
+    do:
+      "spending halted: no price for #{name} — set " <>
+        "RAXOL_COST_PER_MTOK_IN/OUT or /model a priced one"
 
   # What the provider actually CHARGED for, which is what has to be priced:
   # with no :model configured the backend substitutes its own hosted default.
@@ -2596,7 +2663,12 @@ defmodule Raxol.Agent.Code.App do
   defp set_model(model, ""), do: model_usage(model)
 
   defp set_model(model, name) do
-    notice(%{model | model_override: name}, "model set to #{name}")
+    # Clears any unpriced-model halt: naming a model is one of the two fixes
+    # the halt notice points at, so it has to actually unblock the session.
+    notice(
+      %{model | model_override: name, unpriced_model: nil},
+      "model set to #{name}"
+    )
   end
 
   defp model_usage(model),
