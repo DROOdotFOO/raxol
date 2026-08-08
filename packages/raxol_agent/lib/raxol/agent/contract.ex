@@ -457,11 +457,21 @@ defmodule Raxol.Agent.Contract do
         acc = close_reasoning_item(session_id, turn_id, counter, acc)
 
         ev =
-          emit_event(session_id, turn_id, counter, :turn_completed, :durable, %{
-            iteration: Map.get(info, :iteration, 0),
-            usage: Map.get(info, :usage, %{}),
-            final: false
-          })
+          emit_event(
+            session_id,
+            turn_id,
+            counter,
+            :turn_completed,
+            :durable,
+            put_model(
+              %{
+                iteration: Map.get(info, :iteration, 0),
+                usage: Map.get(info, :usage, %{}),
+                final: false
+              },
+              info
+            )
+          )
 
         %{acc | journal: [ev | acc.journal]}
 
@@ -806,8 +816,20 @@ defmodule Raxol.Agent.Contract do
   # closes with `final: true`, carrying its accepted `refs` when the gate
   # accepts, and emitting a telemetry signal for a non-accepting verdict so the
   # boundary is measurable without blocking every done on a v0 journal.
+  # The model the provider BILLED, which is not always the one configured: with
+  # no :model the backend substitutes its own default. Only a real string is
+  # recorded, so a backend that reports none does not grow a null in the
+  # durable payload.
+  defp put_model(payload, info) do
+    case Map.get(info, :model) do
+      model when is_binary(model) and model != "" -> Map.put(payload, :model, model)
+      _ -> payload
+    end
+  end
+
   defp gated_done_payload(journal, turn_id, refs, info) do
-    base = %{usage: Map.get(info, :usage, %{}), final: true}
+    base =
+      put_model(%{usage: Map.get(info, :usage, %{}), final: true}, info)
 
     case DoneGate.gate(journal, turn_id, refs) do
       {:ok, _done} ->

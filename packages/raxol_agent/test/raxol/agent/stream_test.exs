@@ -180,7 +180,13 @@ defmodule Raxol.Agent.StreamTest do
                {:reasoning, "let me "},
                {:reasoning, "think"},
                {:text_delta, "answer"},
-               {:done, %{content: "answer", tool_results: [], usage: %{}}}
+               {:done,
+                %{
+                  content: "answer",
+                  tool_results: [],
+                  usage: %{},
+                  model: nil
+                }}
              ]
     end
   end
@@ -554,9 +560,7 @@ defmodule Raxol.Agent.StreamTest do
 
       tool_count =
         AgentStream.react("Add", sequence_opts(responses))
-        |> Enum.count(
-          &(match?({:tool_use, _}, &1) or match?({:tool_result, _}, &1))
-        )
+        |> Enum.count(&(match?({:tool_use, _}, &1) or match?({:tool_result, _}, &1)))
 
       assert tool_count == 2
     end

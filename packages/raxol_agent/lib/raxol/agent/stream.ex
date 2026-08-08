@@ -90,12 +90,14 @@ defmodule Raxol.Agent.Stream do
   @type turn_info :: %{
           content: String.t(),
           usage: map(),
+          model: String.t() | nil,
           iteration: non_neg_integer()
         }
   @type done_info :: %{
           content: String.t(),
           tool_results: [tool_result()],
-          usage: map()
+          usage: map(),
+          model: String.t() | nil
         }
 
   @default_max_iterations 10
@@ -346,7 +348,12 @@ defmodule Raxol.Agent.Stream do
 
         done_event =
           {:done,
-           %{content: response.content, tool_results: [], usage: response.usage}}
+           %{
+             content: response.content,
+             tool_results: [],
+             usage: response.usage,
+             model: billed_model(response)
+           }}
 
         {unexecuted_events ++ [done_event], :done}
 
@@ -378,7 +385,8 @@ defmodule Raxol.Agent.Stream do
                  %{
                    content: response.content,
                    tool_results: [],
-                   usage: response.usage
+                   usage: response.usage,
+                   model: billed_model(response)
                  }}
               ]
 
@@ -448,7 +456,8 @@ defmodule Raxol.Agent.Stream do
            %{
              content: content,
              tool_results: accumulated,
-             usage: Map.get(response, :usage, %{})
+             usage: Map.get(response, :usage, %{}),
+             model: billed_model(response)
            }}
         )
 
@@ -478,6 +487,7 @@ defmodule Raxol.Agent.Stream do
        %{
          content: Map.get(response, :content, ""),
          usage: Map.get(response, :usage, %{}),
+         model: billed_model(response),
          iteration: iteration
        }}
     )
@@ -486,6 +496,13 @@ defmodule Raxol.Agent.Stream do
     next_messages = messages ++ [assistant_msg | tool_messages]
 
     react_loop(next_messages, iteration + 1, config)
+  end
+
+  # The BILLED model, which is not always the configured one: given no :model
+  # the backend substitutes its own default and reports here what it actually
+  # charged for. Costing has to price that, not the request.
+  defp billed_model(response) do
+    response |> Map.get(:metadata, %{}) |> Map.get(:model)
   end
 
   defp emit(%{caller: caller, ref: ref}, event) do

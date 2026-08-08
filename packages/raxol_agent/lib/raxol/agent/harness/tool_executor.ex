@@ -144,8 +144,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       tool_context: tool_context,
       max_iterations: max_iterations,
       gate?: gate?,
-      await_decision:
-        Keyword.get(opts, :await_decision, default_await_decision(gate?)),
+      await_decision: Keyword.get(opts, :await_decision, default_await_decision(gate?)),
       # `stream: true` drives each round off `backend.stream/2` instead of the
       # blocking `complete/2` -- reasoning + answer text are forwarded to the
       # tail LIVE (the ShadowStream preview + streaming answer), and the final
@@ -336,7 +335,12 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     emit(
       st,
       {:done,
-       %{content: content || "", tool_results: [], usage: usage(response)}}
+       %{
+         content: content || "",
+         tool_results: [],
+         usage: usage(response),
+         model: billed_model(response)
+       }}
     )
   end
 
@@ -404,6 +408,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
        %{
          content: Map.get(response, :content, "") || "",
          usage: usage(response),
+         model: billed_model(response),
          iteration: iteration
        }}
     )
@@ -430,8 +435,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
         emit(
           st,
-          {:tool_result,
-           %{name: "unknown", result: {:error, :missing_tool_name}}}
+          {:tool_result, %{name: "unknown", result: {:error, :missing_tool_name}}}
         )
 
         %{role: :user, content: "[Tool error]: tool call had no name"}
@@ -472,8 +476,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
     emit(
       st,
-      {:approval_requested,
-       approval_payload(request_id, name, arguments, options, preview)}
+      {:approval_requested, approval_payload(request_id, name, arguments, options, preview)}
     )
 
     decision =
@@ -487,8 +490,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:allow, option_id} ->
         emit(
           st,
-          {:approval_decided,
-           %{request_id: request_id, option_id: option_id, decision: :allow}}
+          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :allow}}
         )
 
         apply_after_allow(tc, name, preview, st)
@@ -496,8 +498,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       {:deny, option_id, reason} ->
         emit(
           st,
-          {:approval_decided,
-           %{request_id: request_id, option_id: option_id, decision: :deny}}
+          {:approval_decided, %{request_id: request_id, option_id: option_id, decision: :deny}}
         )
 
         emit(
@@ -525,10 +526,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # a preview against one sandbox root and a write against another would
   # break the label-vs-binding guarantee.
   defp tool_preview("write_file", args, ctx),
-    do:
-      preview_or_none(
-        Workspace.preview_write(arg(args, "path"), arg(args, "content"), ctx)
-      )
+    do: preview_or_none(Workspace.preview_write(arg(args, "path"), arg(args, "content"), ctx))
 
   defp tool_preview("edit_file", args, ctx),
     do:
@@ -722,6 +720,12 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
         "[Calling tools: #{names}]"
     end
+  end
+
+  # The BILLED model: with no :model configured the backend substitutes its own
+  # default and reports here what it actually charged for.
+  defp billed_model(response) do
+    response |> Map.get(:metadata, %{}) |> Map.get(:model)
   end
 
   defp usage(response), do: Map.get(response, :usage, %{})
