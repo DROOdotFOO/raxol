@@ -38,9 +38,9 @@ The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the 
 
 | Package                                                    | Hex                           | What                                        |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
-| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.1"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
-| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.1"}` | Telegram bot, per-chat sessions, keyboards  |
-| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.1"}`    | APNS/FCM push, glanceable summaries         |
+| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.2"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
+| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.2"}` | Telegram bot, per-chat sessions, keyboards  |
+| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.2"}`    | APNS/FCM push, glanceable summaries         |
 
 ## Dependency graph
 
