@@ -8,6 +8,61 @@ defmodule Raxol.Agent.SessionStreamerTest do
     %{streamer: streamer}
   end
 
+  # The streamer is a node-global singleton supervised for the node's lifetime,
+  # so anything it fails to reclaim is resident forever -- and what it holds is
+  # conversation content: prompts, assistant text, tool results.
+  describe "reclaiming state when the last subscriber goes" do
+    test "a dead subscriber's session leaves no residue", %{streamer: streamer} do
+      subscriber = spawn_subscriber(:dead_run, streamer)
+      SessionStreamer.emit(:dead_run, {:text_delta, "chunk"}, streamer)
+
+      kill_and_await(subscriber)
+
+      # The streamer monitors the same pid, so its own DOWN was enqueued during
+      # that termination -- ahead of this call, which is therefore a barrier.
+      assert SessionStreamer.history(:dead_run, streamer) == []
+      refute :dead_run in SessionStreamer.list_sessions(streamer)
+    end
+
+    test "unsubscribing the last subscriber drops its history", %{
+      streamer: streamer
+    } do
+      SessionStreamer.subscribe(:done_run, streamer)
+      SessionStreamer.emit(:done_run, {:text_delta, "chunk"}, streamer)
+      assert_receive {:session_event, :done_run, _}
+      assert SessionStreamer.history(:done_run, streamer) != []
+
+      :ok = SessionStreamer.unsubscribe(:done_run, streamer)
+
+      assert SessionStreamer.history(:done_run, streamer) == []
+      refute :done_run in SessionStreamer.list_sessions(streamer)
+    end
+
+    test "a dead subscriber leaves history alone while another remains", %{
+      streamer: streamer
+    } do
+      SessionStreamer.subscribe(:shared_run, streamer)
+      other = spawn_subscriber(:shared_run, streamer)
+      SessionStreamer.emit(:shared_run, {:text_delta, "chunk"}, streamer)
+      assert_receive {:session_event, :shared_run, _}
+
+      kill_and_await(other)
+
+      assert SessionStreamer.history(:shared_run, streamer) != []
+      assert :shared_run in SessionStreamer.list_sessions(streamer)
+    end
+
+    test "an emit with no subscriber is not retained", %{streamer: streamer} do
+      # A producer that never subscribed, or one still emitting after the last
+      # subscriber left, would otherwise mint an entry that list_sessions/0
+      # does not even report and nothing ever removes.
+      SessionStreamer.emit(:orphan_run, {:text_delta, "chunk"}, streamer)
+
+      assert SessionStreamer.history(:orphan_run, streamer) == []
+      refute :orphan_run in SessionStreamer.list_sessions(streamer)
+    end
+  end
+
   describe "subscribe/unsubscribe" do
     test "receives events after subscribing", %{streamer: streamer} do
       SessionStreamer.subscribe(:agent_1, streamer)
@@ -78,7 +133,8 @@ defmodule Raxol.Agent.SessionStreamerTest do
             send(parent, {:subscribed, i})
 
             receive do
-              {:session_event, :agent_1, event} -> send(parent, {:got, i, event})
+              {:session_event, :agent_1, event} ->
+                send(parent, {:got, i, event})
             end
           end)
         end
@@ -141,13 +197,14 @@ defmodule Raxol.Agent.SessionStreamerTest do
     end
 
     test "returns emitted events in order", %{streamer: streamer} do
+      # Subscribed first, as every producer is: history is kept for a session's
+      # subscribers, so an emit to a session with none is not retained.
+      SessionStreamer.subscribe(:agent_1, streamer)
       SessionStreamer.emit(:agent_1, {:text_delta, "a"}, streamer)
       SessionStreamer.emit(:agent_1, {:text_delta, "b"}, streamer)
       SessionStreamer.emit(:agent_1, {:done, %{}}, streamer)
 
-      # Give casts time to process
-      Process.sleep(50)
-
+      # history/2 is a call, so it already orders behind those casts.
       history = SessionStreamer.history(:agent_1, streamer)
       assert length(history) == 3
       assert Enum.at(history, 0) == {:text_delta, "a"}
@@ -156,11 +213,11 @@ defmodule Raxol.Agent.SessionStreamerTest do
     end
 
     test "caps at max_history", %{streamer: streamer} do
+      SessionStreamer.subscribe(:agent_1, streamer)
+
       for i <- 1..15 do
         SessionStreamer.emit(:agent_1, {:text_delta, "msg#{i}"}, streamer)
       end
-
-      Process.sleep(50)
 
       history = SessionStreamer.history(:agent_1, streamer)
       # max_history is 10 in setup
@@ -216,7 +273,9 @@ defmodule Raxol.Agent.SessionStreamerTest do
   end
 
   describe "cross-surface consistency" do
-    test "every subscriber observes the identical ordered sequence", %{streamer: streamer} do
+    test "every subscriber observes the identical ordered sequence", %{
+      streamer: streamer
+    } do
       parent = self()
 
       sequence = [
@@ -268,5 +327,26 @@ defmodule Raxol.Agent.SessionStreamerTest do
     after
       1_000 -> Enum.reverse(acc)
     end
+  end
+
+  defp spawn_subscriber(session_id, streamer) do
+    test_pid = self()
+
+    pid =
+      spawn(fn ->
+        SessionStreamer.subscribe(session_id, streamer)
+        send(test_pid, :subscribed)
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive :subscribed
+    pid
+  end
+
+  defp kill_and_await(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}
+    :ok
   end
 end

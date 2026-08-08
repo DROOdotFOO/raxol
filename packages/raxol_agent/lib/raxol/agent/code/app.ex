@@ -758,13 +758,22 @@ defmodule Raxol.Agent.Code.App do
     spawn(fn ->
       SessionStreamer.subscribe(session_id)
 
-      Task.async(fn ->
-        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts),
-          prompt: prompt
-        )
-      end)
+      pump =
+        Task.async(fn ->
+          Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts),
+            prompt: prompt
+          )
+        end)
 
       relay(session_id, app)
+
+      # The pump is linked to this worker, but a :normal worker exit does not
+      # kill a linked process -- and a producer outliving its consumer would
+      # re-create the streamer entry the release below reclaims. (An interrupt
+      # kills the worker, which DOES propagate; the streamer's own DOWN
+      # handler reclaims that path.)
+      Task.shutdown(pump, :brutal_kill)
+      SessionStreamer.release(session_id)
     end)
   end
 

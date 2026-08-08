@@ -28,7 +28,9 @@ defmodule Raxol.Agent.SecurityTest do
     end
 
     test "unknown from/to stay as strings (no atom creation)" do
-      unique_from = "totally_unknown_agent_#{System.unique_integer([:positive])}"
+      unique_from =
+        "totally_unknown_agent_#{System.unique_integer([:positive])}"
+
       unique_to = "totally_unknown_target_#{System.unique_integer([:positive])}"
 
       {:ok, msg} =
@@ -134,7 +136,9 @@ defmodule Raxol.Agent.SecurityTest do
     test "accepts valid arguments within all limits" do
       tool_call = %{"name" => "echo", "arguments" => %{"msg" => "hello"}}
 
-      assert {:ok, params} = ToolConverter.dispatch_tool_call(tool_call, @actions)
+      assert {:ok, params} =
+               ToolConverter.dispatch_tool_call(tool_call, @actions)
+
       assert params["msg"] == "hello" or params[:msg] == "hello"
     end
 
@@ -146,7 +150,10 @@ defmodule Raxol.Agent.SecurityTest do
     end
 
     test "rejects non-object JSON string arguments" do
-      tool_call = %{"name" => "echo", "arguments" => ~s(["array", "not", "object"])}
+      tool_call = %{
+        "name" => "echo",
+        "arguments" => ~s(["array", "not", "object"])
+      }
 
       assert {:error, :arguments_not_object} =
                ToolConverter.dispatch_tool_call(tool_call, @actions)
@@ -196,6 +203,7 @@ defmodule Raxol.Agent.SecurityTest do
     end
 
     test "numeric session id is parsed as integer", %{streamer: streamer} do
+      SessionStreamer.subscribe(999, streamer)
       SessionStreamer.emit(999, {:text_delta, "hello"}, streamer)
       Process.sleep(20)
 
@@ -208,6 +216,7 @@ defmodule Raxol.Agent.SecurityTest do
     end
 
     test "non-numeric session id stays as string", %{streamer: streamer} do
+      SessionStreamer.subscribe("my_agent", streamer)
       SessionStreamer.emit("my_agent", {:text_delta, "hi"}, streamer)
       Process.sleep(20)
 

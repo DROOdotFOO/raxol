@@ -92,10 +92,9 @@ defmodule Raxol.Agent.SessionStreamer do
   subscribers remain, drop the subscription entry and the session's event
   history.
 
-  Per-run session ids (CLI pumps, MCP turns) mint a fresh id per run, and
-  plain `unsubscribe/2` leaves the empty subscription entry and the bounded
-  history queue behind — state this long-lived server would otherwise
-  accumulate forever, one entry per run.
+  Identical to `unsubscribe/2`, which reclaims the same way. It exists to say
+  at the call site that a per-run session id (CLI pumps, MCP turns) is being
+  retired rather than merely stopped listening to.
   """
   @spec release(session_id(), GenServer.server()) :: :ok
   def release(session_id, server \\ __MODULE__) do
@@ -141,32 +140,11 @@ defmodule Raxol.Agent.SessionStreamer do
   end
 
   def handle_manager_call({:unsubscribe, session_id, pid}, _from, state) do
-    subs =
-      Map.update(state.subscriptions, session_id, MapSet.new(), fn set ->
-        MapSet.delete(set, pid)
-      end)
-
-    {:reply, :ok, %{state | subscriptions: subs}}
+    {:reply, :ok, drop_subscriber(state, session_id, pid)}
   end
 
   def handle_manager_call({:release, session_id, pid}, _from, state) do
-    remaining =
-      state.subscriptions
-      |> Map.get(session_id, MapSet.new())
-      |> MapSet.delete(pid)
-
-    state =
-      if MapSet.size(remaining) == 0 do
-        %{
-          state
-          | subscriptions: Map.delete(state.subscriptions, session_id),
-            history: Map.delete(state.history, session_id)
-        }
-      else
-        %{state | subscriptions: Map.put(state.subscriptions, session_id, remaining)}
-      end
-
-    {:reply, :ok, state}
+    {:reply, :ok, drop_subscriber(state, session_id, pid)}
   end
 
   def handle_manager_call({:history, session_id}, _from, state) do
@@ -195,31 +173,65 @@ defmodule Raxol.Agent.SessionStreamer do
       send(pid, {:session_event, session_id, event})
     end)
 
-    history =
-      Map.update(
-        state.history,
-        session_id,
-        :queue.from_list([event]),
-        fn queue ->
-          enqueue_bounded(queue, event, state.max_history)
-        end
-      )
-
-    {:noreply, %{state | history: history}}
+    {:noreply, retain(state, session_id, event)}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    # Remove dead subscriber from all sessions
-    subs =
-      Map.new(state.subscriptions, fn {session_id, set} ->
-        {session_id, MapSet.delete(set, pid)}
-      end)
-
-    {:noreply, %{state | subscriptions: subs}}
+    state.subscriptions
+    |> Enum.filter(fn {_session_id, set} -> MapSet.member?(set, pid) end)
+    |> Enum.reduce(state, fn {session_id, _set}, acc ->
+      drop_subscriber(acc, session_id, pid)
+    end)
+    |> then(&{:noreply, &1})
   end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  # History is a live replay buffer for a session's subscribers, not a durable
+  # log -- the journal is that. It goes when the last subscriber does, whether
+  # that subscriber released, unsubscribed, or died. Leaving the entry behind
+  # kept one turn's prompts, assistant text and tool results resident on a
+  # node-global singleton past /clear, disconnect and session end.
+  defp drop_subscriber(state, session_id, pid) do
+    remaining =
+      state.subscriptions
+      |> Map.get(session_id, MapSet.new())
+      |> MapSet.delete(pid)
+
+    if MapSet.size(remaining) == 0 do
+      %{
+        state
+        | subscriptions: Map.delete(state.subscriptions, session_id),
+          history: Map.delete(state.history, session_id)
+      }
+    else
+      %{
+        state
+        | subscriptions: Map.put(state.subscriptions, session_id, remaining)
+      }
+    end
+  end
+
+  # An emit for a session nobody is subscribed to has no one to replay to. It
+  # would otherwise mint an entry that `list_sessions/0` does not even report
+  # and no removal path ever reaches -- which is what a producer still emitting
+  # after its consumer detached does on every event.
+  defp retain(state, session_id, event) do
+    if Map.has_key?(state.subscriptions, session_id) do
+      history =
+        Map.update(
+          state.history,
+          session_id,
+          :queue.from_list([event]),
+          &enqueue_bounded(&1, event, state.max_history)
+        )
+
+      %{state | history: history}
+    else
+      state
+    end
+  end
 
   defp enqueue_bounded(queue, item, max) do
     queue = :queue.in(item, queue)
