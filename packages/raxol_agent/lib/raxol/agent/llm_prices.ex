@@ -40,6 +40,17 @@ defmodule Raxol.Agent.LlmPrices do
   @spec rates(atom() | nil, String.t() | nil) ::
           {:ok, {float(), float()}} | :unknown
   def rates(_backend, model) when is_binary(model) do
+    case match_prefix(model) do
+      :unknown -> match_prefix(strip_vendor(model))
+      rates -> rates
+    end
+  end
+
+  def rates(_backend, _model), do: :unknown
+
+  defp match_prefix(nil), do: :unknown
+
+  defp match_prefix(model) do
     @prices
     |> Enum.filter(fn {prefix, _in_rate, _out_rate} ->
       String.starts_with?(model, prefix)
@@ -56,5 +67,17 @@ defmodule Raxol.Agent.LlmPrices do
     end
   end
 
-  def rates(_backend, _model), do: :unknown
+  # OpenRouter names the same hosted model "anthropic/claude-sonnet-4-5", which
+  # matches no family prefix and therefore priced at nothing -- silently
+  # inerting any budget on that whole backend. Retry on the segment after a
+  # single "/", which is the vendor-prefix form; a local id with more than one
+  # slash is left alone. Safe against the table as written because no row is
+  # shorter than "gpt-4o", so a stripped local id cannot collide with a family.
+  # Adding a short row ("gpt", "claude") would change that.
+  defp strip_vendor(model) do
+    case String.split(model, "/") do
+      [_vendor, name] -> name
+      _ -> nil
+    end
+  end
 end

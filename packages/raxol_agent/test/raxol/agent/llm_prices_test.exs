@@ -30,4 +30,26 @@ defmodule Raxol.Agent.LlmPricesTest do
     assert :unknown = LlmPrices.rates(:openai, "some-future-model")
     assert :unknown = LlmPrices.rates(nil, nil)
   end
+
+  describe "vendor-prefixed ids" do
+    test "an OpenRouter id prices as its model family" do
+      # OpenRouter names the same hosted model with a vendor prefix, which
+      # matched no row -- so every turn on that backend priced at $0.00 and any
+      # spending budget was silently inert.
+      assert {:ok, {3.0, 15.0}} =
+               LlmPrices.rates(:openrouter, "anthropic/claude-sonnet-4-5")
+
+      assert {:ok, {2.5, 10.0}} = LlmPrices.rates(:openrouter, "openai/gpt-4o")
+
+      assert {:ok, {5.0, 25.0}} =
+               LlmPrices.rates(:openrouter, "anthropic/claude-opus-4-5")
+    end
+
+    test "a vendor prefix does not invent a price for an unknown model" do
+      assert :unknown = LlmPrices.rates(:openrouter, "meta/llama-3.3-70b")
+      assert :unknown = LlmPrices.rates(:lm_studio, "openai/gpt-oss-20b")
+      # More than one slash is a local path-ish id, not a vendor prefix.
+      assert :unknown = LlmPrices.rates(:ollama, "a/claude-sonnet/b")
+    end
+  end
 end
