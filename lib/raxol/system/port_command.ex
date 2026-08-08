@@ -4,6 +4,17 @@ defmodule Raxol.System.PortCommand do
 
   This module provides a way to execute external commands and pass
   data to their stdin, which System.cmd/3 doesn't support directly.
+
+  ## Why the stdin goes through a temp file
+
+  A `:spawn_executable` port cannot half-close: the only way to signal
+  EOF on the child's stdin is `Port.close/1`, which also tears the port
+  down before its `{:exit_status, _}` is delivered. Commands that read
+  stdin to EOF (`pbcopy`, `xclip`, `flamegraph.pl`) therefore never
+  finished under a plain command/close sequence, and the caller blocked
+  the full timeout. Feeding stdin from a temporary file via a shell
+  redirect gives the child a real EOF, so it exits on its own and the
+  port reports its status like any self-terminating process.
   """
 
   @doc """
@@ -28,21 +39,114 @@ defmodule Raxol.System.PortCommand do
   def run(command, args, input, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 30_000)
 
-    case System.find_executable(command) do
-      nil ->
-        {:error, "command not found: #{command}"}
-
-      executable ->
-        port =
-          Port.open(
-            {:spawn_executable, executable},
-            [:binary, :exit_status, :stderr_to_stdout, {:args, args}]
-          )
-
-        Port.command(port, input)
-        Port.close(port)
-        collect_output(port, "", timeout)
+    with {:ok, executable} <- find_executable(command),
+         {:ok, shell} <- find_shell(),
+         {:ok, stdin_path} <- write_stdin(input) do
+      try do
+        run_with_stdin_file(shell, executable, args, stdin_path, timeout)
+      after
+        _ = File.rm(stdin_path)
+      end
+    else
+      {:error, _} = error -> error
     end
+  end
+
+  defp find_executable(command) do
+    case System.find_executable(command) do
+      nil -> {:error, "command not found: #{command}"}
+      executable -> {:ok, executable}
+    end
+  end
+
+  # The shell is only the vehicle for the stdin redirect; the actual command
+  # and its arguments are still passed as separate argv entries (`"$0" "$@"`
+  # on POSIX), never re-parsed by the shell, so caller args cannot inject.
+  defp find_shell do
+    case :os.type() do
+      {:win32, _} -> find_windows_shell()
+      _ -> find_posix_shell()
+    end
+  end
+
+  defp find_posix_shell do
+    cond do
+      shell = System.find_executable("sh") -> {:ok, shell}
+      File.exists?("/bin/sh") -> {:ok, "/bin/sh"}
+      true -> {:error, "no POSIX shell available to redirect stdin"}
+    end
+  end
+
+  defp find_windows_shell do
+    case System.get_env("COMSPEC") || System.find_executable("cmd") do
+      nil -> {:error, "no command shell available to redirect stdin"}
+      shell -> {:ok, shell}
+    end
+  end
+
+  # Exclusive (O_EXCL) create so a pre-planted symlink in a shared tmp dir
+  # cannot redirect the write or leak the input; chmod tightens to owner-only.
+  defp write_stdin(input) do
+    dir = System.tmp_dir!()
+
+    name =
+      "raxol_portcmd_#{:erlang.unique_integer([:positive])}_#{:os.system_time(:nanosecond)}"
+
+    path = Path.join(dir, name)
+
+    case File.write(path, input, [:exclusive, :binary]) do
+      :ok ->
+        _ = File.chmod(path, 0o600)
+        {:ok, path}
+
+      {:error, reason} ->
+        {:error, "failed to buffer stdin: #{:file.format_error(reason)}"}
+    end
+  end
+
+  defp run_with_stdin_file(shell, executable, args, stdin_path, timeout) do
+    port = spawn_port(shell, executable, args, stdin_path)
+    collect_output(port, "", timeout)
+  end
+
+  defp spawn_port(shell, executable, args, stdin_path) do
+    spawn_args =
+      case :os.type() do
+        {:win32, _} -> windows_args(executable, args, stdin_path)
+        _ -> posix_args(executable, args, stdin_path)
+      end
+
+    Port.open(
+      {:spawn_executable, shell},
+      [:binary, :exit_status, :stderr_to_stdout, {:args, spawn_args}]
+    )
+  end
+
+  # `exec "$0" "$@" < <stdin_path>`: the redirect target is single-quoted so a
+  # tmp dir with spaces is safe; the command and args ride in argv, unquoted by
+  # the shell, so there is no argument-injection surface.
+  defp posix_args(executable, args, stdin_path) do
+    redirect = "exec \"$0\" \"$@\" < #{posix_single_quote(stdin_path)}"
+    ["-c", redirect, executable | args]
+  end
+
+  defp posix_single_quote(value) do
+    "'" <> String.replace(value, "'", "'\\''") <> "'"
+  end
+
+  # cmd.exe cannot pass argv through a variable the way POSIX `"$@"` does, so
+  # the command line is assembled and each token double-quoted. Callers here
+  # are internal (fixed clipboard invocations), not attacker-controlled.
+  defp windows_args(executable, args, stdin_path) do
+    command_line =
+      [executable | args]
+      |> Enum.map_join(" ", &windows_quote/1)
+
+    ["/c", "#{command_line} < #{windows_quote(stdin_path)}"]
+  end
+
+  defp windows_quote(value) do
+    "\"" <> String.replace(value, "\"", "\"\"") <> "\""
   end
 
   @spec collect_output(port(), String.t(), non_neg_integer()) ::
@@ -59,7 +163,14 @@ defmodule Raxol.System.PortCommand do
         {:error, acc}
     after
       timeout ->
+        _ = safe_close(port)
         {:error, "timeout waiting for command"}
     end
+  end
+
+  defp safe_close(port) do
+    if Port.info(port), do: Port.close(port)
+  rescue
+    ArgumentError -> :ok
   end
 end
