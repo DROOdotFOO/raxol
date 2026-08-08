@@ -23,8 +23,12 @@ Raxol is a multi-surface application runtime for Elixir. One TEA module renders 
 ## Features
 
 - [Agent Framework](features/AGENT_FRAMEWORK.md): AI agents as TEA apps
+- [Coding Agent](features/CODING_AGENT.md): `mix raxol.code`, approvals, durable sessions, SSH hosting
+- [Memory](features/MEMORY.md): provider stack, full-text recall, user model
+- [Self-Improvement](features/SELF_IMPROVEMENT.md): after-turn reviewer, skill curation
 - [Agentic Commerce](features/AGENTIC_COMMERCE.md): agent wallets, payments, Xochi
 - [Agent Commerce Protocol](features/ACP.md): sell agent services on Base (pre-alpha)
+- [Editor Agent Client Protocol](features/EDITOR_ACP.md): editors drive the agent over JSON-RPC (pre-alpha)
 - [Symphony](features/SYMPHONY.md): coding-agent orchestrator (pre-alpha)
 - [MCP](features/MCP.md): MCP as a rendering target
 - [Plugin SDK](features/PLUGIN_SDK.md): writing plugins
@@ -36,6 +40,7 @@ Raxol is a multi-surface application runtime for Elixir. One TEA module renders 
 - [REPL](features/REPL.md): sandboxed interactive Elixir REPL
 - [Virtual File System](features/FILESYSTEM.md): pure functional in-memory VFS
 - [Speech](features/SPEECH.md): TTS announcements, Whisper STT, voice commands
+- [Gateway](features/GATEWAY.md): one adapter contract, many chat platforms (pre-alpha)
 - [Telegram](features/TELEGRAM.md): TEA app as Telegram bot
 - [Watch](features/WATCH.md): APNS/FCM push notifications
 - [Cursor Effects](features/CURSOR_EFFECTS.md): visual trails and glow
@@ -50,6 +55,7 @@ Raxol is a multi-surface application runtime for Elixir. One TEA module renders 
 ## Reference
 
 - [Architecture](core/ARCHITECTURE.md)
+- [Harness Architecture](harness/architecture.md): the agent-session engine, its contract and journal
 - [Buffer API](core/BUFFER_API.md)
 - [Tool/Action Catalog](reference/TOOL_CATALOG.md): every LLM-callable tool, generated
 - [Architecture Decisions](adr/)

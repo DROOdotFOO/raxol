@@ -1,54 +1,18 @@
 import * as vscode from 'vscode';
-import {
-  LanguageClient,
-  LanguageClientOptions,
-  ServerOptions,
-  TransportKind
-} from 'vscode-languageclient/node';
-
-let client: LanguageClient;
 
 export function activate(context: vscode.ExtensionContext) {
   // Register Raxol commands
   registerCommands(context);
-  
-  // Start LSP server if enabled
-  const config = vscode.workspace.getConfiguration('raxol');
-  if (config.get('lsp.enabled')) {
-    startLanguageServer(context);
-  }
 
   // Set up file watchers for Raxol-specific files
   setupFileWatchers(context);
 }
 
-export function deactivate(): Thenable<void> | undefined {
-  if (!client) {
-    return undefined;
-  }
-  return client.stop();
+export function deactivate() {
+  // Nothing to tear down: the commands run in a terminal the user owns.
 }
 
 function registerCommands(context: vscode.ExtensionContext) {
-  // Start/Restart LSP Server
-  context.subscriptions.push(
-    vscode.commands.registerCommand('raxol.startLSP', () => {
-      startLanguageServer(context);
-      vscode.window.showInformationMessage('Raxol LSP Server started');
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('raxol.restartLSP', () => {
-      if (client) {
-        client.stop().then(() => {
-          startLanguageServer(context);
-          vscode.window.showInformationMessage('Raxol LSP Server restarted');
-        });
-      }
-    })
-  );
-
   // Generate Component
   context.subscriptions.push(
     vscode.commands.registerCommand('raxol.generateComponent', async (uri) => {
@@ -83,74 +47,6 @@ function registerCommands(context: vscode.ExtensionContext) {
   );
 }
 
-function startLanguageServer(context: vscode.ExtensionContext) {
-  const config = vscode.workspace.getConfiguration('raxol');
-  const lspPath = config.get<string>('lsp.path', 'mix');
-  const lspArgs = config.get<string[]>('lsp.args', ['raxol.lsp', '--stdio']);
-
-  const serverOptions: ServerOptions = {
-    run: { command: lspPath, args: lspArgs, transport: TransportKind.stdio },
-    debug: { command: lspPath, args: lspArgs, transport: TransportKind.stdio }
-  };
-
-  const clientOptions: LanguageClientOptions = {
-    documentSelector: [
-      { scheme: 'file', language: 'elixir' },
-      { scheme: 'file', language: 'eex' },
-      { scheme: 'file', language: 'heex' }
-    ],
-    synchronize: {
-      fileEvents: [
-        vscode.workspace.createFileSystemWatcher('**/*.ex'),
-        vscode.workspace.createFileSystemWatcher('**/*.exs'),
-        vscode.workspace.createFileSystemWatcher('**/*.eex'),
-        vscode.workspace.createFileSystemWatcher('**/*.heex'),
-        vscode.workspace.createFileSystemWatcher('**/mix.exs'),
-        vscode.workspace.createFileSystemWatcher('**/.raxol.exs')
-      ]
-    },
-    initializationOptions: {
-      raxol: {
-        version: '1.0.0',
-        features: {
-          completion: config.get('completion.enabled'),
-          diagnostics: config.get('diagnostics.enabled')
-        }
-      }
-    }
-  };
-
-  client = new LanguageClient(
-    'raxolLanguageServer',
-    'Raxol Language Server',
-    serverOptions,
-    clientOptions
-  );
-
-  // Start the client and server
-  client.start().then(() => {
-    console.log('Raxol Language Server started');
-    
-    // Register additional client capabilities
-    registerClientCapabilities();
-  });
-}
-
-function registerClientCapabilities() {
-  // Handle custom LSP notifications from Raxol server
-  client.onNotification('raxol/componentValidation', (params) => {
-    // Handle component validation results
-    console.log('Component validation:', params);
-  });
-
-  client.onNotification('raxol/frameworkDetected', (params) => {
-    // Handle framework detection
-    vscode.window.showInformationMessage(
-      `Raxol detected ${params.framework} framework`
-    );
-  });
-}
-
 function setupFileWatchers(context: vscode.ExtensionContext) {
   // Watch for new Raxol component files
   const componentWatcher = vscode.workspace.createFileSystemWatcher(
@@ -167,18 +63,6 @@ function setupFileWatchers(context: vscode.ExtensionContext) {
   });
 
   context.subscriptions.push(componentWatcher);
-
-  // Watch for .raxol.exs configuration changes
-  const configWatcher = vscode.workspace.createFileSystemWatcher('**/.raxol.exs');
-  
-  configWatcher.onDidChange(() => {
-    // Restart LSP server when configuration changes
-    if (client) {
-      vscode.commands.executeCommand('raxol.restartLSP');
-    }
-  });
-
-  context.subscriptions.push(configWatcher);
 }
 
 async function suggestComponentTemplate(document: vscode.TextDocument) {

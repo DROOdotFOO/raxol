@@ -3,7 +3,9 @@
 ## Status
 
 Accepted; implemented 2026-07-26 (`Raxol.Agent.Scheduler` + `Raxol.Agent.Schedule` in PR #723,
-the `cronjob` Action + `Scheduler.Fire`/`Scheduler.Delivery` in PR #725). Originally proposed
+the `cronjob` Action + `Scheduler.Fire`/`Scheduler.Delivery` in PR #725). As built, a fire runs
+`Raxol.Agent.Stream.react/2` directly; the `Raxol.Agent.Turn` driver named in decision item 4 is
+not on the path. Originally proposed
 2026-06-18. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
 H2.2). Builds on the agent skill runtime (ADR-0021), the unified messaging gateway (ADR-0023, for
 delivery), and `Raxol.Core.Stores.Dets` (the shared ETS+DETS store).
@@ -146,4 +148,5 @@ Keep jobs in memory only. Rejected: a restart would silently drop every recurrin
 - `packages/raxol_symphony/lib/raxol/symphony/orchestrator.ex` (the existing fixed-cadence poll the
   general scheduler generalizes away from)
 - `packages/raxol_core/lib/raxol/core/stores/dets.ex` (the persisted job store)
-- `packages/raxol_agent/lib/raxol/agent/turn.ex` (the turn driver each fire runs through)
+- `packages/raxol_agent/lib/raxol/agent/scheduler/fire.ex` (the shipped fire path: skills injected
+  from the `Skills.Store`, then `Raxol.Agent.Stream.react/2`)

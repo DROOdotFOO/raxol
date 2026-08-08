@@ -25,7 +25,13 @@ Discord, ...) and the `Lifecycle`-backed handler.
 
 2026-07-24: the `Adapter` contract is frozen (five callbacks; additions must be optional callbacks),
 and the first production handler landed: `Handler.Agent`, backed by `Raxol.Agent.Stream` with
-environment-resolved credentials (`auto_provider`). The `Lifecycle`-backed TEA handler remains open.
+environment-resolved credentials (`auto_provider`).
+
+2026-07-25: the remaining items from the 2026-06-18 list closed. `Handler.Lifecycle` runs a full TEA
+app per chat under the new `environment: :gateway` (#721), and three platform adapters sit behind the
+frozen contract: `Raxol.Telegram.GatewayAdapter` plus its `UpdatePoller` (#715),
+`Raxol.Gateway.Adapter.Discord` plus its `GatewaySocket` (#717), and `Raxol.Gateway.Adapter.Email`
+over `gen_smtp` (#718).
 
 ## Context
 

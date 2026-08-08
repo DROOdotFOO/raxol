@@ -29,18 +29,18 @@ Raxol ships as a main package plus 17 focused subsystems. Use the main `raxol` p
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
 | `raxol_symphony` (0.2.0, pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
 | `raxol_gateway` (pre-alpha)                                | `path: "packages/raxol_gateway"`  | Unified messaging gateway (multi-platform) |
-| `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command, shipped as a Burrito binary via npm |
+| `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command (`code`, `p`, `acp`, `agent`, `playground`, `new`), packaged as a self-contained Burrito binary |
 | `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
 
-The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (`Raxol.Harness.*`, agent-session core + contract, in main `raxol`) -> the product surfaces `mix raxol.code` (interactive) and `mix raxol.p` (headless), both in `raxol_agent` -> `raxol_symphony`, which orchestrates many agent runs above them. The Harness is the engine, not a separate product; `mix raxol.harness.*` are only its golden/fixture test tasks.
+The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (the event/command contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`) -> the product surfaces `mix raxol.code` (interactive TUI, also over SSH), `mix raxol.p` (headless one-shot), and `mix raxol.acp` (ACP on stdio, for editors), all three in `raxol_agent` -> `raxol_symphony`, which orchestrates many agent runs above them. The Harness is the engine; the `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
 ## Surfaces
 
 | Package                                                    | Hex                           | What                                        |
 | ---------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
-| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.2"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
-| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.2"}` | Telegram bot, per-chat sessions, keyboards  |
-| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.2"}`    | APNS/FCM push, glanceable summaries         |
+| [`raxol_speech`](https://hex.pm/packages/raxol_speech)     | `{:raxol_speech, "~> 0.1"}`   | TTS (say/espeak), STT (Whisper), voice cmds |
+| [`raxol_telegram`](https://hex.pm/packages/raxol_telegram) | `{:raxol_telegram, "~> 0.1"}` | Telegram bot, per-chat sessions, keyboards  |
+| [`raxol_watch`](https://hex.pm/packages/raxol_watch)       | `{:raxol_watch, "~> 0.1"}`    | APNS/FCM push, glanceable summaries         |
 
 ## Dependency graph
 
@@ -58,11 +58,11 @@ raxol_payments --> raxol_agent (compile-time only)
 raxol_earn      --> raxol_payments (runtime), raxol_mcp + raxol_agent (compile-time only)
 raxol_agent_client_protocol --> (none; jason only, zero raxol deps)
 raxol_symphony --> raxol_core, raxol_agent, raxol_mcp (all optional)
-raxol_cli      --> raxol, raxol_agent
+raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp`)
 raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
 
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
-raxol_telegram --> raxol_core (+ raxol/telegex optional)
+raxol_telegram --> raxol_core (+ raxol/telegex/raxol_gateway optional)
 raxol_watch    --> raxol_core (+ pigeon optional for APNS/FCM)
 raxol_gateway  --> raxol_core (+ raxol_agent optional)
 

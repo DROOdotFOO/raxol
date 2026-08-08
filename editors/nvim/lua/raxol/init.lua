@@ -1,41 +1,18 @@
 local M = {}
 
-local lspconfig = require('lspconfig')
-local configs = require('lspconfig.configs')
-
 -- Default configuration
 local default_config = {
-  lsp = {
-    enabled = true,
-    cmd = { 'mix', 'raxol.lsp', '--stdio' },
-    filetypes = { 'elixir', 'eex', 'heex' },
-    root_patterns = { 'mix.exs', '.raxol.exs', '.git' }
-  },
   treesitter = {
     enabled = true,
     highlight = true,
     incremental_selection = true,
     textobjects = true
-  },
-  completion = {
-    enabled = true,
-    snippet_support = true
-  },
-  diagnostics = {
-    enabled = true,
-    virtual_text = true,
-    signs = true
   }
 }
 
 -- Setup function
 function M.setup(opts)
   opts = vim.tbl_deep_extend('force', default_config, opts or {})
-
-  -- Configure LSP server
-  if opts.lsp.enabled then
-    M.setup_lsp(opts.lsp)
-  end
 
   -- Configure treesitter
   if opts.treesitter.enabled then
@@ -48,47 +25,6 @@ function M.setup(opts)
 
   -- Setup user commands
   M.setup_commands()
-end
-
--- LSP Configuration
-function M.setup_lsp(lsp_opts)
-  -- Register Raxol LSP server if not already configured
-  if not configs.raxol then
-    configs.raxol = {
-      default_config = {
-        cmd = lsp_opts.cmd,
-        filetypes = lsp_opts.filetypes,
-        root_dir = function(fname)
-          return lspconfig.util.root_pattern(unpack(lsp_opts.root_patterns))(fname)
-        end,
-        settings = {
-          raxol = {
-            completion = { enabled = true },
-            diagnostics = { enabled = true },
-            hover = { enabled = true }
-          }
-        },
-        init_options = {
-          raxol = {
-            version = '1.0.0',
-            editor = 'neovim'
-          }
-        }
-      }
-    }
-  end
-
-  -- Setup the LSP client
-  lspconfig.raxol.setup({
-    on_attach = M.on_attach,
-    capabilities = M.get_capabilities(),
-    settings = {
-      raxol = {
-        completion = { enabled = true },
-        diagnostics = { enabled = true }
-      }
-    }
-  })
 end
 
 -- Treesitter Configuration
@@ -161,57 +97,6 @@ function M.setup_treesitter(ts_opts)
   })
 end
 
--- LSP on_attach function
-function M.on_attach(client, bufnr)
-  -- Enable completion triggered by <c-x><c-o>
-  vim.bo[bufnr].omnifunc = 'v:lua.vim.lsp.omnifunc'
-
-  local opts = { buffer = bufnr, silent = true }
-
-  -- LSP keymaps
-  vim.keymap.set('n', 'gD', vim.lsp.buf.declaration, opts)
-  vim.keymap.set('n', 'gd', vim.lsp.buf.definition, opts)
-  vim.keymap.set('n', 'K', vim.lsp.buf.hover, opts)
-  vim.keymap.set('n', 'gi', vim.lsp.buf.implementation, opts)
-  vim.keymap.set('n', '<C-k>', vim.lsp.buf.signature_help, opts)
-  vim.keymap.set('n', '<space>wa', vim.lsp.buf.add_workspace_folder, opts)
-  vim.keymap.set('n', '<space>wr', vim.lsp.buf.remove_workspace_folder, opts)
-  vim.keymap.set('n', '<space>wl', function()
-    print(vim.inspect(vim.lsp.buf.list_workspace_folders()))
-  end, opts)
-  vim.keymap.set('n', '<space>D', vim.lsp.buf.type_definition, opts)
-  vim.keymap.set('n', '<space>rn', vim.lsp.buf.rename, opts)
-  vim.keymap.set({ 'n', 'v' }, '<space>ca', vim.lsp.buf.code_action, opts)
-  vim.keymap.set('n', 'gr', vim.lsp.buf.references, opts)
-  vim.keymap.set('n', '<space>f', function()
-    vim.lsp.buf.format({ async = true })
-  end, opts)
-
-  -- Raxol-specific keymaps
-  vim.keymap.set('n', '<space>rc', M.generate_component, opts)
-  vim.keymap.set('n', '<space>rp', M.open_playground, opts)
-  vim.keymap.set('n', '<space>rt', M.run_tests, opts)
-end
-
--- Get LSP capabilities
-function M.get_capabilities()
-  local capabilities = vim.lsp.protocol.make_client_capabilities()
-
-  -- Add completion capabilities if nvim-cmp is available
-  local status_ok, cmp_nvim_lsp = pcall(require, 'cmp_nvim_lsp')
-  if status_ok then
-    capabilities = cmp_nvim_lsp.default_capabilities(capabilities)
-  end
-
-  -- Add snippet capabilities
-  capabilities.textDocument.completion.completionItem.snippetSupport = true
-  capabilities.textDocument.completion.completionItem.resolveSupport = {
-    properties = { 'documentation', 'detail', 'additionalTextEdits' }
-  }
-
-  return capabilities
-end
-
 -- Setup autocommands
 function M.setup_autocommands()
   local group = vim.api.nvim_create_augroup('RaxolPlugin', { clear = true })
@@ -260,7 +145,6 @@ function M.setup_keymaps()
   vim.keymap.set('n', '<leader>rc', M.generate_component, { desc = 'Generate Raxol component' })
   vim.keymap.set('n', '<leader>rp', M.open_playground, { desc = 'Open Raxol playground' })
   vim.keymap.set('n', '<leader>rt', M.run_tests, { desc = 'Run Raxol tests' })
-  vim.keymap.set('n', '<leader>rl', M.restart_lsp, { desc = 'Restart Raxol LSP' })
 end
 
 -- Setup user commands
@@ -274,9 +158,6 @@ function M.setup_commands()
 
   vim.api.nvim_create_user_command('RaxolTest', M.run_tests,
     { desc = 'Run Raxol tests' })
-
-  vim.api.nvim_create_user_command('RaxolRestartLSP', M.restart_lsp,
-    { desc = 'Restart Raxol LSP server' })
 end
 
 -- Component template insertion
@@ -353,11 +234,6 @@ end
 
 function M.run_tests()
   vim.cmd('terminal SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker')
-end
-
-function M.restart_lsp()
-  vim.cmd('LspRestart raxol')
-  vim.notify('Raxol LSP server restarted', vim.log.levels.INFO)
 end
 
 return M

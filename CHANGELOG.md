@@ -1,5 +1,36 @@
 ## [Unreleased]
 
+### Added
+
+- **Coding agent: durable sessions, replay, and rewind (#819)**. Each session writes an offset-addressed journal under `~/.raxol/sessions/<id>/`, so `--continue` / `--resume <id>` restore the model context and the scrollback together. `--replay <id>` prints a transcript straight from the journal (`--to-offset N` stops at an offset) via `Raxol.Agent.Code.Replay`, and `/rewind` returns a live session to an earlier turn. `Raxol.Agent.Code.Inspection` backs both `mix raxol.inspect` and the TUI's `/inspect`: one snapshot of provider resolution, `.raxol/config.json`, `.raxol/hooks.json`, `.mcp.json`, skills roots, and the session store, recording env variable names and never their values.
+- **Multi-tenant SSH coding agent (#819)**. `mix raxol.code --ssh --ssh-tenants DIR` serves the TUI to many users from one daemon. Each tenant authenticates against its own `DIR/<user>/ssh/authorized_keys` and gets its own cwd jail, session store, journal base, and spending identity (`ssh:<user>`) through `Raxol.Agent.Code.Tenant`; the jail disables the shell tool, which a path sandbox cannot confine. Hosted deployment (`RAXOL_SSH_CODE=true`, port 2223) refuses to serve unless `RAXOL_SSH_CODE_TENANTS` names a tenants root, `RAXOL_SSH_CODE_BUDGET_USD` sets a positive per-tenant cap, and both raxol_agent and an HTTP client are in the build.
+- **`/share` read-only session links (#819)**. `Raxol.Agent.Code.ShareToken` mints an HMAC-SHA256 token binding a session id, its tenant scope, and a 24-hour expiry; a host mounts `Raxol.Agent.Code.ShareLive` at `/share/:token` to replay the journal and follow the session live. Requires `RAXOL_SHARE_SECRET`; a token minted for one tenant cannot be replayed against another's tree.
+- **ACP stdio surface (#819)**. `mix raxol.acp`, the packaged `raxol acp`, and the `bin/raxol-acp` shim serve the coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) on stdio, for editors that spawn an agent themselves (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`). Turns run the read-only toolset.
+- **The harness as MCP tools (#819)**. `Raxol.Agent.Harness.McpTools` registers `harness_start_session`, `harness_send_prompt`, `harness_read_transcript`, and `harness_list_sessions`. Sessions share the TUI's store, so a session started over MCP resumes with `mix raxol.code --resume <id>`. Read-only toolset, one unlinked worker per turn.
+- **`.mcp.json` servers in the coding TUI (#819)**. `Raxol.Agent.Code.McpLoader` turns declared servers into approval-gated `mcp__<server>__<tool>` tools. A janitor process owns every started client and monitors the session, so clients and their OS subprocesses die on any termination path.
+- **LLM spend on the payments ledger (#819)**. `Raxol.Agent.Code.CostLedger` meters each turn into `Raxol.Payments.Ledger` when the host wires a ledger and a spending policy, so LLM spend and agent payment spend draw on one budget. `Raxol.Agent.LlmPrices` prices well-known hosted models when `RAXOL_COST_PER_MTOK_IN`/`_OUT` are unset.
+- **`Raxol.Agent.Code.Launcher` (#819)**: flag parsing, provider resolution, and session resolution for the coding TUI, with no Mix calls, so `mix raxol.code`, `bin/raxol-code`, and the packaged `raxol code` cannot drift.
+- **`SECURITY.md` (#819)**: private vulnerability reporting through GitHub security advisories, the supported release line, and the pre-alpha packages that carry no support commitment.
+
+### Changed
+
+- **Spending budgets halt a running turn (#819)** instead of only the next prompt, and a model with no price fails closed once a ledger and policy are wired (an unpriced model bills real tokens while the ledger records $0.00).
+- **The web release carries the agent stack (#819)**: `raxol_agent`, `raxol_payments`, and `req` are release dependencies. Without them the hosted coding agent could not have started or made an LLM call, and `Raxol.Application` now declines to serve the surface rather than standing up a broken one.
+
+### Fixed
+
+- **Journal reads healed a torn tail (#819)**. A read-side scan truncated live segments and permanently damaged a session; healing now belongs to the owning writer alone (`Raxol.Agent.Journal.FileStore.Reader.resume_scan/1`).
+- **Per-session Lifecycles owned the VM-singleton plugin manager (#819)**. The `:ssh`, `:telegram`, `:agent`, `:liveview`, and `:gateway` environments start no plugin manager, so one disconnect can no longer kill a concurrent session. `Raxol.SSH.Session.lifecycle_opts/4` is the opts merge seam.
+- **`raxol acp` never exited on peer disconnect (#819)**: exit 1 on the mix path, and a resident BEAM per editor session on the packaged one. A clean peer disconnect now exits 0.
+- **`Raxol.Agent.SessionStreamer` retained event history forever (#819)**. History is a live replay buffer tied to subscriber presence: it is reclaimed when the last subscriber leaves, and `release/2` retires a per-run session id at the call site.
+- **Sub-agent LLM spend never reached the ledger (#819)**, and turns were priced from the configured model rather than the billed one, so budgets read $0.00.
+- **`Raxol.System.PortCommand` left children running on timeout (#819)**. A timed-out command is killed; where the port is its own process group leader, the whole group is signalled so descendants die with it.
+
+### Security
+
+- **`grep`/`glob` followed symlinks out of the workspace sandbox (#819)** and returned file contents with no approval. Containment is decided on the real path of every walked entry (`Raxol.Agent.Actions.Fs.realpath/1`), and a symlink that resolves outside the root is skipped.
+- **`/resume` and `--resume` accepted an unvalidated session id (#819)**, which let `/transcript` write into another tenant's workspace. Both validate the id, and `/transcript` is containment-checked like `/export`.
+
 ## [2.6.1] - 2026-08-08
 
 ### Fixed

@@ -1,15 +1,17 @@
 #!/bin/sh
-# raxol-acp — serve the coding agent over the Agent Client Protocol on stdio,
+# raxol-acp -- serve the coding agent over the Agent Client Protocol on stdio,
 # for ACP-speaking editors (Zed and its ecosystem). Point the editor's
 # agent_servers command at this shim.
 #
 #   raxol-acp
 #   raxol-acp --backend anthropic --model claude-sonnet-5
+#   raxol-acp --help
 #
 # mix raxol.acp lives in the raxol_agent package. This shim runs it from the
-# package while keeping the CALLER's cwd as the agent's workspace (fs tools
-# scope to it via RAXOL_CLI_CWD) — the editor should spawn this with its
-# project directory as cwd.
+# package while passing the CALLER's cwd through as RAXOL_CLI_CWD. A session's
+# fs tools scope to the cwd the editor names in session/new; RAXOL_CLI_CWD is
+# what applies when that field is blank, so spawn this with the project
+# directory as cwd either way.
 #
 # Why a shim: `mix raxol.acp` compiles the project on first run and Mix prints
 # "Compiling N files" to STDOUT, which would corrupt the NDJSON wire before

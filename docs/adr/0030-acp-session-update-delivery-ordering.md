@@ -174,5 +174,8 @@ with telemetry (small), and the property/adversarial tests above.
   `d70c0dfd`, and the posted adversarial re-reviews.
 - ADR-0013: Event-dispatch backpressure: the in-repo pattern for bounded, observable,
   deterministic-under-overload dispatch this contract adopts.
-- `packages/raxol_earn` client delivery path: `extract_update_seq/1`, `emit_update/3`,
-  `cascade_release/2`, `@update_settle_ms`.
+- `packages/raxol_agent_client_protocol` delivery path: `Connection` stamps and delivers,
+  `Delivery` holds the shared vocabulary, `Client` consumes the turn. The peer-supplied
+  `update_seq` and the `@update_settle_ms` settle window criticized above are PR #640 shapes
+  that never reached master; `test/connection_delivery_test.exs` gates the settle timer out of
+  `client.ex` and `delivery.ex` by grep, and its hostile-peer tests cover clause 1.

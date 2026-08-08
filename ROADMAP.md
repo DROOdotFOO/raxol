@@ -2,7 +2,7 @@
 
 Multi-surface application runtime for Elixir. One TEA module, four render targets.
 
-## Current Version: v2.6.0
+## Current Version: v2.6.1
 
 ---
 
@@ -17,6 +17,8 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 **MCP surface (Phases 8-13):** extracted `raxol_mcp` (server/client/registry, stdio + SSE). Auto-derives tools from the widget tree (15 widgets) with a focus/hover lens; `@mcp_exclude` opt-out. Full spec coverage (prompts, logging, completion, notifications, circuit breaker). Resources + ContextTree + StructuredScreenshot + model-projection diffs. Pipe-friendly test harness with functor-law property tests.
 
 **Agent framework:** TEA-based agents, coordinator/worker teams, 7 harness gaps closed (compaction, hooks, permissions, MCP client, streams, LSP, SSE). AI cockpit with SSE streaming for 9 backends. Virtual File System (pure-functional in-memory VFS, REPL helpers, 7 agent actions).
+
+**Coding agent:** three surfaces on one launch path (`Raxol.Agent.Code.Launcher`): `mix raxol.code` (interactive TUI, also served over SSH single-tenant via `--authorized-keys` or multi-tenant via `--ssh-tenants`), `mix raxol.p` (headless one-shot), and `mix raxol.acp` (ACP on stdio for editors). ALLOW/ASK/DENY approval on every mutating tool call, a durable per-session journal behind `--continue`/`--resume`/`--replay`/`/rewind`, `/share` read-only transcript links, `.mcp.json` servers bridged into the toolset, four `harness_*` MCP tools, and LLM spend metered into the shared `Raxol.Payments.Ledger` with budgets that halt a running turn.
 
 **Agent memory + self-improving skills** (hermes-agent pickup): pluggable `Raxol.Agent.Memory` (`Store.Ets`, ETS+DETS, BM25-lite + recency + tags), pre-turn recall injection, `memory_remember`/`recall`/`forget`. Self-improving skill loop: `Curator` on an idle gate plus an isolated post-turn reviewer (`SelfImprove`) that authors/patches/consolidates `SKILL.md` skills (agentskills.io format). The same background pass does post-turn memory auto-capture and refreshes a dialectic per-user `UserModel` (both in `turn.ex`), and feeds a full-text `session_search` index. Config via `memory_provider/0` / `skills_provider/0` / `self_improve/0`. Remaining: recall-MCP bridge, hub client, paid skills.
 
@@ -34,7 +36,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ### Ship It
 
-The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) at v2.6.0, and the independent payment/surface packages (`raxol_payments`, `raxol_speech`, `raxol_telegram`, `raxol_watch`) at v0.2.0. `raxol_earn` (0.2.0), `raxol_symphony` (0.2.0), and `raxol_gateway` stay pre-alpha and unpublished until they graduate.
+The twelve published Hex packages track two version lines: the framework packages (`raxol` + `raxol_core`/`raxol_terminal`/`raxol_agent`/`raxol_mcp`/`raxol_liveview`/`raxol_plugin`/`raxol_sensor`) on 2.6.x, and the independent payment/surface packages on their own 0.x line (`raxol_payments` published at 0.2.0; `raxol_speech`, `raxol_telegram`, and `raxol_watch` published at 0.1.0 with 0.2.0 in the tree). `raxol_earn` (0.2.0), `raxol_symphony` (0.2.0), `raxol_gateway`, `raxol_cli`, `raxol_console`, and `raxol_agent_client_protocol` stay pre-alpha and unpublished until they graduate.
 
 | Task                      | Description                                                            | Effort |
 | ------------------------- | --------------------------------------------------------------------- | ------ |
@@ -49,9 +51,9 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 
 | Item | What | Effort | Tag |
 | ---- | ---- | ------ | --- |
-| Install funnel | `flake.nix` (first PR) -> Burrito `curl \| bash` self-contained release (BEAM bundled, per-target termbox2 NIF, pure-Elixir driver on Windows) -> `raxol doctor`/`setup`/`update` -> Windows PowerShell installer | M | CATCH-UP |
-| Gateway breadth | Graduate `raxol_gateway`: freeze the `Gateway.Adapter` behaviour, port Telegram behind it, then Discord + Email; wire `raxol_speech` STT as a shared pipeline stage so every adapter gets voice memos | M | SURFACE |
-| Cron scheduler | `Raxol.Agent.Cron`: parse-once crontab / NL schedule, one lightweight GenServer per agent, deliver to any surface or gateway. Generalizes Symphony's polling loop | M | SURFACE |
+| Install funnel | `flake.nix` and the Burrito-packaged `raxol` binary (`raxol_cli`, with an npm wrapper in `packages/raxol_cli/npm`) landed. Remaining: publishing the binary, `raxol doctor`/`setup`/`update`, and the Windows PowerShell installer | M | CATCH-UP |
+| Gateway breadth | Built: the `Gateway.Adapter` behaviour is frozen, Telegram is ported behind it (`Raxol.Telegram.GatewayAdapter`), Discord and Email adapters ship in-gateway, and `Gateway.Pipeline.Transcribe` gives every adapter voice memos through `raxol_speech` STT. Remaining: the first Hex release of `raxol_gateway` | M | SURFACE |
+| Cron scheduler | DONE. `Raxol.Agent.Schedule.parse/1` (relative / interval / 5-field cron / ISO) plus `Raxol.Agent.Scheduler`, one timer per job with DETS persistence and boot replay, the `cronjob` Action, and `Scheduler.Delivery` to a gateway target or an in-process callback | M | SURFACE |
 | Memory remainder | The `UserModel` + post-turn auto-capture already ship; finish the `Provider.RecallMcp` bridge, optionally back `session_search` with SQLite FTS5, and extract `raxol_memory`/`raxol_skills` | S/M | RAILS-adjacent |
 
 **P1: differentiation**
@@ -70,7 +72,7 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 - **FLAME** elastic exec on Fly Machines (BEAM-native idle hibernation, replaces Modal/Daytona).
 - More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
 - i18n: wire the present `gettext` through surface rendering, extract locale files.
-- Agent Client Protocol adapter (`raxol_agent` inside Zed/VS Code/JetBrains panels; distinct from `raxol_earn`).
+- Agent Client Protocol adapter: shipped. `bin/raxol-acp` / `mix raxol.acp` / `raxol acp` serve the coding agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`, read-only toolset) for editors that spawn an agent. Distinct from `raxol_earn`.
 - Expose the sandboxed REPL as an agent action for scripted single-turn tool pipelines.
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
@@ -115,6 +117,8 @@ Supported now:
 - **Kimi K2.5** (`KIMI_API_KEY=...`): Moonshot AI, $0.60/M input, 256K context, named `:kimi` provider
 - **LLM7.io** (`FREE_AI=true`): free, OpenAI-compatible, no key needed, 40 req/min
 - **Ollama** (`OLLAMA_MODEL=...`): free local inference, OpenAI-compatible
+- **LM Studio** (`:lm_studio` backend): local OpenAI-compatible server, `http://localhost:1234` by default
+- **LongCat** (`:longcat` backend): Meituan's `LongCat-2.0` over the OpenAI-compatible path
 - **Groq** (`AI_API_KEY=... AI_BASE_URL=https://api.groq.com/openai`): fast free tier
 - **OpenAI** (`AI_API_KEY=...`): GPT-4o-mini and up
 - **Anthropic** (`ANTHROPIC_API_KEY=...`): Claude Haiku/Sonnet/Opus
