@@ -85,10 +85,10 @@ defmodule Raxol.Agent.Actions.Code do
       ]
 
     @impl true
-    def run(%{path: path, content: content} = params, _context) do
+    def run(%{path: path, content: content} = params, context) do
       overwrite = Map.get(params, :overwrite, false)
 
-      with {:ok, abs} <- Fs.resolve(path) do
+      with {:ok, abs} <- Fs.resolve(path, context) do
         Raxol.Agent.Actions.Code.write_file(abs, path, content, overwrite)
       end
     end
@@ -134,12 +134,12 @@ defmodule Raxol.Agent.Actions.Code do
     @impl true
     def run(
           %{path: path, old_string: old_string, new_string: new_string} = params,
-          _context
+          context
         ) do
       replace_all = Map.get(params, :replace_all, false)
 
       with :ok <- reject_noop(old_string, new_string),
-           {:ok, abs} <- Fs.resolve(path),
+           {:ok, abs} <- Fs.resolve(path, context),
            {:ok, content} <- File.read(abs),
            {:ok, count} <- match_count(content, old_string, replace_all) do
         Raxol.Agent.Actions.Code.write_edit(
@@ -207,7 +207,7 @@ defmodule Raxol.Agent.Actions.Code do
       timeout = Map.get(params, :timeout_ms) || 30_000
 
       with :ok <- Raxol.Agent.Actions.Code.sandbox_allow(context, command),
-           {:ok, cd} <- resolve_cd(Map.get(params, :cd)) do
+           {:ok, cd} <- resolve_cd(Map.get(params, :cd), context) do
         {output, status} =
           Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
 
@@ -224,8 +224,8 @@ defmodule Raxol.Agent.Actions.Code do
     end
 
     # No `cd` given → run in the working dir. A `cd` must stay under cwd.
-    defp resolve_cd(nil), do: {:ok, Fs.working_dir()}
-    defp resolve_cd(rel), do: Fs.resolve(rel)
+    defp resolve_cd(nil, context), do: {:ok, Fs.working_dir(context)}
+    defp resolve_cd(rel, context), do: Fs.resolve(rel, context)
   end
 
   defmodule Grep do
@@ -265,13 +265,19 @@ defmodule Raxol.Agent.Actions.Code do
       ]
 
     @impl true
-    def run(%{pattern: pattern} = params, _context) do
+    def run(%{pattern: pattern} = params, context) do
       path = Map.get(params, :path) || "."
       ignore_case = Map.get(params, :ignore_case, false)
       max_results = Map.get(params, :max_results) || 200
 
-      with {:ok, abs} <- Fs.resolve(path) do
-        Raxol.Agent.Actions.Code.grep(pattern, abs, ignore_case, max_results)
+      with {:ok, abs} <- Fs.resolve(path, context) do
+        Raxol.Agent.Actions.Code.grep(
+          pattern,
+          abs,
+          ignore_case,
+          max_results,
+          context
+        )
       end
     end
   end
@@ -306,11 +312,11 @@ defmodule Raxol.Agent.Actions.Code do
     @max_paths 500
 
     @impl true
-    def run(%{pattern: pattern} = params, _context) do
+    def run(%{pattern: pattern} = params, context) do
       base = Map.get(params, :path) || "."
 
-      with {:ok, abs_base} <- Fs.resolve(base) do
-        cwd = Fs.working_dir()
+      with {:ok, abs_base} <- Fs.resolve(base, context) do
+        cwd = Fs.working_dir(context)
 
         all =
           abs_base
@@ -503,17 +509,20 @@ defmodule Raxol.Agent.Actions.Code do
   @doc false
   @spec grep(String.t(), String.t(), boolean(), pos_integer()) ::
           {:ok, map()} | {:error, term()}
-  def grep(pattern, abs_dir, ignore_case, max_results) do
+  def grep(pattern, abs_dir, ignore_case, max_results, context \\ %{}) do
     case System.find_executable("rg") do
-      nil -> grep_native(pattern, abs_dir, ignore_case, max_results)
-      rg -> grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results)
+      nil ->
+        grep_native(pattern, abs_dir, ignore_case, max_results, context)
+
+      rg ->
+        grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results, context)
     end
   end
 
   # ripgrep: fast path. Args are passed as a list (no shell), so the pattern
   # is never shell-interpreted.
-  defp grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results) do
-    cwd = Fs.working_dir()
+  defp grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results, context) do
+    cwd = Fs.working_dir(context)
 
     args =
       ["--line-number", "--no-heading", "--color=never"] ++
@@ -533,7 +542,7 @@ defmodule Raxol.Agent.Actions.Code do
       {_out, _status} ->
         # rg failed (e.g. bad regex) — fall back to the native scanner, which
         # reports a regex compile error as {:error, _} rather than a crash.
-        grep_native(pattern, abs_dir, ignore_case, max_results)
+        grep_native(pattern, abs_dir, ignore_case, max_results, context)
     end
   end
 
@@ -552,12 +561,12 @@ defmodule Raxol.Agent.Actions.Code do
     end
   end
 
-  defp grep_native(pattern, abs_dir, ignore_case, max_results) do
+  defp grep_native(pattern, abs_dir, ignore_case, max_results, context) do
     opts = if ignore_case, do: [:caseless], else: []
 
     case Regex.compile(pattern, opts) do
       {:ok, regex} ->
-        cwd = Fs.working_dir()
+        cwd = Fs.working_dir(context)
 
         matches =
           abs_dir

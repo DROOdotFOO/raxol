@@ -752,6 +752,10 @@ defmodule Raxol.Agent.Code.App do
   # (for the `task` tool), and any settings-file tool-call hooks.
   defp run_context(model, app) do
     %{
+      # The sandbox root every fs/workspace/shell tool scopes to. On a
+      # multi-tenant host each connection's App carries its own cwd, so
+      # this is what keeps one tenant's tools out of another's tree.
+      cwd: model.cwd,
       tool_authorizer: tool_authorizer(app),
       subagent: %{
         executor: model.executor,

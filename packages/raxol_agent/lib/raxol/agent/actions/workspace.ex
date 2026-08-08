@@ -71,8 +71,8 @@ defmodule Raxol.Agent.Actions.Workspace do
       ]
 
     @impl true
-    def run(%{path: path, content: content}, _context) do
-      Raxol.Agent.Actions.Workspace.do_write(path, content)
+    def run(%{path: path, content: content}, context) do
+      Raxol.Agent.Actions.Workspace.do_write(path, content, context)
     end
   end
 
@@ -108,8 +108,8 @@ defmodule Raxol.Agent.Actions.Workspace do
       ]
 
     @impl true
-    def run(%{path: path, old_string: old_string, new_string: new_string}, _ctx) do
-      Raxol.Agent.Actions.Workspace.do_edit(path, old_string, new_string)
+    def run(%{path: path, old_string: old_string, new_string: new_string}, ctx) do
+      Raxol.Agent.Actions.Workspace.do_edit(path, old_string, new_string, ctx)
     end
   end
 
@@ -138,8 +138,8 @@ defmodule Raxol.Agent.Actions.Workspace do
     @max_matches 500
 
     @impl true
-    def run(%{pattern: pattern}, _context) do
-      cwd = Fs.working_dir()
+    def run(%{pattern: pattern}, context) do
+      cwd = Fs.working_dir(context)
       # First gate: reject a pattern that would reach outside cwd LEXICALLY
       # (a literal `../`) before any filesystem walk. Path.wildcard expands
       # from cwd.
@@ -157,7 +157,7 @@ defmodule Raxol.Agent.Actions.Workspace do
           # realpath-based containment `Fs.resolve/1` uses (via
           # `Fs.outside_cwd?/1`) before it is ever surfaced, so a symlinked
           # subtree cannot disclose filenames outside cwd.
-          |> Enum.reject(&Fs.outside_cwd?/1)
+          |> Enum.reject(&Fs.outside_cwd?(&1, context))
           |> Enum.map(&Path.relative_to(&1, cwd))
           |> Enum.sort()
 
@@ -202,9 +202,9 @@ defmodule Raxol.Agent.Actions.Workspace do
     @max_matches 200
 
     @impl true
-    def run(%{pattern: pattern, path: path}, _context) do
+    def run(%{pattern: pattern, path: path}, context) do
       with {:ok, regex} <- compile_regex(pattern),
-           {:ok, abs} <- Fs.resolve(path),
+           {:ok, abs} <- Fs.resolve(path, context),
            {:ok, content} <- File.read(abs) do
         matches =
           content
@@ -236,10 +236,11 @@ defmodule Raxol.Agent.Actions.Workspace do
   def all, do: [WriteFile, EditFile, Glob, Grep]
 
   @doc false
-  @spec do_write(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def do_write(path, content) when is_binary(content) do
+  @spec do_write(String.t(), String.t(), map() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def do_write(path, content, context \\ %{}) when is_binary(content) do
     with :ok <- guard_size(content),
-         {:ok, abs} <- Fs.resolve(path) do
+         {:ok, abs} <- Fs.resolve(path, context) do
       {created, old} =
         case File.read(abs) do
           {:ok, existing} -> {false, existing}
@@ -271,10 +272,10 @@ defmodule Raxol.Agent.Actions.Workspace do
   end
 
   @doc false
-  @spec do_edit(String.t(), String.t(), String.t()) ::
+  @spec do_edit(String.t(), String.t(), String.t(), map() | nil) ::
           {:ok, map()} | {:error, term()}
-  def do_edit(path, old_string, new_string) do
-    with {:ok, abs} <- Fs.resolve(path),
+  def do_edit(path, old_string, new_string, context \\ %{}) do
+    with {:ok, abs} <- Fs.resolve(path, context),
          {:ok, content} <- File.read(abs),
          :ok <- guard_size(content),
          {:ok, replaced} <- replace_unique(content, old_string, new_string),
@@ -309,10 +310,11 @@ defmodule Raxol.Agent.Actions.Workspace do
   what applies (the `base_hash` still anchors the staleness re-check). A
   rejected path (outside cwd / too large) returns `{:error, _}`.
   """
-  @spec preview_write(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def preview_write(path, content) when is_binary(content) do
+  @spec preview_write(String.t(), String.t(), map() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def preview_write(path, content, context \\ %{}) when is_binary(content) do
     with :ok <- guard_size(content),
-         {:ok, abs} <- Fs.resolve(path) do
+         {:ok, abs} <- Fs.resolve(path, context) do
       {old, base_hash} = current_state(abs)
 
       {:ok,
@@ -346,10 +348,13 @@ defmodule Raxol.Agent.Actions.Workspace do
   exact-unique match and fails loudly otherwise -- so the operator is never
   shown one change and served another (the label-vs-binding guarantee).
   """
-  @spec preview_edit(String.t(), String.t(), String.t()) :: {:ok, map()}
-  def preview_edit(path, old_string, new_string)
+  @spec preview_edit(String.t(), String.t(), String.t(), map() | nil) ::
+          {:ok, map()}
+  def preview_edit(path, old_string, new_string, context \\ %{})
+
+  def preview_edit(path, old_string, new_string, context)
       when is_binary(old_string) and is_binary(new_string) do
-    case read_for_preview(path) do
+    case read_for_preview(path, context) do
       {:ok, content} ->
         preview_edit_against(path, content, old_string, new_string)
 
@@ -360,7 +365,7 @@ defmodule Raxol.Agent.Actions.Workspace do
     end
   end
 
-  def preview_edit(path, old_string, new_string) do
+  def preview_edit(path, old_string, new_string, _context) do
     # Malformed call (non-string edit args): degrade to a hunk of whatever was
     # proposed, coerced to strings so the diff renderer always gets strings.
     {:ok,
@@ -412,8 +417,8 @@ defmodule Raxol.Agent.Actions.Workspace do
 
   # Read a file for previewing: resolve within cwd, read, size-guard. Any
   # failure means there is no faithful image to build.
-  defp read_for_preview(path) do
-    with {:ok, abs} <- Fs.resolve(path),
+  defp read_for_preview(path, context) do
+    with {:ok, abs} <- Fs.resolve(path, context),
          {:ok, content} <- File.read(abs),
          :ok <- guard_size(content) do
       {:ok, content}
@@ -429,10 +434,10 @@ defmodule Raxol.Agent.Actions.Workspace do
   at approval time). `{:error, :stale}` when it drifted -- the caller must
   then refuse to apply and re-ask, never blindly overwrite.
   """
-  @spec verify_unchanged(String.t(), String.t() | :absent) ::
+  @spec verify_unchanged(String.t(), String.t() | :absent, map() | nil) ::
           :ok | {:error, :stale} | {:error, term()}
-  def verify_unchanged(path, base_hash) do
-    with {:ok, abs} <- Fs.resolve(path) do
+  def verify_unchanged(path, base_hash, context \\ %{}) do
+    with {:ok, abs} <- Fs.resolve(path, context) do
       {_content, current_hash} = current_state(abs)
       if current_hash == base_hash, do: :ok, else: {:error, :stale}
     end
