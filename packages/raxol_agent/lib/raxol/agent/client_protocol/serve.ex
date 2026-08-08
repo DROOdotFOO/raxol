@@ -42,8 +42,9 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   @doc """
   Parse `argv` and serve until the peer disconnects, returning an exit code.
 
-  Never returns while serving; the non-zero paths are a usage error (64), an
-  unavailable ACP build (1), and an unresolved provider (1).
+  A clean disconnect is 0. The non-zero paths are a usage error (64), an
+  unavailable ACP build (1), an unresolved provider (1), and a connection that
+  ended abnormally (1).
   """
   @spec run([String.t()]) :: non_neg_integer()
   def run(argv) do
@@ -107,15 +108,82 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
 
     {:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
 
-    {:ok, _sup} =
+    serve_connection(
+      {Raxol.AgentClientProtocol.Transport.Stdio, handle},
+      %{turn_opts: turn_opts(executor)}
+    )
+  end
+
+  @doc false
+  # Serve one connection and return its exit code.
+  #
+  # On peer disconnect the transport reports {:closed, _}, the Connection stops
+  # :normal, and the supervisor -- one_for_all with auto_shutdown:
+  # :any_significant over a significant Connection child -- exits :shutdown into
+  # the link `start_link` just made. Trapping turns that into a message we can
+  # answer with an exit code. Blocking instead got both callers wrong: the mix
+  # task died OF the linked exit (stderr "** (EXIT ...)", status 1 on a CLEAN
+  # disconnect), and the packaged binary, whose caller is OTP's
+  # application-master starter and therefore already trapping, ignored it and
+  # parked forever -- one resident BEAM per editor session holding the provider
+  # key, which Burrito's launcher cannot signal away.
+  @spec serve_connection(term(), map()) :: non_neg_integer()
+  def serve_connection(transport, handler_arg) do
+    Process.flag(:trap_exit, true)
+
+    {:ok, sup} =
       Raxol.AgentClientProtocol.Agent.start_link(
         Raxol.Agent.ClientProtocol.StdioAgent,
-        transport: {Raxol.AgentClientProtocol.Transport.Stdio, handle},
-        handler_arg: %{turn_opts: turn_opts(executor)}
+        transport: transport,
+        handler_arg: handler_arg
       )
 
-    Process.sleep(:infinity)
-    0
+    await_shutdown(sup, monitor_connection(sup))
+  end
+
+  # OTP folds every significant-child exit into one :shutdown at the
+  # supervisor, so the supervisor's own reason cannot tell a clean disconnect
+  # from a crash. The Connection's DOWN carries the real one.
+  defp monitor_connection(sup) do
+    case Raxol.AgentClientProtocol.Agent.connection(sup) do
+      {:ok, pid} -> Process.monitor(pid)
+      _ -> nil
+    end
+  end
+
+  defp await_shutdown(sup, ref, reason \\ :normal) do
+    receive do
+      {:DOWN, ^ref, :process, _pid, down_reason} ->
+        await_shutdown(sup, ref, down_reason)
+
+      {:EXIT, ^sup, _sup_reason} ->
+        exit_code(collect_down(ref, reason))
+    end
+  end
+
+  # The Connection dies before the supervisor it brings down, but the two
+  # signals come from different processes, so take a DOWN that has already
+  # landed rather than assuming they arrive in that order.
+  defp collect_down(nil, reason), do: reason
+
+  defp collect_down(ref, reason) do
+    receive do
+      {:DOWN, ^ref, :process, _pid, down_reason} -> down_reason
+    after
+      0 -> reason
+    end
+  end
+
+  defp exit_code(reason) when reason in [:normal, :shutdown], do: 0
+  defp exit_code({:shutdown, _}), do: 0
+
+  defp exit_code(reason) do
+    IO.puts(
+      :stderr,
+      "raxol acp: connection ended abnormally: #{inspect(reason)}"
+    )
+
+    1
   end
 
   # Read-only toolset, matching the StdioAgent contract.
