@@ -170,11 +170,14 @@ defmodule Raxol.System.PortCommand do
   end
 
   # On timeout the caller has stopped waiting, but "stopped waiting" must not
-  # orphan the command OR any children it spawned: `Port.close/1` closes the
-  # port yet leaves the whole OS subtree alive. The `sh -c 'exec ...'` shell
-  # replaces itself with the command, and the BEAM makes each port program its
-  # own process-group leader (pgid == os_pid), so signalling the GROUP takes
-  # the command and its descendants down together. Best-effort, Unix only.
+  # orphan the command: `Port.close/1` closes the port yet leaves the OS process
+  # alive. The `sh -c 'exec ...'` shell replaces itself with the command, so the
+  # port's os_pid IS the command -- always kill it. Where the port is also its
+  # OWN process-group leader (macOS; NOT guaranteed on Linux/OTP, same as
+  # `Raxol.Agent.Interrupt`, which likewise degrades) the kill signals the whole
+  # GROUP so descendants die too; otherwise it is a per-pid kill of the command.
+  # The real callers (pbcopy/xclip/flamegraph) are single processes either way.
+  # Best-effort, Unix only.
   defp kill_child(port) do
     with {:os_pid, os_pid} <- Port.info(port, :os_pid),
          kill when is_binary(kill) <- System.find_executable("kill") do

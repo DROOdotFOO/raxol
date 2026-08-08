@@ -47,7 +47,7 @@ defmodule Raxol.System.PortCommandTest do
                PortCommand.run("sleep", ["30"], "", timeout: 200)
     end
 
-    test "kills the whole process tree on timeout, not just the direct child" do
+    test "kills the timed-out command instead of orphaning it" do
       pidfile =
         Path.join(
           System.tmp_dir!(),
@@ -56,32 +56,28 @@ defmodule Raxol.System.PortCommandTest do
 
       File.rm(pidfile)
 
-      # The shell records the pid of a BACKGROUNDED grandchild (`$!`) that sleeps
-      # 30s, then waits. run/4 issues the kill INSIDE its timeout branch
-      # (synchronously, before returning), so by the time it returns the group
-      # has already been signalled -- no wall-clock race. A per-pid kill of the
-      # shell would leave the grandchild alive; a process-GROUP kill reaps it.
+      # The command records its OWN pid (`echo $$`, which the `exec` keeps as the
+      # port's os_pid) then sleeps 30s. run/4 kills it inside its timeout branch
+      # SYNCHRONOUSLY (before returning), so by the time run/4 returns the signal
+      # is delivered -- no wall-clock race. A bare Port.close would leave the
+      # command running; the kill (group where the OS makes the port a group
+      # leader, else per-pid) always reaps the command itself.
       assert {:error, "timeout waiting for command"} =
                PortCommand.run(
                  "sh",
-                 ["-c", "(sleep 30) & echo $! > #{pidfile}; wait"],
+                 ["-c", "echo $$ > #{pidfile}; exec sleep 30"],
                  "",
                  timeout: 150
                )
 
-      grandchild = await_pid(pidfile)
+      pid = await_pid(pidfile)
+      dead? = await_dead(pid, 1000)
 
-      # The group kill was issued synchronously in run/4; poll (up to ~1s) for
-      # the grandchild to disappear. A per-pid kill would leave it sleeping 30s,
-      # so it would still be alive when the budget runs out.
-      dead? = await_dead(grandchild, 1000)
-
-      # Safety net: never leak the 30s sleep if the group kill regressed.
-      _ = System.cmd("kill", ["-9", grandchild], stderr_to_stdout: true)
+      # Safety net: never leak the 30s sleep if the kill regressed.
+      _ = System.cmd("kill", ["-9", pid], stderr_to_stdout: true)
       File.rm(pidfile)
 
-      assert dead?,
-             "the backgrounded grandchild survived the process-group kill"
+      assert dead?, "the timed-out command was orphaned"
     end
 
     test "does not leak stdin temp files" do
