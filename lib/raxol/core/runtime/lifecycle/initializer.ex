@@ -114,9 +114,17 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
       {:error, :registry_table_creation_failed, fn -> :ok end}
   end
 
+  # Every MULTI-INSTANCE environment (the list in Lifecycle.start_link/2) is
+  # per-session, and PluginLifecycle is a VM singleton registered by name: the
+  # first session to start one holds its LINK, later sessions merely adopt the
+  # pid, and terminate/2 stops it unconditionally -- so an owning session's
+  # peer disconnecting would send :shutdown down that link and kill a live
+  # session mid-turn. None of them may own it; nil is the supported shape.
   defp start_plugin_manager(_options, :agent), do: {:ok, nil}
   defp start_plugin_manager(_options, :liveview), do: {:ok, nil}
   defp start_plugin_manager(_options, :gateway), do: {:ok, nil}
+  defp start_plugin_manager(_options, :ssh), do: {:ok, nil}
+  defp start_plugin_manager(_options, :telegram), do: {:ok, nil}
 
   defp start_plugin_manager(options, _environment) do
     plugin_manager_opts = Keyword.get(options, :plugin_manager_opts, [])
