@@ -120,14 +120,20 @@ defmodule Raxol.SSH.Server do
 
   # SSH usernames are client-supplied and become path components: only a
   # conservative charset passes, everything else (traversal shapes,
-  # separators, control bytes, over-long names) is refused.
-  @tenant_re ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
+  # separators, control bytes, over-long names) is refused. Lowercase ONLY:
+  # a case-insensitive filesystem (macOS/APFS) folds `Alice` and `alice` onto
+  # one directory but "ssh:<user>" would still mint two ledger identities, so
+  # the canonical form is single-case and any other casing is refused rather
+  # than silently folded onto another principal's keys and workspace.
+  @tenant_re ~r/\A[a-z0-9][a-z0-9._-]{0,63}\z/
 
   @doc """
   Normalize a client-supplied SSH username to a tenant name, or `nil`
-  when it is not a safe path component. Shared with the tenant-option
-  derivation so the key lookup and the workspace mapping can never
-  disagree about which directory a username names.
+  when it is not a safe, canonical path component. Shared with the
+  tenant-option derivation so the key lookup and the workspace mapping can
+  never disagree about which directory a username names. Names are canonical
+  lowercase — a mixed-case username is refused, not case-folded, so one
+  principal has exactly one path and one ledger key on every filesystem.
   """
   @spec sanitize_tenant(String.t() | charlist()) :: String.t() | nil
   def sanitize_tenant(user) do

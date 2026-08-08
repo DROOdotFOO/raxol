@@ -64,6 +64,12 @@ defmodule Raxol.SSH.ServerTest do
             ".hidden",
             "name with space",
             "nul\0byte",
+            # Mixed/upper case is refused, not case-folded: on a
+            # case-insensitive filesystem it would share one workspace but mint
+            # a second "ssh:<user>" ledger identity.
+            "Alice",
+            "ALICE",
+            "aLICE",
             String.duplicate("a", 65)
           ] do
         assert Server.sanitize_tenant(bad) == nil, "accepted #{inspect(bad)}"
