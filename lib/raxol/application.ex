@@ -366,7 +366,14 @@ defmodule Raxol.Application do
   # single-tenant from a shared host — no tenants root, no server.
   # raxol_agent is optional for main raxol; without it the child is
   # skipped with a log rather than crashing boot.
-  @compile {:no_warn_undefined, [Raxol.Agent.Code.App, Raxol.Agent.Code.Tenant]}
+  @compile {:no_warn_undefined,
+            [
+              Raxol.Agent.Code.App,
+              Raxol.Agent.Code.Tenant,
+              Raxol.Payments.Ledger,
+              Raxol.Payments.SpendingPolicy,
+              Decimal
+            ]}
   defp maybe_add_ssh_code do
     enabled? = System.get_env("RAXOL_SSH_CODE") == "true"
     tenants = System.get_env("RAXOL_SSH_CODE_TENANTS")
@@ -393,24 +400,110 @@ defmodule Raxol.Application do
         nil
 
       true ->
-        port = ssh_code_port()
-
-        host_keys_dir =
-          System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys"
-
-        # A distinct child id and server name: the playground SSH server
-        # may run beside this one in the same tree.
-        Supervisor.child_spec(
-          {Raxol.SSH.Server,
-           name: Raxol.SSH.CodeServer,
-           app_module: Raxol.Agent.Code.App,
-           port: port,
-           host_keys_dir: host_keys_dir,
-           tenants_dir: tenants,
-           tenant_opts: &Raxol.Agent.Code.Tenant.app_opts(tenants, &1)},
-          id: :ssh_code_server
-        )
+        ssh_code_children(tenants)
     end
+  end
+
+  # A hosted tenant spends the HOST's provider credential, so the budget is
+  # not optional: without a ledger every tenant's spend is unbounded and
+  # unattributed (`CostLedger.check/3` has nothing to ask and passes). Refuse
+  # to serve rather than serve unmetered — the same fail-closed posture the
+  # tenants-root check above takes for auth.
+  defp ssh_code_children(tenants) do
+    case ssh_code_budget() do
+      {:ok, policy} ->
+        [
+          Supervisor.child_spec(
+            {Raxol.Payments.Ledger, name: Raxol.SSH.CodeLedger},
+            id: :ssh_code_ledger
+          ),
+          ssh_code_server_spec(tenants, policy)
+        ]
+
+      {:error, message} ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true but #{message}; refusing " <>
+            "to serve the coding agent without a spending budget"
+        )
+
+        nil
+    end
+  end
+
+  defp ssh_code_server_spec(tenants, policy) do
+    port = ssh_code_port()
+    host_keys_dir = System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys"
+
+    # A distinct child id and server name: the playground SSH server
+    # may run beside this one in the same tree.
+    Supervisor.child_spec(
+      {
+        Raxol.SSH.Server,
+        # Server-wide: one ledger, one policy. The per-tenant `agent_id`
+        # (`ssh:<user>`, from Tenant.app_opts, which wins over these) is the
+        # ledger scope key, so each tenant draws on their own budget.
+        name: Raxol.SSH.CodeServer,
+        app_module: Raxol.Agent.Code.App,
+        port: port,
+        host_keys_dir: host_keys_dir,
+        tenants_dir: tenants,
+        app_opts: [ledger: Raxol.SSH.CodeLedger, spending_policy: policy],
+        tenant_opts: &Raxol.Agent.Code.Tenant.app_opts(tenants, &1)
+      },
+      id: :ssh_code_server
+    )
+  end
+
+  @doc false
+  # `RAXOL_SSH_CODE_BUDGET_USD` is the per-tenant lifetime cap. Parsed
+  # fail-closed: absent, unparseable, or non-positive all refuse. Public so
+  # the refusal rules are testable without standing up a real SSH daemon.
+  @spec ssh_code_budget() :: {:ok, struct()} | {:error, String.t()}
+  def ssh_code_budget do
+    # The operator-fixable cause is reported first: a missing cap is a config
+    # mistake they can correct, a missing raxol_payments is a build they have
+    # to rebuild. Both refuse.
+    with {:ok, usd} <- parse_budget(System.get_env("RAXOL_SSH_CODE_BUDGET_USD")),
+         true <- payments_available?() do
+      # `struct/2`, not a struct literal: raxol_payments is not a compile-time
+      # dependency of main raxol (the dependency runs the other way), so the
+      # struct cannot be expanded here — only built once the module is loaded,
+      # which `payments_available?/0` has just established.
+      cap = Decimal.from_float(usd)
+
+      {:ok,
+       struct(Raxol.Payments.SpendingPolicy,
+         lifetime_max: cap,
+         session_max: cap,
+         currency: "USD"
+       )}
+    else
+      false ->
+        {:error, "raxol_payments is not in this build (no ledger to meter on)"}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp parse_budget(value) when value in [nil, ""],
+    do: {:error, "RAXOL_SSH_CODE_BUDGET_USD is not set"}
+
+  defp parse_budget(value) do
+    case Float.parse(String.trim(value)) do
+      {usd, ""} when usd > 0.0 ->
+        {:ok, usd}
+
+      _ ->
+        {:error,
+         "RAXOL_SSH_CODE_BUDGET_USD #{inspect(value)} is not a positive amount"}
+    end
+  end
+
+  defp payments_available? do
+    Code.ensure_loaded?(Raxol.Payments.Ledger) and
+      Code.ensure_loaded?(Raxol.Payments.SpendingPolicy) and
+      Code.ensure_loaded?(Decimal)
   end
 
   # raxol_agent presence, checked by loadability of the modules the child spec
