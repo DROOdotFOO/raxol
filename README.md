@@ -51,6 +51,8 @@ bin/raxol-code                              # the TUI, your cwd as the workspace
 
 No API key configured? The TUI opens on a provider wizard instead of failing. `/inspect` (or `mix raxol.inspect` from `packages/raxol_agent`) shows every config source the agent will use in the current directory.
 
+The same TUI serves over SSH: `mix raxol.code --ssh --ssh-tenants /srv/tenants` hosts many users from one daemon, each behind their own public key with their own cwd jail, session store, and spending identity (`ssh <you>@your-host -p 2222` is the whole client). Single-tenant (`--authorized-keys`) and hosted deployment (`RAXOL_SSH_CODE=true`) are in [Coding Agent](docs/features/CODING_AGENT.md).
+
 Both surfaces sit on the **Harness**, the agent-session engine (`Raxol.Harness.*`): a durable event journal, a typed event/command contract, and pure replay-from-offset surfaces, with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
 
 The agent subsystems ship as standalone packages:

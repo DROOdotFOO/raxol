@@ -221,7 +221,9 @@ defmodule Raxol.Application do
       # Development performance tools
       maybe_add_dev_performance_tools(),
       # SSH playground (enabled via RAXOL_SSH_PLAYGROUND=true)
-      maybe_add_ssh_playground()
+      maybe_add_ssh_playground(),
+      # Hosted coding agent over SSH (RAXOL_SSH_CODE=true, multi-tenant)
+      maybe_add_ssh_code()
     ]
   end
 
@@ -356,6 +358,62 @@ defmodule Raxol.Application do
         max_connections: max_connections,
         allow_anonymous: true
       }
+    end
+  end
+
+  # The hosted coding agent: multi-tenant ONLY. This surface reaches
+  # write/shell tools, so it never serves anonymously and never serves
+  # single-tenant from a shared host — no tenants root, no server.
+  # raxol_agent is optional for main raxol; without it the child is
+  # skipped with a log rather than crashing boot.
+  @compile {:no_warn_undefined, [Raxol.Agent.Code.App, Raxol.Agent.Code.Tenant]}
+  defp maybe_add_ssh_code do
+    enabled? = System.get_env("RAXOL_SSH_CODE") == "true"
+    tenants = System.get_env("RAXOL_SSH_CODE_TENANTS")
+
+    cond do
+      not enabled? ->
+        nil
+
+      tenants in [nil, ""] ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true requires " <>
+            "RAXOL_SSH_CODE_TENANTS (the per-user key root); refusing to " <>
+            "serve the coding agent without tenant auth"
+        )
+
+        nil
+
+      not module_available?(Raxol.Agent.Code.App) ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true but raxol_agent is not " <>
+            "in this build; coding-agent SSH disabled"
+        )
+
+        nil
+
+      true ->
+        port =
+          case System.get_env("RAXOL_SSH_CODE_PORT") do
+            nil -> 2223
+            val -> String.to_integer(val)
+          end
+
+        host_keys_dir =
+          System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys"
+
+        # A distinct child id and server name: the playground SSH server
+        # may run beside this one in the same tree.
+        Supervisor.child_spec(
+          {Raxol.SSH.Server,
+           name: Raxol.SSH.CodeServer,
+           app_module: Raxol.Agent.Code.App,
+           port: port,
+           host_keys_dir: host_keys_dir,
+           tenants_dir: tenants,
+           tenant_opts: &Raxol.Agent.Code.Tenant.app_opts(tenants, &1)},
+          id: :ssh_code_server
+        )
     end
   end
 

@@ -269,6 +269,37 @@ write and shell tools, so anonymous serving is not offered at all, and
 every connection shares the server's filesystem, credentials, and session
 store, so serve it only to keys you would hand a shell.
 
+### Multi-tenant hosting
+
+`mix raxol.code --ssh --ssh-tenants /srv/tenants` hosts many users from one
+daemon. Each tenant is a directory under the root:
+
+    /srv/tenants/<user>/
+    ├── ssh/authorized_keys   # that user's keys: a key only authenticates
+    │                         # the username it is filed under
+    ├── work/                 # the cwd jail: every fs/shell tool, /export,
+    │                         # and /transcript confine here
+    ├── code_sessions/        # that user's session store (/resume, --replay)
+    └── sessions/             # that user's durable journal
+
+The AUTHENTICATED username decides everything: usernames are restricted to
+a conservative charset (anything else fails auth outright), the same
+normalization maps the key lookup and the workspace so they can never
+disagree, and a connection whose tenant options cannot be derived is
+refused rather than started unjailed. Spending identity is `ssh:<user>`;
+wire a shared `Raxol.Payments.Ledger` + policy through the server-level
+app options and each tenant draws on their own budget (the gate refuses
+the next turn once it is spent).
+
+Hosted deployment: set `RAXOL_SSH_CODE=true` with
+`RAXOL_SSH_CODE_TENANTS=/data/tenants` (and optionally
+`RAXOL_SSH_CODE_PORT`, default 2223) and the main application serves the
+coding agent beside the SSH playground. It refuses to start without the
+tenants root: there is no anonymous or single-tenant hosted mode.
+Onboarding a user is `mkdir -p /data/tenants/<user>/ssh` plus writing
+their `authorized_keys`; then `ssh <user>@host -p 2223` is the whole
+client.
+
 ## Driving the harness over MCP
 
 `Raxol.Agent.Harness.McpTools` exposes the harness itself as MCP tools:
