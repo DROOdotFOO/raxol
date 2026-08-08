@@ -47,13 +47,6 @@ defmodule Raxol.System.PortCommandTest do
                PortCommand.run("sleep", ["30"], "", timeout: 200)
     end
 
-    # :skip_on_ci -- verified locally, but exactly which OS pid a port program
-    # maps to (and whether it is a process-group leader) is platform/OTP
-    # dependent, the same reachability `Raxol.Agent.Interrupt` degrades over. The
-    # kill code is a no-regression best-effort improvement over a bare
-    # Port.close; the real callers (pbcopy/xclip/flamegraph) are single
-    # short-lived processes that never reach this timeout.
-    @tag :skip_on_ci
     test "kills the timed-out command instead of orphaning it" do
       pidfile =
         Path.join(
@@ -78,13 +71,11 @@ defmodule Raxol.System.PortCommandTest do
                )
 
       pid = await_pid(pidfile)
-      dead? = await_dead(pid, 1000)
-
-      # Safety net: never leak the 30s sleep if the kill regressed.
-      _ = System.cmd("kill", ["-9", pid], stderr_to_stdout: true)
+      dead? = await_dead(pid, 2000)
+      residue = if dead?, do: nil, else: reap(pid)
       File.rm(pidfile)
 
-      assert dead?, "the timed-out command was orphaned"
+      assert dead?, "the timed-out command was orphaned (ps state: #{residue})"
     end
 
     test "does not leak stdin temp files" do
@@ -129,7 +120,33 @@ defmodule Raxol.System.PortCommandTest do
     end
   end
 
+  # `kill -0` cannot tell a live process from a ZOMBIE, and a just-killed child
+  # stays a zombie until the BEAM reaps it -- so a signal-based oracle reports a
+  # successfully killed command as still alive, which is the platform-dependence
+  # that got this test tagged out of every executor. `ps -o state=` distinguishes
+  # them: a leading Z is a corpse, which is what a delivered kill looks like.
   defp os_pid_alive?(pid) do
-    match?({_out, 0}, System.cmd("kill", ["-0", pid], stderr_to_stdout: true))
+    case ps_state(pid) do
+      "gone" -> false
+      state -> not String.starts_with?(state, "Z")
+    end
+  end
+
+  defp ps_state(pid) do
+    with {out, 0} <-
+           System.cmd("ps", ["-o", "state=", "-p", pid], stderr_to_stdout: true),
+         state when state != "" <- String.trim(out) do
+      state
+    else
+      _ -> "gone"
+    end
+  end
+
+  # Never leak the 30s sleep if the kill regressed, but record what the orphan
+  # was doing first so the failure names a state instead of just "still alive".
+  defp reap(pid) do
+    state = ps_state(pid)
+    _ = System.cmd("kill", ["-9", pid], stderr_to_stdout: true)
+    state
   end
 end
