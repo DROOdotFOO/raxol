@@ -15,9 +15,33 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
   `HEAD` records the last *durable* offset (+ config) and is persisted together
   with each datasync, never in place.
+
+  ## Single-writer across OS processes
+
+  The process name is `{:global, {Writer, dir}}`, but `:global` only spans a
+  CONNECTED cluster — two unclustered OS processes on one session dir would
+  each start a Writer and mint duplicate offsets, permanently damaging the
+  journal. A pid lock file (`writer.lock`) closes the same-host case: it is
+  acquired at init and released on terminate, a stale lock (dead holder) is
+  reclaimed via `kill -0`, and init refuses (`{:stop, {:journal_locked, _}}`)
+  ONLY when a confirmed-live foreign process holds it. The lock fails OPEN
+  (proceeds lockless) where it cannot prove liveness (non-Unix / no `kill`) so
+  a lock-subsystem hiccup can never block journaling. Residual: two processes
+  both reclaiming the same stale lock in the same instant still race.
+
+  ## Write-failure tolerance
+
+  A failing disk (e.g. ENOSPC) surfaces as a logged
+  `[:raxol, :agent, :journal, :write_failed]` event, never a Writer crash: the
+  append's own `:file.write` already returns `{:error, _}`, and the follow-on
+  `datasync`, `HEAD`/`meta` atomic writes, and segment rotation all degrade
+  (log + continue, retry on the next append) rather than MatchError-exiting the
+  process out from under every open handle on the session.
   """
 
   use GenServer
+
+  require Logger
 
   alias Raxol.Agent.Journal.FileStore.Reader
 
@@ -25,6 +49,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   @default_sync_ceiling_ms 200
   @default_immediate_types ["tool_result", "approval"]
   @default_schema_version "1.1.0"
+  @lock_file "writer.lock"
 
   defstruct [
     :session_id,
@@ -39,6 +64,9 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     :immediate_types,
     :sync_ceiling_ms,
     :sync_timer,
+    # The path of the cross-process lock file when THIS Writer owns it; nil
+    # when the lock was skipped (non-Unix / no `kill`) or not acquired.
+    :lock_path,
     dirty: false
   ]
 
@@ -107,6 +135,22 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     File.mkdir_p!(Path.join(dir, "snapshots"))
     sweep_tmp_files(dir)
 
+    # Cross-process single-writer lock. `:global` (the process name) only spans
+    # a CONNECTED cluster, so two unclustered OS processes on one session dir
+    # would each start a Writer and mint duplicate offsets, permanently
+    # damaging the journal. A pid lock file closes the same-host case; it fails
+    # OPEN (proceeds without a lock) on any uncertainty, and refuses ONLY when
+    # the holder is a confirmed-live foreign OS process.
+    case acquire_lock(dir) do
+      {:ok, lock_path} ->
+        init_after_lock(opts, dir, session_id, journal_dir, lock_path)
+
+      {:refused, holder} ->
+        {:stop, {:journal_locked, holder}}
+    end
+  end
+
+  defp init_after_lock(opts, dir, session_id, journal_dir, lock_path) do
     schema_version = Keyword.get(opts, :schema_version, @default_schema_version)
     seg_cap = Keyword.get(opts, :segment_cap, @default_segment_cap)
 
@@ -119,7 +163,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
 
     offset = resume_offset(dir)
     {seg_num, seg_size} = current_segment(journal_dir, seg_cap)
-    io = open_segment(journal_dir, seg_num)
+    io = open_segment!(journal_dir, seg_num)
 
     state = %__MODULE__{
       session_id: session_id,
@@ -132,8 +176,8 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       offset: offset,
       schema_version: schema_version,
       immediate_types: immediate_types,
-      sync_ceiling_ms:
-        Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms)
+      sync_ceiling_ms: Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms),
+      lock_path: lock_path
     }
 
     write_head(state)
@@ -219,6 +263,9 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     # close-then-reopen on the same dir never races the async :global cleanup
     # and gets handed the corpse of the writer we just stopped.
     if state.dir, do: :global.unregister_name({__MODULE__, state.dir})
+    # Release the cross-process lock so the next opener re-acquires cleanly
+    # (a crash leaves it behind, but the stale-pid reclaim below handles that).
+    if state.lock_path, do: File.rm(state.lock_path)
     :ok
   end
 
@@ -259,26 +306,52 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   defp flush_now(%{dirty: false, sync_timer: nil} = state), do: state
 
   defp flush_now(state) do
-    if state.io, do: :ok = :file.datasync(state.io)
-    if state.sync_timer, do: Process.cancel_timer(state.sync_timer)
-    state = %{state | dirty: false, sync_timer: nil}
-    write_head(state)
-    state
+    case safe_datasync(state) do
+      :ok ->
+        if state.sync_timer, do: Process.cancel_timer(state.sync_timer)
+        state = %{state | dirty: false, sync_timer: nil}
+        write_head(state)
+        state
+
+      :error ->
+        # Durability could not be confirmed (e.g. a full disk). Do NOT crash
+        # the Writer — the already-buffered bytes are not lost, and keeping
+        # `dirty: true` lets a later flush retry once space frees. Drop the
+        # timer so we do not spin retrying on a wedged disk.
+        if state.sync_timer, do: Process.cancel_timer(state.sync_timer)
+        %{state | sync_timer: nil}
+    end
+  end
+
+  # datasync can fail on a full/failing disk; never let that MatchError-crash
+  # the Writer out from under every open handle on the session.
+  defp safe_datasync(%{io: nil}), do: :ok
+
+  defp safe_datasync(%{io: io}) do
+    case :file.datasync(io) do
+      :ok -> :ok
+      {:error, reason} -> write_failed(:datasync, reason)
+    end
   end
 
   # --- segment rotation ------------------------------------------------------
 
+  # Open the NEXT segment BEFORE closing the current one, so a failed open
+  # (e.g. ENOSPC) leaves the Writer appending to the current (over-cap) segment
+  # rather than crashing or dropping its fd. Retried on the next append.
   defp maybe_rotate(%{seg_size: size, seg_cap: cap} = state) when size >= cap do
-    :ok = :file.datasync(state.io)
-    :ok = :file.close(state.io)
     seg_num = state.seg_num + 1
 
-    %{
-      state
-      | io: open_segment(state.journal_dir, seg_num),
-        seg_num: seg_num,
-        seg_size: 0
-    }
+    case open_segment(state.journal_dir, seg_num) do
+      {:ok, io} ->
+        _ = safe_datasync(state)
+        if state.io, do: :file.close(state.io)
+        %{state | io: io, seg_num: seg_num, seg_size: 0}
+
+      {:error, reason} ->
+        _ = write_failed(:rotate, reason)
+        state
+    end
   end
 
   defp maybe_rotate(state), do: state
@@ -286,8 +359,17 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   defp open_segment(journal_dir, seg_num) do
     path = Path.join(journal_dir, segment_name(seg_num))
     # :raw + :append, never :delayed_write (durability guarantees depend on it).
-    {:ok, io} = :file.open(path, [:append, :raw, :binary])
-    io
+    :file.open(path, [:append, :raw, :binary])
+  end
+
+  defp open_segment!(journal_dir, seg_num) do
+    case open_segment(journal_dir, seg_num) do
+      {:ok, io} ->
+        io
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "open", path: segment_name(seg_num)
+    end
   end
 
   defp current_segment(journal_dir, seg_cap) do
@@ -334,6 +416,9 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
+  # HEAD lagging the real journal is already tolerated on resume (resume_offset
+  # takes the max of HEAD and the reader's recovered last offset), so a failed
+  # HEAD write is logged and swallowed rather than crashing the Writer.
   defp write_head(state) do
     head = %{
       "offset" => state.offset,
@@ -342,7 +427,10 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       "schema_version" => state.schema_version
     }
 
-    atomic_write!(Path.join(state.dir, "HEAD"), Jason.encode_to_iodata!(head))
+    case atomic_write(Path.join(state.dir, "HEAD"), Jason.encode_to_iodata!(head)) do
+      :ok -> :ok
+      {:error, reason} -> write_failed(:head, reason)
+    end
   end
 
   defp write_meta(dir, opts, schema_version) do
@@ -359,7 +447,10 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
         "schema_version" => schema_version
       }
 
-      atomic_write!(path, Jason.encode_to_iodata!(meta))
+      case atomic_write(path, Jason.encode_to_iodata!(meta)) do
+        :ok -> :ok
+        {:error, reason} -> write_failed(:meta, reason)
+      end
     end
   end
 
@@ -373,21 +464,123 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     end
   end
 
-  defp atomic_write!(path, data) do
+  # Non-raising: a full/failing disk returns {:error, reason} so the caller can
+  # log and continue instead of crashing the Writer mid-append.
+  defp atomic_write(path, data) do
     tmp =
       path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive]))
 
-    File.open!(tmp, [:write, :raw, :binary], fn io ->
-      :ok = :file.write(io, data)
-      :ok = :file.datasync(io)
-    end)
+    with :ok <- write_temp(tmp, data),
+         :ok <- :file.rename(tmp, path) do
+      # Durability of the rename itself needs the *directory* entry flushed,
+      # else a power loss can lose the newly-renamed name. Best-effort (some
+      # platforms reject datasync on a dir fd — fine, the rename still stands).
+      sync_dir(Path.dirname(path))
+      :ok
+    else
+      {:error, reason} ->
+        _ = File.rm(tmp)
+        {:error, reason}
+    end
+  end
 
-    File.rename!(tmp, path)
-    # Durability of the rename itself needs the *directory* entry flushed, else
-    # a power loss can lose the newly-renamed name. Best-effort (some platforms
-    # reject datasync on a dir fd — that's fine, the rename still stands).
-    sync_dir(Path.dirname(path))
-    :ok
+  defp write_temp(tmp, data) do
+    case :file.open(tmp, [:write, :raw, :binary]) do
+      {:ok, io} ->
+        result = with :ok <- :file.write(io, data), do: :file.datasync(io)
+        _ = :file.close(io)
+        result
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp write_failed(stage, reason) do
+    Logger.warning("journal writer #{stage} write failed: #{inspect(reason)}")
+
+    :telemetry.execute(
+      [:raxol, :agent, :journal, :write_failed],
+      %{},
+      %{stage: stage, reason: reason}
+    )
+
+    :error
+  end
+
+  # --- cross-process single-writer lock --------------------------------------
+
+  # Acquire the pid lock for `dir`. Returns `{:ok, lock_path | nil}` to proceed
+  # (lock_path is nil when locking is unavailable — we degrade rather than block
+  # journaling) or `{:refused, holder_pid}` only when a CONFIRMED-live foreign
+  # OS process already holds it.
+  defp acquire_lock(dir) do
+    if lockable?() do
+      claim_lock(Path.join(dir, @lock_file), System.pid())
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp claim_lock(path, our_pid) do
+    case File.write(path, our_pid, [:exclusive]) do
+      :ok ->
+        {:ok, path}
+
+      {:error, :eexist} ->
+        resolve_existing_lock(path, our_pid)
+
+      {:error, reason} ->
+        # Could not even create the lock (e.g. a read-only dir): do not block
+        # journaling on the lock subsystem — proceed lockless with a warning.
+        Logger.warning("journal writer lock create failed: #{inspect(reason)}")
+        {:ok, nil}
+    end
+  end
+
+  defp resolve_existing_lock(path, our_pid) do
+    case File.read(path) do
+      {:ok, contents} ->
+        holder = String.trim(contents)
+
+        cond do
+          holder == "" or holder == our_pid -> reclaim_lock(path, our_pid)
+          os_pid_alive?(holder) -> {:refused, holder}
+          true -> reclaim_lock(path, our_pid)
+        end
+
+      {:error, _reason} ->
+        # Unreadable lock: treat as stale and reclaim (fail open).
+        reclaim_lock(path, our_pid)
+    end
+  end
+
+  defp reclaim_lock(path, our_pid) do
+    case File.write(path, our_pid) do
+      :ok -> {:ok, path}
+      {:error, _reason} -> {:ok, nil}
+    end
+  end
+
+  # Locking needs a way to prove the holder is dead before reclaiming a stale
+  # lock; without that a crash would lock the session out forever. Only enable
+  # it where `kill -0` can answer (Unix with a kill binary).
+  defp lockable? do
+    match?({:unix, _}, :os.type()) and System.find_executable("kill") != nil
+  end
+
+  defp os_pid_alive?(pid) do
+    case System.find_executable("kill") do
+      nil ->
+        # Cannot determine liveness — assume alive so we never reclaim a lock
+        # that might be held (fail toward refusing a second writer).
+        true
+
+      kill ->
+        match?({_, 0}, System.cmd(kill, ["-0", pid], stderr_to_stdout: true))
+    end
+  rescue
+    _ -> true
   end
 
   defp sync_dir(dir) do
