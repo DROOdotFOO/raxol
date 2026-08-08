@@ -384,7 +384,7 @@ defmodule Raxol.Application do
 
         nil
 
-      not module_available?(Raxol.Agent.Code.App) ->
+      not code_agent_available?() ->
         Log.warning(
           "[Raxol.Application] RAXOL_SSH_CODE=true but raxol_agent is not " <>
             "in this build; coding-agent SSH disabled"
@@ -393,11 +393,7 @@ defmodule Raxol.Application do
         nil
 
       true ->
-        port =
-          case System.get_env("RAXOL_SSH_CODE_PORT") do
-            nil -> 2223
-            val -> String.to_integer(val)
-          end
+        port = ssh_code_port()
 
         host_keys_dir =
           System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys"
@@ -414,6 +410,39 @@ defmodule Raxol.Application do
            tenant_opts: &Raxol.Agent.Code.Tenant.app_opts(tenants, &1)},
           id: :ssh_code_server
         )
+    end
+  end
+
+  # raxol_agent presence, checked by loadability of the modules the child spec
+  # actually needs. NOT `function_exported?(Code.App, :child_spec, 1)`: Code.App
+  # is a TEA module (`use Raxol.Core.Runtime.Application`) and never defines
+  # child_spec/1, so that test was always false and the server never started.
+  defp code_agent_available? do
+    Code.ensure_loaded?(Raxol.Agent.Code.App) and
+      Code.ensure_loaded?(Raxol.Agent.Code.Tenant)
+  end
+
+  # Degrade a malformed port to the default with a warning, the way every other
+  # arm of maybe_add_ssh_code/0 degrades — never let it raise and take down the
+  # whole application supervisor at boot.
+  defp ssh_code_port do
+    case System.get_env("RAXOL_SSH_CODE_PORT") do
+      value when value in [nil, ""] ->
+        2223
+
+      value ->
+        case Integer.parse(String.trim(value)) do
+          {port, ""} when port > 0 and port < 65_536 ->
+            port
+
+          _ ->
+            Log.warning(
+              "[Raxol.Application] RAXOL_SSH_CODE_PORT #{inspect(value)} is " <>
+                "not a valid port; using 2223"
+            )
+
+            2223
+        end
     end
   end
 

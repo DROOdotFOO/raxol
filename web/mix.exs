@@ -23,6 +23,13 @@ defmodule RaxolPlayground.MixProject do
   defp deps do
     [
       {:raxol, path: ".."},
+      # The hosted coding agent over SSH (RAXOL_SSH_CODE) needs the agent
+      # framework on the release code path. Main raxol keeps raxol_agent
+      # optional (no dependency edge), so the deploy app opts in here; without
+      # it, Raxol.Application.maybe_add_ssh_code/0 logs and skips. The ACP
+      # sibling package rides along as a source-build transitive dep and is
+      # harmless (nothing auto-serves it in the web release).
+      {:raxol_agent, path: "../packages/raxol_agent"},
       {:phoenix, "~> 1.8.1"},
       {:phoenix_live_view, "~> 1.2.3"},
       {:phoenix_html, "~> 4.3"},
