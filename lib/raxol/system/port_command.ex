@@ -187,19 +187,31 @@ defmodule Raxol.System.PortCommand do
     _ -> :ok
   end
 
-  # Kill the process GROUP (`kill -9 -<os_pid>`) so children die too — but ONLY
-  # when os_pid is a confirmed live group leader (pgid == os_pid), never
-  # otherwise: a negative-pid signal against a pid that was reaped and reused
-  # could hit an unrelated group (and pgid == os_pid also proves it is not the
-  # BEAM's own group, whose pgid is the BEAM's pid). When the group cannot be
-  # confirmed, fall back to a per-pid kill of the command itself.
+  # The command itself, ALWAYS: the `sh -c 'exec ...'` wrapper replaces itself
+  # with the command, so the port's os_pid IS the command and this is the kill
+  # that provably reaps it on every platform.
+  #
+  # Then descendants, best-effort, and only when os_pid is a confirmed live
+  # group leader (pgid == os_pid) — never otherwise: a negative-pid signal
+  # against a pid that was reaped and reused could hit an unrelated group, and
+  # pgid == os_pid also proves it is not the BEAM's own group.
+  #
+  # `--` ends option parsing before the negative pid. Without it, util-linux
+  # `kill` (Linux) reads a leading-dash argument as a SIGNAL rather than a
+  # process group and refuses the call, so the group kill silently did nothing
+  # there while working on BSD/macOS. That asymmetry is why the only test of
+  # this path was tagged out of CI rather than fixed.
   defp kill_process_tree(kill, os_pid) do
-    target =
-      if group_leader?(os_pid),
-        do: "-#{os_pid}",
-        else: Integer.to_string(os_pid)
+    _ =
+      System.cmd(kill, ["-9", "--", Integer.to_string(os_pid)],
+        stderr_to_stdout: true
+      )
 
-    _ = System.cmd(kill, ["-9", target], stderr_to_stdout: true)
+    if group_leader?(os_pid) do
+      _ = System.cmd(kill, ["-9", "--", "-#{os_pid}"], stderr_to_stdout: true)
+    end
+
+    :ok
   end
 
   defp group_leader?(os_pid) do
