@@ -68,11 +68,63 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       {:os_pid, os_pid} = Port.info(port, :os_pid)
       File.write!(Path.join(dir, "writer.lock"), Integer.to_string(os_pid))
 
-      assert {:error, {:journal_locked, holder}} =
-               Writer.start_link(dir: dir, session_id: s)
+      # `:ignore`, not `{:stop, _}`: an abnormal init exit reaches the linked
+      # opener as an exit SIGNAL too, killing a non-trapping caller before it
+      # can read the error. The refusal must degrade the caller, not end it.
+      assert :ignore == Writer.start_link(dir: dir, session_id: s)
 
+      # The refusal still names the holder, through the read-only pre-flight
+      # FileStore.open/2 uses to report it.
+      assert Writer.lock_holder(dir) == Integer.to_string(os_pid)
+
+      Port.close(port)
+    end
+
+    test "a locked journal fails FileStore.open without killing the opener", %{
+      base: base,
+      session: s
+    } do
+      dir = Path.join(base, s)
+      File.mkdir_p!(dir)
+
+      port =
+        Port.open({:spawn_executable, System.find_executable("sleep")}, [
+          :binary,
+          args: ["30"]
+        ])
+
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+      File.write!(Path.join(dir, "writer.lock"), Integer.to_string(os_pid))
+
+      # The opener is a plain NON-trapping process, like the TUI dispatcher
+      # that calls FileStore.open/2 from its update loop. It must receive the
+      # documented error tuple and stay alive to handle it.
+      parent = self()
+
+      opener =
+        spawn(fn ->
+          send(parent, {:open_result, FileStore.open(s, base_dir: base)})
+          # Stays in a receive loop: any exit signal from the refused Writer
+          # would show up as a DOWN below.
+          receive do
+            :ping -> send(parent, :pong)
+          end
+        end)
+
+      ref = Process.monitor(opener)
+
+      assert_receive {:open_result, {:error, {:journal_locked, holder}}}, 5_000
       assert holder == Integer.to_string(os_pid)
 
+      # No exit signal landed: the opener is still parked in its receive.
+      refute_receive {:DOWN, ^ref, :process, ^opener, _reason}, 200
+      assert Process.alive?(opener)
+
+      # And it is live enough to still do work.
+      send(opener, :ping)
+      assert_receive :pong, 5_000
+
+      Process.exit(opener, :kill)
       Port.close(port)
     end
 

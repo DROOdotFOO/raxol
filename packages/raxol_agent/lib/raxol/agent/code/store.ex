@@ -26,6 +26,7 @@ defmodule Raxol.Agent.Code.Store do
   @type session :: %{
           id: String.t(),
           updated_at: integer(),
+          rev: String.t() | nil,
           cwd: String.t(),
           title: String.t(),
           parent: String.t() | nil,
@@ -44,26 +45,100 @@ defmodule Raxol.Agent.Code.Store do
 
   defp home_base, do: System.user_home() || System.tmp_dir!()
 
-  @doc "Persist a session's messages + metadata. Returns `:ok` or `{:error, reason}`."
-  @spec save(String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def save(dir, session_key, attrs) do
-    with :ok <- File.mkdir_p(dir) do
-      data =
-        %{
-          "id" => session_key,
-          "updated_at" => System.system_time(:second),
-          "cwd" => Map.get(attrs, :cwd, ""),
-          "title" => Map.get(attrs, :title, ""),
-          # A forked session records the id it was copied from.
-          "parent" => Map.get(attrs, :parent),
-          "messages" =>
-            attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1),
-          # Durable projection events, stored as-is (already JSON-encodable);
-          # EventCodec decodes them back to projection shape on load.
-          "events" => Map.get(attrs, :events, [])
-        }
+  @doc """
+  Persist a session's messages + metadata. Returns `:ok` or `{:error, reason}`.
 
-      File.write(path(dir, session_key), Jason.encode!(data))
+  Options:
+
+    * `:expect_rev` — optimistic concurrency. The save is refused with
+      `{:error, :stale}` unless the on-disk `rev` still matches. Two surfaces
+      share this store (the TUI and `Raxol.Agent.Harness.McpTools`), and a
+      save rewrites the WHOLE file, so a blind write from one silently
+      discards the other's turn. A caller that read the session first passes
+      the `rev` it read and gets a refusal instead of a clobber.
+
+      `rev` is a fresh random token per save, NOT `updated_at`: timestamps
+      here have one-second resolution, and two surfaces writing within the
+      same second is the common case rather than the rare one, so an
+      `updated_at` comparison would miss exactly the race worth catching.
+
+      Not every caller passes it, deliberately. A short read-modify-write
+      (an MCP turn) can refuse and report; the TUI holds the session in
+      memory across a whole run and has nowhere to put a refusal, so it
+      saves unconditionally and wins. The asymmetry is the point: the
+      surface that can still act on a refusal is the one that checks.
+
+  The write itself is atomic: the JSON goes to a temp file in the same
+  directory and is renamed over the target. A half-written session file
+  decodes as damaged and `load/2` reports `:not_found`, which the surface
+  reads as "starting fresh" — silently discarding the conversation, which
+  lives ONLY here (the journal holds transcript events, not the messages).
+  """
+  @spec save(String.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def save(dir, session_key, attrs, opts \\ []) do
+    with :ok <- File.mkdir_p(dir),
+         :ok <- check_expected(dir, session_key, opts),
+         {:ok, json} <- encode(session_key, attrs) do
+      atomic_write(path(dir, session_key), json)
+    end
+  end
+
+  defp check_expected(dir, session_key, opts) do
+    case Keyword.fetch(opts, :expect_rev) do
+      :error ->
+        :ok
+
+      {:ok, expected} ->
+        case load(dir, session_key) do
+          # No file yet: nothing to clobber, so any expectation is satisfiable.
+          {:error, :not_found} -> :ok
+          {:ok, %{rev: ^expected}} -> :ok
+          {:ok, _moved_on} -> {:error, :stale}
+        end
+    end
+  end
+
+  # `Jason.encode/1`, not `encode!/1`: an event payload that is not
+  # JSON-encodable must surface as the `{:error, _}` this function promises,
+  # not raise through a caller written against that contract.
+  defp encode(session_key, attrs) do
+    data = %{
+      "id" => session_key,
+      "updated_at" => System.system_time(:second),
+      # A fresh token per save: the version the next writer's `:expect_rev`
+      # is checked against. Random rather than a counter so it needs no
+      # read-modify-write, and differs across BEAM restarts.
+      "rev" => Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+      "cwd" => Map.get(attrs, :cwd, ""),
+      "title" => Map.get(attrs, :title, ""),
+      # A forked session records the id it was copied from.
+      "parent" => Map.get(attrs, :parent),
+      "messages" =>
+        attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1),
+      # Durable projection events, stored as-is (already JSON-encodable);
+      # EventCodec decodes them back to projection shape on load.
+      "events" => Map.get(attrs, :events, [])
+    }
+
+    case Jason.encode(data) do
+      {:ok, json} -> {:ok, json}
+      {:error, reason} -> {:error, {:encode_failed, reason}}
+    end
+  end
+
+  # Write-then-rename in the SAME directory, so the rename is atomic on POSIX
+  # and a reader sees either the previous session or the new one, never a
+  # truncated prefix. The temp file is cleaned up on any failure.
+  defp atomic_write(path, json) do
+    tmp = path <> ".tmp." <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+    with :ok <- File.write(tmp, json),
+         :ok <- File.rename(tmp, path) do
+      :ok
+    else
+      {:error, reason} ->
+        _ = File.rm(tmp)
+        {:error, reason}
     end
   end
 
@@ -82,6 +157,9 @@ defmodule Raxol.Agent.Code.Store do
     %{
       id: Map.get(json, "id", session_key),
       updated_at: Map.get(json, "updated_at", 0),
+      # Sessions written before revisions existed carry none; `nil` is a
+      # legitimate expectation, so they still round-trip through a CAS save.
+      rev: string_or_nil(Map.get(json, "rev")),
       cwd: Map.get(json, "cwd", ""),
       title: string_or_empty(Map.get(json, "title")),
       parent: string_or_nil(Map.get(json, "parent")),

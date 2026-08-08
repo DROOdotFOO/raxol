@@ -29,6 +29,12 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   a lock-subsystem hiccup can never block journaling. Residual: two processes
   both reclaiming the same stale lock in the same instant still race.
 
+  A refusal is `:ignore`, never `{:stop, reason}`: an abnormal init exit also
+  reaches the linked opener as an exit signal, which kills a non-trapping
+  caller before it can read the `{:error, _}` return. Refusing to journal must
+  degrade the session, not end it — `FileStore.open/2` turns the `:ignore`
+  into `{:error, {:journal_locked, _}}` and the surface carries on unjournaled.
+
   ## Write-failure tolerance
 
   A failing disk (e.g. ENOSPC) surfaces as a logged
@@ -156,7 +162,20 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
         end
 
       {:refused, holder} ->
-        {:stop, {:journal_locked, holder}}
+        # `:ignore`, NOT `{:stop, reason}`. An abnormal init exit is delivered
+        # to the linked caller as an exit SIGNAL as well as an `{:error, _}`
+        # return, so a non-trapping opener (the TUI dispatcher, via
+        # `FileStore.open/2`) dies of it before it can handle the error — and
+        # the whole point of refusing is to protect the journal, not to take
+        # the session down with it. `:ignore` exits `:normal`, so `start_link`
+        # returns cleanly and `FileStore.open/2` maps it to the documented
+        # `{:error, {:journal_locked, _}}`.
+        Logger.warning(
+          "journal writer refused: #{inspect(dir)} is locked by live " <>
+            "OS process #{inspect(holder)}"
+        )
+
+        :ignore
     end
   end
 
@@ -531,6 +550,27 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   # (lock_path is nil when locking is unavailable — we degrade rather than block
   # journaling) or `{:refused, holder_pid}` only when a CONFIRMED-live foreign
   # OS process already holds it.
+  @doc """
+  The OS pid holding `dir`'s writer lock when it is a CONFIRMED-LIVE foreign
+  process, else `nil` (no lock, a stale one, our own, or liveness unprovable).
+
+  A read-only pre-flight for `FileStore.open/2`, so a refusal is reported as
+  a plain `{:error, {:journal_locked, holder}}` naming the holder. It does not
+  replace the claim in `init/1` — that is the authority, this is the message.
+  """
+  @spec lock_holder(Path.t()) :: String.t() | nil
+  def lock_holder(dir) do
+    with true <- lockable?(),
+         {:ok, contents} <- File.read(Path.join(dir, @lock_file)),
+         holder when holder != "" <- String.trim(contents),
+         false <- holder == System.pid(),
+         true <- os_pid_alive?(holder) do
+      holder
+    else
+      _no_live_foreign_holder -> nil
+    end
+  end
+
   defp acquire_lock(dir) do
     if lockable?() do
       claim_lock(Path.join(dir, @lock_file), System.pid())
