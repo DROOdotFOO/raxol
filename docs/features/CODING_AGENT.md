@@ -250,8 +250,10 @@ ACP-speaking editor (Zed and its ecosystem) can spawn and drive it: each
 `session/new` gets a real `Raxol.AgentClientProtocol.Session` running
 `Raxol.Agent.ClientProtocol.TurnRunner` over the same provider resolution
 as every other entrypoint. Turns are read-only on this surface until ACP's
-permission flow is bridged to the authorization engine, and the file tools
-scope to the server's working directory (run one server per project). Point
+permission flow is bridged to the authorization engine. Each session's file
+tools scope to the `cwd` the editor names in `session/new`, so one server
+handles projects in different directories and every tool call is contained
+under its own session root. Point
 the editor at the `bin/raxol-acp` shim rather than `mix` directly, so Mix
 compile output never reaches the NDJSON wire; `mix help raxol.acp` has the
 Zed `agent_servers` snippet. This is a repo-checkout feature: the protocol

@@ -31,10 +31,11 @@ defmodule Mix.Tasks.Raxol.Acp do
         }
       }
 
-  The session's file tools scope to that process working directory
-  (`RAXOL_CLI_CWD`, which the shim sets to its own cwd). ACP's per-session
-  `cwd` field is not yet honored as a distinct root; run one server per
-  project.
+  Each session's file tools scope to the `cwd` the editor sends in
+  `session/new` (the field shown above), so one server can drive projects in
+  different directories and each tool call is contained under its own session
+  root. When a client sends a blank `cwd`, the process working directory
+  (`RAXOL_CLI_CWD`, which the shim sets to its own cwd) applies.
 
   ## Availability
 
