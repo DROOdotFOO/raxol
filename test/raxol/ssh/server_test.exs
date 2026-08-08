@@ -3,6 +3,23 @@ defmodule Raxol.SSH.ServerTest do
 
   alias Raxol.SSH.Server
 
+  defmodule RecordingApp do
+    @moduledoc false
+    # Records what Lifecycle actually resolved, so the opts merge is asserted
+    # through its real consumer instead of being re-derived in the test.
+    def init(%{options: options}) do
+      {:ok,
+       %{
+         cwd: Keyword.get(options, :cwd),
+         agent_id: Keyword.get(options, :agent_id),
+         environment: Keyword.get(options, :environment)
+       }}
+    end
+
+    def update(_msg, model), do: {model, []}
+    def view(_), do: %{type: :text, content: "ok"}
+  end
+
   describe "authentication (fail-closed)" do
     test "refuses to start with no auth configured" do
       # An SSH surface that can reach payment Actions must not be silently
@@ -146,12 +163,11 @@ defmodule Raxol.SSH.ServerTest do
 
     test "connection transport keys win over server app_opts (first-occurrence)" do
       # Session prepends transport wiring, so a served app's app_opts cannot
-      # shadow :environment/:io_writer/:width. This mirrors the merge in
-      # Raxol.SSH.Session.init/1.
-      app_opts = [environment: :agent, width: 999, model: "m"]
-
+      # shadow :environment/:io_writer/:width.
       merged =
-        [environment: :ssh, io_writer: :chan, width: 80, height: 24] ++ app_opts
+        Raxol.SSH.Session.lifecycle_opts(:chan, 80, 24,
+          app_opts: [environment: :agent, width: 999, model: "m"]
+        )
 
       assert Keyword.get(merged, :environment) == :ssh
       assert Keyword.get(merged, :width) == 80
@@ -161,21 +177,50 @@ defmodule Raxol.SSH.ServerTest do
     end
 
     test "tenant opts beat server app_opts but never the transport wiring" do
-      # Mirrors Session.init/1's transport ++ tenant ++ server merge.
-      tenant = [cwd: "/t/alice/work", agent_id: "ssh:alice", width: 5]
-      server = [cwd: "/srv/shared", model: "m"]
-
       merged =
-        [environment: :ssh, io_writer: :chan, width: 80, height: 24] ++
-          tenant ++ server
+        Raxol.SSH.Session.lifecycle_opts(:chan, 80, 24,
+          tenant_opts: [cwd: "/t/alice/work", agent_id: "ssh:alice", width: 5],
+          app_opts: [cwd: "/srv/shared", model: "m"]
+        )
 
-      # The tenant's jail wins over the server-wide default…
+      # The tenant's jail wins over the server-wide default...
       assert Keyword.get(merged, :cwd) == "/t/alice/work"
       assert Keyword.get(merged, :agent_id) == "ssh:alice"
-      # …but transport keys stay untouchable.
+      # ...but transport keys stay untouchable.
       assert Keyword.get(merged, :width) == 80
       # Non-colliding server options still flow.
       assert Keyword.get(merged, :model) == "m"
+    end
+
+    test "a started :ssh Lifecycle initializes with the tenant option" do
+      # The merge order only means anything because Lifecycle reads every
+      # option with Keyword.get, so assert through the real consumer: the app
+      # must come up holding the tenant's identity, not the server-wide one.
+      opts =
+        Raxol.SSH.Session.lifecycle_opts(fn _ -> :ok end, 40, 10,
+          tenant_opts: [cwd: "/t/alice/work", agent_id: "ssh:alice"],
+          app_opts: [cwd: "/srv/shared", environment: :agent]
+        )
+
+      assert {:ok, pid} =
+               Raxol.Core.Runtime.Lifecycle.start_link(RecordingApp, opts)
+
+      try do
+        dispatcher = :sys.get_state(pid, 5_000).dispatcher_pid
+        model = :sys.get_state(dispatcher, 5_000).model
+
+        assert model.cwd == "/t/alice/work"
+        assert model.agent_id == "ssh:alice"
+        assert model.environment == :ssh
+      after
+        Process.unlink(pid)
+
+        try do
+          Raxol.Core.Runtime.Lifecycle.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
+      end
     end
   end
 
