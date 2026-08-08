@@ -122,15 +122,24 @@ defmodule Mix.Tasks.Raxol.Acp do
         {:error, message} -> config_error(message)
       end
 
-    # stdout is the wire: NDJSON only, so every log line goes to stderr.
-    # `update_handler_config(:config, ...)` is rejected by logger_std_h as an
-    # illegal runtime type change, so remove the default handler and re-add it
-    # bound to standard_error. No terminal driver, no web endpoint.
+    # stdout is the wire: NDJSON only, so every log line goes to stderr. Two
+    # mechanisms, because the swap alone is not enough: `app.start` reloads
+    # config and restarts :logger, which reinstates a stdout-bound default
+    # handler, so a pre-boot swap loses every startup log line onto the wire.
+    # Seed :logger's env first so the restarted handler comes up on stderr,
+    # then re-assert after boot in case loadconfig overwrote it.
+    Application.put_env(:logger, :default_handler, config: %{type: :standard_error})
     reroute_logs_to_stderr()
     Application.put_env(:raxol, :skip_endpoint, true)
     Application.put_env(:raxol, :startup_mode, :mcp)
     System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
+
+    # `app.start` compiles path deps and announces each one as `==> dep` through
+    # Mix's shell, which writes to stdout -- one more thing on the wire. The
+    # shim has already compiled by this point, so there is nothing to report.
+    Mix.shell(Mix.Shell.Quiet)
     Mix.Task.run("app.start")
+    reroute_logs_to_stderr()
 
     {:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
 
@@ -155,9 +164,27 @@ defmodule Mix.Tasks.Raxol.Acp do
     ]
   end
 
+  # `update_handler_config(:config, ...)` is rejected by logger_std_h as an
+  # illegal runtime type change, so the handler has to be removed and re-added.
+  # Carry the existing config across so Elixir's formatter and level survive:
+  # re-adding a bare logger_std_h would keep stdout clean but reduce every
+  # stderr log line to Erlang's default format.
   defp reroute_logs_to_stderr do
-    _ = :logger.remove_handler(:default)
-    _ = :logger.add_handler(:default, :logger_std_h, %{config: %{type: :standard_error}})
+    case :logger.get_handler_config(:default) do
+      {:ok, %{module: module} = config} ->
+        _ = :logger.remove_handler(:default)
+
+        rebound =
+          config
+          |> Map.drop([:id, :module])
+          |> Map.put(:config, %{type: :standard_error})
+
+        _ = :logger.add_handler(:default, module, rebound)
+
+      _ ->
+        _ = :logger.add_handler(:default, :logger_std_h, %{config: %{type: :standard_error}})
+    end
+
     :ok
   end
 
