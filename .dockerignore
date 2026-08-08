@@ -15,7 +15,16 @@ deps/
 # repo root, so every packages/*/test leaked into the context (8.3MB).
 # `*.md` stays root-anchored deliberately -- ex_keccak reads its own README.md
 # at compile time for @moduledoc.
+#
+# The re-include is load-bearing: `test` names a mix SUITE at a package root
+# but a NAMESPACE under lib/, and the recursive glob cannot tell them apart.
+# `packages/raxol_mcp/lib/raxol/mcp/test/` holds Raxol.MCP.Test.Session and
+# .Assertions -- shipped library code. Dropping them compiled raxol_mcp with
+# 25 files instead of 27, so Raxol.MCP.Test could not expand %Session{} and
+# every Linux release build died in `mix release`. macOS builds natively with
+# no Docker context, so it passed and the break reached a tag unseen.
 **/test/
+!**/lib/**/test/
 bench/
 scripts/
 
