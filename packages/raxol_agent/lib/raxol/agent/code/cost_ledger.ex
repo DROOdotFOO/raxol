@@ -67,6 +67,11 @@ defmodule Raxol.Agent.Code.CostLedger do
     else
       :ok
     end
+  catch
+    # A wired-but-dead (or hung) ledger: a budget that cannot be checked
+    # fails CLOSED with its own reason — a silent pass would let spend
+    # run unaccounted, and a raw call exit would eat the keypress.
+    :exit, _reason -> {:over, :ledger_unreachable}
   end
 
   def check(_ledger, _agent_id, _policy), do: :ok
@@ -85,6 +90,8 @@ defmodule Raxol.Agent.Code.CostLedger do
       "ledger: $#{Decimal.round(session, 4)} session · " <>
         "$#{Decimal.round(lifetime, 4)} lifetime"
     end
+  catch
+    :exit, _reason -> "ledger: unreachable"
   end
 
   def totals_text(_ledger, _agent_id, _policy), do: nil

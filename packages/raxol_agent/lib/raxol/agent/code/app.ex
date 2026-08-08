@@ -618,15 +618,8 @@ defmodule Raxol.Agent.Code.App do
       # has already been made, so enforcement means refusing to start
       # another one once the shared ledger says the budget is spent.
       case budget_exhausted(model) do
-        :ok ->
-          start_turn(model, prompt)
-
-        {:over, limit} ->
-          notice(
-            model,
-            "spending budget exhausted (#{limit}) — adjust the policy " <>
-              "to continue"
-          )
+        :ok -> start_turn(model, prompt)
+        {:over, limit} -> notice(model, budget_notice(limit))
       end
     else
       notice(model, provider_setup_hint(model))
@@ -640,6 +633,18 @@ defmodule Raxol.Agent.Code.App do
       model.spending_policy
     )
   end
+
+  # Each refusal names the action that can actually clear it: a frozen
+  # ledger only unfreezes (no policy change helps), an unreachable one
+  # needs its process fixed.
+  defp budget_notice(:frozen),
+    do: "spending ledger frozen — unfreeze it to continue"
+
+  defp budget_notice(:ledger_unreachable),
+    do: "spending ledger unreachable — check the wired ledger process"
+
+  defp budget_notice(limit),
+    do: "spending budget exhausted (#{limit}) — adjust the policy to continue"
 
   defp provider_ready?(%{provider_status: :ready}), do: true
 

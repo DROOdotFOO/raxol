@@ -12,10 +12,21 @@ defmodule Raxol.Agent.LlmPrices do
   """
 
   # {prefix, usd_per_mtok_in, usd_per_mtok_out} — longest prefix wins.
+  # Family rows sit under their exceptions: Opus dropped to 5/25 with
+  # 4.5, and the gpt-5 variants price very differently from the base —
+  # a family-only match would over- or under-bill a real spending budget
+  # by an order of magnitude.
   @prices [
+    {"claude-opus-4-5", 5.0, 25.0},
+    {"claude-opus-4-6", 5.0, 25.0},
+    {"claude-opus-4-7", 5.0, 25.0},
+    {"claude-opus-4-8", 5.0, 25.0},
     {"claude-opus", 15.0, 75.0},
     {"claude-sonnet", 3.0, 15.0},
     {"claude-haiku", 1.0, 5.0},
+    {"gpt-5-mini", 0.25, 2.0},
+    {"gpt-5-nano", 0.05, 0.4},
+    {"gpt-5-pro", 15.0, 120.0},
     {"gpt-5", 1.25, 10.0},
     {"gpt-4o-mini", 0.15, 0.6},
     {"gpt-4o", 2.5, 10.0}

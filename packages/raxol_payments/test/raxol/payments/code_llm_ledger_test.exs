@@ -128,6 +128,30 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
     assert gated.notice =~ "spending budget exhausted (session)"
   end
 
+  test "a dead wired ledger fails closed with its own notice" do
+    ledger = start_ledger()
+    model = model_with(ledger, SpendingPolicy.dev())
+
+    GenServer.stop(ledger)
+
+    {gated, []} = submit(model, "a prompt")
+    refute gated.running?
+    assert gated.notice =~ "spending ledger unreachable"
+
+    {model, []} = submit(model, "/usage")
+    assert model.notice =~ "ledger: unreachable"
+  end
+
+  test "a frozen ledger names the unfreeze, not the policy" do
+    ledger = start_ledger()
+    :ok = Ledger.freeze(ledger)
+    model = model_with(ledger, SpendingPolicy.dev())
+
+    {gated, []} = submit(model, "a prompt")
+    refute gated.running?
+    assert gated.notice =~ "frozen — unfreeze it to continue"
+  end
+
   test "/usage shows the shared-ledger totals" do
     ledger = start_ledger()
     policy = SpendingPolicy.dev()
