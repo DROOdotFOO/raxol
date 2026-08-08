@@ -88,6 +88,33 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
 
       GenServer.stop(pid)
     end
+
+    test "an init failure after locking releases the lock (no self-lockout)", %{
+      base: base,
+      session: s
+    } do
+      Process.flag(:trap_exit, true)
+      dir = Path.join(base, s)
+      journal = Path.join(dir, "journal")
+      File.mkdir_p!(journal)
+
+      # A DIRECTORY where the first segment file must be: open_segment! fails
+      # with :eisdir, so init raises AFTER the lock was taken. terminate is not
+      # called on an init failure, so the lock must be released on that path or
+      # every future open of this session is refused for the node's lifetime.
+      blocker = Path.join(journal, "000001.jsonl")
+      File.mkdir_p!(blocker)
+
+      assert {:error, _reason} = Writer.start_link(dir: dir, session_id: s)
+      refute File.exists?(Path.join(dir, "writer.lock")),
+             "the lock must be released when init fails after acquiring it"
+
+      # With the blocker gone, a retry acquires cleanly rather than being
+      # refused by a leaked live-pid lock.
+      File.rm_rf!(blocker)
+      assert {:ok, pid} = Writer.start_link(dir: dir, session_id: s)
+      GenServer.stop(pid)
+    end
   end
 
   describe "write-failure resilience" do

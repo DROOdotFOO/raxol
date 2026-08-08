@@ -143,12 +143,29 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
     # the holder is a confirmed-live foreign OS process.
     case acquire_lock(dir) do
       {:ok, lock_path} ->
-        init_after_lock(opts, dir, session_id, journal_dir, lock_path)
+        try do
+          init_after_lock(opts, dir, session_id, journal_dir, lock_path)
+        rescue
+          error ->
+            release_lock_on_init_failure(lock_path)
+            reraise error, __STACKTRACE__
+        catch
+          kind, reason ->
+            release_lock_on_init_failure(lock_path)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
 
       {:refused, holder} ->
         {:stop, {:journal_locked, holder}}
     end
   end
+
+  # An init failure AFTER the lock was taken (a segment open on a full disk, a
+  # stat race) never reaches terminate, so the lock would be left holding THIS
+  # live BEAM's pid — and every future open of the session would then be
+  # refused (a confirmed-live holder) until the node restarts. Release it here.
+  defp release_lock_on_init_failure(nil), do: :ok
+  defp release_lock_on_init_failure(path), do: File.rm(path)
 
   defp init_after_lock(opts, dir, session_id, journal_dir, lock_path) do
     schema_version = Keyword.get(opts, :schema_version, @default_schema_version)
