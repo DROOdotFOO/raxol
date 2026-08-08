@@ -274,29 +274,42 @@ defmodule Raxol.Agent.Code.App do
         Raxol.Agent.Code.Store.default_dir()
 
     case Keyword.get(options, :session_key) do
-      nil ->
-        fresh_session(dir)
+      nil -> fresh_session(dir)
+      key -> resume_session(dir, key)
+    end
+  end
 
-      key ->
-        case Raxol.Agent.Code.Store.load(dir, key) do
-          {:ok, %{messages: messages, events: events} = saved} ->
-            %{
-              dir: dir,
-              key: key,
-              messages: messages,
-              events: renumber_events(events),
-              notice: "resumed #{length(messages)} messages",
-              title: Map.get(saved, :title, ""),
-              parent: Map.get(saved, :parent)
-            }
+  # Same rule as /resume, on the `--resume` path: the key is a filename, and
+  # the not-found arm below adopts it without any load succeeding first.
+  defp resume_session(dir, key) do
+    case Raxol.Agent.Code.ShareToken.valid_session_id?(key) do
+      true ->
+        load_session(dir, key)
 
-          {:error, _} ->
-            %{
-              fresh_session(dir)
-              | key: key,
-                notice: "session #{key} not found — starting fresh"
-            }
-        end
+      false ->
+        %{fresh_session(dir) | notice: "not a session id — starting fresh"}
+    end
+  end
+
+  defp load_session(dir, key) do
+    case Raxol.Agent.Code.Store.load(dir, key) do
+      {:ok, %{messages: messages, events: events} = saved} ->
+        %{
+          dir: dir,
+          key: key,
+          messages: messages,
+          events: renumber_events(events),
+          notice: "resumed #{length(messages)} messages",
+          title: Map.get(saved, :title, ""),
+          parent: Map.get(saved, :parent)
+        }
+
+      {:error, _} ->
+        %{
+          fresh_session(dir)
+          | key: key,
+            notice: "session #{key} not found — starting fresh"
+        }
     end
   end
 
@@ -2167,7 +2180,18 @@ defmodule Raxol.Agent.Code.App do
   defp switch_session(%{session_key: key} = model, key),
     do: notice(model, "already in session #{key}")
 
+  # A session key is a FILENAME: it reaches Path.join unescaped in
+  # /transcript and names the journal directory. Store.load only basenames it
+  # for its own lookup, so a traversal would survive the load and land in the
+  # model. Reject it here, where it enters, rather than at each use.
   defp switch_session(model, key) do
+    case Raxol.Agent.Code.ShareToken.valid_session_id?(key) do
+      true -> enter_session(model, key)
+      false -> notice(model, "not a session id: #{inspect(key)}")
+    end
+  end
+
+  defp enter_session(model, key) do
     case Raxol.Agent.Code.Store.load(model.sessions_dir, key) do
       {:ok, saved} ->
         # Persist the departing session only when it holds unsaved
@@ -2274,20 +2298,32 @@ defmodule Raxol.Agent.Code.App do
     # useless to the tenant.
     base = if model.jail, do: model.cwd, else: System.tmp_dir!()
 
-    path =
-      Path.join(
-        base,
-        "#{model.session_key}-transcript-" <>
-          "#{System.unique_integer([:positive])}.txt"
-      )
+    name =
+      "#{model.session_key}-transcript-" <>
+        "#{System.unique_integer([:positive])}.txt"
 
-    write_transcript_file(
-      model,
-      path,
-      &write_private/2,
-      "transcript written — view with: ${PAGER:-less} #{path}"
-    )
+    case transcript_path(model, base, name) do
+      {:ok, path} ->
+        write_transcript_file(
+          model,
+          path,
+          &write_private/2,
+          "transcript written — view with: ${PAGER:-less} #{path}"
+        )
+
+      {:error, :outside_cwd} ->
+        notice(model, "transcript refused: path escapes the workspace")
+    end
   end
+
+  # The filename embeds session_key, which both /resume and --resume take from
+  # the user. They validate it on the way in; this is the check at the write
+  # itself, so any future path into session_key cannot turn /transcript into a
+  # file drop outside the jail. Mirrors what export_path/2 does for /export.
+  defp transcript_path(%{jail: true} = model, base, name),
+    do: Raxol.Agent.Actions.Fs.resolve(Path.join(base, name), %{cwd: model.cwd})
+
+  defp transcript_path(_model, base, name), do: {:ok, Path.join(base, name)}
 
   defp write_transcript_file(model, path, writer, success_note) do
     text = Raxol.Agent.Code.Replay.transcript_text(model.events)

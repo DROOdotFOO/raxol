@@ -1395,6 +1395,49 @@ defmodule Raxol.Agent.Code.AppTest do
       assert String.starts_with?(path, Path.expand(cwd))
     end
 
+    test "a resumed traversal id cannot aim /transcript out of the jail" do
+      # Store.load only basenames the key for its OWN lookup, so a traversal
+      # survives into session_key -- which /transcript joins straight into a
+      # path. The load has to SUCCEED for the key to be adopted, so the fixture
+      # is a session the tenant already owns, named by that basename.
+      cwd = tmp_dir()
+      neighbour = tmp_dir()
+      File.mkdir_p!(cwd)
+      File.mkdir_p!(neighbour)
+
+      model = answered_model(cwd: cwd, jail: true)
+
+      :ok =
+        Raxol.Agent.Code.Store.save(model.sessions_dir, "sess-victim", %{
+          messages: []
+        })
+
+      traversal = "../#{Path.basename(neighbour)}/sess-victim"
+      {resumed, []} = submit(model, "/resume #{traversal}")
+      refute resumed.session_key == traversal
+
+      {t_model, []} = submit(resumed, "/transcript")
+      path = t_model.notice |> String.split(" ") |> List.last()
+      assert String.starts_with?(path, Path.expand(cwd))
+      assert File.ls!(neighbour) == []
+    end
+
+    test "a traversal id on the command line does not become the session key" do
+      # --resume keeps the requested key when no such session exists, so the
+      # raw string reaches session_key with no successful load needed at all.
+      cwd = tmp_dir()
+      neighbour = tmp_dir()
+      File.mkdir_p!(cwd)
+      File.mkdir_p!(neighbour)
+
+      traversal = "../#{Path.basename(neighbour)}/sess-nope"
+      model = new_model(cwd: cwd, jail: true, session_key: traversal)
+      refute model.session_key == traversal
+
+      {_t_model, []} = submit(model, "/transcript")
+      assert File.ls!(neighbour) == []
+    end
+
     test "/transcript writes a private temp file and hints at a pager" do
       model = answered_model()
       {model, []} = submit(model, "/transcript")
