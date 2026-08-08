@@ -198,19 +198,32 @@ defmodule Raxol.Agent.Actions.Fs do
   def outside_cwd?(path, context \\ %{})
 
   def outside_cwd?(path, context) when is_binary(path) do
-    cwd = working_dir(context)
-    abs = Path.expand(path, cwd)
+    if jailed_without_root?(context) do
+      # Jailed but no root — treat every path as outside (fail closed), the
+      # same decision resolve/2 makes.
+      true
+    else
+      cwd = working_dir(context)
+      abs = Path.expand(path, cwd)
 
-    case {safe_realpath(abs), safe_realpath(cwd)} do
-      {{:ok, real_abs}, {:ok, real_root}} ->
-        not contained?(real_abs, real_root)
+      case {safe_realpath(abs), safe_realpath(cwd)} do
+        {{:ok, real_abs}, {:ok, real_root}} ->
+          not contained?(real_abs, real_root)
 
-      _ ->
-        true
+        _ ->
+          true
+      end
     end
   end
 
   def outside_cwd?(_path, _context), do: false
+
+  # A jailed session (tenancy marker in the tool context) with no usable :cwd.
+  # The global fallback in working_dir/1 is only safe for the single-tenant CLI
+  # (no jail marker); under a jail it would un-scope the tool, so callers fail
+  # closed on this predicate instead.
+  defp jailed_without_root?(%{jail: true} = context), do: context_cwd(context) == nil
+  defp jailed_without_root?(_context), do: false
 
   @doc """
   Expansion WITHOUT the sandbox check — only reachable through an
@@ -238,15 +251,21 @@ defmodule Raxol.Agent.Actions.Fs do
   @spec resolve(String.t(), map() | nil) ::
           {:ok, String.t()} | {:error, :outside_cwd}
   def resolve(path, context \\ %{}) do
-    cwd = working_dir(context)
-    abs = Path.expand(path, cwd)
-
-    with {:ok, real_abs} <- safe_realpath(abs),
-         {:ok, real_root} <- safe_realpath(cwd),
-         true <- contained?(real_abs, real_root) do
-      {:ok, abs}
+    if jailed_without_root?(context) do
+      # A jailed session with no usable :cwd must NOT fall back to the
+      # process-global cwd — that silently un-jails the tool. Fail closed.
+      {:error, :outside_cwd}
     else
-      _ -> {:error, :outside_cwd}
+      cwd = working_dir(context)
+      abs = Path.expand(path, cwd)
+
+      with {:ok, real_abs} <- safe_realpath(abs),
+           {:ok, real_root} <- safe_realpath(cwd),
+           true <- contained?(real_abs, real_root) do
+        {:ok, abs}
+      else
+        _ -> {:error, :outside_cwd}
+      end
     end
   end
 

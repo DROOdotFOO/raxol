@@ -170,6 +170,39 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert {:ok, %{exit_status: 0}} =
                Code.Bash.run(%{command: "echo ok"}, %{shell_sandbox: sandbox})
     end
+
+    test "refuses to run in a jailed session with no OS sandbox" do
+      # The cwd jail does not confine a shell command line, so a jailed
+      # (multi-tenant) session must not get the shell at all until per-tenant
+      # OS confinement is wired.
+      assert {:error, :shell_disabled_in_jail} =
+               Code.Bash.run(%{command: "cat ../../other/secret"}, %{jail: true})
+
+      # An explicit OS sandbox re-enables it (the sandbox is the confinement).
+      sandbox = Sandbox.Shell.allowlist(["echo"])
+
+      assert {:ok, %{exit_status: 0}} =
+               Code.Bash.run(
+                 %{command: "echo ok"},
+                 %{jail: true, shell_sandbox: sandbox}
+               )
+    end
+  end
+
+  describe "shell_jail_allow/1" do
+    test "refuses a jailed context without a sandbox" do
+      assert {:error, :shell_disabled_in_jail} = Code.shell_jail_allow(%{jail: true})
+    end
+
+    test "allows a non-jailed context" do
+      assert :ok = Code.shell_jail_allow(%{})
+      assert :ok = Code.shell_jail_allow(%{jail: false})
+    end
+
+    test "allows a jailed context that carries an OS sandbox" do
+      sandbox = Sandbox.Shell.allowlist(["echo"])
+      assert :ok = Code.shell_jail_allow(%{jail: true, shell_sandbox: sandbox})
+    end
   end
 
   describe "Grep" do

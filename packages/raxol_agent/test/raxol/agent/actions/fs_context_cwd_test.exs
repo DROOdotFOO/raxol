@@ -93,6 +93,25 @@ defmodule Raxol.Agent.Actions.FsContextCwdTest do
     assert File.read!(Path.join(a, "notes.txt")) == "edited a"
   end
 
+  test "a jail marker without a cwd fails closed, never the global root", %{a: a} do
+    # A jailed session whose context somehow lost its :cwd must NOT fall back
+    # to the process-global cwd (that silently un-jails the tool). Refuse.
+    assert {:error, :outside_cwd} = Fs.resolve("anything.txt", %{jail: true})
+    assert {:error, :outside_cwd} = Fs.resolve("/etc/passwd", %{jail: true})
+    assert Fs.outside_cwd?("anything.txt", %{jail: true})
+
+    # Reads through the actions fail closed on the same predicate.
+    assert {:error, :outside_cwd} =
+             Fs.ReadFile.run(%{path: "anything.txt"}, %{jail: true})
+
+    # A jailed session WITH a cwd is unaffected (still confined, still works).
+    assert {:ok, %{content: "alpha"}} =
+             Fs.ReadFile.run(%{path: "secret-a.txt"}, %{cwd: a, jail: true})
+
+    assert {:error, :outside_cwd} =
+             Fs.resolve("../escape", %{cwd: a, jail: true})
+  end
+
   test "previews and staleness checks use the same context root", %{
     a: a,
     b: b

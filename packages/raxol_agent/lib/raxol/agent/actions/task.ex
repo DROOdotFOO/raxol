@@ -89,7 +89,11 @@ defmodule Raxol.Agent.Actions.Task do
       system_prompt: subagent_system(),
       # A clean context: read-only tools only, default deny_sensitive, and no
       # human-in-the-loop authorizer (a sub-agent must never surface a prompt).
-      context: %{}
+      # BUT it MUST inherit the jail root and marker — dropping :cwd re-roots
+      # the sub-agent's read tools at the process-global cwd, which on a hosted
+      # host reads outside the tenant's jail (e.g. the SSH host keys). Only
+      # those two keys carry over; everything else is deliberately dropped.
+      context: subagent_context(context)
     ]
     |> maybe_put(:executor, Map.get(sub, :executor))
     |> maybe_put(:backend, Map.get(sub, :backend))
@@ -105,4 +109,10 @@ defmodule Raxol.Agent.Actions.Task do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  # Carry ONLY the confinement into the nested run: the jail root and its
+  # marker. A delegation must never be able to widen its root beyond the
+  # parent's, and it must never inherit the authorizer, sub-agent backend, or
+  # hooks (kept deliberately absent for a clean deny-by-default read-only run).
+  defp subagent_context(context), do: Map.take(context, [:cwd, :jail])
 end

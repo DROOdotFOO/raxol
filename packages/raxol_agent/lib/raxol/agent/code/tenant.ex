@@ -6,9 +6,18 @@ defmodule Raxol.Agent.Code.Tenant do
 
       <tenants_dir>/<user>/
       ├── ssh/authorized_keys   # that tenant's keys (read by the server's auth)
-      ├── work/                 # the cwd jail — every fs/shell tool scopes here
+      ├── work/                 # the cwd jail — the fs tools scope here
       ├── code_sessions/        # the JSON session store
       └── sessions/             # the durable journal base
+
+  The `work/` jail confines the *fs* tools (read/write/edit/list/grep/glob,
+  all of which resolve paths through `Raxol.Agent.Actions.Fs.resolve/2`). It
+  does NOT confine the shell: a `/bin/sh -c` command line can `cd` or name an
+  absolute path, and `{:cd, work}` is a starting directory, not a boundary.
+  So `jail: true` disables the shell tool entirely (see
+  `Raxol.Agent.Actions.Code.shell_jail_allow/1`) until per-tenant OS
+  confinement is wired. Real cross-tenant isolation still wants separate OS
+  uids or containers; this is one BEAM, one uid.
 
   `app_opts/2` is the `:tenant_opts` fun the SSH server calls with the
   AUTHENTICATED username; it applies the same username normalization the

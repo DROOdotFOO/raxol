@@ -206,7 +206,8 @@ defmodule Raxol.Agent.Actions.Code do
     def run(%{command: command} = params, context) do
       timeout = Map.get(params, :timeout_ms) || 30_000
 
-      with :ok <- Raxol.Agent.Actions.Code.sandbox_allow(context, command),
+      with :ok <- Raxol.Agent.Actions.Code.shell_jail_allow(context),
+           :ok <- Raxol.Agent.Actions.Code.sandbox_allow(context, command),
            {:ok, cd} <- resolve_cd(Map.get(params, :cd), context) do
         {output, status} =
           Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
@@ -421,6 +422,28 @@ defmodule Raxol.Agent.Actions.Code do
         truncated: true
       })
     end
+  end
+
+  @doc """
+  Refuse the shell surface for a jailed (multi-tenant) session that carries
+  no OS-level sandbox.
+
+  The cwd jail confines the *fs* tools (they resolve every path through
+  `Fs.resolve/2`), but a `/bin/sh -c` command string is not a path — it can
+  `cd ..`, name an absolute path, or read the daemon's own files, none of
+  which `{:cd, cwd}` prevents. On a shared host that is a cross-tenant read
+  and write primitive, so until per-tenant OS confinement (separate uid /
+  chroot / bwrap, wired as a `:shell_sandbox`) exists, the only safe posture
+  is to withhold the shell entirely from a jailed session.
+  """
+  @spec shell_jail_allow(map()) :: :ok | {:error, :shell_disabled_in_jail}
+  def shell_jail_allow(context) do
+    jailed? = is_map(context) and Map.get(context, :jail) not in [nil, false]
+    sandboxed? = match?(%Raxol.Agent.Sandbox.Shell{}, Map.get(context, :shell_sandbox))
+
+    if jailed? and not sandboxed?,
+      do: {:error, :shell_disabled_in_jail},
+      else: :ok
   end
 
   @doc """
