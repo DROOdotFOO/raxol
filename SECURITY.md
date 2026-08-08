@@ -31,6 +31,16 @@ support commitment yet.
 - The SSH server (`Raxol.SSH.Server`) is fail-closed by design (no anonymous
   access unless explicitly configured); configuration-dependent findings are
   still welcome.
+- Multi-tenant coding-agent hosting (`--ssh-tenants`, `RAXOL_SSH_CODE`) puts
+  an untrusted principal at the keyboard of a session that holds the host's
+  provider credential. The boundary is one BEAM under one uid, NOT separate
+  OS users: it rests on the fs tools' path resolution, the `:jail` refusal of
+  the shell tool, and the refusal to load workspace-configured commands
+  (`.raxol/hooks.json`, `.mcp.json`) in a jailed session. Anything that
+  executes code outside a tenant's `work/` jail, reads another tenant's
+  workspace, sessions, or journal, or spends past that tenant's budget is in
+  scope and high priority. Deployments handling mutually hostile tenants
+  should add OS-level isolation on top.
 
 ## Dependency scanning
 

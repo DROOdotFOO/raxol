@@ -240,7 +240,16 @@ Two optional per-project files, both read from `<cwd>/`:
   approval-gated like any mutating tool, and plan mode denies them outright since an
   external tool's effects are unknown. `/mcp` shows per-server connection state
   (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
-  a note, never fatal.
+  a note, never fatal. At most 16 servers load per config, and server names are held to
+  `[a-zA-Z0-9][a-zA-Z0-9_-]*` (each one interns an atom and spawns a subprocess);
+  refusals show up in `/mcp` alongside connection failures.
+
+Both files name a command to execute, so both are read only when the session owns its
+workspace. A jailed session (multi-tenant SSH, see below) loads NEITHER: its workspace is
+writable by a tenant whose own `write_file` can author these files, and running them would
+be arbitrary execution as the server uid: around the cwd jail, the `:jail` shell gate,
+and the approval chain alike. `/mcp` and the status line say so rather than reporting an
+empty config.
 
 ## Editors over ACP
 
@@ -288,16 +297,29 @@ The AUTHENTICATED username decides everything: usernames are restricted to
 a conservative charset (anything else fails auth outright), the same
 normalization maps the key lookup and the workspace so they can never
 disagree, and a connection whose tenant options cannot be derived is
-refused rather than started unjailed. Spending identity is `ssh:<user>`;
-wire a shared `Raxol.Payments.Ledger` + policy through the server-level
-app options and each tenant draws on their own budget (the gate refuses
-the next turn once it is spent).
+refused rather than started unjailed. A jailed session also loads no
+`.raxol/hooks.json` and no `.mcp.json`: both name a command to run and both
+live in the tenant's own writable workspace.
+
+Spending identity is `ssh:<user>`, so a shared `Raxol.Payments.Ledger` +
+policy on the server-level app options gives each tenant their own budget
+(the gate refuses the next turn once it is spent).
+
+What the jail is NOT: separate OS uids. This is one BEAM under one uid, so
+the confinement is the fs tools' path resolution plus the refusal to load
+workspace-configured commands. Untrusted tenants want separate uids or
+containers on top.
 
 Hosted deployment: set `RAXOL_SSH_CODE=true` with
-`RAXOL_SSH_CODE_TENANTS=/data/tenants` (and optionally
-`RAXOL_SSH_CODE_PORT`, default 2223) and the main application serves the
-coding agent beside the SSH playground. It refuses to start without the
-tenants root: there is no anonymous or single-tenant hosted mode.
+`RAXOL_SSH_CODE_TENANTS=/data/tenants` and
+`RAXOL_SSH_CODE_BUDGET_USD=<cap>` (and optionally `RAXOL_SSH_CODE_PORT`,
+default 2223) and the main application serves the coding agent beside the
+SSH playground. It refuses to start without BOTH: there is no anonymous or
+single-tenant hosted mode, and no unmetered one either. A hosted tenant
+spends the host's provider credential, so an unset or unparseable cap
+refuses to serve rather than serving unbounded. The cap is per tenant
+(lifetime and session), enforced through a `Raxol.SSH.CodeLedger` the
+supervisor starts alongside the server, so the build needs raxol_payments.
 Onboarding a user is `mkdir -p /data/tenants/<user>/ssh` plus writing
 their `authorized_keys`; then `ssh <user>@host -p 2223` is the whole
 client.
@@ -316,11 +338,25 @@ The view verifies the token offline (`Raxol.Agent.Code.ShareToken`, HMAC,
 no server state), replays the session's durable journal with the same
 rewind-marker-aware fold `--replay` uses, and follows new records live
 from the journal high-watermark. Transcript only: the surface has no
-input path, and a token grants read access to exactly one session until
-it expires. `RAXOL_SHARE_BASE_URL` turns the `/share` notice into a
-pasteable link. `phoenix_live_view` is an optional dependency; without
-it the viewer module simply is not compiled and `/share` still mints
-tokens. Multiplayer (shared input) is not scheduled.
+input path.
+
+A token grants read access to exactly one session until it expires, and
+it FOLLOWS that session: the viewer keeps receiving new records for the
+full 24h, so sharing is "watch me work", not "here is a snapshot". There
+is no revocation short of rotating the secret.
+
+The token also carries the scope its session id is meaningful in, because
+ids are unique per journal base rather than per host. An unjailed session
+signs the empty scope (the host's own base); a tenant session signs its
+tenant name, and the viewer resolves
+`<tenants_root>/<scope>/sessions` from `:share_tenants_root` or
+`RAXOL_SSH_CODE_TENANTS`. A scoped token on a host with no tenants root
+configured is refused rather than resolved against the host's own tree.
+
+`RAXOL_SHARE_BASE_URL` turns the `/share` notice into a pasteable link.
+`phoenix_live_view` is an optional dependency; without it the viewer
+module simply is not compiled and `/share` still mints tokens.
+Multiplayer (shared input) is not scheduled.
 
 ## Driving the harness over MCP
 
