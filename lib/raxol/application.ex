@@ -399,6 +399,15 @@ defmodule Raxol.Application do
 
         nil
 
+      not http_client_available?() ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true but no HTTP client " <>
+            "(req) is in this build; every LLM turn would fail with " <>
+            ":req_not_available, so coding-agent SSH is disabled"
+        )
+
+        nil
+
       true ->
         ssh_code_children(tenants)
     end
@@ -514,6 +523,15 @@ defmodule Raxol.Application do
     Code.ensure_loaded?(Raxol.Agent.Code.App) and
       Code.ensure_loaded?(Raxol.Agent.Code.Tenant)
   end
+
+  @doc false
+  # req is an OPTIONAL dep of raxol_agent, and optional deps do not propagate
+  # to a release that merely depends on it. Every remote provider resolves to
+  # Backend.HTTP, which answers {:error, :req_not_available} without it -- so a
+  # release can pass every other gate here and still be unable to make a single
+  # LLM call. Fail closed at boot rather than per turn, per tenant.
+  @spec http_client_available?() :: boolean()
+  def http_client_available?, do: Code.ensure_loaded?(Req)
 
   # Degrade a malformed port to the default with a warning, the way every other
   # arm of maybe_add_ssh_code/0 degrades — never let it raise and take down the

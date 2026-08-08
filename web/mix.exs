@@ -30,6 +30,18 @@ defmodule RaxolPlayground.MixProject do
       # sibling package rides along as a source-build transitive dep and is
       # harmless (nothing auto-serves it in the web release).
       {:raxol_agent, path: "../packages/raxol_agent"},
+
+      # The hosted agent's spend gate. Raxol.Application refuses to serve
+      # RAXOL_SSH_CODE without a ledger (a tenant spends the HOST's provider
+      # credential), and the ledger lives here -- so without this dep the
+      # coding agent cannot start at all, whatever else is configured.
+      {:raxol_payments, path: "../packages/raxol_payments"},
+
+      # The HTTP client behind every remote provider. raxol_agent declares it
+      # optional and optional deps do not propagate, so a release depending on
+      # raxol_agent gets no HTTP client: Backend.HTTP would answer
+      # {:error, :req_not_available} on every turn.
+      {:req, "~> 0.5"},
       {:phoenix, "~> 1.8.1"},
       {:phoenix_live_view, "~> 1.2.3"},
       {:phoenix_html, "~> 4.3"},

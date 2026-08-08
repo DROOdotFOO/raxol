@@ -320,6 +320,15 @@ spends the host's provider credential, so an unset or unparseable cap
 refuses to serve rather than serving unbounded. The cap is per tenant
 (lifetime and session), enforced through a `Raxol.SSH.CodeLedger` the
 supervisor starts alongside the server, so the build needs raxol_payments.
+
+Three dependencies have to be on the release code path, and boot refuses
+without any of them: raxol_agent for the agent itself, raxol_payments for
+the ledger, and `req` for the HTTP client every remote provider resolves
+to. `req` is easy to miss because raxol_agent declares it optional and
+optional dependencies do not propagate: a release could pass every other
+check and still answer `{:error, :req_not_available}` on every turn. The
+deploy app (`web/mix.exs`) declares all three.
+
 Onboarding a user is `mkdir -p /data/tenants/<user>/ssh` plus writing
 their `authorized_keys`; then `ssh <user>@host -p 2223` is the whole
 client.

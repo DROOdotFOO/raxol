@@ -68,4 +68,19 @@ defmodule Raxol.ApplicationSshCodeTest do
       end
     end
   end
+
+  # req is an OPTIONAL dep of raxol_agent, and optional deps do not propagate.
+  # A release can therefore satisfy every other gate here -- tenants root,
+  # budget, raxol_agent present -- and still be unable to make a single LLM
+  # call, failing per turn per tenant instead of once at boot.
+  describe "an HTTP client is required to serve the hosted coding agent" do
+    test "this build has one, so the gate passes" do
+      assert Raxol.Application.http_client_available?()
+    end
+
+    test "the gate is exactly the loadability of Req" do
+      assert Raxol.Application.http_client_available?() ==
+               Code.ensure_loaded?(Req)
+    end
+  end
 end

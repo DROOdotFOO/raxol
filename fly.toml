@@ -22,10 +22,11 @@ kill_signal = 'SIGTERM'
   RAXOL_SSH_PORT = '2222'
   RAXOL_SSH_MAX_CONNECTIONS = '50'
   RAXOL_SSH_HOST_KEYS_DIR = '/app/ssh_keys'
-  # Hosted coding agent (multi-tenant, port 2223): flip on once the build
-  # includes raxol_agent and raxol_payments and a tenants volume exists.
-  # Refuses to serve without BOTH the per-user key root and a per-tenant
-  # spend cap -- a hosted tenant spends the host's provider credential.
+  # Hosted coding agent (multi-tenant, port 2223): flip on once a tenants
+  # volume exists. The build already carries raxol_agent, raxol_payments and
+  # req (see web/mix.exs); boot refuses to serve without all three, and
+  # without BOTH the per-user key root and a per-tenant spend cap -- a hosted
+  # tenant spends the host's provider credential.
   # RAXOL_SSH_CODE = 'true'
   # RAXOL_SSH_CODE_PORT = '2223'
   # RAXOL_SSH_CODE_TENANTS = '/data/tenants'
