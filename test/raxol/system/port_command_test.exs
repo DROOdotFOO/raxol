@@ -48,29 +48,40 @@ defmodule Raxol.System.PortCommandTest do
     end
 
     test "kills the whole process tree on timeout, not just the direct child" do
-      marker =
+      pidfile =
         Path.join(
           System.tmp_dir!(),
-          "raxol_portcmd_kill_#{System.unique_integer([:positive])}"
+          "raxol_portcmd_pg_#{System.unique_integer([:positive])}"
         )
 
-      File.rm(marker)
+      File.rm(pidfile)
 
-      # The shell BACKGROUNDS a grandchild that would touch the marker after
-      # 0.5s, then waits. Killing only the shell's pid (the direct child) would
-      # leave the backgrounded grandchild alive to create the marker; a
-      # process-GROUP kill takes the grandchild down too, so it never appears.
+      # The shell records the pid of a BACKGROUNDED grandchild (`$!`) that sleeps
+      # 30s, then waits. run/4 issues the kill INSIDE its timeout branch
+      # (synchronously, before returning), so by the time it returns the group
+      # has already been signalled -- no wall-clock race. A per-pid kill of the
+      # shell would leave the grandchild alive; a process-GROUP kill reaps it.
       assert {:error, "timeout waiting for command"} =
                PortCommand.run(
                  "sh",
-                 ["-c", "(sleep 0.5 && touch #{marker}) & wait"],
+                 ["-c", "(sleep 30) & echo $! > #{pidfile}; wait"],
                  "",
                  timeout: 150
                )
 
-      Process.sleep(700)
-      refute File.exists?(marker)
-      File.rm(marker)
+      grandchild = await_pid(pidfile)
+
+      # The group kill was issued synchronously in run/4; poll (up to ~1s) for
+      # the grandchild to disappear. A per-pid kill would leave it sleeping 30s,
+      # so it would still be alive when the budget runs out.
+      dead? = await_dead(grandchild, 1000)
+
+      # Safety net: never leak the 30s sleep if the group kill regressed.
+      _ = System.cmd("kill", ["-9", grandchild], stderr_to_stdout: true)
+      File.rm(pidfile)
+
+      assert dead?,
+             "the backgrounded grandchild survived the process-group kill"
     end
 
     test "does not leak stdin temp files" do
@@ -86,5 +97,36 @@ defmodule Raxol.System.PortCommandTest do
     |> Path.join("raxol_portcmd_*")
     |> Path.wildcard()
     |> Enum.sort()
+  end
+
+  # Poll until the shell has written the grandchild pid.
+  defp await_pid(pidfile, tries \\ 200) do
+    with {:ok, contents} <- File.read(pidfile),
+         pid when pid != "" <- String.trim(contents) do
+      pid
+    else
+      _ when tries > 0 ->
+        Process.sleep(10)
+        await_pid(pidfile, tries - 1)
+
+      _ ->
+        flunk("grandchild pid was never recorded in #{pidfile}")
+    end
+  end
+
+  # Poll until `pid` is gone, or the budget is exhausted (still alive).
+  defp await_dead(_pid, budget_ms) when budget_ms <= 0, do: false
+
+  defp await_dead(pid, budget_ms) do
+    if os_pid_alive?(pid) do
+      Process.sleep(20)
+      await_dead(pid, budget_ms - 20)
+    else
+      true
+    end
+  end
+
+  defp os_pid_alive?(pid) do
+    match?({_out, 0}, System.cmd("kill", ["-0", pid], stderr_to_stdout: true))
   end
 end
