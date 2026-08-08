@@ -50,11 +50,19 @@ defmodule Raxol.Agent.Code.Tenant do
                cwd: work,
                # The jail flag makes operator-typed escapes (/export to an
                # absolute path) refuse too: on a multi-tenant host the
-               # keyboard principal is NOT the server owner.
+               # keyboard principal is NOT the server owner. It also stops
+               # this session loading `.raxol/hooks.json` or `.mcp.json` out
+               # of the tenant-writable workspace, both of which name a
+               # command to run outside the jail.
                jail: true,
                sessions_dir: Path.join(root, "code_sessions"),
                journal_opts: [base_dir: Path.join(root, "sessions")],
-               agent_id: "ssh:" <> name
+               agent_id: "ssh:" <> name,
+               # `/share` signs this into the token, so the viewer resolves
+               # THIS tenant's journal base. Session ids are unique per base,
+               # not per host, so an unscoped token would name a session
+               # ambiguously across tenants.
+               share_scope: name
              ]}
 
           {:error, reason} ->

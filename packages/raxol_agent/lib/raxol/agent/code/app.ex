@@ -76,8 +76,16 @@ defmodule Raxol.Agent.Code.App do
     session = init_session(options)
 
     cwd = Keyword.get(options, :cwd) || Raxol.Agent.Actions.Fs.working_dir()
-    {hooks, hooks_note} = load_hooks(cwd)
-    {mcp_servers, mcp_note} = load_mcp(cwd)
+
+    # Both `.raxol/hooks.json` and `.mcp.json` are workspace files that name
+    # a command to execute. In a jail the workspace is TENANT-writable (the
+    # agent's own write_file lands there), so loading either would let a
+    # tenant run arbitrary code as the server uid — around the cwd jail, the
+    # `:jail` shell gate, and the approval chain alike. A jailed session
+    # loads neither.
+    jail? = Keyword.get(options, :jail, false) not in [nil, false]
+    {hooks, hooks_note} = load_hooks(cwd, jail?)
+    {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
 
     config(options, context)
     |> Map.merge(%{
@@ -242,6 +250,10 @@ defmodule Raxol.Agent.Code.App do
       share_base_url:
         Keyword.get(options, :share_base_url) ||
           System.get_env("RAXOL_SHARE_BASE_URL"),
+      # Which journal base this session's ids are meaningful in: "" for the
+      # host's own, or a tenant name. Signed into the share token so the
+      # viewer resolves the right tree (see Raxol.Agent.Code.Tenant).
+      share_scope: Keyword.get(options, :share_scope, ""),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -316,7 +328,11 @@ defmodule Raxol.Agent.Code.App do
     "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
   end
 
-  defp load_hooks(cwd) do
+  # Announced, not silent: a tenant whose hooks never fire should see why
+  # rather than conclude the feature is broken.
+  defp load_hooks(_cwd, true), do: {nil, "hooks disabled (jailed session)"}
+
+  defp load_hooks(cwd, _jail?) do
     case Raxol.Agent.Code.Hooks.load(cwd) do
       {:ok, config} -> {config, "#{Raxol.Agent.Code.Hooks.count(config)} hooks"}
       :none -> {nil, nil}
@@ -324,7 +340,9 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp load_mcp(cwd) do
+  defp load_mcp(_cwd, true), do: {[], "mcp servers disabled (jailed session)"}
+
+  defp load_mcp(cwd, _jail?) do
     case Raxol.Agent.Code.McpConfig.load(cwd) do
       {:ok, []} -> {[], nil}
       {:ok, servers} -> {servers, "#{length(servers)} MCP servers"}
@@ -1550,6 +1568,12 @@ defmodule Raxol.Agent.Code.App do
     end)
   end
 
+  # A jailed session reads no `.mcp.json` at all, so "none configured" would
+  # misdescribe it: the file may well be there, and the operator should know
+  # it was refused rather than go looking for a config bug.
+  defp mcp_text(%{mcp_servers: [], jail: jail}) when jail not in [nil, false],
+    do: "MCP servers are disabled in a jailed session"
+
   defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
 
   defp mcp_text(%{mcp_servers: servers} = model) do
@@ -2421,7 +2445,8 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp share_session(model) do
-    if Raxol.Agent.Code.ShareToken.valid_session_id?(model.session_key) do
+    if Raxol.Agent.Code.ShareToken.valid_session_id?(model.session_key) and
+         Raxol.Agent.Code.ShareToken.valid_scope?(model.share_scope) do
       mint_share(model)
     else
       # A session_key with a `:` or other non-id character (e.g. a colon-laden
@@ -2443,16 +2468,25 @@ defmodule Raxol.Agent.Code.App do
       end
 
     token =
-      Raxol.Agent.Code.ShareToken.sign(model.session_key, model.share_secret)
+      Raxol.Agent.Code.ShareToken.sign(model.session_key, model.share_secret,
+        scope: model.share_scope
+      )
 
+    # "follows this session live" is the part that surprises: the viewer
+    # attaches at the high-watermark and keeps receiving, so the link shares
+    # everything typed for the next 24h, not a snapshot of the scrollback.
     case model.share_base_url do
       nil ->
-        notice(model, "share token (read-only, 24h): #{token}")
+        notice(
+          model,
+          "share token (read-only, follows this session live for 24h): #{token}"
+        )
 
       base ->
         notice(
           model,
-          "read-only link (24h): #{String.trim_trailing(base, "/")}/#{token}"
+          "read-only link (follows this session live for 24h): " <>
+            "#{String.trim_trailing(base, "/")}/#{token}"
         )
     end
   end

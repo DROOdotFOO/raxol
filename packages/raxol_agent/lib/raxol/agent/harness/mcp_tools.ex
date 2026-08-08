@@ -191,7 +191,7 @@ defmodule Raxol.Agent.Harness.McpTools do
           system_prompt: system_prompt(),
           actions: turn_actions(),
           messages: messages
-        ] ++ turn_context()
+        ] ++ turn_context(session)
 
       timeout_ms = timeout_ms(args)
 
@@ -318,22 +318,43 @@ defmodule Raxol.Agent.Harness.McpTools do
     end
   end
 
-  defp persist_turn(key, session, messages, state) do
+  @doc false
+  # Public so the shared-store refusal is testable without racing two real
+  # turns against each other.
+  @spec persist_turn(String.t(), map(), [map()], map()) ::
+          {:ok, String.t()} | {:error, String.t()}
+  def persist_turn(key, session, messages, state) do
     messages = messages ++ [%{role: :assistant, content: state.answer}]
     events = session.events ++ Enum.reverse(state.events)
 
-    case Store.save(Store.default_dir(), key, %{
-           messages: messages,
-           events: events,
-           cwd: session.cwd,
-           # Save rewrites the whole file; the loaded session's title and
-           # fork lineage must ride along or an MCP-driven turn erases
-           # what /rename and /fork recorded.
-           title: Map.get(session, :title, ""),
-           parent: Map.get(session, :parent)
-         }) do
+    save =
+      Store.save(
+        Store.default_dir(),
+        key,
+        %{
+          messages: messages,
+          events: events,
+          cwd: session.cwd,
+          # Save rewrites the whole file; the loaded session's title and
+          # fork lineage must ride along or an MCP-driven turn erases
+          # what /rename and /fork recorded.
+          title: Map.get(session, :title, ""),
+          parent: Map.get(session, :parent)
+        },
+        # This store is shared with the TUI. Refuse rather than overwrite if
+        # the session moved on since `send_prompt/1` read it — a blind write
+        # would silently drop whichever surface persisted in between.
+        expect_rev: Map.get(session, :rev)
+      )
+
+    case save do
       :ok ->
         {:ok, state.answer}
+
+      {:error, :stale} ->
+        {:error,
+         "answer produced but not saved: session #{key} was written by " <>
+           "another surface during this turn (open elsewhere?)"}
 
       {:error, reason} ->
         {:error, "answer produced but session save failed: #{inspect(reason)}"}
@@ -365,12 +386,31 @@ defmodule Raxol.Agent.Harness.McpTools do
     Raxol.Agent.Skills.enabled_actions() -- [Raxol.Agent.Actions.Skills.Manage]
   end
 
-  defp turn_context do
-    case Raxol.Agent.Skills.default_context() do
-      nil -> []
-      skills -> [context: %{skills: skills}]
+  # The session records the workspace it was started against; honor it, so a
+  # session resumed later reads the tree it was created for instead of
+  # whatever directory this long-lived MCP server happens to sit in. A
+  # recorded cwd that no longer exists is dropped rather than passed on (the
+  # fs tools would refuse every path against a missing root).
+  @doc false
+  @spec turn_context(map()) :: keyword()
+  def turn_context(session) do
+    context =
+      %{}
+      |> put_some(:skills, Raxol.Agent.Skills.default_context())
+      |> put_some(:cwd, usable_cwd(session))
+
+    if map_size(context) == 0, do: [], else: [context: context]
+  end
+
+  defp usable_cwd(session) do
+    case Map.get(session, :cwd) do
+      dir when is_binary(dir) and dir != "" -> if File.dir?(dir), do: dir
+      _absent -> nil
     end
   end
+
+  defp put_some(map, _key, nil), do: map
+  defp put_some(map, key, value), do: Map.put(map, key, value)
 
   defp system_prompt do
     "You are a helpful coding assistant running headlessly at the user's " <>

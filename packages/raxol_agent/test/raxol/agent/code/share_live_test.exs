@@ -137,7 +137,54 @@ defmodule Raxol.Agent.Code.ShareLiveTest do
     {:noreply, socket} =
       ShareLive.handle_info({:reattach_live, "sess-live", live_record}, socket)
 
+    # Arrivals are buffered and folded once per refresh window, so the record
+    # is pending until the armed refresh fires (the fold is O(records) and
+    # per-record recomputation is quadratic over a session's lifetime).
+    assert socket.assigns.pending == [live_record]
+    assert socket.assigns.refresh_armed?
+    refute socket.assigns.transcript =~ "> a later prompt"
+
+    assert_receive :refresh_transcript, 1_000
+    {:noreply, socket} = ShareLive.handle_info(:refresh_transcript, socket)
+
     assert socket.assigns.transcript =~ "> a later prompt"
+    assert socket.assigns.pending == []
+    refute socket.assigns.refresh_armed?
+  end
+
+  test "a burst of live records costs one refresh, not one per record" do
+    seed_session("sess-burst")
+    token = ShareToken.sign("sess-burst", @secret)
+
+    {:ok, socket} = ShareLive.mount(%{"token" => token}, %{}, socket(true))
+
+    socket =
+      Enum.reduce(5..9, socket, fn n, acc ->
+        record = %{
+          "id" => n,
+          "turn_id" => "t#{n}",
+          "ts" => n,
+          "family" => "loop",
+          "type" => "turn_started",
+          "tier" => "durable",
+          "payload" => %{"prompt" => "prompt #{n}"}
+        }
+
+        {:noreply, next} =
+          ShareLive.handle_info({:reattach_live, "sess-burst", record}, acc)
+
+        next
+      end)
+
+    # One armed refresh for the whole burst; the five records wait together.
+    assert length(socket.assigns.pending) == 5
+    assert_receive :refresh_transcript, 1_000
+    refute_receive :refresh_transcript, 100
+
+    {:noreply, socket} = ShareLive.handle_info(:refresh_transcript, socket)
+
+    # Buffering preserves arrival order, so the fold sees them as journaled.
+    for n <- 5..9, do: assert(socket.assigns.transcript =~ "> prompt #{n}")
   end
 
   test "invalid and expired tokens close the view" do

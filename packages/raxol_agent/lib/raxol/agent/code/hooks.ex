@@ -23,6 +23,22 @@ defmodule Raxol.Agent.Code.Hooks do
   `/bin/sh -c` in the working directory with `RAXOL_TOOL_NAME` set. Config
   travels in the run context under `:code_hooks`, so this one module serves
   every session without per-config module generation.
+
+  ## Never in a jail
+
+  A hook is workspace-configured code execution: the command string reaches
+  `/bin/sh -c` with no approval prompt, no allowlist, and no cwd confinement
+  (a command line can `cd` anywhere). That is fine when the keyboard
+  principal owns the host — they could run the same command in their own
+  shell. It is NOT fine on a multi-tenant host, where `.raxol/hooks.json`
+  sits inside a tenant's writable jail and the agent's own `write_file` can
+  author it: running it would hand every tenant arbitrary execution as the
+  server uid, defeating the cwd jail and the `:jail` shell gate in one step.
+
+  So hooks are refused whenever the tool context carries `jail: true` — the
+  same marker `Raxol.Agent.Actions.Code.shell_jail_allow/1` gates the shell
+  tool on. `Raxol.Agent.Code.App` additionally declines to LOAD the config in
+  a jailed session, so this check is the second of two independent gates.
   """
 
   @behaviour Raxol.Agent.ToolCall.Hook
@@ -157,12 +173,28 @@ defmodule Raxol.Agent.Code.Hooks do
   defp matches?("*", _tool_name), do: true
   defp matches?(pattern, tool_name), do: pattern == tool_name
 
+  # A jailed session has no hooks, whatever its workspace config says: the
+  # keyboard principal is a tenant, not the server owner, and a hook command
+  # is unconfined execution. Fail closed here as well as at load time.
   defp rules(context, key) do
-    case Map.get(context, :code_hooks) do
-      %{} = config -> Map.get(config, key, [])
-      _other -> []
+    if jailed?(context) do
+      []
+    else
+      case Map.get(context, :code_hooks) do
+        %{} = config -> Map.get(config, key, [])
+        _other -> []
+      end
     end
   end
+
+  @doc """
+  Whether `context` marks a jailed (multi-tenant) session, in which hooks
+  never run. Mirrors `Raxol.Agent.Actions.Code.shell_jail_allow/1`'s test so
+  the shell tool and the hook path cannot disagree about what a jail is.
+  """
+  @spec jailed?(map()) :: boolean()
+  def jailed?(context),
+    do: is_map(context) and Map.get(context, :jail) not in [nil, false]
 
   defp cwd(context), do: Map.get(context, :hook_cwd) || File.cwd!()
 

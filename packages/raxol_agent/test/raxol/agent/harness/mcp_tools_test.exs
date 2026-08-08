@@ -187,4 +187,82 @@ defmodule Raxol.Agent.Harness.McpToolsTest do
     assert {:error, message} = call("harness_send_prompt", %{"prompt" => "hi"})
     assert message =~ ~s(missing required argument "session_id")
   end
+
+  test "a concurrent write is refused rather than clobbered", ctx do
+    {:ok, key} = call("harness_start_session", %{})
+
+    # What `send_prompt` holds: the session as it read it before running the
+    # turn. A save rewrites the WHOLE file, so persisting this blindly after
+    # another surface has written would discard that surface's turn.
+    {:ok, read_before_turn} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+
+    :ok =
+      Raxol.Agent.Code.Store.save(ctx.sessions, key, %{
+        messages: [%{role: :user, content: "from the other surface"}],
+        events: [],
+        cwd: read_before_turn.cwd
+      })
+
+    assert {:error, message} =
+             McpTools.persist_turn(
+               key,
+               read_before_turn,
+               [%{role: :user, content: "mine"}],
+               %{answer: "mine too", events: []}
+             )
+
+    assert message =~ "another surface"
+
+    # The other surface's turn survived.
+    {:ok, after_save} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+    assert [%{content: "from the other surface"}] = after_save.messages
+  end
+
+  test "an uncontended turn still persists", ctx do
+    {:ok, key} = call("harness_start_session", %{})
+    {:ok, session} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+
+    assert {:ok, "answer"} =
+             McpTools.persist_turn(
+               key,
+               session,
+               [%{role: :user, content: "q"}],
+               %{answer: "answer", events: []}
+             )
+
+    {:ok, saved} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+    assert [%{content: "q"}, %{content: "answer"}] = saved.messages
+  end
+
+  test "turns run against the session's recorded workspace", ctx do
+    # `start_session` records the cwd it was created against; a turn must
+    # honor it rather than whatever directory this long-lived server sits in,
+    # or a resumed session silently reads a different tree.
+    workspace = Path.join(ctx.sessions, "workspace")
+    File.mkdir_p!(workspace)
+
+    {:ok, key} = call("harness_start_session", %{})
+    {:ok, session} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+
+    :ok =
+      Raxol.Agent.Code.Store.save(ctx.sessions, key, %{
+        messages: session.messages,
+        events: session.events,
+        cwd: workspace
+      })
+
+    {:ok, reloaded} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+    assert [context: context] = McpTools.turn_context(reloaded)
+    assert context.cwd == workspace
+
+    # A recorded cwd that no longer exists is dropped, not passed on: the fs
+    # tools would refuse every path against a missing root. (With no skills
+    # configured, dropping it leaves no context at all.)
+    File.rm_rf!(workspace)
+
+    refute reloaded
+           |> McpTools.turn_context()
+           |> Keyword.get(:context, %{})
+           |> Map.has_key?(:cwd)
+  end
 end

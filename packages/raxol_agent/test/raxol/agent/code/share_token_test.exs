@@ -8,7 +8,9 @@ defmodule Raxol.Agent.Code.ShareTokenTest do
 
   test "round-trips a session id within its ttl" do
     token = ShareToken.sign("sess-1-2", @secret, now_s: 1_000, ttl_s: 60)
-    assert {:ok, "sess-1-2"} = ShareToken.verify(token, @secret, now_s: 1_050)
+
+    assert {:ok, %{session_id: "sess-1-2", scope: ""}} =
+             ShareToken.verify(token, @secret, now_s: 1_050)
   end
 
   test "expires" do
@@ -42,12 +44,7 @@ defmodule Raxol.Agent.Code.ShareTokenTest do
       assert {:error, :invalid} = ShareToken.verify(token, "short")
 
       # And a token forged under the empty key does not slip through.
-      forged =
-        Base.url_encode64(
-          "v1:sess-1-2:9999999999:" <>
-            :crypto.mac(:hmac, :sha256, "", "v1:sess-1-2:9999999999"),
-          padding: false
-        )
+      forged = forge("v2::sess-1-2:9999999999", "")
 
       assert {:error, :invalid} = ShareToken.verify(forged, "")
     end
@@ -67,23 +64,24 @@ defmodule Raxol.Agent.Code.ShareTokenTest do
 
   describe "session id validation (unverifiable-token prevention)" do
     test "sign raises on an id that could never verify" do
-      # A colon breaks the v1:<id>:<exp> framing; a slash fails the charset.
-      assert_raise ArgumentError, fn -> ShareToken.sign("team:review", @secret) end
+      # A colon breaks the v2:<scope>:<id>:<exp> framing; a slash fails the
+      # charset; a dot segment is a traversal shape, not a name.
+      assert_raise ArgumentError, fn ->
+        ShareToken.sign("team:review", @secret)
+      end
+
       assert_raise ArgumentError, fn -> ShareToken.sign("../escape", @secret) end
+      assert_raise ArgumentError, fn -> ShareToken.sign("..", @secret) end
+      assert_raise ArgumentError, fn -> ShareToken.sign(".", @secret) end
     end
 
     test "verify still refuses a smuggled unsafe id (defense in depth)" do
-      # Hand-craft a validly-MAC'd token whose id would fail sign, proving the
-      # verifier rejects it too rather than trusting the signature alone.
-      payload = "v1:../escape:9999999999"
-
-      token =
-        Base.url_encode64(
-          payload <> ":" <> :crypto.mac(:hmac, :sha256, @secret, payload),
-          padding: false
-        )
-
-      assert {:error, :invalid} = ShareToken.verify(token, @secret)
+      # Hand-craft validly-MAC'd tokens whose ids would fail sign, proving the
+      # verifier rejects them too rather than trusting the signature alone.
+      for id <- ["../escape", "..", "."] do
+        token = forge("v2::#{id}:9999999999", @secret)
+        assert {:error, :invalid} = ShareToken.verify(token, @secret)
+      end
     end
 
     test "valid_session_id?/1 matches the accepted shape" do
@@ -91,6 +89,69 @@ defmodule Raxol.Agent.Code.ShareTokenTest do
       refute ShareToken.valid_session_id?("team:review")
       refute ShareToken.valid_session_id?("../escape")
       refute ShareToken.valid_session_id?("")
+      # Dot segments pass the charset but name a directory, not a session.
+      refute ShareToken.valid_session_id?(".")
+      refute ShareToken.valid_session_id?("..")
     end
+  end
+
+  describe "scope binding (cross-tenant ambiguity)" do
+    test "round-trips the scope it was minted under" do
+      token = ShareToken.sign("sess-1-2", @secret, scope: "alice")
+
+      assert {:ok, %{session_id: "sess-1-2", scope: "alice"}} =
+               ShareToken.verify(token, @secret)
+    end
+
+    test "the scope is signed, so it cannot be swapped to another tenant" do
+      alice = ShareToken.sign("sess-1-2", @secret, scope: "alice")
+      bob = ShareToken.sign("sess-1-2", @secret, scope: "bob")
+
+      # Same id, same secret, same expiry window: only the scope differs, and
+      # it changes the token — a bob-scoped view cannot replay alice's tree by
+      # presenting alice's token, and neither token verifies as the other.
+      refute alice == bob
+      assert {:ok, %{scope: "alice"}} = ShareToken.verify(alice, @secret)
+      assert {:ok, %{scope: "bob"}} = ShareToken.verify(bob, @secret)
+    end
+
+    test "sign raises on a scope that could never verify" do
+      for scope <- ["ssh:alice", "../escape", "Alice", "..", "."] do
+        assert_raise ArgumentError, fn ->
+          ShareToken.sign("sess-1-2", @secret, scope: scope)
+        end
+      end
+    end
+
+    test "verify refuses a smuggled unsafe scope (defense in depth)" do
+      token = forge("v2:../escape:sess-1-2:9999999999", @secret)
+      assert {:error, :invalid} = ShareToken.verify(token, @secret)
+    end
+
+    test "a v1 token no longer verifies" do
+      # The old framing carried no scope, so its ids were ambiguous across
+      # tenants. It must not be accepted alongside v2.
+      token = forge("v1:sess-1-2:9999999999", @secret)
+      assert {:error, :invalid} = ShareToken.verify(token, @secret)
+    end
+
+    test "valid_scope?/1 matches the accepted shape" do
+      assert ShareToken.valid_scope?("")
+      assert ShareToken.valid_scope?("alice")
+      assert ShareToken.valid_scope?("a-tenant.1_x")
+      refute ShareToken.valid_scope?("ssh:alice")
+      refute ShareToken.valid_scope?("Alice")
+      refute ShareToken.valid_scope?("../escape")
+      refute ShareToken.valid_scope?(nil)
+    end
+  end
+
+  # A validly-MAC'd token over an arbitrary payload, for proving the verifier
+  # re-checks structure rather than trusting the signature alone.
+  defp forge(payload, secret) do
+    Base.url_encode64(
+      payload <> ":" <> :crypto.mac(:hmac, :sha256, secret, payload),
+      padding: false
+    )
   end
 end

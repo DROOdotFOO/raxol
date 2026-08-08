@@ -110,4 +110,64 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
 
     assert_receive {:DOWN, ^ref, :process, ^client_pid, _reason}, 2_000
   end
+
+  describe "admission (a workspace file names commands and mints atoms)" do
+    test "caps how many servers may load" do
+      servers =
+        for n <- 1..40, do: %{name: "srv#{n}", command: "true", args: [], env: %{}}
+
+      {accepted, rejected} = McpLoader.admit(servers)
+
+      # Every accepted server mints an atom (never collected) and spawns an OS
+      # subprocess; a config file must not be able to ask for unbounded
+      # amounts of either.
+      assert length(accepted) == 16
+      assert length(rejected) == 24
+      assert Enum.all?(rejected, fn {_name, why} -> why == :server_limit_exceeded end)
+    end
+
+    test "refuses names outside the conservative charset" do
+      bad = [
+        String.duplicate("x", 100),
+        "has space",
+        "-leading-dash",
+        "sl/ash",
+        "",
+        "unicode\u00e9"
+      ]
+
+      servers = for name <- bad, do: %{name: name, command: "true"}
+      {accepted, rejected} = McpLoader.admit(servers)
+
+      assert accepted == []
+      assert length(rejected) == length(bad)
+      assert Enum.all?(rejected, fn {_name, why} -> why == :invalid_server_name end)
+    end
+
+    test "accepts an ordinary config unchanged" do
+      servers = [
+        %{name: "filesystem", command: "npx"},
+        %{name: "git_2", command: "uvx"}
+      ]
+
+      assert {^servers, []} = McpLoader.admit(servers)
+    end
+
+    test "load/2 reports refusals through :failed rather than dropping them" do
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> if Process.alive?(owner), do: Process.exit(owner, :kill) end)
+
+      bundle = fn specs, _opts -> %{tools: [], servers: [], failed: [], specs: specs} end
+
+      result =
+        McpLoader.load(
+          [%{name: "ok", command: "true"}, %{name: "not ok", command: "true"}],
+          owner: owner,
+          bundle: bundle
+        )
+
+      assert {"not ok", :invalid_server_name} in result.failed
+      McpLoader.stop(result.janitor)
+    end
+  end
 end

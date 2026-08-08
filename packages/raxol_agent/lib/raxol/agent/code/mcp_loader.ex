@@ -20,6 +20,16 @@ defmodule Raxol.Agent.Code.McpLoader do
   alias Raxol.Agent.McpBundle
   alias __MODULE__.Janitor
 
+  # Each accepted server mints an atom (the bundle spec's name) and spawns an
+  # OS subprocess, and atoms are never collected. `.mcp.json` is a workspace
+  # file, so both costs are bounded here rather than trusted to the file: at
+  # most this many servers load, and a name outside the conservative charset
+  # is refused instead of interned. (A jailed session declines to read the
+  # file at all — see `Raxol.Agent.Code.App`; this is the second gate, for
+  # the single-tenant workspace that is merely careless rather than hostile.)
+  @max_servers 16
+  @server_name_re ~r/\A[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\z/
+
   @type result :: %{
           tools: [struct()],
           connected: [term()],
@@ -44,10 +54,12 @@ defmodule Raxol.Agent.Code.McpLoader do
     client_start =
       Keyword.get(opts, :client_start, &Raxol.MCP.Client.start_link/1)
 
+    {accepted, rejected} = admit(servers)
+
     janitor = start_janitor(owner, client_start)
     start = fn client_opts -> Janitor.start_client(janitor, client_opts) end
 
-    result = bundle.(Enum.map(servers, &to_spec/1), start: start)
+    result = bundle.(Enum.map(accepted, &to_spec/1), start: start)
 
     # Report connected server NAMES only; the janitor owns the client pids so
     # nothing else can outlive the session by holding one.
@@ -57,7 +69,9 @@ defmodule Raxol.Agent.Code.McpLoader do
     %{
       tools: Map.get(result, :tools, []),
       connected: connected,
-      failed: Map.get(result, :failed, []),
+      # Refusals ride the same `failed` channel the surface already reports,
+      # so a dropped server is visible in `/mcp` rather than silently absent.
+      failed: Map.get(result, :failed, []) ++ rejected,
       janitor: janitor
     }
   catch
@@ -83,9 +97,31 @@ defmodule Raxol.Agent.Code.McpLoader do
     Janitor.start(owner, client_start)
   end
 
+  @doc """
+  Split configured servers into the ones that may load and the ones refused,
+  as `{accepted, rejected}`. Rejections are `{name, reason}` pairs in the
+  same shape `McpBundle` reports load failures in.
+  """
+  @spec admit([map()]) :: {[map()], [{term(), term()}]}
+  def admit(servers) do
+    {named, unnamed} =
+      Enum.split_with(servers, &valid_server_name?(Map.get(&1, :name)))
+
+    {accepted, over_cap} = Enum.split(named, @max_servers)
+
+    rejected =
+      Enum.map(unnamed, &{Map.get(&1, :name), :invalid_server_name}) ++
+        Enum.map(over_cap, &{Map.get(&1, :name), :server_limit_exceeded})
+
+    {accepted, rejected}
+  end
+
+  defp valid_server_name?(name),
+    do: is_binary(name) and Regex.match?(@server_name_re, name)
+
   # McpConfig servers carry string names and an env MAP; the bundle spec
-  # wants an atom name and an env LIST. The atom is minted from the user's
-  # own local `.mcp.json` (bounded, not wire input).
+  # wants an atom name and an env LIST. `admit/1` has already bounded both
+  # the count and the shape of the names interned here.
   defp to_spec(server) do
     %{
       name: String.to_atom(server.name),

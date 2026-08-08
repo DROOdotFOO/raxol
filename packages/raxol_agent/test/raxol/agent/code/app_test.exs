@@ -1496,10 +1496,12 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "share token"
       token = model.notice |> String.split(" ") |> List.last()
 
-      assert {:ok, session_id} =
+      assert {:ok, %{session_id: session_id, scope: scope}} =
                Raxol.Agent.Code.ShareToken.verify(token, secret)
 
       assert session_id == model.session_key
+      # An unjailed session shares under the host's own journal base.
+      assert scope == ""
 
       # The journal exists for the viewer to replay.
       {:ok, records} =
