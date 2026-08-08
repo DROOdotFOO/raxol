@@ -8,16 +8,21 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent p playground new help)
+  @commands ~w(agent code p acp playground new help)
 
   @doc "Dispatch `argv`, returning an exit code."
   @spec main([String.t()]) :: non_neg_integer()
   def main([]), do: run_agent([])
   def main(["agent" | rest]), do: run_agent(rest)
+  # The full coding-agent TUI (approvals, plan mode, sessions, slash
+  # commands) — the same launch path as `mix raxol.code`.
+  def main(["code" | rest]), do: run_code(rest)
   # Headless one-shot: prompt on argv, answer to stdout, contract events to
   # stderr. `-p` matches the historical `bin/raxol -p` wrapper spelling.
   def main(["p" | rest]), do: Raxol.Agent.P.run(rest)
   def main(["-p" | rest]), do: Raxol.Agent.P.run(rest)
+  # Serve over ACP on stdio, for editors and agent harnesses that spawn us.
+  def main(["acp" | rest]), do: Raxol.Agent.ClientProtocol.Serve.run(rest)
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
   def main([help]) when help in ~w(help --help -h), do: help()
@@ -105,13 +110,40 @@ defmodule Raxol.CLI do
   defp turn_opts(input, :mock) do
     [
       backend: Raxol.Agent.Backend.Mock,
-      backend_opts: [response: "(mock) Set AI_API_KEY for real replies. You said: #{input}"]
+      backend_opts: [
+        response: "(mock) Set AI_API_KEY for real replies. You said: #{input}"
+      ]
     ]
   end
 
   defp credentials? do
     ~w(AI_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY)
     |> Enum.any?(&(System.get_env(&1) not in [nil, ""]))
+  end
+
+  # -- code -------------------------------------------------------------------
+
+  # The fullscreen coding harness. The shared launcher owns flags, provider
+  # resolution, and the session store. The local TUI boot vetoes when there
+  # is no real terminal (the TUI needs one); `--ssh` serving renders on the
+  # remote client, so it boots without that check. `--help`/`--sessions` are
+  # answered by the launcher before either boot runs.
+  defp run_code(args) do
+    boot = if "--ssh" in args, do: &serve_boot/0, else: &code_boot/0
+    Raxol.Agent.Code.Launcher.main(args, boot: boot)
+  end
+
+  defp code_boot do
+    if interactive?() do
+      serve_boot()
+    else
+      {:error, "raxol code requires an interactive terminal."}
+    end
+  end
+
+  defp serve_boot do
+    {:ok, _} = Application.ensure_all_started(:raxol_agent)
+    :ok
   end
 
   # -- playground -------------------------------------------------------------
@@ -153,7 +185,9 @@ defmodule Raxol.CLI do
 
     Commands:
       agent         Interactive AI agent session (default)
+      code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
+      acp           Serve over the Agent Client Protocol on stdio
       playground    Browse the interactive component catalog
       new [name]    Scaffold a new Raxol application
       help          Show this help

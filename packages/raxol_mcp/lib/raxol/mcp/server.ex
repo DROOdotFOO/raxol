@@ -154,7 +154,12 @@ defmodule Raxol.MCP.Server do
   """
   @spec handle_message(GenServer.server(), map()) :: {:reply, map() | nil}
   def handle_message(server \\ __MODULE__, message) do
-    GenServer.call(server, {:handle_message, message})
+    # :infinity, not the default 5s: tool callbacks run inline in the server
+    # (Registry.call_tool invokes them in the calling process), and a slow
+    # tool — an agent turn, a screenshot of a busy app — must stall the
+    # transport, never crash it with a call-timeout exit. Slow tools bound
+    # their own work; the transport's job is to wait for the reply.
+    GenServer.call(server, {:handle_message, message}, :infinity)
   end
 
   @doc """
@@ -342,8 +347,7 @@ defmodule Raxol.MCP.Server do
     # The boot check catches this for tools present at start; this catches one
     # registered afterwards, which would otherwise slip past it.
     if state.authorizer == nil and sensitive_tool?(state.registry, name) do
-      {authorization_required(id, name, :deny, :sensitive_tool_unguarded),
-       state}
+      {authorization_required(id, name, :deny, :sensitive_tool_unguarded), state}
     else
       authorize_and_call(id, name, arguments, state)
     end
@@ -401,8 +405,7 @@ defmodule Raxol.MCP.Server do
         # subscribed URIs go to all transport-level subscribers.
         new_subs = Map.put_new(state.resource_subscriptions, uri, true)
 
-        {Protocol.response(id, %{}),
-         %{state | resource_subscriptions: new_subs}}
+        {Protocol.response(id, %{}), %{state | resource_subscriptions: new_subs}}
 
       {:deny, detail} ->
         {authz_error_response(id, "resources/subscribe", detail), state}
@@ -422,8 +425,7 @@ defmodule Raxol.MCP.Server do
       :allow ->
         new_subs = Map.delete(state.resource_subscriptions, uri)
 
-        {Protocol.response(id, %{}),
-         %{state | resource_subscriptions: new_subs}}
+        {Protocol.response(id, %{}), %{state | resource_subscriptions: new_subs}}
 
       {:deny, detail} ->
         {authz_error_response(id, "resources/unsubscribe", detail), state}
@@ -595,8 +597,7 @@ defmodule Raxol.MCP.Server do
         content = [
           %{
             type: "text",
-            text:
-              "Tool temporarily unavailable (circuit open after repeated failures)"
+            text: "Tool temporarily unavailable (circuit open after repeated failures)"
           }
         ]
 
@@ -836,8 +837,7 @@ defmodule Raxol.MCP.Server do
     state = %{
       state
       | elicitation_seq: seq,
-        pending_elicitations:
-          Map.put(state.pending_elicitations, elicit_id, pending)
+        pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending)
     }
 
     broadcast(state.subscribers, elicitation_request(elicit_id, tool, prompt))

@@ -1,5 +1,14 @@
 # Harness Interaction: speakers, input, commands, approvals
 
+> **Status: interaction doctrine, partially staged.** This document is the
+> design target for harness surfaces. Several modules it names
+> (`Raxol.UI.Harness.CommandRegistry`, `CommandAutocomplete`, `ChoicePrompt`,
+> `Indication`, `TranscriptView`) do not exist yet, and the shipped coding TUI
+> (`mix raxol.code`) differs in places: slash commands dispatch through plain
+> function clauses, approvals use a simpler footer prompt, and Ctrl+C quits on
+> a single press. Where this document and `Raxol.Agent.Code.App` disagree, the
+> code is current truth and this is the direction.
+
 ## Speaker separation
 
 Mirrored outer-contour chevrons carry authorship, and nothing else does. The

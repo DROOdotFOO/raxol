@@ -13,7 +13,11 @@ defmodule Raxol.Agent.Actions.CodeTest do
       )
 
     File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "hello.ex"), "defmodule Hello do\n  :world\nend\n")
+
+    File.write!(
+      Path.join(dir, "hello.ex"),
+      "defmodule Hello do\n  :world\nend\n"
+    )
 
     previous = System.get_env("RAXOL_CLI_CWD")
     System.put_env("RAXOL_CLI_CWD", dir)
@@ -75,10 +79,16 @@ defmodule Raxol.Agent.Actions.CodeTest do
   end
 
   describe "Edit" do
-    test "replaces a unique match and returns the before/after images", %{dir: dir} do
+    test "replaces a unique match and returns the before/after images", %{
+      dir: dir
+    } do
       assert {:ok, result} =
                Code.Edit.run(
-                 %{path: "hello.ex", old_string: ":world", new_string: ":earth"},
+                 %{
+                   path: "hello.ex",
+                   old_string: ":world",
+                   new_string: ":earth"
+                 },
                  %{}
                )
 
@@ -97,7 +107,10 @@ defmodule Raxol.Agent.Actions.CodeTest do
     end
 
     test "errors when the match is not unique" do
-      File.write!(Path.join(System.get_env("RAXOL_CLI_CWD"), "dup.txt"), "a a a")
+      File.write!(
+        Path.join(System.get_env("RAXOL_CLI_CWD"), "dup.txt"),
+        "a a a"
+      )
 
       assert {:error, :not_unique} =
                Code.Edit.run(
@@ -170,6 +183,40 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert {:ok, %{exit_status: 0}} =
                Code.Bash.run(%{command: "echo ok"}, %{shell_sandbox: sandbox})
     end
+
+    test "refuses to run in a jailed session with no OS sandbox" do
+      # The cwd jail does not confine a shell command line, so a jailed
+      # (multi-tenant) session must not get the shell at all until per-tenant
+      # OS confinement is wired.
+      assert {:error, :shell_disabled_in_jail} =
+               Code.Bash.run(%{command: "cat ../../other/secret"}, %{jail: true})
+
+      # An explicit OS sandbox re-enables it (the sandbox is the confinement).
+      sandbox = Sandbox.Shell.allowlist(["echo"])
+
+      assert {:ok, %{exit_status: 0}} =
+               Code.Bash.run(
+                 %{command: "echo ok"},
+                 %{jail: true, shell_sandbox: sandbox}
+               )
+    end
+  end
+
+  describe "shell_jail_allow/1" do
+    test "refuses a jailed context without a sandbox" do
+      assert {:error, :shell_disabled_in_jail} =
+               Code.shell_jail_allow(%{jail: true})
+    end
+
+    test "allows a non-jailed context" do
+      assert :ok = Code.shell_jail_allow(%{})
+      assert :ok = Code.shell_jail_allow(%{jail: false})
+    end
+
+    test "allows a jailed context that carries an OS sandbox" do
+      sandbox = Sandbox.Shell.allowlist(["echo"])
+      assert :ok = Code.shell_jail_allow(%{jail: true, shell_sandbox: sandbox})
+    end
   end
 
   describe "Grep" do
@@ -204,10 +251,72 @@ defmodule Raxol.Agent.Actions.CodeTest do
       File.write!(Path.join(dir, "lib/one.ex"), "1")
       File.write!(Path.join(dir, "lib/two.ex"), "2")
 
-      assert {:ok, %{paths: paths}} = Code.Glob.run(%{pattern: "lib/**/*.ex"}, %{})
+      assert {:ok, %{paths: paths}} =
+               Code.Glob.run(%{pattern: "lib/**/*.ex"}, %{})
+
       assert "lib/one.ex" in paths
       assert "lib/two.ex" in paths
       assert paths == Enum.sort(paths)
+    end
+  end
+
+  # Fs.resolve/2 confines the base directory an action is POINTED at, but the
+  # walkers underneath it re-derive paths from the filesystem, where a symlink
+  # leads wherever it likes. grep and glob are both auto-allowed, and the
+  # executor's outside-cwd escalation only covers read_file, so nothing
+  # downstream would prompt for what these return.
+  describe "sandbox containment through symlinks" do
+    setup %{dir: dir} do
+      outside =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-code-outside-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.txt"), "TOPSECRET value\n")
+      File.ln_s!(outside, Path.join(dir, "vendor"))
+
+      on_exit(fn -> File.rm_rf!(outside) end)
+      %{outside: outside}
+    end
+
+    test "grep does not read through a symlink pointing out of the sandbox" do
+      # The native scanner is the hole: it walks with File.dir?/File.regular?,
+      # which follow symlinks. Strip PATH so ripgrep cannot mask it.
+      without_ripgrep(fn ->
+        assert {:ok, %{matches: matches}} =
+                 Code.Grep.run(%{pattern: "TOPSECRET"}, %{})
+
+        assert matches == []
+      end)
+    end
+
+    test "a regex ripgrep rejects cannot read out of the sandbox either" do
+      # A backreference is the model's lever onto the native scanner even where
+      # ripgrep is installed: rg exits 2 on it, and grep_ripgrep routes any
+      # status outside [0, 1] to grep_native, whose PCRE compile accepts it.
+      assert {:ok, %{matches: matches}} =
+               Code.Grep.run(%{pattern: "(TOPSECRET)\\1?"}, %{})
+
+      assert matches == []
+    end
+
+    test "glob does not list paths through a symlink pointing out of the sandbox" do
+      assert {:ok, %{paths: paths}} = Code.Glob.run(%{pattern: "**/*.txt"}, %{})
+
+      refute Enum.any?(paths, &(&1 =~ "secret"))
+    end
+
+    test "a file genuinely inside the sandbox is still found", %{dir: dir} do
+      File.write!(Path.join(dir, "inside.txt"), "TOPSECRET value\n")
+
+      without_ripgrep(fn ->
+        assert {:ok, %{matches: matches}} =
+                 Code.Grep.run(%{pattern: "TOPSECRET"}, %{})
+
+        assert Enum.map(matches, & &1.path) == ["inside.txt"]
+      end)
     end
   end
 
@@ -222,9 +331,28 @@ defmodule Raxol.Agent.Actions.CodeTest do
     end
   end
 
+  # Pins the pure-Elixir scanner, which is what runs wherever ripgrep is not
+  # installed and wherever the model hands us a regex ripgrep rejects.
+  defp without_ripgrep(fun) do
+    previous = System.get_env("PATH")
+    System.put_env("PATH", "")
+
+    try do
+      fun.()
+    after
+      case previous do
+        nil -> System.delete_env("PATH")
+        value -> System.put_env("PATH", value)
+      end
+    end
+  end
+
   describe "tool-call gating (the security seam)" do
     test "sensitive write_file is denied under the default policy" do
-      call = %{"name" => "write_file", "arguments" => %{"path" => "x", "content" => "y"}}
+      call = %{
+        "name" => "write_file",
+        "arguments" => %{"path" => "x", "content" => "y"}
+      }
 
       assert {:error, {:tool_denied, "write_file", :sensitive_tool}} =
                ToolConverter.dispatch_tool_call(call, Code.all(), %{})

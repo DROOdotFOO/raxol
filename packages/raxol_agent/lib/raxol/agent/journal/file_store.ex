@@ -73,8 +73,13 @@ defmodule Raxol.Agent.Journal.FileStore do
   corruption (the damaged content is never surfaced). Used by the read-side
   reattach and seek paths.
   """
-  @spec read_records(String.t(), keyword()) :: {:ok, [map()]} | {:error, :damaged}
+  @spec read_records(String.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :damaged}
   def read_records(session_id, opts \\ []) when is_binary(session_id) do
+    # Read-side only: never self-heal (physically truncate) a torn tail
+    # here — the dir may belong to a live Writer in another OS process
+    # (a concurrent `--replay`), or sit on read-only media. The partial
+    # line is tolerated in-memory; the Writer heals it at its own boot.
     case Reader.scan(session_dir(session_id, opts)) do
       {:ok, records} -> {:ok, records}
       {:damaged, _partial} -> {:error, :damaged}
@@ -106,7 +111,8 @@ defmodule Raxol.Agent.Journal.FileStore do
     # real filesystem failures. (Found by the I1 `:open_fail` fault site in
     # test/invariants/identity_invariants_test.exs.)
     with :ok <- validate_session_id(session_id),
-         :ok <- ensure_layout(dir) do
+         :ok <- ensure_layout(dir),
+         :ok <- ensure_unlocked(dir) do
       writer_opts = Keyword.merge(opts, dir: dir, session_id: session_id)
 
       case Writer.start_link(writer_opts) do
@@ -132,9 +138,27 @@ defmodule Raxol.Agent.Journal.FileStore do
              owner?: false
            }}
 
+        # `Writer.init/1` answers a live foreign lock holder with `:ignore`
+        # (an abnormal init exit would kill this non-trapping caller before it
+        # could read an error). Report it as the refusal it is; the pre-flight
+        # above names the holder in the common case, and this covers the race
+        # where the lock was taken between the check and the start.
+        :ignore ->
+          {:error, {:journal_locked, Writer.lock_holder(dir)}}
+
         {:error, _} = err ->
           err
       end
+    end
+  end
+
+  # A confirmed-live foreign Writer already owns this journal in ANOTHER OS
+  # process. Refuse here, where the caller gets a plain error tuple naming the
+  # holder, rather than letting the Writer's own claim decide it.
+  defp ensure_unlocked(dir) do
+    case Writer.lock_holder(dir) do
+      nil -> :ok
+      holder -> {:error, {:journal_locked, holder}}
     end
   end
 

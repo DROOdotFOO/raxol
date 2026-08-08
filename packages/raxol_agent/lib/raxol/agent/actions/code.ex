@@ -15,6 +15,13 @@ defmodule Raxol.Agent.Actions.Code do
   with `:outside_cwd`. Path safety is shared with `Fs` (`Fs.resolve/1`,
   `Fs.working_dir/0`); this module never re-implements it.
 
+  That covers the path a tool is POINTED at. `grep` and `glob` also
+  DISCOVER paths by walking the filesystem, where a symlink leads
+  wherever it likes, so both re-check every path they reach with the same
+  realpath-based containment before reading or reporting it — confining
+  the root alone would let `./vendor -> /` disclose anything the daemon
+  can read.
+
   ## Gating
 
   `write_file`, `edit_file`, and `bash` are marked `sensitive: true`, so
@@ -85,10 +92,10 @@ defmodule Raxol.Agent.Actions.Code do
       ]
 
     @impl true
-    def run(%{path: path, content: content} = params, _context) do
+    def run(%{path: path, content: content} = params, context) do
       overwrite = Map.get(params, :overwrite, false)
 
-      with {:ok, abs} <- Fs.resolve(path) do
+      with {:ok, abs} <- Fs.resolve(path, context) do
         Raxol.Agent.Actions.Code.write_file(abs, path, content, overwrite)
       end
     end
@@ -134,12 +141,12 @@ defmodule Raxol.Agent.Actions.Code do
     @impl true
     def run(
           %{path: path, old_string: old_string, new_string: new_string} = params,
-          _context
+          context
         ) do
       replace_all = Map.get(params, :replace_all, false)
 
       with :ok <- reject_noop(old_string, new_string),
-           {:ok, abs} <- Fs.resolve(path),
+           {:ok, abs} <- Fs.resolve(path, context),
            {:ok, content} <- File.read(abs),
            {:ok, count} <- match_count(content, old_string, replace_all) do
         Raxol.Agent.Actions.Code.write_edit(
@@ -206,8 +213,9 @@ defmodule Raxol.Agent.Actions.Code do
     def run(%{command: command} = params, context) do
       timeout = Map.get(params, :timeout_ms) || 30_000
 
-      with :ok <- Raxol.Agent.Actions.Code.sandbox_allow(context, command),
-           {:ok, cd} <- resolve_cd(Map.get(params, :cd)) do
+      with :ok <- Raxol.Agent.Actions.Code.shell_jail_allow(context),
+           :ok <- Raxol.Agent.Actions.Code.sandbox_allow(context, command),
+           {:ok, cd} <- resolve_cd(Map.get(params, :cd), context) do
         {output, status} =
           Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
 
@@ -224,8 +232,8 @@ defmodule Raxol.Agent.Actions.Code do
     end
 
     # No `cd` given → run in the working dir. A `cd` must stay under cwd.
-    defp resolve_cd(nil), do: {:ok, Fs.working_dir()}
-    defp resolve_cd(rel), do: Fs.resolve(rel)
+    defp resolve_cd(nil, context), do: {:ok, Fs.working_dir(context)}
+    defp resolve_cd(rel, context), do: Fs.resolve(rel, context)
   end
 
   defmodule Grep do
@@ -265,13 +273,19 @@ defmodule Raxol.Agent.Actions.Code do
       ]
 
     @impl true
-    def run(%{pattern: pattern} = params, _context) do
+    def run(%{pattern: pattern} = params, context) do
       path = Map.get(params, :path) || "."
       ignore_case = Map.get(params, :ignore_case, false)
       max_results = Map.get(params, :max_results) || 200
 
-      with {:ok, abs} <- Fs.resolve(path) do
-        Raxol.Agent.Actions.Code.grep(pattern, abs, ignore_case, max_results)
+      with {:ok, abs} <- Fs.resolve(path, context) do
+        Raxol.Agent.Actions.Code.grep(
+          pattern,
+          abs,
+          ignore_case,
+          max_results,
+          context
+        )
       end
     end
   end
@@ -306,17 +320,20 @@ defmodule Raxol.Agent.Actions.Code do
     @max_paths 500
 
     @impl true
-    def run(%{pattern: pattern} = params, _context) do
+    def run(%{pattern: pattern} = params, context) do
       base = Map.get(params, :path) || "."
 
-      with {:ok, abs_base} <- Fs.resolve(base) do
-        cwd = Fs.working_dir()
+      with {:ok, abs_base} <- Fs.resolve(base, context) do
+        cwd = Fs.working_dir(context)
 
         all =
           abs_base
           |> Path.join(pattern)
           |> Path.wildcard()
-          |> Enum.filter(&under?(&1, cwd))
+          # Containment is decided on realpath, not on the lexical prefix: a
+          # wildcard match reached through a symlink still reads as living
+          # under cwd, and disclosing the name is already a disclosure.
+          |> Enum.reject(&Fs.outside_cwd?(&1, context))
           |> Enum.map(&Path.relative_to(&1, cwd))
           |> Enum.sort()
 
@@ -324,9 +341,6 @@ defmodule Raxol.Agent.Actions.Code do
         {:ok, %{paths: paths, count: length(paths), truncated: truncated}}
       end
     end
-
-    defp under?(abs, cwd),
-      do: abs == cwd or String.starts_with?(abs, cwd <> "/")
 
     defp cap(list, max) when length(list) > max,
       do: {true, Enum.take(list, max)}
@@ -418,6 +432,30 @@ defmodule Raxol.Agent.Actions.Code do
   end
 
   @doc """
+  Refuse the shell surface for a jailed (multi-tenant) session that carries
+  no OS-level sandbox.
+
+  The cwd jail confines the *fs* tools (they resolve every path through
+  `Fs.resolve/2`), but a `/bin/sh -c` command string is not a path — it can
+  `cd ..`, name an absolute path, or read the daemon's own files, none of
+  which `{:cd, cwd}` prevents. On a shared host that is a cross-tenant read
+  and write primitive, so until per-tenant OS confinement (separate uid /
+  chroot / bwrap, wired as a `:shell_sandbox`) exists, the only safe posture
+  is to withhold the shell entirely from a jailed session.
+  """
+  @spec shell_jail_allow(map()) :: :ok | {:error, :shell_disabled_in_jail}
+  def shell_jail_allow(context) do
+    jailed? = is_map(context) and Map.get(context, :jail) not in [nil, false]
+
+    sandboxed? =
+      match?(%Raxol.Agent.Sandbox.Shell{}, Map.get(context, :shell_sandbox))
+
+    if jailed? and not sandboxed?,
+      do: {:error, :shell_disabled_in_jail},
+      else: :ok
+  end
+
+  @doc """
   Check a shell command against a `Raxol.Agent.Sandbox.Shell` in the
   context under `:shell_sandbox`. Absent → allowed.
   """
@@ -503,17 +541,20 @@ defmodule Raxol.Agent.Actions.Code do
   @doc false
   @spec grep(String.t(), String.t(), boolean(), pos_integer()) ::
           {:ok, map()} | {:error, term()}
-  def grep(pattern, abs_dir, ignore_case, max_results) do
+  def grep(pattern, abs_dir, ignore_case, max_results, context \\ %{}) do
     case System.find_executable("rg") do
-      nil -> grep_native(pattern, abs_dir, ignore_case, max_results)
-      rg -> grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results)
+      nil ->
+        grep_native(pattern, abs_dir, ignore_case, max_results, context)
+
+      rg ->
+        grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results, context)
     end
   end
 
   # ripgrep: fast path. Args are passed as a list (no shell), so the pattern
   # is never shell-interpreted.
-  defp grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results) do
-    cwd = Fs.working_dir()
+  defp grep_ripgrep(rg, pattern, abs_dir, ignore_case, max_results, context) do
+    cwd = Fs.working_dir(context)
 
     args =
       ["--line-number", "--no-heading", "--color=never"] ++
@@ -533,7 +574,7 @@ defmodule Raxol.Agent.Actions.Code do
       {_out, _status} ->
         # rg failed (e.g. bad regex) — fall back to the native scanner, which
         # reports a regex compile error as {:error, _} rather than a crash.
-        grep_native(pattern, abs_dir, ignore_case, max_results)
+        grep_native(pattern, abs_dir, ignore_case, max_results, context)
     end
   end
 
@@ -552,17 +593,17 @@ defmodule Raxol.Agent.Actions.Code do
     end
   end
 
-  defp grep_native(pattern, abs_dir, ignore_case, max_results) do
+  defp grep_native(pattern, abs_dir, ignore_case, max_results, context) do
     opts = if ignore_case, do: [:caseless], else: []
 
     case Regex.compile(pattern, opts) do
       {:ok, regex} ->
-        cwd = Fs.working_dir()
+        cwd = Fs.working_dir(context)
 
         matches =
           abs_dir
-          |> list_files(@grep_max_files_scanned)
-          |> Enum.flat_map(&scan_file(&1, regex, cwd))
+          |> list_files(@grep_max_files_scanned, context)
+          |> Enum.flat_map(&scan_file(&1, regex, cwd, context))
 
         {truncated, capped} = cap_matches(matches, max_results)
         {:ok, %{matches: capped, count: length(capped), truncated: truncated}}
@@ -572,13 +613,15 @@ defmodule Raxol.Agent.Actions.Code do
     end
   end
 
-  defp scan_file(abs_path, regex, cwd) do
-    case File.read(abs_path) do
-      {:ok, content} ->
-        scan_content(content, regex, Path.relative_to(abs_path, cwd))
-
-      {:error, _} ->
-        []
+  # Re-checked here as well as in the walk: the read is the moment the content
+  # actually leaves the sandbox, and it is the only point a path swapped after
+  # the walk would still be caught.
+  defp scan_file(abs_path, regex, cwd, context) do
+    with false <- escapes_sandbox?(abs_path, context),
+         {:ok, content} <- File.read(abs_path) do
+      scan_content(content, regex, Path.relative_to(abs_path, cwd))
+    else
+      _ -> []
     end
   end
 
@@ -595,30 +638,49 @@ defmodule Raxol.Agent.Actions.Code do
   end
 
   # Bounded recursive file walk, pruning heavy/build dirs and hidden dirs.
-  defp list_files(root, limit) do
-    root |> do_walk([], limit) |> elem(0) |> Enum.reverse()
+  defp list_files(root, limit, context) do
+    root |> do_walk([], limit, context) |> elem(0) |> Enum.reverse()
   end
 
-  defp do_walk(_path, acc, 0), do: {acc, 0}
+  defp do_walk(_path, acc, 0, _context), do: {acc, 0}
 
-  defp do_walk(path, acc, budget) do
+  defp do_walk(path, acc, budget, context) do
     cond do
-      File.regular?(path) -> {[path | acc], budget - 1}
-      File.dir?(path) and not pruned?(path) -> walk_dir(path, acc, budget)
-      true -> {acc, budget}
+      escapes_sandbox?(path, context) ->
+        {acc, budget}
+
+      File.regular?(path) ->
+        {[path | acc], budget - 1}
+
+      File.dir?(path) and not pruned?(path) ->
+        walk_dir(path, acc, budget, context)
+
+      true ->
+        {acc, budget}
     end
   end
 
-  defp walk_dir(path, acc, budget) do
+  defp walk_dir(path, acc, budget, context) do
     case File.ls(path) do
       {:ok, entries} ->
         Enum.reduce(entries, {acc, budget}, fn entry, {a, b} ->
-          do_walk(Path.join(path, entry), a, b)
+          do_walk(Path.join(path, entry), a, b, context)
         end)
 
       {:error, _} ->
         {acc, budget}
     end
+  end
+
+  # File.regular?/1 and File.dir?/1 both FOLLOW symlinks, so a walk that only
+  # confines its root will happily descend a link out of the sandbox and read
+  # what it finds. The walk starts from a root Fs.resolve/2 already confined
+  # and visits every component on the way down, so crossing a symlink is the
+  # only way out -- test that first and the realpath check (two component-wise
+  # walks) stays off the common path, where paying it per entry would dominate
+  # the cost of scanning @grep_max_files_scanned files.
+  defp escapes_sandbox?(path, context) do
+    match?({:ok, _}, File.read_link(path)) and Fs.outside_cwd?(path, context)
   end
 
   defp pruned?(path) do

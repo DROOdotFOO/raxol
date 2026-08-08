@@ -334,7 +334,13 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
     emit(
       st,
-      {:done, %{content: content || "", tool_results: [], usage: usage(response)}}
+      {:done,
+       %{
+         content: content || "",
+         tool_results: [],
+         usage: usage(response),
+         model: billed_model(response)
+       }}
     )
   end
 
@@ -347,7 +353,13 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # still seals a `:done` receipt rather than hanging or crashing.
   defp dispatch_response(messages, iteration, st, response, opts)
        when is_map(response) do
-    dispatch_response(messages, iteration, st, Map.put_new(response, :content, ""), opts)
+    dispatch_response(
+      messages,
+      iteration,
+      st,
+      Map.put_new(response, :content, ""),
+      opts
+    )
   end
 
   # The model's chain-of-thought for this round, surfaced from
@@ -396,6 +408,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
        %{
          content: Map.get(response, :content, "") || "",
          usage: usage(response),
+         model: billed_model(response),
          iteration: iteration
        }}
     )
@@ -436,7 +449,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
       # escape would widen the blast radius exactly when the operator opted
       # out of questions.
       config.gate? and name == "read_file" and
-          Fs.outside_cwd?(read_path(arguments)) ->
+          Fs.outside_cwd?(read_path(arguments), tool_ctx(st)) ->
         gated_run(tc, name, arguments, st)
 
       true ->
@@ -459,7 +472,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
     # operator the CONSEQUENCES of the answer (the ± diff), not truncated
     # args. `preview` also captures the target's content hash -- the
     # staleness anchor verified below.
-    preview = tool_preview(name, arguments)
+    preview = tool_preview(name, arguments, tool_ctx(st))
 
     emit(
       st,
@@ -509,20 +522,27 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # always sees SOMETHING to approve). `write_file` yields `{:ok, diff}`
   # unless the path itself is rejected (outside cwd / too large), which stays
   # `:none`. Every other tool has no diff to show.
-  defp tool_preview("write_file", args),
-    do: preview_or_none(Workspace.preview_write(arg(args, "path"), arg(args, "content")))
+  # The preview resolves paths with the SAME context the execution will —
+  # a preview against one sandbox root and a write against another would
+  # break the label-vs-binding guarantee.
+  defp tool_preview("write_file", args, ctx),
+    do: preview_or_none(Workspace.preview_write(arg(args, "path"), arg(args, "content"), ctx))
 
-  defp tool_preview("edit_file", args),
+  defp tool_preview("edit_file", args, ctx),
     do:
       preview_or_none(
         Workspace.preview_edit(
           arg(args, "path"),
           arg(args, "old_string"),
-          arg(args, "new_string")
+          arg(args, "new_string"),
+          ctx
         )
       )
 
-  defp tool_preview(_name, _args), do: :none
+  defp tool_preview(_name, _args, _ctx), do: :none
+
+  defp tool_ctx(%{config: %{tool_context: ctx}}) when is_map(ctx), do: ctx
+  defp tool_ctx(_st), do: %{}
 
   defp preview_or_none({:ok, diff}), do: {:ok, diff}
   defp preview_or_none(_error), do: :none
@@ -576,7 +596,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
          {:ok, %{path: path, base_hash: base_hash}},
          st
        ) do
-    case Workspace.verify_unchanged(path, base_hash) do
+    case Workspace.verify_unchanged(path, base_hash, tool_ctx(st)) do
       :ok ->
         execute(tc, name, st)
 
@@ -610,7 +630,7 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
   # approved OUTSIDE-CWD read carries the one-shot unconfined context —
   # granted strictly by the allow decision for THIS call, never ambient.
   defp apply_after_allow(tc, "read_file" = name, _no_preview, st) do
-    if Fs.outside_cwd?(read_path(Map.get(tc, "arguments", %{}))) do
+    if Fs.outside_cwd?(read_path(Map.get(tc, "arguments", %{})), tool_ctx(st)) do
       execute(tc, name, st, %{allow_outside_cwd: true})
     else
       execute(tc, name, st)
@@ -700,6 +720,12 @@ defmodule Raxol.Agent.Harness.ToolExecutor do
 
         "[Calling tools: #{names}]"
     end
+  end
+
+  # The BILLED model: with no :model configured the backend substitutes its own
+  # default and reports here what it actually charged for.
+  defp billed_model(response) do
+    response |> Map.get(:metadata, %{}) |> Map.get(:model)
   end
 
   defp usage(response), do: Map.get(response, :usage, %{})

@@ -103,15 +103,15 @@ defmodule Raxol.Property.ConcurrentLifecycleIntegrationTest do
         assert length(Enum.uniq(dispatchers)) == 4,
                "dispatcher pids must be distinct (regression of #228)"
 
-        managers =
-          Enum.map(pids, &plugin_manager_pid/1) |> Enum.reject(&is_nil/1)
+        managers = Enum.map(pids, &plugin_manager_pid/1)
 
-        assert length(managers) == 4
-
-        assert length(Enum.uniq(managers)) == 1,
-               "PluginManager is VM-singleton; all Lifecycles must share " <>
-                 "the same pid (regression of #229 if not). Got: " <>
-                 inspect(Enum.uniq(managers))
+        assert managers == [nil, nil, nil, nil],
+               "an :ssh session must own no PluginManager. It is a VM " <>
+                 "singleton registered by name, so sessions could only ever " <>
+                 "SHARE one -- and then the owner's link would carry any one " <>
+                 "session's teardown into every other. Owning none removes " <>
+                 "both the contention #229 hit and that cross-kill. Got: " <>
+                 inspect(managers)
       after
         stop_all(pids)
       end

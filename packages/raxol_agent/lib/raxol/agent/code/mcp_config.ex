@@ -19,13 +19,10 @@ defmodule Raxol.Agent.Code.McpConfig do
 
   ## Scope
 
-  This loads and surfaces the config. **Bridging a server's tools into the
-  live ReAct toolset is a deliberate follow-up**: the tool loop dispatches
-  to `Raxol.Agent.Action` *modules* (`ToolConverter.dispatch_tool_call/3`),
-  whereas MCP tools are discovered at runtime, so exposing them needs a
-  dispatch path for dynamic (non-module) tools. `Raxol.MCP.Client` already
-  connects to servers; the missing piece is that dynamic dispatch seam, not
-  this loader.
+  This loads the config; `Raxol.Agent.Code.McpLoader` bridges the servers
+  into the live toolset (started under the agent DynamicSupervisor via
+  `Raxol.Agent.McpBundle`, tools wrapped as `Raxol.Agent.Action.Dynamic`
+  and dispatched through the same authorizer and hook chain as any Action).
   """
 
   @type server :: %{

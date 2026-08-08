@@ -74,7 +74,7 @@ defmodule Raxol.Agent.Actions.Shell do
   @impl true
   def run(%{command: command} = params, context) do
     timeout = Map.get(params, :timeout_ms) || @default_timeout_ms
-    cwd = Raxol.Agent.Actions.Fs.working_dir()
+    cwd = Raxol.Agent.Actions.Fs.working_dir(context)
 
     port =
       Port.open({:spawn_executable, shell_path()}, [

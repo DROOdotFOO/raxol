@@ -1,0 +1,372 @@
+defmodule Raxol.Agent.Code.Launcher do
+  @moduledoc """
+  The coding-agent TUI launch path, as a plain function.
+
+  Shared by every entrypoint: `mix raxol.code` (dev), the `raxol code`
+  subcommand of the Burrito-packaged CLI (release), and the repo-root
+  `bin/raxol-code` shim. Contains no Mix calls, so it runs inside a release
+  where Mix does not exist; `main/2` returns the exit code and leaves
+  halting to the caller.
+
+  Flag parsing, provider resolution (through `Raxol.Agent.Backend.Cli` and
+  `Raxol.Agent.Backend.Resolver`), the `.raxol/config.json` repo pin, and
+  session resolution all live here so the entrypoints cannot drift. The
+  caller injects its boot step via the `:boot` option; a boot that returns
+  `{:error, message}` (a non-interactive terminal, say) vetoes the launch
+  with exit 1 before any UI starts.
+  """
+
+  alias Raxol.Agent.Backend.Cli
+  alias Raxol.Agent.Code.Store
+
+  @switches [
+    backend: :string,
+    # `--harness` is a deprecated alias for `--backend`.
+    harness: :string,
+    model: :string,
+    api_key: :string,
+    base_url: :string,
+    system: :string,
+    continue: :boolean,
+    resume: :string,
+    sessions: :boolean,
+    replay: :string,
+    to_offset: :integer,
+    ascii: :boolean,
+    ssh: :boolean,
+    ssh_port: :integer,
+    authorized_keys: :string,
+    ssh_tenants: :string,
+    help: :boolean
+  ]
+
+  @aliases [h: :help]
+
+  @usage """
+  Usage: raxol code [options]    (dev: mix raxol.code [options])
+
+  Interactive coding agent TUI (the axol face).
+
+  Options:
+    --backend NAME   LLM backend (auto-detected if omitted; --harness is a
+                     deprecated alias)
+    --model NAME     model override
+    --api-key KEY    API key for the selected backend (else op/env)
+    --base-url URL   override the backend base URL
+    --system TEXT    system prompt override
+    --continue       resume the most recently updated session
+    --resume ID      resume a specific session by id
+    --sessions       print saved sessions and exit
+    --replay ID      print a session's transcript from its durable journal
+                     and exit (falls back to the saved session file)
+    --to-offset N    with --replay: stop at journal offset N
+    --ascii          ASCII-only face for terminals without a UTF-8 font
+    --ssh            serve the TUI over SSH instead of the local terminal
+                     (requires --authorized-keys; one fresh session per
+                     connection)
+    --ssh-port N     SSH listen port (default 2222)
+    --authorized-keys DIR
+                     directory with authorized_keys for publickey auth
+                     (single-tenant: every keyholder is one principal)
+    --ssh-tenants DIR
+                     multi-tenant: per-user keys at DIR/<user>/ssh/
+                     authorized_keys; each user gets their own cwd jail,
+                     session store, and spending identity under DIR/<user>/
+    -h, --help       print this help
+
+  Full docs: mix help raxol.code
+  """
+
+  @doc """
+  Run the coding-agent entrypoint from `argv`; returns the exit code.
+
+  Options: `:boot` — a zero-arity function run after flag/provider
+  resolution and before the TUI starts; return `:ok` to proceed or
+  `{:error, message}` to veto with exit 1. Defaults to starting the
+  `:raxol_agent` application (idempotent under a release).
+  """
+  @spec main([String.t()], keyword()) :: non_neg_integer()
+  def main(argv, opts \\ []) do
+    {parsed, _args, invalid} =
+      OptionParser.parse(argv, strict: @switches, aliases: @aliases)
+
+    cond do
+      Keyword.get(parsed, :help, false) ->
+        IO.puts(@usage)
+        0
+
+      invalid != [] ->
+        usage_error!("unknown options: #{inspect(invalid)}")
+
+      Keyword.get(parsed, :replay) ->
+        run_replay(parsed)
+
+      Keyword.has_key?(parsed, :to_offset) ->
+        usage_error!("--to-offset requires --replay")
+
+      Keyword.get(parsed, :sessions, false) ->
+        print_sessions()
+
+      Keyword.get(parsed, :ssh, false) ->
+        serve_ssh(
+          parsed,
+          Keyword.get(opts, :boot, &default_boot/0),
+          Keyword.get(opts, :serve, &Raxol.SSH.serve/2)
+        )
+
+      true ->
+        launch(parsed, Keyword.get(opts, :boot, &default_boot/0))
+    end
+  catch
+    {:raxol_code_usage, message} ->
+      IO.puts(:stderr, "raxol.code: #{message}\n\n#{@usage}")
+      64
+  end
+
+  # Non-local exit for the deep parse/validate sites; caught in main/2.
+  defp usage_error!(message), do: throw({:raxol_code_usage, message})
+
+  defp print_sessions do
+    dir = Store.default_dir()
+
+    case Store.list(dir) do
+      [] ->
+        IO.puts("no saved sessions in #{dir}")
+
+      sessions ->
+        IO.puts("saved sessions in #{dir}:")
+
+        Enum.each(sessions, fn s ->
+          IO.puts("  #{s.id}  (#{s.message_count} msgs)")
+        end)
+    end
+
+    0
+  end
+
+  # Headless: prints the replayed transcript and exits, never invoking the
+  # boot step (so the CLI's interactive-terminal veto does not apply, the
+  # same way --sessions behaves).
+  defp run_replay(parsed) do
+    cond do
+      Keyword.get(parsed, :ssh, false) ->
+        usage_error!("--replay cannot combine with --ssh")
+
+      Keyword.get(parsed, :sessions, false) ->
+        usage_error!("--replay cannot combine with --sessions")
+
+      Keyword.get(parsed, :continue, false) || Keyword.get(parsed, :resume) ->
+        usage_error!("--replay cannot combine with --continue/--resume")
+
+      true ->
+        replay_result =
+          Raxol.Agent.Code.Replay.run(
+            Keyword.fetch!(parsed, :replay),
+            to_offset: Keyword.get(parsed, :to_offset)
+          )
+
+        case replay_result do
+          {:ok, text} ->
+            IO.puts(text)
+            0
+
+          {:error, message} ->
+            IO.puts(:stderr, "raxol code --replay: #{message}")
+            1
+        end
+    end
+  end
+
+  defp launch(parsed, boot) do
+    # Resolve flags and the provider before booting: an unknown backend
+    # errors fast, without starting anything.
+    app_opts = app_opts(parsed)
+
+    case boot.() do
+      :ok ->
+        {:ok, pid} = Raxol.start_link(Raxol.Agent.Code.App, app_opts)
+        ref = Process.monitor(pid)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> 0
+        end
+
+      {:error, message} ->
+        IO.puts(:stderr, "raxol code: #{message}")
+        1
+    end
+  end
+
+  defp default_boot do
+    {:ok, _} = Application.ensure_all_started(:raxol_agent)
+    :ok
+  end
+
+  # SSH serving: one daemon, one fresh session per connection. Fail-closed
+  # on auth — this surface reaches write/shell tools, so anonymous serving
+  # is not offered at all. Two modes: --authorized-keys (single-tenant,
+  # every keyholder is one principal) and --ssh-tenants (multi-tenant,
+  # per-user keys + per-user jail/sessions/spend identity).
+  defp serve_ssh(parsed, boot, serve) do
+    tenants = Keyword.get(parsed, :ssh_tenants)
+    keys = Keyword.get(parsed, :authorized_keys)
+
+    cond do
+      is_nil(tenants) and keys in [nil, ""] ->
+        usage_error!(
+          "--ssh requires --authorized-keys DIR (single-tenant) or " <>
+            "--ssh-tenants DIR (multi-tenant); this surface never " <>
+            "serves anonymously"
+        )
+
+      is_binary(tenants) and keys not in [nil, ""] ->
+        usage_error!(
+          "--authorized-keys and --ssh-tenants are mutually exclusive"
+        )
+
+      Keyword.get(parsed, :continue, false) || Keyword.get(parsed, :resume) ->
+        usage_error!(
+          "--continue/--resume cannot combine with --ssh; every " <>
+            "connection gets a fresh session"
+        )
+
+      true ->
+        # Server-wide app options: provider resolution happens once, here.
+        # No :session_key — each connection's App.init mints its own.
+        app_opts = app_opts(parsed)
+
+        case boot.() do
+          :ok ->
+            serve_result =
+              serve.(
+                Raxol.Agent.Code.App,
+                [
+                  port: Keyword.get(parsed, :ssh_port, 2222),
+                  app_opts: app_opts
+                ] ++ ssh_auth_opts(tenants, keys)
+              )
+
+            case serve_result do
+              {:ok, pid} ->
+                IO.puts(
+                  "serving the coding agent over SSH on port " <>
+                    "#{Keyword.get(parsed, :ssh_port, 2222)} (Ctrl+C stops)"
+                )
+
+                ref = Process.monitor(pid)
+
+                receive do
+                  {:DOWN, ^ref, :process, ^pid, _reason} -> 0
+                end
+
+              {:error, reason} ->
+                IO.puts(:stderr, "raxol code --ssh: #{inspect(reason)}")
+                1
+            end
+
+          {:error, message} ->
+            IO.puts(:stderr, "raxol code: #{message}")
+            1
+        end
+    end
+  end
+
+  # Multi-tenant: the server authenticates per-user keys under the
+  # tenants root and derives each session's jail/sessions/spend options
+  # from the authenticated username.
+  defp ssh_auth_opts(tenants, _keys) when is_binary(tenants) do
+    root = Path.expand(tenants)
+
+    [
+      tenants_dir: root,
+      tenant_opts: &Raxol.Agent.Code.Tenant.app_opts(root, &1)
+    ]
+  end
+
+  defp ssh_auth_opts(_tenants, keys), do: [authorized_keys_dir: keys]
+
+  @doc false
+  # The Code.App boot options for parsed flags: repo pin + resolver +
+  # session resolution. Public (hidden) so the SSH serving path can reuse it.
+  @spec app_opts(keyword()) :: keyword()
+  def app_opts(parsed) do
+    # The `.raxol/config.json` pin must load from the agent's WORKSPACE (the
+    # caller's dir via RAXOL_CLI_CWD), the same directory the App scopes its
+    # tools to — not the package dir the bin/raxol-code shim cd's into.
+    project =
+      Raxol.Agent.Code.ProjectConfig.load(Raxol.Agent.Actions.Fs.working_dir())
+
+    resolution =
+      Raxol.Agent.Backend.Resolver.resolve(resolver_opts(parsed, project))
+
+    []
+    |> put_if(:system, Keyword.get(parsed, :system))
+    |> put_if(:model, Keyword.get(parsed, :model) || Map.get(project, :model))
+    |> put_if(:session_key, resolve_session(parsed))
+    |> Keyword.put(:ascii, Keyword.get(parsed, :ascii, false))
+    |> apply_resolution(resolution)
+  end
+
+  # The resolver inputs, in precedence order explicit flag > `.raxol/config.json`
+  # pin > env auto-detect: a `--backend`/`--model`/`--base-url` wins, else the
+  # per-repo pin, else the resolver auto-detects. The resolver's own input key
+  # stays `:harness` (its internal provider vocabulary); only the user-facing
+  # flag is renamed.
+  defp resolver_opts(parsed, project) do
+    []
+    |> maybe_put(
+      :harness,
+      backend_flag(parsed) || Map.get(project, :provider)
+    )
+    |> maybe_put(
+      :model,
+      Keyword.get(parsed, :model) || Map.get(project, :model)
+    )
+    |> maybe_put(:api_key, Keyword.get(parsed, :api_key))
+    |> maybe_put(
+      :base_url,
+      Keyword.get(parsed, :base_url) || Map.get(project, :base_url)
+    )
+  end
+
+  # Shared `--backend`/`--harness` normalization + validation (deprecation
+  # notices, supported-name check) through `Backend.Cli`. Returns the backend
+  # atom, or `nil` when neither flag is given (auto-detect).
+  defp backend_flag(parsed) do
+    case Cli.flag(parsed, "raxol.code") do
+      {:ok, backend} -> backend
+      {:error, message} -> usage_error!(message)
+    end
+  end
+
+  # `{:ok, executor, source}` wires the executor and records how it was found;
+  # `{:no_key, harness}` and `:no_provider` open the App on its setup panel
+  # (no executor) so the user can `/login` rather than hit a crash.
+  defp apply_resolution(app_opts, {:ok, executor, source}) do
+    app_opts
+    |> Keyword.put(:executor, executor)
+    |> Keyword.put(:provider_status, {:ready, executor.backend, source})
+  end
+
+  defp apply_resolution(app_opts, {:no_key, harness}) do
+    Keyword.put(app_opts, :provider_status, {:no_key, harness})
+  end
+
+  defp apply_resolution(app_opts, :no_provider) do
+    Keyword.put(app_opts, :provider_status, :no_provider)
+  end
+
+  defp resolve_session(parsed) do
+    cond do
+      key = Keyword.get(parsed, :resume) -> key
+      Keyword.get(parsed, :continue, false) -> Store.latest(Store.default_dir())
+      true -> nil
+    end
+  end
+
+  defp maybe_put(kw, _key, nil), do: kw
+  defp maybe_put(kw, key, value), do: Keyword.put(kw, key, value)
+
+  defp put_if(kw, _key, nil), do: kw
+  defp put_if(kw, key, value), do: Keyword.put(kw, key, value)
+end

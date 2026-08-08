@@ -41,10 +41,10 @@ defmodule Raxol.Agent.Actions.Fs do
       ]
 
     @impl true
-    def run(params, _context) do
+    def run(params, context) do
       path = Map.get(params, :path) || "."
 
-      with {:ok, abs} <- Raxol.Agent.Actions.Fs.resolve(path),
+      with {:ok, abs} <- Raxol.Agent.Actions.Fs.resolve(path, context),
            {:ok, names} <- File.ls(abs) do
         entries =
           names
@@ -100,8 +100,8 @@ defmodule Raxol.Agent.Actions.Fs do
       # confined by resolve/1.
       resolver =
         if is_map(context) && Map.get(context, :allow_outside_cwd),
-          do: &Raxol.Agent.Actions.Fs.resolve_unconfined/1,
-          else: &Raxol.Agent.Actions.Fs.resolve/1
+          do: &Raxol.Agent.Actions.Fs.resolve_unconfined(&1, context),
+          else: &Raxol.Agent.Actions.Fs.resolve(&1, context)
 
       with {:ok, abs} <- resolver.(path),
            {:ok, content} <- File.read(abs) do
@@ -165,8 +165,8 @@ defmodule Raxol.Agent.Actions.Fs do
       ]
 
     @impl true
-    def run(%{path: path}, _context) do
-      with {:ok, abs} <- Raxol.Agent.Actions.Fs.resolve(path),
+    def run(%{path: path}, context) do
+      with {:ok, abs} <- Raxol.Agent.Actions.Fs.resolve(path, context),
            {:ok, stat} <- File.stat(abs, time: :posix) do
         {:ok,
          %{
@@ -194,30 +194,45 @@ defmodule Raxol.Agent.Actions.Fs do
   `:outside_cwd` error instead of an operator escalation. A symlink
   cycle counts as outside (escalate, never silently allow).
   """
-  @spec outside_cwd?(String.t() | nil) :: boolean()
-  def outside_cwd?(path) when is_binary(path) do
-    cwd = working_dir()
-    abs = Path.expand(path, cwd)
+  @spec outside_cwd?(String.t() | nil, map() | nil) :: boolean()
+  def outside_cwd?(path, context \\ %{})
 
-    case {safe_realpath(abs), safe_realpath(cwd)} do
-      {{:ok, real_abs}, {:ok, real_root}} ->
-        not contained?(real_abs, real_root)
+  def outside_cwd?(path, context) when is_binary(path) do
+    if jailed_without_root?(context) do
+      # Jailed but no root — treat every path as outside (fail closed), the
+      # same decision resolve/2 makes.
+      true
+    else
+      cwd = working_dir(context)
+      abs = Path.expand(path, cwd)
 
-      _ ->
-        true
+      case {safe_realpath(abs), safe_realpath(cwd)} do
+        {{:ok, real_abs}, {:ok, real_root}} ->
+          not contained?(real_abs, real_root)
+
+        _ ->
+          true
+      end
     end
   end
 
-  def outside_cwd?(_path), do: false
+  def outside_cwd?(_path, _context), do: false
+
+  # A jailed session (tenancy marker in the tool context) with no usable :cwd.
+  # The global fallback in working_dir/1 is only safe for the single-tenant CLI
+  # (no jail marker); under a jail it would un-scope the tool, so callers fail
+  # closed on this predicate instead.
+  defp jailed_without_root?(%{jail: true} = context), do: context_cwd(context) == nil
+  defp jailed_without_root?(_context), do: false
 
   @doc """
   Expansion WITHOUT the sandbox check — only reachable through an
   operator-approved escalation (`allow_outside_cwd` in the tool context,
   set by the executor strictly after an allow decision for THIS call).
   """
-  @spec resolve_unconfined(String.t()) :: {:ok, String.t()}
-  def resolve_unconfined(path),
-    do: {:ok, Path.expand(path, working_dir())}
+  @spec resolve_unconfined(String.t(), map() | nil) :: {:ok, String.t()}
+  def resolve_unconfined(path, context \\ %{}),
+    do: {:ok, Path.expand(path, working_dir(context))}
 
   @doc """
   Expand `path` against the working directory and require the result to
@@ -233,17 +248,24 @@ defmodule Raxol.Agent.Actions.Fs do
   `realpath/1` of both sides, so a symlink cannot lexically hide an
   escape.
   """
-  @spec resolve(String.t()) :: {:ok, String.t()} | {:error, :outside_cwd}
-  def resolve(path) do
-    cwd = working_dir()
-    abs = Path.expand(path, cwd)
-
-    with {:ok, real_abs} <- safe_realpath(abs),
-         {:ok, real_root} <- safe_realpath(cwd),
-         true <- contained?(real_abs, real_root) do
-      {:ok, abs}
+  @spec resolve(String.t(), map() | nil) ::
+          {:ok, String.t()} | {:error, :outside_cwd}
+  def resolve(path, context \\ %{}) do
+    if jailed_without_root?(context) do
+      # A jailed session with no usable :cwd must NOT fall back to the
+      # process-global cwd — that silently un-jails the tool. Fail closed.
+      {:error, :outside_cwd}
     else
-      _ -> {:error, :outside_cwd}
+      cwd = working_dir(context)
+      abs = Path.expand(path, cwd)
+
+      with {:ok, real_abs} <- safe_realpath(abs),
+           {:ok, real_root} <- safe_realpath(cwd),
+           true <- contained?(real_abs, real_root) do
+        {:ok, abs}
+      else
+        _ -> {:error, :outside_cwd}
+      end
     end
   end
 
@@ -312,9 +334,28 @@ defmodule Raxol.Agent.Actions.Fs do
     end
   end
 
-  @doc "The directory fs actions are scoped to (see `resolve/1`)."
-  @spec working_dir() :: String.t()
-  def working_dir do
+  @doc """
+  The directory fs actions are scoped to (see `resolve/2`).
+
+  A `%{cwd: dir}` in the tool context wins — the per-session root a
+  multi-tenant host assigns (each SSH tenant gets its own). Without it,
+  `RAXOL_CLI_CWD` then the BEAM cwd apply; both are process-GLOBAL, so
+  only the context form can scope two concurrent sessions differently.
+  """
+  @spec working_dir(map() | nil) :: String.t()
+  def working_dir(context \\ %{}) do
+    case context_cwd(context) do
+      nil -> global_working_dir()
+      dir -> dir
+    end
+  end
+
+  defp context_cwd(%{cwd: dir}) when is_binary(dir) and dir != "",
+    do: Path.expand(dir)
+
+  defp context_cwd(_context), do: nil
+
+  defp global_working_dir do
     case System.get_env("RAXOL_CLI_CWD") do
       nil -> File.cwd!()
       "" -> File.cwd!()

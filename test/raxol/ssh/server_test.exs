@@ -3,6 +3,23 @@ defmodule Raxol.SSH.ServerTest do
 
   alias Raxol.SSH.Server
 
+  defmodule RecordingApp do
+    @moduledoc false
+    # Records what Lifecycle actually resolved, so the opts merge is asserted
+    # through its real consumer instead of being re-derived in the test.
+    def init(%{options: options}) do
+      {:ok,
+       %{
+         cwd: Keyword.get(options, :cwd),
+         agent_id: Keyword.get(options, :agent_id),
+         environment: Keyword.get(options, :environment)
+       }}
+    end
+
+    def update(_msg, model), do: {model, []}
+    def view(_), do: %{type: :text, content: "ok"}
+  end
+
   describe "authentication (fail-closed)" do
     test "refuses to start with no auth configured" do
       # An SSH surface that can reach payment Actions must not be silently
@@ -32,6 +49,57 @@ defmodule Raxol.SSH.ServerTest do
 
     test "no auth option fails closed" do
       assert {:error, :ssh_auth_required} = Server.auth_daemon_opts([])
+    end
+
+    test "tenants_dir yields per-user public-key auth" do
+      assert {:ok, opts} = Server.auth_daemon_opts(tenants_dir: "/srv/tenants")
+      assert is_function(opts[:user_dir_fun], 1)
+      assert opts[:auth_methods] == ~c"publickey"
+
+      # The fun maps a username to that tenant's key dir…
+      assert opts[:user_dir_fun].(~c"alice") ==
+               ~c"/srv/tenants/alice/ssh"
+
+      # …and an unsafe username to a path no tenant dir can occupy.
+      assert opts[:user_dir_fun].(~c"../root") == ~c"/srv/tenants/.denied"
+    end
+  end
+
+  describe "tenant username handling" do
+    test "sanitize_tenant accepts conservative names only" do
+      assert Server.sanitize_tenant("alice") == "alice"
+      assert Server.sanitize_tenant("bob-2.dev_x") == "bob-2.dev_x"
+      assert Server.sanitize_tenant(~c"carol") == "carol"
+
+      for bad <- [
+            "",
+            ".",
+            "..",
+            "../etc",
+            "a/b",
+            "-leading",
+            ".hidden",
+            "name with space",
+            "nul\0byte",
+            # Mixed/upper case is refused, not case-folded: on a
+            # case-insensitive filesystem it would share one workspace but mint
+            # a second "ssh:<user>" ledger identity.
+            "Alice",
+            "ALICE",
+            "aLICE",
+            String.duplicate("a", 65)
+          ] do
+        assert Server.sanitize_tenant(bad) == nil, "accepted #{inspect(bad)}"
+      end
+    end
+
+    test "a tenant literally named .denied cannot occupy the refusal path" do
+      # ".denied" fails sanitize (leading dot), and even a hypothetical
+      # tenant name maps to <name>/ssh — never the bare refusal path.
+      assert Server.sanitize_tenant(".denied") == nil
+
+      assert Server.tenant_user_dir("/t", "alice") == "/t/alice/ssh"
+      assert Server.tenant_user_dir("/t", "../x") == "/t/.denied"
     end
   end
 
@@ -74,6 +142,126 @@ defmodule Raxol.SSH.ServerTest do
 
     test "release never drops below zero" do
       assert {0, _} = Server.release(0, %{}, @ip_a)
+    end
+  end
+
+  describe "app_opts threading" do
+    test "the CLI handler retains per-server app options for its sessions" do
+      {:ok, state} =
+        Raxol.SSH.CLIHandler.init(
+          app_module: FakeApp,
+          app_opts: [ascii: true, system: "be terse"]
+        )
+
+      assert state.app_opts == [ascii: true, system: "be terse"]
+    end
+
+    test "app_opts default to empty" do
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      assert state.app_opts == []
+    end
+
+    test "connection transport keys win over server app_opts (first-occurrence)" do
+      # Session prepends transport wiring, so a served app's app_opts cannot
+      # shadow :environment/:io_writer/:width.
+      merged =
+        Raxol.SSH.Session.lifecycle_opts(:chan, 80, 24,
+          app_opts: [environment: :agent, width: 999, model: "m"]
+        )
+
+      assert Keyword.get(merged, :environment) == :ssh
+      assert Keyword.get(merged, :width) == 80
+      assert Keyword.get(merged, :io_writer) == :chan
+      # A non-colliding app option still flows through.
+      assert Keyword.get(merged, :model) == "m"
+    end
+
+    test "tenant opts beat server app_opts but never the transport wiring" do
+      merged =
+        Raxol.SSH.Session.lifecycle_opts(:chan, 80, 24,
+          tenant_opts: [cwd: "/t/alice/work", agent_id: "ssh:alice", width: 5],
+          app_opts: [cwd: "/srv/shared", model: "m"]
+        )
+
+      # The tenant's jail wins over the server-wide default...
+      assert Keyword.get(merged, :cwd) == "/t/alice/work"
+      assert Keyword.get(merged, :agent_id) == "ssh:alice"
+      # ...but transport keys stay untouchable.
+      assert Keyword.get(merged, :width) == 80
+      # Non-colliding server options still flow.
+      assert Keyword.get(merged, :model) == "m"
+    end
+
+    test "a started :ssh Lifecycle initializes with the tenant option" do
+      # The merge order only means anything because Lifecycle reads every
+      # option with Keyword.get, so assert through the real consumer: the app
+      # must come up holding the tenant's identity, not the server-wide one.
+      opts =
+        Raxol.SSH.Session.lifecycle_opts(fn _ -> :ok end, 40, 10,
+          tenant_opts: [cwd: "/t/alice/work", agent_id: "ssh:alice"],
+          app_opts: [cwd: "/srv/shared", environment: :agent]
+        )
+
+      assert {:ok, pid} =
+               Raxol.Core.Runtime.Lifecycle.start_link(RecordingApp, opts)
+
+      try do
+        dispatcher = :sys.get_state(pid, 5_000).dispatcher_pid
+        model = :sys.get_state(dispatcher, 5_000).model
+
+        assert model.cwd == "/t/alice/work"
+        assert model.agent_id == "ssh:alice"
+        assert model.environment == :ssh
+      after
+        Process.unlink(pid)
+
+        try do
+          Raxol.Core.Runtime.Lifecycle.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
+      end
+    end
+  end
+
+  describe "channel session admission" do
+    test "a repeated pty-req resizes instead of starting another session" do
+      # One connection registers ONE slot at :ssh_channel_up, so a client that
+      # loops pty-req on the same channel could otherwise stand up unbounded
+      # sessions inside its single admitted connection -- each orphaning the
+      # last, and all of them past max_connections/max_per_ip.
+      session = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(session, :kill) end)
+
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      state = %{state | session_pid: session, channel_id: 0}
+
+      pty = {:ssh_cm, :conn, {:pty, 0, false, {~c"xterm", 100, 40, 0, 0, []}}}
+
+      assert {:ok, ^state} = Raxol.SSH.CLIHandler.handle_ssh_msg(pty, state)
+
+      # Same session, told to resize.
+      assert state.session_pid == session
+      assert Process.alive?(session)
+    end
+
+    test "the resize reaches the existing session" do
+      parent = self()
+
+      session =
+        spawn(fn ->
+          receive do
+            message -> send(parent, {:got, message})
+          end
+        end)
+
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      state = %{state | session_pid: session, channel_id: 0}
+
+      pty = {:ssh_cm, :conn, {:pty, 0, false, {~c"xterm", 120, 50, 0, 0, []}}}
+      {:ok, _state} = Raxol.SSH.CLIHandler.handle_ssh_msg(pty, state)
+
+      assert_receive {:got, {:resize, 120, 50}}, 1_000
     end
   end
 

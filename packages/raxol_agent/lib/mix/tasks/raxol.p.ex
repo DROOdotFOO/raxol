@@ -30,15 +30,19 @@ defmodule Mix.Tasks.Raxol.P do
 
   ## Options
 
-    * `--backend`  — LLM backend atom (default `lm_studio`; also
-      `anthropic`, `openai`, `ollama`, ... see `Backend.Selector`).
-      `--harness` is accepted as a deprecated alias.
+    * `--backend`  — LLM backend atom (`anthropic`, `openai`, `ollama`,
+      `lm_studio`, ... see `Backend.Selector`). Auto-detected through
+      `Raxol.Agent.Backend.Resolver` when omitted (stored `op://` reference,
+      then provider env vars, then generic `AI_API_KEY`); with nothing
+      configured the task exits 1 with a setup hint. `--harness` is accepted
+      as a deprecated alias.
     * `--model`    — model override (LM Studio uses its loaded model)
     * `--base-url` — override the backend base URL
     * `--system`   — system prompt override
     * `--timeout`  — per-run timeout in seconds (default 180)
     * `--write`    — expose write_file/edit_file/bash (opt-in; unattended)
     * `--no-tools` — plain completion, no tool loop
+    * `-h`/`--help` — print usage and exit
 
   ## Benchmark / harness env contract
 
@@ -57,8 +61,8 @@ defmodule Mix.Tasks.Raxol.P do
 
   ## Exit codes
 
-  `0` success · `1` run error · `2` timeout or budget exhausted ·
-  `64` usage error · `143` terminated (SIGTERM)
+  `0` success · `1` run or configuration error · `2` timeout or budget
+  exhausted · `64` usage error · `143` terminated (SIGTERM)
   """
 
   use Mix.Task
@@ -68,7 +72,9 @@ defmodule Mix.Tasks.Raxol.P do
     # Boot without recompiling (bin/raxol precompiles silently) so stdout
     # stays clean for the answer, then hand off to the shared runner --
     # `Raxol.Agent.P` contains no Mix calls, so the same code path serves
-    # the Burrito-packaged `raxol p` where Mix does not exist.
+    # the Burrito-packaged `raxol p` where Mix does not exist. `--help`,
+    # usage errors, and provider resolution are answered by the runner, so
+    # every entrypoint agrees.
     Mix.Task.run("app.start", [
       "--no-compile",
       "--no-deps-check",

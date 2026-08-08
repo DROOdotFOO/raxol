@@ -51,6 +51,8 @@ defmodule Raxol.Agent.SessionStreamServerTest do
 
     test "returns event history", %{streamer: streamer} do
       # Use string session ID to match how HTTP path params are parsed
+      # History is kept for a session's subscribers, which every producer is.
+      SessionStreamer.subscribe("test_session", streamer)
       SessionStreamer.emit("test_session", {:text_delta, "hello"}, streamer)
 
       SessionStreamer.emit(
@@ -183,7 +185,8 @@ defmodule Raxol.Agent.SessionStreamServerTest do
         |> Plug.Conn.put_private(:session_stream_require_auth, false)
         |> SessionStreamServer.call(SessionStreamServer.init([]))
 
-      assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") == []
+      assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") ==
+               []
     end
 
     test "echoes an allowlisted origin, never a wildcard", %{streamer: streamer} do
@@ -214,6 +217,8 @@ defmodule Raxol.Agent.SessionStreamServerTest do
         {:done, %{content: "final"}},
         {:error, :timeout}
       ]
+
+      SessionStreamer.subscribe("serial_test", streamer)
 
       for event <- events do
         SessionStreamer.emit("serial_test", event, streamer)
@@ -248,6 +253,7 @@ defmodule Raxol.Agent.SessionStreamServerTest do
         payload: %{chunk: "hi"}
       }
 
+      SessionStreamer.subscribe("acp_test", streamer)
       SessionStreamer.emit("acp_test", event, streamer)
       Process.sleep(50)
 
@@ -271,6 +277,7 @@ defmodule Raxol.Agent.SessionStreamServerTest do
         payload: %{reason: {:tool_failed, :enoent}}
       }
 
+      SessionStreamer.subscribe("acp_test_err", streamer)
       SessionStreamer.emit("acp_test_err", event, streamer)
       Process.sleep(50)
 

@@ -221,7 +221,9 @@ defmodule Raxol.Application do
       # Development performance tools
       maybe_add_dev_performance_tools(),
       # SSH playground (enabled via RAXOL_SSH_PLAYGROUND=true)
-      maybe_add_ssh_playground()
+      maybe_add_ssh_playground(),
+      # Hosted coding agent over SSH (RAXOL_SSH_CODE=true, multi-tenant)
+      maybe_add_ssh_code()
     ]
   end
 
@@ -356,6 +358,202 @@ defmodule Raxol.Application do
         max_connections: max_connections,
         allow_anonymous: true
       }
+    end
+  end
+
+  # The hosted coding agent: multi-tenant ONLY. This surface reaches
+  # write/shell tools, so it never serves anonymously and never serves
+  # single-tenant from a shared host — no tenants root, no server.
+  # raxol_agent is optional for main raxol; without it the child is
+  # skipped with a log rather than crashing boot.
+  @compile {:no_warn_undefined,
+            [
+              Raxol.Agent.Code.App,
+              Raxol.Agent.Code.Tenant,
+              Raxol.Payments.Ledger,
+              Raxol.Payments.SpendingPolicy,
+              Decimal
+            ]}
+  defp maybe_add_ssh_code do
+    enabled? = System.get_env("RAXOL_SSH_CODE") == "true"
+    tenants = System.get_env("RAXOL_SSH_CODE_TENANTS")
+
+    cond do
+      not enabled? ->
+        nil
+
+      tenants in [nil, ""] ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true requires " <>
+            "RAXOL_SSH_CODE_TENANTS (the per-user key root); refusing to " <>
+            "serve the coding agent without tenant auth"
+        )
+
+        nil
+
+      not code_agent_available?() ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true but raxol_agent is not " <>
+            "in this build; coding-agent SSH disabled"
+        )
+
+        nil
+
+      not http_client_available?() ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true but no HTTP client " <>
+            "(req) is in this build; every LLM turn would fail with " <>
+            ":req_not_available, so coding-agent SSH is disabled"
+        )
+
+        nil
+
+      true ->
+        ssh_code_children(tenants)
+    end
+  end
+
+  # A hosted tenant spends the HOST's provider credential, so the budget is
+  # not optional: without a ledger every tenant's spend is unbounded and
+  # unattributed (`CostLedger.check/3` has nothing to ask and passes). Refuse
+  # to serve rather than serve unmetered — the same fail-closed posture the
+  # tenants-root check above takes for auth.
+  defp ssh_code_children(tenants) do
+    case ssh_code_budget() do
+      {:ok, policy} ->
+        [
+          Supervisor.child_spec(
+            {Raxol.Payments.Ledger, name: Raxol.SSH.CodeLedger},
+            id: :ssh_code_ledger
+          ),
+          ssh_code_server_spec(tenants, policy)
+        ]
+
+      {:error, message} ->
+        Log.warning(
+          "[Raxol.Application] RAXOL_SSH_CODE=true but #{message}; refusing " <>
+            "to serve the coding agent without a spending budget"
+        )
+
+        nil
+    end
+  end
+
+  defp ssh_code_server_spec(tenants, policy) do
+    port = ssh_code_port()
+    host_keys_dir = System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys"
+
+    # A distinct child id and server name: the playground SSH server
+    # may run beside this one in the same tree.
+    Supervisor.child_spec(
+      {
+        Raxol.SSH.Server,
+        # Server-wide: one ledger, one policy. The per-tenant `agent_id`
+        # (`ssh:<user>`, from Tenant.app_opts, which wins over these) is the
+        # ledger scope key, so each tenant draws on their own budget.
+        name: Raxol.SSH.CodeServer,
+        app_module: Raxol.Agent.Code.App,
+        port: port,
+        host_keys_dir: host_keys_dir,
+        tenants_dir: tenants,
+        app_opts: [ledger: Raxol.SSH.CodeLedger, spending_policy: policy],
+        tenant_opts: &Raxol.Agent.Code.Tenant.app_opts(tenants, &1)
+      },
+      id: :ssh_code_server
+    )
+  end
+
+  @doc false
+  # `RAXOL_SSH_CODE_BUDGET_USD` is the per-tenant lifetime cap. Parsed
+  # fail-closed: absent, unparseable, or non-positive all refuse. Public so
+  # the refusal rules are testable without standing up a real SSH daemon.
+  @spec ssh_code_budget() :: {:ok, struct()} | {:error, String.t()}
+  def ssh_code_budget do
+    # The operator-fixable cause is reported first: a missing cap is a config
+    # mistake they can correct, a missing raxol_payments is a build they have
+    # to rebuild. Both refuse.
+    with {:ok, usd} <- parse_budget(System.get_env("RAXOL_SSH_CODE_BUDGET_USD")),
+         true <- payments_available?() do
+      # `struct/2`, not a struct literal: raxol_payments is not a compile-time
+      # dependency of main raxol (the dependency runs the other way), so the
+      # struct cannot be expanded here — only built once the module is loaded,
+      # which `payments_available?/0` has just established.
+      cap = Decimal.from_float(usd)
+
+      {:ok,
+       struct(Raxol.Payments.SpendingPolicy,
+         lifetime_max: cap,
+         session_max: cap,
+         currency: "USD"
+       )}
+    else
+      false ->
+        {:error, "raxol_payments is not in this build (no ledger to meter on)"}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp parse_budget(value) when value in [nil, ""],
+    do: {:error, "RAXOL_SSH_CODE_BUDGET_USD is not set"}
+
+  defp parse_budget(value) do
+    case Float.parse(String.trim(value)) do
+      {usd, ""} when usd > 0.0 ->
+        {:ok, usd}
+
+      _ ->
+        {:error,
+         "RAXOL_SSH_CODE_BUDGET_USD #{inspect(value)} is not a positive amount"}
+    end
+  end
+
+  defp payments_available? do
+    Code.ensure_loaded?(Raxol.Payments.Ledger) and
+      Code.ensure_loaded?(Raxol.Payments.SpendingPolicy) and
+      Code.ensure_loaded?(Decimal)
+  end
+
+  # raxol_agent presence, checked by loadability of the modules the child spec
+  # actually needs. NOT `function_exported?(Code.App, :child_spec, 1)`: Code.App
+  # is a TEA module (`use Raxol.Core.Runtime.Application`) and never defines
+  # child_spec/1, so that test was always false and the server never started.
+  defp code_agent_available? do
+    Code.ensure_loaded?(Raxol.Agent.Code.App) and
+      Code.ensure_loaded?(Raxol.Agent.Code.Tenant)
+  end
+
+  @doc false
+  # req is an OPTIONAL dep of raxol_agent, and optional deps do not propagate
+  # to a release that merely depends on it. Every remote provider resolves to
+  # Backend.HTTP, which answers {:error, :req_not_available} without it -- so a
+  # release can pass every other gate here and still be unable to make a single
+  # LLM call. Fail closed at boot rather than per turn, per tenant.
+  @spec http_client_available?() :: boolean()
+  def http_client_available?, do: Code.ensure_loaded?(Req)
+
+  # Degrade a malformed port to the default with a warning, the way every other
+  # arm of maybe_add_ssh_code/0 degrades — never let it raise and take down the
+  # whole application supervisor at boot.
+  defp ssh_code_port do
+    case System.get_env("RAXOL_SSH_CODE_PORT") do
+      value when value in [nil, ""] ->
+        2223
+
+      value ->
+        case Integer.parse(String.trim(value)) do
+          {port, ""} when port > 0 and port < 65_536 ->
+            port
+
+          _ ->
+            Log.warning(
+              "[Raxol.Application] RAXOL_SSH_CODE_PORT #{inspect(value)} is " <>
+                "not a valid port; using 2223"
+            )
+
+            2223
+        end
     end
   end
 
@@ -669,6 +867,13 @@ defmodule Raxol.Application do
       if Code.ensure_loaded?(Raxol.MCP.AdaptiveTools) and
            Raxol.MCP.AdaptiveTools.available?() do
         Raxol.MCP.AdaptiveTools.register(Raxol.MCP.Registry)
+      end
+
+      # The coding-agent harness tools live in raxol_agent, which main raxol
+      # does not depend on; they register only when that package is loaded
+      # in this VM (e.g. `mix mcp.server` run from packages/raxol_agent).
+      if Code.ensure_loaded?(Raxol.Agent.Harness.McpTools) do
+        apply(Raxol.Agent.Harness.McpTools, :register, [Raxol.MCP.Registry])
       end
     end
 

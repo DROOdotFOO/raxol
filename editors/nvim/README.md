@@ -2,6 +2,10 @@
 
 Neovim plugin for Raxol development with LSP and treesitter support.
 
+> **Status:** the LSP half of this plugin points at `mix raxol.lsp`, which is
+> not shipped yet; LSP features will not start until it exists. Treesitter
+> support, snippets, and commands that do not need the server work today.
+
 ## Features
 
 - **LSP Integration**: Full Language Server Protocol support with completion, hover, diagnostics

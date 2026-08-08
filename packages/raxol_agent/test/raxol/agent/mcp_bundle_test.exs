@@ -193,6 +193,24 @@ defmodule Raxol.Agent.McpBundleTest do
                ToolConverter.dispatch_tool_call(call, open.tools, %{})
     end
 
+    test "a client that dies after start_link fails open per server" do
+      # A missing npx/uvx binary crashes the client AFTER start_link returns
+      # {:ok, pid}; the listing call then exits :noproc instead of returning
+      # an error, and the bundle must absorb that as this server's failure.
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, _}
+
+      result =
+        McpBundle.load([%{name: :ghost, command: "definitely-missing"}],
+          start: fn _opts -> {:ok, dead} end,
+          ready_timeout: 200
+        )
+
+      assert result.tools == []
+      assert [{:ghost, {:client_down, _reason}}] = result.failed
+    end
+
     test "an empty spec list loads nothing" do
       assert %{tools: [], servers: [], failed: []} = McpBundle.load([])
     end

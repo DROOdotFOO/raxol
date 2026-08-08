@@ -6,7 +6,12 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
   setup do
     # Point the store at a throwaway file so tests never touch the real
     # ~/.raxol/providers.json.
-    path = Path.join(System.tmp_dir!(), "raxol-creds-#{System.unique_integer([:positive])}.json")
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "raxol-creds-#{System.unique_integer([:positive])}.json"
+      )
+
     prev = System.get_env("RAXOL_PROVIDERS")
     System.put_env("RAXOL_PROVIDERS", path)
 
@@ -30,15 +35,26 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
   describe "put/2 and load/0" do
     test "round-trips an op reference with model" do
       assert :ok =
-               Credentials.put(:anthropic, op_ref: "op://Vault/Anthropic/key", model: "claude-x")
+               Credentials.put(:anthropic,
+                 op_ref: "op://Vault/Anthropic/key",
+                 model: "claude-x"
+               )
 
-      assert %{"anthropic" => %{op_ref: "op://Vault/Anthropic/key", model: "claude-x"}} =
+      assert %{
+               "anthropic" => %{
+                 op_ref: "op://Vault/Anthropic/key",
+                 model: "claude-x"
+               }
+             } =
                Credentials.load()
     end
 
     test "fetch/1 returns a stored entry, :none otherwise" do
       Credentials.put(:openai, op_ref: "op://Vault/OpenAI/key")
-      assert {:ok, %{op_ref: "op://Vault/OpenAI/key"}} = Credentials.fetch(:openai)
+
+      assert {:ok, %{op_ref: "op://Vault/OpenAI/key"}} =
+               Credentials.fetch(:openai)
+
       assert :none = Credentials.fetch(:anthropic)
     end
 
@@ -47,7 +63,11 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     end
 
     test "never persists a raw api_key field" do
-      Credentials.put(:openai, op_ref: "op://Vault/OpenAI/key", api_key: "sk-secret")
+      Credentials.put(:openai,
+        op_ref: "op://Vault/OpenAI/key",
+        api_key: "sk-secret"
+      )
+
       {:ok, entry} = Credentials.fetch(:openai)
       refute Map.has_key?(entry, :api_key)
       refute File.read!(Credentials.path()) =~ "sk-secret"
@@ -78,7 +98,11 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     end
 
     test "unknown fields are dropped on read", %{path: path} do
-      File.write!(path, Jason.encode!(%{"openai" => %{"op_ref" => "op://v/i/f", "junk" => 1}}))
+      File.write!(
+        path,
+        Jason.encode!(%{"openai" => %{"op_ref" => "op://v/i/f", "junk" => 1}})
+      )
+
       assert %{"openai" => entry} = Credentials.load()
       assert entry == %{op_ref: "op://v/i/f"}
     end
@@ -117,6 +141,69 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     end
   end
 
+  describe "bounded op shell-out" do
+    # A fake `op` that hangs stands in for a locked vault: the runner
+    # must give up (bounded by RAXOL_OP_TIMEOUT_MS) and kill the child
+    # instead of blocking the caller for the child's lifetime.
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-fake-op-#{System.os_time(:millisecond)}-" <>
+            "#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      fake_op = Path.join(dir, "op")
+      File.write!(fake_op, "#!/bin/sh\nsleep 60\n")
+      File.chmod!(fake_op, 0o755)
+
+      prev_path = System.get_env("PATH")
+      prev_timeout = System.get_env("RAXOL_OP_TIMEOUT_MS")
+      System.put_env("PATH", dir <> ":" <> (prev_path || ""))
+      System.put_env("RAXOL_OP_TIMEOUT_MS", "200")
+
+      on_exit(fn ->
+        System.put_env("PATH", prev_path || "")
+
+        if prev_timeout,
+          do: System.put_env("RAXOL_OP_TIMEOUT_MS", prev_timeout),
+          else: System.delete_env("RAXOL_OP_TIMEOUT_MS")
+
+        File.rm_rf!(dir)
+      end)
+
+      :ok
+    end
+
+    @tag timeout: 10_000
+    test "read_ref times out against a hung op instead of blocking" do
+      assert {:error, :op_timeout} =
+               Credentials.read_ref("op://vault/item/field")
+    end
+
+    @tag timeout: 10_000
+    test "op_status reads a hung op as not signed in" do
+      assert Credentials.op_status() == :not_signed_in
+    end
+
+    @tag timeout: 10_000
+    test "a timed-out op leaves no port messages in the caller's mailbox" do
+      # An op that flushes output right before hanging: the data message
+      # lands in the caller's mailbox and must be drained on timeout —
+      # in the TUI the caller is the dispatcher, whose catch-all
+      # handle_info would log (and thereby leak) a stranded secret.
+      fake_op = System.find_executable("op")
+      File.write!(fake_op, "#!/bin/sh\necho leaked-secret\nsleep 60\n")
+
+      assert {:error, :op_timeout} =
+               Credentials.read_ref("op://vault/item/field")
+
+      refute_receive {_port, {:data, _leak}}, 50
+      refute_receive {_port, {:exit_status, _status}}, 50
+    end
+  end
+
   describe "create_item/3" do
     test "refuses an empty key" do
       assert {:error, :empty_key} = Credentials.create_item(:openai, "")
@@ -126,7 +213,8 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       # Deterministic only without op; with op present a live create would
       # mutate a real vault, so we do not exercise the success path here.
       unless Credentials.op_available?() do
-        assert {:error, :op_unavailable} = Credentials.create_item(:openai, "sk-x")
+        assert {:error, :op_unavailable} =
+                 Credentials.create_item(:openai, "sk-x")
       end
     end
   end

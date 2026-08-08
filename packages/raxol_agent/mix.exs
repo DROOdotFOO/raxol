@@ -41,19 +41,34 @@ defmodule RaxolAgent.MixProject do
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
       {:req, "~> 0.5", optional: true},
-
-      # Dev/test only. raxol_agent_client_protocol is dev/test-scoped, NOT a
-      # published requirement: Raxol.Agent.ClientProtocol.TurnRunner reaches it
-      # through the repo's cross-package convention (@compile no_warn_undefined
-      # + Code.ensure_loaded? guard), so production embedders opt in by adding
-      # the package themselves; the dep here exists so this package's own suite
-      # can run the runner against the REAL ACP Session.
-      {:raxol_agent_client_protocol, path: "../raxol_agent_client_protocol", only: [:dev, :test]},
+      # Optional: only for the read-only session-share LiveView
+      # (Raxol.Agent.Code.ShareLive, compile-gated on its presence).
+      {:phoenix_live_view, "~> 1.0 or ~> 0.20", optional: true},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.0", only: [:dev, :test]}
-    ]
+    ] ++ acp_dep()
+  end
+
+  # raxol_agent_client_protocol is NOT a published requirement -- it is
+  # unpublished, so naming it in the Hex package would make raxol_agent
+  # unpublishable. HEX_BUILD therefore drops it entirely, and a Hex install of
+  # raxol_agent has no ACP surface (`Raxol.Agent.ClientProtocol.StdioAgent` is
+  # compile-gated on the package's presence), exactly as `mix help raxol.acp`
+  # documents.
+  #
+  # A source build takes it in EVERY env, not just dev/test: the packaged
+  # `raxol acp` is a :prod build of this package, and a dep edge is what orders
+  # the ACP package's compilation ahead of the gate that tests for it.
+  defp acp_dep do
+    path = "../raxol_agent_client_protocol"
+
+    if System.get_env("HEX_BUILD") || !File.dir?(path) do
+      []
+    else
+      [{:raxol_agent_client_protocol, path: path, override: true}]
+    end
   end
 
   defp raxol_dep(name, version, path) do

@@ -264,7 +264,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [raxol_gateway, raxol_telegram]
+        package: [raxol_gateway, raxol_telegram, raxol_cli]
 
     steps:
       - uses: actions/checkout@v7

@@ -11,10 +11,11 @@ Contributions welcome.
 ## Development setup
 
 ### Prerequisites
-- Elixir 1.17.3
-- Erlang/OTP 27.0
+- Elixir 1.17 or newer (1.20 recommended; `.tool-versions` pins the reference toolchain)
+- Erlang/OTP 27 or newer (29 recommended)
 - Node.js 20+ (for VSCode extension dev)
-- PostgreSQL 15+
+
+No database is needed: the test suite runs on an in-memory MockDB adapter.
 
 ### Initial setup
 ```bash

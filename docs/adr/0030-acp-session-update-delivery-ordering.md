@@ -2,9 +2,10 @@
 
 ## Status
 
-Proposed, 2026-07-18. Raised from three consecutive review rounds on PR #640
-(`fix(acp): single-sender session/update delivery`). No code has landed on master;
-this ADR exists to settle the contract before a fourth patch round. Revised the same
+Accepted; implemented (`Raxol.AgentClientProtocol.Delivery` implements clauses 1/2/5,
+per its moduledoc). Originally proposed 2026-07-18, raised from three consecutive
+review rounds on PR #640 (`fix(acp): single-sender session/update delivery`); this
+ADR settled the contract before the implementing patch. Revised the same
 day after an adversarial self-review (see #641): clause 1 is now decided (not an
 either/or), the receiver-assigned principle is applied recursively to the turn
 namespace, the wall-clock/overflow contradiction in the gap clause is removed, and the

@@ -70,9 +70,32 @@ defmodule RaxolCli.MixProject do
       # wrapped argv via `Burrito.Util.Args` at startup, so the module must ship
       # in the release.
       {:burrito, "~> 1.6"},
+
+      # The HTTP client behind every remote provider. raxol_agent declares it
+      # optional, and optional deps do not propagate, so without this line the
+      # packaged binary's LLM path works only by accident -- burrito happens to
+      # pull req in today, and Backend.HTTP would return :req_not_available the
+      # day it stops.
+      {:req, "~> 0.5"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
-    ]
+    ] ++ acp_dep()
+  end
+
+  # `raxol acp` serves the agent over the Agent Client Protocol, and
+  # `Raxol.Agent.ClientProtocol.StdioAgent` is compile-gated on this package's
+  # presence -- without it the packaged binary would ship the subcommand but not
+  # the surface behind it. raxol_agent declares the same path dep; this one
+  # documents what the CLI distributes. Both drop out under HEX_BUILD, since the
+  # package is unpublished and must never appear as a Hex requirement.
+  defp acp_dep do
+    path = "../raxol_agent_client_protocol"
+
+    if System.get_env("HEX_BUILD") || !File.dir?(path) do
+      []
+    else
+      [{:raxol_agent_client_protocol, path: path, override: true}]
+    end
   end
 
   defp raxol_dep(name, version, path) do

@@ -37,12 +37,9 @@ defmodule Raxol.SSH.Session do
     io_writer = IOAdapter.make_writer(connection_ref, channel_id)
 
     {:ok, lifecycle_pid} =
-      Raxol.Core.Runtime.Lifecycle.start_link(app_module,
-        environment: :ssh,
-        io_writer: io_writer,
-        width: width,
-        height: height,
-        name: :"ssh_session_#{inspect(self())}"
+      Raxol.Core.Runtime.Lifecycle.start_link(
+        app_module,
+        lifecycle_opts(io_writer, width, height, opts)
       )
 
     Raxol.Core.Runtime.Log.info(
@@ -58,6 +55,27 @@ defmodule Raxol.SSH.Session do
        width: width,
        height: height
      }}
+  end
+
+  @doc false
+  # Option precedence by first occurrence, which is how Lifecycle reads every
+  # option (Keyword.get): connection transport wiring FIRST (a served app must
+  # not shadow :environment, :io_writer, or the per-connection size), then the
+  # per-TENANT options (the authenticated user's cwd/sessions/spend identity
+  # must beat the server-wide defaults), then the server-level app_opts.
+  # `:name` is omitted so Lifecycle mints an unnamed multi-instance server (see
+  # the :ssh entry in its multi-instance list), not a per-connection atom.
+  @spec lifecycle_opts(term(), pos_integer(), pos_integer(), keyword()) ::
+          keyword()
+  def lifecycle_opts(io_writer, width, height, opts) do
+    [
+      environment: :ssh,
+      io_writer: io_writer,
+      width: width,
+      height: height
+    ] ++
+      Keyword.get(opts, :tenant_opts, []) ++
+      Keyword.get(opts, :app_opts, [])
   end
 
   @impl true

@@ -22,10 +22,13 @@ defmodule Raxol.Agent.Code.AppTest do
     App.init(%{options: opts})
   end
 
+  # `unique_integer` restarts every BEAM run and these dirs outlive the
+  # run, so a time component keeps reruns from colliding with leftovers.
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),
-      "raxol-code-app-#{System.unique_integer([:positive])}"
+      "raxol-code-app-#{System.os_time(:millisecond)}-" <>
+        "#{System.unique_integer([:positive])}"
     )
   end
 
@@ -41,6 +44,22 @@ defmodule Raxol.Agent.Code.AppTest do
       tier: tier,
       payload: payload
     }
+  end
+
+  defp tev(turn_id, id, type, payload, tier \\ :durable),
+    do: %{ev(id, type, payload, tier) | turn_id: turn_id}
+
+  defp message_turn(turn_id, answer) do
+    [
+      tev(turn_id, 1, :turn_started, %{prompt: "ask"}),
+      tev(turn_id, 2, :item_started, %{item_id: "i1", item_type: :message}),
+      tev(turn_id, 3, :item_completed, %{
+        item_id: "i1",
+        item_type: :message,
+        content: answer
+      }),
+      tev(turn_id, 4, :turn_completed, %{final: true, usage: %{}})
+    ]
   end
 
   defp send_ev(model, event) do
@@ -213,17 +232,16 @@ defmodule Raxol.Agent.Code.AppTest do
   alias Raxol.Agent.ExecutorConfig
 
   defp connected_model(opts \\ []) do
-    fetcher =
-      Keyword.get(opts, :models_fetcher, fn _opts, _ref, _app -> :ok end)
-
-    new_model(
+    [
       executor: ExecutorConfig.new(backend: :openai, model: "gpt-4o"),
       provider_status: {:ready, :openai, :env},
       # A connected provider has a current model (set on connect from the
       # executor); reflected here so the picker cursor has something to land on.
       model: "gpt-4o",
-      models_fetcher: fetcher
-    )
+      models_fetcher: fn _opts, _ref, _app -> :ok end
+    ]
+    |> Keyword.merge(opts)
+    |> new_model()
   end
 
   defp slash(model, command),
@@ -649,6 +667,1110 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
+  describe "event id stamping" do
+    # Contract.pump stamps ids from a fresh per-turn counter, so a second
+    # turn's ids collide with the first's; the projection's id recovery
+    # drops colliding events, losing every turn after the first from the
+    # transcript. The fold re-stamps into one session-monotonic space.
+    test "a second turn with restarted producer ids stays in the transcript" do
+      model = new_model()
+
+      model =
+        Enum.reduce(
+          message_turn("t1", "first answer") ++
+            message_turn("t2", "second answer"),
+          model,
+          &send_ev(&2, &1)
+        )
+
+      assert Enum.map(model.events, & &1.id) == Enum.to_list(1..8)
+
+      projection = Raxol.Harness.Projection.project(model.events)
+      assert projection.diagnostics == []
+
+      texts =
+        Enum.map(
+          projection.blocks,
+          &Raxol.UI.Components.Harness.Block.search_text/1
+        )
+
+      assert Enum.any?(texts, &(&1 =~ "first answer"))
+      assert Enum.any?(texts, &(&1 =~ "second answer"))
+    end
+
+    test "resumed events renumber into the dense session space" do
+      dir = tmp_dir()
+
+      # A stored log with colliding per-turn producer ids, as sessions
+      # persisted before the fold re-stamped ids.
+      stored =
+        [
+          {"t1", 1, "turn_started", %{"prompt" => "one"}},
+          {"t1", 2, "item_started",
+           %{"item_id" => "i1", "item_type" => "message"}},
+          {"t1", 3, "item_completed",
+           %{"item_id" => "i1", "item_type" => "message", "content" => "a"}},
+          {"t1", 4, "turn_completed", %{"final" => true}},
+          {"t2", 1, "turn_started", %{"prompt" => "two"}},
+          {"t2", 2, "item_started",
+           %{"item_id" => "i1", "item_type" => "message"}},
+          {"t2", 3, "item_completed",
+           %{"item_id" => "i1", "item_type" => "message", "content" => "b"}},
+          {"t2", 4, "turn_completed", %{"final" => true}}
+        ]
+        |> Enum.map(fn {turn, id, type, payload} ->
+          %{
+            "id" => id,
+            "turn_id" => turn,
+            "ts" => id,
+            "family" => "loop",
+            "type" => type,
+            "tier" => "durable",
+            "payload" => payload
+          }
+        end)
+
+      :ok =
+        Raxol.Agent.Code.Store.save(dir, "sess-renum", %{
+          messages: [],
+          events: stored
+        })
+
+      model = new_model(sessions_dir: dir, session_key: "sess-renum")
+
+      assert Enum.map(model.events, & &1.id) == Enum.to_list(1..8)
+      assert model.next_event_id == 9
+
+      projection = Raxol.Harness.Projection.project(model.events)
+      assert projection.diagnostics == []
+      refute projection.damaged
+    end
+
+    test "/clear resets the id counter with the session" do
+      model =
+        Enum.reduce(
+          message_turn("t1", "answer"),
+          new_model(),
+          &send_ev(&2, &1)
+        )
+
+      assert model.next_event_id == 5
+
+      {cleared, []} = submit(model, "/clear")
+      assert cleared.next_event_id == 1
+      assert cleared.events == []
+    end
+  end
+
+  describe "durable journal" do
+    alias Raxol.Agent.Journal.FileStore
+
+    defp journal_model(extra \\ []) do
+      base = tmp_dir()
+      {new_model([journal_opts: [base_dir: base]] ++ extra), base}
+    end
+
+    defp journal_records(model, base) do
+      close_journal!(model)
+      {:ok, records} = FileStore.read_records(model.session_key, base_dir: base)
+      records
+    end
+
+    defp close_journal!(%{journal: nil}), do: :ok
+    defp close_journal!(%{journal: journal}), do: FileStore.close(journal)
+
+    test "durable events land in the journal as they fold" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "answer"), model, &send_ev(&2, &1))
+
+      records = journal_records(model, base)
+
+      assert Enum.map(records, & &1["id"]) == [1, 2, 3, 4]
+
+      assert Enum.map(records, & &1["type"]) == [
+               "turn_started",
+               "item_started",
+               "item_completed",
+               "turn_completed"
+             ]
+
+      assert Enum.all?(records, &(&1["session_id"] == model.session_key))
+    end
+
+    test "ephemeral events are never journaled" do
+      {model, base} = journal_model()
+
+      model =
+        model
+        |> send_ev(tev("t1", 1, :turn_started, %{prompt: "hi"}))
+        |> send_ev(
+          tev(
+            "t1",
+            2,
+            :item_delta,
+            %{item_id: "i1", chunk: "partial"},
+            :ephemeral
+          )
+        )
+        |> send_ev(tev("t1", 3, :turn_completed, %{final: true, usage: %{}}))
+
+      records = journal_records(model, base)
+
+      assert Enum.map(records, & &1["type"]) == [
+               "turn_started",
+               "turn_completed"
+             ]
+    end
+
+    test "the journal spans turns with session-monotonic offsets" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(
+          message_turn("t1", "one") ++ message_turn("t2", "two"),
+          model,
+          &send_ev(&2, &1)
+        )
+
+      records = journal_records(model, base)
+      assert Enum.map(records, & &1["id"]) == Enum.to_list(1..8)
+    end
+
+    test "/clear closes the journal and the next turn opens a fresh one" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      old_key = model.session_key
+      old_writer = model.journal.writer
+
+      {cleared, []} = submit(model, "/clear")
+      assert cleared.journal == nil
+      refute Process.alive?(old_writer)
+
+      cleared =
+        Enum.reduce(message_turn("t1", "two"), cleared, &send_ev(&2, &1))
+
+      refute cleared.session_key == old_key
+      records = journal_records(cleared, base)
+      assert Enum.map(records, & &1["id"]) == [1, 2, 3, 4]
+    end
+
+    test "a fork's journal backfills inherited history, so --replay keeps it" do
+      base = tmp_dir()
+      model = new_model(journal_opts: [base_dir: base])
+
+      model =
+        Enum.reduce(
+          message_turn("t1", "inherited answer") ++
+            message_turn("t2", "rewound answer"),
+          model,
+          &send_ev(&2, &1)
+        )
+
+      {forked, []} = submit(model, "/fork")
+      # /rewind on the fresh fork: without backfill the fork's journal
+      # would hold ONLY the rewind marker and replay nothing.
+      {forked, []} = submit(forked, "/rewind")
+
+      {:ok, text} =
+        Raxol.Agent.Code.Replay.run(forked.session_key, base_dir: base)
+
+      assert text =~ "inherited answer"
+      refute text =~ "rewound answer"
+      refute text =~ "no replayable events"
+    end
+
+    test "a pre-journal session backfills on its first new turn" do
+      base = tmp_dir()
+      dir = tmp_dir()
+
+      # A session persisted by the pre-journal TUI: store only.
+      old = new_model(sessions_dir: dir)
+
+      old =
+        Enum.reduce(message_turn("t1", "old history"), old, &send_ev(&2, &1))
+
+      close_journal!(old)
+      key = old.session_key
+
+      # Resume it with a journal base that has nothing for this session.
+      resumed =
+        new_model(
+          sessions_dir: dir,
+          session_key: key,
+          journal_opts: [base_dir: base]
+        )
+
+      resumed =
+        Enum.reduce(
+          message_turn("t2", "new turn"),
+          resumed,
+          &send_ev(&2, &1)
+        )
+
+      {:ok, text} = Raxol.Agent.Code.Replay.run(key, base_dir: base)
+      assert text =~ "old history"
+      assert text =~ "new turn"
+    end
+
+    test "a killed Writer neither kills the fold nor loses the record" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      # Abnormal Writer death (disk trouble, kill): the fold must survive
+      # (the Writer is unlinked) and the next event must reopen + retry.
+      Process.exit(model.journal.writer, :kill)
+
+      model =
+        Enum.reduce(message_turn("t2", "two"), model, &send_ev(&2, &1))
+
+      records = journal_records(model, base)
+      types = Enum.map(records, & &1["type"])
+      # Both turns' records present — including the one that hit the
+      # dead Writer and was retried after reopen.
+      assert Enum.count(types, &(&1 == "turn_started")) == 2
+      assert Enum.count(types, &(&1 == "turn_completed")) == 2
+    end
+
+    test "journal records carry provenance so replay cannot launder taint" do
+      {model, base} = journal_model()
+
+      tainted =
+        %{
+          tev("t1", 1, :item_completed, %{
+            item_id: "i1",
+            item_type: :tool_result,
+            content: "wire content"
+          })
+          | provenance: %{source: :primary, trust: :tainted}
+        }
+
+      model = send_ev(model, tainted)
+      [record] = journal_records(model, base)
+
+      assert record["provenance"] == %{
+               "source" => "primary",
+               "trust" => "tainted"
+             }
+
+      [decoded] = Raxol.Agent.Code.EventCodec.decode_all([record])
+      assert decoded.provenance.trust == :tainted
+    end
+
+    test "read_records tolerates a torn tail without truncating the file" do
+      {model, base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      close_journal!(model)
+
+      segment =
+        Path.join([base, model.session_key, "journal", "000001.jsonl"])
+
+      # Simulate a crash mid-write: an unterminated partial line.
+      File.write!(segment, "{\"partial", [:append])
+      size_before = File.stat!(segment).size
+
+      {:ok, records} =
+        Raxol.Agent.Journal.FileStore.read_records(
+          model.session_key,
+          base_dir: base
+        )
+
+      assert length(records) == 4
+      # Read-side scan must not self-heal: the file is untouched.
+      assert File.stat!(segment).size == size_before
+    end
+
+    test "a failing journal degrades to a status warning, never blocks the fold" do
+      base = tmp_dir()
+      # The base dir path is occupied by a regular file, so the session
+      # layout cannot be created and every open fails.
+      File.mkdir_p!(Path.dirname(base))
+      File.write!(base, "not a dir")
+
+      model = new_model(journal_opts: [base_dir: base])
+
+      model =
+        Enum.reduce(message_turn("t1", "answer"), model, &send_ev(&2, &1))
+
+      assert model.journal == nil
+      assert length(model.events) == 4
+      assert model.status_line =~ "journal unavailable"
+    end
+
+    test "ctrl+c closes the journal" do
+      {model, _base} = journal_model()
+
+      model =
+        Enum.reduce(message_turn("t1", "one"), model, &send_ev(&2, &1))
+
+      writer = model.journal.writer
+      {_model, commands} = App.update(key("c", [:ctrl]), model)
+      assert commands != []
+      refute Process.alive?(writer)
+    end
+  end
+
+  describe "/resume" do
+    test "/resume <id> switches sessions in place, persisting the departing one" do
+      dir = tmp_dir()
+
+      first = new_model(sessions_dir: dir)
+      {first, []} = submit(first, "ask one")
+
+      first =
+        Enum.reduce(message_turn("t1", "first answer"), first, &send_ev(&2, &1))
+
+      first_key = first.session_key
+
+      # A second session in the same store.
+      second = new_model(sessions_dir: dir)
+      {second, []} = submit(second, "ask two")
+
+      second =
+        Enum.reduce(
+          message_turn("t2", "second answer"),
+          second,
+          &send_ev(&2, &1)
+        )
+
+      {switched, []} = submit(second, "/resume #{first_key}")
+
+      assert switched.session_key == first_key
+      assert switched.notice =~ "resumed #{first_key}"
+
+      assert Enum.map(switched.messages, & &1.content) == [
+               "ask one",
+               "first answer"
+             ]
+
+      # The departing session was persisted before switching.
+      {:ok, saved} =
+        Raxol.Agent.Code.Store.load(dir, second.session_key)
+
+      assert Enum.map(saved.messages, & &1.content) == [
+               "ask two",
+               "second answer"
+             ]
+    end
+
+    test "/resume with an unknown id notices without switching" do
+      model = new_model()
+      {after_cmd, []} = submit(model, "/resume sess-does-not-exist")
+      assert after_cmd.session_key == model.session_key
+      assert after_cmd.notice =~ "not found"
+    end
+
+    test "/resume with no arg opens a picker; Enter resumes the selection" do
+      dir = tmp_dir()
+
+      other = new_model(sessions_dir: dir)
+      {other, []} = submit(other, "ask other")
+
+      other =
+        Enum.reduce(message_turn("t1", "other answer"), other, &send_ev(&2, &1))
+
+      test_pid = self()
+
+      model =
+        new_model(
+          sessions_dir: dir,
+          sessions_fetcher: fn dir, ref, _app ->
+            send(test_pid, {:listed, dir, ref})
+          end
+        )
+
+      {model, []} = submit(model, "/resume")
+      assert model.sessions_ref != nil
+      assert_received {:listed, ^dir, ref}
+      assert ref == model.sessions_ref
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}},
+          model
+        )
+
+      assert model.wizard.step == :sessions
+      assert model.sessions_ref == nil
+
+      {model, []} = App.update(key(:enter), model)
+
+      assert model.session_key == other.session_key
+      assert model.wizard == nil
+
+      assert Enum.map(model.messages, & &1.content) == [
+               "ask other",
+               "other answer"
+             ]
+    end
+
+    test "typed input does not hijack Enter while the picker is open" do
+      dir = tmp_dir()
+
+      other = new_model(sessions_dir: dir)
+      {other, []} = submit(other, "ask other")
+
+      other =
+        Enum.reduce(message_turn("t1", "other answer"), other, &send_ev(&2, &1))
+
+      model =
+        new_model(
+          sessions_dir: dir,
+          sessions_fetcher: fn _dir, _ref, _app -> :ok end
+        )
+
+      {model, []} = submit(model, "/resume")
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:sessions_list, model.sessions_ref,
+            Raxol.Agent.Code.Store.list(dir)}},
+          model
+        )
+
+      assert model.wizard.step == :sessions
+
+      # A stray typed character must not turn Enter into a prompt submit.
+      model = %{model | input: "stray"}
+      {model, []} = App.update(key(:enter), model)
+
+      refute model.running?
+      assert model.session_key == other.session_key
+      assert model.input == "stray"
+    end
+
+    test "a sessions list never replaces the modal credential wizard" do
+      model =
+        new_model(sessions_fetcher: fn _dir, _ref, _app -> :ok end)
+
+      {model, []} = submit(model, "/resume")
+      ref = model.sessions_ref
+
+      model = %{
+        model
+        | wizard: %{step: :credential, harness: :openai, buffer: "sk-half"}
+      }
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:sessions_list, ref,
+            [%{id: "x", updated_at: 1, message_count: 0, cwd: "", title: ""}]}},
+          model
+        )
+
+      assert model.wizard.step == :credential
+      assert model.wizard.buffer == "sk-half"
+    end
+
+    test "peeking at a session does not bump its updated_at" do
+      dir = tmp_dir()
+
+      target = new_model(sessions_dir: dir)
+      {target, []} = submit(target, "ask a")
+
+      target =
+        Enum.reduce(message_turn("t1", "answer a"), target, &send_ev(&2, &1))
+
+      peeker = new_model(sessions_dir: dir)
+      {peeker, []} = submit(peeker, "ask b")
+
+      peeker =
+        Enum.reduce(message_turn("t2", "answer b"), peeker, &send_ev(&2, &1))
+
+      # The finalized turn persisted; the peeker holds no unsaved changes.
+      refute peeker.dirty
+      peeker_path = Path.join(dir, peeker.session_key <> ".json")
+      File.rm!(peeker_path)
+
+      {_switched, []} = submit(peeker, "/resume #{target.session_key}")
+
+      # No departing persist happened — the file was not recreated.
+      refute File.exists?(peeker_path)
+    end
+
+    test "approval grants and plan mode are per-session" do
+      dir = tmp_dir()
+
+      target = new_model(sessions_dir: dir)
+      {target, []} = submit(target, "ask")
+
+      target =
+        Enum.reduce(message_turn("t1", "answer"), target, &send_ev(&2, &1))
+
+      model = %{
+        new_model(sessions_dir: dir)
+        | always_allow: MapSet.new(["bash"]),
+          plan_mode: true
+      }
+
+      {switched, []} = submit(model, "/resume #{target.session_key}")
+      assert switched.always_allow == MapSet.new()
+      refute switched.plan_mode
+
+      cleared_src = %{
+        new_model()
+        | always_allow: MapSet.new(["bash"]),
+          plan_mode: true
+      }
+
+      {cleared, []} = submit(cleared_src, "/clear")
+      assert cleared.always_allow == MapSet.new()
+      refute cleared.plan_mode
+    end
+
+    test "an empty store notices instead of opening the picker" do
+      model = new_model()
+      {model, []} = submit(model, "/resume")
+
+      {model, []} =
+        App.update(
+          {:command_result, {:sessions_list, model.sessions_ref, []}},
+          model
+        )
+
+      assert model.wizard == nil
+      assert model.notice =~ "no saved sessions"
+    end
+  end
+
+  describe "/fork" do
+    test "forks to a fresh key that records its parent, keeping both files" do
+      dir = tmp_dir()
+      model = new_model(sessions_dir: dir)
+      {model, []} = submit(model, "ask")
+
+      model =
+        Enum.reduce(message_turn("t1", "the answer"), model, &send_ev(&2, &1))
+
+      parent_key = model.session_key
+      {forked, []} = submit(model, "/fork side quest")
+
+      assert forked.session_key != parent_key
+      assert forked.parent == parent_key
+      assert forked.title == "side quest"
+      assert forked.notice =~ "forked to #{forked.session_key}"
+
+      # Both files exist; the fork carries the full conversation + parent.
+      {:ok, original} = Raxol.Agent.Code.Store.load(dir, parent_key)
+      {:ok, fork} = Raxol.Agent.Code.Store.load(dir, forked.session_key)
+
+      assert original.parent == nil
+      assert fork.parent == parent_key
+      assert fork.messages == original.messages
+      assert length(fork.events) == 4
+    end
+
+    test "an empty session has nothing to fork" do
+      {model, []} = submit(new_model(), "/fork")
+      assert model.notice =~ "nothing to fork"
+    end
+  end
+
+  describe "cost estimation" do
+    setup do
+      saved =
+        Map.new(
+          ~w(RAXOL_COST_PER_MTOK_IN RAXOL_COST_PER_MTOK_OUT),
+          &{&1, System.get_env(&1)}
+        )
+
+      Enum.each(Map.keys(saved), &System.delete_env/1)
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {key, nil} -> System.delete_env(key)
+          {key, val} -> System.put_env(key, val)
+        end)
+      end)
+
+      :ok
+    end
+
+    test "/usage estimates cost from the price table without env rates" do
+      model = connected_model()
+
+      events = [
+        tev("t1", 1, :turn_started, %{prompt: "ask"}),
+        tev("t1", 2, :turn_completed, %{
+          final: true,
+          usage: %{input_tokens: 1_000_000, output_tokens: 100_000}
+        })
+      ]
+
+      model = Enum.reduce(events, model, &send_ev(&2, &1))
+      {model, []} = submit(model, "/usage")
+
+      # gpt-4o: 1M in at $2.50 + 100k out at $10/M = $3.50
+      assert model.notice =~ "est. cost: $3.5000"
+    end
+
+    test "/usage on an unknown model points at the env rates" do
+      model = new_model()
+
+      model =
+        send_ev(
+          model,
+          tev("t1", 1, :turn_completed, %{
+            final: true,
+            usage: %{input_tokens: 10, output_tokens: 10}
+          })
+        )
+
+      {model, []} = submit(model, "/usage")
+      assert model.notice =~ "RAXOL_COST_PER_MTOK"
+    end
+  end
+
+  describe "/export /transcript /copy /find /logout" do
+    defp answered_model(opts \\ []) do
+      model = new_model(opts)
+      {model, []} = submit(model, "ask")
+
+      Enum.reduce(
+        message_turn("t1", "the special answer"),
+        model,
+        &send_ev(&2, &1)
+      )
+    end
+
+    test "/export writes the transcript beside the work" do
+      cwd = tmp_dir()
+      File.mkdir_p!(cwd)
+      model = answered_model(cwd: cwd)
+
+      {model, []} = submit(model, "/export")
+
+      assert model.notice =~ "exported to"
+      path = Path.join(cwd, "#{model.session_key}.txt")
+      assert File.exists?(path)
+      content = File.read!(path)
+      assert content =~ "> ask"
+      assert content =~ "the special answer"
+    end
+
+    test "/export honors a given path relative to the cwd" do
+      cwd = tmp_dir()
+      File.mkdir_p!(cwd)
+      model = answered_model(cwd: cwd)
+
+      {_model, []} = submit(model, "/export session.log")
+      assert File.read!(Path.join(cwd, "session.log")) =~ "the special answer"
+    end
+
+    test "a jailed session confines /export and /transcript to the workspace" do
+      cwd = tmp_dir()
+      File.mkdir_p!(cwd)
+      model = answered_model(cwd: cwd, jail: true)
+
+      escape = Path.join(System.tmp_dir!(), "raxol-jail-escape.txt")
+      File.rm(escape)
+
+      {refused, []} = submit(model, "/export #{escape}")
+      assert refused.notice =~ "export refused"
+      refute File.exists?(escape)
+
+      {refused2, []} = submit(model, "/export ../outside.txt")
+      assert refused2.notice =~ "export refused"
+
+      # In-jail exports still work.
+      {ok_model, []} = submit(model, "/export notes.txt")
+      assert ok_model.notice =~ "exported to"
+      assert File.exists?(Path.join(cwd, "notes.txt"))
+
+      # /transcript lands inside the jail, where the tenant's tools reach.
+      {t_model, []} = submit(model, "/transcript")
+      path = t_model.notice |> String.split(" ") |> List.last()
+      assert String.starts_with?(path, Path.expand(cwd))
+    end
+
+    test "a resumed traversal id cannot aim /transcript out of the jail" do
+      # Store.load only basenames the key for its OWN lookup, so a traversal
+      # survives into session_key -- which /transcript joins straight into a
+      # path. The load has to SUCCEED for the key to be adopted, so the fixture
+      # is a session the tenant already owns, named by that basename.
+      cwd = tmp_dir()
+      neighbour = tmp_dir()
+      File.mkdir_p!(cwd)
+      File.mkdir_p!(neighbour)
+
+      model = answered_model(cwd: cwd, jail: true)
+
+      :ok =
+        Raxol.Agent.Code.Store.save(model.sessions_dir, "sess-victim", %{
+          messages: []
+        })
+
+      traversal = "../#{Path.basename(neighbour)}/sess-victim"
+      {resumed, []} = submit(model, "/resume #{traversal}")
+      refute resumed.session_key == traversal
+
+      {t_model, []} = submit(resumed, "/transcript")
+      path = t_model.notice |> String.split(" ") |> List.last()
+      assert String.starts_with?(path, Path.expand(cwd))
+      assert File.ls!(neighbour) == []
+    end
+
+    test "a traversal id on the command line does not become the session key" do
+      # --resume keeps the requested key when no such session exists, so the
+      # raw string reaches session_key with no successful load needed at all.
+      cwd = tmp_dir()
+      neighbour = tmp_dir()
+      File.mkdir_p!(cwd)
+      File.mkdir_p!(neighbour)
+
+      traversal = "../#{Path.basename(neighbour)}/sess-nope"
+      model = new_model(cwd: cwd, jail: true, session_key: traversal)
+      refute model.session_key == traversal
+
+      {_t_model, []} = submit(model, "/transcript")
+      assert File.ls!(neighbour) == []
+    end
+
+    test "/transcript writes a private temp file and hints at a pager" do
+      model = answered_model()
+      {model, []} = submit(model, "/transcript")
+
+      assert model.notice =~ "PAGER"
+
+      path = model.notice |> String.split(" ") |> List.last()
+      assert File.read!(path) =~ "the special answer"
+
+      # Transcripts are conversations; /tmp is shared on Linux.
+      %File.Stat{mode: mode} = File.stat!(path)
+      assert Bitwise.band(mode, 0o777) == 0o600
+    end
+
+    test "/copy pushes the last reply through the clipboard seam" do
+      test_pid = self()
+
+      model =
+        answered_model(
+          clipboard: fn text ->
+            send(test_pid, {:copied, text})
+            :ok
+          end
+        )
+
+      {model, []} = submit(model, "/copy")
+
+      assert model.notice =~ "copied last reply"
+      assert_received {:copied, "the special answer"}
+    end
+
+    test "/copy with no assistant reply notices" do
+      {model, []} = submit(new_model(), "/copy")
+      assert model.notice =~ "no assistant reply"
+    end
+
+    test "/find excerpts stay anchored through multibyte text" do
+      model = new_model()
+      lead = String.duplicate("word — ", 30)
+
+      model =
+        model
+        |> submit("ask")
+        |> elem(0)
+        |> then(fn m ->
+          Enum.reduce(
+            message_turn("t1", lead <> "needle here"),
+            m,
+            &send_ev(&2, &1)
+          )
+        end)
+
+      {model, []} = submit(model, "/find needle")
+      assert model.notice =~ "needle here"
+    end
+
+    test "/find reports matching blocks and misses honestly" do
+      model = answered_model()
+
+      {model, []} = submit(model, "/find special")
+      assert model.notice =~ "1 match(es) for \"special\""
+      assert model.notice =~ "[message]"
+
+      {model, []} = submit(model, "/find zzz-not-there")
+      assert model.notice =~ "no matches"
+
+      {model, []} = submit(model, "/find")
+      assert model.notice =~ "usage: /find"
+    end
+
+    test "/logout disconnects the provider and reopens the setup panel" do
+      model = connected_model()
+      {model, []} = submit(model, "/logout")
+
+      assert model.executor == nil
+      assert model.provider_status == :no_provider
+      assert model.wizard.step == :browse
+      assert model.notice =~ "logged out"
+    end
+
+    test "/share without a secret says how to configure it" do
+      {model, []} = submit(new_model(share_secret: nil), "/share")
+      assert model.notice =~ "sharing not configured"
+    end
+
+    test "/share mints a verifiable token and ensures the journal" do
+      base = tmp_dir()
+
+      secret = String.duplicate("app-share-secret-", 2)
+
+      model =
+        answered_model(
+          share_secret: secret,
+          journal_opts: [base_dir: base]
+        )
+
+      {model, []} = submit(model, "/share")
+
+      assert model.notice =~ "share token"
+      token = model.notice |> String.split(" ") |> List.last()
+
+      assert {:ok, %{session_id: session_id, scope: scope}} =
+               Raxol.Agent.Code.ShareToken.verify(token, secret)
+
+      assert session_id == model.session_key
+      # An unjailed session shares under the host's own journal base.
+      assert scope == ""
+
+      # The journal exists for the viewer to replay.
+      {:ok, records} =
+        Raxol.Agent.Journal.FileStore.read_records(
+          model.session_key,
+          base_dir: base
+        )
+
+      assert records != []
+    end
+
+    test "/share with a base url mints a pasteable link" do
+      model =
+        answered_model(
+          share_secret: String.duplicate("share-secret-", 3),
+          share_base_url: "https://example.test/share/"
+        )
+
+      {model, []} = submit(model, "/share")
+      assert model.notice =~ "https://example.test/share/"
+      refute model.notice =~ "share//"
+    end
+
+    test "/logout <provider> removes the credential through the seam" do
+      test_pid = self()
+
+      model =
+        connected_model(
+          credential_remover: fn provider ->
+            send(test_pid, {:removed, provider})
+            {:ok, :openai}
+          end
+        )
+
+      {model, []} = submit(model, "/logout openai")
+
+      assert_received {:removed, "openai"}
+      assert model.notice =~ "forgot stored credential for openai"
+      # The removed provider was the connected one — disconnected too.
+      assert model.executor == nil
+    end
+  end
+
+  describe "/rename and enriched /sessions" do
+    test "/rename titles the session and persists it" do
+      model = new_model()
+      {model, []} = submit(model, "/rename fix the auth bug")
+
+      assert model.title == "fix the auth bug"
+      assert model.notice =~ "renamed"
+
+      {:ok, saved} =
+        Raxol.Agent.Code.Store.load(model.sessions_dir, model.session_key)
+
+      assert saved.title == "fix the auth bug"
+    end
+
+    test "/rename without a title shows usage" do
+      {model, []} = submit(new_model(), "/rename")
+      assert model.notice =~ "usage: /rename"
+    end
+
+    test "a resumed session keeps its title" do
+      dir = tmp_dir()
+      model = new_model(sessions_dir: dir)
+      {model, []} = submit(model, "/rename keep me")
+
+      resumed =
+        new_model(sessions_dir: dir, session_key: model.session_key)
+
+      assert resumed.title == "keep me"
+    end
+
+    test "/sessions lists title, age, and cwd off the app process" do
+      dir = tmp_dir()
+      model = new_model(sessions_dir: dir)
+      {model, []} = submit(model, "/rename my title")
+      {model, []} = submit(model, "/sessions")
+
+      # The default fetcher spawns and sends the list back to the app
+      # process (here: the test); fold it like the dispatcher would.
+      ref = model.sessions_ref
+      assert ref != nil
+      assert_receive {:command_result, {:sessions_list, ^ref, sessions}}, 1_000
+
+      {model, []} =
+        App.update({:command_result, {:sessions_list, ref, sessions}}, model)
+
+      assert model.notice =~ ~s("my title")
+      assert model.notice =~ "msgs"
+      assert model.notice =~ "just now"
+    end
+  end
+
+  describe "/rewind" do
+    defp run_turn(model, turn_id, prompt, answer) do
+      {model, []} = submit(model, prompt)
+      Enum.reduce(message_turn(turn_id, answer), model, &send_ev(&2, &1))
+    end
+
+    test "drops the last turn from transcript, conversation, store, and marks the journal" do
+      base = tmp_dir()
+      model = new_model(journal_opts: [base_dir: base])
+
+      model =
+        model
+        |> run_turn("t1", "ask one", "first answer")
+        |> run_turn("t2", "ask two", "second answer")
+
+      assert length(model.messages) == 4
+
+      {model, []} = submit(model, "/rewind")
+
+      assert model.notice =~ "rewound"
+      assert Enum.map(model.events, & &1.turn_id) |> Enum.uniq() == ["t1"]
+
+      assert model.messages == [
+               %{role: :user, content: "ask one"},
+               %{role: :assistant, content: "first answer"}
+             ]
+
+      # The store persisted the truncated state.
+      {:ok, saved} =
+        Raxol.Agent.Code.Store.load(model.sessions_dir, model.session_key)
+
+      assert length(saved.events) == 4
+
+      # The append-only journal keeps the turn plus a rewind marker.
+      close_journal!(model)
+
+      {:ok, records} =
+        Raxol.Agent.Journal.FileStore.read_records(
+          model.session_key,
+          base_dir: base
+        )
+
+      assert List.last(records)["type"] == "rewind"
+
+      assert get_in(List.last(records), ["payload", "dropped_turn"]) ==
+               "t2"
+    end
+
+    test "with no turns there is nothing to rewind" do
+      {model, []} = submit(new_model(), "/rewind")
+      assert model.notice =~ "nothing to rewind"
+    end
+
+    # Turn ids restart across VM runs (Contract.pump mints them from
+    # System.unique_integer), so a resumed session can hold the same
+    # turn_id twice; only the trailing run may be dropped.
+    test "a colliding older turn survives a rewind of the newer one" do
+      model = new_model()
+
+      events =
+        message_turn("turn-9", "old answer") ++
+          message_turn("t-mid", "middle answer") ++
+          message_turn("turn-9", "new answer")
+
+      model = Enum.reduce(events, model, &send_ev(&2, &1))
+      assert length(model.events) == 12
+
+      {model, []} = submit(model, "/rewind")
+
+      assert length(model.events) == 8
+      texts = Enum.map(model.events, & &1.turn_id)
+      assert "turn-9" in texts
+      assert model.notice =~ "dropped 4 events"
+    end
+
+    test "rewind resets the id counter so the next turn has no gap" do
+      model =
+        Enum.reduce(
+          message_turn("t1", "one") ++ message_turn("t2", "two"),
+          new_model(),
+          &send_ev(&2, &1)
+        )
+
+      {model, []} = submit(model, "/rewind")
+      assert model.next_event_id == 5
+
+      model = Enum.reduce(message_turn("t3", "three"), model, &send_ev(&2, &1))
+
+      projection = Raxol.Harness.Projection.project(model.events)
+      assert projection.diagnostics == []
+      refute projection.damaged
+    end
+
+    test "rewind after an aborted turn removes only the orphan prompt" do
+      model = run_turn(new_model(), "t1", "ask", "one")
+
+      # A turn that dies before emitting any event: submit then Esc.
+      {model, []} = submit(model, "doomed prompt")
+      assert model.running?
+      {model, []} = App.update(key(:escape), model)
+      refute model.running?
+
+      events_before = model.events
+      {model, []} = submit(model, "/rewind")
+
+      assert model.notice =~ "un-run prompt"
+      assert model.events == events_before
+
+      assert Enum.map(model.messages, & &1.content) == [
+               "ask",
+               "one"
+             ]
+    end
+
+    test "refuses while a turn is running" do
+      model = %{new_model() | running?: false}
+      {model, []} = submit(model, "ask")
+      assert model.running?
+
+      # Slash input is swallowed mid-turn, so call the command through the
+      # dispatch used when the turn has just ended but running? was stale.
+      {rewound, []} =
+        App.update(
+          key(:enter),
+          %{model | running?: true, input: "/rewind"}
+        )
+
+      # Mid-turn enter is swallowed entirely (input preserved).
+      assert rewound.input == "/rewind"
+    end
+  end
+
   describe "slash commands" do
     test "/help shows a notice and does not start a turn" do
       {model, []} = submit(new_model(), "/help")
@@ -683,6 +1805,224 @@ defmodule Raxol.Agent.Code.AppTest do
     test "an unknown command reports itself" do
       {model, []} = submit(new_model(), "/frobnicate")
       assert model.notice =~ "unknown command"
+    end
+
+    test "/inspect fetches the snapshot off the app process" do
+      test_pid = self()
+
+      model =
+        new_model(
+          inspection_fetcher: fn cwd, dir, ref, app ->
+            send(test_pid, {:inspect_spawned, cwd, dir, ref, app})
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+
+      assert_received {:inspect_spawned, cwd, dir, ref, app}
+      assert cwd == model.cwd
+      assert dir == model.sessions_dir
+      assert model.inspection_ref == ref
+      assert app == self()
+
+      {model, []} =
+        App.update(
+          {:command_result, {:inspection_result, ref, "SNAPSHOT"}},
+          model
+        )
+
+      assert model.notice == "SNAPSHOT"
+      assert model.inspection_ref == nil
+    end
+
+    test "a stale /inspect result is ignored" do
+      model = %{new_model() | inspection_ref: make_ref()}
+
+      {model2, []} =
+        App.update(
+          {:command_result, {:inspection_result, make_ref(), "STALE"}},
+          model
+        )
+
+      assert model2.notice != "STALE"
+    end
+
+    test "the default /inspect fetcher delivers the full snapshot" do
+      ref = make_ref()
+      model = new_model()
+
+      App.default_inspection_fetcher(model.cwd, model.sessions_dir, ref, self())
+
+      assert_receive {:command_result, {:inspection_result, ^ref, text}}, 10_000
+      assert text =~ "inspecting: #{model.cwd}"
+      assert text =~ "providers (op CLI:"
+      assert text =~ "sessions: #{model.sessions_dir}"
+    end
+
+    test "/usage folds token totals across provider vocabularies" do
+      model =
+        new_model()
+        |> send_ev(
+          ev(1, :turn_completed, %{
+            final: true,
+            usage: %{"input_tokens" => 100, "output_tokens" => 20}
+          })
+        )
+        |> send_ev(
+          ev(2, :turn_completed, %{
+            final: true,
+            usage: %{prompt_tokens: 50, completion_tokens: 5}
+          })
+        )
+
+      {model, []} = submit(model, "/usage")
+      assert model.notice =~ "turns: 2"
+      assert model.notice =~ "input tokens: 150"
+      assert model.notice =~ "output tokens: 25"
+      assert model.notice =~ "RAXOL_COST_PER_MTOK_IN"
+    end
+
+    test "/usage shows an estimated cost when rates are configured" do
+      System.put_env("RAXOL_COST_PER_MTOK_IN", "1.0")
+      System.put_env("RAXOL_COST_PER_MTOK_OUT", "2.0")
+
+      on_exit(fn ->
+        System.delete_env("RAXOL_COST_PER_MTOK_IN")
+        System.delete_env("RAXOL_COST_PER_MTOK_OUT")
+      end)
+
+      model =
+        send_ev(
+          new_model(),
+          ev(1, :turn_completed, %{
+            final: true,
+            usage: %{input_tokens: 1_000_000, output_tokens: 500_000}
+          })
+        )
+
+      {model, []} = submit(model, "/usage")
+      assert model.notice =~ "est. cost: $2.0000"
+    end
+
+    test "mcp servers bridge into the toolset asynchronously" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"fs" => %{"command" => "npx", "args" => []}}
+            })
+        })
+
+      test_pid = self()
+
+      model =
+        new_model(
+          cwd: dir,
+          mcp_loader: fn servers, ref, app ->
+            send(test_pid, {:mcp_spawned, servers, ref, app})
+          end
+        )
+
+      # Armed at init, fired on the first update (the dispatcher process).
+      {model, []} = App.update(key("x"), model)
+
+      assert_received {:mcp_spawned, servers, ref, app}
+      assert [%{name: "fs"}] = servers
+      assert app == self()
+      assert model.mcp_status == :loading
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__read",
+        invoke: fn _params, _context -> {:ok, %{}} end,
+        sensitive: false
+      }
+
+      result = %{tools: [tool], connected: [:fs], failed: [], janitor: nil}
+
+      {model, []} =
+        App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      assert tool in model.actions
+      assert model.mcp_status.connected == [:fs]
+      assert model.status_line =~ "mcp: 1 tools from 1 servers"
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "● fs"
+    end
+
+    test "a failed mcp server shows in the status line and /mcp" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{"ghost" => %{"command" => "nope"}}
+            })
+        })
+
+      model =
+        new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      {model, []} = App.update(key("x"), model)
+      ref = model.mcp_ref
+
+      result = %{
+        tools: [],
+        connected: [],
+        failed: [{:ghost, :enoent}],
+        janitor: nil
+      }
+
+      {model, []} =
+        App.update({:command_result, {:mcp_loaded, ref, result}}, model)
+
+      assert model.status_line =~ "failed: ghost"
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "✗ ghost"
+    end
+
+    test "the tool authorizer gates a sensitive Dynamic MCP tool" do
+      auth = App.tool_authorizer(self())
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__write",
+        invoke: fn _params, _context -> :ok end,
+        sensitive: true
+      }
+
+      task = Task.async(fn -> auth.(tool, %{}, %{}) end)
+
+      assert_receive {:command_result,
+                      {:authorize_request, ref, from, "mcp__fs__write"}}
+
+      send(from, {:authorize_decision, ref, {:deny, :test_denied}})
+      assert Task.await(task) == {:deny, :test_denied}
+    end
+
+    test "a read-only Dynamic tool runs without an approval round-trip" do
+      auth = App.tool_authorizer(self())
+
+      tool = %Raxol.Agent.Action.Dynamic{
+        name: "mcp__fs__read",
+        invoke: fn _params, _context -> :ok end,
+        sensitive: false
+      }
+
+      assert auth.(tool, %{}, %{}) == :ok
+      refute_received {:command_result, _}
+    end
+
+    test "/context includes token totals" do
+      model =
+        send_ev(
+          new_model(),
+          ev(1, :turn_completed, %{
+            final: true,
+            usage: %{input_tokens: 10, output_tokens: 3}
+          })
+        )
+
+      {model, []} = submit(model, "/context")
+      assert model.notice =~ "tokens: 10 in / 3 out"
     end
   end
 

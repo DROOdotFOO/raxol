@@ -18,6 +18,26 @@ defmodule Raxol.Agent.ContractTest do
   end
 
   describe "pump/3" do
+    test "the billed model rides on turn_completed" do
+      # Costing has to price the model the provider CHARGED for, which is not
+      # always the one configured: with no :model the backend substitutes its
+      # own default and reports it back in the response metadata. Without this
+      # on the durable payload, a turn prices at $0.00 and no budget can bind.
+      session_id = "contract-model-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      assert {:ok, _} =
+               Contract.pump(session_id, mock_stream("answer"), prompt: "hi")
+
+      completed =
+        session_id
+        |> drain_events()
+        |> Enum.filter(&(&1.type == :turn_completed))
+
+      assert completed != []
+      assert Enum.all?(completed, &(&1.payload.model == "mock-1"))
+    end
+
     test "maps a completed run onto the v0 vocabulary, in order" do
       session_id = "contract-test-#{System.unique_integer([:positive])}"
       :ok = SessionStreamer.subscribe(session_id)

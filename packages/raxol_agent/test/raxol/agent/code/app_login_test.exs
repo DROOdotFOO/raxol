@@ -113,6 +113,36 @@ defmodule Raxol.Agent.Code.AppLoginTest do
     end
   end
 
+  describe "hosted (jailed) session command gating" do
+    # On a multi-tenant host the keyboard principal is a tenant, not the host
+    # owner. /login and /logout mutate the host-global credential store, and
+    # /copy drives the host clipboard — none may be reachable from a tenant.
+    test "/login is refused and writes no credential in a jailed session" do
+      model =
+        new_model(:no_provider, jail: true)
+        |> type("/login anthropic op://Vault/Anthropic/key")
+
+      assert model.notice =~ "disabled in a hosted session"
+      assert model.provider_status == :no_provider
+      assert Credentials.fetch(:anthropic) == :none
+    end
+
+    test "/logout is refused in a jailed session" do
+      model =
+        new_model({:ready, :lm_studio, :explicit}, jail: true)
+        |> type("/logout anthropic")
+
+      assert model.notice =~ "disabled in a hosted session"
+      # The provider the tenant was using is untouched.
+      assert {:ready, :lm_studio, _} = model.provider_status
+    end
+
+    test "/copy is unavailable in a jailed session" do
+      model = new_model(:no_provider, jail: true) |> type("/copy")
+      assert model.notice =~ "unavailable in a hosted session"
+    end
+  end
+
   describe "/login" do
     test "with no argument opens the browse wizard" do
       model = new_model(:no_provider) |> type("/login")

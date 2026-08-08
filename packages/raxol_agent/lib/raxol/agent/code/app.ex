@@ -57,6 +57,7 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.Agent.Authorization.Policy
   alias Raxol.Agent.Authorization.Verdict
   alias Raxol.Agent.Contract
+  alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Harness.EventBoundary
   alias Raxol.Harness.Projection
@@ -72,22 +73,33 @@ defmodule Raxol.Agent.Code.App do
   def init(context) do
     options = Map.get(context, :options, [])
 
-    {sessions_dir, session_key, messages, events, resume_notice} =
-      init_session(options)
+    session = init_session(options)
 
     cwd = Keyword.get(options, :cwd) || Raxol.Agent.Actions.Fs.working_dir()
-    {hooks, hooks_note} = load_hooks(cwd)
-    {mcp_servers, mcp_note} = load_mcp(cwd)
+
+    # Both `.raxol/hooks.json` and `.mcp.json` are workspace files that name
+    # a command to execute. In a jail the workspace is TENANT-writable (the
+    # agent's own write_file lands there), so loading either would let a
+    # tenant run arbitrary code as the server uid — around the cwd jail, the
+    # `:jail` shell gate, and the approval chain alike. A jailed session
+    # loads neither.
+    jail? = Keyword.get(options, :jail, false) not in [nil, false]
+    {hooks, hooks_note} = load_hooks(cwd, jail?)
+    {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
 
     config(options, context)
     |> Map.merge(%{
       # Seeded from a resumed session so the transcript + conversation
-      # rebuild immediately; a fresh session starts these empty.
-      events: events,
-      messages: messages,
-      status_line: combine_notes([resume_notice, hooks_note, mcp_note]),
-      session_key: session_key,
-      sessions_dir: sessions_dir,
+      # rebuild immediately; a fresh session starts these empty. Resumed
+      # events arrive renumbered 1..n, so the live fold continues at n+1.
+      events: session.events,
+      next_event_id: length(session.events) + 1,
+      messages: session.messages,
+      status_line: combine_notes([session.notice, hooks_note, mcp_note]),
+      session_key: session.key,
+      sessions_dir: session.dir,
+      title: session.title,
+      parent: session.parent,
       cwd: cwd,
       hooks: hooks,
       mcp_servers: mcp_servers
@@ -158,6 +170,42 @@ defmodule Raxol.Agent.Code.App do
           :models_fetcher,
           &__MODULE__.default_models_fetcher/3
         ),
+      # `/resume` with no arg lists saved sessions off the app process
+      # (Store.list reads every session file); the result rides back as a
+      # `:sessions_list` message matched by this ref. Injectable,
+      # mirroring `:models_fetcher`.
+      sessions_ref: nil,
+      sessions_mode: :picker,
+      sessions_fetcher:
+        Keyword.get(
+          options,
+          :sessions_fetcher,
+          &__MODULE__.default_sessions_fetcher/3
+        ),
+      # Unsaved-changes flag: set when the conversation or transcript
+      # moves, cleared by persist. Guards the departing persist on a
+      # session switch so merely peeking at a session never bumps its
+      # updated_at (which would hijack --continue).
+      dirty: false,
+      # `/inspect` gathers off the app process (provider probing may shell
+      # out to `op`, which must never stall the update loop); the rendered
+      # snapshot rides back as an `:inspection_result` message matched by
+      # this ref. Injectable, mirroring `:models_fetcher`.
+      inspection_ref: nil,
+      inspection_fetcher:
+        Keyword.get(
+          options,
+          :inspection_fetcher,
+          &__MODULE__.default_inspection_fetcher/4
+        ),
+      # `.mcp.json` servers bridge into the toolset asynchronously: armed at
+      # init, launched on the first update (the dispatcher process, where the
+      # result message must land), folded into `:actions` when tools arrive.
+      # Injectable, mirroring `:models_fetcher`.
+      mcp_ref: nil,
+      mcp_status: nil,
+      mcp_janitor: nil,
+      mcp_loader: Keyword.get(options, :mcp_loader, &__MODULE__.default_mcp_loader/3),
       # The onboarding wizard overlay: nil (connected), or a step map
       # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
       # save-to-1Password prompt). Set in init when no provider is connected.
@@ -168,6 +216,44 @@ defmodule Raxol.Agent.Code.App do
       # Injectable so the save-to-1Password flow is testable without mutating a
       # real vault; the default shells out to `op item create`.
       op_saver: Keyword.get(options, :op_saver, &__MODULE__.default_op_saver/2),
+      # `/copy` and `/logout <provider>` reach system state (clipboard,
+      # the stored-credentials file); injectable so tests stay hermetic.
+      clipboard: Keyword.get(options, :clipboard, &__MODULE__.default_clipboard/1),
+      credential_remover: Keyword.get(options, :credential_remover, &Raxol.Agent.Setup.remove/1),
+      # The durable journal handle, opened lazily on the first durable
+      # event so idle sessions never spawn a Writer. `:journal_opts` is
+      # forwarded to `FileStore.open/2` (tests set `:base_dir` here).
+      journal: nil,
+      journal_opts: Keyword.get(options, :journal_opts, []),
+      # LLM cost accounting into a shared Raxol.Payments.Ledger (wired by
+      # the host app; see Raxol.Agent.Code.CostLedger). Without a ledger,
+      # cost still shows in /usage via env rates or the price table.
+      ledger: Keyword.get(options, :ledger),
+      spending_policy: Keyword.get(options, :spending_policy),
+      # Set when a metered round burned tokens we could not price. With a
+      # budget wired that is a hole in the cap, so it fails closed.
+      unpriced_model: nil,
+      ledger_agent_id: Keyword.get(options, :agent_id, "raxol-code"),
+      # Multi-tenant hosts set :jail — the keyboard principal is not the
+      # server owner, so operator-typed paths (/export) confine to the
+      # workspace like tool paths do.
+      jail: Keyword.get(options, :jail, false),
+      # `/share` mints signed read-only tokens for this session; without
+      # a secret there is nothing safe to mint. A blank or too-short secret
+      # is treated as unconfigured (an empty HMAC key is offline-forgeable).
+      # The base URL turns the notice into a pasteable link.
+      share_secret:
+        normalize_share_secret(
+          Keyword.get(options, :share_secret) ||
+            System.get_env("RAXOL_SHARE_SECRET")
+        ),
+      share_base_url:
+        Keyword.get(options, :share_base_url) ||
+          System.get_env("RAXOL_SHARE_BASE_URL"),
+      # Which journal base this session's ids are meaningful in: "" for the
+      # host's own, or a tenant name. Signed into the share token so the
+      # viewer resolves the right tree (see Raxol.Agent.Code.Tenant).
+      share_scope: Keyword.get(options, :share_scope, ""),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -188,25 +274,78 @@ defmodule Raxol.Agent.Code.App do
         Raxol.Agent.Code.Store.default_dir()
 
     case Keyword.get(options, :session_key) do
-      nil ->
-        {dir, mint_session_key(), [], [], nil}
-
-      key ->
-        case Raxol.Agent.Code.Store.load(dir, key) do
-          {:ok, %{messages: messages, events: events}} ->
-            {dir, key, messages, events, "resumed #{length(messages)} messages"}
-
-          {:error, _} ->
-            {dir, key, [], [], "session #{key} not found — starting fresh"}
-        end
+      nil -> fresh_session(dir)
+      key -> resume_session(dir, key)
     end
+  end
+
+  # Same rule as /resume, on the `--resume` path: the key is a filename, and
+  # the not-found arm below adopts it without any load succeeding first.
+  defp resume_session(dir, key) do
+    case Raxol.Agent.Code.ShareToken.valid_session_id?(key) do
+      true ->
+        load_session(dir, key)
+
+      false ->
+        %{fresh_session(dir) | notice: "not a session id — starting fresh"}
+    end
+  end
+
+  defp load_session(dir, key) do
+    case Raxol.Agent.Code.Store.load(dir, key) do
+      {:ok, %{messages: messages, events: events} = saved} ->
+        %{
+          dir: dir,
+          key: key,
+          messages: messages,
+          events: renumber_events(events),
+          notice: "resumed #{length(messages)} messages",
+          title: Map.get(saved, :title, ""),
+          parent: Map.get(saved, :parent)
+        }
+
+      {:error, _} ->
+        %{
+          fresh_session(dir)
+          | key: key,
+            notice: "session #{key} not found — starting fresh"
+        }
+    end
+  end
+
+  defp fresh_session(dir) do
+    %{
+      dir: dir,
+      key: mint_session_key(),
+      messages: [],
+      events: [],
+      notice: nil,
+      title: "",
+      parent: nil
+    }
+  end
+
+  # Stored ids are whatever the producer stamped at the time (historically
+  # per-turn pump counters, which collide across turns) and the durable-only
+  # filter leaves gaps; both make the projection's id recovery drop or
+  # diagnose resumed events on every render. Ids only order the projection
+  # fold, so a resumed log is renumbered into the dense session space the
+  # live fold continues from.
+  defp renumber_events(events) do
+    events
+    |> Enum.with_index(1)
+    |> Enum.map(fn {event, index} -> %{event | id: index} end)
   end
 
   defp mint_session_key do
     "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
   end
 
-  defp load_hooks(cwd) do
+  # Announced, not silent: a tenant whose hooks never fire should see why
+  # rather than conclude the feature is broken.
+  defp load_hooks(_cwd, true), do: {nil, "hooks disabled (jailed session)"}
+
+  defp load_hooks(cwd, _jail?) do
     case Raxol.Agent.Code.Hooks.load(cwd) do
       {:ok, config} -> {config, "#{Raxol.Agent.Code.Hooks.count(config)} hooks"}
       :none -> {nil, nil}
@@ -214,7 +353,9 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp load_mcp(cwd) do
+  defp load_mcp(_cwd, true), do: {[], "mcp servers disabled (jailed session)"}
+
+  defp load_mcp(cwd, _jail?) do
     case Raxol.Agent.Code.McpConfig.load(cwd) do
       {:ok, []} -> {[], nil}
       {:ok, servers} -> {servers, "#{length(servers)} MCP servers"}
@@ -234,7 +375,7 @@ defmodule Raxol.Agent.Code.App do
 
   @impl true
   def update(%Raxol.Core.Events.Event{} = event, model) do
-    model = maybe_launch_validation(model)
+    model = model |> maybe_launch_validation() |> maybe_launch_mcp()
     norm = InputEvent.normalize(event)
 
     cond do
@@ -317,13 +458,101 @@ defmodule Raxol.Agent.Code.App do
 
   # An async `/model` model-list fetch result. Applied only when its ref still
   # matches the latest fetch (a newer `/model` supersedes an in-flight one).
+  # An async `/resume` session list. Same ref discipline as `:models_list`.
+  # A nested sub-agent round reporting what it just spent. Metered exactly like
+  # a parent turn, against the same ledger.
+  def update({:command_result, {:tool_usage, info}}, model) do
+    {meter_usage(
+       model,
+       Map.get(info, :usage) || %{},
+       Map.get(info, :model) || current_model(model),
+       :llm_subagent
+     ), []}
+  end
+
+  def update({:command_result, {:sessions_list, ref, sessions}}, model) do
+    if ref == model.sessions_ref do
+      {apply_sessions_result(model, sessions), []}
+    else
+      {model, []}
+    end
+  end
+
   def update({:command_result, {:models_list, ref, result}}, model) do
     if ref == model.models_ref,
       do: {apply_models_result(model, result), []},
       else: {model, []}
   end
 
+  # An async `/inspect` snapshot. Same ref discipline as `:models_list`.
+  def update({:command_result, {:inspection_result, ref, text}}, model) do
+    if ref == model.inspection_ref,
+      do: {notice(%{model | inspection_ref: nil, status_line: nil}, text), []},
+      else: {model, []}
+  end
+
+  # The async `.mcp.json` bundle result: fold the discovered tools into the
+  # toolset and record per-server state for `/mcp`. Same ref discipline.
+  def update({:command_result, {:mcp_loaded, ref, result}}, model) do
+    if ref == model.mcp_ref do
+      model = %{
+        model
+        | mcp_ref: nil,
+          mcp_janitor: result.janitor,
+          mcp_status: %{
+            connected: result.connected,
+            failed: result.failed,
+            tools: length(result.tools)
+          },
+          actions: model.actions ++ result.tools
+      }
+
+      {put_status(model, mcp_loaded_line(result)), []}
+    else
+      {model, []}
+    end
+  end
+
   def update(_message, model), do: {model, []}
+
+  # Fire the armed `.mcp.json` bundle load on the first update (the
+  # dispatcher process, where the `:mcp_loaded` result must land). Loading
+  # is off-process, so a slow server handshake never stalls boot or input.
+  defp maybe_launch_mcp(%{mcp_servers: []} = model), do: model
+
+  defp maybe_launch_mcp(%{mcp_ref: nil, mcp_status: nil} = model) do
+    ref = make_ref()
+    model.mcp_loader.(model.mcp_servers, ref, self())
+
+    %{model | mcp_ref: ref, mcp_status: :loading}
+  end
+
+  defp maybe_launch_mcp(model), do: model
+
+  @doc false
+  # Default loader: bridge the configured servers off the app process; the
+  # result rides back as an `:mcp_loaded` message `update/2` folds.
+  def default_mcp_loader(servers, ref, app) do
+    # The janitor monitors `app` (the dispatcher/session process), so the
+    # started clients are torn down whenever this session ends.
+    spawn(fn ->
+      result = Raxol.Agent.Code.McpLoader.load(servers, owner: app)
+      send(app, {:command_result, {:mcp_loaded, ref, result}})
+    end)
+  end
+
+  defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
+
+  defp mcp_loaded_line(%{tools: tools, connected: connected, failed: []}) do
+    "mcp: #{length(tools)} tools from #{length(connected)} servers"
+  end
+
+  defp mcp_loaded_line(%{tools: tools, failed: failed}) do
+    names =
+      Enum.map_join(failed, ", ", fn {name, _reason} -> to_string(name) end)
+
+    "mcp: #{length(tools)} tools · failed: #{names}"
+  end
 
   # Fire the armed launch validation on the first update (dispatcher process).
   defp maybe_launch_validation(%{pending_validation: nil} = model), do: model
@@ -347,6 +576,12 @@ defmodule Raxol.Agent.Code.App do
   # -- key handlers -----------------------------------------------------------
 
   defp handle_shortcut(%{char: "c", mods: %{ctrl: true}}, model) do
+    # Fast-path cleanup: stop the MCP janitor (and its clients) and flush
+    # the journal on an explicit quit. Both also survive any other exit
+    # path — the janitor monitors this process, and the journal Writer is
+    # linked to it (its terminate flushes).
+    Raxol.Agent.Code.McpLoader.stop(model.mcp_janitor)
+    close_journal(model.journal)
     {model, [Directive.stop()]}
   end
 
@@ -388,12 +623,19 @@ defmodule Raxol.Agent.Code.App do
   # selects it. A typed prompt or slash command still takes precedence (so the
   # `/login <provider> ...` text path stays reachable alongside the wizard).
   defp handle_key(:up, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models],
+       when step in [:browse, :models, :sessions],
        do: {wizard_move(model, -1), []}
 
   defp handle_key(:down, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models],
+       when step in [:browse, :models, :sessions],
        do: {wizard_move(model, +1), []}
+
+  # The sessions picker owns Enter outright — unlike :browse (which must
+  # keep `/login <provider> ...` typeable), nothing in it needs the
+  # prompt path, and a stray typed character must not turn Enter into a
+  # paid LLM turn under the picker. Typed input survives the switch.
+  defp handle_key(:enter, %{wizard: %{step: :sessions}} = model),
+    do: {maybe_wizard_select(model), []}
 
   defp handle_key(:enter, model) do
     case String.trim(model.input) do
@@ -420,7 +662,7 @@ defmodule Raxol.Agent.Code.App do
   # Esc closes the browse/model list (reopen with /login or /model); the modal
   # steps handle their own Esc in handle_wizard/2.
   defp handle_key(:escape, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models],
+       when step in [:browse, :models, :sessions],
        do: {close_wizard(model), []}
 
   defp handle_key(_key, model), do: {model, []}
@@ -430,11 +672,42 @@ defmodule Raxol.Agent.Code.App do
   # run, so `/login` itself is always reachable).
   defp submit_prompt(model, prompt) do
     if provider_ready?(model) do
-      start_turn(model, prompt)
+      # The budget gates the NEXT turn — cost is only known after a call
+      # has already been made, so enforcement means refusing to start
+      # another one once the shared ledger says the budget is spent.
+      case budget_exhausted(model) do
+        :ok -> start_turn(model, prompt)
+        {:over, limit} -> notice(model, budget_notice(limit))
+      end
     else
       notice(model, provider_setup_hint(model))
     end
   end
+
+  defp budget_exhausted(%{unpriced_model: name}) when is_binary(name),
+    do: {:over, {:unpriced, name}}
+
+  defp budget_exhausted(model) do
+    Raxol.Agent.Code.CostLedger.check(
+      model.ledger,
+      model.ledger_agent_id,
+      model.spending_policy
+    )
+  end
+
+  # Each refusal names the action that can actually clear it: a frozen
+  # ledger only unfreezes (no policy change helps), an unreachable one
+  # needs its process fixed.
+  defp budget_notice(:frozen),
+    do: "spending ledger frozen — unfreeze it to continue"
+
+  defp budget_notice(:ledger_unreachable),
+    do: "spending ledger unreachable — check the wired ledger process"
+
+  defp budget_notice({:unpriced, name}), do: unpriced_notice(name)
+
+  defp budget_notice(limit),
+    do: "spending budget exhausted (#{limit}) — adjust the policy to continue"
 
   defp provider_ready?(%{provider_status: :ready}), do: true
 
@@ -480,6 +753,7 @@ defmodule Raxol.Agent.Code.App do
         worker: worker,
         session_id: session_id,
         messages: messages,
+        dirty: true,
         turn_answer: "",
         face_state: :thinking,
         face_frame: 0,
@@ -500,13 +774,20 @@ defmodule Raxol.Agent.Code.App do
     spawn(fn ->
       SessionStreamer.subscribe(session_id)
 
-      Task.async(fn ->
-        Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts),
-          prompt: prompt
-        )
-      end)
+      pump =
+        Task.async(fn ->
+          Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts), prompt: prompt)
+        end)
 
       relay(session_id, app)
+
+      # The pump is linked to this worker, but a :normal worker exit does not
+      # kill a linked process -- and a producer outliving its consumer would
+      # re-create the streamer entry the release below reclaims. (An interrupt
+      # kills the worker, which DOES propagate; the streamer's own DOWN
+      # handler reclaims that path.)
+      Task.shutdown(pump, :brutal_kill)
+      SessionStreamer.release(session_id)
     end)
   end
 
@@ -541,7 +822,21 @@ defmodule Raxol.Agent.Code.App do
   # (for the `task` tool), and any settings-file tool-call hooks.
   defp run_context(model, app) do
     %{
+      # The sandbox root the fs/workspace tools scope to. On a multi-tenant
+      # host each connection's App carries its own cwd, so this is what keeps
+      # one tenant's fs tools out of another's tree. NOTE: the shell tool is
+      # NOT confined by cwd alone (a command string can `cd` / `..` out), which
+      # is why `:jail` gates it off entirely — see the Bash action.
+      cwd: model.cwd,
+      # Tenancy marker: propagated into the tool context so the shell tool can
+      # fail closed and the fs jail can refuse a missing root instead of
+      # falling back to the process-global cwd. Threaded into sub-agents too.
+      jail: model.jail,
       tool_authorizer: tool_authorizer(app),
+      # Sub-agent rounds are paid provider calls on the SAME executor, but they
+      # run inside a nested stream whose usage never reaches the parent's fold.
+      # This is how they get metered.
+      usage_sink: usage_sink(app),
       subagent: %{
         executor: model.executor,
         backend_opts: model.backend_opts,
@@ -595,22 +890,449 @@ defmodule Raxol.Agent.Code.App do
   defp fold_event(event, normalized, model) do
     running? = model.running? and not terminal_event?(event)
 
+    # Producer ids restart every turn (`Contract.pump` stamps from a fresh
+    # per-turn counter), but the projection's id recovery requires one
+    # session-monotonic id space — colliding ids drop whole turns from the
+    # transcript. The model is the id authority for its own event log: every
+    # folded event is re-stamped from a session counter.
+    normalized = %{normalized | id: model.next_event_id}
+
+    {model, journal_warning} = journal_durable(model, normalized)
+
     # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
     events = model.events ++ [normalized]
 
     model = %{
       model
       | events: events,
+        next_event_id: model.next_event_id + 1,
+        dirty: true,
         face_state: face_for_event(event, model.face_state),
         face_frame: model.face_frame + 1,
         running?: running?,
         worker: if(running?, do: model.worker, else: nil),
-        status_line: if(running?, do: model.status_line, else: nil)
+        status_line:
+          journal_warning ||
+            if(running?, do: model.status_line, else: nil)
     }
 
     model
     |> accumulate_answer(event)
+    |> record_turn_cost(event)
     |> finalize_turn(event)
+  end
+
+  # Every turn_completed is one provider call; its cost (env rates or the
+  # price table) is recorded against the shared ledger as it happens, so
+  # LLM spend and payment spend draw on one budget. Fire-and-forget: a
+  # ledger problem never blocks the fold.
+  defp record_turn_cost(model, %{type: :turn_completed, payload: payload}) do
+    usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
+    meter_usage(model, usage, billed_model(model, payload), :llm_turn)
+  end
+
+  defp record_turn_cost(model, _event), do: model
+
+  defp meter_usage(model, usage, billed, type) do
+    cost = turn_cost_usd(model, usage, billed)
+
+    Raxol.Agent.Code.CostLedger.record(
+      model.ledger,
+      model.ledger_agent_id,
+      cost,
+      %{
+        type: type,
+        currency: "USD",
+        session: model.session_key,
+        model: billed
+      }
+    )
+
+    model
+    |> flag_unpriced(usage, billed, cost)
+    |> enforce_budget()
+  end
+
+  # Fail closed. A budget is only a budget if every paid round can be priced:
+  # an unpriced model bills real tokens while the ledger records $0.00, so the
+  # cap reads untouched no matter how much is spent. The first round of a
+  # session is unavoidable -- the billed model is only knowable from a response
+  # -- so this halts the NEXT one rather than pretending to prevent the first.
+  # With no ledger AND policy wired nothing changes: local single-user sessions
+  # keep today's best-effort estimate.
+  defp flag_unpriced(%{ledger: nil} = model, _usage, _billed, _cost), do: model
+
+  defp flag_unpriced(%{spending_policy: nil} = model, _usage, _billed, _cost),
+    do: model
+
+  defp flag_unpriced(model, usage, billed, cost) do
+    if cost == 0.0 and billed_tokens?(usage) do
+      %{model | unpriced_model: billed || "(unnamed)"}
+    else
+      model
+    end
+  end
+
+  defp billed_tokens?(usage) do
+    acc =
+      Raxol.Agent.BenchmarkProfile.add_usage(
+        %{input_tokens: 0, output_tokens: 0},
+        usage
+      )
+
+    acc.input_tokens > 0 or acc.output_tokens > 0
+  end
+
+  # The gate at submit refuses the NEXT prompt; this one stops the turn already
+  # running, which can otherwise make up to max_iterations more provider calls
+  # after the ledger already knows the cap is blown.
+  defp enforce_budget(%{running?: false} = model), do: model
+
+  defp enforce_budget(%{unpriced_model: name} = model) when is_binary(name) do
+    halt_turn(model, unpriced_notice(name))
+  end
+
+  defp enforce_budget(model) do
+    case budget_exhausted(model) do
+      :ok -> model
+      {:over, limit} -> halt_turn(model, budget_notice(limit))
+    end
+  end
+
+  defp halt_turn(model, notice) do
+    %{interrupt(model) | status_line: notice}
+  end
+
+  defp unpriced_notice(name),
+    do:
+      "spending halted: no price for #{name} — set " <>
+        "RAXOL_COST_PER_MTOK_IN/OUT or /model a priced one"
+
+  # What the provider actually CHARGED for, which is what has to be priced:
+  # with no :model configured the backend substitutes its own hosted default.
+  # A resumed session's payload is string-keyed. A backend that reports none
+  # leaves the configured model as the only estimate available.
+  defp billed_model(model, payload) do
+    Map.get(payload, :model) || Map.get(payload, "model") ||
+      current_model(model)
+  end
+
+  defp turn_cost_usd(model, usage, billed) do
+    case cost_profile(model, billed) do
+      nil ->
+        0.0
+
+      profile ->
+        acc =
+          Raxol.Agent.BenchmarkProfile.add_usage(
+            %{input_tokens: 0, output_tokens: 0},
+            usage
+          )
+
+        Raxol.Agent.BenchmarkProfile.cost_usd(profile, acc)
+    end
+  end
+
+  # Env rates (RAXOL_COST_PER_MTOK_IN/OUT) win; else the static price
+  # table for the connected model. nil = no estimate possible.
+  defp cost_profile(model, billed) do
+    case Raxol.Agent.BenchmarkProfile.from_env() do
+      {:ok, %{cost_per_mtok_in: rin, cost_per_mtok_out: rout} = profile}
+      when is_number(rin) and is_number(rout) ->
+        profile
+
+      _ ->
+        table_profile(model, billed)
+    end
+  end
+
+  defp table_profile(model, billed) do
+    backend = model.executor && model.executor.backend
+
+    case Raxol.Agent.LlmPrices.rates(backend, billed) do
+      {:ok, {rin, rout}} ->
+        %Raxol.Agent.BenchmarkProfile{
+          cost_per_mtok_in: rin,
+          cost_per_mtok_out: rout
+        }
+
+      :unknown ->
+        nil
+    end
+  end
+
+  defp current_model(model),
+    do: model.model_override || (model.executor && model.executor.model)
+
+  # -- durable journal --------------------------------------------------------
+
+  # Durable events land in the session's offset-addressed journal as they
+  # fold, so the durable-tier stamp holds even if the process dies mid-turn
+  # (the JSON store only persists on turn boundaries). Journal trouble never
+  # blocks the fold: the event stays in the model either way and the failure
+  # surfaces on the status line.
+  defp journal_durable(model, %{tier: :durable} = normalized),
+    do: journal_append(model, journal_record(model, normalized))
+
+  defp journal_durable(model, _ephemeral), do: {model, nil}
+
+  # Ensure + append with a single writer-down retry: a lost Writer (a
+  # sharing owner closed it, or it crashed) reopens once so the record
+  # is not silently missing from the journal. Returns {model, warning}.
+  defp journal_append(model, record) do
+    case ensure_journal(model) do
+      {:ok, model} ->
+        case FileStore.append(model.journal, record) do
+          {:ok, _offset} ->
+            {model, nil}
+
+          {:error, {:writer_down, _reason}} ->
+            retry_journal_append(%{model | journal: nil}, record)
+
+          {:error, reason} ->
+            {model, "journal append failed: #{inspect(reason)}"}
+        end
+
+      {:error, reason} ->
+        {model, "journal unavailable: #{inspect(reason)}"}
+    end
+  end
+
+  defp retry_journal_append(model, record) do
+    case ensure_journal(model) do
+      {:ok, model} ->
+        case FileStore.append(model.journal, record) do
+          {:ok, _offset} ->
+            {model, nil}
+
+          {:error, _reason} ->
+            {%{model | journal: nil}, "journal writer lost — will reopen"}
+        end
+
+      {:error, reason} ->
+        {model, "journal unavailable: #{inspect(reason)}"}
+    end
+  end
+
+  defp ensure_journal(%{journal: %FileStore{}} = model), do: {:ok, model}
+
+  defp ensure_journal(model) do
+    opts = Keyword.merge([cwd: model.cwd], model.journal_opts)
+
+    empty_before? =
+      FileStore.high_watermark(model.session_key, model.journal_opts) == 0
+
+    case FileStore.open(model.session_key, opts) do
+      {:ok, journal} ->
+        adopt_writer(journal)
+        model = %{model | journal: journal}
+        if empty_before?, do: backfill_journal(model)
+        {:ok, model}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # `FileStore.open` links the Writer to this process. Unlink so an
+  # abnormal Writer crash (a raising flush on a full disk, say) degrades
+  # to the writer-down append arm instead of killing the whole session;
+  # a janitor still stops the Writer on ANY exit of this process (SSH
+  # disconnect, crash), while the explicit close paths (/clear, /resume,
+  # /fork, Ctrl+C) just get there first.
+  defp adopt_writer(%FileStore{owner?: true} = journal) do
+    Process.unlink(journal.writer)
+    app = self()
+
+    spawn(fn ->
+      ref = Process.monitor(app)
+
+      receive do
+        {:DOWN, ^ref, :process, ^app, _reason} -> close_journal(journal)
+      end
+    end)
+
+    :ok
+  end
+
+  defp adopt_writer(_joiner), do: :ok
+
+  # A fork and a session recorded before journaling hold their history
+  # only in the JSON store, but --replay reads the journal first and a
+  # NON-empty journal never falls back — so an empty journal is seeded
+  # with the model's durable history before anything else lands in it.
+  # One-time cost proportional to the inherited history; best-effort
+  # (the regular append path surfaces journal trouble loudly).
+  defp backfill_journal(model) do
+    model.events
+    |> durable_events()
+    |> Enum.each(fn normalized ->
+      FileStore.append(model.journal, journal_record(model, normalized))
+    end)
+  end
+
+  # The Writer stamps `id` (the journal offset) and stringifies keys; the
+  # payload is already JSON-safe from the EventBoundary normalization.
+  # Scope and provenance ride along so a replay cannot launder a tainted
+  # event back to trusted (EventCodec defaults MISSING provenance to
+  # trusted).
+  defp journal_record(model, normalized) do
+    %{
+      v: 0,
+      session_id: model.session_key,
+      turn_id: normalized.turn_id,
+      ts: normalized.ts,
+      family: normalized.family,
+      type: normalized.type,
+      tier: :durable,
+      scope: normalized.scope,
+      provenance: normalized.provenance,
+      payload: normalized.payload
+    }
+  end
+
+  defp close_journal(%FileStore{} = journal) do
+    FileStore.close(journal)
+  catch
+    # A close-time flush can exit if the Writer is already dying; losing
+    # that flush is survivable, killing the session is not.
+    :exit, _reason -> :ok
+  end
+
+  defp close_journal(_none), do: :ok
+
+  # -- /rewind ----------------------------------------------------------------
+
+  # Drops the last turn from the transcript and the conversation in
+  # lockstep. The journal is append-only, so the drop is recorded there as
+  # a meta `:rewind` marker — replay applies markers in offset order and
+  # so converges with the live session; the JSON store just persists the
+  # truncated state.
+  defp rewind(%{running?: true} = model),
+    do: notice(model, "cannot rewind while a turn is running")
+
+  defp rewind(model) do
+    cond do
+      orphan_prompt?(model) ->
+        # An aborted turn (Esc before its first event, or an eagerly
+        # crashed worker) left the user prompt in the conversation but
+        # no events; the trailing EVENTS belong to the previous turn.
+        # Rewinding must undo the abort, not destroy the prior turn.
+        [_orphan | rest] = Enum.reverse(model.messages)
+
+        %{model | messages: Enum.reverse(rest)}
+        |> persist()
+        |> notice("rewound — removed the un-run prompt")
+
+      model.events == [] ->
+        notice(model, "nothing to rewind")
+
+      true ->
+        rewind_last_turn(model)
+    end
+  end
+
+  defp rewind_last_turn(model) do
+    {kept, dropped} = split_trailing_turn(model.events)
+    turn_id = List.last(model.events).turn_id
+    {messages, dropped_messages} = drop_turn_messages(model.messages)
+    {model, marker_warning} = journal_rewind_marker(model, turn_id)
+
+    model =
+      persist(%{
+        model
+        | events: kept,
+          next_event_id: next_id_after(kept),
+          messages: messages,
+          turn_answer: "",
+          face_state: :idle
+      })
+
+    note =
+      "rewound — dropped #{length(dropped)} events, " <>
+        "#{dropped_messages} messages"
+
+    notice(model, join_notes(note, marker_warning))
+  end
+
+  # Turn ids are only unique within one VM run (`Contract.pump` mints
+  # them from `System.unique_integer`), so a session grown across
+  # restarts can hold the same turn_id twice. Rewinding therefore drops
+  # only the CONTIGUOUS trailing run of the last turn's events — never a
+  # global match over the whole session — and the replay marker applies
+  # the same trailing-run rule.
+  defp split_trailing_turn([]), do: {[], []}
+
+  defp split_trailing_turn(events) do
+    turn_id = List.last(events).turn_id
+
+    {dropped_rev, kept_rev} =
+      events
+      |> Enum.reverse()
+      |> Enum.split_while(&(&1.turn_id == turn_id))
+
+    {Enum.reverse(kept_rev), Enum.reverse(dropped_rev)}
+  end
+
+  defp next_id_after([]), do: 1
+  defp next_id_after(kept), do: List.last(kept).id + 1
+
+  # The abort signature: the conversation ends in a user prompt that no
+  # event belongs to — the trailing events (if any) are a COMPLETED
+  # turn, so the prompt was appended by a turn that never emitted.
+  defp orphan_prompt?(model) do
+    trailing_user? = match?([%{role: :user} | _], Enum.reverse(model.messages))
+
+    completed_tail? =
+      case List.last(model.events) do
+        nil -> true
+        %{type: :turn_completed} -> true
+        _other -> false
+      end
+
+    trailing_user? and completed_tail?
+  end
+
+  defp join_notes(note, nil), do: note
+  defp join_notes(note, warning), do: note <> " · " <> warning
+
+  # The rewound turn's conversation tail is at most one user prompt plus
+  # one assistant reply (an errored or interrupted turn appends no reply).
+  defp drop_turn_messages(messages) do
+    case Enum.reverse(messages) do
+      [%{role: :assistant}, %{role: :user} | rest] ->
+        {Enum.reverse(rest), 2}
+
+      [%{role: :assistant} | rest] ->
+        {Enum.reverse(rest), 1}
+
+      [%{role: :user} | rest] ->
+        {Enum.reverse(rest), 1}
+
+      _other ->
+        {messages, 0}
+    end
+  end
+
+  defp journal_rewind_marker(model, turn_id) do
+    record = %{
+      v: 0,
+      session_id: model.session_key,
+      turn_id: nil,
+      ts: System.system_time(:microsecond),
+      family: :meta,
+      type: :rewind,
+      tier: :durable,
+      payload: %{"dropped_turn" => turn_id}
+    }
+
+    case journal_append(model, record) do
+      {model, nil} ->
+        {model, nil}
+
+      {model, _warning} ->
+        {model, "journal marker failed — --replay may still show it"}
+    end
   end
 
   # A completed message item is assistant answer text — accumulate it so the
@@ -620,8 +1342,7 @@ defmodule Raxol.Agent.Code.App do
       :message ->
         %{
           model
-          | turn_answer:
-              model.turn_answer <> to_string(payload_content(payload))
+          | turn_answer: model.turn_answer <> to_string(payload_content(payload))
         }
 
       _other ->
@@ -701,10 +1422,13 @@ defmodule Raxol.Agent.Code.App do
   defp persist(model) do
     case Raxol.Agent.Code.Store.save(model.sessions_dir, model.session_key, %{
            messages: model.messages,
-           events: durable_events(model.events)
+           events: durable_events(model.events),
+           cwd: model.cwd,
+           title: model.title,
+           parent: model.parent
          }) do
       :ok ->
-        model
+        %{model | dirty: false}
 
       {:error, reason} ->
         %{model | status_line: "session save failed: #{inspect(reason)}"}
@@ -756,19 +1480,25 @@ defmodule Raxol.Agent.Code.App do
 
   # -- authorization ----------------------------------------------------------
 
+  @doc false
   # The `:tool_authorizer`: runs inside the react loop's process and defers
   # every sensitive tool call to the app for an Engine verdict, blocking until
   # the app answers. Non-sensitive tools are allowed without a round-trip.
-  defp tool_authorizer(app) do
-    fn module, _params, _context ->
-      meta = module.__action_meta__()
+  # Reports one nested sub-agent round's usage back to the app for metering.
+  defp usage_sink(app) do
+    fn info -> send(app, {:command_result, {:tool_usage, info}}) end
+  end
 
-      if Map.get(meta, :sensitive, false) do
+  def tool_authorizer(app) do
+    fn action, _params, _context ->
+      {name, sensitive?} = action_identity(action)
+
+      if sensitive? do
         ref = make_ref()
 
         send(
           app,
-          {:command_result, {:authorize_request, ref, self(), meta.name}}
+          {:command_result, {:authorize_request, ref, self(), name}}
         )
 
         receive do
@@ -781,6 +1511,22 @@ defmodule Raxol.Agent.Code.App do
         :ok
       end
     end
+  end
+
+  # Module Actions carry their identity in `__action_meta__/0`;
+  # runtime-discovered MCP tools are `%Action.Dynamic{}` structs and carry it
+  # on the struct (sensitive by default, so an external server's tool is
+  # approval-gated per call — and denied outright in plan mode, since its
+  # effects are unknown).
+  defp action_identity(%Raxol.Agent.Action.Dynamic{
+         name: name,
+         sensitive: sensitive?
+       }),
+       do: {name, sensitive?}
+
+  defp action_identity(module) when is_atom(module) do
+    meta = module.__action_meta__()
+    {meta.name, Map.get(meta, :sensitive, false)}
   end
 
   # The ALLOW/ASK/DENY policy the Engine folds. Only sensitive (mutating)
@@ -840,6 +1586,16 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp apply_command("help", _arg, model), do: {notice(model, help_text()), []}
+
+  # In a jailed (multi-tenant) session the keyboard principal is a tenant, not
+  # the host owner. /login and /logout mutate the HOST-GLOBAL credential store
+  # (`Credentials.put`/`delete`, one file for the whole node), so a tenant must
+  # not reach them: the host pre-wires the provider via server app_opts.
+  defp apply_command(cmd, _arg, %{jail: true} = model)
+       when cmd in ["login", "logout"] do
+    {notice(model, "credential management is disabled in a hosted session"), []}
+  end
+
   defp apply_command("login", arg, model), do: {login(model, arg), []}
   defp apply_command("clear", _arg, model), do: {clear_session(model), []}
 
@@ -851,10 +1607,50 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("context", _arg, model),
     do: {notice(model, context_text(model)), []}
 
+  defp apply_command("usage", _arg, model),
+    do: {notice(model, usage_text(model)), []}
+
   defp apply_command("compact", _arg, model), do: {compact(model), []}
 
+  defp apply_command("rewind", _arg, model), do: {rewind(model), []}
+
+  defp apply_command("rename", arg, model),
+    do: {rename(model, String.trim(arg)), []}
+
+  defp apply_command("resume", arg, model) do
+    case String.trim(arg) do
+      "" -> {open_session_picker(model), []}
+      key -> {switch_session(model, key), []}
+    end
+  end
+
+  defp apply_command("fork", arg, model),
+    do: {fork_session(model, String.trim(arg)), []}
+
+  defp apply_command("export", arg, model),
+    do: {export_session(model, String.trim(arg)), []}
+
+  defp apply_command("transcript", _arg, model),
+    do: {write_transcript(model), []}
+
+  # /copy drives the HOST clipboard — unavailable to a jailed tenant.
+  defp apply_command("copy", _arg, %{jail: true} = model),
+    do: {notice(model, "clipboard is unavailable in a hosted session"), []}
+
+  defp apply_command("copy", _arg, model), do: {copy_last_answer(model), []}
+
+  defp apply_command("find", arg, model),
+    do: {find_in_transcript(model, String.trim(arg)), []}
+
+  defp apply_command("logout", arg, model),
+    do: {logout(model, String.trim(arg)), []}
+
+  defp apply_command("share", _arg, model), do: {share_session(model), []}
+
+  # Listing reads (and fully decodes) every session file, so it runs off
+  # the app process like the /resume picker — one fetcher, two modes.
   defp apply_command("sessions", _arg, model),
-    do: {notice(model, sessions_text(model)), []}
+    do: {arm_sessions_fetch(model, :list), []}
 
   defp apply_command("mcp", _arg, model),
     do: {notice(model, mcp_text(model)), []}
@@ -862,15 +1658,58 @@ defmodule Raxol.Agent.Code.App do
   defp apply_command("hooks", _arg, model),
     do: {notice(model, hooks_text(model)), []}
 
+  defp apply_command("inspect", _arg, model) do
+    ref = make_ref()
+    model.inspection_fetcher.(model.cwd, model.sessions_dir, ref, self())
+    {%{model | inspection_ref: ref} |> put_status("inspecting…"), []}
+  end
+
   defp apply_command(other, _arg, model),
     do: {notice(model, "unknown command: /#{other} — try /help"), []}
 
+  @doc false
+  # Default fetcher: gather + render the snapshot off the app process (a
+  # fresh disk read, the same snapshot `mix raxol.inspect` prints); the
+  # result rides back as an `:inspection_result` message `update/2` folds.
+  def default_inspection_fetcher(cwd, sessions_dir, ref, app) do
+    spawn(fn ->
+      text =
+        cwd
+        |> Raxol.Agent.Code.Inspection.gather(sessions_dir: sessions_dir)
+        |> Raxol.Agent.Code.Inspection.render()
+
+      send(app, {:command_result, {:inspection_result, ref, text}})
+    end)
+  end
+
+  # A jailed session reads no `.mcp.json` at all, so "none configured" would
+  # misdescribe it: the file may well be there, and the operator should know
+  # it was refused rather than go looking for a config bug.
+  defp mcp_text(%{mcp_servers: [], jail: jail}) when jail not in [nil, false],
+    do: "MCP servers are disabled in a jailed session"
+
   defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
 
-  defp mcp_text(%{mcp_servers: servers}) do
+  defp mcp_text(%{mcp_servers: servers} = model) do
     Enum.map_join(servers, "\n", fn s ->
-      "#{s.name}  →  #{s.command} #{Enum.join(s.args, " ")}"
+      "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
+        "#{s.command} #{Enum.join(s.args, " ")}"
     end)
+  end
+
+  defp server_mark(:loading, _name), do: "…"
+  defp server_mark(nil, _name), do: "○"
+
+  defp server_mark(%{connected: connected, failed: failed}, name) do
+    atom = String.to_existing_atom(name)
+
+    cond do
+      atom in connected -> "●"
+      Enum.any?(failed, fn {n, _reason} -> n == atom end) -> "✗"
+      true -> "○"
+    end
+  rescue
+    ArgumentError -> "○"
   end
 
   defp hooks_text(%{hooks: nil}), do: "no hooks configured (.raxol/hooks.json)"
@@ -1048,9 +1887,7 @@ defmodule Raxol.Agent.Code.App do
     ping_opts =
       opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
 
-    interpret_ping(
-      backend.complete([%{role: :user, content: "ping"}], ping_opts)
-    )
+    interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
   end
 
   @doc false
@@ -1138,9 +1975,7 @@ defmodule Raxol.Agent.Code.App do
     %{model | wizard: %{wizard | cursor: next}}
   end
 
-  defp maybe_wizard_select(
-         %{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model
-       ) do
+  defp maybe_wizard_select(%{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model) do
     case Enum.at(entries, cursor) do
       nil -> model
       entry -> select_provider(model, entry.harness, entry.keyless?)
@@ -1148,8 +1983,15 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp maybe_wizard_select(
-         %{wizard: %{step: :models, entries: entries, cursor: cursor}} = model
+         %{wizard: %{step: :sessions, entries: entries, cursor: cursor}} = model
        ) do
+    case Enum.at(entries, cursor) do
+      nil -> model
+      entry -> switch_session(%{model | wizard: nil}, entry.id)
+    end
+  end
+
+  defp maybe_wizard_select(%{wizard: %{step: :models, entries: entries, cursor: cursor}} = model) do
     case Enum.at(entries, cursor) do
       nil ->
         model
@@ -1251,8 +2093,7 @@ defmodule Raxol.Agent.Code.App do
       %{
         model
         | wizard: %{step: :confirm_save, harness: harness, key: key},
-          notice:
-            "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
+          notice: "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
       }
     else
       close_wizard(model)
@@ -1271,9 +2112,7 @@ defmodule Raxol.Agent.Code.App do
       {:error, reason} ->
         model
         |> close_wizard()
-        |> notice(
-          "could not save to 1Password: #{inspect(reason)} — key kept for this session"
-        )
+        |> notice("could not save to 1Password: #{inspect(reason)} — key kept for this session")
     end
   end
 
@@ -1329,19 +2168,489 @@ defmodule Raxol.Agent.Code.App do
   defp notice(model, text), do: %{model | notice: text}
 
   # A fresh session preserves the old file on disk and starts a new key, so
-  # clearing is never destructive to a prior conversation.
+  # clearing is never destructive to a prior conversation. The old journal
+  # closes (flushing its Writer); the new session lazily opens its own.
+  # Approval grants and plan mode are per-session, so they reset too.
   defp clear_session(model) do
+    close_journal(model.journal)
+
     %{
       model
       | messages: [],
         events: [],
+        journal: nil,
+        next_event_id: 1,
+        dirty: false,
         turn_answer: "",
         face_state: :idle,
         face_frame: 0,
         session_key: mint_session_key(),
+        title: "",
+        parent: nil,
+        plan_mode: false,
+        always_allow: MapSet.new(),
+        auth_state: Engine.new(),
         notice: "cleared — new session"
     }
   end
+
+  # `/rename` titles the session; the title shows in `/sessions` and the
+  # `/resume` picker, and persists with the session file.
+  defp rename(model, ""), do: notice(model, "usage: /rename <title>")
+
+  defp rename(model, title),
+    do: %{model | title: title} |> persist() |> notice(~s(renamed to "#{title}"))
+
+  # -- /resume + /fork --------------------------------------------------------
+
+  defp open_session_picker(model), do: arm_sessions_fetch(model, :picker)
+
+  defp arm_sessions_fetch(model, mode) do
+    ref = make_ref()
+    model.sessions_fetcher.(model.sessions_dir, ref, self())
+
+    %{model | sessions_ref: ref, sessions_mode: mode}
+    |> put_status("listing sessions…")
+  end
+
+  @doc false
+  # Lists sessions off the app process (Store.list reads every session
+  # file); the result rides back as a `:sessions_list` message.
+  def default_sessions_fetcher(dir, ref, app) do
+    spawn(fn ->
+      send(
+        app,
+        {:command_result, {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}}
+      )
+    end)
+  end
+
+  defp apply_sessions_result(model, []) do
+    %{model | sessions_ref: nil, status_line: nil}
+    |> notice("no saved sessions")
+  end
+
+  defp apply_sessions_result(%{sessions_mode: :list} = model, sessions) do
+    text =
+      sessions
+      |> Enum.take(10)
+      |> Enum.map_join("\n", &session_line/1)
+
+    %{model | sessions_ref: nil, status_line: nil} |> notice(text)
+  end
+
+  defp apply_sessions_result(model, sessions) do
+    if modal_wizard?(model) do
+      # A modal step (masked credential entry) owns the screen; opening
+      # the picker over it would discard half-typed secret input.
+      %{model | sessions_ref: nil, status_line: nil}
+    else
+      entries =
+        sessions
+        |> Enum.take(20)
+        |> Enum.map(&%{id: &1.id, label: session_line(&1)})
+
+      cursor = Enum.find_index(entries, &(&1.id == model.session_key)) || 0
+
+      %{
+        model
+        | sessions_ref: nil,
+          status_line: nil,
+          wizard: %{step: :sessions, entries: entries, cursor: cursor}
+      }
+    end
+  end
+
+  # Switching persists the departing session first (nothing is lost),
+  # closes its journal, and rebuilds transcript + conversation from the
+  # target — the in-place version of `--resume`.
+  defp switch_session(%{running?: true} = model, _key),
+    do: notice(model, "cannot switch sessions while a turn is running")
+
+  defp switch_session(%{session_key: key} = model, key),
+    do: notice(model, "already in session #{key}")
+
+  # A session key is a FILENAME: it reaches Path.join unescaped in
+  # /transcript and names the journal directory. Store.load only basenames it
+  # for its own lookup, so a traversal would survive the load and land in the
+  # model. Reject it here, where it enters, rather than at each use.
+  defp switch_session(model, key) do
+    case Raxol.Agent.Code.ShareToken.valid_session_id?(key) do
+      true -> enter_session(model, key)
+      false -> notice(model, "not a session id: #{inspect(key)}")
+    end
+  end
+
+  defp enter_session(model, key) do
+    case Raxol.Agent.Code.Store.load(model.sessions_dir, key) do
+      {:ok, saved} ->
+        # Persist the departing session only when it holds unsaved
+        # changes — a save always bumps updated_at, and merely peeking
+        # at a session must not make it the --continue target.
+        model = if model.dirty, do: persist(model), else: model
+        close_journal(model.journal)
+        events = renumber_events(saved.events)
+
+        %{
+          model
+          | session_key: key,
+            messages: saved.messages,
+            events: events,
+            next_event_id: length(events) + 1,
+            dirty: false,
+            journal: nil,
+            title: saved.title,
+            parent: saved.parent,
+            turn_answer: "",
+            face_state: :idle,
+            # Approval grants and plan mode are per-session.
+            plan_mode: false,
+            always_allow: MapSet.new(),
+            auth_state: Engine.new(),
+            wizard: nil
+        }
+        |> notice("resumed #{key} (#{length(saved.messages)} messages)")
+
+      {:error, :not_found} ->
+        notice(model, "session #{key} not found — try /sessions")
+    end
+  end
+
+  defp session_dirty?(model), do: model.messages != [] or model.events != []
+
+  # Copy-fork: the conversation and transcript continue under a fresh key
+  # whose store entry names its parent; the original session file stays
+  # intact. The fork's journal starts fresh on its next durable event.
+  defp fork_session(%{running?: true} = model, _title),
+    do: notice(model, "cannot fork while a turn is running")
+
+  defp fork_session(model, title) do
+    if session_dirty?(model) do
+      parent = model.session_key
+      model = persist(model)
+      close_journal(model.journal)
+      new_key = mint_session_key()
+
+      %{
+        model
+        | session_key: new_key,
+          parent: parent,
+          title: if(title == "", do: model.title, else: title),
+          journal: nil
+      }
+      |> persist()
+      |> notice("forked to #{new_key} (from #{parent})")
+    else
+      notice(model, "nothing to fork yet")
+    end
+  end
+
+  # -- /export /transcript /copy /find /logout --------------------------------
+
+  # `/export [path]` writes the transcript as plain text; the default
+  # lands beside the work as `<session_key>.txt` in the cwd. A jailed
+  # session confines the destination to the workspace — same containment
+  # decision the tools make.
+  defp export_session(model, path_arg) do
+    requested =
+      case path_arg do
+        "" -> "#{model.session_key}.txt"
+        given -> given
+      end
+
+    case export_path(model, requested) do
+      {:ok, path} ->
+        write_transcript_file(model, path, &File.write/2, "exported to #{path}")
+
+      {:error, :outside_cwd} ->
+        notice(
+          model,
+          "export refused: the path escapes this session's workspace"
+        )
+    end
+  end
+
+  defp export_path(%{jail: true} = model, requested),
+    do: Raxol.Agent.Actions.Fs.resolve(requested, %{cwd: model.cwd})
+
+  defp export_path(model, requested),
+    do: {:ok, Path.expand(requested, model.cwd)}
+
+  # `/transcript` writes to a temp file and points a pager at it. The TUI
+  # cannot suspend the terminal to host `$PAGER` itself (the driver owns
+  # the tty), so the hint is the honest version. The file is created
+  # exclusively with a fresh name and tightened to 0600 while still
+  # empty: /tmp is shared on Linux, transcripts are conversations, and a
+  # reused predictable path invites symlink games.
+  defp write_transcript(model) do
+    # A jailed session writes into its own workspace — the server's /tmp
+    # is unreachable through jailed tools, so a path there would be
+    # useless to the tenant.
+    base = if model.jail, do: model.cwd, else: System.tmp_dir!()
+
+    name =
+      "#{model.session_key}-transcript-" <>
+        "#{System.unique_integer([:positive])}.txt"
+
+    case transcript_path(model, base, name) do
+      {:ok, path} ->
+        write_transcript_file(
+          model,
+          path,
+          &write_private/2,
+          "transcript written — view with: ${PAGER:-less} #{path}"
+        )
+
+      {:error, :outside_cwd} ->
+        notice(model, "transcript refused: path escapes the workspace")
+    end
+  end
+
+  # The filename embeds session_key, which both /resume and --resume take from
+  # the user. They validate it on the way in; this is the check at the write
+  # itself, so any future path into session_key cannot turn /transcript into a
+  # file drop outside the jail. Mirrors what export_path/2 does for /export.
+  defp transcript_path(%{jail: true} = model, base, name),
+    do: Raxol.Agent.Actions.Fs.resolve(Path.join(base, name), %{cwd: model.cwd})
+
+  defp transcript_path(_model, base, name), do: {:ok, Path.join(base, name)}
+
+  defp write_transcript_file(model, path, writer, success_note) do
+    text = Raxol.Agent.Code.Replay.transcript_text(model.events)
+
+    case writer.(path, text <> "\n") do
+      :ok -> notice(model, success_note)
+      {:error, reason} -> notice(model, "write failed: #{inspect(reason)}")
+    end
+  end
+
+  defp write_private(path, text) do
+    case File.open(path, [:write, :exclusive]) do
+      {:ok, io} ->
+        File.chmod(path, 0o600)
+        result = IO.binwrite(io, text)
+        File.close(io)
+        result
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc false
+  # Write-and-close: clipboard tools (pbcopy/xclip/clip) commit on stdin
+  # EOF. `Raxol.System.Clipboard` waits for an exit status its port can
+  # never deliver (it closes the port before collecting), freezing the
+  # update loop for its full timeout — so this seam feeds the tool
+  # directly and treats a completed write as success.
+  def default_clipboard(text) do
+    case clipboard_command() do
+      {:ok, {executable, args}} ->
+        port = Port.open({:spawn_executable, executable}, [:binary, args: args])
+        Port.command(port, text)
+        Port.close(port)
+        :ok
+
+      {:error, _} = error ->
+        error
+    end
+  rescue
+    error -> {:error, error}
+  end
+
+  @doc false
+  def clipboard_command do
+    {command, args} =
+      case :os.type() do
+        {:unix, :darwin} -> {"pbcopy", []}
+        {:unix, _} -> {"xclip", ["-selection", "clipboard"]}
+        {:win32, _} -> {"clip", []}
+      end
+
+    case System.find_executable(command) do
+      nil -> {:error, {:clipboard_tool_missing, command}}
+      path -> {:ok, {path, args}}
+    end
+  end
+
+  defp copy_last_answer(model) do
+    case model.messages
+         |> Enum.reverse()
+         |> Enum.find(&(&1.role == :assistant)) do
+      nil ->
+        notice(model, "no assistant reply to copy yet")
+
+      %{content: content} ->
+        case model.clipboard.(content) do
+          :ok ->
+            notice(model, "copied last reply (#{byte_size(content)} bytes)")
+
+          {:error, reason} ->
+            notice(model, "copy failed: #{inspect(reason)}")
+        end
+    end
+  end
+
+  @find_match_cap 8
+
+  defp find_in_transcript(model, ""), do: notice(model, "usage: /find <text>")
+
+  defp find_in_transcript(model, needle) do
+    down_needle = String.downcase(needle)
+
+    matches =
+      Projection.project(model.events).blocks
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {block, _index} ->
+        block
+        |> Block.search_text()
+        |> String.downcase()
+        |> String.contains?(down_needle)
+      end)
+
+    case matches do
+      [] ->
+        notice(model, "no matches for \"#{needle}\"")
+
+      matches ->
+        lines =
+          matches
+          |> Enum.take(@find_match_cap)
+          |> Enum.map(fn {block, index} ->
+            "#{index}. [#{block.kind}] " <>
+              excerpt(Block.search_text(block), needle)
+          end)
+
+        header = "#{length(matches)} match(es) for \"#{needle}\":"
+        notice(model, Enum.join([header | lines], "\n"))
+    end
+  end
+
+  # A one-line window around the first hit, newlines flattened. The
+  # caseless regex yields a BYTE offset that is a codepoint boundary in
+  # the ORIGINAL string (a byte offset into a downcased copy is neither,
+  # and grapheme-slicing with it shifts or empties the window on any
+  # multibyte text — em dashes are everywhere in LLM replies).
+  defp excerpt(text, needle) do
+    flat = text |> String.replace(~r/\s+/u, " ") |> String.trim()
+
+    with {:ok, pattern} <- Regex.compile(Regex.escape(needle), "iu"),
+         [{byte_start, _len}] <- Regex.run(pattern, flat, return: :index) do
+      lead =
+        flat
+        |> binary_part(0, byte_start)
+        |> String.graphemes()
+        |> Enum.take(-20)
+
+      rest = binary_part(flat, byte_start, byte_size(flat) - byte_start)
+      ellipsis = if byte_start > 0 and length(lead) == 20, do: "…", else: ""
+      ellipsis <> Enum.join(lead) <> String.slice(rest, 0, 70)
+    else
+      _no_match -> String.slice(flat, 0, 70)
+    end
+  end
+
+  # Treat a blank or too-short share secret as unconfigured (nil): a
+  # declared-but-empty RAXOL_SHARE_SECRET is "" (truthy), and an empty/short
+  # HMAC key is offline-forgeable, so /share must fall back to "not configured"
+  # rather than mint a weak token. Length threshold lives in ShareToken.
+  defp normalize_share_secret(secret) do
+    if Raxol.Agent.Code.ShareToken.secret_ok?(secret), do: secret, else: nil
+  end
+
+  # `/share` mints a signed, expiring read-only token for THIS session.
+  # The journal is what the viewer replays, so it is ensured (and
+  # backfilled) here — a share of a never-journaled session would
+  # otherwise open empty.
+  defp share_session(%{share_secret: nil} = model) do
+    notice(
+      model,
+      "sharing not configured — set RAXOL_SHARE_SECRET (>= 32 bytes) on the " <>
+        "host (and mount Raxol.Agent.Code.ShareLive in a web app)"
+    )
+  end
+
+  defp share_session(model) do
+    if Raxol.Agent.Code.ShareToken.valid_session_id?(model.session_key) and
+         Raxol.Agent.Code.ShareToken.valid_scope?(model.share_scope) do
+      mint_share(model)
+    else
+      # A session_key with a `:` or other non-id character (e.g. a colon-laden
+      # /resume argument) would mint a token that can never verify. Refuse at
+      # the source with an actionable message rather than print a dead link.
+      notice(
+        model,
+        "this session's id can't be shared — resume or fork it under a " <>
+          "plain id (letters, digits, . _ -) first"
+      )
+    end
+  end
+
+  defp mint_share(model) do
+    model =
+      case ensure_journal(model) do
+        {:ok, journaled} -> journaled
+        {:error, _reason} -> model
+      end
+
+    token =
+      Raxol.Agent.Code.ShareToken.sign(model.session_key, model.share_secret,
+        scope: model.share_scope
+      )
+
+    # "follows this session live" is the part that surprises: the viewer
+    # attaches at the high-watermark and keeps receiving, so the link shares
+    # everything typed for the next 24h, not a snapshot of the scrollback.
+    case model.share_base_url do
+      nil ->
+        notice(
+          model,
+          "share token (read-only, follows this session live for 24h): #{token}"
+        )
+
+      base ->
+        notice(
+          model,
+          "read-only link (follows this session live for 24h): " <>
+            "#{String.trim_trailing(base, "/")}/#{token}"
+        )
+    end
+  end
+
+  # `/logout` disconnects the session's provider (the setup panel
+  # reopens); `/logout <provider>` additionally deletes that provider's
+  # stored credential reference.
+  defp logout(%{executor: nil} = model, ""),
+    do: notice(model, "no provider connected")
+
+  defp logout(model, "") do
+    %{model | executor: nil, provider_status: :no_provider}
+    |> open_browse()
+    |> notice("logged out — /login reconnects")
+  end
+
+  defp logout(model, provider) do
+    case model.credential_remover.(provider) do
+      {:ok, harness} ->
+        # The remover is idempotent (it cannot tell whether a reference
+        # was stored), and env-var keys are out of its reach entirely.
+        model
+        |> disconnect_if_current(harness)
+        |> notice(
+          "forgot stored credential for #{harness} " <>
+            "(env keys, if any, persist until unset)"
+        )
+
+      {:error, reason} ->
+        notice(model, "logout failed: #{inspect(reason)}")
+    end
+  end
+
+  defp disconnect_if_current(%{executor: %{backend: harness}} = model, harness) do
+    %{model | executor: nil, provider_status: :no_provider} |> open_browse()
+  end
+
+  defp disconnect_if_current(model, _harness), do: model
 
   # `/model` with no arg on a connected provider fetches its model list and
   # opens a selectable picker; otherwise it just shows the current model.
@@ -1354,7 +2663,12 @@ defmodule Raxol.Agent.Code.App do
   defp set_model(model, ""), do: model_usage(model)
 
   defp set_model(model, name) do
-    notice(%{model | model_override: name}, "model set to #{name}")
+    # Clears any unpriced-model halt: naming a model is one of the two fixes
+    # the halt notice points at, so it has to actually unblock the session.
+    notice(
+      %{model | model_override: name, unpriced_model: nil},
+      "model set to #{name}"
+    )
   end
 
   defp model_usage(model),
@@ -1455,22 +2769,111 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp context_text(model) do
+    {_turns, usage, _billed} = fold_usage(model.events)
+
     "messages: #{length(model.messages)} · events: #{length(model.events)} · " <>
+      "tokens: #{usage.input_tokens} in / #{usage.output_tokens} out · " <>
       "plan: #{if model.plan_mode, do: "on", else: "off"} · " <>
       "model: #{model.model_override || "default"} · session: #{model.session_key}"
   end
 
-  defp sessions_text(model) do
-    case Raxol.Agent.Code.Store.list(model.sessions_dir) do
-      [] ->
-        "no saved sessions"
+  # Session token totals folded from the turn_completed events the model
+  # already holds (the same events the transcript rebuilds from), so /usage
+  # works on a resumed session too. Cost estimates from env rates or the
+  # static price table; a wired Payments ledger adds the shared-budget
+  # totals (LLM + payment spend together).
+  defp usage_text(model) do
+    {turns, usage, billed} = fold_usage(model.events)
 
-      sessions ->
-        sessions
-        |> Enum.take(10)
-        |> Enum.map_join("\n", fn s -> "#{s.id}  (#{s.message_count} msgs)" end)
+    base =
+      "turns: #{turns} · input tokens: #{usage.input_tokens} · " <>
+        "output tokens: #{usage.output_tokens}"
+
+    cost_part =
+      case session_cost(model, usage, billed) do
+        nil ->
+          " · cost: unknown model — set RAXOL_COST_PER_MTOK_IN/OUT"
+
+        cost ->
+          " · est. cost: $#{:erlang.float_to_binary(cost, decimals: 4)}"
+      end
+
+    ledger_part =
+      case Raxol.Agent.Code.CostLedger.totals_text(
+             model.ledger,
+             model.ledger_agent_id,
+             model.spending_policy
+           ) do
+        nil -> ""
+        text -> " · " <> text
+      end
+
+    base <> cost_part <> ledger_part
+  end
+
+  # Also carries the last model the provider billed, so the summary prices the
+  # same way a turn did rather than falling back to the configured name.
+  defp fold_usage(events) do
+    Enum.reduce(events, {0, %{input_tokens: 0, output_tokens: 0}, nil}, fn
+      %{type: :turn_completed, payload: payload}, {turns, acc, billed} ->
+        usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
+        model = Map.get(payload, :model) || Map.get(payload, "model") || billed
+
+        {turns + 1, Raxol.Agent.BenchmarkProfile.add_usage(acc, usage), model}
+
+      _event, acc ->
+        acc
+    end)
+  end
+
+  defp session_cost(model, usage, billed) do
+    case cost_profile(model, billed || current_model(model)) do
+      nil -> nil
+      profile -> Raxol.Agent.BenchmarkProfile.cost_usd(profile, usage)
     end
   end
+
+  defp session_line(session) do
+    details =
+      [
+        title_note(session),
+        "#{session.message_count} msgs",
+        format_age(session.updated_at),
+        shorten_home(session.cwd)
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join(" · ")
+
+    "#{session.id}  (#{details})"
+  end
+
+  defp title_note(%{title: title}) when is_binary(title) and title != "",
+    do: ~s("#{title}")
+
+  defp title_note(_session), do: nil
+
+  defp format_age(updated_at)
+       when is_integer(updated_at) and updated_at > 0 do
+    diff = System.system_time(:second) - updated_at
+
+    cond do
+      diff < 60 -> "just now"
+      diff < 3600 -> "#{div(diff, 60)}m ago"
+      diff < 86_400 -> "#{div(diff, 3600)}h ago"
+      true -> "#{div(diff, 86_400)}d ago"
+    end
+  end
+
+  defp format_age(_updated_at), do: nil
+
+  defp shorten_home(cwd) when is_binary(cwd) and cwd != "" do
+    case System.user_home() do
+      nil -> cwd
+      home -> String.replace_prefix(cwd, home, "~")
+    end
+  end
+
+  defp shorten_home(_cwd), do: nil
 
   defp help_text do
     """
@@ -1480,10 +2883,22 @@ defmodule Raxol.Agent.Code.App do
     /model [name]      switch model (no name = pick from the provider's list)
     /plan              toggle plan mode
     /compact           shrink the conversation history
+    /rewind            drop the last turn (transcript + conversation)
     /context           session stats
+    /usage             session token and cost totals
     /sessions          list saved sessions
+    /resume [id]       switch session (no id = pick from a list)
+    /fork [title]      branch a copy of this session and continue there
+    /rename <title>    title this session (shown in /sessions)
+    /export [path]     write the transcript to a file (default: cwd)
+    /transcript        write the transcript to a temp file for paging
+    /copy              copy the last reply to the clipboard
+    /find <text>       search the transcript blocks
+    /logout [provider] disconnect (with a name: forget its credential)
+    /share             mint a read-only share link for this session
     /mcp               list configured MCP servers
     /hooks             show configured lifecycle hooks
+    /inspect           show every config source in use (providers, pin, hooks, MCP, skills, sessions)
     """
     |> String.trim_trailing()
   end
@@ -1516,6 +2931,9 @@ defmodule Raxol.Agent.Code.App do
   defp setup_block(%{wizard: %{step: :confirm_save} = wizard}),
     do: confirm_save_panel(wizard)
 
+  defp setup_block(%{wizard: %{step: :sessions} = wizard}),
+    do: sessions_panel(wizard)
+
   defp setup_block(%{wizard: %{step: :models} = wizard}),
     do: models_panel(wizard)
 
@@ -1546,6 +2964,24 @@ defmodule Raxol.Agent.Code.App do
     fg = if selected?, do: :cyan, else: :white
     style = if selected?, do: [:bold], else: []
     text("#{marker} #{entry.label}", fg: fg, style: style)
+  end
+
+  defp sessions_panel(%{entries: entries, cursor: cursor}) do
+    rows =
+      entries
+      |> Enum.with_index()
+      |> Enum.map(fn {entry, index} -> model_row(entry, index == cursor) end)
+
+    box style: %{border: :single, padding: 0} do
+      column style: %{gap: 0} do
+        [
+          text("resume a session  (↑↓ move · Enter resume · Esc cancel)",
+            fg: :yellow,
+            style: [:bold]
+          )
+        ] ++ rows
+      end
+    end
   end
 
   defp browse_panel(%{entries: entries, cursor: cursor}) do
