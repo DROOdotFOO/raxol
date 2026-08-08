@@ -205,8 +205,7 @@ defmodule Raxol.Agent.Code.App do
       mcp_ref: nil,
       mcp_status: nil,
       mcp_janitor: nil,
-      mcp_loader:
-        Keyword.get(options, :mcp_loader, &__MODULE__.default_mcp_loader/3),
+      mcp_loader: Keyword.get(options, :mcp_loader, &__MODULE__.default_mcp_loader/3),
       # The onboarding wizard overlay: nil (connected), or a step map
       # (`:browse` selectable list, `:credential` masked entry, `:confirm_save`
       # save-to-1Password prompt). Set in init when no provider is connected.
@@ -219,10 +218,8 @@ defmodule Raxol.Agent.Code.App do
       op_saver: Keyword.get(options, :op_saver, &__MODULE__.default_op_saver/2),
       # `/copy` and `/logout <provider>` reach system state (clipboard,
       # the stored-credentials file); injectable so tests stay hermetic.
-      clipboard:
-        Keyword.get(options, :clipboard, &__MODULE__.default_clipboard/1),
-      credential_remover:
-        Keyword.get(options, :credential_remover, &Raxol.Agent.Setup.remove/1),
+      clipboard: Keyword.get(options, :clipboard, &__MODULE__.default_clipboard/1),
+      credential_remover: Keyword.get(options, :credential_remover, &Raxol.Agent.Setup.remove/1),
       # The durable journal handle, opened lazily on the first durable
       # event so idle sessions never spawn a Writer. `:journal_opts` is
       # forwarded to `FileStore.open/2` (tests set `:base_dir` here).
@@ -760,9 +757,7 @@ defmodule Raxol.Agent.Code.App do
 
       pump =
         Task.async(fn ->
-          Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts),
-            prompt: prompt
-          )
+          Contract.pump(session_id, Raxol.Agent.Stream.react(prompt, opts), prompt: prompt)
         end)
 
       relay(session_id, app)
@@ -910,7 +905,8 @@ defmodule Raxol.Agent.Code.App do
   # ledger problem never blocks the fold.
   defp record_turn_cost(model, %{type: :turn_completed, payload: payload}) do
     usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
-    cost = turn_cost_usd(model, usage)
+    billed = billed_model(model, payload)
+    cost = turn_cost_usd(model, usage, billed)
 
     Raxol.Agent.Code.CostLedger.record(
       model.ledger,
@@ -920,7 +916,7 @@ defmodule Raxol.Agent.Code.App do
         type: :llm_turn,
         currency: "USD",
         session: model.session_key,
-        model: current_model(model)
+        model: billed
       }
     )
 
@@ -929,8 +925,17 @@ defmodule Raxol.Agent.Code.App do
 
   defp record_turn_cost(model, _event), do: model
 
-  defp turn_cost_usd(model, usage) do
-    case cost_profile(model) do
+  # What the provider actually CHARGED for, which is what has to be priced:
+  # with no :model configured the backend substitutes its own hosted default.
+  # A resumed session's payload is string-keyed. A backend that reports none
+  # leaves the configured model as the only estimate available.
+  defp billed_model(model, payload) do
+    Map.get(payload, :model) || Map.get(payload, "model") ||
+      current_model(model)
+  end
+
+  defp turn_cost_usd(model, usage, billed) do
+    case cost_profile(model, billed) do
       nil ->
         0.0
 
@@ -947,21 +952,21 @@ defmodule Raxol.Agent.Code.App do
 
   # Env rates (RAXOL_COST_PER_MTOK_IN/OUT) win; else the static price
   # table for the connected model. nil = no estimate possible.
-  defp cost_profile(model) do
+  defp cost_profile(model, billed) do
     case Raxol.Agent.BenchmarkProfile.from_env() do
       {:ok, %{cost_per_mtok_in: rin, cost_per_mtok_out: rout} = profile}
       when is_number(rin) and is_number(rout) ->
         profile
 
       _ ->
-        table_profile(model)
+        table_profile(model, billed)
     end
   end
 
-  defp table_profile(model) do
+  defp table_profile(model, billed) do
     backend = model.executor && model.executor.backend
 
-    case Raxol.Agent.LlmPrices.rates(backend, current_model(model)) do
+    case Raxol.Agent.LlmPrices.rates(backend, billed) do
       {:ok, {rin, rout}} ->
         %Raxol.Agent.BenchmarkProfile{
           cost_per_mtok_in: rin,
@@ -1254,8 +1259,7 @@ defmodule Raxol.Agent.Code.App do
       :message ->
         %{
           model
-          | turn_answer:
-              model.turn_answer <> to_string(payload_content(payload))
+          | turn_answer: model.turn_answer <> to_string(payload_content(payload))
         }
 
       _other ->
@@ -1795,9 +1799,7 @@ defmodule Raxol.Agent.Code.App do
     ping_opts =
       opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
 
-    interpret_ping(
-      backend.complete([%{role: :user, content: "ping"}], ping_opts)
-    )
+    interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
   end
 
   @doc false
@@ -1885,9 +1887,7 @@ defmodule Raxol.Agent.Code.App do
     %{model | wizard: %{wizard | cursor: next}}
   end
 
-  defp maybe_wizard_select(
-         %{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model
-       ) do
+  defp maybe_wizard_select(%{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model) do
     case Enum.at(entries, cursor) do
       nil -> model
       entry -> select_provider(model, entry.harness, entry.keyless?)
@@ -1903,9 +1903,7 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp maybe_wizard_select(
-         %{wizard: %{step: :models, entries: entries, cursor: cursor}} = model
-       ) do
+  defp maybe_wizard_select(%{wizard: %{step: :models, entries: entries, cursor: cursor}} = model) do
     case Enum.at(entries, cursor) do
       nil ->
         model
@@ -2007,8 +2005,7 @@ defmodule Raxol.Agent.Code.App do
       %{
         model
         | wizard: %{step: :confirm_save, harness: harness, key: key},
-          notice:
-            "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
+          notice: "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
       }
     else
       close_wizard(model)
@@ -2027,9 +2024,7 @@ defmodule Raxol.Agent.Code.App do
       {:error, reason} ->
         model
         |> close_wizard()
-        |> notice(
-          "could not save to 1Password: #{inspect(reason)} — key kept for this session"
-        )
+        |> notice("could not save to 1Password: #{inspect(reason)} — key kept for this session")
     end
   end
 
@@ -2116,8 +2111,7 @@ defmodule Raxol.Agent.Code.App do
   defp rename(model, ""), do: notice(model, "usage: /rename <title>")
 
   defp rename(model, title),
-    do:
-      %{model | title: title} |> persist() |> notice(~s(renamed to "#{title}"))
+    do: %{model | title: title} |> persist() |> notice(~s(renamed to "#{title}"))
 
   # -- /resume + /fork --------------------------------------------------------
 
@@ -2138,8 +2132,7 @@ defmodule Raxol.Agent.Code.App do
     spawn(fn ->
       send(
         app,
-        {:command_result,
-         {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}}
+        {:command_result, {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}}
       )
     end)
   end
@@ -2683,7 +2676,7 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp context_text(model) do
-    {_turns, usage} = fold_usage(model.events)
+    {_turns, usage, _billed} = fold_usage(model.events)
 
     "messages: #{length(model.messages)} · events: #{length(model.events)} · " <>
       "tokens: #{usage.input_tokens} in / #{usage.output_tokens} out · " <>
@@ -2697,14 +2690,14 @@ defmodule Raxol.Agent.Code.App do
   # static price table; a wired Payments ledger adds the shared-budget
   # totals (LLM + payment spend together).
   defp usage_text(model) do
-    {turns, usage} = fold_usage(model.events)
+    {turns, usage, billed} = fold_usage(model.events)
 
     base =
       "turns: #{turns} · input tokens: #{usage.input_tokens} · " <>
         "output tokens: #{usage.output_tokens}"
 
     cost_part =
-      case session_cost(model, usage) do
+      case session_cost(model, usage, billed) do
         nil ->
           " · cost: unknown model — set RAXOL_COST_PER_MTOK_IN/OUT"
 
@@ -2725,19 +2718,23 @@ defmodule Raxol.Agent.Code.App do
     base <> cost_part <> ledger_part
   end
 
+  # Also carries the last model the provider billed, so the summary prices the
+  # same way a turn did rather than falling back to the configured name.
   defp fold_usage(events) do
-    Enum.reduce(events, {0, %{input_tokens: 0, output_tokens: 0}}, fn
-      %{type: :turn_completed, payload: payload}, {turns, acc} ->
+    Enum.reduce(events, {0, %{input_tokens: 0, output_tokens: 0}, nil}, fn
+      %{type: :turn_completed, payload: payload}, {turns, acc, billed} ->
         usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
-        {turns + 1, Raxol.Agent.BenchmarkProfile.add_usage(acc, usage)}
+        model = Map.get(payload, :model) || Map.get(payload, "model") || billed
+
+        {turns + 1, Raxol.Agent.BenchmarkProfile.add_usage(acc, usage), model}
 
       _event, acc ->
         acc
     end)
   end
 
-  defp session_cost(model, usage) do
-    case cost_profile(model) do
+  defp session_cost(model, usage, billed) do
+    case cost_profile(model, billed || current_model(model)) do
       nil -> nil
       profile -> Raxol.Agent.BenchmarkProfile.cost_usd(profile, usage)
     end

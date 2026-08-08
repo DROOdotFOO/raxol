@@ -21,14 +21,12 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
 
   defp start_ledger do
     {:ok, ledger} =
-      Ledger.start_link(
-        table_name: :"llm_ledger_#{System.unique_integer([:positive])}"
-      )
+      Ledger.start_link(table_name: :"llm_ledger_#{System.unique_integer([:positive])}")
 
     ledger
   end
 
-  defp model_with(ledger, policy) do
+  defp model_with(ledger, policy, executor_opts \\ [backend: :openai, model: "gpt-4o"]) do
     App.init(%{
       options: [
         runner: fn _session_id, _prompt, _opts, _app ->
@@ -36,7 +34,7 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
         end,
         sessions_dir: tmp_dir(),
         journal_opts: [base_dir: tmp_dir()],
-        executor: ExecutorConfig.new(backend: :openai, model: "gpt-4o"),
+        executor: ExecutorConfig.new(executor_opts),
         provider_status: {:ready, :openai, :env},
         ledger: ledger,
         spending_policy: policy,
@@ -45,7 +43,7 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
     })
   end
 
-  defp turn_completed(usage) do
+  defp turn_completed(usage, extra \\ %{}) do
     %Contract.Event{
       id: 1,
       ts: 1,
@@ -53,7 +51,7 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
       family: :loop,
       type: :turn_completed,
       tier: :durable,
-      payload: %{final: true, usage: usage}
+      payload: Map.merge(%{final: true, usage: usage}, extra)
     }
   end
 
@@ -173,5 +171,29 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
 
     # 0.25 payment + 0.25 LLM (100k in at $2.50/M) = 0.5 in one ledger.
     assert model.notice =~ "ledger: $0.5000 session"
+  end
+
+  test "a turn prices from the model the provider billed, not the one configured" do
+    # With no :model configured the backend substitutes its own hosted default
+    # and charges for it. Pricing the configured (nil) name instead yielded
+    # :unknown -> $0.00 -> CostLedger.record's cost_usd > 0.0 guard no-oped, so
+    # the ledger read empty and no budget could ever bind.
+    ledger = start_ledger()
+    :ok = Ledger.subscribe(ledger)
+    model = model_with(ledger, SpendingPolicy.dev(), backend: :openai)
+
+    refute model.executor.model
+
+    _model =
+      fold(
+        model,
+        turn_completed(%{input_tokens: 1_000_000, output_tokens: 0}, %{
+          model: "gpt-4o"
+        })
+      )
+
+    assert_receive {:ledger_entry, entry}, 2_000
+    assert Decimal.eq?(entry.amount, Decimal.new("2.5"))
+    assert entry.metadata.model == "gpt-4o"
   end
 end
