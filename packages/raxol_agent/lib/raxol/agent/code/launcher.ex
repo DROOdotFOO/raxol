@@ -36,6 +36,7 @@ defmodule Raxol.Agent.Code.Launcher do
     ssh: :boolean,
     ssh_port: :integer,
     authorized_keys: :string,
+    ssh_tenants: :string,
     help: :boolean
   ]
 
@@ -66,6 +67,11 @@ defmodule Raxol.Agent.Code.Launcher do
     --ssh-port N     SSH listen port (default 2222)
     --authorized-keys DIR
                      directory with authorized_keys for publickey auth
+                     (single-tenant: every keyholder is one principal)
+    --ssh-tenants DIR
+                     multi-tenant: per-user keys at DIR/<user>/ssh/
+                     authorized_keys; each user gets their own cwd jail,
+                     session store, and spending identity under DIR/<user>/
     -h, --help       print this help
 
   Full docs: mix help raxol.code
@@ -196,16 +202,26 @@ defmodule Raxol.Agent.Code.Launcher do
     :ok
   end
 
-  # Single-tenant SSH serving: one daemon, one fresh session per connection.
-  # Fail-closed on auth — this surface reaches write/shell tools, so
-  # anonymous serving is not offered at all; publickey via --authorized-keys
-  # is the only mode.
+  # SSH serving: one daemon, one fresh session per connection. Fail-closed
+  # on auth — this surface reaches write/shell tools, so anonymous serving
+  # is not offered at all. Two modes: --authorized-keys (single-tenant,
+  # every keyholder is one principal) and --ssh-tenants (multi-tenant,
+  # per-user keys + per-user jail/sessions/spend identity).
   defp serve_ssh(parsed, boot, serve) do
+    tenants = Keyword.get(parsed, :ssh_tenants)
+    keys = Keyword.get(parsed, :authorized_keys)
+
     cond do
-      Keyword.get(parsed, :authorized_keys) in [nil, ""] ->
+      is_nil(tenants) and keys in [nil, ""] ->
         usage_error!(
-          "--ssh requires --authorized-keys DIR (publickey auth; " <>
-            "this surface never serves anonymously)"
+          "--ssh requires --authorized-keys DIR (single-tenant) or " <>
+            "--ssh-tenants DIR (multi-tenant); this surface never " <>
+            "serves anonymously"
+        )
+
+      is_binary(tenants) and keys not in [nil, ""] ->
+        usage_error!(
+          "--authorized-keys and --ssh-tenants are mutually exclusive"
         )
 
       Keyword.get(parsed, :continue, false) || Keyword.get(parsed, :resume) ->
@@ -222,10 +238,12 @@ defmodule Raxol.Agent.Code.Launcher do
         case boot.() do
           :ok ->
             serve_result =
-              serve.(Raxol.Agent.Code.App,
-                port: Keyword.get(parsed, :ssh_port, 2222),
-                authorized_keys_dir: Keyword.fetch!(parsed, :authorized_keys),
-                app_opts: app_opts
+              serve.(
+                Raxol.Agent.Code.App,
+                [
+                  port: Keyword.get(parsed, :ssh_port, 2222),
+                  app_opts: app_opts
+                ] ++ ssh_auth_opts(tenants, keys)
               )
 
             case serve_result do
@@ -252,6 +270,20 @@ defmodule Raxol.Agent.Code.Launcher do
         end
     end
   end
+
+  # Multi-tenant: the server authenticates per-user keys under the
+  # tenants root and derives each session's jail/sessions/spend options
+  # from the authenticated username.
+  defp ssh_auth_opts(tenants, _keys) when is_binary(tenants) do
+    root = Path.expand(tenants)
+
+    [
+      tenants_dir: root,
+      tenant_opts: &Raxol.Agent.Code.Tenant.app_opts(root, &1)
+    ]
+  end
+
+  defp ssh_auth_opts(_tenants, keys), do: [authorized_keys_dir: keys]
 
   @doc false
   # The Code.App boot options for parsed flags: repo pin + resolver +

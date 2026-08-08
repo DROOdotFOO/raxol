@@ -29,9 +29,24 @@ defmodule Raxol.SSH.Server do
 
     * `:allow_anonymous` - `true` accepts any connection (BBS/playground use).
     * `:authorized_keys_dir` - a directory holding an `authorized_keys` file;
-      connections must present a listed public key.
+      connections must present a listed public key. Single-tenant: every
+      keyholder is the same principal regardless of the username they claim.
+    * `:tenants_dir` - multi-tenant: keys live per user at
+      `<tenants_dir>/<user>/ssh/authorized_keys`, so a key only
+      authenticates the username it is filed under (a keyholder cannot
+      claim another tenant's name). Usernames are restricted to a
+      conservative charset; anything else maps to a directory that cannot
+      exist, so auth fails closed.
 
-  With neither, the server refuses to start.
+  With none of these, the server refuses to start.
+
+  ## Per-tenant application options
+
+  `:tenant_opts` - an arity-1 fun of the AUTHENTICATED username returning
+  `{:ok, keyword}` (options merged into the connection's app instance,
+  winning over the server-level `:app_opts`) or `{:error, reason}` (the
+  connection is refused). This is how a multi-tenant host assigns each
+  user their own cwd jail, session store, and spending identity.
   """
 
   use GenServer
@@ -81,10 +96,18 @@ defmodule Raxol.SSH.Server do
   def auth_daemon_opts(opts) do
     anonymous? = Keyword.get(opts, :allow_anonymous, false) == true
     keys_dir = Keyword.get(opts, :authorized_keys_dir)
+    tenants_dir = Keyword.get(opts, :tenants_dir)
 
     cond do
       anonymous? ->
         {:ok, [no_auth_needed: true]}
+
+      is_binary(tenants_dir) ->
+        {:ok,
+         [
+           user_dir_fun: tenant_user_dir_fun(tenants_dir),
+           auth_methods: ~c"publickey"
+         ]}
 
       is_binary(keys_dir) ->
         {:ok,
@@ -92,6 +115,50 @@ defmodule Raxol.SSH.Server do
 
       true ->
         {:error, :ssh_auth_required}
+    end
+  end
+
+  # SSH usernames are client-supplied and become path components: only a
+  # conservative charset passes, everything else (traversal shapes,
+  # separators, control bytes, over-long names) is refused.
+  @tenant_re ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
+
+  @doc """
+  Normalize a client-supplied SSH username to a tenant name, or `nil`
+  when it is not a safe path component. Shared with the tenant-option
+  derivation so the key lookup and the workspace mapping can never
+  disagree about which directory a username names.
+  """
+  @spec sanitize_tenant(String.t() | charlist()) :: String.t() | nil
+  def sanitize_tenant(user) do
+    name = to_string(user)
+
+    if name not in [".", ".."] and Regex.match?(@tenant_re, name) do
+      name
+    else
+      nil
+    end
+  end
+
+  @doc """
+  The per-tenant SSH key directory for `user`:
+  `<tenants_dir>/<user>/ssh` (holding that tenant's `authorized_keys`).
+  An unsafe username maps to a reserved path no tenant directory can
+  ever occupy, so its key lookup fails and auth is refused.
+  """
+  @spec tenant_user_dir(String.t(), String.t() | charlist()) :: String.t()
+  def tenant_user_dir(tenants_dir, user) do
+    case sanitize_tenant(user) do
+      # `.denied` itself is a valid tenant NAME, but a name maps to
+      # `<name>/ssh` — never to this bare path — so no tenant can occupy it.
+      nil -> Path.join(tenants_dir, ".denied")
+      name -> Path.join([tenants_dir, name, "ssh"])
+    end
+  end
+
+  defp tenant_user_dir_fun(tenants_dir) do
+    fn user ->
+      tenants_dir |> tenant_user_dir(user) |> String.to_charlist()
     end
   end
 
@@ -201,8 +268,11 @@ defmodule Raxol.SSH.Server do
              server: server_name,
              # Per-server app options, passed into every connection's app
              # instance (`context.options`); connection-scoped values (size,
-             # io_writer) are added per session.
-             app_opts: Keyword.get(opts, :app_opts, [])
+             # io_writer) are added per session, and per-TENANT options
+             # (from :tenant_opts, keyed by the authenticated username)
+             # override these.
+             app_opts: Keyword.get(opts, :app_opts, []),
+             tenant_opts: Keyword.get(opts, :tenant_opts)
            ]},
         negotiation_timeout: negotiation_timeout
       ] ++ auth_opts

@@ -33,6 +33,51 @@ defmodule Raxol.SSH.ServerTest do
     test "no auth option fails closed" do
       assert {:error, :ssh_auth_required} = Server.auth_daemon_opts([])
     end
+
+    test "tenants_dir yields per-user public-key auth" do
+      assert {:ok, opts} = Server.auth_daemon_opts(tenants_dir: "/srv/tenants")
+      assert is_function(opts[:user_dir_fun], 1)
+      assert opts[:auth_methods] == ~c"publickey"
+
+      # The fun maps a username to that tenant's key dir…
+      assert opts[:user_dir_fun].(~c"alice") ==
+               ~c"/srv/tenants/alice/ssh"
+
+      # …and an unsafe username to a path no tenant dir can occupy.
+      assert opts[:user_dir_fun].(~c"../root") == ~c"/srv/tenants/.denied"
+    end
+  end
+
+  describe "tenant username handling" do
+    test "sanitize_tenant accepts conservative names only" do
+      assert Server.sanitize_tenant("alice") == "alice"
+      assert Server.sanitize_tenant("bob-2.dev_x") == "bob-2.dev_x"
+      assert Server.sanitize_tenant(~c"carol") == "carol"
+
+      for bad <- [
+            "",
+            ".",
+            "..",
+            "../etc",
+            "a/b",
+            "-leading",
+            ".hidden",
+            "name with space",
+            "nul\0byte",
+            String.duplicate("a", 65)
+          ] do
+        assert Server.sanitize_tenant(bad) == nil, "accepted #{inspect(bad)}"
+      end
+    end
+
+    test "a tenant literally named .denied cannot occupy the refusal path" do
+      # ".denied" fails sanitize (leading dot), and even a hypothetical
+      # tenant name maps to <name>/ssh — never the bare refusal path.
+      assert Server.sanitize_tenant(".denied") == nil
+
+      assert Server.tenant_user_dir("/t", "alice") == "/t/alice/ssh"
+      assert Server.tenant_user_dir("/t", "../x") == "/t/.denied"
+    end
   end
 
   describe "host key default" do
@@ -106,6 +151,24 @@ defmodule Raxol.SSH.ServerTest do
       assert Keyword.get(merged, :width) == 80
       assert Keyword.get(merged, :io_writer) == :chan
       # A non-colliding app option still flows through.
+      assert Keyword.get(merged, :model) == "m"
+    end
+
+    test "tenant opts beat server app_opts but never the transport wiring" do
+      # Mirrors Session.init/1's transport ++ tenant ++ server merge.
+      tenant = [cwd: "/t/alice/work", agent_id: "ssh:alice", width: 5]
+      server = [cwd: "/srv/shared", model: "m"]
+
+      merged =
+        [environment: :ssh, io_writer: :chan, width: 80, height: 24] ++
+          tenant ++ server
+
+      # The tenant's jail wins over the server-wide default…
+      assert Keyword.get(merged, :cwd) == "/t/alice/work"
+      assert Keyword.get(merged, :agent_id) == "ssh:alice"
+      # …but transport keys stay untouchable.
+      assert Keyword.get(merged, :width) == 80
+      # Non-colliding server options still flow.
       assert Keyword.get(merged, :model) == "m"
     end
   end

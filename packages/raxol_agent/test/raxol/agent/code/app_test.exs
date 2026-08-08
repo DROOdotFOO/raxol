@@ -1369,6 +1369,32 @@ defmodule Raxol.Agent.Code.AppTest do
       assert File.read!(Path.join(cwd, "session.log")) =~ "the special answer"
     end
 
+    test "a jailed session confines /export and /transcript to the workspace" do
+      cwd = tmp_dir()
+      File.mkdir_p!(cwd)
+      model = answered_model(cwd: cwd, jail: true)
+
+      escape = Path.join(System.tmp_dir!(), "raxol-jail-escape.txt")
+      File.rm(escape)
+
+      {refused, []} = submit(model, "/export #{escape}")
+      assert refused.notice =~ "export refused"
+      refute File.exists?(escape)
+
+      {refused2, []} = submit(model, "/export ../outside.txt")
+      assert refused2.notice =~ "export refused"
+
+      # In-jail exports still work.
+      {ok_model, []} = submit(model, "/export notes.txt")
+      assert ok_model.notice =~ "exported to"
+      assert File.exists?(Path.join(cwd, "notes.txt"))
+
+      # /transcript lands inside the jail, where the tenant's tools reach.
+      {t_model, []} = submit(model, "/transcript")
+      path = t_model.notice |> String.split(" ") |> List.last()
+      assert String.starts_with?(path, Path.expand(cwd))
+    end
+
     test "/transcript writes a private temp file and hints at a pager" do
       model = answered_model()
       {model, []} = submit(model, "/transcript")

@@ -290,6 +290,54 @@ defmodule Raxol.Agent.Code.LauncherTest do
       refute inspect(executor) =~ "sk-secret-leak-probe"
     end
 
+    test "--ssh-tenants serves multi-tenant with per-user auth + options" do
+      serve = fn app, opts ->
+        send(self(), {:served, app, opts})
+        {:ok, spawn(fn -> :ok end)}
+      end
+
+      capture_io(fn ->
+        assert Launcher.main(
+                 [
+                   "--ssh",
+                   "--ssh-tenants",
+                   "/srv/tenants",
+                   "--backend",
+                   "mock"
+                 ],
+                 boot: fn -> :ok end,
+                 serve: serve
+               ) == 0
+      end)
+
+      assert_received {:served, Raxol.Agent.Code.App, opts}
+      assert opts[:tenants_dir] == "/srv/tenants"
+      refute Keyword.has_key?(opts, :authorized_keys_dir)
+
+      # The tenant fun derives that user's jailed option set.
+      tenant_opts = opts[:tenant_opts]
+      assert is_function(tenant_opts, 1)
+      assert {:error, :invalid_tenant} = tenant_opts.("../escape")
+    end
+
+    test "--authorized-keys and --ssh-tenants are mutually exclusive" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert Launcher.main(
+                   [
+                     "--ssh",
+                     "--authorized-keys",
+                     "/k",
+                     "--ssh-tenants",
+                     "/t"
+                   ],
+                   boot: fn -> flunk("boot ran") end
+                 ) == 64
+        end)
+
+      assert stderr =~ "mutually exclusive"
+    end
+
     test "a serve failure prints the reason and returns 1" do
       stderr =
         capture_io(:stderr, fn ->

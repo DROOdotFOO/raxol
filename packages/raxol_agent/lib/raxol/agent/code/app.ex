@@ -226,6 +226,10 @@ defmodule Raxol.Agent.Code.App do
       ledger: Keyword.get(options, :ledger),
       spending_policy: Keyword.get(options, :spending_policy),
       ledger_agent_id: Keyword.get(options, :agent_id, "raxol-code"),
+      # Multi-tenant hosts set :jail — the keyboard principal is not the
+      # server owner, so operator-typed paths (/export) confine to the
+      # workspace like tool paths do.
+      jail: Keyword.get(options, :jail, false),
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
@@ -2172,16 +2176,33 @@ defmodule Raxol.Agent.Code.App do
   # -- /export /transcript /copy /find /logout --------------------------------
 
   # `/export [path]` writes the transcript as plain text; the default
-  # lands beside the work as `<session_key>.txt` in the cwd.
+  # lands beside the work as `<session_key>.txt` in the cwd. A jailed
+  # session confines the destination to the workspace — same containment
+  # decision the tools make.
   defp export_session(model, path_arg) do
-    path =
+    requested =
       case path_arg do
-        "" -> Path.join(model.cwd, "#{model.session_key}.txt")
-        given -> Path.expand(given, model.cwd)
+        "" -> "#{model.session_key}.txt"
+        given -> given
       end
 
-    write_transcript_file(model, path, &File.write/2, "exported to #{path}")
+    case export_path(model, requested) do
+      {:ok, path} ->
+        write_transcript_file(model, path, &File.write/2, "exported to #{path}")
+
+      {:error, :outside_cwd} ->
+        notice(
+          model,
+          "export refused: the path escapes this session's workspace"
+        )
+    end
   end
+
+  defp export_path(%{jail: true} = model, requested),
+    do: Raxol.Agent.Actions.Fs.resolve(requested, %{cwd: model.cwd})
+
+  defp export_path(model, requested),
+    do: {:ok, Path.expand(requested, model.cwd)}
 
   # `/transcript` writes to a temp file and points a pager at it. The TUI
   # cannot suspend the terminal to host `$PAGER` itself (the driver owns
@@ -2190,9 +2211,14 @@ defmodule Raxol.Agent.Code.App do
   # empty: /tmp is shared on Linux, transcripts are conversations, and a
   # reused predictable path invites symlink games.
   defp write_transcript(model) do
+    # A jailed session writes into its own workspace — the server's /tmp
+    # is unreachable through jailed tools, so a path there would be
+    # useless to the tenant.
+    base = if model.jail, do: model.cwd, else: System.tmp_dir!()
+
     path =
       Path.join(
-        System.tmp_dir!(),
+        base,
         "#{model.session_key}-transcript-" <>
           "#{System.unique_integer([:positive])}.txt"
       )
