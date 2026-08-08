@@ -80,11 +80,17 @@ defmodule Raxol.CLITest do
     end
 
     test "code without an interactive terminal vetoes with exit 1" do
-      # The test VM has no tty on stdin, so the boot veto path is the real
-      # one; --backend mock keeps provider resolution hermetic (keyless).
-      stderr =
-        capture_io(:stderr, fn ->
-          assert CLI.main(["code", "--backend", "mock"]) == 1
+      # `interactive?/0` reads this process's GROUP LEADER, not stdin, so
+      # capturing :stderr alone leaves a real tty in place and the full-screen
+      # TUI boots over it. The outer `with_io/1` swaps the group leader for a
+      # StringIO, which is what makes the veto path deterministic whether or
+      # not the suite was launched from a terminal. --backend mock keeps
+      # provider resolution hermetic (keyless).
+      {stderr, _stdout} =
+        with_io(fn ->
+          capture_io(:stderr, fn ->
+            assert CLI.main(["code", "--backend", "mock"]) == 1
+          end)
         end)
 
       assert stderr =~ "interactive terminal"
@@ -93,10 +99,14 @@ defmodule Raxol.CLITest do
     test "code --ssh is NOT vetoed for a missing tty (serving needs none)" do
       # Without --authorized-keys the launcher rejects --ssh as a usage error
       # (64), which proves the tty veto (exit 1, "interactive terminal") did
-      # NOT fire first — the SSH path skips the local-terminal check.
-      stderr =
-        capture_io(:stderr, fn ->
-          assert CLI.main(["code", "--ssh"]) == 64
+      # NOT fire first -- the SSH path skips the local-terminal check. The
+      # group-leader swap is what gives the refute its meaning: under a real
+      # tty the veto could not have fired anyway.
+      {stderr, _stdout} =
+        with_io(fn ->
+          capture_io(:stderr, fn ->
+            assert CLI.main(["code", "--ssh"]) == 64
+          end)
         end)
 
       assert stderr =~ "authorized-keys"
