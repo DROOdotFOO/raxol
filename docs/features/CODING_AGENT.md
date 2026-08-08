@@ -117,17 +117,25 @@ what would resolve in the current directory and why.
 | `--continue` | Resume the most recently updated session. |
 | `--resume ID` | Resume a specific session by id. |
 | `--sessions` | Print saved sessions and exit (no TUI). |
+| `--replay ID` | Print a session's transcript from its durable journal and exit (no TUI). |
+| `--to-offset N` | With `--replay`: stop at journal offset N. Alone it is a usage error. |
 | `--ascii` | ASCII-only face for terminals without a UTF-8 font. |
 | `-h`, `--help` | Print usage and exit. |
+
+The SSH flags (`--ssh`, `--ssh-port`, `--authorized-keys`, `--ssh-tenants`) are
+described under [Serving over SSH](#serving-over-ssh).
 
 ```bash
 mix raxol.code --backend anthropic --model claude-sonnet-5
 mix raxol.code --continue
 mix raxol.code --resume sess-1234-5
 mix raxol.code --sessions
+mix raxol.code --replay sess-1234-5
 ```
 
 `--resume` wins over `--continue`; with neither, a fresh session is minted.
+`--replay` refuses to combine with `--ssh`, `--sessions`, `--continue`, or
+`--resume`.
 
 ## Keys
 
@@ -154,12 +162,27 @@ Typing, Enter, plan-mode toggles, and backspace are accepted only when the agent
 | `/model <name>` | Switch model for the next turns (bare `/model` on a connected provider opens a live model picker) |
 | `/plan` | Toggle plan mode |
 | `/compact` | Shrink history: keep the last 6 messages, replace older ones with a compaction marker, then persist |
+| `/rewind` | Drop the last turn from the transcript and the conversation (and write a rewind marker to the journal, so a replay drops it too) |
 | `/context` | Session stats (message, event, and token counts, plan on/off, model, session key) |
-| `/usage` | Session token totals per direction, plus an estimated cost when `RAXOL_COST_PER_MTOK_IN`/`RAXOL_COST_PER_MTOK_OUT` are set |
+| `/usage` | Session token totals per direction, an estimated cost (env rates, else the `Raxol.Agent.LlmPrices` table), and the shared-ledger totals when a ledger is wired |
 | `/sessions` | List up to 10 saved sessions |
+| `/resume [id]` | Switch session in place; bare `/resume` opens a picker over the 20 most recent |
+| `/fork [title]` | Branch a copy of this session under a new id and continue there |
+| `/rename <title>` | Title this session (shown by `/sessions`) |
+| `/export [path]` | Write the transcript to a file (default `<session>.txt` in the cwd) |
+| `/transcript` | Write the transcript to a fresh 0600 file (a temp file, or the workspace in a jailed session) and print a pager hint |
+| `/copy` | Copy the last assistant reply to the clipboard |
+| `/find <text>` | Case-insensitive search over the transcript blocks (first 8 matches) |
+| `/logout [provider]` | Disconnect the session's provider; with a name, also forget its stored credential reference |
+| `/share` | Mint a read-only share link for this session |
 | `/mcp` | List MCP servers configured in `.mcp.json` |
 | `/hooks` | Show pre/post/stop hook counts |
 | `/inspect` | Show every config source in use: provider resolution and why, the repo pin, hook rules, MCP servers, skills roots, session store (same output as `mix raxol.inspect`) |
+
+A jailed session (multi-tenant SSH, see below) refuses `/login`, `/logout`, and
+`/copy`: the keyboard principal there is a tenant, and all three reach host-global
+state (the credential store, the host clipboard). `/rewind`, `/resume`, and `/fork`
+refuse while a turn is running.
 
 ## Tools
 
@@ -175,9 +198,29 @@ sub-agent. Read-only tools run without a prompt; sensitive tools gate through ap
 | `bash` | Yes | `/bin/sh -c`, combined stdout+stderr, output truncated past 64KB |
 | `task` | (delegating) | Delegates to a fresh read-only sub-agent that cannot write, run bash, or recurse |
 
-Every path expands relative to the working directory (`RAXOL_CLI_CWD` or the BEAM cwd) and
-must stay under it. A `../` escape or an outside-cwd absolute path is rejected with
-`:outside_cwd`.
+Skills tools (`skills_list`, `skill_view`, `skill_manage`) join the toolset when a
+skills provider is configured.
+
+Every path expands relative to the working directory: the tool context's `:cwd`
+when the surface sets one (an ACP session root, a tenant jail), else
+`RAXOL_CLI_CWD`, else the BEAM cwd. The result must stay under that root, and
+containment is decided on the REAL path: `Raxol.Agent.Actions.Fs.resolve/2`
+canonicalizes both sides component by component (`realpath`), so a symlink cannot
+lexically hide an escape. A `../` escape, an outside-cwd absolute path, or a
+symlink cycle is rejected with `:outside_cwd`.
+
+`grep` and `glob` run that check on every path they WALK, entry by entry through
+the recursive scan. `File.regular?/1` and `File.dir?/1` follow symlinks, so the
+native grep walk tests each symlinked entry for containment, skips the ones that
+escape, and re-tests at the read itself; `glob` rejects every wildcard match whose
+realpath lands outside the root, so an out-of-workspace name stays undisclosed.
+
+In a jailed session the `bash` tool is refused entirely
+(`Raxol.Agent.Actions.Code.shell_jail_allow/1` returns
+`{:error, :shell_disabled_in_jail}`) unless the context carries a
+`Raxol.Agent.Sandbox.Shell`. A `/bin/sh -c` command line is not a path, so
+`{:cd, cwd}` is a starting directory rather than a boundary and the fs
+containment above does not apply to it.
 
 ## Approval UX
 
@@ -199,14 +242,67 @@ Plan mode appends a read-only directive to the system prompt and has the Authori
 engine deny every mutating tool, with a `PLAN` chip in the status strip. Toggle it off to
 execute.
 
+## Spending limits
+
+LLM spend is metered into the same `Raxol.Payments.Ledger` agent payments draw on,
+through `Raxol.Agent.Code.CostLedger`. Wire it with the app options `:ledger`
+(a Ledger server ref), `:spending_policy` (a `Raxol.Payments.SpendingPolicy`), and
+optionally `:agent_id` (the ledger scope key, default `"raxol-code"` so a `/clear`
+cannot mint its way out of a cap). Without raxol_payments in the host, or without
+both a ledger and a policy, every call here degrades to a no-op and nothing changes.
+
+Each provider call's cost is recorded as its `turn_completed` event folds, priced
+from `RAXOL_COST_PER_MTOK_IN`/`RAXOL_COST_PER_MTOK_OUT` when both are set, else from
+the `Raxol.Agent.LlmPrices` table. Sub-agent rounds from the `task` tool run in a
+nested stream whose usage never reaches the parent fold, so they report through a
+`:usage_sink` and are metered the same way. The gate then runs twice:
+
+- at submit, so an exhausted budget refuses the NEXT prompt with a notice naming
+  what clears it (`frozen`, `ledger_unreachable`, or the limit that tripped);
+- inside the running turn, so a turn that blows the cap mid-loop is interrupted
+  rather than allowed to keep looping through more provider calls.
+
+A wired-but-dead ledger fails closed: an unanswerable `check_budget` reads as
+`{:over, :ledger_unreachable}`.
+
+With a ledger AND a policy wired, a model with no price fails closed too. An
+unpriced model bills real tokens while the ledger records $0.00, so the first
+response that reports billed tokens at $0.00 halts the running turn and blocks
+the next prompt. The notice names the two fixes: set
+`RAXOL_COST_PER_MTOK_IN`/`RAXOL_COST_PER_MTOK_OUT`, or `/model` a priced one.
+Naming a model with `/model` clears the halt. The first round of a session
+cannot be prevented (the billed model is only knowable from a response), so
+this stops the second.
+
 ## Sessions
 
 Conversation memory persists across turns and across runs, one JSON file per session.
 `--continue` resumes the most recent; `--resume ID` a specific one. The default directory is
 `$RAXOL_CODE_SESSIONS` if set, otherwise `~/.raxol/code_sessions`. A saved session stores the
 messages and the durable transcript events, so a resume rebuilds both the model context and
-the visual scrollback. The session id is passed through `Path.basename`, so a crafted id
-cannot escape the sessions directory.
+the visual scrollback. Session ids are validated where they enter (`--resume`, `/resume`,
+`--replay`) against the charset `[A-Za-z0-9._-]+`, excluding `.` and `..`, and the store
+additionally passes the id through `Path.basename`, so a crafted id cannot escape the
+sessions directory.
+
+Alongside the JSON store, each session appends its durable-tier events to an
+offset-addressed journal (`Raxol.Agent.Journal.FileStore`, one directory per session
+under `$RAXOL_SESSIONS_DIR` or `~/.raxol/sessions`), through a single owning Writer, as
+they fold. The JSON store only persists on turn boundaries, so the journal is what
+survives a process death mid-turn; it opens lazily on the first durable event, and an
+append failure lands on the status line without blocking the fold.
+
+That journal is what `--replay ID` reads: it folds the records through
+`Raxol.Harness.Projection` and prints the transcript without starting a TUI, with
+`--to-offset N` replaying only the prefix at or below offset N. A session recorded
+before the journal existed (or whose journal is gone) falls back to the JSON store.
+Replay is read-only: a crash-torn tail is tolerated on read and healed only by the
+owning Writer (`Reader.resume_scan/1`), so replaying a live session cannot disturb it.
+
+`/rewind` drops the last turn from the transcript and the conversation and writes a
+rewind marker into the journal, so `--replay` and the shared viewer drop it too. Turn
+ids are only unique within one VM run, so a rewind removes the contiguous trailing run
+of the last turn's events rather than every event with that id.
 
 ## The axol face
 
@@ -230,10 +326,11 @@ Contract events drive the face: a started turn is `:thinking`, a running tool is
 
 Two optional per-project files, both read from `<cwd>/`:
 
-- `.raxol/hooks.json` declares `pre_tool_use` / `post_tool_use` matchers (each `[match, command]`,
-  `match` is an exact tool name or `"*"`) plus `stop` commands. A pre-hook that exits non-zero
-  vetoes the tool (30-second timeout, `RAXOL_TOOL_NAME` in the environment); post-hooks are
-  advisory; stop commands run at turn end.
+- `.raxol/hooks.json` declares `pre_tool_use` / `post_tool_use` matchers (each
+  `{"match": ..., "command": ...}`, `match` is an exact tool name or `"*"` and defaults to
+  `"*"`) plus `stop` commands. A pre-hook that exits non-zero vetoes the tool (30-second
+  timeout, `RAXOL_TOOL_NAME` in the environment); post-hooks are advisory; stop commands
+  run at turn end.
 - `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format.
   Configured servers are started (supervised, off the boot path) and their tools join the
   live toolset as `mcp__<server>__<tool>`, sensitive by default: each call is
@@ -241,7 +338,7 @@ Two optional per-project files, both read from `<cwd>/`:
   external tool's effects are unknown. `/mcp` shows per-server connection state
   (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
   a note, never fatal. At most 16 servers load per config, and server names are held to
-  `[a-zA-Z0-9][a-zA-Z0-9_-]*` (each one interns an atom and spawns a subprocess);
+  `[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}` (each one interns an atom and spawns a subprocess);
   refusals show up in `/mcp` alongside connection failures.
 
 Both files name a command to execute, so both are read only when the session owns its
@@ -269,6 +366,13 @@ Zed `agent_servers` snippet. This is a repo-checkout feature: the protocol
 package is a dev/test path dependency, so a Hex install of raxol_agent is
 built without it and the task exits 1 with an explanation.
 
+`Raxol.Agent.ClientProtocol.Serve` owns every exit code, so `mix raxol.acp`,
+the packaged `raxol acp`, and the shim agree. A clean peer disconnect exits 0:
+the transport reports the close, the connection stops, and the process answers
+with a code instead of dying of the linked exit. The non-zero paths are a usage
+error (64), a build with no ACP support (1), an unresolved provider (1), and a
+connection that ended abnormally (1).
+
 ## Serving over SSH
 
 `mix raxol.code --ssh --authorized-keys ~/.ssh/agent_keys` serves the same
@@ -288,10 +392,10 @@ daemon. Each tenant is a directory under the root:
     /srv/tenants/<user>/
     ├── ssh/authorized_keys   # that user's keys: a key only authenticates
     │                         # the username it is filed under
-    ├── work/                 # the cwd jail: every fs/shell tool, /export,
-    │                         # and /transcript confine here
-    ├── code_sessions/        # that user's session store (/resume, --replay)
-    └── sessions/             # that user's durable journal
+    ├── work/                 # the cwd jail: every fs tool, /export, and
+    │                         # /transcript confine here (bash is refused)
+    ├── code_sessions/        # that user's session store (/sessions, /resume)
+    └── sessions/             # that user's durable journal (/share, --replay)
 
 The AUTHENTICATED username decides everything: usernames are restricted to
 a conservative charset (anything else fails auth outright), the same
@@ -301,14 +405,16 @@ refused rather than started unjailed. A jailed session also loads no
 `.raxol/hooks.json` and no `.mcp.json`: both name a command to run and both
 live in the tenant's own writable workspace.
 
-Spending identity is `ssh:<user>`, so a shared `Raxol.Payments.Ledger` +
-policy on the server-level app options gives each tenant their own budget
-(the gate refuses the next turn once it is spent).
+Spending identity is `ssh:<user>` (the tenant's `:agent_id`), so a shared
+`Raxol.Payments.Ledger` + policy on the server-level app options gives each
+tenant their own budget, enforced as described in
+[Spending limits](#spending-limits): the running turn halts and the next
+prompt is refused.
 
 What the jail is NOT: separate OS uids. This is one BEAM under one uid, so
-the confinement is the fs tools' path resolution plus the refusal to load
-workspace-configured commands. Untrusted tenants want separate uids or
-containers on top.
+the confinement is the fs tools' path resolution, the refusal of the `bash`
+tool, and the refusal to load workspace-configured commands. Untrusted
+tenants want separate uids or containers on top.
 
 Hosted deployment: set `RAXOL_SSH_CODE=true` with
 `RAXOL_SSH_CODE_TENANTS=/data/tenants` and
@@ -337,9 +443,9 @@ client.
 
 `/share` mints a signed, expiring token (24h) for the current session and
 ensures its journal exists for a viewer to replay. Configuration is one
-secret: set `RAXOL_SHARE_SECRET` (or the `:share_secret` app option) on
-both the TUI host and the web host, and mount the viewer in any Phoenix
-app:
+secret: set `RAXOL_SHARE_SECRET` (or the `:share_secret` app option), at
+least 32 bytes, on both the TUI host and the web host, and mount the viewer
+in any Phoenix app:
 
     live "/share/:token", Raxol.Agent.Code.ShareLive
 
@@ -361,6 +467,11 @@ tenant name, and the viewer resolves
 `<tenants_root>/<scope>/sessions` from `:share_tenants_root` or
 `RAXOL_SSH_CODE_TENANTS`. A scoped token on a host with no tenants root
 configured is refused rather than resolved against the host's own tree.
+
+A blank or under-length secret reads as unconfigured, so `/share` says so
+rather than minting a forgeable token, and a session whose id is not of the
+shareable shape is refused with a message pointing at `/fork` or `/resume`
+under a plain id.
 
 `RAXOL_SHARE_BASE_URL` turns the `/share` notice into a pasteable link.
 `phoenix_live_view` is an optional dependency; without it the viewer

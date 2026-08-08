@@ -42,7 +42,7 @@ session
 
 `mix mcp.server` starts the MCP server on stdio for Claude Code integration, and `mix raxol.code` is an interactive terminal coding agent (the axol face) with every mutating tool call gated by an ALLOW/ASK/DENY authorization engine. See the [Coding Agent](docs/features/CODING_AGENT.md).
 
-**Code** is the coding-agent product, in two surfaces: `mix raxol.code` is the interactive terminal TUI (the axol face `≡··≡`), and `mix raxol.p` is its headless twin (prompt in on argv, answer to stdout, contract events to stderr) for pipes and CI. Every mutating tool call is gated by an ALLOW/ASK/DENY authorization engine. From a clone, one setup command and one launch:
+**Code** is the coding-agent product, in two hands-on surfaces: `mix raxol.code` is the interactive terminal TUI (the axol face `≡··≡`), and `mix raxol.p` is its headless twin (prompt in on argv, answer to stdout, contract events to stderr) for pipes and CI. Every mutating tool call is gated by an ALLOW/ASK/DENY authorization engine. From a clone, one setup command and one launch:
 
 ```bash
 (cd packages/raxol_agent && mix deps.get)   # once
@@ -51,9 +51,13 @@ bin/raxol-code                              # the TUI, your cwd as the workspace
 
 No API key configured? The TUI opens on a provider wizard instead of failing. `/inspect` (or `mix raxol.inspect` from `packages/raxol_agent`) shows every config source the agent will use in the current directory.
 
+Sessions are durable. Each session journals its events to disk, so `--continue` and `--resume <id>` restore the model context and the scrollback together, `--replay <id>` prints a transcript straight from the journal (`--to-offset N` stops at an offset), `/rewind` drops back to an earlier turn, and `/share` mints a signed 24-hour link to a read-only transcript that follows the session live (needs `RAXOL_SHARE_SECRET` and a host mounting `Raxol.Agent.Code.ShareLive`).
+
 The same TUI serves over SSH: `mix raxol.code --ssh --ssh-tenants /srv/tenants` hosts many users from one daemon, each behind their own public key with their own cwd jail, session store, and spending identity (`ssh <you>@your-host -p 2222` is the whole client). Single-tenant (`--authorized-keys`) and hosted deployment (`RAXOL_SSH_CODE=true`) are in [Coding Agent](docs/features/CODING_AGENT.md).
 
-Both surfaces sit on the **Harness**, the agent-session engine (`Raxol.Harness.*`): a durable event journal, a typed event/command contract, and pure replay-from-offset surfaces, with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
+Two unattended surfaces run the same agent. `bin/raxol-acp` (or `mix raxol.acp`) serves it over the [Agent Client Protocol](https://agentclientprotocol.com) on stdio, for editors that spawn an agent themselves; `Raxol.Agent.Harness.McpTools` registers `harness_start_session`, `harness_send_prompt`, `harness_read_transcript`, and `harness_list_sessions` with the MCP registry, so a session started by an MCP client resumes later in the TUI. Both run the read-only toolset: `write_file`, `edit_file`, and `bash` are absent where nobody is there to answer an approval prompt.
+
+Every one of those surfaces sits on the **Harness**, the agent-session engine: a durable event journal (`Raxol.Agent.Journal`), a typed event/command contract (`Raxol.Agent.Contract`), and surface state that is a pure fold over the event stream (`Raxol.Harness.Projection`), with staged interrupt, steer, and spend/blast-radius gates underneath. The same engine can supervise external agent CLIs (`claude`, `cursor`) as readily as Raxol's own loop. See [Harness architecture](docs/harness/architecture.md).
 
 The agent subsystems ship as standalone packages:
 

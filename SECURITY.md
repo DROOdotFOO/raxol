@@ -33,14 +33,18 @@ support commitment yet.
   still welcome.
 - Multi-tenant coding-agent hosting (`--ssh-tenants`, `RAXOL_SSH_CODE`) puts
   an untrusted principal at the keyboard of a session that holds the host's
-  provider credential. The boundary is one BEAM under one uid, NOT separate
-  OS users: it rests on the fs tools' path resolution, the `:jail` refusal of
-  the shell tool, and the refusal to load workspace-configured commands
-  (`.raxol/hooks.json`, `.mcp.json`) in a jailed session. Anything that
-  executes code outside a tenant's `work/` jail, reads another tenant's
-  workspace, sessions, or journal, or spends past that tenant's budget is in
-  scope and high priority. Deployments handling mutually hostile tenants
-  should add OS-level isolation on top.
+  provider credential. Every tenant runs in one BEAM under one OS uid;
+  per-tenant OS isolation (separate uid, chroot, container) is not
+  implemented. The confinement is `Raxol.Agent.Code.Tenant`'s per-user `work/`
+  cwd jail, enforced by the realpath containment in
+  `Raxol.Agent.Actions.Fs.resolve/2`, plus two refusals in a jailed session:
+  the shell tool unless the deployment wires a `:shell_sandbox`
+  (`Raxol.Agent.Actions.Code.shell_jail_allow/1`), and workspace-configured
+  commands (`.raxol/hooks.json`, `.mcp.json`). Anything that executes code
+  outside a tenant's `work/` jail, reads another tenant's workspace,
+  sessions, or journal, or spends past that tenant's budget is in scope and
+  high priority. Deployments handling mutually hostile tenants should add
+  OS-level isolation on top.
 
 ## Dependency scanning
 

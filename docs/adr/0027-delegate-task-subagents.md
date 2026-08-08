@@ -8,8 +8,13 @@ As built, the shipped Action is narrower than the decision below: it is named
 `task` (not `delegate_task`), accepts a single string prompt (no list input,
 no `Task.async_stream/3` fan-out), runs a nested `Stream.react` rather than a
 transient `Agent.Session` with its own `Conversation.Log`, and blocks the
-parent tool loop until the sub-agent finishes. The fan-out and Session-backed
-variants remain unimplemented design. Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
+parent tool loop until the sub-agent finishes. It returns `%{result: content}`
+where decision item 2 specified `%{summary: ...}`. The sub-agent's toolset is a
+fixed read-only set (`list_dir`, `read_file`, `file_stat`, `grep`, `glob`)
+rather than a parent-supplied grant, and recursion is bounded by withholding
+the `task` tool itself, so the configurable depth guard of decision item 4 does
+not exist. The fan-out and Session-backed variants remain unimplemented design.
+Hermes-extraction Tier 2 ADR (`~/Desktop/hermes-extraction-report.md`, item
 H2.4). Refines the deferred omnigent T2.1 ("sub-agents are async tools + auto-wake") into a clean
 summary-only contract. Builds on `Raxol.Agent.Session`, `Raxol.Agent.Team`, the omnigent item-log
 (`Raxol.Agent.Conversation.Log`), and `Raxol.Agent.Turn` (ADR-0021's wiring).
@@ -141,7 +146,12 @@ session and the parallel dispatch.
 - `~/Desktop/hermes-extraction-report.md` (item H2.4; Hermes `delegate_task`, summary-only contract)
 - ADR-0021 / ADR-0022: skills + memory (the subagent's log feeds `session_search`)
 - ADR-0020: Agent Sandbox, ThreadLog, declarative Policies (delegation flows through the same gating)
-- `packages/raxol_agent/lib/raxol/agent/session.ex` (`start_link/1`, the transient isolated subagent)
-- `packages/raxol_agent/lib/raxol/agent/team.ex` (the long-lived alternative this deliberately is not)
-- `packages/raxol_agent/lib/raxol/agent/turn.ex` (the turn driver the subagent runs through)
-- `packages/raxol_agent/lib/raxol/agent/conversation/log.ex` (the subagent's isolated history)
+- `packages/raxol_agent/lib/raxol/agent/actions/task.ex` (the shipped Action: `Delegate` +
+  `run_subagent/3`, a nested `Raxol.Agent.Stream.react/2` run inheriting only `:cwd` and `:jail`)
+- `packages/raxol_agent/lib/raxol/agent/session.ex` (`start_link/1`, the transient isolated subagent
+  this ADR proposed and the shipped Action does not use)
+- `packages/raxol_agent/lib/raxol/agent/team.ex` (the long-lived alternative this ADR rejects)
+- `packages/raxol_agent/lib/raxol/agent/turn.ex` (the turn driver the proposed subagent would run
+  through)
+- `packages/raxol_agent/lib/raxol/agent/conversation/log.ex` (the proposed subagent's isolated
+  history)

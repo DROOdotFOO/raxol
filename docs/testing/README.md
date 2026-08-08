@@ -2,8 +2,9 @@
 
 ## Running tests
 
-`SKIP_TERMBOX2_TESTS=true` and `TMPDIR=/tmp` are set automatically via `.claude/settings.json`,
-so you can omit them locally.
+The suite expects `SKIP_TERMBOX2_TESTS=true` and `TMPDIR=/tmp`. Export them in your shell,
+or put them in a local `.claude/settings.json` `env` block if you run tests through Claude
+Code; that file is gitignored, so a fresh clone starts without it.
 
 ```bash
 # Standard run (excludes slow, integration, docker-dependent tests)
@@ -22,7 +23,7 @@ MIX_ENV=test mix test --max-failures 5
 
 ### Package tests
 
-Each extracted package has its own test suite:
+Each extracted package has its own test suite, run from inside the package directory:
 
 ```bash
 cd packages/raxol_core     && MIX_ENV=test mix test
@@ -36,8 +37,9 @@ cd packages/raxol_agent    && MIX_ENV=test mix test
 
 ### All quality checks
 
-`mix raxol.check` mirrors the checks CI enforces. Run the full command before you push;
-a clean local run is the strongest signal your branch will pass CI.
+`mix raxol.check` runs the quality gates in one pass. CI spreads the same tooling across
+workflows (`mix format --check-formatted`, `mix raxol.check_docs`, `mix credo`,
+`mix dialyzer`, and the test matrix), so a clean local run is a good pre-push signal.
 
 ```bash
 mix raxol.check                        # lockfile, compile, format, credo, dialyzer, security, docs, rate, test
@@ -56,13 +58,14 @@ bug worth tracking down.
 ### Coverage
 
 ```bash
-mix test --cover
+MIX_ENV=test mix test --cover
 ```
 
 ## Test tags
 
-Tests are tagged to allow selective exclusion. The standard run excludes `:slow`,
-`:integration`, and `:docker` automatically.
+Tests are tagged to allow selective exclusion. `:slow`, `:integration`, and `:docker` are
+excluded by the `--exclude` flags on the standard run above; `test/test_helper.exs` adds
+the rest.
 
 | Tag | Meaning |
 |-----|---------|
@@ -72,12 +75,12 @@ Tests are tagged to allow selective exclusion. The standard run excludes `:slow`
 | `@tag :unix_only` | Unix/macOS only, excluded on Windows |
 | `@tag :slow` | Long-running tests |
 | `@tag :integration` | Full-stack integration tests |
-| `@tag :flaky` | Known flaky tests (excluded by default) |
-| `@tag :requires_terminal` | Needs a real terminal (excluded in CI) |
-| `@tag :tmp_dir` | Allocates a temp dir; fixture-managed |
+| `@moduletag :ring_b` | Drives real GUI terminals over AppleScript; excluded unconditionally, on every platform |
+| `@tag :requires_terminal` | Needs a real terminal to mean anything; `.github/workflows/rate-selfhosted.yml` runs these under a pty |
+| `@tag :tmp_dir` | ExUnit's temp-dir fixture; the dir arrives in the test context |
 | `@tag :event_manager` | Touches the global event manager |
 | `@tag :notification` | Touches the global notification manager |
-| `@tag :gpg` | Requires `gpg` on `PATH` |
+| `@tag :gpg` | Requires `gpg` on `PATH` (raxol_agent suite) |
 
 Run only a specific tag:
 
@@ -166,7 +169,7 @@ end
 | `test/support/buffer_helper.ex` | Screen buffer assertions |
 | `test/support/event_macro_helpers.ex` | Event construction shortcuts |
 
-## Property-Based tests
+## Property-based tests
 
 Property tests live in `test/property/` and use
 [StreamData](https://hexdocs.pm/stream_data) via `ExUnitProperties`.
@@ -204,7 +207,7 @@ defp csi_sequence_generator do
 end
 ```
 
-Existing property test files:
+A few of the files in `test/property/`:
 
 - `test/property/parser_property_test.exs`: ANSI parser
 - `test/property/ui_component_property_test.exs`: Button, TextInput, Flexbox, Grid
