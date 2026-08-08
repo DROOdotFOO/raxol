@@ -8,7 +8,7 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent code p playground new help)
+  @commands ~w(agent code p acp playground new help)
 
   @doc "Dispatch `argv`, returning an exit code."
   @spec main([String.t()]) :: non_neg_integer()
@@ -21,6 +21,8 @@ defmodule Raxol.CLI do
   # stderr. `-p` matches the historical `bin/raxol -p` wrapper spelling.
   def main(["p" | rest]), do: Raxol.Agent.P.run(rest)
   def main(["-p" | rest]), do: Raxol.Agent.P.run(rest)
+  # Serve over ACP on stdio, for editors and agent harnesses that spawn us.
+  def main(["acp" | rest]), do: Raxol.Agent.ClientProtocol.Serve.run(rest)
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
   def main([help]) when help in ~w(help --help -h), do: help()
@@ -185,6 +187,7 @@ defmodule Raxol.CLI do
       agent         Interactive AI agent session (default)
       code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
+      acp           Serve over the Agent Client Protocol on stdio
       playground    Browse the interactive component catalog
       new [name]    Scaffold a new Raxol application
       help          Show this help

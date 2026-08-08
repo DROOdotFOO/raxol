@@ -14,6 +14,44 @@ defmodule Raxol.CLITest do
       assert out =~ "playground"
     end
 
+    test "help lists acp, and it is a declared command" do
+      out = capture_io(fn -> assert CLI.main(["help"]) == 0 end)
+
+      assert out =~ "acp"
+      assert out =~ "Agent Client Protocol"
+      assert "acp" in CLI.commands()
+    end
+  end
+
+  describe "acp subcommand" do
+    test "acp --help prints the shared serve usage" do
+      out = capture_io(fn -> assert CLI.main(["acp", "--help"]) == 0 end)
+
+      assert out =~ "Usage: raxol acp"
+      assert out =~ "--backend"
+    end
+
+    # The packaged binary must not merely accept `acp` -- the surface behind it
+    # is compile-gated on the (unpublished) ACP package, so a build that ships
+    # the subcommand without the agent would fail only at runtime, on the wire.
+    #
+    # This also catches a stale _build: adding the ACP dep does not change
+    # raxol_agent's own sources, so Mix will happily reuse a raxol_agent
+    # compiled before the package existed, with "absent" baked into the gate.
+    # Remedy: `mix deps.compile raxol_agent --force`.
+    test "the ACP agent surface is compiled into this build" do
+      assert Raxol.Agent.ClientProtocol.Serve.available?()
+    end
+
+    test "an unknown acp option is a usage error, not a boot" do
+      stderr =
+        capture_io(:stderr, fn ->
+          assert CLI.main(["acp", "--nonsense"]) == 64
+        end)
+
+      assert stderr =~ "unknown options"
+    end
+
     test "an unknown command prints help and returns 1" do
       stderr =
         capture_io(:stderr, fn ->

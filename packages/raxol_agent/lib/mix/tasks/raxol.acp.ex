@@ -56,145 +56,35 @@ defmodule Mix.Tasks.Raxol.Acp do
 
   use Mix.Task
 
-  @compile {:no_warn_undefined,
-            [
-              Raxol.AgentClientProtocol.Transport.Stdio,
-              Raxol.AgentClientProtocol.Agent,
-              Raxol.Agent.ClientProtocol.StdioAgent
-            ]}
-
-  @switches [backend: :string, harness: :string, model: :string, help: :boolean]
-  @aliases [h: :help]
-
-  @usage """
-  Usage: mix raxol.acp [options]
-
-  Serve the coding agent over the Agent Client Protocol on stdio
-  (for ACP-speaking editors such as Zed).
-
-  Options:
-    --backend NAME   LLM backend (auto-detected if omitted; --harness is a
-                     deprecated alias)
-    --model NAME     model override
-    -h, --help       print this help
-
-  Full docs: mix help raxol.acp
-  """
-
   @impl Mix.Task
   def run(argv) do
-    {opts, _args, invalid} =
-      OptionParser.parse(argv, strict: @switches, aliases: @aliases)
+    # stdout is the wire, so nothing may print to it before the transport binds.
+    # `app.start` reloads config and restarts :logger, which reinstates a
+    # stdout-bound default handler; seed :logger's env so the restarted handler
+    # comes up on stderr instead of putting every startup log line on the wire.
+    # (`Serve` re-asserts this after boot.) Mix's own `==> dep` announcements go
+    # to stdout too, hence the quiet shell and the skipped checks.
+    Application.put_env(:logger, :default_handler,
+      config: %{type: :standard_error}
+    )
 
-    cond do
-      Keyword.get(opts, :help, false) ->
-        IO.puts(@usage)
-
-      invalid != [] ->
-        usage_error("unknown options: #{inspect(invalid)}")
-
-      not acp_available?() ->
-        IO.puts(
-          :stderr,
-          "raxol.acp: the ACP package is not available in this build; " <>
-            "run from the raxol repo (packages/raxol_agent), or add " <>
-            ":raxol_agent_client_protocol to your deps"
-        )
-
-        exit({:shutdown, 1})
-
-      true ->
-        serve(opts)
-    end
-  end
-
-  defp acp_available? do
-    Code.ensure_loaded?(Raxol.Agent.ClientProtocol.TurnRunner) and
-      Raxol.Agent.ClientProtocol.TurnRunner.available?() and
-      Code.ensure_loaded?(Raxol.Agent.ClientProtocol.StdioAgent)
-  end
-
-  defp serve(opts) do
-    # Provider first: a config problem exits 1 before anything binds stdio.
-    executor =
-      case Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
-        {:ok, executor, _source} -> executor
-        {:error, message} -> config_error(message)
-      end
-
-    # stdout is the wire: NDJSON only, so every log line goes to stderr. Two
-    # mechanisms, because the swap alone is not enough: `app.start` reloads
-    # config and restarts :logger, which reinstates a stdout-bound default
-    # handler, so a pre-boot swap loses every startup log line onto the wire.
-    # Seed :logger's env first so the restarted handler comes up on stderr,
-    # then re-assert after boot in case loadconfig overwrote it.
-    Application.put_env(:logger, :default_handler, config: %{type: :standard_error})
-    reroute_logs_to_stderr()
     Application.put_env(:raxol, :skip_endpoint, true)
     Application.put_env(:raxol, :startup_mode, :mcp)
     System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
-
-    # `app.start` compiles path deps and announces each one as `==> dep` through
-    # Mix's shell, which writes to stdout -- one more thing on the wire. The
-    # shim has already compiled by this point, so there is nothing to report.
     Mix.shell(Mix.Shell.Quiet)
-    Mix.Task.run("app.start")
-    reroute_logs_to_stderr()
 
-    {:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
+    # Boot without recompiling (bin/raxol-acp precompiles silently), then hand
+    # off to the shared runner -- `Raxol.Agent.ClientProtocol.Serve` contains no
+    # Mix calls, so the same code path serves the Burrito-packaged `raxol acp`
+    # where Mix does not exist. `--help`, usage errors, and provider resolution
+    # are answered by the runner, so every entrypoint agrees.
+    Mix.Task.run("app.start", [
+      "--no-compile",
+      "--no-deps-check",
+      "--no-archives-check",
+      "--no-elixir-version-check"
+    ])
 
-    {:ok, _sup} =
-      Raxol.AgentClientProtocol.Agent.start_link(
-        Raxol.Agent.ClientProtocol.StdioAgent,
-        transport: {Raxol.AgentClientProtocol.Transport.Stdio, handle},
-        handler_arg: %{turn_opts: turn_opts(executor)}
-      )
-
-    Process.sleep(:infinity)
-  end
-
-  # Read-only toolset, matching the StdioAgent contract.
-  defp turn_opts(executor) do
-    [
-      executor: executor,
-      actions: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.read_only(),
-      system_prompt:
-        "You are a coding assistant driven by an editor over ACP. Use the " <>
-          "available read-only tools to inspect files. Be concise."
-    ]
-  end
-
-  # `update_handler_config(:config, ...)` is rejected by logger_std_h as an
-  # illegal runtime type change, so the handler has to be removed and re-added.
-  # Carry the existing config across so Elixir's formatter and level survive:
-  # re-adding a bare logger_std_h would keep stdout clean but reduce every
-  # stderr log line to Erlang's default format.
-  defp reroute_logs_to_stderr do
-    case :logger.get_handler_config(:default) do
-      {:ok, %{module: module} = config} ->
-        _ = :logger.remove_handler(:default)
-
-        rebound =
-          config
-          |> Map.drop([:id, :module])
-          |> Map.put(:config, %{type: :standard_error})
-
-        _ = :logger.add_handler(:default, module, rebound)
-
-      _ ->
-        _ = :logger.add_handler(:default, :logger_std_h, %{config: %{type: :standard_error}})
-    end
-
-    :ok
-  end
-
-  defp usage_error(message) do
-    IO.puts(:stderr, "raxol.acp: #{message}\n\n#{@usage}")
-    exit({:shutdown, 64})
-  end
-
-  defp config_error(message) do
-    IO.puts(:stderr, "raxol.acp: #{message}")
-    exit({:shutdown, 1})
+    exit({:shutdown, Raxol.Agent.ClientProtocol.Serve.run(argv)})
   end
 end
