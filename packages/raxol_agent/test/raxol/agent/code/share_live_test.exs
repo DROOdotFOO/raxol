@@ -10,7 +10,8 @@ defmodule Raxol.Agent.Code.ShareLiveTest do
   alias Raxol.Agent.Code.ShareToken
   alias Raxol.Agent.Journal.FileStore
 
-  @secret "share-live-secret"
+  # >= 32 bytes: ShareToken now refuses shorter keys as offline-forgeable.
+  @secret String.duplicate("share-live-secret-", 2)
 
   setup do
     Application.put_env(:raxol_agent, :share_secret, @secret)
@@ -151,6 +152,26 @@ defmodule Raxol.Agent.Code.ShareLiveTest do
       ShareLive.mount(%{"token" => expired}, %{}, socket(false))
 
     assert socket.assigns.error =~ "expired"
+  end
+
+  test "a blank host secret closes the view (fail closed)" do
+    seed_session("sess-blank")
+    token = ShareToken.sign("sess-blank", @secret)
+
+    # An empty configured secret must not verify a token anyone could forge.
+    Application.put_env(:raxol_agent, :share_secret, "")
+
+    {:ok, socket} = ShareLive.mount(%{"token" => token}, %{}, socket(false))
+    assert socket.assigns.error =~ "invalid share link"
+  end
+
+  test "a valid token for an unknown session fails loud, not blank" do
+    # No seed: the session dir does not exist under this host's base.
+    token = ShareToken.sign("sess-missing", @secret)
+
+    {:ok, socket} = ShareLive.mount(%{"token" => token}, %{}, socket(false))
+    assert socket.assigns.error =~ "session unavailable"
+    assert socket.assigns.transcript == ""
   end
 
   test "the transcript honors rewind markers like --replay does" do

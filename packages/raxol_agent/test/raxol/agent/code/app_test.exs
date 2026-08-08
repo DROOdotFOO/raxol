@@ -1483,9 +1483,11 @@ defmodule Raxol.Agent.Code.AppTest do
     test "/share mints a verifiable token and ensures the journal" do
       base = tmp_dir()
 
+      secret = String.duplicate("app-share-secret-", 2)
+
       model =
         answered_model(
-          share_secret: "app-share-secret",
+          share_secret: secret,
           journal_opts: [base_dir: base]
         )
 
@@ -1495,7 +1497,7 @@ defmodule Raxol.Agent.Code.AppTest do
       token = model.notice |> String.split(" ") |> List.last()
 
       assert {:ok, session_id} =
-               Raxol.Agent.Code.ShareToken.verify(token, "app-share-secret")
+               Raxol.Agent.Code.ShareToken.verify(token, secret)
 
       assert session_id == model.session_key
 
@@ -1512,7 +1514,7 @@ defmodule Raxol.Agent.Code.AppTest do
     test "/share with a base url mints a pasteable link" do
       model =
         answered_model(
-          share_secret: "s",
+          share_secret: String.duplicate("share-secret-", 3),
           share_base_url: "https://example.test/share/"
         )
 

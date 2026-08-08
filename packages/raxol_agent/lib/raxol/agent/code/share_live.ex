@@ -70,16 +70,28 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     # -- internals (public test seams are the callbacks themselves) ----------
 
     defp open_session(socket, session_id) do
-      socket = assign(socket, session_id: session_id, error: nil)
+      if session_exists?(session_id) do
+        socket = assign(socket, session_id: session_id, error: nil)
 
-      # The tailer only starts on the CONNECTED mount; the static render
-      # shows the replayed history without spawning a follower per crawl.
-      if connected?(socket) do
-        attach_live(socket, session_id)
+        # The tailer only starts on the CONNECTED mount; the static render
+        # shows the replayed history without spawning a follower per crawl.
+        if connected?(socket) do
+          attach_live(socket, session_id)
+        else
+          records = read_history(session_id)
+          assign(socket, records: records, transcript: transcript(records))
+        end
       else
-        records = read_history(session_id)
-        assign(socket, records: records, transcript: transcript(records))
+        # A valid token whose session this host cannot resolve (e.g. a tenant
+        # journal under a per-tenant base ShareLive does not address). Fail
+        # loud rather than render a blank transcript that reads as an empty
+        # but healthy session.
+        closed(socket, "session unavailable")
       end
+    end
+
+    defp session_exists?(session_id) do
+      File.dir?(FileStore.session_dir(session_id))
     end
 
     defp attach_live(socket, session_id) do
@@ -124,8 +136,20 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     end
 
     defp share_secret do
-      Application.get_env(:raxol_agent, :share_secret) ||
-        System.get_env("RAXOL_SHARE_SECRET")
+      blank_to_nil(Application.get_env(:raxol_agent, :share_secret)) ||
+        blank_to_nil(System.get_env("RAXOL_SHARE_SECRET"))
     end
+
+    # A declared-but-empty RAXOL_SHARE_SECRET is "" (truthy), which would sign
+    # and verify with an empty HMAC key anyone can compute. Treat blank (and
+    # whitespace-only) as unconfigured so verify/1 fails closed on nil.
+    defp blank_to_nil(value) when is_binary(value) do
+      case String.trim(value) do
+        "" -> nil
+        _ -> value
+      end
+    end
+
+    defp blank_to_nil(_value), do: nil
   end
 end

@@ -231,11 +231,14 @@ defmodule Raxol.Agent.Code.App do
       # workspace like tool paths do.
       jail: Keyword.get(options, :jail, false),
       # `/share` mints signed read-only tokens for this session; without
-      # a secret there is nothing safe to mint. The base URL turns the
-      # notice into a pasteable link.
+      # a secret there is nothing safe to mint. A blank or too-short secret
+      # is treated as unconfigured (an empty HMAC key is offline-forgeable).
+      # The base URL turns the notice into a pasteable link.
       share_secret:
-        Keyword.get(options, :share_secret) ||
-          System.get_env("RAXOL_SHARE_SECRET"),
+        normalize_share_secret(
+          Keyword.get(options, :share_secret) ||
+            System.get_env("RAXOL_SHARE_SECRET")
+        ),
       share_base_url:
         Keyword.get(options, :share_base_url) ||
           System.get_env("RAXOL_SHARE_BASE_URL"),
@@ -765,10 +768,16 @@ defmodule Raxol.Agent.Code.App do
   # (for the `task` tool), and any settings-file tool-call hooks.
   defp run_context(model, app) do
     %{
-      # The sandbox root every fs/workspace/shell tool scopes to. On a
-      # multi-tenant host each connection's App carries its own cwd, so
-      # this is what keeps one tenant's tools out of another's tree.
+      # The sandbox root the fs/workspace tools scope to. On a multi-tenant
+      # host each connection's App carries its own cwd, so this is what keeps
+      # one tenant's fs tools out of another's tree. NOTE: the shell tool is
+      # NOT confined by cwd alone (a command string can `cd` / `..` out), which
+      # is why `:jail` gates it off entirely — see the Bash action.
       cwd: model.cwd,
+      # Tenancy marker: propagated into the tool context so the shell tool can
+      # fail closed and the fs jail can refuse a missing root instead of
+      # falling back to the process-global cwd. Threaded into sub-agents too.
+      jail: model.jail,
       tool_authorizer: tool_authorizer(app),
       subagent: %{
         executor: model.executor,
@@ -1445,6 +1454,16 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp apply_command("help", _arg, model), do: {notice(model, help_text()), []}
+
+  # In a jailed (multi-tenant) session the keyboard principal is a tenant, not
+  # the host owner. /login and /logout mutate the HOST-GLOBAL credential store
+  # (`Credentials.put`/`delete`, one file for the whole node), so a tenant must
+  # not reach them: the host pre-wires the provider via server app_opts.
+  defp apply_command(cmd, _arg, %{jail: true} = model)
+       when cmd in ["login", "logout"] do
+    {notice(model, "credential management is disabled in a hosted session"), []}
+  end
+
   defp apply_command("login", arg, model), do: {login(model, arg), []}
   defp apply_command("clear", _arg, model), do: {clear_session(model), []}
 
@@ -1481,6 +1500,10 @@ defmodule Raxol.Agent.Code.App do
 
   defp apply_command("transcript", _arg, model),
     do: {write_transcript(model), []}
+
+  # /copy drives the HOST clipboard — unavailable to a jailed tenant.
+  defp apply_command("copy", _arg, %{jail: true} = model),
+    do: {notice(model, "clipboard is unavailable in a hosted session"), []}
 
   defp apply_command("copy", _arg, model), do: {copy_last_answer(model), []}
 
@@ -2377,6 +2400,14 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # Treat a blank or too-short share secret as unconfigured (nil): a
+  # declared-but-empty RAXOL_SHARE_SECRET is "" (truthy), and an empty/short
+  # HMAC key is offline-forgeable, so /share must fall back to "not configured"
+  # rather than mint a weak token. Length threshold lives in ShareToken.
+  defp normalize_share_secret(secret) do
+    if Raxol.Agent.Code.ShareToken.secret_ok?(secret), do: secret, else: nil
+  end
+
   # `/share` mints a signed, expiring read-only token for THIS session.
   # The journal is what the viewer replays, so it is ensured (and
   # backfilled) here — a share of a never-journaled session would
@@ -2384,12 +2415,27 @@ defmodule Raxol.Agent.Code.App do
   defp share_session(%{share_secret: nil} = model) do
     notice(
       model,
-      "sharing not configured — set RAXOL_SHARE_SECRET on the host " <>
-        "(and mount Raxol.Agent.Code.ShareLive in a web app)"
+      "sharing not configured — set RAXOL_SHARE_SECRET (>= 32 bytes) on the " <>
+        "host (and mount Raxol.Agent.Code.ShareLive in a web app)"
     )
   end
 
   defp share_session(model) do
+    if Raxol.Agent.Code.ShareToken.valid_session_id?(model.session_key) do
+      mint_share(model)
+    else
+      # A session_key with a `:` or other non-id character (e.g. a colon-laden
+      # /resume argument) would mint a token that can never verify. Refuse at
+      # the source with an actionable message rather than print a dead link.
+      notice(
+        model,
+        "this session's id can't be shared — resume or fork it under a " <>
+          "plain id (letters, digits, . _ -) first"
+      )
+    end
+  end
+
+  defp mint_share(model) do
     model =
       case ensure_journal(model) do
         {:ok, journaled} -> journaled
