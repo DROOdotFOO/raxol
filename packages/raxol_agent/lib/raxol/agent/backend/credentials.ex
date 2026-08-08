@@ -206,15 +206,46 @@ defmodule Raxol.Agent.Backend.Credentials do
   end
 
   defp kill_op(port, os_pid) do
-    # `kill` is non-interactive and never hangs; -9 because a blocked
-    # `op` is holding an auth prompt, not state worth a graceful stop.
-    if os_pid,
-      do: System.cmd("kill", ["-9", to_string(os_pid)], stderr_to_stdout: true)
+    kill_os_process(os_pid)
 
-    Port.close(port)
-    :ok
-  catch
-    :error, :badarg -> :ok
+    try do
+      Port.close(port)
+    catch
+      :error, :badarg -> :ok
+    end
+
+    # Anything the port delivered between the deadline firing and the
+    # close stays in the CALLER's mailbox (the TUI's dispatcher during
+    # /login) — including a {:data, secret} the child flushed as it
+    # died, which a catch-all handle_info would inspect into the log.
+    drain_port_messages(port)
+  end
+
+  # `kill` is non-interactive and never hangs; -9 because a blocked `op`
+  # is holding an auth prompt, not state worth a graceful stop. On a
+  # platform without a `kill` binary (Windows) the child is left to die
+  # with its closed stdio — better orphaned than raising :enoent on the
+  # exact locked-vault path this runner exists to survive.
+  defp kill_os_process(nil), do: :ok
+
+  defp kill_os_process(os_pid) do
+    case System.find_executable("kill") do
+      nil ->
+        :ok
+
+      kill ->
+        System.cmd(kill, ["-9", to_string(os_pid)], stderr_to_stdout: true)
+        :ok
+    end
+  end
+
+  defp drain_port_messages(port) do
+    receive do
+      {^port, _message} -> drain_port_messages(port)
+      {:EXIT, ^port, _reason} -> drain_port_messages(port)
+    after
+      0 -> :ok
+    end
   end
 
   @doc """
@@ -272,8 +303,14 @@ defmodule Raxol.Agent.Backend.Credentials do
         "raxol-op-#{System.unique_integer([:positive])}.json"
       )
 
-    with :ok <- File.write(path, template),
-         _ <- File.chmod(path, 0o600) do
+    # Exclusive create, then tighten to 0600 while still EMPTY, then
+    # write the secret — the default-permission window never contains
+    # key material, and a pre-planted file/symlink at the (guessable)
+    # name fails the exclusive open instead of receiving the key.
+    with {:ok, io} <- File.open(path, [:write, :exclusive]),
+         _ <- File.chmod(path, 0o600),
+         :ok <- IO.binwrite(io, template),
+         :ok <- File.close(io) do
       try do
         run_op_create(path, vault)
       after

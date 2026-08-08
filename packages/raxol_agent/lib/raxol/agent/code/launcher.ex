@@ -92,14 +92,14 @@ defmodule Raxol.Agent.Code.Launcher do
       invalid != [] ->
         usage_error!("unknown options: #{inspect(invalid)}")
 
-      Keyword.get(parsed, :sessions, false) ->
-        print_sessions()
-
       Keyword.get(parsed, :replay) ->
         run_replay(parsed)
 
       Keyword.has_key?(parsed, :to_offset) ->
         usage_error!("--to-offset requires --replay")
+
+      Keyword.get(parsed, :sessions, false) ->
+        print_sessions()
 
       Keyword.get(parsed, :ssh, false) ->
         serve_ssh(
@@ -145,6 +145,9 @@ defmodule Raxol.Agent.Code.Launcher do
     cond do
       Keyword.get(parsed, :ssh, false) ->
         usage_error!("--replay cannot combine with --ssh")
+
+      Keyword.get(parsed, :sessions, false) ->
+        usage_error!("--replay cannot combine with --sessions")
 
       Keyword.get(parsed, :continue, false) || Keyword.get(parsed, :resume) ->
         usage_error!("--replay cannot combine with --continue/--resume")

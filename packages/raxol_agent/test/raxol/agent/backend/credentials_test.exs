@@ -186,6 +186,22 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
     test "op_status reads a hung op as not signed in" do
       assert Credentials.op_status() == :not_signed_in
     end
+
+    @tag timeout: 10_000
+    test "a timed-out op leaves no port messages in the caller's mailbox" do
+      # An op that flushes output right before hanging: the data message
+      # lands in the caller's mailbox and must be drained on timeout —
+      # in the TUI the caller is the dispatcher, whose catch-all
+      # handle_info would log (and thereby leak) a stranded secret.
+      fake_op = System.find_executable("op")
+      File.write!(fake_op, "#!/bin/sh\necho leaked-secret\nsleep 60\n")
+
+      assert {:error, :op_timeout} =
+               Credentials.read_ref("op://vault/item/field")
+
+      refute_receive {_port, {:data, _leak}}, 50
+      refute_receive {_port, {:exit_status, _status}}, 50
+    end
   end
 
   describe "create_item/3" do

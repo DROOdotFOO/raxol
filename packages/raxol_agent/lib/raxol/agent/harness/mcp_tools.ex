@@ -68,8 +68,14 @@ defmodule Raxol.Agent.Harness.McpTools do
           type: "object",
           required: ["session_id", "prompt"],
           properties: %{
-            session_id: %{type: "string", description: "Session id from harness_start_session"},
-            prompt: %{type: "string", description: "The user prompt for this turn"},
+            session_id: %{
+              type: "string",
+              description: "Session id from harness_start_session"
+            },
+            prompt: %{
+              type: "string",
+              description: "The user prompt for this turn"
+            },
             backend: %{
               type: "string",
               description: "LLM backend override (auto-detected when omitted)"
@@ -86,7 +92,8 @@ defmodule Raxol.Agent.Harness.McpTools do
       },
       %{
         name: "harness_read_transcript",
-        description: "Returns a session's conversation (role-prefixed messages).",
+        description:
+          "Returns a session's conversation (role-prefixed messages).",
         inputSchema: %{
           type: "object",
           required: ["session_id"],
@@ -98,7 +105,8 @@ defmodule Raxol.Agent.Harness.McpTools do
       },
       %{
         name: "harness_list_sessions",
-        description: "Lists saved coding-agent sessions, most recently updated first.",
+        description:
+          "Lists saved coding-agent sessions, most recently updated first.",
         inputSchema: %{type: "object", properties: %{}},
         callback: &list_sessions/1
       }
@@ -162,7 +170,8 @@ defmodule Raxol.Agent.Harness.McpTools do
          {:ok, prompt} <- required(args, "prompt") do
       case Store.load(Store.default_dir(), key) do
         {:error, :not_found} ->
-          {:error, "unknown session #{inspect(key)}; call harness_start_session first"}
+          {:error,
+           "unknown session #{inspect(key)}; call harness_start_session first"}
 
         {:ok, session} ->
           run_turn(key, session, prompt, args)
@@ -287,7 +296,10 @@ defmodule Raxol.Agent.Harness.McpTools do
 
   defp accumulate_answer(
          state,
-         %{type: :item_completed, payload: %{item_type: :message, content: content}}
+         %{
+           type: :item_completed,
+           payload: %{item_type: :message, content: content}
+         }
        ) do
     %{state | answer: state.answer <> to_string(content)}
   end
@@ -313,7 +325,12 @@ defmodule Raxol.Agent.Harness.McpTools do
     case Store.save(Store.default_dir(), key, %{
            messages: messages,
            events: events,
-           cwd: session.cwd
+           cwd: session.cwd,
+           # Save rewrites the whole file; the loaded session's title and
+           # fork lineage must ride along or an MCP-driven turn erases
+           # what /rename and /fork recorded.
+           title: Map.get(session, :title, ""),
+           parent: Map.get(session, :parent)
          }) do
       :ok ->
         {:ok, state.answer}
@@ -364,7 +381,8 @@ defmodule Raxol.Agent.Harness.McpTools do
   # -- helpers ----------------------------------------------------------------
 
   defp mint_session_key,
-    do: "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
+    do:
+      "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
 
   # Session ids come off the wire: basename-sanitize so a crafted id cannot
   # escape the sessions directory (same rule the TUI store applies).
@@ -393,9 +411,14 @@ defmodule Raxol.Agent.Harness.McpTools do
 
   defp ensure_streamer! do
     case SessionStreamer.start_link([]) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> raise "cannot start SessionStreamer: #{inspect(reason)}"
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        raise "cannot start SessionStreamer: #{inspect(reason)}"
     end
   end
 

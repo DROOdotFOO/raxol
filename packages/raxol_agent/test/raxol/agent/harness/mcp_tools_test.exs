@@ -82,7 +82,8 @@ defmodule Raxol.Agent.Harness.McpToolsTest do
              call("harness_read_transcript", %{"session_id" => key})
   end
 
-  test "send_prompt runs a turn, persists history, and stays TUI-resumable", ctx do
+  test "send_prompt runs a turn, persists history, and stays TUI-resumable",
+       ctx do
     {:ok, key} = call("harness_start_session", %{})
 
     assert {:ok, answer} =
@@ -96,7 +97,10 @@ defmodule Raxol.Agent.Harness.McpToolsTest do
 
     # Persisted in the same store and shape the TUI resumes from.
     assert {:ok, session} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
-    assert [%{role: :user, content: "hello there"}, %{role: :assistant}] = session.messages
+
+    assert [%{role: :user, content: "hello there"}, %{role: :assistant}] =
+             session.messages
+
     assert session.events != []
     assert Enum.all?(session.events, &(&1.tier == :durable))
 
@@ -116,6 +120,34 @@ defmodule Raxol.Agent.Harness.McpToolsTest do
 
     assert transcript =~ "user: hello there"
     assert transcript =~ "user: and again"
+  end
+
+  test "an MCP-driven turn preserves the session's title and fork parent",
+       ctx do
+    {:ok, key} = call("harness_start_session", %{})
+
+    # A /rename'd, forked session: title + parent already on disk.
+    {:ok, saved} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+
+    :ok =
+      Raxol.Agent.Code.Store.save(ctx.sessions, key, %{
+        messages: saved.messages,
+        events: saved.events,
+        cwd: saved.cwd,
+        title: "titled by rename",
+        parent: "sess-parent"
+      })
+
+    assert {:ok, _answer} =
+             call("harness_send_prompt", %{
+               "session_id" => key,
+               "prompt" => "hello",
+               "backend" => "mock"
+             })
+
+    {:ok, after_turn} = Raxol.Agent.Code.Store.load(ctx.sessions, key)
+    assert after_turn.title == "titled by rename"
+    assert after_turn.parent == "sess-parent"
   end
 
   test "an unknown session errors instead of minting one" do
