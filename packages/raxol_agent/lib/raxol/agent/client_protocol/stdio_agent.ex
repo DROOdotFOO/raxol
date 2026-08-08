@@ -22,6 +22,7 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
 
     alias Raxol.Agent.ClientProtocol.TurnRunner
     alias Raxol.AgentClientProtocol.Error
+    alias Raxol.AgentClientProtocol.Schema.AgentTypes.Implementation
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeResponse
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionResponse
     alias Raxol.AgentClientProtocol.Session
@@ -31,23 +32,61 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     @impl true
     def init(arg), do: {:ok, arg}
 
+    # Identify ourselves in the handshake: clients and benchmark harnesses
+    # record `agentInfo` as the agent under test, and a nil there is reported
+    # as an unnamed agent.
     @impl true
-    def initialize(_req, _ctx), do: {:ok, InitializeResponse.new(1)}
+    def initialize(_req, _ctx) do
+      {:ok, %{InitializeResponse.new(1) | agent_info: implementation()}}
+    end
+
+    defp implementation do
+      version =
+        case :application.get_key(:raxol_agent, :vsn) do
+          {:ok, vsn} -> List.to_string(vsn)
+          _ -> "dev"
+        end
+
+      Implementation.new("raxol", version)
+    end
 
     @impl true
-    def new_session(_req, ctx) do
+    def new_session(req, ctx) do
       sid = "acp-#{System.unique_integer([:positive])}"
+      turn_opts = session_turn_opts(ctx.handler_state.turn_opts, req)
 
       {:ok, _session} =
         Session.Supervisor.start_session(ctx.session_sup,
           session_id: sid,
           conn: ctx.conn,
           task_sup: ctx.task_sup,
-          turn_runner: TurnRunner.new(ctx.handler_state.turn_opts)
+          turn_runner: TurnRunner.new(turn_opts)
         )
 
       {:ok, NewSessionResponse.new(sid)}
     end
+
+    # `session/new` names the session's working directory; scope this session's
+    # fs/glob/grep tools to it through the tool-context `:cwd` seam
+    # (`Raxol.Agent.Actions.Fs.working_dir/1`), so two sessions on one server
+    # get independent roots and each tool call is contained under its own cwd.
+    # A blank cwd leaves the server-wide default in place. Map pattern, not a
+    # struct pattern, per the cross-package convention.
+    defp session_turn_opts(base_opts, %{cwd: cwd})
+         when is_binary(cwd) and cwd != "" do
+      context =
+        base_opts
+        |> Keyword.get(:context)
+        |> ensure_context_map()
+        |> Map.put(:cwd, cwd)
+
+      Keyword.put(base_opts, :context, context)
+    end
+
+    defp session_turn_opts(base_opts, _req), do: base_opts
+
+    defp ensure_context_map(context) when is_map(context), do: context
+    defp ensure_context_map(_other), do: %{}
 
     @impl true
     def prompt(req, ctx) do
