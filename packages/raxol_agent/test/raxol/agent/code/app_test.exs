@@ -1369,16 +1369,18 @@ defmodule Raxol.Agent.Code.AppTest do
       assert File.read!(Path.join(cwd, "session.log")) =~ "the special answer"
     end
 
-    test "/transcript writes a temp file and hints at a pager" do
+    test "/transcript writes a private temp file and hints at a pager" do
       model = answered_model()
       {model, []} = submit(model, "/transcript")
 
       assert model.notice =~ "PAGER"
 
-      path =
-        Path.join(System.tmp_dir!(), "#{model.session_key}-transcript.txt")
-
+      path = model.notice |> String.split(" ") |> List.last()
       assert File.read!(path) =~ "the special answer"
+
+      # Transcripts are conversations; /tmp is shared on Linux.
+      %File.Stat{mode: mode} = File.stat!(path)
+      assert Bitwise.band(mode, 0o777) == 0o600
     end
 
     test "/copy pushes the last reply through the clipboard seam" do
@@ -1401,6 +1403,26 @@ defmodule Raxol.Agent.Code.AppTest do
     test "/copy with no assistant reply notices" do
       {model, []} = submit(new_model(), "/copy")
       assert model.notice =~ "no assistant reply"
+    end
+
+    test "/find excerpts stay anchored through multibyte text" do
+      model = new_model()
+      lead = String.duplicate("word — ", 30)
+
+      model =
+        model
+        |> submit("ask")
+        |> elem(0)
+        |> then(fn m ->
+          Enum.reduce(
+            message_turn("t1", lead <> "needle here"),
+            m,
+            &send_ev(&2, &1)
+          )
+        end)
+
+      {model, []} = submit(model, "/find needle")
+      assert model.notice =~ "needle here"
     end
 
     test "/find reports matching blocks and misses honestly" do
@@ -1441,7 +1463,7 @@ defmodule Raxol.Agent.Code.AppTest do
       {model, []} = submit(model, "/logout openai")
 
       assert_received {:removed, "openai"}
-      assert model.notice =~ "removed stored credential for openai"
+      assert model.notice =~ "forgot stored credential for openai"
       # The removed provider was the connected one — disconnected too.
       assert model.executor == nil
     end

@@ -212,7 +212,7 @@ defmodule Raxol.Agent.Code.App do
       # `/copy` and `/logout <provider>` reach system state (clipboard,
       # the stored-credentials file); injectable so tests stay hermetic.
       clipboard:
-        Keyword.get(options, :clipboard, &Raxol.System.Clipboard.copy/1),
+        Keyword.get(options, :clipboard, &__MODULE__.default_clipboard/1),
       credential_remover:
         Keyword.get(options, :credential_remover, &Raxol.Agent.Setup.remove/1),
       # The durable journal handle, opened lazily on the first durable
@@ -2171,29 +2171,86 @@ defmodule Raxol.Agent.Code.App do
         given -> Path.expand(given, model.cwd)
       end
 
-    write_transcript_file(model, path, "exported to #{path}")
+    write_transcript_file(model, path, &File.write/2, "exported to #{path}")
   end
 
   # `/transcript` writes to a temp file and points a pager at it. The TUI
   # cannot suspend the terminal to host `$PAGER` itself (the driver owns
-  # the tty), so the hint is the honest version.
+  # the tty), so the hint is the honest version. The file is created
+  # exclusively with a fresh name and tightened to 0600 while still
+  # empty: /tmp is shared on Linux, transcripts are conversations, and a
+  # reused predictable path invites symlink games.
   defp write_transcript(model) do
     path =
-      Path.join(System.tmp_dir!(), "#{model.session_key}-transcript.txt")
+      Path.join(
+        System.tmp_dir!(),
+        "#{model.session_key}-transcript-" <>
+          "#{System.unique_integer([:positive])}.txt"
+      )
 
     write_transcript_file(
       model,
       path,
+      &write_private/2,
       "transcript written — view with: ${PAGER:-less} #{path}"
     )
   end
 
-  defp write_transcript_file(model, path, success_note) do
+  defp write_transcript_file(model, path, writer, success_note) do
     text = Raxol.Agent.Code.Replay.transcript_text(model.events)
 
-    case File.write(path, text <> "\n") do
+    case writer.(path, text <> "\n") do
       :ok -> notice(model, success_note)
       {:error, reason} -> notice(model, "write failed: #{inspect(reason)}")
+    end
+  end
+
+  defp write_private(path, text) do
+    case File.open(path, [:write, :exclusive]) do
+      {:ok, io} ->
+        File.chmod(path, 0o600)
+        result = IO.binwrite(io, text)
+        File.close(io)
+        result
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc false
+  # Write-and-close: clipboard tools (pbcopy/xclip/clip) commit on stdin
+  # EOF. `Raxol.System.Clipboard` waits for an exit status its port can
+  # never deliver (it closes the port before collecting), freezing the
+  # update loop for its full timeout — so this seam feeds the tool
+  # directly and treats a completed write as success.
+  def default_clipboard(text) do
+    case clipboard_command() do
+      {:ok, {executable, args}} ->
+        port = Port.open({:spawn_executable, executable}, [:binary, args: args])
+        Port.command(port, text)
+        Port.close(port)
+        :ok
+
+      {:error, _} = error ->
+        error
+    end
+  rescue
+    error -> {:error, error}
+  end
+
+  @doc false
+  def clipboard_command do
+    {command, args} =
+      case :os.type() do
+        {:unix, :darwin} -> {"pbcopy", []}
+        {:unix, _} -> {"xclip", ["-selection", "clipboard"]}
+        {:win32, _} -> {"clip", []}
+      end
+
+    case System.find_executable(command) do
+      nil -> {:error, {:clipboard_tool_missing, command}}
+      path -> {:ok, {path, args}}
     end
   end
 
@@ -2242,7 +2299,7 @@ defmodule Raxol.Agent.Code.App do
           |> Enum.take(@find_match_cap)
           |> Enum.map(fn {block, index} ->
             "#{index}. [#{block.kind}] " <>
-              excerpt(Block.search_text(block), down_needle)
+              excerpt(Block.search_text(block), needle)
           end)
 
         header = "#{length(matches)} match(es) for \"#{needle}\":"
@@ -2250,18 +2307,28 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  # A one-line window around the first hit, newlines flattened.
-  defp excerpt(text, down_needle) do
-    flat = text |> String.replace(~r/\s+/, " ") |> String.trim()
+  # A one-line window around the first hit, newlines flattened. The
+  # caseless regex yields a BYTE offset that is a codepoint boundary in
+  # the ORIGINAL string (a byte offset into a downcased copy is neither,
+  # and grapheme-slicing with it shifts or empties the window on any
+  # multibyte text — em dashes are everywhere in LLM replies).
+  defp excerpt(text, needle) do
+    flat = text |> String.replace(~r/\s+/u, " ") |> String.trim()
 
-    start =
-      case :binary.match(String.downcase(flat), down_needle) do
-        {at, _len} -> max(at - 20, 0)
-        :nomatch -> 0
-      end
+    with {:ok, pattern} <- Regex.compile(Regex.escape(needle), "iu"),
+         [{byte_start, _len}] <- Regex.run(pattern, flat, return: :index) do
+      lead =
+        flat
+        |> binary_part(0, byte_start)
+        |> String.graphemes()
+        |> Enum.take(-20)
 
-    prefix = if start > 0, do: "…", else: ""
-    prefix <> String.slice(flat, start, 70)
+      rest = binary_part(flat, byte_start, byte_size(flat) - byte_start)
+      ellipsis = if byte_start > 0 and length(lead) == 20, do: "…", else: ""
+      ellipsis <> Enum.join(lead) <> String.slice(rest, 0, 70)
+    else
+      _no_match -> String.slice(flat, 0, 70)
+    end
   end
 
   # `/logout` disconnects the session's provider (the setup panel
@@ -2279,9 +2346,14 @@ defmodule Raxol.Agent.Code.App do
   defp logout(model, provider) do
     case model.credential_remover.(provider) do
       {:ok, harness} ->
+        # The remover is idempotent (it cannot tell whether a reference
+        # was stored), and env-var keys are out of its reach entirely.
         model
         |> disconnect_if_current(harness)
-        |> notice("removed stored credential for #{harness}")
+        |> notice(
+          "forgot stored credential for #{harness} " <>
+            "(env keys, if any, persist until unset)"
+        )
 
       {:error, reason} ->
         notice(model, "logout failed: #{inspect(reason)}")
