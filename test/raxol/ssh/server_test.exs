@@ -179,6 +179,47 @@ defmodule Raxol.SSH.ServerTest do
     end
   end
 
+  describe "channel session admission" do
+    test "a repeated pty-req resizes instead of starting another session" do
+      # One connection registers ONE slot at :ssh_channel_up, so a client that
+      # loops pty-req on the same channel could otherwise stand up unbounded
+      # sessions inside its single admitted connection -- each orphaning the
+      # last, and all of them past max_connections/max_per_ip.
+      session = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(session, :kill) end)
+
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      state = %{state | session_pid: session, channel_id: 0}
+
+      pty = {:ssh_cm, :conn, {:pty, 0, false, {~c"xterm", 100, 40, 0, 0, []}}}
+
+      assert {:ok, ^state} = Raxol.SSH.CLIHandler.handle_ssh_msg(pty, state)
+
+      # Same session, told to resize.
+      assert state.session_pid == session
+      assert Process.alive?(session)
+    end
+
+    test "the resize reaches the existing session" do
+      parent = self()
+
+      session =
+        spawn(fn ->
+          receive do
+            message -> send(parent, {:got, message})
+          end
+        end)
+
+      {:ok, state} = Raxol.SSH.CLIHandler.init(app_module: FakeApp)
+      state = %{state | session_pid: session, channel_id: 0}
+
+      pty = {:ssh_cm, :conn, {:pty, 0, false, {~c"xterm", 120, 50, 0, 0, []}}}
+      {:ok, _state} = Raxol.SSH.CLIHandler.handle_ssh_msg(pty, state)
+
+      assert_receive {:got, {:resize, 120, 50}}, 1_000
+    end
+  end
+
   describe "host key generation" do
     test "generates RSA host key" do
       dir =

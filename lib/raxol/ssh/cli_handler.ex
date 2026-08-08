@@ -73,6 +73,23 @@ defmodule Raxol.SSH.CLIHandler do
     {:ok, state}
   end
 
+  # A second pty-req on a channel that already has a session is a RESIZE, not
+  # a new session. Starting another would orphan the first Lifecycle (and its
+  # journal, MCP clients, and tenant workspace) while still costing only the
+  # one connection slot registered at `:ssh_channel_up` — a client that loops
+  # pty-req could stand up unbounded sessions inside its single admitted
+  # connection, straight through `max_connections` and `max_per_ip`.
+  @impl true
+  def handle_ssh_msg(
+        {:ssh_cm, _conn,
+         {:pty, _ch, _want_reply, {_term, width, height, _pxw, _pxh, _modes}}},
+        %__MODULE__{session_pid: pid} = state
+      )
+      when not is_nil(pid) do
+    send(pid, {:resize, width, height})
+    {:ok, state}
+  end
+
   @impl true
   def handle_ssh_msg(
         {:ssh_cm, _conn,
