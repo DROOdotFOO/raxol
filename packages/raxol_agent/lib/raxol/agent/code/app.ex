@@ -456,6 +456,17 @@ defmodule Raxol.Agent.Code.App do
   # An async `/model` model-list fetch result. Applied only when its ref still
   # matches the latest fetch (a newer `/model` supersedes an in-flight one).
   # An async `/resume` session list. Same ref discipline as `:models_list`.
+  # A nested sub-agent round reporting what it just spent. Metered exactly like
+  # a parent turn, against the same ledger.
+  def update({:command_result, {:tool_usage, info}}, model) do
+    {meter_usage(
+       model,
+       Map.get(info, :usage) || %{},
+       Map.get(info, :model) || current_model(model),
+       :llm_subagent
+     ), []}
+  end
+
   def update({:command_result, {:sessions_list, ref, sessions}}, model) do
     if ref == model.sessions_ref do
       {apply_sessions_result(model, sessions), []}
@@ -814,6 +825,10 @@ defmodule Raxol.Agent.Code.App do
       # falling back to the process-global cwd. Threaded into sub-agents too.
       jail: model.jail,
       tool_authorizer: tool_authorizer(app),
+      # Sub-agent rounds are paid provider calls on the SAME executor, but they
+      # run inside a nested stream whose usage never reaches the parent's fold.
+      # This is how they get metered.
+      usage_sink: usage_sink(app),
       subagent: %{
         executor: model.executor,
         backend_opts: model.backend_opts,
@@ -905,15 +920,18 @@ defmodule Raxol.Agent.Code.App do
   # ledger problem never blocks the fold.
   defp record_turn_cost(model, %{type: :turn_completed, payload: payload}) do
     usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
-    billed = billed_model(model, payload)
-    cost = turn_cost_usd(model, usage, billed)
+    meter_usage(model, usage, billed_model(model, payload), :llm_turn)
+  end
 
+  defp record_turn_cost(model, _event), do: model
+
+  defp meter_usage(model, usage, billed, type) do
     Raxol.Agent.Code.CostLedger.record(
       model.ledger,
       model.ledger_agent_id,
-      cost,
+      turn_cost_usd(model, usage, billed),
       %{
-        type: :llm_turn,
+        type: type,
         currency: "USD",
         session: model.session_key,
         model: billed
@@ -922,8 +940,6 @@ defmodule Raxol.Agent.Code.App do
 
     model
   end
-
-  defp record_turn_cost(model, _event), do: model
 
   # What the provider actually CHARGED for, which is what has to be priced:
   # with no :model configured the backend substitutes its own hosted default.
@@ -1401,6 +1417,11 @@ defmodule Raxol.Agent.Code.App do
   # The `:tool_authorizer`: runs inside the react loop's process and defers
   # every sensitive tool call to the app for an Engine verdict, blocking until
   # the app answers. Non-sensitive tools are allowed without a round-trip.
+  # Reports one nested sub-agent round's usage back to the app for metering.
+  defp usage_sink(app) do
+    fn info -> send(app, {:command_result, {:tool_usage, info}}) end
+  end
+
   def tool_authorizer(app) do
     fn action, _params, _context ->
       {name, sensitive?} = action_identity(action)

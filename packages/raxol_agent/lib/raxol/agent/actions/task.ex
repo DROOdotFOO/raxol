@@ -64,10 +64,11 @@ defmodule Raxol.Agent.Actions.Task do
   @spec run_subagent(String.t(), map(), map()) :: {:ok, map()} | {:error, term()}
   def run_subagent(prompt, params, context) do
     opts = subagent_opts(params, context)
+    sink = Map.get(context, :usage_sink)
 
     prompt
     |> Stream.react(opts)
-    |> Stream.collect()
+    |> drain(sink)
     |> case do
       {:ok, %{content: content}} when is_binary(content) ->
         {:ok, %{result: content}}
@@ -79,6 +80,48 @@ defmodule Raxol.Agent.Actions.Task do
         {:error, :subagent_no_result}
     end
   end
+
+  # `Stream.collect/1` keeps only the final content, so every round's usage --
+  # up to max_iterations paid calls against the SAME executor as the parent --
+  # died inside the nested stream and reached no ledger. A delegation could
+  # therefore overrun a spending cap by an arbitrary multiple while the ledger
+  # and /usage both read as barely spent. Drain the stream ourselves and report
+  # each round as it lands.
+  #
+  # Deliberately not halting mid-drain on an exhausted budget: react's after_fun
+  # is Process.exit(pid, :normal), a no-op against a non-trapping process, so an
+  # early halt would abandon a sub-agent that keeps on spending.
+  defp drain(stream, sink) do
+    stream
+    |> Enum.reduce(nil, fn
+      {:turn_complete, info}, acc ->
+        report_usage(sink, info)
+        acc
+
+      {:done, info}, _acc ->
+        report_usage(sink, info)
+        {:ok, info}
+
+      {:error, reason}, _acc ->
+        {:error, reason}
+
+      _event, acc ->
+        acc
+    end)
+    |> Kernel.||({:error, :no_result})
+  end
+
+  defp report_usage(sink, info) when is_function(sink, 1) do
+    case Map.get(info, :usage) do
+      usage when is_map(usage) and map_size(usage) > 0 ->
+        sink.(%{usage: usage, model: Map.get(info, :model)})
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp report_usage(_sink, _info), do: :ok
 
   defp subagent_opts(params, context) do
     sub = Map.get(context, :subagent, %{})

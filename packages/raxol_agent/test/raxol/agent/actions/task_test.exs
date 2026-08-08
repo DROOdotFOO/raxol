@@ -50,6 +50,70 @@ defmodule Raxol.Agent.Actions.TaskTest do
     %{subagent: %{backend: Mock, backend_opts: [response: response]}}
   end
 
+  # Two rounds, each reporting real usage and a billed model, so the drain has
+  # something to meter on both the tool round and the final answer.
+  defmodule MeteredBackend do
+    @moduledoc false
+    @behaviour Raxol.Agent.Backend
+
+    @impl true
+    def complete(messages, _opts) do
+      if Enum.any?(messages, &(Map.get(&1, :role) == :assistant)) do
+        {:ok,
+         %{
+           content: "done",
+           usage: %{input_tokens: 20, output_tokens: 2},
+           metadata: %{model: "gpt-4o"}
+         }}
+      else
+        {:ok,
+         %{
+           content: "",
+           tool_calls: [
+             %{"id" => "c1", "name" => "glob", "arguments" => %{"pattern" => "*"}}
+           ],
+           usage: %{input_tokens: 10, output_tokens: 1},
+           metadata: %{model: "gpt-4o"}
+         }}
+      end
+    end
+
+    @impl true
+    def stream(messages, opts) do
+      {:ok, response} = complete(messages, opts)
+      {:ok, [{:chunk, response.content}, {:done, response}]}
+    end
+
+    @impl true
+    def available?, do: true
+    @impl true
+    def name, do: "MeteredBackend"
+    @impl true
+    def capabilities, do: [:completion, :streaming, :tool_use]
+  end
+
+  test "each sub-agent round is reported to the usage sink" do
+    # Every round is a paid provider call on the parent's executor. Without the
+    # sink they died inside the nested stream, so a delegation could overrun a
+    # spending cap by an arbitrary multiple while the ledger read as unspent.
+    test_pid = self()
+
+    context = %{
+      subagent: %{backend: MeteredBackend, backend_opts: []},
+      usage_sink: fn info -> send(test_pid, {:usage, info}) end
+    }
+
+    assert {:ok, %{result: _}} = Task.Delegate.run(%{prompt: "look"}, context)
+
+    assert_receive {:usage, %{usage: %{input_tokens: 10}, model: "gpt-4o"}}
+    assert_receive {:usage, %{usage: %{input_tokens: 20}, model: "gpt-4o"}}
+  end
+
+  test "a sub-agent still works with no usage sink wired" do
+    assert {:ok, %{result: "sub result"}} =
+             Task.Delegate.run(%{prompt: "investigate"}, subagent_ctx("sub result"))
+  end
+
   test "delegates to a sub-agent and returns its final answer" do
     assert {:ok, %{result: "sub result"}} =
              Task.Delegate.run(%{prompt: "investigate"}, subagent_ctx("sub result"))

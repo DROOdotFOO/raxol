@@ -196,4 +196,26 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
     assert Decimal.eq?(entry.amount, Decimal.new("2.5"))
     assert entry.metadata.model == "gpt-4o"
   end
+
+  test "sub-agent spend lands in the shared ledger" do
+    # The task tool runs a nested react loop against the SAME paid executor.
+    # Its usage never reaches the parent's turn_completed fold, so without the
+    # usage sink a delegation's up-to-6 calls accrued $0.00 and the cap could
+    # be overrun by an arbitrary multiple.
+    ledger = start_ledger()
+    :ok = Ledger.subscribe(ledger)
+    model = model_with(ledger, SpendingPolicy.dev(), backend: :openai)
+
+    {_model, []} =
+      App.update(
+        {:command_result,
+         {:tool_usage, %{usage: %{input_tokens: 1_000_000, output_tokens: 0}, model: "gpt-4o"}}},
+        model
+      )
+
+    assert_receive {:ledger_entry, entry}, 2_000
+    assert Decimal.eq?(entry.amount, Decimal.new("2.5"))
+    assert entry.metadata.type == :llm_subagent
+    assert entry.metadata.model == "gpt-4o"
+  end
 end
