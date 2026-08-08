@@ -170,16 +170,46 @@ defmodule Raxol.System.PortCommand do
   end
 
   # On timeout the caller has stopped waiting, but "stopped waiting" must not
-  # orphan the child: `Port.close/1` closes the port yet leaves the OS process
-  # alive. The `sh -c 'exec ...'` shell replaces itself with the command, so the
-  # port's os_pid IS the command — kill it. Best-effort, Unix only.
+  # orphan the command OR any children it spawned: `Port.close/1` closes the
+  # port yet leaves the whole OS subtree alive. The `sh -c 'exec ...'` shell
+  # replaces itself with the command, and the BEAM makes each port program its
+  # own process-group leader (pgid == os_pid), so signalling the GROUP takes
+  # the command and its descendants down together. Best-effort, Unix only.
   defp kill_child(port) do
     with {:os_pid, os_pid} <- Port.info(port, :os_pid),
          kill when is_binary(kill) <- System.find_executable("kill") do
-      _ = System.cmd(kill, ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+      kill_process_tree(kill, os_pid)
     end
   rescue
     _ -> :ok
+  end
+
+  # Kill the process GROUP (`kill -9 -<os_pid>`) so children die too — but ONLY
+  # when os_pid is a confirmed live group leader (pgid == os_pid), never
+  # otherwise: a negative-pid signal against a pid that was reaped and reused
+  # could hit an unrelated group (and pgid == os_pid also proves it is not the
+  # BEAM's own group, whose pgid is the BEAM's pid). When the group cannot be
+  # confirmed, fall back to a per-pid kill of the command itself.
+  defp kill_process_tree(kill, os_pid) do
+    target =
+      if group_leader?(os_pid),
+        do: "-#{os_pid}",
+        else: Integer.to_string(os_pid)
+
+    _ = System.cmd(kill, ["-9", target], stderr_to_stdout: true)
+  end
+
+  defp group_leader?(os_pid) do
+    with ps when is_binary(ps) <- System.find_executable("ps"),
+         {out, 0} <-
+           System.cmd(ps, ["-o", "pgid=", "-p", Integer.to_string(os_pid)],
+             stderr_to_stdout: true
+           ),
+         {pgid, _rest} <- Integer.parse(String.trim(out)) do
+      pgid == os_pid
+    else
+      _ -> false
+    end
   end
 
   defp safe_close(port) do

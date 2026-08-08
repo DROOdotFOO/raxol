@@ -47,7 +47,7 @@ defmodule Raxol.System.PortCommandTest do
                PortCommand.run("sleep", ["30"], "", timeout: 200)
     end
 
-    test "kills the child on timeout instead of orphaning it" do
+    test "kills the whole process tree on timeout, not just the direct child" do
       marker =
         Path.join(
           System.tmp_dir!(),
@@ -56,13 +56,18 @@ defmodule Raxol.System.PortCommandTest do
 
       File.rm(marker)
 
+      # The shell BACKGROUNDS a grandchild that would touch the marker after
+      # 0.5s, then waits. Killing only the shell's pid (the direct child) would
+      # leave the backgrounded grandchild alive to create the marker; a
+      # process-GROUP kill takes the grandchild down too, so it never appears.
       assert {:error, "timeout waiting for command"} =
-               PortCommand.run("sh", ["-c", "sleep 0.5 && touch #{marker}"], "",
+               PortCommand.run(
+                 "sh",
+                 ["-c", "(sleep 0.5 && touch #{marker}) & wait"],
+                 "",
                  timeout: 150
                )
 
-      # A merely-detached shell (Port.close only) would still run `touch` after
-      # its sleep; a real kill prevents the marker from ever appearing.
       Process.sleep(700)
       refute File.exists?(marker)
       File.rm(marker)
