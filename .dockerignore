@@ -11,8 +11,11 @@ deps/
 **/deps/
 .fetch
 
-# Test and development
-test/
+# Test and development. Recursive: an unanchored `test/` matches only the
+# repo root, so every packages/*/test leaked into the context (8.3MB).
+# `*.md` stays root-anchored deliberately -- ex_keccak reads its own README.md
+# at compile time for @moduledoc.
+**/test/
 bench/
 scripts/
 
@@ -33,7 +36,8 @@ docs/
 # Elixir artifacts
 *.beam
 /tmp/
-erl_crash.dump
+# Recursive: two dumps (web/, packages/raxol_agent/) were 28% of the context.
+**/erl_crash.dump
 
 # NIF build artifacts (must not leak host-platform binaries into Docker).
 # Recursive so nested build dirs are caught, e.g.
@@ -64,6 +68,9 @@ docker/
 #   priv/plts -- Dialyzer PLT cache (~49MB)
 #   demos     -- asciinema .cast recordings (~23MB)
 #   doc       -- generated ExDoc HTML (~15MB; distinct from the `docs/` rule above)
+# priv/plts is load-bearing, not just context hygiene: _build/prod/lib/raxol/priv
+# is a SYMLINK to the repo priv/, and mix release's copy_app dereferences it, so
+# without this line the PLT cache ships inside the release itself.
 priv/static/
 priv/plts/
 demos/
