@@ -26,20 +26,21 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
   @doc """
   Replay all journal segments under `dir` in ascending order.
 
-  Returns `{:ok, records}` for a healthy or torn-tail-recovered journal (the
-  torn tail is physically truncated as a side effect), or `{:damaged, records}`
-  when interior corruption was detected. In the damaged case `records` are only
-  the complete records preceding the corruption and MUST NOT be surfaced
-  downstream — callers map this to an error.
+  Returns `{:ok, records}` for a healthy or torn-tail-tolerated journal, or
+  `{:damaged, records}` when interior corruption was detected. In the damaged
+  case `records` are only the complete records preceding the corruption and
+  MUST NOT be surfaced downstream — callers map this to an error.
+
+  READS NEVER WRITE. A torn tail is ignored, not repaired: repairing is the
+  owning Writer's job (`resume_scan/1`). A reader computes the cut from a file
+  it read moments ago, so against a live session it can delete a record the
+  Writer already committed and counted — whose next append then lands past the
+  hole and leaves the session permanently `{:damaged, _}`. Read-only media is
+  the same hazard in a smaller way: the repair could only crash the reader.
   """
   @spec scan(Path.t(), keyword()) :: result
   def scan(dir, opts \\ []) do
-    # `heal: false` tolerates a torn tail WITHOUT physically truncating
-    # the segment — for read-side scans of a dir some live Writer may
-    # own (a concurrent `--replay`), or of read-only media, where the
-    # self-heal write would corrupt or crash. The Writer's own resume
-    # path keeps the default healing behavior.
-    heal? = Keyword.get(opts, :heal, true)
+    heal? = Keyword.get(opts, :heal, false)
 
     dir
     |> Path.join("journal")
@@ -48,14 +49,28 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
     |> replay([], dir, heal?)
   end
 
+  @doc """
+  `scan/1` for the OWNING Writer at resume, which additionally REPAIRS a torn
+  tail.
+
+  The Writer must truncate the torn bytes before it appends again, or the next
+  record concatenates onto them and turns a recoverable tail into permanent
+  damage. It is the only caller that may: it holds the lock, and nothing else
+  is appending while it resumes.
+  """
+  @spec resume_scan(Path.t()) :: result
+  def resume_scan(dir), do: scan(dir, heal: true)
+
   @doc "Highest offset (id) present in a healthy replay, or 0 if empty/damaged."
   @spec last_offset(Path.t()) :: non_neg_integer()
-  def last_offset(dir) do
-    case scan(dir) do
-      {:ok, records} -> records |> List.last() |> record_id()
-      {:damaged, _} -> 0
-    end
-  end
+  def last_offset(dir), do: offset_of(scan(dir))
+
+  @doc "`last_offset/1` for the owning Writer's resume; repairs a torn tail."
+  @spec resume_last_offset(Path.t()) :: non_neg_integer()
+  def resume_last_offset(dir), do: offset_of(resume_scan(dir))
+
+  defp offset_of({:ok, records}), do: records |> List.last() |> record_id()
+  defp offset_of({:damaged, _}), do: 0
 
   defp record_id(nil), do: 0
   defp record_id(%{"id" => id}) when is_integer(id), do: id
@@ -101,9 +116,20 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
 
           lines
           |> Enum.with_index()
-          |> Enum.map(fn {line, i} ->
-            %{path: path, raw: line, terminated: i < n - 1 or terminated_file?}
+          |> Enum.map_reduce(0, fn {line, i}, at ->
+            entry = %{
+              path: path,
+              raw: line,
+              # Where this line STARTS. Recorded during the read so a repair
+              # cuts at a position derived from the same bytes it parsed,
+              # rather than from a fresh stat taken afterwards.
+              at: at,
+              terminated: i < n - 1 or terminated_file?
+            }
+
+            {entry, at + byte_size(line) + 1}
           end)
+          |> elem(0)
           # A stray blank line is not a record and not corruption — drop it, as
           # the moduledoc promises. (`terminated` on the survivors is unaffected:
           # only the file's true last line can ever be unterminated.)
@@ -173,22 +199,25 @@ defmodule Raxol.Agent.Journal.FileStore.Reader do
     {:damaged, Enum.reverse(acc)}
   end
 
-  defp truncate_torn(%{path: path, raw: raw, terminated: terminated}) do
-    size = File.stat!(path).size
-    newline = if terminated, do: 1, else: 0
-    keep = max(size - byte_size(raw) - newline, 0)
+  defp truncate_torn(%{path: path, at: at}) do
+    case :file.open(path, [:read, :write, :binary]) do
+      {:ok, io} ->
+        try do
+          {:ok, _} = :file.position(io, at)
+          :ok = :file.truncate(io)
+          :ok = :file.datasync(io)
+        after
+          :file.close(io)
+        end
 
-    {:ok, io} = :file.open(path, [:read, :write, :binary])
+        :ok
 
-    try do
-      {:ok, _} = :file.position(io, keep)
-      :ok = :file.truncate(io)
-      :ok = :file.datasync(io)
-    after
-      :file.close(io)
+      # Read-only media, or a mode-bit accident. Declining to repair leaves a
+      # tail the next scan tolerates just the same; raising here would kill a
+      # Tailer or propagate out of an attach.
+      {:error, _reason} ->
+        :ok
     end
-
-    :ok
   end
 
   defp alarm(dir, %{path: path}) do

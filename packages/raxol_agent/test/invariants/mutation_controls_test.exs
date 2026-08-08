@@ -125,7 +125,7 @@ defmodule Raxol.Agent.Invariants.MutationControlsTest do
   test "m4/I8 — resume from HEAD alone" do
     assert_anchor!(
       Path.join(@agent_lib, "journal/file_store/writer.ex"),
-      "max(head_offset(dir), Reader.last_offset(dir))",
+      "max(head_offset(dir), Reader.resume_last_offset(dir))",
       "return head_offset(dir) alone from resume_offset/1",
       "storage_invariants_test.exs — I8 stale-HEAD resume test (duplicate id 2) and journal_test.exs"
     )

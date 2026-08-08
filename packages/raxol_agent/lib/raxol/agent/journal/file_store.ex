@@ -80,7 +80,7 @@ defmodule Raxol.Agent.Journal.FileStore do
     # here — the dir may belong to a live Writer in another OS process
     # (a concurrent `--replay`), or sit on read-only media. The partial
     # line is tolerated in-memory; the Writer heals it at its own boot.
-    case Reader.scan(session_dir(session_id, opts), heal: false) do
+    case Reader.scan(session_dir(session_id, opts)) do
       {:ok, records} -> {:ok, records}
       {:damaged, _partial} -> {:error, :damaged}
     end

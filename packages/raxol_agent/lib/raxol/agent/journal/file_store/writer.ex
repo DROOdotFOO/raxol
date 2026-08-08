@@ -212,7 +212,8 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       offset: offset,
       schema_version: schema_version,
       immediate_types: immediate_types,
-      sync_ceiling_ms: Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms),
+      sync_ceiling_ms:
+        Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms),
       lock_path: lock_path
     }
 
@@ -404,7 +405,10 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
         io
 
       {:error, reason} ->
-        raise File.Error, reason: reason, action: "open", path: segment_name(seg_num)
+        raise File.Error,
+          reason: reason,
+          action: "open",
+          path: segment_name(seg_num)
     end
   end
 
@@ -436,7 +440,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
   # id, non-monotonic, id ≠ offset). Resume from the max of HEAD and the reader's
   # torn-tail-recovered real last offset, so id stays monotonic and == offset.
   defp resume_offset(dir) do
-    max(head_offset(dir), Reader.last_offset(dir))
+    max(head_offset(dir), Reader.resume_last_offset(dir))
   end
 
   defp head_offset(dir) do
@@ -463,7 +467,10 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       "schema_version" => state.schema_version
     }
 
-    case atomic_write(Path.join(state.dir, "HEAD"), Jason.encode_to_iodata!(head)) do
+    case atomic_write(
+           Path.join(state.dir, "HEAD"),
+           Jason.encode_to_iodata!(head)
+         ) do
       :ok -> :ok
       {:error, reason} -> write_failed(:head, reason)
     end
