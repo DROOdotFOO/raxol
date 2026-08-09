@@ -215,6 +215,10 @@ defmodule Raxol.Symphony.Workspace do
         {:error, :bash_not_found}
 
       bash_path ->
+        # `:in` closes the child's stdin. Without it the port hands the script a
+        # pipe that never delivers and never closes, so a setup/verify step
+        # that reads stdin blocks until the timeout rather than seeing EOF.
+        # Nothing here writes to the port, so there is no input to lose.
         port =
           Port.open(
             {:spawn_executable, bash_path},
@@ -223,6 +227,7 @@ defmodule Raxol.Symphony.Workspace do
               :binary,
               :stderr_to_stdout,
               :hide,
+              :in,
               {:cd, cwd},
               {:args, ["-lc", script]}
             ]

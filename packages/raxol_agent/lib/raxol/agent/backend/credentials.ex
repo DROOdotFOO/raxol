@@ -151,7 +151,10 @@ defmodule Raxol.Agent.Backend.Credentials do
   # op-shelling test). This Port-based runner bounds the wait and KILLS
   # the OS process on timeout; `Port.close/1` alone would leave the hung
   # `op` (and its auth prompt) alive. Generous default so an interactive
-  # signin approval still fits; `RAXOL_OP_TIMEOUT_MS` overrides.
+  # signin approval still fits; `RAXOL_OP_TIMEOUT_MS` overrides, and a caller
+  # that knows the user's attention is elsewhere (the browser sign-in, which
+  # raises the 1Password prompt the moment they come back from approving in a
+  # tab) passes its own `:timeout_ms`.
   @op_timeout_ms 15_000
 
   defp op_timeout_ms do
@@ -161,27 +164,49 @@ defmodule Raxol.Agent.Backend.Credentials do
     end
   end
 
-  defp run_op(args) do
+  defp run_op(args, timeout_ms \\ nil) do
     case System.find_executable("op") do
-      nil ->
-        {:error, :op_unavailable}
-
-      op ->
-        port =
-          Port.open(
-            {:spawn_executable, op},
-            [:binary, :exit_status, :stderr_to_stdout, args: args]
-          )
-
-        os_pid =
-          case Port.info(port, :os_pid) do
-            {:os_pid, pid} -> pid
-            _ -> nil
-          end
-
-        deadline = System.monotonic_time(:millisecond) + op_timeout_ms()
-        collect_op(port, os_pid, deadline, [])
+      nil -> {:error, :op_unavailable}
+      op -> run_executable(op, args, timeout_ms || op_timeout_ms())
     end
+  end
+
+  @doc false
+  # Spawn `executable` and collect its output, bounded by `timeout_ms`.
+  #
+  # `:in` is load-bearing, not tidiness. A port opened without it hands the
+  # child a stdin pipe that never delivers and never closes, so anything the
+  # child tries to READ from stdin blocks until the deadline. `op` decides
+  # whether to prompt by looking at stdin: given that pipe it waits for input
+  # forever, and given EOF it goes straight to the desktop-app integration and
+  # succeeds. That is why `op item create` hung here while the identical
+  # command run from a shell (whose stdin is a terminal, or `/dev/null`)
+  # returned in seconds -- and why the whole `connect_key` path, browser
+  # sign-in and pasted key alike, could not store a credential from the BEAM.
+  #
+  # Every caller here is read-only (nothing ever `Port.command`s), so closing
+  # the write half costs nothing.
+  @spec run_executable(String.t(), [String.t()], pos_integer()) ::
+          {String.t(), non_neg_integer()} | {:error, :op_timeout}
+  def run_executable(executable, args, timeout_ms) do
+    port =
+      Port.open(
+        {:spawn_executable, executable},
+        [:binary, :exit_status, :stderr_to_stdout, :in, args: args]
+      )
+
+    os_pid =
+      case Port.info(port, :os_pid) do
+        {:os_pid, pid} -> pid
+        _ -> nil
+      end
+
+    collect_op(
+      port,
+      os_pid,
+      System.monotonic_time(:millisecond) + timeout_ms,
+      []
+    )
   end
 
   defp collect_op(port, os_pid, deadline, acc) do
@@ -312,14 +337,14 @@ defmodule Raxol.Agent.Backend.Credentials do
          :ok <- IO.binwrite(io, template),
          :ok <- File.close(io) do
       try do
-        run_op_create(path, vault)
+        run_op_create(path, vault, Keyword.get(opts, :timeout_ms))
       after
         File.rm(path)
       end
     end
   end
 
-  defp run_op_create(template_path, vault) do
+  defp run_op_create(template_path, vault, timeout_ms) do
     args = [
       "item",
       "create",
@@ -331,7 +356,7 @@ defmodule Raxol.Agent.Backend.Credentials do
       "json"
     ]
 
-    case run_op(args) do
+    case run_op(args, timeout_ms) do
       {:error, reason} -> {:error, reason}
       {out, 0} -> created_ref(out, vault)
       {out, code} -> {:error, {:op_create_failed, code, String.trim(out)}}

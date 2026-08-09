@@ -159,6 +159,17 @@ defmodule Raxol.Agent.Code.App do
           :login_validator,
           &__MODULE__.default_login_validator/3
         ),
+      # `/login <provider> browser` runs the provider's OAuth sign-in off the
+      # app process — it waits on a human in a browser, which must never block
+      # the TEA loop — and the outcome rides back as a `:browser_signin`
+      # message matched by this ref. Injectable, mirroring `:login_validator`.
+      signin_ref: nil,
+      signin_runner:
+        Keyword.get(
+          options,
+          :signin_runner,
+          &__MODULE__.default_browser_signin/3
+        ),
       # `/model` with no arg fetches the connected provider's model list off
       # the app process; the result rides back as a `:models_list` message
       # matched by this ref. Injectable so tests drive it without a network
@@ -451,6 +462,19 @@ defmodule Raxol.Agent.Code.App do
          | status_line: validation_status(harness, result),
            login_ref: nil
        }, []}
+    else
+      {model, []}
+    end
+  end
+
+  # An async `/login <provider> browser` result. Same ref discipline as
+  # `:login_validation` — a newer sign-in supersedes an in-flight one.
+  def update(
+        {:command_result, {:browser_signin, ref, harness, result}},
+        model
+      ) do
+    if ref == model.signin_ref do
+      {apply_signin(%{model | signin_ref: nil}, harness, result), []}
     else
       {model, []}
     end
@@ -1734,12 +1758,59 @@ defmodule Raxol.Agent.Code.App do
       [provider] ->
         login_provider(model, provider, nil, nil)
 
+      # Spelled out rather than inferred: `/login <provider>` already means
+      # "resolve from op/env", and a browser opening on its own would be a
+      # surprise.
+      [provider, "browser"] ->
+        login_browser(model, provider)
+
       [provider, secret] ->
         login_provider(model, provider, secret, nil)
 
       [provider, secret, model_name | _] ->
         login_provider(model, provider, secret, model_name)
     end
+  end
+
+  defp login_browser(model, provider_str) do
+    case Raxol.Agent.Backend.Resolver.harness_from_string(provider_str) do
+      {:ok, harness} ->
+        start_browser_signin(model, harness)
+
+      :error ->
+        notice(
+          model,
+          "unknown provider: #{provider_str}\n\n" <> login_status_text()
+        )
+    end
+  end
+
+  defp start_browser_signin(model, harness) do
+    if Raxol.Agent.Auth.Flow.supported?(harness) do
+      ref = make_ref()
+      model.signin_runner.(harness, ref, self())
+
+      %{model | signin_ref: ref}
+      |> notice("opening a browser to sign in to #{harness}...")
+      |> put_status("waiting for #{harness} sign-in...")
+    else
+      notice(
+        model,
+        "#{harness} has no browser sign-in. Connect it with an api key or an " <>
+          "op:// reference:\n  /login #{harness} <api-key>"
+      )
+    end
+  end
+
+  defp apply_signin(model, harness, {:ok, _result}) do
+    resolve_and_connect(model, harness, [], "browser sign-in")
+  end
+
+  defp apply_signin(model, harness, {:error, reason}) do
+    notice(
+      model,
+      "#{harness} sign-in failed: #{Raxol.Agent.Auth.Flow.describe(reason)}"
+    )
   end
 
   defp login_provider(model, provider_str, secret, model_name) do
@@ -1833,6 +1904,25 @@ defmodule Raxol.Agent.Code.App do
   # Kick off the injectable validator, returning the ref that stamps its
   # result. `self()` here is the app process, so the ping's reply message lands
   # where `update/2` can fold it.
+  @doc false
+  # The default sign-in runner: the whole OAuth flow off the app process, so a
+  # user who wanders off mid-approval cannot wedge the TUI. The outcome rides
+  # back as a `:browser_signin` message, mirroring the validation ping.
+  def default_browser_signin(harness, ref, app) do
+    spawn(fn ->
+      result =
+        try do
+          Raxol.Agent.Auth.Flow.run(harness)
+        rescue
+          error -> {:error, error}
+        catch
+          _kind, reason -> {:error, reason}
+        end
+
+      send(app, {:command_result, {:browser_signin, ref, harness, result}})
+    end)
+  end
+
   defp start_login_validation(model, executor) do
     ref = make_ref()
     model.login_validator.(executor, ref, self())
@@ -2139,6 +2229,7 @@ defmodule Raxol.Agent.Code.App do
     Connect a provider with /login:
       /login anthropic op://Vault/Anthropic/key   1Password reference (persisted)
       /login openai sk-...                         session key (not saved)
+      /login openrouter browser                    sign in via browser (persisted)
       /login lm_studio                             local server (no key)
 
     ● connected  ○ not connected

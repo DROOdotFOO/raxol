@@ -104,10 +104,21 @@ defmodule Raxol.Agent.Backend.HTTP do
           | :unsupported
   def check_auth(opts) do
     if available?() do
-      opts |> detect_provider() |> models_request(opts) |> run_auth_check(opts)
+      opts |> auth_check_request() |> run_auth_check(opts)
     else
       :unsupported
     end
+  end
+
+  @doc false
+  # The `{url, headers}` `check_auth/1` would call, or `:unsupported` when the
+  # provider has no endpoint to check. Exposed so the routing can be tested
+  # without a socket: `:unsupported` here is precisely the silent failure that
+  # let unvalidated credentials report as merely "stored".
+  @spec auth_check_request(keyword()) ::
+          {String.t(), [{String.t(), String.t()}]} | :unsupported
+  def auth_check_request(opts) do
+    opts |> detect_provider() |> models_request(opts)
   end
 
   defp run_auth_check(:unsupported, _opts), do: :unsupported
@@ -215,11 +226,17 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   defp models_request(_provider, _opts), do: :unsupported
 
+  # `:auth_check_path` lets a provider name an endpoint that actually requires
+  # the credential. `/v1/models` is the OpenAI-dialect default, but it is
+  # PUBLIC on some hosts -- OpenRouter serves it 200 with no key at all -- and
+  # validating against one of those reports a revoked key as valid, which is
+  # worse than not validating.
   defp bearer_models_request(opts, default_base) do
     case Keyword.get(opts, :api_key) do
       key when is_binary(key) ->
         base = Keyword.get(opts, :base_url, default_base)
-        {"#{base}/v1/models", [{"authorization", "Bearer #{key}"}]}
+        path = Keyword.get(opts, :auth_check_path, "/v1/models")
+        {"#{base}#{path}", [{"authorization", "Bearer #{key}"}]}
 
       _no_key ->
         :unsupported

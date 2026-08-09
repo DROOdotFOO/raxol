@@ -218,4 +218,45 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       end
     end
   end
+
+  describe "run_executable/3" do
+    # An Erlang port opened without `:in` hands the child a stdin pipe that
+    # never delivers and never closes, so any child that READS stdin blocks
+    # until the deadline. That is not hypothetical: it is why `op item create`
+    # hung from the BEAM while the identical command returned in seconds from a
+    # shell, which silently broke every path that stores a credential.
+    #
+    # `cat` with no arguments reads stdin to EOF, so it is the cheapest probe
+    # for the regression: EOF means it exits at once, an open pipe means it
+    # hangs until the timeout.
+    @tag :unix_only
+    test "closes the child's stdin, so a stdin-reading child sees EOF" do
+      cat = System.find_executable("cat")
+      assert cat, "cat is required for this test"
+
+      started = System.monotonic_time(:millisecond)
+      result = Credentials.run_executable(cat, [], 5_000)
+      elapsed = System.monotonic_time(:millisecond) - started
+
+      assert {"", 0} = result
+      assert elapsed < 4_000, "cat blocked on stdin for #{elapsed}ms"
+    end
+
+    @tag :unix_only
+    test "returns the child's output and exit status" do
+      echo = System.find_executable("echo")
+      assert {output, 0} = Credentials.run_executable(echo, ["hello"], 5_000)
+      assert String.trim(output) == "hello"
+    end
+
+    # The bound is the whole point of the Port runner: a hung `op` must not
+    # freeze the caller (the TUI update loop, a test, an ACP turn).
+    @tag :unix_only
+    test "kills a child that outlives its deadline" do
+      sleep = System.find_executable("sleep")
+
+      assert {:error, :op_timeout} =
+               Credentials.run_executable(sleep, ["30"], 300)
+    end
+  end
 end

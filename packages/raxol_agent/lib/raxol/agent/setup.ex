@@ -21,7 +21,7 @@ defmodule Raxol.Agent.Setup do
   alias Raxol.Agent.Backend.Credentials
   alias Raxol.Agent.Backend.HTTP
   alias Raxol.Agent.Backend.Resolver
-  alias Raxol.Agent.ExecutorConfig
+  alias Raxol.Agent.Backend.Selector
 
   @type validation ::
           :valid
@@ -63,6 +63,9 @@ defmodule Raxol.Agent.Setup do
   provider, then validate. Requires the `op` CLI (the `:creator` seam
   defaults to `Credentials.create_item/3`).
 
+  `:vault` and `:timeout_ms` reach the creator; the latter is for callers
+  whose user is looking somewhere else when 1Password raises its prompt.
+
   Returns `{:ok, harness, op_ref, validation}` or `{:error, reason}`.
   """
   @spec connect_key(atom() | String.t(), String.t(), keyword()) ::
@@ -72,7 +75,8 @@ defmodule Raxol.Agent.Setup do
     attrs = Map.new(Keyword.take(opts, [:model, :base_url]))
 
     with {:ok, provider} <- resolve_harness(harness),
-         {:ok, ref} <- creator.(provider, key, Keyword.take(opts, [:vault])),
+         {:ok, ref} <-
+           creator.(provider, key, Keyword.take(opts, [:vault, :timeout_ms])),
          :ok <- Credentials.put(provider, ref_entry(ref, attrs)) do
       {:ok, provider, ref, validate(provider, opts)}
     end
@@ -95,18 +99,31 @@ defmodule Raxol.Agent.Setup do
   end
 
   # Resolve the stored reference to a live executor and hit the provider's
-  # model-list endpoint (no tokens spent). A resolution that yields no key or
+  # auth-check endpoint (no tokens spent). A resolution that yields no key or
   # no provider is surfaced verbatim so the caller can report it.
   defp default_validate(provider) do
     case Resolver.resolve(harness: provider) do
-      {:ok, executor, _source} ->
-        executor
-        |> ExecutorConfig.to_backend_opts()
-        |> Keyword.put(:provider, executor.backend)
-        |> HTTP.check_auth()
+      {:ok, executor, _source} -> check_credential(executor)
+      other -> other
+    end
+  end
 
-      other ->
-        other
+  # Route through `Selector` rather than assembling backend opts here: it is
+  # the single source of truth for which wire dialect and base URL a harness
+  # speaks. Passing `executor.backend` as `:provider` looked equivalent only
+  # because the four original providers are named after their dialect. For
+  # openrouter, lm_studio, llm7 and longcat -- all of which speak `:openai` at
+  # their own base URL -- it named a dialect `Backend.HTTP` has never heard of,
+  # so each one silently validated as `:unsupported` and a dead credential
+  # reported "stored" instead of failing.
+  #
+  # Only the HTTP backend has an auth-check endpoint; Lumo, Native and Mock
+  # have nothing to hit, so they stay honestly unsupported.
+  defp check_credential(executor) do
+    case Selector.select(executor) do
+      {:ok, HTTP, opts} -> HTTP.check_auth(opts)
+      {:ok, _module, _opts} -> :unsupported
+      {:error, _reason} -> :unsupported
     end
   end
 

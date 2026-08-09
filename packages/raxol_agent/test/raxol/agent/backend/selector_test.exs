@@ -124,4 +124,55 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       refute :codex in supported
     end
   end
+
+  describe "credential validation routing" do
+    # A harness whose `:provider` is not a dialect Backend.HTTP recognizes gets
+    # NO auth check at all: `check_auth/1` returns :unsupported without a
+    # request, and a dead credential reports as merely "stored". That is how
+    # openrouter, lm_studio, llm7 and longcat went silently unvalidated -- the
+    # caller passed `executor.backend` as `:provider`, which only happens to be
+    # a dialect name for the four original providers.
+    test "every HTTP-backed harness builds an auth check request" do
+      for harness <- Selector.supported_backends() do
+        config =
+          ExecutorConfig.new(backend: harness, auth: %{api_key: "probe-key"})
+
+        case Selector.select(config) do
+          {:ok, Raxol.Agent.Backend.HTTP, opts} ->
+            refute Raxol.Agent.Backend.HTTP.auth_check_request(opts) ==
+                     :unsupported,
+                   "#{harness} resolves to HTTP but has no auth check"
+
+          {:ok, _other_backend, _opts} ->
+            :ok
+        end
+      end
+    end
+
+    # OpenRouter serves /api/v1/models publicly (200 with no key), so checking
+    # there would call a revoked credential valid -- worse than not checking.
+    test "openrouter checks the auth-required endpoint, not the public one" do
+      config =
+        ExecutorConfig.new(backend: :openrouter, auth: %{api_key: "probe-key"})
+
+      {:ok, _module, opts} = Selector.select(config)
+
+      assert {url, headers} =
+               Raxol.Agent.Backend.HTTP.auth_check_request(opts)
+
+      assert url == "https://openrouter.ai/api/v1/key"
+      refute url =~ "/models"
+      assert {"authorization", "Bearer probe-key"} in headers
+    end
+
+    test "an openai-dialect provider still checks the model list by default" do
+      config =
+        ExecutorConfig.new(backend: :openai, auth: %{api_key: "probe-key"})
+
+      {:ok, _module, opts} = Selector.select(config)
+
+      assert {"https://api.openai.com/v1/models", _headers} =
+               Raxol.Agent.Backend.HTTP.auth_check_request(opts)
+    end
+  end
 end
