@@ -12,10 +12,13 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     Each `session/new` starts a `Raxol.AgentClientProtocol.Session` whose
     `:turn_runner` is `Raxol.Agent.ClientProtocol.TurnRunner` over the
     launcher-resolved executor; `session/prompt` defers to that session.
-    Turns run the read-only toolset (read/grep/glob, no
-    write_file/edit_file/bash): ACP's permission flow is not yet bridged to
-    the authorization engine, and an unattended surface fails closed until
-    it is — the same posture as the harness MCP tools.
+    Turns run the FULL toolset, mutating tools included. Every sensitive call
+    is gated on a `session/request_permission` round trip via
+    `Raxol.Agent.ClientProtocol.Permission`, which `TurnRunner` injects as the
+    turn's `:tool_authorizer`. Reads are not gated, so a read-heavy turn costs
+    no extra protocol traffic. A client that refuses, times out, disconnects,
+    or does not implement permissions denies the write and keeps reading, so
+    the surface is fail-closed on the DECISION rather than on the toolset.
     """
 
     use Raxol.AgentClientProtocol.Agent

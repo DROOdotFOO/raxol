@@ -249,13 +249,21 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   end
 
   # Read-only toolset, matching the StdioAgent contract.
+  # The FULL toolset, mutating tools included. Safe because every sensitive
+  # call is gated on a `session/request_permission` round trip -- see
+  # `Raxol.Agent.ClientProtocol.Permission`, whose gate `TurnRunner` injects
+  # per turn. A client that refuses, times out, disconnects, or does not
+  # implement permissions at all denies the write, so the read-only narrowing
+  # this used to do is no longer what keeps the surface closed.
   defp turn_opts(executor) do
     [
       executor: executor,
-      actions: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.read_only(),
+      actions: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all(),
       system_prompt:
-        "You are a coding assistant driven by an editor over ACP. Use the " <>
-          "available read-only tools to inspect files. Be concise."
+        "You are a coding assistant driven by an editor over ACP. Inspect " <>
+          "files with the read tools, and use write_file, edit_file and bash " <>
+          "to make changes. Editing tools ask the client for permission per " <>
+          "call, so a refusal is an answer, not an error. Be concise."
     ]
   end
 

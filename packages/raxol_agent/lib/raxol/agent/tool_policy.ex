@@ -80,8 +80,24 @@ defmodule Raxol.Agent.ToolPolicy do
   defp action_name(%Raxol.Agent.Action.Dynamic{name: name}), do: name
   defp action_name(module), do: module.__action_meta__().name
 
-  defp sensitive?(%Raxol.Agent.Action.Dynamic{sensitive: sensitive}), do: sensitive == true
+  @doc """
+  The `{name, sensitive?}` pair for an action, however it is carried.
 
-  defp sensitive?(module),
-    do: Map.get(module.__action_meta__(), :sensitive, false) == true
+  Module Actions keep it in `__action_meta__/0`; runtime-discovered MCP tools
+  are `%Raxol.Agent.Action.Dynamic{}` structs and carry it on the struct. Public
+  because an authorizer that ASKS rather than denies needs the name for its
+  prompt, not just the flag -- see
+  `Raxol.Agent.ClientProtocol.Permission.authorizer/2`.
+  """
+  @spec identity(module() | Raxol.Agent.Action.Dynamic.t()) ::
+          {String.t() | atom(), boolean()}
+  def identity(%Raxol.Agent.Action.Dynamic{name: name, sensitive: sensitive}),
+    do: {name, sensitive == true}
+
+  def identity(module) when is_atom(module) do
+    meta = module.__action_meta__()
+    {Map.get(meta, :name), Map.get(meta, :sensitive, false) == true}
+  end
+
+  defp sensitive?(action), do: action |> identity() |> elem(1)
 end
