@@ -101,6 +101,22 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
     end
   end
 
+  # Same env contract `raxol p` already honours (RAXOL_MAX_COST_USD,
+  # RAXOL_MAX_TURNS, RAXOL_COST_PER_MTOK_IN/_OUT). A malformed or
+  # unenforceable value refuses to serve rather than running uncapped: the
+  # whole reason to set one is that nobody is watching.
+  defp start_budget do
+    case Raxol.Agent.BenchmarkProfile.from_env() do
+      {:ok, profile} ->
+        Raxol.Agent.ClientProtocol.Budget.start_link(profile)
+        :ok
+
+      {:error, message} ->
+        IO.puts(:stderr, "raxol acp: #{message}")
+        System.halt(64)
+    end
+  end
+
   @requested_model_env "HARBOR_ACP_REQUESTED_MODEL"
 
   @doc """
@@ -167,6 +183,7 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
     System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
     reroute_logs_to_stderr()
     {:ok, _apps} = Application.ensure_all_started(:raxol_agent)
+    start_budget()
 
     {:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
 
