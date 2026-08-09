@@ -1,6 +1,6 @@
 {
   "name": "raxol",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Interactive AI agent and TUI toolkit in your terminal. A self-contained binary (via Burrito), so `npm i -g raxol` puts `raxol` on your PATH -- no Erlang or Elixir required.",
   "bin": {
     "raxol": "bin/launcher.js"
