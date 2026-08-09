@@ -280,6 +280,11 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     turn_id = "acp-turn-" <> Integer.to_string(System.unique_integer([:positive]))
     prompt = prompt_text(req)
     parent = self()
+    # The permission gate can only be built HERE: it closes over this turn's
+    # session pid and session id, neither of which exists when the launcher
+    # assembles turn_opts. Injected unless the caller already supplied an
+    # authorizer, so a test (or an embedder with its own policy) can override.
+    opts = with_permission_gate(opts, session, session_id(req))
 
     # The stream is BUILT inside the pump, not here: Stream.react/2 spawns its
     # loop eagerly with `caller = self()`, so building it in the root task
@@ -306,6 +311,22 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       tool_ids: %{},
       open_tools: %{}
     })
+  end
+
+  @doc false
+  # Put the ACP permission gate in the agent context under `:tool_authorizer`,
+  # unless one is already there. Anything else in `:context` survives (the cwd
+  # and jail markers ride there too), so this composes rather than replaces.
+  @spec with_permission_gate(keyword(), GenServer.server(), String.t()) :: keyword()
+  def with_permission_gate(opts, session, session_id) do
+    context = Keyword.get(opts, :context, %{})
+
+    if Map.has_key?(context, :tool_authorizer) do
+      opts
+    else
+      gate = Raxol.Agent.ClientProtocol.Permission.authorizer(session, session_id)
+      Keyword.put(opts, :context, Map.put(context, :tool_authorizer, gate))
+    end
   end
 
   defp build_stream(prompt, opts) do
