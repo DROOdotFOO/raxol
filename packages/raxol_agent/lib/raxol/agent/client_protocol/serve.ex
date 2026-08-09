@@ -87,18 +87,43 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
       Code.ensure_loaded?(Raxol.Agent.ClientProtocol.StdioAgent)
   end
 
-  # Provider first: a config problem exits before anything binds stdio, so a
-  # misconfigured agent fails loudly instead of opening a wire it cannot serve.
+  # An unresolved provider no longer stops the wire from opening.
+  #
+  # It used to: resolution came first and a failure exited 1 before binding
+  # stdio, on the reasoning that a misconfigured agent should fail loudly
+  # rather than serve a wire it cannot answer on. That was the wrong shape for
+  # this protocol. A client connects and negotiates BEFORE any model is
+  # configured -- ACP has authentication methods precisely so it can -- and the
+  # registry's own verifier runs `raxol acp` with no credentials at all and
+  # expects a handshake. Refusing to boot made a perfectly serviceable
+  # `initialize` impossible.
+  #
+  # Loudness is preserved, and now arrives twice: a warning on stderr the
+  # moment we know, and a structured per-turn error carrying the same message
+  # to the peer. That second channel is new -- it did not exist when the
+  # fail-early call was made -- so the failure is no quieter for moving later,
+  # it is better addressed.
   defp serve(opts) do
-    with {:ok, opts} <- apply_requested_model(opts),
-         {:ok, executor, _source} <-
-           Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
-      start_serving(executor)
-    else
+    case apply_requested_model(opts) do
+      {:ok, opts} -> start_serving(resolve_provider(opts))
+      {:error, message} -> usage_error(message)
+    end
+  end
+
+  defp resolve_provider(opts) do
+    case Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
+      {:ok, executor, _source} ->
+        {:ok, executor}
+
       {:error, message} ->
         IO.puts(:stderr, "raxol acp: #{message}")
-        1
+        {:error, message}
     end
+  end
+
+  defp usage_error(message) do
+    IO.puts(:stderr, "raxol acp: #{message}")
+    1
   end
 
   # Same env contract `raxol p` already honours (RAXOL_MAX_COST_USD,
@@ -178,7 +203,7 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
     end
   end
 
-  defp start_serving(executor) do
+  defp start_serving(provider) do
     # No terminal driver: this process's stdio is the protocol wire, not a UI.
     System.put_env("RAXOL_SKIP_TERMINAL_INIT", "true")
     reroute_logs_to_stderr()
@@ -189,7 +214,7 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
 
     serve_connection(
       {Raxol.AgentClientProtocol.Transport.Stdio, handle},
-      %{turn_opts: turn_opts(executor)}
+      %{turn_opts: turn_opts(provider)}
     )
   end
 
@@ -272,7 +297,12 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   # per turn. A client that refuses, times out, disconnects, or does not
   # implement permissions at all denies the write, so the read-only narrowing
   # this used to do is no longer what keeps the surface closed.
-  defp turn_opts(executor) do
+  # `:executor` carries the resolution OUTCOME, not just the executor. A turn
+  # started without a provider fails with the same message the operator already
+  # saw on stderr, instead of a shrug.
+  defp turn_opts({:error, message}), do: [provider_error: message]
+
+  defp turn_opts({:ok, executor}) do
     [
       executor: executor,
       actions: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.all(),
