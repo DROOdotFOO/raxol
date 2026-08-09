@@ -77,6 +77,17 @@ defmodule RaxolCli.MixProject do
       # pull req in today, and Backend.HTTP would return :req_not_available the
       # day it stops.
       {:req, "~> 0.5"},
+
+      # The CA trust store, and the reason `req` alone is not enough. castore is
+      # an OPTIONAL dep of mint, so it lands in the lock but is never compiled
+      # into the release -- the packaged binary then has no trust store and
+      # Mint raises "default CA trust store not available" on the FIRST HTTPS
+      # connect, i.e. every remote LLM call. Declaring it here is what ships it.
+      # Host OS certs are not a substitute: something must still load them
+      # (`:public_key.cacerts_load/0`), and a self-contained binary that
+      # promises no Erlang install should not depend on the host's cert bundle
+      # existing at all.
+      {:castore, "~> 1.0"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ] ++ acp_dep()
