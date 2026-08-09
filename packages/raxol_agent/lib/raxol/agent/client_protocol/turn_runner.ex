@@ -117,6 +117,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
   require Logger
 
+  alias Raxol.Agent.ClientProtocol.Budget
   alias Raxol.Agent.Stream, as: AgentStream
 
   # Cross-package: raxol_agent_client_protocol is an optional peer (dev/test
@@ -277,6 +278,13 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   # -- the turn body (runs inside the Session's supervised root Task) ----------
 
   defp run_turn(session, req, opts) do
+    case Budget.check() do
+      :ok -> start_turn(session, req, opts)
+      {:exceeded, cap} -> {:error, turn_error(:budget_exhausted, cap)}
+    end
+  end
+
+  defp start_turn(session, req, opts) do
     # Trap exits: the pump is LINKED (so a root crash can never leak a
     # streaming process) and killed with :kill on every exit path; the trapped
     # {:EXIT, pump, _} is dropped in the loop — the monitor drives the logic.
@@ -433,8 +441,9 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
   defp handle_event({:turn_complete, _info}, state), do: loop(state)
 
-  defp handle_event({:done, _info}, state) do
+  defp handle_event({:done, info}, state) do
     stop_pump(state)
+    Budget.record(Map.get(info, :usage) || %{})
     {:stop, :end_turn}
   end
 
