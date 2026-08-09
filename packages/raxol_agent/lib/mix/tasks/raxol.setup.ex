@@ -22,6 +22,9 @@ defmodule Mix.Tasks.Raxol.Setup do
       # connect a raw key: creates a 1Password item, stores its reference
       mix raxol.setup --provider openai --api-key sk-... --vault Private
 
+      # sign in through a browser (providers that offer one; opt-in, see below)
+      mix raxol.setup --provider openrouter --browser
+
       # forget a provider's stored reference
       mix raxol.setup --provider openai --remove
 
@@ -37,12 +40,20 @@ defmodule Mix.Tasks.Raxol.Setup do
     * `--model`    — default model to store with the reference
     * `--base-url` — base URL override to store with the reference
     * `--vault`    — 1Password vault for `--api-key` (default `$RAXOL_OP_VAULT` or `Private`)
+    * `--browser`  — run the provider's browser sign-in (opens a browser; see below)
     * `--remove`   — delete the provider's stored reference
     * `--status`   — print provider status and exit (default when no action given)
+
+  `--browser` is opt-in rather than the default here, unlike `raxol login`.
+  This task is the CI/headless twin, and a build step must never block on a
+  browser that will not open. It also needs a browser on THIS machine: the
+  sign-in redirect lands on a loopback port.
   """
 
   use Mix.Task
 
+  alias Raxol.Agent.Auth.Flow
+  alias Raxol.Agent.Backend.Resolver
   alias Raxol.Agent.Setup
 
   @switches [
@@ -52,6 +63,7 @@ defmodule Mix.Tasks.Raxol.Setup do
     model: :string,
     base_url: :string,
     vault: :string,
+    browser: :boolean,
     remove: :boolean,
     status: :boolean
   ]
@@ -88,14 +100,19 @@ defmodule Mix.Tasks.Raxol.Setup do
       Keyword.get(opts, :api_key) ->
         do_connect_key(provider, opts)
 
+      Keyword.get(opts, :browser, false) ->
+        do_connect_browser(provider)
+
       true ->
-        usage_error("give one of --op, --api-key, or --remove for #{provider}")
+        usage_error(
+          "give one of --op, --api-key, --browser, or --remove for #{provider}"
+        )
     end
   end
 
   defp no_action?(opts) do
     not Enum.any?(
-      [:op, :api_key, :remove, :provider],
+      [:op, :api_key, :browser, :remove, :provider],
       &Keyword.has_key?(opts, &1)
     )
   end
@@ -121,6 +138,36 @@ defmodule Mix.Tasks.Raxol.Setup do
       Keyword.take(opts, [:model, :base_url, :vault])
     )
     |> report_connect_key()
+  end
+
+  # The flow stores through `Setup.connect_key/3` like every other path here,
+  # so what lands on disk is still only an `op://` reference.
+  defp do_connect_browser(provider) do
+    case Resolver.harness_from_string(provider) do
+      {:ok, harness} -> run_browser_flow(harness)
+      :error -> fail(connect_error({:unknown_provider, provider}))
+    end
+  end
+
+  defp run_browser_flow(harness) do
+    if Flow.supported?(harness) do
+      IO.puts("opening a browser to sign in to #{harness}...")
+      report_browser(Flow.run(harness), harness)
+    else
+      fail(
+        "#{harness} has no browser sign-in — use --op or --api-key " <>
+          "(browser sign-in: #{Enum.map_join(Flow.providers(), ", ", &to_string/1)})"
+      )
+    end
+  end
+
+  defp report_browser({:ok, %{provider: provider, validation: validation}}, _harness) do
+    IO.puts("stored reference for #{provider}")
+    report_validation(provider, validation)
+  end
+
+  defp report_browser({:error, reason}, harness) do
+    fail("#{harness} sign-in failed: #{Flow.describe(reason)}")
   end
 
   defp do_remove(provider) do

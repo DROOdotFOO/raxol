@@ -202,6 +202,120 @@ defmodule Raxol.Agent.Code.AppLoginTest do
     end
   end
 
+  describe "/login <provider> browser" do
+    defp signin_recording do
+      caller = self()
+
+      fn harness, ref, app ->
+        send(caller, {:signin_started, harness, ref, app})
+        :ok
+      end
+    end
+
+    # The flow waits on a human in a browser. Running it inline would freeze
+    # the TEA loop for as long as they took, so `/login` must return at once
+    # with only a ref to match the result by.
+    test "starts the sign-in off the app process and returns immediately" do
+      model =
+        new_model(:no_provider, signin_runner: signin_recording())
+        |> type("/login openrouter browser")
+
+      assert_received {:signin_started, :openrouter, ref, app}
+      assert app == self()
+      assert model.signin_ref == ref
+      assert model.notice =~ "opening a browser"
+      assert model.status_line =~ "waiting for openrouter"
+      assert model.provider_status == :no_provider
+    end
+
+    test "a completed sign-in connects the provider" do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-live")
+
+      model =
+        new_model(:no_provider,
+          signin_runner: signin_recording(),
+          login_validator: noop_validator()
+        )
+        |> type("/login openrouter browser")
+
+      assert_received {:signin_started, :openrouter, ref, _app}
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:browser_signin, ref, :openrouter, {:ok, %{validation: :valid}}}},
+          model
+        )
+
+      assert {:ready, :openrouter, _source} = model.provider_status
+      assert model.signin_ref == nil
+      assert model.notice =~ "browser sign-in"
+    end
+
+    test "a failed sign-in says why and leaves the provider unconnected" do
+      model =
+        new_model(:no_provider, signin_runner: signin_recording())
+        |> type("/login openrouter browser")
+
+      assert_received {:signin_started, :openrouter, ref, _app}
+
+      {model, []} =
+        App.update(
+          {:command_result, {:browser_signin, ref, :openrouter, {:error, :timeout}}},
+          model
+        )
+
+      assert model.notice =~ "timed out"
+      assert model.provider_status == :no_provider
+      assert model.signin_ref == nil
+    end
+
+    # Same ref discipline as the validation ping: a superseded sign-in must not
+    # connect a provider the user has since moved on from.
+    test "a superseded sign-in result is ignored" do
+      model =
+        new_model(:no_provider, signin_runner: signin_recording())
+        |> type("/login openrouter browser")
+
+      assert_received {:signin_started, :openrouter, _ref, _app}
+      current = model.signin_ref
+
+      {model, []} =
+        App.update(
+          {:command_result,
+           {:browser_signin, make_ref(), :openrouter, {:ok, %{validation: :valid}}}},
+          model
+        )
+
+      assert model.provider_status == :no_provider
+      assert model.signin_ref == current
+    end
+
+    # Advertising a browser sign-in for a provider that has none would hang the
+    # user on a flow that never starts.
+    test "a provider without a browser flow is refused, and nothing is spawned" do
+      runner = fn _harness, _ref, _app -> flunk("spawned a flow for anthropic") end
+
+      model =
+        new_model(:no_provider, signin_runner: runner)
+        |> type("/login anthropic browser")
+
+      assert model.notice =~ "no browser sign-in"
+      assert model.signin_ref == nil
+    end
+
+    test "is refused in a jailed session like the rest of /login" do
+      runner = fn _harness, _ref, _app -> flunk("spawned a flow in a jail") end
+
+      model =
+        new_model(:no_provider, jail: true, signin_runner: runner)
+        |> type("/login openrouter browser")
+
+      assert model.notice =~ "disabled in a hosted session"
+      assert model.signin_ref == nil
+    end
+  end
+
   describe "/login validation" do
     test "connecting shows a validating status and stamps a login ref" do
       model =

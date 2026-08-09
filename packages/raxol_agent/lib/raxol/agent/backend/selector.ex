@@ -51,6 +51,10 @@ defmodule Raxol.Agent.Backend.Selector do
          # The :openai build_request appends "/v1/chat/completions", so the base
          # URL stops at "/api" (never "/api/v1", which would double the "/v1").
          base_url: "https://openrouter.ai/api",
+         # OpenRouter serves /api/v1/models PUBLICLY (200 with no key), so the
+         # default auth check would call a revoked credential valid. /v1/key is
+         # the auth-required endpoint: 401 with no key and with a bad one.
+         auth_check_path: "/v1/key",
          extra_headers: [
            {"HTTP-Referer", "https://raxol.io"},
            {"X-OpenRouter-Title", "Raxol"},

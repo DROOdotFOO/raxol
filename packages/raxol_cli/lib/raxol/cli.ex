@@ -191,7 +191,7 @@ defmodule Raxol.CLI do
       code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
       acp           Serve over the Agent Client Protocol on stdio
-      login         Connect an LLM provider (ACP Terminal Auth)
+      login         Connect an LLM provider (browser sign-in, or a key)
       playground    Browse the interactive component catalog
       new [name]    Scaffold a new Raxol application
       help          Show this help

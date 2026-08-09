@@ -105,6 +105,29 @@ defmodule Raxol.Agent.SetupTest do
 
       assert Credentials.fetch(:openai) == :none
     end
+
+    # The browser sign-in raises 1Password's prompt while the user is still
+    # looking at a browser tab, so it needs to widen the `op` budget. Losing
+    # that race discards a key the provider already minted.
+    test "passes :vault and :timeout_ms through to the creator" do
+      caller = self()
+
+      creator = fn _harness, _key, opts ->
+        send(caller, {:creator_opts, opts})
+        {:ok, "op://Private/abc/credential"}
+      end
+
+      Setup.connect_key(:openai, "sk-live",
+        creator: creator,
+        validator: fn _ -> :valid end,
+        vault: "Employee",
+        timeout_ms: 120_000
+      )
+
+      assert_receive {:creator_opts, opts}
+      assert Keyword.fetch!(opts, :vault) == "Employee"
+      assert Keyword.fetch!(opts, :timeout_ms) == 120_000
+    end
   end
 
   describe "remove/1" do
