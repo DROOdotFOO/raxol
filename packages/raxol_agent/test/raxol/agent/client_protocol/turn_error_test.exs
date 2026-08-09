@@ -56,6 +56,16 @@ defmodule Raxol.Agent.ClientProtocol.TurnErrorTest do
       assert byte_size(err.data["reason"]) <= 2_000
     end
 
+    # The registry's own verifier runs `raxol acp` with no credentials and
+    # expects a handshake, so an unresolved provider can no longer stop the
+    # wire from opening -- it has to become a turn-time answer instead.
+    test "an unresolved provider is a turn error, not a refusal to boot" do
+      err = TurnRunner.turn_error(:no_provider, "no provider configured; set ANTHROPIC_API_KEY")
+
+      assert err.data["tag"] == "no_provider"
+      assert err.data["reason"] =~ "no provider configured"
+    end
+
     # inspect/2 defaults elide long structures with "..."; the message we most
     # need is usually at the end of a nested provider payload.
     test "a nested reason is not elided before the message" do

@@ -277,10 +277,32 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
   # -- the turn body (runs inside the Session's supervised root Task) ----------
 
+  # Two gates before any provider call, in the order that costs least. A turn
+  # with no provider can never succeed, and one over budget must not be paid
+  # for; both answer with the same structured error shape a stream failure
+  # does, so a client handles one case, not three.
+  # Two gates before any provider call, cheapest first. A turn with no provider
+  # can never succeed, and one over budget must not be paid for; both answer
+  # with the same structured error shape a stream failure does, so a client
+  # handles one case, not three.
   defp run_turn(session, req, opts) do
+    case refusal(opts) do
+      nil -> start_turn(session, req, opts)
+      {tag, detail} -> {:error, turn_error(tag, detail)}
+    end
+  end
+
+  defp refusal(opts) do
+    case Keyword.get(opts, :provider_error) do
+      nil -> budget_refusal()
+      message -> {:no_provider, message}
+    end
+  end
+
+  defp budget_refusal do
     case Budget.check() do
-      :ok -> start_turn(session, req, opts)
-      {:exceeded, cap} -> {:error, turn_error(:budget_exhausted, cap)}
+      :ok -> nil
+      {:exceeded, cap} -> {:budget_exhausted, cap}
     end
   end
 
