@@ -90,13 +90,75 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   # Provider first: a config problem exits before anything binds stdio, so a
   # misconfigured agent fails loudly instead of opening a wire it cannot serve.
   defp serve(opts) do
-    case Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
+    with {:ok, opts} <- apply_requested_model(opts),
+         {:ok, executor, _source} <-
+           Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
+      start_serving(executor)
+    else
       {:error, message} ->
         IO.puts(:stderr, "raxol acp: #{message}")
         1
+    end
+  end
 
-      {:ok, executor, _source} ->
-        start_serving(executor)
+  @requested_model_env "HARBOR_ACP_REQUESTED_MODEL"
+
+  @doc """
+  Fold a harness-requested model into `opts`.
+
+  Harbor, the runner behind Terminal-Bench, tells an ACP agent which model to
+  use by setting `HARBOR_ACP_REQUESTED_MODEL` to a litellm-style
+  `provider/model` spec. Nothing on the ACP wire itself carries a model, so
+  without reading it a benchmark run served whatever provider auto-detection
+  happened to find and the recorded trajectory named a model the harness never
+  asked for — fabricated attribution in a published result.
+
+  `--backend`/`--model` win, because the human channel outranks the harness
+  channel. When either is given the env var is ignored WHOLE rather than
+  merged per key, so a flagged provider can never be paired with a model
+  belonging to a different one.
+
+  A value that is set but unparseable is REFUSED: a benchmark that cannot
+  honor the requested model must fail loudly rather than quietly serve a
+  different one. Blank is treated as unset. An unsupported provider is left to
+  `Raxol.Agent.Backend.Cli`, whose error already names the supported set. The
+  model half is split off only once, so a provider-qualified model name
+  (`openrouter/meta-llama/llama-3.1`) survives intact.
+  """
+  @spec apply_requested_model(keyword(), %{optional(String.t()) => String.t()}) ::
+          {:ok, keyword()} | {:error, String.t()}
+  def apply_requested_model(opts, env \\ System.get_env()) do
+    if flagged?(opts) do
+      {:ok, opts}
+    else
+      merge_requested(opts, Map.get(env, @requested_model_env))
+    end
+  end
+
+  defp flagged?(opts) do
+    Enum.any?([:model, :backend, :harness], &Keyword.has_key?(opts, &1))
+  end
+
+  defp merge_requested(opts, value) do
+    case parse_requested(value) do
+      :none ->
+        {:ok, opts}
+
+      {:ok, provider, model} ->
+        {:ok, Keyword.merge(opts, backend: provider, model: model)}
+
+      :error ->
+        {:error, "#{@requested_model_env} must be provider/model (got #{inspect(value)})"}
+    end
+  end
+
+  defp parse_requested(nil), do: :none
+
+  defp parse_requested(value) do
+    case String.split(String.trim(value), "/", parts: 2) do
+      [""] -> :none
+      [provider, model] when provider != "" and model != "" -> {:ok, provider, model}
+      _ -> :error
     end
   end
 
@@ -190,8 +252,7 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   defp turn_opts(executor) do
     [
       executor: executor,
-      actions:
-        Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.read_only(),
+      actions: Raxol.Agent.Actions.Fs.all() ++ Raxol.Agent.Actions.Code.read_only(),
       system_prompt:
         "You are a coding assistant driven by an editor over ACP. Use the " <>
           "available read-only tools to inspect files. Be concise."

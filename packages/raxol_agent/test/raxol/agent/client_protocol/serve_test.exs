@@ -43,6 +43,73 @@ defmodule Raxol.Agent.ClientProtocol.ServeTest do
     assert_receive {:acp_exit, ^serving, 1}, 5_000
   end
 
+  describe "apply_requested_model/2" do
+    test "a harness-requested provider/model becomes the backend and model" do
+      env = %{"HARBOR_ACP_REQUESTED_MODEL" => "anthropic/claude-sonnet-4-5"}
+
+      assert {:ok, opts} = Serve.apply_requested_model([], env)
+      assert Keyword.get(opts, :backend) == "anthropic"
+      assert Keyword.get(opts, :model) == "claude-sonnet-4-5"
+    end
+
+    test "only the FIRST slash splits, so a qualified model name survives" do
+      env = %{
+        "HARBOR_ACP_REQUESTED_MODEL" => "openrouter/meta-llama/llama-3.1-70b"
+      }
+
+      assert {:ok, opts} = Serve.apply_requested_model([], env)
+      assert Keyword.get(opts, :backend) == "openrouter"
+      assert Keyword.get(opts, :model) == "meta-llama/llama-3.1-70b"
+    end
+
+    test "an absent or blank request leaves opts untouched" do
+      for env <- [
+            %{},
+            %{"HARBOR_ACP_REQUESTED_MODEL" => ""},
+            %{"HARBOR_ACP_REQUESTED_MODEL" => "   "}
+          ] do
+        assert {:ok, []} = Serve.apply_requested_model([], env)
+      end
+    end
+
+    # Fail CLOSED. Ignoring a set-but-broken request would serve a different
+    # model than the harness recorded, which is the misattribution this reader
+    # exists to prevent.
+    test "a set but unparseable request is refused, not ignored" do
+      for bad <- ["claude-sonnet-4-5", "anthropic/", "/claude", "/"] do
+        env = %{"HARBOR_ACP_REQUESTED_MODEL" => bad}
+
+        assert {:error, message} = Serve.apply_requested_model([], env)
+        assert message =~ "HARBOR_ACP_REQUESTED_MODEL must be provider/model"
+        assert message =~ inspect(bad)
+      end
+    end
+
+    test "--model wins over the harness request" do
+      env = %{"HARBOR_ACP_REQUESTED_MODEL" => "anthropic/claude-sonnet-4-5"}
+
+      assert {:ok, opts} = Serve.apply_requested_model([model: "gpt-5"], env)
+      assert Keyword.get(opts, :model) == "gpt-5"
+    end
+
+    # Ignored WHOLE, not merged per key: pairing a flagged provider with a
+    # model from another provider would be a silently wrong request.
+    test "--backend suppresses the request entirely rather than merging it" do
+      env = %{"HARBOR_ACP_REQUESTED_MODEL" => "anthropic/claude-sonnet-4-5"}
+
+      assert {:ok, opts} = Serve.apply_requested_model([backend: "openai"], env)
+      assert Keyword.get(opts, :backend) == "openai"
+      refute Keyword.has_key?(opts, :model)
+    end
+
+    test "the deprecated --harness alias suppresses it too" do
+      env = %{"HARBOR_ACP_REQUESTED_MODEL" => "anthropic/claude-sonnet-4-5"}
+
+      assert {:ok, opts} = Serve.apply_requested_model([harness: "openai"], env)
+      refute Keyword.has_key?(opts, :model)
+    end
+  end
+
   # Spawned UNLINKED: before the fix the supervisor's :shutdown travels down
   # start_link's link, which would take the ExUnit process with it.
   defp start_serving(handle) do
