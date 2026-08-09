@@ -326,9 +326,7 @@ defmodule Raxol.Adaptive.LayoutRecommender do
           |> then(fn confs -> Enum.sum(confs) / length(confs) end)
 
         reasoning =
-          selected
-          |> Enum.map(& &1.reasoning)
-          |> Enum.join("; ")
+          Enum.map_join(selected, "; ", & &1.reasoning)
 
         {:recommend, changes, avg_confidence, reasoning}
     end
@@ -409,18 +407,21 @@ defmodule Raxol.Adaptive.LayoutRecommender do
     end)
   end
 
+  # Carries the running count rather than calling `length/1` per candidate, and
+  # accumulates in reverse: both the count and the append were O(n) inside the
+  # fold. `conflicts_with_any?/2` only ever asks "does any", so it does not care
+  # which order it sees them in.
   defp select_non_conflicting(candidates, max) do
-    Enum.reduce(candidates, [], fn candidate, selected ->
-      if length(selected) >= max do
-        selected
-      else
-        if conflicts_with_any?(candidate, selected) do
-          selected
-        else
-          selected ++ [candidate]
-        end
+    candidates
+    |> Enum.reduce({[], 0}, fn candidate, {selected, count} = acc ->
+      cond do
+        count >= max -> acc
+        conflicts_with_any?(candidate, selected) -> acc
+        true -> {[candidate | selected], count + 1}
       end
     end)
+    |> elem(0)
+    |> Enum.reverse()
   end
 
   defp conflicts_with_any?(candidate, selected) do

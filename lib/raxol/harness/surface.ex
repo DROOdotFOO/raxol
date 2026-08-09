@@ -618,10 +618,10 @@ defmodule Raxol.Harness.Surface do
   alias Raxol.Harness.Projection
   alias Raxol.Harness.RecencyPolicy
   alias Raxol.Harness.SealFrontier
-  alias Raxol.Terminal.ScrollRegionManager
   alias Raxol.Harness.StatusStrip
   alias Raxol.Harness.Surface.ViewText
   alias Raxol.Harness.UnreadDivider
+  alias Raxol.Terminal.ScrollRegionManager
 
   alias Raxol.UI.Components.Harness.{Block, BlockBody, Composer}
   alias Raxol.UI.Harness.{InputEvent, Keymap, OverlayPanel, OverlayPicker}

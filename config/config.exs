@@ -19,7 +19,7 @@ config :logger, :console,
     :category,
     :performance_impact,
     :suggestions_count,
-    :phase3_context
+    :optimization_context
   ]
 
 # Use Jason for JSON parsing in Phoenix

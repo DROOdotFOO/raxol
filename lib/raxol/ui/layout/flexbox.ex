@@ -32,8 +32,8 @@ defmodule Raxol.UI.Layout.Flexbox do
   @default_order 0
 
   alias Raxol.UI.Layout.Engine
-  alias Raxol.UI.Layout.FlexItem
   alias Raxol.UI.Layout.Flexbox.{Calculator, Positioner, Solver, Wrapper}
+  alias Raxol.UI.Layout.FlexItem
   alias Raxol.UI.Layout.LayoutUtils
   alias Raxol.UI.Layout.MinContent
 
