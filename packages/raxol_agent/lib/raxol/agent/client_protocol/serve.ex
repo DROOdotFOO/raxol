@@ -209,6 +209,10 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
     reroute_logs_to_stderr()
     {:ok, _apps} = Application.ensure_all_started(:raxol_agent)
     start_budget()
+    # Burrito's launcher does not forward signals, so a client that kills the
+    # launcher pid alone would otherwise leave this BEAM running with the
+    # provider credential and an open stdin.
+    Raxol.Agent.ClientProtocol.ParentWatch.start_link([])
 
     {:ok, handle} = Raxol.AgentClientProtocol.Transport.Stdio.start_self()
 

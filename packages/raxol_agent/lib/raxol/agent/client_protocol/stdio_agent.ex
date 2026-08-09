@@ -25,6 +25,7 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
 
     alias Raxol.Agent.ClientProtocol.TurnRunner
     alias Raxol.AgentClientProtocol.Error
+    alias Raxol.AgentClientProtocol.Schema.AgentTypes.AuthMethod
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.Implementation
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.InitializeResponse
     alias Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionResponse
@@ -39,8 +40,35 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     # record `agentInfo` as the agent under test, and a nil there is reported
     # as an unnamed agent.
     @impl true
+    # Terminal Auth, advertised because raxol takes its credential from a
+    # stored `op://` reference or a provider env var -- never from the wire.
+    # A client with no way to authenticate us would otherwise have to tell the
+    # user to go configure something out of band. Terminal Auth is the
+    # protocol's answer: relaunch this same binary with these args, let the
+    # user log in in a real terminal, then open a normal session.
+    #
+    # Agent Auth (the agent runs its own OAuth flow) is NOT claimed. We do not
+    # implement it, and a method advertised with no `type` silently defaults to
+    # `agent` at the registry validator -- so the `terminal-auth` marker is
+    # load-bearing, not decoration.
+    @doc false
+    def auth_methods do
+      [
+        %{
+          AuthMethod.new("terminal", "Run in terminal")
+          | description: "Connect a provider interactively with `raxol login`",
+            _meta: %{"terminal-auth" => %{"args" => ["login"]}}
+        }
+      ]
+    end
+
     def initialize(_req, _ctx) do
-      {:ok, %{InitializeResponse.new(1) | agent_info: implementation()}}
+      {:ok,
+       %{
+         InitializeResponse.new(1)
+         | agent_info: implementation(),
+           auth_methods: auth_methods()
+       }}
     end
 
     defp implementation do

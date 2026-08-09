@@ -23,6 +23,9 @@ defmodule Raxol.CLI do
   def main(["-p" | rest]), do: Raxol.Agent.P.run(rest)
   # Serve over ACP on stdio, for editors and agent harnesses that spawn us.
   def main(["acp" | rest]), do: Raxol.Agent.ClientProtocol.Serve.run(rest)
+  # The interactive setup an ACP client relaunches us for (Terminal Auth): the
+  # args here are the ones `initialize` advertises, so the two cannot drift.
+  def main(["login" | rest]), do: Raxol.Agent.ClientProtocol.Login.run(rest)
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
   def main([help]) when help in ~w(help --help -h), do: help()
@@ -188,6 +191,7 @@ defmodule Raxol.CLI do
       code          Full coding-agent TUI: gated tools, plan mode, sessions
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
       acp           Serve over the Agent Client Protocol on stdio
+      login         Connect an LLM provider (ACP Terminal Auth)
       playground    Browse the interactive component catalog
       new [name]    Scaffold a new Raxol application
       help          Show this help
