@@ -12,10 +12,12 @@ const os = require("node:os");
 const { withTerminalRestore } = require("./tty");
 
 // Maps `${platform}-${arch}` to the Burrito output name (`raxol_cli_<target>`).
+// Burrito appends `.exe` on Windows.
 const BINARIES = {
   "darwin-arm64": "raxol_cli_macos",
   "linux-x64": "raxol_cli_linux",
   "linux-arm64": "raxol_cli_linux_arm",
+  "win32-x64": "raxol_cli_windows.exe",
 };
 
 function resolveBinary() {

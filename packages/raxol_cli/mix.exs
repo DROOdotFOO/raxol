@@ -38,7 +38,7 @@ defmodule RaxolCli.MixProject do
   defp releases do
     [
       raxol_cli: [
-        include_executables_for: [:unix],
+        include_executables_for: [:unix, :windows],
         steps: [:assemble, &Burrito.wrap/1],
         burrito: [targets: burrito_targets()]
       ]
@@ -47,11 +47,16 @@ defmodule RaxolCli.MixProject do
 
   # `skip_nifs: true`: each target is built natively (CI builds the arch it runs
   # on), so the termbox NIF from `mix release` assemble already matches the target.
+  # Windows carries no NIF to skip or ship: `raxol_terminal`'s mix.exs drops
+  # `:elixir_make` entirely on `{:win32, _}` and the driver falls back to the
+  # pure-Elixir `IOTerminal`, which is the path the windows-2022 CI leg already
+  # exercises. So the target is a native build like the others, minus the C.
   defp burrito_targets do
     [
       linux: [os: :linux, cpu: :x86_64, skip_nifs: true],
       linux_arm: [os: :linux, cpu: :aarch64, skip_nifs: true],
-      macos: [os: :darwin, cpu: :aarch64, skip_nifs: true]
+      macos: [os: :darwin, cpu: :aarch64, skip_nifs: true],
+      windows: [os: :windows, cpu: :x86_64, skip_nifs: true]
     ]
   end
 

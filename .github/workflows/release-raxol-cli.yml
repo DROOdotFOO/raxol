@@ -122,9 +122,52 @@ jobs:
           path: packages/raxol_cli/burrito_out/raxol_cli_macos
           if-no-files-found: error
 
+  windows-build:
+    name: windows-x86_64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '29.0.3'
+          elixir-version: '1.20.2'
+
+      - name: Install pinned Zig
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o zig.zip "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip"
+          Expand-Archive -Path zig.zip -DestinationPath $env:USERPROFILE
+          "$env:USERPROFILE\zig-x86_64-windows-0.16.0" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # No NIF here: raxol_terminal drops :elixir_make on {:win32, _} and the
+      # driver uses the pure-Elixir IOTerminal, which the windows-2022 test leg
+      # already covers.
+      - name: Build runtime binary
+        working-directory: packages/raxol_cli
+        shell: pwsh
+        env:
+          MIX_ENV: prod
+          BURRITO_TARGET: windows
+        run: |
+          zig version
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix release raxol_cli --overwrite
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-windows-x86_64
+          path: packages/raxol_cli/burrito_out/raxol_cli_windows.exe
+          if-no-files-found: error
+
   package:
     name: assemble npm package
-    needs: [linux-build, macos-build]
+    needs: [linux-build, macos-build, windows-build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -185,7 +228,7 @@ jobs:
   # which does not match `raxol-cli-v*`.
   release:
     name: attach release assets
-    needs: [linux-build, macos-build]
+    needs: [linux-build, macos-build, windows-build]
     if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
     runs-on: ubuntu-latest
     permissions:
