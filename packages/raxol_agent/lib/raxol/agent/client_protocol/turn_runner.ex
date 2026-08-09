@@ -130,8 +130,13 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
               Raxol.AgentClientProtocol.Schema.ToolCall,
               Raxol.AgentClientProtocol.Schema.ToolCallUpdate,
               Raxol.AgentClientProtocol.Schema.ToolCallUpdateFields,
-              Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification
+              Raxol.AgentClientProtocol.Schema.LifecycleExtras.SessionNotification,
+              Raxol.AgentClientProtocol.Error
             ]}
+
+  @error_mod Raxol.AgentClientProtocol.Error
+  # A runaway reason must not become an unbounded JSON-RPC frame.
+  @error_detail_limit 2_000
 
   @ctx Raxol.AgentClientProtocol.Ctx
   @content_block Raxol.AgentClientProtocol.Schema.ContentBlock
@@ -435,10 +440,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
   defp handle_event({:error, reason}, state) do
     stop_pump(state)
-    # The Session folds any non-{:stop,_}/non-PromptResponse root result to an
-    # internal-error prompt response (normalize_root_result/1) — the honest
-    # rendering of a backend/stream failure.
-    {:error, {:turn_stream_error, reason}}
+    {:error, turn_error(:turn_stream_error, reason)}
   end
 
   defp handle_event(_other, state), do: loop(state)
@@ -449,7 +451,37 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   end
 
   defp handle_pump_down(reason, _state) do
-    {:error, {:turn_stream_crashed, reason}}
+    {:error, turn_error(:turn_stream_crashed, reason)}
+  end
+
+  # Say what broke, twice, because the two audiences are different and both
+  # were getting nothing.
+  #
+  # This used to return an opaque `{:turn_stream_error, reason}` tuple, which
+  # the Session folded to a bare `Error.internal_error()` — reason discarded —
+  # and nothing logged it. A provider answering "your credit balance is too
+  # low" surfaced to an editor as -32603 with no data, and to a benchmark
+  # harness as a non-zero exit with an empty stderr. Diagnosing it meant
+  # driving the agent stream by hand.
+  #
+  # `Logger.error` reaches the operator (this surface reroutes logs to stderr
+  # before the transport binds, so it lands beside the wire without corrupting
+  # it, and a harness captures it). The `data` payload reaches the peer, which
+  # is what an editor renders.
+  @doc false
+  @spec turn_error(atom(), term()) :: struct()
+  def turn_error(tag, reason) do
+    detail =
+      reason
+      |> inspect(limit: :infinity, printable_limit: :infinity)
+      |> String.slice(0, @error_detail_limit)
+
+    Logger.error("[acp] #{tag}: #{detail}")
+
+    @error_mod.with_data(@error_mod.internal_error(), %{
+      "reason" => detail,
+      "tag" => Atom.to_string(tag)
+    })
   end
 
   # -- cancellation ---------------------------------------------------------------
