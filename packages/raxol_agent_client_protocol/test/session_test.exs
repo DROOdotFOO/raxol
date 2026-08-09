@@ -372,6 +372,40 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Root-result error passthrough
+  # ---------------------------------------------------------------------------
+
+  describe "root result carrying a protocol error" do
+    # The Session used to fold EVERY unrecognized root result into a bare
+    # internal_error, so a runner that had already diagnosed the failure had
+    # its diagnosis discarded and the peer saw -32603 with no data --
+    # indistinguishable from a crash.
+    test "a runner's own Error survives with its data intact", ctx do
+      conn = new_conn()
+      err = Error.with_data(Error.internal_error(), %{"reason" => "credit balance too low"})
+
+      {session, _sid} =
+        start_session(ctx, conn, turn_runner: fn _s, _req -> {:error, err} end)
+
+      begin(session)
+
+      assert {:reply, _, {:error, %Error{data: %{"reason" => "credit balance too low"}}}} =
+               wait_for_reply(conn)
+    end
+
+    test "an unrecognized shape still folds to a bare internal error", ctx do
+      conn = new_conn()
+
+      {session, _sid} =
+        start_session(ctx, conn, turn_runner: fn _s, _req -> :nonsense end)
+
+      begin(session)
+
+      assert {:reply, _, {:error, %Error{code: -32_603, data: nil}}} = wait_for_reply(conn)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # I8 fail-closed permission matrix
   # ---------------------------------------------------------------------------
 

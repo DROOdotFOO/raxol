@@ -766,6 +766,15 @@ defmodule Raxol.AgentClientProtocol.Session do
   @spec normalize_root_result(term()) :: Turn.outcome()
   defp normalize_root_result({:stop, reason}) when is_atom(reason), do: {:stop, reason}
   defp normalize_root_result(%PromptResponse{stop_reason: reason}), do: {:stop, reason}
+
+  # A runner that has ALREADY built a protocol error keeps it, `data` included.
+  # Folding it into a bare `Error.internal_error()` like any other unrecognized
+  # shape discarded the only description of what went wrong: a provider
+  # refusing a request reached the peer as -32603 with no data, which is
+  # indistinguishable from a crash. The runner is trusted to have decided the
+  # code; this clause only stops the Session from overwriting it.
+  defp normalize_root_result({:error, %Error{} = err}), do: {:error, err}
+
   defp normalize_root_result(_other), do: {:error, Error.internal_error()}
 
   # Drain gate (§3.1): finish iff the task group is empty AND an outcome exists.
