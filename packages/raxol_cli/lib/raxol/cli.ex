@@ -168,11 +168,47 @@ defmodule Raxol.CLI do
     end
   end
 
-  defp interactive? do
+  # Is there a terminal for a full-screen TUI to draw on?
+  #
+  # Two different questions, because the packaged binary and a source run do not
+  # present stdio the same way.
+  #
+  # Under Burrito the answer CANNOT come from the group leader. Its launcher
+  # spawns the BEAM with stdout on a pipe so it can notice a downstream consumer
+  # going away (`app cmd | head -5`), which makes `:io.getopts()` report a
+  # non-terminal on every run, tty or not. Asking it there vetoes `raxol code`
+  # and `raxol playground` unconditionally -- the packaged binary could never
+  # open either one. Stdin is left inherited, so that is where the real answer
+  # lives, and it is the honest one: termbox2 opens /dev/tty directly
+  # (`tb_init/0` is `tb_init_file("/dev/tty")`), so the TUI never draws through
+  # the piped stdout anyway.
+  #
+  # Everywhere else keep reading the group leader. It is what `with_io/1` swaps,
+  # which is what lets the veto be tested without a tty deciding the outcome.
+  defp interactive?, do: interactive?(burrito?())
+
+  @doc false
+  # Split on the packaging so a test can pin the branch: the Burrito arm's
+  # answer comes from the real stdin of the OS process, which a unit test
+  # cannot pose either way.
+  def interactive?(true), do: tty_stdin?()
+  def interactive?(false), do: terminal_group_leader?()
+
+  defp burrito?, do: System.get_env("__BURRITO") == "1"
+
+  defp terminal_group_leader? do
     case :io.getopts() do
       opts when is_list(opts) -> Keyword.get(opts, :terminal, false) != false
       _ -> false
     end
+  rescue
+    _ -> false
+  end
+
+  defp tty_stdin? do
+    Code.ensure_loaded?(:prim_tty) and
+      function_exported?(:prim_tty, :isatty, 1) and
+      :prim_tty.isatty(:stdin) == true
   rescue
     _ -> false
   end

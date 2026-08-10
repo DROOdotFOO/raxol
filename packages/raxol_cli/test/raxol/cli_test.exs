@@ -96,6 +96,20 @@ defmodule Raxol.CLITest do
       assert stderr =~ "interactive terminal"
     end
 
+    test "the Burrito arm ignores the group leader" do
+      # Burrito's launcher puts the BEAM's stdout on a pipe, so the group leader
+      # reports a non-terminal on every packaged run. Reading it there vetoed
+      # `raxol code` and `raxol playground` unconditionally -- the packaged
+      # binary could not open either. Under a StringIO group leader, which is
+      # the strongest "no terminal" signal a test can produce, the non-Burrito
+      # arm must still veto while the Burrito arm must not consult it at all.
+      {{burrito, plain}, _io} =
+        with_io(fn -> {CLI.interactive?(true), CLI.interactive?(false)} end)
+
+      refute plain
+      assert burrito == (:prim_tty.isatty(:stdin) == true)
+    end
+
     test "code --ssh is NOT vetoed for a missing tty (serving needs none)" do
       # Without --authorized-keys the launcher rejects --ssh as a usage error
       # (64), which proves the tty veto (exit 1, "interactive terminal") did
