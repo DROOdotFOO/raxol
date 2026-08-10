@@ -13,9 +13,14 @@ defmodule Raxol.MCP.Deployment do
   # to :prod when Mix is gone rather than crash or read the wrong env.
   @mix_env if Code.ensure_loaded?(Mix), do: Mix.env(), else: :prod
 
+  # Resolved here rather than in the function body. Inlined into `production?/0`
+  # the membership test compares two atoms the type checker already knows are
+  # disjoint, which it reports as a typing violation on every build.
+  @production? @mix_env not in [:dev, :test]
+
   @doc "True in any non-dev/test build."
   @spec production?() :: boolean()
-  def production?, do: @mix_env not in [:dev, :test]
+  def production?, do: @production?
 
   @doc """
   Whether a network transport must refuse to expose tools without an authorizer.
