@@ -366,14 +366,12 @@ defmodule Raxol.Adaptive.LayoutRecommender do
   defp compute_trends(nil), do: %{}
 
   defp compute_trends(tracker_server) do
-    try do
-      aggregates =
-        Raxol.Adaptive.BehaviorTracker.get_aggregates(tracker_server, 5)
+    aggregates =
+      Raxol.Adaptive.BehaviorTracker.get_aggregates(tracker_server, 5)
 
-      TrendDetector.compute(aggregates)
-    catch
-      :exit, _ -> %{}
-    end
+    TrendDetector.compute(aggregates)
+  catch
+    :exit, _ -> %{}
   end
 
   defp apply_trend_guards(candidates, trends) when map_size(trends) == 0,

@@ -73,8 +73,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
 
     files
     |> Enum.filter(&String.ends_with?(&1, ".md"))
-    |> Enum.reject(&String.contains?(&1, "node_modules/"))
-    |> Enum.reject(&vendored?/1)
+    |> Enum.reject(&(String.contains?(&1, "node_modules/") or vendored?(&1)))
     |> Enum.flat_map(&ProseLint.check_file(&1, lint_opts))
     |> Enum.sort_by(&{&1.path, &1.line})
   end
