@@ -5,6 +5,8 @@
 [![CI](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml/badge.svg?branch=master)](https://github.com/DROOdotFOO/raxol/actions/workflows/ci-unified.yml)
 [![Hex](https://img.shields.io/hexpm/v/raxol.svg)](https://hex.pm/packages/raxol)
 
+[![raxol MCP server](https://glama.ai/mcp/servers/DROOdotFOO/raxol/badges/card.svg)](https://glama.ai/mcp/servers/DROOdotFOO/raxol)
+
 Write one app. Render it to a terminal, a browser, an SSH session, or an agent.
 
 Your application is a single [TEA](https://guide.elm-lang.org/architecture/) module (`init`, `update`, `view`) running as an [OTP](https://en.wikipedia.org/wiki/Open_Telecom_Platform) GenServer. Raxol renders that module to four surfaces from one codebase:
