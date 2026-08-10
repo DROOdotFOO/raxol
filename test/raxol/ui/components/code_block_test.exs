@@ -68,7 +68,7 @@ defmodule Raxol.UI.Components.CodeBlockTest do
       result = CodeBlock.render(state, %{})
       assert result.type == :column
       assert is_list(result.children)
-      assert length(result.children) >= 1
+      assert result.children != []
     end
 
     test "rendered content preserves the source text" do

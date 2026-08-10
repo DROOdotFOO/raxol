@@ -328,8 +328,7 @@ defmodule Raxol.UI.Components.MarkdownRenderer do
     pattern =
       line
       |> String.split(" ")
-      |> Enum.map(&Regex.escape/1)
-      |> Enum.join("\\s+")
+      |> Enum.map_join("\\s+", &Regex.escape/1)
 
     case Regex.run(Regex.compile!(pattern, "u"), rest, return: :index) do
       [{offset, len}] -> {cursor + offset, len}

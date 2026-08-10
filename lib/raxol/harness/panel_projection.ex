@@ -247,14 +247,19 @@ defmodule Raxol.Harness.PanelProjection do
         }
 
         if Map.has_key?(lanes_map, lane) do
-          {lanes_order, Map.update!(lanes_map, lane, &(&1 ++ [entry]))}
+          {lanes_order, Map.update!(lanes_map, lane, &[entry | &1])}
         else
-          {lanes_order ++ [lane], Map.put(lanes_map, lane, [entry])}
+          {[lane | lanes_order], Map.put(lanes_map, lane, [entry])}
         end
       end)
 
-    Enum.map(lanes_order, fn lane ->
-      %{name: lane, items: Map.fetch!(lanes_map, lane)}
+    # Both accumulators build in reverse and are flipped once here. Appending
+    # per entry copied the lane's whole list each time, and `order` runs to
+    # `@max_entries` (500) on a path that rebuilds per projection.
+    lanes_order
+    |> Enum.reverse()
+    |> Enum.map(fn lane ->
+      %{name: lane, items: lanes_map |> Map.fetch!(lane) |> Enum.reverse()}
     end)
   end
 

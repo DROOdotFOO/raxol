@@ -39,8 +39,8 @@ defmodule Raxol.UI.Components.Modal do
   # alias Raxol.UI.Components.Input.TextInput # Example, avoid direct component usage in render
 
   # Alias the new modules
-  alias Raxol.UI.Components.Modal.{Core, Events, Rendering, State}
   alias Raxol.UI.Components.AbsoluteLayer
+  alias Raxol.UI.Components.Modal.{Core, Events, Rendering, State}
 
   # Define state struct
   defstruct id: nil,

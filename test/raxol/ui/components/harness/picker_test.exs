@@ -449,7 +449,7 @@ defmodule Raxol.UI.Components.Harness.PickerTest do
         Picker.render(state, default_context())
 
       assert %{type: :row, children: children} = row
-      assert length(children) >= 1
+      assert children != []
       assert Enum.any?(children, &(&1.content != ""))
     end
   end

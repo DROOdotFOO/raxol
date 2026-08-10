@@ -21,11 +21,11 @@ defmodule Raxol.Effects.BorderBeam.CellApplier do
   alias Raxol.Effects.BorderBeam.Effect
 
   alias Raxol.Effects.BorderBeam.Effects.{
-    Stroke,
-    Pulse,
-    Flames,
+    Clouds,
     Electric,
-    Clouds
+    Flames,
+    Pulse,
+    Stroke
   }
 
   @type cell ::

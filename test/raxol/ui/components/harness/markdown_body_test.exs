@@ -281,7 +281,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
           not String.contains?(l, "─") and not String.contains?(l, "check")
         end)
 
-      assert length(body) >= 1
+      assert body != []
 
       for row <- body, cell <- table_cells(row) do
         refute cell == "",
