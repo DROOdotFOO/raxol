@@ -865,22 +865,20 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   defp wrap_piece(piece, {rows_rev, current_rev, used}, budget) do
     width = TextMeasure.display_width(piece.text)
 
-    cond do
-      used + width <= budget ->
-        {rows_rev, [piece | current_rev], used + width}
+    if used + width <= budget do
+      {rows_rev, [piece | current_rev], used + width}
+    else
+      room = budget - used
+      {head_text, rest_text} = split_text_at_width(piece.text, room)
 
-      true ->
-        room = budget - used
-        {head_text, rest_text} = split_text_at_width(piece.text, room)
+      current_rev =
+        if head_text == "",
+          do: current_rev,
+          else: [%{piece | text: head_text} | current_rev]
 
-        current_rev =
-          if head_text == "",
-            do: current_rev,
-            else: [%{piece | text: head_text} | current_rev]
+      rest = %{piece | text: rest_text}
 
-        rest = %{piece | text: rest_text}
-
-        wrap_piece(rest, {[current_rev | rows_rev], [], 0}, budget)
+      wrap_piece(rest, {[current_rev | rows_rev], [], 0}, budget)
     end
   end
 

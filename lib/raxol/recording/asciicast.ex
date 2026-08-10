@@ -182,30 +182,28 @@ defmodule Raxol.Recording.Asciicast do
   defp decode_events([], acc), do: Enum.reverse(acc)
 
   defp decode_events([line | rest], acc) do
-    cond do
-      blank?(line) ->
-        decode_events(rest, acc)
+    if blank?(line) do
+      decode_events(rest, acc)
+    else
+      case decode_event(line) do
+        {:ok, event} ->
+          decode_events(rest, [event | acc])
 
-      true ->
-        case decode_event(line) do
-          {:ok, event} ->
-            decode_events(rest, [event | acc])
+        :error when rest == [] ->
+          # No trailing newline: torn mid-write. Expected when the writer was
+          # killed; drop it silently and return the complete events.
+          Enum.reverse(acc)
 
-          :error when rest == [] ->
-            # No trailing newline: torn mid-write. Expected when the writer was
-            # killed; drop it silently and return the complete events.
-            Enum.reverse(acc)
+        :error ->
+          # Either an interior malformed line or a newline-terminated (fully
+          # flushed) but unparseable final line -- committed corruption, alarm.
+          Logger.warning(
+            "Raxol.Recording.Asciicast: malformed event line, stopping decode " <>
+              "and returning #{length(acc)} recovered event(s)"
+          )
 
-          :error ->
-            # Either an interior malformed line or a newline-terminated (fully
-            # flushed) but unparseable final line -- committed corruption, alarm.
-            Logger.warning(
-              "Raxol.Recording.Asciicast: malformed event line, stopping decode " <>
-                "and returning #{length(acc)} recovered event(s)"
-            )
-
-            Enum.reverse(acc)
-        end
+          Enum.reverse(acc)
+      end
     end
   end
 

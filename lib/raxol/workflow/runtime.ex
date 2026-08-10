@@ -1215,38 +1215,35 @@ defmodule Raxol.Workflow.Runtime do
     branch_ids
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], count}, fn {id, index}, {:ok, slots, c} ->
-      cond do
-        monotonic_us() >= deadline_us ->
-          {:halt, {:error, :run_timeout, state, c}}
+      if monotonic_us() >= deadline_us do
+        {:halt, {:error, :run_timeout, state, c}}
+      else
+        result =
+          with_branch_id({join_target, index}, fn ->
+            step_branch(
+              compiled,
+              id,
+              state,
+              run_id,
+              deadline_us,
+              c,
+              join_target
+            )
+          end)
 
-        true ->
-          result =
-            with_branch_id({join_target, index}, fn ->
-              step_branch(
-                compiled,
-                id,
-                state,
-                run_id,
-                deadline_us,
-                c,
-                join_target
-              )
-            end)
+        case result do
+          {:branch_done, branch_state, new_count} ->
+            {:cont, {:ok, [{:done, branch_state} | slots], new_count}}
 
-          case result do
-            {:branch_done, branch_state, new_count} ->
-              {:cont, {:ok, [{:done, branch_state} | slots], new_count}}
+          {:branch_paused, value, state_at_interrupt, paused_node_id, new_count} ->
+            {:cont,
+             {:ok,
+              [{:paused, paused_node_id, state_at_interrupt, value} | slots],
+              new_count}}
 
-            {:branch_paused, value, state_at_interrupt, paused_node_id,
-             new_count} ->
-              {:cont,
-               {:ok,
-                [{:paused, paused_node_id, state_at_interrupt, value} | slots],
-                new_count}}
-
-            {:error, _reason, _state, _count} = err ->
-              {:halt, err}
-          end
+          {:error, _reason, _state, _count} = err ->
+            {:halt, err}
+        end
       end
     end)
     |> case do
@@ -1468,20 +1465,18 @@ defmodule Raxol.Workflow.Runtime do
          count,
          halt_at
        ) do
-    cond do
-      monotonic_us() >= deadline_us ->
-        {:error, :run_timeout, state, count}
-
-      true ->
-        execute_branch_node(
-          compiled,
-          current_id,
-          state,
-          run_id,
-          deadline_us,
-          count,
-          halt_at
-        )
+    if monotonic_us() >= deadline_us do
+      {:error, :run_timeout, state, count}
+    else
+      execute_branch_node(
+        compiled,
+        current_id,
+        state,
+        run_id,
+        deadline_us,
+        count,
+        halt_at
+      )
     end
   end
 
