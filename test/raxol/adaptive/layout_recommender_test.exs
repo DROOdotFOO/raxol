@@ -177,4 +177,43 @@ defmodule Raxol.Adaptive.LayoutRecommenderTest do
       assert [_ | _] = rec.layout_changes
     end
   end
+
+  # Trends are pulled from the tracker with a GenServer.call, so a tracker that
+  # dies exits the caller. Absorbing that is what keeps one tracker crash from
+  # cascading into the recommender and every subscriber attached to it; the
+  # cost is a recommendation computed without trend guards, which is the
+  # degraded answer rather than no answer. Every other test here leaves
+  # `subscribe_to` unset, so this is the only one that reaches the tracker.
+  describe "tracker failure" do
+    test "a dead tracker degrades to no trends, it does not kill the recommender" do
+      Process.flag(:trap_exit, true)
+
+      {:ok, tracker} = BehaviorTracker.start_link(name: nil)
+
+      {:ok, pid} =
+        LayoutRecommender.start_link(
+          name: nil,
+          recommendation_cooldown_ms: 0,
+          subscribe_to: tracker
+        )
+
+      LayoutRecommender.subscribe(pid)
+
+      # A call lands after the subscribe_to continuation, so returning proves
+      # tracker_server is set -- otherwise it stays nil and never calls out.
+      assert LayoutRecommender.get_last_recommendation(pid) == nil
+
+      ref = Process.monitor(tracker)
+      Process.exit(tracker, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^tracker, :killed}, 500
+
+      aggregate = make_aggregate(%{analyst: 6.0, scout: 2.0, comms: 2.0})
+      send(pid, {:behavior_aggregate, aggregate})
+
+      assert_receive {:layout_recommendation, rec}, 500
+      assert [change | _] = rec.layout_changes
+      assert change.action == :expand
+      assert Process.alive?(pid)
+    end
+  end
 end
