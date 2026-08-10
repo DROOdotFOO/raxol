@@ -98,30 +98,11 @@ defprotocol Raxol.Protocols.Styleable do
   def to_ansi(data)
 end
 
-# Implementation for Color struct
-defimpl Raxol.Protocols.Styleable, for: Raxol.Style.Colors.Color do
-  def apply_style(color, style) do
-    Map.merge(color, style)
-  end
-
-  def get_style(color) do
-    %{
-      foreground: {color.r, color.g, color.b}
-    }
-  end
-
-  def merge_styles(color, new_style) do
-    Map.merge(color, new_style)
-  end
-
-  def reset_style(color) do
-    %{color | r: 0, g: 0, b: 0}
-  end
-
-  def to_ansi(%{r: r, g: g, b: b}) do
-    "\e[38;2;#{r};#{g};#{b}m"
-  end
-end
+# The Color implementation lives in `Raxol.Protocols.ThemeImplementations`,
+# alongside the other theme-facing ones. It used to be duplicated here, which
+# left the winner up to compile order and made the two disagree: this copy
+# reported only `:foreground` from `get_style/1` and left `:hex`/`:name` stale
+# after `reset_style/1`.
 
 # Implementation for Maps (generic style containers)
 defimpl Raxol.Protocols.Styleable, for: Map do
