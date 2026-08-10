@@ -16,7 +16,8 @@ defmodule RaxolTerminal.MixProject do
       package: package(),
       docs: docs(),
       name: "Raxol Terminal",
-      source_url: @source_url
+      source_url: @source_url,
+      homepage_url: "https://raxol.io"
     ]
 
     # Only compile NIF on Unix systems
@@ -95,7 +96,6 @@ defmodule RaxolTerminal.MixProject do
     [
       main: "readme",
       source_url: @source_url,
-      homepage_url: "https://raxol.io",
       source_ref: "v#{@version}",
       extras: ["README.md"]
     ]
