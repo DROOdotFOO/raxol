@@ -16,7 +16,8 @@ defmodule RaxolAgent.MixProject do
       package: package(),
       docs: docs(),
       name: "Raxol Agent",
-      source_url: @source_url
+      source_url: @source_url,
+      homepage_url: "https://raxol.io"
     ]
   end
 
@@ -94,7 +95,9 @@ defmodule RaxolAgent.MixProject do
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Docs" => "https://hexdocs.pm/raxol_agent"
+        "Docs" => "https://hexdocs.pm/raxol_agent",
+        "Changelog" => "https://github.com/DROOdotFOO/raxol/blob/master/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]

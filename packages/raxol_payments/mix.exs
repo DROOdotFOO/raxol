@@ -24,7 +24,8 @@ defmodule RaxolPayments.MixProject do
       package: package(),
       docs: docs(),
       name: "Raxol Payments",
-      source_url: @source_url
+      source_url: @source_url,
+      homepage_url: "https://raxol.io"
     ]
   end
 
@@ -76,11 +77,13 @@ defmodule RaxolPayments.MixProject do
   defp package do
     [
       name: "raxol_payments",
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md),
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Docs" => "https://hexdocs.pm/raxol_payments"
+        "Docs" => "https://hexdocs.pm/raxol_payments",
+        "Changelog" => "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_payments/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]

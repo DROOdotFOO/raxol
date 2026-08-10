@@ -19,7 +19,8 @@ defmodule RaxolTelegram.MixProject do
       package: package(),
       docs: docs(),
       name: "RaxolTelegram",
-      source_url: @source_url
+      source_url: @source_url,
+      homepage_url: "https://raxol.io"
     ]
   end
 
@@ -100,7 +101,8 @@ defmodule RaxolTelegram.MixProject do
         "GitHub" => @source_url,
         "Docs" => "https://hexdocs.pm/raxol_telegram",
         "Changelog" =>
-          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_telegram/CHANGELOG.md"
+          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_telegram/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"],
       files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md)

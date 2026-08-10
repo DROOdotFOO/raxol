@@ -16,7 +16,8 @@ defmodule RaxolSpeech.MixProject do
       package: package(),
       docs: docs(),
       name: "RaxolSpeech",
-      source_url: @source_url
+      source_url: @source_url,
+      homepage_url: "https://raxol.io"
     ]
   end
 
@@ -75,7 +76,8 @@ defmodule RaxolSpeech.MixProject do
         "GitHub" => @source_url,
         "Docs" => "https://hexdocs.pm/raxol_speech",
         "Changelog" =>
-          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_speech/CHANGELOG.md"
+          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_speech/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]
