@@ -19,7 +19,8 @@ defmodule RaxolWatch.MixProject do
       package: package(),
       docs: docs(),
       name: "RaxolWatch",
-      source_url: @source_url
+      source_url: @source_url,
+      homepage_url: "https://raxol.io"
     ]
   end
 
@@ -74,7 +75,8 @@ defmodule RaxolWatch.MixProject do
         "GitHub" => @source_url,
         "Docs" => "https://hexdocs.pm/raxol_watch",
         "Changelog" =>
-          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_watch/CHANGELOG.md"
+          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_watch/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]

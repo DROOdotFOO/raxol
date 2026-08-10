@@ -16,7 +16,8 @@ defmodule RaxolCore.MixProject do
       package: package(),
       docs: docs(),
       name: "Raxol Core",
-      source_url: @source_url
+      source_url: @source_url,
+      homepage_url: "https://raxol.io"
     ]
   end
 
@@ -59,6 +60,8 @@ defmodule RaxolCore.MixProject do
       links: %{
         "GitHub" => @source_url,
         "Docs" => "https://hexdocs.pm/raxol_core",
+        "Changelog" => "https://github.com/DROOdotFOO/raxol/blob/master/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]

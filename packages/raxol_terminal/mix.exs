@@ -83,7 +83,9 @@ defmodule RaxolTerminal.MixProject do
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Docs" => "https://hexdocs.pm/raxol_terminal"
+        "Docs" => "https://hexdocs.pm/raxol_terminal",
+        "Changelog" => "https://github.com/DROOdotFOO/raxol/blob/master/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]
@@ -93,6 +95,7 @@ defmodule RaxolTerminal.MixProject do
     [
       main: "readme",
       source_url: @source_url,
+      homepage_url: "https://raxol.io",
       source_ref: "v#{@version}",
       extras: ["README.md"]
     ]
