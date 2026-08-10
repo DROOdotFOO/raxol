@@ -7,6 +7,7 @@ defmodule Raxol.Terminal.TerminalUtils do
   @default_width Raxol.Core.Defaults.terminal_width()
   @default_height Raxol.Core.Defaults.terminal_height()
 
+  @ctty_key {__MODULE__, :controlling_terminal?}
 
   # Check if termbox2_nif is available at compile time
   @termbox2_available Code.ensure_loaded?(:termbox2_nif)
@@ -137,7 +138,9 @@ defmodule Raxol.Terminal.TerminalUtils do
              {:ok, width, height}
            else
              {:error, reason} ->
-               Raxol.Core.Runtime.Log.debug("io.columns/rows error: #{inspect(reason)}")
+               Raxol.Core.Runtime.Log.debug(
+                 "io.columns/rows error: #{inspect(reason)}"
+               )
 
                {:error, reason}
 
@@ -153,7 +156,9 @@ defmodule Raxol.Terminal.TerminalUtils do
         result
 
       {:error, reason} ->
-        Raxol.Core.Runtime.Log.debug("Error in detect_with_io: #{inspect(reason)}")
+        Raxol.Core.Runtime.Log.debug(
+          "Error in detect_with_io: #{inspect(reason)}"
+        )
 
         {:error, reason}
     end
@@ -207,7 +212,9 @@ defmodule Raxol.Terminal.TerminalUtils do
                end
 
              {output, code} ->
-               Raxol.Core.Runtime.Log.debug("stty exited with code #{code}: #{inspect(output)}")
+               Raxol.Core.Runtime.Log.debug(
+                 "stty exited with code #{code}: #{inspect(output)}"
+               )
 
                {:error, {:exit_code, code}}
            end
@@ -216,7 +223,9 @@ defmodule Raxol.Terminal.TerminalUtils do
         result
 
       {:error, reason} ->
-        Raxol.Core.Runtime.Log.debug("Error in detect_with_stty: #{inspect(reason)}")
+        Raxol.Core.Runtime.Log.debug(
+          "Error in detect_with_stty: #{inspect(reason)}"
+        )
 
         {:error, reason}
     end
@@ -235,16 +244,65 @@ defmodule Raxol.Terminal.TerminalUtils do
   end
 
   @doc """
-  Checks if stdout is connected to a real terminal device.
+  Checks whether a real terminal is available to drive.
 
   Unlike `real_tty?/0` which uses Erlang's IO system (fails in -noshell mode),
   this checks at the OS level via prim_tty NIF. Use this for terminal
   initialization that needs to work with `mix run` (which sets -noshell).
+
+  Stdout answers this for an ordinary run. It is not the whole question,
+  though, because stdout being a terminal and a terminal being *available* come
+  apart whenever something interposes on the stream. Burrito's launcher does
+  exactly that: it spawns the BEAM with stdout on a pipe so it can notice a
+  downstream consumer going away, and a packaged `raxol code` then found
+  `isatty(:stdout)` false on every run and skipped terminal setup entirely --
+  no raw mode, no alternate screen, so the TUI drew and ignored the keyboard.
+
+  Nothing in the driver actually needs stdout to be the terminal. Raw mode goes
+  through `/dev/tty` (`Raxol.Terminal.Driver.Stty`), and the ANSI it writes
+  reaches the terminal through whatever is relaying stdout. So fall back to
+  asking whether this process still owns a controlling terminal.
   """
   @spec has_terminal_device?() :: boolean()
   def has_terminal_device? do
     # prim_tty:isatty checks the actual fd at the OS level (C isatty()),
     # which works regardless of Erlang's -noshell flag.
-    :prim_tty.isatty(:stdout) == true
+    :prim_tty.isatty(:stdout) == true or controlling_terminal?()
+  end
+
+  @doc """
+  Whether this process still has a controlling terminal, cached per VM.
+
+  Cached because `has_terminal_device?/0` is called per cursor move, and this
+  branch opens a file. The answer cannot change during a run: a process does
+  not acquire or lose its controlling terminal mid-flight.
+  """
+  @spec controlling_terminal?() :: boolean()
+  def controlling_terminal? do
+    case :persistent_term.get(@ctty_key, :unknown) do
+      :unknown ->
+        result = probe_controlling_terminal()
+        :persistent_term.put(@ctty_key, result)
+        result
+
+      cached ->
+        cached
+    end
+  end
+
+  # Opening /dev/tty is the question itself: it succeeds only for a process
+  # with a controlling terminal, and fails on Windows and under a daemon or a
+  # CI runner, which is the answer those cases want. Requiring stdin to be a
+  # tty as well keeps `raxol code < script.txt` reading as non-interactive.
+  defp probe_controlling_terminal do
+    with true <- :prim_tty.isatty(:stdin) == true,
+         {:ok, device} <- File.open("/dev/tty", [:read]) do
+      File.close(device)
+      true
+    else
+      _ -> false
+    end
+  rescue
+    _ -> false
   end
 end

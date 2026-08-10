@@ -39,10 +39,97 @@ defmodule RaxolCli.MixProject do
     [
       raxol_cli: [
         include_executables_for: [:unix, :windows],
-        steps: [:assemble, &Burrito.wrap/1],
+        steps: [:assemble, &patch_burrito_launcher/1, &Burrito.wrap/1],
         burrito: [targets: burrito_targets()]
       ]
     ]
+  end
+
+  # Burrito 1.6.0 spawns the BEAM with stdout on a pipe so its launcher can
+  # notice a downstream consumer going away (`raxol code | head -5`). That costs
+  # the child its terminal, and two separate gates then read as "no terminal":
+  # `:io.getopts()` (which vetoed `raxol code` and `raxol playground` outright)
+  # and `:prim_tty.isatty(:stdout)` behind
+  # `Raxol.Terminal.TerminalUtils.has_terminal_device?/0` (which made the driver
+  # skip raw mode and the alternate screen, so the TUI drew but ignored every
+  # keystroke). Inheriting a stdout that is already a tty loses nothing: the
+  # EPIPE this guards against needs a downstream consumer holding the far end,
+  # which is exactly the not-a-tty case.
+  #
+  # Upstream exposes no option for this, so patch the dependency on the way to
+  # wrapping it. `mix deps.get` restores the original and this runs again, which
+  # is what makes the fix survive a clean checkout. raxol carries its own
+  # defence for the same failure (see `has_terminal_device?/0`); this half fixes
+  # the cause rather than tolerating it. Remove once burrito ships the fix.
+  @burrito_patches [
+    {"    if (builtin.os.tag != .windows) {\n" <>
+       "        child = try std.process.spawn(io, .{\n" <>
+       "            .argv = final_args,\n" <>
+       "            .environ_map = env_map,\n" <>
+       "            .stdout = .pipe,\n" <>
+       "        });",
+     "    const stdout_is_tty = Io.File.stdout().isTty(io) catch false;\n\n" <>
+       "    if (builtin.os.tag != .windows and !stdout_is_tty) {\n" <>
+       "        child = try std.process.spawn(io, .{\n" <>
+       "            .argv = final_args,\n" <>
+       "            .environ_map = env_map,\n" <>
+       "            .stdout = .pipe,\n" <>
+       "        });"},
+    # Keyed on the copy thread rather than the OS: with an inherited tty there
+    # is no thread to join, and `copy_thread.?` would panic on that path.
+    {"    const term = if (builtin.os.tag != .windows)\n",
+     "    const term = if (copy_thread != null)\n"}
+  ]
+
+  @doc false
+  # Public only so the patch can be exercised without a full release build.
+  def patch_burrito_launcher(release) do
+    path =
+      Path.join([
+        Mix.Project.deps_path(),
+        "burrito",
+        "src",
+        "erlang_launcher.zig"
+      ])
+
+    original = File.read!(path)
+
+    patched =
+      Enum.reduce(
+        @burrito_patches,
+        original,
+        &apply_burrito_patch(&1, &2, path)
+      )
+
+    if patched != original, do: File.write!(path, patched)
+
+    release
+  end
+
+  defp apply_burrito_patch({from, to}, source, path) do
+    cond do
+      String.contains?(source, to) ->
+        source
+
+      String.contains?(source, from) ->
+        String.replace(source, from, to, global: false)
+
+      true ->
+        Mix.raise(burrito_patch_error(path))
+    end
+  end
+
+  # Fail the build rather than ship a binary whose TUI cannot be typed into.
+  defp burrito_patch_error(path) do
+    """
+    Could not apply the burrito stdout fix to #{path}.
+
+    Neither the original source nor the patched form was found, so burrito's
+    launcher has changed and this patch no longer describes it. Re-derive it
+    against the new source before releasing: without it the packaged `raxol
+    code` and `raxol playground` refuse to start, and lifting only that veto
+    leaves a TUI that renders and ignores the keyboard.
+    """
   end
 
   # `skip_nifs: true`: each target is built natively (CI builds the arch it runs

@@ -53,4 +53,27 @@ defmodule Raxol.Terminal.TerminalUtilsTest do
       assert bounds.height > 0
     end
   end
+
+  describe "has_terminal_device?/0" do
+    test "a terminal on either stdout or the controlling terminal counts" do
+      # Burrito's launcher puts the BEAM's stdout on a pipe, so asking stdout
+      # alone reported "no terminal" on every packaged run and the driver
+      # skipped raw mode and the alternate screen. The driver reaches the
+      # terminal through /dev/tty regardless, so either answer is sufficient.
+      stdout? = :prim_tty.isatty(:stdout) == true
+
+      assert TerminalUtils.has_terminal_device?() ==
+               (stdout? or TerminalUtils.controlling_terminal?())
+    end
+
+    test "the controlling-terminal answer is stable across calls" do
+      # It is cached in :persistent_term because has_terminal_device?/0 runs
+      # per cursor move and this branch opens a file. Reading it twice must
+      # not depend on which call populated the cache.
+      first = TerminalUtils.controlling_terminal?()
+
+      assert is_boolean(first)
+      assert TerminalUtils.controlling_terminal?() == first
+    end
+  end
 end
