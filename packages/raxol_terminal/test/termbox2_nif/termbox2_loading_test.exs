@@ -18,6 +18,11 @@ defmodule Termbox2LoadingTest do
 
     @tag :docker
     test "NIF functions are defined" do
+      # `function_exported?/3` reports false for a module that is simply not
+      # loaded yet, so load it here rather than depending on the sibling test
+      # above having been scheduled first -- ExUnit shuffles per seed.
+      Code.ensure_loaded!(:termbox2_nif)
+
       # Check that all expected functions exist
       expected_functions = [
         {:tb_init, 0},
