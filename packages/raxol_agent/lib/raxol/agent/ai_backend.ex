@@ -56,7 +56,7 @@ defmodule Raxol.Agent.AIBackend do
   """
   @spec handles_tools_internally?(module()) :: boolean()
   def handles_tools_internally?(backend) when is_atom(backend) do
-    if function_exported?(backend, :handles_tools_internally?, 0) do
+    if exports?(backend, :handles_tools_internally?) do
       backend.handles_tools_internally?()
     else
       false
@@ -66,10 +66,19 @@ defmodule Raxol.Agent.AIBackend do
   @doc "Query a backend's max context window, defaulting to `nil`."
   @spec max_context_tokens(module()) :: pos_integer() | nil
   def max_context_tokens(backend) when is_atom(backend) do
-    if function_exported?(backend, :max_context_tokens, 0) do
+    if exports?(backend, :max_context_tokens) do
       backend.max_context_tokens()
     else
       nil
     end
+  end
+
+  # `function_exported?/3` answers false for a module that is merely not loaded
+  # YET, which in interactive mode is any backend nothing has called into. That
+  # false negative is not cosmetic here: `handles_tools_internally?/1` decides
+  # whether the vendor CLI owns the tool loop, so a native backend answering
+  # "no" would put the framework in charge of tools the CLI serves itself.
+  defp exports?(module, fun) do
+    Code.ensure_loaded?(module) and function_exported?(module, fun, 0)
   end
 end

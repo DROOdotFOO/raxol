@@ -29,8 +29,8 @@ defmodule Raxol.Agent.Code.InspectionTest do
     assert snapshot.hooks.status == :none
     assert snapshot.mcp_servers.status == :none
     assert snapshot.sessions == %{dir: ctx.sessions_dir, count: 0, latest: nil}
-    # All 10 registry providers are always reported, available or not.
-    assert length(snapshot.provider.providers) == 10
+    # All 12 registry providers are always reported, available or not.
+    assert length(snapshot.provider.providers) == 12
   end
 
   test "config files land in the snapshot with their real contents", ctx do

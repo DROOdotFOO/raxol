@@ -24,6 +24,15 @@ defmodule Raxol.Agent.Backend.Resolver do
   provider), then falls back to the generic `AI_API_KEY`/`AI_BASE_URL` trio,
   and finally `:no_provider` — the honest signal that the caller should show a
   setup prompt rather than crash against a placeholder endpoint.
+
+  ## Auto-detection never spends
+
+  Auto-detection considers only providers that cost nothing per request: a
+  subscription the user already holds, a local server, or a free tier.
+  Providers billed in API credits are skipped even when fully configured, so
+  an unattended run cannot quietly draw down a prepaid balance. Reaching one
+  is explicit: name it (`--backend openrouter`, `harness: :openrouter`) or set
+  `RAXOL_ALLOW_PAID_API=1` to restore the walk-everything order.
   """
 
   alias Raxol.Agent.Backend.Credentials
@@ -31,73 +40,120 @@ defmodule Raxol.Agent.Backend.Resolver do
 
   # Provider registry. `keyless: true` providers need no API key (local
   # servers, the free LLM7 endpoint, Mock); `env_keys` are checked in order.
-  # Detection walks this list top-to-bottom, so hosted/keyed providers rank
-  # ahead of local ones — a keyless provider is only auto-selected when the
-  # user has explicitly stored a reference for it.
+  # Detection walks this list top-to-bottom, and a keyless local provider is
+  # only auto-selected when the user has explicitly stored a reference for it.
+  #
+  # `billing` is what auto-detection routes on. `:api_credits` means a request
+  # draws down a prepaid balance, so those are NEVER auto-selected -- reaching
+  # one takes an explicit `--backend`/`harness:` or `RAXOL_ALLOW_PAID_API=1`.
+  # Everything else is already paid for: a `:subscription` the user holds, a
+  # `:local` server, or a `:free` tier. Ordering still matters within the
+  # allowed set, and the subscription harness comes first because it is the
+  # one that costs nothing extra AND is a frontier model.
   @providers [
+    %{
+      harness: :claude_native,
+      label: "Claude (subscription, via CLI)",
+      env_keys: [],
+      model_env: nil,
+      keyless: true,
+      billing: :subscription,
+      native_module: Raxol.Agent.Backend.ClaudeCode
+    },
+    %{
+      harness: :grok_native,
+      label: "Grok (subscription, via CLI)",
+      env_keys: [],
+      model_env: "GROK_MODEL",
+      keyless: true,
+      billing: :subscription,
+      native_module: Raxol.Agent.Backend.GrokBuild
+    },
     %{
       harness: :anthropic,
       label: "Anthropic (Claude)",
       env_keys: ["ANTHROPIC_API_KEY"],
       model_env: "ANTHROPIC_MODEL",
-      keyless: false
+      keyless: false,
+      billing: :api_credits
     },
     %{
       harness: :openai,
       label: "OpenAI",
       env_keys: ["OPENAI_API_KEY"],
       model_env: "OPENAI_MODEL",
-      keyless: false
+      keyless: false,
+      billing: :api_credits
     },
     %{
       harness: :kimi,
       label: "Kimi (Moonshot)",
       env_keys: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
       model_env: "KIMI_MODEL",
-      keyless: false
+      keyless: false,
+      billing: :api_credits
     },
     %{
       harness: :openrouter,
       label: "OpenRouter",
       env_keys: ["OPENROUTER_API_KEY"],
       model_env: "OPENROUTER_MODEL",
-      keyless: false
+      keyless: false,
+      billing: :api_credits
     },
     %{
       harness: :longcat,
       label: "LongCat (Meituan)",
       env_keys: ["LONGCAT_API_KEY"],
       model_env: "LONGCAT_MODEL",
-      keyless: false
+      keyless: false,
+      billing: :api_credits
     },
     %{
       harness: :lumo,
       label: "Proton Lumo",
       env_keys: ["PROTON_ACCESS_TOKEN"],
       model_env: nil,
-      keyless: false
+      keyless: false,
+      billing: :subscription
     },
     %{
       harness: :ollama,
       label: "Ollama (local)",
       env_keys: [],
       model_env: "OLLAMA_MODEL",
-      keyless: true
+      keyless: true,
+      billing: :local
     },
     %{
       harness: :lm_studio,
       label: "LM Studio (local)",
       env_keys: [],
       model_env: nil,
-      keyless: true
+      keyless: true,
+      billing: :local
     },
-    %{harness: :llm7, label: "LLM7 (free, no key)", env_keys: [], model_env: nil, keyless: true},
-    %{harness: :mock, label: "Mock (offline)", env_keys: [], model_env: nil, keyless: true}
+    %{
+      harness: :llm7,
+      label: "LLM7 (free, no key)",
+      env_keys: [],
+      model_env: nil,
+      keyless: true,
+      billing: :free
+    },
+    %{
+      harness: :mock,
+      label: "Mock (offline)",
+      env_keys: [],
+      model_env: nil,
+      keyless: true,
+      billing: :free
+    }
   ]
 
   @by_string Map.new(@providers, &{to_string(&1.harness), &1.harness})
 
-  @type source :: :explicit | :op | :env | :generic | :configured
+  @type source :: :explicit | :op | :env | :generic | :configured | :subscription
   @type resolution ::
           {:ok, ExecutorConfig.t(), source()}
           | {:no_key, atom()}
@@ -243,10 +299,57 @@ defmodule Raxol.Agent.Backend.Resolver do
 
   # -- auto detection ---------------------------------------------------------
 
+  # Auto-detection never spends money. A provider billed in `:api_credits` is
+  # skipped no matter how well configured it is -- including the generic
+  # `AI_API_KEY` endpoint, which is someone's prepaid balance too. Naming one
+  # explicitly (`--backend openrouter`, `harness:`) still works and is the
+  # opt-in; `RAXOL_ALLOW_PAID_API=1` restores the old walk-everything order for
+  # a deployment that wants it. Without this, a stored OpenRouter key outranked
+  # an installed, already-paid-for Claude subscription on every single turn.
   defp auto_detect(opts) do
-    Enum.find_value(@providers, fn spec -> ok_or_nil(detect_available(spec, opts)) end) ||
-      detect_generic(opts) ||
+    Enum.find_value(auto_detect_providers(), fn spec ->
+      ok_or_nil(detect_available(spec, opts))
+    end) ||
+      auto_detect_generic(opts) ||
       :no_provider
+  end
+
+  defp auto_detect_providers do
+    if paid_api_allowed?(),
+      do: @providers,
+      else: Enum.reject(@providers, &(&1.billing == :api_credits))
+  end
+
+  defp auto_detect_generic(opts) do
+    if paid_api_allowed?(), do: detect_generic(opts), else: nil
+  end
+
+  # Whether the vendor CLI behind a native harness is installed and signed in.
+  # Auto-detection would otherwise depend on what happens to be on the host's
+  # PATH, which no test can control: `:native_probe` is the seam that makes
+  # resolution deterministic. It takes a boolean (the whole answer) or a
+  # 1-arity fun receiving the backend module; unset means ask the CLI.
+  defp native_available?(mod) do
+    case Application.get_env(:raxol_agent, :native_probe) do
+      probe when is_function(probe, 1) -> probe.(mod)
+      answer when is_boolean(answer) -> answer
+      _unset -> Code.ensure_loaded?(mod) and mod.available?()
+    end
+  end
+
+  @doc """
+  Whether auto-detection may select a provider billed in API credits.
+
+  False unless `RAXOL_ALLOW_PAID_API` is set to a truthy value. An explicitly
+  named harness bypasses this entirely -- it is the user asking for that
+  provider by name, which is itself the opt-in.
+  """
+  @spec paid_api_allowed?() :: boolean()
+  def paid_api_allowed? do
+    case System.get_env("RAXOL_ALLOW_PAID_API") do
+      nil -> false
+      value -> String.trim(value) in ["1", "true", "TRUE", "yes"]
+    end
   end
 
   defp ok_or_nil({:ok, _config, _source} = ok), do: ok
@@ -255,6 +358,21 @@ defmodule Raxol.Agent.Backend.Resolver do
   # A provider is auto-available when it resolves a key, or — for a keyless
   # provider — only when the user has stored a reference for it (so a bare
   # localhost server is never silently selected as the default).
+  # A native harness is available when its CLI is on PATH -- that CLI holds the
+  # subscription, so there is no key here to resolve and nothing to store.
+  # Unlike the keyless local servers below it needs no `configured?/1` opt-in:
+  # an installed vendor CLI is a deliberate act, not a stray localhost port that
+  # could be anything. Note the probe is presence, not sign-in: a CLI installed
+  # but never logged into resolves here and then fails at run time with its own
+  # auth message, which is a clearer signal than silently falling through.
+  defp detect_available(%{native_module: mod} = spec, opts) do
+    if native_available?(mod) do
+      {:ok, build_config(spec.harness, nil, resolve_model(spec, opts), nil), :subscription}
+    else
+      :none
+    end
+  end
+
   defp detect_available(%{keyless: true} = spec, opts) do
     if configured?(spec.harness) do
       {:ok, build_config(spec.harness, nil, resolve_model(spec, opts), stored_base_url(spec)),

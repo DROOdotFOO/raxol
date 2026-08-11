@@ -109,8 +109,11 @@ defmodule Raxol.Agent.Code.AppWizardTest do
     end
 
     test "Enter on a keyed provider opens masked credential entry" do
-      # No keys set, so the cursor starts at index 0 (anthropic, keyed).
+      # Navigate to anthropic by harness rather than by position: the registry
+      # leads with the keyless subscription harness, so index 0 is not keyed.
       model = new_model()
+      index = Enum.find_index(model.wizard.entries, &(&1.harness == :anthropic))
+      model = Enum.reduce(1..index, model, fn _, m -> press(m, :down) end)
 
       assert Enum.at(model.wizard.entries, model.wizard.cursor).harness ==
                :anthropic
@@ -195,9 +198,7 @@ defmodule Raxol.Agent.Code.AppWizardTest do
 
     test "y saves the key via the op saver and stores the returned reference" do
       model =
-        new_model(
-          op_saver: fn _h, _k -> {:ok, "op://Vault/OpenAI/credential"} end
-        )
+        new_model(op_saver: fn _h, _k -> {:ok, "op://Vault/OpenAI/credential"} end)
         |> to_confirm_save(:openai, "sk-raw")
 
       model = press(model, "y")
@@ -249,8 +250,7 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       assert model.pending_validation == nil
       assert is_reference(model.login_ref)
 
-      assert_receive {:command_result,
-                      {:login_validation, ref, :openai, :valid}} = msg
+      assert_receive {:command_result, {:login_validation, ref, :openai, :valid}} = msg
 
       assert ref == model.login_ref
 
