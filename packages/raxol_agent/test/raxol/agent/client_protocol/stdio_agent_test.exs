@@ -3,6 +3,7 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
   # journal registries, AttachPolicy task supervisor).
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.SessionKey
   alias Raxol.AgentClientProtocol.Agent, as: AcpAgent
   alias Raxol.AgentClientProtocol.Client, as: AcpClient
   alias Raxol.AgentClientProtocol.Connection
@@ -131,7 +132,11 @@ defmodule Raxol.Agent.ClientProtocol.StdioAgentTest do
                2_000
              )
 
-    assert is_binary(sid) and sid =~ "acp-"
+    # Not a prefix check: what a session id has to be is resolvable as a
+    # journal directory later, by a client that stored it and by a different
+    # VM than the one that minted it.
+    assert is_binary(sid)
+    assert SessionKey.valid?(sid)
 
     prompt = PromptRequest.new(sid, [ContentBlock.from_string("hello")])
 

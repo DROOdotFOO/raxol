@@ -90,6 +90,35 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       window — no kill stage in `outcome.stages`) emits no kill fence either:
       there was no kill to fence.
 
+  ## Durable record (what `session/load` replays)
+
+  Every `session/update` this runner delivers is also appended to the
+  session's journal (`Raxol.Agent.Journal.FileStore`, under the id
+  `session/new` minted), so a session can be replayed to a client that comes
+  back for it later.
+
+  **What is stored is the notification itself**, as its own `to_json/1` form,
+  rather than the agent-contract events the coding TUI journals. A resume has
+  to reproduce what the live turn actually sent; deriving those updates a
+  second time from a second vocabulary is how a replay drifts from the turn it
+  claims to be replaying. `SessionNotification` round-trips
+  (`to_json/1`/`from_json/1`), so the replay is the same frames, not a
+  reconstruction of them.
+
+  Records use the ordinary journal envelope with `family: :acp` — the field is
+  already the vocabulary discriminator, and readers already tolerate a family
+  they do not know. A reader meeting one of these can therefore recognise it
+  as ACP-shaped and say so, instead of folding it into opaque blocks that look
+  like corruption. Nothing outside this module reads them yet.
+
+  **Journal trouble never fails a turn.** The handle is opened once per turn
+  and every failure path degrades to running without one, emitting
+  `[:raxol, :agent, :acp_turn_runner, :journal_failed]` so the loss is
+  measurable rather than silent. The Writer is linked to the turn task, which
+  already traps exits, so a Writer crash arrives as an ignored `{:EXIT, _, _}`
+  instead of taking the turn down with it, and a turn task that dies abnormally
+  cannot leak a Writer.
+
   ## Options for `new/1`
 
   Streaming (forwarded to `Raxol.Agent.Stream`): `:executor` (an
@@ -106,6 +135,11 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   silently mid-turn: a system prompt the operator believes is live but the
   backend never received is a trust bug.
 
+  Durability: `:journal` (default `true` — set `false` to run a turn with no
+  durable record) and `:journal_opts` (forwarded to
+  `Raxol.Agent.Journal.FileStore.open/2`; tests set `:base_dir` here). See
+  "Durable record" below.
+
   Cancellation seams: `:interrupt` (module implementing the
   `Raxol.Agent.Interrupt` behaviour, or an arity-3 fun; default
   `Raxol.Agent.Interrupt`), `:interrupt_sink` (the staged kill's durable-emit
@@ -118,6 +152,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   require Logger
 
   alias Raxol.Agent.ClientProtocol.Budget
+  alias Raxol.Agent.Journal.FileStore
+  alias Raxol.Agent.SessionKey
   alias Raxol.Agent.Stream, as: AgentStream
 
   # Cross-package: raxol_agent_client_protocol is an optional peer (dev/test
@@ -320,6 +356,8 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     # assembles turn_opts. Injected unless the caller already supplied an
     # authorizer, so a test (or an embedder with its own policy) can override.
     opts = with_permission_gate(opts, session, session_id(req))
+    # Before the stream is built, because this is what the model is asked.
+    opts = with_history(opts, session_id(req), prompt)
 
     # The stream is BUILT inside the pump, not here: Stream.react/2 spawns its
     # loop eagerly with `caller = self()`, so building it in the root task
@@ -336,7 +374,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
     mref = Process.monitor(pump)
 
-    loop(%{
+    state = %{
       session: session,
       session_id: session_id(req),
       turn_id: turn_id,
@@ -344,8 +382,90 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       mref: mref,
       opts: opts,
       tool_ids: %{},
-      open_tools: %{}
-    })
+      open_tools: %{},
+      # What this turn was asked, so the terminal record can be the whole
+      # conversation even on the `run/2` path, which reports no message list.
+      input_messages: Keyword.get(opts, :messages, []),
+      journal: open_turn_journal(session_id(req), opts)
+    }
+
+    journal_append(state, "turn_started", %{prompt: prompt})
+
+    # The loop returns from several arms (end_turn / error / cancelled); close
+    # HERE so every one of them lands on the same teardown rather than each
+    # remembering to. A `:normal` exit does not travel down a link, so the
+    # linked Writer would outlive a cleanly finished turn without this.
+    #
+    # Each arm returns `{result, outcome}`: `result` is the Session's, and
+    # `outcome` carries what only that arm knows -- the assistant's reply,
+    # which the terminal record needs and the Session does not.
+    {result, outcome} = loop(state)
+    close_turn_journal(state, result, outcome)
+    result
+  end
+
+  # -- conversation history ---------------------------------------------------
+  #
+  # The journal is the session's memory. Deriving history from it rather than
+  # holding it in the runner is what makes a loaded session real: `session/load`
+  # binds a Session and this reads the same record the replay came from, so a
+  # resumed conversation continues with the context it had, not an empty one.
+  #
+  # `Raxol.Agent.Stream` treats `:messages` as REPLACING the prompt, so the
+  # full list is assembled here.
+  #
+  # A configured `:messages` seed is always the head: history holds only what
+  # the turns themselves contributed, never the seed and never the injected
+  # system message (`Raxol.Agent.Stream` adds that per turn), so nothing here
+  # can be counted twice.
+  defp with_history(opts, session_id, prompt) do
+    seed = Keyword.get(opts, :messages) || []
+    history = journal_history(session_id, opts)
+
+    Keyword.put(opts, :messages, seed ++ history ++ [%{role: :user, content: prompt}])
+  end
+
+  defp journal_history(session_id, opts) do
+    if Keyword.get(opts, :journal, true) and SessionKey.valid?(session_id) do
+      case FileStore.read_records(session_id, Keyword.get(opts, :journal_opts, [])) do
+        {:ok, records} -> history_messages(records)
+        {:error, _reason} -> []
+      end
+    else
+      []
+    end
+  end
+
+  # The conversation is the completed turns' contributions, in order. Only a
+  # completed turn writes one, so a cancelled or failed turn adds nothing and
+  # leaves the history standing -- which is right: it has a prompt and no
+  # reply, and the user half alone would put two user messages side by side.
+  defp history_messages(records) do
+    Enum.flat_map(records, fn
+      %{"type" => "turn_completed", "payload" => %{"messages" => messages}}
+      when is_list(messages) ->
+        decode_messages(messages)
+
+      _other ->
+        []
+    end)
+  end
+
+  # Fixed vocabulary, never `String.to_atom/1` on something read from disk. An
+  # unrecognized role drops the message rather than guessing at it.
+  @roles %{"user" => :user, "assistant" => :assistant, "system" => :system}
+
+  defp decode_messages(messages) do
+    Enum.flat_map(messages, fn
+      %{"role" => role, "content" => content} when is_binary(content) ->
+        case Map.fetch(@roles, role) do
+          {:ok, decoded} -> [%{role: decoded, content: content}]
+          :error -> []
+        end
+
+      _other ->
+        []
+    end)
   end
 
   @doc false
@@ -466,23 +586,69 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   defp handle_event({:done, info}, state) do
     stop_pump(state)
     Budget.record(Map.get(info, :usage) || %{})
-    {:stop, :end_turn}
+    {{:stop, :end_turn}, %{messages: turn_messages(info, state)}}
   end
 
   defp handle_event({:error, reason}, state) do
     stop_pump(state)
-    {:error, turn_error(:turn_stream_error, reason)}
+    {{:error, turn_error(:turn_stream_error, reason)}, %{}}
   end
 
   defp handle_event(_other, state), do: loop(state)
 
+  # What this turn ADDS to the conversation: the prompt, then everything the
+  # loop appended answering it -- for `react/2`, the tool calls and their
+  # results as well as the reply.
+  #
+  # The contribution, not the whole conversation: a full snapshot per turn
+  # would make an append-only journal grow with the SQUARE of the turn count,
+  # and the history is reassembled by concatenating these in order anyway.
+  defp turn_messages(info, state) do
+    case appended(info, state) do
+      [] -> []
+      appended -> [user_message(state) | appended]
+    end
+  end
+
+  # `react/2` reports the conversation it built; the prefix it started from is
+  # this turn's input plus the system message `Raxol.Agent.Stream` injects when
+  # one is configured and the list has none. `run/2` runs no loop and reports
+  # nothing, so its contribution is just the reply.
+  defp appended(%{messages: messages}, state) when is_list(messages) do
+    Enum.drop(messages, length(state.input_messages) + system_offset(state))
+  end
+
+  defp appended(info, _state) do
+    case Map.get(info, :content) do
+      content when is_binary(content) and content != "" ->
+        [%{role: :assistant, content: content}]
+
+      _blank ->
+        []
+    end
+  end
+
+  defp system_offset(state) do
+    configured? = Keyword.get(state.opts, :system_prompt) != nil
+    present? = Enum.any?(state.input_messages, &(Map.get(&1, :role) == :system))
+
+    if configured? and not present?, do: 1, else: 0
+  end
+
+  defp user_message(state) do
+    case List.last(state.input_messages) do
+      %{role: :user} = message -> message
+      _other -> %{role: :user, content: ""}
+    end
+  end
+
   defp handle_pump_down(:normal, _state) do
     # Stream ended without a {:done, _} (defensive: run/react always emit one).
-    {:stop, :end_turn}
+    {{:stop, :end_turn}, %{}}
   end
 
   defp handle_pump_down(reason, _state) do
-    {:error, turn_error(:turn_stream_crashed, reason)}
+    {{:error, turn_error(:turn_stream_crashed, reason)}, %{}}
   end
 
   # Say what broke, twice, because the two audiences are different and both
@@ -531,7 +697,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
 
     # 4. ...the exactly-one cancelled PromptResponse the Session renders once
     #    this return drains the turn group.
-    {:stop, :cancelled}
+    {{:stop, :cancelled}, %{}}
   end
 
   defp stop_pump(%{pump: pump, mref: mref}) do
@@ -656,7 +822,7 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
           update = @tool_call_update.new(tool_id, fields)
           notif = @session_notification.new(state.session_id, {:tool_call_update, update})
           notif = %{notif | _meta: %{@fence_meta_key => rider}}
-          _ = @ctx.post_update(state.session, notif)
+          deliver(state, notif)
         end)
 
         :ok
@@ -678,11 +844,119 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   # -- update emission -------------------------------------------------------------
 
   defp post(state, update) do
-    notif = @session_notification.new(state.session_id, update)
+    deliver(state, @session_notification.new(state.session_id, update))
+  end
+
+  # The one place a `session/update` reaches both the client and the journal,
+  # so the durable record cannot fall behind the wire by someone adding a post
+  # site and not a journal site.
+  defp deliver(state, notif) do
     # While this root task is alive the turn cannot have drained (the drain
     # gate waits on this very process), so {:error, :turn_over} is unreachable
     # here; {:error, :empty_chunk} is prevented by the text_delta guard above.
     _ = @ctx.post_update(state.session, notif)
+    journal_append(state, "session_update", %{notification: notification_json(notif)})
+    :ok
+  end
+
+  defp notification_json(notif), do: @session_notification.to_json(notif)
+
+  # -- durable record -------------------------------------------------------------
+
+  # Opened once per turn. A turn with no usable session id (the `""` a test
+  # double yields) or an unopenable journal runs WITHOUT one rather than
+  # failing: durability is a property of the record, never a precondition of
+  # answering the client.
+  defp open_turn_journal(session_id, opts) do
+    if Keyword.get(opts, :journal, true) and SessionKey.valid?(session_id) do
+      case FileStore.open(session_id, Keyword.get(opts, :journal_opts, [])) do
+        {:ok, journal} ->
+          journal
+
+        {:error, reason} ->
+          journal_failed(:open, reason)
+          nil
+      end
+    end
+  end
+
+  defp close_turn_journal(%{journal: nil}, _result, _outcome), do: :ok
+
+  defp close_turn_journal(state, result, outcome) do
+    journal_append(state, terminal_type(result), terminal_payload(result, outcome))
+    FileStore.close(state.journal)
+    :ok
+  catch
+    # A close-time flush can exit if the Writer is already dying. Losing that
+    # flush is survivable; raising out of a finished turn is not.
+    :exit, _reason -> :ok
+  end
+
+  defp terminal_type({:stop, :end_turn}), do: "turn_completed"
+  defp terminal_type({:stop, :cancelled}), do: "turn_cancelled"
+  defp terminal_type({:error, _error}), do: "turn_failed"
+  defp terminal_type(_other), do: "turn_ended"
+
+  # The wire error carries a reason string already trimmed to a bounded
+  # length by `turn_error/2`; anything else contributes no payload rather
+  # than an unbounded inspect of a runaway term.
+  defp terminal_payload({:error, %{data: %{"reason" => reason}}}, _outcome)
+       when is_binary(reason),
+       do: %{reason: reason}
+
+  # The conversation as of this turn -- the next turn's history, and the whole
+  # of it, so a resumed session knows what it read and not only what it
+  # concluded. Roles are written as strings: this is JSON on disk, and nothing
+  # may mint an atom back from it.
+  defp terminal_payload(_result, %{messages: messages})
+       when is_list(messages) and messages != [],
+       do: %{messages: Enum.map(messages, &encode_message/1)}
+
+  defp terminal_payload(_result, _outcome), do: %{}
+
+  defp encode_message(%{role: role, content: content}),
+    do: %{"role" => to_string(role), "content" => content}
+
+  defp encode_message(other), do: other
+
+  defp journal_append(%{journal: nil}, _type, _payload), do: :ok
+
+  defp journal_append(state, type, payload) do
+    case FileStore.append(state.journal, journal_record(state, type, payload)) do
+      {:ok, _offset} -> :ok
+      {:error, reason} -> journal_failed(:append, reason)
+    end
+  end
+
+  # The ordinary journal envelope. `family: :acp` is the vocabulary marker: a
+  # reader that knows only the agent-contract families can recognise these as
+  # something else rather than mistaking them for damaged contract records.
+  defp journal_record(state, type, payload) do
+    %{
+      v: 0,
+      session_id: state.session_id,
+      turn_id: state.turn_id,
+      ts: System.system_time(:millisecond),
+      family: :acp,
+      type: type,
+      tier: :durable,
+      scope: nil,
+      provenance: %{surface: "acp"},
+      payload: payload
+    }
+  end
+
+  # Measurable, not silent: a session that stops being replayable should show
+  # up as a signal, the same way a failed interrupt does.
+  defp journal_failed(stage, reason) do
+    Logger.warning("acp turn_runner: journal #{stage} failed: #{inspect(reason)}")
+
+    :telemetry.execute(
+      [:raxol, :agent, :acp_turn_runner, :journal_failed],
+      %{},
+      %{stage: stage, detail: reason}
+    )
+
     :ok
   end
 
