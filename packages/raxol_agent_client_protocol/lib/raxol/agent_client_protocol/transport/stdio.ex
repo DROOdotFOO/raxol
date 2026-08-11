@@ -253,6 +253,18 @@ defmodule Raxol.AgentClientProtocol.Transport.Stdio do
     {:noreply, state}
   end
 
+  # `:self` mode is HALF-closable, and the port was opened with `:eof`
+  # precisely so it is: fd 0 ending says the peer will send nothing more, not
+  # that it has stopped reading fd 1. Marking the transport closed here
+  # refused every subsequent `send_message/2` with `{:error, :closed}`, so a
+  # peer that piped its requests and closed stdin -- a script, a benchmark
+  # harness, anything not holding the pipe open -- got NO replies at all,
+  # including the reply to a request already being handled. The read side is
+  # done; the write side stays open until `close/1` or a failed write.
+  def handle_info({port, :eof}, %{port: port, closed: false, mode: :self} = state) do
+    {:noreply, emit(state, {:closed, :eof})}
+  end
+
   def handle_info({port, :eof}, %{port: port, closed: false} = state) do
     state = emit(state, {:closed, :eof})
     {:noreply, %{state | closed: true}}

@@ -169,6 +169,12 @@ defmodule Raxol.AgentClientProtocol.Connection do
   # override per-connection via the `:max_inbound` start_link opt.
   @default_max_inbound 1_000
 
+  # How long a closed read side waits for in-flight inbound requests to answer
+  # before the connection stops anyway. Long enough for a handler that is
+  # already running to finish writing, short enough that a wedged one cannot
+  # keep the process resident.
+  @close_drain_ms 5_000
+
   defstruct role: :agent,
             transport_mod: nil,
             transport_state: nil,
@@ -701,12 +707,32 @@ defmodule Raxol.AgentClientProtocol.Connection do
     end
   end
 
+  # A closed READ side is not a closed connection when work is still in
+  # flight. `transport_down/2` terminates every inbound dispatch task, so
+  # stopping the instant stdin ends killed requests already being handled and
+  # answered them with nothing -- invisible over a pipe an editor holds open,
+  # fatal for a peer that sends its requests and closes stdin.
+  #
+  # Deliberately a bounded grace rather than "stop when `pending_in` drains":
+  # entries are retired at more than one site, and a fix wired to only some of
+  # them would hang the shutdown it was meant to shorten. The cost is waiting
+  # out the grace when work is in flight at EOF, which is a shutdown path.
   def handle_info({:acp_transport, ref, {:closed, reason}}, state) do
-    if ref == state.transport_ref do
-      {:stop, :normal, transport_down(reason, state)}
-    else
-      {:noreply, state}
+    cond do
+      ref != state.transport_ref ->
+        {:noreply, state}
+
+      state.phase != :closed and map_size(state.pending_in) > 0 ->
+        Process.send_after(self(), {:acp_close_drained, reason}, @close_drain_ms)
+        {:noreply, state}
+
+      true ->
+        {:stop, :normal, transport_down(reason, state)}
     end
+  end
+
+  def handle_info({:acp_close_drained, reason}, state) do
+    {:stop, :normal, transport_down(reason, state)}
   end
 
   # A torn/non-JSON inbound line, or a decoded-but-non-object top-level term

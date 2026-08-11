@@ -984,6 +984,50 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
       ScriptedPeer.assert_no_frame(peer, 150)
     end
 
+    test "a closed read side lets an in-flight inbound request still answer" do
+      %{conn: conn, peer: peer} = start_agent_conn()
+      complete_handshake(peer)
+
+      ScriptedPeer.send_request(peer, 77, "session/new", new_session_params("/held"))
+
+      %{task_pid: task_pid} =
+        handle_next_invoke(:new_session, fn req, _ctx ->
+          receive do
+            :go ->
+              {:ok,
+               %Raxol.AgentClientProtocol.Schema.AgentTypes.NewSessionResponse{
+                 session_id: req.cwd
+               }}
+          end
+        end)
+
+      %{transport_ref: ref} = :sys.get_state(conn)
+      cmon = Process.monitor(conn)
+
+      # stdin ends while the handler is still running. This used to stop the
+      # connection at once, terminating the dispatch task, so a peer that
+      # piped its requests and closed stdin got no reply to a request the
+      # agent was already answering.
+      send(conn, {:acp_transport, ref, {:closed, :eof}})
+      refute_receive {:DOWN, ^cmon, :process, ^conn, _reason}, 200
+
+      send(task_pid, :go)
+      frame = ScriptedPeer.recv(peer)
+      assert frame["id"] == 77
+      assert frame["result"]["sessionId"] == "/held"
+    end
+
+    test "a closed read side with nothing in flight still stops at once" do
+      %{conn: conn, peer: peer} = start_agent_conn()
+      complete_handshake(peer)
+
+      %{transport_ref: ref} = :sys.get_state(conn)
+      cmon = Process.monitor(conn)
+
+      send(conn, {:acp_transport, ref, {:closed, :eof}})
+      assert_receive {:DOWN, ^cmon, :process, ^conn, :normal}, 500
+    end
+
     test "Inv-15: malformed frames never terminate the connection or disturb an in-flight request" do
       %{conn: conn, peer: peer} = start_agent_conn()
       complete_handshake(peer)
