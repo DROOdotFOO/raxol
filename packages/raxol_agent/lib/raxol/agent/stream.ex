@@ -38,7 +38,8 @@ defmodule Raxol.Agent.Stream do
   - `{:tool_use, %{name, arguments, id}}` -- LLM requesting a tool call
   - `{:tool_result, %{name, result}}` -- result from executing a tool
   - `{:turn_complete, %{content, usage, iteration}}` -- end of one ReAct turn
-  - `{:done, %{content, tool_results, usage}}` -- final answer
+  - `{:done, %{content, tool_results, usage}}` -- final answer (from `react/2`,
+    also `messages`: the conversation the loop built, tool exchanges included)
   - `{:error, reason}` -- error during execution
 
   ## Options
@@ -94,10 +95,13 @@ defmodule Raxol.Agent.Stream do
           iteration: non_neg_integer()
         }
   @type done_info :: %{
-          content: String.t(),
-          tool_results: [tool_result()],
-          usage: map(),
-          model: String.t() | nil
+          required(:content) => String.t(),
+          required(:tool_results) => [tool_result()],
+          required(:usage) => map(),
+          required(:model) => String.t() | nil,
+          # Only the tool loop (`react/2`) reports this: the full conversation
+          # it built, for a consumer that has to resume the turn later.
+          optional(:messages) => [map()]
         }
 
   @default_max_iterations 10
@@ -456,6 +460,12 @@ defmodule Raxol.Agent.Stream do
            %{
              content: content,
              tool_results: accumulated,
+             # The conversation as the loop actually built it, tool calls and
+             # their results included. `content` alone is the conclusion
+             # without the work: a consumer persisting a turn to resume it
+             # later would otherwise reload an agent that knows what it
+             # decided and not what it read.
+             messages: messages ++ [%{role: :assistant, content: content}],
              usage: Map.get(response, :usage, %{}),
              model: billed_model(response)
            }}
