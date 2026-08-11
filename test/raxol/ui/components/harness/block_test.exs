@@ -204,6 +204,53 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert Enum.any?(texts, &(&1 =~ "some content here"))
     end
 
+    # An `error` event carries its cause under `:reason` (plus `:detail` when
+    # the reason is a bare label), and `:error` is not a known kind, so it
+    # renders through this same opaque path. Before those were read the cause
+    # was dropped and every failed turn rendered as "[error] (empty)", which is
+    # indistinguishable across a 402, a timeout and a tool crash.
+    test "an error event's reason is the summary, not '(empty)'" do
+      block =
+        Block.from_events(:error, [
+          %{
+            id: 1,
+            type: :error,
+            payload: %{reason: "timeout after 30s", retryable: true}
+          }
+        ])
+
+      assert block.kind == :opaque
+      assert block.raw_kind == :error
+      assert Block.summary(block) == "[error] timeout after 30s"
+
+      texts = block |> Block.render() |> flat_texts()
+      assert Enum.any?(texts, &(&1 =~ "timeout after 30s"))
+    end
+
+    test "a bare reason keeps its detail, which is where the cause is" do
+      block =
+        Block.from_events(:error, [
+          %{
+            id: 1,
+            type: :error,
+            payload: %{
+              reason: "crashed",
+              original_type: :item_completed,
+              detail: "%KeyError{key: :api_key}"
+            }
+          }
+        ])
+
+      assert Block.summary(block) ==
+               "[error] crashed: %KeyError{key: :api_key}"
+    end
+
+    test "a block carrying neither reason nor detail still reads '(empty)'" do
+      block = Block.from_events(:error, [%{id: 1, type: :error, payload: %{}}])
+
+      assert Block.summary(block) == "[error] (empty)"
+    end
+
     test "malformed/garbage events never raise, in construction or render" do
       garbage_events = [
         %{},

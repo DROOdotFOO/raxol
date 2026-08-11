@@ -1035,6 +1035,14 @@ defmodule Raxol.UI.Components.Harness.Block do
   @cost_paths [[:cost], [:usage, :cost], [:content, :cost]]
   @duration_paths [[:duration_ms], [:content, :duration_ms]]
   @text_paths [[:content], [:text], [:output], [:diff]]
+
+  # An `error` event carries no text field: its cause is `%{reason}`, and when
+  # the reason is a bare label ("crashed") the cause itself rides in
+  # `%{detail}` (`Raxol.Agent.EmitBridge`). `:error` is not a known kind, so
+  # it renders through the opaque path -- until these were read, the cause of
+  # every failed turn was dropped and the block said "[error] (empty)", which
+  # reads identically for a 402, a timeout and a crash.
+  @failure_paths [[:reason], [:detail]]
   @name_paths [[:name], [:content, :name]]
   @args_paths [[:args], [:content, :args]]
   @action_paths [[:action]]
@@ -1098,10 +1106,22 @@ defmodule Raxol.UI.Components.Harness.Block do
   defp extract_content(_kind, events), do: %{text: extract_text(events)}
 
   defp extract_text(events) do
-    events
-    |> preferred_events()
-    |> find_in_events(@text_paths)
-    |> to_display_text()
+    preferred = preferred_events(events)
+
+    case find_in_events(preferred, @text_paths) do
+      nil -> failure_text(preferred)
+      text -> to_display_text(text)
+    end
+  end
+
+  # Reason first, then detail: a reason on its own can be a bare label, and a
+  # detail on its own drops the classification, so a failure that carries both
+  # shows both.
+  defp failure_text(events) do
+    @failure_paths
+    |> Enum.map(&(events |> find_in_events([&1]) |> to_display_text()))
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join(": ")
   end
 
   defp preferred_events(events) when is_list(events) do

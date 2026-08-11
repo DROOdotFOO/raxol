@@ -1,8 +1,8 @@
 <pre class="raxol-terminal" role="application">
 <span style="color: #000000">▾ ⚙ http_get(url: &quot;https://example.com/flaky&quot;)</span>
 <span style="color: #000000">100ms</span>
-<span style="color: #000000">▾ ◆ [error] (empty)</span>
-
+<span style="color: #000000">▾ ◆ [error] timeout after 30s</span>
+<span style="color: #000000">timeout after 30s</span>
 
 
 
