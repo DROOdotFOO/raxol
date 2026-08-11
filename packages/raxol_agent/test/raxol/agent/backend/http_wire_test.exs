@@ -320,7 +320,8 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
         ]
       }
 
-      assert {:ok, %{tool_calls: [call]}} = complete_stub(body, provider: :openai, api_key: "test")
+      assert {:ok, %{tool_calls: [call]}} =
+               complete_stub(body, provider: :openai, api_key: "test")
 
       assert call["arguments"] == %{}
       assert is_binary(call["arguments_error"])
@@ -349,9 +350,95 @@ defmodule Raxol.Agent.Backend.HTTPWireTest do
         ]
       }
 
-      assert {:ok, %{tool_calls: [call]}} = complete_stub(body, provider: :openai, api_key: "test")
+      assert {:ok, %{tool_calls: [call]}} =
+               complete_stub(body, provider: :openai, api_key: "test")
+
       assert call["arguments"] == %{"path" => "a.txt"}
       refute Map.has_key?(call, "arguments_error")
     end
+  end
+
+  describe "keyless providers build a request instead of raising" do
+    # LLM7 is keyless, and `Selector` maps it onto `provider: :openai` with only
+    # a base_url -- no `:api_key`. `Keyword.fetch!(opts, :api_key)` raised a
+    # KeyError there, which killed the turn before any request was built and
+    # made `--backend llm7` unusable. A missing key must omit the auth header,
+    # not crash.
+    for provider <- [:openai, :kimi, :anthropic] do
+      test "#{provider} with no api_key sends no auth header" do
+        headers = captured_headers(provider: unquote(provider))
+
+        refute Map.has_key?(headers, "authorization")
+        refute Map.has_key?(headers, "x-api-key")
+        assert headers["content-type"] == ["application/json"]
+      end
+    end
+
+    test "an api_key still produces the provider's auth header" do
+      assert captured_headers(provider: :openai, api_key: "sk-test")[
+               "authorization"
+             ] == ["Bearer sk-test"]
+
+      assert captured_headers(provider: :kimi, api_key: "sk-test")[
+               "authorization"
+             ] == ["Bearer sk-test"]
+
+      assert captured_headers(provider: :anthropic, api_key: "sk-test")[
+               "x-api-key"
+             ] == ["sk-test"]
+    end
+
+    # An empty string is a stored-but-unset credential, not a usable one: it
+    # would otherwise send `Bearer ` and read as a malformed key rather than
+    # an absent one.
+    test "an empty api_key is treated as absent" do
+      headers = captured_headers(provider: :openai, api_key: "")
+      refute Map.has_key?(headers, "authorization")
+    end
+
+    # Every HTTP-backed entry in the Selector table, built from the SAME
+    # defaults the CLI's `--backend` flag uses. `llm7` is the one that used to
+    # raise; the rest are here so a future keyless entry cannot regress
+    # silently.
+    test "every backend in the Selector table builds a request without raising" do
+      for backend <- [
+            :anthropic,
+            :openai,
+            :kimi,
+            :ollama,
+            :lm_studio,
+            :llm7,
+            :longcat,
+            :openrouter
+          ] do
+        {:ok, HTTP, opts} =
+          Raxol.Agent.Backend.Selector.select(%Raxol.Agent.ExecutorConfig{
+            backend: backend
+          })
+
+        assert %{} = captured_headers(opts),
+               "#{backend} failed to build a request"
+      end
+    end
+  end
+
+  # Captures the assembled headers and answers from a stub adapter, so the
+  # request is fully built but never leaves the process.
+  defp captured_headers(provider_opts) do
+    test_pid = self()
+
+    plugin = fn req ->
+      send(test_pid, {:req_headers, req.headers})
+      %{req | adapter: fn r -> {r, Req.Response.new(status: 200, body: %{})} end}
+    end
+
+    HTTP.complete(
+      [%{role: :user, content: "hi"}],
+      [req_plugins: [plugin], timeout: 100] ++
+        provider_opts ++ [base_url: "http://127.0.0.1:19876"]
+    )
+
+    assert_received {:req_headers, headers}
+    headers
   end
 end
