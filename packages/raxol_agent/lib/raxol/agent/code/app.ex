@@ -348,9 +348,10 @@ defmodule Raxol.Agent.Code.App do
     |> Enum.map(fn {event, index} -> %{event | id: index} end)
   end
 
-  defp mint_session_key do
-    "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
-  end
+  # The format lives in `Raxol.Agent.SessionKey`, not here: the ACP surface
+  # mints these too, and a key minted there has to resolve to the same journal
+  # directory this one does.
+  defp mint_session_key, do: Raxol.Agent.SessionKey.mint()
 
   # Announced, not silent: a tenant whose hooks never fire should see why
   # rather than conclude the feature is broken.
