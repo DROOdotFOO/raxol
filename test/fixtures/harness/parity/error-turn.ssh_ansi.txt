@@ -8,5 +8,9 @@ ESC[30m
 ESC[0m
 ESC[3;1H
 ESC[30m
-"▾ ◆ [error] (empty)"
+"▾ ◆ [error] timeout after 30s"
+ESC[0m
+ESC[4;1H
+ESC[30m
+"timeout after 30s"
 ESC[0m

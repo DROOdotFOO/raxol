@@ -20,6 +20,22 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     saved = Map.new(@managed_env, fn key -> {key, System.get_env(key)} end)
     Enum.each(@managed_env, &System.delete_env/1)
 
+    # Auto-detection now considers an installed vendor CLI (the subscription
+    # harness), which would otherwise make every assertion here depend on
+    # whether `claude` happens to be on this host's PATH. `config/config.exs`
+    # already pins this false for :test; save and RESTORE it rather than
+    # deleting, or the tests that follow this module lose that pin and start
+    # resolving against the real CLI.
+    prev_probe = Application.fetch_env(:raxol_agent, :native_probe)
+    Application.put_env(:raxol_agent, :native_probe, fn _mod -> false end)
+
+    on_exit(fn ->
+      case prev_probe do
+        {:ok, value} -> Application.put_env(:raxol_agent, :native_probe, value)
+        :error -> Application.delete_env(:raxol_agent, :native_probe)
+      end
+    end)
+
     store =
       Path.join(
         System.tmp_dir!(),
@@ -45,12 +61,107 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     :ok
   end
 
+  # Auto-detection refuses to spend, so the precedence rules below are about
+  # ordering WITHIN the paid tier and only apply once paid use is opted into.
+  defp allow_paid! do
+    System.put_env("RAXOL_ALLOW_PAID_API", "1")
+    on_exit(fn -> System.delete_env("RAXOL_ALLOW_PAID_API") end)
+  end
+
+  describe "auto-detect never spends" do
+    test "a configured API-credit provider is NOT auto-selected" do
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
+      System.put_env("OPENROUTER_API_KEY", "sk-or")
+
+      assert :no_provider = Resolver.resolve()
+    end
+
+    test "the generic AI_API_KEY is not auto-selected either" do
+      System.put_env("AI_API_KEY", "sk-generic")
+      assert :no_provider = Resolver.resolve()
+    end
+
+    test "RAXOL_ALLOW_PAID_API restores the walk-everything order" do
+      allow_paid!()
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
+
+      assert {:ok, %{backend: :anthropic}, :env} = Resolver.resolve()
+    end
+
+    test "naming a paid harness explicitly still resolves it" do
+      System.put_env("OPENROUTER_API_KEY", "sk-or")
+
+      assert {:ok, config, :env} = Resolver.resolve(harness: :openrouter)
+      assert config.backend == :openrouter
+    end
+
+    test "a free provider is still auto-selected with no opt-in" do
+      Credentials.put(:lm_studio, base_url: "http://localhost:1234")
+      System.put_env("OPENROUTER_API_KEY", "sk-or")
+
+      assert {:ok, %{backend: :lm_studio}, :configured} = Resolver.resolve()
+    end
+  end
+
+  describe "subscription harness" do
+    test "an installed vendor CLI is auto-selected ahead of a paid provider" do
+      Application.put_env(:raxol_agent, :native_probe, fn _mod -> true end)
+      allow_paid!()
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
+
+      assert {:ok, config, :subscription} = Resolver.resolve()
+      assert config.backend == :claude_native
+      assert config.auth == %{}
+    end
+
+    test "an absent CLI falls through rather than resolving to it" do
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
+      assert :no_provider = Resolver.resolve()
+    end
+
+    # Naming a harness resolves it whether or not its CLI is installed, and the
+    # source is the naming itself -- `:subscription` is what AUTO-detection
+    # reports when it picks one up on its own.
+    test "grok resolves by name with no credential to supply" do
+      assert {:ok, config, :explicit} = Resolver.resolve(harness: :grok_native)
+      assert config.backend == :grok_native
+      assert config.auth == %{}
+    end
+
+    test "grok is auto-selected when its CLI is present" do
+      Application.put_env(:raxol_agent, :native_probe, fn
+        Raxol.Agent.Backend.GrokBuild -> true
+        _other -> false
+      end)
+
+      assert {:ok, %{backend: :grok_native}, :subscription} = Resolver.resolve()
+    end
+
+    # Both subscription harnesses are registry entries, so the setup panel and
+    # /login list them whether or not their CLI is installed.
+    test "both subscription harnesses are in the registry, ahead of the paid ones" do
+      harnesses = Enum.map(Resolver.providers(), & &1.harness)
+
+      assert :claude_native in harnesses
+      assert :grok_native in harnesses
+
+      subscription_last =
+        harnesses |> Enum.find_index(&(&1 == :grok_native))
+
+      paid_first =
+        harnesses |> Enum.find_index(&(&1 in [:anthropic, :openai, :openrouter]))
+
+      assert subscription_last < paid_first
+    end
+  end
+
   describe "auto-detect precedence" do
     test "no provider anywhere yields :no_provider" do
       assert :no_provider = Resolver.resolve()
     end
 
     test "a provider env key is detected" do
+      allow_paid!()
       System.put_env("ANTHROPIC_API_KEY", "sk-ant")
       assert {:ok, config, :env} = Resolver.resolve()
       assert config.backend == :anthropic
@@ -58,6 +169,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     end
 
     test "registry order wins when several env keys are present" do
+      allow_paid!()
       System.put_env("OPENAI_API_KEY", "sk-oai")
       System.put_env("KIMI_API_KEY", "sk-kimi")
       # openai precedes kimi in the registry.
@@ -65,6 +177,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     end
 
     test "the generic AI_API_KEY maps onto :openai with its base URL" do
+      allow_paid!()
       System.put_env("AI_API_KEY", "sk-generic")
       System.put_env("AI_BASE_URL", "https://example.test")
       System.put_env("AI_MODEL", "some-model")
@@ -77,6 +190,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
     end
 
     test "a keyed provider outranks the generic escape hatch" do
+      allow_paid!()
       System.put_env("ANTHROPIC_API_KEY", "sk-ant")
       System.put_env("AI_API_KEY", "sk-generic")
       assert {:ok, %{backend: :anthropic}, :env} = Resolver.resolve()

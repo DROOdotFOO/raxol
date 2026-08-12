@@ -203,8 +203,7 @@ defmodule Raxol.Agent.Backend.HTTP do
       key when is_binary(key) ->
         base = Keyword.get(opts, :base_url, "https://api.anthropic.com")
 
-        {"#{base}/v1/models",
-         [{"x-api-key", key}, {"anthropic-version", @anthropic_api_version}]}
+        {"#{base}/v1/models", [{"x-api-key", key}, {"anthropic-version", @anthropic_api_version}]}
 
       _no_key ->
         :unsupported
@@ -559,9 +558,24 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   # -- Request building -------------------------------------------------------
 
+  # A keyless OpenAI-compatible endpoint (LLM7) carries no credential, and the
+  # provider atom cannot tell it apart from api.openai.com -- both resolve to
+  # `:openai`, only the base URL differs. So an absent key omits the auth
+  # header and lets the endpoint answer: LLM7 serves the request, and a
+  # key-required host answers 401, which reaches the user as a legible error.
+  # `Keyword.fetch!/2` instead raised a KeyError that killed the turn before
+  # any request was built, which is how `--backend llm7` came to be unusable.
+  defp auth_header(opts, name, format) do
+    case Keyword.get(opts, :api_key) do
+      key when is_binary(key) and key != "" -> [{name, format.(key)}]
+      _absent -> []
+    end
+  end
+
+  defp bearer_header(opts), do: auth_header(opts, "authorization", &"Bearer #{&1}")
+
   defp build_request(:anthropic, messages, opts) do
     base_url = Keyword.get(opts, :base_url, "https://api.anthropic.com")
-    api_key = Keyword.fetch!(opts, :api_key)
     model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
 
     {system_msgs, chat_msgs} = split_system_messages(messages)
@@ -569,11 +583,12 @@ defmodule Raxol.Agent.Backend.HTTP do
 
     url = "#{base_url}/v1/messages"
 
-    headers = [
-      {"x-api-key", api_key},
-      {"anthropic-version", @anthropic_api_version},
-      {"content-type", "application/json"}
-    ]
+    headers =
+      auth_header(opts, "x-api-key", & &1) ++
+        [
+          {"anthropic-version", @anthropic_api_version},
+          {"content-type", "application/json"}
+        ]
 
     body = %{
       model: model,
@@ -591,16 +606,12 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   defp build_request(:openai, messages, opts) do
     base_url = Keyword.get(opts, :base_url, "https://api.openai.com")
-    api_key = Keyword.fetch!(opts, :api_key)
     model = Keyword.get(opts, :model, "gpt-4o")
 
     url = "#{base_url}/v1/chat/completions"
 
     headers =
-      [
-        {"authorization", "Bearer #{api_key}"},
-        {"content-type", "application/json"}
-      ]
+      (bearer_header(opts) ++ [{"content-type", "application/json"}])
       |> append_extra_headers(opts)
 
     body = %{
@@ -616,16 +627,12 @@ defmodule Raxol.Agent.Backend.HTTP do
 
   defp build_request(:kimi, messages, opts) do
     base_url = Keyword.get(opts, :base_url, "https://api.moonshot.ai")
-    api_key = Keyword.fetch!(opts, :api_key)
     model = Keyword.get(opts, :model, "kimi-k2.5")
 
     url = "#{base_url}/v1/chat/completions"
 
     headers =
-      [
-        {"authorization", "Bearer #{api_key}"},
-        {"content-type", "application/json"}
-      ]
+      (bearer_header(opts) ++ [{"content-type", "application/json"}])
       |> append_extra_headers(opts)
 
     body = %{

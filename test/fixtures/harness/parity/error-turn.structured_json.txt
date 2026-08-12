@@ -28,9 +28,17 @@
         "children": [
           {
             "children": [],
-            "content": "▾ ◆ [error] (empty)",
+            "content": "▾ ◆ [error] timeout after 30s",
             "id": null,
-            "label": "▾ ◆ [error] (empty)",
+            "label": "▾ ◆ [error] timeout after 30s",
+            "role": "text",
+            "type": "text"
+          },
+          {
+            "children": [],
+            "content": "timeout after 30s",
+            "id": "block-4-line-0",
+            "label": "timeout after 30s",
             "role": "text",
             "type": "text"
           }

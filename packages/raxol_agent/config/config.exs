@@ -23,3 +23,12 @@ if config_env() != :test do
     skills_root: "~/.raxol/skills",
     skills_external_dirs: ["~/.agents/skills", "~/.agents/skills-extra"]
 end
+
+# Auto-detecting the subscription harness asks whether a vendor CLI is
+# installed and signed in, which is a property of the host, not the project:
+# the suite must not resolve a provider on a machine with `claude` installed
+# and none on a machine without it. Same rule as the skills root above. Tests
+# that exercise the subscription path set this key explicitly.
+if config_env() == :test do
+  config :raxol_agent, native_probe: false
+end

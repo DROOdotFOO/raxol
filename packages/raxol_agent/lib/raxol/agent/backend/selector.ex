@@ -30,9 +30,19 @@ defmodule Raxol.Agent.Backend.Selector do
          base_url: "http://localhost:1234",
          api_key: "lm-studio"
        ]},
+    # LLM7 is keyless, so it carries no `:api_key` -- Backend.HTTP omits the
+    # auth header when none is set. Only a SUBSET of its catalogue is free:
+    # most ids (gpt-5.4-mini, deepseek-v4-flash, ...) answer 401 "Missing API
+    # key" without one, so the default names a model that serves keyless
+    # requests. Without it the request inherited the :openai default of
+    # "gpt-4o", which LLM7 does not host at all ("model_unavailable").
     llm7:
       {Raxol.Agent.Backend.HTTP,
-       [provider: :openai, base_url: "https://api.llm7.io"]},
+       [
+         provider: :openai,
+         base_url: "https://api.llm7.io",
+         model: "gpt-oss:20b"
+       ]},
     # LongCat (Meituan) is OpenAI-compatible; the base URL stops at "/openai" so
     # build_request appends "/v1/chat/completions". LongCat's message-object SSE
     # frames, reasoning_content channel, and "finishreason" key are already
@@ -63,6 +73,7 @@ defmodule Raxol.Agent.Backend.Selector do
        ]},
     lumo: {Raxol.Agent.Backend.Lumo, []},
     mock: {Raxol.Agent.Backend.Mock, []},
+    grok_native: {Raxol.Agent.Backend.GrokBuild, []},
     # Native backends: the CLI owns its loop; Raxol tools are injected over MCP.
     claude_native: {Raxol.Agent.Backend.ClaudeCode, []},
     cursor: {Raxol.Agent.Backend.Cursor, []}

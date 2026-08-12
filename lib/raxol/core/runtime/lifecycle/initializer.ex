@@ -172,29 +172,39 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
     end
   end
 
+  # `Raxol.Core.Runtime.Application.init/1` is declared as
+  # `{model, [command]} | {model, command} | model | {:error, term}` -- the
+  # model comes FIRST, mirroring `update/2`. A blanket `{_, model}` clause used
+  # to bind the SECOND element, so a lawful `{model, commands}` return handed
+  # the runtime its command list as the model: `{%{...}, []}` became `[]`, and
+  # the first `update/2` to touch it raised `%BadMapError{term: []}`. The same
+  # clause swallowed `{:error, reason}` by adopting `reason` as the model.
+  #
+  # Commands returned here are still dropped -- `Lifecycle` sources
+  # `:initial_commands` from its options only -- so an app that relies on init
+  # commands firing needs that plumbing before this contract is fully honored.
   defp call_app_init(app_module, initial_model_args) do
     case app_module.init(initial_model_args) do
-      {:ok, model} ->
+      # Same 3-tuple shape `start_plugin_manager/2` uses, so `finish_init/2`
+      # stops with the reason instead of raising CaseClauseError on a 2-tuple.
+      {:error, reason} ->
+        {:error, {:app_init_failed, reason}, fn -> :ok end}
+
+      {:ok, model} when is_map(model) ->
         {:ok, model}
 
-      {_, model} ->
-        Log.warning_with_context(
-          "[Lifecycle.Initializer] #{inspect(app_module)}.init returned a tuple, using model: #{inspect(model)}",
-          %{}
-        )
+      {model, commands} when is_map(model) and is_list(commands) ->
+        {:ok, model}
 
+      {model, command} when is_map(model) and is_struct(command) ->
         {:ok, model}
 
       model when is_map(model) ->
-        Log.info(
-          "[Lifecycle.Initializer] #{inspect(app_module)}.init returned a map directly: #{inspect(model)}"
-        )
-
         {:ok, model}
 
-      _ ->
+      other ->
         Log.warning_with_context(
-          "[Lifecycle.Initializer] #{inspect(app_module)}.init did not return {:ok, model} or a map. Using empty model.",
+          "[Lifecycle.Initializer] #{inspect(app_module)}.init returned #{inspect(other)}, which is not a model, {model, commands}, or {:error, reason}. Using empty model.",
           %{}
         )
 

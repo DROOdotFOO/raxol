@@ -45,11 +45,21 @@ defmodule Raxol.Agent.StreamResolveTest do
       assert AgentStream.resolve_executor([]) == nil
     end
 
-    test "auto-detects a provider from an env key" do
+    # Auto-detection refuses providers billed in API credits, so reaching one
+    # this way takes the explicit opt-in. Without it a configured key resolves
+    # to nothing, which is the point: an unattended turn cannot spend.
+    test "auto-detects a provider from an env key once paid use is opted into" do
+      System.put_env("RAXOL_ALLOW_PAID_API", "1")
+      on_exit(fn -> System.delete_env("RAXOL_ALLOW_PAID_API") end)
       System.put_env("ANTHROPIC_API_KEY", "sk-ant")
 
       assert %Raxol.Agent.ExecutorConfig{backend: :anthropic} =
                AgentStream.resolve_executor(auto_provider: true)
+    end
+
+    test "a configured paid key alone does not auto-resolve" do
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant")
+      assert AgentStream.resolve_executor(auto_provider: true) == nil
     end
 
     test "a pinned :provider resolves that provider's credential" do
@@ -62,7 +72,9 @@ defmodule Raxol.Agent.StreamResolveTest do
                )
     end
 
-    test "the generic AI_API_KEY escape hatch resolves" do
+    test "the generic AI_API_KEY escape hatch resolves once paid use is opted into" do
+      System.put_env("RAXOL_ALLOW_PAID_API", "1")
+      on_exit(fn -> System.delete_env("RAXOL_ALLOW_PAID_API") end)
       System.put_env("AI_API_KEY", "sk-generic")
 
       assert %Raxol.Agent.ExecutorConfig{} =

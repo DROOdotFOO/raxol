@@ -146,7 +146,11 @@ defmodule Raxol.Agent.Backend.CliTest do
       assert message =~ "mix raxol.setup --provider anthropic"
     end
 
+    # Auto-detection skips providers billed in API credits unless paid use is
+    # opted into, so this precedence check has to ask for it.
     test "a provider env var auto-detects into a ready executor" do
+      System.put_env("RAXOL_ALLOW_PAID_API", "1")
+      on_exit(fn -> System.delete_env("RAXOL_ALLOW_PAID_API") end)
       System.put_env("ANTHROPIC_API_KEY", "sk-ant")
 
       assert {:ok, %ExecutorConfig{} = executor, :env} =
