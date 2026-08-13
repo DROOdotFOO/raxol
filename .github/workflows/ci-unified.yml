@@ -122,6 +122,14 @@ jobs:
           # drift -- a transitive dep publishing a newer patch after the lock was
           # committed -- does not red the whole pipeline. The pre-commit hook and
           # `mix raxol.check` still guard genuinely uncommitted lock changes.
+          #
+          # The fallback has a cost every consumer of this cache pays. It
+          # rewrites mix.lock in place, so deps/ ends up holding versions the
+          # COMMITTED lock does not name -- while the cache saved here is keyed
+          # on a hash of that committed lock. A consumer restoring that key then
+          # dies on "lock mismatch" for a dependency nobody touched: on
+          # 2026-08-12 a sobelow-only dependabot bump red-ed master via nx and
+          # phoenix. Hence the `mix deps.get` each consumer runs before use.
           mix deps.get --check-locked || mix deps.get
           mix deps.compile
 
@@ -155,6 +163,11 @@ jobs:
         run: |
           mix local.hex --force
           mix local.rebar --force
+
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
 
       - name: Check formatting
         run: mix format --check-formatted
@@ -203,6 +216,11 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       - name: Compile with warnings as errors
         run: mix compile --warnings-as-errors
 
@@ -232,6 +250,11 @@ jobs:
             .raxol_cache
           key: ${{ needs.setup.outputs.cache-key }}
       
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       - name: Run unit tests
         run: |
           mix test --exclude integration --exclude property --exclude slow --exclude skip_on_ci
@@ -389,6 +412,11 @@ jobs:
             .raxol_cache
           key: ${{ needs.setup.outputs.cache-key }}
       
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       - name: Run integration tests
         run: |
           mix test --only integration --exclude skip_on_ci
@@ -429,6 +457,11 @@ jobs:
             .raxol_cache
           key: ${{ needs.setup.outputs.cache-key }}
       
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       - name: Run property tests
         run: |
           # Run test/property by path, but still honor skip_on_ci: some
@@ -473,6 +506,11 @@ jobs:
             .raxol_cache
           key: ${{ needs.setup.outputs.cache-key }}
       
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       - name: Run Credo
         run: mix credo --strict || true
 
@@ -501,6 +539,11 @@ jobs:
             .raxol_cache
           key: ${{ needs.setup.outputs.cache-key }}
       
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       - name: Restore PLT cache
         uses: actions/cache@v6
         with:
@@ -539,6 +582,11 @@ jobs:
             .raxol_cache
           key: ${{ needs.setup.outputs.cache-key }}
       
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       - name: Check for vulnerable dependencies
         run: |
           mix deps.audit || true
