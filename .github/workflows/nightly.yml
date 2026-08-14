@@ -141,17 +141,43 @@ jobs:
           # already run isolated at --timeout 300000 in the extended-scenarios
           # job, so excluding them here removes the duplicate run.
           #
-          # --max-cases / --timeout: the harness surface suites (test/harness)
-          # are the same CPU-bound emulator-replay class but are NOT property
-          # tests, so --exclude property never covered them. On slow matrix
-          # legs (older Elixir, macOS 2-3 core runners) the default async pool
-          # (2x schedulers) co-schedules several of them and starves each of
-          # cores, pushing them past the default 60s bound -- a runner-load
-          # artifact, not a hang. Capping concurrency gives each a full core
-          # and raising the default bound to 120s absorbs the residual GC/
-          # scheduling jitter. ci-unified runs this same suite per-push on
-          # fast runners, so cross-version coverage is unchanged.
-          mix test --exclude slow --exclude integration --exclude docker --exclude skip_on_ci --exclude property --max-cases 4 --timeout 120000
+          # test/harness is excluded here and runs serially in the next step.
+          # Those suites are the same CPU-bound emulator-replay class but are
+          # NOT property tests, so --exclude property never covered them. On
+          # slow matrix legs (older Elixir, macOS 2-3 core runners) the async
+          # pool co-schedules several of them and starves each of cores. That
+          # was first mitigated by --max-cases 4 --timeout 120000 (up from a
+          # 60s default), and it re-emerged against the new bound: 2026-08-12
+          # and 08-13 both failed on 1.17.3/27.2/macos, on DIFFERENT tests of
+          # the same module (:626 then :300), each of which finishes in under
+          # two seconds locally. The victim is whichever test the seed lands
+          # in the bad window, so raising the bound again just moves it.
+          #
+          # The file list is enumerated rather than hardcoded, so a new
+          # top-level test directory cannot be silently skipped. -print0 into
+          # xargs -0 rather than word-splitting a string: the latter is a
+          # no-op under zsh, so it would behave differently for anyone
+          # reproducing this step in their own shell.
+          count="$(find test -name '*_test.exs' -not -path 'test/harness/*' | wc -l)"
+          [ "$count" -gt 0 ] || { echo "no test files matched"; exit 1; }
+          echo "running $count files (test/harness runs in the next step)"
+          find test -name '*_test.exs' -not -path 'test/harness/*' -print0 \
+            | sort -z \
+            | xargs -0 mix test --exclude slow --exclude integration --exclude docker --exclude skip_on_ci --exclude property --max-cases 4 --timeout 120000
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: raxol_test
+
+      # Serialized, so no harness test competes with another for a core on a
+      # 2-3 core runner. Measured at 21.9s for 748 tests on an M1 with
+      # --max-cases 1, so the isolation costs wall-clock in the tens of
+      # seconds, not minutes. The generous bound is headroom for the slowest
+      # leg, not an expectation: a test that actually hangs still fails here.
+      - name: Run harness surface suites (serialized)
+        run: |
+          mix test test/harness --exclude slow --exclude integration --exclude docker --exclude skip_on_ci --exclude property --max-cases 1 --timeout 300000
         env:
           POSTGRES_HOST: localhost
           POSTGRES_USER: postgres
