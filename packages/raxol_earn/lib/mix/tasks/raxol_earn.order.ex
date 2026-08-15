@@ -89,7 +89,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   alias Raxol.Payments.Xochi.{PullContracts, Schemas.QuoteRequest}
 
   # Nested wallet modules (defined below) -- alias so they resolve everywhere.
-  alias __MODULE__.{ScaWallet, Signer}
+  alias __MODULE__.{ScaWallet, Signer, Sma7702Wallet}
 
   # The raxol agent (seller) wallet -- the provider a buyer hires by default.
   @default_provider "0x939ead944b5d28b86d91af1961812d3bbc46cac1"
