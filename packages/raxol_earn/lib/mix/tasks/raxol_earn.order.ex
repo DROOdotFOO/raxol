@@ -386,8 +386,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     {from, to} = parse_corridor(Keyword.get(opts, :corridor, "8453>42161"))
     amount = Keyword.get(opts, :amount, "3.00")
 
-    {:ok, src_token} = Assets.address(from, "USDC")
-    {:ok, dst_token} = Assets.address(to, "USDC")
+    src_token = usdc_address!(from, "origin")
+    dst_token = usdc_address!(to, "destination")
     principal_atomic = Assets.to_atomic(Decimal.new(amount), Assets.decimals(from, src_token))
 
     signer = Keyword.get(opts, :signer, "privy")
@@ -427,7 +427,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     _ = fetch_env!("RAXOL_ACP_SIGNER_PRIVATE_KEY")
     address = fetch_env!("RAXOL_ACP_WALLET_ADDRESS")
 
-    {:ok, _} = Raxol.Earn.SignerSidecar.start_link([])
+    start_sidecar!()
 
     provider =
       ProviderAdapter.Privy.new(
@@ -563,6 +563,57 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   defp sign_intent_error(reason),
     do: "could not sign the Xochi intent: #{inspect(reason)}"
+
+  # `Assets.address/2` answers a bare `:error` for an unsupported pair, so a
+  # bad --corridor used to surface as `no match of right hand side value: :error`
+  # with no hint of which side was wrong.
+  defp usdc_address!(chain_id, side) do
+    case Assets.address(chain_id, "USDC") do
+      {:ok, address} ->
+        address
+
+      :error ->
+        supported =
+          Assets.supported_chain_ids()
+          |> Enum.map(&"#{&1} (#{Assets.chain_name(&1)})")
+          |> Enum.join(", ")
+
+        Mix.raise("""
+        no USDC address for the #{side} chain #{chain_id}.
+
+        Check --corridor (origin>destination). Chains with a USDC address:
+          #{supported}
+        """)
+    end
+  end
+
+  # The sidecar is a Node process: it fails when node is missing, its deps are
+  # not installed, the port is taken, or the Privy credentials are rejected.
+  # Each of those used to arrive as a MatchError on a start_link tuple.
+  defp start_sidecar!() do
+    case Raxol.Earn.SignerSidecar.start_link([]) do
+      {:ok, pid} ->
+        pid
+
+      {:error, {:already_started, pid}} ->
+        pid
+
+      {:error, reason} ->
+        Mix.raise("""
+        the Privy signer sidecar did not start: #{inspect(reason)}
+
+        It is a Node process under packages/raxol_earn/priv/signer_sidecar.
+        Check, in order:
+
+          node --version                       # must be present on PATH
+          ls priv/signer_sidecar/node_modules  # run `npm install` there if absent
+          lsof -i :4048                        # default port, must be free
+
+        RAXOL_ACP_WALLET_ADDRESS / RAXOL_ACP_WALLET_ID / RAXOL_ACP_SIGNER_PRIVATE_KEY
+        must all be set: the sidecar reads them at boot and exits if any is missing.
+        """)
+    end
+  end
 
   @explorers %{
     1 => "https://etherscan.io/tx/",
