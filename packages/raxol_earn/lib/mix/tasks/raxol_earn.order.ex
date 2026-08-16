@@ -279,11 +279,16 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     Agent.subscribe(agent)
     Agent.start_stream(agent)
 
+    # `emitter` + `client` scope the JobCreated search to the job THIS buyer
+    # created: the sponsored path resolves against a bundle receipt that also
+    # carries other senders' JobCreated logs from this same core.
     resolver = %{
       adapter: JobIdResolver.Receipt,
       config: %{
         event_signature: "JobCreated(uint256,address,address,address,uint256,address)",
-        topic_index: 1
+        topic_index: 1,
+        emitter: cfg.core,
+        client: cfg.buyer
       }
     }
 

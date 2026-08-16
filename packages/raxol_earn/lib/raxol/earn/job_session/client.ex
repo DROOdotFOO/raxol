@@ -122,11 +122,26 @@ defmodule Raxol.Earn.JobSession.Client do
 
     %{
       c
-      | resolver: c.resolver || %{adapter: Raxol.Earn.JobIdResolver.Receipt},
+      | resolver: scope_resolver(c.resolver || %{adapter: Raxol.Earn.JobIdResolver.Receipt}, c),
         evaluator: c.evaluator || c.buyer,
         hook_address: c.hook_address || @zero_address,
         evaluate_fn: c.evaluate_fn || (&default_evaluate/2)
     }
+  end
+
+  # Tell the resolver WHICH JobCreated is ours. The receipt it decodes is the
+  # bundle's on the ERC-4337 path, so it holds every co-bundled UserOp's logs --
+  # another buyer's genuine JobCreated from this same core would otherwise win
+  # by being first, and a wrong job_id checkpoints as `bound` and sticks across
+  # restarts. An explicit config wins, so `client: nil` opts back out.
+  defp scope_resolver(resolver, c) do
+    config =
+      resolver
+      |> Map.get(:config, %{})
+      |> Map.put_new(:emitter, c.acp_core_address)
+      |> Map.put_new(:client, c.buyer)
+
+    Map.put(resolver, :config, config)
   end
 
   @doc """
