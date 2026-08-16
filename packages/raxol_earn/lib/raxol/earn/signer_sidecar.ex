@@ -29,6 +29,9 @@ defmodule Raxol.Earn.SignerSidecar do
   - `:node_path` -- node executable (default: `System.find_executable("node")`).
   - `:script` -- server.mjs path (default: this app's `priv/signer_sidecar/server.mjs`).
   - `:health_timeout_ms` -- boot health-wait budget (default `20_000`).
+  - `:expect_address` -- the wallet `GET /health` must report (default
+    `RAXOL_ACP_WALLET_ADDRESS`). A listener answering for another wallet is
+    rejected rather than adopted as the signer.
   """
 
   use GenServer
@@ -42,6 +45,53 @@ defmodule Raxol.Earn.SignerSidecar do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+  end
+
+  @doc """
+  Start the sidecar for a caller that does not trap exits, such as a Mix task.
+
+  `start_link/1` cannot report a boot failure to such a caller: `init/1` exits,
+  and the link delivers that exit signal before the `{:error, _}` return value is
+  ever inspected, so the caller dies with an opaque `** (EXIT from ...)`. This
+  traps exits for the duration of the start and hands the reason back. The link
+  is left intact on success, so a sidecar that dies later still takes the caller
+  with it.
+  """
+  @spec start_link_or_error(keyword()) :: {:ok, pid()} | {:error, term()}
+  def start_link_or_error(opts \\ []) do
+    trapping? = Process.flag(:trap_exit, true)
+
+    try do
+      opts |> start_link() |> settle()
+    after
+      Process.flag(:trap_exit, trapping?)
+    end
+  end
+
+  # Already running: no child was spawned, so there is no exit signal to collect.
+  defp settle({:error, {:already_started, pid}}), do: {:ok, pid}
+
+  # `init_fail/3` acks the caller before the child exits, so the signal lands just
+  # after start_link returns. Wait for it: leaving it queued would surface later as
+  # a stray message, or vanish once the flag is restored.
+  defp settle({:error, reason}) do
+    receive do
+      {:EXIT, _pid, _} -> :ok
+    after
+      1_000 -> :ok
+    end
+
+    {:error, reason}
+  end
+
+  # A sidecar that died in this window has already been converted to a message that
+  # restoring the flag cannot turn back into a kill, so report it rather than lose it.
+  defp settle({:ok, pid}) do
+    receive do
+      {:EXIT, ^pid, reason} -> {:error, reason}
+    after
+      0 -> {:ok, pid}
+    end
   end
 
   @doc "The sidecar base URL for the given (or default) options."
@@ -79,7 +129,8 @@ defmodule Raxol.Earn.SignerSidecar do
 
     case await_health(
            state.base_url,
-           Keyword.get(opts, :health_timeout_ms, @default_health_timeout_ms)
+           Keyword.get(opts, :health_timeout_ms, @default_health_timeout_ms),
+           expect_address(opts)
          ) do
       :ok ->
         Logger.info("signer sidecar healthy at #{state.base_url}")
@@ -129,24 +180,51 @@ defmodule Raxol.Earn.SignerSidecar do
     |> Application.app_dir("priv/signer_sidecar/server.mjs")
   end
 
-  # Poll GET /health until 200 or the budget elapses.
-  defp await_health(base_url, timeout_ms) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_await_health(base_url, deadline)
+  # The sidecar reads this env itself, so it is also what the sidecar will report.
+  defp expect_address(opts) do
+    Keyword.get(opts, :expect_address) || System.get_env("RAXOL_ACP_WALLET_ADDRESS")
   end
 
-  defp do_await_health(base_url, deadline) do
-    case Req.get(url: base_url <> "/health", retry: false, receive_timeout: 2_000) do
-      {:ok, %Req.Response{status: 200}} ->
-        :ok
+  # Poll GET /health until the sidecar answers as `expect_address`, or the budget
+  # elapses. Public so the identity gate is testable against a real loopback
+  # listener, without a node runtime.
+  @doc false
+  @spec await_health(String.t(), non_neg_integer(), String.t() | nil) :: :ok | {:error, term()}
+  def await_health(base_url, timeout_ms, expect_address \\ nil) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_await_health(base_url, deadline, expect_address)
+  end
 
-      _ ->
-        if System.monotonic_time(:millisecond) < deadline do
-          Process.sleep(250)
-          do_await_health(base_url, deadline)
-        else
-          {:error, :health_timeout}
-        end
+  defp do_await_health(base_url, deadline, expect) do
+    case Req.get(url: base_url <> "/health", retry: false, receive_timeout: 2_000) do
+      {:ok, %Req.Response{status: 200, body: body}} -> check_identity(body, expect)
+      _ -> retry_health(base_url, deadline, expect)
+    end
+  end
+
+  # A 200 is only liveness. An orphaned sidecar (or any other process) holding the
+  # port would otherwise become the money-path signer while callers keep reporting
+  # the configured wallet, so the reported wallet has to match -- and a mismatch
+  # never becomes a match by waiting, so it is returned rather than retried.
+  defp check_identity(_body, nil), do: :ok
+
+  defp check_identity(%{"address" => got}, want) when is_binary(got) do
+    case String.downcase(got) == String.downcase(want) do
+      true -> :ok
+      false -> {:error, {:sidecar_wrong_wallet, got, want}}
+    end
+  end
+
+  defp check_identity(_body, want), do: {:error, {:sidecar_wrong_wallet, nil, want}}
+
+  defp retry_health(base_url, deadline, expect) do
+    case System.monotonic_time(:millisecond) < deadline do
+      true ->
+        Process.sleep(250)
+        do_await_health(base_url, deadline, expect)
+
+      false ->
+        {:error, :health_timeout}
     end
   end
 end

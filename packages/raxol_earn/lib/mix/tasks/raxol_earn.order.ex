@@ -427,7 +427,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     _ = fetch_env!("RAXOL_ACP_SIGNER_PRIVATE_KEY")
     address = fetch_env!("RAXOL_ACP_WALLET_ADDRESS")
 
-    start_sidecar!()
+    start_sidecar!(address)
 
     provider =
       ProviderAdapter.Privy.new(
@@ -587,32 +587,48 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     end
   end
 
-  # The sidecar is a Node process: it fails when node is missing, its deps are
-  # not installed, the port is taken, or the Privy credentials are rejected.
-  # Each of those used to arrive as a MatchError on a start_link tuple.
-  defp start_sidecar!() do
-    case Raxol.Earn.SignerSidecar.start_link([]) do
-      {:ok, pid} ->
-        pid
-
-      {:error, {:already_started, pid}} ->
-        pid
-
-      {:error, reason} ->
-        Mix.raise("""
-        the Privy signer sidecar did not start: #{inspect(reason)}
-
-        It is a Node process under packages/raxol_earn/priv/signer_sidecar.
-        Check, in order:
-
-          node --version                       # must be present on PATH
-          ls priv/signer_sidecar/node_modules  # run `npm install` there if absent
-          lsof -i :4048                        # default port, must be free
-
-        RAXOL_ACP_WALLET_ADDRESS / RAXOL_ACP_WALLET_ID / RAXOL_ACP_SIGNER_PRIVATE_KEY
-        must all be set: the sidecar reads them at boot and exits if any is missing.
-        """)
+  # The sidecar is a Node process: it fails when node is missing, its deps are not
+  # installed, the port is taken, or the Privy credentials are rejected. A plain
+  # `start_link` cannot report any of those here -- the linked child's exit signal
+  # kills this task before the return value is read -- so go through the trapping
+  # start, which turns the exit back into a reason.
+  defp start_sidecar!(address) do
+    case Raxol.Earn.SignerSidecar.start_link_or_error(expect_address: address) do
+      {:ok, pid} -> pid
+      {:error, reason} -> Mix.raise(sidecar_error(reason))
     end
+  end
+
+  defp sidecar_error({:sidecar_unhealthy, {:sidecar_wrong_wallet, got, want}}) do
+    """
+    #{Raxol.Earn.SignerSidecar.base_url([])} answers /health for the WRONG wallet:
+    #{got}, expected #{want}.
+
+    Something else already holds the port -- most often a signer sidecar left over
+    from an earlier run, delegated to a different agent. Left alone it would sign
+    this order's intent and its on-chain calls as #{got}, while every log line here
+    said #{want}. Find and stop it:
+
+      lsof -i :4048
+
+    Or point this run elsewhere with RAXOL_ACP_SIGNER_PORT / RAXOL_ACP_SIDECAR_URL.
+    """
+  end
+
+  defp sidecar_error(reason) do
+    """
+    the Privy signer sidecar did not start: #{inspect(reason)}
+
+    It is a Node process under packages/raxol_earn/priv/signer_sidecar.
+    Check, in order:
+
+      node --version                       # must be present on PATH
+      ls priv/signer_sidecar/node_modules  # run `npm install` there if absent
+      lsof -i :4048                        # default port; the sidecar exits if taken
+
+    RAXOL_ACP_WALLET_ADDRESS / RAXOL_ACP_WALLET_ID / RAXOL_ACP_SIGNER_PRIVATE_KEY
+    must all be set: the sidecar reads them at boot and exits if any is missing.
+    """
   end
 
   @explorers %{
