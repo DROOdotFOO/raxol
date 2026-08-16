@@ -54,6 +54,11 @@
 #                         asset (USDT needs GATE_RPC_42161; USDG needs GATE_RPC_4663)
 #                         on the acp route, and for the relay source chain.
 #   GATE_FROM_ADDRESS     EVM source address for the relay quote probe.
+#   GATE_TRON_ADDRESS     Tron recipient WALLET for the relay route. REQUIRED to
+#                         probe or settle relay; there is no default, because a
+#                         Tron settlement is final and the destination token
+#                         contract is a well-formed address that would swallow
+#                         the funds. A relay cell SKIPs without it.
 #
 # FLAGS:
 #   --asset A[,A...]      REQUIRED. USDC|USDT|USDG|all
@@ -79,6 +84,7 @@
 #
 #   # Launch rail: real USDC across all three routes:
 #   GATE_KEY=0x<funded> GATE_FROM_ADDRESS=0x<addr> GATE_RPC_8453=https://mainnet.base.org \
+#   GATE_TRON_ADDRESS=T<your Tron wallet> \
 #     ./scripts/run_live_gates.sh --asset USDC
 #
 #   # Just the ACP order path for USDC:
@@ -136,7 +142,8 @@ Usage: scripts/run_live_gates.sh --asset A[,A...] [--route R[,R...]] [options]
   -h, --help                     full docs are in the file header
 
 Secrets via env: GATE_KEY, GATE_XOCHI_TOKEN, GATE_RELAY_TOKEN,
-GATE_RPC_<chainid> (e.g. GATE_RPC_42161), GATE_FROM_ADDRESS.
+GATE_RPC_<chainid> (e.g. GATE_RPC_42161), GATE_FROM_ADDRESS,
+GATE_TRON_ADDRESS (relay recipient wallet; relay cells SKIP without it).
 EOF
 }
 
@@ -349,9 +356,24 @@ run_relay() {
     USDT) from_token="0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2" ;;
   esac
 
+  # The Tron recipient is a WALLET and there is no safe default: a Tron
+  # settlement is final, and the destination TOKEN contract is a well-formed
+  # base58 address the relay would settle to and nobody could spend back out.
+  local to_addr="${GATE_TRON_ADDRESS:-}"
+  if [[ -z "$to_addr" ]]; then
+    log "relay $asset: SKIP -- set GATE_TRON_ADDRESS to the Tron recipient wallet"
+    log "             you control. There is no default; a Tron settlement is final."
+    return 10
+  fi
+  if [[ "$to_addr" == "$to_token" ]]; then
+    err "relay $asset: GATE_TRON_ADDRESS is the destination token contract, not a"
+    err "             wallet. Funds settled there are unrecoverable. No funds moved."
+    return 1
+  fi
+
   atomic="$(awk -v a="$RELAY_AMOUNT" 'BEGIN { printf "%d", a * 1000000 }')"
   body="$(printf '{"transfer_id":"probe","from_chain_id":%s,"to_chain_id":728126428,"from_token":"%s","to_token":"%s","from_amount":"%s","from_address":"%s","to_address":"%s","slippage_bps":50}' \
-    "$from_chain" "$from_token" "$to_token" "$atomic" "$from_addr" "$to_token")"
+    "$from_chain" "$from_token" "$to_token" "$atomic" "$from_addr" "$to_addr")"
 
   log "relay preflight: probing /relay/quote for $tok (read-only, no funds)..."
   code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' \
@@ -374,9 +396,10 @@ run_relay() {
   export RELAY_LIVE_URL="$RELAY_URL" RELAY_LIVE_TOKEN="$RELAY_TOKEN"
   export RELAY_LIVE_KEY="$KEY" RELAY_LIVE_RPC="$rpc" RELAY_LIVE_FROM_ADDRESS="$from_addr"
   export RELAY_LIVE_FROM_CHAIN="$from_chain" RELAY_LIVE_TOKENS="$tok" RELAY_LIVE_AMOUNT="$RELAY_AMOUNT"
+  export RELAY_LIVE_TO_ADDRESS="$to_addr"
 
   cd "$ACP_DIR"
-  log "relay settle: EVM($from_chain) $tok -> Tron USDT (REAL, broadcasts a deposit)..."
+  log "relay settle: EVM($from_chain) $tok -> Tron USDT at $to_addr (REAL, broadcasts a deposit)..."
   env MIX_ENV=test mix test --include live_relay "$RELAY_TEST"
 }
 
@@ -460,7 +483,7 @@ confirm_funded() {
           if [[ "$a" == "USDG" ]]; then
             log "  $a / relay  -> skip (no Tron leg)"
           else
-            log "  $a / relay  -> Base $tok -> Tron USDT (~$RELAY_AMOUNT)"
+            log "  $a / relay  -> Base $tok -> Tron USDT at ${GATE_TRON_ADDRESS:-<unset: cell skips>} (~$RELAY_AMOUNT)"
           fi ;;
         fee) log "  $a / fee  -> take-rate check [$eff] (NO funds)" ;;
         *) log "  $a / $r  -> [$eff] token=$tok (~$AMOUNT/corridor)" ;;
