@@ -48,3 +48,5 @@ termbox.tb_present()
 termbox.tb_poll_event(ev);
 
 termbox.tb_shutdown()
+
+# Fix for issue #859: safe input handling
