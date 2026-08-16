@@ -128,6 +128,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
         {:ok, bundle} -> bundle
         {:error, reason} -> Mix.raise(sign_intent_error(reason))
       end
+
     requirement = requirement(cfg, bundle)
     log("signed Xochi intent: #{bundle[:intent_id] || bundle["intent_id"]}")
 
