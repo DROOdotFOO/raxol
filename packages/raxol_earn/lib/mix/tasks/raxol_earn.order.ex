@@ -421,6 +421,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     _ = fetch_env!("RAXOL_ACP_WALLET_ID")
     _ = fetch_env!("RAXOL_ACP_SIGNER_PRIVATE_KEY")
     address = fetch_env!("RAXOL_ACP_WALLET_ADDRESS")
+    check_7702_account(String.downcase(address), Sma7702Wallet.address())
 
     {:ok, _} = Raxol.Earn.SignerSidecar.start_link([])
 
@@ -470,6 +471,20 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   defp build_signer(other, _from, _rpc),
     do: Mix.raise("unknown --signer #{inspect(other)} (want privy | sca | eoa)")
+
+  # Sma7702Wallet's account is the verifyingContract of the replay-safe EIP-712
+  # domain it signs over, so pointing RAXOL_ACP_WALLET_ADDRESS at a different
+  # managed wallet signs the wrong account's hash: isValidSignature is called on
+  # the payer and rejects, surfacing as an opaque 401 after a sidecar round trip.
+  defp check_7702_account(account, account), do: :ok
+
+  defp check_7702_account(given, account) do
+    Mix.raise(
+      "RAXOL_ACP_WALLET_ADDRESS #{given} is not the 7702 account Sma7702Wallet " <>
+        "signs for (#{account}); the intent would be signed over the wrong " <>
+        "replay-safe hash"
+    )
+  end
 
   # The managed Privy provider is runtime state; Sma7702Wallet resolves it here at
   # call time so the wallet stays a plain behaviour module.
