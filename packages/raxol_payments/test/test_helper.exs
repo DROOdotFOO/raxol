@@ -1,34 +1,36 @@
 ExUnit.start()
 
-# Tests tagged :cli_signer spawn the riddler-client CLI. Skipped
-# by default; enable with `mix test --include cli_signer` or by setting
-# RIDDLER_CLI_DIR in the environment so the helper can find the CLI repo.
+# Fund-moving suites are ALWAYS excluded. They spend real mainnet USDC, so
+# the presence of an endpoint/key in the environment must not be enough to
+# run them -- an explicit `--include live_xochi` (or `--only`) is the sole
+# opt-in, which is what scripts/run_live_gates.sh passes on every cell.
 #
-# Tests tagged :conformance read the shared EIP-712 fixture from the CLI
-# repo. Same skip-by-default rules as :cli_signer.
-# Each entry excludes a tag by default unless its enabling env var is set:
+#   :live_xochi -- drives the full intent lifecycle (and the :live_xochi_matrix
+#     / :live_xochi_preflight cells inside it) against a real Xochi endpoint
+#     with a funded wallet.
+#   :live_relay -- drives the EVM->Tron relay with a funded wallet.
+#   :live_property -- property runs against the live quote endpoints.
+live_exclude = [:live_xochi, :live_relay, :live_property]
+
+# Each entry excludes a tag by default unless its enabling env var is set.
+# These read fixtures or spawn a local CLI; none of them move funds.
 #
 #   :cli_signer / :conformance -- spawn the riddler-client CLI or read
 #     its shared EIP-712 fixture (RIDDLER_CLI_DIR / CONFORMANCE_FIXTURE_PATH).
 #   :stealth_conformance -- match the stealth scheme against a reference SDK
 #     fixture (STEALTH_VECTORS_PATH).
-#   :live_xochi -- drive the full intent lifecycle against a real (testnet)
-#     Xochi endpoint with a funded wallet (XOCHI_LIVE_URL).
 gated_tags = [
   {[:cli_signer, :conformance],
    System.get_env("RIDDLER_CLI_DIR") ||
      System.get_env("CONFORMANCE_FIXTURE_PATH")},
   {[:stealth_conformance],
    System.get_env("STEALTH_VECTORS_PATH") ||
-     File.exists?(Path.join(__DIR__, "fixtures/stealth_vectors.json"))},
-  {[:live_xochi], System.get_env("XOCHI_LIVE_URL")},
-  {[:live_relay], System.get_env("RELAY_LIVE_URL")},
-  {[:live_property], System.get_env("XOCHI_LIVE_URL") || System.get_env("RELAY_LIVE_URL")}
+     File.exists?(Path.join(__DIR__, "fixtures/stealth_vectors.json"))}
 ]
 
-excluded =
+gated_exclude =
   Enum.flat_map(gated_tags, fn {tags, enabled} ->
     if enabled, do: [], else: tags
   end)
 
-ExUnit.configure(exclude: excluded)
+ExUnit.configure(exclude: live_exclude ++ gated_exclude)
