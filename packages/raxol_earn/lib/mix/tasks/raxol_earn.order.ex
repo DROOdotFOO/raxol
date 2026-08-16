@@ -605,16 +605,17 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   end
 
   defp sidecar_error({:sidecar_unhealthy, {:sidecar_wrong_wallet, got, want}}) do
-    """
-    #{Raxol.Earn.SignerSidecar.base_url([])} answers /health for the WRONG wallet:
-    #{got}, expected #{want}.
+    url = Raxol.Earn.SignerSidecar.base_url([])
 
-    Something else already holds the port -- most often a signer sidecar left over
+    """
+    #{url} answers /health for the WRONG wallet: #{got}, expected #{want}.
+
+    Something else already holds that port -- most often a signer sidecar left over
     from an earlier run, delegated to a different agent. Left alone it would sign
     this order's intent and its on-chain calls as #{got}, while every log line here
     said #{want}. Find and stop it:
 
-      lsof -i :4048
+      lsof -i :#{URI.parse(url).port}
 
     Or point this run elsewhere with RAXOL_ACP_SIGNER_PORT / RAXOL_ACP_SIDECAR_URL.
     """
