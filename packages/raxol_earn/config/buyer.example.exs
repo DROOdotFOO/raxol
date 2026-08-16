@@ -75,11 +75,17 @@ config :raxol_earn,
     server_url: "https://api-dev.acp.virtuals.io",
     chain_ids: [84_532]
   ],
-  # jobId resolution after createJob. Defaults to JobIdResolver.Receipt.
-  # CONFIRM the JobCreated event signature / indexed position in the dry-run,
-  # then override here:
+  # jobId resolution after createJob. Defaults to JobIdResolver.Receipt, whose
+  # default signature matches the deployed AgenticCommerceV3 core -- leave this
+  # nil unless you are pointing at a different core.
+  #
+  # An override is easy to get wrong and fails QUIETLY: a signature that does
+  # not match the emitted event decodes to :pending, not an error, so the buyer
+  # falls through to reconcile-by-tag instead of reporting a bad jobId. If you
+  # do override, take the signature from the core's verified ABI, not from here:
   #
   #     buyer_job_id_resolver:
   #       {Raxol.Earn.JobIdResolver.Receipt,
-  #        %{event_signature: "JobCreated(uint256)", topic_index: 1}}
+  #        %{event_signature: "JobCreated(uint256,address,address,address,uint256,address)",
+  #          topic_index: 1}}
   buyer_job_id_resolver: nil

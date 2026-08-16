@@ -42,8 +42,21 @@ defmodule Raxol.Earn.JobIdResolverTest do
   describe "Receipt" do
     test "resolve decodes the jobId from the createJob receipt logs" do
       adapter = Adapter.new()
-      topic = LogDecoder.event_topic("JobCreated(uint256)")
-      log = %{"topics" => [topic, "0x" <> String.duplicate("0", 62) <> "2a"]}
+
+      topic =
+        LogDecoder.event_topic("JobCreated(uint256,address,address,address,uint256,address)")
+
+      # The deployed AgenticCommerceV3 indexes jobId, client and provider, so a
+      # real JobCreated log carries four topics and jobId is topics[1].
+      log = %{
+        "topics" => [
+          topic,
+          "0x" <> String.duplicate("0", 62) <> "2a",
+          "0x" <> String.duplicate("0", 24) <> String.duplicate("11", 20),
+          "0x" <> String.duplicate("0", 24) <> String.duplicate("22", 20)
+        ]
+      }
+
       :ok = Adapter.set_receipt(adapter, "0xtx", %{"logs" => [log]})
 
       resolver = %{adapter: Receipt}
