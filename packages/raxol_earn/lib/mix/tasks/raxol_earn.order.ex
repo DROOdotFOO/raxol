@@ -205,11 +205,11 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     job_id
   end
 
-  # approve (USDC) + fund (ACP Core) batched into ONE UserOp, per acp-node-v2. A
-  # standalone approve to a token contract is not sponsored by the Virtuals
-  # paymaster; batched with the ACP-core fund call, the whole UserOp is.
+  # approve (USDC) + fund (ACP Core) batched into ONE UserOp, per acp-node-v2. The
+  # Virtuals paymaster refuses a standalone approve to a token contract; batched
+  # with the ACP-core fund call it accepts the UserOp and bills the buyer in USDC.
   defp fund_job(cfg, job_id, budget) do
-    log("funding escrow: batched approve + fund(#{job_id}) in one sponsored UserOp...")
+    log(funding_line(job_id))
 
     calls = [
       %{
@@ -242,6 +242,15 @@ defmodule Mix.Tasks.RaxolEarn.Order do
         Mix.raise("fund failed: #{inspect(err)}")
     end
   end
+
+  @doc false
+  # Public only so the wording can be tested: this line used to call the UserOp
+  # sponsored, contradicting the plan printed a few lines earlier in the same run.
+  @spec funding_line(non_neg_integer()) :: String.t()
+  def funding_line(job_id),
+    do:
+      "funding escrow: batched approve + fund(#{job_id}) in one UserOp -- " <>
+        "gas billed to the buyer in USDC"
 
   # -- Spend accounting --
 
@@ -291,52 +300,94 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   defp report_actuals(cfg, label, tx_hashes) do
     client = Raxol.Earn.Onchain.RPC.client(url: cfg.rpc)
-    decimals = Assets.decimals(cfg.from, cfg.src_token)
 
-    transfers =
+    reads =
       tx_hashes
       |> List.wrap()
-      |> Enum.flat_map(&buyer_transfers(client, cfg, &1))
+      |> Enum.map(&{&1, buyer_transfers(client, cfg, &1)})
 
-    case transfers do
-      [] ->
-        log("SPEND ACTUAL (#{label}): no USDC left the buyer, or receipts not yet available")
-
-      transfers ->
-        total = transfers |> Enum.map(&elem(&1, 1)) |> Enum.sum()
-
-        log("SPEND ACTUAL (#{label}): #{Assets.to_human(total, decimals)} USDC left the buyer")
-
-        Enum.each(transfers, fn {to, amount} ->
-          log("  #{Assets.to_human(amount, decimals)} -> #{to}#{destination_note(cfg, to)}")
-        end)
-    end
+    Enum.each(spend_actual_lines(cfg, label, reads), &log/1)
   rescue
     # Accounting must never take down a run that already moved money.
     e -> log("SPEND ACTUAL (#{label}): could not read receipts (#{Exception.message(e)})")
   end
+
+  @doc false
+  # Public only so it can be tested. A receipt that could NOT be read must not
+  # read like a receipt that showed nothing: the first is an unknown, the second
+  # is a zero, and printing them the same way is how a real spend gets reported
+  # as no spend.
+  @spec spend_actual_lines(map(), String.t(), [
+          {String.t(), {:ok, [{String.t(), non_neg_integer()}]} | {:error, term()}}
+        ]) :: [String.t()]
+  def spend_actual_lines(cfg, label, reads) do
+    decimals = Assets.decimals(cfg.from, cfg.src_token)
+    {read, failed} = Enum.split_with(reads, &match?({_hash, {:ok, _}}, &1))
+    transfers = Enum.flat_map(read, fn {_hash, {:ok, transfers}} -> transfers end)
+
+    headline(label, decimals, transfers, failed) ++
+      Enum.map(transfers, fn {to, amount} ->
+        "  #{Assets.to_human(amount, decimals)} -> #{to}#{destination_note(cfg, to)}"
+      end) ++
+      Enum.map(failed, fn {hash, {:error, reason}} ->
+        "  UNREAD receipt #{hash} (#{inspect(reason)}) -- check #{explorer(cfg.from)}#{hash}"
+      end)
+  end
+
+  defp headline(label, _decimals, [], []),
+    do: ["SPEND ACTUAL (#{label}): no USDC left the buyer"]
+
+  defp headline(label, decimals, transfers, []) do
+    [
+      "SPEND ACTUAL (#{label}): #{Assets.to_human(total(transfers), decimals)} USDC left the buyer"
+    ]
+  end
+
+  defp headline(label, decimals, transfers, failed) do
+    [
+      "SPEND ACTUAL (#{label}): at least #{Assets.to_human(total(transfers), decimals)} USDC " <>
+        "left the buyer -- LOWER BOUND, #{length(failed)} receipt(s) unread"
+    ]
+  end
+
+  defp total(transfers), do: transfers |> Enum.map(&elem(&1, 1)) |> Enum.sum()
 
   defp buyer_transfers(client, cfg, tx_hash) do
     case Raxol.Earn.Onchain.RPC.await_receipt(client, tx_hash, timeout_ms: 20_000) do
       {:ok, %{"logs" => logs}} when is_list(logs) ->
         buyer_topic = pad_topic(cfg.buyer)
 
-        for %{"address" => addr, "topics" => [topic0, from, to | _], "data" => data} <- logs,
-            String.downcase(addr) == String.downcase(cfg.src_token),
-            String.downcase(topic0) == @transfer_topic,
-            String.downcase(from) == buyer_topic do
-          {"0x" <> String.slice(to, -40, 40), parse_uint(data)}
-        end
+        transfers =
+          for %{"address" => addr, "topics" => [topic0, from, to | _], "data" => data} <- logs,
+              String.downcase(addr) == String.downcase(cfg.src_token),
+              String.downcase(topic0) == @transfer_topic,
+              String.downcase(from) == buyer_topic do
+            {"0x" <> String.slice(to, -40, 40), parse_uint(data)}
+          end
 
-      _ ->
-        []
+        {:ok, transfers}
+
+      {:ok, other} ->
+        {:error, {:receipt_without_logs, other}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
+  # The ERC-20 paymaster that fronts the ETH for the Virtuals-managed SCA and
+  # bills the buyer in USDC, observed across four UserOps on Base. Anything else
+  # is money going somewhere nobody planned, and must not read as routine gas.
+  @paymaster "0x5d74bdab1ce9ddadd7e2e333d1d173830860694a"
+
   defp destination_note(cfg, to) do
-    if String.downcase(to) == String.downcase(cfg.core),
-      do: "  (ACP Core -- the fee escrow)",
-      else: "  (gas: ERC-20 paymaster)"
+    core = String.downcase(cfg.core)
+
+    case String.downcase(to) do
+      ^core -> "  (ACP Core -- the fee escrow)"
+      @paymaster -> "  (gas: ERC-20 paymaster)"
+      _ -> "  (UNEXPECTED recipient -- neither the fee escrow nor the known paymaster)"
+    end
   end
 
   defp pad_topic("0x" <> addr),
@@ -534,10 +585,11 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   # -- Signer backends --
 
-  # B (default): Virtuals-delegated Privy signing via the Node sidecar; gas is
-  # Alchemy-sponsored. The buyer is the managed SCA agent. Needs (env, from op):
+  # B (default): Virtuals-delegated Privy signing via the Node sidecar. Gas is not
+  # free -- an ERC-20 paymaster fronts the ETH and charges the buyer in USDC per
+  # UserOp. The buyer is the managed SCA agent. Needs (env, from op):
   # RAXOL_ACP_WALLET_ADDRESS / RAXOL_ACP_WALLET_ID / RAXOL_ACP_SIGNER_PRIVATE_KEY
-  # (+ PRIVY_APP_ID). The intent is still signed locally as the SCA (EOA -> 1271).
+  # (+ PRIVY_APP_ID).
   defp build_signer("privy", from, rpc) do
     _ = fetch_env!("RAXOL_ACP_WALLET_ID")
     _ = fetch_env!("RAXOL_ACP_SIGNER_PRIVATE_KEY")
