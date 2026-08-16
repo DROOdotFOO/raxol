@@ -287,7 +287,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [raxol_gateway, raxol_telegram, raxol_cli]
+        # raxol_payments and raxol_earn move real money and were the two least
+        # gated packages in the repo: the Sma7702Wallet alias bug (#858) shipped
+        # with a compiler warning nobody could fail on, because nothing here ran
+        # them. Adding them required unbreaking both suites first -- see the PR.
+        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn]
 
     steps:
       - uses: actions/checkout@v7

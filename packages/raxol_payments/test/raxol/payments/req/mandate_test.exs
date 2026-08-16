@@ -55,8 +55,15 @@ defmodule Raxol.Payments.Req.MandateTest do
     |> ReqMandate.attach(agent_wallet: @agent)
   end
 
+  # `run_request/1` runs the ADAPTER as well as the steps, so without one this
+  # made a real HTTPS request to api.xochi.fi per test -- three Req retries each,
+  # and minutes of wall time on any network that cannot reach it. Only the
+  # OUTBOUND headers are under test here, so the transport is short-circuited.
+  # The tests that assert on responses use `plug: {Req.Test, __MODULE__}`.
+  defp offline(req), do: {req, %Req.Response{status: 200}}
+
   defp header_after_step(req) do
-    {ran, _resp} = Req.Request.run_request(req)
+    {ran, _resp} = Req.Request.run_request(%{req | adapter: &offline/1})
     Req.Request.get_header(ran, "x-xochi-delegation")
   end
 
