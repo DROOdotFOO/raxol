@@ -99,9 +99,9 @@ PAYMENTS_DIR="$REPO_ROOT/packages/raxol_payments"
 ACP_DIR="$REPO_ROOT/packages/raxol_earn"
 
 XOCHI_TEST="test/raxol/payments/xochi/live_xochi_test.exs"
-ORDER_TEST="test/raxol/acp/xochi/live_order_test.exs"
-RELAY_TEST="test/raxol/acp/relay/live_relay_test.exs"
-SOLVER_FEE_TEST="test/raxol/acp/xochi/solver_fee_live_test.exs"
+ORDER_TEST="test/raxol/earn/xochi/live_order_test.exs"
+RELAY_TEST="test/raxol/earn/relay/live_relay_test.exs"
+SOLVER_FEE_TEST="test/raxol/earn/xochi/solver_fee_live_test.exs"
 
 # --- defaults / env inputs ---
 ASSETS=""
