@@ -321,15 +321,6 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
-      # The root Format Check reads the root .formatter.exs, whose inputs cover
-      # only root lib/config/examples/test -- so before this step NO file under
-      # packages/ was format-checked anywhere in CI. Drift accumulated silently
-      # across formatter versions (25 files over three packages when this was
-      # added), and an unformatted file could pass a fully green run.
-      - name: Check formatting
-        working-directory: packages/${{ matrix.package }}
-        run: mix format --check-formatted
-
       - name: Compile package
         working-directory: packages/${{ matrix.package }}
         run: |
@@ -360,6 +351,16 @@ jobs:
             --exclude live_bundler \
             --exclude live_acp_dev \
             --exclude cli_signer
+
+      # Last, not first. The root Format Check reads the root .formatter.exs,
+      # whose inputs cover only root lib/config/examples/test, so before this
+      # step no file under packages/ was format-checked anywhere in CI (25 files
+      # over three packages had drifted). But this job is named "Package Tests"
+      # and two of its cells move real money: a red X here has to mean the tests
+      # ran, not that a line was two columns too wide before compile started.
+      - name: Check formatting
+        working-directory: packages/${{ matrix.package }}
+        run: mix format --check-formatted
 
   # The local terminal input path is BEAM/OTP-coupled: keystrokes arrive by
   # tracing prim_tty's reader (a private protocol). Every unit test fabricates
