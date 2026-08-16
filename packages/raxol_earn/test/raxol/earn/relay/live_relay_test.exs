@@ -36,7 +36,6 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
   @moduletag :live_relay
   @moduletag timeout: 300_000
 
-  @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   @usdt_tron "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
   if System.get_env("RELAY_LIVE_URL") && System.get_env("RELAY_LIVE_KEY") &&
@@ -153,11 +152,15 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
       store = Raxol.Payments.Checkpoint.ETS.new()
       context = Map.merge(context, %{checkpoint: store, idempotency_key: "live-relay-resume"})
 
+      # Resolve the source the same way the settle test does: a hardcoded origin
+      # token here deposits an asset the caller never selected.
+      {src_token, _label} = hd(source_cells(from_chain))
+
       params = %{
         amount: System.get_env("RELAY_LIVE_AMOUNT", "0.10"),
         from_chain_id: from_chain,
-        to_chain_id: 728_126_428,
-        from_token: System.get_env("RELAY_LIVE_FROM_TOKEN", @usdc_base),
+        to_chain_id: @tron,
+        from_token: src_token,
         to_token: to_token(),
         to_address: recipient!()
       }

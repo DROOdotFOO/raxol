@@ -399,7 +399,10 @@ run_relay() {
   export RELAY_LIVE_TO_ADDRESS="$to_addr"
 
   cd "$ACP_DIR"
-  log "relay settle: EVM($from_chain) $tok -> Tron USDT at $to_addr (REAL, broadcasts a deposit)..."
+  # The whole module runs, and the settle test and the resume test each broadcast
+  # one deposit of $tok -- which is what estimate_spend counts.
+  log "relay settle: EVM($from_chain) $tok -> Tron USDT at $to_addr"
+  log "              (REAL, broadcasts two deposits of $RELAY_AMOUNT: settle + resume)..."
   env MIX_ENV=test mix test --include live_relay "$RELAY_TEST"
 }
 
@@ -451,7 +454,8 @@ corridor_count() {
 }
 
 # Worst-case funded spend: per-corridor amount x corridor count over settling
-# cells (relay is a single corridor at RELAY_AMOUNT). This is a CEILING -- the
+# cells (relay is a single corridor at RELAY_AMOUNT, but its module broadcasts
+# two deposits: the settle test and the resume test). This is a CEILING -- the
 # tests settle only the fillable subset, so real spend is usually lower.
 estimate_spend() {
   local a r tok corr _p2 _pc eff n
@@ -462,7 +466,7 @@ estimate_spend() {
     for r in $ROUTE_LIST; do
       case "$r" in
         xochi|acp) n="$(corridor_count "$eff")"; pairs+=("$AMOUNT $n") ;;
-        relay)     [[ "$a" == "USDG" ]] && continue; pairs+=("$RELAY_AMOUNT 1") ;;
+        relay)     [[ "$a" == "USDG" ]] && continue; pairs+=("$RELAY_AMOUNT 2") ;;
       esac
     done
   done
@@ -483,7 +487,8 @@ confirm_funded() {
           if [[ "$a" == "USDG" ]]; then
             log "  $a / relay  -> skip (no Tron leg)"
           else
-            log "  $a / relay  -> Base $tok -> Tron USDT at ${GATE_TRON_ADDRESS:-<unset: cell skips>} (~$RELAY_AMOUNT)"
+            log "  $a / relay  -> Base $tok -> Tron USDT at ${GATE_TRON_ADDRESS:-<unset: cell skips>}"
+            log "                 two deposits of ~$RELAY_AMOUNT (settle + resume)"
           fi ;;
         fee) log "  $a / fee  -> take-rate check [$eff] (NO funds)" ;;
         *) log "  $a / $r  -> [$eff] token=$tok (~$AMOUNT/corridor)" ;;
