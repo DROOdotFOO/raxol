@@ -112,22 +112,21 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   @offering "xochi_crosschain"
   @sla_minutes 5
 
+  @switches [
+    amount: :string,
+    corridor: :string,
+    provider: :string,
+    fee_bps: :integer,
+    max_escrow: :string,
+    fund: :boolean,
+    dry_run: :boolean,
+    job_id: :integer,
+    signer: :string
+  ]
+
   @impl Mix.Task
   def run(argv) do
-    {opts, _, _} =
-      OptionParser.parse(argv,
-        strict: [
-          amount: :string,
-          corridor: :string,
-          provider: :string,
-          fee_bps: :integer,
-          max_escrow: :string,
-          fund: :boolean,
-          dry_run: :boolean,
-          job_id: :integer,
-          signer: :string
-        ]
-      )
+    opts = parse_argv(argv)
 
     Application.ensure_all_started(:raxol_earn)
 
@@ -159,6 +158,16 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     end
   end
 
+  @doc false
+  # Public only so the spend gate can be exercised against the flags an operator
+  # really types, rather than a hand-built keyword list that could drift from
+  # @switches.
+  @spec parse_argv([String.t()]) :: keyword()
+  def parse_argv(argv) do
+    {opts, _argv, _invalid} = OptionParser.parse(argv, strict: @switches)
+    opts
+  end
+
   # -- Orchestration --
 
   defp place(cfg, requirement, opts) do
@@ -181,15 +190,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     funding? = Keyword.get(opts, :fund, false)
 
     log("provider setBudget = #{budget} base units (#{realized_bps} bps)")
-
-    # The budget is the counterparty's number, and --fund approves and pays it.
-    # Over the ceiling it is refused rather than logged, but only when this run
-    # would actually spend it: without --fund the mismatch is just disclosure.
-    case {budget_verdict(cfg, budget, escrow_ceiling(cfg, opts)), funding?} do
-      {{:ok, line}, _} -> log(line)
-      {{:error, message}, false} -> log("WARN: " <> message)
-      {{:error, message}, true} -> Mix.raise(message)
-    end
+    enforce_budget!(cfg, budget, opts)
 
     log("job #{job_id} is live -- view it at https://app.virtuals.io/acp")
 
@@ -396,6 +397,24 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   end
 
   @doc false
+  # Public only so the whole gate -- ceiling, verdict and the --fund branch --
+  # can be exercised from parsed options without an on-chain run.
+  @spec enforce_budget!(map(), non_neg_integer(), keyword()) :: :ok
+  def enforce_budget!(cfg, budget, opts) do
+    cfg
+    |> budget_verdict(budget, escrow_ceiling(cfg, opts))
+    |> act_on_verdict(Keyword.get(opts, :fund, false))
+  end
+
+  defp act_on_verdict({:ok, line}, _funding?), do: log(line)
+
+  # An over-ceiling budget only threatens a run that would escrow it. Without
+  # --fund nothing is approved, so the mismatch is disclosure rather than cause
+  # to abandon a job that is already on chain.
+  defp act_on_verdict({:error, message}, false), do: log("WARN: " <> message)
+  defp act_on_verdict({:error, message}, true), do: Mix.raise(message)
+
+  @doc false
   # Public only so the ceiling decision can be tested without an on-chain run.
   @spec budget_verdict(map(), non_neg_integer(), non_neg_integer()) ::
           {:ok, String.t()} | {:error, String.t()}
@@ -414,9 +433,12 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       true ->
         {:error,
          "provider set budget #{budget} base units, above the #{ceiling} ceiling -- " <>
-           "refusing to fund. The ceiling is #{cfg.fee_bps} bps of --amount #{cfg.amount}; " <>
-           "on --job-id it does not describe the resumed job at all. Accept this budget " <>
-           "with --max-escrow <USDC>."}
+           "refusing to fund. The budget is what --fund approves and escrows, so a " <>
+           "provider that sets its own number is simply paid it. Either the offering's " <>
+           "fee changed, in which case re-run with a matching --fee-bps, or this " <>
+           "provider is not charging what it advertises. The ceiling is #{cfg.fee_bps} " <>
+           "bps of --amount #{cfg.amount}; on --job-id it does not describe the resumed " <>
+           "job at all. Accept this budget with --max-escrow <USDC>."}
     end
   end
 
