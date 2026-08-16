@@ -11,6 +11,22 @@
     "test/fixtures"
   ],
   line_length: 80,
+  # Each package carries its own .formatter.exs and formats at the 98-column
+  # default. Without delegation, a root-cwd `mix format packages/...` -- what an
+  # editor save does in a monorepo workspace -- rewraps those files at 80 and
+  # reverts exactly what the per-package CI gate blessed.
+  #
+  # This list tracks the `package-tests` matrix in .github/workflows/ci-unified.yml,
+  # which is the only place a package is format-gated. Widening it to `packages/*`
+  # pulls the ungated packages (169 files of pre-existing drift) into the root
+  # check, so a package joins here when it joins that matrix.
+  subdirectories: [
+    "packages/raxol_cli",
+    "packages/raxol_earn",
+    "packages/raxol_gateway",
+    "packages/raxol_payments",
+    "packages/raxol_telegram"
+  ],
   locals_without_parens: [
     # Phoenix
     action_fallback: 1,
