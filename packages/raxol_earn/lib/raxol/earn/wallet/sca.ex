@@ -164,8 +164,8 @@ defmodule Raxol.Earn.Wallet.SCA do
 
       @doc """
       Fill gas + paymaster data via the Alchemy gas manager, returning
-      a sponsored UserOp ready to sign and send. Requires
-      `:paymaster_policy_id` in config.
+      a sponsored UserOp ready to sign and send. Requires a
+      `:paymaster_policy_id`, from the compile-time config or the opts.
       """
       @spec sponsor(Raxol.Earn.Wallet.SCA.UserOp.t(), keyword()) ::
               {:ok, Raxol.Earn.Wallet.SCA.UserOp.t()} | {:error, term()}
@@ -181,26 +181,15 @@ defmodule Raxol.Earn.Wallet.SCA do
 
       @doc """
       One-shot gasless send: sponsor via the gas manager, then sign and
-      submit to the bundler. Requires `:paymaster_policy_id`.
+      submit to the bundler. Requires a `:paymaster_policy_id`, from the
+      compile-time config or the per-call opts.
       """
       @spec send_sponsored_user_operation(Raxol.Earn.Wallet.SCA.UserOp.t(), keyword()) ::
               {:ok, String.t()} | {:error, term()}
-      if unquote(paymaster_policy_id) do
-        def send_sponsored_user_operation(op, opts \\ []) do
-          with {:ok, sponsored} <- sponsor(op, opts) do
-            send_user_operation(sponsored, opts)
-          end
+      def send_sponsored_user_operation(op, opts \\ []) do
+        with {:ok, sponsored} <- sponsor(op, opts) do
+          send_user_operation(sponsored, opts)
         end
-      else
-        # Without a `:paymaster_policy_id` this wallet can never be sponsored:
-        # `SCA.sponsor/5` matches nil on its first clause and returns the error
-        # unconditionally. Generating the `with` anyway gives every policy-less
-        # instantiation an unreachable success branch, which the compiler
-        # correctly reports and `--warnings-as-errors` then fails on. The
-        # runtime contract is unchanged -- same error tuple, same arity -- the
-        # dead branch simply is not emitted.
-        def send_sponsored_user_operation(_op, _opts \\ []),
-          do: {:error, :no_paymaster_policy_id}
       end
 
       @doc "The configured EntryPoint address."
@@ -308,13 +297,13 @@ defmodule Raxol.Earn.Wallet.SCA do
           String.t(),
           keyword()
         ) :: {:ok, UserOp.t()} | {:error, term()}
-  def sponsor(_op, _url, nil, _entry_point, _opts), do: {:error, :no_paymaster_policy_id}
-
   def sponsor(op, paymaster_url, policy_id, entry_point, opts) do
-    configured = Keyword.get(opts, :paymaster_url, paymaster_url)
-
-    with {:ok, url} <- resolve_url(configured, :no_paymaster_url) do
-      Paymaster.sponsor(url, policy_id, entry_point, op, opts)
+    # Runtime opts override the compile-time config, as for the bundler URL:
+    # a policy id is usually only known to the deployment, not to the module.
+    with {:ok, id} <- resolve_policy_id(Keyword.get(opts, :paymaster_policy_id, policy_id)),
+         {:ok, url} <-
+           resolve_url(Keyword.get(opts, :paymaster_url, paymaster_url), :no_paymaster_url) do
+      Paymaster.sponsor(url, id, entry_point, op, opts)
     end
   end
 
@@ -350,6 +339,10 @@ defmodule Raxol.Earn.Wallet.SCA do
   end
 
   defp normalize_v(<<_::binary-size(64), _v::8>> = sig), do: sig
+
+  # An exported-but-empty env var reads as "", which is no policy at all.
+  defp resolve_policy_id(id) when is_binary(id) and id != "", do: {:ok, id}
+  defp resolve_policy_id(_absent), do: {:error, :no_paymaster_policy_id}
 
   # Resolve a URL that may be a literal string, a `{:system, var}`
   # env-var reference, or nil (returns the supplied error atom).

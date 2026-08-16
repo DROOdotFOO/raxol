@@ -440,17 +440,23 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   end
 
   # A (--signer sca): direct ERC-4337 -- the EOA session key signs UserOps,
-  # submitted to your own bundler + paymaster. Needs ORDER_BUNDLER_URL (and
-  # ORDER_PAYMASTER_POLICY for sponsorship, else the SCA must hold ETH).
+  # submitted to your own bundler + paymaster. Needs ORDER_BUNDLER_URL and
+  # ORDER_PAYMASTER_POLICY: the adapter only ever sends sponsored UserOps,
+  # so there is no unsponsored fallback to fall back to.
+  # Alchemy multiplexes bundler + gas manager on one URL.
   defp build_signer("sca", from, rpc) do
     bundler = fetch_env!("ORDER_BUNDLER_URL")
-    policy = System.get_env("ORDER_PAYMASTER_POLICY")
+    policy = fetch_env!("ORDER_PAYMASTER_POLICY")
 
     provider =
       ProviderAdapter.SCA.new(
         wallet: ScaWallet,
         chains: %{from => rpc},
-        wallet_opts: [bundler_url: bundler, paymaster_policy_id: policy]
+        wallet_opts: [
+          bundler_url: bundler,
+          paymaster_url: bundler,
+          paymaster_policy_id: policy
+        ]
       )
 
     {provider, @sca_account, ScaWallet}
