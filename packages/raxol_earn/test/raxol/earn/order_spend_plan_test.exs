@@ -10,8 +10,9 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
   An overstatement of ~175x.
 
   The accounting can misreport in its own right, so the same scrutiny applies to
-  it: an unread receipt must not print as a zero, and an unplanned recipient must
-  not print as routine gas.
+  it: an unread receipt must not print as a zero, an unplanned recipient must not
+  print as routine gas, and a resumed job's escrow must not be invented from
+  flags that job never saw.
   """
 
   use ExUnit.Case, async: true
@@ -34,7 +35,8 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
     }
   end
 
-  defp plan(opts), do: Order.spend_plan_lines(cfg(), opts) |> Enum.join("\n")
+  defp plan(opts, escrow \\ :new_job),
+    do: Order.spend_plan_lines(cfg(), opts, escrow) |> Enum.join("\n")
 
   defp actual(reads),
     do: Order.spend_actual_lines(cfg(), "approve+fund", reads) |> Enum.join("\n")
@@ -49,7 +51,7 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
     end
 
     test "scales with fee_bps" do
-      lines = Order.spend_plan_lines(%{cfg() | fee_bps: 100}, fund: true)
+      lines = Order.spend_plan_lines(%{cfg() | fee_bps: 100}, [fund: true], :new_job)
       # 100 bps of 3.000000 = 30000 atomic = 0.03.
       assert Enum.join(lines, "\n") =~ "0.03"
     end
@@ -95,7 +97,72 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
     end
 
     test "resuming an existing job drops the createJob leg" do
-      assert plan(job_id: 73_295, fund: true) =~ "UserOps this run: approve+fund"
+      assert plan([job_id: 73_295, fund: true], {:ok, 2_400}) =~ "UserOps this run: approve+fund"
+    end
+
+    test "a dry run names no UserOps at all" do
+      text = plan(dry_run: true, fund: true)
+
+      assert text =~ "SPEND PLAN"
+      assert text =~ "UserOps this run: none (--dry-run writes nothing on-chain)"
+      assert text =~ "spends nothing"
+    end
+  end
+
+  describe "resumed jobs" do
+    test "print the job's own on-chain budget, not the --amount/--fee-bps default" do
+      text = plan([job_id: 73_295, fund: true], {:ok, 5_000})
+
+      assert text =~ "escrow      0.005 ON-CHAIN"
+      assert text =~ "the resumed job's own budget"
+      # 8 bps of the default 3.00 has nothing to do with this job.
+      refute text =~ "0.0024 expected"
+    end
+
+    test "say so when the budget cannot be read, rather than inventing one" do
+      text = plan([job_id: 73_295, fund: true], :unreadable)
+
+      assert text =~ "escrow      UNKNOWN"
+      assert text =~ "could not read the resumed job's budget"
+      refute text =~ "0.0024 expected"
+    end
+
+    test "note that the flags do not describe the resumed job" do
+      assert plan([job_id: 73_295], {:ok, 5_000}) =~
+               "--amount/--fee-bps do not describe a resumed job"
+    end
+  end
+
+  describe "escrow ceiling" do
+    test "the plan names the ceiling --fund will refuse to exceed" do
+      assert plan(fund: true) =~ "refusing anything above 0.0024 (raise it with --max-escrow)"
+    end
+
+    test "--max-escrow raises the printed ceiling" do
+      assert plan(fund: true, max_escrow: "0.05") =~ "refusing anything above 0.05"
+    end
+
+    test "a budget matching the asserted take-rate passes" do
+      assert {:ok, line} = Order.budget_verdict(cfg(), 2_400, 2_400)
+      assert line =~ "OK: budget == 8 bps"
+    end
+
+    test "a budget under the ceiling passes with the mismatch named" do
+      assert {:ok, line} = Order.budget_verdict(cfg(), 2_000, 2_400)
+      assert line =~ "budget 2000 != expected 2400"
+      assert line =~ "within the ceiling 2400"
+    end
+
+    test "a budget over the ceiling is refused, not warned about" do
+      assert {:error, message} = Order.budget_verdict(cfg(), 2_000_000_000, 2_400)
+      assert message =~ "above the 2400 ceiling"
+      assert message =~ "refusing to fund"
+      assert message =~ "--max-escrow"
+    end
+
+    test "--max-escrow accepts a budget that would otherwise be refused" do
+      assert {:ok, line} = Order.budget_verdict(cfg(), 3_000_000, 3_000_000)
+      assert line =~ "within the ceiling 3000000"
     end
   end
 

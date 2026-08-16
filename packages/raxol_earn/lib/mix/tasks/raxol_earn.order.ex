@@ -19,7 +19,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     5. Poll `getJob(jobId).budget` until the provider sets it, and assert it is
        `fee_bps` of the principal.
     6. With `--fund`: approve + `fund(jobId, budget)` so the provider is paid and
-       settlement proceeds.
+       settlement proceeds. The provider writes that budget, so `--fund` refuses
+       anything above the `--fee-bps` take-rate unless `--max-escrow` raises the
+       ceiling.
 
   ## Signer backends (`--signer`)
 
@@ -43,8 +45,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   The PRINCIPAL does not move in this task's writes. The signed intent only
   AUTHORIZES the solver to pull up to that much during settlement, so a "3.00 USDC"
-  run costs ~0.0169 end to end, not 3.00. The task prints a spend plan before the
-  first write and receipt-derived actuals after each one.
+  run costs ~0.0169 end to end, not 3.00. The task prints a spend plan before it
+  does anything -- including under `--dry-run`, which is the mode you want the
+  plan in -- and receipt-derived actuals after each write.
 
   `--dry-run` stops after signing and spends nothing.
 
@@ -69,6 +72,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       --corridor F>T     origin>destination chain ids (default 8453>42161).
       --provider 0x..    the agent (seller) wallet to hire (default the raxol agent).
       --fee-bps N        expected take-rate to assert (default 8).
+      --max-escrow N     ceiling in USDC on what --fund will pay. Defaults to the
+                         --fee-bps take-rate; a larger on-chain budget is refused.
       --job-id N         resume an existing job (skip createJob).
       --fund             after budget is observed, fund the escrow + settle.
       --dry-run          sign only, no on-chain writes.
@@ -116,6 +121,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
           corridor: :string,
           provider: :string,
           fee_bps: :integer,
+          max_escrow: :string,
           fund: :boolean,
           dry_run: :boolean,
           job_id: :integer,
@@ -131,6 +137,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     log(
       "buyer=#{cfg.buyer}  provider=#{cfg.provider}  corridor=#{cfg.from}->#{cfg.to}  amount=#{cfg.amount} USDC"
     )
+
+    # Before anything, including under --dry-run: rehearsing a run is the reason
+    # the plan exists, so the costless mode must be the one that shows it.
+    print_plan(cfg, opts)
 
     # 1. Sign the Xochi intent (off-chain).
     bundle =
@@ -152,8 +162,6 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # -- Orchestration --
 
   defp place(cfg, requirement, opts) do
-    print_plan(cfg, opts)
-
     {agent, resolver} = start_buyer(cfg)
 
     # 2. createJob on-chain (or resume an existing job with --job-id).
@@ -167,22 +175,25 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     :ok = send_requirement(agent, cfg.from, job_id, requirement)
     log("requirement sent for job #{job_id}")
 
-    # 5. Watch the provider set the budget on-chain and assert the take-rate.
+    # 5. Watch the provider set the budget on-chain and enforce the take-rate.
     budget = await_budget(cfg, job_id)
-    expected = div(cfg.principal_atomic * cfg.fee_bps, 10_000)
     realized_bps = Float.round(budget / cfg.principal_atomic * 10_000, 3)
+    funding? = Keyword.get(opts, :fund, false)
 
     log("provider setBudget = #{budget} base units (#{realized_bps} bps)")
 
-    if budget == expected do
-      log("OK: budget == #{cfg.fee_bps} bps of the principal")
-    else
-      log("WARN: budget #{budget} != expected #{expected} (#{cfg.fee_bps} bps)")
+    # The budget is the counterparty's number, and --fund approves and pays it.
+    # Over the ceiling it is refused rather than logged, but only when this run
+    # would actually spend it: without --fund the mismatch is just disclosure.
+    case {budget_verdict(cfg, budget, escrow_ceiling(cfg, opts)), funding?} do
+      {{:ok, line}, _} -> log(line)
+      {{:error, message}, false} -> log("WARN: " <> message)
+      {{:error, message}, true} -> Mix.raise(message)
     end
 
     log("job #{job_id} is live -- view it at https://app.virtuals.io/acp")
 
-    if Keyword.get(opts, :fund, false), do: fund_job(cfg, job_id, budget)
+    if funding?, do: fund_job(cfg, job_id, budget)
   end
 
   defp create_and_resolve(cfg, resolver) do
@@ -254,44 +265,159 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   # -- Spend accounting --
 
-  # What this run CAN spend, printed before the first on-chain write. Every line
-  # is a bound or an expectation; actuals come from receipts afterwards.
+  # What this run CAN spend, printed before anything else happens. Every line is a
+  # bound or an expectation; actuals come from receipts afterwards.
   #
   # The principal is the trap. It is AUTHORIZED by the signed intent and pulled
   # later by the solver during settlement -- it does not move in this task's
   # writes. Reporting it as escrow overstates a $3.00 run by ~175x.
-  defp print_plan(cfg, opts), do: Enum.each(spend_plan_lines(cfg, opts), &log/1)
+  defp print_plan(cfg, opts) do
+    cfg
+    |> spend_plan_lines(opts, resume_escrow(cfg, opts))
+    |> Enum.each(&log/1)
+  end
+
+  # --amount and --fee-bps describe a job this run CREATES. On --job-id they
+  # describe nothing: whoever created that job set its budget. Read it instead of
+  # printing an expectation derived from flags the resumed job never saw.
+  defp resume_escrow(cfg, opts) do
+    with job_id when not is_nil(job_id) <- Keyword.get(opts, :job_id),
+         {:ok, budget} <- read_budget(cfg, job_id) do
+      {:ok, budget}
+    else
+      nil -> :new_job
+      :not_ready -> :unreadable
+    end
+  end
 
   @doc false
-  # Public only so it can be tested: the escrow arithmetic and the wording of
-  # the principal line are the two things this exists to get right.
-  @spec spend_plan_lines(map(), keyword()) :: [String.t()]
-  def spend_plan_lines(cfg, opts) do
+  # Public only so it can be tested: the escrow arithmetic, the enforced ceiling
+  # and the wording of the principal line are what this exists to get right.
+  @spec spend_plan_lines(map(), keyword(), :new_job | :unreadable | {:ok, non_neg_integer()}) ::
+          [String.t()]
+  def spend_plan_lines(cfg, opts, escrow) do
     decimals = Assets.decimals(cfg.from, cfg.src_token)
-    expected_escrow = div(cfg.principal_atomic * cfg.fee_bps, 10_000)
-    funding? = Keyword.get(opts, :fund, false)
 
+    ["SPEND PLAN -- buyer #{cfg.buyer} on chain #{cfg.from}, amounts in USDC"] ++
+      escrow_lines(cfg, decimals, escrow_ceiling(cfg, opts), escrow) ++
+      [
+        "  gas         charged in USDC from the buyer by an ERC-20 paymaster, NOT in ETH " <>
+          "and NOT free; priced per UserOp, known only from the receipt",
+        "             UserOps this run: #{userops(opts)}",
+        "  principal   #{cfg.amount} AUTHORIZED, not moved here -- the signed intent lets " <>
+          "the solver pull up to that during settlement"
+      ] ++ plan_footer(opts)
+  end
+
+  defp escrow_lines(cfg, decimals, ceiling, :new_job) do
+    [
+      "  escrow     ~#{Assets.to_human(expected_escrow(cfg), decimals)} expected " <>
+        "(#{cfg.fee_bps} bps of #{cfg.amount}) -> ACP Core #{cfg.core}",
+      "             the PROVIDER sets the real budget on-chain; --fund pays what it set, " <>
+        ceiling_note(ceiling, decimals)
+    ]
+  end
+
+  defp escrow_lines(cfg, decimals, ceiling, {:ok, budget}) do
+    [
+      "  escrow      #{Assets.to_human(budget, decimals)} ON-CHAIN -- the resumed job's own " <>
+        "budget -> ACP Core #{cfg.core}",
+      "             --amount/--fee-bps do not describe a resumed job; --fund pays it, " <>
+        ceiling_note(ceiling, decimals)
+    ]
+  end
+
+  defp escrow_lines(cfg, decimals, ceiling, :unreadable) do
+    [
+      "  escrow      UNKNOWN -- could not read the resumed job's budget on chain #{cfg.from}",
+      "             --amount/--fee-bps do not describe a resumed job; --fund pays what the " <>
+        "provider set, " <> ceiling_note(ceiling, decimals)
+    ]
+  end
+
+  defp ceiling_note(ceiling, decimals),
+    do:
+      "refusing anything above #{Assets.to_human(ceiling, decimals)} (raise it with --max-escrow)"
+
+  defp userops(opts) do
     legs =
       [
         if(Keyword.get(opts, :job_id), do: nil, else: "createJob"),
-        if(funding?, do: "approve+fund", else: nil)
+        if(Keyword.get(opts, :fund, false), do: "approve+fund", else: nil)
       ]
       |> Enum.reject(&is_nil/1)
 
-    [
-      "SPEND PLAN -- buyer #{cfg.buyer} on chain #{cfg.from}, amounts in USDC",
-      "  escrow     ~#{Assets.to_human(expected_escrow, decimals)} expected " <>
-        "(#{cfg.fee_bps} bps of #{cfg.amount}) -> ACP Core #{cfg.core}",
-      "             the PROVIDER sets the real budget on-chain; --fund pays what it set",
-      "  gas         charged in USDC from the buyer by an ERC-20 paymaster, NOT in ETH " <>
-        "and NOT free; priced per UserOp, known only from the receipt",
-      "             UserOps this run: #{Enum.join(legs, ", ")}",
-      "  principal   #{cfg.amount} AUTHORIZED, not moved here -- the signed intent lets " <>
-        "the solver pull up to that during settlement"
-    ] ++
-      if funding?,
-        do: [],
-        else: ["  (no --fund: no escrow this run, but the createJob UserOp still costs USDC gas)"]
+    describe_userops(Keyword.get(opts, :dry_run, false), legs)
+  end
+
+  defp describe_userops(true, _legs), do: "none (--dry-run writes nothing on-chain)"
+  defp describe_userops(false, []), do: "none"
+  defp describe_userops(false, legs), do: Enum.join(legs, ", ")
+
+  defp plan_footer(opts) do
+    footer(
+      Keyword.get(opts, :dry_run, false),
+      Keyword.get(opts, :fund, false),
+      Keyword.get(opts, :job_id) != nil
+    )
+  end
+
+  defp footer(true, _funding?, _resuming?),
+    do: ["  (--dry-run: signs the intent and stops, spends nothing)"]
+
+  defp footer(false, true, _resuming?), do: []
+
+  defp footer(false, false, false),
+    do: ["  (no --fund: no escrow this run, but the createJob UserOp still costs USDC gas)"]
+
+  defp footer(false, false, true),
+    do: ["  (no --fund and no createJob: this run writes nothing on-chain)"]
+
+  defp expected_escrow(cfg), do: div(cfg.principal_atomic * cfg.fee_bps, 10_000)
+
+  # The most --fund may pay. Default: the take-rate the operator asserted with
+  # --fee-bps, so a provider that writes a bigger budget on-chain cannot be paid
+  # without the operator naming the number.
+  defp escrow_ceiling(cfg, opts) do
+    case Keyword.get(opts, :max_escrow) do
+      nil -> expected_escrow(cfg)
+      human -> parse_max_escrow(human, Assets.decimals(cfg.from, cfg.src_token))
+    end
+  end
+
+  defp parse_max_escrow(human, decimals) do
+    case Decimal.parse(human) do
+      {value, ""} ->
+        Assets.to_atomic(value, decimals)
+
+      _ ->
+        Mix.raise("--max-escrow #{inspect(human)} is not a USDC amount (e.g. --max-escrow 0.05)")
+    end
+  end
+
+  @doc false
+  # Public only so the ceiling decision can be tested without an on-chain run.
+  @spec budget_verdict(map(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, String.t()} | {:error, String.t()}
+  def budget_verdict(cfg, budget, ceiling) do
+    expected = expected_escrow(cfg)
+
+    cond do
+      budget == expected ->
+        {:ok, "OK: budget == #{cfg.fee_bps} bps of the principal"}
+
+      budget <= ceiling ->
+        {:ok,
+         "budget #{budget} != expected #{expected} (#{cfg.fee_bps} bps), " <>
+           "within the ceiling #{ceiling}"}
+
+      true ->
+        {:error,
+         "provider set budget #{budget} base units, above the #{ceiling} ceiling -- " <>
+           "refusing to fund. The ceiling is #{cfg.fee_bps} bps of --amount #{cfg.amount}; " <>
+           "on --job-id it does not describe the resumed job at all. Accept this budget " <>
+           "with --max-escrow <USDC>."}
+    end
   end
 
   # What actually moved, decoded from receipts. Only USDC transfers OUT of the
