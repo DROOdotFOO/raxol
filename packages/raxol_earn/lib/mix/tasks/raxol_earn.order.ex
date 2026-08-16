@@ -27,16 +27,26 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   drives a managed SCA agent:
 
     * `privy` (default) -- Virtuals-delegated signing via the Node signer sidecar
-      (`priv/signer_sidecar`); gas is Alchemy-sponsored (no ETH needed). The buyer
-      is the managed SCA at `RAXOL_ACP_WALLET_ADDRESS`; the intent is signed locally
-      as that SCA (`ORDER_KEY` session key -> ERC-1271).
+      (`priv/signer_sidecar`). No ETH needed, but gas is NOT free: an ERC-20
+      paymaster fronts the ETH and charges the buyer in USDC on every UserOp
+      (~0.0075 observed on Base). The buyer is the managed SCA at
+      `RAXOL_ACP_WALLET_ADDRESS`; the intent is signed by the account's own
+      managed authority (`Sma7702Wallet` -> ERC-1271), not by a session key.
     * `sca` -- direct ERC-4337: the `ORDER_KEY` session key signs UserOps submitted
       to your own bundler + paymaster (`ORDER_BUNDLER_URL`, `ORDER_PAYMASTER_POLICY`).
     * `eoa` -- raw EOA from `ORDER_KEY`. NOT a registered agent (messaging 404s);
       on-chain-only testing.
 
-  MOVES REAL FUNDS on `--fund` (the fee escrow + the Xochi settlement pull). Gas is
-  sponsored under `privy`. `--dry-run` stops after signing (step 1).
+  MOVES REAL FUNDS. Every non-`--dry-run` run spends USDC, because each UserOp pays
+  its own gas in USDC. `--fund` adds the fee escrow: `fee_bps` of the principal,
+  ~0.0024 USDC at the 3.00/8bps default.
+
+  The PRINCIPAL does not move in this task's writes. The signed intent only
+  AUTHORIZES the solver to pull up to that much during settlement, so a "3.00 USDC"
+  run costs ~0.0169 end to end, not 3.00. The task prints a spend plan before the
+  first write and receipt-derived actuals after each one.
+
+  `--dry-run` stops after signing and spends nothing.
 
   ## Env
 
@@ -142,6 +152,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # -- Orchestration --
 
   defp place(cfg, requirement, opts) do
+    print_plan(cfg, opts)
+
     {agent, resolver} = start_buyer(cfg)
 
     # 2. createJob on-chain (or resume an existing job with --job-id).
@@ -186,6 +198,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       })
 
     log("createJob tx: #{explorer(cfg.from)}#{tx}")
+    report_actuals(cfg, "createJob", tx)
 
     job_id = await_job_id(resolver, cfg, tx)
     log("jobId: #{job_id}")
@@ -223,11 +236,114 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     case ProviderAdapter.send_calls(cfg.provider_adapter, cfg.from, calls) do
       {:ok, txs} ->
         log("funded (approve+fund batched): #{inspect(txs)} -- provider will settle + deliver")
+        report_actuals(cfg, "approve+fund", txs)
 
       err ->
         Mix.raise("fund failed: #{inspect(err)}")
     end
   end
+
+  # -- Spend accounting --
+
+  # What this run CAN spend, printed before the first on-chain write. Every line
+  # is a bound or an expectation; actuals come from receipts afterwards.
+  #
+  # The principal is the trap. It is AUTHORIZED by the signed intent and pulled
+  # later by the solver during settlement -- it does not move in this task's
+  # writes. Reporting it as escrow overstates a $3.00 run by ~175x.
+  defp print_plan(cfg, opts), do: Enum.each(spend_plan_lines(cfg, opts), &log/1)
+
+  @doc false
+  # Public only so it can be tested: the escrow arithmetic and the wording of
+  # the principal line are the two things this exists to get right.
+  @spec spend_plan_lines(map(), keyword()) :: [String.t()]
+  def spend_plan_lines(cfg, opts) do
+    decimals = Assets.decimals(cfg.from, cfg.src_token)
+    expected_escrow = div(cfg.principal_atomic * cfg.fee_bps, 10_000)
+    funding? = Keyword.get(opts, :fund, false)
+
+    legs =
+      [
+        if(Keyword.get(opts, :job_id), do: nil, else: "createJob"),
+        if(funding?, do: "approve+fund", else: nil)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    [
+      "SPEND PLAN -- buyer #{cfg.buyer} on chain #{cfg.from}, amounts in USDC",
+      "  escrow     ~#{Assets.to_human(expected_escrow, decimals)} expected " <>
+        "(#{cfg.fee_bps} bps of #{cfg.amount}) -> ACP Core #{cfg.core}",
+      "             the PROVIDER sets the real budget on-chain; --fund pays what it set",
+      "  gas         charged in USDC from the buyer by an ERC-20 paymaster, NOT in ETH " <>
+        "and NOT free; priced per UserOp, known only from the receipt",
+      "             UserOps this run: #{Enum.join(legs, ", ")}",
+      "  principal   #{cfg.amount} AUTHORIZED, not moved here -- the signed intent lets " <>
+        "the solver pull up to that during settlement"
+    ] ++
+      if funding?,
+        do: [],
+        else: ["  (no --fund: no escrow this run, but the createJob UserOp still costs USDC gas)"]
+  end
+
+  # What actually moved, decoded from receipts. Only USDC transfers OUT of the
+  # buyer count as spend; anything else in the tx is someone else's money.
+  @transfer_topic "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+  defp report_actuals(cfg, label, tx_hashes) do
+    client = Raxol.Earn.Onchain.RPC.client(url: cfg.rpc)
+    decimals = Assets.decimals(cfg.from, cfg.src_token)
+
+    transfers =
+      tx_hashes
+      |> List.wrap()
+      |> Enum.flat_map(&buyer_transfers(client, cfg, &1))
+
+    case transfers do
+      [] ->
+        log("SPEND ACTUAL (#{label}): no USDC left the buyer, or receipts not yet available")
+
+      transfers ->
+        total = transfers |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+
+        log("SPEND ACTUAL (#{label}): #{Assets.to_human(total, decimals)} USDC left the buyer")
+
+        Enum.each(transfers, fn {to, amount} ->
+          log("  #{Assets.to_human(amount, decimals)} -> #{to}#{destination_note(cfg, to)}")
+        end)
+    end
+  rescue
+    # Accounting must never take down a run that already moved money.
+    e -> log("SPEND ACTUAL (#{label}): could not read receipts (#{Exception.message(e)})")
+  end
+
+  defp buyer_transfers(client, cfg, tx_hash) do
+    case Raxol.Earn.Onchain.RPC.await_receipt(client, tx_hash, timeout_ms: 20_000) do
+      {:ok, %{"logs" => logs}} when is_list(logs) ->
+        buyer_topic = pad_topic(cfg.buyer)
+
+        for %{"address" => addr, "topics" => [topic0, from, to | _], "data" => data} <- logs,
+            String.downcase(addr) == String.downcase(cfg.src_token),
+            String.downcase(topic0) == @transfer_topic,
+            String.downcase(from) == buyer_topic do
+          {"0x" <> String.slice(to, -40, 40), parse_uint(data)}
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp destination_note(cfg, to) do
+    if String.downcase(to) == String.downcase(cfg.core),
+      do: "  (ACP Core -- the fee escrow)",
+      else: "  (gas: ERC-20 paymaster)"
+  end
+
+  defp pad_topic("0x" <> addr),
+    do: String.downcase("0x" <> String.duplicate("0", 24) <> addr)
+
+  defp parse_uint("0x" <> hex), do: String.to_integer(hex, 16)
+  defp parse_uint(_), do: 0
 
   # -- Steps --
 
