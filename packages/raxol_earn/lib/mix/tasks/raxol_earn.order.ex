@@ -573,10 +573,15 @@ defmodule Mix.Tasks.RaxolEarn.Order do
         address
 
       :error ->
+        # Read the table `address/2` reads. `Assets.supported_chain_ids/0` is the
+        # union over every symbol, so it also lists chains that carry USDG or WETH
+        # but no USDC -- naming those here sends the operator round the same error.
         supported =
-          Assets.supported_chain_ids()
-          |> Enum.map(&"#{&1} (#{Assets.chain_name(&1)})")
-          |> Enum.join(", ")
+          Assets.evm_tokens()
+          |> Map.fetch!("USDC")
+          |> Map.keys()
+          |> Enum.sort()
+          |> Enum.map_join(", ", &"#{&1} (#{Assets.chain_name(&1)})")
 
         Mix.raise("""
         no USDC address for the #{side} chain #{chain_id}.
