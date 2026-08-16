@@ -38,10 +38,22 @@ defmodule Raxol.Earn.Seller.Backend.WebSocketTest do
     pid
   end
 
+  # `whereis` then `stop` is a time-of-check/time-of-use race: the backend can
+  # exit on its own between the two (a reconnect giving up, or an on_exit from a
+  # prior test), and `GenServer.stop/1` on a dead pid exits the CALLER, failing
+  # a test that has already finished its assertions. Teardown wants "ensure it
+  # is not running", which a already-dead process satisfies.
   defp stop_if_running(name) do
     case Process.whereis(name) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
     end
   end
 

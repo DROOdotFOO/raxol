@@ -185,10 +185,22 @@ defmodule Raxol.Earn.Wallet.SCA do
       """
       @spec send_sponsored_user_operation(Raxol.Earn.Wallet.SCA.UserOp.t(), keyword()) ::
               {:ok, String.t()} | {:error, term()}
-      def send_sponsored_user_operation(op, opts \\ []) do
-        with {:ok, sponsored} <- sponsor(op, opts) do
-          send_user_operation(sponsored, opts)
+      if unquote(paymaster_policy_id) do
+        def send_sponsored_user_operation(op, opts \\ []) do
+          with {:ok, sponsored} <- sponsor(op, opts) do
+            send_user_operation(sponsored, opts)
+          end
         end
+      else
+        # Without a `:paymaster_policy_id` this wallet can never be sponsored:
+        # `SCA.sponsor/5` matches nil on its first clause and returns the error
+        # unconditionally. Generating the `with` anyway gives every policy-less
+        # instantiation an unreachable success branch, which the compiler
+        # correctly reports and `--warnings-as-errors` then fails on. The
+        # runtime contract is unchanged -- same error tuple, same arity -- the
+        # dead branch simply is not emitted.
+        def send_sponsored_user_operation(_op, _opts \\ []),
+          do: {:error, :no_paymaster_policy_id}
       end
 
       @doc "The configured EntryPoint address."

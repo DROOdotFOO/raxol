@@ -29,10 +29,34 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
     path |> File.read!() |> Jason.decode!()
   end
 
-  @doc "Filter the fixture by `\"protocol\"` field."
+  @doc """
+  Filter the fixture by `"protocol"` field.
+
+  Returns `[]` when the fixture is absent, rather than raising. The conformance
+  files call this at test-module COMPILE time (`for vec <- by_protocol(...)`
+  inside a `describe`), so the `:conformance` moduletag -- a runtime exclusion --
+  cannot save a raise here: the whole suite dies before a single test runs. That
+  is what kept `raxol_payments` out of CI, where riddler-client is not checked
+  out beside the repo.
+
+  The absence is announced rather than swallowed: generating zero vectors is
+  legitimate here, but it must not look like coverage that passed.
+  """
   @spec by_protocol(String.t()) :: [map()]
   def by_protocol(protocol) do
-    Enum.filter(load!(), &(&1["protocol"] == protocol))
+    case do_locate() do
+      nil ->
+        IO.puts(
+          :stderr,
+          "[conformance] fixture absent -- 0 #{protocol} vectors generated. " <>
+            "Set CONFORMANCE_FIXTURE_PATH or RIDDLER_CLI_DIR to run them."
+        )
+
+        []
+
+      _path ->
+        Enum.filter(load!(), &(&1["protocol"] == protocol))
+    end
   end
 
   @doc "Return the single vector with the given `\"name\"`."
