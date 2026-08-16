@@ -284,6 +284,10 @@ jobs:
     name: Package Tests (${{ matrix.package }})
     needs: setup
     runs-on: ubuntu-latest
+    # A backstop, not a budget: the suites finish in single-digit minutes. If a
+    # live test ever escapes its exclusion it blocks on a network call, and the
+    # default 6h job timeout would let it sit there.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -332,9 +336,30 @@ jobs:
           mix deps.get
           mix compile --warnings-as-errors
 
+      # The exclusions are stated here rather than left to each package's
+      # test_helper. raxol_payments computes its list from env-var PRESENCE, so a
+      # stray XOCHI_LIVE_URL anywhere in the workflow env drops :live_xochi and
+      # the live suite -- which compile-gates on the same one variable -- starts
+      # issuing requests on every PR, forks included. ExUnit unions these with
+      # the helper's list, so nothing here can un-exclude a tag.
       - name: Run package tests
         working-directory: packages/${{ matrix.package }}
-        run: mix test
+        run: |
+          mix test \
+            --exclude live_xochi \
+            --exclude live_xochi_matrix \
+            --exclude live_xochi_preflight \
+            --exclude live_xochi_order \
+            --exclude live_xochi_order_preflight \
+            --exclude live_xochi_order_settle \
+            --exclude live_relay \
+            --exclude live_property \
+            --exclude live_parity \
+            --exclude live_solver_fee \
+            --exclude live_chain \
+            --exclude live_bundler \
+            --exclude live_acp_dev \
+            --exclude cli_signer
 
   # The local terminal input path is BEAM/OTP-coupled: keystrokes arrive by
   # tracing prim_tty's reader (a private protocol). Every unit test fabricates
