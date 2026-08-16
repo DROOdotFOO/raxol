@@ -157,7 +157,8 @@ defmodule Raxol.Payments.Protocols.Permit2Test do
     end
 
     test "missing required field returns an error" do
-      bad_quote = put_in(@canonical_quote["gasless"], Map.delete(@canonical_quote["gasless"], "orderId"))
+      bad_quote =
+        put_in(@canonical_quote["gasless"], Map.delete(@canonical_quote["gasless"], "orderId"))
 
       assert {:error, {:missing_quote_field, :orderId}} =
                Permit2.sign_quote(bad_quote, 8453, StaticWallet)

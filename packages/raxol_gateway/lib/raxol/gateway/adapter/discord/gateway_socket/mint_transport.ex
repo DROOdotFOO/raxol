@@ -97,8 +97,7 @@ defmodule Raxol.Gateway.Adapter.Discord.GatewaySocket.MintTransport do
         {%{t | conn: conn, ws: ws}, [:upgraded | events]}
 
       {:error, conn, reason} ->
-        {%{t | conn: conn},
-         [{:transport_error, {:upgrade_failed, reason}} | events]}
+        {%{t | conn: conn}, [{:transport_error, {:upgrade_failed, reason}} | events]}
     end
   end
 

@@ -94,10 +94,8 @@ defmodule Raxol.Gateway.Adapter.Discord.GatewaySocket do
       transport: Keyword.get(opts, :transport, MintTransport),
       transport_opts: Keyword.get(opts, :transport_opts, []),
       parent: Keyword.get(opts, :parent),
-      reconnect_base_ms:
-        Keyword.get(opts, :reconnect_base_ms, @default_reconnect_base_ms),
-      reconnect_max_ms:
-        Keyword.get(opts, :reconnect_max_ms, @default_reconnect_max_ms),
+      reconnect_base_ms: Keyword.get(opts, :reconnect_base_ms, @default_reconnect_base_ms),
+      reconnect_max_ms: Keyword.get(opts, :reconnect_max_ms, @default_reconnect_max_ms),
       jitter_fn: Keyword.get(opts, :jitter_fn, &:rand.uniform/0),
       conn: nil,
       phase: :disconnected,

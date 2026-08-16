@@ -44,8 +44,7 @@ defmodule Raxol.Payments.Relay.LiveRelayTest do
       }
 
       request = %QuoteRequest{
-        transfer_id:
-          "live_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+        transfer_id: "live_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
         from_chain_id: env_int("RELAY_LIVE_FROM_CHAIN", 8453),
         to_chain_id: env_int("RELAY_LIVE_TO_CHAIN", 728_126_428),
         from_token: System.get_env("RELAY_LIVE_FROM_TOKEN", @usdc_base),

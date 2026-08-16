@@ -57,9 +57,7 @@ defmodule Raxol.Payments.PolicyGatePropertyTest do
       # Even with an always-:approve callback installed and an amount above
       # the threshold, an unapproved domain must deny on the domain reason.
       result =
-        PolicyGate.evaluate(policy, amount, attempted_host,
-          on_confirm: fn _, _ -> :approve end
-        )
+        PolicyGate.evaluate(policy, amount, attempted_host, on_confirm: fn _, _ -> :approve end)
 
       assert match?({:deny, {:domain_not_approved, _}}, result),
              "expected domain-deny for host #{attempted_host} not in #{approved_host}, got #{inspect(result)}"
@@ -85,9 +83,7 @@ defmodule Raxol.Payments.PolicyGatePropertyTest do
 
       assert match?(
                {:deny, {:domain_not_approved, _}},
-               PolicyGate.evaluate(policy, amount, attempted_host,
-                 on_confirm: canary
-               )
+               PolicyGate.evaluate(policy, amount, attempted_host, on_confirm: canary)
              )
     end
   end

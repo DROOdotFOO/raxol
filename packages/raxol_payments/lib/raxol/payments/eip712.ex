@@ -63,10 +63,7 @@ defmodule Raxol.Payments.EIP712 do
     with {:ok, domain_separator} <-
            hash_struct("EIP712Domain", domain, eip712_domain_types(domain)),
          {:ok, message_hash} <- hash_struct(primary_type(types), message, types) do
-      {:ok,
-       ExKeccak.hash_256(
-         <<0x19, 0x01, domain_separator::binary, message_hash::binary>>
-       )}
+      {:ok, ExKeccak.hash_256(<<0x19, 0x01, domain_separator::binary, message_hash::binary>>)}
     end
   end
 
@@ -119,8 +116,7 @@ defmodule Raxol.Payments.EIP712 do
   # (an EIP-155 chain-encoded v, or a buggy signer) would silently pack a
   # non-recovering signature, so fail loud rather than emit one.
   defp canonical_v(v),
-    do:
-      raise(ArgumentError, "non-canonical secp256k1 recovery id: #{inspect(v)}")
+    do: raise(ArgumentError, "non-canonical secp256k1 recovery id: #{inspect(v)}")
 
   # EIP-712 defines exactly five domain fields, in this order: name, version,
   # chainId, verifyingContract, salt. Only the keys present in the domain map are

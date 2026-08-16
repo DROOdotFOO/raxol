@@ -15,9 +15,7 @@ defmodule Raxol.Payments.Eip191 do
   """
   @spec digest(binary()) :: binary()
   def digest(message) when is_binary(message) do
-    ExKeccak.hash_256(
-      @prefix <> Integer.to_string(byte_size(message)) <> message
-    )
+    ExKeccak.hash_256(@prefix <> Integer.to_string(byte_size(message)) <> message)
   end
 
   @doc """
