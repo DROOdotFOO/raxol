@@ -184,8 +184,7 @@ defmodule Raxol.Payments.EchoServer do
       "payTo" => Keyword.fetch!(opts, :pay_to),
       "asset" => Keyword.fetch!(opts, :asset),
       "network" => Keyword.fetch!(opts, :network),
-      "nonce" =>
-        "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
+      "nonce" => "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
       "validAfter" => 0,
       "validBefore" => System.system_time(:second) + 3600
     }
@@ -193,8 +192,7 @@ defmodule Raxol.Payments.EchoServer do
 
   defp build_receipt(payload) do
     %{
-      "transactionHash" =>
-        "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
+      "transactionHash" => "0x" <> Base.encode16(:crypto.strong_rand_bytes(32), case: :lower),
       "network" => payload["network"],
       "success" => true,
       "settledBy" => "echo_server"

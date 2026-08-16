@@ -197,9 +197,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
     signer =
       opts[:deposit_attestation_signer] ||
         Application.get_env(:raxol_payments, :xochi_deposit_attestation_signer) ||
-        Capabilities.deposit_attestation_signer(
-          deposit_capabilities(config, opts)
-        )
+        Capabilities.deposit_attestation_signer(deposit_capabilities(config, opts))
 
     case signer do
       s when is_binary(s) and s != "" -> {:ok, s}
@@ -615,7 +613,8 @@ defmodule Raxol.Payments.Protocols.Xochi do
   defp sign_pull_authorization(
          %QuoteResponse{pull_authorization: nil},
          _wallet
-       ), do: {:ok, nil}
+       ),
+       do: {:ok, nil}
 
   defp sign_pull_authorization(%QuoteResponse{pull_authorization: pull}, wallet) do
     domain = eip712_domain(pull)
@@ -691,11 +690,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
     message = pull["message"] || %{}
 
     first_mismatch([
-      {:pull_type,
-       valid_envelope?(pull, @erc3009_primary_type, @erc3009_fields)},
+      {:pull_type, valid_envelope?(pull, @erc3009_primary_type, @erc3009_fields)},
       {:pull_from, addr_match?(message["from"], signer)},
-      {:pull_token,
-       addr_match?(domain["verifyingContract"], request.from_token)},
+      {:pull_token, addr_match?(domain["verifyingContract"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(message["value"], request.from_amount)},
       {:pull_to, solver_allowed?(message["to"], :erc3009)},
@@ -716,8 +713,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
     permitted = message["permitted"] || %{}
 
     first_mismatch([
-      {:pull_type,
-       valid_envelope?(pull, @permit2_primary_type, @permit2_fields)},
+      {:pull_type, valid_envelope?(pull, @permit2_primary_type, @permit2_fields)},
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(permitted["amount"], request.from_amount)},
@@ -788,9 +784,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
     do: Application.get_env(:raxol_payments, :pull_require_solver_pin, false)
 
   defp solver_allowlist do
-    normalize_solver_list(
-      Application.get_env(:raxol_payments, :pull_solver_allowlist, [])
-    )
+    normalize_solver_list(Application.get_env(:raxol_payments, :pull_solver_allowlist, []))
   end
 
   defp normalize_solver_list(list) do

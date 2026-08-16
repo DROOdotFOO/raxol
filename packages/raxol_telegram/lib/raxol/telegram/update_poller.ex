@@ -95,10 +95,8 @@ defmodule Raxol.Telegram.UpdatePoller do
     state = %{
       conn: Keyword.get(opts, :conn, []),
       on_update: Keyword.fetch!(opts, :on_update),
-      poll_timeout_s:
-        Keyword.get(opts, :poll_timeout_s, @default_poll_timeout_s),
-      allowed_updates:
-        Keyword.get(opts, :allowed_updates, @default_allowed_updates),
+      poll_timeout_s: Keyword.get(opts, :poll_timeout_s, @default_poll_timeout_s),
+      allowed_updates: Keyword.get(opts, :allowed_updates, @default_allowed_updates),
       offset: load_offset(dets),
       dets: dets,
       failures: 0,

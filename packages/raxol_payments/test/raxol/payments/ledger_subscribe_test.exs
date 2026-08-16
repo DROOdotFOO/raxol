@@ -6,9 +6,7 @@ defmodule Raxol.Payments.LedgerSubscribeTest do
   describe "freeze/unfreeze" do
     setup do
       {:ok, ledger} =
-        Ledger.start_link(
-          table_name: :"frz_ledger_#{:erlang.unique_integer([:positive])}"
-        )
+        Ledger.start_link(table_name: :"frz_ledger_#{:erlang.unique_integer([:positive])}")
 
       on_exit(fn ->
         try do
@@ -64,9 +62,7 @@ defmodule Raxol.Payments.LedgerSubscribeTest do
   describe "telemetry events" do
     setup do
       {:ok, ledger} =
-        Ledger.start_link(
-          table_name: :"tel_ledger_#{:erlang.unique_integer([:positive])}"
-        )
+        Ledger.start_link(table_name: :"tel_ledger_#{:erlang.unique_integer([:positive])}")
 
       handler_id = :"telemetry_test_#{:erlang.unique_integer([:positive])}"
       parent = self()
@@ -103,8 +99,7 @@ defmodule Raxol.Payments.LedgerSubscribeTest do
           %{protocol: "x402"}
         )
 
-      assert_receive {:telemetry, [:raxol, :payments, :spend], measurements,
-                      metadata}
+      assert_receive {:telemetry, [:raxol, :payments, :spend], measurements, metadata}
 
       assert Decimal.equal?(measurements.amount, Decimal.new("0.10"))
       assert metadata.agent_id == :tel_a
@@ -122,8 +117,7 @@ defmodule Raxol.Payments.LedgerSubscribeTest do
       assert {:over_limit, :per_request} =
                Ledger.try_spend(ledger, :tel_b, Decimal.new("1.00"), policy)
 
-      assert_receive {:telemetry, [:raxol, :payments, :over_budget],
-                      measurements, metadata}
+      assert_receive {:telemetry, [:raxol, :payments, :over_budget], measurements, metadata}
 
       assert Decimal.equal?(measurements.amount, Decimal.new("1.00"))
       assert metadata.limit_type == :per_request
@@ -140,28 +134,23 @@ defmodule Raxol.Payments.LedgerSubscribeTest do
                  SpendingPolicy.unrestricted()
                )
 
-      assert_receive {:telemetry, [:raxol, :payments, :over_budget], _,
-                      %{limit_type: :frozen}}
+      assert_receive {:telemetry, [:raxol, :payments, :over_budget], _, %{limit_type: :frozen}}
     end
 
     test "emits :freeze event on freeze/unfreeze", %{ledger: ledger} do
       :ok = Ledger.freeze(ledger)
 
-      assert_receive {:telemetry, [:raxol, :payments, :freeze], _,
-                      %{frozen?: true}}
+      assert_receive {:telemetry, [:raxol, :payments, :freeze], _, %{frozen?: true}}
 
       :ok = Ledger.unfreeze(ledger)
 
-      assert_receive {:telemetry, [:raxol, :payments, :freeze], _,
-                      %{frozen?: false}}
+      assert_receive {:telemetry, [:raxol, :payments, :freeze], _, %{frozen?: false}}
     end
   end
 
   setup do
     {:ok, ledger} =
-      Ledger.start_link(
-        table_name: :"sub_ledger_#{:erlang.unique_integer([:positive])}"
-      )
+      Ledger.start_link(table_name: :"sub_ledger_#{:erlang.unique_integer([:positive])}")
 
     on_exit(fn ->
       try do

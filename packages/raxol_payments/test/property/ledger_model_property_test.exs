@@ -85,10 +85,7 @@ defmodule Raxol.Payments.LedgerModelPropertyTest do
   property "Ledger outcomes match the pure-Elixir reference model" do
     check all(cmds <- commands()) do
       ledger =
-        case Ledger.start_link(
-               table_name:
-                 :"model_ledger_#{:erlang.unique_integer([:positive])}"
-             ) do
+        case Ledger.start_link(table_name: :"model_ledger_#{:erlang.unique_integer([:positive])}") do
           {:ok, pid} -> pid
           {:error, {:already_started, pid}} -> pid
         end

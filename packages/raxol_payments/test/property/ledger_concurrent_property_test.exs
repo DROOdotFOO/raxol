@@ -64,9 +64,7 @@ defmodule Raxol.Payments.LedgerConcurrentPropertyTest do
             lifetime <- integer(50..200)
           ) do
       ledger =
-        case Ledger.start_link(
-               table_name: :"conc_ledger_#{:erlang.unique_integer([:positive])}"
-             ) do
+        case Ledger.start_link(table_name: :"conc_ledger_#{:erlang.unique_integer([:positive])}") do
           {:ok, pid} -> pid
           {:error, {:already_started, pid}} -> pid
         end
@@ -100,9 +98,7 @@ defmodule Raxol.Payments.LedgerConcurrentPropertyTest do
             amount <- integer(1..10)
           ) do
       ledger =
-        case Ledger.start_link(
-               table_name: :"frz_conc_#{:erlang.unique_integer([:positive])}"
-             ) do
+        case Ledger.start_link(table_name: :"frz_conc_#{:erlang.unique_integer([:positive])}") do
           {:ok, pid} -> pid
           {:error, {:already_started, pid}} -> pid
         end

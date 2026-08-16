@@ -126,7 +126,9 @@ defmodule Raxol.Payments.PolicyGateTest do
                PolicyGate.evaluate(
                  policy,
                  Decimal.new("10.00"),
-                 "api.example.com", on_confirm: callback)
+                 "api.example.com",
+                 on_confirm: callback
+               )
 
       assert_received {:saw, %Decimal{} = amount, "api.example.com"}
       assert Decimal.equal?(amount, Decimal.new("10.00"))

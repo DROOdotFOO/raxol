@@ -44,8 +44,7 @@ defmodule Raxol.Telegram.UpdatePollerTest do
   defp respond(pid, result) do
     send(
       pid,
-      {:respond,
-       {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}}}
+      {:respond, {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}}}
     )
   end
 

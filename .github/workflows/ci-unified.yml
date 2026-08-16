@@ -317,6 +317,15 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
+      # The root Format Check reads the root .formatter.exs, whose inputs cover
+      # only root lib/config/examples/test -- so before this step NO file under
+      # packages/ was format-checked anywhere in CI. Drift accumulated silently
+      # across formatter versions (25 files over three packages when this was
+      # added), and an unformatted file could pass a fully green run.
+      - name: Check formatting
+        working-directory: packages/${{ matrix.package }}
+        run: mix format --check-formatted
+
       - name: Compile package
         working-directory: packages/${{ matrix.package }}
         run: |

@@ -106,9 +106,7 @@ defmodule Raxol.Payments.GateParityTest do
 
   defp hook_decision(%{policy: policy, amount: amount, host: host}) do
     {:ok, ledger} =
-      Ledger.start_link(
-        table_name: :"parity_hook_#{:erlang.unique_integer([:positive])}"
-      )
+      Ledger.start_link(table_name: :"parity_hook_#{:erlang.unique_integer([:positive])}")
 
     try do
       SpendingHook.set_config(%{ledger: ledger, policy: policy})
@@ -136,9 +134,7 @@ defmodule Raxol.Payments.GateParityTest do
 
   defp auto_pay_decision(%{policy: policy, amount: amount, host: host}) do
     {:ok, ledger} =
-      Ledger.start_link(
-        table_name: :"parity_auto_#{:erlang.unique_integer([:positive])}"
-      )
+      Ledger.start_link(table_name: :"parity_auto_#{:erlang.unique_integer([:positive])}")
 
     Process.put(:wallet_signal_target, self())
 

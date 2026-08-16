@@ -85,8 +85,6 @@ defmodule Raxol.Payments.Accounting do
 
   @spec price_source() :: atom()
   defp price_source do
-    String.to_atom(
-      System.get_env("RAXOL_PRICE_SOURCE") || @default_price_source
-    )
+    String.to_atom(System.get_env("RAXOL_PRICE_SOURCE") || @default_price_source)
   end
 end
