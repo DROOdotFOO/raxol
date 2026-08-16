@@ -123,7 +123,11 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     )
 
     # 1. Sign the Xochi intent (off-chain).
-    {:ok, bundle} = sign_intent(cfg)
+    bundle =
+      case sign_intent(cfg) do
+        {:ok, bundle} -> bundle
+        {:error, reason} -> Mix.raise(sign_intent_error(reason))
+      end
     requirement = requirement(cfg, bundle)
     log("signed Xochi intent: #{bundle[:intent_id] || bundle["intent_id"]}")
 
@@ -532,6 +536,32 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       v -> v
     end
   end
+
+  # A bare `{:ok, _} =` here reported a transport failure as a MatchError on a
+  # Req struct, which reads like a Xochi outage. It is more often the local
+  # network: some ISPs null-route whole Cloudflare ranges, and api.xochi.fi
+  # resolves into one (188.114.96.0/20). Observed on Vodafone ES -- port 80 is
+  # intercepted with an "Acceso bloqueado" page and 443 is dropped, so every
+  # request dies at connect with no HTTP status to explain itself.
+  defp sign_intent_error(%{__struct__: Req.TransportError, reason: reason}) do
+    """
+    could not reach the Xochi API (transport #{inspect(reason)}).
+
+    This is usually the network path, not Xochi. Check, in order:
+
+      nc -z api.xochi.fi 443          # dropped => blocked upstream, not down
+      curl -sI http://api.xochi.fi    # a non-Cloudflare page here => intercepted
+      curl -s "https://r.jina.ai/https://xochi.fi"   # answers => the API is fine
+
+    A control host only proves anything if it shares the blocked IP range;
+    cloudflare.com and other Cloudflare sites sit elsewhere and will pass while
+    this one fails. Route around it with a VPN or an exit node in another
+    country. Confirm from off-network before reporting an outage upstream.
+    """
+  end
+
+  defp sign_intent_error(reason),
+    do: "could not sign the Xochi intent: #{inspect(reason)}"
 
   @explorers %{
     1 => "https://etherscan.io/tx/",
