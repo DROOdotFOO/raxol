@@ -132,12 +132,13 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
       end
     end
 
-    # Only order a cell the solver can fill now, and (for USDT/WETH) only once the
-    # Permit2 allowance is in place. A non-fillable cell or a missing RPC is a
-    # logged skip, not a failure -- this is the fillable subset.
+    # Only order a cell the solver can fill now, and -- when the served quote
+    # pulls via Permit2 -- only once that allowance is in place. A non-fillable
+    # cell or a missing RPC is a logged skip, not a failure: this is the fillable
+    # subset.
     defp run_fillable_cell(cfg, from, to, token, label) do
-      with {:ok, _quote} <- preflight_quote(cfg, from, to, token),
-           {:ok, _allowance} <- ensure_permit2(from, token, cfg.wallet_address) do
+      with {:ok, quote_resp} <- preflight_quote(cfg, from, to, token),
+           {:ok, _allowance} <- ensure_permit2(quote_resp, from, token, cfg.wallet_address) do
         order_cell(cfg, from, to, token, label)
       else
         {:error, reason} -> log("SKIP #{label}: #{inspect(reason)}; no funds moved")
@@ -276,21 +277,23 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
       end
     end
 
-    # -- Permit2 allowance (USDT/WETH only) --
+    # -- Permit2 allowance --
 
-    defp ensure_permit2(from, token, owner) do
-      if permit2_origin?(from, token) do
-        with {:ok, provider} <- provider_for(from),
-             {:ok, src_token} <- Assets.address(from, leg_symbol(from, token)) do
-          Permit2Approver.ensure_allowance(provider, from, src_token, owner)
-        else
-          :error -> {:error, {:unknown_token, token}}
-          {:error, _} = err -> err
-        end
+    # Keyed on the SERVED quote's rail, not on the token: an EOA buyer pulls USDC
+    # through ERC-3009 and holds no allowance, while a smart-account (ERC-1271)
+    # buyer pulls the same USDC through Permit2 and must. USDT, WETH and USDG take
+    # Permit2 whoever the buyer is, and the quote says so either way.
+    defp ensure_permit2(%{payment_method: "permit2"}, from, token, owner) do
+      with {:ok, provider} <- provider_for(from),
+           {:ok, src_token} <- Assets.address(from, leg_symbol(from, token)) do
+        Permit2Approver.ensure_allowance(provider, from, src_token, owner)
       else
-        {:ok, :not_needed}
+        :error -> {:error, {:unknown_token, token}}
+        {:error, _} = err -> err
       end
     end
+
+    defp ensure_permit2(_quote_resp, _from, _token, _owner), do: {:ok, :not_needed}
 
     defp provider_for(chain) do
       case System.get_env("XOCHI_ORDER_RPC_#{chain}") do
@@ -361,12 +364,6 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
 
     defp amount_for("WETH", _stable), do: System.get_env("XOCHI_ORDER_WETH_AMOUNT", "0.001")
     defp amount_for(_token, stable), do: stable
-
-    # The origin pull rail: USDC pulls via ERC-3009, everything else (USDT, WETH,
-    # and Robinhood's USDG) via Permit2. Keyed on the ORIGIN leg's resolved token,
-    # so a Robinhood-origin corridor (USDG) needs a Permit2 allowance even when the
-    # logical corridor token is USDC.
-    defp permit2_origin?(from, token), do: String.upcase(leg_symbol(from, token)) != "USDC"
 
     # Robinhood Chain (4663) carries no USDC/USDT: its only stablecoin is USDG. A
     # stablecoin corridor touching 4663 is therefore cross-asset (USDG on the
