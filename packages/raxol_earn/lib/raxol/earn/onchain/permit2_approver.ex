@@ -3,11 +3,21 @@ defmodule Raxol.Earn.Onchain.Permit2Approver do
   On-chain ERC-20 Permit2 allowance management, backed by raxol_earn's EVM
   transaction stack.
 
-  A Xochi cross-chain transfer of USDT or WETH pulls the origin funds through
-  the universal Permit2 contract, which requires a standing ERC-20 allowance the
-  origin wallet must grant once per token per chain. (USDC pulls via ERC-3009 and
-  needs no allowance.) This module reads the current allowance and, when it is
-  short, broadcasts a max `approve(Permit2, uint256.max)` so the pull lands.
+  A Xochi cross-chain transfer whose origin pull is Permit2 collects the funds
+  through the universal Permit2 contract, which requires an ERC-20 allowance the
+  origin wallet grants beforehand. This module reads the current allowance and,
+  when it is short, broadcasts an `approve(Permit2, amount)` so the pull lands.
+
+  Which transfers take that rail is a property of the quote, not of the token: an
+  EOA buyer pulls USDC via ERC-3009 (no allowance), while a smart-account
+  (ERC-1271) buyer pulls the same USDC via Permit2. Read the rail from the
+  quote's `payment_method` -- `Raxol.Earn.Xochi.OriginPull` does that, and is the
+  caller most orders should go through.
+
+  `:amount` defaults to `uint256.max`, the conventional standing Permit2 approval.
+  An agent ordering through `OriginPull` never takes that default: it passes the
+  one intent's authorized pull, so a bad signature cannot reach more of the
+  balance than the run was already spending.
 
   It lives in raxol_earn (not raxol_payments) for the same reason as
   `Raxol.Earn.Relay.OnchainBroadcaster`: this is where the proven EIP-1559 signing
@@ -30,11 +40,17 @@ defmodule Raxol.Earn.Onchain.Permit2Approver do
           Raxol.Earn.ProviderAdapter.get_address(provider)
         )
 
-  The EOA behind `provider` (the JSON-RPC `ProviderAdapter`) must be the origin
-  wallet that signs the Xochi Permit2 authorization, since that is the address
-  Permit2 pulls from. In the storefront model the BUYER signs and holds this
-  allowance (raxol relays the buyer's signed intent and never pulls), so pass the
-  buyer's wallet here -- not the storefront/ACP-provider wallet.
+  `provider` is any `Raxol.Earn.ProviderAdapter`: the allowance is read with
+  `read_contract/3` and granted with `send_calls/3`, both of which every adapter
+  implements. A smart-account provider therefore works and is the primary case --
+  `ProviderAdapter.Privy` grants the approval as a sponsored UserOp from the
+  managed 7702 account, no EOA involved.
+
+  Whatever the provider, its account must be the origin wallet that signs the
+  Xochi Permit2 authorization, since that is the address Permit2 pulls from. In
+  the storefront model the BUYER signs and holds this allowance (raxol relays the
+  buyer's signed intent and never pulls), so pass the buyer's wallet here -- not
+  the storefront/ACP-provider wallet.
   """
 
   alias Raxol.Earn.{ABI, ProviderAdapter}

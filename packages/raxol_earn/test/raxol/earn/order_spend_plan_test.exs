@@ -22,7 +22,9 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
   @core "0x238E541BfefD82238730D00a2208E5497F1832E0"
   @paymaster "0x5d74bdab1ce9ddadd7e2e333d1d173830860694a"
 
-  # 3.00 USDC on Base at the default 8 bps.
+  @spender "0xE9B020941015e428876f60C1979B3fc2A38a2f53"
+
+  # 3.00 USDC on Base at the default 8 bps, under the default managed-SCA signer.
   defp cfg do
     %{
       buyer: "0x468aeae798b3a6548ac2401d276f83afdc172283",
@@ -31,7 +33,9 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
       core: @core,
       amount: "3.00",
       principal_atomic: 3_000_000,
-      fee_bps: 8
+      fee_bps: 8,
+      signer: "privy",
+      solver: nil
     }
   end
 
@@ -75,8 +79,19 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
       refute text =~ "sponsored"
     end
 
+    test "an EOA run says ETH, since no paymaster bills it USDC" do
+      lines = Order.spend_plan_lines(%{cfg() | signer: "eoa"}, [fund: true], :new_job)
+      text = Enum.join(lines, "\n")
+
+      assert text =~ "paid in ETH by the buyer EOA"
+      assert text =~ "NOT in USDC"
+      # An EOA broadcasts plain transactions; calling them UserOps sends the
+      # operator looking for a paymaster charge that never appears.
+      refute text =~ "UserOp"
+    end
+
     test "the funding log line does not contradict the plan" do
-      line = Order.funding_line(72_993)
+      line = Order.funding_line(72_993, :not_needed)
 
       refute line =~ "sponsored"
       assert line =~ "gas billed to the buyer in USDC"
@@ -84,28 +99,96 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
   end
 
   describe "legs" do
-    test "a funded run names both UserOps" do
-      assert plan(fund: true) =~ "UserOps this run: createJob, approve+fund"
+    test "a funded run names every write, the carried approve included" do
+      assert plan(fund: true) =~
+               "writes this run: createJob, approve+fund " <>
+                 "(carrying the approve(Permit2) if the pull needs it)"
     end
 
     test "an unfunded run still warns that createJob costs gas" do
       text = plan([])
 
-      assert text =~ "UserOps this run: createJob"
+      assert text =~ "writes this run: createJob"
       assert text =~ "no --fund: no escrow this run"
-      assert text =~ "still costs USDC gas"
+      assert text =~ "still costs gas"
     end
 
     test "resuming an existing job drops the createJob leg" do
-      assert plan([job_id: 73_295, fund: true], {:ok, 2_400}) =~ "UserOps this run: approve+fund"
+      assert plan([job_id: 73_295, fund: true], {:ok, 2_400}) =~
+               "writes this run: approve+fund (carrying the approve(Permit2) if the pull needs it)"
     end
 
-    test "a dry run names no UserOps at all" do
+    test "a resumed unfunded run claims no writes, because it can make none" do
+      text = plan([job_id: 73_295], {:ok, 2_400})
+
+      # The approve now rides in the funding batch, so without --fund and without
+      # createJob there is nothing left to broadcast. Naming the approve as a leg
+      # here would promise a write this run cannot make.
+      assert text =~ "writes this run: none (without --fund and without createJob"
+      assert text =~ "this run signs an intent and broadcasts nothing"
+      assert text =~ "stays unexecutable"
+    end
+
+    test "a dry run names no writes at all" do
       text = plan(dry_run: true, fund: true)
 
       assert text =~ "SPEND PLAN"
-      assert text =~ "UserOps this run: none (--dry-run writes nothing on-chain)"
+      assert text =~ "writes this run: none (--dry-run writes nothing on-chain)"
       assert text =~ "spends nothing"
+    end
+  end
+
+  describe "the Permit2 approve" do
+    test "is named as riding inside the funding write, not as one of its own" do
+      text = plan(fund: true)
+
+      assert text =~ "rides INSIDE the approve+fund UserOp"
+      assert text =~ "no separate write, no extra gas"
+      assert text =~ "the buyer's allowance is short"
+    end
+
+    test "is disclosed as bounded, not as a standing max approval" do
+      text = plan(fund: true)
+
+      assert text =~ "approves exactly the intent's authorized pull, not a standing max"
+    end
+
+    test "an unfunded run says the allowance is not granted, and what that costs" do
+      text = plan([])
+
+      # --fund is what carries the approve, so without it a signed Permit2 intent
+      # is left with a pull that cannot execute. Saying nothing here is how that
+      # surfaces later as an unexplained settlement failure.
+      assert text =~ "no approve(Permit2) UserOp without --fund"
+      assert text =~ "unexecutable until a --fund run grants the allowance"
+    end
+
+    test "is a tx, not a UserOp, under --signer eoa" do
+      lines = Order.spend_plan_lines(%{cfg() | signer: "eoa"}, [fund: true], :new_job)
+
+      assert Enum.join(lines, "\n") =~ "rides INSIDE the approve+fund tx"
+    end
+
+    test "names the pinned spender when one was supplied" do
+      lines = Order.spend_plan_lines(%{cfg() | solver: @spender}, [fund: true], :new_job)
+
+      assert Enum.join(lines, "\n") =~ "spender pin: #{@spender}"
+    end
+
+    test "says a Permit2 pull is refused when no spender is pinned" do
+      text = plan(fund: true)
+
+      assert text =~ "spender pin: NONE"
+      assert text =~ "refused before signing"
+      assert text =~ "--solver"
+      assert text =~ "no on-chain recipient guard"
+    end
+
+    test "a dry run promises no approve, only a report" do
+      text = plan(dry_run: true)
+
+      assert text =~ "no approve(Permit2) UserOp is sent under --dry-run"
+      refute text =~ "rides INSIDE"
     end
   end
 

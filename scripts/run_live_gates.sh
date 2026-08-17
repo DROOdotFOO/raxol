@@ -54,6 +54,14 @@
 #                         asset (USDT needs GATE_RPC_42161; USDG needs GATE_RPC_4663)
 #                         on the acp route, and for the relay source chain.
 #   GATE_FROM_ADDRESS     EVM source address for the relay quote probe.
+#   GATE_PULL_SPENDER     the Permit2 spender the acp route may grant an origin
+#                         allowance to. REQUIRED to SETTLE a cell whose quote
+#                         pulls via Permit2; there is no default, because Permit2
+#                         has no on-chain recipient guard and the allowance is
+#                         what makes that address able to move the origin
+#                         balance. A Permit2 cell SKIPs without it. Take it from
+#                         Riddler's XochiPull deployment record -- it is the pull
+#                         proxy, not GATE_SOLVER's settlement wallet.
 #   GATE_TRON_ADDRESS     Tron recipient WALLET for the relay route. REQUIRED to
 #                         probe or settle relay; there is no default, because a
 #                         Tron settlement is final and the destination token
@@ -143,6 +151,7 @@ Usage: scripts/run_live_gates.sh --asset A[,A...] [--route R[,R...]] [options]
 
 Secrets via env: GATE_KEY, GATE_XOCHI_TOKEN, GATE_RELAY_TOKEN,
 GATE_RPC_<chainid> (e.g. GATE_RPC_42161), GATE_FROM_ADDRESS,
+GATE_PULL_SPENDER (Permit2 allowance pin; Permit2 cells SKIP without it),
 GATE_TRON_ADDRESS (relay recipient wallet; relay cells SKIP without it).
 EOF
 }
@@ -313,6 +322,14 @@ run_acp() {
   export XOCHI_ORDER_AMOUNT="$AMOUNT"
   export XOCHI_ORDER_CORRIDORS="$corridors" XOCHI_ORDER_TOKENS="$tok"
   export XOCHI_ORDER_SOLVER="${GATE_SOLVER:-$CANONICAL_SOLVER}"
+  # The Permit2 allowance pin is separate and deliberately undefaulted: it names
+  # the spender an ERC-20 approve would make able to pull the origin balance, and
+  # Permit2 bounds the destination nowhere on-chain. Unset, Permit2 cells SKIP.
+  if [[ -n "${GATE_PULL_SPENDER:-}" ]]; then
+    export XOCHI_ORDER_PULL_SPENDER="$GATE_PULL_SPENDER"
+  else
+    unset XOCHI_ORDER_PULL_SPENDER
+  fi
   # Order the launch offering (xochi_stable_public) under its real corridor scope:
   # each asset's default corridor above is on the CorridorAllowlist.
   export XOCHI_ORDER_STABLECOIN_ALLOWLIST=true
