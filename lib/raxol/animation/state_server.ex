@@ -22,6 +22,10 @@ defmodule Raxol.Animation.StateServer do
   }
   ```
 
+  `settings` is a map on every path, including a server nobody has initialized.
+  Readers index it with `Map.get/3` and take their own defaults, so the empty
+  map means "no settings yet", never a different type.
+
   ## Performance Considerations
   This implementation uses ETS for read-heavy operations when performance
   is critical, while maintaining GenServer for write operations and
@@ -42,7 +46,7 @@ defmodule Raxol.Animation.StateServer do
   @doc """
   Initializes the animation state storage with the given settings.
   """
-  def init_state(server \\ __MODULE__, settings) do
+  def init_state(server \\ __MODULE__, settings) when is_map(settings) do
     GenServer.call(server, {:init_state, settings})
   end
 
@@ -56,7 +60,7 @@ defmodule Raxol.Animation.StateServer do
   @doc """
   Updates the animation framework settings.
   """
-  def update_settings(server \\ __MODULE__, settings) do
+  def update_settings(server \\ __MODULE__, settings) when is_map(settings) do
     GenServer.call(server, {:update_settings, settings})
   end
 
@@ -152,14 +156,8 @@ defmodule Raxol.Animation.StateServer do
   # GenServer Callbacks
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def init_manager(settings) do
-    initial_state = %{
-      settings: settings,
-      animations: %{},
-      active_animations: %{}
-    }
-
-    {:ok, initial_state}
+  def init_manager(init_arg) do
+    {:ok, %{@default_state | settings: settings_from_init_arg(init_arg)}}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -283,6 +281,26 @@ defmodule Raxol.Animation.StateServer do
   end
 
   # Private Helper Functions
+
+  # BaseManager splits the GenServer server options off and hands `init/1`
+  # whatever is left, so both a supervisor child spec and
+  # `StateManager.ensure_started/0` arrive here as `[name: __MODULE__]` minus
+  # the name, i.e. an empty keyword list. Every reader indexes the settings with
+  # `Map.get/3`, so storing that list verbatim turns the next read into a
+  # BadMapError. Settings are a map on every path.
+  defp settings_from_init_arg(settings) when is_map(settings), do: settings
+
+  defp settings_from_init_arg(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:settings, [])
+    |> Map.new()
+  end
+
+  defp settings_from_init_arg(other) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)} expects a settings map or keyword options, " <>
+            "got: #{inspect(other)}"
+  end
 
   defp do_remove_active_animation(state, element_id, animation_name) do
     element_animations = Map.get(state.active_animations, element_id, %{})

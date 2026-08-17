@@ -80,7 +80,15 @@ defmodule Raxol.Animation.Framework do
       iex> AnimationFramework.init(reduced_motion: true)
       :ok
   """
-  def init(opts \\ %{}, user_preferences_pid \\ nil) do
+  def init(opts \\ %{}, user_preferences_pid \\ nil)
+
+  # Every option below is read with `Map.get/3`, so the documented keyword form
+  # has to become a map before any of them are read.
+  def init(opts, user_preferences_pid) when is_list(opts) do
+    init(Map.new(opts), user_preferences_pid)
+  end
+
+  def init(opts, user_preferences_pid) when is_map(opts) do
     Raxol.Core.Runtime.Log.debug("Initializing animation framework...")
 
     # Read reduced_motion preference
