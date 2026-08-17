@@ -238,14 +238,21 @@ defmodule Raxol.Earn.Xochi.OriginPull do
     """
   end
 
+  # The served address is NAMED but never formatted as the fix. Printing
+  # `--solver <served>` here would hand back a ready-to-run command that grants a
+  # real allowance towards whatever the counterparty asked for, one paste after
+  # being told the pin exists to check exactly that value.
   def explain({:pull_spender_mismatch, served, pinned}) do
     """
     this quote's Permit2 spender is #{served}, but the pinned spender is #{pinned}.
 
-    Nothing was signed and no allowance was granted. Either the solver rotated its
-    pull contract -- confirm the new address against Riddler's XochiPull deployment
-    record and re-run with `--solver #{served}` -- or this quote is not the one you
-    meant to sign.
+    Nothing was signed and no allowance was granted.
+
+    Do NOT re-run with the served address because it appears above -- checking it
+    is the entire point of the pin. Either this quote is not the one you meant to
+    sign, or the solver rotated its pull contract. Only the second is a reason to
+    change the pin, and only after the new address matches Riddler's XochiPull
+    deployment record. Take the value from that record, not from this message.
     """
   end
 

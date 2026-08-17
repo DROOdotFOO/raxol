@@ -393,6 +393,17 @@ defmodule Raxol.Earn.Xochi.OriginPullTest do
       assert text =~ "Nothing was signed"
     end
 
+    # Naming the served address is disclosure; formatting it as `--solver <it>` is
+    # a remedy. Rendering the remedy hands back a ready-to-run command that grants
+    # a real allowance towards whatever the counterparty asked for, one paste
+    # after the operator is told the pin exists to check exactly that value.
+    test "a mismatch does not offer the served address as the fix" do
+      text = OriginPull.explain({:pull_spender_mismatch, "0xaaa", "0xbbb"})
+
+      refute text =~ "--solver 0xaaa"
+      assert text =~ "deployment record"
+    end
+
     test "every cross-check refusal says what was served and what was intended" do
       chain = OriginPull.explain({:pull_chain_mismatch, 42_161, 8453})
       token = OriginPull.explain({:pull_token_mismatch, @other_token, @token})
