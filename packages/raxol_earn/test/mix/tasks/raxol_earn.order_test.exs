@@ -3,8 +3,10 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
   use ExUnit.Case, async: false
 
   alias Mix.Tasks.RaxolEarn.Order
+  alias Raxol.Earn.ProviderAdapter.Mock
 
   @spender "0xE9B020941015e428876f60C1979B3fc2A38a2f53"
+  @allowance_sig "allowance(address,address)"
 
   setup do
     shell = Mix.shell()
@@ -49,6 +51,64 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
 
   defp approve_args(%{data: <<_sel::binary-size(4), spender::binary-size(32), amount::256>>}),
     do: {"0x" <> Base.encode16(binary_part(spender, 12, 20), case: :lower), amount}
+
+  defp word(value), do: "0x" <> String.pad_leading(Integer.to_string(value, 16), 64, "0")
+
+  # A cfg carrying a provider, for the reads the funding leg makes on its own.
+  defp funding_cfg(adapter), do: Map.put(cfg(), :provider_adapter, adapter)
+
+  defp with_allowance(value) do
+    adapter = Mock.new()
+    :ok = Mock.set_contract_read(adapter, cfg().src_token, @allowance_sig, word(value))
+    funding_cfg(adapter)
+  end
+
+  # The gap between signing and funding is minutes of real time: createJob has to
+  # mine, the chat room has to appear, and the provider has to write a budget. An
+  # allowance covering the pull at signing can be spent down inside that window --
+  # an earlier intent's own pull consumes it -- so a batch built from the signing
+  # read would escrow the fee and leave THIS intent's pull short. Fee paid,
+  # transfer impossible.
+  describe "the allowance behind the funding batch" do
+    test "is read at funding time, not carried over from signing" do
+      # Signing saw a covering allowance; by now it is spent down to zero.
+      assert {:short, %{amount: 3_000_000}} =
+               Order.fund_time_allowance(with_allowance(0), {:permit2, permit()})
+    end
+
+    test "an allowance that still covers the pull adds nothing to the batch" do
+      assert :standing =
+               Order.fund_time_allowance(with_allowance(3_000_000), {:permit2, permit()})
+    end
+
+    test "a rail needing no allowance reads nothing and stays not_needed" do
+      adapter = Mock.new()
+
+      assert :not_needed = Order.fund_time_allowance(funding_cfg(adapter), :not_needed)
+      assert Mock.sent_calls(adapter) == []
+    end
+
+    test "the fresh reading is what decides the batch, so a spent-down one restores the approve" do
+      pull = Order.fund_time_allowance(with_allowance(0), {:permit2, permit()})
+
+      assert [permit2_approve, _core_approve, _fund] = calls(pull)
+      assert approve_args(permit2_approve) == {String.downcase(@permit2), 3_000_000}
+    end
+
+    # Funding without the approve is the outcome being avoided, so an unreadable
+    # allowance must not be treated as one that covers the pull.
+    test "a failed read at funding time aborts rather than funding short" do
+      adapter = Mock.new()
+
+      %Mix.Error{message: message} =
+        assert_raise(Mix.Error, fn ->
+          Order.fund_time_allowance(funding_cfg(adapter), {:permit2, permit()})
+        end)
+
+      assert message =~ "origin-pull allowance could not be settled"
+      assert Mock.sent_calls(adapter) == []
+    end
+  end
 
   describe "--corridor validation" do
     test "an unsupported destination lists only the chains USDC actually exists on" do

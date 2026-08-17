@@ -78,6 +78,13 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   was already spending. It is idempotent: an allowance that already covers the
   pull adds nothing to the batch.
 
+  What the batch grants is decided by an allowance read taken when the batch is
+  BUILT, not by the one taken when the intent was signed. Minutes separate them --
+  createJob has to mine, the chat room has to appear, the provider has to write a
+  budget -- and an allowance can be spent down in between by an earlier intent's
+  own pull. Deciding on the older reading would escrow the fee and leave this
+  intent's pull short.
+
   A run WITHOUT `--fund` (including `--dry-run`) therefore grants no allowance.
   It still refuses an unpinned or mismatched Permit2 quote before signing, and it
   says plainly that the pull it authorized cannot execute until a `--fund` run
@@ -181,8 +188,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     print_plan(cfg, opts)
 
     # 1. Quote, check the origin pull against the pin, then sign. All off-chain:
-    #    the allowance itself is granted later, inside the funding batch.
-    {bundle, pull} =
+    #    the allowance itself is granted later, inside the funding batch. What
+    #    survives to that point is the PLAN -- the cross-checked permit -- not the
+    #    allowance reading taken here, which is stale by the time funding happens.
+    {bundle, plan} =
       case sign_intent(cfg, opts) do
         {:ok, signed} -> signed
         {:error, reason} -> Mix.raise(sign_intent_error(reason))
@@ -194,7 +203,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     if opts[:dry_run] do
       log("--dry-run: signed only, no on-chain writes. requirement=#{inspect(requirement)}")
     else
-      place(cfg, requirement, opts, pull)
+      place(cfg, requirement, opts, plan)
     end
   end
 
@@ -210,7 +219,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   # -- Orchestration --
 
-  defp place(cfg, requirement, opts, pull) do
+  defp place(cfg, requirement, opts, plan) do
     {agent, resolver} = start_buyer(cfg)
 
     # 2. createJob on-chain (or resume an existing job with --job-id).
@@ -234,7 +243,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     log("job #{job_id} is live -- view it at https://app.virtuals.io/acp")
 
-    if funding?, do: fund_job(cfg, job_id, budget, pull)
+    if funding?, do: fund_job(cfg, job_id, budget, plan)
   end
 
   defp create_and_resolve(cfg, resolver) do
@@ -266,7 +275,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # settles from `:funded`. Granting the allowance in the very transaction that
   # funds the job means it exists at the first block anyone can act on the
   # funding, with no window and no leg that can land alone.
-  defp fund_job(cfg, job_id, budget, pull) do
+  defp fund_job(cfg, job_id, budget, plan) do
+    pull = fund_time_allowance(cfg, plan)
     label = batch_label(pull)
     log(funding_line(job_id, pull))
 
@@ -281,6 +291,34 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
       err ->
         Mix.raise("fund failed: #{inspect(err)}")
+    end
+  end
+
+  # The allowance read taken when the intent was signed is minutes old by now:
+  # createJob had to mine, the chat room had to appear, and the provider had to
+  # write a budget. An allowance that covered the pull back then can have been
+  # spent down since -- an earlier intent's own pull consumes it -- and a batch
+  # built on that reading would escrow the fee while leaving THIS intent's pull
+  # short, which is a fee paid for a transfer that cannot happen.
+  #
+  # So the batch is decided against a fresh read. The plan is what carries
+  # forward, because the plan is the cross-checked permit and cannot drift; only
+  # the allowance can. A read that fails aborts rather than funds: funding
+  # without the approve strands the escrow, which is the outcome being avoided.
+  @doc false
+  # Public only so the re-read can be proven. That the batch is built from a
+  # fund-time reading rather than the one taken at signing is the whole property,
+  # and it is invisible in `funding_calls/4`, which sees only the status it is
+  # handed.
+  @spec fund_time_allowance(map(), OriginPull.plan()) :: OriginPull.status()
+  def fund_time_allowance(cfg, plan) do
+    case OriginPull.allowance_status(plan, cfg.provider_adapter, cfg.buyer) do
+      {:ok, status} ->
+        log("at funding time -- " <> OriginPull.describe(status))
+        status
+
+      {:error, reason} ->
+        Mix.raise(OriginPull.explain(reason))
     end
   end
 
@@ -714,11 +752,15 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # Only the on-chain GRANT is deferred, to the funding batch: the allowance is
   # not needed until the solver pulls, and the solver pulls at settlement, which
   # the seller reaches only from `:funded`.
+  #
+  # The PLAN is what is returned, not the status read here. The status describes
+  # the allowance at signing time and is reported for that, but the funding batch
+  # re-reads rather than trusting it -- see `fund_time_allowance/2`.
   defp check_origin_pull(cfg, quote_resp, opts) do
     with {:ok, plan} <- OriginPull.allowance_plan(quote_resp, cfg.solver, origin_leg(cfg)),
          {:ok, status} <- OriginPull.allowance_status(plan, cfg.provider_adapter, cfg.buyer) do
       Enum.each(origin_pull_lines(status, opts), &log/1)
-      {:ok, status}
+      {:ok, plan}
     else
       {:error, reason} -> {:error, {:origin_pull, reason}}
     end
