@@ -38,6 +38,23 @@ defmodule Raxol.Earn.Onchain.LogDecoder do
 
   @type log :: %{required(String.t()) => any()}
 
+  @typedoc """
+  Extra constraints a log must satisfy, beyond its `topics[0]`.
+
+  - `:emitter` -- the contract address the log must have been emitted by.
+  - `:topics` -- expected values for indexed parameters, keyed by 1-based topic
+    index. Each value is a 32-byte topic or a 20-byte address (left-padded to a
+    topic here).
+
+  An unset key constrains nothing. A log that does not CARRY a constrained key
+  never matches -- a log with no `address` cannot prove which contract emitted
+  it, so it cannot satisfy an `:emitter` constraint.
+  """
+  @type match_opts :: [
+          {:emitter, String.t() | nil}
+          | {:topics, %{optional(pos_integer()) => String.t()}}
+        ]
+
   # -- Topic computation --
 
   @doc """
@@ -56,31 +73,99 @@ defmodule Raxol.Earn.Onchain.LogDecoder do
   # -- Log lookup --
 
   @doc """
-  Find the first log in `logs` whose `topics[0]` matches `event`.
+  Find the first log in `logs` whose `topics[0]` matches `event` and which
+  satisfies every constraint in `opts`.
 
   Accepts either a precomputed topic hash (`"0x..."`) or a canonical event
   signature; the latter is hashed automatically.
 
-  Returns `{:ok, log}` or `:error` (no matching log).
+  A signature match alone is not identity: one receipt can hold many logs of the
+  same event from many senders (an ERC-4337 bundle receipt holds every
+  co-bundled UserOp's logs). Pass `:emitter` / `:topics` to pin the log down to
+  the one this caller caused.
+
+  Returns `{:ok, log}` or `:error` (no matching log). Raises `ArgumentError` on
+  a malformed expected topic value, since a mis-specified constraint that
+  silently matched nothing would read exactly like an absent event.
   """
-  @spec find_event([log()], String.t()) :: {:ok, log()} | :error
-  def find_event(logs, "0x" <> _ = topic) when is_list(logs) do
-    do_find(logs, normalize(topic))
+  @spec find_event([log()], String.t(), match_opts()) :: {:ok, log()} | :error
+  def find_event(logs, event, opts \\ [])
+
+  def find_event(logs, "0x" <> _ = topic, opts) when is_list(logs) and is_list(opts) do
+    do_find(logs, normalize(topic), constraints(opts))
   end
 
-  def find_event(logs, signature) when is_list(logs) and is_binary(signature) do
-    find_event(logs, event_topic(signature))
+  def find_event(logs, signature, opts)
+      when is_list(logs) and is_binary(signature) and is_list(opts) do
+    find_event(logs, event_topic(signature), opts)
   end
 
-  defp do_find([], _topic), do: :error
+  defp constraints(opts) do
+    %{
+      emitter: normalize_emitter(Keyword.get(opts, :emitter)),
+      topics:
+        opts
+        |> Keyword.get(:topics, %{})
+        |> Map.new(fn {index, value} -> {index, expected_topic(index, value)} end)
+    }
+  end
 
-  defp do_find([log | rest], topic) do
+  defp normalize_emitter(nil), do: nil
+  defp normalize_emitter(address) when is_binary(address), do: normalize(address)
+
+  defp expected_topic(_index, "0x" <> hex = value) when byte_size(hex) == 64, do: normalize(value)
+
+  defp expected_topic(_index, "0x" <> hex) when byte_size(hex) == 40,
+    do: "0x" <> String.duplicate("0", 24) <> String.downcase(hex)
+
+  defp expected_topic(index, value) do
+    raise ArgumentError,
+          "expected topic #{index} must be a 32-byte topic or a 20-byte address, " <>
+            "got: #{inspect(value)}"
+  end
+
+  defp do_find([], _topic, _constraints), do: :error
+
+  defp do_find([log | rest], topic, constraints) do
+    if matches?(log, topic, constraints) do
+      {:ok, log}
+    else
+      do_find(rest, topic, constraints)
+    end
+  end
+
+  defp matches?(log, topic, constraints) do
+    signature_matches?(log, topic) and emitted_by?(log, constraints.emitter) and
+      indexed_match?(log, constraints.topics)
+  end
+
+  defp signature_matches?(log, topic) do
     case Map.get(log, "topics", []) do
-      [first | _] ->
-        if normalize(first) == topic, do: {:ok, log}, else: do_find(rest, topic)
+      [first | _] when is_binary(first) -> normalize(first) == topic
+      _ -> false
+    end
+  end
 
-      _ ->
-        do_find(rest, topic)
+  defp emitted_by?(_log, nil), do: true
+
+  defp emitted_by?(log, emitter) do
+    case Map.get(log, "address") do
+      address when is_binary(address) -> normalize(address) == emitter
+      _ -> false
+    end
+  end
+
+  defp indexed_match?(_log, expected) when map_size(expected) == 0, do: true
+
+  defp indexed_match?(log, expected) do
+    topics = Map.get(log, "topics", [])
+    Enum.all?(expected, fn {index, value} -> topic_matches?(topics, index, value) end)
+  end
+
+  defp topic_matches?(topics, index, expected) do
+    case Enum.at(topics, index) do
+      raw when is_binary(raw) -> normalize(raw) == expected
+      _ -> false
     end
   end
 
@@ -129,26 +214,28 @@ defmodule Raxol.Earn.Onchain.LogDecoder do
   # -- Convenience: extract an indexed parameter --
 
   @doc """
-  Find a log matching `event` (canonical signature or topic hash) and decode the
-  parameter at `topic_index` (1-based; topic 0 is the event hash) as `type`.
+  Find a log matching `event` (canonical signature or topic hash) under `opts`
+  and decode the parameter at `topic_index` (1-based; topic 0 is the event hash)
+  as `type`.
 
   Returns `{:ok, value}` or `{:error, reason}`. Used by
   `Raxol.Earn.JobIdResolver.Receipt` to extract the new `jobId` from a
   `JobCreated` event without spelling out the find/decode steps every time.
   """
-  @spec extract([log()], String.t(), pos_integer(), :uint256 | :address) ::
+  @spec extract([log()], String.t(), pos_integer(), :uint256 | :address, match_opts()) ::
           {:ok, term()} | {:error, term()}
-  def extract(logs, event, topic_index, type)
-      when is_list(logs) and is_binary(event) and is_integer(topic_index) and topic_index > 0 do
-    with {:ok, log} <- find_or_error(logs, event),
+  def extract(logs, event, topic_index, type, opts \\ [])
+      when is_list(logs) and is_binary(event) and is_integer(topic_index) and topic_index > 0 and
+             is_list(opts) do
+    with {:ok, log} <- find_or_error(logs, event, opts),
          topics <- Map.get(log, "topics", []),
          {:ok, raw} <- nth_topic(topics, topic_index) do
       decode_one(raw, type)
     end
   end
 
-  defp find_or_error(logs, event) do
-    case find_event(logs, event) do
+  defp find_or_error(logs, event, opts) do
+    case find_event(logs, event, opts) do
       {:ok, log} -> {:ok, log}
       :error -> {:error, {:event_not_found, event}}
     end

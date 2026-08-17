@@ -82,7 +82,11 @@ config :raxol_earn,
   # An override is easy to get wrong and fails QUIETLY: a signature that does
   # not match the emitted event decodes to :pending, not an error, so the buyer
   # falls through to reconcile-by-tag instead of reporting a bad jobId. If you
-  # do override, take the signature from the core's verified ABI, not from here:
+  # do override, take the signature from the core's verified ABI, not from here.
+  #
+  # The `emitter` + `client` scoping (which pins the JobCreated log to the core
+  # we called and to our own buyer address) is filled in by the buyer itself, so
+  # an override here keeps it -- unless you spell either key out explicitly.
   #
   #     buyer_job_id_resolver:
   #       {Raxol.Earn.JobIdResolver.Receipt,

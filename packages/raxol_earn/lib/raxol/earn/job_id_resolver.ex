@@ -26,9 +26,10 @@ defmodule Raxol.Earn.JobIdResolver do
   - `Raxol.Earn.JobIdResolver.Receipt` (default) -- reads the receipt via
     `ProviderAdapter.get_transaction_receipt` and decodes the `JobCreated` topic
     with `Raxol.Earn.Onchain.LogDecoder`; reconciles via `JobApi.get_active_jobs`.
-    The exact event signature, indexed position, and emitter address are config
-    with placeholders that **must be confirmed against the deployed
-    `AgenticCommerceV3` in the Sepolia dry-run** (see the module).
+    The event signature and indexed positions are verified against the deployed
+    `AgenticCommerceV3` and configurable, as are the emitter address and the
+    buyer address the log's indexed `client` must equal -- which is what keeps a
+    co-bundled UserOp's `JobCreated` from binding as ours (see the module).
   - `Raxol.Earn.JobIdResolver.Mock` -- canned tx->id and tag->id maps for tests.
   """
 
