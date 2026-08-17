@@ -21,6 +21,14 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
       XOCHI_ORDER_RPC_8453=https://mainnet.base.org \\
         mix test --only live_xochi_order test/raxol/acp/xochi/live_order_test.exs
 
+  A cell whose quote pulls via Permit2 also needs `XOCHI_ORDER_PULL_SPENDER`: the
+  spender the operator expects the permit to name, taken from Riddler's XochiPull
+  deployment record. It has no default, because granting the allowance is what
+  makes that address able to move the buyer's origin balance and Permit2 carries
+  no on-chain recipient guard. Unset, a Permit2 cell is skipped, never guessed.
+  It is NOT `XOCHI_ORDER_SOLVER`: that pins the solver wallet for the signature
+  allowlist, where the permit's spender is the pull proxy.
+
   Runner + full env/corridor reference (USDC/ERC-3009 vs USDT/WETH/USDG Permit2,
   Robinhood cross-asset corridors, mesh, and all `XOCHI_ORDER_*` overrides): the
   unified gate at the repo root, `scripts/run_live_gates.sh --route acp`.
@@ -34,9 +42,9 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
   if System.get_env("XOCHI_ORDER_LIVE_URL") && System.get_env("XOCHI_ORDER_LIVE_KEY") do
     alias Raxol.Earn.{AssetToken, Chain, JobSession}
     alias Raxol.Earn.Offering.Registry, as: OfferingRegistry
-    alias Raxol.Earn.Onchain.Permit2Approver
     alias Raxol.Earn.ProviderAdapter
     alias Raxol.Earn.ProviderAdapter.JSONRPC
+    alias Raxol.Earn.Xochi.OriginPull
     alias Raxol.Earn.Xochi.StablePublicOffering
     alias Raxol.Payments.Assets
     alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
@@ -75,6 +83,11 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
       cfg = %{
         xochi_config: xochi_config,
         wallet_address: wallet_address,
+        # No default, deliberately. This pin is what a real Permit2 allowance is
+        # granted towards, and Permit2 has no on-chain recipient guard -- a
+        # checked-in address would make the gate grant a standing capability
+        # nobody typed. Unset means Permit2 cells are skipped, not guessed.
+        pull_spender: System.get_env("XOCHI_ORDER_PULL_SPENDER"),
         stable_amount: System.get_env("XOCHI_ORDER_AMOUNT", "1.10")
       }
 
@@ -138,10 +151,17 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     # subset.
     defp run_fillable_cell(cfg, from, to, token, label) do
       with {:ok, quote_resp} <- preflight_quote(cfg, from, to, token),
-           {:ok, _allowance} <- ensure_permit2(quote_resp, from, token, cfg.wallet_address) do
+           {:ok, _allowance} <- ensure_permit2(quote_resp, cfg, from, token) do
         order_cell(cfg, from, to, token, label)
       else
-        {:error, reason} -> log("SKIP #{label}: #{inspect(reason)}; no funds moved")
+        {:error, :unpinned_permit2_spender} ->
+          log(
+            "SKIP #{label}: the served quote pulls via Permit2 and XOCHI_ORDER_PULL_SPENDER " <>
+              "is unset; no allowance granted, no funds moved"
+          )
+
+        {:error, reason} ->
+          log("SKIP #{label}: #{inspect(reason)}; no funds moved")
       end
     end
 
@@ -283,17 +303,43 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     # through ERC-3009 and holds no allowance, while a smart-account (ERC-1271)
     # buyer pulls the same USDC through Permit2 and must. USDT, WETH and USDG take
     # Permit2 whoever the buyer is, and the quote says so either way.
-    defp ensure_permit2(%{payment_method: "permit2"}, from, token, owner) do
-      with {:ok, provider} <- provider_for(from),
-           {:ok, src_token} <- Assets.address(from, leg_symbol(from, token)) do
-        Permit2Approver.ensure_allowance(provider, from, src_token, owner)
-      else
-        :error -> {:error, {:unknown_token, token}}
-        {:error, _} = err -> err
+    #
+    # The decision is OriginPull's, not this file's: it is the same allowance
+    # `mix raxol_earn.order` grants, so it must refuse on the same terms. An
+    # unpinned or mismatched spender, a permit for another chain or token, or one
+    # authorizing more than the cell is ordering, all fail closed here.
+    defp ensure_permit2(quote_resp, cfg, from, token) do
+      with {:ok, src_token} <- token_address(from, token),
+           {:ok, plan} <-
+             OriginPull.allowance_plan(
+               quote_resp,
+               cfg.pull_spender,
+               %{
+                 chain_id: from,
+                 token: src_token,
+                 amount: amount_atomic(from, token, cfg.stable_amount)
+               }
+             ) do
+        settle_allowance(plan, cfg, from)
       end
     end
 
-    defp ensure_permit2(_quote_resp, _from, _token, _owner), do: {:ok, :not_needed}
+    # Only a Permit2 plan needs a broadcasting provider, so an ERC-3009 cell still
+    # runs without an origin-chain RPC configured.
+    defp settle_allowance(:not_needed, _cfg, _from), do: {:ok, :not_needed}
+
+    defp settle_allowance(plan, cfg, from) do
+      with {:ok, provider} <- provider_for(from) do
+        OriginPull.ensure_allowance(plan, provider, cfg.wallet_address)
+      end
+    end
+
+    defp token_address(from, token) do
+      case Assets.address(from, leg_symbol(from, token)) do
+        {:ok, address} -> {:ok, address}
+        :error -> {:error, {:unknown_token, token}}
+      end
+    end
 
     defp provider_for(chain) do
       case System.get_env("XOCHI_ORDER_RPC_#{chain}") do
