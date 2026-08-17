@@ -73,8 +73,7 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
     end
 
     test "ORDER_SOLVER is read when the flag is absent, and validated the same way" do
-      System.put_env("ORDER_SOLVER", "not-an-address")
-      on_exit(fn -> System.delete_env("ORDER_SOLVER") end)
+      put_solver_env("not-an-address")
 
       %Mix.Error{message: message} =
         assert_raise(Mix.Error, fn -> Order.run(["--dry-run"]) end)
@@ -82,7 +81,31 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
       assert message =~ "ORDER_SOLVER"
       assert message =~ "is not a 0x-hex 20-byte address"
     end
+
+    test "an empty --solver falls back to ORDER_SOLVER instead of suppressing it" do
+      # `--solver ""` is truthy in Elixir, so an empty flag used to win the `||`
+      # and leave the run unpinned while ORDER_SOLVER sat there set.
+      put_solver_env("not-an-address")
+
+      %Mix.Error{message: message} =
+        assert_raise(Mix.Error, fn -> Order.run(["--solver", "  ", "--dry-run"]) end)
+
+      # The env value is what got validated, so it is the value named back.
+      assert message =~ ~s|"not-an-address"|
+      assert message =~ "is not a 0x-hex 20-byte address"
+    end
   end
+
+  # The value is process-global, so a test that deletes it on the way out erases
+  # whatever the operator (or an outer gate run) had set.
+  defp put_solver_env(value) do
+    prior = System.get_env("ORDER_SOLVER")
+    System.put_env("ORDER_SOLVER", value)
+    on_exit(fn -> restore_env("ORDER_SOLVER", prior) end)
+  end
+
+  defp restore_env(name, nil), do: System.delete_env(name)
+  defp restore_env(name, value), do: System.put_env(name, value)
 
   describe "the escrow ceiling gate" do
     test "a budget above the ceiling aborts a --fund run before anything is approved" do

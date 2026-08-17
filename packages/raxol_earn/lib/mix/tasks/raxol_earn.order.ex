@@ -1006,14 +1006,24 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # The pinned origin-pull spender: a flag, because it is a per-run counterparty
   # address like --provider, and an env var, because the live-gate runner drives
   # this task entirely through ORDER_*. The flag wins when both are set.
+  # Trim BEFORE the fallback: `--solver ""` is truthy in Elixir, so an empty flag
+  # would otherwise suppress ORDER_SOLVER and leave the run unpinned rather than
+  # falling back to it.
   defp pinned_solver(opts) do
-    case Keyword.get(opts, :solver) || System.get_env("ORDER_SOLVER") do
+    case present(Keyword.get(opts, :solver)) || present(System.get_env("ORDER_SOLVER")) do
       nil -> nil
-      value -> solver_address!(String.trim(value))
+      value -> solver_address!(value)
     end
   end
 
-  defp solver_address!(""), do: nil
+  defp present(nil), do: nil
+
+  defp present(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
 
   defp solver_address!(value) do
     case Regex.match?(~r/\A0x[0-9a-fA-F]{40}\z/, value) do
