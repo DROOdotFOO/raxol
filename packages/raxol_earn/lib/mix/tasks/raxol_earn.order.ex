@@ -123,7 +123,12 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     )
 
     # 1. Sign the Xochi intent (off-chain).
-    {:ok, bundle} = sign_intent(cfg)
+    bundle =
+      case sign_intent(cfg) do
+        {:ok, bundle} -> bundle
+        {:error, reason} -> Mix.raise(sign_intent_error(reason))
+      end
+
     requirement = requirement(cfg, bundle)
     log("signed Xochi intent: #{bundle[:intent_id] || bundle["intent_id"]}")
 
@@ -381,8 +386,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     {from, to} = parse_corridor(Keyword.get(opts, :corridor, "8453>42161"))
     amount = Keyword.get(opts, :amount, "3.00")
 
-    {:ok, src_token} = Assets.address(from, "USDC")
-    {:ok, dst_token} = Assets.address(to, "USDC")
+    src_token = usdc_address!(from, "origin")
+    dst_token = usdc_address!(to, "destination")
     principal_atomic = Assets.to_atomic(Decimal.new(amount), Assets.decimals(from, src_token))
 
     signer = Keyword.get(opts, :signer, "privy")
@@ -422,7 +427,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     _ = fetch_env!("RAXOL_ACP_SIGNER_PRIVATE_KEY")
     address = fetch_env!("RAXOL_ACP_WALLET_ADDRESS")
 
-    {:ok, _} = Raxol.Earn.SignerSidecar.start_link([])
+    start_sidecar!(address)
 
     provider =
       ProviderAdapter.Privy.new(
@@ -537,6 +542,105 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       "" -> Mix.raise("set #{name}")
       v -> v
     end
+  end
+
+  # A bare `{:ok, _} =` here reported a transport failure as a MatchError on a
+  # Req struct, which reads like a Xochi outage. It is more often the local
+  # network: some ISPs null-route whole Cloudflare ranges, and api.xochi.fi
+  # resolves into one (188.114.96.0/20). Observed on Vodafone ES -- port 80 is
+  # intercepted with an "Acceso bloqueado" page and 443 is dropped, so every
+  # request dies at connect with no HTTP status to explain itself.
+  defp sign_intent_error(%{__struct__: Req.TransportError, reason: reason}) do
+    """
+    could not reach the Xochi API (transport #{inspect(reason)}).
+
+    This is usually the network path, not Xochi. Check, in order:
+
+      nc -z api.xochi.fi 443          # dropped => blocked upstream, not down
+      curl -sI http://api.xochi.fi    # a non-Cloudflare page here => intercepted
+      curl -s "https://r.jina.ai/https://xochi.fi"   # answers => the API is fine
+
+    A control host only proves anything if it shares the blocked IP range;
+    cloudflare.com and other Cloudflare sites sit elsewhere and will pass while
+    this one fails. Route around it with a VPN or an exit node in another
+    country. Confirm from off-network before reporting an outage upstream.
+    """
+  end
+
+  defp sign_intent_error(reason),
+    do: "could not sign the Xochi intent: #{inspect(reason)}"
+
+  # `Assets.address/2` answers a bare `:error` for an unsupported pair, so a
+  # bad --corridor used to surface as `no match of right hand side value: :error`
+  # with no hint of which side was wrong.
+  defp usdc_address!(chain_id, side) do
+    case Assets.address(chain_id, "USDC") do
+      {:ok, address} ->
+        address
+
+      :error ->
+        # Read the table `address/2` reads. `Assets.supported_chain_ids/0` is the
+        # union over every symbol, so it also lists chains that carry USDG or WETH
+        # but no USDC -- naming those here sends the operator round the same error.
+        supported =
+          Assets.evm_tokens()
+          |> Map.fetch!("USDC")
+          |> Map.keys()
+          |> Enum.sort()
+          |> Enum.map_join(", ", &"#{&1} (#{Assets.chain_name(&1)})")
+
+        Mix.raise("""
+        no USDC address for the #{side} chain #{chain_id}.
+
+        Check --corridor (origin>destination). Chains with a USDC address:
+          #{supported}
+        """)
+    end
+  end
+
+  # The sidecar is a Node process: it fails when node is missing, its deps are not
+  # installed, the port is taken, or the Privy credentials are rejected. A plain
+  # `start_link` cannot report any of those here -- the linked child's exit signal
+  # kills this task before the return value is read -- so go through the trapping
+  # start, which turns the exit back into a reason.
+  defp start_sidecar!(address) do
+    case Raxol.Earn.SignerSidecar.start_link_or_error(expect_address: address) do
+      {:ok, pid} -> pid
+      {:error, reason} -> Mix.raise(sidecar_error(reason))
+    end
+  end
+
+  defp sidecar_error({:sidecar_unhealthy, {:sidecar_wrong_wallet, got, want}}) do
+    url = Raxol.Earn.SignerSidecar.base_url([])
+
+    """
+    #{url} answers /health for the WRONG wallet: #{got}, expected #{want}.
+
+    Something else already holds that port -- most often a signer sidecar left over
+    from an earlier run, delegated to a different agent. Left alone it would sign
+    this order's intent and its on-chain calls as #{got}, while every log line here
+    said #{want}. Find and stop it:
+
+      lsof -i :#{URI.parse(url).port}
+
+    Or point this run elsewhere with RAXOL_ACP_SIGNER_PORT / RAXOL_ACP_SIDECAR_URL.
+    """
+  end
+
+  defp sidecar_error(reason) do
+    """
+    the Privy signer sidecar did not start: #{inspect(reason)}
+
+    It is a Node process under packages/raxol_earn/priv/signer_sidecar.
+    Check, in order:
+
+      node --version                       # must be present on PATH
+      ls priv/signer_sidecar/node_modules  # run `npm install` there if absent
+      lsof -i :4048                        # default port; the sidecar exits if taken
+
+    RAXOL_ACP_WALLET_ADDRESS / RAXOL_ACP_WALLET_ID / RAXOL_ACP_SIGNER_PRIVATE_KEY
+    must all be set: the sidecar reads them at boot and exits if any is missing.
+    """
   end
 
   @explorers %{

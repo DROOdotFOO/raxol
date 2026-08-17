@@ -188,6 +188,14 @@ async function main() {
     }
   });
 
+  // An emitter error (EADDRINUSE, above all) is not reachable by main().catch, so
+  // without this the process would fault opaquely and leave whatever already holds
+  // the port answering /health in its place.
+  server.on("error", (err) => {
+    console.error(`[signer] cannot listen on ${HOST}:${PORT}: ${err.message}`);
+    process.exit(1);
+  });
+
   server.listen(PORT, HOST, () => {
     console.log(`[signer] listening on http://${HOST}:${PORT}`);
   });

@@ -39,7 +39,19 @@ defmodule Mix.Tasks.RaxolEarn.Rebalance do
   defp sweep(acc, rpc_urls, solver) do
     # A throwaway ledger: the drain only tiebreaks refuel ordering, so an empty one
     # still yields correct balance-driven recommendations for a snapshot.
-    {:ok, ledger} = SettlementLedger.start_link(table_name: :raxol_earn_rebalance_task)
+    ledger =
+      case SettlementLedger.start_link(table_name: :raxol_earn_rebalance_task) do
+        {:ok, pid} ->
+          pid
+
+        # Re-running the sweep in one VM (or an ETS table left by a prior run)
+        # is not a failure -- the ledger is a throwaway either way.
+        {:error, {:already_started, pid}} ->
+          pid
+
+        {:error, reason} ->
+          Mix.raise("could not start the throwaway settlement ledger: #{inspect(reason)}")
+      end
 
     RebalanceMonitor.advise_once(
       ledger: ledger,
