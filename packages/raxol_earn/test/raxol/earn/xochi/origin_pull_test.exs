@@ -196,7 +196,9 @@ defmodule Raxol.Earn.Xochi.OriginPullTest do
       assert OriginPull.describe({:approved, "0xabc"}) =~ "approve tx 0xabc"
       assert OriginPull.describe(:standing) =~ "no approve sent"
       assert OriginPull.describe(:would_approve) =~ "SHORT"
-      assert OriginPull.describe(:not_needed) =~ "ERC-3009"
+      # True of a non-pulling quote as well as an ERC-3009 one, since both reach
+      # this outcome.
+      assert OriginPull.describe(:not_needed) =~ "not a Permit2 pull"
     end
   end
 

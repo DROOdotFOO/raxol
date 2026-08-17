@@ -85,7 +85,7 @@ defmodule Raxol.Earn.Xochi.OriginPull do
   @doc "One log line describing what `ensure_allowance/6` did."
   @spec describe(outcome()) :: String.t()
   def describe(:not_needed),
-    do: "origin pull: ERC-3009 rail -- no Permit2 allowance to grant"
+    do: "origin pull: not a Permit2 pull -- no allowance to grant"
 
   def describe(:standing),
     do: "origin pull: Permit2 allowance already standing -- no approve sent"
