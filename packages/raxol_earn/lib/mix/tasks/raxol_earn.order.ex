@@ -78,7 +78,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
       ORDER_KEY          session-key EOA (0x-hex): signs the intent, and -- under
                          sca/eoa -- the on-chain txs.
-      ORDER_RPC_8453     Base JSON-RPC (reads; eoa/sca broadcast). Default: mainnet.
+      ORDER_RPC_8453     Base JSON-RPC (the ACP core lives on Base). Default: mainnet.
+      ORDER_RPC_<chain>  origin-chain JSON-RPC, when --corridor leaves another
+                         chain. Falls back to ORDER_RPC_8453.
       ORDER_XOCHI_TOKEN  Xochi Member token.  ORDER_XOCHI_URL default api.xochi.fi.
       ORDER_SOLVER       origin-pull spender to pin, when not passed as --solver.
 
@@ -802,7 +804,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       params: [%{to: cfg.core, data: data}, "latest"]
     }
 
-    case Req.post(cfg.rpc, json: body) do
+    case Req.post(cfg.acp_rpc, json: body) do
       {:ok, %{status: 200, body: %{"result" => "0x" <> hex}}} when byte_size(hex) >= 8 * 64 ->
         raw = Base.decode16!(hex, case: :mixed)
 
@@ -822,9 +824,15 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # -- Config / helpers --
 
   defp build_config(opts) do
-    rpc = System.get_env("ORDER_RPC_8453", Chain.mainnet().rpc_url)
     {from, to} = parse_corridor(Keyword.get(opts, :corridor, "8453>42161"))
     amount = Keyword.get(opts, :amount, "3.00")
+
+    # Two chains, deliberately separate. `acp_rpc` reads the ACP core, which lives
+    # on Base whatever the corridor is; `rpc` is the ORIGIN chain the buyer signs
+    # UserOps and holds the Permit2 allowance on. They coincide on the default
+    # 8453 origin, which is why one hardcoded Base URL served both until now.
+    acp_rpc = System.get_env("ORDER_RPC_8453", Chain.mainnet().rpc_url)
+    rpc = System.get_env("ORDER_RPC_#{from}", acp_rpc)
 
     src_token = usdc_address!(from, "origin")
     dst_token = usdc_address!(to, "destination")
@@ -853,6 +861,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       fee_bps: Keyword.get(opts, :fee_bps, 8),
       signer: signer,
       rpc: rpc,
+      acp_rpc: acp_rpc,
       core: Chain.mainnet().acp_core_address,
       server_url: Chain.mainnet().acp_server_url,
       xochi_config: %{
