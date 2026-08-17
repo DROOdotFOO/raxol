@@ -45,11 +45,14 @@ defmodule Raxol.Animation.Adaptation do
     # Update StateManager settings
     settings = StateManager.get_settings()
 
-    new_settings = %{
-      settings
-      | reduced_motion: current_reduced_motion,
+    # Merge rather than update-in-place: the settings map is empty both before
+    # the framework is initialized and after `Framework.stop/0` clears it, and
+    # the update syntax demands the keys already exist.
+    new_settings =
+      Map.merge(settings, %{
+        reduced_motion: current_reduced_motion,
         cognitive_accessibility: current_cognitive_accessibility
-    }
+      })
 
     StateManager.init(new_settings)
 
