@@ -97,6 +97,12 @@ yarn-error.log
 # Elixir
 .elixir_ls/
 
+# Python bytecode. The repo's .py helpers are run in place, so the interpreter
+# drops __pycache__ next to them; committed bytecode is unreviewable.
+__pycache__/
+*.py[cod]
+*.pyo
+
 # VS Code Extension
 /extensions/vscode/out/
 
