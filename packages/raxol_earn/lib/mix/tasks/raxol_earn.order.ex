@@ -67,9 +67,12 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   (or `ORDER_SOLVER`) names the spender AND the quote served exactly it.
 
   When the pin holds, the run grants the Permit2 allowance first, as one extra
-  UserOp billed to the buyer in USDC. It is idempotent: a standing allowance
-  sends nothing. `--dry-run` reads the allowance and reports whether a funded run
-  would need the approve, without sending it.
+  UserOp billed to the buyer in USDC. The approve is for exactly this intent's
+  authorized pull, not a standing max, so a later bad signature cannot reach more
+  of the origin balance than this run was already spending. It is idempotent: an
+  allowance that already covers the pull sends nothing. `--dry-run` reads the
+  allowance and reports whether a funded run would need the approve, without
+  sending it.
 
   ## Env
 
@@ -628,7 +631,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # before the approve and before the signature -- an allowance towards an
   # unverified spender is the failure this whole path exists to prevent.
   defp settle_origin_pull(cfg, quote_resp, opts) do
-    with {:ok, plan} <- OriginPull.allowance_plan(quote_resp, cfg.solver),
+    with {:ok, plan} <- OriginPull.allowance_plan(quote_resp, cfg.solver, origin_leg(cfg)),
          {:ok, outcome} <- ensure_allowance(cfg, plan, opts) do
       log(OriginPull.describe(outcome))
       report_approve(cfg, outcome)
@@ -638,18 +641,21 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     end
   end
 
+  # The transfer the operator asked for. The served permit is cross-checked
+  # against it, so the allowance is granted on the chain and token this run named
+  # and never exceeds the principal it was told to send.
+  defp origin_leg(cfg),
+    do: %{chain_id: cfg.from, token: cfg.src_token, amount: cfg.principal_atomic}
+
   defp ensure_allowance(cfg, plan, opts) do
-    OriginPull.ensure_allowance(
-      plan,
-      cfg.provider_adapter,
-      cfg.from,
-      cfg.src_token,
-      cfg.buyer,
+    OriginPull.ensure_allowance(plan, cfg.provider_adapter, cfg.buyer,
       dry_run: Keyword.get(opts, :dry_run, false)
     )
   end
 
-  defp report_approve(cfg, {:approved, tx}), do: report_actuals(cfg, "permit2 approve", tx)
+  defp report_approve(cfg, {:approved, _amount, tx}),
+    do: report_actuals(cfg, "permit2 approve", tx)
+
   defp report_approve(_cfg, _outcome), do: :ok
 
   defp requirement(cfg, bundle) do

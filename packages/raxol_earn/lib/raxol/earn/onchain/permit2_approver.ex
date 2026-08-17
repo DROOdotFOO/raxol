@@ -4,16 +4,20 @@ defmodule Raxol.Earn.Onchain.Permit2Approver do
   transaction stack.
 
   A Xochi cross-chain transfer whose origin pull is Permit2 collects the funds
-  through the universal Permit2 contract, which requires a standing ERC-20
-  allowance the origin wallet must grant once per token per chain. This module
-  reads the current allowance and, when it is short, broadcasts a max
-  `approve(Permit2, uint256.max)` so the pull lands.
+  through the universal Permit2 contract, which requires an ERC-20 allowance the
+  origin wallet grants beforehand. This module reads the current allowance and,
+  when it is short, broadcasts an `approve(Permit2, amount)` so the pull lands.
 
   Which transfers take that rail is a property of the quote, not of the token: an
   EOA buyer pulls USDC via ERC-3009 (no allowance), while a smart-account
   (ERC-1271) buyer pulls the same USDC via Permit2. Read the rail from the
   quote's `payment_method` -- `Raxol.Earn.Xochi.OriginPull` does that, and is the
   caller most orders should go through.
+
+  `:amount` defaults to `uint256.max`, the conventional standing Permit2 approval.
+  An agent ordering through `OriginPull` never takes that default: it passes the
+  one intent's authorized pull, so a bad signature cannot reach more of the
+  balance than the run was already spending.
 
   It lives in raxol_earn (not raxol_payments) for the same reason as
   `Raxol.Earn.Relay.OnchainBroadcaster`: this is where the proven EIP-1559 signing
@@ -68,13 +72,6 @@ defmodule Raxol.Earn.Onchain.Permit2Approver do
   @doc "The maximum uint256 value granted by a default approve."
   @spec max_uint256() :: non_neg_integer()
   def max_uint256, do: @max_uint256
-
-  @doc """
-  The default `:min_allowance` threshold. Exposed so a caller that only READS the
-  allowance (a rehearsal) judges it against the same number the funded path does.
-  """
-  @spec allowance_floor() :: non_neg_integer()
-  def allowance_floor, do: @allowance_floor
 
   @doc """
   Build the ERC-20 `approve(Permit2, amount)` call (selector `0x095ea7b3`).
