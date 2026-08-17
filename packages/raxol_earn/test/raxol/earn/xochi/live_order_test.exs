@@ -3,8 +3,7 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
   Live gate: a buyer orders the `xochi_stable_public` ACP offering and the seller
   settles it for real through Xochi + the Riddler solver. Moves real funds.
 
-  The buyer quotes and signs a Xochi intent itself
-  (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`), embeds the signed bundle in
+  The buyer quotes and signs a Xochi intent itself, embeds the signed bundle in
   the job requirement's `signed_intent`, and the seller's `StablePublicOffering`
   relays it via `Raxol.Earn.Xochi.Settler` -> `execute_signed/2` (no re-signing) and
   polls.
@@ -12,6 +11,11 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
   hook writes); only the settlement moves funds. The funded `LiveWallet` plays every
   role -- buyer, provider, and recipient (the Xochi `QuoteRequest` has no separate
   recipient, so funds return to the funded key on the destination chain).
+
+  Each cell quotes ONCE. The solver pin, the served-permit cross-checks and the
+  Permit2 allowance are all decided against that one quote, and that same quote is
+  what `sign_intent/3` signs -- re-quoting between the check and the signature
+  would leave every check standing behind a quote this gate never signs.
 
   Tagged `:live_xochi_order` (settle) and `:live_xochi_order_preflight`
   (read-only); excluded by default, compiled only when the env is present.
@@ -150,9 +154,9 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     # cell or a missing RPC is a logged skip, not a failure: this is the fillable
     # subset.
     defp run_fillable_cell(cfg, from, to, token, label) do
-      with {:ok, quote_resp} <- preflight_quote(cfg, from, to, token),
-           {:ok, _allowance} <- ensure_permit2(quote_resp, cfg, from, token) do
-        order_cell(cfg, from, to, token, label)
+      with {:ok, checked} <- preflight_quote(cfg, from, to, token),
+           {:ok, _allowance} <- ensure_permit2(checked.quote, cfg, from, token) do
+        order_cell(cfg, checked, from, to, token, label)
       else
         {:error, :unpinned_permit2_spender} ->
           log(
@@ -167,12 +171,19 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
 
     # -- Order one cell through the ACP job lifecycle --
 
-    defp order_cell(cfg, from, to, token, label) do
-      # The BUYER quotes + signs the Xochi intent itself; the signed bundle rides
-      # in the requirement. raxol (the offering) relays it -- it never re-signs.
-      {:ok, request} = quote_request(cfg, from, to, token)
+    defp order_cell(cfg, checked, from, to, token, label) do
+      # The BUYER signs the Xochi intent itself; the signed bundle rides in the
+      # requirement. raxol (the offering) relays it -- it never re-signs.
+      #
+      # `checked` is the quote the solver pin, the served-permit cross-checks and
+      # the Permit2 allowance were all settled against, so signing it (rather than
+      # re-quoting) is what makes those checks bind the signature. A fresh quote
+      # can arrive on another rail -- erc3009 checked, permit2 signed -- and the
+      # allowlist alone already trusts the mirrored pull proxy, so it would not
+      # catch that.
+      %{request: request, quote: quote_resp} = checked
 
-      {:ok, bundle} = XochiProtocol.quote_and_sign(cfg.xochi_config, request, LiveWallet)
+      {:ok, bundle} = XochiProtocol.sign_intent(quote_resp, LiveWallet, request)
 
       requirement = requirement(cfg, from, to, token, bundle)
 
@@ -244,11 +255,14 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
 
     # -- Read-only quote (fillability + solver pin) --
 
+    # Returns the checked PAIR, not just the quote: the request is what the pull
+    # was validated against, so `sign_intent/3` has to re-validate against that
+    # same one rather than a freshly built lookalike.
     defp preflight_quote(cfg, from, to, token) do
       with {:ok, request} <- quote_request(cfg, from, to, token),
            {:ok, quote} <- solver_quote(cfg, request),
            :ok <- XochiProtocol.validate_pull(quote, request, LiveWallet) do
-        {:ok, quote}
+        {:ok, %{request: request, quote: quote}}
       end
     end
 
@@ -272,9 +286,14 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     # failure like a solver-pin mismatch (hard).
     defp preflight_cell(cfg, from, to, token) do
       case preflight_quote(cfg, from, to, token) do
-        {:ok, quote} -> {:ok, %{method: quote.payment_method, to_amount: quote.to_amount}}
-        {:error, :cannot_solve} -> {:soft, :cannot_solve}
-        {:error, reason} -> {:error, reason}
+        {:ok, %{quote: quote}} ->
+          {:ok, %{method: quote.payment_method, to_amount: quote.to_amount}}
+
+        {:error, :cannot_solve} ->
+          {:soft, :cannot_solve}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
 

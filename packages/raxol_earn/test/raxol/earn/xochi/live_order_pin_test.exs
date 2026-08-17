@@ -39,6 +39,21 @@ defmodule Raxol.Earn.Xochi.LiveOrderPinTest do
              "go through OriginPull"
   end
 
+  # The pin is checked against ONE served quote. Signing a different one throws
+  # the check away: a quote served `erc3009` passes the Permit2 branch trivially,
+  # and a second quote served `permit2` is then signed with no pin behind it,
+  # leaving only the solver allowlist -- which already contains the mirrored pull
+  # proxy, i.e. exactly what the pin exists to add to.
+  test "the intent signed is the quote that was checked, not a second one", %{source: source} do
+    refute source =~ "quote_and_sign(",
+           "quote_and_sign/3 fetches a FRESH quote and signs that one, so the spender pin " <>
+             "and the bounded allowance would be checked against a quote the gate never signs"
+
+    assert source =~ "XochiProtocol.sign_intent(",
+           "the gate must sign the quote preflight_quote/4 already checked and the " <>
+             "allowance was granted against"
+  end
+
   test "the pinned spender is operator-supplied, with no default", %{source: source} do
     assert source =~ ~s|System.get_env("XOCHI_ORDER_PULL_SPENDER")|,
            "the Permit2 allowance pin must come from XOCHI_ORDER_PULL_SPENDER"
