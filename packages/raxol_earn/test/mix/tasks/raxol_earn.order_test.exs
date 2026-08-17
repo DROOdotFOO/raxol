@@ -126,12 +126,32 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
       end
     end
 
-    test "an unsupported origin is named as the origin" do
+    # This task runs the whole ACP lifecycle on the corridor's ORIGIN chain, and
+    # the ACP core is deployed only on Base. The funding batch is what makes that
+    # binding rather than incidental: it carries the origin-chain Permit2 approve
+    # in the same send_calls as the Base ACP fund, and one batch is one chain.
+    #
+    # Unchecked it looked supported -- createJob went to the Base core address on
+    # the origin chain, where nothing is deployed, while the budget poll read Base
+    # and saw nothing. The 7702/SCA wallets sign for 8453 regardless, so nothing
+    # downstream would have caught it either.
+    test "a non-Base origin is refused, not half-executed" do
+      %Mix.Error{message: message} =
+        assert_raise(Mix.Error, fn -> Order.run(["--corridor", "42161>8453", "--dry-run"]) end)
+
+      assert message =~ "--corridor origin 42161 is not the ACP core's chain (8453)"
+      # The remedy names a corridor that actually works, keeping the destination.
+      assert message =~ "--corridor 8453>42161"
+    end
+
+    # The origin check fires before the token lookup, so an origin that fails both
+    # is reported on the ground that no token address could fix.
+    test "an origin with no USDC is refused as an origin, not as a token gap" do
       %Mix.Error{message: message} =
         assert_raise(Mix.Error, fn -> Order.run(["--corridor", "4663>8453", "--dry-run"]) end)
 
-      assert message =~ "no USDC address for the origin chain 4663"
-      refute message =~ "Robinhood Chain"
+      assert message =~ "is not the ACP core's chain"
+      refute message =~ "no USDC address"
     end
   end
 

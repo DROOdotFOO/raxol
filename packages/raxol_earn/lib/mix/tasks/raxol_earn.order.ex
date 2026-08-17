@@ -94,9 +94,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
       ORDER_KEY          session-key EOA (0x-hex): signs the intent, and -- under
                          sca/eoa -- the on-chain txs.
-      ORDER_RPC_8453     Base JSON-RPC (the ACP core lives on Base). Default: mainnet.
-      ORDER_RPC_<chain>  origin-chain JSON-RPC, when --corridor leaves another
-                         chain. Falls back to ORDER_RPC_8453.
+      ORDER_RPC_8453     Base JSON-RPC. Default: mainnet. This serves both roles --
+                         the ACP core read and the origin chain -- because the
+                         corridor's origin must BE Base (see --corridor).
       ORDER_XOCHI_TOKEN  Xochi Member token.  ORDER_XOCHI_URL default api.xochi.fi.
       ORDER_SOLVER       origin-pull spender to pin, when not passed as --solver.
 
@@ -111,7 +111,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       --signer B         privy (default) | sca | eoa
       --amount N         principal in USDC (default 3.00; the solver's dynamic gas
                          floor rejects sub-~$3 today).
-      --corridor F>T     origin>destination chain ids (default 8453>42161).
+      --corridor F>T     origin>destination chain ids (default 8453>42161). The
+                         ORIGIN must be the ACP core's chain (8453): the job and
+                         the origin-pull approve share one batch. Destination is free.
       --provider 0x..    the agent (seller) wallet to hire (default the raxol agent).
       --solver 0x..      the origin-pull spender to pin (or ORDER_SOLVER). REQUIRED
                          when the quote pulls via Permit2 -- see below.
@@ -946,12 +948,13 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   defp build_config(opts) do
     {from, to} = parse_corridor(Keyword.get(opts, :corridor, "8453>42161"))
+    assert_acp_origin!(from)
     amount = Keyword.get(opts, :amount, "3.00")
 
-    # Two chains, deliberately separate. `acp_rpc` reads the ACP core, which lives
-    # on Base whatever the corridor is; `rpc` is the ORIGIN chain the buyer signs
-    # UserOps and holds the Permit2 allowance on. They coincide on the default
-    # 8453 origin, which is why one hardcoded Base URL served both until now.
+    # Two names, deliberately separate. `acp_rpc` reads the ACP core; `rpc` is the
+    # ORIGIN chain the buyer signs UserOps and holds the Permit2 allowance on.
+    # `assert_acp_origin!/1` above is what makes them the same chain, so the split
+    # records which role each read plays rather than a divergence that can happen.
     acp_rpc = System.get_env("ORDER_RPC_8453", Chain.mainnet().rpc_url)
     rpc = System.get_env("ORDER_RPC_#{from}", acp_rpc)
 
@@ -1157,6 +1160,39 @@ defmodule Mix.Tasks.RaxolEarn.Order do
             "It pins the origin-pull spender, so a typo would either reject every quote " <>
             "or pin the wrong destination."
         )
+    end
+  end
+
+  # This task runs the whole ACP lifecycle on the corridor's ORIGIN chain --
+  # createJob, the budget read, and the approve+fund batch all go there -- while
+  # the ACP core is deployed only on Base. The funding batch is what makes that
+  # structural rather than incidental: it carries the origin-chain Permit2 approve
+  # in the SAME send_calls as the Base ACP fund, and one batch cannot span two
+  # chains.
+  #
+  # So a non-Base origin is refused here rather than half-executed. Left unchecked
+  # it reads as supported: createJob would be sent to the Base core address on the
+  # origin chain, where nothing is deployed, while the budget poll read Base and
+  # saw nothing -- and the 7702/SCA wallets sign for 8453 whatever the corridor
+  # says.
+  defp assert_acp_origin!(from) do
+    core_chain = Chain.mainnet().chain_id
+
+    case from do
+      ^core_chain ->
+        :ok
+
+      other ->
+        Mix.raise("""
+        --corridor origin #{other} is not the ACP core's chain (#{core_chain}).
+
+        This task creates and funds a real ACP job, and the ACP core is deployed
+        only on chain #{core_chain}. The origin-pull approve rides in the same
+        batch as that job's fund call, so the origin leg cannot be a different
+        chain than the job.
+
+        Order FROM #{core_chain} (the destination is free): --corridor #{core_chain}>#{other}
+        """)
     end
   end
 
