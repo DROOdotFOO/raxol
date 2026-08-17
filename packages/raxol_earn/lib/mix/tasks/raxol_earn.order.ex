@@ -51,12 +51,33 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   `--dry-run` stops after signing and spends nothing.
 
+  ## Origin pull: the `--solver` pin
+
+  The signed intent carries an origin-pull authorization letting the solver collect
+  the principal at settlement. A smart-account buyer (the `privy`/`sca` signers)
+  pulls USDC through Permit2, where an EOA buyer pulls the same USDC through
+  ERC-3009 -- so the rail comes from the served quote's `payment_method`, never
+  from the token.
+
+  That distinction decides how much the destination is bounded. ERC-3009 names the
+  recipient inside the signed digest and the token enforces `msg.sender == to`;
+  Permit2 has no on-chain recipient guard at all, so the spender picks the
+  recipient at call time and the pinned spender is the ONLY destination control.
+  A Permit2 quote is therefore refused before signing unless `--solver`
+  (or `ORDER_SOLVER`) names the spender AND the quote served exactly it.
+
+  When the pin holds, the run grants the Permit2 allowance first, as one extra
+  UserOp billed to the buyer in USDC. It is idempotent: a standing allowance
+  sends nothing. `--dry-run` reads the allowance and reports whether a funded run
+  would need the approve, without sending it.
+
   ## Env
 
       ORDER_KEY          session-key EOA (0x-hex): signs the intent, and -- under
                          sca/eoa -- the on-chain txs.
       ORDER_RPC_8453     Base JSON-RPC (reads; eoa/sca broadcast). Default: mainnet.
       ORDER_XOCHI_TOKEN  Xochi Member token.  ORDER_XOCHI_URL default api.xochi.fi.
+      ORDER_SOLVER       origin-pull spender to pin, when not passed as --solver.
 
       # `privy` backend (delegated sidecar) -- from the agent's op item:
       RAXOL_ACP_WALLET_ADDRESS      the managed SCA agent (the buyer).
@@ -71,6 +92,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
                          floor rejects sub-~$3 today).
       --corridor F>T     origin>destination chain ids (default 8453>42161).
       --provider 0x..    the agent (seller) wallet to hire (default the raxol agent).
+      --solver 0x..      the origin-pull spender to pin (or ORDER_SOLVER). REQUIRED
+                         when the quote pulls via Permit2 -- see below.
       --fee-bps N        expected take-rate to assert (default 8).
       --max-escrow N     ceiling in USDC on what --fund will pay. Defaults to the
                          --fee-bps take-rate; a larger on-chain budget is refused.
@@ -99,6 +122,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     Transport
   }
 
+  alias Raxol.Earn.Xochi.OriginPull
   alias Raxol.Payments.Assets
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
   alias Raxol.Payments.Xochi.{PullContracts, Schemas.QuoteRequest}
@@ -116,6 +140,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     amount: :string,
     corridor: :string,
     provider: :string,
+    solver: :string,
     fee_bps: :integer,
     max_escrow: :string,
     fund: :boolean,
@@ -131,7 +156,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     Application.ensure_all_started(:raxol_earn)
 
     cfg = build_config(opts)
-    trust_pull_contracts()
+    pin_origin_pull(cfg.solver)
 
     log(
       "buyer=#{cfg.buyer}  provider=#{cfg.provider}  corridor=#{cfg.from}->#{cfg.to}  amount=#{cfg.amount} USDC"
@@ -141,9 +166,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     # the plan exists, so the costless mode must be the one that shows it.
     print_plan(cfg, opts)
 
-    # 1. Sign the Xochi intent (off-chain).
+    # 1. Quote, settle the origin-pull allowance, then sign (all off-chain bar the
+    #    Permit2 approve).
     bundle =
-      case sign_intent(cfg) do
+      case sign_intent(cfg, opts) do
         {:ok, bundle} -> bundle
         {:error, reason} -> Mix.raise(sign_intent_error(reason))
       end
@@ -304,11 +330,41 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       [
         "  gas         charged in USDC from the buyer by an ERC-20 paymaster, NOT in ETH " <>
           "and NOT free; priced per UserOp, known only from the receipt",
-        "             UserOps this run: #{userops(opts)}",
+        "             UserOps this run: #{userops(opts)}"
+      ] ++
+      permit2_lines(cfg, Keyword.get(opts, :dry_run, false)) ++
+      [
         "  principal   #{cfg.amount} AUTHORIZED, not moved here -- the signed intent lets " <>
           "the solver pull up to that during settlement"
       ] ++ plan_footer(opts)
   end
+
+  # The origin-pull rail is only known once the quote is served, so the approve is
+  # a conditional leg rather than a counted one. It is named anyway: a
+  # smart-account buyer pulls USDC via Permit2, and that costs the buyer one more
+  # USDC-billed UserOp than the ERC-3009 rail an EOA buyer takes.
+  defp permit2_lines(cfg, false = _dry_run?) do
+    [
+      "  permit2     +1 approve(Permit2) UserOp, USDC gas again, IF the quote's origin pull " <>
+        "is Permit2 and the buyer's allowance is short",
+      "             spender pin: #{spender_pin(cfg)}"
+    ]
+  end
+
+  defp permit2_lines(cfg, true) do
+    [
+      "  permit2     no approve(Permit2) UserOp is sent under --dry-run; the run reads the " <>
+        "allowance and reports whether a funded run would need one",
+      "             spender pin: #{spender_pin(cfg)}"
+    ]
+  end
+
+  defp spender_pin(%{solver: nil}),
+    do:
+      "NONE -- a Permit2 pull is refused before signing (pass --solver 0x.. / ORDER_SOLVER); " <>
+        "Permit2 has no on-chain recipient guard, so the pin is the only destination control"
+
+  defp spender_pin(%{solver: solver}), do: solver
 
   defp escrow_lines(cfg, decimals, ceiling, :new_job) do
     [
@@ -546,7 +602,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   # -- Steps --
 
-  defp sign_intent(cfg) do
+  # Quote first, so the origin-pull rail is read from what the solver actually
+  # served rather than assumed from the token, then hold the allowance that rail
+  # needs BEFORE releasing a signature over it.
+  defp sign_intent(cfg, opts) do
     request = %QuoteRequest{
       wallet: cfg.buyer,
       from_chain_id: cfg.from,
@@ -558,8 +617,40 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       slippage_bps: 50
     }
 
-    XochiProtocol.quote_and_sign(cfg.xochi_config, request, cfg.intent_wallet)
+    with {:ok, quote_resp} <- XochiProtocol.get_quote(cfg.xochi_config, request),
+         :ok <- settle_origin_pull(cfg, quote_resp, opts) do
+      XochiProtocol.sign_intent(quote_resp, cfg.intent_wallet, request)
+    end
   end
+
+  # The Permit2 rail pulls through a standing ERC-20 allowance, which the buyer
+  # grants with one extra UserOp. Refusing an unpinned spender happens here,
+  # before the approve and before the signature -- an allowance towards an
+  # unverified spender is the failure this whole path exists to prevent.
+  defp settle_origin_pull(cfg, quote_resp, opts) do
+    with {:ok, plan} <- OriginPull.allowance_plan(quote_resp, cfg.solver),
+         {:ok, outcome} <- ensure_allowance(cfg, plan, opts) do
+      log(OriginPull.describe(outcome))
+      report_approve(cfg, outcome)
+      :ok
+    else
+      {:error, reason} -> {:error, {:origin_pull, reason}}
+    end
+  end
+
+  defp ensure_allowance(cfg, plan, opts) do
+    OriginPull.ensure_allowance(
+      plan,
+      cfg.provider_adapter,
+      cfg.from,
+      cfg.src_token,
+      cfg.buyer,
+      dry_run: Keyword.get(opts, :dry_run, false)
+    )
+  end
+
+  defp report_approve(cfg, {:approved, tx}), do: report_actuals(cfg, "permit2 approve", tx)
+  defp report_approve(_cfg, _outcome), do: :ok
 
   defp requirement(cfg, bundle) do
     %{
@@ -710,6 +801,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     dst_token = usdc_address!(to, "destination")
     principal_atomic = Assets.to_atomic(Decimal.new(amount), Assets.decimals(from, src_token))
 
+    # Before build_signer, which boots the sidecar: a malformed pin should not
+    # cost a subprocess to discover.
+    solver = pinned_solver(opts)
+
     signer = Keyword.get(opts, :signer, "privy")
     {provider_adapter, buyer, intent_wallet} = build_signer(signer, from, rpc)
     log("signer backend: #{signer}")
@@ -719,6 +814,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       intent_wallet: intent_wallet,
       provider_adapter: provider_adapter,
       provider: Keyword.get(opts, :provider, @default_provider),
+      solver: solver,
       from: from,
       to: to,
       amount: amount,
@@ -856,10 +952,42 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   end
 
   # Trust the verified XochiPull contracts so the intent's origin-pull authorization
-  # passes the anti-drain pin (Riddler #591; same set config/runtime.exs uses).
-  defp trust_pull_contracts do
-    Application.put_env(:raxol_payments, :pull_solver_allowlist, PullContracts.pull_recipients())
+  # passes the anti-drain pin (Riddler #591; same set config/runtime.exs uses),
+  # plus the spender this run was told to expect. The mirrored contract set is a
+  # checked-in copy of a deployment record, so it is never widened silently: a
+  # rotated address has to be named on the command line.
+  defp pin_origin_pull(solver) do
+    Application.put_env(:raxol_payments, :pull_solver_allowlist, pull_allowlist(solver))
     Application.put_env(:raxol_payments, :pull_require_solver_pin, true)
+  end
+
+  defp pull_allowlist(nil), do: PullContracts.pull_recipients()
+  defp pull_allowlist(solver), do: Enum.uniq([solver | PullContracts.pull_recipients()])
+
+  # The pinned origin-pull spender: a flag, because it is a per-run counterparty
+  # address like --provider, and an env var, because the live-gate runner drives
+  # this task entirely through ORDER_*. The flag wins when both are set.
+  defp pinned_solver(opts) do
+    case Keyword.get(opts, :solver) || System.get_env("ORDER_SOLVER") do
+      nil -> nil
+      value -> solver_address!(String.trim(value))
+    end
+  end
+
+  defp solver_address!(""), do: nil
+
+  defp solver_address!(value) do
+    case Regex.match?(~r/\A0x[0-9a-fA-F]{40}\z/, value) do
+      true ->
+        value
+
+      false ->
+        Mix.raise(
+          "--solver / ORDER_SOLVER #{inspect(value)} is not a 0x-hex 20-byte address. " <>
+            "It pins the origin-pull spender, so a typo would either reject every quote " <>
+            "or pin the wrong destination."
+        )
+    end
   end
 
   defp parse_corridor(spec) do
@@ -900,6 +1028,28 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     cloudflare.com and other Cloudflare sites sit elsewhere and will pass while
     this one fails. Route around it with a VPN or an exit node in another
     country. Confirm from off-network before reporting an outage upstream.
+    """
+  end
+
+  defp sign_intent_error({:origin_pull, reason}), do: OriginPull.explain(reason)
+
+  # The pin rejected the served recipient/spender. The addresses it accepts are a
+  # checked-in mirror of Riddler's deployment record plus whatever --solver named,
+  # so a rotated pull contract lands here rather than anywhere more informative.
+  defp sign_intent_error({:authorization_mismatch, field})
+       when field in [:pull_to, :pull_spender] do
+    """
+    the quote's origin-pull recipient is not pinned (#{field}).
+
+    Nothing was signed. The accepted set is the verified XochiPull contracts this
+    repo mirrors, plus any --solver / ORDER_SOLVER address. A solver that has
+    redeployed its pull contract will fail exactly here: confirm the new address
+    against Riddler's XochiPull deployment record, then re-run with
+
+      --solver 0x<spender>
+
+    Do not widen the pin to whatever the quote served -- checking that value is
+    the entire point of it.
     """
   end
 

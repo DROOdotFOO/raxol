@@ -4,6 +4,8 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
 
   alias Mix.Tasks.RaxolEarn.Order
 
+  @spender "0xE9B020941015e428876f60C1979B3fc2A38a2f53"
+
   setup do
     shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)
@@ -51,6 +53,34 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
 
       assert message =~ "no USDC address for the origin chain 4663"
       refute message =~ "Robinhood Chain"
+    end
+  end
+
+  describe "the --solver pin" do
+    test "is a real switch, not one OptionParser silently drops" do
+      # `strict:` routes an unregistered switch to `invalid` and parse_argv drops
+      # it, so an unregistered --solver would leave the pin unset while the
+      # operator watched themselves type it.
+      assert Order.parse_argv(["--solver", @spender]) == [solver: @spender]
+    end
+
+    test "a malformed address is refused before the signer sidecar boots" do
+      %Mix.Error{message: message} =
+        assert_raise(Mix.Error, fn -> Order.run(["--solver", "0xnope", "--dry-run"]) end)
+
+      assert message =~ "is not a 0x-hex 20-byte address"
+      assert message =~ "pins the origin-pull spender"
+    end
+
+    test "ORDER_SOLVER is read when the flag is absent, and validated the same way" do
+      System.put_env("ORDER_SOLVER", "not-an-address")
+      on_exit(fn -> System.delete_env("ORDER_SOLVER") end)
+
+      %Mix.Error{message: message} =
+        assert_raise(Mix.Error, fn -> Order.run(["--dry-run"]) end)
+
+      assert message =~ "ORDER_SOLVER"
+      assert message =~ "is not a 0x-hex 20-byte address"
     end
   end
 
