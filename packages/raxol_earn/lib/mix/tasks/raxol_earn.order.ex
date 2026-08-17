@@ -67,12 +67,12 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   (or `ORDER_SOLVER`) names the spender AND the quote served exactly it.
 
   When the pin holds, the run grants the Permit2 allowance first, as one extra
-  UserOp billed to the buyer in USDC. The approve is for exactly this intent's
-  authorized pull, not a standing max, so a later bad signature cannot reach more
-  of the origin balance than this run was already spending. It is idempotent: an
-  allowance that already covers the pull sends nothing. `--dry-run` reads the
-  allowance and reports whether a funded run would need the approve, without
-  sending it.
+  write: a USDC-gas UserOp under `privy`/`sca`, an ETH-gas tx under `eoa`. The
+  approve is for exactly this intent's authorized pull, not a standing max, so a
+  later bad signature cannot reach more of the origin balance than this run was
+  already spending. It is idempotent: an allowance that already covers the pull
+  sends nothing. `--dry-run` reads the allowance and reports whether a funded run
+  would need the approve, without sending it.
 
   ## Env
 
@@ -331,9 +331,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     ["SPEND PLAN -- buyer #{cfg.buyer} on chain #{cfg.from}, amounts in USDC"] ++
       escrow_lines(cfg, decimals, escrow_ceiling(cfg, opts), escrow) ++
       [
-        "  gas         charged in USDC from the buyer by an ERC-20 paymaster, NOT in ETH " <>
-          "and NOT free; priced per UserOp, known only from the receipt",
-        "             UserOps this run: #{userops(opts)}"
+        "  gas         #{gas_note(cfg.signer)}",
+        "             writes this run: #{writes(opts)}"
       ] ++
       permit2_lines(cfg, Keyword.get(opts, :dry_run, false)) ++
       [
@@ -342,25 +341,43 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       ] ++ plan_footer(opts)
   end
 
+  # `eoa` broadcasts plain EIP-1559 txs and pays ETH; the smart-account signers go
+  # through an ERC-20 paymaster that fronts the ETH and bills USDC. Saying "USDC
+  # gas" for all three would make the plan wrong for exactly the signer whose gas
+  # this task cannot see in its own USDC accounting.
+  defp gas_note("eoa"),
+    do:
+      "paid in ETH by the buyer EOA, NOT in USDC and NOT free; priced per tx, " <>
+        "known only from the receipt"
+
+  defp gas_note(_signer),
+    do:
+      "charged in USDC from the buyer by an ERC-20 paymaster, NOT in ETH " <>
+        "and NOT free; priced per UserOp, known only from the receipt"
+
   # The origin-pull rail is only known once the quote is served, so the approve is
-  # a conditional leg rather than a counted one. It is named anyway: a
-  # smart-account buyer pulls USDC via Permit2, and that costs the buyer one more
-  # USDC-billed UserOp than the ERC-3009 rail an EOA buyer takes.
+  # conditional -- but it can fire on ANY non-dry run, including one that neither
+  # creates nor funds a job, so it is counted as a leg rather than mentioned in
+  # passing.
   defp permit2_lines(cfg, false = _dry_run?) do
     [
-      "  permit2     +1 approve(Permit2) UserOp, USDC gas again, IF the quote's origin pull " <>
-        "is Permit2 and the buyer's allowance is short",
+      "  permit2     +1 approve(Permit2) #{write_noun(cfg.signer)}, gas again, IF the quote's " <>
+        "origin pull is Permit2 and the buyer's allowance is short",
+      "             approves exactly the intent's authorized pull, not a standing max",
       "             spender pin: #{spender_pin(cfg)}"
     ]
   end
 
   defp permit2_lines(cfg, true) do
     [
-      "  permit2     no approve(Permit2) UserOp is sent under --dry-run; the run reads the " <>
-        "allowance and reports whether a funded run would need one",
+      "  permit2     no approve(Permit2) #{write_noun(cfg.signer)} is sent under --dry-run; the " <>
+        "run reads the allowance and reports whether a funded run would need one",
       "             spender pin: #{spender_pin(cfg)}"
     ]
   end
+
+  defp write_noun("eoa"), do: "tx"
+  defp write_noun(_signer), do: "UserOp"
 
   defp spender_pin(%{solver: nil}),
     do:
@@ -399,20 +416,23 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     do:
       "refusing anything above #{Assets.to_human(ceiling, decimals)} (raise it with --max-escrow)"
 
-  defp userops(opts) do
-    legs =
-      [
-        if(Keyword.get(opts, :job_id), do: nil, else: "createJob"),
-        if(Keyword.get(opts, :fund, false), do: "approve+fund", else: nil)
-      ]
-      |> Enum.reject(&is_nil/1)
+  # Every leg that can broadcast, in the order it happens. The Permit2 approve is
+  # first because it is settled before the intent is signed, and it is counted
+  # even though the quote decides it: a leg that "usually" does not fire is still
+  # a write this run may make, and the plan exists so no write is unannounced.
+  defp writes(opts), do: describe_writes(Keyword.get(opts, :dry_run, false), opts)
 
-    describe_userops(Keyword.get(opts, :dry_run, false), legs)
+  defp describe_writes(true, _opts), do: "none (--dry-run writes nothing on-chain)"
+
+  defp describe_writes(false, opts) do
+    [
+      "approve(Permit2) if the pull needs it",
+      if(Keyword.get(opts, :job_id), do: nil, else: "createJob"),
+      if(Keyword.get(opts, :fund, false), do: "approve+fund", else: nil)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(", ")
   end
-
-  defp describe_userops(true, _legs), do: "none (--dry-run writes nothing on-chain)"
-  defp describe_userops(false, []), do: "none"
-  defp describe_userops(false, legs), do: Enum.join(legs, ", ")
 
   defp plan_footer(opts) do
     footer(
@@ -428,10 +448,13 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   defp footer(false, true, _resuming?), do: []
 
   defp footer(false, false, false),
-    do: ["  (no --fund: no escrow this run, but the createJob UserOp still costs USDC gas)"]
+    do: ["  (no --fund: no escrow this run, but the createJob write still costs gas)"]
 
   defp footer(false, false, true),
-    do: ["  (no --fund and no createJob: this run writes nothing on-chain)"]
+    do: [
+      "  (no --fund and no createJob: the only write this run can make is the " <>
+        "conditional approve(Permit2))"
+    ]
 
   defp expected_escrow(cfg), do: div(cfg.principal_atomic * cfg.fee_bps, 10_000)
 
@@ -828,6 +851,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       src_token: src_token,
       dst_token: dst_token,
       fee_bps: Keyword.get(opts, :fee_bps, 8),
+      signer: signer,
       rpc: rpc,
       core: Chain.mainnet().acp_core_address,
       server_url: Chain.mainnet().acp_server_url,

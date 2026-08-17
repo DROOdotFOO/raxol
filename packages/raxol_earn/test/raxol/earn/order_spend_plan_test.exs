@@ -24,7 +24,7 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
 
   @spender "0xE9B020941015e428876f60C1979B3fc2A38a2f53"
 
-  # 3.00 USDC on Base at the default 8 bps.
+  # 3.00 USDC on Base at the default 8 bps, under the default managed-SCA signer.
   defp cfg do
     %{
       buyer: "0x468aeae798b3a6548ac2401d276f83afdc172283",
@@ -34,6 +34,7 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
       amount: "3.00",
       principal_atomic: 3_000_000,
       fee_bps: 8,
+      signer: "privy",
       solver: nil
     }
   end
@@ -78,6 +79,17 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
       refute text =~ "sponsored"
     end
 
+    test "an EOA run says ETH, since no paymaster bills it USDC" do
+      lines = Order.spend_plan_lines(%{cfg() | signer: "eoa"}, [fund: true], :new_job)
+      text = Enum.join(lines, "\n")
+
+      assert text =~ "paid in ETH by the buyer EOA"
+      assert text =~ "NOT in USDC"
+      # An EOA broadcasts plain transactions; calling them UserOps sends the
+      # operator looking for a paymaster charge that never appears.
+      refute text =~ "UserOp"
+    end
+
     test "the funding log line does not contradict the plan" do
       line = Order.funding_line(72_993)
 
@@ -87,27 +99,39 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
   end
 
   describe "legs" do
-    test "a funded run names both UserOps" do
-      assert plan(fund: true) =~ "UserOps this run: createJob, approve+fund"
+    test "a funded run names every write, the conditional approve included" do
+      assert plan(fund: true) =~
+               "writes this run: approve(Permit2) if the pull needs it, createJob, approve+fund"
     end
 
     test "an unfunded run still warns that createJob costs gas" do
       text = plan([])
 
-      assert text =~ "UserOps this run: createJob"
+      assert text =~ "writes this run: approve(Permit2) if the pull needs it, createJob"
       assert text =~ "no --fund: no escrow this run"
-      assert text =~ "still costs USDC gas"
+      assert text =~ "still costs gas"
     end
 
     test "resuming an existing job drops the createJob leg" do
-      assert plan([job_id: 73_295, fund: true], {:ok, 2_400}) =~ "UserOps this run: approve+fund"
+      assert plan([job_id: 73_295, fund: true], {:ok, 2_400}) =~
+               "writes this run: approve(Permit2) if the pull needs it, approve+fund"
     end
 
-    test "a dry run names no UserOps at all" do
+    test "a resumed unfunded run counts the approve rather than claiming no writes" do
+      text = plan([job_id: 73_295], {:ok, 2_400})
+
+      # The run can still broadcast the Permit2 approve, so a plan saying it
+      # writes nothing is the contradiction the plan exists to prevent.
+      assert text =~ "writes this run: approve(Permit2) if the pull needs it"
+      assert text =~ "the only write this run can make is the conditional approve(Permit2)"
+      refute text =~ "writes nothing on-chain"
+    end
+
+    test "a dry run names no writes at all" do
       text = plan(dry_run: true, fund: true)
 
       assert text =~ "SPEND PLAN"
-      assert text =~ "UserOps this run: none (--dry-run writes nothing on-chain)"
+      assert text =~ "writes this run: none (--dry-run writes nothing on-chain)"
       assert text =~ "spends nothing"
     end
   end
@@ -117,8 +141,20 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
       text = plan(fund: true)
 
       assert text =~ "+1 approve(Permit2) UserOp"
-      assert text =~ "USDC gas again"
+      assert text =~ "gas again"
       assert text =~ "the buyer's allowance is short"
+    end
+
+    test "is disclosed as bounded, not as a standing max approval" do
+      text = plan(fund: true)
+
+      assert text =~ "approves exactly the intent's authorized pull, not a standing max"
+    end
+
+    test "is a tx, not a UserOp, under --signer eoa" do
+      lines = Order.spend_plan_lines(%{cfg() | signer: "eoa"}, [fund: true], :new_job)
+
+      assert Enum.join(lines, "\n") =~ "+1 approve(Permit2) tx"
     end
 
     test "names the pinned spender when one was supplied" do
