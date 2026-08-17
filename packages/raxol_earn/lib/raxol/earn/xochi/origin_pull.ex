@@ -48,6 +48,27 @@ defmodule Raxol.Earn.Xochi.OriginPull do
   large enough -- including a standing max granted out of band -- is left alone
   and sends nothing, so an operator who prefers the conventional pattern is not
   fought, only never given it by default.
+
+  ## The decision is early; the effect need not be
+
+  Refusing happens before the signature -- an allowance towards an unverified
+  spender is what this exists to prevent, so `allowance_plan/3` runs while there
+  is still nothing signed to regret. The GRANT is a separate question, because
+  the allowance is not needed until the solver pulls, which is at settlement.
+
+  Two effect shapes, for two kinds of caller:
+
+    * `ensure_allowance/4` broadcasts the approve on its own. Right for a buyer
+      that can simply send a transaction.
+    * `allowance_status/3` + `approve_calls/1` hand the approve back as calls to
+      batch into a write the caller was already making. Right for a sponsored
+      ERC-4337 buyer, whose paymaster refuses a standalone approve to a token
+      contract -- and better besides, since batching lands the allowance in the
+      same transaction rather than an earlier one that could be the only leg to
+      land.
+
+  Both are bounded by the same plan and both send nothing when the allowance
+  already covers the pull.
   """
 
   alias Raxol.Earn.Onchain.Permit2Approver
@@ -71,6 +92,9 @@ defmodule Raxol.Earn.Xochi.OriginPull do
 
   @typedoc "What the origin pull needs before the intent is signed."
   @type plan :: :not_needed | {:permit2, permit()}
+
+  @typedoc "What the pull still needs, read against the buyer's current allowance."
+  @type status :: :not_needed | :standing | {:short, permit()}
 
   @typedoc "What ensuring the allowance did (or, under `:dry_run`, would do)."
   @type outcome ::
@@ -102,7 +126,47 @@ defmodule Raxol.Earn.Xochi.OriginPull do
     do: {:error, {:unsupported_pull_method, other}}
 
   @doc """
-  Ensure the buyer holds the allowance `plan` calls for.
+  Read the buyer's current allowance and say what the pull still needs.
+
+  Never writes. The counterpart to `ensure_allowance/4` for a caller that grants
+  the allowance inside a write of its own: it decides whether an approve is
+  needed and at what bound, and `approve_calls/1` turns that into the calls to
+  batch. A read that fails is returned as an error rather than assumed short,
+  because approving on a guess is the one thing this module will not do.
+  """
+  @spec allowance_status(plan(), ProviderAdapter.adapter(), String.t()) ::
+          {:ok, status()} | {:error, term()}
+  def allowance_status(plan, provider, owner)
+
+  def allowance_status(:not_needed, _provider, _owner), do: {:ok, :not_needed}
+
+  def allowance_status({:permit2, permit}, provider, owner) do
+    with {:ok, current} <-
+           Permit2Approver.allowance(provider, permit.chain_id, permit.token, owner) do
+      {:ok, covered(current >= permit.amount, permit)}
+    end
+  end
+
+  defp covered(true, _permit), do: :standing
+  defp covered(false, permit), do: {:short, permit}
+
+  @doc """
+  The `approve` calls that close a `{:short, _}` status, for the caller to batch
+  into its own write. Empty for every other status, so an allowance that already
+  covers the pull still sends nothing.
+
+  The amount is the permit's, which `allowance_plan/3` already bounded to the
+  transfer the operator asked for -- batching moves WHERE the approve lands,
+  never how much it grants.
+  """
+  @spec approve_calls(status()) :: [ProviderAdapter.call()]
+  def approve_calls({:short, permit}),
+    do: [Permit2Approver.approve_call(permit.token, permit.amount)]
+
+  def approve_calls(status) when status in [:not_needed, :standing], do: []
+
+  @doc """
+  Ensure the buyer holds the allowance `plan` calls for, in a write of its own.
 
   The plan carries the chain, token and amount that were cross-checked against the
   operator's intent, so this cannot act on a different leg than the one that was
@@ -110,6 +174,11 @@ defmodule Raxol.Earn.Xochi.OriginPull do
   `{:ok, :standing}` and sends nothing. With `dry_run: true` the allowance is only
   READ, so a rehearsal reports `{:would_approve, amount}` instead of broadcasting
   one.
+
+  Use this only where a lone approve is broadcastable. A sponsored ERC-4337 buyer
+  should batch instead (`allowance_status/3` + `approve_calls/1`): the Virtuals
+  paymaster refuses a standalone approve to a token contract, so on that path the
+  approve has to ride in a UserOp that also carries a call the paymaster accepts.
   """
   @spec ensure_allowance(plan(), ProviderAdapter.adapter(), String.t(), keyword()) ::
           {:ok, outcome()} | {:error, term()}
@@ -120,8 +189,8 @@ defmodule Raxol.Earn.Xochi.OriginPull do
   def ensure_allowance({:permit2, permit}, provider, owner, opts),
     do: ensure(Keyword.get(opts, :dry_run, false), provider, permit, owner)
 
-  @doc "One log line describing what `ensure_allowance/4` did."
-  @spec describe(outcome()) :: String.t()
+  @doc "One log line describing an `allowance_status/3` or an `ensure_allowance/4` result."
+  @spec describe(status() | outcome()) :: String.t()
   def describe(:not_needed),
     do: "origin pull: not a Permit2 pull -- no allowance to grant"
 
@@ -129,6 +198,13 @@ defmodule Raxol.Earn.Xochi.OriginPull do
     do:
       "origin pull: the standing Permit2 allowance already covers this intent's pull " <>
         "-- no approve sent"
+
+  # Where the approve then lands is the caller's, since only it knows whether it
+  # has a write to batch into.
+  def describe({:short, permit}),
+    do:
+      "origin pull: Permit2 allowance is SHORT -- an approve for exactly #{permit.amount} " <>
+        "base units (this intent's authorized pull) is needed before the solver can pull"
 
   def describe({:would_approve, amount}),
     do:
@@ -356,12 +432,11 @@ defmodule Raxol.Earn.Xochi.OriginPull do
 
   defp to_uint(_value), do: nil
 
-  # A rehearsal reads the allowance and answers with the same threshold the
-  # funded path applies, so `--dry-run` cannot promise a different run.
+  # A rehearsal goes through the same read the batching path does, so there is one
+  # threshold and `--dry-run` cannot promise a different run.
   defp ensure(true, provider, permit, owner) do
-    with {:ok, current} <-
-           Permit2Approver.allowance(provider, permit.chain_id, permit.token, owner) do
-      {:ok, rehearsed(current >= permit.amount, permit.amount)}
+    with {:ok, status} <- allowance_status({:permit2, permit}, provider, owner) do
+      {:ok, rehearsed(status)}
     end
   end
 
@@ -375,8 +450,8 @@ defmodule Raxol.Earn.Xochi.OriginPull do
     end
   end
 
-  defp rehearsed(true, _amount), do: :standing
-  defp rehearsed(false, amount), do: {:would_approve, amount}
+  defp rehearsed(:standing), do: :standing
+  defp rehearsed({:short, permit}), do: {:would_approve, permit.amount}
 
   defp granted(:sufficient, _amount), do: :standing
   defp granted({:approved, hash}, amount), do: {:approved, amount, hash}

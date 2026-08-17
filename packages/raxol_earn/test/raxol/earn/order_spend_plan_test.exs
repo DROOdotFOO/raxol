@@ -91,7 +91,7 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
     end
 
     test "the funding log line does not contradict the plan" do
-      line = Order.funding_line(72_993)
+      line = Order.funding_line(72_993, :not_needed)
 
       refute line =~ "sponsored"
       assert line =~ "gas billed to the buyer in USDC"
@@ -99,32 +99,34 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
   end
 
   describe "legs" do
-    test "a funded run names every write, the conditional approve included" do
+    test "a funded run names every write, the carried approve included" do
       assert plan(fund: true) =~
-               "writes this run: approve(Permit2) if the pull needs it, createJob, approve+fund"
+               "writes this run: createJob, approve+fund " <>
+                 "(carrying the approve(Permit2) if the pull needs it)"
     end
 
     test "an unfunded run still warns that createJob costs gas" do
       text = plan([])
 
-      assert text =~ "writes this run: approve(Permit2) if the pull needs it, createJob"
+      assert text =~ "writes this run: createJob"
       assert text =~ "no --fund: no escrow this run"
       assert text =~ "still costs gas"
     end
 
     test "resuming an existing job drops the createJob leg" do
       assert plan([job_id: 73_295, fund: true], {:ok, 2_400}) =~
-               "writes this run: approve(Permit2) if the pull needs it, approve+fund"
+               "writes this run: approve+fund (carrying the approve(Permit2) if the pull needs it)"
     end
 
-    test "a resumed unfunded run counts the approve rather than claiming no writes" do
+    test "a resumed unfunded run claims no writes, because it can make none" do
       text = plan([job_id: 73_295], {:ok, 2_400})
 
-      # The run can still broadcast the Permit2 approve, so a plan saying it
-      # writes nothing is the contradiction the plan exists to prevent.
-      assert text =~ "writes this run: approve(Permit2) if the pull needs it"
-      assert text =~ "the only write this run can make is the conditional approve(Permit2)"
-      refute text =~ "writes nothing on-chain"
+      # The approve now rides in the funding batch, so without --fund and without
+      # createJob there is nothing left to broadcast. Naming the approve as a leg
+      # here would promise a write this run cannot make.
+      assert text =~ "writes this run: none (without --fund and without createJob"
+      assert text =~ "this run signs an intent and broadcasts nothing"
+      assert text =~ "stays unexecutable"
     end
 
     test "a dry run names no writes at all" do
@@ -137,11 +139,11 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
   end
 
   describe "the Permit2 approve" do
-    test "is named as a possible extra UserOp, with what decides it" do
+    test "is named as riding inside the funding write, not as one of its own" do
       text = plan(fund: true)
 
-      assert text =~ "+1 approve(Permit2) UserOp"
-      assert text =~ "gas again"
+      assert text =~ "rides INSIDE the approve+fund UserOp"
+      assert text =~ "no separate write, no extra gas"
       assert text =~ "the buyer's allowance is short"
     end
 
@@ -151,10 +153,20 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
       assert text =~ "approves exactly the intent's authorized pull, not a standing max"
     end
 
+    test "an unfunded run says the allowance is not granted, and what that costs" do
+      text = plan([])
+
+      # --fund is what carries the approve, so without it a signed Permit2 intent
+      # is left with a pull that cannot execute. Saying nothing here is how that
+      # surfaces later as an unexplained settlement failure.
+      assert text =~ "no approve(Permit2) UserOp without --fund"
+      assert text =~ "unexecutable until a --fund run grants the allowance"
+    end
+
     test "is a tx, not a UserOp, under --signer eoa" do
       lines = Order.spend_plan_lines(%{cfg() | signer: "eoa"}, [fund: true], :new_job)
 
-      assert Enum.join(lines, "\n") =~ "+1 approve(Permit2) tx"
+      assert Enum.join(lines, "\n") =~ "rides INSIDE the approve+fund tx"
     end
 
     test "names the pinned spender when one was supplied" do
@@ -176,7 +188,7 @@ defmodule Raxol.Earn.OrderSpendPlanTest do
       text = plan(dry_run: true)
 
       assert text =~ "no approve(Permit2) UserOp is sent under --dry-run"
-      refute text =~ "+1 approve(Permit2) UserOp"
+      refute text =~ "rides INSIDE"
     end
   end
 

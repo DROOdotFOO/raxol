@@ -299,6 +299,65 @@ defmodule Raxol.Earn.Xochi.OriginPullTest do
     end
   end
 
+  describe "allowance_status/3 and approve_calls/1" do
+    test "reading the allowance broadcasts nothing, whatever it says" do
+      adapter = Mock.new()
+      :ok = Mock.set_contract_read(adapter, @token, @allowance_sig, zero_word())
+
+      assert {:ok, {:short, permit()}} ==
+               OriginPull.allowance_status({:permit2, permit()}, adapter, @owner)
+
+      assert Mock.sent_calls(adapter) == []
+    end
+
+    test "a rail needing no allowance is short of nothing and batches nothing" do
+      adapter = Mock.new()
+
+      assert {:ok, :not_needed} = OriginPull.allowance_status(:not_needed, adapter, @owner)
+      assert OriginPull.approve_calls(:not_needed) == []
+    end
+
+    test "an allowance already covering the pull batches nothing" do
+      adapter = Mock.new()
+      :ok = Mock.set_contract_read(adapter, @token, @allowance_sig, word(@amount))
+
+      assert {:ok, :standing} =
+               OriginPull.allowance_status({:permit2, permit()}, adapter, @owner)
+
+      assert OriginPull.approve_calls(:standing) == []
+    end
+
+    test "a short allowance batches one approve, bounded to the permit" do
+      assert [call] = OriginPull.approve_calls({:short, permit()})
+
+      assert call.to == @token
+      assert call.value == 0
+      assert <<@approve_selector::binary, args::binary>> = call.data
+
+      assert <<spender::binary-size(32), granted::unsigned-big-integer-size(256)>> = args
+      assert granted == @amount
+      refute granted == Permit2Approver.max_uint256()
+
+      # The ERC-20 approval spender is the universal Permit2 contract; the
+      # permit's own spender is bounded by the pin, not by this approve.
+      assert "0x" <> Base.encode16(binary_part(spender, 12, 20), case: :lower) ==
+               String.downcase(Permit2Approver.permit2_address())
+    end
+
+    test "the batched bound is the permit's, not the amount originally ordered" do
+      assert [call] = OriginPull.approve_calls({:short, permit(%{amount: 1_500_000})})
+      assert <<@approve_selector::binary, _spender::binary-size(32), granted::256>> = call.data
+      assert granted == 1_500_000
+    end
+
+    test "a failed allowance read is surfaced, never read as sufficient" do
+      adapter = Mock.new()
+
+      assert {:error, {:no_canned_read, _, _}} =
+               OriginPull.allowance_status({:permit2, permit()}, adapter, @owner)
+    end
+  end
+
   describe "describe/1" do
     test "distinguishes a granted approval from a standing one, and names the bound" do
       assert OriginPull.describe({:approved, 3_000_000, "0xabc"}) =~ "approve tx 0xabc"
@@ -306,6 +365,8 @@ defmodule Raxol.Earn.Xochi.OriginPullTest do
       assert OriginPull.describe(:standing) =~ "no approve sent"
       assert OriginPull.describe({:would_approve, 3_000_000}) =~ "SHORT"
       assert OriginPull.describe({:would_approve, 3_000_000}) =~ "exactly 3000000 base units"
+      assert OriginPull.describe({:short, %{amount: 3_000_000}}) =~ "SHORT"
+      assert OriginPull.describe({:short, %{amount: 3_000_000}}) =~ "exactly 3000000 base units"
       # True of a non-pulling quote as well as an ERC-3009 one, since both reach
       # this outcome.
       assert OriginPull.describe(:not_needed) =~ "not a Permit2 pull"

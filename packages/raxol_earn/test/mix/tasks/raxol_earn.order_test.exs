@@ -31,6 +31,25 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
   # under test.
   defp gate(budget, argv), do: Order.enforce_budget!(cfg(), budget, Order.parse_argv(argv))
 
+  # The universal Permit2 contract -- the ERC-20 spender an origin-pull approve
+  # names. The permit's own spender is what the --solver pin bounds; the two are
+  # different addresses and confusing them is the failure this pins against.
+  @permit2 "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+
+  defp permit(amount \\ 3_000_000),
+    do: %{spender: @spender, chain_id: 8453, token: cfg().src_token, amount: amount}
+
+  defp calls(pull), do: Order.funding_calls(cfg(), 73_295, 2_400, pull)
+
+  defp selector(%{data: <<sel::binary-size(4), _rest::binary>>}),
+    do: Base.encode16(sel, case: :lower)
+
+  defp selector_of(signature),
+    do: Base.encode16(binary_part(ExKeccak.hash_256(signature), 0, 4), case: :lower)
+
+  defp approve_args(%{data: <<_sel::binary-size(4), spender::binary-size(32), amount::256>>}),
+    do: {"0x" <> Base.encode16(binary_part(spender, 12, 20), case: :lower), amount}
+
   describe "--corridor validation" do
     test "an unsupported destination lists only the chains USDC actually exists on" do
       %Mix.Error{message: message} =
@@ -106,6 +125,80 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
 
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
+
+  # The Virtuals paymaster refuses a STANDALONE approve to a token contract, so
+  # the Permit2 approve cannot be its own UserOp on the sponsored path this task
+  # defaults to. It rides in the approve+fund batch instead, which the paymaster
+  # already accepts -- and which lands the allowance in the very transaction that
+  # funds the job, so it exists at the first block the seller can observe
+  # `funded` and settle (the settlement is when the solver pulls).
+  describe "the funding batch" do
+    test "a short allowance rides in the batch rather than a standalone approve" do
+      assert [permit2_approve, core_approve, fund] = calls({:short, permit()})
+
+      assert selector(permit2_approve) == selector_of("approve(address,uint256)")
+      assert permit2_approve.to == cfg().src_token
+      assert approve_args(permit2_approve) == {String.downcase(@permit2), 3_000_000}
+
+      # The ACP-core call is what makes the paymaster accept the UserOp, so the
+      # batch the approve rides in must still carry it.
+      assert core_approve.to == cfg().src_token
+      assert approve_args(core_approve) == {String.downcase(cfg().core), 2_400}
+      assert fund.to == cfg().core
+      assert selector(fund) == selector_of("fund(uint256,uint256,bytes)")
+    end
+
+    test "the batched approve grants the permit's bound, never a standing max" do
+      assert [permit2_approve | _] = calls({:short, permit(1_500_000)})
+      assert {_spender, 1_500_000} = approve_args(permit2_approve)
+    end
+
+    test "a standing allowance adds nothing, so the batch is escrow only" do
+      for pull <- [:standing, :not_needed] do
+        assert [core_approve, fund] = calls(pull)
+        assert approve_args(core_approve) == {String.downcase(cfg().core), 2_400}
+        assert fund.to == cfg().core
+      end
+    end
+
+    test "the funding log line names the Permit2 approve when it rides along" do
+      assert Order.funding_line(73_295, {:short, permit()}) =~ "approve(Permit2"
+      assert Order.funding_line(73_295, {:short, permit()}) =~ "3000000"
+      refute Order.funding_line(73_295, :standing) =~ "Permit2"
+      refute Order.funding_line(73_295, :standing) =~ "sponsored"
+    end
+  end
+
+  describe "the origin-pull disclosure" do
+    test "a funded run says where the approve lands" do
+      text = Enum.join(Order.origin_pull_lines({:short, permit()}, fund: true), "\n")
+
+      assert text =~ "SHORT"
+      assert text =~ "approve+fund"
+      refute text =~ "CANNOT execute"
+    end
+
+    test "a run that signs but never funds says the pull it authorized cannot execute" do
+      text = Enum.join(Order.origin_pull_lines({:short, permit()}, []), "\n")
+
+      assert text =~ "does not --fund"
+      assert text =~ "CANNOT execute"
+      assert text =~ "--job-id"
+    end
+
+    test "a dry run says no approve is sent, without the unfunded warning" do
+      text = Enum.join(Order.origin_pull_lines({:short, permit()}, dry_run: true), "\n")
+
+      assert text =~ "--dry-run"
+      refute text =~ "CANNOT execute"
+    end
+
+    test "a covered or non-Permit2 pull adds no warning at all" do
+      for pull <- [:standing, :not_needed], opts <- [[], [fund: true]] do
+        assert [_one_line] = Order.origin_pull_lines(pull, opts)
+      end
+    end
+  end
 
   describe "the escrow ceiling gate" do
     test "a budget above the ceiling aborts a --fund run before anything is approved" do

@@ -19,9 +19,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     5. Poll `getJob(jobId).budget` until the provider sets it, and assert it is
        `fee_bps` of the principal.
     6. With `--fund`: approve + `fund(jobId, budget)` so the provider is paid and
-       settlement proceeds. The provider writes that budget, so `--fund` refuses
-       anything above the `--fee-bps` take-rate unless `--max-escrow` raises the
-       ceiling.
+       settlement proceeds, carrying the origin-pull approve when the quote needs
+       one. The provider writes that budget, so `--fund` refuses anything above
+       the `--fee-bps` take-rate unless `--max-escrow` raises the ceiling.
 
   ## Signer backends (`--signer`)
 
@@ -66,13 +66,22 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   A Permit2 quote is therefore refused before signing unless `--solver`
   (or `ORDER_SOLVER`) names the spender AND the quote served exactly it.
 
-  When the pin holds, the run grants the Permit2 allowance first, as one extra
-  write: a USDC-gas UserOp under `privy`/`sca`, an ETH-gas tx under `eoa`. The
-  approve is for exactly this intent's authorized pull, not a standing max, so a
-  later bad signature cannot reach more of the origin balance than this run was
-  already spending. It is idempotent: an allowance that already covers the pull
-  sends nothing. `--dry-run` reads the allowance and reports whether a funded run
-  would need the approve, without sending it.
+  When the pin holds, the allowance is granted inside the `--fund` batch rather
+  than as a write of its own -- the Virtuals paymaster refuses a standalone
+  approve to a token contract, and the allowance is not needed until the solver
+  pulls, which happens at settlement, after funding. Batching it there costs no
+  extra write and leaves no window: the allowance lands in the same transaction
+  as the escrow, so it exists at the first block anyone can act on the funding.
+
+  The approve is for exactly this intent's authorized pull, not a standing max,
+  so a later bad signature cannot reach more of the origin balance than this run
+  was already spending. It is idempotent: an allowance that already covers the
+  pull adds nothing to the batch.
+
+  A run WITHOUT `--fund` (including `--dry-run`) therefore grants no allowance.
+  It still refuses an unpinned or mismatched Permit2 quote before signing, and it
+  says plainly that the pull it authorized cannot execute until a `--fund` run
+  grants the allowance.
 
   ## Env
 
@@ -171,11 +180,11 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     # the plan exists, so the costless mode must be the one that shows it.
     print_plan(cfg, opts)
 
-    # 1. Quote, settle the origin-pull allowance, then sign (all off-chain bar the
-    #    Permit2 approve).
-    bundle =
+    # 1. Quote, check the origin pull against the pin, then sign. All off-chain:
+    #    the allowance itself is granted later, inside the funding batch.
+    {bundle, pull} =
       case sign_intent(cfg, opts) do
-        {:ok, bundle} -> bundle
+        {:ok, signed} -> signed
         {:error, reason} -> Mix.raise(sign_intent_error(reason))
       end
 
@@ -185,7 +194,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     if opts[:dry_run] do
       log("--dry-run: signed only, no on-chain writes. requirement=#{inspect(requirement)}")
     else
-      place(cfg, requirement, opts)
+      place(cfg, requirement, opts, pull)
     end
   end
 
@@ -201,7 +210,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   # -- Orchestration --
 
-  defp place(cfg, requirement, opts) do
+  defp place(cfg, requirement, opts, pull) do
     {agent, resolver} = start_buyer(cfg)
 
     # 2. createJob on-chain (or resume an existing job with --job-id).
@@ -225,7 +234,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     log("job #{job_id} is live -- view it at https://app.virtuals.io/acp")
 
-    if funding?, do: fund_job(cfg, job_id, budget)
+    if funding?, do: fund_job(cfg, job_id, budget, pull)
   end
 
   defp create_and_resolve(cfg, resolver) do
@@ -251,46 +260,74 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # approve (USDC) + fund (ACP Core) batched into ONE UserOp, per acp-node-v2. The
   # Virtuals paymaster refuses a standalone approve to a token contract; batched
   # with the ACP-core fund call it accepts the UserOp and bills the buyer in USDC.
-  defp fund_job(cfg, job_id, budget) do
-    log(funding_line(job_id))
+  #
+  # The origin-pull approve rides here for that same reason, and this is also when
+  # it is first needed: the solver pulls at SETTLEMENT, and the seller only
+  # settles from `:funded`. Granting the allowance in the very transaction that
+  # funds the job means it exists at the first block anyone can act on the
+  # funding, with no window and no leg that can land alone.
+  defp fund_job(cfg, job_id, budget, pull) do
+    label = batch_label(pull)
+    log(funding_line(job_id, pull))
 
-    calls = [
-      %{
-        to: cfg.src_token,
-        data:
-          Raxol.Earn.ABI.encode_call("approve(address,uint256)", [
-            {"address", cfg.core},
-            {"uint256", budget}
-          ]),
-        value: 0
-      },
-      %{
-        to: cfg.core,
-        data:
-          Raxol.Earn.ABI.encode_call("fund(uint256,uint256,bytes)", [
-            {"uint256", job_id},
-            {"uint256", budget},
-            {"bytes", <<>>}
-          ]),
-        value: 0
-      }
-    ]
-
-    case ProviderAdapter.send_calls(cfg.provider_adapter, cfg.from, calls) do
+    case ProviderAdapter.send_calls(
+           cfg.provider_adapter,
+           cfg.from,
+           funding_calls(cfg, job_id, budget, pull)
+         ) do
       {:ok, txs} ->
-        log("funded (approve+fund batched): #{inspect(txs)} -- provider will settle + deliver")
-        report_actuals(cfg, "approve+fund", txs)
+        log("funded (#{label} batched): #{inspect(txs)} -- provider will settle + deliver")
+        report_actuals(cfg, label, txs)
 
       err ->
         Mix.raise("fund failed: #{inspect(err)}")
     end
   end
 
+  defp batch_label({:short, _permit}), do: "approve(Permit2)+approve+fund"
+  defp batch_label(_pull), do: "approve+fund"
+
+  @doc false
+  # Public only so the batch can be inspected without a funded run. WHERE the
+  # origin-pull approve rides is the whole point of batching it, and it must not
+  # displace the ACP-core call that makes the paymaster accept the UserOp.
+  @spec funding_calls(map(), non_neg_integer(), non_neg_integer(), OriginPull.status()) ::
+          [ProviderAdapter.call()]
+  def funding_calls(cfg, job_id, budget, pull) do
+    OriginPull.approve_calls(pull) ++
+      [
+        %{
+          to: cfg.src_token,
+          data:
+            Raxol.Earn.ABI.encode_call("approve(address,uint256)", [
+              {"address", cfg.core},
+              {"uint256", budget}
+            ]),
+          value: 0
+        },
+        %{
+          to: cfg.core,
+          data:
+            Raxol.Earn.ABI.encode_call("fund(uint256,uint256,bytes)", [
+              {"uint256", job_id},
+              {"uint256", budget},
+              {"bytes", <<>>}
+            ]),
+          value: 0
+        }
+      ]
+  end
+
   @doc false
   # Public only so the wording can be tested: this line used to call the UserOp
   # sponsored, contradicting the plan printed a few lines earlier in the same run.
-  @spec funding_line(non_neg_integer()) :: String.t()
-  def funding_line(job_id),
+  @spec funding_line(non_neg_integer(), OriginPull.status()) :: String.t()
+  def funding_line(job_id, {:short, permit}),
+    do:
+      "funding escrow: batched approve(Permit2, #{permit.amount}) + approve + " <>
+        "fund(#{job_id}) in one UserOp -- gas billed to the buyer in USDC"
+
+  def funding_line(job_id, _pull),
     do:
       "funding escrow: batched approve + fund(#{job_id}) in one UserOp -- " <>
         "gas billed to the buyer in USDC"
@@ -336,7 +373,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
         "  gas         #{gas_note(cfg.signer)}",
         "             writes this run: #{writes(opts)}"
       ] ++
-      permit2_lines(cfg, Keyword.get(opts, :dry_run, false)) ++
+      permit2_lines(cfg, opts) ++
       [
         "  principal   #{cfg.amount} AUTHORIZED, not moved here -- the signed intent lets " <>
           "the solver pull up to that during settlement"
@@ -358,23 +395,36 @@ defmodule Mix.Tasks.RaxolEarn.Order do
         "and NOT free; priced per UserOp, known only from the receipt"
 
   # The origin-pull rail is only known once the quote is served, so the approve is
-  # conditional -- but it can fire on ANY non-dry run, including one that neither
-  # creates nor funds a job, so it is counted as a leg rather than mentioned in
-  # passing.
-  defp permit2_lines(cfg, false = _dry_run?) do
+  # conditional -- and it has no write of its own: it rides inside the --fund
+  # batch, since the Virtuals paymaster refuses a standalone approve to a token
+  # contract. Which makes --fund the thing that decides whether the allowance is
+  # granted at all, so the plan says that before the run signs anything.
+  defp permit2_lines(cfg, opts) do
+    pull_lines(cfg, Keyword.get(opts, :dry_run, false), Keyword.get(opts, :fund, false)) ++
+      ["             spender pin: #{spender_pin(cfg)}"]
+  end
+
+  defp pull_lines(cfg, true = _dry_run?, _funding?) do
     [
-      "  permit2     +1 approve(Permit2) #{write_noun(cfg.signer)}, gas again, IF the quote's " <>
-        "origin pull is Permit2 and the buyer's allowance is short",
-      "             approves exactly the intent's authorized pull, not a standing max",
-      "             spender pin: #{spender_pin(cfg)}"
+      "  permit2     no approve(Permit2) #{write_noun(cfg.signer)} is sent under --dry-run; the " <>
+        "run reads the allowance and reports whether a funded run would need one"
     ]
   end
 
-  defp permit2_lines(cfg, true) do
+  defp pull_lines(cfg, false, true = _funding?) do
     [
-      "  permit2     no approve(Permit2) #{write_noun(cfg.signer)} is sent under --dry-run; the " <>
-        "run reads the allowance and reports whether a funded run would need one",
-      "             spender pin: #{spender_pin(cfg)}"
+      "  permit2     the approve(Permit2) rides INSIDE the approve+fund " <>
+        "#{write_noun(cfg.signer)} -- no separate write, no extra gas -- IF the quote's " <>
+        "origin pull is Permit2 and the buyer's allowance is short",
+      "             approves exactly the intent's authorized pull, not a standing max"
+    ]
+  end
+
+  defp pull_lines(cfg, false, false) do
+    [
+      "  permit2     no approve(Permit2) #{write_noun(cfg.signer)} without --fund: the approve " <>
+        "rides in the funding batch, so a run that signs a Permit2 intent here leaves that " <>
+        "intent's pull unexecutable until a --fund run grants the allowance"
     ]
   end
 
@@ -419,22 +469,26 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       "refusing anything above #{Assets.to_human(ceiling, decimals)} (raise it with --max-escrow)"
 
   # Every leg that can broadcast, in the order it happens. The Permit2 approve is
-  # first because it is settled before the intent is signed, and it is counted
-  # even though the quote decides it: a leg that "usually" does not fire is still
-  # a write this run may make, and the plan exists so no write is unannounced.
+  # named inside the funding leg rather than beside it, because that is where it
+  # rides: counting it separately would promise a write this run cannot make on
+  # its own, and the plan exists so no write is either unannounced or invented.
   defp writes(opts), do: describe_writes(Keyword.get(opts, :dry_run, false), opts)
 
   defp describe_writes(true, _opts), do: "none (--dry-run writes nothing on-chain)"
 
   defp describe_writes(false, opts) do
     [
-      "approve(Permit2) if the pull needs it",
       if(Keyword.get(opts, :job_id), do: nil, else: "createJob"),
-      if(Keyword.get(opts, :fund, false), do: "approve+fund", else: nil)
+      if(Keyword.get(opts, :fund, false), do: fund_leg(), else: nil)
     ]
     |> Enum.reject(&is_nil/1)
-    |> Enum.join(", ")
+    |> join_writes()
   end
+
+  defp fund_leg, do: "approve+fund (carrying the approve(Permit2) if the pull needs it)"
+
+  defp join_writes([]), do: "none (without --fund and without createJob, this run only signs)"
+  defp join_writes(legs), do: Enum.join(legs, ", ")
 
   defp plan_footer(opts) do
     footer(
@@ -454,8 +508,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   defp footer(false, false, true),
     do: [
-      "  (no --fund and no createJob: the only write this run can make is the " <>
-        "conditional approve(Permit2))"
+      "  (no --fund and no createJob: this run signs an intent and broadcasts nothing, so " <>
+        "a Permit2 pull it authorizes stays unexecutable)"
     ]
 
   defp expected_escrow(cfg), do: div(cfg.principal_atomic * cfg.fee_bps, 10_000)
@@ -631,8 +685,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # -- Steps --
 
   # Quote first, so the origin-pull rail is read from what the solver actually
-  # served rather than assumed from the token, then hold the allowance that rail
-  # needs BEFORE releasing a signature over it.
+  # served rather than assumed from the token, then decide that rail's allowance
+  # BEFORE releasing a signature over it.
   defp sign_intent(cfg, opts) do
     request = %QuoteRequest{
       wallet: cfg.buyer,
@@ -646,42 +700,67 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     }
 
     with {:ok, quote_resp} <- XochiProtocol.get_quote(cfg.xochi_config, request),
-         :ok <- settle_origin_pull(cfg, quote_resp, opts) do
-      XochiProtocol.sign_intent(quote_resp, cfg.intent_wallet, request)
+         {:ok, pull} <- check_origin_pull(cfg, quote_resp, opts),
+         {:ok, bundle} <- XochiProtocol.sign_intent(quote_resp, cfg.intent_wallet, request) do
+      {:ok, {bundle, pull}}
     end
   end
 
-  # The Permit2 rail pulls through a standing ERC-20 allowance, which the buyer
-  # grants with one extra UserOp. Refusing an unpinned spender happens here,
-  # before the approve and before the signature -- an allowance towards an
-  # unverified spender is the failure this whole path exists to prevent.
-  defp settle_origin_pull(cfg, quote_resp, opts) do
+  # The Permit2 rail pulls through a standing ERC-20 allowance. Refusing an
+  # unpinned or mismatched spender happens HERE, before the signature -- an
+  # allowance towards an unverified spender is the failure this whole path exists
+  # to prevent, and refusing while nothing is signed yet is the point of it.
+  #
+  # Only the on-chain GRANT is deferred, to the funding batch: the allowance is
+  # not needed until the solver pulls, and the solver pulls at settlement, which
+  # the seller reaches only from `:funded`.
+  defp check_origin_pull(cfg, quote_resp, opts) do
     with {:ok, plan} <- OriginPull.allowance_plan(quote_resp, cfg.solver, origin_leg(cfg)),
-         {:ok, outcome} <- ensure_allowance(cfg, plan, opts) do
-      log(OriginPull.describe(outcome))
-      report_approve(cfg, outcome)
-      :ok
+         {:ok, status} <- OriginPull.allowance_status(plan, cfg.provider_adapter, cfg.buyer) do
+      Enum.each(origin_pull_lines(status, opts), &log/1)
+      {:ok, status}
     else
       {:error, reason} -> {:error, {:origin_pull, reason}}
     end
   end
+
+  @doc false
+  # Public only so the disclosure can be tested. A run that signs a Permit2 intent
+  # and then does not fund grants no allowance at all, so it must say the pull it
+  # just authorized cannot execute -- otherwise the run reads as a success and the
+  # settlement fails later with nothing pointing back at this.
+  @spec origin_pull_lines(OriginPull.status(), keyword()) :: [String.t()]
+  def origin_pull_lines(status, opts) do
+    [OriginPull.describe(status)] ++
+      grant_lines(status, Keyword.get(opts, :dry_run, false), Keyword.get(opts, :fund, false))
+  end
+
+  defp grant_lines({:short, _permit}, true, _funding?),
+    do: [
+      "origin pull: --dry-run sends no approve; a funded run grants it inside the " <>
+        "approve+fund batch"
+    ]
+
+  defp grant_lines({:short, _permit}, false, true),
+    do: [
+      "origin pull: that approve rides in the approve+fund batch, so the allowance lands " <>
+        "in the same transaction as the escrow"
+    ]
+
+  defp grant_lines({:short, _permit}, false, false),
+    do: [
+      "WARN: this run does not --fund, so no approve is sent. The intent is signed and its " <>
+        "pull authorized, but that pull CANNOT execute until the allowance exists -- " <>
+        "re-run with --job-id <id> --fund to grant it in the funding batch."
+    ]
+
+  defp grant_lines(_status, _dry_run?, _funding?), do: []
 
   # The transfer the operator asked for. The served permit is cross-checked
   # against it, so the allowance is granted on the chain and token this run named
   # and never exceeds the principal it was told to send.
   defp origin_leg(cfg),
     do: %{chain_id: cfg.from, token: cfg.src_token, amount: cfg.principal_atomic}
-
-  defp ensure_allowance(cfg, plan, opts) do
-    OriginPull.ensure_allowance(plan, cfg.provider_adapter, cfg.buyer,
-      dry_run: Keyword.get(opts, :dry_run, false)
-    )
-  end
-
-  defp report_approve(cfg, {:approved, _amount, tx}),
-    do: report_actuals(cfg, "permit2 approve", tx)
-
-  defp report_approve(_cfg, _outcome), do: :ok
 
   defp requirement(cfg, bundle) do
     %{
