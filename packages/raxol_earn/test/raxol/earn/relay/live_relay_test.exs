@@ -16,14 +16,17 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
       RELAY_LIVE_TOKEN="$(op read 'op://Employee/Xochi staging RIDDLER_API_TOKEN/credential')" \\
       RELAY_LIVE_KEY=0x<funded source-chain private key> \\
       RELAY_LIVE_RPC=https://mainnet.base.org \\
-        mix test --include live_relay test/raxol/acp/relay/live_relay_test.exs
+      RELAY_LIVE_TO_ADDRESS=T<Tron recipient wallet> \\
+        mix test --include live_relay test/raxol/earn/relay/live_relay_test.exs
+
+  RELAY_LIVE_TO_ADDRESS is REQUIRED and has no default: the destination is a
+  wallet you control, and a Tron settlement cannot be reversed.
 
   Multiple source tokens (each resolved per chain via `Raxol.Payments.Assets`)
   settle in one run via `RELAY_LIVE_TOKENS` (default `USDC`); the destination is
   always Tron. Defaults (Base -> Tron USDT, 0.10) are overridable via
   RELAY_LIVE_FROM_CHAIN, RELAY_LIVE_TOKENS, RELAY_LIVE_FROM_TOKEN (a raw origin
-  address that overrides the token list), RELAY_LIVE_TO_TOKEN, RELAY_LIVE_TO_ADDRESS,
-  RELAY_LIVE_AMOUNT.
+  address that overrides the token list), RELAY_LIVE_TO_TOKEN, RELAY_LIVE_AMOUNT.
 
   Or use the unified gate at the repo root: scripts/run_live_gates.sh --route relay
   """
@@ -33,7 +36,6 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
   @moduletag :live_relay
   @moduletag timeout: 300_000
 
-  @usdc_base "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   @usdt_tron "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
   if System.get_env("RELAY_LIVE_URL") && System.get_env("RELAY_LIVE_KEY") &&
@@ -103,7 +105,7 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
       from_chain: from_chain
     } do
       amount = System.get_env("RELAY_LIVE_AMOUNT", "0.10")
-      to_address = System.get_env("RELAY_LIVE_TO_ADDRESS", @usdt_tron)
+      to_address = recipient!()
       cells = source_cells(from_chain)
 
       # Preflight every cell read-only first: a dead corridor aborts the run
@@ -122,7 +124,7 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
           from_chain_id: from_chain,
           to_chain_id: @tron,
           from_token: src_token,
-          to_token: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron),
+          to_token: to_token(),
           to_address: to_address
         }
 
@@ -150,13 +152,17 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
       store = Raxol.Payments.Checkpoint.ETS.new()
       context = Map.merge(context, %{checkpoint: store, idempotency_key: "live-relay-resume"})
 
+      # Resolve the source the same way the settle test does: a hardcoded origin
+      # token here deposits an asset the caller never selected.
+      {src_token, _label} = hd(source_cells(from_chain))
+
       params = %{
         amount: System.get_env("RELAY_LIVE_AMOUNT", "0.10"),
         from_chain_id: from_chain,
-        to_chain_id: 728_126_428,
-        from_token: System.get_env("RELAY_LIVE_FROM_TOKEN", @usdc_base),
-        to_token: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron),
-        to_address: System.get_env("RELAY_LIVE_TO_ADDRESS", @usdt_tron)
+        to_chain_id: @tron,
+        from_token: src_token,
+        to_token: to_token(),
+        to_address: recipient!()
       }
 
       assert {:ok, transfer} = ExecuteRelayTransfer.call(params, context)
@@ -178,6 +184,21 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
 
       assert status.status == "completed",
              "live transfer #{transfer.transfer_id} ended in #{status.status}, expected completed"
+    end
+
+    defp to_token, do: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron)
+
+    # The destination is a WALLET. The Tron USDT contract is a well-formed base58
+    # address that the relay will happily settle to, and nobody can spend it back
+    # out, so there is no default here and the token contract is refused outright.
+    defp recipient! do
+      to_address = System.fetch_env!("RELAY_LIVE_TO_ADDRESS")
+
+      refute to_address == to_token(),
+             "RELAY_LIVE_TO_ADDRESS is the destination token contract, not a wallet: " <>
+               "funds settled there are unrecoverable"
+
+      to_address
     end
 
     # A raw RELAY_LIVE_FROM_TOKEN overrides the token list with one custom cell;
@@ -211,7 +232,7 @@ defmodule Raxol.Earn.Relay.LiveRelayTest do
         from_chain_id: from_chain,
         to_chain_id: @tron,
         from_token: src_token,
-        to_token: System.get_env("RELAY_LIVE_TO_TOKEN", @usdt_tron),
+        to_token: to_token(),
         from_amount: atomic,
         from_address: LiveWallet.address(),
         to_address: to_address,
