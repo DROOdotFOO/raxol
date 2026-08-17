@@ -70,7 +70,10 @@ defmodule Raxol.Payments.Xochi.StealthE2ETest do
 
       # Sign a message with the stealth private key
       message = ExKeccak.hash_256("claim:#{settlement.stealth_address}")
-      {:ok, {r, s, _recovery_id}} = ExSecp256k1.sign(message, Secret.reveal(payment.stealth_priv_key))
+
+      {:ok, {r, s, _recovery_id}} =
+        ExSecp256k1.sign(message, Secret.reveal(payment.stealth_priv_key))
+
       signature = r <> s
       assert byte_size(signature) == 64
 

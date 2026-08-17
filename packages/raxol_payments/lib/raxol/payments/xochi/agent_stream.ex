@@ -297,9 +297,7 @@ defmodule Raxol.Payments.Xochi.AgentStream do
   end
 
   defp handle_response({:error, reason}, config) do
-    Logger.warning(
-      "[agent-stream] announce transport error: #{inspect(reason)}"
-    )
+    Logger.warning("[agent-stream] announce transport error: #{inspect(reason)}")
 
     emit_dropped(config, reason)
     {:error, reason}

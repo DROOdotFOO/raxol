@@ -145,6 +145,7 @@ defmodule Raxol.Payments.Mandate.Store do
   @impl Raxol.Core.Behaviours.BaseManager
   def init_manager(opts) do
     name = Naming.registered_name!(__MODULE__)
+
     tables = %{
       primary: primary_table(name),
       by_agent: by_agent_table(name),

@@ -44,6 +44,11 @@ mix credo                     # Style checks
 mix dialyzer                  # Type checking
 ```
 
+Packages format at their own line length (98), not the root's 80. The root
+`.formatter.exs` delegates to the packages CI format-gates (`:subdirectories`),
+so a root `mix format` handles those correctly. For any other package, format
+from inside it: `cd packages/<pkg> && mix format`.
+
 ### Running examples
 
 ```bash

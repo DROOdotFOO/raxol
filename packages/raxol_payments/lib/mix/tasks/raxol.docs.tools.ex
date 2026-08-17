@@ -54,14 +54,10 @@ defmodule Mix.Tasks.Raxol.Docs.Tools do
         Mix.shell().info("TOOL_CATALOG.md is up to date")
 
       {:ok, _stale} ->
-        Mix.raise(
-          "docs/reference/TOOL_CATALOG.md is stale. Run `mix raxol.docs.tools`."
-        )
+        Mix.raise("docs/reference/TOOL_CATALOG.md is stale. Run `mix raxol.docs.tools`.")
 
       {:error, _} ->
-        Mix.raise(
-          "docs/reference/TOOL_CATALOG.md is missing. Run `mix raxol.docs.tools`."
-        )
+        Mix.raise("docs/reference/TOOL_CATALOG.md is missing. Run `mix raxol.docs.tools`.")
     end
   end
 

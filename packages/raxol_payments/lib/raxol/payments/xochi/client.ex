@@ -207,6 +207,7 @@ defmodule Raxol.Payments.Xochi.Client do
   # invite). A `Raxol.Payments.Secret`-wrapped token is revealed only here, so
   # the token stays redacted in any config/state that a crash report might dump.
   defp auth_mode(%{auth: auth}), do: auth
+
   defp auth_mode(%{auth_token: %Raxol.Payments.Secret{} = token}),
     do: {:member, Raxol.Payments.Secret.reveal(token)}
 

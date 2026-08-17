@@ -186,6 +186,9 @@ defmodule Mix.Tasks.Raxol.Check do
   defp run_check(:format) do
     Mix.shell().info(Colors.subsection_header("Code formatting"))
 
+    # Covers the format-gated packages too: the root .formatter.exs lists them
+    # under :subdirectories, so this one command sees every file CI checks, each
+    # at its own package config. CI hard-fails on a miss, so this must too.
     case Mix.shell().cmd("mix format --check-formatted") do
       0 ->
         Mix.shell().info(
@@ -195,12 +198,12 @@ defmodule Mix.Tasks.Raxol.Check do
         {:format, :ok}
 
       _ ->
-        Mix.shell().info(
-          "    " <> Colors.format_warning("Code formatting issues found")
+        Mix.shell().error(
+          "    " <> Colors.format_error("Code formatting issues found")
         )
 
         Mix.shell().info("    " <> Colors.format_fix("Fix", "mix format"))
-        {:format, :warning}
+        {:format, :error}
     end
   end
 

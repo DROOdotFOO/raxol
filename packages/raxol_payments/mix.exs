@@ -82,7 +82,8 @@ defmodule RaxolPayments.MixProject do
       links: %{
         "GitHub" => @source_url,
         "Docs" => "https://hexdocs.pm/raxol_payments",
-        "Changelog" => "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_payments/CHANGELOG.md",
+        "Changelog" =>
+          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_payments/CHANGELOG.md",
         "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]

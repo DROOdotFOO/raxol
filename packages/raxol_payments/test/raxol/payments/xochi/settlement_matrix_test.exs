@@ -47,18 +47,18 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
   @chains [1, 10, 137, 8453, 42_161, 4663]
   @symbols Enum.sort(Assets.symbols())
 
-  @endpoints (for chain <- @chains,
-                  symbol <- @symbols,
-                  {:ok, address} <- [Assets.address(chain, symbol)],
-                  do: {chain, symbol, address})
+  @endpoints for chain <- @chains,
+                 symbol <- @symbols,
+                 {:ok, address} <- [Assets.address(chain, symbol)],
+                 do: {chain, symbol, address}
 
   # Every cross-chain (chain, token) -> (chain, token) pair. Cross-asset when the
   # two symbols differ (the norm for any Robinhood corridor: USDG lives only on
   # 4663), same-asset when they match.
-  @corridors (for {fc, fs, fa} <- @endpoints,
-                  {tc, ts, ta} <- @endpoints,
-                  fc != tc,
-                  do: {fc, fs, fa, tc, ts, ta})
+  @corridors for {fc, fs, fa} <- @endpoints,
+                 {tc, ts, ta} <- @endpoints,
+                 fc != tc,
+                 do: {fc, fs, fa, tc, ts, ta}
 
   @pubkey_re ~r/^0x0[23][a-f0-9]{64}$/
 
@@ -187,7 +187,7 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
       assert length(@corridors) == 240
 
       # USDG lives only on Robinhood Chain, and shows up as both origin and dest.
-      assert (for {c, "USDG", _} <- @endpoints, do: c) == [4663]
+      assert for({c, "USDG", _} <- @endpoints, do: c) == [4663]
 
       assert Enum.any?(@corridors, fn {fc, fs, _, tc, _, _} ->
                {fc, fs} == {4663, "USDG"} and tc != 4663
@@ -245,7 +245,10 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
         assert body["settlement_preference"] == "stealth"
         assert body["from_chain_id"] == fc
         assert body["to_chain_id"] == tc
-        assert Regex.match?(@pubkey_re, body["stealth_spending_pub_key"]), "#{label}: spending key"
+
+        assert Regex.match?(@pubkey_re, body["stealth_spending_pub_key"]),
+               "#{label}: spending key"
+
         assert Regex.match?(@pubkey_re, body["stealth_viewing_pub_key"]), "#{label}: viewing key"
       end
 
@@ -294,7 +297,10 @@ defmodule Raxol.Payments.Xochi.SettlementMatrixTest do
       {:ok, to} = Assets.address(4663, "USDG")
 
       assert {:error, %Failure{reason: :delivery_below_floor}} =
-               run(ledger, 8453, from, 4663, to, "public", %{to_amount: "1", min_to_amount: "490000"})
+               run(ledger, 8453, from, 4663, to, "public", %{
+                 to_amount: "1",
+                 min_to_amount: "490000"
+               })
 
       refute_received :wallet_signed
 

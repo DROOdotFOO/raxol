@@ -223,8 +223,7 @@ defmodule Raxol.Payments.EIP712Test do
       "nonce" => 1,
       "deadline" => 1_900_000_000,
       "witness" => %{
-        "orderId" =>
-          "0xdeadbeef00000000000000000000000000000000000000000000000000000000"
+        "orderId" => "0xdeadbeef00000000000000000000000000000000000000000000000000000000"
       }
     }
 
