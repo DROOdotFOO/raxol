@@ -23,6 +23,16 @@ defmodule Raxol.Earn.Wallet.SCATest do
       paymaster_policy_id: "186aaa4a-5f57-4156-83fb-e456365a8820"
   end
 
+  # The shape `mix raxol_earn.order --signer sca` builds: the policy id is
+  # only known at runtime, so it arrives in the per-call opts.
+  defmodule NoPolicyAccount do
+    use Raxol.Earn.Wallet.SCA,
+      account_address: "0x1234567890123456789012345678901234567890",
+      chain_id: 8453,
+      signer: Raxol.Earn.Wallet.SCATest.SessionKey,
+      signer_entity_id: 1
+  end
+
   setup do
     System.put_env(@session_key_env, @session_privkey)
     on_exit(fn -> System.delete_env(@session_key_env) end)
@@ -208,25 +218,62 @@ defmodule Raxol.Earn.Wallet.SCATest do
     end
 
     test "errors when no policy id is configured" do
-      defmodule NoPolicyAccount do
-        use Raxol.Earn.Wallet.SCA,
-          account_address: "0x1234567890123456789012345678901234567890",
-          chain_id: 8453,
-          signer: Raxol.Earn.Wallet.SCATest.SessionKey,
-          signer_entity_id: 1
-      end
-
       assert {:error, :no_paymaster_policy_id} =
                NoPolicyAccount.sponsor(%UserOp{sender: @account})
     end
 
+    test "errors when the runtime policy id is blank" do
+      assert {:error, :no_paymaster_policy_id} =
+               NoPolicyAccount.sponsor(%UserOp{sender: @account}, paymaster_policy_id: "")
+    end
+
+    test "a runtime policy id sponsors a wallet configured without one" do
+      op = %UserOp{sender: @account, nonce: 0, call_data: <<0x12>>}
+
+      assert {:ok, sponsored} =
+               NoPolicyAccount.sponsor(op,
+                 paymaster_policy_id: "186aaa4a-5f57-4156-83fb-e456365a8820",
+                 paymaster_url: "http://alchemy.test",
+                 req: Req.new(plug: json_rpc_plug(@gm_result))
+               )
+
+      assert sponsored.paymaster == "0xabababababababababababababababababababab"
+    end
+
     test "send_sponsored_user_operation sponsors then signs then sends" do
       op = %UserOp{sender: @account, nonce: 0, call_data: <<0x12>>}
-      test_pid = self()
 
-      # One plug serving both the gas manager and the bundler, keyed on
-      # the JSON-RPC method.
-      plug = fn conn ->
+      assert {:ok, "0xfeedface"} =
+               Account.send_sponsored_user_operation(op,
+                 paymaster_url: "http://alchemy.test",
+                 bundler_url: "http://alchemy.test",
+                 req: Req.new(plug: sponsored_send_plug(self()))
+               )
+
+      # Both legs were called, in order.
+      assert_received {:rpc, "alchemy_requestGasAndPaymasterAndData"}
+      assert_received {:rpc, "eth_sendUserOperation"}
+    end
+
+    test "send_sponsored_user_operation honours a runtime policy id" do
+      op = %UserOp{sender: @account, nonce: 0, call_data: <<0x12>>}
+
+      assert {:ok, "0xfeedface"} =
+               NoPolicyAccount.send_sponsored_user_operation(op,
+                 paymaster_policy_id: "186aaa4a-5f57-4156-83fb-e456365a8820",
+                 paymaster_url: "http://alchemy.test",
+                 bundler_url: "http://alchemy.test",
+                 req: Req.new(plug: sponsored_send_plug(self()))
+               )
+
+      assert_received {:rpc, "alchemy_requestGasAndPaymasterAndData"}
+      assert_received {:rpc, "eth_sendUserOperation"}
+    end
+
+    # One plug serving both the gas manager and the bundler, keyed on
+    # the JSON-RPC method.
+    defp sponsored_send_plug(test_pid) do
+      fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
         send(test_pid, {:rpc, decoded["method"]})
@@ -243,17 +290,6 @@ defmodule Raxol.Earn.Wallet.SCATest do
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(200, payload)
       end
-
-      assert {:ok, "0xfeedface"} =
-               Account.send_sponsored_user_operation(op,
-                 paymaster_url: "http://alchemy.test",
-                 bundler_url: "http://alchemy.test",
-                 req: Req.new(plug: plug)
-               )
-
-      # Both legs were called, in order.
-      assert_received {:rpc, "alchemy_requestGasAndPaymasterAndData"}
-      assert_received {:rpc, "eth_sendUserOperation"}
     end
   end
 
