@@ -23,6 +23,24 @@ defmodule Raxol.Earn.Xochi.OriginPull do
   exactly that spender. Granting an allowance towards an unpinned spender is the
   one thing this module will not do.
 
+  ## That refusal binds this module's callers, and no one else
+
+  Read the sentence above as scoped, because the signing layer underneath applies
+  a WEAKER rule. `Raxol.Payments.Protocols.Xochi`'s `validate_permit2_pull/2` asks
+  only that the spender be in `:pull_solver_allowlist`, and both `config/runtime.exs`
+  and the live solver-fee gate populate that list from
+  `Raxol.Payments.Xochi.PullContracts.pull_recipients/0` -- the checked-in mirror,
+  which contains the Permit2 pull proxy. So `XochiProtocol.quote_and_sign/3`
+  called directly WILL sign a Permit2 pull naming that proxy with no operator
+  input at all.
+
+  That is deliberate at this stage and not something this module can close from
+  here: a mirror of a deployment record is a reasonable default for a server that
+  has no operator at the keyboard, and tightening it would stop existing
+  deployments settling. What it means for anyone adding a new caller is that the
+  operator pin arrives with THIS module and not with the signature. Route through
+  `allowance_plan/3` before signing, or the pin is simply absent.
+
   ## The served permit decides nothing on its own
 
   A quote is served by a remote solver, so every field the allowance depends on is
