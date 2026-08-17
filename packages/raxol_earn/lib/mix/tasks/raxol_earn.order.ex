@@ -19,7 +19,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     5. Poll `getJob(jobId).budget` until the provider sets it, and assert it is
        `fee_bps` of the principal.
     6. With `--fund`: approve + `fund(jobId, budget)` so the provider is paid and
-       settlement proceeds.
+       settlement proceeds. The provider writes that budget, so `--fund` refuses
+       anything above the `--fee-bps` take-rate unless `--max-escrow` raises the
+       ceiling.
 
   ## Signer backends (`--signer`)
 
@@ -27,16 +29,27 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   drives a managed SCA agent:
 
     * `privy` (default) -- Virtuals-delegated signing via the Node signer sidecar
-      (`priv/signer_sidecar`); gas is Alchemy-sponsored (no ETH needed). The buyer
-      is the managed SCA at `RAXOL_ACP_WALLET_ADDRESS`; the intent is signed locally
-      as that SCA (`ORDER_KEY` session key -> ERC-1271).
+      (`priv/signer_sidecar`). No ETH needed, but gas is NOT free: an ERC-20
+      paymaster fronts the ETH and charges the buyer in USDC on every UserOp
+      (~0.0075 observed on Base). The buyer is the managed SCA at
+      `RAXOL_ACP_WALLET_ADDRESS`; the intent is signed by the account's own
+      managed authority (`Sma7702Wallet` -> ERC-1271), not by a session key.
     * `sca` -- direct ERC-4337: the `ORDER_KEY` session key signs UserOps submitted
       to your own bundler + paymaster (`ORDER_BUNDLER_URL`, `ORDER_PAYMASTER_POLICY`).
     * `eoa` -- raw EOA from `ORDER_KEY`. NOT a registered agent (messaging 404s);
       on-chain-only testing.
 
-  MOVES REAL FUNDS on `--fund` (the fee escrow + the Xochi settlement pull). Gas is
-  sponsored under `privy`. `--dry-run` stops after signing (step 1).
+  MOVES REAL FUNDS. Every non-`--dry-run` run spends USDC, because each UserOp pays
+  its own gas in USDC. `--fund` adds the fee escrow: `fee_bps` of the principal,
+  ~0.0024 USDC at the 3.00/8bps default.
+
+  The PRINCIPAL does not move in this task's writes. The signed intent only
+  AUTHORIZES the solver to pull up to that much during settlement, so a "3.00 USDC"
+  run costs ~0.0169 end to end, not 3.00. The task prints a spend plan before it
+  does anything -- including under `--dry-run`, which is the mode you want the
+  plan in -- and receipt-derived actuals after each write.
+
+  `--dry-run` stops after signing and spends nothing.
 
   ## Env
 
@@ -59,6 +72,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       --corridor F>T     origin>destination chain ids (default 8453>42161).
       --provider 0x..    the agent (seller) wallet to hire (default the raxol agent).
       --fee-bps N        expected take-rate to assert (default 8).
+      --max-escrow N     ceiling in USDC on what --fund will pay. Defaults to the
+                         --fee-bps take-rate; a larger on-chain budget is refused.
       --job-id N         resume an existing job (skip createJob).
       --fund             after budget is observed, fund the escrow + settle.
       --dry-run          sign only, no on-chain writes.
@@ -97,21 +112,21 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   @offering "xochi_crosschain"
   @sla_minutes 5
 
+  @switches [
+    amount: :string,
+    corridor: :string,
+    provider: :string,
+    fee_bps: :integer,
+    max_escrow: :string,
+    fund: :boolean,
+    dry_run: :boolean,
+    job_id: :integer,
+    signer: :string
+  ]
+
   @impl Mix.Task
   def run(argv) do
-    {opts, _, _} =
-      OptionParser.parse(argv,
-        strict: [
-          amount: :string,
-          corridor: :string,
-          provider: :string,
-          fee_bps: :integer,
-          fund: :boolean,
-          dry_run: :boolean,
-          job_id: :integer,
-          signer: :string
-        ]
-      )
+    opts = parse_argv(argv)
 
     Application.ensure_all_started(:raxol_earn)
 
@@ -121,6 +136,10 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     log(
       "buyer=#{cfg.buyer}  provider=#{cfg.provider}  corridor=#{cfg.from}->#{cfg.to}  amount=#{cfg.amount} USDC"
     )
+
+    # Before anything, including under --dry-run: rehearsing a run is the reason
+    # the plan exists, so the costless mode must be the one that shows it.
+    print_plan(cfg, opts)
 
     # 1. Sign the Xochi intent (off-chain).
     bundle =
@@ -139,6 +158,16 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     end
   end
 
+  @doc false
+  # Public only so the spend gate can be exercised against the flags an operator
+  # really types, rather than a hand-built keyword list that could drift from
+  # @switches.
+  @spec parse_argv([String.t()]) :: keyword()
+  def parse_argv(argv) do
+    {opts, _argv, _invalid} = OptionParser.parse(argv, strict: @switches)
+    opts
+  end
+
   # -- Orchestration --
 
   defp place(cfg, requirement, opts) do
@@ -155,22 +184,17 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     :ok = send_requirement(agent, cfg.from, job_id, requirement)
     log("requirement sent for job #{job_id}")
 
-    # 5. Watch the provider set the budget on-chain and assert the take-rate.
+    # 5. Watch the provider set the budget on-chain and enforce the take-rate.
     budget = await_budget(cfg, job_id)
-    expected = div(cfg.principal_atomic * cfg.fee_bps, 10_000)
     realized_bps = Float.round(budget / cfg.principal_atomic * 10_000, 3)
+    funding? = Keyword.get(opts, :fund, false)
 
     log("provider setBudget = #{budget} base units (#{realized_bps} bps)")
-
-    if budget == expected do
-      log("OK: budget == #{cfg.fee_bps} bps of the principal")
-    else
-      log("WARN: budget #{budget} != expected #{expected} (#{cfg.fee_bps} bps)")
-    end
+    enforce_budget!(cfg, budget, opts)
 
     log("job #{job_id} is live -- view it at https://app.virtuals.io/acp")
 
-    if Keyword.get(opts, :fund, false), do: fund_job(cfg, job_id, budget)
+    if funding?, do: fund_job(cfg, job_id, budget)
   end
 
   defp create_and_resolve(cfg, resolver) do
@@ -186,17 +210,18 @@ defmodule Mix.Tasks.RaxolEarn.Order do
       })
 
     log("createJob tx: #{explorer(cfg.from)}#{tx}")
+    report_actuals(cfg, "createJob", tx)
 
     job_id = await_job_id(resolver, cfg, tx)
     log("jobId: #{job_id}")
     job_id
   end
 
-  # approve (USDC) + fund (ACP Core) batched into ONE UserOp, per acp-node-v2. A
-  # standalone approve to a token contract is not sponsored by the Virtuals
-  # paymaster; batched with the ACP-core fund call, the whole UserOp is.
+  # approve (USDC) + fund (ACP Core) batched into ONE UserOp, per acp-node-v2. The
+  # Virtuals paymaster refuses a standalone approve to a token contract; batched
+  # with the ACP-core fund call it accepts the UserOp and bills the buyer in USDC.
   defp fund_job(cfg, job_id, budget) do
-    log("funding escrow: batched approve + fund(#{job_id}) in one sponsored UserOp...")
+    log(funding_line(job_id))
 
     calls = [
       %{
@@ -223,11 +248,301 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     case ProviderAdapter.send_calls(cfg.provider_adapter, cfg.from, calls) do
       {:ok, txs} ->
         log("funded (approve+fund batched): #{inspect(txs)} -- provider will settle + deliver")
+        report_actuals(cfg, "approve+fund", txs)
 
       err ->
         Mix.raise("fund failed: #{inspect(err)}")
     end
   end
+
+  @doc false
+  # Public only so the wording can be tested: this line used to call the UserOp
+  # sponsored, contradicting the plan printed a few lines earlier in the same run.
+  @spec funding_line(non_neg_integer()) :: String.t()
+  def funding_line(job_id),
+    do:
+      "funding escrow: batched approve + fund(#{job_id}) in one UserOp -- " <>
+        "gas billed to the buyer in USDC"
+
+  # -- Spend accounting --
+
+  # What this run CAN spend, printed before anything else happens. Every line is a
+  # bound or an expectation; actuals come from receipts afterwards.
+  #
+  # The principal is the trap. It is AUTHORIZED by the signed intent and pulled
+  # later by the solver during settlement -- it does not move in this task's
+  # writes. Reporting it as escrow overstates a $3.00 run by ~175x.
+  defp print_plan(cfg, opts) do
+    cfg
+    |> spend_plan_lines(opts, resume_escrow(cfg, opts))
+    |> Enum.each(&log/1)
+  end
+
+  # --amount and --fee-bps describe a job this run CREATES. On --job-id they
+  # describe nothing: whoever created that job set its budget. Read it instead of
+  # printing an expectation derived from flags the resumed job never saw.
+  defp resume_escrow(cfg, opts) do
+    with job_id when not is_nil(job_id) <- Keyword.get(opts, :job_id),
+         {:ok, budget} <- read_budget(cfg, job_id) do
+      {:ok, budget}
+    else
+      nil -> :new_job
+      :not_ready -> :unreadable
+    end
+  end
+
+  @doc false
+  # Public only so it can be tested: the escrow arithmetic, the enforced ceiling
+  # and the wording of the principal line are what this exists to get right.
+  @spec spend_plan_lines(map(), keyword(), :new_job | :unreadable | {:ok, non_neg_integer()}) ::
+          [String.t()]
+  def spend_plan_lines(cfg, opts, escrow) do
+    decimals = Assets.decimals(cfg.from, cfg.src_token)
+
+    ["SPEND PLAN -- buyer #{cfg.buyer} on chain #{cfg.from}, amounts in USDC"] ++
+      escrow_lines(cfg, decimals, escrow_ceiling(cfg, opts), escrow) ++
+      [
+        "  gas         charged in USDC from the buyer by an ERC-20 paymaster, NOT in ETH " <>
+          "and NOT free; priced per UserOp, known only from the receipt",
+        "             UserOps this run: #{userops(opts)}",
+        "  principal   #{cfg.amount} AUTHORIZED, not moved here -- the signed intent lets " <>
+          "the solver pull up to that during settlement"
+      ] ++ plan_footer(opts)
+  end
+
+  defp escrow_lines(cfg, decimals, ceiling, :new_job) do
+    [
+      "  escrow     ~#{Assets.to_human(expected_escrow(cfg), decimals)} expected " <>
+        "(#{cfg.fee_bps} bps of #{cfg.amount}) -> ACP Core #{cfg.core}",
+      "             the PROVIDER sets the real budget on-chain; --fund pays what it set, " <>
+        ceiling_note(ceiling, decimals)
+    ]
+  end
+
+  defp escrow_lines(cfg, decimals, ceiling, {:ok, budget}) do
+    [
+      "  escrow      #{Assets.to_human(budget, decimals)} ON-CHAIN -- the resumed job's own " <>
+        "budget -> ACP Core #{cfg.core}",
+      "             --amount/--fee-bps do not describe a resumed job; --fund pays it, " <>
+        ceiling_note(ceiling, decimals)
+    ]
+  end
+
+  defp escrow_lines(cfg, decimals, ceiling, :unreadable) do
+    [
+      "  escrow      UNKNOWN -- could not read the resumed job's budget on chain #{cfg.from}",
+      "             --amount/--fee-bps do not describe a resumed job; --fund pays what the " <>
+        "provider set, " <> ceiling_note(ceiling, decimals)
+    ]
+  end
+
+  defp ceiling_note(ceiling, decimals),
+    do:
+      "refusing anything above #{Assets.to_human(ceiling, decimals)} (raise it with --max-escrow)"
+
+  defp userops(opts) do
+    legs =
+      [
+        if(Keyword.get(opts, :job_id), do: nil, else: "createJob"),
+        if(Keyword.get(opts, :fund, false), do: "approve+fund", else: nil)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    describe_userops(Keyword.get(opts, :dry_run, false), legs)
+  end
+
+  defp describe_userops(true, _legs), do: "none (--dry-run writes nothing on-chain)"
+  defp describe_userops(false, []), do: "none"
+  defp describe_userops(false, legs), do: Enum.join(legs, ", ")
+
+  defp plan_footer(opts) do
+    footer(
+      Keyword.get(opts, :dry_run, false),
+      Keyword.get(opts, :fund, false),
+      Keyword.get(opts, :job_id) != nil
+    )
+  end
+
+  defp footer(true, _funding?, _resuming?),
+    do: ["  (--dry-run: signs the intent and stops, spends nothing)"]
+
+  defp footer(false, true, _resuming?), do: []
+
+  defp footer(false, false, false),
+    do: ["  (no --fund: no escrow this run, but the createJob UserOp still costs USDC gas)"]
+
+  defp footer(false, false, true),
+    do: ["  (no --fund and no createJob: this run writes nothing on-chain)"]
+
+  defp expected_escrow(cfg), do: div(cfg.principal_atomic * cfg.fee_bps, 10_000)
+
+  # The most --fund may pay. Default: the take-rate the operator asserted with
+  # --fee-bps, so a provider that writes a bigger budget on-chain cannot be paid
+  # without the operator naming the number.
+  defp escrow_ceiling(cfg, opts) do
+    case Keyword.get(opts, :max_escrow) do
+      nil -> expected_escrow(cfg)
+      human -> parse_max_escrow(human, Assets.decimals(cfg.from, cfg.src_token))
+    end
+  end
+
+  defp parse_max_escrow(human, decimals) do
+    case Decimal.parse(human) do
+      {value, ""} ->
+        Assets.to_atomic(value, decimals)
+
+      _ ->
+        Mix.raise("--max-escrow #{inspect(human)} is not a USDC amount (e.g. --max-escrow 0.05)")
+    end
+  end
+
+  @doc false
+  # Public only so the whole gate -- ceiling, verdict and the --fund branch --
+  # can be exercised from parsed options without an on-chain run.
+  @spec enforce_budget!(map(), non_neg_integer(), keyword()) :: :ok
+  def enforce_budget!(cfg, budget, opts) do
+    cfg
+    |> budget_verdict(budget, escrow_ceiling(cfg, opts))
+    |> act_on_verdict(Keyword.get(opts, :fund, false))
+  end
+
+  defp act_on_verdict({:ok, line}, _funding?), do: log(line)
+
+  # An over-ceiling budget only threatens a run that would escrow it. Without
+  # --fund nothing is approved, so the mismatch is disclosure rather than cause
+  # to abandon a job that is already on chain.
+  defp act_on_verdict({:error, message}, false), do: log("WARN: " <> message)
+  defp act_on_verdict({:error, message}, true), do: Mix.raise(message)
+
+  @doc false
+  # Public only so the ceiling decision can be tested without an on-chain run.
+  @spec budget_verdict(map(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, String.t()} | {:error, String.t()}
+  def budget_verdict(cfg, budget, ceiling) do
+    expected = expected_escrow(cfg)
+
+    cond do
+      budget == expected ->
+        {:ok, "OK: budget == #{cfg.fee_bps} bps of the principal"}
+
+      budget <= ceiling ->
+        {:ok,
+         "budget #{budget} != expected #{expected} (#{cfg.fee_bps} bps), " <>
+           "within the ceiling #{ceiling}"}
+
+      true ->
+        {:error,
+         "provider set budget #{budget} base units, above the #{ceiling} ceiling -- " <>
+           "refusing to fund. The budget is what --fund approves and escrows, so a " <>
+           "provider that sets its own number is simply paid it. Either the offering's " <>
+           "fee changed, in which case re-run with a matching --fee-bps, or this " <>
+           "provider is not charging what it advertises. The ceiling is #{cfg.fee_bps} " <>
+           "bps of --amount #{cfg.amount}; on --job-id it does not describe the resumed " <>
+           "job at all. Accept this budget with --max-escrow <USDC>."}
+    end
+  end
+
+  # What actually moved, decoded from receipts. Only USDC transfers OUT of the
+  # buyer count as spend; anything else in the tx is someone else's money.
+  @transfer_topic "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+  defp report_actuals(cfg, label, tx_hashes) do
+    client = Raxol.Earn.Onchain.RPC.client(url: cfg.rpc)
+
+    reads =
+      tx_hashes
+      |> List.wrap()
+      |> Enum.map(&{&1, buyer_transfers(client, cfg, &1)})
+
+    Enum.each(spend_actual_lines(cfg, label, reads), &log/1)
+  rescue
+    # Accounting must never take down a run that already moved money.
+    e -> log("SPEND ACTUAL (#{label}): could not read receipts (#{Exception.message(e)})")
+  end
+
+  @doc false
+  # Public only so it can be tested. A receipt that could NOT be read must not
+  # read like a receipt that showed nothing: the first is an unknown, the second
+  # is a zero, and printing them the same way is how a real spend gets reported
+  # as no spend.
+  @spec spend_actual_lines(map(), String.t(), [
+          {String.t(), {:ok, [{String.t(), non_neg_integer()}]} | {:error, term()}}
+        ]) :: [String.t()]
+  def spend_actual_lines(cfg, label, reads) do
+    decimals = Assets.decimals(cfg.from, cfg.src_token)
+    {read, failed} = Enum.split_with(reads, &match?({_hash, {:ok, _}}, &1))
+    transfers = Enum.flat_map(read, fn {_hash, {:ok, transfers}} -> transfers end)
+
+    headline(label, decimals, transfers, failed) ++
+      Enum.map(transfers, fn {to, amount} ->
+        "  #{Assets.to_human(amount, decimals)} -> #{to}#{destination_note(cfg, to)}"
+      end) ++
+      Enum.map(failed, fn {hash, {:error, reason}} ->
+        "  UNREAD receipt #{hash} (#{inspect(reason)}) -- check #{explorer(cfg.from)}#{hash}"
+      end)
+  end
+
+  defp headline(label, _decimals, [], []),
+    do: ["SPEND ACTUAL (#{label}): no USDC left the buyer"]
+
+  defp headline(label, decimals, transfers, []) do
+    [
+      "SPEND ACTUAL (#{label}): #{Assets.to_human(total(transfers), decimals)} USDC left the buyer"
+    ]
+  end
+
+  defp headline(label, decimals, transfers, failed) do
+    [
+      "SPEND ACTUAL (#{label}): at least #{Assets.to_human(total(transfers), decimals)} USDC " <>
+        "left the buyer -- LOWER BOUND, #{length(failed)} receipt(s) unread"
+    ]
+  end
+
+  defp total(transfers), do: transfers |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+
+  defp buyer_transfers(client, cfg, tx_hash) do
+    case Raxol.Earn.Onchain.RPC.await_receipt(client, tx_hash, timeout_ms: 20_000) do
+      {:ok, %{"logs" => logs}} when is_list(logs) ->
+        buyer_topic = pad_topic(cfg.buyer)
+
+        transfers =
+          for %{"address" => addr, "topics" => [topic0, from, to | _], "data" => data} <- logs,
+              String.downcase(addr) == String.downcase(cfg.src_token),
+              String.downcase(topic0) == @transfer_topic,
+              String.downcase(from) == buyer_topic do
+            {"0x" <> String.slice(to, -40, 40), parse_uint(data)}
+          end
+
+        {:ok, transfers}
+
+      {:ok, other} ->
+        {:error, {:receipt_without_logs, other}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The ERC-20 paymaster that fronts the ETH for the Virtuals-managed SCA and
+  # bills the buyer in USDC, observed across four UserOps on Base. Anything else
+  # is money going somewhere nobody planned, and must not read as routine gas.
+  @paymaster "0x5d74bdab1ce9ddadd7e2e333d1d173830860694a"
+
+  defp destination_note(cfg, to) do
+    core = String.downcase(cfg.core)
+
+    case String.downcase(to) do
+      ^core -> "  (ACP Core -- the fee escrow)"
+      @paymaster -> "  (gas: ERC-20 paymaster)"
+      _ -> "  (UNEXPECTED recipient -- neither the fee escrow nor the known paymaster)"
+    end
+  end
+
+  defp pad_topic("0x" <> addr),
+    do: String.downcase("0x" <> String.duplicate("0", 24) <> addr)
+
+  defp parse_uint("0x" <> hex), do: String.to_integer(hex, 16)
+  defp parse_uint(_), do: 0
 
   # -- Steps --
 
@@ -418,10 +733,11 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   # -- Signer backends --
 
-  # B (default): Virtuals-delegated Privy signing via the Node sidecar; gas is
-  # Alchemy-sponsored. The buyer is the managed SCA agent. Needs (env, from op):
+  # B (default): Virtuals-delegated Privy signing via the Node sidecar. Gas is not
+  # free -- an ERC-20 paymaster fronts the ETH and charges the buyer in USDC per
+  # UserOp. The buyer is the managed SCA agent. Needs (env, from op):
   # RAXOL_ACP_WALLET_ADDRESS / RAXOL_ACP_WALLET_ID / RAXOL_ACP_SIGNER_PRIVATE_KEY
-  # (+ PRIVY_APP_ID). The intent is still signed locally as the SCA (EOA -> 1271).
+  # (+ PRIVY_APP_ID).
   defp build_signer("privy", from, rpc) do
     _ = fetch_env!("RAXOL_ACP_WALLET_ID")
     _ = fetch_env!("RAXOL_ACP_SIGNER_PRIVATE_KEY")
