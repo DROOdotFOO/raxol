@@ -1,10 +1,23 @@
 name: RATE self-hosted
 
 # Builds the termbox2 NIF and exercises the tty-dependent suite on the homelab's
-# Nix-pinned self-hosted runners (aarch64-linux + x86_64-linux). GitHub-hosted CI
-# skips these via SKIP_TERMBOX2_TESTS; this workflow leaves it unset and runs the
-# NIF for real on both Linux architectures, plus a golden render comparison so the
-# aarch64-linux hash is checked against priv/rate/golden.refs.
+# Nix-pinned self-hosted runners. GitHub-hosted CI skips these via
+# SKIP_TERMBOX2_TESTS; this workflow leaves it unset and runs the NIF for real,
+# plus a golden render comparison so the aarch64-linux hash is checked against
+# priv/rate/golden.refs.
+#
+# aarch64 only, because that is the homelab: the Turing Pi nodes are ARM. This
+# matrix used to name X64 as well, which no registered runner could satisfy, so
+# that leg queued until the next nightly cancelled it through the concurrency
+# group -- eight consecutive daily runs reported `cancelled` while the aarch64
+# half was passing, which reads as CI flakiness and hides a real result.
+#
+# What that leaves uncovered on x86_64 is the tty-dependent work only -- the
+# termbox2 NIF suite and the :requires_terminal platform suite, both skipped by
+# SKIP_TERMBOX2_TESTS in GitHub-hosted CI. The golden render is untagged, so it
+# still runs there in the default suite. Closing the tty gap needs either an
+# x86_64 self-hosted runner or a nix-on-ubuntu-latest leg; naming an arch nobody
+# can run is not coverage.
 #
 # Security: raxol is a public repository, so these jobs must never run untrusted
 # code on the homelab. Triggers are limited to manual dispatch, pushes to master,
@@ -33,11 +46,7 @@ permissions:
 jobs:
   nif:
     if: github.repository_owner == 'DROOdotFOO'
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [ARM64, X64]
-    runs-on: [self-hosted, linux, "${{ matrix.arch }}", raxol]
+    runs-on: [self-hosted, linux, ARM64, raxol]
     timeout-minutes: 45
     env:
       TERM: xterm-256color
