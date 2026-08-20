@@ -882,13 +882,6 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   defp replay_nonce_from(_), do: 0
 
-  # Build the domain from exactly the keys the worker served -- EVERY field is
-  # conditional. `Raxol.Payments.EIP712` derives the EIP712Domain field list from
-  # the keys present, so a key carrying `nil` still declares that field and hashes
-  # a domain the verifier never built. No served domain uses all five: the
-  # canonical XochiIntent domain omits `verifyingContract` and carries a `salt`,
-  # and Permit2's omits `version` (see GitHub #772 -- signing a 4-field domain
-  # against Permit2's 3-field one reverts InvalidContractSignature on the pull).
   @domain_fields [
     {:name, "name"},
     {:version, "version"},
@@ -897,7 +890,24 @@ defmodule Raxol.Payments.Protocols.Xochi do
     {:salt, "salt"}
   ]
 
-  defp eip712_domain(eip712) do
+  @doc """
+  Project a served EIP-712 payload's `"domain"` onto the domain map the wallet
+  signs, carrying over exactly the keys the worker sent.
+
+  EVERY field is conditional. `Raxol.Payments.EIP712` derives the EIP712Domain
+  field list from the keys present, so a key carrying `nil` still declares that
+  field and hashes a domain the verifier never built. No served domain uses all
+  five: the canonical XochiIntent domain omits `verifyingContract` and carries a
+  `salt`, and Permit2's omits `version` (see GitHub #772 -- signing a 4-field
+  domain against Permit2's 3-field one reverts InvalidContractSignature on the
+  pull).
+
+  Public because the served-to-signed projection is what the conformance oracle
+  has to exercise. A test that rebuilds this mapping proves only that the test
+  agrees with itself, which is how #772 reached production with a green suite.
+  """
+  @spec eip712_domain(map()) :: map()
+  def eip712_domain(eip712) do
     served = eip712["domain"] || %{}
 
     Enum.reduce(@domain_fields, %{}, fn {key, served_key}, domain ->

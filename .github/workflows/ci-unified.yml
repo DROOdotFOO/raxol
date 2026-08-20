@@ -295,7 +295,21 @@ jobs:
         # gated packages in the repo: the Sma7702Wallet alias bug (#858) shipped
         # with a compiler warning nobody could fail on, because nothing here ran
         # them. Adding them required unbreaking both suites first -- see the PR.
-        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn]
+        #
+        # raxol_agent_client_protocol joins for the format half: ungated, five of
+        # its files had been rewrapped at the root's 80 columns and no check
+        # anywhere disagreed. A package earns its entry in the root
+        # .formatter.exs `subdirectories` list by being gated here, so the two
+        # lists move together.
+        package:
+          [
+            raxol_gateway,
+            raxol_telegram,
+            raxol_cli,
+            raxol_payments,
+            raxol_earn,
+            raxol_agent_client_protocol
+          ]
 
     steps:
       - uses: actions/checkout@v7

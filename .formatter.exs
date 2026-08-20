@@ -21,6 +21,7 @@
   # pulls the ungated packages (169 files of pre-existing drift) into the root
   # check, so a package joins here when it joins that matrix.
   subdirectories: [
+    "packages/raxol_agent_client_protocol",
     "packages/raxol_cli",
     "packages/raxol_earn",
     "packages/raxol_gateway",

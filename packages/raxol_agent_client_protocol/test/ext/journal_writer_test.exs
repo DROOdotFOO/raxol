@@ -152,8 +152,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Journal.WriterTest do
 
     assert_receive {:reattach_live, ^sid, %Record{offset: 2}}
 
-    assert_receive {:reattach_live, ^sid,
-                    %Record{offset: 3, payload: %{"phantom" => true}}}
+    assert_receive {:reattach_live, ^sid, %Record{offset: 3, payload: %{"phantom" => true}}}
 
     durable = MapSet.new(read_all(j), & &1.offset)
 

@@ -92,8 +92,7 @@ defmodule Raxol.AgentClientProtocol.Schema.AgentTypes do
   # fold into `_meta` via `extract_meta/2`, so forward-compat is untouched.
   @spec fetch(map(), String.t(), (term() -> boolean())) ::
           {:ok, term()}
-          | {:error,
-             {:missing_field, String.t()} | {:invalid_field, String.t(), term()}}
+          | {:error, {:missing_field, String.t()} | {:invalid_field, String.t(), term()}}
   def fetch(map, key, valid?) when is_map(map) and is_function(valid?, 1) do
     case Map.fetch(map, key) do
       {:ok, value} ->

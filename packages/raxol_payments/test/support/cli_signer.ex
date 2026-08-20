@@ -145,11 +145,21 @@ defmodule Raxol.Payments.Test.CliSigner do
     end
   end
 
-  # Best-effort fallback: ../../riddler-client relative to the
-  # raxol monorepo root. Works for the common dev layout where both repos
-  # live side-by-side under ~/CODE/.
+  # Best-effort fallback: a sibling checkout of the CLI repo (axol-io/riddler-sdk,
+  # formerly riddler-client) beside the raxol monorepo, the common dev layout
+  # where both live under ~/CODE/.
+  #
+  # The previous expansion was one level short and landed on
+  # <raxol>/riddler-client, inside this repo, so the fallback never resolved
+  # under either repo name.
   defp sibling_default do
-    Path.expand("../../../../riddler-client", __DIR__)
+    Enum.find(
+      [
+        Path.expand("../../../../../riddler-sdk", __DIR__),
+        Path.expand("../../../../../riddler-client", __DIR__)
+      ],
+      &File.dir?/1
+    )
   end
 
   defp encode_flags(flags) do

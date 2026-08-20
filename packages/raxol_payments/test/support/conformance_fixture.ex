@@ -107,7 +107,15 @@ defmodule Raxol.Payments.Test.ConformanceFixture do
   defp cli_dir_path(dir),
     do: Path.join([dir, "packages", "spec", "conformance", "conformance.json"])
 
+  # axol-io/riddler-sdk, formerly riddler-client. The old name is kept as a
+  # fallback so a checkout under either directory resolves.
   defp sibling_default do
-    Path.expand("../../../../../riddler-client", __DIR__)
+    Enum.find(
+      [
+        Path.expand("../../../../../riddler-sdk", __DIR__),
+        Path.expand("../../../../../riddler-client", __DIR__)
+      ],
+      &File.dir?/1
+    )
   end
 end
