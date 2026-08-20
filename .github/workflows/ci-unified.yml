@@ -301,15 +301,10 @@ jobs:
         # anywhere disagreed. A package earns its entry in the root
         # .formatter.exs `subdirectories` list by being gated here, so the two
         # lists move together.
-        package:
-          [
-            raxol_gateway,
-            raxol_telegram,
-            raxol_cli,
-            raxol_payments,
-            raxol_earn,
-            raxol_agent_client_protocol
-          ]
+        # Keep on ONE line: test/raxol/formatter_delegation_test.exs parses this
+        # matrix with `^\s*package: \[...\]` to prove every gated package is also
+        # delegated by the root .formatter.exs. A block sequence parses as absent.
+        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol]
 
     steps:
       - uses: actions/checkout@v7
