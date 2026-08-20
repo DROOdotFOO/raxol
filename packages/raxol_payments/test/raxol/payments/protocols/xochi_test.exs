@@ -393,6 +393,11 @@ defmodule Raxol.Payments.Protocols.XochiTest do
     @anvil_key "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
     @anvil_addr "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
 
+    # The universal Permit2 deployment, and the solver spender a permit2 pull
+    # names (pinned via :pull_solver_allowlist, which is always required).
+    @permit2_address "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+    @permit2_spender "0x000000000000000000000000000000000000dEaD"
+
     defmodule RealWallet do
       @moduledoc false
       use Raxol.Payments.Wallets.Env, env_var: "RAXOL_XOCHI_DOMAIN_TEST_KEY"
@@ -632,6 +637,64 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       assert body["pull_signature"] == "0x" <> Base.encode16(raw, case: :lower)
       # Distinct payload from the intent signature.
       assert body["pull_signature"] != body["signature"]
+    end
+
+    test "signs a permit2 pull over Permit2's own domain, which declares no version" do
+      # Permit2's EIP-712 domain is name/chainId/verifyingContract -- it carries NO
+      # `version`. A served domain that omits a field must not be signed as though
+      # that field were present and empty: doing so hashes a 4-field EIP712Domain
+      # against the 3-field one Permit2 rebuilds on-chain, so Permit2 asks
+      # `isValidSignature` about a digest the buyer never signed and the pull
+      # reverts InvalidContractSignature() (0xb0669cbc). See GitHub #772.
+      Application.put_env(:raxol_payments, :pull_solver_allowlist, [@permit2_spender])
+      on_exit(fn -> Application.delete_env(:raxol_payments, :pull_solver_allowlist) end)
+
+      pull =
+        canonical_permit2_pull(%{
+          domain: %{
+            "name" => "Permit2",
+            "chainId" => 8453,
+            "verifyingContract" => @permit2_address
+          },
+          message: %{"spender" => @permit2_spender}
+        })
+
+      quote_resp = %QuoteResponse{
+        intent_id: "xi_p2domain",
+        quote_id: "xq_p2domain",
+        can_solve: true,
+        payment_method: "permit2",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_p2domain"}
+        },
+        pull_authorization: pull
+      }
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      assert {:ok, _} = Xochi.execute(config, quote_resp, RealWallet, request)
+      assert_receive {:req, "POST", "/api/intent/execute", _h, raw_body}
+      body = Jason.decode!(raw_body)
+
+      expected = permit2_reference_signature(pull)
+      assert body["pull_signature"] == "0x" <> Base.encode16(expected, case: :lower)
     end
 
     test "omits pull_signature when the quote carries no pull_authorization" do
@@ -1303,6 +1366,64 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       "message" => message
     }
   end
+
+  # Permit2's DOMAIN_SEPARATOR() as deployed on Base (chain 8453), read from
+  # 0x000000000022D473030F116dDEE9F6B43aC78BA3. It is the 3-field
+  # EIP712Domain(string name,uint256 chainId,address verifyingContract): Permit2
+  # declares no `version`. Hard-coded so this test is an independent oracle
+  # rather than a second run of the code under test.
+  @permit2_domain_separator "3b6f35e4fce979ef8eac3bcdc8c3fc38fe7911bb0c69c8fe72bf1fd1a17e6f07"
+
+  # Permit2 builds the PermitWitnessTransferFrom typehash by concatenating a fixed
+  # stub with the caller's witness type string, not by EIP-712's alphabetical
+  # encodeType. Reproduce Permit2's construction so the expected digest is the one
+  # the contract computes. The witness string is XochiPullPermit2's.
+  @permit2_typehash_stub "PermitWitnessTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline,"
+  @permit2_witness_type_string "OriginPullWitness witness)OriginPullWitness(bytes32 orderId)TokenPermissions(address token,uint256 amount)"
+
+  # The signature Permit2 will accept for `pull`: the anvil key over the digest
+  # Permit2 itself rebuilds on-chain.
+  defp permit2_reference_signature(pull) do
+    key = Base.decode16!(String.trim_leading(@anvil_key, "0x"), case: :mixed)
+    {:ok, signature} = ExSecp256k1.sign(permit2_reference_digest(pull), key)
+    Raxol.Payments.EIP712.pack_signature(signature)
+  end
+
+  defp permit2_reference_digest(pull) do
+    message = pull["message"]
+    permitted = message["permitted"]
+
+    token_permissions =
+      ExKeccak.hash_256(
+        ExKeccak.hash_256("TokenPermissions(address token,uint256 amount)") <>
+          address_word(permitted["token"]) <> uint_word(permitted["amount"])
+      )
+
+    witness =
+      ExKeccak.hash_256(
+        ExKeccak.hash_256("OriginPullWitness(bytes32 orderId)") <>
+          bytes32_word(message["witness"]["orderId"])
+      )
+
+    struct_hash =
+      ExKeccak.hash_256(
+        ExKeccak.hash_256(@permit2_typehash_stub <> @permit2_witness_type_string) <>
+          token_permissions <>
+          address_word(message["spender"]) <>
+          uint_word(message["nonce"]) <>
+          uint_word(message["deadline"]) <>
+          witness
+      )
+
+    ExKeccak.hash_256(
+      <<0x19, 0x01>> <>
+        Base.decode16!(@permit2_domain_separator, case: :lower) <> struct_hash
+    )
+  end
+
+  defp address_word("0x" <> hex), do: <<0::size(96)>> <> Base.decode16!(hex, case: :mixed)
+  defp uint_word(value), do: <<String.to_integer(value)::unsigned-big-256>>
+  defp bytes32_word("0x" <> hex), do: Base.decode16!(hex, case: :mixed)
 
   describe "origin_pull_fail_open?/2" do
     test "an empty allowlist with the pin not required is fail-open" do
