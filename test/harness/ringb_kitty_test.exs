@@ -22,22 +22,26 @@ defmodule Raxol.Harness.RingBKittyTest do
 
   @probes_dir Path.expand("../../scripts/harness/t0/probes", __DIR__)
 
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide availability at load time. A spawn failure on
+  # an installed emulator is a real failure, so surface it as one.
+  if not Kitty.available?() do
+    @moduletag skip: "kitty not installed in this environment"
+  end
+
   setup do
-    if Kitty.available?() do
-      case Kitty.spawn_session([]) do
-        {:ok, session} ->
-          on_exit(fn ->
-            Guard.safe_teardown(Kitty, session, "ringb-kitty-test")
-          end)
+    case Kitty.spawn_session([]) do
+      {:ok, session} ->
+        on_exit(fn ->
+          Guard.safe_teardown(Kitty, session, "ringb-kitty-test")
+        end)
 
-          [session: session]
+        [session: session]
 
-        {:error, reason} ->
-          {:skip,
-           "kitty spawn_session failed (best-effort driver): #{inspect(reason)}"}
-      end
-    else
-      {:skip, "kitty not installed in this environment"}
+      {:error, reason} ->
+        flunk(
+          "kitty spawn_session failed (best-effort driver): #{inspect(reason)}"
+        )
     end
   end
 

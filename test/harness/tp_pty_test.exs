@@ -37,12 +37,11 @@ defmodule Raxol.Harness.TpPtyTest do
   # bearing distinction here, not the exact exit code.
   @trap_script ~s(trap "echo CLEANUP" TERM; echo READY; sleep 30)
 
-  setup_all do
-    if PtyHarness.available?() do
-      :ok
-    else
-      {:skip, "python3 not found on PATH"}
-    end
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide at load time -- .exs files are re-evaluated
+  # every run, so this still tracks whether python3 is on PATH.
+  if not PtyHarness.available?() do
+    @moduletag skip: "python3 not found on PATH"
   end
 
   # Stops the wrapper (killing anything still running under it) and removes

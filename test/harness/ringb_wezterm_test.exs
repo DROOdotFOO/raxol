@@ -22,21 +22,24 @@ defmodule Raxol.Harness.RingBWeztermTest do
 
   @probes_dir Path.expand("../../scripts/harness/t0/probes", __DIR__)
 
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide availability at load time. A spawn failure on
+  # an installed emulator is a real failure, so surface it as one.
+  if not Wezterm.available?() do
+    @moduletag skip: "wezterm not installed in this environment"
+  end
+
   setup do
-    if Wezterm.available?() do
-      case Wezterm.spawn_session([]) do
-        {:ok, session} ->
-          on_exit(fn ->
-            Guard.safe_teardown(Wezterm, session, "ringb-wezterm-test")
-          end)
+    case Wezterm.spawn_session([]) do
+      {:ok, session} ->
+        on_exit(fn ->
+          Guard.safe_teardown(Wezterm, session, "ringb-wezterm-test")
+        end)
 
-          [session: session]
+        [session: session]
 
-        {:error, reason} ->
-          {:skip, "wezterm spawn_session failed: #{inspect(reason)}"}
-      end
-    else
-      {:skip, "wezterm not installed in this environment"}
+      {:error, reason} ->
+        flunk("wezterm spawn_session failed: #{inspect(reason)}")
     end
   end
 

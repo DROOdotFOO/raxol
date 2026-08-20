@@ -26,21 +26,24 @@ defmodule Raxol.Harness.RingBTerminalAppTest do
 
   @probes_dir Path.expand("../../scripts/harness/t0/probes", __DIR__)
 
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide availability at load time. A spawn failure on
+  # an installed emulator is a real failure, so surface it as one.
+  if not TerminalApp.available?() do
+    @moduletag skip: "Terminal.app not available in this environment"
+  end
+
   setup do
-    if TerminalApp.available?() do
-      case TerminalApp.spawn_session([]) do
-        {:ok, session} ->
-          on_exit(fn ->
-            Guard.safe_teardown(TerminalApp, session, "ringb-apple-test")
-          end)
+    case TerminalApp.spawn_session([]) do
+      {:ok, session} ->
+        on_exit(fn ->
+          Guard.safe_teardown(TerminalApp, session, "ringb-apple-test")
+        end)
 
-          [session: session]
+        [session: session]
 
-        {:error, reason} ->
-          {:skip, "Terminal.app spawn_session failed: #{inspect(reason)}"}
-      end
-    else
-      {:skip, "Terminal.app not available in this environment"}
+      {:error, reason} ->
+        flunk("Terminal.app spawn_session failed: #{inspect(reason)}")
     end
   end
 

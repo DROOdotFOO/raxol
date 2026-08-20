@@ -329,14 +329,12 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
   # -- end-to-end over Transport.Paired -----------------------------------
 
   describe "Paired integration: agent terminal/create against a no-terminal client" do
-    setup do
-      if Code.ensure_loaded?(Raxol.AgentClientProtocol.Connection) and
-           Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) and
-           Code.ensure_loaded?(Raxol.AgentClientProtocol.Client) do
-        :ok
-      else
-        {:skip, "Connection/Agent/Client sibling-wave modules have not landed yet"}
-      end
+    # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+    # invalidates the module. Decide at load time instead.
+    if not (Code.ensure_loaded?(Raxol.AgentClientProtocol.Connection) and
+              Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) and
+              Code.ensure_loaded?(Raxol.AgentClientProtocol.Client)) do
+      @describetag skip: "Connection/Agent/Client sibling-wave modules have not landed yet"
     end
 
     defmodule GateAgent do

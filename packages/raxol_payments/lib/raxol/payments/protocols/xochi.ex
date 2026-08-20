@@ -882,27 +882,31 @@ defmodule Raxol.Payments.Protocols.Xochi do
 
   defp replay_nonce_from(_), do: 0
 
-  # Build the domain from exactly the keys the worker served. `verifyingContract`
-  # and `salt` are only included when present: the canonical XochiIntent domain
-  # omits `verifyingContract` and carries a `salt`, so the included key set must
-  # mirror the served domain exactly -- dropping `salt` (or adding a nil
-  # verifyingContract) hashes a different EIP712Domain than the worker's and the
-  # signature does not recover.
+  # Build the domain from exactly the keys the worker served -- EVERY field is
+  # conditional. `Raxol.Payments.EIP712` derives the EIP712Domain field list from
+  # the keys present, so a key carrying `nil` still declares that field and hashes
+  # a domain the verifier never built. No served domain uses all five: the
+  # canonical XochiIntent domain omits `verifyingContract` and carries a `salt`,
+  # and Permit2's omits `version` (see GitHub #772 -- signing a 4-field domain
+  # against Permit2's 3-field one reverts InvalidContractSignature on the pull).
+  @domain_fields [
+    {:name, "name"},
+    {:version, "version"},
+    {:chainId, "chainId"},
+    {:verifyingContract, "verifyingContract"},
+    {:salt, "salt"}
+  ]
+
   defp eip712_domain(eip712) do
-    d = eip712["domain"] || %{}
+    served = eip712["domain"] || %{}
 
-    %{name: d["name"], version: d["version"], chainId: d["chainId"]}
-    |> maybe_put_verifying_contract(d["verifyingContract"])
-    |> maybe_put_salt(d["salt"])
+    Enum.reduce(@domain_fields, %{}, fn {key, served_key}, domain ->
+      case served[served_key] do
+        nil -> domain
+        value -> Map.put(domain, key, value)
+      end
+    end)
   end
-
-  defp maybe_put_verifying_contract(domain, nil), do: domain
-
-  defp maybe_put_verifying_contract(domain, vc),
-    do: Map.put(domain, :verifyingContract, vc)
-
-  defp maybe_put_salt(domain, nil), do: domain
-  defp maybe_put_salt(domain, salt), do: Map.put(domain, :salt, salt)
 
   defp eip712_types(eip712) do
     (eip712["types"] || %{})

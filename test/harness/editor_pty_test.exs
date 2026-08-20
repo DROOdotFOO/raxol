@@ -28,12 +28,11 @@ defmodule Raxol.Harness.EditorPtyTest do
   @moduletag :skip_on_ci
   @moduletag timeout: 120_000
 
-  setup_all do
-    if PtyHarness.available?() do
-      :ok
-    else
-      {:skip, "python3 not found on PATH"}
-    end
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide at load time -- .exs files are re-evaluated
+  # every run, so this still tracks whether python3 is on PATH.
+  if not PtyHarness.available?() do
+    @moduletag skip: "python3 not found on PATH"
   end
 
   # `stty -a` renders modes as bare tokens when set, minus-prefixed when

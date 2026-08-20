@@ -8,11 +8,11 @@ defmodule Raxol.Payments.Conformance.X402ConformanceTest do
 
   @moduletag :conformance
 
-  setup_all do
-    case ConformanceFixture.locate() do
-      {:ok, _path} -> :ok
-      {:error, :not_found} -> {:skip, "conformance fixture not found"}
-    end
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide at load time -- .exs files are re-evaluated
+  # every run, so this still tracks whether the fixture is present.
+  if match?({:error, :not_found}, ConformanceFixture.locate()) do
+    @moduletag skip: "conformance fixture not found"
   end
 
   # ERC-3009 vectors in the fixture exercise the x402 protocol's signing
