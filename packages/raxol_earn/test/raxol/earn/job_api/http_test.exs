@@ -12,26 +12,28 @@ defmodule Raxol.Earn.JobApi.HTTPTest do
 
   @moduletag :live_acp_dev
 
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide at load time -- .exs files are re-evaluated
+  # every run, so this still tracks the credential. A skipped module never runs
+  # setup_all, so the key is present by the time it does.
+  if System.fetch_env("RAXOL_ACP_AGENT_PRIVATE_KEY") == :error do
+    @moduletag skip: "RAXOL_ACP_AGENT_PRIVATE_KEY not set -- live Virtuals dev API tests"
+  end
+
   setup_all do
-    case System.fetch_env("RAXOL_ACP_AGENT_PRIVATE_KEY") do
-      :error ->
-        {:skip, "RAXOL_ACP_AGENT_PRIVATE_KEY not set -- skipping live Virtuals dev API tests"}
+    pk = decode_pk(System.fetch_env!("RAXOL_ACP_AGENT_PRIVATE_KEY"))
 
-      {:ok, pk_hex} ->
-        pk = decode_pk(pk_hex)
+    server_url =
+      System.get_env("RAXOL_ACP_SERVER_URL", "https://api-dev.acp.virtuals.io")
 
-        server_url =
-          System.get_env("RAXOL_ACP_SERVER_URL", "https://api-dev.acp.virtuals.io")
+    rpc_url = System.get_env("RAXOL_ACP_RPC_URL", "https://mainnet.base.org")
 
-        rpc_url = System.get_env("RAXOL_ACP_RPC_URL", "https://mainnet.base.org")
+    provider = JSONRPC.new(chains: %{8453 => rpc_url}, private_key: pk)
 
-        provider = JSONRPC.new(chains: %{8453 => rpc_url}, private_key: pk)
+    {:ok, auth} = Auth.start_link(provider: provider, server_url: server_url, chain_id: 8453)
+    api = HTTP.new(auth: auth, server_url: server_url, chain_ids: [8453])
 
-        {:ok, auth} = Auth.start_link(provider: provider, server_url: server_url, chain_id: 8453)
-        api = HTTP.new(auth: auth, server_url: server_url, chain_ids: [8453])
-
-        {:ok, api: api, provider: provider}
-    end
+    {:ok, api: api, provider: provider}
   end
 
   describe "get_active_jobs/1" do

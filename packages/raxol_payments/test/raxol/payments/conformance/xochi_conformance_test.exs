@@ -52,11 +52,11 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
     salt: "0x50c4e63fec78d6897bf2f854fbe944310903876e56027940293bb80e79f75fe2"
   }
 
-  setup_all do
-    case ConformanceFixture.locate() do
-      {:ok, _path} -> :ok
-      {:error, :not_found} -> {:skip, "conformance fixture not found"}
-    end
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide at load time -- .exs files are re-evaluated
+  # every run, so this still tracks whether the fixture is present.
+  if match?({:error, :not_found}, ConformanceFixture.locate()) do
+    @moduletag skip: "conformance fixture not found"
   end
 
   # Xochi vectors carry their full EIP-712 typed data inline because the

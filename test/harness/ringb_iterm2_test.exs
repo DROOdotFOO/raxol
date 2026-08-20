@@ -27,21 +27,24 @@ defmodule Raxol.Harness.RingBIterm2Test do
 
   @probes_dir Path.expand("../../scripts/harness/t0/probes", __DIR__)
 
+  # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+  # invalidates the module. Decide availability at load time. A spawn failure on
+  # an installed emulator is a real failure, so surface it as one.
+  if not Iterm2.available?() do
+    @moduletag skip: "iTerm2 not installed in this environment"
+  end
+
   setup do
-    if Iterm2.available?() do
-      case Iterm2.spawn_session([]) do
-        {:ok, session} ->
-          on_exit(fn ->
-            Guard.safe_teardown(Iterm2, session, "ringb-iterm2-test")
-          end)
+    case Iterm2.spawn_session([]) do
+      {:ok, session} ->
+        on_exit(fn ->
+          Guard.safe_teardown(Iterm2, session, "ringb-iterm2-test")
+        end)
 
-          [session: session]
+        [session: session]
 
-        {:error, reason} ->
-          {:skip, "iTerm2 spawn_session failed: #{inspect(reason)}"}
-      end
-    else
-      {:skip, "iTerm2 not installed in this environment"}
+      {:error, reason} ->
+        flunk("iTerm2 spawn_session failed: #{inspect(reason)}")
     end
   end
 

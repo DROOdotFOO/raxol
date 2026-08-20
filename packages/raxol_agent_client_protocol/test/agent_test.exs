@@ -11,7 +11,7 @@
 #      -> `session/prompt` (2 streamed updates + response) turn through
 #      `Connection`. `Connection`/`Session` are sibling-wave modules that
 #      may not have landed in this worktree yet; the `describe` block below
-#      skips (not fails) at runtime via `Code.ensure_loaded?/1` when they
+#      tags itself `:skip` at load time via `Code.ensure_loaded?/1` when they
 #      are absent, so the rest of the suite stays green either way.
 defmodule Raxol.AgentClientProtocol.AgentTest do
   use ExUnit.Case, async: true
@@ -233,12 +233,11 @@ defmodule Raxol.AgentClientProtocol.AgentTest do
   end
 
   describe "end-to-end smoke over Transport.Paired" do
-    setup do
-      if Code.ensure_loaded?(Raxol.AgentClientProtocol.Connection) do
-        :ok
-      else
-        {:skip, "Raxol.AgentClientProtocol.Connection has not landed in this worktree yet"}
-      end
+    # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
+    # invalidates the module. Decide at load time instead.
+    if not Code.ensure_loaded?(Raxol.AgentClientProtocol.Connection) do
+      @describetag skip:
+                     "Raxol.AgentClientProtocol.Connection has not landed in this worktree yet"
     end
 
     test "initialize -> session/new -> session/prompt streams 2 updates then a response" do
