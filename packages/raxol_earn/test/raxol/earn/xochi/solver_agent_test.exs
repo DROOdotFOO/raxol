@@ -8,6 +8,10 @@ defmodule Raxol.Earn.Xochi.SolverAgentTest do
   @evaluator "0x" <> String.duplicate("ed", 20)
   @acp_core "0x238E541BfefD82238730D00a2208E5497F1832E0"
 
+  # Real Base addresses, from Raxol.Payments.Assets: USDC is 6dp, WETH 18dp.
+  @base_usdc "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  @base_weth "0x4200000000000000000000000000000000000006"
+
   setup do
     for {_, pid, _, _} <- DynamicSupervisor.which_children(JobSession.Supervisor),
         is_pid(pid) do
@@ -52,14 +56,18 @@ defmodule Raxol.Earn.Xochi.SolverAgentTest do
   # In-process Xochi stub for accept-time intent derivation: GET /api/intent/:id
   # returns a `:quoted` intent carrying the authoritative `from_amount`. The
   # budget is sized on THIS, never the requirement's declared `amount_atomic`.
-  defp xochi_stub(from_amount \\ "1000000", status \\ "quoted") do
+  #
+  # `from_token` defaults to real Base USDC: the fee is charged in USDC and
+  # derived 1:1 from the origin amount, so the origin leg has to actually be a
+  # 6dp USD stablecoin for that arithmetic to mean anything.
+  defp xochi_stub(from_amount \\ "1000000", status \\ "quoted", opts \\ []) do
     plug = fn conn ->
       body = %{
         "id" => "xi_1",
         "status" => status,
         "from_chain_id" => 8453,
         "to_chain_id" => 10,
-        "from_token" => "0x" <> String.duplicate("11", 20),
+        "from_token" => Keyword.get(opts, :from_token, @base_usdc),
         "to_token" => "0x" <> String.duplicate("22", 20),
         "from_amount" => from_amount,
         "to_amount" => from_amount,
@@ -140,6 +148,75 @@ defmodule Raxol.Earn.Xochi.SolverAgentTest do
       Process.sleep(40)
 
       assert SolverAgent.sessions(solver) |> map_size() == 1
+    end
+  end
+
+  # The budget is `fee_bps` of the intent's `from_amount`, escrowed as the ACP
+  # payment token (USDC, 6dp). `from_amount` is in the ORIGIN token's base units,
+  # so that arithmetic only holds when the origin token is itself a 6dp USD
+  # stablecoin. Rescaling decimals cannot rescue an 18dp token either: 1 WETH is
+  # 1e18 base units, and reading that as 1e6-scaled USDC understates by roughly
+  # the ETH price. Without a price oracle the only sound answer is to refuse.
+  describe "budget proposal fee-base gate" do
+    test "refuses to size a budget from an 18dp origin token", ctx do
+      {:ok, solver} =
+        start_solver(
+          [fee_bps: 50, xochi_config: xochi_stub("1000000", "quoted", from_token: @base_weth)],
+          ctx
+        )
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+
+    test "refuses an unregistered origin token rather than assuming 6dp", ctx do
+      unknown = "0x" <> String.duplicate("11", 20)
+
+      {:ok, solver} =
+        start_solver(
+          [fee_bps: 50, xochi_config: xochi_stub("1000000", "quoted", from_token: unknown)],
+          ctx
+        )
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+
+    test "refuses a transfer so small the fee truncates to zero", ctx do
+      # 50 bps of 100 base units truncates to 0 through `div/2`. A zero budget is
+      # an escrow that can never pay, so the job fails closed instead.
+      {:ok, solver} =
+        start_solver([fee_bps: 50, xochi_config: xochi_stub("100")], ctx)
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+
+    test "a 6dp stablecoin origin still proposes a budget", ctx do
+      {:ok, solver} = start_solver([fee_bps: 50], ctx)
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :budget_proposed, budget_atomic: 5_000}} =
+               SolverAgent.sessions(solver)
     end
   end
 
