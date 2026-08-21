@@ -117,6 +117,25 @@ defmodule Raxol.Earn.Xochi.Offering do
   the buyer no longer hand-carries (and cannot misstate) `src_chain_id`,
   `dst_chain_id`, `src_token`, `dst_token`, or `amount_atomic`. Those remain as
   optional audit hints; raxol derives and enforces the real values.
+
+  ## `pull_signature` is mandatory, which narrows this to pulling corridors
+
+  The bundle requires a `pull_signature` for every mode. That is deliberate, and
+  it means an ACP job can only ever be a corridor whose origin supports a gasless
+  pull -- an EVM leg signing ERC-3009 or Permit2.
+
+  A non-EVM origin (Tron, Solana) funds a `deposit_address` instead, so its buyer
+  has no pull to sign and nothing to put here. `Raxol.Payments` models that case
+  (`Protocols.Xochi.deposit_route_quote/3`, and a bundle whose `pull_signature`
+  is nil for non-pulling methods), but the seller stack does not: every corridor
+  in `Raxol.Earn.Xochi.CorridorAllowlist` is EVM, and `Raxol.Earn.Xochi.Settler`
+  settles only by relaying a signed pull through `execute_signed/2`. Accepting a
+  deposit-route job would therefore escrow a fee for work this stack cannot do.
+
+  So the narrowing costs nothing today, and a corridor_allowlist_test guard fails
+  if a non-pulling origin ever becomes quotable while this stays mandatory. At
+  that point make `pull_signature` required per-mode in `requirement_schema/1`
+  rather than in this shared base. See GitHub #665.
   """
   @spec requirement_schema() :: map()
   def requirement_schema do
@@ -496,6 +515,10 @@ defmodule Raxol.Earn.Xochi.Offering do
   authoritatively from Xochi by the intent id (see
   `Raxol.Earn.Xochi.IntentDeriver`). It does not verify the signature (Riddler
   does that against its persisted quote).
+
+  Requiring `pull_signature` restricts this to corridors whose origin can sign a
+  gasless pull; see `requirement_schema/0` for why that is safe while every
+  allowlisted corridor is EVM, and what to change when one is not.
   """
   @spec valid_requirement?(map()) :: boolean()
   def valid_requirement?(req) when is_map(req) do
