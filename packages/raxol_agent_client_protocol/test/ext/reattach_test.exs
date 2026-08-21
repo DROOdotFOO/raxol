@@ -82,9 +82,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       start_supervised!(
         %{
           id: {:writer, sid},
-          start:
-            {Writer, :start_link,
-             [[session_id: sid, journal: {Mem, j}] ++ writer_opts]},
+          start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}] ++ writer_opts]},
           restart: :temporary
         },
         restart: :temporary
@@ -242,12 +240,9 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       {sid, j, w} =
         start_writer([
           {"turn_started", %{"turnId" => 1, "prompt" => []}, "user"},
-          {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
-           "agent"},
-          {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
-           "agent"},
-          {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"},
-           "system"}
+          {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
+          {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
+          {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"}, "system"}
         ])
 
       # Durable so far: 1 genesis, 2 turn_started, 3-4 updates, 5 turn_completed.
@@ -453,9 +448,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     taints = ~w(user agent external system)
 
     {sid, j, _w} =
-      start_writer(
-        Enum.map(taints, fn t -> {"session_update", %{"t" => t}, t} end)
-      )
+      start_writer(Enum.map(taints, fn t -> {"session_update", %{"t" => t}, t} end))
 
     {conn, _ref, sub, :deferred} = attach(sid, j)
     _ = sync(sub)
@@ -563,8 +556,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
       # emits the terminal Lagged for the probe and drops it. (Assertions below do
       # not hardcode the triggering offset — any reasonable accounting greens this.)
       for i <- 1..5,
-          do:
-            {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
+          do: {:ok, _} = Writer.append(w, "session_update", %{"i" => i}, "agent")
 
       # The Writer PRODUCED the heal signal itself, carrying the highest offset it
       # actually sent this subscriber (selectively received past the live frames).
@@ -677,10 +669,8 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     {sid, j, _w} =
       start_writer([
         {"turn_started", %{"turnId" => 4, "prompt" => []}, "user"},
-        {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
-         "agent"},
-        {"turn_completed", %{"turnId" => 4, "stopReason" => "end_turn"},
-         "system"}
+        {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
+        {"turn_completed", %{"turnId" => 4, "stopReason" => "end_turn"}, "system"}
       ])
 
     {conn, _ref, sub, :deferred} = attach(sid, j)
@@ -776,8 +766,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
         })
 
       # The CDI-5 deny envelope: -32000 "attach denied", NO data (anti-oracle).
-      assert {:error,
-              %Error{code: -32_000, message: "attach denied", data: nil}} = res
+      assert {:error, %Error{code: -32_000, message: "attach denied", data: nil}} = res
 
       # Nothing registered, no history read, no delegate/reply — a denied
       # attacher never appears in the subscriber set even transiently.
@@ -849,10 +838,8 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
     {sid, j, _w} =
       start_writer([
         {"turn_started", %{"turnId" => 1, "prompt" => []}, "user"},
-        {"session_update", %{"sessionUpdate" => "agent_message_chunk"},
-         "agent"},
-        {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"},
-         "system"}
+        {"session_update", %{"sessionUpdate" => "agent_message_chunk"}, "agent"},
+        {"turn_completed", %{"turnId" => 1, "stopReason" => "end_turn"}, "system"}
       ])
 
     {conn, _ref, sub, :deferred} = attach(sid, j, %{offset_aware?: false})
@@ -895,8 +882,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
         start_supervised!(
           %{
             id: {:writer, sid},
-            start:
-              {Writer, :start_link, [[session_id: sid, journal: {Mem, j}]]},
+            start: {Writer, :start_link, [[session_id: sid, journal: {Mem, j}]]},
             restart: :temporary
           },
           restart: :temporary

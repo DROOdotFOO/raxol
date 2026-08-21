@@ -765,8 +765,7 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.SetSessionConfigOptionRespon
   def to_json(%__MODULE__{} = r) do
     AgentTypes.put_meta(
       %{
-        "configOptions" =>
-          Enum.map(r.config_options, &SessionConfigOption.to_json/1)
+        "configOptions" => Enum.map(r.config_options, &SessionConfigOption.to_json/1)
       },
       r._meta
     )
@@ -1478,8 +1477,7 @@ defmodule Raxol.AgentClientProtocol.Schema.Unstable.ConfigOptionUpdate do
   def to_json(%__MODULE__{} = c) do
     AgentTypes.put_meta(
       %{
-        "configOptions" =>
-          Enum.map(c.config_options, &SessionConfigOption.to_json/1)
+        "configOptions" => Enum.map(c.config_options, &SessionConfigOption.to_json/1)
       },
       c._meta
     )

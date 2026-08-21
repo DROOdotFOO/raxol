@@ -2,6 +2,7 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Payments.EIP712
+  alias Raxol.Payments.Protocols.Xochi
   alias Raxol.Payments.Test.ConformanceFixture
   alias Raxol.Payments.Test.ConformanceSigner
 
@@ -41,16 +42,26 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
   # settlement path.
   @shielded_signature "0xbe2545d815e4ce15d859e9bdee5bcb3a2f81e94a4b0fd0586220bd0235682d2f4bd1ea6082ddb8e59bb5557e91cb2f80e4dd3aef800e0fa4eabd0367a04c86061b"
 
-  # The fixture domain (above) is a determinism-locked synthetic, NOT the live
-  # worker domain. The live worker domain-separates with name "Xochi", version
-  # "1-prod", and a bytes32 salt (no verifyingContract) -- pinned byte-for-byte
-  # against viem in eip712_test.exs "salt domain". Kept here to guard the drift.
+  # The live worker domain-separates with name "Xochi", a DEPLOY-SCOPED version,
+  # and salt = keccak256(version), with no verifyingContract. Operators set the
+  # version via XOCHI_EIP712_VERSION; api.xochi.fi (riddler-axol) serves
+  # "3-prod", and riddler-prod serves "1-prod". Pinned to the endpoint raxol
+  # actually talks to.
+  #
+  # raxol signs whatever domain the quote serves (`Xochi.eip712_domain/1`), so a
+  # version bump needs no change here. This constant exists only to prove the
+  # fixture domain is not a live one.
   @live_domain %{
     name: "Xochi",
-    version: "1-prod",
+    version: "3-prod",
     chainId: 8453,
-    salt: "0x50c4e63fec78d6897bf2f854fbe944310903876e56027940293bb80e79f75fe2"
+    salt: "0x9367b434237c76dd65474f6b3400f245656f312be16268d772cec464857dc759"
   }
+
+  # The generator pins the server's BARE default version for determinism
+  # (riddler-sdk packages/spec/conformance/generate.ts, XOCHI_DOMAIN_VERSION),
+  # tracking the server's domain SHAPE while staying off every deploy scope.
+  @fixture_domain_version "3"
 
   # ExUnit has no runtime skip: a callback returning {:skip, _} raises and
   # invalidates the module. Decide at load time -- .exs files are re-evaluated
@@ -59,9 +70,26 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
     @moduletag skip: "conformance fixture not found"
   end
 
+  # `by_protocol/1` answers [] both when the fixture is absent and when it loads
+  # but carries no xochi vectors, and a `for` over [] generates no tests at all.
+  # The moduletag above covers the first case; this covers the second, where the
+  # suite would otherwise report a green run having asserted nothing about Xochi.
+  describe "fixture coverage" do
+    test "the loaded fixture yields at least one xochi vector" do
+      assert ConformanceFixture.by_protocol("xochi") != [],
+             "fixture loaded but produced no xochi vectors -- every generated " <>
+               "test below was silently skipped out of existence"
+    end
+  end
+
   # Xochi vectors carry their full EIP-712 typed data inline because the
   # domain has no `verifyingContract` and the `version` is deployment-scoped
   # (read from the quote response at runtime).
+  #
+  # The domain comes from `Xochi.eip712_domain/1`, the same projection the
+  # signing path uses, so a served-to-signed mismatch fails here. Rebuilding
+  # that mapping locally is what let #772 ship green: the copy in this file was
+  # conditional on `version` while production was not, and nothing compared them.
   describe "Xochi XochiIntent EIP-712 conformance vs CLI" do
     for vec <- ConformanceFixture.by_protocol("xochi") do
       @vec vec
@@ -69,7 +97,7 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
       test "digest matches CLI for #{vec["name"]}" do
         vec = @vec
         eip712 = vec["eip712"]
-        domain = atomize_domain(eip712["domain"])
+        domain = Xochi.eip712_domain(eip712)
         types = atomize_types(eip712["types"])
         message = eip712["message"]
 
@@ -88,7 +116,7 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
       test "signs + recovers identically to CLI for #{vec["name"]}" do
         vec = @vec
         eip712 = vec["eip712"]
-        domain = atomize_domain(eip712["domain"])
+        domain = Xochi.eip712_domain(eip712)
         types = atomize_types(eip712["types"])
         message = eip712["message"]
 
@@ -153,28 +181,41 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
   # for a live one. This guard fails loudly if the two domains ever converge,
   # forcing a conscious decision about whether the fixture should track live.
   describe "live-vs-fixture domain drift guard" do
-    test "the fixture domain differs from the live worker domain (name, version, salt)" do
+    test "the fixture version carries no deploy scope, so it is no deployment's domain" do
       fixture = ConformanceFixture.by_name("xochi-base-optimism-usdc")["eip712"]["domain"]
 
-      assert fixture["name"] == "XochiIntent"
-      assert fixture["name"] != @live_domain.name
+      # Name and salt-presence converged on live deliberately, so neither
+      # separates the two any more. The deploy scope is what does.
+      assert fixture["name"] == @live_domain.name
+      assert Map.has_key?(fixture, "salt")
 
-      assert fixture["version"] == "1"
-      assert fixture["version"] != @live_domain.version
+      assert fixture["version"] == @fixture_domain_version
 
-      refute Map.has_key?(fixture, "salt")
-      assert Map.has_key?(@live_domain, :salt)
+      refute String.contains?(fixture["version"], "-"),
+             "the fixture pins the server's BARE default version for determinism; " <>
+               "a scoped value here means it is signing some deployment's domain"
+
+      assert String.contains?(@live_domain.version, "-"),
+             "every deployment scopes its version (riddler-prod 1-prod, " <>
+               "riddler-axol 3-prod); an unscoped live version collides with the fixture"
+
+      refute fixture["version"] == @live_domain.version
+      refute fixture["salt"] == @live_domain.salt
+    end
+
+    test "salt is keccak256(version) on both sides, so the version binds the salt" do
+      fixture = ConformanceFixture.by_name("xochi-base-optimism-usdc")["eip712"]["domain"]
+
+      assert fixture["salt"] == keccak_utf8(fixture["version"])
+      assert @live_domain.salt == keccak_utf8(@live_domain.version)
     end
 
     test "the same XochiIntent message hashes differently under each domain" do
       message = shielded_message("public")
+      fixture = ConformanceFixture.by_name("xochi-base-optimism-usdc")["eip712"]["domain"]
 
       assert {:ok, fixture_digest} =
-               EIP712.hash(
-                 %{name: "XochiIntent", version: "1", chainId: 8453},
-                 @xochi_types,
-                 message
-               )
+               EIP712.hash(Xochi.eip712_domain(%{"domain" => fixture}), @xochi_types, message)
 
       assert {:ok, live_digest} = EIP712.hash(@live_domain, @xochi_types, message)
 
@@ -185,14 +226,10 @@ defmodule Raxol.Payments.Conformance.XochiConformanceTest do
 
   # -- Fixture shape helpers --
 
-  defp atomize_domain(domain) do
-    %{name: domain["name"], chainId: domain["chainId"]}
-    |> maybe_put(:version, domain["version"])
-    |> maybe_put(:salt, domain["salt"])
+  # The domain salt rule on both sides: salt = keccak256(utf8(version)).
+  defp keccak_utf8(value) do
+    "0x" <> Base.encode16(ExKeccak.hash_256(value), case: :lower)
   end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # CLI emits types as { TypeName: [{name, type}, ...], ... }; convert to
   # the {name, type} tuple shape Raxol.Payments.EIP712 expects.

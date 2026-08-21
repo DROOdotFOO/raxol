@@ -6,9 +6,20 @@ defmodule Raxol.Payments.Test.CliSignerTest do
   @moduletag :cli_signer
 
   setup do
+    # The CLI repo is axol-io/riddler-sdk (formerly riddler-client), a sibling of
+    # the raxol monorepo. The previous expansion was one level short and landed
+    # on <raxol>/riddler-client, inside this repo, so the fallback never resolved
+    # under either name and these tests only ran with RIDDLER_CLI_DIR set.
     cwd =
       System.get_env("RIDDLER_CLI_DIR") ||
-        Path.expand("../../../../riddler-client", __DIR__)
+        Enum.find(
+          [
+            Path.expand("../../../../../riddler-sdk", __DIR__),
+            Path.expand("../../../../../riddler-client", __DIR__)
+          ],
+          &File.dir?/1
+        ) ||
+        Path.expand("../../../../../riddler-sdk", __DIR__)
 
     cli_available? =
       File.dir?(cwd) and
@@ -38,7 +49,13 @@ defmodule Raxol.Payments.Test.CliSignerTest do
       assert {:ok, %{exit_code: 0, stdout: stdout}} =
                CliSigner.run("help", [], cwd: cwd)
 
-      assert stdout =~ "RIDDLER COMMERCE CLIENT"
+      # Assert the subcommands raxol drives, not the banner. The banner has
+      # already been renamed once upstream (COMMERCE -> XOCHI) and nothing here
+      # depends on it; these three are the actual contract with the CLI.
+      for subcommand <- ~w(acp-buyer-auth sign-erc3009 sign-permit2) do
+        assert stdout =~ subcommand,
+               "CLI help no longer advertises #{subcommand}, which this oracle drives"
+      end
     end
 
     test "acp-buyer-auth emits a parseable RESULT_JSON line", %{

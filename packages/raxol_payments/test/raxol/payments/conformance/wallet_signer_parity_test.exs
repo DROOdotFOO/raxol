@@ -69,17 +69,22 @@ defmodule Raxol.Payments.Conformance.WalletSignerParityTest do
   # Resolve the CLI checkout: explicit env var, then the two common dev layouts
   # (beside the raxol repo under a shared parent, or inside it). Returns nil when
   # absent so the test flunks with a clear message under `--only cli_signer`.
+  # The CLI repo (axol-io/riddler-sdk, formerly riddler-client) became a
+  # monorepo and its entry point moved to packages/sdk-taker/src/cli.ts.
+  # Probing for the retired src/index.js + src/acp.js answered nil even with
+  # RIDDLER_CLI_DIR set correctly, which silently retired this oracle: the test
+  # is :cli_signer-tagged and excluded by default, so the flunk below was never
+  # reached. Probe the entry point CliSigner actually spawns.
   defp locate_cli do
     [
       System.get_env("RIDDLER_CLI_DIR"),
+      Path.expand("../../../../../../../riddler-sdk", __DIR__),
+      Path.expand("../../../../../../riddler-sdk", __DIR__),
       Path.expand("../../../../../../../riddler-client", __DIR__),
       Path.expand("../../../../../../riddler-client", __DIR__)
     ]
     |> Enum.reject(&is_nil/1)
-    |> Enum.find(fn dir ->
-      File.exists?(Path.join([dir, "src", "index.js"])) and
-        File.exists?(Path.join([dir, "src", "acp.js"]))
-    end)
+    |> Enum.find(&File.exists?(Path.join([&1, "packages", "sdk-taker", "src", "cli.ts"])))
   end
 
   defp decode_hex("0x" <> hex), do: Base.decode16(hex, case: :mixed)

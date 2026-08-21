@@ -363,9 +363,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       ])
     end
 
-    Logger.debug(
-      "acp reattach: attach denied for #{inspect(sid)} (#{inspect(reason)})"
-    )
+    Logger.debug("acp reattach: attach denied for #{inspect(sid)} (#{inspect(reason)})")
 
     :ok
   end
@@ -410,8 +408,7 @@ defmodule Raxol.AgentClientProtocol.Ext.Reattach do
       forward_hi: 0,
       live: :pending,
       # dead-injector knobs (untagged red controls, bus §9):
-      dead_register_after_history:
-        Map.get(dead, :__dead_register_after_history__, false),
+      dead_register_after_history: Map.get(dead, :__dead_register_after_history__, false),
       dead_cached_counter: Map.get(dead, :__dead_cached_counter__, false)
     }
 
