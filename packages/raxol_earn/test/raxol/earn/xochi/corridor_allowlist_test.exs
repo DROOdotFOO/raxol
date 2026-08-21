@@ -3,6 +3,8 @@ defmodule Raxol.Earn.Xochi.CorridorAllowlistTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Earn.Xochi.CorridorAllowlist
+  alias Raxol.Payments.Assets
+  alias Raxol.Payments.Relay.Schemas, as: RelaySchemas
 
   @usdc_chains [1, 10, 137, 8453, 42_161]
   @usdt_chains [1, 10, 137, 8453, 42_161]
@@ -132,30 +134,44 @@ defmodule Raxol.Earn.Xochi.CorridorAllowlistTest do
   # cannot pull: make `pull_signature` required per-mode in
   # `requirement_schema/1` instead of in the shared base. See GitHub #665.
   describe "pull-signature precondition" do
-    # Every chain reachable as a corridor ORIGIN today. All EVM, all able to sign
-    # ERC-3009 or Permit2.
-    @pulling_origins [1, 10, 137, 8453, 42_161, 4663]
+    # The property is "the origin can sign a gasless pull", i.e. it is an EVM leg
+    # signing ERC-3009 or Permit2. `Raxol.Payments.Assets` is the registry of EVM
+    # chains the payments stack prices gas for, so membership there IS that
+    # property. Restating the chain ids in this file instead would make any newly
+    # allowlisted EVM chain -- Linea, Scroll, which sign both just fine -- fail
+    # with a diagnosis that is simply false.
+    test "every corridor origin is an EVM chain whose buyer can sign a gasless pull" do
+      corridors = CorridorAllowlist.corridors()
+      assert corridors != []
 
-    test "every corridor origin can sign a gasless pull" do
-      origins =
-        CorridorAllowlist.corridors()
-        |> Enum.map(fn {_src, _dst, from, _to} -> from end)
-        |> Enum.uniq()
-        |> Enum.sort()
+      for {src, dst, from, to} <- corridors do
+        assert Assets.native_symbol(from),
+               "corridor #{src}->#{dst} (#{from}->#{to}) has origin chain #{from}, which " <>
+                 "Raxol.Payments.Assets does not know as an EVM chain. A non-EVM origin " <>
+                 "funds a deposit address and so has no pull to sign, while " <>
+                 "Offering.requirement_schema/0 demands a pull_signature from every " <>
+                 "bundle. Either register the chain, or make pull_signature required " <>
+                 "per-mode in requirement_schema/1. See GitHub #665."
 
-      assert origins -- @pulling_origins == [],
-             "a corridor origin cannot sign a gasless pull, so its buyer has no " <>
-               "pull_signature -- but Offering.requirement_schema/0 still demands one"
+        refute RelaySchemas.tron_chain?(from),
+               "Tron is quotable as a corridor origin (#{src}->#{dst}), but it funds by " <>
+                 "deposit address and its buyer has no pull_signature to send."
+      end
     end
 
-    test "a Tron origin is not quotable, so the mandatory pull_signature turns nobody away" do
-      # Tron mainnet, which Raxol.Payments.Assets knows (USDT/USDC TRC-20) and
-      # Riddler is actively building deposit routes for. It funds by deposit
-      # address, so it is the concrete corridor this precondition would break on.
-      tron = 728_126_428
+    test "Tron is quotable as neither origin nor destination" do
+      tron = RelaySchemas.tron_chain_id()
 
-      for dst <- @pulling_origins, symbol <- ~w(USDC USDT) do
-        refute CorridorAllowlist.allowed?(symbol, symbol, tron, dst)
+      # A positive control, because `allowed?/4` ends in a catch-all returning
+      # false: refutes alone would still pass if `tron` were a typo, or if the
+      # argument order here drifted. This proves the same call shape can be true.
+      assert CorridorAllowlist.allowed?("USDC", "USDC", 8453, 10)
+
+      # Derived from the corridor list rather than a hand-written pair list, so
+      # every symbol pairing is covered and a new one cannot slip past.
+      for {src, dst, from, to} <- CorridorAllowlist.corridors() do
+        refute CorridorAllowlist.allowed?(src, dst, tron, to)
+        refute CorridorAllowlist.allowed?(src, dst, from, tron)
       end
     end
   end
