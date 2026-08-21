@@ -90,4 +90,79 @@ defmodule Raxol.Gateway.PairingTest do
       assert :deny = Pairing.authorize(p, route(:telegram, nil))
     end
   end
+
+  # A crash must not silently reverse the deployment's posture. Seeded from
+  # opts, `init_manager/1` rebuilds it; seeded by calls against a running
+  # server, a restart leaves an empty server no caller can distinguish from a
+  # configured one -- open Consoles start denying everything, enforcing ones
+  # forget their allowlist, and the boot that announced the posture is long past.
+  describe "seeds" do
+    test "an allowlist given as start opts is applied at init" do
+      p =
+        start_pairing(
+          allow_platforms: [:telegram],
+          allowed_users: ["u-global"],
+          platform_users: [discord: ["u-discord"]]
+        )
+
+      assert :allow = Pairing.authorize(p, route(:telegram, "anyone"))
+      assert :allow = Pairing.authorize(p, route(:slack, "u-global"))
+      assert :allow = Pairing.authorize(p, route(:discord, "u-discord"))
+      assert :deny = Pairing.authorize(p, route(:slack, "u-discord"))
+      assert :deny = Pairing.authorize(p, route(:discord, "nobody"))
+    end
+
+    test "integer user ids seed the same as the strings a route carries" do
+      p = start_pairing(allowed_users: [12_345], platform_users: [telegram: [678]])
+
+      assert :allow = Pairing.authorize(p, route(:slack, "12345"))
+      assert :allow = Pairing.authorize(p, route(:telegram, "678"))
+    end
+
+    test "the seeded posture survives a restart; a runtime pairing does not" do
+      name = :"pairing_restart_#{System.unique_integer([:positive])}"
+
+      sup =
+        start_supervised!(%{
+          id: :sup_for_pairing_restart,
+          start:
+            {Supervisor, :start_link,
+             [
+               [{Pairing, [name: name, allow_platforms: [:telegram]]}],
+               [strategy: :one_for_one]
+             ]}
+        })
+
+      :ok = Pairing.approve(name, "u-runtime")
+      assert :allow = Pairing.authorize(name, route(:discord, "u-runtime"))
+      assert :allow = Pairing.authorize(name, route(:telegram, "anyone"))
+
+      ref = Process.monitor(Process.whereis(name))
+      Process.exit(Process.whereis(name), :kill)
+      assert_receive {:DOWN, ^ref, :process, _pid, :killed}
+      wait_for_restart(name)
+
+      # The configured posture is back.
+      assert :allow = Pairing.authorize(name, route(:telegram, "anyone"))
+      # The in-memory pairing is not, which is what in-memory means.
+      assert :deny = Pairing.authorize(name, route(:discord, "u-runtime"))
+
+      Supervisor.stop(sup)
+    end
+
+    defp wait_for_restart(name, attempts \\ 100)
+
+    defp wait_for_restart(name, 0), do: flunk("#{name} never restarted")
+
+    defp wait_for_restart(name, attempts) do
+      case Process.whereis(name) do
+        nil ->
+          Process.sleep(10)
+          wait_for_restart(name, attempts - 1)
+
+        pid ->
+          pid
+      end
+    end
+  end
 end

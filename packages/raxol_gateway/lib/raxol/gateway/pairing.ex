@@ -20,6 +20,23 @@ defmodule Raxol.Gateway.Pairing do
 
   `:code_ttl_ms` (1h), `:request_cooldown_ms` (30s), `:max_failures` (5),
   `:lockout_ms` (5m), `:code_length` (8).
+
+  ## Seeds, and why the configured posture is not runtime state
+
+  `:allow_platforms`, `:allowed_users` and `:platform_users` are applied at
+  `init_manager/1` on every start, including a supervisor RESTART. The
+  runtime-mutable calls (`allow/3`, `allow_platform_all/2`, `approve/2`) exist
+  alongside them and are lost on restart, which is what in-memory pairing means.
+
+  The split matters because the two failure modes are not symmetric. Losing a
+  DM pairing costs one user one re-pair. Losing the configured posture is total
+  and silent in BOTH directions: an `:open` deployment starts denying every
+  message forever, and an enforcing one revokes every allowlist entry it was
+  given. Neither re-announces itself, because the boot that announced it already
+  happened. Seeding from opts means a crash restores the deployment's intent
+  rather than an empty server that no caller can tell from a configured one.
+
+      {Raxol.Gateway.Pairing, name: :gw_pairing, allow_platforms: [:telegram]}
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -89,13 +106,21 @@ defmodule Raxol.Gateway.Pairing do
        config: config,
        pending: %{},
        approved: MapSet.new(),
-       allow_global: MapSet.new(),
-       allow_platform: %{},
-       allow_all_platforms: MapSet.new(),
+       allow_global: MapSet.new(Enum.map(opt_list(opts, :allowed_users), &to_string/1)),
+       allow_platform: seed_platform_users(opts),
+       allow_all_platforms: MapSet.new(opt_list(opts, :allow_platforms)),
        last_request: %{},
        failures: 0,
        locked_until: nil
      }}
+  end
+
+  defp opt_list(opts, key), do: opts |> Keyword.get(key, []) |> List.wrap()
+
+  defp seed_platform_users(opts) do
+    for {platform, users} <- opt_list(opts, :platform_users), into: %{} do
+      {platform, MapSet.new(users, &to_string/1)}
+    end
   end
 
   @impl Raxol.Core.Behaviours.BaseManager

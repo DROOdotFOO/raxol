@@ -84,51 +84,78 @@ defmodule Raxol.Console.Boot do
 
     case start_gateway(sup, runtime_config, adapters, actions, base, skills) do
       :ok ->
-        pairing = apply_pairing(runtime_config, adapters, base)
-        {:ok, report(sup, mcp_sup, mcp, adapters, skills, pairing, opts)}
+        posture = announce_posture(runtime_config, adapters, base)
+        {:ok, report(sup, mcp_sup, mcp, adapters, skills, posture, opts)}
 
       {:error, _} = error ->
         stop_supervisor(sup) && error
     end
   end
 
-  # Seed the running Pairing server from the deployment's posture. This runs
-  # after start_gateway/6 because Pairing's allowlists are runtime-mutable only
-  # -- `init_manager/1` starts every one of them empty and takes no seeds.
+  # The deployment's posture, as `Raxol.Gateway.Pairing` start opts. These are
+  # SEEDS, not calls against a running server: the Pairing server applies them in
+  # `init_manager/1`, so a supervisor restart rebuilds the same posture. Seeding
+  # a running server from here instead would mean one crash silently reverses the
+  # deployment -- an open Console starts denying everything, an enforcing one
+  # forgets its allowlist -- with the boot that announced the posture long past.
   #
-  # Open mode is expressed as allow_platform_all/2 over the CONNECTED platforms
-  # rather than as a flag the gate consults, so `Raxol.Console.Inbound` has one
-  # code path and the posture is inspectable in the Pairing server's own state.
-  # A platform the deployment never connected stays denied even when open.
-  #
-  # A headless runtime connects no channels, so start_gateway/6 starts no gateway
-  # subtree and there is no Pairing server to seed. It also has no inbound chat
-  # surface to authorize, so warning about an open one would be false.
-  defp apply_pairing(_rc, adapters, _base) when map_size(adapters) == 0, do: :none
+  # Open mode is expressed as `allow_platforms` over the CONNECTED platforms
+  # rather than as a flag the gate consults, so there is one code path in both
+  # postures and the truth is in the Pairing server's own state. A platform the
+  # deployment never connected stays denied even when open.
+  defp pairing_opts(%{pairing: nil}, adapters), do: [allow_platforms: Map.keys(adapters)]
 
-  defp apply_pairing(%{pairing: nil}, _adapters, _base), do: :open
+  defp pairing_opts(%{pairing: %{mode: :open}}, adapters),
+    do: [allow_platforms: Map.keys(adapters)]
 
-  defp apply_pairing(%{pairing: pairing}, adapters, base) do
-    server = name(base, "pairing")
-
-    case pairing.mode do
-      :open ->
-        Enum.each(Map.keys(adapters), &Pairing.allow_platform_all(server, &1))
-        announce_open(pairing, Map.keys(adapters), base)
-        :open
-
-      :enforce ->
-        seed_allowlists(server, pairing)
-        :enforce
-    end
+  defp pairing_opts(%{pairing: pairing}, _adapters) do
+    [
+      allow_platforms: pairing.allow_platforms,
+      allowed_users: pairing.allowed_users,
+      platform_users: pairing.platform_users
+    ]
   end
 
-  defp seed_allowlists(server, pairing) do
-    Enum.each(pairing.allow_platforms, &Pairing.allow_platform_all(server, &1))
-    Enum.each(pairing.allowed_users, &Pairing.allow(server, &1, :global))
+  # A headless runtime connects no channels, so start_gateway/6 starts no gateway
+  # subtree and there is no Pairing server at all. It also has no inbound chat
+  # surface to authorize, so warning about an open one would be false.
+  defp announce_posture(_rc, adapters, _base) when map_size(adapters) == 0, do: :none
 
-    for {platform, users} <- pairing.platform_users, user <- users do
-      Pairing.allow(server, user, {:platform, platform})
+  defp announce_posture(%{pairing: nil} = rc, adapters, base) do
+    announce_open(rc.pairing, Map.keys(adapters), base)
+    :open
+  end
+
+  defp announce_posture(%{pairing: %{mode: :open} = pairing}, adapters, base) do
+    announce_open(pairing, Map.keys(adapters), base)
+    :open
+  end
+
+  defp announce_posture(%{pairing: pairing}, adapters, base) do
+    warn_unconnected(pairing, adapters, base)
+    :enforce
+  end
+
+  # A platform atom that names no connected channel grants nothing, which reads
+  # exactly like a deliberate `pairing: []` -- the silent lockout `known_keys/1`
+  # already refuses to allow one level up, where a typo'd `allowed_user:` is
+  # rejected on these same grounds. The names are known here, so say so.
+  defp warn_unconnected(pairing, adapters, base) do
+    connected = Map.keys(adapters)
+    named = Enum.uniq(pairing.allow_platforms ++ Keyword.keys(pairing.platform_users))
+
+    case named -- connected do
+      [] ->
+        :ok
+
+      unknown ->
+        Logger.warning("""
+        #{base}: pairing names #{inspect(unknown)}, which no channel connected.
+
+        Connected: #{inspect(connected)}. Those entries grant nothing, so anyone
+        they were meant to admit is denied -- indistinguishable from configuring
+        no allowlist at all. Check the platform atoms against your :channels.
+        """)
     end
   end
 
@@ -292,6 +319,8 @@ defmodule Raxol.Console.Boot do
       |> Keyword.put(:actions, skill_actions(skills) ++ actions)
       |> put_skills_context(skills)
 
+    pairing_server = name(base, "pairing")
+
     [
       handler: RuntimeConfig.handler_spec(rc, agent_opts),
       deliver: fn route, rendered ->
@@ -299,7 +328,14 @@ defmodule Raxol.Console.Boot do
       end,
       name: name(base, "gateway"),
       router_name: name(base, "router"),
-      pairing_name: name(base, "pairing"),
+      pairing_name: pairing_server,
+      pairing: pairing_opts(rc, adapters),
+      # The router asks Pairing itself, so the gate holds for a feed loop that
+      # calls `SessionRouter.route/3` directly. `Raxol.Console.Inbound` is the
+      # documented door and answers a denial without a round trip through the
+      # router; this is what makes skipping it a difference in ergonomics rather
+      # than a difference in who gets served.
+      authorize: fn route -> Pairing.authorize(pairing_server, route) end,
       sessions_sup: name(base, "sessions")
     ]
     |> put_router_opts(rc)

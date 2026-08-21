@@ -15,7 +15,16 @@ defmodule Raxol.Gateway.Supervisor do
       `Raxol.Gateway.Pairing`)
     * `:sessions_sup` -- the session supervisor's name (default
       `Raxol.Gateway.SessionSup`)
+    * `:authorize` -- `(Route.t() -> :allow | :deny)` the router consults before
+      starting a session or delivering an event (see `SessionRouter`). Unset
+      allows everything.
     * `:router` / `:pairing` -- extra opts merged into those children
+
+  `:rest_for_one` also means a Pairing crash restarts the sessions and the
+  router behind it. That is deliberate: the router holds a closure over the
+  Pairing server, and sessions authorized under the pre-crash posture should not
+  outlive it. Pass the posture as `:pairing` seed opts rather than calling the
+  running server, so the restart rebuilds it -- see `Raxol.Gateway.Pairing`.
   """
 
   use Supervisor
@@ -37,6 +46,7 @@ defmodule Raxol.Gateway.Supervisor do
       ]
       |> put_if(:adapter, Keyword.get(opts, :adapter))
       |> put_if(:deliver, Keyword.get(opts, :deliver))
+      |> put_if(:authorize, Keyword.get(opts, :authorize))
       |> Keyword.merge(Keyword.get(opts, :router, []))
 
     pairing_opts =

@@ -159,6 +159,94 @@ defmodule Raxol.Console.InboundTest do
       assert :ok = Inbound.route(:inb_allplat, route("anyone"), %{text: "hi"})
       refute Inbound.authorized?(:inb_allplat, route("anyone", :discord))
     end
+
+    # A platform atom naming no connected channel grants nothing, which reads
+    # exactly like configuring no allowlist at all. `known_keys/1` already
+    # refuses that ambiguity one level up, where a typo'd `allowed_user:` is
+    # rejected on the same grounds.
+    test "a platform atom that matches no channel is named in the log" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          report = boot(:inb_typo, pairing: [allow_platforms: [:in_memry]])
+          assert report.pairing == :enforce
+        end)
+
+      assert log =~ "pairing names [:in_memry]"
+      assert log =~ "Connected: [:in_memory]"
+    end
+
+    test "a correctly named platform warns about nothing" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          boot(:inb_no_typo, pairing: [allow_platforms: [:in_memory]])
+        end)
+
+      refute log =~ "pairing names"
+    end
+  end
+
+  # The gate is only a gate if it cannot be walked around. `route/3` is the
+  # documented door; these prove the walls.
+  describe "enforcement outside Inbound.route/3" do
+    test "the router refuses a feed that calls SessionRouter directly" do
+      boot(:inb_bypass, pairing: [allowed_users: ["alice"]])
+      router = Inbound.router_name(:inb_bypass)
+
+      assert {:error, :unauthorized} =
+               SessionRouter.route(router, route("mallory"), %{text: "hi"})
+
+      assert SessionRouter.session_count(router) == 0
+
+      assert :ok = SessionRouter.route(router, route("alice"), %{text: "hi"})
+      assert SessionRouter.session_count(router) == 1
+    end
+
+    # The posture is seeded into Pairing's own init, so a crash restores it.
+    # Seeded by calls against the running server it would not: an :open Console
+    # would start denying every message forever, and an enforcing one would
+    # forget its allowlist -- both silently, both with report.pairing still
+    # claiming the posture the boot announced.
+    test "an open Console is still open after its Pairing server crashes" do
+      boot(:inb_crash_open, [])
+      assert Inbound.authorized?(:inb_crash_open, route("anyone"))
+
+      restart_pairing(:inb_crash_open)
+
+      assert Inbound.authorized?(:inb_crash_open, route("anyone"))
+    end
+
+    test "an enforcing Console keeps its allowlist after a Pairing crash" do
+      boot(:inb_crash_enforce, pairing: [allowed_users: ["alice"]])
+      assert Inbound.authorized?(:inb_crash_enforce, route("alice"))
+
+      restart_pairing(:inb_crash_enforce)
+
+      assert Inbound.authorized?(:inb_crash_enforce, route("alice"))
+      refute Inbound.authorized?(:inb_crash_enforce, route("mallory"))
+    end
+  end
+
+  defp restart_pairing(console) do
+    name = Inbound.pairing_name(console)
+    pid = Process.whereis(name)
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+    wait_for(name)
+  end
+
+  defp wait_for(name, attempts \\ 200)
+  defp wait_for(name, 0), do: flunk("#{name} never came back")
+
+  defp wait_for(name, attempts) do
+    case Process.whereis(name) do
+      nil ->
+        Process.sleep(10)
+        wait_for(name, attempts - 1)
+
+      pid ->
+        pid
+    end
   end
 
   describe "headless runtimes" do

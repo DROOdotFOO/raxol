@@ -23,6 +23,33 @@ defmodule Raxol.Console.Application do
         workspace: "/srv/agent/workspace",
         bundle_default_mcp: true
 
+  ## Who may talk to this agent
+
+  Nobody by default is NOT the default. With no `:pairing` key, every connected
+  platform is open to everyone, and anyone who can reach the bot can spend this
+  agent's LLM turns, its tools, and any credential they reach through. That is
+  the wrong default for a container that holds a wallet, so the boot logs a
+  warning and emits `[:raxol_console, :pairing, :open]` until a deployment says
+  what it wants:
+
+      config :raxol_console,
+        pairing: [allow_platforms: [:telegram]]   # anyone on Telegram
+        pairing: [allowed_users: ["12345"]]       # these ids, any platform
+        pairing: [platform_users: [telegram: ["12345"]]]   # these ids, there
+        pairing: :open                            # open, and say so on purpose
+        pairing: []                                # allowlist nobody
+
+  The allowlist decides who may OPEN a chat, keyed on the sender. It says
+  nothing about who can read the reply: an allowed user who adds the bot to a
+  group gets the agent's output -- tool results included -- delivered to that
+  group. Prefer `chat_type: :dm` channels for an agent with reachable
+  credentials.
+
+  Inbound events are gated by `Raxol.Console.Inbound.route/3` and by the router
+  itself, so a deployment's own feed loop cannot route around it. See
+  `Raxol.Console.RuntimeConfig.build/2` for the full option and
+  `Raxol.Gateway.Pairing` for the decision order.
+
   A chat turn runs the stateless agent loop by default. To run a full TEA app per
   chat instead, name a template registered in `Raxol.Console.AppRegistry`:
 
@@ -153,11 +180,14 @@ defmodule Raxol.Console.Application do
 
   defp to_app_result({:ok, report}) do
     Logger.info(
+      # The posture belongs on the line an operator actually reads. The boot
+      # warning fires once and is easy to lose in container startup noise,
+      # which left "open to everyone" visible nowhere at a glance.
       "[Raxol.Console] booted: " <>
         "jobs created=#{length(report.jobs.created)} updated=#{length(report.jobs.updated)} " <>
         "removed=#{length(report.jobs.removed)} failed=#{length(report.jobs.failed)}, " <>
         "mcp tools=#{report.mcp.tools}, skills=#{report.skills.count}, " <>
-        "channels=#{inspect(report.channels)}"
+        "channels=#{inspect(report.channels)}, pairing=#{report.pairing}"
     )
 
     {:ok, report.supervisor}

@@ -30,18 +30,26 @@ defmodule Raxol.Console.Inbound do
   and Console -- having no feed loop -- never got the call site. The server ran,
   denied nothing, and every inbound event got a session. See GitHub #884.
 
-  So the gate is a function you route THROUGH rather than a check you remember to
-  perform. The gateway still cannot force it (`SessionRouter.route/3` is public
-  and a deployment may call it), but the documented path no longer has a step in
-  it that is easy to skip.
+  ## This is not the only enforcement point
+
+  A gate that only works when you remember to call it is the bug above with a
+  new name, so `Raxol.Console.Boot` also hands the router an `:authorize`
+  function over the same Pairing server. A deployment that calls
+  `Raxol.Gateway.SessionRouter.route/3` directly gets the same decision.
+
+  What this adds is the answer without a round trip: a denial here never touches
+  the router, and it carries the console's own telemetry and log line. Skipping
+  it costs an extra `GenServer.call` per denied event and loses that signal --
+  it does not cost the check.
 
   ## Authorization posture
 
-  `route/3` always consults `Pairing`. An open Console is open because
-  `Raxol.Console.Boot` called `Pairing.allow_platform_all/2` for its connected
-  platforms, not because this module skipped a check -- so there is one code path
-  in both postures, and `:sys.get_state` on the Pairing server shows the truth.
-  See `Raxol.Console.RuntimeConfig.build/2` for configuring it.
+  `route/3` always consults `Pairing`. An open Console is open because its
+  Pairing server was seeded to allow the connected platforms, not because
+  anything skipped a check -- so there is one code path in both postures, and
+  `:sys.get_state` on the Pairing server shows the truth. The seeds are start
+  options, so the posture survives a Pairing restart; runtime DM pairings do
+  not. See `Raxol.Console.RuntimeConfig.build/2` for configuring it.
 
   ## Telemetry
 
