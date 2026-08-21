@@ -34,6 +34,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
   defp chain(opts \\ []) do
     code = Keyword.get(opts, :code, "0xef0100" <> String.duplicate("11", 20))
     chain_id = Keyword.get(opts, :chain_id, 8453)
+    foreign = Keyword.get(opts, :foreign_separator, @permit2_separator)
 
     plug = fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -53,7 +54,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
 
           "eth_call" ->
             [%{"to" => to, "data" => data} | _] = req["params"]
-            dispatch(String.downcase(to), data)
+            dispatch(String.downcase(to), data, foreign)
         end
 
       conn
@@ -67,11 +68,19 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
     RPC.client(url: "http://stub.invalid/rpc", plug: plug)
   end
 
-  defp dispatch(to, _data) when to == "0x000000000022d473030f116ddee9f6b43ac78ba3" do
+  defp dispatch(to, _data, _foreign) when to == "0x000000000022d473030f116ddee9f6b43ac78ba3" do
     "0x" <> Base.encode16(@permit2_separator, case: :lower)
   end
 
-  defp dispatch(to, data) when to == @account do
+  # Any other contract answers DOMAIN_SEPARATOR() with whatever 32 bytes it
+  # likes. A verifier nominated by the party under audit answers with the
+  # separator for the domain that party SERVED, which is what makes the check
+  # agree with the payload instead of testing it.
+  defp dispatch(to, "0x3644e515", foreign) when to != @account do
+    "0x" <> Base.encode16(foreign, case: :lower)
+  end
+
+  defp dispatch(to, data, _foreign) when to == @account do
     <<_selector::binary-size(4), digest::binary-size(32), _offset::binary-size(32),
       len::unsigned-big-256, rest::binary>> = decode!(data)
 
@@ -125,6 +134,36 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
         "witness" => %{"orderId" => "0x" <> String.duplicate("11", 32)}
       }
     }
+  end
+
+  @hostile "0x00000000000000000000000000000000000badc0"
+
+  # A pull whose domain nominates a verifier the worker controls, paired with a
+  # chain where that verifier answers DOMAIN_SEPARATOR() with the separator for
+  # the domain it served. Nothing in the payload is inconsistent -- that is the
+  # point. The signature really does cover the digest that address really will
+  # rebuild, so every question this module asks the chain comes back clean while
+  # the pull runs somewhere else entirely.
+  defp hostile_verifier do
+    served =
+      served_pull()
+      |> Map.put("primaryType", "PermitWitnessTransferFromV2")
+      |> update_in(["domain"], &Map.put(&1, "verifyingContract", @hostile))
+
+    {served, chain(foreign_separator: separator_for(served["domain"]))}
+  end
+
+  # EIP712Domain(string name,uint256 chainId,address verifyingContract), built
+  # the long way so the fake does not borrow the code under test to lie with.
+  defp separator_for(%{"name" => name, "chainId" => chain_id, "verifyingContract" => "0x" <> vc}) do
+    type = "EIP712Domain(string name,uint256 chainId,address verifyingContract)"
+
+    ExKeccak.hash_256(
+      ExKeccak.hash_256(type) <>
+        ExKeccak.hash_256(name) <>
+        <<chain_id::unsigned-big-256>> <>
+        <<0::size(96)>> <> Base.decode16!(vc, case: :mixed)
+    )
   end
 
   defp types_for(served) do
@@ -262,6 +301,49 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
         update_in(served_pull(), ["domain"], &Map.put(&1, "verifyingContract", hostile))
 
       assert {:rejected, %{reason: {:verifier_not_permit2, ^hostile, _canonical}}} =
+               PullPreflight.verify(served, current_signature(served), @account, rpc: chain())
+    end
+
+    # The primaryType-keyed fallback is a floor, not the control: it reads a
+    # field the same party served. A payload declaring some other primary type
+    # skips it, the quote picks the contract we ask about its own signature, and
+    # the check PASSES -- the #772 shape, one layer out. Documented so the option
+    # below reads as load-bearing rather than belt-and-braces.
+    test "without :expect_verifier a non-permit2 primaryType gets its own oracle to agree" do
+      {served, chain} = hostile_verifier()
+
+      assert {:ok, %{verifying_contract: @hostile}} =
+               PullPreflight.verify(served, current_signature(served), @account, rpc: chain)
+    end
+
+    test ":expect_verifier pins the oracle regardless of what the payload declares" do
+      {served, chain} = hostile_verifier()
+
+      assert {:rejected, %{reason: {:verifier_mismatch, @hostile, @permit2_address}}} =
+               PullPreflight.verify(served, current_signature(served), @account,
+                 rpc: chain,
+                 expect_verifier: @permit2_address
+               )
+    end
+
+    test ":expect_verifier accepts the address the rail actually pulls through" do
+      served = served_pull()
+
+      assert {:ok, _details} =
+               PullPreflight.verify(served, current_signature(served), @account,
+                 rpc: chain(),
+                 expect_verifier: String.downcase(@permit2_address)
+               )
+    end
+
+    # This module and `Protocols.Xochi` both parse domain.chainId, and they now
+    # agree on what a value is. Nothing reaches here that they disagree about --
+    # `EIP712` refuses a padded uint256 at signing, several steps earlier -- so
+    # this pins the agreement rather than a live divergence.
+    test "a chainId string parses the way the signing gate parses it" do
+      served = update_in(served_pull(), ["domain"], &Map.put(&1, "chainId", "8453"))
+
+      assert {:ok, _details} =
                PullPreflight.verify(served, current_signature(served), @account, rpc: chain())
     end
 

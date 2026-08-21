@@ -326,7 +326,13 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
         signature = bundle[:pull_signature] || bundle["pull_signature"]
 
         served
-        |> PullPreflight.verify(signature, LiveWallet.address(), rpc: RPC.client(url: url))
+        |> PullPreflight.verify(signature, LiveWallet.address(),
+          rpc: RPC.client(url: url),
+          # Named from the rail we asked for, never from the served payload: the
+          # party that chose `verifyingContract` must not also choose the
+          # contract we ask about its own signature.
+          expect_verifier: expected_verifier(quote.payment_method, request)
+        )
         |> PullPreflight.describe()
       else
         {:error, reason} -> "pull preflight: skipped (#{inspect(reason)})"
@@ -335,6 +341,12 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
 
     defp served_pull(%{pull_authorization: nil}), do: {:error, :no_pull_authorization}
     defp served_pull(%{pull_authorization: pull}), do: {:ok, pull}
+
+    defp expected_verifier("permit2", _request),
+      do: Raxol.Payments.Protocols.Permit2.verifying_contract()
+
+    defp expected_verifier("erc3009", request), do: request.from_token
+    defp expected_verifier(_method, _request), do: nil
 
     defp rpc_url(chain) do
       case System.get_env("XOCHI_ORDER_RPC_#{chain}") do

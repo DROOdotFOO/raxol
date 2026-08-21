@@ -9,7 +9,10 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   no detail (`validation_failed`, or a bare `pull_failed`), so each attempt cost
   a job, an escrow, and a round trip through two other repositories to learn one
   bit. This asks the two contracts involved the same question directly, for the
-  price of two `eth_call`s.
+  price of four read-only calls: `eth_chainId` (which chain the node speaks for),
+  `eth_getCode` (which branch the pull will take), and one `eth_call` each for
+  the separator and the signature check. An EOA buyer costs three -- there is no
+  `isValidSignature` to call.
 
   ## What it proves
 
@@ -106,6 +109,12 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
 
   - `:rpc` -- an `Raxol.Earn.Onchain.RPC` client. Built from application config
     when absent.
+  - `:expect_verifier` -- the address the caller's rail says will verify this
+    signature (the canonical Permit2, or the origin token for ERC-3009). The
+    served `domain.verifyingContract` must match it or the pull is rejected.
+    PASS THIS. It is what stops the party who served the payload from also
+    choosing the contract this module asks about it; without it the fallback pin
+    keys off the served `primaryType`, which that party also controls.
 
   Returns:
 
@@ -121,9 +130,10 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   @spec verify(map(), String.t(), String.t(), keyword()) :: outcome()
   def verify(served, signature, account, opts \\ []) when is_map(served) do
     client = Keyword.get_lazy(opts, :rpc, fn -> RPC.client() end)
+    expected = Keyword.get(opts, :expect_verifier)
 
     with {:ok, sig_bytes} <- signature_bytes(signature),
-         {:ok, details} <- describe_target(client, served, account) do
+         {:ok, details} <- describe_target(client, served, account, expected) do
       details.signer_kind
       |> check(client, account, details.digest, sig_bytes)
       |> verdict(details)
@@ -139,9 +149,9 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   # that the node speaks for the chain the domain names, which contract verifies,
   # the separator it rebuilds, the digest that yields, and whether the buyer is
   # asked by ERC-1271 or by recovery.
-  defp describe_target(client, served, account) do
+  defp describe_target(client, served, account, expected) do
     with :ok <- same_chain(client, served),
-         {:ok, verifying_contract} <- verifying_contract(served),
+         {:ok, verifying_contract} <- verifying_contract(served, expected),
          {:ok, separator} <- domain_separator(client, verifying_contract),
          {:ok, digest} <- digest(separator, served),
          {:ok, kind} <- signer_kind(client, account) do
@@ -196,17 +206,21 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
 
   # -- Internal --
 
-  # Permit2 lives at one address on every chain, so a served `verifyingContract`
-  # is a claim about WHO will check the signature, made by the same party whose
-  # payload is under audit. Reading a separator from an address the quote chose
-  # would let a hostile worker nominate a contract whose DOMAIN_SEPARATOR() it
-  # controls, and the check would agree with the payload exactly the way #772's
-  # tests agreed with #772. The ERC-3009 rail needs no pin here: its verifier is
-  # the token, which `Protocols.Xochi` already binds to the request's origin
-  # token before anything is signed.
-  defp verifying_contract(served) do
+  # A served `verifyingContract` is a claim about WHO will check the signature,
+  # made by the same party whose payload is under audit. Reading a separator from
+  # an address the quote chose would let a hostile worker nominate a contract
+  # whose DOMAIN_SEPARATOR() it controls, and the check would agree with the
+  # payload exactly the way #772's tests agreed with #772.
+  #
+  # `:expect_verifier` is how a caller breaks that: it names the verifier from
+  # the rail the caller ASKED for, so the oracle is not drawn from served data at
+  # all. Without it the only pin available keys off `served["primaryType"]` --
+  # also served, also chosen by the same party -- so a payload declaring some
+  # other primary type skips the pin. That floor makes a bare call no worse than
+  # nothing; it is not a substitute for passing the option.
+  defp verifying_contract(served, expected) do
     with {:ok, address} <- declared_verifier(served) do
-      pinned_verifier(served["primaryType"], address)
+      pinned_verifier(expected, served["primaryType"], address)
     end
   end
 
@@ -218,7 +232,15 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
     end
   end
 
-  defp pinned_verifier(@permit2_primary_type, address) do
+  defp pinned_verifier(expected, _primary_type, address) when is_binary(expected) do
+    if EIP712.normalize_address(address) == EIP712.normalize_address(expected) do
+      {:ok, address}
+    else
+      {:rejected_because, {:verifier_mismatch, address, expected}}
+    end
+  end
+
+  defp pinned_verifier(nil, @permit2_primary_type, address) do
     canonical = Permit2.verifying_contract()
 
     if EIP712.normalize_address(address) == EIP712.normalize_address(canonical) do
@@ -228,7 +250,7 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
     end
   end
 
-  defp pinned_verifier(_primary_type, address), do: {:ok, address}
+  defp pinned_verifier(nil, _primary_type, address), do: {:ok, address}
 
   # Permit2's separator commits to the chain id, and Permit2 is deployed at the
   # SAME address everywhere -- so a node for the wrong chain answers this call
@@ -250,8 +272,13 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
 
   defp to_uint(n) when is_integer(n) and n >= 0, do: n
 
+  # Trimmed, to agree with `Protocols.Xochi`'s parser of the same field. Nothing
+  # reaching here can currently differ -- `EIP712` refuses a padded uint256 at
+  # signing, several steps earlier -- but two parsers of one field disagreeing is
+  # a bug waiting for a caller, and the disagreement here would surface as a hard
+  # rejection reading "declares no domain.chainId" for a payload that declares one.
   defp to_uint(s) when is_binary(s) do
-    case Integer.parse(s) do
+    case Integer.parse(String.trim(s)) do
       {n, ""} when n >= 0 -> n
       _ -> nil
     end
@@ -370,7 +397,9 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
     with {:ok, hex} <- RPC.eth_call(client, call),
          {:ok, bytes} <- decode_hex(hex, :magic_value) do
       # A bytes4 return is left-aligned in its 32-byte word. An account that
-      # reverts rather than returning a value surfaces as an RPC error above.
+      # REVERTS rather than returning a value surfaces as an RPC error above and
+      # is classified `:inconclusive` -- indistinguishable here from a node that
+      # dropped the call, and both block, so the safe reading wins.
       {:ok, binary_part(bytes, 0, min(4, byte_size(bytes)))}
     else
       {:error, reason} -> {:inconclusive, {:erc1271_call_failed, account, reason}}
@@ -423,6 +452,12 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   defp describe_defect({:invalid_verifying_contract, other}),
     do: "the served domain.verifyingContract is not an address (#{inspect(other)})"
 
+  defp describe_defect({:verifier_mismatch, served, expected}),
+    do:
+      "the served domain.verifyingContract is #{short(served)}, not #{short(expected)}, which " <>
+        "is what this rail pulls through. Asking the served address about the signature would " <>
+        "be asking the party that chose it, so the check stops here"
+
   defp describe_defect({:verifier_not_permit2, served, canonical}),
     do:
       "the served domain.verifyingContract is #{short(served)}, not the canonical Permit2 " <>
@@ -468,8 +503,15 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   defp describe_gap({:signer_kind_unavailable, account, _}),
     do: "eth_getCode did not answer for #{short(account)}, so the pull's own branch is unknown"
 
+  # A revert lands here rather than in a rejection, because this cannot tell a
+  # reverting `isValidSignature` (which IS a verdict -- the pull reverts too)
+  # from a node that dropped the call. Erring toward "retry" is the safe
+  # direction for a check that blocks either way, but say what a repeat means so
+  # the operator is not sent after the RPC forever.
   defp describe_gap({:erc1271_call_failed, account, _}),
-    do: "#{short(account)} did not answer isValidSignature"
+    do:
+      "#{short(account)} did not answer isValidSignature. If it answers other calls, this is " <>
+        "the account REVERTING rather than the node failing, and the signature is the suspect"
 
   defp describe_gap(_other), do: "the check itself could not run"
 

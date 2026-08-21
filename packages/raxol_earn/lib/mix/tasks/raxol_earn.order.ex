@@ -53,8 +53,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   Every run, `--dry-run` included, ends the signing step by asking the origin
   pull's verifying contract for its own `DOMAIN_SEPARATOR()` and asking the buyer
-  whether the signature just produced covers the digest that yields. Three
-  `eth_call`s, no writes.
+  whether the signature just produced covers the digest that yields. Four
+  read-only calls (`eth_chainId`, `eth_getCode`, and one `eth_call` each), no
+  writes.
 
   A real run proceeds only when that check PASSES. A rejection means the pull
   would revert on settlement; an inconclusive result means nobody knows, and the
@@ -161,6 +162,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   alias Raxol.Earn.Xochi.OriginPull
   alias Raxol.Earn.Xochi.PullPreflight
   alias Raxol.Payments.Assets
+  alias Raxol.Payments.Protocols.Permit2
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
   alias Raxol.Payments.Xochi.{PullContracts, Schemas.QuoteRequest}
 
@@ -764,7 +766,7 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # `check_origin_pull/3` decides the pull's SHAPE is safe to sign. This asks
   # whether the signature just produced will actually be accepted, which is a
   # different question and the one every funded attempt on GitHub #772 has lost:
-  # the shape passed each time, and the digest was wrong. The two `eth_call`s
+  # the shape passed each time, and the digest was wrong. Four read-only calls
   # cost nothing and happen before any write.
   #
   # A real run proceeds on `{:ok, _}` and nothing else. Continuing on anything
@@ -773,37 +775,66 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # and expired. Under `--dry-run` it only reports -- rehearsing the failure is
   # the reason that mode exists.
   #
-  # An inconclusive check blocks too, and the asymmetry that would make it not
-  # block does not exist: this reads `cfg.rpc`, the same endpoint the funding
-  # writes go to moments later, so a node too unwell to answer two `eth_call`s is
-  # not about to mine a `createJob`. Refusing costs a re-run; proceeding costs an
-  # escrow. What an inconclusive result must not do is claim the SIGNATURE is
-  # bad, and `PullPreflight.describe/1` keeps those separate in the log.
-  defp preflight_pull(_cfg, %{pull_authorization: nil}, _bundle, _opts), do: :ok
+  # An inconclusive check blocks too. Refusing costs a re-run; proceeding costs
+  # an escrow, and there is no reading of "nobody could answer" that makes the
+  # escrow the better bet. Note this reads `cfg.rpc`, the ORIGIN chain's
+  # endpoint, which is NOT where `createJob` and `fund` go -- those go to
+  # `cfg.acp_rpc` on Base, and the two are the same endpoint only when the origin
+  # IS Base or `ORDER_RPC_<from>` is unset. So an inconclusive result says
+  # nothing about whether the funding writes would land; it says the question
+  # this gate exists to answer went unanswered, which is reason enough on its
+  # own. What it must not do is claim the SIGNATURE is bad, and
+  # `PullPreflight.describe/1` keeps those separate in the log.
+  # Public, like `decide_preflight/2`, only so the money decision can be tested.
+  # A missing signature aborts `--dry-run` too: it is not a preflight VERDICT to
+  # rehearse, it is a bundle with nothing in it to check, and a dry run whose
+  # purpose is to rehearse the real thing should say so.
+  @doc false
+  def preflight_pull(_cfg, %{pull_authorization: nil}, _bundle, _opts), do: :ok
 
-  defp preflight_pull(cfg, quote_resp, bundle, opts) do
-    case bundle[:pull_signature] || bundle["pull_signature"] do
-      nil ->
-        :ok
+  def preflight_pull(cfg, quote_resp, bundle, opts) do
+    with {:ok, signature} <- pull_signature(bundle) do
+      outcome =
+        PullPreflight.verify(
+          quote_resp.pull_authorization,
+          signature,
+          cfg.buyer,
+          rpc: RPC.client(url: cfg.rpc),
+          expect_verifier: expected_verifier(quote_resp.payment_method, cfg)
+        )
 
-      signature ->
-        outcome =
-          PullPreflight.verify(
-            quote_resp.pull_authorization,
-            signature,
-            cfg.buyer,
-            rpc: RPC.client(url: cfg.rpc)
-          )
-
-        log(PullPreflight.describe(outcome))
-        decide_preflight(outcome, Keyword.get(opts, :dry_run, false))
+      log(PullPreflight.describe(outcome))
+      decide_preflight(outcome, Keyword.get(opts, :dry_run, false))
     end
   end
 
+  # The quote served a pull authorization, so the bundle must carry a signature
+  # over it. Reading a missing one as "nothing to check" would turn the gate off
+  # for exactly the payload it was built to gate -- the fail-open shape
+  # `PullPreflight` refuses to offer its callers, one level up.
+  defp pull_signature(bundle) do
+    case Map.get(bundle, :pull_signature) do
+      sig when is_binary(sig) -> {:ok, sig}
+      other -> {:error, {:pull_signature_missing, other}}
+    end
+  end
+
+  # WHO will check this signature, decided from the rail we asked for rather than
+  # from the payload under audit. `PullPreflight` reads `DOMAIN_SEPARATOR()` from
+  # this address, so leaving it to the served `verifyingContract` would let a
+  # hostile quote nominate its own oracle. Permit2 is one address on every chain;
+  # the ERC-3009 verifier is the origin token itself.
+  defp expected_verifier("permit2", _cfg), do: Permit2.verifying_contract()
+  defp expected_verifier("erc3009", cfg), do: cfg.src_token
+  defp expected_verifier(_method, _cfg), do: nil
+
   @doc false
   # Public only so the money decision itself can be tested. Every clause is
-  # explicit: there is no catch-all, so a new `PullPreflight` outcome is a
-  # compile-time gap here rather than a silent funded run.
+  # explicit and there is no catch-all: a `PullPreflight` outcome nobody named
+  # here raises `FunctionClauseError` inside `sign_intent/2`, which aborts the run
+  # before any write. Elixir will not tell you at compile time -- `mix dialyzer`
+  # is what catches the spec going stale -- but the runtime failure is the safe
+  # one, which is the property that matters.
   @spec decide_preflight(PullPreflight.outcome(), boolean()) :: :ok | {:error, atom()}
   def decide_preflight({:ok, _details}, _dry_run?), do: :ok
   def decide_preflight({:rejected, _details}, true = _dry_run?), do: :ok
@@ -1360,12 +1391,30 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     anything, because the most common cause is ORDER_RPC_<from-chain> being unset
     and falling back to the Base endpoint, which answers for the wrong chain.
 
-    This is not a claim that the signature is bad. It is a refusal to escrow a
-    fee on a question nobody answered: the same RPC serves the createJob and
-    fund writes that would come next, so a node that cannot answer two eth_calls
-    would not have carried the run much further anyway.
+    This is not a claim that the signature is bad, and it is not a claim about
+    the endpoint the funding writes go to: those go to ORDER_RPC_8453, while this
+    check reads ORDER_RPC_<from-chain>. It is a refusal to escrow a fee on a
+    question nobody answered. Fix the ORIGIN chain's endpoint, not Base's.
 
     Re-run once the endpoint answers, or with --dry-run to rehearse for free.
+    """
+  end
+
+  # The quote served a pull to sign and the bundle came back without a signature
+  # over it. Nothing is wrong on chain; the signing path did not produce what the
+  # settlement needs, and the gate cannot check a signature that is not there.
+  defp sign_intent_error({:pull_signature_missing, got}) do
+    """
+    the quote served an origin pull, but the signed bundle carries no
+    pull_signature (got #{inspect(got)}).
+
+    Nothing was written and nothing was escrowed. The solver will be asked to
+    pull funds on the origin chain and will have no authorization to do it with,
+    so this would strand a funded job exactly the way a bad signature does.
+
+    This is a defect in the signing path rather than in the quote or the chain:
+    Protocols.Xochi.sign_intent/4 attaches :pull_signature whenever the quote
+    carries a pull_authorization. Capture the bundle it returned.
     """
   end
 

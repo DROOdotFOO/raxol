@@ -355,4 +355,27 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
       assert Order.decide_preflight({:inconclusive, :whatever}, true) == :ok
     end
   end
+
+  # The gate can only check a signature it is handed. Reading a missing one as
+  # "nothing to check" would switch the gate off for exactly the payload it was
+  # built to gate, which is the fail-open shape PullPreflight refuses to offer
+  # its callers one level down.
+  describe "a bundle with no pull signature" do
+    test "aborts rather than funding an unchecked pull" do
+      quote_resp = %{pull_authorization: %{"domain" => %{}}}
+      cfg = %{buyer: "0x0", rpc: "http://stub.invalid", src_token: "0x0"}
+
+      assert {:error, {:pull_signature_missing, nil}} =
+               Order.preflight_pull(cfg, quote_resp, %{signature: "0xabc"}, [])
+
+      assert {:error, {:pull_signature_missing, nil}} =
+               Order.preflight_pull(cfg, quote_resp, %{}, dry_run: true)
+    end
+
+    test "a quote that served no pull has nothing to check and is not blocked" do
+      cfg = %{buyer: "0x0", rpc: "http://stub.invalid", src_token: "0x0"}
+
+      assert :ok = Order.preflight_pull(cfg, %{pull_authorization: nil}, %{}, [])
+    end
+  end
 end
