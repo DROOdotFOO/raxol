@@ -35,6 +35,23 @@ defmodule Raxol.Gateway.SessionRouterTest do
     def handle_event(_event, state), do: {:noreply, state}
   end
 
+  defmodule SlowInitHandler do
+    @behaviour Raxol.Gateway.Handler
+
+    @impl true
+    def init(_route, opts) do
+      send(Keyword.fetch!(opts, :caller), {:initializing, self()})
+
+      receive do
+        :release -> {:ok, %{}}
+      end
+    end
+
+    @impl true
+    def handle_event({:say, text}, state), do: {:reply, "echo: #{text}", state}
+    def handle_event(_event, state), do: {:noreply, state}
+  end
+
   setup ctx do
     test_pid = self()
     sup = :"sup_#{uid()}"
@@ -93,6 +110,45 @@ defmodule Raxol.Gateway.SessionRouterTest do
 
     refute SessionRouter.get_session(r, Route.key(route(1))) ==
              SessionRouter.get_session(r, Route.key(route(2)))
+  end
+
+  # The router starts sessions with a synchronous DynamicSupervisor.start_child
+  # inside its own handle_call. While a handler's init/2 ran there, it held the
+  # single router process, and every other chat's route/3 queued behind it until
+  # the caller's own call timeout fired. Handlers whose init is a pure map never
+  # showed this; one that starts a per-chat TEA app and waits on its first
+  # render does.
+  test "a handler blocked in init does not block the router for other chats" do
+    test_pid = self()
+    sup = :"sup_#{uid()}"
+    start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+    router = :"router_#{uid()}"
+
+    start_supervised!(%{
+      id: router,
+      start:
+        {SessionRouter, :start_link,
+         [
+           [
+             name: router,
+             handler: {SlowInitHandler, [caller: test_pid]},
+             sessions_sup: sup,
+             deliver: fn route, rendered -> send(test_pid, {:out, route, rendered}) end
+           ]
+         ]}
+    })
+
+    rt = route(1)
+    assert :ok = SessionRouter.route(router, rt, {:say, "hi"})
+    assert_receive {:initializing, session}, 1_000
+
+    # Answered while that session is still stuck inside its handler's init.
+    assert SessionRouter.session_count(router) == 1
+
+    # And the event that started it was not lost: it was cast, so it waits
+    # behind the continue that finishes the handler rather than racing it.
+    send(session, :release)
+    assert_receive {:out, ^rt, "echo: hi"}, 1_000
   end
 
   test "a session crash is cleaned up from the router", %{router: r} do

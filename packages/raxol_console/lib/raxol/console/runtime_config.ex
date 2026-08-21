@@ -52,7 +52,8 @@ defmodule Raxol.Console.RuntimeConfig do
             channels: [],
             mcp_servers: [],
             handler_mode: :chat,
-            app_module: nil
+            app_module: nil,
+            idle_timeout: nil
 
   @type t :: %__MODULE__{
           system_prompt: String.t(),
@@ -63,7 +64,8 @@ defmodule Raxol.Console.RuntimeConfig do
           channels: [term()],
           mcp_servers: [McpBundle.server_spec()],
           handler_mode: handler_mode(),
-          app_module: module() | nil
+          app_module: module() | nil,
+          idle_timeout: pos_integer() | nil
         }
 
   @doc """
@@ -80,6 +82,11 @@ defmodule Raxol.Console.RuntimeConfig do
     * `:handler_mode` -- `:chat` (default) or `:app`; see `t:handler_mode/0`.
     * `:app_template` -- required in `:app` mode; a name resolved against
       `Raxol.Console.AppRegistry`.
+    * `:idle_timeout` -- ms a chat may sit idle before its session stops
+      (gateway default 10 minutes). A stopped session is rebuilt on the next
+      message, so for `:chat` this costs nothing. For `:app` it discards the
+      model the mode exists to persist, which makes the right value a property
+      of the deployment's app rather than of the gateway.
 
   `:handler_mode` and `:app_template` are read from the DEPLOYMENT options, never
   from the package. The package is untrusted input, and choosing which module
@@ -90,7 +97,8 @@ defmodule Raxol.Console.RuntimeConfig do
 
   def build(%Package{} = pkg, opts) do
     with {:ok, persona} <- persona(pkg),
-         {:ok, mode, app_module} <- handler(opts) do
+         {:ok, mode, app_module} <- handler(opts),
+         {:ok, idle_timeout} <- idle_timeout(opts) do
       {:ok,
        %__MODULE__{
          system_prompt: persona,
@@ -101,7 +109,8 @@ defmodule Raxol.Console.RuntimeConfig do
          channels: Keyword.get(opts, :channels, []),
          mcp_servers: mcp_servers(opts),
          handler_mode: mode,
-         app_module: app_module
+         app_module: app_module,
+         idle_timeout: idle_timeout
        }}
     end
   end
@@ -118,11 +127,20 @@ defmodule Raxol.Console.RuntimeConfig do
   `init(%{options: opts})`. That is the only seam a TEA app has for the persona:
   unlike the chat loop it weaves the system prompt into its own model and backend
   calls rather than getting it applied for free.
+
+  `agent_opts` rides the same seam. The boot resolves them either way -- bundled
+  MCP servers run as supervised subprocesses and the skills store is started
+  before the gateway -- so an `:app` runtime that dropped them would pay for a
+  toolset no chat could reach. A TEA app is free to ignore the key; it is not
+  free to have it silently withheld.
   """
   @spec handler_spec(t(), keyword()) :: {module(), keyword()}
-  def handler_spec(%__MODULE__{handler_mode: :app} = rc, _agent_opts) do
+  def handler_spec(%__MODULE__{handler_mode: :app} = rc, agent_opts) do
     {Raxol.Gateway.Handler.Lifecycle,
-     [app_module: rc.app_module, lifecycle_opts: [system_prompt: rc.system_prompt]]}
+     [
+       app_module: rc.app_module,
+       lifecycle_opts: [system_prompt: rc.system_prompt, agent_opts: agent_opts]
+     ]}
   end
 
   def handler_spec(%__MODULE__{} = rc, agent_opts) do
@@ -143,6 +161,20 @@ defmodule Raxol.Console.RuntimeConfig do
 
   defp resolve_app(name) do
     with {:ok, module} <- AppRegistry.fetch(name), do: {:ok, :app, module}
+  end
+
+  # -- idle timeout ----------------------------------------------------------
+
+  # Validated rather than defaulted: a timeout that is not a positive integer
+  # would otherwise reach the session's `Process.send_after/3` and fail there,
+  # or -- worse for a string -- compare as a term and never fire. `nil` is the
+  # honest "unset", leaving the gateway's own default in force.
+  defp idle_timeout(opts) do
+    case Keyword.get(opts, :idle_timeout) do
+      nil -> {:ok, nil}
+      ms when is_integer(ms) and ms > 0 -> {:ok, ms}
+      other -> {:error, {:invalid_idle_timeout, other}}
+    end
   end
 
   # -- persona ---------------------------------------------------------------

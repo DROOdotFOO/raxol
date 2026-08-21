@@ -1,5 +1,7 @@
 defmodule Raxol.Console.RuntimeConfigTest do
-  use ExUnit.Case, async: true
+  # Not async: the handler-mode tests set and delete `:app_templates`, which is
+  # global application env. BootTest writes the same key.
+  use ExUnit.Case, async: false
 
   alias Raxol.Earn.Console.Package
   alias Raxol.Console.RuntimeConfig
@@ -115,6 +117,20 @@ defmodule Raxol.Console.RuntimeConfigTest do
       assert opts[:lifecycle_opts][:system_prompt] == cfg.system_prompt
     end
 
+    # The boot resolves agent_opts either way -- bundled MCP servers are running
+    # subprocesses by this point. Dropping them in :app mode paid for a toolset
+    # nothing could reach.
+    test "app mode threads the resolved agent_opts to the app rather than dropping them" do
+      assert {:ok, cfg} =
+               RuntimeConfig.build(package(), handler_mode: :app, app_template: "dashboard")
+
+      assert {Raxol.Gateway.Handler.Lifecycle, opts} =
+               RuntimeConfig.handler_spec(cfg, actions: [:tool_a], context: %{skills: :store})
+
+      assert opts[:lifecycle_opts][:agent_opts][:actions] == [:tool_a]
+      assert opts[:lifecycle_opts][:agent_opts][:context] == %{skills: :store}
+    end
+
     test "an unregistered template is refused rather than resolved to a module" do
       assert {:error, {:unknown_app_template, "not-a-template"}} =
                RuntimeConfig.build(package(), handler_mode: :app, app_template: "not-a-template")
@@ -135,6 +151,31 @@ defmodule Raxol.Console.RuntimeConfigTest do
     test "an unknown handler mode is refused" do
       assert {:error, {:unknown_handler_mode, :telepathy}} =
                RuntimeConfig.build(package(), handler_mode: :telepathy)
+    end
+  end
+
+  describe "idle timeout" do
+    test "is unset by default, leaving the gateway's own default in force" do
+      assert {:ok, cfg} = RuntimeConfig.build(package())
+      assert cfg.idle_timeout == nil
+    end
+
+    test "carries a positive integer through" do
+      assert {:ok, cfg} = RuntimeConfig.build(package(), idle_timeout: 3_600_000)
+      assert cfg.idle_timeout == 3_600_000
+    end
+
+    # A string compares against an integer by term order rather than raising, so
+    # an unvalidated one would arm a timer that never fires the branch it feeds.
+    test "refuses a value that is not a positive integer" do
+      assert {:error, {:invalid_idle_timeout, "3600000"}} =
+               RuntimeConfig.build(package(), idle_timeout: "3600000")
+
+      assert {:error, {:invalid_idle_timeout, 0}} =
+               RuntimeConfig.build(package(), idle_timeout: 0)
+
+      assert {:error, {:invalid_idle_timeout, -1}} =
+               RuntimeConfig.build(package(), idle_timeout: -1)
     end
   end
 

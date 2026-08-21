@@ -132,8 +132,8 @@ defmodule Raxol.Gateway.SessionRouter do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    {:noreply, drop_pid(pid, state)}
+  def handle_manager_info({:DOWN, _ref, :process, pid, reason}, state) do
+    {:noreply, drop_pid(pid, reason, state)}
   end
 
   def handle_manager_info(_msg, state), do: {:noreply, state}
@@ -257,12 +257,24 @@ defmodule Raxol.Gateway.SessionRouter do
     end
   end
 
-  defp drop_pid(pid, state) do
+  defp drop_pid(pid, reason, state) do
     case Enum.find(state.sessions, fn {_key, p} -> p == pid end) do
-      {key, _pid} -> forget(key, state)
-      nil -> state
+      {key, _pid} ->
+        emit_down(key, reason)
+        forget(key, state)
+
+      nil ->
+        state
     end
   end
+
+  # A session dies abnormally on a handler crash mid-turn, and -- since handler
+  # init is deferred to a continue -- on a handler that failed to start at all.
+  # The latter no longer reaches the caller of route/3, which has already been
+  # told :ok, so this is the only signal that a chat was accepted and then
+  # dropped. Clean stops (idle timeout, explicit stop) are not failures.
+  defp emit_down(_key, reason) when reason in [:normal, :shutdown], do: :ok
+  defp emit_down(key, reason), do: emit(:down, %{key: key, reason: reason})
 
   defp demonitor(key, state) do
     case Map.get(state.monitors, key) do

@@ -1,5 +1,7 @@
 defmodule Raxol.Console.BootTest do
-  use ExUnit.Case, async: true
+  # Not async: the app-handler test sets and deletes `:app_templates`, which is
+  # global application env. RuntimeConfigTest writes the same key.
+  use ExUnit.Case, async: false
 
   alias Raxol.Earn.Console.Package
   alias Raxol.Agent.Action.Dynamic
@@ -291,6 +293,48 @@ defmodule Raxol.Console.BootTest do
 
       # The persona reached the app's init/1 through :lifecycle_opts.
       assert rendered =~ "persona: Be terse."
+    end
+
+    # `:idle_timeout` crosses four hops to reach the router: the deployment
+    # config, RuntimeConfig, gateway_opts' `:router` key, and Gateway.Supervisor's
+    # merge into the router child. A key dropped at any of them defaults in
+    # silence, which is exactly how `:handler_mode` came to be unreachable.
+    test "a configured idle timeout reaches the running router" do
+      pid = self()
+
+      pkg = %Package{
+        runtime: :raxol,
+        soul_md: "# Bot\n\nHi.",
+        agents_md: nil,
+        tasks: [],
+        skills: []
+      }
+
+      {:ok, rc} =
+        RuntimeConfig.build(pkg,
+          bundle_default_mcp: false,
+          idle_timeout: 1_234_000,
+          channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}]
+        )
+
+      assert rc.idle_timeout == 1_234_000
+
+      {:ok, _report} =
+        Boot.start(rc,
+          name: :console_idle,
+          scheduler_name: :console_idle_sched,
+          reconciler_name: :console_idle_recon
+        )
+
+      on_exit(fn ->
+        try do
+          Supervisor.stop(:console_idle)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      assert :sys.get_state(:"console_idle.router").idle_timeout == 1_234_000
     end
   end
 

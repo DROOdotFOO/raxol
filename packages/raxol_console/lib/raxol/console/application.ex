@@ -23,6 +23,21 @@ defmodule Raxol.Console.Application do
         workspace: "/srv/agent/workspace",
         bundle_default_mcp: true
 
+  A chat turn runs the stateless agent loop by default. To run a full TEA app per
+  chat instead, name a template registered in `Raxol.Console.AppRegistry`:
+
+      config :raxol_console, :app_templates, %{"dashboard" => MyConsole.Dashboard}
+
+      config :raxol_console,
+        handler_mode: :app,
+        app_template: "dashboard",
+        idle_timeout: :timer.hours(6)
+
+  A per-chat app holds its model in memory, and the session's idle timeout
+  discards it; `:idle_timeout` is how long a deployment's app is worth keeping
+  warm. Both other keys are deployment-owned. The package never selects the module that runs
+  per chat -- see `Raxol.Console.RuntimeConfig.build/2`.
+
   The package carries persona + behavior; the deployment supplies the rest. The
   three deployment-owned inputs the Console injects -- credentials (agent wallet,
   email, card, channel bot tokens), messaging channels, and inference -- arrive
@@ -44,7 +59,19 @@ defmodule Raxol.Console.Application do
   alias Raxol.Earn.Console.Package
   alias Raxol.Console.{Boot, RuntimeConfig}
 
-  @rc_keys [:channels, :agent_opts, :default_target, :workspace, :bundle_default_mcp]
+  # Every deployment option `RuntimeConfig.build/2` understands. Both takes below
+  # filter through this list, so a key missing here is silently dropped on the
+  # way in and its feature is unreachable from application config.
+  @rc_keys [
+    :channels,
+    :agent_opts,
+    :default_target,
+    :workspace,
+    :bundle_default_mcp,
+    :handler_mode,
+    :app_template,
+    :idle_timeout
+  ]
 
   @impl true
   def start(_type, _args) do

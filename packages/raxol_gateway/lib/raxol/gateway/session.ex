@@ -12,6 +12,20 @@ defmodule Raxol.Gateway.Session do
   across a platform handoff: the router can start a session on a new route with
   an existing `conversation_id`, so a configured `:log` resumes the same history.
 
+  ## Handler startup
+
+  `start_link/1` returns as soon as the process exists; the handler's `init/2`
+  runs in a `handle_continue` after it. This keeps an expensive handler (one
+  starting a per-chat TEA app, say) from blocking the router that started it,
+  which starts sessions synchronously inside its own `handle_call`.
+
+  Two consequences for callers. A handler that fails to initialize stops the
+  session *after* `start_link/1` has already returned `{:ok, pid}`, so the
+  failure arrives as a DOWN rather than a return value -- `SessionRouter` emits
+  `[:raxol_gateway, :session, :down]` for it. And "the handler has started" is
+  not implied by `start_link/1` returning: any `GenServer.call/3` to the session
+  is serialized behind the continue and can be used as the barrier.
+
   ## Options
 
     * `:route` (required) -- the `Raxol.Gateway.Route` this session serves
@@ -58,24 +72,42 @@ defmodule Raxol.Gateway.Session do
     # teardown at all.
     Process.flag(:trap_exit, true)
 
-    case handler_mod.init(route, handler_opts) do
+    state = %{
+      route: route,
+      handler_mod: handler_mod,
+      handler_state: nil,
+      handler_ready?: false,
+      deliver: Keyword.get(opts, :deliver, fn _route, _rendered -> :ok end),
+      idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
+      conversation_id: Keyword.get(opts, :conversation_id) || Route.key(route),
+      log: Keyword.get(opts, :log),
+      timer: nil,
+      idle_ref: nil
+    }
+
+    {:ok, state, {:continue, {:init_handler, handler_opts}}}
+  end
+
+  # The handler is initialized here rather than in init/1 because the router
+  # starts sessions with a synchronous DynamicSupervisor.start_child inside its
+  # own handle_call: anything init/1 blocks on blocks the single router process,
+  # and with it every other chat's route/3. A handler whose init is a pure map
+  # (Handler.Agent) never made that visible; one that starts a per-chat TEA app
+  # and waits on its first render (Handler.Lifecycle) does.
+  #
+  # A continue is delivered before any queued message, so a cast that the router
+  # sends the instant start_child returns is still handled after this.
+  @impl true
+  def handle_continue({:init_handler, handler_opts}, state) do
+    case state.handler_mod.init(state.route, handler_opts) do
       {:ok, handler_state} ->
-        state = %{
-          route: route,
-          handler_mod: handler_mod,
-          handler_state: handler_state,
-          deliver: Keyword.get(opts, :deliver, fn _route, _rendered -> :ok end),
-          idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
-          conversation_id: Keyword.get(opts, :conversation_id) || Route.key(route),
-          log: Keyword.get(opts, :log),
-          timer: nil,
-          idle_ref: nil
-        }
+        {:noreply, arm_timer(%{state | handler_state: handler_state, handler_ready?: true})}
 
-        {:ok, arm_timer(state)}
-
+      # Deferring init moved this failure off the caller's return value: route/3
+      # has already replied :ok. The router observes the DOWN and emits
+      # [:raxol_gateway, :session, :down] rather than the event vanishing.
       {:error, reason} ->
-        {:stop, reason}
+        {:stop, reason, state}
     end
   end
 
@@ -118,6 +150,12 @@ defmodule Raxol.Gateway.Session do
   # shutdown, explicit stop); only a brutal kill skips it. A handler owning
   # linked processes needs this: the session's :normal exit does not
   # propagate over links, so without teardown they would leak.
+  # `handler_ready?` gates this rather than a nil handler_state, because a
+  # handler is free to return `{:ok, nil}` as its own state. Tearing down a
+  # handler whose init never returned would hand it a state it never built.
+  @impl true
+  def terminate(_reason, %{handler_ready?: false}), do: :ok
+
   @impl true
   def terminate(reason, state) do
     if function_exported?(state.handler_mod, :terminate, 2) do
