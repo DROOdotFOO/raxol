@@ -16,6 +16,19 @@ defmodule Raxol.Gateway.Pairing do
   after `:code_ttl_ms`, and repeated invalid confirms lock confirmation for
   `:lockout_ms` after `:max_failures`. The lockout is global for this slice.
 
+  ## Pairings and the global allowlist are NOT platform-scoped
+
+  Steps 2 and 4 above match on the user id alone. A pairing confirmed over
+  Telegram, or an id in `:allowed_users`, admits that same id STRING on every
+  connected platform. Platform id namespaces are unrelated -- a Telegram integer
+  id, a Discord snowflake and an email address are drawn from different spaces --
+  so this is a deliberate convenience, not an identity guarantee, and it is only
+  safe while those spaces do not collide.
+
+  Use `:platform_users` (step 3) or `allow/3` with `{:platform, atom}` when the
+  grant should mean "this id, on this platform". A deployment connecting two
+  platforms whose ids could collide should prefer them for everything.
+
   ## Config keys (all optional)
 
   `:code_ttl_ms` (1h), `:request_cooldown_ms` (30s), `:max_failures` (5),
@@ -117,10 +130,16 @@ defmodule Raxol.Gateway.Pairing do
 
   defp opt_list(opts, key), do: opts |> Keyword.get(key, []) |> List.wrap()
 
+  # Repeated platform keys UNION rather than overwrite. A keyword list admits
+  # duplicates and `into: %{}` would keep only the last, silently dropping every
+  # id named earlier -- a lockout indistinguishable from never having configured
+  # them, which is the ambiguity the Console's `known_keys/1` refuses one level
+  # up for a typo'd key.
   defp seed_platform_users(opts) do
-    for {platform, users} <- opt_list(opts, :platform_users), into: %{} do
-      {platform, MapSet.new(users, &to_string/1)}
-    end
+    Enum.reduce(opt_list(opts, :platform_users), %{}, fn {platform, users}, acc ->
+      ids = MapSet.new(users, &to_string/1)
+      Map.update(acc, platform, ids, fn existing -> MapSet.union(existing, ids) end)
+    end)
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -202,10 +221,21 @@ defmodule Raxol.Gateway.Pairing do
   defp decide(%Route{platform: platform, user_id: user_id}, state) do
     cond do
       MapSet.member?(state.allow_all_platforms, platform) -> :allow
-      allowed_user?(state, platform, user_id && to_string(user_id)) -> :allow
+      allowed_user?(state, platform, scalar_id(user_id)) -> :allow
       true -> :deny
     end
   end
+
+  # `authorize/2` runs INSIDE this server on a route an adapter built from wire
+  # input, and `Route.new/1` validates nothing. A `to_string/1` over whatever the
+  # payload carried would raise here rather than at the caller, and this server is
+  # the first `:rest_for_one` child -- so one malformed id would take the session
+  # supervisor and the router down with it, on every retry, for every chat. An id
+  # that is not a scalar cannot match a seeded allowlist entry anyway, so treating
+  # it as absent is the same answer without the crash.
+  defp scalar_id(id) when is_binary(id), do: id
+  defp scalar_id(id) when is_integer(id), do: Integer.to_string(id)
+  defp scalar_id(_id), do: nil
 
   defp allowed_user?(_state, _platform, nil), do: false
 

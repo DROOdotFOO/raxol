@@ -132,9 +132,19 @@ defmodule Raxol.Console.RuntimeConfig do
         platform_users: [discord: ["9876"]]    # per-platform allowlist
       ]
 
-  `pairing: []` is the useful empty case: enforced with nothing seeded, so the
-  only way in is the runtime DM pairing flow (`Pairing.request_code/2` ->
-  `confirm/2`).
+  `pairing: []` is enforced with nothing seeded: it denies everyone, and it
+  admits nobody until an operator pairs them by hand. There is no `/pair` chat
+  command -- a denial is decided before a session exists, so an unpaired sender
+  cannot ask for a code through the chat. `Pairing.request_code/2` and
+  `confirm/2` are reachable only out of band (a remote shell, or the
+  deployment's own admin surface), and a self-service lane is something the feed
+  loop builds with `Raxol.Console.Inbound.authorized?/2`. Do not reach for
+  `pairing: []` expecting the pairing flow to be wired; seed `:allowed_users`
+  with whoever should already be in.
+
+  `:allowed_users` is NOT platform-scoped -- the id matches on every connected
+  platform, whose id namespaces are unrelated. Prefer `:platform_users` when a
+  deployment connects more than one. See `Raxol.Gateway.Pairing`.
 
   Open is the default because enforcing by default would lock out every Console
   running today -- `Pairing`'s allowlists boot empty, so an unconfigured enforce
@@ -142,11 +152,11 @@ defmodule Raxol.Console.RuntimeConfig do
   way round; `Raxol.Console.Boot` compensates by making silence loud rather than
   by making it safe.
 
-  Open mode is not a bypass. It is applied by calling
-  `Pairing.allow_platform_all/2` for each CONNECTED platform, so the gate runs
-  identically in both modes and the posture is visible in the Pairing server's
-  own state. A route on a platform the deployment never connected is denied even
-  when open.
+  Open mode is not a bypass. It is seeded into `Pairing`'s own start options as
+  `allow_platforms:` over the CONNECTED platforms, so the gate runs identically
+  in both modes, the posture is visible in the Pairing server's state, and a
+  restart rebuilds it. A route on a platform the deployment never connected is
+  denied even when open.
 
   ## Sizing an `:app` deployment
 
@@ -298,13 +308,19 @@ defmodule Raxol.Console.RuntimeConfig do
     end
   end
 
+  # `nil`, `true` and `false` are atoms, and a platform key holding one of them
+  # names no channel and grants nothing -- the silent-lockout shape `known_keys/1`
+  # refuses one level up. `platform: nil` is the likely way in, from a lookup that
+  # missed. Refuse it here rather than warning about it at boot.
   defp atom_list(list, key) do
     values = Keyword.get(list, key, [])
 
-    if is_list(values) and Enum.all?(values, &is_atom/1),
+    if is_list(values) and Enum.all?(values, &platform_atom?/1),
       do: {:ok, values},
       else: {:error, {:invalid_pairing, {key, values}}}
   end
+
+  defp platform_atom?(value), do: is_atom(value) and value not in [nil, true, false]
 
   # User ids are stringified here rather than at the Pairing call site, because
   # `Pairing.allow/3` stringifies too and an integer Telegram id configured as an
@@ -328,8 +344,11 @@ defmodule Raxol.Console.RuntimeConfig do
     end
   end
 
+  # Duplicate platform keys are carried through as written; `Pairing` unions them
+  # when it seeds, so naming a platform twice adds both sets rather than keeping
+  # only the last.
   defp reduce_platform_users({platform, users}, {:ok, acc}) do
-    if is_list(users) and Enum.all?(users, &scalar_id?/1),
+    if platform_atom?(platform) and is_list(users) and Enum.all?(users, &scalar_id?/1),
       do: {:cont, {:ok, acc ++ [{platform, Enum.map(users, &to_string/1)}]}},
       else: {:halt, {:error, {:invalid_pairing, {:platform_users, platform, users}}}}
   end

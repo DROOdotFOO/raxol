@@ -51,12 +51,37 @@ defmodule Raxol.Console.Inbound do
   options, so the posture survives a Pairing restart; runtime DM pairings do
   not. See `Raxol.Console.RuntimeConfig.build/2` for configuring it.
 
+  A `Pairing` that cannot answer -- crashed, or inside its own restart window --
+  denies. The alternative is a feed loop taking an uncaught exit from the
+  authorization call, which would drop or replay whatever batch it was pumping.
+
+  ## Admitting someone who is not on the allowlist
+
+  There is no `/pair` chat command, and there cannot be one at this layer: a
+  denial is decided before a session exists, so an unpaired sender has no way to
+  ask for a code through the chat itself. Pairing a newcomer means calling
+  `Raxol.Gateway.Pairing.request_code/2` and `confirm/2` out of band -- a remote
+  shell on the node, or whatever admin surface the deployment already has:
+
+      pairing = Raxol.Console.Inbound.pairing_name(MyConsole)
+      {:ok, code} = Raxol.Gateway.Pairing.request_code(pairing, "12345")
+      # deliver `code` to that user however you already reach them
+      {:ok, "12345"} = Raxol.Gateway.Pairing.confirm(pairing, code)
+
+  A deployment that wants a self-service lane builds it in its own feed loop with
+  `authorized?/2`: answer a denied sender with a code instead of dropping them,
+  and never hand the event to `route/3`. That stays the deployment's decision
+  because "what an unauthorized stranger is told" is a policy question, and the
+  safe default -- silence -- is the one that does not confirm the bot exists.
+
   ## Telemetry
 
     * `[:raxol_console, :inbound, :denied]` -- metadata `%{console, key, platform,
-      user_id}`. The only signal that someone was turned away; a denial is
-      otherwise invisible, since `route/3` returns to a feed loop that is free to
-      discard it.
+      user_id}`. The signal that someone was turned away; a denial is otherwise
+      invisible, since `route/3` returns to a feed loop that is free to discard
+      it. Telemetry rather than a log line, because the volume is set by whoever
+      is sending the denied traffic: a handler here can sample or aggregate, an
+      unconditional `Logger.info` per event cannot. The matching log is `debug`.
   """
 
   require Logger
@@ -73,7 +98,7 @@ defmodule Raxol.Console.Inbound do
   """
   @spec route(atom(), Route.t(), term()) :: :ok | {:error, term()}
   def route(base \\ Raxol.Console, %Route{} = route, event) do
-    case Pairing.authorize(pairing_name(base), route) do
+    case authorize(base, route) do
       :allow ->
         SessionRouter.route(router_name(base), route, event)
 
@@ -91,7 +116,20 @@ defmodule Raxol.Console.Inbound do
   """
   @spec authorized?(atom(), Route.t()) :: boolean()
   def authorized?(base \\ Raxol.Console, %Route{} = route),
-    do: Pairing.authorize(pairing_name(base), route) == :allow
+    do: authorize(base, route) == :allow
+
+  # The caller is the deployment's feed loop, pumping a batch it cannot replay.
+  # An uncaught exit here -- Pairing crashed, or is inside its own restart --
+  # would take that loop down mid-batch and lose or duplicate whatever it was
+  # holding, which is a large price for a question we already know the safe
+  # answer to. A gate that cannot answer denies.
+  defp authorize(base, route) do
+    Pairing.authorize(pairing_name(base), route)
+  catch
+    :exit, reason ->
+      Logger.warning("#{base}: pairing server unreachable, denying: #{inspect(reason)}")
+      :deny
+  end
 
   @doc "The Pairing server name for a Console booted under `base`."
   @spec pairing_name(atom()) :: atom()
@@ -113,6 +151,12 @@ defmodule Raxol.Console.Inbound do
       }
     )
 
-    Logger.info("#{base}: denied unauthorized #{route.platform} chat #{Route.key(route)}")
+    # `debug`, not `info`: the rate is chosen by whoever is sending the denied
+    # traffic, and this is the one path an unauthorized sender can reach at will
+    # -- `Pairing` rate-limits `request_code/2` and locks out `confirm/2`, but a
+    # denial costs nothing to provoke. At `info` a flood is unbounded log volume
+    # carrying third-party chat and user ids. The telemetry event above is the
+    # signal, and a handler can sample it.
+    Logger.debug("#{base}: denied unauthorized #{route.platform} chat #{Route.key(route)}")
   end
 end

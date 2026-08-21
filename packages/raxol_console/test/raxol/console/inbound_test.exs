@@ -224,6 +224,41 @@ defmodule Raxol.Console.InboundTest do
       assert Inbound.authorized?(:inb_crash_enforce, route("alice"))
       refute Inbound.authorized?(:inb_crash_enforce, route("mallory"))
     end
+
+    # The caller is the deployment's feed loop, pumping a batch it cannot replay.
+    # An uncaught exit from the authorization call would take that loop down
+    # mid-batch. A Pairing that cannot answer denies -- it does not raise, and it
+    # does not fall through to the router.
+    test "a Pairing server that cannot answer denies instead of exiting the caller" do
+      unbooted = :inb_no_such_console
+
+      assert Process.whereis(Inbound.pairing_name(unbooted)) == nil
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          refute Inbound.authorized?(unbooted, route("anyone"))
+
+          assert {:error, :unauthorized} =
+                   Inbound.route(unbooted, route("anyone"), %{text: "hi"})
+        end)
+
+      assert log =~ "pairing server unreachable, denying"
+    end
+
+    # A route the adapter built from wire input, which Route.new/1 does not
+    # validate. This used to crash the Pairing server -- and Pairing is the first
+    # :rest_for_one child, so it took every live session with it.
+    test "a malformed user id denies and leaves the runtime standing" do
+      boot(:inb_malformed, pairing: [allowed_users: ["alice"]])
+      pairing = Process.whereis(Inbound.pairing_name(:inb_malformed))
+
+      bad = Route.new(%{platform: :in_memory, chat_type: :dm, chat_id: "c", user_id: %{"a" => 1}})
+
+      assert {:error, :unauthorized} = Inbound.route(:inb_malformed, bad, %{text: "hi"})
+      assert Process.alive?(pairing)
+      assert SessionRouter.session_count(Inbound.router_name(:inb_malformed)) == 0
+      assert :ok = Inbound.route(:inb_malformed, route("alice"), %{text: "hi"})
+    end
   end
 
   defp restart_pairing(console) do

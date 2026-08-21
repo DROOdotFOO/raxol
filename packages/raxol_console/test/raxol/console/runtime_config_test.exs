@@ -351,6 +351,31 @@ defmodule Raxol.Console.RuntimeConfigTest do
       assert {:error, {:invalid_pairing, {:platform_users, :discord, "bob"}}} =
                RuntimeConfig.build(package(), pairing: [platform_users: [discord: "bob"]])
     end
+
+    # `nil` is an atom, so a platform resolved from a lookup that missed would
+    # pass an `is_atom/1` check, name no channel, and grant nothing -- the same
+    # silent lockout an unknown key is refused for.
+    test "refuses nil and booleans as platform atoms" do
+      assert {:error, {:invalid_pairing, {:allow_platforms, [nil]}}} =
+               RuntimeConfig.build(package(), pairing: [allow_platforms: [nil]])
+
+      assert {:error, {:invalid_pairing, {:allow_platforms, [true]}}} =
+               RuntimeConfig.build(package(), pairing: [allow_platforms: [true]])
+
+      assert {:error, {:invalid_pairing, {:platform_users, nil, ["bob"]}}} =
+               RuntimeConfig.build(package(), pairing: [platform_users: [{nil, ["bob"]}]])
+    end
+
+    # A keyword list admits duplicates; Pairing unions them when it seeds, so
+    # both sets are carried through here rather than the last one winning.
+    test "carries a platform named twice through as written" do
+      assert {:ok, cfg} =
+               RuntimeConfig.build(package(),
+                 pairing: [platform_users: [telegram: ["a"], telegram: ["b"]]]
+               )
+
+      assert cfg.pairing.platform_users == [telegram: ["a"], telegram: ["b"]]
+    end
   end
 
   test "rejects a non-package" do

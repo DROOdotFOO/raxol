@@ -21,10 +21,15 @@ defmodule Raxol.Gateway.Supervisor do
     * `:router` / `:pairing` -- extra opts merged into those children
 
   `:rest_for_one` also means a Pairing crash restarts the sessions and the
-  router behind it. That is deliberate: the router holds a closure over the
-  Pairing server, and sessions authorized under the pre-crash posture should not
-  outlive it. Pass the posture as `:pairing` seed opts rather than calling the
-  running server, so the restart rebuilds it -- see `Raxol.Gateway.Pairing`.
+  router behind it. That is deliberate: sessions authorized under the pre-crash
+  posture should not outlive it. (The router's `:authorize` closure captures a
+  NAME, so it would survive on its own -- the restart is about the sessions.)
+  Pass the posture as `:pairing` seed opts rather than calling the running
+  server, so the restart rebuilds it -- see `Raxol.Gateway.Pairing`.
+
+  The corollary is that Pairing sits on the hot path of every event with the
+  blast radius of every session behind it, so it must not crash on wire input.
+  `authorize/2` fails closed on a malformed route rather than raising.
   """
 
   use Supervisor

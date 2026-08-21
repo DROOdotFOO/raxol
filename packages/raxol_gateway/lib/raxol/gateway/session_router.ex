@@ -36,6 +36,11 @@ defmodule Raxol.Gateway.SessionRouter do
   `Raxol.Console.Boot` always sets it -- an open Console is open because its
   Pairing server allows those platforms, not because nothing asked.
 
+  The function runs inside the router's own call, so it should be cheap: every
+  event pays for it, including events for sessions that already exist. A function
+  that raises or exits is logged and DENIES rather than crashing the router --
+  a gate that cannot answer is not a reason to serve the chat.
+
   ## Telemetry
 
   Every event is `[:raxol_gateway, :session, event]`, measured
@@ -60,6 +65,8 @@ defmodule Raxol.Gateway.SessionRouter do
   """
 
   use Raxol.Core.Behaviours.BaseManager
+
+  require Logger
 
   alias Raxol.Gateway.Route
   alias Raxol.Gateway.Session
@@ -213,7 +220,26 @@ defmodule Raxol.Gateway.SessionRouter do
   end
 
   defp authorized?(_route, %{authorize: nil}), do: true
-  defp authorized?(route, %{authorize: fun}), do: fun.(route) == :allow
+
+  # The gate runs inside this server's own call, so a raising or exiting
+  # `:authorize` would take the router down and wipe every session it tracks
+  # while the session processes themselves live on, orphaned under the dynamic
+  # supervisor. The common cause is the decision living in another process --
+  # `Raxol.Gateway.Pairing` is one -- which is unreachable for the window of its
+  # own restart. Same treatment as `fetch_conversation_id/1`: absorb it here and
+  # answer. A gate that cannot answer denies; the alternative is serving a chat
+  # because the thing that would have refused it was briefly down.
+  defp authorized?(route, %{authorize: fun}) do
+    fun.(route) == :allow
+  rescue
+    error ->
+      Logger.warning("gateway :authorize raised, denying: #{Exception.message(error)}")
+      false
+  catch
+    :exit, reason ->
+      Logger.warning("gateway :authorize exited, denying: #{inspect(reason)}")
+      false
+  end
 
   defp start_guarded(key, route, state) do
     cond do

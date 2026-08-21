@@ -394,6 +394,46 @@ defmodule Raxol.Gateway.SessionRouterTest do
       assert :ok = SessionRouter.route(r, route(7), {:say, "hi"})
       assert_receive {:out, _route, "echo: hi"}
     end
+
+    # The gate runs inside the router's own call. An uncaught raise or exit would
+    # kill the router and wipe its session map while the session processes lived
+    # on, orphaned under the dynamic supervisor. The usual cause is the decision
+    # living in another process (Pairing) that is inside its own restart window.
+    for {label, boom} <- [
+          {"raises", quote(do: raise("gate is broken"))},
+          {"exits", quote(do: exit({:noproc, {GenServer, :call, [:gone, :authorize]}}))}
+        ] do
+      test "an :authorize that #{label} denies, and the router survives it" do
+        test_pid = self()
+        sup = :"sup_#{uid()}"
+        start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+        router = :"broken_gate_router_#{uid()}"
+
+        start_supervised!(%{
+          id: router,
+          start:
+            {SessionRouter, :start_link,
+             [
+               [
+                 name: router,
+                 handler: {EchoHandler, []},
+                 sessions_sup: sup,
+                 deliver: fn route, rendered -> send(test_pid, {:out, route, rendered}) end,
+                 authorize: fn _route -> unquote(boom) end
+               ]
+             ]}
+        })
+
+        pid = Process.whereis(router)
+
+        assert {:error, :unauthorized} = SessionRouter.route(router, route(1), {:say, "hi"})
+        assert {:error, :unauthorized} = SessionRouter.start_session(router, route(1))
+
+        assert Process.whereis(router) == pid
+        assert SessionRouter.session_count(router) == 0
+        refute_receive {:out, _, _}, 50
+      end
+    end
   end
 
   defp uid, do: System.unique_integer([:positive])

@@ -103,6 +103,9 @@ defmodule Raxol.Console.Boot do
   # rather than as a flag the gate consults, so there is one code path in both
   # postures and the truth is in the Pairing server's own state. A platform the
   # deployment never connected stays denied even when open.
+  # `RuntimeConfig.build/2` always resolves a posture map, so a nil is a struct
+  # someone built by hand rather than a fourth posture. It reads as unset, which
+  # is what an unset `:pairing` option means.
   defp pairing_opts(%{pairing: nil}, adapters), do: [allow_platforms: Map.keys(adapters)]
 
   defp pairing_opts(%{pairing: %{mode: :open}}, adapters),
@@ -182,8 +185,12 @@ defmodule Raxol.Console.Boot do
 
         config :raxol_console,
           pairing: [allow_platforms: [:telegram]]     # or allowed_users: [...]
-          pairing: []                                 # enforce; pair over DM only
+          pairing: []                                 # deny everyone; pair by hand
           pairing: :open                              # keep this, silence this warning
+
+    There is no /pair command: a denial is decided before a session exists, so
+    `pairing: []` admits nobody until an operator calls Raxol.Gateway.Pairing
+    out of band. Seed :allowed_users unless that is what you meant.
     """)
   end
 

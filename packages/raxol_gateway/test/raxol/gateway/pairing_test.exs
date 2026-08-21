@@ -119,6 +119,17 @@ defmodule Raxol.Gateway.PairingTest do
       assert :allow = Pairing.authorize(p, route(:telegram, "678"))
     end
 
+    # A keyword list admits duplicate keys, and collecting them `into: %{}` would
+    # keep only the last -- silently dropping every id named earlier. That is a
+    # lockout indistinguishable from never having configured them, which is the
+    # ambiguity `known_keys/1` refuses one level up for a typo'd key.
+    test "a platform named twice unions its ids rather than keeping the last" do
+      p = start_pairing(platform_users: [telegram: ["first"], telegram: ["second"]])
+
+      assert :allow = Pairing.authorize(p, route(:telegram, "first"))
+      assert :allow = Pairing.authorize(p, route(:telegram, "second"))
+    end
+
     test "the seeded posture survives a restart; a runtime pairing does not" do
       name = :"pairing_restart_#{System.unique_integer([:positive])}"
 
@@ -163,6 +174,33 @@ defmodule Raxol.Gateway.PairingTest do
         pid ->
           pid
       end
+    end
+  end
+
+  # `authorize/2` runs INSIDE this server, on a route an adapter built from wire
+  # input that `Route.new/1` does not validate. A `user_id` that is not a scalar
+  # used to raise `Protocol.UndefinedError` in `decide/2` -- and since Pairing is
+  # the first `:rest_for_one` child, that crash took the session supervisor and
+  # the router with it, on every retry, for every chat.
+  describe "a malformed route" do
+    test "denies rather than crashing the server" do
+      p = start_pairing(allowed_users: ["alice"])
+      pid = Process.whereis(p)
+
+      for bad <- [%{"a" => 1}, {:tuple, 1}, ["list"], self()] do
+        assert :deny = Pairing.authorize(p, route(:telegram, bad))
+      end
+
+      assert Process.alive?(pid)
+      assert :allow = Pairing.authorize(p, route(:telegram, "alice"))
+    end
+
+    # Normalizing with a bare `to_string/1` would turn a nil id into "", which an
+    # allowlist holding "" would then match.
+    test "a nil user id denies, and does not become the empty string" do
+      p = start_pairing(allowed_users: [""])
+
+      assert :deny = Pairing.authorize(p, route(:telegram, nil))
     end
   end
 end

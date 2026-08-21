@@ -37,13 +37,19 @@ defmodule Raxol.Console.Application do
         pairing: [allowed_users: ["12345"]]       # these ids, any platform
         pairing: [platform_users: [telegram: ["12345"]]]   # these ids, there
         pairing: :open                            # open, and say so on purpose
-        pairing: []                                # allowlist nobody
+        pairing: []                                # deny everyone; pair by hand
 
   The allowlist decides who may OPEN a chat, keyed on the sender. It says
   nothing about who can read the reply: an allowed user who adds the bot to a
   group gets the agent's output -- tool results included -- delivered to that
   group. Prefer `chat_type: :dm` channels for an agent with reachable
   credentials.
+
+  `pairing: []` denies everyone and there is no `/pair` command to escape it --
+  a denial is decided before a session exists, so pairing a newcomer is an out
+  of band call to `Raxol.Gateway.Pairing`. Seed `:allowed_users` instead unless
+  that is what you meant. Note also that `:allowed_users` and confirmed pairings
+  match on the id alone, across every connected platform.
 
   Inbound events are gated by `Raxol.Console.Inbound.route/3` and by the router
   itself, so a deployment's own feed loop cannot route around it. See
