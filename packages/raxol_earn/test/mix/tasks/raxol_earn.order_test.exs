@@ -329,4 +329,30 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
       assert message =~ "is not a USDC amount"
     end
   end
+
+  # The preflight's own suite proves it classifies outcomes correctly. This
+  # proves the run SPENDS on that classification -- a distinct claim, and the one
+  # that was untested while a catch-all funded every outcome but one.
+  describe "what a preflight outcome authorizes" do
+    test "a funded run proceeds only on a pass" do
+      assert Order.decide_preflight({:ok, %{}}, false) == :ok
+    end
+
+    test "a funded run stops on a rejection" do
+      assert Order.decide_preflight({:rejected, %{reason: :no_verifying_contract}}, false) ==
+               {:error, :pull_signature_rejected}
+    end
+
+    test "a funded run stops on an inconclusive check too" do
+      # An unanswered question is not permission to escrow. The RPC that could
+      # not answer it is the same one the createJob and fund writes go to.
+      assert Order.decide_preflight({:inconclusive, {:chain_id_unavailable, :timeout}}, false) ==
+               {:error, :pull_preflight_inconclusive}
+    end
+
+    test "a dry run reports every outcome and carries on, since it spends nothing" do
+      assert Order.decide_preflight({:rejected, %{reason: :no_verifying_contract}}, true) == :ok
+      assert Order.decide_preflight({:inconclusive, :whatever}, true) == :ok
+    end
+  end
 end

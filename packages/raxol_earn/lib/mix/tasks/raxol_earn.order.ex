@@ -53,11 +53,15 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   Every run, `--dry-run` included, ends the signing step by asking the origin
   pull's verifying contract for its own `DOMAIN_SEPARATOR()` and asking the buyer
-  whether the signature just produced covers the digest that yields. Two
-  `eth_call`s, no writes. A rejection means the pull would revert on settlement,
-  so a real run stops there rather than escrowing a fee it cannot earn; a
-  `--dry-run` reports it and carries on. See `Raxol.Earn.Xochi.PullPreflight` and
-  GitHub #772.
+  whether the signature just produced covers the digest that yields. Three
+  `eth_call`s, no writes.
+
+  A real run proceeds only when that check PASSES. A rejection means the pull
+  would revert on settlement; an inconclusive result means nobody knows, and the
+  endpoint that could not say is the one the `createJob` and `fund` writes go to
+  next. Either way the run stops before escrowing a fee it cannot earn, and the
+  log line distinguishes the two so the next move is clear. `--dry-run` reports
+  and carries on. See `Raxol.Earn.Xochi.PullPreflight` and GitHub #772.
 
   ## Origin pull: the `--solver` pin
 
@@ -763,14 +767,18 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # the shape passed each time, and the digest was wrong. The two `eth_call`s
   # cost nothing and happen before any write.
   #
-  # A rejection aborts a real run. Continuing would `createJob` and escrow a fee
-  # for a settlement that provably cannot execute, which is how job 74047 ended
-  # up funded, unsettleable, and expired. Under `--dry-run` it only reports --
-  # rehearsing the failure is the reason that mode exists.
+  # A real run proceeds on `{:ok, _}` and nothing else. Continuing on anything
+  # weaker would `createJob` and escrow a fee for a settlement nobody has
+  # confirmed can execute, which is how job 74047 ended up funded, unsettleable,
+  # and expired. Under `--dry-run` it only reports -- rehearsing the failure is
+  # the reason that mode exists.
   #
-  # An inconclusive check never blocks: an unreachable RPC is not evidence about
-  # a signature, and treating it as one would send the next debugging round after
-  # the wrong thing.
+  # An inconclusive check blocks too, and the asymmetry that would make it not
+  # block does not exist: this reads `cfg.rpc`, the same endpoint the funding
+  # writes go to moments later, so a node too unwell to answer two `eth_call`s is
+  # not about to mine a `createJob`. Refusing costs a re-run; proceeding costs an
+  # escrow. What an inconclusive result must not do is claim the SIGNATURE is
+  # bad, and `PullPreflight.describe/1` keeps those separate in the log.
   defp preflight_pull(_cfg, %{pull_authorization: nil}, _bundle, _opts), do: :ok
 
   defp preflight_pull(cfg, quote_resp, bundle, opts) do
@@ -792,11 +800,18 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     end
   end
 
-  defp decide_preflight({:error, {:signature_rejected, _}}, false = _dry_run?) do
-    {:error, :pull_signature_rejected}
-  end
+  @doc false
+  # Public only so the money decision itself can be tested. Every clause is
+  # explicit: there is no catch-all, so a new `PullPreflight` outcome is a
+  # compile-time gap here rather than a silent funded run.
+  @spec decide_preflight(PullPreflight.outcome(), boolean()) :: :ok | {:error, atom()}
+  def decide_preflight({:ok, _details}, _dry_run?), do: :ok
+  def decide_preflight({:rejected, _details}, true = _dry_run?), do: :ok
+  def decide_preflight({:rejected, _details}, false), do: {:error, :pull_signature_rejected}
+  def decide_preflight({:inconclusive, _reason}, true = _dry_run?), do: :ok
 
-  defp decide_preflight(_outcome, _dry_run?), do: :ok
+  def decide_preflight({:inconclusive, _reason}, false),
+    do: {:error, :pull_preflight_inconclusive}
 
   # The Permit2 rail pulls through a standing ERC-20 allowance. Refusing an
   # unpinned or mismatched spender happens HERE, before the signature -- an
@@ -1330,6 +1345,27 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     verifying contract's own DOMAIN_SEPARATOR() before re-running.
 
     Re-run with --dry-run to reproduce this for free.
+    """
+  end
+
+  # The check could not be completed, which is NOT a verdict on the signature.
+  # It still stops the run: an unanswered question is not permission to escrow,
+  # and the endpoint that could not answer it is the one the funding writes go to.
+  defp sign_intent_error(:pull_preflight_inconclusive) do
+    """
+    the origin pull's signature could not be checked against the chain.
+
+    Nothing was written and nothing was escrowed. The preflight line above says
+    what stopped the check and what to do about it -- read it before changing
+    anything, because the most common cause is ORDER_RPC_<from-chain> being unset
+    and falling back to the Base endpoint, which answers for the wrong chain.
+
+    This is not a claim that the signature is bad. It is a refusal to escrow a
+    fee on a question nobody answered: the same RPC serves the createJob and
+    fund writes that would come next, so a node that cannot answer two eth_calls
+    would not have carried the run much further anyway.
+
+    Re-run once the endpoint answers, or with --dry-run to rehearse for free.
     """
   end
 

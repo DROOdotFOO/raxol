@@ -958,6 +958,88 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       refute_received {:req, "POST", "/api/intent/execute", _h, _b}
     end
 
+    test "binds the permit2 verifyingContract to the canonical Permit2" do
+      # The served verifyingContract decides WHO checks this signature. Left to
+      # the quote, a hostile worker nominates a contract it controls -- one whose
+      # DOMAIN_SEPARATOR() agrees with whatever it served -- and every check that
+      # asks that address agrees with the payload. Meanwhile the allowance being
+      # spent was granted to the canonical Permit2, which is where the pull runs.
+      Application.put_env(:raxol_payments, :pull_solver_allowlist, [
+        "0x000000000000000000000000000000000000dEaD"
+      ])
+
+      on_exit(fn -> Application.delete_env(:raxol_payments, :pull_solver_allowlist) end)
+
+      request = %QuoteRequest{
+        wallet: @anvil_addr,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "1000000",
+        settlement_preference: "public"
+      }
+
+      config = %{
+        base_url: "https://api.xochi.fi",
+        auth: :none,
+        req_options: [plug: echo_plug(self())]
+      }
+
+      quote_for = fn pull ->
+        %QuoteResponse{
+          intent_id: "xi_vc",
+          quote_id: "xq_vc",
+          can_solve: true,
+          payment_method: "permit2",
+          eip712_data: %{
+            "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+            "primaryType" => "XochiIntent",
+            "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+            "message" => %{"intentId" => "xi_vc"}
+          },
+          pull_authorization: pull
+        }
+      end
+
+      # The canonical address passes, served in any case.
+      canonical = Raxol.Payments.Protocols.Permit2.verifying_contract()
+
+      assert {:ok, _} =
+               Xochi.execute(
+                 config,
+                 quote_for.(
+                   canonical_permit2_pull(%{
+                     domain: %{"verifyingContract" => String.downcase(canonical)}
+                   })
+                 ),
+                 RealWallet,
+                 request
+               )
+
+      # A verifier of the worker's choosing aborts before anything is signed.
+      assert {:error, {:authorization_mismatch, :pull_verifier}} =
+               Xochi.execute(
+                 config,
+                 quote_for.(
+                   canonical_permit2_pull(%{
+                     domain: %{
+                       "verifyingContract" => "0x00000000000000000000000000000000000badc0"
+                     }
+                   })
+                 ),
+                 RealWallet,
+                 request
+               )
+
+      # So does omitting it, which is how a 2-field domain used to slip through.
+      no_verifier =
+        update_in(canonical_permit2_pull(), ["domain"], &Map.delete(&1, "verifyingContract"))
+
+      assert {:error, {:authorization_mismatch, :pull_verifier}} =
+               Xochi.execute(config, quote_for.(no_verifier), RealWallet, request)
+    end
+
     test "rejects a permit2 pull when no solver allowlist is configured (fail-closed)" do
       # Permit2 has NO on-chain recipient guard -- the spender picks where funds go
       # at call time -- so the pin is the only destination control and is always
@@ -1346,7 +1428,14 @@ defmodule Raxol.Payments.Protocols.XochiTest do
       )
 
     %{
-      "domain" => Map.merge(%{"chainId" => 8453}, Map.get(overrides, :domain, %{})),
+      "domain" =>
+        Map.merge(
+          %{
+            "chainId" => 8453,
+            "verifyingContract" => Raxol.Payments.Protocols.Permit2.verifying_contract()
+          },
+          Map.get(overrides, :domain, %{})
+        ),
       "primaryType" => Map.get(overrides, :primary_type, "PermitWitnessTransferFrom"),
       "types" =>
         Map.get(overrides, :types, %{

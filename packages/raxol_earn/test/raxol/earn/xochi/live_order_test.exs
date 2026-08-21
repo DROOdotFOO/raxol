@@ -313,10 +313,16 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     # Reported, never asserted. A cell that cannot reach an RPC has no verdict to
     # give, and this test's contract is that it moves no funds and fails only on
     # a solver-pin mismatch.
+    #
+    # The RPC is resolved FIRST, before `sign_intent`. A pull authorization is a
+    # bearer instrument -- bounded by the pinned spender, but live and in-window
+    # -- and minting one with the funded key for a check that cannot run is a
+    # side effect this gate has no reason to have. With the mesh corridor set
+    # that is ninety of them, signed and dropped.
     defp preflight_pull_signature(%{quote: quote, request: request}, from) do
-      with {:ok, served} <- served_pull(quote),
-           {:ok, bundle} <- XochiProtocol.sign_intent(quote, LiveWallet, request),
-           {:ok, url} <- rpc_url(from) do
+      with {:ok, url} <- rpc_url(from),
+           {:ok, served} <- served_pull(quote),
+           {:ok, bundle} <- XochiProtocol.sign_intent(quote, LiveWallet, request) do
         signature = bundle[:pull_signature] || bundle["pull_signature"]
 
         served

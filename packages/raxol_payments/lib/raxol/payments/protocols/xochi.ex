@@ -53,6 +53,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @behaviour Raxol.Payments.Protocol
 
   alias Raxol.Payments.Poll
+  alias Raxol.Payments.Protocols.Permit2
   alias Raxol.Payments.Xochi.{Capabilities, Client, DepositAttestation}
 
   alias Raxol.Payments.Xochi.Schemas.{
@@ -707,6 +708,14 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # spender pin is ALWAYS required (fail-closed): with no allowlist configured a
   # permit2 pull is rejected before signing. The `OriginPullWitness` ties the
   # permit to one intent on-chain. See GitHub #333.
+  #
+  # `verifyingContract` is pinned to the canonical Permit2 for the same reason
+  # the ERC-3009 rail pins its own to the request's token: it decides WHO checks
+  # this signature. Leaving it to the quote lets the served payload nominate its
+  # own verifier -- a contract whose `DOMAIN_SEPARATOR()` agrees with whatever it
+  # served -- while the allowance being spent was granted to Permit2 and the pull
+  # runs there. Permit2 is deployed at one address on every chain, so this is a
+  # constant and not a per-corridor lookup.
   defp validate_permit2_pull(pull, request) do
     domain = pull["domain"] || %{}
     message = pull["message"] || %{}
@@ -715,6 +724,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
     first_mismatch([
       {:pull_type, valid_envelope?(pull, @permit2_primary_type, @permit2_fields)},
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
+      {:pull_verifier, addr_match?(domain["verifyingContract"], Permit2.verifying_contract())},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(permitted["amount"], request.from_amount)},
       {:pull_spender, solver_allowed?(message["spender"], :permit2)},

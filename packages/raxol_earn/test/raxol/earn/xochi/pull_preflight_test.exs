@@ -33,6 +33,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
   # the fake cannot accidentally agree with a wrong digest.
   defp chain(opts \\ []) do
     code = Keyword.get(opts, :code, "0xef0100" <> String.duplicate("11", 20))
+    chain_id = Keyword.get(opts, :chain_id, 8453)
 
     plug = fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -40,6 +41,12 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
 
       result =
         case req["method"] do
+          # Which chain the node speaks for. Permit2 is at one address on every
+          # chain with a DIFFERENT separator, so this is the only thing that
+          # distinguishes a correct read from a plausible wrong one.
+          "eth_chainId" ->
+            "0x" <> Integer.to_string(chain_id, 16)
+
           # A 7702 delegation designator is code; "0x" is a bare EOA.
           "eth_getCode" ->
             code
@@ -190,7 +197,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
     test "rejects an EOA signature that recovers to someone else, naming who" do
       served = served_pull()
 
-      assert {:error, {:signature_rejected, details}} =
+      assert {:rejected, details} =
                PullPreflight.verify(served, current_signature(served), @account,
                  rpc: chain(code: "0x")
                )
@@ -205,7 +212,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       # the Permit2 path at all.
       served = served_pull()
 
-      assert {:error, {:signature_rejected, details}} =
+      assert {:rejected, details} =
                PullPreflight.verify(served, pre_878_signature(served), @owner,
                  rpc: chain(code: "0x")
                )
@@ -222,7 +229,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       # the separator from the contract is what makes it visible here.
       served = served_pull()
 
-      assert {:error, {:signature_rejected, details}} =
+      assert {:rejected, details} =
                PullPreflight.verify(served, pre_878_signature(served), @account, rpc: chain())
 
       assert details.returned == <<0xFF, 0xFF, 0xFF, 0xFF>>
@@ -234,11 +241,61 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       refute current_signature(served) == pre_878_signature(served)
     end
 
-    test "a served domain with no verifyingContract has nothing to ask" do
+    test "a served domain with no verifyingContract is a rejection, not a gap" do
+      # Nothing on chain claims to verify this, so no signature over it can pass.
+      # Reporting that as inconclusive is what let #772's defect class through a
+      # gate built to catch it: the run read "could not check" and funded anyway.
       served = Map.put(served_pull(), "domain", %{"name" => "Xochi", "chainId" => 8453})
 
-      assert {:error, :no_verifying_contract} =
+      assert {:rejected, %{reason: :no_verifying_contract}} =
                PullPreflight.verify(served, "0x00", @account, rpc: chain())
+    end
+
+    test "a permit2 pull is refused when the quote nominates its own verifier" do
+      # The oracle must not be chosen by the party under audit. A hostile worker
+      # serving a contract it controls could answer DOMAIN_SEPARATOR() with
+      # whatever makes our own projection agree -- and the allowance being spent
+      # was granted to the canonical Permit2, which is where the pull runs.
+      hostile = "0x00000000000000000000000000000000000badc0"
+
+      served =
+        update_in(served_pull(), ["domain"], &Map.put(&1, "verifyingContract", hostile))
+
+      assert {:rejected, %{reason: {:verifier_not_permit2, ^hostile, _canonical}}} =
+               PullPreflight.verify(served, current_signature(served), @account, rpc: chain())
+    end
+
+    test "an unrecoverable signature on a codeless account is a rejection" do
+      # Permit2 recovers this same signature against this same account, so a
+      # signature that cannot be recovered here cannot be recovered there. This
+      # is the 7702 case: a wrapped envelope on an account whose delegation is
+      # not actually set has nothing to unwrap it.
+      served = served_pull()
+      wrapped = "0x" <> String.duplicate("ab", 72)
+
+      assert {:rejected, %{reason: {:recover_failed, {:not_a_canonical_signature, 72}}}} =
+               PullPreflight.verify(served, wrapped, @owner, rpc: chain(code: "0x"))
+    end
+
+    test "a signature that is not hex is a rejection, not a gap" do
+      served = served_pull()
+
+      assert {:rejected, %{reason: {:invalid_hex, :signature}}} =
+               PullPreflight.verify(served, "0xnothex", @account, rpc: chain())
+    end
+
+    test "an RPC answering for the wrong chain is inconclusive, never a rejection" do
+      # Permit2 lives at the same address on every chain with a different
+      # separator, so an RPC pointed at the wrong network returns 32 plausible
+      # bytes and a CORRECT signature fails to match them. Calling that a
+      # rejection would tell the operator their signing is broken when their
+      # ORDER_RPC_<chain> is -- and that env var falls back to Base when unset.
+      served = served_pull()
+
+      assert {:inconclusive, {:wrong_chain, declared: 8453, node: 42_161}} =
+               PullPreflight.verify(served, current_signature(served), @account,
+                 rpc: chain(chain_id: 42_161)
+               )
     end
 
     test "an unreachable RPC is inconclusive, not a rejection" do
@@ -249,7 +306,29 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       client = RPC.client(url: "http://stub.invalid/rpc", plug: plug)
       served = served_pull()
 
-      assert {:error, {:domain_separator_unavailable, _vc, _reason}} =
+      assert {:inconclusive, {:chain_id_unavailable, _reason}} =
+               PullPreflight.verify(served, current_signature(served), @account, rpc: client)
+    end
+
+    test "a separator that cannot be read is inconclusive" do
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        req = Jason.decode!(body)
+
+        result = if req["method"] == "eth_chainId", do: "0x2105", else: nil
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => req["id"], "result" => result})
+        )
+      end
+
+      client = RPC.client(url: "http://stub.invalid/rpc", plug: plug)
+      served = served_pull()
+
+      assert {:inconclusive, {:domain_separator_unavailable, _vc, _reason}} =
                PullPreflight.verify(served, current_signature(served), @account, rpc: client)
     end
   end
@@ -267,11 +346,28 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       assert line =~ "would revert"
     end
 
+    test "a payload defect reads as a rejection, not as a check that could not run" do
+      line = PullPreflight.describe({:rejected, %{reason: :no_verifying_contract}})
+
+      assert line =~ "REJECTED"
+      assert line =~ "declares no domain.verifyingContract"
+      refute line =~ "could not run"
+    end
+
     test "an inconclusive check does not claim the signature is bad" do
-      line = PullPreflight.describe({:error, {:domain_separator_unavailable, "0x0", :timeout}})
+      line =
+        PullPreflight.describe({:inconclusive, {:domain_separator_unavailable, "0x0", :timeout}})
 
       assert line =~ "INCONCLUSIVE"
       assert line =~ "not a verdict"
+    end
+
+    test "a wrong-chain RPC names the env var to set rather than blaming the signature" do
+      line = PullPreflight.describe({:inconclusive, {:wrong_chain, declared: 8453, node: 42_161}})
+
+      assert line =~ "INCONCLUSIVE"
+      assert line =~ "not a verdict"
+      assert line =~ "ORDER_RPC_8453"
     end
   end
 end
