@@ -8,6 +8,43 @@ defmodule Raxol.Console.BootTest do
   alias Raxol.Gateway.Adapter.InMemory
   alias Raxol.Gateway.SessionRouter
 
+  # A minimal per-chat TEA app for `:app` mode. Renders the last key it folded
+  # plus the persona it was handed at init, so one frame proves both that the
+  # model survived the turn and that the system prompt reached the app.
+  defmodule ProbeApp do
+    @moduledoc false
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(context) do
+      persona = context |> Map.get(:options, []) |> Keyword.get(:system_prompt, "")
+      %{last: "ready", persona: String.trim(persona)}
+    end
+
+    @impl true
+    def update(message, model) do
+      case message do
+        %Raxol.Core.Events.Event{type: :paste, data: %{text: text}} ->
+          {%{model | last: text}, []}
+
+        %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: char}} ->
+          {%{model | last: char}, []}
+
+        _ ->
+          {model, []}
+      end
+    end
+
+    @impl true
+    def view(model) do
+      persona = model.persona |> String.split("\n", trim: true) |> List.last() || ""
+      Raxol.Core.Renderer.View.text("last: #{model.last} persona: #{persona}")
+    end
+
+    @impl true
+    def subscriptions(_model), do: []
+  end
+
   defp job(id, prompt, cron) do
     %{id: id, prompt: prompt, schedule: cron, skills: [], target: nil, enabled: true}
   end
@@ -187,6 +224,73 @@ defmodule Raxol.Console.BootTest do
       assert_receive {:tool_invoked, params}
       assert "hi" in Map.values(params)
       assert_receive {:gateway_sent, ^route, "final answer"}
+    end
+
+    # The same boot path in `:app` mode: the reply is a TEA app's rendered frame
+    # rather than an LLM turn, and the persona reaches the app through its own
+    # `init/1` instead of being applied for free. See GitHub #763.
+    test "app mode boots a per-chat TEA app and replies with its rendered frame" do
+      pid = self()
+
+      Application.put_env(:raxol_console, :app_templates, %{"probe" => ProbeApp})
+      on_exit(fn -> Application.delete_env(:raxol_console, :app_templates) end)
+
+      pkg = %Package{
+        runtime: :raxol,
+        soul_md: "# Bot\n\nBe terse.",
+        agents_md: nil,
+        tasks: [],
+        skills: []
+      }
+
+      {:ok, rc} =
+        RuntimeConfig.build(pkg,
+          bundle_default_mcp: false,
+          handler_mode: :app,
+          app_template: "probe",
+          channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}]
+        )
+
+      assert rc.app_module == ProbeApp
+
+      {:ok, report} =
+        Boot.start(rc,
+          name: :console_app,
+          scheduler_name: :console_app_sched,
+          reconciler_name: :console_app_recon
+        )
+
+      on_exit(fn ->
+        try do
+          Supervisor.stop(:console_app)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      assert report.channels == [:in_memory]
+
+      raw = %{
+        platform: :in_memory,
+        chat_type: :dm,
+        chat_id: "c",
+        user_id: "u",
+        event: %{text: "z"}
+      }
+
+      {:ok, route, event} = InMemory.normalize_event(raw)
+      assert :ok = SessionRouter.route(:"console_app.router", route, event)
+
+      # Starting a per-chat Lifecycle and collecting its first frame is slower
+      # than a mocked chat turn, so this needs more than the 100ms default.
+      assert_receive {:gateway_sent, ^route, rendered}, 5_000
+
+      # The app folded the keypress into its own model and rendered it back,
+      # which no stateless chat turn would do.
+      assert rendered =~ "last: z"
+
+      # The persona reached the app's init/1 through :lifecycle_opts.
+      assert rendered =~ "persona: Be terse."
     end
   end
 

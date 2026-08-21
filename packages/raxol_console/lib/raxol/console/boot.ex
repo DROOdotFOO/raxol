@@ -22,6 +22,7 @@ defmodule Raxol.Console.Boot do
   """
 
   alias Raxol.Agent.{McpBundle, Scheduler}
+  alias Raxol.Console.RuntimeConfig
 
   # Read-only skill access surfaced to the chat agent when the package ships
   # skills: the agent can list/view them on demand (skill authoring stays a
@@ -207,11 +208,8 @@ defmodule Raxol.Console.Boot do
       |> Keyword.put(:actions, skill_actions(skills) ++ actions)
       |> put_skills_context(skills)
 
-    handler =
-      {Raxol.Gateway.Handler.Agent, [system_prompt: rc.system_prompt, agent_opts: agent_opts]}
-
     [
-      handler: handler,
+      handler: RuntimeConfig.handler_spec(rc, agent_opts),
       deliver: fn route, rendered ->
         Raxol.Gateway.Delivery.deliver(adapters, {:direct, route}, rendered)
       end,
