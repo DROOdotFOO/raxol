@@ -135,16 +135,25 @@ defmodule Raxol.Console.RuntimeConfig do
   `pairing: []` is enforced with nothing seeded: it denies everyone, and it
   admits nobody until an operator pairs them by hand. There is no `/pair` chat
   command -- a denial is decided before a session exists, so an unpaired sender
-  cannot ask for a code through the chat. `Pairing.request_code/2` and
+  cannot ask for a code through the chat. `Pairing.request_code/3` and
   `confirm/2` are reachable only out of band (a remote shell, or the
   deployment's own admin surface), and a self-service lane is something the feed
   loop builds with `Raxol.Console.Inbound.authorized?/2`. Do not reach for
   `pairing: []` expecting the pairing flow to be wired; seed `:allowed_users`
   with whoever should already be in.
 
-  `:allowed_users` is NOT platform-scoped -- the id matches on every connected
-  platform, whose id namespaces are unrelated. Prefer `:platform_users` when a
-  deployment connects more than one. See `Raxol.Gateway.Pairing`.
+  The two user allowlists differ in SCOPE, not in convenience.
+  `:platform_users` grants an id on the platform it names and nowhere else;
+  `:allowed_users` grants it on every connected platform. Platform id namespaces
+  are unrelated -- a Telegram integer, a Discord snowflake and an email address
+  are drawn from different spaces -- so `:allowed_users` is only sound when you
+  know those spaces cannot collide, which a single-platform deployment gets for
+  free and anything else has to mean on purpose. `Raxol.Console.Boot` says so at
+  boot when a deployment uses it with more than one channel connected. Prefer
+  `:platform_users`. See `Raxol.Gateway.Pairing`.
+
+  `platform_users: [global: [...]]` is refused: a grant filed under "per
+  platform" must not turn out to admit every platform.
 
   Open is the default because enforcing by default would lock out every Console
   running today -- `Pairing`'s allowlists boot empty, so an unconfigured enforce
@@ -320,7 +329,10 @@ defmodule Raxol.Console.RuntimeConfig do
       else: {:error, {:invalid_pairing, {key, values}}}
   end
 
-  defp platform_atom?(value), do: is_atom(value) and value not in [nil, true, false]
+  # `:global` is `Raxol.Gateway.Pairing`'s key for the cross-platform bucket, so
+  # a platform of that name would file a scoped grant where every platform reads.
+  # `:allowed_users` is how you ask for that, out loud.
+  defp platform_atom?(value), do: is_atom(value) and value not in [:global, nil, true, false]
 
   # User ids are stringified here rather than at the Pairing call site, because
   # `Pairing.allow/3` stringifies too and an integer Telegram id configured as an
