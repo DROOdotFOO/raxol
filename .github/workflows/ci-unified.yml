@@ -301,10 +301,15 @@ jobs:
         # anywhere disagreed. A package earns its entry in the root
         # .formatter.exs `subdirectories` list by being gated here, so the two
         # lists move together.
+        #
+        # raxol_console boots agent packages onto the gateway and was ungated for
+        # the same reason the others were: nothing in per-PR CI ran it. It joins
+        # already clean, so this adds a gate rather than fixing drift.
+        #
         # Keep on ONE line: test/raxol/formatter_delegation_test.exs parses this
         # matrix with `^\s*package: \[...\]` to prove every gated package is also
         # delegated by the root .formatter.exs. A block sequence parses as absent.
-        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol]
+        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console]
 
     steps:
       - uses: actions/checkout@v7

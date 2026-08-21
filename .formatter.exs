@@ -23,6 +23,7 @@
   subdirectories: [
     "packages/raxol_agent_client_protocol",
     "packages/raxol_cli",
+    "packages/raxol_console",
     "packages/raxol_earn",
     "packages/raxol_gateway",
     "packages/raxol_payments",
