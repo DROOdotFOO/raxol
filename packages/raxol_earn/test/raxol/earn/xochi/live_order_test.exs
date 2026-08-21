@@ -48,7 +48,9 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     alias Raxol.Earn.Offering.Registry, as: OfferingRegistry
     alias Raxol.Earn.ProviderAdapter
     alias Raxol.Earn.ProviderAdapter.JSONRPC
+    alias Raxol.Earn.Onchain.RPC
     alias Raxol.Earn.Xochi.OriginPull
+    alias Raxol.Earn.Xochi.PullPreflight
     alias Raxol.Earn.Xochi.StablePublicOffering
     alias Raxol.Payments.Assets
     alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
@@ -286,14 +288,52 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     # failure like a solver-pin mismatch (hard).
     defp preflight_cell(cfg, from, to, token) do
       case preflight_quote(cfg, from, to, token) do
-        {:ok, %{quote: quote}} ->
-          {:ok, %{method: quote.payment_method, to_amount: quote.to_amount}}
+        {:ok, %{quote: quote} = checked} ->
+          {:ok,
+           %{
+             method: quote.payment_method,
+             to_amount: quote.to_amount,
+             pull: preflight_pull_signature(checked, from)
+           }}
 
         {:error, :cannot_solve} ->
           {:soft, :cannot_solve}
 
         {:error, reason} ->
           {:error, reason}
+      end
+    end
+
+    # Signing is free and local, so the read-only gate can sign the served pull
+    # and ask the verifying contract whether that signature would be accepted --
+    # the question `validate_pull/3` above does not answer. `validate_pull`
+    # checks the pull's SHAPE; this checks its DIGEST, which is what four funded
+    # attempts on GitHub #772 died on while every shape check passed.
+    #
+    # Reported, never asserted. A cell that cannot reach an RPC has no verdict to
+    # give, and this test's contract is that it moves no funds and fails only on
+    # a solver-pin mismatch.
+    defp preflight_pull_signature(%{quote: quote, request: request}, from) do
+      with {:ok, served} <- served_pull(quote),
+           {:ok, bundle} <- XochiProtocol.sign_intent(quote, LiveWallet, request),
+           {:ok, url} <- rpc_url(from) do
+        signature = bundle[:pull_signature] || bundle["pull_signature"]
+
+        served
+        |> PullPreflight.verify(signature, LiveWallet.address(), rpc: RPC.client(url: url))
+        |> PullPreflight.describe()
+      else
+        {:error, reason} -> "pull preflight: skipped (#{inspect(reason)})"
+      end
+    end
+
+    defp served_pull(%{pull_authorization: nil}), do: {:error, :no_pull_authorization}
+    defp served_pull(%{pull_authorization: pull}), do: {:ok, pull}
+
+    defp rpc_url(chain) do
+      case System.get_env("XOCHI_ORDER_RPC_#{chain}") do
+        nil -> {:error, {:no_rpc_for_chain, chain}}
+        url -> {:ok, url}
       end
     end
 
@@ -483,6 +523,11 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
           {:error, reason} -> "FAIL #{cell}: #{inspect(reason)}"
         end
       )
+
+      case outcome do
+        {:ok, %{pull: line}} when is_binary(line) -> log("  #{line}")
+        _ -> :ok
+      end
     end
 
     # Render the corridor's asset pairing: "USDC" same-asset, "USDC->USDG" when a

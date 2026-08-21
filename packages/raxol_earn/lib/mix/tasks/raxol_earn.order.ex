@@ -51,6 +51,14 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   `--dry-run` stops after signing and spends nothing.
 
+  Every run, `--dry-run` included, ends the signing step by asking the origin
+  pull's verifying contract for its own `DOMAIN_SEPARATOR()` and asking the buyer
+  whether the signature just produced covers the digest that yields. Two
+  `eth_call`s, no writes. A rejection means the pull would revert on settlement,
+  so a real run stops there rather than escrowing a fee it cannot earn; a
+  `--dry-run` reports it and carries on. See `Raxol.Earn.Xochi.PullPreflight` and
+  GitHub #772.
+
   ## Origin pull: the `--solver` pin
 
   The signed intent carries an origin-pull authorization letting the solver collect
@@ -145,7 +153,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     Transport
   }
 
+  alias Raxol.Earn.Onchain.RPC
   alias Raxol.Earn.Xochi.OriginPull
+  alias Raxol.Earn.Xochi.PullPreflight
   alias Raxol.Payments.Assets
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
   alias Raxol.Payments.Xochi.{PullContracts, Schemas.QuoteRequest}
@@ -741,10 +751,52 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     with {:ok, quote_resp} <- XochiProtocol.get_quote(cfg.xochi_config, request),
          {:ok, pull} <- check_origin_pull(cfg, quote_resp, opts),
-         {:ok, bundle} <- XochiProtocol.sign_intent(quote_resp, cfg.intent_wallet, request) do
+         {:ok, bundle} <- XochiProtocol.sign_intent(quote_resp, cfg.intent_wallet, request),
+         :ok <- preflight_pull(cfg, quote_resp, bundle, opts) do
       {:ok, {bundle, pull}}
     end
   end
+
+  # `check_origin_pull/3` decides the pull's SHAPE is safe to sign. This asks
+  # whether the signature just produced will actually be accepted, which is a
+  # different question and the one every funded attempt on GitHub #772 has lost:
+  # the shape passed each time, and the digest was wrong. The two `eth_call`s
+  # cost nothing and happen before any write.
+  #
+  # A rejection aborts a real run. Continuing would `createJob` and escrow a fee
+  # for a settlement that provably cannot execute, which is how job 74047 ended
+  # up funded, unsettleable, and expired. Under `--dry-run` it only reports --
+  # rehearsing the failure is the reason that mode exists.
+  #
+  # An inconclusive check never blocks: an unreachable RPC is not evidence about
+  # a signature, and treating it as one would send the next debugging round after
+  # the wrong thing.
+  defp preflight_pull(_cfg, %{pull_authorization: nil}, _bundle, _opts), do: :ok
+
+  defp preflight_pull(cfg, quote_resp, bundle, opts) do
+    case bundle[:pull_signature] || bundle["pull_signature"] do
+      nil ->
+        :ok
+
+      signature ->
+        outcome =
+          PullPreflight.verify(
+            quote_resp.pull_authorization,
+            signature,
+            cfg.buyer,
+            rpc: RPC.client(url: cfg.rpc)
+          )
+
+        log(PullPreflight.describe(outcome))
+        decide_preflight(outcome, Keyword.get(opts, :dry_run, false))
+    end
+  end
+
+  defp decide_preflight({:error, {:signature_rejected, _}}, false = _dry_run?) do
+    {:error, :pull_signature_rejected}
+  end
+
+  defp decide_preflight(_outcome, _dry_run?), do: :ok
 
   # The Permit2 rail pulls through a standing ERC-20 allowance. Refusing an
   # unpinned or mismatched spender happens HERE, before the signature -- an
@@ -1256,6 +1308,28 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     Do not widen the pin to whatever the quote served -- checking that value is
     the entire point of it.
+    """
+  end
+
+  # The signature exists and is well-formed; the contract that will verify it
+  # rebuilds a different digest. Settling is impossible, so the run stops here
+  # rather than at the far side of an escrow.
+  defp sign_intent_error(:pull_signature_rejected) do
+    """
+    the origin pull's signature will not verify on chain.
+
+    Nothing was written and nothing was escrowed. The preflight line above shows
+    which contract was asked and what it answered: the digest it rebuilds is not
+    the one this signature covers, so the pull would revert and the job would sit
+    funded and unsettleable until it expired.
+
+    That is a defect in what was signed, not a configuration you can retry
+    around. The domain the quote serves and the domain the verifier declares have
+    diverged -- see GitHub #772, where an extra `version` field cost four funded
+    attempts. Capture the served pull_authorization and compare its domain to the
+    verifying contract's own DOMAIN_SEPARATOR() before re-running.
+
+    Re-run with --dry-run to reproduce this for free.
     """
   end
 
