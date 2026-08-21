@@ -75,7 +75,8 @@ defmodule Raxol.Console.Application do
     :handler_mode,
     :app_template,
     :idle_timeout,
-    :max_sessions
+    :max_sessions,
+    :pairing
   ]
 
   @impl true

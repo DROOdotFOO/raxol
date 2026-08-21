@@ -44,6 +44,23 @@ defmodule Raxol.Console.RuntimeConfig do
   """
   @type handler_mode :: :chat | :app
 
+  @typedoc """
+  The resolved gateway authorization posture.
+
+    * `:open` -- every connected platform is allowed for everyone. `declared?`
+      distinguishes an operator who asked for this from one who said nothing;
+      only the latter is warned about at boot.
+    * `:enforce` -- `Raxol.Gateway.Pairing` decides, seeded from the three
+      allowlists and extended at runtime by the DM pairing flow.
+  """
+  @type pairing :: %{
+          mode: :open | :enforce,
+          declared?: boolean(),
+          allow_platforms: [atom()],
+          allowed_users: [String.t()],
+          platform_users: [{atom(), [String.t()]}]
+        }
+
   defstruct system_prompt: nil,
             persona_sha256: nil,
             scheduler_jobs: [],
@@ -54,7 +71,8 @@ defmodule Raxol.Console.RuntimeConfig do
             handler_mode: :chat,
             app_module: nil,
             idle_timeout: nil,
-            max_sessions: nil
+            max_sessions: nil,
+            pairing: nil
 
   @type t :: %__MODULE__{
           system_prompt: String.t(),
@@ -67,7 +85,8 @@ defmodule Raxol.Console.RuntimeConfig do
           handler_mode: handler_mode(),
           app_module: module() | nil,
           idle_timeout: pos_integer() | nil,
-          max_sessions: pos_integer() | nil
+          max_sessions: pos_integer() | nil,
+          pairing: pairing()
         }
 
   @doc """
@@ -91,10 +110,43 @@ defmodule Raxol.Console.RuntimeConfig do
       of the deployment's app rather than of the gateway.
     * `:max_sessions` -- concurrent chats the router will hold (gateway default
       1000); further chats are refused with `:max_sessions`.
+    * `:pairing` -- who may open a chat; see "Authorization" below.
 
   `:handler_mode` and `:app_template` are read from the DEPLOYMENT options, never
   from the package. The package is untrusted input, and choosing which module
   runs per chat is not a decision it gets to make.
+
+  ## Authorization
+
+  `:pairing` has three states, and the difference between two of them is only
+  whether the operator said anything:
+
+      # unset -- open, and warned about loudly at every boot
+      # explicitly open, no warning: the operator has made this call
+      pairing: :open
+
+      # enforced; Raxol.Gateway.Pairing decides
+      pairing: [
+        allow_platforms: [:telegram],          # everyone on these platforms
+        allowed_users: ["12345"],              # global allowlist
+        platform_users: [discord: ["9876"]]    # per-platform allowlist
+      ]
+
+  `pairing: []` is the useful empty case: enforced with nothing seeded, so the
+  only way in is the runtime DM pairing flow (`Pairing.request_code/2` ->
+  `confirm/2`).
+
+  Open is the default because enforcing by default would lock out every Console
+  running today -- `Pairing`'s allowlists boot empty, so an unconfigured enforce
+  denies everyone. That makes silence the permissive answer, which is the wrong
+  way round; `Raxol.Console.Boot` compensates by making silence loud rather than
+  by making it safe.
+
+  Open mode is not a bypass. It is applied by calling
+  `Pairing.allow_platform_all/2` for each CONNECTED platform, so the gate runs
+  identically in both modes and the posture is visible in the Pairing server's
+  own state. A route on a platform the deployment never connected is denied even
+  when open.
 
   ## Sizing an `:app` deployment
 
@@ -116,7 +168,8 @@ defmodule Raxol.Console.RuntimeConfig do
     with {:ok, persona} <- persona(pkg),
          {:ok, mode, app_module} <- handler(opts),
          {:ok, idle_timeout} <- pos_integer(opts, :idle_timeout, :invalid_idle_timeout),
-         {:ok, max_sessions} <- pos_integer(opts, :max_sessions, :invalid_max_sessions) do
+         {:ok, max_sessions} <- pos_integer(opts, :max_sessions, :invalid_max_sessions),
+         {:ok, pairing} <- pairing(opts) do
       {:ok,
        %__MODULE__{
          system_prompt: persona,
@@ -129,7 +182,8 @@ defmodule Raxol.Console.RuntimeConfig do
          handler_mode: mode,
          app_module: app_module,
          idle_timeout: idle_timeout,
-         max_sessions: max_sessions
+         max_sessions: max_sessions,
+         pairing: pairing
        }}
     end
   end
@@ -194,6 +248,93 @@ defmodule Raxol.Console.RuntimeConfig do
   defp resolve_app(name) do
     with {:ok, module} <- AppRegistry.fetch(name), do: {:ok, :app, module}
   end
+
+  # -- authorization ---------------------------------------------------------
+
+  @pairing_keys [:allow_platforms, :allowed_users, :platform_users]
+
+  defp pairing(opts) do
+    case Keyword.get(opts, :pairing) do
+      nil -> {:ok, open(false)}
+      :open -> {:ok, open(true)}
+      list when is_list(list) -> enforce(list)
+      other -> {:error, {:invalid_pairing, other}}
+    end
+  end
+
+  defp open(declared?) do
+    %{
+      mode: :open,
+      declared?: declared?,
+      allow_platforms: [],
+      allowed_users: [],
+      platform_users: []
+    }
+  end
+
+  # A keyword list is the enforcing form, including the empty one. Unknown keys
+  # are refused rather than ignored: a typo'd `allowed_user:` would otherwise
+  # seed nothing and read as a deliberate deny-all.
+  defp enforce(list) do
+    with :ok <- known_keys(list),
+         {:ok, platforms} <- atom_list(list, :allow_platforms),
+         {:ok, users} <- string_list(list, :allowed_users),
+         {:ok, platform_users} <- platform_users(list) do
+      {:ok,
+       %{
+         mode: :enforce,
+         declared?: true,
+         allow_platforms: platforms,
+         allowed_users: users,
+         platform_users: platform_users
+       }}
+    end
+  end
+
+  defp known_keys(list) do
+    case Enum.reject(Keyword.keys(list), &(&1 in @pairing_keys)) do
+      [] -> :ok
+      unknown -> {:error, {:unknown_pairing_keys, unknown}}
+    end
+  end
+
+  defp atom_list(list, key) do
+    values = Keyword.get(list, key, [])
+
+    if is_list(values) and Enum.all?(values, &is_atom/1),
+      do: {:ok, values},
+      else: {:error, {:invalid_pairing, {key, values}}}
+  end
+
+  # User ids are stringified here rather than at the Pairing call site, because
+  # `Pairing.allow/3` stringifies too and an integer Telegram id configured as an
+  # integer must land in the same set the route's stringified id is checked
+  # against.
+  defp string_list(list, key) do
+    values = Keyword.get(list, key, [])
+
+    if is_list(values) and Enum.all?(values, &scalar_id?/1),
+      do: {:ok, Enum.map(values, &to_string/1)},
+      else: {:error, {:invalid_pairing, {key, values}}}
+  end
+
+  defp platform_users(list) do
+    entries = Keyword.get(list, :platform_users, [])
+
+    if Keyword.keyword?(entries) do
+      Enum.reduce_while(entries, {:ok, []}, &reduce_platform_users/2)
+    else
+      {:error, {:invalid_pairing, {:platform_users, entries}}}
+    end
+  end
+
+  defp reduce_platform_users({platform, users}, {:ok, acc}) do
+    if is_list(users) and Enum.all?(users, &scalar_id?/1),
+      do: {:cont, {:ok, acc ++ [{platform, Enum.map(users, &to_string/1)}]}},
+      else: {:halt, {:error, {:invalid_pairing, {:platform_users, platform, users}}}}
+  end
+
+  defp scalar_id?(value), do: is_binary(value) or is_integer(value)
 
   # -- router bounds ---------------------------------------------------------
 

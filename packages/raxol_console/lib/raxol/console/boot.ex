@@ -23,8 +23,11 @@ defmodule Raxol.Console.Boot do
   `Raxol.Console.RuntimeConfig.handler_spec/2`).
   """
 
+  require Logger
+
   alias Raxol.Agent.{McpBundle, Scheduler}
   alias Raxol.Console.RuntimeConfig
+  alias Raxol.Gateway.Pairing
 
   # Read-only skill access surfaced to the chat agent when the package ships
   # skills: the agent can list/view them on demand (skill authoring stays a
@@ -44,7 +47,8 @@ defmodule Raxol.Console.Boot do
           jobs: jobs_report(),
           mcp: %{tools: non_neg_integer(), failed: [{atom(), term()}]},
           channels: [atom()],
-          skills: %{store: atom() | nil, count: non_neg_integer()}
+          skills: %{store: atom() | nil, count: non_neg_integer()},
+          pairing: :open | :enforce | :none
         }
 
   @doc """
@@ -79,9 +83,81 @@ defmodule Raxol.Console.Boot do
     actions = Keyword.get(opts, :actions, []) ++ mcp.tools
 
     case start_gateway(sup, runtime_config, adapters, actions, base, skills) do
-      :ok -> {:ok, report(sup, mcp_sup, mcp, adapters, skills, opts)}
-      {:error, _} = error -> stop_supervisor(sup) && error
+      :ok ->
+        pairing = apply_pairing(runtime_config, adapters, base)
+        {:ok, report(sup, mcp_sup, mcp, adapters, skills, pairing, opts)}
+
+      {:error, _} = error ->
+        stop_supervisor(sup) && error
     end
+  end
+
+  # Seed the running Pairing server from the deployment's posture. This runs
+  # after start_gateway/6 because Pairing's allowlists are runtime-mutable only
+  # -- `init_manager/1` starts every one of them empty and takes no seeds.
+  #
+  # Open mode is expressed as allow_platform_all/2 over the CONNECTED platforms
+  # rather than as a flag the gate consults, so `Raxol.Console.Inbound` has one
+  # code path and the posture is inspectable in the Pairing server's own state.
+  # A platform the deployment never connected stays denied even when open.
+  #
+  # A headless runtime connects no channels, so start_gateway/6 starts no gateway
+  # subtree and there is no Pairing server to seed. It also has no inbound chat
+  # surface to authorize, so warning about an open one would be false.
+  defp apply_pairing(_rc, adapters, _base) when map_size(adapters) == 0, do: :none
+
+  defp apply_pairing(%{pairing: nil}, _adapters, _base), do: :open
+
+  defp apply_pairing(%{pairing: pairing}, adapters, base) do
+    server = name(base, "pairing")
+
+    case pairing.mode do
+      :open ->
+        Enum.each(Map.keys(adapters), &Pairing.allow_platform_all(server, &1))
+        announce_open(pairing, Map.keys(adapters), base)
+        :open
+
+      :enforce ->
+        seed_allowlists(server, pairing)
+        :enforce
+    end
+  end
+
+  defp seed_allowlists(server, pairing) do
+    Enum.each(pairing.allow_platforms, &Pairing.allow_platform_all(server, &1))
+    Enum.each(pairing.allowed_users, &Pairing.allow(server, &1, :global))
+
+    for {platform, users} <- pairing.platform_users, user <- users do
+      Pairing.allow(server, user, {:platform, platform})
+    end
+  end
+
+  # The whole point of defaulting to open is that it cannot be silent. An
+  # operator who wrote `pairing: :open` has already made this call and is not
+  # nagged; only silence is.
+  defp announce_open(%{declared?: true}, _platforms, _base), do: :ok
+
+  defp announce_open(_pairing, platforms, base) do
+    :telemetry.execute(
+      [:raxol_console, :pairing, :open],
+      %{system_time: System.system_time()},
+      %{console: base, platforms: platforms, declared?: false}
+    )
+
+    Logger.warning("""
+    #{base}: gateway authorization is OPEN and was not configured.
+
+    Anyone who can reach #{inspect(platforms)} can open a chat and spend this
+    agent's LLM turns and tools. No :pairing option was set, so every connected
+    platform was allowed for everyone.
+
+    Set one in your deployment config:
+
+        config :raxol_console,
+          pairing: [allow_platforms: [:telegram]]     # or allowed_users: [...]
+          pairing: []                                 # enforce; pair over DM only
+          pairing: :open                              # keep this, silence this warning
+    """)
   end
 
   # The core supervisor opts: everything the tree starts synchronously at init --
@@ -102,7 +178,7 @@ defmodule Raxol.Console.Boot do
   defp mcp_supervisor_pid(%{mcp_servers: []}, _mcp_name), do: nil
   defp mcp_supervisor_pid(_rc, mcp_name), do: Process.whereis(mcp_name)
 
-  defp report(sup, mcp_sup, mcp, adapters, skills, opts) do
+  defp report(sup, mcp_sup, mcp, adapters, skills, pairing, opts) do
     reconciler = Keyword.get(opts, :reconciler_name, Raxol.Console.Reconciler)
 
     %{
@@ -111,7 +187,8 @@ defmodule Raxol.Console.Boot do
       jobs: Raxol.Console.Reconciler.report(reconciler),
       mcp: %{tools: length(mcp.tools), failed: mcp.failed},
       channels: Map.keys(adapters),
-      skills: skills_report(skills)
+      skills: skills_report(skills),
+      pairing: pairing
     }
   end
 

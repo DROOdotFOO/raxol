@@ -279,6 +279,80 @@ defmodule Raxol.Console.RuntimeConfigTest do
     end
   end
 
+  # Who may open a chat. Unset means open, because Pairing's allowlists boot
+  # empty and enforcing by default would deny every Console running today --
+  # which makes silence the permissive answer, so Boot makes silence loud.
+  describe "pairing" do
+    test "unset is open and undeclared, which is what earns the boot warning" do
+      assert {:ok, cfg} = RuntimeConfig.build(package())
+      assert cfg.pairing.mode == :open
+      refute cfg.pairing.declared?
+    end
+
+    test "an explicit :open is open and declared" do
+      assert {:ok, cfg} = RuntimeConfig.build(package(), pairing: :open)
+      assert cfg.pairing.mode == :open
+      assert cfg.pairing.declared?
+    end
+
+    test "an empty list enforces with nothing seeded" do
+      assert {:ok, cfg} = RuntimeConfig.build(package(), pairing: [])
+      assert cfg.pairing.mode == :enforce
+      assert cfg.pairing.allow_platforms == []
+      assert cfg.pairing.allowed_users == []
+      assert cfg.pairing.platform_users == []
+    end
+
+    test "carries the three allowlists through" do
+      assert {:ok, cfg} =
+               RuntimeConfig.build(package(),
+                 pairing: [
+                   allow_platforms: [:telegram],
+                   allowed_users: ["alice"],
+                   platform_users: [discord: ["bob"]]
+                 ]
+               )
+
+      assert cfg.pairing.mode == :enforce
+      assert cfg.pairing.allow_platforms == [:telegram]
+      assert cfg.pairing.allowed_users == ["alice"]
+      assert cfg.pairing.platform_users == [discord: ["bob"]]
+    end
+
+    # Pairing stringifies on both allow/3 and the authorize check, so an integer
+    # Telegram id written as an integer has to normalize to the same thing.
+    test "stringifies integer user ids so they match the route's" do
+      assert {:ok, cfg} =
+               RuntimeConfig.build(package(),
+                 pairing: [allowed_users: [12_345], platform_users: [telegram: [678]]]
+               )
+
+      assert cfg.pairing.allowed_users == ["12345"]
+      assert cfg.pairing.platform_users == [telegram: ["678"]]
+    end
+
+    # A typo'd key would seed nothing and read as a deliberate deny-all, which is
+    # indistinguishable from `pairing: []` and locks the operator out silently.
+    test "refuses an unknown key rather than ignoring it" do
+      assert {:error, {:unknown_pairing_keys, [:allowed_user]}} =
+               RuntimeConfig.build(package(), pairing: [allowed_user: ["alice"]])
+    end
+
+    test "refuses a malformed posture" do
+      assert {:error, {:invalid_pairing, :everyone}} =
+               RuntimeConfig.build(package(), pairing: :everyone)
+
+      assert {:error, {:invalid_pairing, {:allow_platforms, ["telegram"]}}} =
+               RuntimeConfig.build(package(), pairing: [allow_platforms: ["telegram"]])
+
+      assert {:error, {:invalid_pairing, {:allowed_users, [%{}]}}} =
+               RuntimeConfig.build(package(), pairing: [allowed_users: [%{}]])
+
+      assert {:error, {:invalid_pairing, {:platform_users, :discord, "bob"}}} =
+               RuntimeConfig.build(package(), pairing: [platform_users: [discord: "bob"]])
+    end
+  end
+
   test "rejects a non-package" do
     assert {:error, {:not_a_package, %{}}} = RuntimeConfig.build(%{})
   end
