@@ -229,12 +229,19 @@ defmodule Raxol.Console.Boot do
   end
 
   # Only override the router's own defaults when the deployment asked to. An
-  # unset `:idle_timeout` leaves `Raxol.Gateway.SessionRouter` on its default
-  # rather than pinning a second copy of that number here.
-  defp put_router_opts(opts, %{idle_timeout: nil}), do: opts
+  # unset bound leaves `Raxol.Gateway.SessionRouter` on its default rather than
+  # pinning a second copy of that number here. The two travel together because
+  # in `:app` mode they are one sizing decision -- see
+  # `Raxol.Console.RuntimeConfig.build/2`.
+  defp put_router_opts(opts, rc) do
+    case put_if([], :idle_timeout, rc.idle_timeout) |> put_if(:max_sessions, rc.max_sessions) do
+      [] -> opts
+      router -> Keyword.put(opts, :router, router)
+    end
+  end
 
-  defp put_router_opts(opts, %{idle_timeout: ms}),
-    do: Keyword.put(opts, :router, idle_timeout: ms)
+  defp put_if(kw, _key, nil), do: kw
+  defp put_if(kw, key, value), do: Keyword.put(kw, key, value)
 
   defp skill_actions(nil), do: []
   defp skill_actions(_), do: @skill_actions

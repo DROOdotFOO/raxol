@@ -151,6 +151,84 @@ defmodule Raxol.Gateway.SessionRouterTest do
     assert_receive {:out, ^rt, "echo: hi"}, 1_000
   end
 
+  # The other half of deferring init: a handler that never returns parks the
+  # session inside its own continue, where it can read neither the queued event
+  # nor the idle timer (which is armed only once init succeeds). Nothing reaped
+  # it, while the router went on routing that chat to it -- so every later
+  # message was accepted with :ok and queued into a mailbox nobody would read.
+  test "a handler that never returns from init is killed and its slot reclaimed" do
+    test_pid = self()
+    sup = :"sup_#{uid()}"
+    start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+    router = :"router_#{uid()}"
+
+    handler_id = "init-timeout-#{uid()}"
+
+    :telemetry.attach_many(
+      handler_id,
+      [[:raxol_gateway, :session, :init_timeout], [:raxol_gateway, :session, :down]],
+      fn event, _measure, meta, pid -> send(pid, {:telemetry, List.last(event), meta}) end,
+      test_pid
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    start_supervised!(%{
+      id: router,
+      start:
+        {SessionRouter, :start_link,
+         [
+           [
+             name: router,
+             handler: {SlowInitHandler, [caller: test_pid]},
+             sessions_sup: sup,
+             handler_init_timeout: 150,
+             deliver: fn route, rendered -> send(test_pid, {:out, route, rendered}) end
+           ]
+         ]}
+    })
+
+    assert :ok = SessionRouter.route(router, route(1), {:say, "hi"})
+    assert_receive {:initializing, session}, 1_000
+
+    # The kill has to be brutal, so the router's DOWN can only say :killed. The
+    # diagnosis rides its own event, emitted before the kill lands.
+    assert_receive {:telemetry, :init_timeout, meta}, 2_000
+    assert meta.key == Route.key(route(1))
+    assert meta.handler == SlowInitHandler
+    assert meta.timeout == 150
+
+    assert_receive {:telemetry, :down, %{reason: :killed}}, 1_000
+    refute Process.alive?(session)
+
+    # Reclaimed, so the chat recovers on a later message instead of routing
+    # forever into a dead mailbox.
+    assert SessionRouter.session_count(router) == 0
+  end
+
+  # A working handler must not be disturbed by the watchdog, and its readiness
+  # is the event an operator pairs against :started to spot a broken one.
+  test "a handler that initializes emits :ready and is left alone", %{router: r} do
+    handler_id = "ready-#{uid()}"
+
+    :telemetry.attach_many(
+      handler_id,
+      [[:raxol_gateway, :session, :ready], [:raxol_gateway, :session, :init_timeout]],
+      fn event, _measure, meta, pid -> send(pid, {:telemetry, List.last(event), meta}) end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:ok, pid} = SessionRouter.start_session(r, route(1))
+
+    assert_receive {:telemetry, :ready, meta}, 1_000
+    assert meta.key == Route.key(route(1))
+
+    refute_receive {:telemetry, :init_timeout, _}, 300
+    assert Process.alive?(pid)
+  end
+
   test "a session crash is cleaned up from the router", %{router: r} do
     {:ok, pid} = SessionRouter.start_session(r, route(1))
     ref = Process.monitor(pid)

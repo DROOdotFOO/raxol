@@ -295,11 +295,11 @@ defmodule Raxol.Console.BootTest do
       assert rendered =~ "persona: Be terse."
     end
 
-    # `:idle_timeout` crosses four hops to reach the router: the deployment
+    # Each router bound crosses four hops to reach the router: the deployment
     # config, RuntimeConfig, gateway_opts' `:router` key, and Gateway.Supervisor's
     # merge into the router child. A key dropped at any of them defaults in
     # silence, which is exactly how `:handler_mode` came to be unreachable.
-    test "a configured idle timeout reaches the running router" do
+    test "the configured router bounds reach the running router" do
       pid = self()
 
       pkg = %Package{
@@ -314,10 +314,12 @@ defmodule Raxol.Console.BootTest do
         RuntimeConfig.build(pkg,
           bundle_default_mcp: false,
           idle_timeout: 1_234_000,
+          max_sessions: 200,
           channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}]
         )
 
       assert rc.idle_timeout == 1_234_000
+      assert rc.max_sessions == 200
 
       {:ok, _report} =
         Boot.start(rc,
@@ -334,7 +336,13 @@ defmodule Raxol.Console.BootTest do
         end
       end)
 
-      assert :sys.get_state(:"console_idle.router").idle_timeout == 1_234_000
+      router = :sys.get_state(:"console_idle.router")
+      assert router.idle_timeout == 1_234_000
+
+      # In :app mode these are one sizing decision, so they cross the same four
+      # hops together; a deployment that lengthens the idle timeout without
+      # being able to reach max_sessions cannot act on the trade.
+      assert router.max_sessions == 200
     end
   end
 

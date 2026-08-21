@@ -53,7 +53,8 @@ defmodule Raxol.Console.RuntimeConfig do
             mcp_servers: [],
             handler_mode: :chat,
             app_module: nil,
-            idle_timeout: nil
+            idle_timeout: nil,
+            max_sessions: nil
 
   @type t :: %__MODULE__{
           system_prompt: String.t(),
@@ -65,7 +66,8 @@ defmodule Raxol.Console.RuntimeConfig do
           mcp_servers: [McpBundle.server_spec()],
           handler_mode: handler_mode(),
           app_module: module() | nil,
-          idle_timeout: pos_integer() | nil
+          idle_timeout: pos_integer() | nil,
+          max_sessions: pos_integer() | nil
         }
 
   @doc """
@@ -87,10 +89,25 @@ defmodule Raxol.Console.RuntimeConfig do
       message, so for `:chat` this costs nothing. For `:app` it discards the
       model the mode exists to persist, which makes the right value a property
       of the deployment's app rather than of the gateway.
+    * `:max_sessions` -- concurrent chats the router will hold (gateway default
+      1000); further chats are refused with `:max_sessions`.
 
   `:handler_mode` and `:app_template` are read from the DEPLOYMENT options, never
   from the package. The package is untrusted input, and choosing which module
   runs per chat is not a decision it gets to make.
+
+  ## Sizing an `:app` deployment
+
+  The two timeout/limit keys are one decision in `:app` mode, not two. A `:chat`
+  session is a process holding a message list; an `:app` session is a running
+  TEA app -- a Lifecycle, a dispatcher, an engine and a buffer, roughly four to
+  five processes plus the model. At the gateway's own defaults that is a ceiling
+  of ~5000 processes, and raising `:idle_timeout` to keep models warm raises how
+  many of them are live at once, because the two multiply: idle chats now hold
+  their apps instead of being rebuilt on the next message.
+
+  So a deployment that lengthens `:idle_timeout` for `:app` mode should size
+  `:max_sessions` deliberately rather than inherit 1000.
   """
   @spec build(Package.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def build(package, opts \\ [])
@@ -98,7 +115,8 @@ defmodule Raxol.Console.RuntimeConfig do
   def build(%Package{} = pkg, opts) do
     with {:ok, persona} <- persona(pkg),
          {:ok, mode, app_module} <- handler(opts),
-         {:ok, idle_timeout} <- idle_timeout(opts) do
+         {:ok, idle_timeout} <- pos_integer(opts, :idle_timeout, :invalid_idle_timeout),
+         {:ok, max_sessions} <- pos_integer(opts, :max_sessions, :invalid_max_sessions) do
       {:ok,
        %__MODULE__{
          system_prompt: persona,
@@ -110,7 +128,8 @@ defmodule Raxol.Console.RuntimeConfig do
          mcp_servers: mcp_servers(opts),
          handler_mode: mode,
          app_module: app_module,
-         idle_timeout: idle_timeout
+         idle_timeout: idle_timeout,
+         max_sessions: max_sessions
        }}
     end
   end
@@ -133,6 +152,19 @@ defmodule Raxol.Console.RuntimeConfig do
   before the gateway -- so an `:app` runtime that dropped them would pay for a
   toolset no chat could reach. A TEA app is free to ignore the key; it is not
   free to have it silently withheld.
+
+  ## What an `:app` module is trusted with
+
+  Handing over `agent_opts` hands over capability, so it is worth stating plainly
+  what crosses. `:actions` is the fully resolved toolset, including the bundled
+  filesystem server scoped to `:workspace`, and `:context` carries the skills
+  store. In `:chat` mode those are reached only through `Raxol.Agent.Stream`,
+  which gates each call per turn. `:app` mode has no equivalent: the app receives
+  the list and whatever it does with it is unmediated.
+
+  That is why `Raxol.Console.AppRegistry` exists and why the package cannot name
+  a module. An `:app` template is operator-authored code running with the
+  runtime's own authority, and it should be read as such -- not as a sandbox.
   """
   @spec handler_spec(t(), keyword()) :: {module(), keyword()}
   def handler_spec(%__MODULE__{handler_mode: :app} = rc, agent_opts) do
@@ -163,17 +195,18 @@ defmodule Raxol.Console.RuntimeConfig do
     with {:ok, module} <- AppRegistry.fetch(name), do: {:ok, :app, module}
   end
 
-  # -- idle timeout ----------------------------------------------------------
+  # -- router bounds ---------------------------------------------------------
 
-  # Validated rather than defaulted: a timeout that is not a positive integer
+  # Validated rather than defaulted: a bound that is not a positive integer
   # would otherwise reach the session's `Process.send_after/3` and fail there,
-  # or -- worse for a string -- compare as a term and never fire. `nil` is the
-  # honest "unset", leaving the gateway's own default in force.
-  defp idle_timeout(opts) do
-    case Keyword.get(opts, :idle_timeout) do
+  # or -- worse for a string -- compare as a term and never fire the branch it
+  # feeds. `nil` is the honest "unset", leaving the gateway's own default in
+  # force rather than pinning a second copy of that number here.
+  defp pos_integer(opts, key, error_tag) do
+    case Keyword.get(opts, key) do
       nil -> {:ok, nil}
-      ms when is_integer(ms) and ms > 0 -> {:ok, ms}
-      other -> {:error, {:invalid_idle_timeout, other}}
+      n when is_integer(n) and n > 0 -> {:ok, n}
+      other -> {:error, {error_tag, other}}
     end
   end
 

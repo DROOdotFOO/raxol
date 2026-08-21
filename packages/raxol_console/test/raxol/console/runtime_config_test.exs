@@ -154,6 +154,83 @@ defmodule Raxol.Console.RuntimeConfigTest do
     end
   end
 
+  # Being an atom is not evidence of being a bookable app. Resolving on `is_atom`
+  # alone let a typo boot green and then drop every chat: the failure surfaced
+  # only per-chat, inside Handler.Lifecycle, behind a route/3 that had already
+  # answered :ok. A config error has to fail at boot, which is here.
+  describe "app template validation" do
+    defmodule NotATeaApp do
+      @moduledoc false
+      def init(_args), do: {:ok, %{}}
+    end
+
+    test "a registered module that does not exist is refused at build time" do
+      Application.put_env(:raxol_console, :app_templates, %{"typo" => MyConsole.Dashbaord})
+      on_exit(fn -> Application.delete_env(:raxol_console, :app_templates) end)
+
+      assert {:error, {:invalid_app_template, "typo", MyConsole.Dashbaord, :module_not_loaded}} =
+               RuntimeConfig.build(package(), handler_mode: :app, app_template: "typo")
+    end
+
+    test "a registered module missing the TEA callbacks is refused at build time" do
+      Application.put_env(:raxol_console, :app_templates, %{"wrong" => NotATeaApp})
+      on_exit(fn -> Application.delete_env(:raxol_console, :app_templates) end)
+
+      assert {:error, {:invalid_app_template, "wrong", NotATeaApp, {:missing_callbacks, missing}}} =
+               RuntimeConfig.build(package(), handler_mode: :app, app_template: "wrong")
+
+      assert missing == [update: 2, view: 1]
+    end
+  end
+
+  # `templates/0` is read at boot, so a malformed shape must produce a diagnosis
+  # rather than an exception from inside config reading -- and the keyword list
+  # is the shape an operator is most likely to actually write.
+  describe "app template config shapes" do
+    defmodule KeywordApp do
+      @moduledoc false
+      def init(_args), do: {:ok, %{}}
+      def update(_msg, model), do: model
+      def view(_model), do: nil
+    end
+
+    setup do
+      on_exit(fn -> Application.delete_env(:raxol_console, :app_templates) end)
+    end
+
+    test "a keyword list resolves the same as a map" do
+      Application.put_env(:raxol_console, :app_templates, dashboard: KeywordApp)
+
+      assert {:ok, cfg} =
+               RuntimeConfig.build(package(), handler_mode: :app, app_template: "dashboard")
+
+      assert cfg.app_module == KeywordApp
+    end
+
+    test "a malformed list is a refusal, not an ArgumentError from Map.new/1" do
+      Application.put_env(:raxol_console, :app_templates, ["dashboard"])
+
+      assert {:error, {:unknown_app_template, "dashboard"}} =
+               RuntimeConfig.build(package(), handler_mode: :app, app_template: "dashboard")
+    end
+
+    test "a garbage entry is dropped without taking the well-formed ones with it" do
+      Application.put_env(:raxol_console, :app_templates, [
+        "junk",
+        {"dashboard", KeywordApp},
+        {"nil-module", nil}
+      ])
+
+      assert {:ok, cfg} =
+               RuntimeConfig.build(package(), handler_mode: :app, app_template: "dashboard")
+
+      assert cfg.app_module == KeywordApp
+
+      assert {:error, {:unknown_app_template, "nil-module"}} =
+               RuntimeConfig.build(package(), handler_mode: :app, app_template: "nil-module")
+    end
+  end
+
   describe "idle timeout" do
     test "is unset by default, leaving the gateway's own default in force" do
       assert {:ok, cfg} = RuntimeConfig.build(package())
@@ -176,6 +253,29 @@ defmodule Raxol.Console.RuntimeConfigTest do
 
       assert {:error, {:invalid_idle_timeout, -1}} =
                RuntimeConfig.build(package(), idle_timeout: -1)
+    end
+  end
+
+  # In :app mode a session is a running TEA app rather than a message list, so
+  # the ceiling on concurrent chats is a sizing decision a deployment has to be
+  # able to make. It was unreachable while RuntimeConfig knew nothing about it.
+  describe "max sessions" do
+    test "is unset by default, leaving the gateway's own default in force" do
+      assert {:ok, cfg} = RuntimeConfig.build(package())
+      assert cfg.max_sessions == nil
+    end
+
+    test "carries a positive integer through" do
+      assert {:ok, cfg} = RuntimeConfig.build(package(), max_sessions: 200)
+      assert cfg.max_sessions == 200
+    end
+
+    test "refuses a value that is not a positive integer" do
+      assert {:error, {:invalid_max_sessions, "200"}} =
+               RuntimeConfig.build(package(), max_sessions: "200")
+
+      assert {:error, {:invalid_max_sessions, 0}} =
+               RuntimeConfig.build(package(), max_sessions: 0)
     end
   end
 

@@ -15,8 +15,32 @@ defmodule Raxol.Gateway.SessionRouter do
       `send_message/3`. Or pass `:deliver`, a `(Route.t(), rendered -> any())`.
     * `:max_sessions` (default 1000)
     * `:idle_timeout` ms (default 10 minutes)
+    * `:handler_init_timeout` -- passed to each session; ms its handler's
+      `init/2` may take before the session is killed (default 30 seconds)
     * `:cooldown_ms` -- minimum ms between starts for one key (default 5000)
     * `:name` -- the router's registered name
+
+  ## Telemetry
+
+  Every event is `[:raxol_gateway, :session, event]`, measured
+  `%{system_time: _}`, with the session's `:key` in metadata.
+
+    * `:started` -- a session PROCESS was spawned. Its handler has NOT
+      initialized yet, and `route/3` has already replied `:ok`.
+    * `:ready` -- the handler initialized and the chat can be served. Emitted by
+      `Raxol.Gateway.Session`; metadata adds `:handler`.
+    * `:init_timeout` -- the handler never returned from `init/2` and the session
+      was killed. Emitted by `Raxol.Gateway.Session`; metadata adds `:handler`
+      and `:timeout`.
+    * `:down` -- a session died for any reason other than `:normal` or
+      `:shutdown`. Metadata adds `:reason`.
+    * `:stopped` -- `stop_session/2` was called. Metadata adds `reason: :explicit`.
+    * `:rejected` -- no session was started. Metadata adds `:reason`, one of
+      `:max_sessions` or `:rate_limited`.
+
+  A `:started` with no `:ready` behind it is a handler that failed or hung at
+  startup. Since handler init is deferred (see `Raxol.Gateway.Session`), that
+  pair is the only signal of it -- `route/3` cannot report it.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -33,7 +57,16 @@ defmodule Raxol.Gateway.SessionRouter do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc "Route an inbound event to the session for `route`, starting one if needed."
+  @doc """
+  Route an inbound event to the session for `route`, starting one if needed.
+
+  `:ok` means the event was ACCEPTED for delivery, not that it was served. A
+  session's handler initializes asynchronously (see `Raxol.Gateway.Session`), so
+  a handler that fails or hangs at startup does so after this has replied;
+  `[:raxol_gateway, :session, :ready]`, `:down` and `:init_timeout` are what
+  report that. An `{:error, _}` here is only ever a routing refusal --
+  `:max_sessions` or `:rate_limited`.
+  """
   @spec route(GenServer.server(), Route.t(), term()) :: :ok | {:error, term()}
   def route(server, %Route{} = route, event) do
     GenServer.call(server, {:route, route, event})
@@ -84,6 +117,9 @@ defmodule Raxol.Gateway.SessionRouter do
        log: Keyword.get(opts, :log),
        max_sessions: Keyword.get(opts, :max_sessions, @default_max_sessions),
        idle_timeout: Keyword.get(opts, :idle_timeout, @default_idle_timeout),
+       # Unset leaves Session on its own default rather than pinning a second
+       # copy of that number here.
+       handler_init_timeout: Keyword.get(opts, :handler_init_timeout),
        cooldown_ms: Keyword.get(opts, :cooldown_ms, @default_cooldown_ms),
        sessions: %{},
        monitors: %{},
@@ -181,6 +217,7 @@ defmodule Raxol.Gateway.SessionRouter do
       ]
       |> put_if(:conversation_id, conversation_id)
       |> put_if(:log, state.log)
+      |> put_if(:handler_init_timeout, state.handler_init_timeout)
 
     child = %{id: Session, start: {Session, :start_link, [session_opts]}, restart: :temporary}
 
