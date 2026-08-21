@@ -56,11 +56,17 @@ defmodule Raxol.Earn.Xochi.SolverAgent do
   alias Raxol.Earn.{Agent, HookClient, ProviderAdapter}
   alias Raxol.Earn.Transport.SSE.Parser
   alias Raxol.Earn.Xochi.{IntentDeriver, Offering}
+  alias Raxol.Payments.Assets
 
   # On-chain AgenticCommerceV3 JobStatus for a funded job. Verified on Base
   # mainnet (job 70759: `getJob().status == 1` once funded). The memoryless
   # reattach path settles only at exactly this status.
   @onchain_status_funded 1
+
+  # The smallest fee worth escrowing, in the ACP payment token's base units.
+  # `budget_for/2` truncates through `div/2`, so below this a fee that was meant
+  # to be charged has rounded away to an escrow that can never pay.
+  @default_min_fee_atomic 1
 
   @type session_status ::
           :awaiting_requirement
@@ -92,6 +98,7 @@ defmodule Raxol.Earn.Xochi.SolverAgent do
           chain_id: pos_integer(),
           acp_core_address: String.t(),
           fee_bps: non_neg_integer(),
+          min_fee_atomic: non_neg_integer(),
           settle_fn: fun(),
           history_fn:
             (Raxol.Earn.Transport.job_key() ->
@@ -112,6 +119,7 @@ defmodule Raxol.Earn.Xochi.SolverAgent do
     settle_fn: nil,
     history_fn: nil,
     fee_bps: 8,
+    min_fee_atomic: 1,
     sessions: %{}
   ]
 
@@ -141,6 +149,19 @@ defmodule Raxol.Earn.Xochi.SolverAgent do
 
   @impl GenServer
   def init(opts) do
+    case validate_min_fee(configured_min_fee(opts)) do
+      {:ok, min_fee_atomic} -> start_solver(opts, min_fee_atomic)
+      {:error, reason} -> {:stop, reason}
+    end
+  end
+
+  defp configured_min_fee(opts) do
+    Keyword.get_lazy(opts, :min_fee_atomic, fn ->
+      Application.get_env(:raxol_earn, :solver_min_fee_atomic, @default_min_fee_atomic)
+    end)
+  end
+
+  defp start_solver(opts, min_fee_atomic) do
     state = %__MODULE__{
       agent: Keyword.fetch!(opts, :agent),
       provider: Keyword.fetch!(opts, :provider),
@@ -149,6 +170,7 @@ defmodule Raxol.Earn.Xochi.SolverAgent do
       chain_id: Keyword.fetch!(opts, :chain_id),
       acp_core_address: Keyword.fetch!(opts, :acp_core_address),
       fee_bps: Keyword.get(opts, :fee_bps, 8),
+      min_fee_atomic: min_fee_atomic,
       settle_fn: Keyword.get(opts, :settle_fn, &default_settle/1),
       history_fn: Keyword.get(opts, :history_fn),
       xochi_config: Keyword.get(opts, :xochi_config, %{})
@@ -526,19 +548,98 @@ defmodule Raxol.Earn.Xochi.SolverAgent do
   # understate (`IntentDeriver`). Fails the job closed if the intent can't be
   # resolved rather than proposing a budget on an untrusted number.
   defp propose_budget(state, key, session, requirement) do
-    case IntentDeriver.resolve(state.xochi_config, requirement) do
-      {:ok, %{from_amount: transfer_atomic}} ->
-        set_budget(state, key, session, requirement, transfer_atomic)
-
+    with {:ok, %{intent: intent, from_amount: transfer_atomic}} <-
+           IntentDeriver.resolve(state.xochi_config, requirement),
+         {:ok, budget_atomic} <- fee_budget(state, intent, transfer_atomic) do
+      set_budget(state, key, session, requirement, transfer_atomic, budget_atomic)
+    else
       {reject_or_error, reason} when reject_or_error in [:reject, :error] ->
         emit(state, key, :requirement_error, reason)
         put_session(state, key, %{session | status: :failed})
     end
   end
 
-  defp set_budget(state, key, session, requirement, transfer_atomic) do
+  # The budget is `fee_bps` of the intent's `from_amount`, escrowed as the ACP
+  # payment token (USDC, 6dp). `from_amount` is denominated in the ORIGIN token's
+  # base units, so that arithmetic only means anything when the origin leg is
+  # itself a 6dp USD stablecoin.
+  #
+  # Rescaling by decimals cannot rescue a non-stablecoin: 1 WETH is 1e18 base
+  # units, and reading that as 1e6-scaled USDC understates the fee by roughly the
+  # ETH price. Sizing this correctly needs a price oracle, so until there is one
+  # the sound answer is to refuse the corridor rather than escrow a wrong number.
+  #
+  # An unregistered token is refused for the same reason: `Assets.decimals/2`
+  # answers 6 for anything it does not know, so an unlisted 18dp token would
+  # silently size a budget ~1e12 times too small.
+  #
+  # The USDC public offering gates both legs to USDC and is unaffected; this is
+  # the generic `xochi_cross_chain_transfer` path, which gates nothing. See #666.
+  @fee_base_symbols ~w(USDC USDT USDG)
+
+  # The scale the fee arithmetic assumes, asserted rather than trusted. Every
+  # registered @fee_base_symbols token is 6dp on every corridor chain today, so
+  # the symbol check alone happens to be right -- but the argument above is about
+  # DECIMALS, and a symbol is only a proxy for them. Registering an 18dp variant
+  # under one of these symbols would pass a symbol-only gate and size a budget
+  # ~1e12 too small. The symbol check still has to come first: `Assets.decimals/2`
+  # answers 6 for tokens it does not know, so on its own it would wave through
+  # every unregistered token.
+  @fee_base_decimals 6
+
+  # Returns the budget it validated, so the number that was checked is the
+  # number that gets escrowed. Recomputing it in `set_budget/6` would leave the
+  # gate guarding a value nothing downstream is bound to.
+  defp fee_budget(state, intent, transfer_atomic) do
     budget_atomic = budget_for(transfer_atomic, state.fee_bps)
 
+    with :ok <- ensure_stable_origin(intent),
+         :ok <- ensure_fee_floor(budget_atomic, state.fee_bps, state.min_fee_atomic) do
+      {:ok, budget_atomic}
+    end
+  end
+
+  defp ensure_stable_origin(%{from_chain_id: chain, from_token: token}) do
+    with symbol when symbol in @fee_base_symbols <- Assets.symbol_for(chain, token),
+         @fee_base_decimals <- Assets.decimals(chain, token) do
+      :ok
+    else
+      decimals when is_integer(decimals) ->
+        {:reject, {:unsupported_fee_base_decimals, chain, token, decimals}}
+
+      _ ->
+        {:reject, {:unsupported_fee_base, chain, token}}
+    end
+  end
+
+  defp ensure_stable_origin(_intent), do: {:reject, {:unsupported_fee_base, nil, nil}}
+
+  # `budget_for/2` truncates through `div/2`, so a small enough transfer rounds
+  # the fee to zero. A zero budget is an escrow that can never pay, and the
+  # generic path has no order-size band of its own (the USDC public offering
+  # carries a 1 USDC floor), so reject rather than propose it.
+  #
+  # Two different zeros: a storefront configured with `fee_bps: 0` is charging
+  # nothing deliberately and its zero budget is the intended outcome. The floor
+  # is for the other one, where a fee was meant to be charged and truncated away.
+  defp ensure_fee_floor(_budget_atomic, 0, _min), do: :ok
+
+  defp ensure_fee_floor(budget_atomic, _fee_bps, min) do
+    if budget_atomic >= min,
+      do: :ok,
+      else: {:reject, {:fee_below_min, budget_atomic, min}}
+  end
+
+  # Read and checked once, at start_link, rather than per job. `>=` against a
+  # non-integer does not raise -- Erlang term order puts every number below every
+  # atom and binary, so `5000 >= "1"` and `5000 >= :infinity` are both false. A
+  # mistyped value would silently reject every job on this path, which is the
+  # worst way for a storefront to be down. Refusing to start says so instead.
+  @spec validate_min_fee(term()) :: {:ok, non_neg_integer()} | {:error, term()}
+  defp validate_min_fee(n) when is_integer(n) and n >= 0, do: {:ok, n}
+  defp validate_min_fee(other), do: {:error, {:invalid_solver_min_fee_atomic, other}}
+
+  defp set_budget(state, key, session, requirement, transfer_atomic, budget_atomic) do
     case HookClient.set_budget(
            state.provider,
            state.chain_id,

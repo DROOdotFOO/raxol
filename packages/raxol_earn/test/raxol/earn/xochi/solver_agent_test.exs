@@ -3,10 +3,15 @@ defmodule Raxol.Earn.Xochi.SolverAgentTest do
 
   alias Raxol.Earn.{Agent, ProviderAdapter, Transport, JobApi, JobSession}
   alias Raxol.Earn.Xochi.SolverAgent
+  alias Raxol.Payments.Assets
 
   @solver_wallet "0xfeedfacefeedfacefeedfacefeedfacefeedface"
   @evaluator "0x" <> String.duplicate("ed", 20)
   @acp_core "0x238E541BfefD82238730D00a2208E5497F1832E0"
+
+  # Real Base addresses, from Raxol.Payments.Assets: USDC is 6dp, WETH 18dp.
+  @base_usdc "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  @base_weth "0x4200000000000000000000000000000000000006"
 
   setup do
     for {_, pid, _, _} <- DynamicSupervisor.which_children(JobSession.Supervisor),
@@ -52,14 +57,18 @@ defmodule Raxol.Earn.Xochi.SolverAgentTest do
   # In-process Xochi stub for accept-time intent derivation: GET /api/intent/:id
   # returns a `:quoted` intent carrying the authoritative `from_amount`. The
   # budget is sized on THIS, never the requirement's declared `amount_atomic`.
-  defp xochi_stub(from_amount \\ "1000000", status \\ "quoted") do
+  #
+  # `from_token` defaults to real Base USDC: the fee is charged in USDC and
+  # derived 1:1 from the origin amount, so the origin leg has to actually be a
+  # 6dp USD stablecoin for that arithmetic to mean anything.
+  defp xochi_stub(from_amount \\ "1000000", status \\ "quoted", opts \\ []) do
     plug = fn conn ->
       body = %{
         "id" => "xi_1",
         "status" => status,
         "from_chain_id" => 8453,
         "to_chain_id" => 10,
-        "from_token" => "0x" <> String.duplicate("11", 20),
+        "from_token" => Keyword.get(opts, :from_token, @base_usdc),
         "to_token" => "0x" <> String.duplicate("22", 20),
         "from_amount" => from_amount,
         "to_amount" => from_amount,
@@ -140,6 +149,144 @@ defmodule Raxol.Earn.Xochi.SolverAgentTest do
       Process.sleep(40)
 
       assert SolverAgent.sessions(solver) |> map_size() == 1
+    end
+  end
+
+  # The budget is `fee_bps` of the intent's `from_amount`, escrowed as the ACP
+  # payment token (USDC, 6dp). `from_amount` is in the ORIGIN token's base units,
+  # so that arithmetic only holds when the origin token is itself a 6dp USD
+  # stablecoin. Rescaling decimals cannot rescue an 18dp token either: 1 WETH is
+  # 1e18 base units, and reading that as 1e6-scaled USDC understates by roughly
+  # the ETH price. Without a price oracle the only sound answer is to refuse.
+  describe "budget proposal fee-base gate" do
+    test "refuses to size a budget from an 18dp origin token", ctx do
+      {:ok, solver} =
+        start_solver(
+          [fee_bps: 50, xochi_config: xochi_stub("1000000", "quoted", from_token: @base_weth)],
+          ctx
+        )
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+
+    test "refuses an unregistered origin token rather than assuming 6dp", ctx do
+      unknown = "0x" <> String.duplicate("11", 20)
+
+      {:ok, solver} =
+        start_solver(
+          [fee_bps: 50, xochi_config: xochi_stub("1000000", "quoted", from_token: unknown)],
+          ctx
+        )
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+
+    test "refuses a transfer so small the fee truncates to zero", ctx do
+      # 50 bps of 100 base units truncates to 0 through `div/2`. A zero budget is
+      # an escrow that can never pay, so the job fails closed instead.
+      {:ok, solver} =
+        start_solver([fee_bps: 50, xochi_config: xochi_stub("100")], ctx)
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
+      assert ProviderAdapter.Mock.sent_calls(ctx.provider) == []
+    end
+
+    test "a 6dp stablecoin origin still proposes a budget", ctx do
+      {:ok, solver} = start_solver([fee_bps: 50], ctx)
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :budget_proposed, budget_atomic: 5_000}} =
+               SolverAgent.sessions(solver)
+    end
+  end
+
+  # The gate reads a SYMBOL, but the arithmetic it protects is about DECIMALS,
+  # and a symbol is only a proxy for them. `ensure_stable_origin/1` now asserts
+  # the scale directly, which is defence the day the proxy stops holding. This is
+  # the early warning for the same drift: `Raxol.Payments.Assets` is compiled
+  # from module attributes with no runtime seam, so registering an 18dp token
+  # under a stablecoin symbol is a source change, and this is the test it breaks.
+  describe "fee-base scale invariant" do
+    @fee_base_symbols ~w(USDC USDT USDG)
+    @corridor_chains [1, 10, 137, 8453, 42_161, 4663]
+
+    test "every stablecoin the fee can be sized from is 6dp on every corridor chain" do
+      registered =
+        for chain <- @corridor_chains,
+            symbol <- @fee_base_symbols,
+            {:ok, address} <- [Assets.address(chain, symbol)] do
+          {chain, symbol, address, Assets.decimals(chain, address)}
+        end
+
+      # Guards the guard: a comprehension that silently matched nothing would
+      # assert nothing. Assets.address/2 returns {:ok, _} | :error, and reading
+      # it as a bare address is exactly how this test could go hollow.
+      assert length(registered) >= 11
+
+      for {chain, symbol, address, decimals} <- registered do
+        assert decimals == 6,
+               "#{symbol} on chain #{chain} (#{address}) is #{decimals}dp, but " <>
+                 "SolverAgent sizes the ACP fee by reading an origin amount in " <>
+                 "this token's base units as 6dp USDC. Either drop it from " <>
+                 "@fee_base_symbols or size the fee through a price oracle."
+      end
+    end
+  end
+
+  # `>=` against a non-integer does not raise: Erlang term order puts every
+  # number below every atom and binary, so `5000 >= "1"` is false. An unvalidated
+  # value would silently reject every job on this path -- a storefront that is
+  # down and says nothing. Refusing to start says it instead.
+  describe "min fee config validation" do
+    test "refuses to start on a min fee that is not a non-negative integer", ctx do
+      Process.flag(:trap_exit, true)
+
+      for bad <- ["1", :infinity, 1.0, -1] do
+        assert {:error, {:invalid_solver_min_fee_atomic, ^bad}} =
+                 start_solver([min_fee_atomic: bad], ctx)
+      end
+    end
+
+    test "refuses to start on a bad :solver_min_fee_atomic from application config", ctx do
+      Process.flag(:trap_exit, true)
+      Application.put_env(:raxol_earn, :solver_min_fee_atomic, "1000")
+      on_exit(fn -> Application.delete_env(:raxol_earn, :solver_min_fee_atomic) end)
+
+      assert {:error, {:invalid_solver_min_fee_atomic, "1000"}} = start_solver([], ctx)
+    end
+
+    test "a valid min fee is honoured over the default", ctx do
+      # 50 bps of 1_000_000 is 5_000, which clears the default floor of 1 but not
+      # a floor of 10_000.
+      {:ok, solver} = start_solver([fee_bps: 50, min_fee_atomic: 10_000], ctx)
+
+      Agent.start_stream(ctx.agent)
+      Transport.Mock.deliver(ctx.transport, job_created_entry())
+      Transport.Mock.deliver(ctx.transport, requirement_message())
+      Process.sleep(60)
+
+      assert %{{8453, "42"} => %{status: :failed}} = SolverAgent.sessions(solver)
     end
   end
 
