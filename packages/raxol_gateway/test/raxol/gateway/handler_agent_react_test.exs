@@ -24,8 +24,7 @@ defmodule Raxol.Gateway.HandlerAgentReactTest do
       end
     }
 
-    {:ok, counter} = Agent.start_link(fn -> 0 end)
-    on_exit(fn -> if Process.alive?(counter), do: Agent.stop(counter) end)
+    counter = start_supervised!({Agent, fn -> 0 end})
 
     tool_calls_fn = fn ->
       n = Agent.get_and_update(counter, fn n -> {n, n + 1} end)

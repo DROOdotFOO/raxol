@@ -153,6 +153,11 @@ defmodule Raxol.Gateway.Handler.LifecycleTest do
           handler: {Handler.Lifecycle, [app_module: EchoApp]}
         )
 
+      # The session initializes its handler in a continue, so start_link returns
+      # before the app Lifecycle exists. A call is serialized behind that
+      # continue, making it the barrier for "the handler has started".
+      _ = Raxol.Gateway.Session.route(session)
+
       {:links, links} = Process.info(session, :links)
       lifecycles = links -- [self()]
 

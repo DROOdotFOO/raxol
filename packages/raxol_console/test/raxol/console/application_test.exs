@@ -56,6 +56,23 @@ defmodule Raxol.Console.ApplicationTest do
       assert opts[:agent_opts] == [backend: CaptureBackend]
       assert opts[:default_target] == "telegram:home"
     end
+
+    # `plan/1` filters config through `@rc_keys`, and `build/2` filters it again
+    # through the same list. A key absent from it is dropped in silence: the
+    # runtime boots `:chat` with no error, and the deployment's `:app` request
+    # never reaches `RuntimeConfig`. Tests that call `RuntimeConfig.build/2`
+    # directly cannot see that, because they never cross either take.
+    test "carries the handler mode and app template through" do
+      config = [
+        package_dir: "/srv/agent",
+        handler_mode: :app,
+        app_template: "dashboard"
+      ]
+
+      assert {:ok, _dir, opts} = Application.plan(config)
+      assert opts[:handler_mode] == :app
+      assert opts[:app_template] == "dashboard"
+    end
   end
 
   describe "boot/2" do

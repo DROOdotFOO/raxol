@@ -17,11 +17,14 @@ defmodule Raxol.Console.Boot do
   own child, so it is torn down when the runtime stops and never leaks on the
   boot caller; a crashed server client is restarted by it rather than left
   dangling. Boot is two-phase: it starts the tree (with the empty MCP supervisor)
-  first, then loads the servers into it and starts the gateway last, so the chat
-  handler captures the resolved tools.
+  first, then loads the servers into it and starts the gateway last, so the
+  handler captures the resolved tools. Both handler modes receive them: the chat
+  loop as its turn options, a `:app` TEA app through `:lifecycle_opts` (see
+  `Raxol.Console.RuntimeConfig.handler_spec/2`).
   """
 
   alias Raxol.Agent.{McpBundle, Scheduler}
+  alias Raxol.Console.RuntimeConfig
 
   # Read-only skill access surfaced to the chat agent when the package ships
   # skills: the agent can list/view them on demand (skill authoring stays a
@@ -56,24 +59,28 @@ defmodule Raxol.Console.Boot do
   def start(runtime_config, opts \\ []) do
     base = Keyword.get(opts, :name, Raxol.Console)
     skills = resolve_skills(opts, base)
-    mcp_name = name(base, "mcp")
 
     with {:ok, adapters} <- connect_channels(runtime_config.channels),
-         core_opts = core_sup_opts(opts, runtime_config, adapters, skills, mcp_name),
+         core_opts = core_sup_opts(opts, runtime_config, adapters, skills, name(base, "mcp")),
          {:ok, sup} <- Raxol.Console.Supervisor.start_link(core_opts) do
-      # Phase two: the tree (incl. the empty MCP DynamicSupervisor, owned by the
-      # root supervisor so its lifecycle is the runtime's) is up. Load servers
-      # into that supervised MCP subtree, then start the gateway last, so its chat
-      # handler captures the resolved tools. A phase-two failure tears the tree
-      # (and the MCP subtree with it) down rather than leaving it half-booted.
-      mcp = load_mcp(runtime_config, opts, mcp_name)
-      mcp_sup = mcp_supervisor_pid(runtime_config, mcp_name)
-      actions = Keyword.get(opts, :actions, []) ++ mcp.tools
+      start_services(sup, runtime_config, adapters, skills, base, opts)
+    end
+  end
 
-      case start_gateway(sup, runtime_config, adapters, actions, base, skills) do
-        :ok -> {:ok, report(sup, mcp_sup, mcp, adapters, skills, opts)}
-        {:error, _} = error -> stop_supervisor(sup) && error
-      end
+  # Phase two: the tree (incl. the empty MCP DynamicSupervisor, owned by the root
+  # supervisor so its lifecycle is the runtime's) is up. Load servers into that
+  # supervised MCP subtree, then start the gateway last, so its handler captures
+  # the resolved tools. A phase-two failure tears the tree (and the MCP subtree
+  # with it) down rather than leaving it half-booted.
+  defp start_services(sup, runtime_config, adapters, skills, base, opts) do
+    mcp_name = name(base, "mcp")
+    mcp = load_mcp(runtime_config, opts, mcp_name)
+    mcp_sup = mcp_supervisor_pid(runtime_config, mcp_name)
+    actions = Keyword.get(opts, :actions, []) ++ mcp.tools
+
+    case start_gateway(sup, runtime_config, adapters, actions, base, skills) do
+      :ok -> {:ok, report(sup, mcp_sup, mcp, adapters, skills, opts)}
+      {:error, _} = error -> stop_supervisor(sup) && error
     end
   end
 
@@ -181,12 +188,13 @@ defmodule Raxol.Console.Boot do
 
   # Start the gateway subtree as the LAST child of the running tree, only when at
   # least one channel is connected; a headless (scheduler-only) runtime skips it.
-  # It is added dynamically (after MCP tools resolve) so the chat handler can
-  # carry the combined toolset. As the last-started child under `:rest_for_one`,
-  # this matches the ordering a static gateway child would have had. The chat
-  # handler runs the agent's persona + the combined toolset (read-only skill
-  # access + the skills store in context when the package ships skills), outbound
-  # through the same adapters map the scheduler delivers to.
+  # It is added dynamically (after MCP tools resolve) so the handler can carry
+  # the combined toolset. As the last-started child under `:rest_for_one`, this
+  # matches the ordering a static gateway child would have had. The handler runs
+  # the agent's persona + the combined toolset (read-only skill access + the
+  # skills store in context when the package ships skills), outbound through the
+  # same adapters map the scheduler delivers to. `RuntimeConfig.handler_spec/2`
+  # decides which handler that is; both modes are handed the same toolset.
   defp start_gateway(_sup, _rc, adapters, _actions, _base, _skills)
        when map_size(adapters) == 0,
        do: :ok
@@ -207,11 +215,8 @@ defmodule Raxol.Console.Boot do
       |> Keyword.put(:actions, skill_actions(skills) ++ actions)
       |> put_skills_context(skills)
 
-    handler =
-      {Raxol.Gateway.Handler.Agent, [system_prompt: rc.system_prompt, agent_opts: agent_opts]}
-
     [
-      handler: handler,
+      handler: RuntimeConfig.handler_spec(rc, agent_opts),
       deliver: fn route, rendered ->
         Raxol.Gateway.Delivery.deliver(adapters, {:direct, route}, rendered)
       end,
@@ -220,7 +225,23 @@ defmodule Raxol.Console.Boot do
       pairing_name: name(base, "pairing"),
       sessions_sup: name(base, "sessions")
     ]
+    |> put_router_opts(rc)
   end
+
+  # Only override the router's own defaults when the deployment asked to. An
+  # unset bound leaves `Raxol.Gateway.SessionRouter` on its default rather than
+  # pinning a second copy of that number here. The two travel together because
+  # in `:app` mode they are one sizing decision -- see
+  # `Raxol.Console.RuntimeConfig.build/2`.
+  defp put_router_opts(opts, rc) do
+    case put_if([], :idle_timeout, rc.idle_timeout) |> put_if(:max_sessions, rc.max_sessions) do
+      [] -> opts
+      router -> Keyword.put(opts, :router, router)
+    end
+  end
+
+  defp put_if(kw, _key, nil), do: kw
+  defp put_if(kw, key, value), do: Keyword.put(kw, key, value)
 
   defp skill_actions(nil), do: []
   defp skill_actions(_), do: @skill_actions
