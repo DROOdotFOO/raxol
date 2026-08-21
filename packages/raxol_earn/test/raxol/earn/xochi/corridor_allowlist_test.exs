@@ -121,6 +121,45 @@ defmodule Raxol.Earn.Xochi.CorridorAllowlistTest do
     end
   end
 
+  # `Offering.requirement_schema/0` hard-requires `pull_signature` on every
+  # signed_intent bundle, so an ACP job can only be a corridor whose ORIGIN can
+  # sign a gasless pull. A non-EVM origin (Tron, Solana) funds a deposit address
+  # instead and has no pull to sign, so such a buyer would be turned away at the
+  # shape gate as malformed rather than as an unsupported corridor.
+  #
+  # That narrowing costs nothing while no non-pulling origin is quotable at all,
+  # which is what this pins. If it fails, a corridor was added whose origin
+  # cannot pull: make `pull_signature` required per-mode in
+  # `requirement_schema/1` instead of in the shared base. See GitHub #665.
+  describe "pull-signature precondition" do
+    # Every chain reachable as a corridor ORIGIN today. All EVM, all able to sign
+    # ERC-3009 or Permit2.
+    @pulling_origins [1, 10, 137, 8453, 42_161, 4663]
+
+    test "every corridor origin can sign a gasless pull" do
+      origins =
+        CorridorAllowlist.corridors()
+        |> Enum.map(fn {_src, _dst, from, _to} -> from end)
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert origins -- @pulling_origins == [],
+             "a corridor origin cannot sign a gasless pull, so its buyer has no " <>
+               "pull_signature -- but Offering.requirement_schema/0 still demands one"
+    end
+
+    test "a Tron origin is not quotable, so the mandatory pull_signature turns nobody away" do
+      # Tron mainnet, which Raxol.Payments.Assets knows (USDT/USDC TRC-20) and
+      # Riddler is actively building deposit routes for. It funds by deposit
+      # address, so it is the concrete corridor this precondition would break on.
+      tron = 728_126_428
+
+      for dst <- @pulling_origins, symbol <- ~w(USDC USDT) do
+        refute CorridorAllowlist.allowed?(symbol, symbol, tron, dst)
+      end
+    end
+  end
+
   describe "enabled?/0" do
     test "an explicit config boolean wins over the deployment default" do
       Application.put_env(:raxol_earn, :stablecoin_corridors_only, true)
