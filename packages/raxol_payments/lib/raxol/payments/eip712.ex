@@ -84,7 +84,7 @@ defmodule Raxol.Payments.EIP712 do
   The struct half is still encoded here, and is covered against ethers-generated
   vectors by the Permit2 and ERC-3009 conformance suites.
   """
-  @spec hash_with_separator(binary(), map(), map()) :: {:ok, binary()} | {:error, term()}
+  @spec hash_with_separator(term(), map(), map()) :: {:ok, binary()} | {:error, term()}
   def hash_with_separator(<<domain_separator::binary-size(32)>>, types, message) do
     with {:ok, message_hash} <- hash_struct(primary_type(types), message, types) do
       {:ok, ExKeccak.hash_256(<<0x19, 0x01, domain_separator::binary, message_hash::binary>>)}
@@ -93,6 +93,14 @@ defmodule Raxol.Payments.EIP712 do
 
   def hash_with_separator(separator, _types, _message) when is_binary(separator) do
     {:error, {:invalid_domain_separator_length, byte_size(separator)}}
+  end
+
+  # The separator reaching this comes off the wire (an `eth_call` result a caller
+  # decoded), so a non-binary is a shape this function is asked about rather than
+  # a caller bug. Returning the error the spec already promises beats raising a
+  # FunctionClauseError out of a public function.
+  def hash_with_separator(separator, _types, _message) do
+    {:error, {:invalid_domain_separator, separator}}
   end
 
   @doc """

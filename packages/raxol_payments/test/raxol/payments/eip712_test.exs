@@ -419,6 +419,16 @@ defmodule Raxol.Payments.EIP712Test do
                EIP712.hash_with_separator(<<1, 2, 3, 4>>, @separator_types, @separator_message)
     end
 
+    # The separator comes off the wire -- an `eth_call` result a caller decoded --
+    # so a non-binary is a shape this is asked about, not a caller bug. Returning
+    # the error the spec promises beats raising out of a public function.
+    test "refuses a separator that is not a binary at all" do
+      for bad <- [nil, :error, 42, {:ok, <<0>>}] do
+        assert {:error, {:invalid_domain_separator, ^bad}} =
+                 EIP712.hash_with_separator(bad, @separator_types, @separator_message)
+      end
+    end
+
     test "propagates an encoding error from the struct half" do
       assert {:error, _} =
                EIP712.hash_with_separator(
