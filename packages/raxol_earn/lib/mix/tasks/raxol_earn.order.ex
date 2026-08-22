@@ -60,8 +60,12 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   A real run proceeds only when that check PASSES. A rejection means the pull
   would revert on settlement; an inconclusive result means nobody knows. Either
   way the run stops before escrowing a fee it cannot earn, and the log line
-  distinguishes the two so the next move is clear. `--dry-run` reports both and
-  carries on, since it spends nothing.
+  distinguishes the two so the next move is clear.
+
+  A rejection also fails `--dry-run`, non-zero, because the rehearsal is what CI
+  scores. An inconclusive check stays soft there: it says nothing about the
+  payload, and the usual cause is an origin-chain endpoint the rehearsing machine
+  was never given.
 
   A quote that served a pull with no signature in the signed bundle aborts BOTH
   modes. That is not a preflight verdict to rehearse -- it is a bundle with
@@ -776,8 +780,9 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # A real run proceeds on `{:ok, _}` and nothing else. Continuing on anything
   # weaker would `createJob` and escrow a fee for a settlement nobody has
   # confirmed can execute, which is how job 74047 ended up funded, unsettleable,
-  # and expired. Under `--dry-run` it only reports -- rehearsing the failure is
-  # the reason that mode exists.
+  # and expired. A REJECTION fails `--dry-run` too, with a non-zero exit: the
+  # rehearsal is what CI runs, so a mode that reports the defect and exits 0
+  # scores the cell PASS and leaves the finding to whoever reads the log.
   #
   # An inconclusive check blocks too. Refusing costs a re-run; proceeding costs
   # an escrow, and there is no reading of "nobody could answer" that makes the
@@ -845,8 +850,21 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # one, which is the property that matters.
   @spec decide_preflight(PullPreflight.outcome(), boolean()) :: :ok | {:error, atom()}
   def decide_preflight({:ok, _details}, _dry_run?), do: :ok
-  def decide_preflight({:rejected, _details}, true = _dry_run?), do: :ok
-  def decide_preflight({:rejected, _details}, false), do: {:error, :pull_signature_rejected}
+
+  # A rejection fails BOTH modes, and the exit code is the point. `--dry-run` is
+  # what CI runs -- `scripts/run_live_gates.sh --dry-run` scores every cell on
+  # this task's exit status -- so returning `:ok` here made the rehearsal PASS on
+  # the one defect the rehearsal exists to find, leaving it as a single log line
+  # in a matrix of ninety. Rehearsing a failure means reproducing it without
+  # spending, not reporting it without failing.
+  def decide_preflight({:rejected, _details}, _dry_run?),
+    do: {:error, :pull_signature_rejected}
+
+  # An inconclusive check stays soft under `--dry-run`. It is not a verdict on
+  # the payload, and the usual cause is an unset `ORDER_RPC_<from>` on a machine
+  # that was never meant to reach the origin chain -- failing a rehearsal for
+  # that trains an operator to ignore the exit code, which costs more than the
+  # signal is worth. A funded run still refuses.
   def decide_preflight({:inconclusive, _reason}, true = _dry_run?), do: :ok
 
   def decide_preflight({:inconclusive, _reason}, false),
@@ -1383,7 +1401,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     attempts. Capture the served pull_authorization and compare its domain to the
     verifying contract's own DOMAIN_SEPARATOR() before re-running.
 
-    Re-run with --dry-run to reproduce this for free.
+    --dry-run reproduces this for free, and fails the same way: the rehearsal
+    is scored on this exit code.
     """
   end
 

@@ -350,8 +350,18 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
                {:error, :pull_preflight_inconclusive}
     end
 
-    test "a dry run reports every outcome and carries on, since it spends nothing" do
-      assert Order.decide_preflight({:rejected, %{reason: :no_verifying_contract}}, true) == :ok
+    # `scripts/run_live_gates.sh --dry-run` scores every cell on this task's exit
+    # status, so a rejection that returned :ok here scored the rehearsal PASS on
+    # the single defect the rehearsal exists to find.
+    test "a dry run FAILS on a rejection, since the rehearsal is what CI scores" do
+      assert Order.decide_preflight({:rejected, %{reason: :no_verifying_contract}}, true) ==
+               {:error, :pull_signature_rejected}
+    end
+
+    # Not a verdict on the payload, and the usual cause is an origin-chain
+    # endpoint the rehearsing machine was never given. Failing on it trains an
+    # operator to ignore the exit code.
+    test "a dry run carries on when the check could not run" do
       assert Order.decide_preflight({:inconclusive, :whatever}, true) == :ok
     end
   end
