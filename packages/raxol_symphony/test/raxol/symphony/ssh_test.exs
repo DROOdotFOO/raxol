@@ -58,11 +58,18 @@ defmodule Raxol.Symphony.SshTest do
 
       # The command runs with stdin preserved (<&0), backgrounded, and a
       # watcher polls the shell's parent, signalling the command when it dies.
-      assert wrapped =~ "codex app-server <&0 &"
+      # The `{ …; }` group makes the redirect and `&` bind to the whole script.
+      assert wrapped =~ "{ codex app-server\n} <&0 &"
       assert wrapped =~ "__rx_ppid=$PPID"
       assert wrapped =~ "ps -p $__rx_ppid"
       assert wrapped =~ "kill $__rx_pid"
       assert wrapped =~ "wait $__rx_pid"
+      # Job control is on for the fork (so the group kill can reach children)
+      # and off immediately after (so bash does not narrate job transitions
+      # into the command's own output).
+      assert wrapped =~ "set -m"
+      assert wrapped =~ "set +m"
+      assert wrapped =~ "kill -- -$__rx_pid"
       # Framing-safe: no pty request, no single quotes to break remote_bash.
       refute wrapped =~ "-t"
       refute wrapped =~ "'"
@@ -93,6 +100,77 @@ defmodule Raxol.Symphony.SshTest do
     test "the command's real exit status survives the wrapper" do
       wrapped = Ssh.reap_on_disconnect("exit 7")
       assert {_out, 7} = System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true)
+    end
+
+    test "a MULTI-LINE script reports its own status, not a trailing null command's" do
+      # A hook is normally multi-line and ends in a newline. Without the
+      # `{ …; }` group the appended ` <&0 & …` parses as a separate null
+      # command, `wait` returns ITS status, and a hook that failed on its last
+      # line was reported as success. SPEC s9.4 makes those failures fatal.
+      wrapped = Ssh.reap_on_disconnect("echo start\nfalse\n")
+
+      assert {output, 1} = System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true)
+      assert output =~ "start"
+    end
+
+    test "a deadline kills the command AND its children, then returns at once" do
+      marker = Path.join(System.tmp_dir!(), "rx_deadline_#{:erlang.unique_integer([:positive])}")
+      on_exit(fn -> File.rm(marker) end)
+
+      wrapped = Ssh.reap_on_disconnect("sleep 6\ntouch #{marker}\n", deadline_seconds: 1)
+
+      {elapsed_us, {_out, status}} =
+        :timer.tc(fn -> System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true) end)
+
+      refute status == 0
+      refute File.exists?(marker), "the hook kept running past its deadline"
+
+      # Killing only the subshell would leave `sleep` holding the inherited
+      # stdout pipe, so the read would block for the command's full 6s even
+      # though it was "killed". The group kill is what makes this prompt.
+      assert elapsed_us < 3_500_000, "took #{div(elapsed_us, 1000)}ms, expected ~1s"
+    end
+
+    test "a command inside its deadline is left alone" do
+      wrapped = Ssh.reap_on_disconnect("echo fine\n", deadline_seconds: 5)
+      assert {output, 0} = System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true)
+      assert String.trim(output) == "fine"
+    end
+
+    test "job control does not narrate itself into the command's output" do
+      # `set -m` is required for the group kill, and left on it makes bash write
+      # `[1]  Done …` into the very output a hook's result is read from.
+      wrapped = Ssh.reap_on_disconnect("echo hello\n", deadline_seconds: 5)
+      {output, 0} = System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true)
+
+      assert String.trim(output) == "hello"
+      refute output =~ "Done"
+      refute output =~ "[1]"
+    end
+  end
+
+  describe "quote_path/1" do
+    test "leaves a leading ~ bare so the remote shell still expands it" do
+      # Single-quoting is exactly what suppresses tilde expansion, so
+      # `mkdir -p '~/ws'` makes a directory literally NAMED `~`.
+      assert Ssh.quote_path("~/symphony/MT-1") == "~/'symphony/MT-1'"
+      assert Ssh.quote_path("~") == "~"
+      assert Ssh.quote_path("~ci/ws") == "~ci/'ws'"
+    end
+
+    test "quotes an absolute path whole" do
+      assert Ssh.quote_path("/var/lib/ws") == "'/var/lib/ws'"
+    end
+
+    test "a tilde prefix it does not understand is quoted whole, not expanded" do
+      # Fails closed: an unrecognized prefix stays inert rather than reaching
+      # the remote shell bare.
+      assert Ssh.quote_path("~;touch /tmp/x") == "'~;touch /tmp/x'"
+      assert Ssh.quote_path("~$(whoami)/ws") == "'~$(whoami)/ws'"
+    end
+
+    test "a tilde path with an embedded quote is still escaped" do
+      assert Ssh.quote_path("~/it's/ws") == "~/'it'\\''s/ws'"
     end
   end
 

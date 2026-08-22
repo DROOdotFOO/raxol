@@ -38,8 +38,13 @@ defmodule Raxol.Symphony.Ssh do
 
   # How often the disconnect watcher re-checks that its sshd session is still
   # alive. Only bounds how long an orphan survives after a disconnect; it costs
-  # a live command nothing (see `reap_on_disconnect/1`).
+  # a live command nothing (see `reap_on_disconnect/2`).
   @reap_poll_seconds 5
+
+  # A tilde prefix safe to leave unquoted: `~`, or `~user` over the same
+  # character class `HostSpec`'s path pattern already allows. Anything outside
+  # this is quoted whole rather than handed to the remote shell bare.
+  @tilde_prefix ~r/\A~[A-Za-z0-9._-]*\z/
 
   @doc """
   Resolve the `ssh` executable, refusing anything not named `ssh`.
@@ -97,7 +102,7 @@ defmodule Raxol.Symphony.Ssh do
   """
   @spec remote_bash(binary(), binary()) :: binary()
   def remote_bash(workspace, command) when is_binary(workspace) and is_binary(command) do
-    remote_bash("cd #{shell_quote(workspace)} && #{command}")
+    remote_bash("cd #{quote_path(workspace)} && #{command}")
   end
 
   @doc """
@@ -120,6 +125,38 @@ defmodule Raxol.Symphony.Ssh do
   def shell_quote(str) when is_binary(str) do
     "'" <> String.replace(str, "'", "'\\''") <> "'"
   end
+
+  @doc """
+  Quote a remote PATH, leaving a leading `~` or `~user` unquoted so the remote
+  shell still expands it.
+
+  `shell_quote/1` alone is wrong for a home-relative path: single quotes are
+  exactly what suppresses tilde expansion, so `mkdir -p '~/ws'` creates a
+  directory literally NAMED `~` in whatever directory the login shell started
+  in, rather than one under `$HOME`. `HostSpec` accepts `~` roots, so this is
+  reachable from ordinary config.
+
+  Only a tilde prefix drawn from `[A-Za-z0-9._-]` is left bare, which is what
+  `HostSpec`'s path pattern already permits. Anything else falls back to
+  quoting the whole path, so a path this function does not understand is
+  inert rather than expanded.
+  """
+  @spec quote_path(binary()) :: binary()
+  def quote_path("~" <> _ = path) when is_binary(path) do
+    {prefix, rest} =
+      case String.split(path, "/", parts: 2) do
+        [only] -> {only, nil}
+        [head, tail] -> {head, tail}
+      end
+
+    cond do
+      not Regex.match?(@tilde_prefix, prefix) -> shell_quote(path)
+      rest in [nil, ""] -> prefix
+      true -> prefix <> "/" <> shell_quote(rest)
+    end
+  end
+
+  def quote_path(path) when is_binary(path), do: shell_quote(path)
 
   @doc """
   Wrap `command` so a dropped SSH connection can never orphan it.
@@ -148,17 +185,64 @@ defmodule Raxol.Symphony.Ssh do
   the `sleep` it spawns) holding the write end of that pipe: a reader waits for
   EOF, not for the command to exit, so a caller like `System.cmd/3` would block
   for a further poll interval after the command had already finished.
+
+  `command` is wrapped in a `{ …; }` group before the redirect and `&` are
+  applied. Without the group those bind only to the command's LAST LINE, so a
+  multi-line script (which is what a workspace hook normally is) backgrounds an
+  empty trailing command and `wait` reports ITS status: a hook failing on its
+  final line was reported as success.
+
+  ## Options
+
+    * `:deadline_seconds` -- kill the command after this many seconds. This is
+      the only thing that actually bounds the remote side. A caller that gives
+      up locally does NOT take the remote command down with it: killing the BEAM
+      process closes the port, and closing a port does not signal the OS process
+      it spawned.
   """
-  @spec reap_on_disconnect(binary()) :: binary()
-  def reap_on_disconnect(command) when is_binary(command) do
+  @spec reap_on_disconnect(binary(), keyword()) :: binary()
+  def reap_on_disconnect(command, opts \\ []) when is_binary(command) do
+    deadline = Keyword.get(opts, :deadline_seconds)
+
     # Single-quote-free so it survives `remote_bash/2`'s single-quoting intact.
-    command <>
-      " <&0 & __rx_pid=$!; __rx_ppid=$PPID; " <>
+    "set -m; { " <>
+      command <>
+      "\n} <&0 & __rx_pid=$!; set +m; __rx_ppid=$PPID; " <>
       "{ while kill -0 $__rx_pid 2>/dev/null; do " <>
-      "ps -p $__rx_ppid >/dev/null 2>&1 || { kill $__rx_pid 2>/dev/null; break; }; " <>
+      "ps -p $__rx_ppid >/dev/null 2>&1 || { #{kill_tree()} break; }; " <>
       "sleep #{@reap_poll_seconds}; done; } >/dev/null 2>&1 & __rx_watch=$!; " <>
-      "wait $__rx_pid; __rx_status=$?; kill $__rx_watch 2>/dev/null; exit $__rx_status"
+      deadline_clause(deadline) <>
+      "wait $__rx_pid; __rx_status=$?; " <>
+      "kill $__rx_watch #{deadline_pid_ref(deadline)}2>/dev/null; " <>
+      "exit $__rx_status"
   end
+
+  # Signal the command's whole process GROUP, not just the subshell.
+  #
+  # `set -m` above turns on job control, which puts the backgrounded group in
+  # its own process group with pgid == its pid, so `kill -- -PID` reaches the
+  # children too. Killing only the subshell leaves its children running: they
+  # keep doing work past the deadline AND keep the inherited stdout pipe open,
+  # so a reader waiting on EOF blocks for the command's full natural runtime
+  # even though it was supposedly killed.
+  #
+  # Job control is switched back off (`set +m`) the moment the fork is done.
+  # The process group is fixed at fork time so the group kill still lands, but
+  # the shell stops announcing job transitions -- with `-m` left on, bash writes
+  # `[1]  Done …` into the hook's own captured output.
+  #
+  # The plain `kill` is the fallback for a shell where the group kill did not
+  # apply, so the subshell still dies rather than nothing happening.
+  defp kill_tree, do: "kill -- -$__rx_pid 2>/dev/null; kill $__rx_pid 2>/dev/null;"
+
+  defp deadline_clause(nil), do: ""
+
+  defp deadline_clause(seconds) when is_integer(seconds) and seconds > 0 do
+    "{ sleep #{seconds}; #{kill_tree()} } >/dev/null 2>&1 & __rx_dead=$!; "
+  end
+
+  defp deadline_pid_ref(nil), do: ""
+  defp deadline_pid_ref(seconds) when is_integer(seconds) and seconds > 0, do: "$__rx_dead "
 
   @doc """
   Run `remote_command` on the host once and return `{output, exit_status}`.

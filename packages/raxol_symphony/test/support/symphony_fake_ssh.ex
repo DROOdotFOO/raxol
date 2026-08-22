@@ -22,6 +22,7 @@ defmodule Raxol.Symphony.Test.FakeSsh do
   @spec exec_fn(keyword()) :: (binary(), [binary()], keyword() -> {binary(), non_neg_integer()})
   def exec_fn(opts \\ []) do
     report_to = Keyword.get(opts, :report_to)
+    shell_opts = shell_opts(opts)
 
     fn _ssh, argv, cmd_opts ->
       if is_pid(report_to), do: send(report_to, {:fake_ssh, argv})
@@ -29,7 +30,17 @@ defmodule Raxol.Symphony.Test.FakeSsh do
       # The transport puts the remote command last, as a single element, so
       # sshd hands it to the login shell verbatim. Running it through a local
       # `bash -lc` is what a remote shell would do with it.
-      System.cmd("bash", ["-lc", List.last(argv)], cmd_opts)
+      System.cmd("bash", ["-lc", List.last(argv)], cmd_opts ++ shell_opts)
+    end
+  end
+
+  # `:home` gives the stand-in host its own `$HOME` and starts the shell
+  # somewhere neutral, which is what makes a `~`-rooted workspace testable
+  # without writing into the developer's real home directory.
+  defp shell_opts(opts) do
+    case Keyword.get(opts, :home) do
+      nil -> []
+      home when is_binary(home) -> [env: [{"HOME", home}], cd: home]
     end
   end
 
@@ -38,7 +49,7 @@ defmodule Raxol.Symphony.Test.FakeSsh do
   `Raxol.Symphony.Workspace`.
 
   `:executable` is stubbed too, so a machine without `ssh` on PATH still runs
-  these tests.
+  these tests. Pass `home:` to give the stand-in host its own `$HOME`.
   """
   @spec opts(keyword()) :: keyword()
   def opts(overrides \\ []) do

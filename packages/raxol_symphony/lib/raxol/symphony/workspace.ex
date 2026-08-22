@@ -319,7 +319,7 @@ defmodule Raxol.Symphony.Workspace do
   # `created_now` flag that gates `after_create` cannot be decided against a
   # stale observation from a separate probe.
   defp remote_mkdir_p(%HostSpec{} = host, path, ssh_opts) do
-    quoted = Ssh.shell_quote(path)
+    quoted = Ssh.quote_path(path)
 
     script =
       "if [ -d #{quoted} ]; then printf %s #{@exists_marker}; " <>
@@ -347,7 +347,7 @@ defmodule Raxol.Symphony.Workspace do
     do: {:error, {:mkdir_failed, {:unexpected_output, output}}}
 
   defp remote_rm_rf(%HostSpec{} = host, path, ssh_opts) do
-    command = Ssh.remote_bash("rm -rf #{Ssh.shell_quote(path)}")
+    command = Ssh.remote_bash("rm -rf #{Ssh.quote_path(path)}")
 
     case Ssh.exec(host, command, ssh_opts) do
       {:error, reason} ->
@@ -381,12 +381,22 @@ defmodule Raxol.Symphony.Workspace do
     end
   end
 
-  # `System.cmd/3` has no timeout, so `hooks.timeout_ms` is enforced by killing
-  # the local `ssh` and letting `reap_on_disconnect/1` take the remote script
-  # down with the connection. Without the reaper a timed-out hook would keep
-  # running on the host after we stopped waiting for it.
+  # `hooks.timeout_ms` is enforced on BOTH sides, because neither alone is
+  # enough.
+  #
+  # Locally, `run_with_timeout/2` returns control to the orchestrator on time.
+  # It does NOT stop the work: killing the BEAM process closes the port, and
+  # closing a port does not signal the OS process it spawned, so the `ssh`
+  # client (and the hook behind it) runs on. Relying on that alone left a
+  # timed-out `before_remove` hook still executing on the host while
+  # `remote_rm_rf/3` deleted the workspace underneath it.
+  #
+  # So the remote side carries the same deadline and kills the hook itself.
+  # That is the half that actually bounds the work; the local half only bounds
+  # how long we wait for it.
   defp execute_script_remote(script, path, timeout_ms, %HostSpec{} = host, ssh_opts) do
-    command = Ssh.remote_bash(path, Ssh.reap_on_disconnect(script))
+    reaped = Ssh.reap_on_disconnect(script, deadline_seconds: deadline_seconds(timeout_ms))
+    command = Ssh.remote_bash(path, reaped)
 
     case run_with_timeout(fn -> Ssh.exec(host, command, ssh_opts) end, timeout_ms) do
       # As in `remote_mkdir_p/3`: the `{:error, _}` shape is a 2-tuple and has
@@ -398,6 +408,16 @@ defmodule Raxol.Symphony.Workspace do
       :timeout -> {:error, :timeout}
     end
   end
+
+  # The remote deadline is whole seconds (`sleep`), rounded UP so it can never
+  # land before the local timeout and turn an in-budget hook into a kill.
+  # A sub-second timeout still gets a full second remotely: the local half
+  # gives up first, which is the intended ordering.
+  defp deadline_seconds(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
+    max(1, ceil(timeout_ms / 1000))
+  end
+
+  defp deadline_seconds(_non_positive), do: nil
 
   # Unlinked on purpose: an `ssh` invocation that crashes must not take the
   # calling orchestrator down with it.

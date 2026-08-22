@@ -123,6 +123,27 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
                Workspace.ensure(config, "..", host: host(host_root), ssh: FakeSsh.opts())
     end
 
+    test "a `~` root lands under the HOST's home, not in a directory named `~`", %{
+      local_root: local_root
+    } do
+      # Single-quoting a path is what suppresses tilde expansion, so quoting
+      # this one whole made `mkdir -p '~/symphony/MT-1'` create a directory
+      # literally NAMED `~` wherever the login shell started. HostSpec accepts
+      # `~` roots, so this is reachable from ordinary config.
+      host_home = tmp("home")
+      File.mkdir_p!(host_home)
+      on_exit(fn -> File.rm_rf(host_home) end)
+
+      config = build_config(local_root)
+      spec = %HostSpec{host: "build-1", workspace_root: "~/symphony"}
+
+      assert {:ok, %{path: "~/symphony/MT-1"}} =
+               Workspace.ensure(config, "MT-1", host: spec, ssh: FakeSsh.opts(home: host_home))
+
+      assert File.dir?(Path.join(host_home, "symphony/MT-1"))
+      refute File.exists?(Path.join(host_home, "~"))
+    end
+
     test "a relative remote root is refused rather than resolved locally", %{
       local_root: local_root
     } do
@@ -180,6 +201,27 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
 
       assert {:error, {:after_create_hook_failed, :timeout}} =
                Workspace.ensure(config, "MT-1", host: host(host_root), ssh: FakeSsh.opts())
+    end
+
+    test "a timed-out hook is STOPPED on the host, not merely abandoned", %{
+      local_root: local_root,
+      host_root: host_root
+    } do
+      # Giving up locally does not stop remote work: killing the BEAM process
+      # closes the port, and closing a port does not signal the OS process it
+      # spawned. Relying on that alone left a timed-out `before_remove` hook
+      # still running while the workspace was deleted underneath it.
+      witness = Path.join(host_root, "hook_outlived_its_deadline")
+
+      config =
+        build_config(local_root, %{after_create: "sleep 4\ntouch #{witness}\n", timeout_ms: 1_000})
+
+      assert {:error, {:after_create_hook_failed, :timeout}} =
+               Workspace.ensure(config, "MT-1", host: host(host_root), ssh: FakeSsh.opts())
+
+      # Well past when the hook would have finished had nothing stopped it.
+      Process.sleep(5_000)
+      refute File.exists?(witness), "the hook kept running on the host after its deadline"
     end
 
     test "before_run runs against the remote workspace", %{
