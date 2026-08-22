@@ -76,6 +76,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
   alias Raxol.Symphony.Issue
   alias Raxol.Symphony.Runner
   alias Raxol.Symphony.Tracker
+  alias Raxol.Symphony.Workspace
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Graph
 
@@ -258,33 +259,37 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
 
     fn state ->
       case Map.get(state, candidate_key) do
-        nil ->
-          {:ok, Map.put(state, result_key, nil)}
-
-        %Issue{} = issue ->
-          runner_opts = if state.runner_module, do: [runner_module: state.runner_module], else: []
-          parent = Map.get(state, :parent_pid, self())
-          attempt = Map.get(state, :attempt) || 1
-          workspace = Map.get(state, workspace_key) || Map.get(state, :workspace_path, "")
-          host = slot_host(state, slot)
-
-          with {:ok, runner_module} <- Runner.resolve(state.config, runner_opts) do
-            result =
-              runner_module.run(issue, state.config,
-                parent: parent,
-                attempt: attempt,
-                workspace_path: workspace,
-                host: host
-              )
-
-            # A branch pause is recorded verbatim as the slot result and
-            # surfaced through the aggregate; sibling branches run to
-            # completion. The graph run itself does NOT interrupt (unlike
-            # `from_workflow/1`) — the orchestrator parks the pause token
-            # and re-dispatches the paused issue on resume.
-            {:ok, Map.put(state, result_key, result)}
-          end
+        nil -> {:ok, Map.put(state, result_key, nil)}
+        %Issue{} = issue -> dispatch_slot(state, issue, slot, workspace_key, result_key)
       end
+    end
+  end
+
+  defp dispatch_slot(state, %Issue{} = issue, slot, workspace_key, result_key) do
+    runner_opts = if state.runner_module, do: [runner_module: state.runner_module], else: []
+    workspace = Map.get(state, workspace_key) || Map.get(state, :workspace_path, "")
+    host = slot_host(state, slot)
+
+    run_opts = base_run_opts(state, workspace, host)
+
+    with {:ok, runner_module} <- Runner.resolve(state.config, runner_opts) do
+      # Bracketed per SLOT, not per batch: each slot has its own issue, its own
+      # workspace and (in a host pool) its own machine, so one `before_run`
+      # covering all of them would run the wrong hook in the wrong place. A slot
+      # whose `before_run` fails records the failure as ITS result and leaves
+      # its siblings running -- the same shape as a branch pause, and the reason
+      # this does not abort the whole graph.
+      #
+      # A branch pause is recorded verbatim as the slot result and surfaced
+      # through the aggregate. The graph run itself does NOT interrupt (unlike
+      # `from_workflow/1`) -- the orchestrator parks the pause token and
+      # re-dispatches the paused issue on resume.
+      outcome =
+        Workspace.around_run(state.config, workspace, hook_opts(state, host), fn ->
+          runner_module.run(issue, state.config, run_opts)
+        end)
+
+      {:ok, Map.put(state, result_key, slot_result(outcome))}
     end
   end
 
@@ -372,7 +377,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     |> maybe_put(:attempt, Keyword.get(opts, :attempt))
     |> maybe_put(:workspace_path, Keyword.get(opts, :workspace_path))
     |> maybe_put(:host, Keyword.get(opts, :host))
+    |> maybe_put(:ssh, Keyword.get(opts, :ssh))
   end
+
+  # The workspace run hooks a runner node brackets its runner with. `:host` is
+  # per-slot in a parallel graph and shared otherwise; `:ssh` is the transport
+  # the orchestrator was configured with, identical for every slot.
+  defp hook_opts(state, host), do: [host: host, ssh: Map.get(state, :ssh, [])]
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
@@ -419,21 +430,44 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
     runner_opts =
       if state.runner_module, do: [runner_module: state.runner_module], else: []
 
-    parent = Map.get(state, :parent_pid, self())
-    attempt = Map.get(state, :attempt) || 1
     workspace = Map.get(state, :workspace_path, "")
     host = Map.get(state, :host)
-
     {resume_token, resume_value, state} = consume_pending_resume(state)
 
-    base_opts = [parent: parent, attempt: attempt, workspace_path: workspace, host: host]
-    run_opts = maybe_put_resume_opts(base_opts, resume_token, resume_value)
+    run_opts =
+      maybe_put_resume_opts(base_run_opts(state, workspace, host), resume_token, resume_value)
 
     with {:ok, runner_module} <- Runner.resolve(config, runner_opts) do
-      result = runner_module.run(issue, config, run_opts)
-      {:ok, store_runner_result(state, result)}
+      config
+      |> Workspace.around_run(workspace, hook_opts(state, host), fn ->
+        runner_module.run(issue, config, run_opts)
+      end)
+      |> store_bracketed_result(state)
     end
   end
+
+  # What every runner invocation is handed, however it was reached: the pid to
+  # report events to, which attempt this is, and where (and on what machine) to
+  # run. The parallel slots build the same list from their own per-slot values.
+  defp base_run_opts(state, workspace, host) do
+    [
+      parent: Map.get(state, :parent_pid, self()),
+      attempt: Map.get(state, :attempt) || 1,
+      workspace_path: workspace,
+      host: host
+    ]
+  end
+
+  # SPEC s9.4: a `before_run` failure is fatal to this run attempt. A node error
+  # is how the graph says that, and `graph_outcome/1` turns it into the same
+  # failure retry a runner error gets.
+  defp store_bracketed_result({:error, reason}, _state), do: {:error, reason}
+  defp store_bracketed_result({:ok, result}, state), do: {:ok, store_runner_result(state, result)}
+
+  # A `before_run` that failed is this slot's result, in the shape the
+  # aggregate already understands, so one slot cannot fail the batch.
+  defp slot_result({:ok, result}), do: result
+  defp slot_result({:error, reason}), do: {:error, reason}
 
   defp maybe_put_resume_opts(opts, nil, nil), do: opts
 

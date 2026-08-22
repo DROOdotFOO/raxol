@@ -134,6 +134,65 @@ defmodule Raxol.Symphony.Workspace do
   end
 
   @doc """
+  Runs `fun` bracketed by the `before_run` and `after_run` hooks.
+
+  Returns `{:ok, result}` with whatever `fun` returned, or `{:error, reason}`
+  when `before_run` failed -- in which case `fun` never ran. The caller decides
+  what a `before_run` failure means in its own terms (SPEC s9.4 makes it fatal
+  to the run ATTEMPT, not to the workspace), which is why this reports rather
+  than exits.
+
+  The three seams that invoke a runner share this so the bracket cannot drift
+  between workflow modes: a hook that fires under `:default` and not under
+  `:graph_parallel` is worse than one that never fires, because only one of
+  those is visible.
+
+  ## When `after_run` fires
+
+  On any terminal outcome, including a runner that returned an error or raised.
+  `after_run` is the counterpart to `before_run`, so a run that started a dev
+  server or a container in `before_run` must get its teardown even when --
+  especially when -- the run went badly. Skipping it on failure leaks exactly
+  the resources it exists to reclaim.
+
+  It does NOT fire on `{:pause, _, _}`. A paused run is not over: the
+  orchestrator parks the token, holds the workspace and the host slot, and
+  re-dispatches later. Tearing down there would run the teardown mid-run and
+  then run `before_run` a second time on resume.
+
+  Its own failure is logged and ignored, per s9.4, so it cannot turn a
+  successful run into a failed one.
+  """
+  @spec around_run(Config.t(), Path.t(), keyword(), (-> result)) ::
+          {:ok, result} | {:error, term()}
+        when result: term()
+  def around_run(%Config{} = config, path, opts \\ [], fun) when is_function(fun, 0) do
+    case run_before_run_hook(config, path, opts) do
+      {:error, reason} ->
+        {:error, reason}
+
+      :ok ->
+        try do
+          fun.()
+        catch
+          # An exit is how a runner reports failure to its task, so this is a
+          # terminal outcome like any other. Re-raised verbatim afterwards: the
+          # teardown is not license to swallow the reason the run died.
+          kind, reason ->
+            run_after_run_hook(config, path, opts)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        else
+          result ->
+            unless paused?(result), do: run_after_run_hook(config, path, opts)
+            {:ok, result}
+        end
+    end
+  end
+
+  defp paused?({:pause, _reason, _token}), do: true
+  defp paused?(_result), do: false
+
+  @doc """
   Removes a workspace, running `before_remove` first (best-effort).
 
   With a `:host` the containment check is measured against that host's remote
