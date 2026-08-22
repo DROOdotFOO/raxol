@@ -224,6 +224,34 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
       refute File.exists?(witness), "the hook kept running on the host after its deadline"
     end
 
+    # SPEC s9.5 Invariant 1 across the network, tested on the side that FAILS.
+    # Every other cwd test here proves the hook lands in the workspace when the
+    # workspace is there; this proves it does not run at all when it is not.
+    #
+    # The `cd WS && …` short-circuit did not carry that on its own. `&&` binds to
+    # the next COMMAND, and `reap_on_disconnect/2` output begins `set -m;` -- so
+    # a failed `cd` skipped only the `set -m`, ran the hook in the login shell's
+    # home, and then reported exit 0 because `wait` returned the backgrounded
+    # group's status. Both halves are asserted: it did not run, and it did not
+    # claim to succeed.
+    test "a hook whose workspace is missing does not run in the login shell's home", %{
+      local_root: local_root,
+      host_root: host_root
+    } do
+      escaped = Path.join(host_root, "hook_escaped_its_workspace")
+      config = build_config(local_root, %{before_run: "touch #{escaped}"})
+      opts = [host: host(host_root), ssh: FakeSsh.opts(home: host_root)]
+
+      # A path under the host's root that was never created.
+      missing = Path.join(host_root, "MT-GONE")
+      refute File.exists?(missing)
+
+      assert {:error, {:before_run_hook_failed, {:exit, _status}}} =
+               Workspace.run_before_run_hook(config, missing, opts)
+
+      refute File.exists?(escaped), "the hook ran outside its workspace"
+    end
+
     test "before_run runs against the remote workspace", %{
       local_root: local_root,
       host_root: host_root

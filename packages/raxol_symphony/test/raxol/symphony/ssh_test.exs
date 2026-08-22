@@ -177,7 +177,27 @@ defmodule Raxol.Symphony.SshTest do
   describe "remote_bash/2" do
     test "wraps a login shell that cds into a quoted workspace then runs the command" do
       assert Ssh.remote_bash("/ws/app", "codex app-server") ==
-               ~s(bash -lc 'cd '\\''/ws/app'\\'' && codex app-server')
+               ~s(bash -lc 'cd '\\''/ws/app'\\'' && { codex app-server\n}')
+    end
+
+    # `&&` binds to the next COMMAND, not to the rest of the line, so an
+    # ungrouped `cd WS && A; B` runs `B` whatever `cd` did. Every real caller
+    # passes `reap_on_disconnect/2` output, which begins `set -m;` -- so without
+    # the group a failed `cd` skipped only the `set -m` and ran the workload in
+    # the login shell's home, reporting exit 0 because `wait` returned the
+    # backgrounded group's status.
+    test "a failed cd runs nothing, even when the command has its own separators" do
+      sandbox = Path.join(System.tmp_dir!(), "sym_cd_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(sandbox)
+      on_exit(fn -> File.rm_rf(sandbox) end)
+
+      command = Ssh.reap_on_disconnect("touch ./ESCAPED", deadline_seconds: 30)
+      remote = Ssh.remote_bash(Path.join(sandbox, "missing"), command)
+
+      {_out, status} = System.cmd("bash", ["-lc", remote], stderr_to_stdout: true, cd: sandbox)
+
+      refute status == 0, "a failed cd reported success"
+      refute File.exists?(Path.join(sandbox, "ESCAPED")), "the command ran outside its workspace"
     end
 
     test "quoting survives two shell parses (ssh remote shell then bash -lc)" do

@@ -99,10 +99,20 @@ defmodule Raxol.Symphony.Ssh do
   short-circuits, so a command whose workspace is missing does not run in the
   login shell's home directory instead. That is the remote counterpart of the
   local launch's `{:cd, workspace}`.
+
+  `command` is wrapped in a `{ …; }` group, and the group is what makes that
+  true. `&&` binds to the next COMMAND, not to the rest of the line, so
+  `cd WS && A; B` runs `B` whatever `cd` did. Every real caller here passes
+  `reap_on_disconnect/2` output, which begins `set -m;` -- so ungrouped, a failed
+  `cd` skipped only the `set -m` and ran the workload in the login shell's home,
+  then reported exit 0 because `wait` returned the backgrounded group's status.
+  Grouped, a failed `cd` runs nothing and the command exits with `cd`'s status.
   """
   @spec remote_bash(binary(), binary()) :: binary()
   def remote_bash(workspace, command) when is_binary(workspace) and is_binary(command) do
-    remote_bash("cd #{quote_path(workspace)} && #{command}")
+    # The newline before `}` terminates the last command in the group, which a
+    # trailing `;` could not do for a multi-line script ending in a comment.
+    remote_bash("cd #{quote_path(workspace)} && { #{command}\n}")
   end
 
   @doc """
