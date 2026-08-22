@@ -21,11 +21,10 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   (`Raxol.Symphony.Worker.HostPool`). Only the transport (issue #743) turns
   a spec into an actual `ssh` invocation; this module is pure data.
 
-  Note: `workspace_root` is validated and carried here but is currently INERT.
-  The SSH transport (`Raxol.Symphony.SSH` / `Session`) still `cd`s into the
-  local workspace path on the remote host; per-host remote workspace roots are
-  reserved for issue #744. The field is retained (not removed) so config that
-  already declares it stays valid.
+  `workspace_root` is the root that `Raxol.Symphony.Workspace` creates this
+  host's per-issue workspaces under (issue #744). A spec that omits it falls
+  back to the configured `workspace.root`, which assumes the host mirrors the
+  orchestrator's layout.
   """
 
   @enforce_keys [:host]

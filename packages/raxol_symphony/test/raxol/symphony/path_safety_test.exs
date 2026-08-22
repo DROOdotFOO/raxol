@@ -102,4 +102,67 @@ defmodule Raxol.Symphony.PathSafetyTest do
       end
     end
   end
+
+  describe "remote_workspace_path/2 (issue #744)" do
+    test "joins the key onto an absolute remote root" do
+      assert {:ok, "/var/lib/symphony/MT-1"} =
+               PathSafety.remote_workspace_path("/var/lib/symphony", "MT-1")
+    end
+
+    test "sanitizes the identifier the same way the local path does" do
+      assert {:ok, "/srv/ws/abc_.._etc"} =
+               PathSafety.remote_workspace_path("/srv/ws", "abc/../etc")
+    end
+
+    test "leaves `~` for the remote login shell instead of expanding it here" do
+      assert {:ok, "~/symphony/MT-1"} =
+               PathSafety.remote_workspace_path("~/symphony", "MT-1")
+
+      # The local home must not appear: this path names a directory on another
+      # machine, and `Path.expand/1` would substitute the orchestrator's own.
+      refute PathSafety.remote_workspace_path("~/symphony", "MT-1")
+             |> elem(1)
+             |> String.contains?(System.user_home!())
+    end
+
+    test "folds `.` and `..` inside the root without touching the local disk" do
+      assert {:ok, "/srv/ws/MT-1"} =
+               PathSafety.remote_workspace_path("/srv/./nested/../ws", "MT-1")
+    end
+
+    test "refuses an identifier that would climb out of the root" do
+      assert {:error, :workspace_outside_root} =
+               PathSafety.remote_workspace_path("/srv/ws", "..")
+    end
+
+    test "refuses a relative root, which a login shell would resolve arbitrarily" do
+      assert {:error, :invalid_workspace_root} =
+               PathSafety.remote_workspace_path("relative/ws", "MT-1")
+    end
+
+    test "refuses an empty root" do
+      assert {:error, :invalid_workspace_root} = PathSafety.remote_workspace_path("", "MT-1")
+    end
+
+    test "a `..` chain cannot climb above the root" do
+      assert {:ok, "/"} = PathSafety.validate_inside_remote_root("/../../..", "/")
+    end
+  end
+
+  describe "validate_inside_remote_root/2" do
+    test "accepts a nested remote path" do
+      assert {:ok, "/srv/ws/MT-1"} =
+               PathSafety.validate_inside_remote_root("/srv/ws/MT-1", "/srv/ws")
+    end
+
+    test "rejects a sibling that merely shares a prefix" do
+      assert {:error, :workspace_outside_root} =
+               PathSafety.validate_inside_remote_root("/srv/wsother", "/srv/ws")
+    end
+
+    test "rejects a traversal out of the root" do
+      assert {:error, :workspace_outside_root} =
+               PathSafety.validate_inside_remote_root("/srv/ws/../escape", "/srv/ws")
+    end
+  end
 end

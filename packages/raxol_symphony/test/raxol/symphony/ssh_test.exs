@@ -73,6 +73,27 @@ defmodule Raxol.Symphony.SshTest do
       {_out, status} = System.cmd("bash", ["-n", "-c", Ssh.reap_on_disconnect("codex")])
       assert status == 0
     end
+
+    test "a short command returns as soon as it exits, not a poll interval later" do
+      # The watcher polls on a multi-second interval. Two ways that interval
+      # can leak into a fast command's runtime, both of which have bitten:
+      # polling inline (so `wait` is unreachable until the sleep elapses), and
+      # letting the watcher inherit stdout (so the reader waits for EOF on a
+      # pipe the lingering `sleep` still holds open).
+      wrapped = Ssh.reap_on_disconnect("echo done")
+
+      {elapsed_us, {output, status}} =
+        :timer.tc(fn -> System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true) end)
+
+      assert status == 0
+      assert output =~ "done"
+      assert elapsed_us < 2_000_000, "took #{div(elapsed_us, 1000)}ms, expected well under 2s"
+    end
+
+    test "the command's real exit status survives the wrapper" do
+      wrapped = Ssh.reap_on_disconnect("exit 7")
+      assert {_out, 7} = System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true)
+    end
   end
 
   describe "remote_bash/2" do

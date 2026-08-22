@@ -23,7 +23,8 @@ defmodule Raxol.Symphony.Orchestrator do
   - `start_link/1` -- requires `:config` (a `Raxol.Symphony.Config` struct).
     Optional opts: `:name`, `:runner_module` (test override),
     `:tracker_module` (test override), `:task_supervisor` (test override),
-    `:auto_start_tick` (default true).
+    `:auto_start_tick` (default true), `:ssh` (options forwarded to
+    `Raxol.Symphony.Ssh.exec/3` for remote workspace operations).
   - `snapshot/1` -- returns the SPEC s13.7.2 JSON-shaped state.
   - `refresh/1` -- queues an immediate poll cycle.
   - `subscribe/1` -- registers the calling pid for `{:symphony_event, ...}`
@@ -167,6 +168,11 @@ defmodule Raxol.Symphony.Orchestrator do
     paused_max_age_ms =
       Keyword.get(opts, :paused_max_age_ms, @default_paused_max_age_ms)
 
+    # Forwarded to `Raxol.Symphony.Ssh.exec/3` for every remote workspace
+    # operation (issue #744), so a test can drive the remote lifecycle through
+    # a fake `:exec_fn` without a real SSH server.
+    ssh = Keyword.get(opts, :ssh, [])
+
     state = %State{
       config: config,
       runner_module: runner_module,
@@ -175,6 +181,7 @@ defmodule Raxol.Symphony.Orchestrator do
       workflow_store: workflow_store,
       paused_saver: paused_saver,
       paused_max_age_ms: paused_max_age_ms,
+      ssh: ssh,
       paused: hydrate_paused(PausedSaver.load_all(paused_saver)),
       host_pool: build_host_pool(config)
     }
@@ -465,7 +472,7 @@ defmodule Raxol.Symphony.Orchestrator do
   defp dispatch_issue_on_host(%State{} = state, %Issue{} = issue, attempt, host) do
     with {:ok, runner_mod} <- runner_module(state),
          {:ok, %{path: workspace_path}} <-
-           Workspace.ensure(state.config, issue.identifier) do
+           Workspace.ensure(state.config, issue.identifier, host: host, ssh: state.ssh) do
       do_dispatch_issue(state, issue, attempt, runner_mod, workspace_path, host)
     else
       {:error, reason} ->
@@ -715,29 +722,57 @@ defmodule Raxol.Symphony.Orchestrator do
   defp dispatch_parallel_batch(%State{} = state, []), do: state
 
   defp dispatch_parallel_batch(%State{} = state, issues_with_attempts) do
-    with {:ok, runner_mod} <- runner_module(state),
-         {:ok, prepared} <- ensure_batch_workspaces(state, issues_with_attempts) do
-      {prepared, state} = claim_batch_hosts(state, prepared)
-      do_dispatch_parallel_batch(state, runner_mod, prepared)
-    else
-      {:error, reason} ->
-        Logger.warning("symphony.orchestrator.parallel_dispatch_failed reason=#{inspect(reason)}")
+    case runner_module(state) do
+      {:ok, runner_mod} ->
+        dispatch_parallel_batch_with_runner(state, runner_mod, issues_with_attempts)
 
-        # Nothing was spawned; fall each issue back to a failure retry so the
-        # batch is never silently dropped.
-        Enum.reduce(issues_with_attempts, state, fn {issue, attempt}, acc ->
-          schedule_failure_retry(acc, issue, (attempt || 0) + 1, reason)
-        end)
+      {:error, reason} ->
+        # Nothing claimed, nothing created, nothing spawned.
+        fail_whole_batch(state, issues_with_attempts, reason)
     end
   end
 
-  defp ensure_batch_workspaces(%State{} = state, issues_with_attempts) do
+  # Hosts are claimed BEFORE workspaces are created, because a remote worker's
+  # workspace lives on its host (issue #744): the host has to be known to
+  # create the directory in the right place. A workspace failure therefore has
+  # to hand back the slots this already reserved, or they leak busy forever.
+  defp dispatch_parallel_batch_with_runner(%State{} = state, runner_mod, issues_with_attempts) do
+    {slots, state} = claim_batch_hosts(state, issues_with_attempts)
+
+    case ensure_batch_workspaces(state, slots) do
+      {:ok, prepared} ->
+        do_dispatch_parallel_batch(state, runner_mod, prepared)
+
+      {:error, reason} ->
+        state
+        |> release_batch_hosts(slots)
+        |> fail_whole_batch(issues_with_attempts, reason)
+    end
+  end
+
+  defp fail_whole_batch(%State{} = state, issues_with_attempts, reason) do
+    Logger.warning("symphony.orchestrator.parallel_dispatch_failed reason=#{inspect(reason)}")
+
+    # Nothing was spawned; fall each issue back to a failure retry so the
+    # batch is never silently dropped.
+    Enum.reduce(issues_with_attempts, state, fn {issue, attempt}, acc ->
+      schedule_failure_retry(acc, issue, (attempt || 0) + 1, reason)
+    end)
+  end
+
+  defp release_batch_hosts(%State{} = state, slots) do
+    Enum.reduce(slots, state, fn slot, acc -> release_host(acc, Map.get(slot, :host)) end)
+  end
+
+  defp ensure_batch_workspaces(%State{} = state, slots) do
     result =
-      Enum.reduce_while(issues_with_attempts, {:ok, []}, fn {issue, attempt}, {:ok, acc} ->
-        case Workspace.ensure(state.config, issue.identifier) do
+      Enum.reduce_while(slots, {:ok, []}, fn slot, {:ok, acc} ->
+        case Workspace.ensure(state.config, slot.issue.identifier,
+               host: Map.get(slot, :host),
+               ssh: state.ssh
+             ) do
           {:ok, %{path: path}} ->
-            entry = %{issue: issue, attempt: attempt, workspace_path: path}
-            {:cont, {:ok, [entry | acc]}}
+            {:cont, {:ok, [Map.put(slot, :workspace_path, path) | acc]}}
 
           {:error, reason} ->
             {:halt, {:error, reason}}
@@ -756,8 +791,10 @@ defmodule Raxol.Symphony.Orchestrator do
   # the batch is never deferred on host scarcity. With no pool configured every
   # slot gets nil and nothing is reserved, preserving pre-host batch behaviour.
   # Threads the mutated pool back out via the accumulator.
-  defp claim_batch_hosts(%State{} = state, prepared) do
-    Enum.map_reduce(prepared, state, fn slot, acc ->
+  defp claim_batch_hosts(%State{} = state, issues_with_attempts) do
+    Enum.map_reduce(issues_with_attempts, state, fn {issue, attempt}, acc ->
+      slot = %{issue: issue, attempt: attempt}
+
       case claim_host(acc) do
         {:ok, host, acc} -> {Map.put(slot, :host, host), acc}
         :none_free -> {Map.put(slot, :host, nil), acc}
@@ -1521,7 +1558,11 @@ defmodule Raxol.Symphony.Orchestrator do
     )
 
     forget_paused(state.paused_saver, issue_id)
-    Workspace.remove(state.config, entry.workspace_path)
+
+    Workspace.remove(state.config, entry.workspace_path,
+      host: Map.get(entry, :host),
+      ssh: state.ssh
+    )
 
     state
     # The parked run kept its host slot reserved; free it now that the run is
@@ -1631,7 +1672,10 @@ defmodule Raxol.Symphony.Orchestrator do
     %State{} = state = remove_running(state, issue_id, :reconciled)
 
     if clean_workspace? do
-      Workspace.remove(state.config, entry.workspace_path)
+      Workspace.remove(state.config, entry.workspace_path,
+        host: Map.get(entry, :host),
+        ssh: state.ssh
+      )
     end
 
     state

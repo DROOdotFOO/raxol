@@ -16,9 +16,9 @@ defmodule Raxol.Symphony.Ssh do
     * **`ssh` is allowlisted.** `executable/0` refuses anything whose
       basename is not `ssh` (mirrors the gateway transcribe allowlist).
 
-  The remote workspace path handling (creating `WS` on the host) is issue
-  #744; here the caller supplies whatever path the remote command should
-  `cd` into.
+  The caller supplies the path the remote command should `cd` into.
+  `Raxol.Symphony.Workspace` derives that path from the host spec's
+  `workspace_root` and creates it on the host (issue #744).
   """
 
   alias Raxol.Symphony.Worker.HostSpec
@@ -35,6 +35,11 @@ defmodule Raxol.Symphony.Ssh do
   # the Port closes.
   @server_alive_interval_seconds 30
   @server_alive_count_max 3
+
+  # How often the disconnect watcher re-checks that its sshd session is still
+  # alive. Only bounds how long an orphan survives after a disconnect; it costs
+  # a live command nothing (see `reap_on_disconnect/1`).
+  @reap_poll_seconds 5
 
   @doc """
   Resolve the `ssh` executable, refusing anything not named `ssh`.
@@ -82,14 +87,38 @@ defmodule Raxol.Symphony.Ssh do
   re-parse. The remote login shell sources host-provisioned credentials; no
   env is forwarded from the orchestrator.
 
-  `workspace` is the (local) workspace path as-is; `HostSpec.workspace_root`
-  is not consulted here. Per-host remote workspace roots are reserved for
-  issue #744.
+  `workspace` is a path on the HOST, derived by
+  `Raxol.Symphony.Workspace` from the spec's `workspace_root`.
+
+  The `&&` carries SPEC s9.5 Invariant 1 across the network: a `cd` that fails
+  short-circuits, so a command whose workspace is missing does not run in the
+  login shell's home directory instead. That is the remote counterpart of the
+  local launch's `{:cd, workspace}`.
   """
   @spec remote_bash(binary(), binary()) :: binary()
   def remote_bash(workspace, command) when is_binary(workspace) and is_binary(command) do
-    inner = "cd #{shell_quote(workspace)} && #{command}"
-    "bash -lc #{shell_quote(inner)}"
+    remote_bash("cd #{shell_quote(workspace)} && #{command}")
+  end
+
+  @doc """
+  A remote `bash -lc` login-shell command with no `cd`, for the commands that
+  run BEFORE the workspace exists (creating it) or AFTER it is gone (removing
+  it). Prefer `remote_bash/2` for anything that runs inside a workspace.
+  """
+  @spec remote_bash(binary()) :: binary()
+  def remote_bash(command) when is_binary(command) do
+    "bash -lc #{shell_quote(command)}"
+  end
+
+  @doc """
+  POSIX single-quote a value for interpolation into a remote command.
+
+  Public because the workspace layer builds its own `mkdir -p` / `rm -rf`
+  scripts and must quote host paths the same way this module does.
+  """
+  @spec shell_quote(binary()) :: binary()
+  def shell_quote(str) when is_binary(str) do
+    "'" <> String.replace(str, "'", "'\\''") <> "'"
   end
 
   @doc """
@@ -106,15 +135,29 @@ defmodule Raxol.Symphony.Ssh do
   shell's parent (the sshd session process): when it dies, the watcher signals
   the command. A normal exit falls straight through with the command's real
   status (`wait`). Framing-safe: the watcher never reads the data channel.
+
+  The watcher polls in its OWN background subshell rather than inline, so the
+  poll interval is never added to the command's own runtime. Inline, `wait`
+  could not be reached until the current `sleep` elapsed, which charged every
+  invocation up to a full interval. That is invisible for a long-lived
+  `codex app-server` and ruinous for a workspace hook that finishes in
+  milliseconds (issue #744).
+
+  The watcher's own stdio goes to `/dev/null`, which is load-bearing rather
+  than tidiness. Inheriting the command's stdout would leave the watcher (and
+  the `sleep` it spawns) holding the write end of that pipe: a reader waits for
+  EOF, not for the command to exit, so a caller like `System.cmd/3` would block
+  for a further poll interval after the command had already finished.
   """
   @spec reap_on_disconnect(binary()) :: binary()
   def reap_on_disconnect(command) when is_binary(command) do
     # Single-quote-free so it survives `remote_bash/2`'s single-quoting intact.
     command <>
       " <&0 & __rx_pid=$!; __rx_ppid=$PPID; " <>
-      "while kill -0 $__rx_pid 2>/dev/null; do " <>
-      "ps -p $__rx_ppid >/dev/null 2>&1 || break; sleep 5; done; " <>
-      "kill $__rx_pid 2>/dev/null; wait $__rx_pid"
+      "{ while kill -0 $__rx_pid 2>/dev/null; do " <>
+      "ps -p $__rx_ppid >/dev/null 2>&1 || { kill $__rx_pid 2>/dev/null; break; }; " <>
+      "sleep #{@reap_poll_seconds}; done; } >/dev/null 2>&1 & __rx_watch=$!; " <>
+      "wait $__rx_pid; __rx_status=$?; kill $__rx_watch 2>/dev/null; exit $__rx_status"
   end
 
   @doc """
@@ -180,10 +223,4 @@ defmodule Raxol.Symphony.Ssh do
 
   defp identity_args(nil), do: []
   defp identity_args(path) when is_binary(path), do: ["-i", path]
-
-  # POSIX single-quote escaping: wrap in single quotes, and end/re-open the
-  # quote around any embedded single quote (`'` -> `'\''`).
-  defp shell_quote(str) do
-    "'" <> String.replace(str, "'", "'\\''") <> "'"
-  end
 end

@@ -8,6 +8,7 @@ defmodule Raxol.Symphony.OrchestratorRemoteDispatchTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Symphony.{Config, Issue, Orchestrator}
+  alias Raxol.Symphony.Test.FakeSsh
   alias Raxol.Symphony.Trackers.Memory
   alias Raxol.Symphony.Worker.HostSpec
 
@@ -103,7 +104,11 @@ defmodule Raxol.Symphony.OrchestratorRemoteDispatchTest do
     {:ok, pid} =
       start_supervised(
         {Orchestrator,
-         config: config, runner_module: runner_module, auto_start_tick: false, name: nil},
+         config: config,
+         runner_module: runner_module,
+         auto_start_tick: false,
+         name: nil,
+         ssh: FakeSsh.opts()},
         id: {Orchestrator, make_ref()}
       )
 

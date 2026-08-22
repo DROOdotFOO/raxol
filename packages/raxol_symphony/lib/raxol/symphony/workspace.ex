@@ -18,11 +18,36 @@ defmodule Raxol.Symphony.Workspace do
   - `before_run` failure or timeout -> fatal to current run attempt
   - `after_run` failure or timeout -> logged, ignored
   - `before_remove` failure or timeout -> logged, ignored
+
+  ## Local and remote workspaces (issue #744)
+
+  Every entry point takes an optional `:host`. With `host: nil` (the default,
+  and every local dispatch) the local filesystem path below runs unchanged.
+
+  With a `%HostSpec{}` the whole lifecycle moves to that host: the directory is
+  created and removed there over `Raxol.Symphony.Ssh`, hooks run there, and the
+  path is rooted at the spec's `workspace_root`. A remote worker must not be
+  handed the orchestrator's own path, because nothing guarantees that path
+  exists on the host, and if it happens to exist it is a different directory
+  belonging to something else.
+
+  When a spec declares no `workspace_root` the configured `workspace.root` is
+  used as-is, which assumes the host mirrors the orchestrator's layout. Declare
+  `workspace_root` per host when it does not.
+
+  `:ssh` forwards options to `Raxol.Symphony.Ssh.exec/3` (`:exec_fn`,
+  `:executable`), so the remote lifecycle is testable without a real SSH server.
   """
 
   require Logger
 
-  alias Raxol.Symphony.{Config, PathSafety}
+  alias Raxol.Symphony.{Config, PathSafety, Ssh}
+  alias Raxol.Symphony.Worker.HostSpec
+
+  # Distinctive enough that a login banner or profile chatter on the remote
+  # shell cannot be mistaken for the probe's own answer.
+  @created_marker "__rx_ws_created__"
+  @exists_marker "__rx_ws_exists__"
 
   @type ensure_result :: %{
           path: Path.t(),
@@ -41,13 +66,34 @@ defmodule Raxol.Symphony.Workspace do
   @doc """
   Ensures the per-issue workspace directory exists.
 
-  Returns `{:ok, %{path, key, created_now}}` or `{:error, reason}`.
+  Returns `{:ok, %{path, key, created_now}}` or `{:error, reason}`. With a
+  `:host` the directory is created on that host and `path` names a directory
+  there, not on the orchestrator.
   """
-  @spec ensure(Config.t(), binary()) :: {:ok, ensure_result()} | {:error, ensure_error()}
-  def ensure(%Config{} = config, identifier) when is_binary(identifier) do
+  @spec ensure(Config.t(), binary(), keyword()) ::
+          {:ok, ensure_result()} | {:error, ensure_error()}
+  def ensure(%Config{} = config, identifier, opts \\ []) when is_binary(identifier) do
+    case host_opt(opts) do
+      nil -> ensure_local(config, identifier)
+      %HostSpec{} = host -> ensure_remote(config, identifier, host, ssh_opts(opts))
+    end
+  end
+
+  defp ensure_local(%Config{} = config, identifier) do
     with {:ok, path} <- PathSafety.workspace_path(config.workspace.root, identifier),
          {:ok, created_now} <- mkdir_p(path),
-         :ok <- maybe_run_after_create(config, path, created_now) do
+         :ok <- maybe_run_after_create(config, path, created_now, []) do
+      {:ok, %{path: path, key: PathSafety.sanitize_key(identifier), created_now: created_now}}
+    end
+  end
+
+  defp ensure_remote(%Config{} = config, identifier, %HostSpec{} = host, ssh_opts) do
+    hook_opts = [host: host, ssh: ssh_opts]
+
+    with {:ok, path} <-
+           PathSafety.remote_workspace_path(remote_root(config, host), identifier),
+         {:ok, created_now} <- remote_mkdir_p(host, path, ssh_opts),
+         :ok <- maybe_run_after_create(config, path, created_now, hook_opts) do
       {:ok, %{path: path, key: PathSafety.sanitize_key(identifier), created_now: created_now}}
     end
   end
@@ -55,9 +101,9 @@ defmodule Raxol.Symphony.Workspace do
   @doc """
   Runs `hooks.before_run` for the workspace. Returns `:ok` or `{:error, reason}`.
   """
-  @spec run_before_run_hook(Config.t(), Path.t()) :: :ok | {:error, term()}
-  def run_before_run_hook(%Config{} = config, path) do
-    case run_hook(config, :before_run, path) do
+  @spec run_before_run_hook(Config.t(), Path.t(), keyword()) :: :ok | {:error, term()}
+  def run_before_run_hook(%Config{} = config, path, opts \\ []) do
+    case run_hook(config, :before_run, path, opts) do
       :ok -> :ok
       :no_hook -> :ok
       {:error, reason} -> {:error, {:before_run_hook_failed, reason}}
@@ -67,9 +113,9 @@ defmodule Raxol.Symphony.Workspace do
   @doc """
   Runs `hooks.after_run` for the workspace. Failures are logged but ignored.
   """
-  @spec run_after_run_hook(Config.t(), Path.t()) :: :ok
-  def run_after_run_hook(%Config{} = config, path) do
-    case run_hook(config, :after_run, path) do
+  @spec run_after_run_hook(Config.t(), Path.t(), keyword()) :: :ok
+  def run_after_run_hook(%Config{} = config, path, opts \\ []) do
+    case run_hook(config, :after_run, path, opts) do
       :ok ->
         :ok
 
@@ -87,17 +133,44 @@ defmodule Raxol.Symphony.Workspace do
 
   @doc """
   Removes a workspace, running `before_remove` first (best-effort).
+
+  With a `:host` the containment check is measured against that host's remote
+  root and the deletion happens there.
   """
-  @spec remove(Config.t(), Path.t()) :: :ok
-  def remove(%Config{} = config, path) when is_binary(path) do
+  @spec remove(Config.t(), Path.t(), keyword()) :: :ok
+  def remove(%Config{} = config, path, opts \\ []) when is_binary(path) do
+    case host_opt(opts) do
+      nil -> remove_local(config, path)
+      %HostSpec{} = host -> remove_remote(config, path, host, ssh_opts(opts))
+    end
+  end
+
+  defp remove_local(%Config{} = config, path) do
     case PathSafety.validate_inside_root(path, config.workspace.root) do
       {:ok, abs_path} ->
-        run_before_remove(config, abs_path)
+        run_before_remove(config, abs_path, [])
         File.rm_rf(abs_path)
         :ok
 
       {:error, reason} ->
         Logger.warning("symphony.workspace.remove_skipped path=#{path} reason=#{inspect(reason)}")
+
+        :ok
+    end
+  end
+
+  defp remove_remote(%Config{} = config, path, %HostSpec{} = host, ssh_opts) do
+    case PathSafety.validate_inside_remote_root(path, remote_root(config, host)) do
+      {:ok, abs_path} ->
+        run_before_remove(config, abs_path, host: host, ssh: ssh_opts)
+        remote_rm_rf(host, abs_path, ssh_opts)
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "symphony.workspace.remove_skipped host=#{HostSpec.id(host)} path=#{path} " <>
+            "reason=#{inspect(reason)}"
+        )
 
         :ok
     end
@@ -114,23 +187,27 @@ defmodule Raxol.Symphony.Workspace do
   - `:timeout` -- exceeded `hooks.timeout_ms`
   - `:bash_not_found` -- no bash on PATH
   """
-  @spec run_hook(Config.t(), :after_create | :before_run | :after_run | :before_remove, Path.t()) ::
-          :ok | :no_hook | {:error, term()}
-  def run_hook(%Config{hooks: hooks}, hook_name, path)
+  @spec run_hook(
+          Config.t(),
+          :after_create | :before_run | :after_run | :before_remove,
+          Path.t(),
+          keyword()
+        ) :: :ok | :no_hook | {:error, term()}
+  def run_hook(%Config{hooks: hooks}, hook_name, path, opts \\ [])
       when hook_name in [:after_create, :before_run, :after_run, :before_remove] do
     case Map.get(hooks, hook_name) do
       script when is_nil(script) or script == "" ->
         :no_hook
 
       script ->
-        execute_named_hook(hook_name, script, path, hooks.timeout_ms)
+        execute_named_hook(hook_name, script, path, hooks.timeout_ms, opts)
     end
   end
 
-  defp execute_named_hook(hook_name, script, path, timeout_ms) do
-    Logger.info("symphony.workspace.hook_started hook=#{hook_name} path=#{path}")
+  defp execute_named_hook(hook_name, script, path, timeout_ms, opts) do
+    Logger.info("symphony.workspace.hook_started hook=#{hook_name} path=#{path}#{host_log(opts)}")
 
-    case execute_script(script, path, timeout_ms) do
+    case execute_hook_script(script, path, timeout_ms, opts) do
       {:ok, output} ->
         Logger.debug(
           "symphony.workspace.hook_completed hook=#{hook_name} path=#{path} " <>
@@ -174,10 +251,10 @@ defmodule Raxol.Symphony.Workspace do
     end
   end
 
-  defp maybe_run_after_create(_config, _path, false), do: :ok
+  defp maybe_run_after_create(_config, _path, false, _opts), do: :ok
 
-  defp maybe_run_after_create(config, path, true) do
-    case run_hook(config, :after_create, path) do
+  defp maybe_run_after_create(config, path, true, opts) do
+    case run_hook(config, :after_create, path, opts) do
       :ok ->
         :ok
 
@@ -186,14 +263,22 @@ defmodule Raxol.Symphony.Workspace do
 
       {:error, reason} ->
         # Best-effort: remove the partially-prepared directory so the next run
-        # can retry from scratch (per SPEC s9.3 implementation guidance).
-        File.rm_rf(path)
+        # can retry from scratch (per SPEC s9.3 implementation guidance). This
+        # has to unwind on whichever machine just created it.
+        discard_partial(path, opts)
         {:error, {:after_create_hook_failed, reason}}
     end
   end
 
-  defp run_before_remove(config, path) do
-    case run_hook(config, :before_remove, path) do
+  defp discard_partial(path, opts) do
+    case host_opt(opts) do
+      nil -> File.rm_rf(path)
+      %HostSpec{} = host -> remote_rm_rf(host, path, ssh_opts(opts))
+    end
+  end
+
+  defp run_before_remove(config, path, opts) do
+    case run_hook(config, :before_remove, path, opts) do
       :ok ->
         :ok
 
@@ -206,6 +291,130 @@ defmodule Raxol.Symphony.Workspace do
         )
 
         :ok
+    end
+  end
+
+  # -- Remote lifecycle (issue #744) ------------------------------------------
+
+  defp host_opt(opts), do: Keyword.get(opts, :host)
+
+  defp ssh_opts(opts), do: Keyword.get(opts, :ssh, [])
+
+  defp host_log(opts) do
+    case host_opt(opts) do
+      nil -> ""
+      %HostSpec{} = host -> " host=#{HostSpec.id(host)}"
+    end
+  end
+
+  # A spec that declares no root falls back to the configured local root,
+  # which assumes the host mirrors the orchestrator's layout.
+  defp remote_root(%Config{}, %HostSpec{workspace_root: root})
+       when is_binary(root) and root != "",
+       do: root
+
+  defp remote_root(%Config{} = config, %HostSpec{}), do: config.workspace.root
+
+  # One round trip answers both "does it exist" and "create it", so the
+  # `created_now` flag that gates `after_create` cannot be decided against a
+  # stale observation from a separate probe.
+  defp remote_mkdir_p(%HostSpec{} = host, path, ssh_opts) do
+    quoted = Ssh.shell_quote(path)
+
+    script =
+      "if [ -d #{quoted} ]; then printf %s #{@exists_marker}; " <>
+        "else mkdir -p #{quoted} && printf %s #{@created_marker}; fi"
+
+    # `{:error, :ssh_not_allowed}` is itself a 2-tuple, so it has to be matched
+    # before the `{output, status}` clause that would otherwise swallow it and
+    # report an unresolvable `ssh` binary as exit status `:ssh_not_allowed`.
+    case Ssh.exec(host, Ssh.remote_bash(script), ssh_opts) do
+      {:error, reason} -> {:error, {:mkdir_failed, reason}}
+      {output, 0} -> interpret_mkdir_output(output)
+      {output, status} -> {:error, {:mkdir_failed, {:exit, status, output}}}
+    end
+  end
+
+  defp interpret_mkdir_output(output) when is_binary(output) do
+    cond do
+      String.contains?(output, @created_marker) -> {:ok, true}
+      String.contains?(output, @exists_marker) -> {:ok, false}
+      true -> {:error, {:mkdir_failed, {:unexpected_output, output}}}
+    end
+  end
+
+  defp interpret_mkdir_output(output),
+    do: {:error, {:mkdir_failed, {:unexpected_output, output}}}
+
+  defp remote_rm_rf(%HostSpec{} = host, path, ssh_opts) do
+    command = Ssh.remote_bash("rm -rf #{Ssh.shell_quote(path)}")
+
+    case Ssh.exec(host, command, ssh_opts) do
+      {:error, reason} ->
+        Logger.warning(
+          "symphony.workspace.remote_remove_failed host=#{HostSpec.id(host)} path=#{path} " <>
+            "reason=#{inspect(reason)}"
+        )
+
+        :ok
+
+      {_output, 0} ->
+        :ok
+
+      {output, status} ->
+        Logger.warning(
+          "symphony.workspace.remote_remove_failed host=#{HostSpec.id(host)} path=#{path} " <>
+            "exit=#{status} output=#{truncate_for_log(output)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp execute_hook_script(script, path, timeout_ms, opts) do
+    case host_opt(opts) do
+      nil ->
+        execute_script(script, path, timeout_ms)
+
+      %HostSpec{} = host ->
+        execute_script_remote(script, path, timeout_ms, host, ssh_opts(opts))
+    end
+  end
+
+  # `System.cmd/3` has no timeout, so `hooks.timeout_ms` is enforced by killing
+  # the local `ssh` and letting `reap_on_disconnect/1` take the remote script
+  # down with the connection. Without the reaper a timed-out hook would keep
+  # running on the host after we stopped waiting for it.
+  defp execute_script_remote(script, path, timeout_ms, %HostSpec{} = host, ssh_opts) do
+    command = Ssh.remote_bash(path, Ssh.reap_on_disconnect(script))
+
+    case run_with_timeout(fn -> Ssh.exec(host, command, ssh_opts) end, timeout_ms) do
+      # As in `remote_mkdir_p/3`: the `{:error, _}` shape is a 2-tuple and has
+      # to be matched ahead of `{output, status}`.
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:ok, {output, 0}} -> {:ok, output}
+      {:ok, {output, status}} -> {:error, {:exit, status, output}}
+      {:error, reason} -> {:error, reason}
+      :timeout -> {:error, :timeout}
+    end
+  end
+
+  # Unlinked on purpose: an `ssh` invocation that crashes must not take the
+  # calling orchestrator down with it.
+  defp run_with_timeout(fun, timeout_ms) do
+    {pid, ref} = spawn_monitor(fn -> exit({:hook_result, fun.()}) end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, {:hook_result, result}} ->
+        {:ok, result}
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, {:hook_process_exited, reason}}
+    after
+      timeout_ms ->
+        Process.demonitor(ref, [:flush])
+        Process.exit(pid, :kill)
+        :timeout
     end
   end
 

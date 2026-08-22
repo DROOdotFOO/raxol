@@ -13,6 +13,7 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
 
   alias Raxol.Symphony.{Config, Issue, Orchestrator, WorkflowStore}
   alias Raxol.Symphony.Runners.Noop
+  alias Raxol.Symphony.Test.FakeSsh
   alias Raxol.Symphony.Trackers.Memory
 
   setup do
@@ -47,7 +48,12 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
   defp start_orchestrator(config) do
     {:ok, pid} =
       start_supervised(
-        {Orchestrator, config: config, runner_module: Noop, auto_start_tick: false, name: nil},
+        {Orchestrator,
+         config: config,
+         runner_module: Noop,
+         auto_start_tick: false,
+         name: nil,
+         ssh: FakeSsh.opts()},
         id: {Orchestrator, make_ref()}
       )
 
@@ -188,7 +194,11 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
     {:ok, pid} =
       start_supervised(
         {Orchestrator,
-         workflow_store: store, runner_module: Noop, auto_start_tick: false, name: nil},
+         workflow_store: store,
+         runner_module: Noop,
+         auto_start_tick: false,
+         name: nil,
+         ssh: FakeSsh.opts()},
         id: {Orchestrator, make_ref()}
       )
 
