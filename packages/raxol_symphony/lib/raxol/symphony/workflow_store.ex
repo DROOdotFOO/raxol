@@ -243,6 +243,24 @@ defmodule Raxol.Symphony.WorkflowStore do
         FileSystem.subscribe(pid)
         %__MODULE__{state | watcher_pid: pid, watcher_enabled: true}
 
+      # `FileSystem` answers `:ignore` -- not `{:error, _}` -- when its backend
+      # cannot bootstrap: on Linux that is a host with no `inotify-tools`, which
+      # it reports by logging and then declining to start. Unhandled, this raised
+      # a CaseClauseError out of `init_manager/1` and took the whole
+      # WorkflowStore down at boot, so the orchestrator's config server never
+      # came up on a machine whose only defect was a missing package.
+      #
+      # Every other unavailable-watcher path here degrades to load-once mode.
+      # This is the same condition and now degrades the same way.
+      :ignore ->
+        Logger.warning(
+          "symphony.workflow_store.watcher_unavailable dir=#{dir} -- the file_system " <>
+            "backend declined to start (on Linux, install inotify-tools). Running in " <>
+            "load-once mode: WORKFLOW.md changes need a restart."
+        )
+
+        state
+
       {:error, reason} ->
         Logger.warning(
           "symphony.workflow_store.watcher_start_failed dir=#{dir} reason=#{inspect(reason)}"

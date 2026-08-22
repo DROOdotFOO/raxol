@@ -241,6 +241,26 @@ defmodule Raxol.Symphony.WorkflowStoreTest do
   # -- Watcher lifecycle ------------------------------------------------------
 
   describe "watcher" do
+    # The store must COME UP either way. `FileSystem.start_link/1` answers
+    # `:ignore` when its backend cannot bootstrap -- on Linux, a host with no
+    # `inotify-tools` -- and that used to raise a CaseClauseError out of
+    # `init_manager/1`, taking the config server down at boot over a missing
+    # package. Asserting on start separately from `watching?` is what tells the
+    # two apart: a store that declined to watch is fine, a store that refused to
+    # start is not.
+    test "starts even where the file_system backend cannot", %{dir: dir} do
+      path = write_workflow(dir, @workflow)
+
+      pid =
+        start_supervised!(
+          {WorkflowStore, path: path, watch?: true, name: :"#{__MODULE__}_watcher_boot"}
+        )
+
+      assert Process.alive?(pid)
+      assert is_boolean(WorkflowStore.watching?(pid))
+    end
+
+    @tag :needs_file_watcher
     test "starts a FileSystem watcher when watch?: true and dep is present", %{dir: dir} do
       path = write_workflow(dir, @workflow)
 
@@ -263,6 +283,7 @@ defmodule Raxol.Symphony.WorkflowStoreTest do
       refute WorkflowStore.watching?(pid)
     end
 
+    @tag :needs_file_watcher
     test "marks watcher_enabled=false when the watcher process stops", %{dir: dir} do
       path = write_workflow(dir, @workflow)
 

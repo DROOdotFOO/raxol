@@ -341,6 +341,15 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
+      # raxol_symphony's WorkflowStore watches WORKFLOW.md through `file_system`,
+      # whose Linux backend shells out to `inotifywait`. Without it the backend
+      # declines to start and the two watcher tests self-exclude, so the hot
+      # reload path would be gated by a cell that never exercises it. Only this
+      # package needs it, so only this package pays for it.
+      - name: Install inotify-tools
+        if: matrix.package == 'raxol_symphony'
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
       - name: Compile package
         working-directory: packages/${{ matrix.package }}
         run: |
