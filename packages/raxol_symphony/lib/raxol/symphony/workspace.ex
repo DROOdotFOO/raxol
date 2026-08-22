@@ -58,6 +58,7 @@ defmodule Raxol.Symphony.Workspace do
   @type ensure_error ::
           :workspace_outside_root
           | :invalid_workspace_root
+          | :invalid_workspace_key
           | {:mkdir_failed, term()}
           | {:after_create_hook_failed, term()}
 

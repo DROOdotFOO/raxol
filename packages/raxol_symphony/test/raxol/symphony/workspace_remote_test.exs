@@ -116,10 +116,11 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
     } do
       config = build_config(local_root)
 
-      # `sanitize_key/1` keeps `.`, so `".."` survives as a whole segment and
-      # the containment check is the only thing standing between it and the
-      # host root's parent.
-      assert {:error, :workspace_outside_root} =
+      # `sanitize_key/1` keeps `.`, so `".."` survives as a whole segment.
+      # Containment is not what stops it -- `fold_remote/2` clamps `..` at the
+      # prefix, so under a `~` root it folds back to `~` and passes. The key
+      # itself is refused instead.
+      assert {:error, :invalid_workspace_key} =
                Workspace.ensure(config, "..", host: host(host_root), ssh: FakeSsh.opts())
     end
 

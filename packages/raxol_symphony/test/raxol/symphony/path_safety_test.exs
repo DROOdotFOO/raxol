@@ -130,8 +130,12 @@ defmodule Raxol.Symphony.PathSafetyTest do
                PathSafety.remote_workspace_path("/srv/./nested/../ws", "MT-1")
     end
 
+    # Refused as a KEY, not as a containment miss. Containment cannot be the
+    # guard here: `fold_remote/2` clamps `..` at the prefix rather than letting
+    # it escape, so `/srv/ws/..` folds to `/srv` for a deep root (outside, and
+    # caught) but `~/..` folds to `~` (inside its own root, and not).
     test "refuses an identifier that would climb out of the root" do
-      assert {:error, :workspace_outside_root} =
+      assert {:error, :invalid_workspace_key} =
                PathSafety.remote_workspace_path("/srv/ws", "..")
     end
 
@@ -146,6 +150,39 @@ defmodule Raxol.Symphony.PathSafetyTest do
 
     test "a `..` chain cannot climb above the root" do
       assert {:ok, "/"} = PathSafety.validate_inside_remote_root("/../../..", "/")
+    end
+
+    # `.`, `-` and `_` are all in the allowed class, so `""`, `"."` and `".."`
+    # survive `sanitize_key/1` intact -- and containment does NOT catch them,
+    # because each folds back onto the root and the root is inside itself. The
+    # workspace then IS the root, and `Workspace.remove/3` deletes every other
+    # issue's workspace with it. Against a `~` root that is `rm -rf ~` on the
+    # host.
+    test "an identifier that names the root itself is refused, not resolved to it" do
+      for root <- ["~", "~ci", "/", "/srv/ws"], id <- ["", ".", ".."] do
+        assert {:error, :invalid_workspace_key} =
+                 PathSafety.remote_workspace_path(root, id),
+               "#{inspect(root)} + #{inspect(id)} resolved onto its own root"
+      end
+    end
+
+    test "an identifier that merely contains dots is still fine" do
+      assert {:ok, "/srv/ws/MT-1.2"} = PathSafety.remote_workspace_path("/srv/ws", "MT-1.2")
+      assert {:ok, "/srv/ws/..MT"} = PathSafety.remote_workspace_path("/srv/ws", "..MT")
+    end
+  end
+
+  describe "workspace_path/2 (local)" do
+    # The local builder collapses the same way: `Path.join(root, "")` is `root`,
+    # and `File.rm_rf/1` on it takes out every sibling workspace.
+    test "an identifier that names the root itself is refused" do
+      for id <- ["", ".", ".."] do
+        assert {:error, :invalid_workspace_key} = PathSafety.workspace_path("/srv/ws", id)
+      end
+    end
+
+    test "an ordinary identifier still resolves under the root" do
+      assert {:ok, "/srv/ws/MT-1"} = PathSafety.workspace_path("/srv/ws", "MT-1")
     end
   end
 

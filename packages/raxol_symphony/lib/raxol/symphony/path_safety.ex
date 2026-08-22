@@ -16,14 +16,40 @@ defmodule Raxol.Symphony.PathSafety do
 
   @sanitize_pattern ~r/[^A-Za-z0-9._-]/u
 
+  # A sanitized key that names the workspace ROOT rather than a directory under
+  # it. `.` and `-` are in the allowed class, so `""`, `"."` and `".."` all
+  # survive sanitizing intact, and each of them folds back onto the root: the
+  # workspace becomes the root, and `Workspace.remove/3` then deletes every other
+  # issue's workspace with it. Against a `~` remote root that is `rm -rf ~` on
+  # the host. Containment does not catch these -- the root IS inside the root,
+  # and `fold_remote/2` clamps `..` at the prefix rather than letting it escape.
+  @degenerate_keys ~w(. ..)
+
   @doc """
   Sanitizes an issue identifier into a workspace key.
 
   Replaces any character outside `[A-Za-z0-9._-]` with `_`.
+
+  Sanitizing alone does not make a key SAFE -- see `valid_key/1`, which is what
+  the path builders gate on.
   """
   @spec sanitize_key(binary()) :: binary()
   def sanitize_key(identifier) when is_binary(identifier) do
     Regex.replace(@sanitize_pattern, identifier, "_")
+  end
+
+  @doc """
+  Sanitizes an identifier and refuses a key that would name the workspace root.
+
+  Returns `{:ok, key}` or `{:error, :invalid_workspace_key}`.
+  """
+  @spec valid_key(binary()) :: {:ok, binary()} | {:error, :invalid_workspace_key}
+  def valid_key(identifier) when is_binary(identifier) do
+    case sanitize_key(identifier) do
+      "" -> {:error, :invalid_workspace_key}
+      key when key in @degenerate_keys -> {:error, :invalid_workspace_key}
+      key -> {:ok, key}
+    end
   end
 
   @doc """
@@ -33,11 +59,12 @@ defmodule Raxol.Symphony.PathSafety do
   otherwise `{:error, :workspace_outside_root}`.
   """
   @spec workspace_path(Path.t(), binary()) ::
-          {:ok, Path.t()} | {:error, :workspace_outside_root | :invalid_workspace_root}
+          {:ok, Path.t()}
+          | {:error, :workspace_outside_root | :invalid_workspace_root | :invalid_workspace_key}
   def workspace_path(workspace_root, identifier)
       when is_binary(workspace_root) and is_binary(identifier) do
-    with {:ok, root} <- absolutize(workspace_root) do
-      key = sanitize_key(identifier)
+    with {:ok, root} <- absolutize(workspace_root),
+         {:ok, key} <- valid_key(identifier) do
       candidate = Path.join(root, key) |> Path.expand()
       validate_inside_root(candidate, root)
     end
@@ -80,17 +107,17 @@ defmodule Raxol.Symphony.PathSafety do
   shell happens to start in.
   """
   @spec remote_workspace_path(Path.t(), binary()) ::
-          {:ok, Path.t()} | {:error, :workspace_outside_root | :invalid_workspace_root}
+          {:ok, Path.t()}
+          | {:error, :workspace_outside_root | :invalid_workspace_root | :invalid_workspace_key}
   def remote_workspace_path(root, identifier)
       when is_binary(root) and is_binary(identifier) do
-    with {:ok, abs_root} <- normalize_remote(root) do
-      # `sanitize_key/1` strips `/`, so a key cannot add a segment. It does
-      # permit `.`, so `".."` survives as a whole segment -- the containment
-      # check below is what rejects it.
-      validate_inside_remote_root(
-        join_remote_segment(abs_root, sanitize_key(identifier)),
-        abs_root
-      )
+    # `sanitize_key/1` strips `/`, so a key cannot add a segment. It does permit
+    # `.`, so `""`, `"."` and `".."` survive it -- and containment does NOT
+    # reject those, because each folds back onto the root and the root is inside
+    # itself. `valid_key/1` is what rejects them.
+    with {:ok, abs_root} <- normalize_remote(root),
+         {:ok, key} <- valid_key(identifier) do
+      validate_inside_remote_root(join_remote_segment(abs_root, key), abs_root)
     end
   end
 
