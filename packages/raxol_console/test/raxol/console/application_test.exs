@@ -73,6 +73,19 @@ defmodule Raxol.Console.ApplicationTest do
       assert opts[:handler_mode] == :app
       assert opts[:app_template] == "dashboard"
     end
+
+    # Same filter, same failure mode: a :pairing absent from @rc_keys is dropped
+    # in silence, and the deployment's authorization posture never reaches
+    # RuntimeConfig -- so the runtime boots open while its config says otherwise.
+    test "carries the pairing posture through" do
+      config = [
+        package_dir: "/srv/agent",
+        pairing: [allowed_users: ["alice"]]
+      ]
+
+      assert {:ok, _dir, opts} = Application.plan(config)
+      assert opts[:pairing] == [allowed_users: ["alice"]]
+    end
   end
 
   describe "boot/2" do

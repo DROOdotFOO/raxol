@@ -23,8 +23,11 @@ defmodule Raxol.Console.Boot do
   `Raxol.Console.RuntimeConfig.handler_spec/2`).
   """
 
+  require Logger
+
   alias Raxol.Agent.{McpBundle, Scheduler}
   alias Raxol.Console.RuntimeConfig
+  alias Raxol.Gateway.Pairing
 
   # Read-only skill access surfaced to the chat agent when the package ships
   # skills: the agent can list/view them on demand (skill authoring stays a
@@ -44,7 +47,8 @@ defmodule Raxol.Console.Boot do
           jobs: jobs_report(),
           mcp: %{tools: non_neg_integer(), failed: [{atom(), term()}]},
           channels: [atom()],
-          skills: %{store: atom() | nil, count: non_neg_integer()}
+          skills: %{store: atom() | nil, count: non_neg_integer()},
+          pairing: :open | :enforce | :none
         }
 
   @doc """
@@ -79,9 +83,115 @@ defmodule Raxol.Console.Boot do
     actions = Keyword.get(opts, :actions, []) ++ mcp.tools
 
     case start_gateway(sup, runtime_config, adapters, actions, base, skills) do
-      :ok -> {:ok, report(sup, mcp_sup, mcp, adapters, skills, opts)}
-      {:error, _} = error -> stop_supervisor(sup) && error
+      :ok ->
+        posture = announce_posture(runtime_config, adapters, base)
+        {:ok, report(sup, mcp_sup, mcp, adapters, skills, posture, opts)}
+
+      {:error, _} = error ->
+        stop_supervisor(sup) && error
     end
+  end
+
+  # The deployment's posture, as `Raxol.Gateway.Pairing` start opts. These are
+  # SEEDS, not calls against a running server: the Pairing server applies them in
+  # `init_manager/1`, so a supervisor restart rebuilds the same posture. Seeding
+  # a running server from here instead would mean one crash silently reverses the
+  # deployment -- an open Console starts denying everything, an enforcing one
+  # forgets its allowlist -- with the boot that announced the posture long past.
+  #
+  # Open mode is expressed as `allow_platforms` over the CONNECTED platforms
+  # rather than as a flag the gate consults, so there is one code path in both
+  # postures and the truth is in the Pairing server's own state. A platform the
+  # deployment never connected stays denied even when open.
+  # `RuntimeConfig.build/2` always resolves a posture map, so a nil is a struct
+  # someone built by hand rather than a fourth posture. It reads as unset, which
+  # is what an unset `:pairing` option means.
+  defp pairing_opts(%{pairing: nil}, adapters), do: [allow_platforms: Map.keys(adapters)]
+
+  defp pairing_opts(%{pairing: %{mode: :open}}, adapters),
+    do: [allow_platforms: Map.keys(adapters)]
+
+  defp pairing_opts(%{pairing: pairing}, _adapters) do
+    [
+      allow_platforms: pairing.allow_platforms,
+      allowed_users: pairing.allowed_users,
+      platform_users: pairing.platform_users
+    ]
+  end
+
+  # A headless runtime connects no channels, so start_gateway/6 starts no gateway
+  # subtree and there is no Pairing server at all. It also has no inbound chat
+  # surface to authorize, so warning about an open one would be false.
+  defp announce_posture(_rc, adapters, _base) when map_size(adapters) == 0, do: :none
+
+  defp announce_posture(%{pairing: nil} = rc, adapters, base) do
+    announce_open(rc.pairing, Map.keys(adapters), base)
+    :open
+  end
+
+  defp announce_posture(%{pairing: %{mode: :open} = pairing}, adapters, base) do
+    announce_open(pairing, Map.keys(adapters), base)
+    :open
+  end
+
+  defp announce_posture(%{pairing: pairing}, adapters, base) do
+    warn_unconnected(pairing, adapters, base)
+    :enforce
+  end
+
+  # A platform atom that names no connected channel grants nothing, which reads
+  # exactly like a deliberate `pairing: []` -- the silent lockout `known_keys/1`
+  # already refuses to allow one level up, where a typo'd `allowed_user:` is
+  # rejected on these same grounds. The names are known here, so say so.
+  defp warn_unconnected(pairing, adapters, base) do
+    connected = Map.keys(adapters)
+    named = Enum.uniq(pairing.allow_platforms ++ Keyword.keys(pairing.platform_users))
+
+    case named -- connected do
+      [] ->
+        :ok
+
+      unknown ->
+        Logger.warning("""
+        #{base}: pairing names #{inspect(unknown)}, which no channel connected.
+
+        Connected: #{inspect(connected)}. Those entries grant nothing, so anyone
+        they were meant to admit is denied -- indistinguishable from configuring
+        no allowlist at all. Check the platform atoms against your :channels.
+        """)
+    end
+  end
+
+  # The whole point of defaulting to open is that it cannot be silent. An
+  # operator who wrote `pairing: :open` has already made this call and is not
+  # nagged; only silence is.
+  defp announce_open(%{declared?: true}, _platforms, _base), do: :ok
+
+  defp announce_open(_pairing, platforms, base) do
+    :telemetry.execute(
+      [:raxol_console, :pairing, :open],
+      %{system_time: System.system_time()},
+      %{console: base, platforms: platforms, declared?: false}
+    )
+
+    Logger.warning("""
+    #{base}: gateway authorization is OPEN and was not configured.
+
+    Anyone who can reach #{inspect(platforms)} can open a chat and spend this
+    agent's LLM turns and tools. No :pairing option was set, so every connected
+    platform was allowed for everyone.
+
+    Set one in your deployment config:
+
+        config :raxol_console,
+          pairing: [allow_platforms: [:telegram]]     # or allowed_users: [...]
+          pairing: []                                 # deny everyone; pair by hand
+          pairing: :open                              # keep this, silence this warning
+
+    There is no /pair command: a denial is decided before a session exists, so
+    `pairing: []` admits nobody until an operator calls Raxol.Gateway.Pairing
+    out of band. Seed :allowed_users unless that is what you meant.
+    """)
   end
 
   # The core supervisor opts: everything the tree starts synchronously at init --
@@ -102,7 +212,7 @@ defmodule Raxol.Console.Boot do
   defp mcp_supervisor_pid(%{mcp_servers: []}, _mcp_name), do: nil
   defp mcp_supervisor_pid(_rc, mcp_name), do: Process.whereis(mcp_name)
 
-  defp report(sup, mcp_sup, mcp, adapters, skills, opts) do
+  defp report(sup, mcp_sup, mcp, adapters, skills, pairing, opts) do
     reconciler = Keyword.get(opts, :reconciler_name, Raxol.Console.Reconciler)
 
     %{
@@ -111,7 +221,8 @@ defmodule Raxol.Console.Boot do
       jobs: Raxol.Console.Reconciler.report(reconciler),
       mcp: %{tools: length(mcp.tools), failed: mcp.failed},
       channels: Map.keys(adapters),
-      skills: skills_report(skills)
+      skills: skills_report(skills),
+      pairing: pairing
     }
   end
 
@@ -215,6 +326,8 @@ defmodule Raxol.Console.Boot do
       |> Keyword.put(:actions, skill_actions(skills) ++ actions)
       |> put_skills_context(skills)
 
+    pairing_server = name(base, "pairing")
+
     [
       handler: RuntimeConfig.handler_spec(rc, agent_opts),
       deliver: fn route, rendered ->
@@ -222,7 +335,14 @@ defmodule Raxol.Console.Boot do
       end,
       name: name(base, "gateway"),
       router_name: name(base, "router"),
-      pairing_name: name(base, "pairing"),
+      pairing_name: pairing_server,
+      pairing: pairing_opts(rc, adapters),
+      # The router asks Pairing itself, so the gate holds for a feed loop that
+      # calls `SessionRouter.route/3` directly. `Raxol.Console.Inbound` is the
+      # documented door and answers a denial without a round trip through the
+      # router; this is what makes skipping it a difference in ergonomics rather
+      # than a difference in who gets served.
+      authorize: fn route -> Pairing.authorize(pairing_server, route) end,
       sessions_sup: name(base, "sessions")
     ]
     |> put_router_opts(rc)

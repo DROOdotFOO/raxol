@@ -301,5 +301,140 @@ defmodule Raxol.Gateway.SessionRouterTest do
     assert {:error, :rate_limited} = SessionRouter.start_session(r, rt)
   end
 
+  # The router is the narrow point every session passes through, so a gate here
+  # holds for callers that never heard of the gate. Without it, authorization
+  # lives in whichever call site remembered it -- which is how #884 happened.
+  describe ":authorize" do
+    setup do
+      test_pid = self()
+      sup = :"sup_#{uid()}"
+      start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+      router = :"gated_router_#{uid()}"
+
+      start_supervised!(%{
+        id: router,
+        start:
+          {SessionRouter, :start_link,
+           [
+             [
+               name: router,
+               handler: {EchoHandler, []},
+               sessions_sup: sup,
+               deliver: fn route, rendered -> send(test_pid, {:out, route, rendered}) end,
+               authorize: fn %Route{user_id: id} ->
+                 if id == "u1", do: :allow, else: :deny
+               end
+             ]
+           ]}
+      })
+
+      %{gated: router}
+    end
+
+    test "refuses an event for an unauthorized route, starting no session", %{gated: r} do
+      assert {:error, :unauthorized} = SessionRouter.route(r, route(2), {:say, "hi"})
+      assert SessionRouter.session_count(r) == 0
+      refute_receive {:out, _, _}, 50
+    end
+
+    test "refuses start_session/2, so the bypass is not one call over", %{gated: r} do
+      assert {:error, :unauthorized} = SessionRouter.start_session(r, route(2))
+      assert SessionRouter.session_count(r) == 0
+    end
+
+    test "serves an authorized route normally", %{gated: r} do
+      assert :ok = SessionRouter.route(r, route(1), {:say, "hi"})
+      assert_receive {:out, _route, "echo: hi"}
+    end
+
+    test "re-checks every event, so a revoked session stops being served" do
+      # A grant checked only at session start would keep serving a revoked user
+      # for the rest of the idle timeout.
+      test_pid = self()
+      sup = :"sup_#{uid()}"
+      start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+      router = :"revoking_router_#{uid()}"
+      {:ok, allowed} = Agent.start_link(fn -> true end)
+
+      start_supervised!(%{
+        id: router,
+        start:
+          {SessionRouter, :start_link,
+           [
+             [
+               name: router,
+               handler: {EchoHandler, []},
+               sessions_sup: sup,
+               deliver: fn route, rendered -> send(test_pid, {:out, route, rendered}) end,
+               authorize: fn _route ->
+                 if Agent.get(allowed, & &1), do: :allow, else: :deny
+               end
+             ]
+           ]}
+      })
+
+      assert :ok = SessionRouter.route(router, route(1), {:say, "first"})
+      assert_receive {:out, _, "echo: first"}
+
+      Agent.update(allowed, fn _ -> false end)
+
+      assert {:error, :unauthorized} = SessionRouter.route(router, route(1), {:say, "second"})
+      refute_receive {:out, _, "echo: second"}, 50
+    end
+
+    test "refuses a handoff onto an unauthorized route", %{gated: r} do
+      from = route(1)
+      assert {:ok, _} = SessionRouter.start_session(r, from)
+
+      to = Route.new(%{platform: :discord, chat_type: :dm, chat_id: "d", user_id: "u9"})
+      assert {:error, :unauthorized} = SessionRouter.handoff(r, Route.key(from), to)
+    end
+
+    test "an unset :authorize allows everything, so the gateway stays usable bare", %{router: r} do
+      assert :ok = SessionRouter.route(r, route(7), {:say, "hi"})
+      assert_receive {:out, _route, "echo: hi"}
+    end
+
+    # The gate runs inside the router's own call. An uncaught raise or exit would
+    # kill the router and wipe its session map while the session processes lived
+    # on, orphaned under the dynamic supervisor. The usual cause is the decision
+    # living in another process (Pairing) that is inside its own restart window.
+    for {label, boom} <- [
+          {"raises", quote(do: raise("gate is broken"))},
+          {"exits", quote(do: exit({:noproc, {GenServer, :call, [:gone, :authorize]}}))}
+        ] do
+      test "an :authorize that #{label} denies, and the router survives it" do
+        test_pid = self()
+        sup = :"sup_#{uid()}"
+        start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: sup})
+        router = :"broken_gate_router_#{uid()}"
+
+        start_supervised!(%{
+          id: router,
+          start:
+            {SessionRouter, :start_link,
+             [
+               [
+                 name: router,
+                 handler: {EchoHandler, []},
+                 sessions_sup: sup,
+                 deliver: fn route, rendered -> send(test_pid, {:out, route, rendered}) end,
+                 authorize: fn _route -> unquote(boom) end
+               ]
+             ]}
+        })
+
+        pid = Process.whereis(router)
+
+        assert {:error, :unauthorized} = SessionRouter.route(router, route(1), {:say, "hi"})
+        assert {:error, :unauthorized} = SessionRouter.start_session(router, route(1))
+
+        assert Process.whereis(router) == pid
+        assert SessionRouter.session_count(router) == 0
+        refute_receive {:out, _, _}, 50
+      end
+    end
+  end
+
   defp uid, do: System.unique_integer([:positive])
 end
