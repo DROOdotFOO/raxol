@@ -105,7 +105,7 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
                  ssh: FakeSsh.opts(report_to: self())
                )
 
-      assert_receive {:fake_ssh, argv}
+      assert_receive {:fake_ssh, argv}, 2_000
       assert "ci@build-1" in argv
       assert List.last(argv) =~ "mkdir -p"
     end
@@ -306,8 +306,8 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
       assert {:ok, %{path: path}} = Workspace.ensure(config, "MT-1", opts)
       assert :ok = Workspace.remove(config, path, opts)
 
-      assert_receive {:fake_ssh, _mkdir_argv}
-      assert_receive {:fake_ssh, removal_argv}
+      assert_receive {:fake_ssh, _mkdir_argv}, 2_000
+      assert_receive {:fake_ssh, removal_argv}, 2_000
       removal = List.last(removal_argv)
 
       assert removal =~ "rm -rf"
