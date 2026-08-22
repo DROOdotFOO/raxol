@@ -32,8 +32,9 @@ defmodule Raxol.Symphony.Workspace do
   belonging to something else.
 
   When a spec declares no `workspace_root` the configured `workspace.root` is
-  used as-is, which assumes the host mirrors the orchestrator's layout. Declare
-  `workspace_root` per host when it does not.
+  used as-is, which assumes the host mirrors the orchestrator's layout, and says
+  so in a warning rather than defaulting silently. Declare `workspace_root` per
+  host when it does not.
 
   `:ssh` forwards options to `Raxol.Symphony.Ssh.exec/3` (`:exec_fn`,
   `:executable`), so the remote lifecycle is testable without a real SSH server.
@@ -308,13 +309,24 @@ defmodule Raxol.Symphony.Workspace do
     end
   end
 
-  # A spec that declares no root falls back to the configured local root,
-  # which assumes the host mirrors the orchestrator's layout.
+  # A spec that declares no root falls back to the configured local root, which
+  # assumes the host mirrors the orchestrator's layout. That assumption is the
+  # failure this whole slice exists to remove, so taking it says so out loud
+  # rather than defaulting in silence.
   defp remote_root(%Config{}, %HostSpec{workspace_root: root})
        when is_binary(root) and root != "",
        do: root
 
-  defp remote_root(%Config{} = config, %HostSpec{}), do: config.workspace.root
+  defp remote_root(%Config{} = config, %HostSpec{} = host) do
+    Logger.warning(
+      "symphony.workspace.remote_root_defaulted host=#{HostSpec.id(host)} " <>
+        "root=#{config.workspace.root} -- the spec declares no workspace_root, so this " <>
+        "host is assumed to mirror the orchestrator's layout. Declare workspace_root " <>
+        "on the spec when it does not."
+    )
+
+    config.workspace.root
+  end
 
   # One round trip answers both "does it exist" and "create it", so the
   # `created_now` flag that gates `after_create` cannot be decided against a
