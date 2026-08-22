@@ -136,8 +136,28 @@ defmodule Raxol.Console.Boot do
 
   defp announce_posture(%{pairing: pairing}, adapters, base) do
     warn_unconnected(pairing, adapters, base)
+    warn_cross_platform(pairing, adapters, base)
     :enforce
   end
+
+  # `:allowed_users` grants an id on EVERY connected platform, and platform id
+  # namespaces are unrelated. With one channel that is exactly what it looks
+  # like; with two it is a claim that a Telegram integer and a Discord snowflake
+  # cannot name different people, which is a claim and not a default.
+  defp warn_cross_platform(%{allowed_users: []}, _adapters, _base), do: :ok
+
+  defp warn_cross_platform(pairing, adapters, base) when map_size(adapters) > 1 do
+    Logger.warning("""
+    #{base}: :allowed_users grants #{length(pairing.allowed_users)} id(s) on ALL of
+    #{inspect(Map.keys(adapters))}.
+
+    Those platforms number their users independently, so one id can name a
+    different person on each. Move the entries under :platform_users to scope
+    them, or keep this if you know the id spaces cannot collide.
+    """)
+  end
+
+  defp warn_cross_platform(_pairing, _adapters, _base), do: :ok
 
   # A platform atom that names no connected channel grants nothing, which reads
   # exactly like a deliberate `pairing: []` -- the silent lockout `known_keys/1`

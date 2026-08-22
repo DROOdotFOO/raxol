@@ -60,13 +60,17 @@ defmodule Raxol.Console.Inbound do
   There is no `/pair` chat command, and there cannot be one at this layer: a
   denial is decided before a session exists, so an unpaired sender has no way to
   ask for a code through the chat itself. Pairing a newcomer means calling
-  `Raxol.Gateway.Pairing.request_code/2` and `confirm/2` out of band -- a remote
+  `Raxol.Gateway.Pairing.request_code/3` and `confirm/2` out of band -- a remote
   shell on the node, or whatever admin surface the deployment already has:
 
       pairing = Raxol.Console.Inbound.pairing_name(MyConsole)
-      {:ok, code} = Raxol.Gateway.Pairing.request_code(pairing, "12345")
+      {:ok, code} = Raxol.Gateway.Pairing.request_code(pairing, "12345", {:platform, :telegram})
       # deliver `code` to that user however you already reach them
       {:ok, "12345"} = Raxol.Gateway.Pairing.confirm(pairing, code)
+
+  The scope is required and bound to the CODE, so the grant admits that id on
+  the platform you minted it for. Pass `:global` only if you mean every
+  connected platform -- see `Raxol.Gateway.Pairing`.
 
   A deployment that wants a self-service lane builds it in its own feed loop with
   `authorized?/2`: answer a denied sender with a code instead of dropping them,

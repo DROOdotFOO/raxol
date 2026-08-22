@@ -366,6 +366,17 @@ defmodule Raxol.Console.RuntimeConfigTest do
                RuntimeConfig.build(package(), pairing: [platform_users: [{nil, ["bob"]}]])
     end
 
+    # `:global` is Pairing's key for the cross-platform bucket. Accepted here it
+    # would file ids written under "per platform" where every platform reads --
+    # a silent widening of the grant the scoping exists to narrow.
+    test "refuses :global as a platform, since :allowed_users is how you ask for that" do
+      assert {:error, {:invalid_pairing, {:platform_users, :global, ["bob"]}}} =
+               RuntimeConfig.build(package(), pairing: [platform_users: [global: ["bob"]]])
+
+      assert {:error, {:invalid_pairing, {:allow_platforms, [:global]}}} =
+               RuntimeConfig.build(package(), pairing: [allow_platforms: [:global]])
+    end
+
     # A keyword list admits duplicates; Pairing unions them when it seeds, so
     # both sets are carried through here rather than the last one winning.
     test "carries a platform named twice through as written" do

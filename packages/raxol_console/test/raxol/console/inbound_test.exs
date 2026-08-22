@@ -10,13 +10,17 @@ defmodule Raxol.Console.InboundTest do
     %Package{runtime: :raxol, soul_md: "# Bot\n\nHi.", agents_md: nil, tasks: [], skills: []}
   end
 
-  defp boot(name, pairing_opts) do
+  defp channel(platform), do: %{platform: platform, adapter: InMemory, config: %{sink: self()}}
+
+  defp two_channels, do: [channel(:in_memory), channel(:in_memory_2)]
+
+  defp boot(name, pairing_opts, channels \\ nil) do
     {:ok, rc} =
       RuntimeConfig.build(
         package(),
         [
           bundle_default_mcp: false,
-          channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: self()}}]
+          channels: channels || [channel(:in_memory)]
         ] ++ pairing_opts
       )
 
@@ -102,11 +106,14 @@ defmodule Raxol.Console.InboundTest do
       assert {:error, :unauthorized} = Inbound.route(:inb_empty, route("stranger"), %{text: "hi"})
 
       # The runtime pairing flow is the way in, and it works on a live runtime.
+      # The scope is bound to the code, so the grant lands on the platform it
+      # was minted for and nowhere else.
       pairing = Inbound.pairing_name(:inb_empty)
-      {:ok, code} = Pairing.request_code(pairing, "newcomer")
+      {:ok, code} = Pairing.request_code(pairing, "newcomer", {:platform, :in_memory})
       {:ok, "newcomer"} = Pairing.confirm(pairing, code)
 
       assert :ok = Inbound.route(:inb_empty, route("newcomer"), %{text: "hi"})
+      refute Inbound.authorized?(:inb_empty, route("newcomer", :telegram))
     end
 
     # The bug in #884: the Pairing server ran, nothing consulted it, and an
@@ -151,6 +158,40 @@ defmodule Raxol.Console.InboundTest do
 
       assert :ok = Inbound.route(:inb_plat, route("bob"), %{text: "hi"})
       refute Inbound.authorized?(:inb_plat, route("bob", :telegram))
+    end
+
+    # :allowed_users grants on every connected platform, which is what a
+    # deployment with two channels has to mean on purpose rather than inherit.
+    test "warns when a cross-platform allowlist meets more than one channel" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          boot(:inb_multi, [pairing: [allowed_users: ["alice"]]], two_channels())
+        end)
+
+      assert log =~ ":allowed_users grants 1 id(s) on ALL of"
+      assert log =~ ":platform_users"
+    end
+
+    test "a single-channel deployment is not warned, since there is nothing to collide" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          boot(:inb_single, pairing: [allowed_users: ["alice"]])
+        end)
+
+      refute log =~ "grants 1 id(s) on ALL of"
+    end
+
+    test "a scoped allowlist is not warned about however many channels there are" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          boot(
+            :inb_multi_scoped,
+            [pairing: [platform_users: [in_memory: ["alice"]]]],
+            two_channels()
+          )
+        end)
+
+      refute log =~ "on ALL of"
     end
 
     test "seeds allow-everyone for a named platform" do

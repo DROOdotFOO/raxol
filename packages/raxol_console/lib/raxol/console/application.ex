@@ -34,8 +34,8 @@ defmodule Raxol.Console.Application do
 
       config :raxol_console,
         pairing: [allow_platforms: [:telegram]]   # anyone on Telegram
-        pairing: [allowed_users: ["12345"]]       # these ids, any platform
-        pairing: [platform_users: [telegram: ["12345"]]]   # these ids, there
+        pairing: [allowed_users: ["12345"]]       # these ids, EVERY platform
+        pairing: [platform_users: [telegram: ["12345"]]]   # these ids, only there
         pairing: :open                            # open, and say so on purpose
         pairing: []                                # deny everyone; pair by hand
 
@@ -47,9 +47,13 @@ defmodule Raxol.Console.Application do
 
   `pairing: []` denies everyone and there is no `/pair` command to escape it --
   a denial is decided before a session exists, so pairing a newcomer is an out
-  of band call to `Raxol.Gateway.Pairing`. Seed `:allowed_users` instead unless
-  that is what you meant. Note also that `:allowed_users` and confirmed pairings
-  match on the id alone, across every connected platform.
+  of band call to `Raxol.Gateway.Pairing`. Seed one of the allowlists instead
+  unless that is what you meant.
+
+  Prefer `:platform_users`: it grants an id on the platform it names, where
+  `:allowed_users` grants it on all of them. Two platforms number their users
+  independently, so one id there can be two people. The boot says so when a
+  deployment pairs `:allowed_users` with more than one channel.
 
   Inbound events are gated by `Raxol.Console.Inbound.route/3` and by the router
   itself, so a deployment's own feed loop cannot route around it. See
