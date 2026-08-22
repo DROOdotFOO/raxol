@@ -62,10 +62,14 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   way the run stops before escrowing a fee it cannot earn, and the log line
   distinguishes the two so the next move is clear.
 
-  A rejection also fails `--dry-run`, non-zero, because the rehearsal is what CI
-  scores. An inconclusive check stays soft there: it says nothing about the
-  payload, and the usual cause is an origin-chain endpoint the rehearsing machine
-  was never given.
+  A rejection also fails `--dry-run`, non-zero: a rehearsal that reports the
+  defect and exits 0 is not rehearsing the real thing. An inconclusive check
+  stays soft there, because it says nothing about the payload and the usual
+  cause is an `ORDER_RPC_8453` the rehearsing machine cannot reach.
+
+  Note this is the MANUAL path. `scripts/run_live_gates.sh` does not invoke this
+  task; its `acp` cells drive the `:live_xochi_order_preflight` gate, which runs
+  the same `PullPreflight.verify/4` and applies the same rule there.
 
   A quote that served a pull with no signature in the signed bundle aborts BOTH
   modes. That is not a preflight verdict to rehearse -- it is a bundle with
@@ -780,20 +784,18 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # A real run proceeds on `{:ok, _}` and nothing else. Continuing on anything
   # weaker would `createJob` and escrow a fee for a settlement nobody has
   # confirmed can execute, which is how job 74047 ended up funded, unsettleable,
-  # and expired. A REJECTION fails `--dry-run` too, with a non-zero exit: the
-  # rehearsal is what CI runs, so a mode that reports the defect and exits 0
-  # scores the cell PASS and leaves the finding to whoever reads the log.
+  # and expired. A REJECTION fails `--dry-run` too, with a non-zero exit,
+  # because a rehearsal that reports the defect and exits 0 is reporting it, not
+  # rehearsing it.
   #
   # An inconclusive check blocks too. Refusing costs a re-run; proceeding costs
   # an escrow, and there is no reading of "nobody could answer" that makes the
-  # escrow the better bet. Note this reads `cfg.rpc`, the ORIGIN chain's
-  # endpoint, which is NOT where `createJob` and `fund` go -- those go to
-  # `cfg.acp_rpc` on Base, and the two are the same endpoint only when the origin
-  # IS Base or `ORDER_RPC_<from>` is unset. So an inconclusive result says
-  # nothing about whether the funding writes would land; it says the question
-  # this gate exists to answer went unanswered, which is reason enough on its
-  # own. What it must not do is claim the SIGNATURE is bad, and
-  # `PullPreflight.describe/1` keeps those separate in the log.
+  # escrow the better bet. This reads `cfg.rpc`, which `assert_acp_origin!/1`
+  # constrains to the ACP core's own chain -- so for this task it resolves to the
+  # SAME `ORDER_RPC_8453` the `createJob` and `fund` writes go to, and an
+  # inconclusive result here does mean those writes are in doubt as well. What it
+  # must not do is claim the SIGNATURE is bad, and `PullPreflight.describe/1`
+  # keeps those separate in the log.
   # Public, like `decide_preflight/2`, only so the money decision can be tested.
   # A missing signature aborts `--dry-run` too: it is not a preflight VERDICT to
   # rehearse, it is a bundle with nothing in it to check, and a dry run whose
@@ -851,20 +853,20 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   @spec decide_preflight(PullPreflight.outcome(), boolean()) :: :ok | {:error, atom()}
   def decide_preflight({:ok, _details}, _dry_run?), do: :ok
 
-  # A rejection fails BOTH modes, and the exit code is the point. `--dry-run` is
-  # what CI runs -- `scripts/run_live_gates.sh --dry-run` scores every cell on
-  # this task's exit status -- so returning `:ok` here made the rehearsal PASS on
-  # the one defect the rehearsal exists to find, leaving it as a single log line
-  # in a matrix of ninety. Rehearsing a failure means reproducing it without
-  # spending, not reporting it without failing.
+  # A rejection fails BOTH modes, and the exit code is the point. Returning `:ok`
+  # here made the rehearsal PASS on the one defect the rehearsal exists to find,
+  # leaving it as a single log line. Rehearsing a failure means reproducing it
+  # without spending, not reporting it without failing. The live-gate path
+  # applies the same rule at its own layer (`live_order_test.exs` fails the
+  # preflight cell on a REJECTED verdict); this task is the manual entry point.
   def decide_preflight({:rejected, _details}, _dry_run?),
     do: {:error, :pull_signature_rejected}
 
   # An inconclusive check stays soft under `--dry-run`. It is not a verdict on
-  # the payload, and the usual cause is an unset `ORDER_RPC_<from>` on a machine
-  # that was never meant to reach the origin chain -- failing a rehearsal for
-  # that trains an operator to ignore the exit code, which costs more than the
-  # signal is worth. A funded run still refuses.
+  # the payload, and the usual cause is an `ORDER_RPC_8453` the rehearsing
+  # machine cannot reach -- failing a rehearsal for that trains an operator to
+  # ignore the exit code, which costs more than the signal is worth. A funded run
+  # still refuses.
   def decide_preflight({:inconclusive, _reason}, true = _dry_run?), do: :ok
 
   def decide_preflight({:inconclusive, _reason}, false),
@@ -1401,8 +1403,8 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     attempts. Capture the served pull_authorization and compare its domain to the
     verifying contract's own DOMAIN_SEPARATOR() before re-running.
 
-    --dry-run reproduces this for free, and fails the same way: the rehearsal
-    is scored on this exit code.
+    --dry-run reproduces this for free, and fails the same way: a rehearsal that
+    printed this and exited 0 would not be rehearsing it.
     """
   end
 
@@ -1415,15 +1417,15 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     Nothing was written and nothing was escrowed. The preflight line above says
     what stopped the check and what to do about it -- read it before changing
-    anything, because the most common cause is ORDER_RPC_<from-chain> being unset
-    and falling back to the Base endpoint, which answers for the wrong chain.
+    anything.
 
-    This is not a claim that the signature is bad, and it is not a claim about
-    the endpoint the funding writes go to: those go to ORDER_RPC_8453, while this
-    check reads ORDER_RPC_<from-chain>. It is a refusal to escrow a fee on a
-    question nobody answered. Fix the ORIGIN chain's endpoint, not Base's.
+    This is not a claim that the signature is bad. It is a refusal to escrow a
+    fee on a question nobody answered -- and since --corridor's origin is pinned
+    to the ACP core's own chain, the endpoint that could not answer is the SAME
+    ORDER_RPC_8453 the createJob and fund writes go to, so those are in doubt as
+    well.
 
-    Re-run once the endpoint answers, or with --dry-run to rehearse for free.
+    Re-run once ORDER_RPC_8453 answers, or with --dry-run to rehearse for free.
     """
   end
 

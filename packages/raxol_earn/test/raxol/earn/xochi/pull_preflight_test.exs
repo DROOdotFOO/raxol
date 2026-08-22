@@ -138,6 +138,59 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
     }
   end
 
+  @usdc_base "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  @usdc_arbitrum "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+
+  # The ERC-3009 pull a quote serves for an EOA buyer. Two things differ from the
+  # Permit2 fixture and both matter: the verifying contract is the TOKEN rather
+  # than one universal address, and the domain carries a `version` -- so the
+  # `expect_verifier` pin comes from the caller's own token config, and the
+  # domain half has a field the Permit2 domain does not.
+  #
+  # This is the rail `mix raxol_earn.order --signer eoa` and the live ACP gate
+  # take. It had no coverage at all while the preflight was already blocking
+  # funded runs on it.
+  defp served_erc3009_pull do
+    %{
+      "domain" => %{
+        "name" => "USD Coin",
+        "version" => "2",
+        "chainId" => 8453,
+        "verifyingContract" => @usdc_base
+      },
+      "primaryType" => "ReceiveWithAuthorization",
+      "types" => %{
+        "EIP712Domain" => [
+          %{"name" => "name", "type" => "string"},
+          %{"name" => "version", "type" => "string"},
+          %{"name" => "chainId", "type" => "uint256"},
+          %{"name" => "verifyingContract", "type" => "address"}
+        ],
+        "ReceiveWithAuthorization" => [
+          %{"name" => "from", "type" => "address"},
+          %{"name" => "to", "type" => "address"},
+          %{"name" => "value", "type" => "uint256"},
+          %{"name" => "validAfter", "type" => "uint256"},
+          %{"name" => "validBefore", "type" => "uint256"},
+          %{"name" => "nonce", "type" => "bytes32"}
+        ]
+      },
+      "message" => %{
+        "from" => @owner,
+        "to" => @spender,
+        "value" => "3000000",
+        "validAfter" => "0",
+        "validBefore" => "1790000000",
+        "nonce" => "0x" <> String.duplicate("22", 32)
+      }
+    }
+  end
+
+  # A chain where the ERC-3009 token answers DOMAIN_SEPARATOR() with the
+  # separator for the domain it declares.
+  defp erc3009_chain(served),
+    do: chain(code: "0x", foreign_separator: separator_for(served["domain"]))
+
   @hostile "0x00000000000000000000000000000000000badc0"
 
   # A pull whose domain nominates a verifier the worker controls, paired with a
@@ -153,6 +206,23 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       |> update_in(["domain"], &Map.put(&1, "verifyingContract", @hostile))
 
     {served, chain(foreign_separator: separator_for(served["domain"]))}
+  end
+
+  # EIP712Domain(string name,string version,uint256 chainId,address
+  # verifyingContract) -- the four-field domain the ERC-3009 tokens declare.
+  # Must precede the three-field clause, which matches this map as well.
+  defp separator_for(%{"version" => version} = domain) do
+    %{"name" => name, "chainId" => chain_id, "verifyingContract" => "0x" <> vc} = domain
+
+    type = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+
+    ExKeccak.hash_256(
+      ExKeccak.hash_256(type) <>
+        ExKeccak.hash_256(name) <>
+        ExKeccak.hash_256(version) <>
+        <<chain_id::unsigned-big-256>> <>
+        <<0::size(96)>> <> Base.decode16!(vc, case: :mixed)
+    )
   end
 
   # EIP712Domain(string name,uint256 chainId,address verifyingContract), built
@@ -171,7 +241,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
   # Every call needs the pin now, and these tests are about the other arguments.
   # `put_new` so a test that IS about the pin can still name its own. The two
   # tests about the requirement itself call `PullPreflight.verify/4` directly.
-  defp verify(served, signature, account, opts \\ []) do
+  defp verify(served, signature, account, opts) do
     PullPreflight.verify(
       served,
       signature,
@@ -495,6 +565,48 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
                verify(served, current_signature(served), @account, rpc: client)
     end
 
+    # EIP-2098: `r || vs`, with the recovery bit in the top position of `vs`.
+    # Permit2's SignatureVerification takes this alongside the 65-byte form and
+    # the ERC-3009 tokens go through the same library, so refusing it here would
+    # be a false REJECTED on a signature the pull would accept -- and the message
+    # would point at a 7702 delegation that is not the problem.
+    test "accepts a compact 64-byte signature, which the verifier also accepts" do
+      served = served_pull()
+
+      "0x" <> hex = current_signature(served)
+      <<r::binary-size(32), s::binary-size(32), v::8>> = Base.decode16!(hex, case: :lower)
+      <<0::1, s_rest::bitstring>> = s
+      compact = "0x" <> Base.encode16(<<r::binary, v - 27::1, s_rest::bitstring>>, case: :lower)
+
+      assert byte_size(Base.decode16!(String.trim_leading(compact, "0x"), case: :lower)) == 64
+
+      assert {:ok, details} = verify(served, compact, @owner, rpc: chain(code: "0x"))
+      assert details.signer_kind == :eoa
+    end
+
+    test "a compact signature over the WRONG digest is still rejected" do
+      served = served_pull()
+
+      "0x" <> hex = pre_878_signature(served)
+      <<r::binary-size(32), s::binary-size(32), v::8>> = Base.decode16!(hex, case: :lower)
+      <<0::1, s_rest::bitstring>> = s
+      compact = "0x" <> Base.encode16(<<r::binary, v - 27::1, s_rest::bitstring>>, case: :lower)
+
+      assert {:rejected, details} = verify(served, compact, @owner, rpc: chain(code: "0x"))
+      refute details.returned == @owner
+    end
+
+    # `RPC.get_code/3` head-matches `"0x" <> _`, so this used to leave `verify/4`
+    # as a FunctionClauseError out of a function that documents three outcomes.
+    test "a buyer address that is not an 0x address leaves by one of the three doors" do
+      served = served_pull()
+
+      for bad <- ["not-an-address", "", nil, :buyer] do
+        assert {:rejected, %{reason: {:invalid_account, ^bad}}} =
+                 verify(served, current_signature(served), bad, rpc: chain())
+      end
+    end
+
     test "a separator that cannot be read is inconclusive" do
       plug = fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -515,6 +627,85 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
 
       assert {:inconclusive, {:domain_separator_unavailable, _vc, _reason}} =
                verify(served, current_signature(served), @account, rpc: client)
+    end
+  end
+
+  # The other rail. `Mix.Tasks.RaxolEarn.Order.expected_verifier/2` pins this one
+  # to `cfg.src_token` rather than to a universal address, and the live ACP gate
+  # reaches it with a funded EOA -- so a gate that blocks funded runs on it had
+  # no test for it at all until these.
+  describe "the ERC-3009 rail" do
+    test "accepts a pull whose verifier is the origin token itself" do
+      served = served_erc3009_pull()
+
+      assert {:ok, details} =
+               verify(served, current_signature(served), @owner,
+                 rpc: erc3009_chain(served),
+                 expect_verifier: @usdc_base
+               )
+
+      assert details.verifying_contract == @usdc_base
+      assert details.signer_kind == :eoa
+    end
+
+    # The #772 defect on this rail, in the direction it would actually appear:
+    # the token declares a `version` and the signer drops it, so the separator
+    # the token rebuilds is not the one the signature covers. Nothing in the
+    # payload looks wrong -- only the chain-sourced separator tells them apart.
+    test "rejects a signature that dropped the version the token declares" do
+      served = served_erc3009_pull()
+
+      versionless =
+        served["domain"]
+        |> Map.delete("version")
+        |> then(
+          &%{name: &1["name"], chainId: &1["chainId"], verifyingContract: &1["verifyingContract"]}
+        )
+
+      {:ok, digest} =
+        EIP712.hash(versionless, XochiProtocol.eip712_types(served), served["message"])
+
+      assert {:rejected, details} =
+               verify(served, sign_over(digest), @owner,
+                 rpc: erc3009_chain(served),
+                 expect_verifier: @usdc_base
+               )
+
+      refute details.returned == @owner
+    end
+
+    # The pin is the destination token, not the origin one. Getting the leg
+    # backwards is a plausible caller bug, and it must not read as a signing
+    # defect: the served address is named, so the log says which is which.
+    test "refuses a pull pinned to the wrong side of the corridor" do
+      served = served_erc3009_pull()
+
+      assert {:rejected, %{reason: {:verifier_mismatch, @usdc_base, @usdc_arbitrum}}} =
+               verify(served, current_signature(served), @owner,
+                 rpc: erc3009_chain(served),
+                 expect_verifier: @usdc_arbitrum
+               )
+    end
+
+    # An ERC-3009 pull on a contract buyer goes through ERC-1271 exactly as the
+    # Permit2 one does -- the branch is decided by the ACCOUNT's code, never by
+    # the rail.
+    test "a contract buyer on this rail is asked via ERC-1271, not recovery" do
+      served = served_erc3009_pull()
+
+      chain =
+        chain(
+          code: "0xef0100" <> String.duplicate("11", 20),
+          foreign_separator: separator_for(served["domain"])
+        )
+
+      assert {:ok, details} =
+               verify(served, current_signature(served), @account,
+                 rpc: chain,
+                 expect_verifier: @usdc_base
+               )
+
+      assert details.signer_kind == :contract
     end
   end
 
@@ -653,7 +844,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       # The defect that DOES warrant the 7702 advice is the wrapped envelope,
       # and conflating the two sent operators after the wrong thing.
       refute line =~ "7702"
-      refute line =~ "rather than a canonical 65."
+      refute line =~ "bytes rather than"
     end
 
     test "a wrapped envelope still reads as a length problem worth checking 7702 for" do
@@ -662,8 +853,13 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
           {:rejected, %{reason: {:recover_failed, {:not_a_canonical_signature, 72}}}}
         )
 
-      assert line =~ "72 bytes rather than a canonical 65"
+      assert line =~ "72 bytes rather than"
       assert line =~ "7702"
+      # Both accepted lengths are named. Saying "a canonical 65" alone was wrong
+      # once the compact 64-byte form started being accepted, and an operator
+      # holding a 64-byte signature would have read it as confirmation.
+      assert line =~ "65"
+      assert line =~ "64"
     end
 
     test "an inconclusive check does not claim the signature is bad" do
@@ -674,12 +870,35 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       assert line =~ "not a verdict"
     end
 
-    test "a wrong-chain RPC names the env var to set rather than blaming the signature" do
+    test "a wrong-chain RPC names the CHAIN to fix rather than blaming the signature" do
       line = PullPreflight.describe({:inconclusive, {:wrong_chain, declared: 8453, node: 42_161}})
 
       assert line =~ "INCONCLUSIVE"
       assert line =~ "not a verdict"
-      assert line =~ "ORDER_RPC_8453"
+      assert line =~ "chain 8453"
+      assert line =~ "ORIGIN-chain endpoint"
+    end
+
+    # Two callers reach this with different variables -- `mix raxol_earn.order`
+    # reads ORDER_RPC_<chain>, the live gate reads XOCHI_ORDER_RPC_<chain> -- so
+    # a name hardcoded here is wrong in one of them. It named ORDER_RPC_<chain>,
+    # which is the one the live gate does NOT use, and pointing an operator at a
+    # variable that does not exist is the exact failure this module was built to
+    # stop. Each caller names its own knob in its own error text.
+    test "no gap message hardcodes a caller's environment variable" do
+      gaps = [
+        {:wrong_chain, declared: 8453, node: 42_161},
+        {:chain_id_unavailable, :timeout},
+        {:domain_separator_unavailable, "0x0", :timeout},
+        {:domain_separator_length, 8},
+        {:signer_kind_unavailable, "0x0", :timeout},
+        {:erc1271_call_failed, "0x0", :timeout}
+      ]
+
+      for gap <- gaps do
+        line = PullPreflight.describe({:inconclusive, gap})
+        refute line =~ "ORDER_RPC", "#{inspect(gap)} names an env var only one caller has"
+      end
     end
   end
 end

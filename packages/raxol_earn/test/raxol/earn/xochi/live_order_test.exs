@@ -121,6 +121,24 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
 
       assert failures == [],
              "preflight failed for #{length(failures)} cell(s), no funds moved: #{inspect(failures)}"
+
+      # A REJECTED pull signature is a PROVEN defect: the verifying contract
+      # rebuilds a digest this signature does not cover, so the pull would revert
+      # and an order on this cell would escrow a fee for a settlement that cannot
+      # execute. That fails the rehearsal, for the same reason
+      # `Mix.Tasks.RaxolEarn.Order.decide_preflight/2` fails a funded run --
+      # this gate is what `scripts/run_live_gates.sh` scores, so a rejection that
+      # only printed itself would score the cell PASS on the single defect the
+      # rehearsal exists to find.
+      #
+      # INCONCLUSIVE does NOT fail: it is not a verdict on the payload, and the
+      # usual cause is an origin-chain endpoint this machine was never given.
+      rejected = for {cell, {:ok, %{pull: {:rejected, line}}}} <- results, do: {cell, line}
+
+      assert rejected == [],
+             "#{length(rejected)} cell(s) served a pull whose signature will not verify on " <>
+               "chain, so ordering them would strand an escrow (no funds moved): " <>
+               "#{inspect(rejected)}"
     end
 
     @tag :live_xochi_order_settle
@@ -310,9 +328,18 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     # checks the pull's SHAPE; this checks its DIGEST, which is what four funded
     # attempts on GitHub #772 died on while every shape check passed.
     #
-    # Reported, never asserted. A cell that cannot reach an RPC has no verdict to
-    # give, and this test's contract is that it moves no funds and fails only on
-    # a solver-pin mismatch.
+    # Returns `{verdict, line}`. A REJECTED verdict fails the cell (see the
+    # assertion in the preflight test); INCONCLUSIVE and skipped are reported and
+    # nothing more. That split is the same one
+    # `Mix.Tasks.RaxolEarn.Order.decide_preflight/2` makes, and it has to be made
+    # HERE as well, because this gate -- not that task -- is what
+    # `scripts/run_live_gates.sh` runs. A rejection that only printed itself
+    # would score the cell PASS on the one defect the rehearsal exists to find.
+    #
+    # It still moves no funds and still cannot fail on an unreachable endpoint,
+    # so the test's contract is unchanged: what it adds is a hard failure on a
+    # PROVEN defect, which was never covered by "fails only on a solver-pin
+    # mismatch".
     #
     # The RPC is resolved FIRST, before `sign_intent`. A pull authorization is a
     # bearer instrument -- bounded by the pinned spender, but live and in-window
@@ -324,17 +351,18 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
            {:ok, served} <- served_pull(quote),
            {:ok, bundle} <- XochiProtocol.sign_intent(quote, LiveWallet, request),
            {:ok, signature} <- pull_signature(bundle) do
-        served
-        |> PullPreflight.verify(signature, LiveWallet.address(),
-          rpc: RPC.client(url: url),
-          # Named from the rail we asked for, never from the served payload: the
-          # party that chose `verifyingContract` must not also choose the
-          # contract we ask about its own signature.
-          expect_verifier: expected_verifier(quote.payment_method, request)
-        )
-        |> PullPreflight.describe()
+        outcome =
+          PullPreflight.verify(served, signature, LiveWallet.address(),
+            rpc: RPC.client(url: url),
+            # Named from the rail we asked for, never from the served payload:
+            # the party that chose `verifyingContract` must not also choose the
+            # contract we ask about its own signature.
+            expect_verifier: expected_verifier(quote.payment_method, request)
+          )
+
+        {elem(outcome, 0), PullPreflight.describe(outcome)}
       else
-        {:error, reason} -> "pull preflight: skipped (#{inspect(reason)})"
+        {:error, reason} -> {:skipped, "pull preflight: skipped (#{inspect(reason)})"}
       end
     end
 
@@ -358,9 +386,12 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
 
     defp expected_verifier("erc3009", request), do: request.from_token
 
+    # Names the variable rather than the chain, because the skip is only
+    # actionable if the operator can see which knob was missing --
+    # `scripts/run_live_gates.sh` sets these from `GATE_RPC_<chain>`.
     defp rpc_url(chain) do
       case System.get_env("XOCHI_ORDER_RPC_#{chain}") do
-        nil -> {:error, {:no_rpc_for_chain, chain}}
+        nil -> {:error, {:unset, "XOCHI_ORDER_RPC_#{chain}"}}
         url -> {:ok, url}
       end
     end
@@ -553,7 +584,7 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
       )
 
       case outcome do
-        {:ok, %{pull: line}} when is_binary(line) -> log("  #{line}")
+        {:ok, %{pull: {_verdict, line}}} -> log("  #{line}")
         _ -> :ok
       end
     end

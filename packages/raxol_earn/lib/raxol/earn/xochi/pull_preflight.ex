@@ -381,13 +381,25 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   # Checking the wrong one would answer a question the pull never asks -- an EOA
   # has no `isValidSignature` to call, and a 7702 account's wrapped envelope
   # cannot recover. A 7702 delegation designator IS code, so this splits them.
-  defp signer_kind(client, account) do
+  #
+  # `RPC.get_code/3` head-matches `"0x" <> _`, so an account without the prefix
+  # would raise a FunctionClauseError out of a function that documents exactly
+  # three outcomes. The buyer address is the caller's, so getting it wrong is a
+  # bug there rather than a fact about the chain -- but it must still leave by
+  # one of the three doors.
+  defp signer_kind(_client, account) when not is_binary(account),
+    do: {:rejected_because, {:invalid_account, account}}
+
+  defp signer_kind(client, "0x" <> _ = account) do
     case RPC.deployed?(client, account) do
       {:ok, true} -> {:ok, :contract}
       {:ok, false} -> {:ok, :eoa}
       {:error, reason} -> {:inconclusive, {:signer_kind_unavailable, account, reason}}
     end
   end
+
+  defp signer_kind(_client, account),
+    do: {:rejected_because, {:invalid_account, account}}
 
   defp check(:contract, client, account, digest, sig_bytes) do
     case call_erc1271(client, account, digest, sig_bytes) do
@@ -419,6 +431,18 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
       {:ok, pubkey} -> {:ok, EIP712.address_from_pubkey(pubkey)}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # EIP-2098 compact form: `r || vs`, where `vs` is `s` with the recovery bit
+  # occupying its top position. Permit2's `SignatureVerification` accepts this
+  # alongside the 65-byte form, and the ERC-3009 tokens go through the same
+  # library, so refusing it here would be a false REJECTED on a signature the
+  # pull would take -- and the message would send the operator after a 7702
+  # delegation that is not the problem. Widened to what the verifier accepts
+  # rather than to what we happen to emit: `EIP712.pack_signature/1` is 65
+  # bytes, but the signature under audit was not necessarily produced by it.
+  defp recover(digest, <<r::binary-size(32), y_parity::1, s::bitstring-size(255)>>) do
+    recover(digest, <<r::binary, 0::1, s::bitstring, 27 + y_parity>>)
   end
 
   # A 65-byte signature whose `v` is neither 27 nor 28 is a DIFFERENT defect
@@ -520,8 +544,15 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   defp describe_defect({:recover_failed, {:not_a_canonical_signature, size}}),
     do:
       "the buyer has no code on this chain, so the pull recovers with ecrecover, and this " <>
-        "signature is #{size} bytes rather than a canonical 65. A wrapped envelope needs an " <>
-        "account that can unwrap it -- check whether the 7702 delegation is actually set"
+        "signature is #{size} bytes rather than the 65 or the compact 64 the verifier accepts. " <>
+        "A wrapped envelope needs an account that can unwrap it -- check whether the 7702 " <>
+        "delegation is actually set"
+
+  defp describe_defect({:invalid_account, account}),
+    do:
+      "the buyer address this was asked about is not an 0x address (#{inspect(account)}), so " <>
+        "there is no account to check the signature against. That is a defect in what called " <>
+        "this, not in the quote or the chain"
 
   defp describe_defect({:recover_failed, {:non_canonical_v, v}}),
     do:
@@ -540,12 +571,19 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   # What stopped the check, and what the operator does about it. Every one of
   # these is environmental, so every one of them is worth a retry -- unlike the
   # defects above.
+  # Deliberately names no environment variable. Two callers reach this with
+  # different ones -- `mix raxol_earn.order` reads `ORDER_RPC_<chain>`, the live
+  # gate reads `XOCHI_ORDER_RPC_<chain>` -- so a name hardcoded here is wrong in
+  # one of them, and pointing an operator at a variable that does not exist is
+  # the failure this whole module was built to stop doing. Each caller names its
+  # own knob in its own error text; this says which chain the endpoint must
+  # answer for.
   defp describe_gap({:wrong_chain, declared: declared, node: node}),
     do:
       "the RPC answers for chain #{node} while the pull is for chain #{declared}, so the " <>
         "separator read back belongs to a different domain. Permit2 is at one address on " <>
-        "every chain, which is why this reads as a mismatch rather than an error. Set " <>
-        "ORDER_RPC_#{declared} -- it falls back to the Base endpoint when unset"
+        "every chain, which is why this reads as a mismatch rather than an error. Point this " <>
+        "run's ORIGIN-chain endpoint at chain #{declared}"
 
   defp describe_gap({:chain_id_unavailable, _}),
     do: "the RPC did not answer eth_chainId, so which chain it speaks for is unknown"
