@@ -272,6 +272,37 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
       refute File.exists?(escaped), "the hook ran outside its workspace"
     end
 
+    # `bash`'s `cd ''` SUCCEEDS and changes nothing, so the `cd WS && { … }`
+    # guard that carries Invariant 1 across the network passes for an empty
+    # workspace and the hook lands in the login shell's home. `GraphAdapter`
+    # defaults a missing workspace to `""` in two places, which makes this a
+    # fail-OPEN default guarding the one invariant the group exists for.
+    test "a blank workspace is refused rather than resolving to the shell's home", %{
+      local_root: local_root,
+      host_root: host_root
+    } do
+      escaped = Path.join(host_root, "hook_ran_in_home")
+      config = build_config(local_root, %{before_run: "touch #{escaped}"})
+      opts = [host: host(host_root), ssh: FakeSsh.opts(home: host_root)]
+
+      for blank <- ["", "   ", nil] do
+        assert {:error, {:before_run_hook_failed, {:invalid_workspace, ^blank}}} =
+                 Workspace.run_before_run_hook(config, blank, opts)
+      end
+
+      refute File.exists?(escaped), "the hook ran with no workspace to run in"
+    end
+
+    # The guard is on the hook, not on the workspace: a run with no hooks
+    # configured is unaffected by it, because `:no_hook` never reaches the
+    # check.
+    test "a blank workspace with no hook configured is still a no-op", %{local_root: local_root} do
+      config = build_config(local_root)
+
+      assert :ok = Workspace.run_before_run_hook(config, "", host: nil)
+      assert :ok = Workspace.run_after_run_hook(config, "", host: nil)
+    end
+
     test "before_run runs against the remote workspace", %{
       local_root: local_root,
       host_root: host_root

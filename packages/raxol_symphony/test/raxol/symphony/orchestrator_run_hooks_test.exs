@@ -188,5 +188,68 @@ defmodule Raxol.Symphony.OrchestratorRunHooksTest do
         assert_receive {:ran, ^ws, true}, 2_000
       end
     end
+
+    # The three tests above all run with `host: nil`, so they exercise the local
+    # hook path in every mode and the TRANSPORT in none of them. That is what
+    # hid `graph_parallel` building its graph state without `:ssh`: its slots
+    # ran their hooks with default transport options while the other two modes
+    # used the orchestrator's configured ones.
+    #
+    # Asserting on the transport rather than on a file is the point -- a hook
+    # that ran, but over the wrong transport, leaves the same file behind.
+    #
+    # A marker only the hook script carries, so the mkdir and rm round trips
+    # that cross the same transport cannot be mistaken for it.
+    @hook_marker "__rx_hook_marker__"
+
+    for mode <- ["default", "graph", "graph_parallel"] do
+      test "#{mode} mode runs a remote hook over the CONFIGURED transport", %{root: root} do
+        me = self()
+        tag = unquote(mode)
+
+        recording = [
+          exec_fn: fn ssh, argv, opts ->
+            command = List.last(argv)
+            if String.contains?(command, @hook_marker), do: send(me, {:hook_via_transport, tag})
+            FakeSsh.exec_fn([]).(ssh, argv, opts)
+          end,
+          executable: "/usr/bin/ssh"
+        ]
+
+        config(root, %{before_run: "echo #{@hook_marker}"}, %{}, tag)
+        |> start_remote_orchestrator(root, recording)
+        |> Orchestrator.tick_now()
+
+        # Only the injected exec_fn can deliver this, and it IS the configured
+        # transport. A mode that built its graph state without `:ssh` falls back
+        # to the default `System.cmd` against a real `ssh`, and never sends.
+        # The marker keeps the mkdir and rm round trips off this channel.
+        assert_receive {:hook_via_transport, ^tag}, 5_000
+      end
+    end
+  end
+
+  # A host pool of one, so every dispatch is remote and the hooks have to go
+  # through the transport. `workspace_root` points at the same tmp root the
+  # local assertions use, since the "host" is this machine.
+  defp start_remote_orchestrator(config, root, ssh_opts) do
+    config = %{config | worker: %{config.worker | ssh_hosts: [remote_host(root)]}}
+
+    {:ok, pid} =
+      start_supervised(
+        {Orchestrator,
+         config: config,
+         runner_module: WitnessRunner,
+         auto_start_tick: false,
+         name: nil,
+         ssh: ssh_opts},
+        id: {Orchestrator, make_ref()}
+      )
+
+    pid
+  end
+
+  defp remote_host(root) do
+    %Raxol.Symphony.Worker.HostSpec{host: "build-1", user: "ci", workspace_root: root}
   end
 end

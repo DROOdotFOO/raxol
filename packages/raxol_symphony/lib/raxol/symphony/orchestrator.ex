@@ -878,6 +878,7 @@ defmodule Raxol.Symphony.Orchestrator do
     parent = self()
     config = state.config
     max_candidates = length(issues)
+    ssh = state.ssh
 
     Task.Supervisor.async_nolink(
       task_supervisor(state),
@@ -889,12 +890,19 @@ defmodule Raxol.Symphony.Orchestrator do
           workspaces,
           hosts,
           max_candidates,
-          parent
+          parent,
+          ssh
         )
       end
     )
   end
 
+  # `ssh` is carried in for the same reason the single-issue graph payload
+  # carries it: the slots now bracket their runner with `before_run`/`after_run`,
+  # and on a remote worker those shell out over the transport. Left out, every
+  # parallel slot ran its hooks with DEFAULT transport options while the other
+  # two modes used the orchestrator's -- and the mode test could not see it,
+  # because all three modes run with `host: nil` unless a pool is configured.
   defp run_parallel_batch_payload(
          config,
          runner_mod,
@@ -902,7 +910,8 @@ defmodule Raxol.Symphony.Orchestrator do
          workspaces,
          hosts,
          max_candidates,
-         parent
+         parent,
+         ssh
        ) do
     case GraphAdapter.from_workflow_parallel(max_candidates: max_candidates) do
       {:ok, compiled} ->
@@ -913,7 +922,8 @@ defmodule Raxol.Symphony.Orchestrator do
             candidates: issues,
             workspaces: workspaces,
             hosts: hosts,
-            parent_pid: parent
+            parent_pid: parent,
+            ssh: ssh
           )
 
         results =
