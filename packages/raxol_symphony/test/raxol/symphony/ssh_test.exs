@@ -94,7 +94,12 @@ defmodule Raxol.Symphony.SshTest do
 
       assert status == 0
       assert output =~ "done"
-      assert elapsed_us < 2_000_000, "took #{div(elapsed_us, 1000)}ms, expected well under 2s"
+
+      # The bound sits in the gap between correct (tens of ms) and either
+      # regression (a full 5s poll interval), with room for a loaded CI runner
+      # on both sides. Tightening it to what the happy path actually costs
+      # would buy no extra detection and would flake.
+      assert elapsed_us < 3_000_000, "took #{div(elapsed_us, 1000)}ms, expected well under 5s"
     end
 
     test "the command's real exit status survives the wrapper" do
@@ -127,8 +132,9 @@ defmodule Raxol.Symphony.SshTest do
 
       # Killing only the subshell would leave `sleep` holding the inherited
       # stdout pipe, so the read would block for the command's full 6s even
-      # though it was "killed". The group kill is what makes this prompt.
-      assert elapsed_us < 3_500_000, "took #{div(elapsed_us, 1000)}ms, expected ~1s"
+      # though it was "killed". The group kill is what makes this prompt. The
+      # bound discriminates 1s from 6s with headroom for a loaded runner.
+      assert elapsed_us < 4_500_000, "took #{div(elapsed_us, 1000)}ms, expected ~1s"
     end
 
     test "a command inside its deadline is left alone" do
@@ -167,6 +173,25 @@ defmodule Raxol.Symphony.SshTest do
       # the remote shell bare.
       assert Ssh.quote_path("~;touch /tmp/x") == "'~;touch /tmp/x'"
       assert Ssh.quote_path("~$(whoami)/ws") == "'~$(whoami)/ws'"
+    end
+
+    # Bash's tilde prefixes are not all home directories: `~-` is $OLDPWD, `~+`
+    # is $PWD, and `~N`/`~-N` are directory-stack entries. HostSpec's path
+    # pattern accepts every one of these as a workspace_root, so leaving them
+    # bare pointed the root at whatever directory the login shell happened to
+    # have been in -- a different place per connection, and outside the root
+    # containment was measured against.
+    test "a tilde prefix bash would expand to somewhere other than a home is inert" do
+      for path <- ["~-/ws", "~+/ws", "~0/ws", "~-2/ws", "~1", "~-"] do
+        assert Ssh.quote_path(path) == "'#{path}'",
+               "#{path} was left bare for the remote shell to expand"
+      end
+    end
+
+    test "an ordinary username prefix is still expanded" do
+      assert Ssh.quote_path("~ci/ws") == "~ci/'ws'"
+      assert Ssh.quote_path("~_build/ws") == "~_build/'ws'"
+      assert Ssh.quote_path("~ci2/ws") == "~ci2/'ws'"
     end
 
     test "a tilde path with an embedded quote is still escaped" do

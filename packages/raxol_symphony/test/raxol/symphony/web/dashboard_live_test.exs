@@ -272,7 +272,11 @@ defmodule Raxol.Symphony.Web.DashboardLiveTest do
           else
             if System.monotonic_time(:millisecond) >= deadline,
               do: flunk("wait timed out"),
-              else: (Process.sleep(20); do_wait.(do_wait, deadline))
+              else:
+                (
+                  Process.sleep(20)
+                  do_wait.(do_wait, deadline)
+                )
           end
       end
 

@@ -82,7 +82,13 @@ defmodule Raxol.Symphony.Sandboxes.TimeOfDayWindowTest do
     end
 
     test "denies :turn when outside the window" do
-      now = TimeOfDayWindow.current_hour(%TimeOfDayWindow{start_hour: 0, end_hour: 24, timezone: "Etc/UTC"})
+      now =
+        TimeOfDayWindow.current_hour(%TimeOfDayWindow{
+          start_hour: 0,
+          end_hour: 24,
+          timezone: "Etc/UTC"
+        })
+
       # Construct a tiny window that definitely does NOT contain `now`:
       # 2 hours far away from `now`.
       start_h = rem(now + 6, 24)
@@ -94,7 +100,13 @@ defmodule Raxol.Symphony.Sandboxes.TimeOfDayWindowTest do
 
     test "abstains for non-:turn actions" do
       # Window that would deny :turn if reached.
-      now = TimeOfDayWindow.current_hour(%TimeOfDayWindow{start_hour: 0, end_hour: 24, timezone: "Etc/UTC"})
+      now =
+        TimeOfDayWindow.current_hour(%TimeOfDayWindow{
+          start_hour: 0,
+          end_hour: 24,
+          timezone: "Etc/UTC"
+        })
+
       start_h = rem(now + 6, 24)
       end_h = rem(now + 8, 24)
       sb = %TimeOfDayWindow{start_hour: start_h, end_hour: end_h, timezone: "Etc/UTC"}

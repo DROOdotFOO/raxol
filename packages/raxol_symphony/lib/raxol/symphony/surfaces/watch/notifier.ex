@@ -117,9 +117,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
         :ok
 
       _ ->
-        Logger.warning(
-          "symphony.watch.subscribe_failed orchestrator=#{inspect(orch)}"
-        )
+        Logger.warning("symphony.watch.subscribe_failed orchestrator=#{inspect(orch)}")
     end
 
     {:ok, state}
@@ -156,9 +154,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Notifier do
     push_fn.(notification)
   catch
     kind, reason ->
-      Logger.warning(
-        "symphony.watch.push_failed kind=#{inspect(kind)} reason=#{inspect(reason)}"
-      )
+      Logger.warning("symphony.watch.push_failed kind=#{inspect(kind)} reason=#{inspect(reason)}")
   end
 
   defp safe_snapshot(orch) do

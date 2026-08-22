@@ -171,9 +171,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Notifier do
         :ok
 
       _ ->
-        Logger.warning(
-          "symphony.telegram.subscribe_failed orchestrator=#{inspect(orch)}"
-        )
+        Logger.warning("symphony.telegram.subscribe_failed orchestrator=#{inspect(orch)}")
     end
 
     {:ok, state}

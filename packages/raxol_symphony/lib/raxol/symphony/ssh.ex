@@ -41,10 +41,21 @@ defmodule Raxol.Symphony.Ssh do
   # a live command nothing (see `reap_on_disconnect/2`).
   @reap_poll_seconds 5
 
-  # A tilde prefix safe to leave unquoted: `~`, or `~user` over the same
-  # character class `HostSpec`'s path pattern already allows. Anything outside
-  # this is quoted whole rather than handed to the remote shell bare.
-  @tilde_prefix ~r/\A~[A-Za-z0-9._-]*\z/
+  # A tilde prefix safe to leave unquoted: `~` alone, or `~user` where the
+  # username starts with a letter or `_`. Anything outside this is quoted whole
+  # rather than handed to the remote shell bare.
+  #
+  # The leading-character restriction is load-bearing, not tidiness. Bash gives
+  # several tilde prefixes a meaning that has nothing to do with home
+  # directories: `~-` expands to `$OLDPWD`, `~+` to `$PWD`, and `~N` / `~-N` to
+  # directory-stack entries. `HostSpec`'s `@path_re` accepts `~-/ws` and `~0/ws`
+  # as a `workspace_root`, so a pattern that allowed digits and `-` in the first
+  # position left the workspace root resolving to wherever the login shell
+  # happened to have been -- a different directory per connection, and outside
+  # any root containment was measured against. Those now fall through to
+  # `shell_quote/1` and stay inert, which is this function's stated contract for
+  # a path it does not understand.
+  @tilde_prefix ~r/\A~([A-Za-z_][A-Za-z0-9._-]*)?\z/
 
   @doc """
   Resolve the `ssh` executable, refusing anything not named `ssh`.

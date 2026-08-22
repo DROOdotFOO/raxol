@@ -318,14 +318,32 @@ defmodule Raxol.Symphony.Workspace do
        do: root
 
   defp remote_root(%Config{} = config, %HostSpec{} = host) do
-    Logger.warning(
-      "symphony.workspace.remote_root_defaulted host=#{HostSpec.id(host)} " <>
-        "root=#{config.workspace.root} -- the spec declares no workspace_root, so this " <>
-        "host is assumed to mirror the orchestrator's layout. Declare workspace_root " <>
-        "on the spec when it does not."
-    )
-
+    warn_defaulted_root_once(config, host)
     config.workspace.root
+  end
+
+  # Once per host, not once per call. `ensure/3` and `remove/3` each resolve the
+  # root, so at poll cadence with N issues this warned N times a tick, forever,
+  # for a configuration the fallback deliberately supports. The one log line that
+  # has to be READ on this path is `remote_remove_failed`, and a warning
+  # repeating every tick is what buries it.
+  defp warn_defaulted_root_once(%Config{} = config, %HostSpec{} = host) do
+    key = {__MODULE__, :remote_root_defaulted, HostSpec.id(host)}
+
+    if :persistent_term.get(key, nil) == nil do
+      :persistent_term.put(key, true)
+
+      Logger.warning(
+        "symphony.workspace.remote_root_defaulted host=#{HostSpec.id(host)} " <>
+          "root=#{config.workspace.root} -- the spec declares no workspace_root, so this " <>
+          "host is assumed to mirror the orchestrator's layout, and containment for both " <>
+          "creation and REMOVAL is measured against a path that names a directory here as " <>
+          "well. Declare workspace_root on the spec when the host does not mirror it. " <>
+          "(logged once per host)"
+      )
+    end
+
+    :ok
   end
 
   # One round trip answers both "does it exist" and "create it", so the
@@ -341,10 +359,49 @@ defmodule Raxol.Symphony.Workspace do
     # `{:error, :ssh_not_allowed}` is itself a 2-tuple, so it has to be matched
     # before the `{output, status}` clause that would otherwise swallow it and
     # report an unresolvable `ssh` binary as exit status `:ssh_not_allowed`.
-    case Ssh.exec(host, Ssh.remote_bash(script), ssh_opts) do
+    case remote_fs_exec(host, script, ssh_opts) do
       {:error, reason} -> {:error, {:mkdir_failed, reason}}
       {output, 0} -> interpret_mkdir_output(output)
       {output, status} -> {:error, {:mkdir_failed, {:exit, status, output}}}
+    end
+  end
+
+  # How long the orchestrator will wait on one filesystem round trip to a host.
+  #
+  # This bound is the whole point. `ensure/3` and `remove/3` are called from
+  # inside the Orchestrator GenServer -- `dispatch_issue_on_host/4`,
+  # `ensure_batch_workspaces/2` (once per issue, serially), `gc_abandoned_paused/4`
+  # and `terminate_running/4` -- so every second spent here is a second in which
+  # nothing else polls, dispatches, reconciles, or answers `snapshot/1`, across
+  # all six surfaces.
+  #
+  # `ssh` bounds only part of that on its own: `ConnectTimeout=15` covers a host
+  # that never accepts, but a session that ESTABLISHES and then goes silent is
+  # held by `ServerAliveInterval=30` x `ServerAliveCountMax=3`, roughly 105
+  # seconds -- multiplied by the number of issues in a batch. The hook path was
+  # already bounded (`execute_script_remote/5`); these two were not.
+  #
+  # Generous relative to the work: `mkdir -p` and `rm -rf` on a workspace are
+  # sub-second on a healthy host, so anything approaching this is a sick one.
+  @remote_fs_timeout_ms 30_000
+
+  # Note this bounds the WAIT, not the remote command: closing the port does not
+  # signal the `ssh` client's own OS process, exactly as `execute_script_remote/5`
+  # documents. A `mkdir`/`rm` that outlives this finishes on the host unobserved,
+  # which is why the timeout is reported rather than assumed to have done nothing.
+  #
+  # `:fs_timeout_ms` overrides the bound, through the same `:ssh` option list
+  # that injects `:exec_fn`. A deployment whose workspaces are large enough for
+  # `rm -rf` to take longer can raise it, and a test can lower it far enough to
+  # assert the bound exists without spending the default on it.
+  defp remote_fs_exec(%HostSpec{} = host, script, ssh_opts) do
+    command = Ssh.remote_bash(script)
+    timeout = Keyword.get(ssh_opts, :fs_timeout_ms, @remote_fs_timeout_ms)
+
+    case run_with_timeout(fn -> Ssh.exec(host, command, ssh_opts) end, timeout) do
+      {:ok, result} -> result
+      :timeout -> {:error, {:timeout, timeout}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -371,9 +428,8 @@ defmodule Raxol.Symphony.Workspace do
   # A run then proceeds in a workspace nothing prepared.
   defp remote_rm_rf(%HostSpec{} = host, path, ssh_opts) do
     quoted = Ssh.quote_path(path)
-    command = Ssh.remote_bash("rm -rf #{quoted} && [ ! -e #{quoted} ]")
 
-    case Ssh.exec(host, command, ssh_opts) do
+    case remote_fs_exec(host, "rm -rf #{quoted} && [ ! -e #{quoted} ]", ssh_opts) do
       {_output, 0} ->
         :ok
 
@@ -413,7 +469,14 @@ defmodule Raxol.Symphony.Workspace do
   # an exit STATUS rather than a local timeout. It is still a timeout, and
   # reporting `{:exit, 143}` would send an operator looking for a hook that
   # returned 143 deliberately.
-  @killed_by_signal [143, 137]
+  #
+  # 143 ONLY (SIGTERM). `Ssh.reap_on_disconnect/2`'s deadline sends a plain
+  # `kill`, which is SIGTERM, so 143 is the signature of our own deadline. 137
+  # is SIGKILL, which this never sends -- on a host that is almost always the
+  # OOM killer, occasionally an operator. Folding it in here reported a host
+  # that ran out of memory as a hook that ran too long, which is a different
+  # thing to go fix.
+  @killed_by_deadline 143
 
   # `hooks.timeout_ms` is enforced on BOTH sides, because neither alone is
   # enough.
@@ -444,9 +507,19 @@ defmodule Raxol.Symphony.Workspace do
   defp classify_remote_result({:ok, {:error, reason}}, _deadline), do: {:error, reason}
   defp classify_remote_result({:ok, {output, 0}}, _deadline), do: {:ok, output}
 
-  defp classify_remote_result({:ok, {_output, status}}, deadline)
-       when deadline != nil and status in @killed_by_signal,
-       do: {:error, :timeout}
+  # A deadline kill collapses to `:timeout`, which carries no output -- and a
+  # timeout is exactly when a hook's own output is most worth having, since it
+  # says how far the hook got. `execute_named_hook/5` only logs output on the
+  # paths that carry it, so the timeout path has to log its own or lose it.
+  defp classify_remote_result({:ok, {output, @killed_by_deadline}}, deadline)
+       when deadline != nil do
+    Logger.warning(
+      "symphony.workspace.hook_timed_out deadline_s=#{deadline} " <>
+        "output=#{truncate_for_log(output)}"
+    )
+
+    {:error, :timeout}
+  end
 
   defp classify_remote_result({:ok, {output, status}}, _deadline),
     do: {:error, {:exit, status, output}}

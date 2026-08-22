@@ -229,8 +229,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     # Postgrex equivalent.
     saver =
       Map.get(agent, :workflow_saver) ||
-        {Raxol.Workflow.Checkpoint.Saver.Ets,
-         %{table: :raxol_symphony_agent_workflow}}
+        {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: :raxol_symphony_agent_workflow}}
 
     [saver: saver]
   end
@@ -459,9 +458,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     still_active?(state.issue, state.config)
   end
 
-  def __workflow_still_active__(
-        %{tracker_cache: cache, issue: issue, config: config} = state
-      ) do
+  def __workflow_still_active__(%{tracker_cache: cache, issue: issue, config: config} = state) do
     key = {:tracker, issue.id}
 
     case Raxol.Agent.Cache.get(cache, key) do
@@ -574,8 +571,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   # (apply_detector returns `:continue`).
   defp forward_collecting(stream, parent, issue_id, detector) do
     {result, events} =
-      Enum.reduce_while(stream, {{:error, :no_done}, []}, fn event,
-                                                             {_result, acc} ->
+      Enum.reduce_while(stream, {{:error, :no_done}, []}, fn event, {_result, acc} ->
         send(parent, {:run_event, issue_id, legacy_payload(event)})
         acc = [legacy_payload(event) | acc]
         {step, result} = collect_decision(event, detector)

@@ -71,10 +71,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   def event_notification(:worker_exit_abnormal, snapshot) do
     %{
       title: "Symphony",
-      body:
-        truncate(
-          "Run failed -- queued for retry. retrying #{counts(snapshot).retrying}"
-        ),
+      body: truncate("Run failed -- queued for retry. retrying #{counts(snapshot).retrying}"),
       category: "symphony_failure",
       actions: [refresh_action(), dismiss_action()],
       priority: :normal,
@@ -96,10 +93,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   def event_notification({:preflight_failed, reason}, _snapshot) do
     %{
       title: "Symphony BLOCKED",
-      body:
-        truncate(
-          "Workflow validation failed: #{inspect(reason)}. Dispatch paused."
-        ),
+      body: truncate("Workflow validation failed: #{inspect(reason)}. Dispatch paused."),
       category: "symphony_blocker",
       actions: [
         %{id: "sym:approve", label: "Approve"},
@@ -130,8 +124,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   def event_notification(_other, _snapshot), do: :skip
 
   defp paused_event_body(nil, _count) do
-    {"A run is paused. Tap Refresh to see details.",
-     [refresh_action(), dismiss_action()]}
+    {"A run is paused. Tap Refresh to see details.", [refresh_action(), dismiss_action()]}
   end
 
   defp paused_event_body(head, _count) do
@@ -213,10 +206,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
 
     %{
       title: "Symphony",
-      body:
-        truncate(
-          "running #{c.running}, paused #{paused}, retrying #{c.retrying}"
-        ),
+      body: truncate("running #{c.running}, paused #{paused}, retrying #{c.retrying}"),
       category: "symphony_status",
       actions: [refresh_action(), dismiss_action()],
       priority: :silent,

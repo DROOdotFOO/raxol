@@ -145,6 +145,25 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
       refute File.exists?(Path.join(host_home, "~"))
     end
 
+    # `ensure/3` runs inside the Orchestrator GenServer, so an ssh round trip
+    # that never returns stalls the one process that polls, dispatches,
+    # reconciles and answers `snapshot/1` -- once per issue, serially, across a
+    # whole batch. The hook path was already bounded; mkdir and rm were held
+    # only by ssh's own ServerAliveInterval x ServerAliveCountMax, about 105s.
+    test "a host that never answers a mkdir is given up on rather than stalling", %{
+      local_root: local_root,
+      host_root: host_root
+    } do
+      config = build_config(local_root)
+      hung = [exec_fn: fn _ssh, _argv, _opts -> Process.sleep(:infinity) end, fs_timeout_ms: 150]
+
+      assert {:error, {:mkdir_failed, {:timeout, 150}}} =
+               Workspace.ensure(config, "MT-1",
+                 host: host(host_root),
+                 ssh: Keyword.merge(FakeSsh.opts(), hung)
+               )
+    end
+
     test "a relative remote root is refused rather than resolved locally", %{
       local_root: local_root
     } do
@@ -338,6 +357,32 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
       assert log =~ "remote_remove_failed"
       assert log =~ "Permission denied"
       assert log =~ "skip after_create"
+    end
+
+    # `ensure/3` and `remove/3` are called from inside the Orchestrator
+    # GenServer, so an ssh round trip that never returns is a stall in the one
+    # process that polls, dispatches, reconciles and answers `snapshot/1`. The
+    # hook path was already bounded; mkdir and rm were held only by ssh's own
+    # ServerAliveInterval x ServerAliveCountMax -- about 105s, per issue,
+    # serially across a batch.
+    test "a removal the host never answers is given up on rather than stalling", %{
+      local_root: local_root,
+      host_root: host_root
+    } do
+      config = build_config(local_root)
+      hung = [exec_fn: fn _ssh, _argv, _opts -> Process.sleep(:infinity) end, fs_timeout_ms: 150]
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok =
+                   Workspace.remove(config, Path.join(host_root, "MT-1"),
+                     host: host(host_root),
+                     ssh: Keyword.merge(FakeSsh.opts(), hung)
+                   )
+        end)
+
+      assert log =~ "remote_remove_failed"
+      assert log =~ "timeout"
     end
 
     test "refuses a path outside the host's root", %{
