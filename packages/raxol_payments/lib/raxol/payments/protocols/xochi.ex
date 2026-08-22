@@ -928,7 +928,22 @@ defmodule Raxol.Payments.Protocols.Xochi do
     end)
   end
 
-  defp eip712_types(eip712) do
+  @doc """
+  The served `types` map, projected into the shape `Raxol.Payments.EIP712` encodes.
+
+  `EIP712Domain` is dropped: the domain is hashed from `eip712_domain/1` (or, for
+  a checker, read from the verifying contract), and leaving it here would make it
+  a second root type and the primary type ambiguous.
+
+  Public for the same reason `eip712_domain/1` is, and it is the same reason
+  twice: a second copy of this mapping agrees with itself. `EIP712.hash_struct/3`
+  is pinned against ethers-generated vectors, but the projection FEEDING it is
+  not, so a checker that re-derived this would rebuild a different struct hash
+  the moment either copy changed -- and would report that as the signature being
+  bad. `Raxol.Earn.Xochi.PullPreflight` calls this rather than mirroring it.
+  """
+  @spec eip712_types(map()) :: map()
+  def eip712_types(eip712) do
     (eip712["types"] || %{})
     |> Map.drop(["EIP712Domain"])
     |> Enum.into(%{}, fn {name, fields} ->

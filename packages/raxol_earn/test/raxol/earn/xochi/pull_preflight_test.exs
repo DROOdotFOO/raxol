@@ -4,6 +4,8 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
   alias Raxol.Earn.Onchain.RPC
   alias Raxol.Earn.Xochi.PullPreflight
   alias Raxol.Payments.EIP712
+  alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
+  alias Raxol.Payments.Xochi.Schemas.{QuoteRequest, QuoteResponse}
 
   # Permit2's live Base DOMAIN_SEPARATOR, and the universal deployment it is
   # read from. Hardcoding the real value is what makes the fake chain below an
@@ -166,14 +168,6 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
     )
   end
 
-  defp types_for(served) do
-    served["types"]
-    |> Map.drop(["EIP712Domain"])
-    |> Map.new(fn {name, fields} ->
-      {name, Enum.map(fields, fn f -> {f["name"], f["type"]} end)}
-    end)
-  end
-
   defp sign_over(digest) do
     {:ok, raw} = ExSecp256k1.sign(digest, @key)
     "0x" <> Base.encode16(EIP712.pack_signature(raw), case: :lower)
@@ -183,7 +177,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
   # for this payload is exactly the three fields Permit2 declares.
   defp current_signature(served) do
     domain = Raxol.Payments.Protocols.Xochi.eip712_domain(served)
-    {:ok, digest} = EIP712.hash(domain, types_for(served), served["message"])
+    {:ok, digest} = EIP712.hash(domain, XochiProtocol.eip712_types(served), served["message"])
     sign_over(digest)
   end
 
@@ -204,7 +198,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       verifyingContract: d["verifyingContract"]
     }
 
-    {:ok, digest} = EIP712.hash(domain, types_for(served), served["message"])
+    {:ok, digest} = EIP712.hash(domain, XochiProtocol.eip712_types(served), served["message"])
     sign_over(digest)
   end
 
@@ -412,6 +406,104 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
 
       assert {:inconclusive, {:domain_separator_unavailable, _vc, _reason}} =
                PullPreflight.verify(served, current_signature(served), @account, rpc: client)
+    end
+  end
+
+  # Every other test in this file signs with a digest the test builds. That is
+  # fine for proving the checker distinguishes two digests, and useless for
+  # proving it agrees with the thing that will actually sign in production --
+  # which is the property #772 lost. Here the bundle comes out of
+  # `Xochi.sign_intent/3` itself, so a divergence anywhere in the real signing
+  # path (domain projection, types projection, pull selection) fails this.
+  describe "against a bundle the production signer produced" do
+    defmodule ProdWallet do
+      @moduledoc false
+      use Raxol.Payments.Wallets.Env, env_var: "RAXOL_PULL_PREFLIGHT_TEST_KEY"
+    end
+
+    setup do
+      System.put_env(
+        "RAXOL_PULL_PREFLIGHT_TEST_KEY",
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      )
+
+      Application.put_env(:raxol_payments, :pull_solver_allowlist, [@spender])
+
+      on_exit(fn ->
+        System.delete_env("RAXOL_PULL_PREFLIGHT_TEST_KEY")
+        Application.delete_env(:raxol_payments, :pull_solver_allowlist)
+      end)
+
+      :ok
+    end
+
+    test "accepts the pull signature sign_intent/3 actually emits" do
+      served = live_pull()
+
+      {:ok, bundle} =
+        XochiProtocol.sign_intent(quote_response(served), ProdWallet, quote_request())
+
+      assert {:ok, details} =
+               PullPreflight.verify(served, bundle[:pull_signature], @owner,
+                 rpc: chain(code: "0x"),
+                 expect_verifier: @permit2_address
+               )
+
+      assert details.separator == @permit2_separator
+      assert details.signer_kind == :eoa
+    end
+
+    # The same bundle, checked against a separator that is not Permit2's. If this
+    # passed, the one above would be proving nothing about the domain.
+    test "and rejects it against a verifier that rebuilds a different domain" do
+      served = live_pull()
+
+      {:ok, bundle} =
+        XochiProtocol.sign_intent(quote_response(served), ProdWallet, quote_request())
+
+      other = %{served["domain"] | "chainId" => 8453, "name" => "NotPermit2"}
+
+      assert {:rejected, _} =
+               PullPreflight.verify(served, bundle[:pull_signature], @owner,
+                 rpc: chain(code: "0x", foreign_separator: separator_for(other)),
+                 expect_verifier: @hostile
+               )
+    end
+
+    # The fixture's fixed deadline is months out and would silently start failing
+    # `valid_window?` on its own schedule. Only this describe block signs through
+    # the validator, so only this block needs a live one.
+    defp live_pull do
+      deadline = Integer.to_string(System.system_time(:second) + 3600)
+      update_in(served_pull(), ["message"], &Map.put(&1, "deadline", deadline))
+    end
+
+    defp quote_response(served) do
+      %QuoteResponse{
+        intent_id: "xi_prod",
+        quote_id: "xq_prod",
+        can_solve: true,
+        payment_method: "permit2",
+        eip712_data: %{
+          "domain" => %{"name" => "Xochi", "version" => "1", "chainId" => 8453},
+          "primaryType" => "XochiIntent",
+          "types" => %{"XochiIntent" => [%{"name" => "intentId", "type" => "string"}]},
+          "message" => %{"intentId" => "xi_prod"}
+        },
+        pull_authorization: served
+      }
+    end
+
+    defp quote_request do
+      %QuoteRequest{
+        wallet: @owner,
+        from_chain_id: 8453,
+        to_chain_id: 42_161,
+        from_token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        to_token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        from_amount: "3000000",
+        settlement_preference: "public"
+      }
     end
   end
 

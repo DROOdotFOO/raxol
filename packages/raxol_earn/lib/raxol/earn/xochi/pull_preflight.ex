@@ -32,8 +32,14 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   test agreed with because every test rebuilt the domain the same way we did.
   Sourcing the domain half from the contract breaks the loop.
 
-  The struct half is still encoded by `Raxol.Payments.EIP712`, which the Permit2
-  and ERC-3009 conformance suites pin against ethers-generated vectors.
+  The struct half is not chain-sourced. It is encoded by `Raxol.Payments.EIP712`,
+  which the Permit2 and ERC-3009 conformance suites pin against ethers-generated
+  vectors, and projected into that encoder by
+  `Raxol.Payments.Protocols.Xochi.eip712_types/1` -- the SIGNER's own function,
+  called rather than mirrored. Those are two different guarantees and only the
+  first is a vector pin: what the shared call buys is that this module and the
+  signer cannot drift into rebuilding different struct hashes, which would
+  surface as a REJECTED verdict on a signature that was fine.
 
   ## What it does not prove
 
@@ -78,6 +84,7 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   alias Raxol.Earn.Onchain.RPC
   alias Raxol.Payments.EIP712
   alias Raxol.Payments.Protocols.Permit2
+  alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
 
   # ERC-1271: bytes4(keccak256("isValidSignature(bytes32,bytes)"))
   @erc1271_magic <<0x16, 0x26, 0xBA, 0x7E>>
@@ -313,25 +320,22 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   # A served envelope this module cannot encode is one no signature can cover:
   # the signer encoded SOMETHING, and it was not this. That is a defect in the
   # payload, not a gap in the check.
+  # The struct half is projected by the SIGNER's own function, not a copy of it.
+  # A copy would agree with itself and diverge from production the moment either
+  # side changed -- and it would report that divergence as the signature being
+  # bad, which is the false verdict this module exists to avoid. It also does not
+  # make the check circular in any way the moduledoc does not already own: the
+  # domain half is what is sourced from the chain, and this step has no judgment
+  # in it beyond dropping EIP712Domain, which both sides must do identically or
+  # neither is encoding EIP-712.
   defp digest(separator, served) do
-    types = types(served)
+    types = XochiProtocol.eip712_types(served)
     message = served["message"] || %{}
 
     case EIP712.hash_with_separator(separator, types, message) do
       {:ok, digest} -> {:ok, digest}
       {:error, reason} -> {:rejected_because, {:digest_failed, reason}}
     end
-  end
-
-  # Drop the served EIP712Domain declaration: the separator it describes is the
-  # one being read from chain instead, and leaving it in would make it a second
-  # root type and the primary type ambiguous.
-  defp types(served) do
-    (served["types"] || %{})
-    |> Map.drop(["EIP712Domain"])
-    |> Map.new(fn {name, fields} ->
-      {name, Enum.map(fields, fn f -> {f["name"], f["type"]} end)}
-    end)
   end
 
   # Permit2 and the ERC-3009 tokens branch on whether the owner has code: a
