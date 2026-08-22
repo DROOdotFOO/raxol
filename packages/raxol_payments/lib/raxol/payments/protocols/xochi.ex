@@ -714,8 +714,9 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # this signature. Leaving it to the quote lets the served payload nominate its
   # own verifier -- a contract whose `DOMAIN_SEPARATOR()` agrees with whatever it
   # served -- while the allowance being spent was granted to Permit2 and the pull
-  # runs there. Permit2 is deployed at one address on every chain, so this is a
-  # constant and not a per-corridor lookup.
+  # runs there. A constant rather than a per-corridor lookup because Permit2 is
+  # at one address on every chain raxol settles on; see
+  # `Permit2.verifying_contract/0` for the exception that would end that.
   defp validate_permit2_pull(pull, request) do
     domain = pull["domain"] || %{}
     message = pull["message"] || %{}
