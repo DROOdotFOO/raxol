@@ -405,6 +405,25 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       assert Agent.get(asked, & &1) == [@permit2_address]
     end
 
+    # A chainId that is present but unreadable is a different defect from one
+    # that is absent, and describing it as absent sends the operator looking for
+    # a field that is right there in the payload they captured.
+    test "a chainId that is present but unreadable is its own rejection" do
+      for bad <- [-1, "not-a-chain", 1.5, %{}] do
+        served = update_in(served_pull(), ["domain"], &Map.put(&1, "chainId", bad))
+
+        assert {:rejected, %{reason: {:invalid_chain_id, ^bad}}} =
+                 verify(served, "0x00", @account, rpc: chain())
+      end
+    end
+
+    test "a chainId that is absent is still reported as absent" do
+      served = update_in(served_pull(), ["domain"], &Map.delete(&1, "chainId"))
+
+      assert {:rejected, %{reason: :no_chain_id}} =
+               verify(served, "0x00", @account, rpc: chain())
+    end
+
     # This module and `Protocols.Xochi` both parse domain.chainId, and they now
     # agree on what a value is. Nothing reaches here that they disagree about --
     # `EIP712` refuses a padded uint256 at signing, several steps earlier -- so
@@ -616,6 +635,14 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       assert line =~ "REJECTED"
       assert line =~ "declares no domain.verifyingContract"
       refute line =~ "could not run"
+    end
+
+    test "an unreadable chainId is not described as a missing one" do
+      line = PullPreflight.describe({:rejected, %{reason: {:invalid_chain_id, -1}}})
+
+      assert line =~ "REJECTED"
+      assert line =~ "domain.chainId is not a chain id"
+      refute line =~ "declares no domain.chainId"
     end
 
     test "a bad recovery id is not described as a length problem" do

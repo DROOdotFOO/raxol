@@ -292,15 +292,28 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   # broken when their RPC url is. `ORDER_RPC_<from>` falls back to the Base
   # endpoint when unset, so this is the DEFAULT path for any non-Base origin.
   defp same_chain(client, served) do
-    declared = to_uint(get_in(served, ["domain", "chainId"]))
+    served_chain_id = get_in(served, ["domain", "chainId"])
 
-    case {declared, RPC.eth_chain_id(client)} do
-      {nil, _} -> {:rejected_because, :no_chain_id}
-      {chain, {:ok, chain}} -> :ok
-      {chain, {:ok, other}} -> {:inconclusive, {:wrong_chain, declared: chain, node: other}}
-      {_chain, {:error, reason}} -> {:inconclusive, {:chain_id_unavailable, reason}}
+    case to_uint(served_chain_id) do
+      nil -> {:rejected_because, chain_id_defect(served_chain_id)}
+      declared -> compare_chain_id(client, declared)
     end
   end
+
+  defp compare_chain_id(client, declared) do
+    case RPC.eth_chain_id(client) do
+      {:ok, ^declared} -> :ok
+      {:ok, other} -> {:inconclusive, {:wrong_chain, declared: declared, node: other}}
+      {:error, reason} -> {:inconclusive, {:chain_id_unavailable, reason}}
+    end
+  end
+
+  # A payload that declares a chainId this module cannot read is a different
+  # defect from one that declares none, and reporting a negative or non-numeric
+  # value as "declares no domain.chainId" sends the operator looking for a field
+  # that is right there in the payload they captured.
+  defp chain_id_defect(nil), do: :no_chain_id
+  defp chain_id_defect(other), do: {:invalid_chain_id, other}
 
   defp to_uint(n) when is_integer(n) and n >= 0, do: n
 
@@ -486,6 +499,11 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
 
   defp describe_defect(:no_chain_id),
     do: "the served pull declares no domain.chainId, so it names no chain to settle on"
+
+  defp describe_defect({:invalid_chain_id, other}),
+    do:
+      "the served domain.chainId is not a chain id (#{inspect(other)}), so the separator it " <>
+        "commits to names no chain this can read"
 
   defp describe_defect({:invalid_verifying_contract, other}),
     do: "the served domain.verifyingContract is not an address (#{inspect(other)})"
