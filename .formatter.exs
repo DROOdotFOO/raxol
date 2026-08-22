@@ -27,6 +27,7 @@
     "packages/raxol_earn",
     "packages/raxol_gateway",
     "packages/raxol_payments",
+    "packages/raxol_symphony",
     "packages/raxol_telegram"
   ],
   locals_without_parens: [

@@ -10,8 +10,14 @@ on:
       - '**.md'
       - '.github/**'
       - '!.github/workflows/**'
+  # No `branches:` filter. Limiting this to main/master/develop meant a STACKED
+  # pull request -- one opened against another feature branch, which is how a
+  # multi-slice change is reviewed here -- ran no CI at all beyond the secret
+  # scanner. The base branch's own green checks say nothing about the child's
+  # diff, so the child merged unverified and only met CI after its parent
+  # landed and it was retargeted. `push` stays limited to the long-lived
+  # branches; the concurrency group below cancels superseded runs.
   pull_request:
-    branches: [main, master, develop]
     paths-ignore:
       - 'web/**'
       - 'docs/**'
@@ -309,7 +315,7 @@ jobs:
         # Keep on ONE line: test/raxol/formatter_delegation_test.exs parses this
         # matrix with `^\s*package: \[...\]` to prove every gated package is also
         # delegated by the root .formatter.exs. A block sequence parses as absent.
-        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console]
+        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony]
 
     steps:
       - uses: actions/checkout@v7
