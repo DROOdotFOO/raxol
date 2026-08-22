@@ -347,29 +347,40 @@ defmodule Raxol.Symphony.Workspace do
   defp interpret_mkdir_output(output),
     do: {:error, {:mkdir_failed, {:unexpected_output, output}}}
 
+  # The removal VERIFIES rather than trusting `rm -rf`'s status. `rm -rf` exits 0
+  # for a path that is already gone, and a `before_remove` hook that outlives its
+  # deadline can recreate entries under the directory while this runs -- so the
+  # only answer worth acting on is whether the path is absent afterwards.
+  #
+  # Still returns `:ok`: neither caller can retry or unwind, and the orchestrator
+  # has already given the host slot back. What a failure is owed is a LOUD log,
+  # because its consequence is silent -- the next `ensure/3` on this host finds
+  # the directory present, reports `created_now: false`, and skips `after_create`.
+  # A run then proceeds in a workspace nothing prepared.
   defp remote_rm_rf(%HostSpec{} = host, path, ssh_opts) do
-    command = Ssh.remote_bash("rm -rf #{Ssh.quote_path(path)}")
+    quoted = Ssh.quote_path(path)
+    command = Ssh.remote_bash("rm -rf #{quoted} && [ ! -e #{quoted} ]")
 
     case Ssh.exec(host, command, ssh_opts) do
-      {:error, reason} ->
-        Logger.warning(
-          "symphony.workspace.remote_remove_failed host=#{HostSpec.id(host)} path=#{path} " <>
-            "reason=#{inspect(reason)}"
-        )
-
-        :ok
-
       {_output, 0} ->
         :ok
 
-      {output, status} ->
-        Logger.warning(
-          "symphony.workspace.remote_remove_failed host=#{HostSpec.id(host)} path=#{path} " <>
-            "exit=#{status} output=#{truncate_for_log(output)}"
-        )
+      {:error, reason} ->
+        log_remove_failure(host, path, inspect(reason))
 
-        :ok
+      {output, status} ->
+        log_remove_failure(host, path, "exit=#{status} output=#{truncate_for_log(output)}")
     end
+  end
+
+  defp log_remove_failure(%HostSpec{} = host, path, detail) do
+    Logger.error(
+      "symphony.workspace.remote_remove_failed host=#{HostSpec.id(host)} path=#{path} " <>
+        "#{detail} -- the directory may survive on the host, and a later run that " <>
+        "finds it will REUSE it and skip after_create"
+    )
+
+    :ok
   end
 
   defp execute_hook_script(script, path, timeout_ms, opts) do

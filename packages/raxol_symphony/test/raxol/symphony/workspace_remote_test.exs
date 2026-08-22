@@ -293,6 +293,53 @@ defmodule Raxol.Symphony.WorkspaceRemoteTest do
       refute File.exists?(path)
     end
 
+    # `rm -rf` exits 0 for a path that is already gone, so its own status is not
+    # evidence the directory is absent -- and a `before_remove` that outlived its
+    # deadline can still be writing under it. The removal asks the host directly.
+    test "the removal verifies the directory is gone rather than trusting rm", %{
+      local_root: local_root,
+      host_root: host_root
+    } do
+      config = build_config(local_root)
+      opts = [host: host(host_root), ssh: FakeSsh.opts(report_to: self())]
+
+      assert {:ok, %{path: path}} = Workspace.ensure(config, "MT-1", opts)
+      assert :ok = Workspace.remove(config, path, opts)
+
+      assert_receive {:fake_ssh, _mkdir_argv}
+      assert_receive {:fake_ssh, removal_argv}
+      removal = List.last(removal_argv)
+
+      assert removal =~ "rm -rf"
+      assert removal =~ "[ ! -e", "the removal does not check that the path is actually gone"
+      refute File.exists?(path)
+    end
+
+    # A failed removal is silent otherwise: the next `ensure/3` on this host
+    # finds the directory, reports `created_now: false`, and skips
+    # `after_create`, so a run proceeds in a workspace nothing prepared. Neither
+    # caller can retry, so what the failure is owed is a loud log.
+    test "a removal the host refused is logged with what it costs the next run", %{
+      local_root: local_root,
+      host_root: host_root
+    } do
+      config = build_config(local_root)
+      refusing = [exec_fn: fn _ssh, _argv, _opts -> {"rm: Permission denied", 1} end]
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok =
+                   Workspace.remove(config, Path.join(host_root, "MT-1"),
+                     host: host(host_root),
+                     ssh: FakeSsh.opts() |> Keyword.merge(refusing)
+                   )
+        end)
+
+      assert log =~ "remote_remove_failed"
+      assert log =~ "Permission denied"
+      assert log =~ "skip after_create"
+    end
+
     test "refuses a path outside the host's root", %{
       local_root: local_root,
       host_root: host_root
