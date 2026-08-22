@@ -168,6 +168,18 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
     )
   end
 
+  # Every call needs the pin now, and these tests are about the other arguments.
+  # `put_new` so a test that IS about the pin can still name its own. The two
+  # tests about the requirement itself call `PullPreflight.verify/4` directly.
+  defp verify(served, signature, account, opts \\ []) do
+    PullPreflight.verify(
+      served,
+      signature,
+      account,
+      Keyword.put_new(opts, :expect_verifier, @permit2_address)
+    )
+  end
+
   defp sign_over(digest) do
     {:ok, raw} = ExSecp256k1.sign(digest, @key)
     "0x" <> Base.encode16(EIP712.pack_signature(raw), case: :lower)
@@ -207,7 +219,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:ok, details} =
-               PullPreflight.verify(served, current_signature(served), @account, rpc: chain())
+               verify(served, current_signature(served), @account, rpc: chain())
 
       assert details.separator == @permit2_separator
       assert details.verifying_contract == @permit2_address
@@ -220,9 +232,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:ok, details} =
-               PullPreflight.verify(served, current_signature(served), @owner,
-                 rpc: chain(code: "0x")
-               )
+               verify(served, current_signature(served), @owner, rpc: chain(code: "0x"))
 
       assert details.signer_kind == :eoa
     end
@@ -231,9 +241,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:rejected, details} =
-               PullPreflight.verify(served, current_signature(served), @account,
-                 rpc: chain(code: "0x")
-               )
+               verify(served, current_signature(served), @account, rpc: chain(code: "0x"))
 
       assert details.signer_kind == :eoa
       assert details.returned == @owner
@@ -246,9 +254,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:rejected, details} =
-               PullPreflight.verify(served, pre_878_signature(served), @owner,
-                 rpc: chain(code: "0x")
-               )
+               verify(served, pre_878_signature(served), @owner, rpc: chain(code: "0x"))
 
       assert details.signer_kind == :eoa
       refute details.returned == @owner
@@ -263,7 +269,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:rejected, details} =
-               PullPreflight.verify(served, pre_878_signature(served), @account, rpc: chain())
+               verify(served, pre_878_signature(served), @account, rpc: chain())
 
       assert details.returned == <<0xFF, 0xFF, 0xFF, 0xFF>>
       assert details.separator == @permit2_separator
@@ -281,7 +287,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = Map.put(served_pull(), "domain", %{"name" => "Xochi", "chainId" => 8453})
 
       assert {:rejected, %{reason: :no_verifying_contract}} =
-               PullPreflight.verify(served, "0x00", @account, rpc: chain())
+               verify(served, "0x00", @account, rpc: chain())
     end
 
     test "a permit2 pull is refused when the quote nominates its own verifier" do
@@ -294,27 +300,43 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served =
         update_in(served_pull(), ["domain"], &Map.put(&1, "verifyingContract", hostile))
 
-      assert {:rejected, %{reason: {:verifier_not_permit2, ^hostile, _canonical}}} =
-               PullPreflight.verify(served, current_signature(served), @account, rpc: chain())
+      assert {:rejected, %{reason: {:verifier_mismatch, ^hostile, _expected}}} =
+               verify(served, current_signature(served), @account, rpc: chain())
     end
 
-    # The primaryType-keyed fallback is a floor, not the control: it reads a
-    # field the same party served. A payload declaring some other primary type
-    # skips it, the quote picks the contract we ask about its own signature, and
-    # the check PASSES -- the #772 shape, one layer out. Documented so the option
-    # below reads as load-bearing rather than belt-and-braces.
-    test "without :expect_verifier a non-permit2 primaryType gets its own oracle to agree" do
+    # Every default available here would be drawn from the payload under audit,
+    # so there is no default. Omitting the pin used to fall back to one keyed on
+    # the served `primaryType` -- also chosen by the party that served it -- and
+    # a payload declaring some other primary type walked straight past it.
+    test "refuses to run at all without :expect_verifier" do
       {served, chain} = hostile_verifier()
 
-      assert {:ok, %{verifying_contract: @hostile}} =
-               PullPreflight.verify(served, current_signature(served), @account, rpc: chain)
+      assert_raise ArgumentError, ~r/:expect_verifier is required/, fn ->
+        PullPreflight.verify(served, current_signature(served), @account, rpc: chain)
+      end
     end
 
+    test "refuses an :expect_verifier that is not an address" do
+      {served, chain} = hostile_verifier()
+
+      for bad <- [:permit2, nil, 42, "permit2"] do
+        assert_raise ArgumentError, ~r/must be a 0x address/, fn ->
+          PullPreflight.verify(served, current_signature(served), @account,
+            rpc: chain,
+            expect_verifier: bad
+          )
+        end
+      end
+    end
+
+    # The whole payload is internally consistent -- the signature really does
+    # cover the digest that address really will rebuild. Only the caller's pin
+    # tells the two apart.
     test ":expect_verifier pins the oracle regardless of what the payload declares" do
       {served, chain} = hostile_verifier()
 
       assert {:rejected, %{reason: {:verifier_mismatch, @hostile, @permit2_address}}} =
-               PullPreflight.verify(served, current_signature(served), @account,
+               verify(served, current_signature(served), @account,
                  rpc: chain,
                  expect_verifier: @permit2_address
                )
@@ -324,7 +346,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:ok, _details} =
-               PullPreflight.verify(served, current_signature(served), @account,
+               verify(served, current_signature(served), @account,
                  rpc: chain(),
                  expect_verifier: String.downcase(@permit2_address)
                )
@@ -338,7 +360,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = update_in(served_pull(), ["domain"], &Map.put(&1, "chainId", "8453"))
 
       assert {:ok, _details} =
-               PullPreflight.verify(served, current_signature(served), @account, rpc: chain())
+               verify(served, current_signature(served), @account, rpc: chain())
     end
 
     test "an unrecoverable signature on a codeless account is a rejection" do
@@ -350,14 +372,14 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       wrapped = "0x" <> String.duplicate("ab", 72)
 
       assert {:rejected, %{reason: {:recover_failed, {:not_a_canonical_signature, 72}}}} =
-               PullPreflight.verify(served, wrapped, @owner, rpc: chain(code: "0x"))
+               verify(served, wrapped, @owner, rpc: chain(code: "0x"))
     end
 
     test "a signature that is not hex is a rejection, not a gap" do
       served = served_pull()
 
       assert {:rejected, %{reason: {:invalid_hex, :signature}}} =
-               PullPreflight.verify(served, "0xnothex", @account, rpc: chain())
+               verify(served, "0xnothex", @account, rpc: chain())
     end
 
     test "an RPC answering for the wrong chain is inconclusive, never a rejection" do
@@ -369,9 +391,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:inconclusive, {:wrong_chain, declared: 8453, node: 42_161}} =
-               PullPreflight.verify(served, current_signature(served), @account,
-                 rpc: chain(chain_id: 42_161)
-               )
+               verify(served, current_signature(served), @account, rpc: chain(chain_id: 42_161))
     end
 
     test "an unreachable RPC is inconclusive, not a rejection" do
@@ -383,7 +403,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:inconclusive, {:chain_id_unavailable, _reason}} =
-               PullPreflight.verify(served, current_signature(served), @account, rpc: client)
+               verify(served, current_signature(served), @account, rpc: client)
     end
 
     test "a separator that cannot be read is inconclusive" do
@@ -405,7 +425,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       served = served_pull()
 
       assert {:inconclusive, {:domain_separator_unavailable, _vc, _reason}} =
-               PullPreflight.verify(served, current_signature(served), @account, rpc: client)
+               verify(served, current_signature(served), @account, rpc: client)
     end
   end
 
@@ -444,7 +464,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
         XochiProtocol.sign_intent(quote_response(served), ProdWallet, quote_request())
 
       assert {:ok, details} =
-               PullPreflight.verify(served, bundle[:pull_signature], @owner,
+               verify(served, bundle[:pull_signature], @owner,
                  rpc: chain(code: "0x"),
                  expect_verifier: @permit2_address
                )
@@ -464,7 +484,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       other = %{served["domain"] | "chainId" => 8453, "name" => "NotPermit2"}
 
       assert {:rejected, _} =
-               PullPreflight.verify(served, bundle[:pull_signature], @owner,
+               verify(served, bundle[:pull_signature], @owner,
                  rpc: chain(code: "0x", foreign_separator: separator_for(other)),
                  expect_verifier: @hostile
                )
@@ -513,7 +533,7 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
 
       line =
         served
-        |> PullPreflight.verify(pre_878_signature(served), @account, rpc: chain())
+        |> verify(pre_878_signature(served), @account, rpc: chain())
         |> PullPreflight.describe()
 
       assert line =~ "REJECTED"

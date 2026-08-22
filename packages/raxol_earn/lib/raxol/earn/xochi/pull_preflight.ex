@@ -83,13 +83,10 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   alias Raxol.Earn.ABI
   alias Raxol.Earn.Onchain.RPC
   alias Raxol.Payments.EIP712
-  alias Raxol.Payments.Protocols.Permit2
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
 
   # ERC-1271: bytes4(keccak256("isValidSignature(bytes32,bytes)"))
   @erc1271_magic <<0x16, 0x26, 0xBA, 0x7E>>
-
-  @permit2_primary_type "PermitWitnessTransferFrom"
 
   @type details :: %{
           optional(:digest) => binary(),
@@ -116,12 +113,17 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
 
   - `:rpc` -- an `Raxol.Earn.Onchain.RPC` client. Built from application config
     when absent.
-  - `:expect_verifier` -- the address the caller's rail says will verify this
-    signature (the canonical Permit2, or the origin token for ERC-3009). The
-    served `domain.verifyingContract` must match it or the pull is rejected.
-    PASS THIS. It is what stops the party who served the payload from also
-    choosing the contract this module asks about it; without it the fallback pin
-    keys off the served `primaryType`, which that party also controls.
+  - `:expect_verifier` (REQUIRED) -- the address the caller's rail says will
+    verify this signature: the canonical Permit2, or the origin token for
+    ERC-3009. The served `domain.verifyingContract` must match it or the pull is
+    rejected.
+
+    Required rather than defaulted, because every default available here is
+    drawn from the served payload, and the payload is the thing under audit.
+    A caller that does not name the verifier is asking the party who wrote the
+    envelope which contract to ask about the envelope. There is no safe value to
+    fall back to, so there is no fallback: omitting it raises rather than
+    quietly checking something weaker.
 
   Returns:
 
@@ -137,7 +139,7 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   @spec verify(map(), String.t(), String.t(), keyword()) :: outcome()
   def verify(served, signature, account, opts \\ []) when is_map(served) do
     client = Keyword.get_lazy(opts, :rpc, fn -> RPC.client() end)
-    expected = Keyword.get(opts, :expect_verifier)
+    expected = expected_verifier!(opts)
 
     with {:ok, sig_bytes} <- signature_bytes(signature),
          {:ok, details} <- describe_target(client, served, account, expected) do
@@ -213,21 +215,36 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
 
   # -- Internal --
 
+  # The caller's answer to "who checks this signature", validated at the door so
+  # a bad one stops at the call site rather than travelling in as a FunctionClause
+  # from somewhere three functions deeper. Naming the verifier is a decision the
+  # caller has already made by choosing a rail; getting it wrong is a bug there.
+  defp expected_verifier!(opts) do
+    case Keyword.fetch(opts, :expect_verifier) do
+      {:ok, "0x" <> _ = address} ->
+        address
+
+      {:ok, other} ->
+        raise ArgumentError,
+              ":expect_verifier must be a 0x address, got #{inspect(other)}"
+
+      :error ->
+        raise ArgumentError,
+              ":expect_verifier is required -- name the contract your rail pulls " <>
+                "through (Permit2, or the origin token for ERC-3009). There is no " <>
+                "default: every candidate comes from the payload under audit."
+    end
+  end
+
   # A served `verifyingContract` is a claim about WHO will check the signature,
   # made by the same party whose payload is under audit. Reading a separator from
   # an address the quote chose would let a hostile worker nominate a contract
   # whose DOMAIN_SEPARATOR() it controls, and the check would agree with the
-  # payload exactly the way #772's tests agreed with #772.
-  #
-  # `:expect_verifier` is how a caller breaks that: it names the verifier from
-  # the rail the caller ASKED for, so the oracle is not drawn from served data at
-  # all. Without it the only pin available keys off `served["primaryType"]` --
-  # also served, also chosen by the same party -- so a payload declaring some
-  # other primary type skips the pin. That floor makes a bare call no worse than
-  # nothing; it is not a substitute for passing the option.
+  # payload exactly the way #772's tests agreed with #772. So the served address
+  # is never the pin -- it is only ever checked AGAINST one.
   defp verifying_contract(served, expected) do
     with {:ok, address} <- declared_verifier(served) do
-      pinned_verifier(expected, served["primaryType"], address)
+      pinned_verifier(expected, address)
     end
   end
 
@@ -239,25 +256,13 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
     end
   end
 
-  defp pinned_verifier(expected, _primary_type, address) when is_binary(expected) do
+  defp pinned_verifier(expected, address) do
     if EIP712.normalize_address(address) == EIP712.normalize_address(expected) do
       {:ok, address}
     else
       {:rejected_because, {:verifier_mismatch, address, expected}}
     end
   end
-
-  defp pinned_verifier(nil, @permit2_primary_type, address) do
-    canonical = Permit2.verifying_contract()
-
-    if EIP712.normalize_address(address) == EIP712.normalize_address(canonical) do
-      {:ok, address}
-    else
-      {:rejected_because, {:verifier_not_permit2, address, canonical}}
-    end
-  end
-
-  defp pinned_verifier(nil, _primary_type, address), do: {:ok, address}
 
   # Permit2's separator commits to the chain id, and Permit2 is deployed at the
   # SAME address everywhere -- so a node for the wrong chain answers this call
@@ -461,12 +466,6 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
       "the served domain.verifyingContract is #{short(served)}, not #{short(expected)}, which " <>
         "is what this rail pulls through. Asking the served address about the signature would " <>
         "be asking the party that chose it, so the check stops here"
-
-  defp describe_defect({:verifier_not_permit2, served, canonical}),
-    do:
-      "the served domain.verifyingContract is #{short(served)}, not the canonical Permit2 " <>
-        "at #{short(canonical)}. The allowance this pull spends was granted to Permit2, so " <>
-        "whatever that address says about the signature is not what will run"
 
   defp describe_defect({:digest_failed, reason}),
     do: "the served types and message cannot be EIP-712 encoded (#{inspect(reason)})"

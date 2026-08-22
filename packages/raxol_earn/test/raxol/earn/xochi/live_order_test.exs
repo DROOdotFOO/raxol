@@ -322,9 +322,8 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     defp preflight_pull_signature(%{quote: quote, request: request}, from) do
       with {:ok, url} <- rpc_url(from),
            {:ok, served} <- served_pull(quote),
-           {:ok, bundle} <- XochiProtocol.sign_intent(quote, LiveWallet, request) do
-        signature = bundle[:pull_signature] || bundle["pull_signature"]
-
+           {:ok, bundle} <- XochiProtocol.sign_intent(quote, LiveWallet, request),
+           {:ok, signature} <- pull_signature(bundle) do
         served
         |> PullPreflight.verify(signature, LiveWallet.address(),
           rpc: RPC.client(url: url),
@@ -342,11 +341,22 @@ defmodule Raxol.Earn.Xochi.LiveOrderTest do
     defp served_pull(%{pull_authorization: nil}), do: {:error, :no_pull_authorization}
     defp served_pull(%{pull_authorization: pull}), do: {:ok, pull}
 
+    # A quote served a pull, so the bundle owes a signature over it. Handing a
+    # nil to `verify/4` would report "REJECTED -- not hex", which reads as a
+    # verdict on a signature that was never produced.
+    defp pull_signature(bundle) do
+      case Map.get(bundle, :pull_signature) do
+        sig when is_binary(sig) -> {:ok, sig}
+        _ -> {:error, :pull_signature_missing}
+      end
+    end
+
+    # No catch-all: `sign_intent/3` above refused any other payment_method, so a
+    # third value cannot reach here.
     defp expected_verifier("permit2", _request),
       do: Raxol.Payments.Protocols.Permit2.verifying_contract()
 
     defp expected_verifier("erc3009", request), do: request.from_token
-    defp expected_verifier(_method, _request), do: nil
 
     defp rpc_url(chain) do
       case System.get_env("XOCHI_ORDER_RPC_#{chain}") do

@@ -58,11 +58,15 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   writes.
 
   A real run proceeds only when that check PASSES. A rejection means the pull
-  would revert on settlement; an inconclusive result means nobody knows, and the
-  endpoint that could not say is the one the `createJob` and `fund` writes go to
-  next. Either way the run stops before escrowing a fee it cannot earn, and the
-  log line distinguishes the two so the next move is clear. `--dry-run` reports
-  and carries on. See `Raxol.Earn.Xochi.PullPreflight` and GitHub #772.
+  would revert on settlement; an inconclusive result means nobody knows. Either
+  way the run stops before escrowing a fee it cannot earn, and the log line
+  distinguishes the two so the next move is clear. `--dry-run` reports both and
+  carries on, since it spends nothing.
+
+  A quote that served a pull with no signature in the signed bundle aborts BOTH
+  modes. That is not a preflight verdict to rehearse -- it is a bundle with
+  nothing in it to check, so there is no version of the run worth continuing.
+  See `Raxol.Earn.Xochi.PullPreflight` and GitHub #772.
 
   ## Origin pull: the `--solver` pin
 
@@ -824,9 +828,13 @@ defmodule Mix.Tasks.RaxolEarn.Order do
   # this address, so leaving it to the served `verifyingContract` would let a
   # hostile quote nominate its own oracle. Permit2 is one address on every chain;
   # the ERC-3009 verifier is the origin token itself.
+  # Two clauses, no catch-all. `validate_pull/3` refused every other
+  # payment_method before this quote was signed, so a third value here is an
+  # impossibility rather than a case to handle -- and a FunctionClauseError says
+  # that, before any write, where a `nil` fallback would instead hand
+  # `PullPreflight` a missing pin.
   defp expected_verifier("permit2", _cfg), do: Permit2.verifying_contract()
   defp expected_verifier("erc3009", cfg), do: cfg.src_token
-  defp expected_verifier(_method, _cfg), do: nil
 
   @doc false
   # Public only so the money decision itself can be tested. Every clause is
