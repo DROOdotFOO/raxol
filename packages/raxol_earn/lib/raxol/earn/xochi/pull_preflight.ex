@@ -269,9 +269,16 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
     end
   end
 
+  # The CALLER's address is what gets dialed, not the served one that just
+  # matched it. `normalize_address/1` trims and downcases, so the two can match
+  # while differing byte-for-byte -- a served `"0x…BA3 "` passes the pin and then
+  # goes to `eth_call` verbatim as `to:`, where the node refuses it and every
+  # funded run stops INCONCLUSIVE blaming an endpoint that is fine. Comparing
+  # against the pin and then asking the payload's copy of it also contradicts
+  # the rule this function exists to enforce.
   defp pinned_verifier(expected, address) do
     if EIP712.normalize_address(address) == EIP712.normalize_address(expected) do
-      {:ok, address}
+      {:ok, expected}
     else
       {:rejected_because, {:verifier_mismatch, address, expected}}
     end

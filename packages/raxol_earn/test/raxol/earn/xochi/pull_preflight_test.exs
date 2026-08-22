@@ -352,6 +352,59 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
                )
     end
 
+    # `normalize_address/1` trims and downcases, so a served verifyingContract
+    # can pass the pin while differing from it byte for byte. Carrying the
+    # SERVED spelling forward meant `eth_call` was asked about the payload's copy
+    # of the address -- and a served `"0x…BA3 "` reached the node as an invalid
+    # `to:`, stopping every funded run INCONCLUSIVE while blaming an endpoint
+    # that was fine. The pin is what gets dialed.
+    test "the pinned verifier is what gets dialed, not the served spelling of it" do
+      {:ok, asked} = Agent.start_link(fn -> [] end)
+
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        req = Jason.decode!(body)
+
+        result =
+          case req["method"] do
+            "eth_chainId" ->
+              "0x2105"
+
+            "eth_getCode" ->
+              "0x"
+
+            "eth_call" ->
+              [%{"to" => to} | _] = req["params"]
+              Agent.update(asked, &[to | &1])
+              "0x" <> Base.encode16(@permit2_separator, case: :lower)
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => req["id"], "result" => result})
+        )
+      end
+
+      # Same address, different spelling: passes the pin, is not the pin.
+      served =
+        update_in(
+          served_pull(),
+          ["domain"],
+          &Map.put(&1, "verifyingContract", String.downcase(@permit2_address))
+        )
+
+      assert {:ok, details} =
+               verify(served, current_signature(served), @owner,
+                 rpc: RPC.client(url: "http://stub.invalid/rpc", plug: plug),
+                 expect_verifier: @permit2_address
+               )
+
+      assert details.verifying_contract == @permit2_address
+      assert Agent.get(asked, & &1) == [@permit2_address]
+    end
+
     # This module and `Protocols.Xochi` both parse domain.chainId, and they now
     # agree on what a value is. Nothing reaches here that they disagree about --
     # `EIP712` refuses a padded uint256 at signing, several steps earlier -- so
