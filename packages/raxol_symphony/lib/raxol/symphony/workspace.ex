@@ -393,43 +393,67 @@ defmodule Raxol.Symphony.Workspace do
     end
   end
 
+  # How long the local wait outlasts the remote deadline: one ssh round trip
+  # plus slack, so the remote kill is what normally ends the wait.
+  @remote_kill_grace_ms 5_000
+
+  # `wait` reports 128+signo, so a hook the remote deadline killed comes back as
+  # an exit STATUS rather than a local timeout. It is still a timeout, and
+  # reporting `{:exit, 143}` would send an operator looking for a hook that
+  # returned 143 deliberately.
+  @killed_by_signal [143, 137]
+
   # `hooks.timeout_ms` is enforced on BOTH sides, because neither alone is
   # enough.
   #
-  # Locally, `run_with_timeout/2` returns control to the orchestrator on time.
-  # It does NOT stop the work: killing the BEAM process closes the port, and
-  # closing a port does not signal the OS process it spawned, so the `ssh`
-  # client (and the hook behind it) runs on. Relying on that alone left a
-  # timed-out `before_remove` hook still executing on the host while
-  # `remote_rm_rf/3` deleted the workspace underneath it.
+  # The REMOTE deadline is the half that actually stops work. Giving up locally
+  # does not: killing the BEAM process closes the port, and closing a port does
+  # not signal the OS process it spawned, so the `ssh` client and the hook behind
+  # it run on.
   #
-  # So the remote side carries the same deadline and kills the hook itself.
-  # That is the half that actually bounds the work; the local half only bounds
-  # how long we wait for it.
+  # So the local wait deliberately OUTLASTS the remote deadline. Waiting only
+  # `timeout_ms` meant the local half always expired first (the remote deadline
+  # rounds up to whole seconds), returning control while the hook was still alive
+  # on the host -- and `remove_remote/4` then deleted the workspace out from under
+  # a `before_remove` that had not died yet. Waiting past it makes the normal
+  # timeout path the remote kill, with the local timer left as a backstop for an
+  # `ssh` that never answers at all.
   defp execute_script_remote(script, path, timeout_ms, %HostSpec{} = host, ssh_opts) do
-    reaped = Ssh.reap_on_disconnect(script, deadline_seconds: deadline_seconds(timeout_ms))
-    command = Ssh.remote_bash(path, reaped)
+    deadline = deadline_seconds(timeout_ms)
+    command = Ssh.remote_bash(path, Ssh.reap_on_disconnect(script, deadline_seconds: deadline))
 
-    case run_with_timeout(fn -> Ssh.exec(host, command, ssh_opts) end, timeout_ms) do
-      # As in `remote_mkdir_p/3`: the `{:error, _}` shape is a 2-tuple and has
-      # to be matched ahead of `{output, status}`.
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:ok, {output, 0}} -> {:ok, output}
-      {:ok, {output, status}} -> {:error, {:exit, status, output}}
-      {:error, reason} -> {:error, reason}
-      :timeout -> {:error, :timeout}
-    end
+    fn -> Ssh.exec(host, command, ssh_opts) end
+    |> run_with_timeout(local_wait_ms(deadline, timeout_ms))
+    |> classify_remote_result(deadline)
   end
 
+  # As in `remote_mkdir_p/3`: the `{:error, _}` shape is a 2-tuple and has to be
+  # matched ahead of the `{output, status}` one that would otherwise swallow it.
+  defp classify_remote_result({:ok, {:error, reason}}, _deadline), do: {:error, reason}
+  defp classify_remote_result({:ok, {output, 0}}, _deadline), do: {:ok, output}
+
+  defp classify_remote_result({:ok, {_output, status}}, deadline)
+       when deadline != nil and status in @killed_by_signal,
+       do: {:error, :timeout}
+
+  defp classify_remote_result({:ok, {output, status}}, _deadline),
+    do: {:error, {:exit, status, output}}
+
+  defp classify_remote_result({:error, reason}, _deadline), do: {:error, reason}
+  defp classify_remote_result(:timeout, _deadline), do: {:error, :timeout}
+
   # The remote deadline is whole seconds (`sleep`), rounded UP so it can never
-  # land before the local timeout and turn an in-budget hook into a kill.
-  # A sub-second timeout still gets a full second remotely: the local half
-  # gives up first, which is the intended ordering.
+  # land before `timeout_ms` and turn an in-budget hook into a kill.
   defp deadline_seconds(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
     max(1, ceil(timeout_ms / 1000))
   end
 
   defp deadline_seconds(_non_positive), do: nil
+
+  # With no remote deadline to wait for, the local timer is the only bound there
+  # is, so it keeps `timeout_ms` exactly.
+  defp local_wait_ms(nil, timeout_ms), do: timeout_ms
+  defp local_wait_ms(deadline, _timeout_ms), do: deadline * 1000 + @remote_kill_grace_ms
 
   # Unlinked on purpose: an `ssh` invocation that crashes must not take the
   # calling orchestrator down with it.
