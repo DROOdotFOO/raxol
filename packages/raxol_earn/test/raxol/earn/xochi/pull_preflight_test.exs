@@ -375,6 +375,23 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
                verify(served, wrapped, @owner, rpc: chain(code: "0x"))
     end
 
+    test "a 65-byte signature with a non-canonical v is its own rejection reason" do
+      # Distinct from the wrapped-envelope case above, and reported separately:
+      # collapsing both into a byte count produced "this signature is 65 bytes
+      # rather than a canonical 65", which says nothing and then pointed the
+      # operator at a 7702 delegation that is not the problem. Solidity's
+      # ecrecover yields the zero address for any v outside 27/28, so the pull
+      # rejects this too -- for the reason named here.
+      served = served_pull()
+
+      "0x" <> hex = current_signature(served)
+      <<rs::binary-size(64), _v::8>> = Base.decode16!(hex, case: :lower)
+      bad_v = "0x" <> Base.encode16(rs <> <<1>>, case: :lower)
+
+      assert {:rejected, %{reason: {:recover_failed, {:non_canonical_v, 1}}}} =
+               verify(served, bad_v, @owner, rpc: chain(code: "0x"))
+    end
+
     test "a signature that is not hex is a rejection, not a gap" do
       served = served_pull()
 
@@ -546,6 +563,27 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       assert line =~ "REJECTED"
       assert line =~ "declares no domain.verifyingContract"
       refute line =~ "could not run"
+    end
+
+    test "a bad recovery id is not described as a length problem" do
+      line =
+        PullPreflight.describe({:rejected, %{reason: {:recover_failed, {:non_canonical_v, 1}}}})
+
+      assert line =~ "recovery id is 1"
+      # The defect that DOES warrant the 7702 advice is the wrapped envelope,
+      # and conflating the two sent operators after the wrong thing.
+      refute line =~ "7702"
+      refute line =~ "rather than a canonical 65."
+    end
+
+    test "a wrapped envelope still reads as a length problem worth checking 7702 for" do
+      line =
+        PullPreflight.describe(
+          {:rejected, %{reason: {:recover_failed, {:not_a_canonical_signature, 72}}}}
+        )
+
+      assert line =~ "72 bytes rather than a canonical 65"
+      assert line =~ "7702"
     end
 
     test "an inconclusive check does not claim the signature is bad" do

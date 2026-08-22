@@ -46,8 +46,21 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   Only the signature check. A pull can still revert on allowance, balance,
   an expired deadline, or a spent nonce, and this deliberately does not read
   those: they are properties of funding time, not signing time, and the order
-  task reports the allowance separately. A pass here means the signature is not
-  the reason the next attempt fails.
+  task reports the allowance separately.
+
+  Two narrower limits are worth stating rather than leaving to be discovered.
+
+  The EOA branch checks what `ecrecover` checks: a canonical 65 bytes, `v` of 27
+  or 28, and a recovered address equal to the buyer's. Any acceptance policy the
+  verifier layers ON TOP of that -- signature malleability rules, for instance --
+  is the verifier's and is not modelled here, so a pass is a statement about
+  recovery rather than about every rule the contract may apply.
+
+  Both branches also read chain state at preflight time, and the pull happens
+  later. `signer_kind` in particular is a snapshot: a 7702 delegation set or
+  revoked between here and settlement moves the buyer between the ERC-1271 and
+  ecrecover branches, and the verdict was for the branch that was live when the
+  question was asked.
 
   It also needs a `verifyingContract` to ask, so it covers the pull (Permit2 or
   the ERC-3009 token) and not the Xochi intent signature, whose domain is keyed
@@ -388,6 +401,15 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
     end
   end
 
+  # A 65-byte signature whose `v` is neither 27 nor 28 is a DIFFERENT defect
+  # from one of the wrong length, and reporting it by length alone produced
+  # "this signature is 65 bytes rather than a canonical 65" -- which says
+  # nothing, and then sent the operator after a 7702 delegation that is not the
+  # problem. Solidity's `ecrecover` yields the zero address for any other `v`,
+  # so the pull rejects this too; it just rejects it for the reason named here.
+  defp recover(_digest, <<_r::binary-size(32), _s::binary-size(32), v::8>>),
+    do: {:error, {:non_canonical_v, v}}
+
   # An EOA pull carries a canonical 65-byte signature. Anything else is a
   # wrapped envelope on an account with no code to unwrap it, which the pull
   # would reject.
@@ -475,6 +497,12 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
       "the buyer has no code on this chain, so the pull recovers with ecrecover, and this " <>
         "signature is #{size} bytes rather than a canonical 65. A wrapped envelope needs an " <>
         "account that can unwrap it -- check whether the 7702 delegation is actually set"
+
+  defp describe_defect({:recover_failed, {:non_canonical_v, v}}),
+    do:
+      "the signature is a canonical 65 bytes but its recovery id is #{v}, not 27 or 28, so " <>
+        "ecrecover yields the zero address and the pull rejects it. This is the signer's " <>
+        "packing rather than the buyer's account -- capture what produced the signature"
 
   defp describe_defect({:recover_failed, reason}),
     do: "this signature does not recover to any address (#{inspect(reason)})"

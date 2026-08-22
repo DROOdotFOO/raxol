@@ -54,10 +54,20 @@ defmodule Raxol.Earn.Onchain.Permit2Approver do
   """
 
   alias Raxol.Earn.{ABI, ProviderAdapter}
+  alias Raxol.Payments.Protocols.Permit2
 
-  # Universal Permit2, identical on every EVM chain. Matches
-  # `Raxol.Payments.Protocols.Permit2.verifying_contract/0`.
-  @permit2_address "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+  # Universal Permit2, identical on every EVM chain, and taken from the module
+  # that owns it rather than restated here.
+  #
+  # This address now decides three things: the spender an approve grants to
+  # (below), the `verifyingContract` a served pull must declare
+  # (`Protocols.Xochi.validate_permit2_pull/2`), and the contract
+  # `Raxol.Earn.Xochi.PullPreflight` reads `DOMAIN_SEPARATOR()` from. A second
+  # copy agreeing with the first by comment is exactly the shape of defect the
+  # preflight exists to catch -- and if the two ever drifted, the allowance
+  # would be granted at one address while the digest was vouched for at
+  # another, with nothing failing until settlement.
+  @permit2_address Permit2.verifying_contract()
   @approve_signature "approve(address,uint256)"
   @allowance_signature "allowance(address,address)"
   @max_uint256 Integer.pow(2, 256) - 1
