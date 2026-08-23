@@ -754,34 +754,33 @@ defmodule Raxol.Symphony.Workspace do
         # that, a hook that leaks a process per timeout leaks one per retry, and
         # the orchestrator retries.
         #
-        # Captured before the close, killed after it: `PortReaper.capture/1`
-        # needs a live child to read the target off.
+        # Killed BEFORE the close, not after. While the port is open the child's
+        # pid is still ours -- `erl_child_setup` has not reaped it, so the OS
+        # cannot recycle it -- and signalling into that window is the only way
+        # to be sure the pid still names our hook. Nothing here is waiting on
+        # the child's output, so there is no reason to hand it an EOF first.
         #
         # SIGKILL outright, where the remote deadline sends SIGTERM. There the
         # status is read back (`@killed_by_deadline`); here nothing reads it, we
         # have already stopped waiting, and the workspace may be deleted next.
-        reaper = PortReaper.capture(port)
-        close_port(port)
-        PortReaper.kill(reaper)
+        target = PortReaper.capture(port)
+        reaped = PortReaper.kill(target)
+        PortReaper.close(port)
         flush_port_messages(port)
+        warn_if_unreaped(reaped, target)
         {:error, :timeout}
     end
   end
 
-  # The kill can land before this runs, and closing an already-closed port
-  # raises.
-  defp close_port(port) do
-    case :erlang.port_info(port) do
-      :undefined ->
-        :ok
+  # `remove/3` may `rm_rf` this workspace next, so a kill we could not carry out
+  # is not a detail to swallow: the hook is still in there writing to it.
+  defp warn_if_unreaped(:ok, _target), do: :ok
 
-      _ ->
-        try do
-          Port.close(port)
-        rescue
-          ArgumentError -> :ok
-        end
-    end
+  defp warn_if_unreaped({:error, reason}, target) do
+    Logger.warning(
+      "symphony.workspace.hook_unreaped target=#{inspect(target)} reason=#{inspect(reason)} " <>
+        "detail=hook_may_still_be_running"
+    )
   end
 
   defp flush_port_messages(port) do

@@ -24,11 +24,13 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   alias Raxol.Symphony.Worker.HostSpec
 
   @type session :: %{
-          port: port(),
-          thread_id: binary(),
-          workspace: Path.t(),
-          policy: map(),
-          turn_id: pos_integer()
+          required(:port) => port(),
+          required(:thread_id) => binary(),
+          required(:workspace) => Path.t(),
+          required(:policy) => map(),
+          required(:turn_id) => pos_integer(),
+          optional(:reaper) => PortReaper.watcher(),
+          optional(:stop_grace_ms) => non_neg_integer()
         }
 
   @type policy :: %{
@@ -50,6 +52,18 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   # not spend it, since polling stops the moment the process group drains.
   @stop_grace_ms 2_000
 
+  # A remote session's port child is the local `ssh` client, and `ssh` does NOT
+  # exit on stdin EOF. Its clean teardown is a round trip: the EOF crosses the
+  # network, the remote codex exits, the remote `wait` returns, `ssh` follows.
+  # A local-sized budget SIGKILLs a perfectly well-behaved client partway
+  # through that.
+  #
+  # Nothing is stranded either way -- `Ssh.reap_on_disconnect/2` catches the
+  # far side on disconnect -- but that path costs a poll interval and reaps the
+  # remote codex with a signal instead of letting it exit on the EOF, so it is
+  # worth waiting to avoid.
+  @remote_stop_grace_ms 10_000
+
   # ---------------------------------------------------------------------------
   # Public API
   # ---------------------------------------------------------------------------
@@ -66,8 +80,21 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   def start(workspace, command, %{} = policy, env \\ [], host \\ nil)
       when is_binary(workspace) and is_binary(command) and is_list(env) do
     with {:ok, bash} <- find_bash(),
-         {:ok, port} <- open_port(host, bash, command, workspace, env),
-         :ok <- send_initialize(port, policy.read_timeout_ms),
+         {:ok, port} <- open_port(host, bash, command, workspace, env) do
+      handshake(port, workspace, policy, host)
+    end
+  end
+
+  defp handshake(port, workspace, policy, host) do
+    grace_ms = stop_grace_ms(host)
+
+    # Watched from the moment the child exists, because from here on an
+    # untrappable exit skips `stop/1` entirely -- and the orchestrator tears
+    # workers down exactly that way (`stop_run`, stall detection,
+    # reconcile-kill), so `try/after` never runs.
+    reaper = PortReaper.watch(PortReaper.capture(port))
+
+    with :ok <- send_initialize(port, policy.read_timeout_ms),
          {:ok, thread_id} <- send_thread_start(port, workspace, policy) do
       {:ok,
        %{
@@ -75,13 +102,24 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
          thread_id: thread_id,
          workspace: workspace,
          policy: policy,
-         turn_id: @default_turn_id
+         turn_id: @default_turn_id,
+         reaper: reaper,
+         stop_grace_ms: grace_ms
        }}
     else
       {:error, _} = err ->
+        # A handshake that fails has still left a codex running, and only a
+        # session that was built ever reaches `stop/1`.
+        stop_port(port, grace_ms)
+        PortReaper.release(reaper)
         err
     end
   end
+
+  @doc false
+  @spec stop_grace_ms(HostSpec.t() | nil) :: pos_integer()
+  def stop_grace_ms(nil), do: @stop_grace_ms
+  def stop_grace_ms(%HostSpec{}), do: @remote_stop_grace_ms
 
   @doc """
   Drives one turn against an active session.
@@ -141,20 +179,45 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   So the EOF is given first and a group kill backs it up. The grace window is
   what keeps a well-behaved codex on the clean path -- it gets to flush and exit
   on its own terms, and the kill only reaches a session that would otherwise
-  have been left behind.
+  have been left behind. A remote session gets a longer one, since `ssh` does
+  not exit on EOF and its clean teardown is a network round trip.
+
+  This is the ordinary path. It does not run at all when the caller is killed
+  outright, which is what `PortReaper.watch/1` covers.
   """
   @spec stop(session() | port()) :: :ok
-  def stop(%{port: port}), do: stop(port)
+  def stop(%{port: port} = session) do
+    result = stop_port(port, Map.get(session, :stop_grace_ms) || @stop_grace_ms)
 
-  def stop(port) when is_port(port) do
-    # Captured while the port is still open: after the child exits, the process
-    # group its orphans are in can no longer be read back off anything.
-    reaper = PortReaper.capture(port)
-    close_port(port)
-    PortReaper.await_exit(reaper, @stop_grace_ms)
+    # Released last: until the reap has actually happened the watcher is the
+    # only thing still covering us if this process dies mid-stop.
+    PortReaper.release(Map.get(session, :reaper))
+    result
   end
 
+  def stop(port) when is_port(port), do: stop_port(port, @stop_grace_ms)
+
   def stop(_), do: :ok
+
+  defp stop_port(port, grace_ms) do
+    # Captured while the port is still open: after the child exits, the process
+    # group its orphans are in can no longer be read back off anything.
+    target = PortReaper.capture(port)
+    close_port(port)
+
+    case PortReaper.await_exit(target, grace_ms) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "symphony.runners.codex.session_unreaped target=#{inspect(target)} " <>
+            "reason=#{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Handshake
@@ -397,20 +460,8 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   end
 
   defp close_port(port) do
-    case :erlang.port_info(port) do
-      :undefined ->
-        :ok
-
-      _ ->
-        try do
-          Port.close(port)
-        rescue
-          ArgumentError -> :ok
-        end
-
-        flush(port)
-        :ok
-    end
+    PortReaper.close(port)
+    flush(port)
   end
 
   defp flush(port) do

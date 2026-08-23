@@ -104,8 +104,8 @@ defmodule Raxol.Symphony.WorkspaceTest do
       child_witness = Path.join(tmp_dir, "child_finished")
 
       script = """
-      ( sleep 2; touch #{child_witness} ) &
-      sleep 2
+      ( sleep 1; touch #{child_witness} ) &
+      sleep 1
       touch #{hook_witness}
       """
 
@@ -113,7 +113,9 @@ defmodule Raxol.Symphony.WorkspaceTest do
 
       assert {:error, :timeout} = Workspace.run_hook(config, :before_run, tmp_dir)
 
-      Process.sleep(2_400)
+      # Five times the timeout the hook was given, and past the point a survivor
+      # would have finished its own work.
+      Process.sleep(1_200)
 
       refute File.exists?(hook_witness)
       refute File.exists?(child_witness)

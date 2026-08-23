@@ -17,6 +17,13 @@ set -u
 
 mode="${FAKE_CODEX_MODE:-happy}"
 
+# Optionally spawn a long-lived background child, standing in for a tool
+# subprocess. It inherits the port's stdout, as a real one would. Off unless
+# FAKE_CODEX_SPAWN_SECONDS is set, so no existing mode is affected.
+if [[ -n "${FAKE_CODEX_SPAWN_SECONDS:-}" ]]; then
+  ( sleep "$FAKE_CODEX_SPAWN_SECONDS" ) &
+fi
+
 # Read one line from stdin; exit on EOF.
 # Do NOT echo to stderr -- the runner opens the port with :stderr_to_stdout,
 # which would mix the echo into the JSON-RPC stream.
