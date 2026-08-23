@@ -18,6 +18,7 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
 
   require Logger
 
+  alias Raxol.Symphony.PortReaper
   alias Raxol.Symphony.Runners.Codex.{Framing, Protocol}
   alias Raxol.Symphony.Ssh
   alias Raxol.Symphony.Worker.HostSpec
@@ -42,6 +43,12 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
 
   @port_line_bytes 1_048_576
   @default_turn_id 100
+
+  # How long a codex gets to act on the EOF `stop/1` delivers before it is
+  # killed. Long enough for a clean app-server shutdown, short enough that it
+  # cannot stall the orchestrator's `after` block -- and the ordinary case does
+  # not spend it, since polling stops the moment the process group drains.
+  @stop_grace_ms 2_000
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -117,11 +124,36 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   end
 
   @doc """
-  Closes the Port and drains any residual messages.
+  Closes the Port, reaps whatever the session left running, and drains any
+  residual messages.
+
+  Closing the port delivers the EOF a stdio server treats as "shut down", and a
+  codex that is reading its stdin exits on it. That covers the ordinary case and
+  only the ordinary case, so it is not the whole of stopping a session:
+
+    * a codex that is NOT reading stdin -- wedged, or busy inside a turn --
+      never sees the EOF and keeps running.
+    * the tool subprocesses codex spawned are not its stdin's business at all.
+      They survive a parent that exited perfectly cleanly, reparented to init,
+      still holding the workspace open. Measured: parent gone, orphan still
+      running.
+
+  So the EOF is given first and a group kill backs it up. The grace window is
+  what keeps a well-behaved codex on the clean path -- it gets to flush and exit
+  on its own terms, and the kill only reaches a session that would otherwise
+  have been left behind.
   """
   @spec stop(session() | port()) :: :ok
   def stop(%{port: port}), do: stop(port)
-  def stop(port) when is_port(port), do: close_port(port)
+
+  def stop(port) when is_port(port) do
+    # Captured while the port is still open: after the child exits, the process
+    # group its orphans are in can no longer be read back off anything.
+    reaper = PortReaper.capture(port)
+    close_port(port)
+    PortReaper.await_exit(reaper, @stop_grace_ms)
+  end
+
   def stop(_), do: :ok
 
   # ---------------------------------------------------------------------------
