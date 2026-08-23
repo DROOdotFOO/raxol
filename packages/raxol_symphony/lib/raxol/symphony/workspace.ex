@@ -42,7 +42,7 @@ defmodule Raxol.Symphony.Workspace do
 
   require Logger
 
-  alias Raxol.Symphony.{Config, PathSafety, Ssh}
+  alias Raxol.Symphony.{Config, PathSafety, PortReaper, Ssh}
   alias Raxol.Symphony.Worker.HostSpec
 
   # Distinctive enough that a login banner or profile chatter on the remote
@@ -747,87 +747,24 @@ defmodule Raxol.Symphony.Workspace do
         {:error, {:exit, status, IO.iodata_to_binary(Enum.reverse(acc))}}
     after
       timeout_ms ->
-        kill_spawned_process(port)
+        # Giving up on a hook does not stop it. `Port.close/1` signals nothing,
+        # so the hook runs on -- and `before_remove` is the sharp case, since
+        # `remove/3` then `rm_rf`s the workspace out from under a hook still
+        # writing to it. `after_create`'s failure path has the same shape. Past
+        # that, a hook that leaks a process per timeout leaks one per retry, and
+        # the orchestrator retries.
+        #
+        # Captured before the close, killed after it: `PortReaper.capture/1`
+        # needs a live child to read the target off.
+        #
+        # SIGKILL outright, where the remote deadline sends SIGTERM. There the
+        # status is read back (`@killed_by_deadline`); here nothing reads it, we
+        # have already stopped waiting, and the workspace may be deleted next.
+        reaper = PortReaper.capture(port)
         close_port(port)
+        PortReaper.kill(reaper)
         flush_port_messages(port)
         {:error, :timeout}
-    end
-  end
-
-  # Giving up on a hook does not stop it.
-  #
-  # `Port.close/1` releases the BEAM-side port and signals nothing, so the hook
-  # runs on. `before_remove` is the sharp case: `remove/3` then `rm_rf`s the
-  # workspace out from under a hook still writing to it, and `after_create`'s
-  # failure path has the same shape. Past that, a hook that leaks a process per
-  # timeout leaks one per retry, and the orchestrator retries.
-  #
-  # This is the local half of the mistake the remote deadline in
-  # `Ssh.reap_on_disconnect/2` fixed on the host.
-  defp kill_spawned_process(port) do
-    case Port.info(port, :os_pid) do
-      {:os_pid, os_pid} -> kill_process_tree(os_pid)
-      # Exited between the timer firing and this call: nothing left to signal.
-      nil -> :ok
-    end
-  end
-
-  defp kill_process_tree(os_pid) do
-    case System.find_executable("kill") do
-      nil ->
-        Logger.warning(
-          "symphony.workspace.hook_kill_skipped os_pid=#{os_pid} reason=no_kill_executable"
-        )
-
-        :ok
-
-      kill_path ->
-        run_kill(kill_path, os_pid, signal_target(os_pid))
-    end
-  end
-
-  # SIGKILL, where the remote deadline sends SIGTERM. There the status is read
-  # back (`@killed_by_deadline`); here nothing reads it, we have already stopped
-  # waiting, and the workspace may be deleted next -- so a hook that traps TERM
-  # must not get to keep running.
-  defp run_kill(kill_path, os_pid, target) do
-    case System.cmd(kill_path, ["-KILL", target], stderr_to_stdout: true) do
-      {_output, 0} ->
-        :ok
-
-      {output, status} ->
-        Logger.warning(
-          "symphony.workspace.hook_kill_failed os_pid=#{os_pid} target=#{target} " <>
-            "status=#{status} output=#{truncate_for_log(output)}"
-        )
-
-        :ok
-    end
-  end
-
-  # Signal the process GROUP, for the reason the remote half does: killing only
-  # the hook leaves its children running, doing work past the timeout and still
-  # holding the inherited stdout pipe.
-  #
-  # `erl_child_setup` gives a spawned port child a process group of its own, so
-  # `kill -KILL -PID` reaches its descendants and nothing else. That is checked
-  # rather than assumed, because the failure mode is not subtle: a child that is
-  # NOT a group leader shares the BEAM's group, and the group kill would take
-  # down the orchestrator itself. The bare-pid fallback loses the hook's
-  # children and keeps the VM.
-  defp signal_target(os_pid) do
-    if group_leader?(os_pid), do: "-#{os_pid}", else: "#{os_pid}"
-  end
-
-  # A `ps` that is missing, fails, or answers something unparseable is treated
-  # as "not a leader" -- the conservative answer, for the same reason.
-  defp group_leader?(os_pid) do
-    with ps_path when is_binary(ps_path) <- System.find_executable("ps"),
-         {output, 0} <-
-           System.cmd(ps_path, ["-o", "pgid=", "-p", "#{os_pid}"], stderr_to_stdout: true) do
-      String.trim(output) == "#{os_pid}"
-    else
-      _ -> false
     end
   end
 
