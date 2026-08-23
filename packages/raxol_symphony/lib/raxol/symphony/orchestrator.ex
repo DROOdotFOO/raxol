@@ -1377,11 +1377,13 @@ defmodule Raxol.Symphony.Orchestrator do
         ]
 
         # `before_run` runs again on a resume, and `after_run` did not run when
-        # this attempt paused. That keeps the pair balanced across a pause: one
-        # `before_run` per stretch of actual running, one `after_run` when the
-        # run finally ends. A `before_run` that is not idempotent would see the
-        # second call, but a resumed run genuinely is starting again -- on a
-        # remote worker, possibly after the host rebooted.
+        # this attempt paused. So the two are NOT matched one-for-one: a run
+        # that pauses N times gets N+1 `before_run`s and a single `after_run`
+        # when it finally ends. One `before_run` per stretch of actual running
+        # is the intent -- a resumed run genuinely is starting again, on a
+        # remote worker possibly after the host rebooted -- but it makes
+        # idempotence a REQUIREMENT of `before_run` rather than a nicety. A pair
+        # that starts a container has to tolerate being asked twice.
         run_runner(runner_mod, issue, config, runner_opts, host: host, ssh: ssh)
       end
     )

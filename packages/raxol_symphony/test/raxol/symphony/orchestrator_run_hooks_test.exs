@@ -33,6 +33,9 @@ defmodule Raxol.Symphony.OrchestratorRunHooksTest do
         :ok -> :ok
         :error -> {:error, :deliberate}
         :pause -> {:pause, :awaiting_review, "rt"}
+        # Outside `Runner.result/0`: every reader but one treats this as a
+        # terminated run, so the teardown owes it an `after_run`.
+        :bad_pause -> {:pause, "not-an-atom", "rt"}
         :raise -> raise "deliberate"
       end
     end
@@ -161,6 +164,24 @@ defmodule Raxol.Symphony.OrchestratorRunHooksTest do
       assert_receive {:ran, ^ws, _}, 2_000
       Process.sleep(300)
       refute File.exists?(Path.join(ws, "after_run_ran"))
+    end
+
+    # `Runner.result/0` is `{:pause, atom(), term()}`, and a non-atom reason is
+    # outside it. Every other reader guards `is_atom(reason)` and treats such a
+    # value as a terminated run: `interpret_runner_result/3` exits
+    # `{:runner_bad_return, _}`, the batch path falls to a continuation retry.
+    # Unguarded, `Workspace.paused?/1` was the ONLY reader that called it a
+    # pause -- so the run was retried and its teardown never fired.
+    test "a pause reason outside the runner contract still gets its teardown", %{
+      root: root,
+      workspace: ws
+    } do
+      config(root, %{after_run: "touch after_run_ran"}, %{outcome: :bad_pause})
+      |> start_orchestrator()
+      |> Orchestrator.tick_now()
+
+      assert_receive {:ran, ^ws, _}, 2_000
+      eventually(fn -> File.exists?(Path.join(ws, "after_run_ran")) end)
     end
 
     # s9.4: logged and ignored, so it cannot turn a good run into a failed one.

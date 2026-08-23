@@ -170,9 +170,10 @@ defmodule Raxol.Symphony.Workspace do
   Its own failure is logged and ignored, per s9.4, so it cannot turn a
   successful run into a failed one.
 
-  A blank `path` is refused before `before_run` runs, so a hook can never land
-  in whatever directory the shell happened to start in. See
-  `execute_hook_script/4`.
+  A blank `path` is refused before `before_run` runs AND before `fun` does, so
+  neither a hook nor the runner it brackets can land in whatever directory the
+  shell happened to start in. It reports as a `before_run` failure would, which
+  s9.4 already makes fatal to the attempt and retryable.
   """
   # `opts` carries no default on purpose. A default before a required argument
   # is legal but reads as optional, and `around_run(config, path, opts)` would
@@ -183,29 +184,60 @@ defmodule Raxol.Symphony.Workspace do
         when result: term()
   def around_run(%Config{} = config, path, opts, fun)
       when is_list(opts) and is_function(fun, 0) do
-    case run_before_run_hook(config, path, opts) do
-      {:error, reason} ->
-        {:error, reason}
-
-      :ok ->
-        try do
-          fun.()
-        catch
-          # An exit is how a runner reports failure to its task, so this is a
-          # terminal outcome like any other. Re-raised verbatim afterwards: the
-          # teardown is not license to swallow the reason the run died.
-          kind, reason ->
-            run_after_run_hook(config, path, opts)
-            :erlang.raise(kind, reason, __STACKTRACE__)
-        else
-          result ->
-            unless paused?(result), do: run_after_run_hook(config, path, opts)
-            {:ok, result}
-        end
+    with :ok <- runnable_workspace(path),
+         :ok <- run_before_run_hook(config, path, opts) do
+      bracket(config, path, opts, fun)
     end
   end
 
-  defp paused?({:pause, _reason, _token}), do: true
+  # The RUNNER needs a real directory as much as the hooks do, so the refusal
+  # belongs here rather than only in `execute_hook_script/4`.
+  #
+  # Guarding the hook alone left the fail-open default in place for the thing
+  # the hook brackets: `GraphAdapter` defaults a missing workspace to `""` in
+  # two places (`slot_workspace/2`, `runner_dispatch_node/1`), and with no hooks
+  # configured `:no_hook` short-circuits before any check, so the runner was
+  # dispatched into an empty path anyway. `bash`'s `cd ''` succeeds and changes
+  # nothing, so SPEC s9.5 Invariant 1's `cd WS && { … }` guard passes and the
+  # work lands in whatever directory the shell started in.
+  #
+  # Costs a run ATTEMPT, not a workspace: it lands where a `before_run` failure
+  # lands, which s9.4 already makes fatal to the attempt and retryable.
+  defp runnable_workspace(path) when is_binary(path) do
+    if String.trim(path) == "", do: {:error, {:invalid_workspace, path}}, else: :ok
+  end
+
+  defp runnable_workspace(path), do: {:error, {:invalid_workspace, path}}
+
+  defp bracket(config, path, opts, fun) do
+    try do
+      fun.()
+    catch
+      # An exit is how a runner reports failure to its task, so this is a
+      # terminal outcome like any other. Re-raised verbatim afterwards: the
+      # teardown is not license to swallow the reason the run died.
+      kind, reason ->
+        run_after_run_hook(config, path, opts)
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    else
+      result ->
+        unless paused?(result), do: run_after_run_hook(config, path, opts)
+        {:ok, result}
+    end
+  end
+
+  # `is_atom(reason)` matches every other reader of this shape, and the match
+  # has to be exact for the same reason the bracket is shared: a run the
+  # orchestrator treats as OVER must get its teardown.
+  #
+  # `Runner.result/0` is `{:pause, atom(), term()}`, and each consumer guards on
+  # it -- `Orchestrator.interpret_runner_result/3` (`exit({:runner_bad_return,
+  # _})`), `apply_batch_issue_result/3` (continuation retry) and
+  # `GraphAdapter.store_runner_result/2`. Unguarded here, a `{:pause, "string",
+  # token}` was the one shape read as paused by this and as terminated by all
+  # three: the run was retried and `after_run` never fired, so whatever
+  # `before_run` started was never reclaimed.
+  defp paused?({:pause, reason, _token}) when is_atom(reason), do: true
   defp paused?(_result), do: false
 
   @doc """
