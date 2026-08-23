@@ -124,14 +124,10 @@ defmodule Raxol.Symphony.Sandboxes.BudgetCap do
 
       true ->
         input =
-          to_non_neg(
-            Map.get(usage, :input_tokens) || Map.get(usage, "input_tokens")
-          )
+          to_non_neg(Map.get(usage, :input_tokens) || Map.get(usage, "input_tokens"))
 
         output =
-          to_non_neg(
-            Map.get(usage, :output_tokens) || Map.get(usage, "output_tokens")
-          )
+          to_non_neg(Map.get(usage, :output_tokens) || Map.get(usage, "output_tokens"))
 
         input + output
     end

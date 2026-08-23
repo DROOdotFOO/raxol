@@ -207,7 +207,11 @@ defmodule Raxol.Symphony.Surfaces.Telegram.NotifierTest do
       else
         if System.monotonic_time(:millisecond) >= deadline,
           do: flunk("wait timed out"),
-          else: (Process.sleep(20); do_wait(deadline, fun))
+          else:
+            (
+              Process.sleep(20)
+              do_wait(deadline, fun)
+            )
       end
     end
 

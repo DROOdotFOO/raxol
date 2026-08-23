@@ -168,6 +168,7 @@ defmodule Raxol.Symphony.ResumerTest do
 
     test "Resumer detaches its telemetry handler on terminate", %{config: config} do
       orch = start_orchestrator(config)
+
       {:ok, resumer} =
         Resumer.start_link(
           orchestrator: orch,

@@ -23,6 +23,7 @@ defmodule Raxol.Symphony.AgentMetadataTest do
 
     test "extracts thread_log from thread_log/0 via normalize" do
       meta = AgentMetadata.read(AgentWithMetadata)
+
       assert {Raxol.Agent.ThreadLog.Ets, %{table: :symphony_test_module_thread_log}} =
                meta.thread_log
     end

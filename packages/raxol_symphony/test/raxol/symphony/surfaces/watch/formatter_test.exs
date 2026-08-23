@@ -87,9 +87,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.FormatterTest do
   describe "run_notification/1" do
     test "produces tap-to-stop and tap-to-approve actions for the run" do
       n =
-        Formatter.run_notification(
-          run(issue_id: "iss_42", issue_identifier: "MT-42")
-        )
+        Formatter.run_notification(run(issue_id: "iss_42", issue_identifier: "MT-42"))
 
       assert n.title == "Symphony: MT-42"
       assert n.category == "symphony_run"

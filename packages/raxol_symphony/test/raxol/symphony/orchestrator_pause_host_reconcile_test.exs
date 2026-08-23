@@ -16,6 +16,7 @@ defmodule Raxol.Symphony.OrchestratorPauseHostReconcileTest do
   alias Raxol.Symphony.{Config, Issue, Orchestrator}
   alias Raxol.Symphony.Orchestrator.PausedSaver.Memory, as: MemorySaver
   alias Raxol.Symphony.Runners.Noop
+  alias Raxol.Symphony.Test.FakeSsh
   alias Raxol.Symphony.Trackers.Memory, as: MemoryTracker
   alias Raxol.Symphony.Worker.HostSpec
 
@@ -88,7 +89,8 @@ defmodule Raxol.Symphony.OrchestratorPauseHostReconcileTest do
            runner_module: Noop,
            auto_start_tick: false,
            name: nil,
-           paused_saver: saver
+           paused_saver: saver,
+           ssh: FakeSsh.opts()
          ] ++ opts},
         id: {Orchestrator, make_ref()}
       )

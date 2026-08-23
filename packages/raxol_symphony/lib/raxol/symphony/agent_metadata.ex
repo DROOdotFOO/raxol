@@ -52,6 +52,7 @@ defmodule Raxol.Symphony.AgentMetadata do
   """
   @spec read(module() | nil) :: t()
   def read(nil), do: empty(nil)
+
   def read(module) when is_atom(module) do
     Code.ensure_loaded(module)
 

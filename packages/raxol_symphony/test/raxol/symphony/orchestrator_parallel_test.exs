@@ -56,8 +56,7 @@ defmodule Raxol.Symphony.OrchestratorParallelTest do
   defp start_orchestrator(config) do
     {:ok, pid} =
       start_supervised(
-        {Orchestrator,
-         config: config, runner_module: Noop, auto_start_tick: false, name: nil},
+        {Orchestrator, config: config, runner_module: Noop, auto_start_tick: false, name: nil},
         id: {Orchestrator, make_ref()}
       )
 

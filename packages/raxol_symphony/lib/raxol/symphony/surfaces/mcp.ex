@@ -223,8 +223,7 @@ defmodule Raxol.Symphony.Surfaces.MCP do
             description: "Tracker-internal issue ID of the paused run."
           },
           decision: %{
-            description:
-              "Operator's decision payload. Forwarded to the runner as :resume_value."
+            description: "Operator's decision payload. Forwarded to the runner as :resume_value."
           }
         },
         required: ["issue_id", "decision"]
@@ -308,13 +307,11 @@ defmodule Raxol.Symphony.Surfaces.MCP do
           },
           repo: %{
             type: "string",
-            description:
-              "GitHub repo as owner/name. Inferred from workspace git when omitted."
+            description: "GitHub repo as owner/name. Inferred from workspace git when omitted."
           },
           ref: %{
             type: "string",
-            description:
-              "Git ref (branch or sha). Inferred from workspace HEAD when omitted."
+            description: "Git ref (branch or sha). Inferred from workspace HEAD when omitted."
           },
           issue_number: %{
             type: "integer",

@@ -91,10 +91,14 @@ defmodule Raxol.Symphony.TestSupport.SessionAgentPausesResumes do
 
   def update({:agent_message, _, {:symphony_start, payload}}, model) do
     if Code.ensure_loaded?(Raxol.Agent.SessionStreamer) do
-      Raxol.Agent.SessionStreamer.emit(payload.session_id, {:paused, %{
-        reason: :awaiting_review,
-        token: %{step: "first-half"}
-      }})
+      Raxol.Agent.SessionStreamer.emit(
+        payload.session_id,
+        {:paused,
+         %{
+           reason: :awaiting_review,
+           token: %{step: "first-half"}
+         }}
+      )
     end
 
     {Map.put(model, :session_id, payload.session_id), []}
@@ -102,8 +106,15 @@ defmodule Raxol.Symphony.TestSupport.SessionAgentPausesResumes do
 
   def update({:agent_message, _, {:symphony_resume, payload}}, model) do
     if Code.ensure_loaded?(Raxol.Agent.SessionStreamer) do
-      Raxol.Agent.SessionStreamer.emit(payload.session_id, {:turn_complete, %{after_resume: true}})
-      Raxol.Agent.SessionStreamer.emit(payload.session_id, {:done, %{resumed_with: payload.resume_value}})
+      Raxol.Agent.SessionStreamer.emit(
+        payload.session_id,
+        {:turn_complete, %{after_resume: true}}
+      )
+
+      Raxol.Agent.SessionStreamer.emit(
+        payload.session_id,
+        {:done, %{resumed_with: payload.resume_value}}
+      )
     end
 
     {model, []}

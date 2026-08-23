@@ -42,7 +42,8 @@ defmodule Raxol.Symphony.Orchestrator.PausedSaver do
   Load the full paused map. Called from `init_manager/1`. Returns an
   empty map when no persisted state exists.
   """
-  @callback load_all(config()) :: {:ok, %{optional(binary()) => State.paused_entry()}} | {:error, term()}
+  @callback load_all(config()) ::
+              {:ok, %{optional(binary()) => State.paused_entry()}} | {:error, term()}
 
   # -- Public dispatch -- avoids the orchestrator caring whether a saver
   # is configured.

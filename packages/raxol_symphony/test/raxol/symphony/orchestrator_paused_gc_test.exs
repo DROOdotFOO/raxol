@@ -30,7 +30,9 @@ defmodule Raxol.Symphony.OrchestratorPausedGcTest do
     start_supervised!(Noop.Director)
     Noop.Director.clear()
 
-    workspace_root = Path.join(System.tmp_dir!(), "symphony_gc_#{:erlang.unique_integer([:positive])}")
+    workspace_root =
+      Path.join(System.tmp_dir!(), "symphony_gc_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(workspace_root)
     on_exit(fn -> File.rm_rf(workspace_root) end)
 
