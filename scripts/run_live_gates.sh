@@ -237,6 +237,57 @@ relay_cfg() {
 
 rpc_for() { local v="GATE_RPC_$1"; printf '%s' "${!v:-}"; }
 
+# The settleable EVM chains, matching @evm_chains in live_order_test.exs. This
+# is what `mesh`/`all` expands to there, so it is what this has to expand them
+# to here.
+ORDER_RPC_CHAINS="1 10 137 8453 42161 4663"
+
+# The ORIGIN chain of every corridor a run will actually drive. Derived from the
+# corridor spec rather than assumed, because `--corridors` accepts any pair: a
+# fixed list reported "all endpoints present" while the one corridor in play
+# originated on a chain nobody had set, and that cell then skipped silently.
+origin_chains_for() {
+  local spec="$1"
+  if [[ "$spec" == "mesh" || "$spec" == "all" ]]; then
+    printf '%s' "$ORDER_RPC_CHAINS"
+    return 0
+  fi
+  # `a>b,c>d` -> the `a` of each pair, deduplicated, order preserved. Spaces and
+  # tabs only: `[:space:]` would strip the newlines this splits on, folding
+  # every origin into one unusable token.
+  printf '%s' "$spec" | tr ',' '\n' | cut -d'>' -f1 | tr -d ' \t' \
+    | awk 'NF && !seen[$0]++' | tr '\n' ' '
+}
+
+# Hand every configured GATE_RPC_<chain> through as XOCHI_ORDER_RPC_<chain>, and
+# say out loud which of the chains THIS RUN originates on have none. A cell whose
+# origin has no endpoint reports "pull preflight: skipped" -- which reads exactly
+# like a check that passed unless the absence is announced up front.
+export_order_rpcs() {
+  local asset="$1" corridors="$2" c rpc origins found=false missing=""
+  origins="$(origin_chains_for "$corridors")"
+
+  for c in $origins; do
+    rpc="$(rpc_for "$c")"
+    if [[ -n "$rpc" ]]; then
+      export "XOCHI_ORDER_RPC_$c=$rpc"
+      found=true
+    else
+      missing="$missing $c"
+    fi
+  done
+
+  if [[ "$found" == false ]]; then
+    log "acp $asset: NOTE -- no GATE_RPC_<chain> is set for any origin in"
+    log "             [$corridors], so the pull-signature preflight SKIPS every"
+    log "             cell and checks nothing. Set GATE_RPC_<origin> to have the"
+    log "             rehearsal verify what it signs."
+  elif [[ -n "$missing" ]]; then
+    log "acp $asset: no endpoint for origin chain(s):$missing -- those cells of"
+    log "             [$corridors] skip the pull-signature check."
+  fi
+}
+
 # --- secret loading (lazy: only what the selected routes need) ---
 need_xochi=false; need_relay=false
 for r in $ROUTE_LIST; do
@@ -334,6 +385,14 @@ run_acp() {
   # each asset's default corridor above is on the CorridorAllowlist.
   export XOCHI_ORDER_STABLECOIN_ALLOWLIST=true
 
+  # Origin-chain endpoints for the read-only pull-signature preflight. This used
+  # to be exported only for a Permit2 asset, where it was needed to broadcast the
+  # allowance -- so on USDC (p2=0, and the LIVE launch asset) no endpoint was
+  # ever set and the preflight reported "skipped" on every cell. The check needs
+  # an endpoint for whichever chain a cell ORIGINATES on, which is independent of
+  # the allowance question below.
+  export_order_rpcs "$asset" "$corridors"
+
   if [[ "$p2" == "1" ]]; then
     rpc="$(rpc_for "$p2chain")"
     if [[ -z "$rpc" && -z "$DRY_RUN" ]]; then
@@ -341,7 +400,6 @@ run_acp() {
       log "             broadcast the allowance. Set it, or run --dry-run."
       return 10
     fi
-    [[ -n "$rpc" ]] && export "XOCHI_ORDER_RPC_$p2chain=$rpc"
   fi
 
   cd "$ACP_DIR"

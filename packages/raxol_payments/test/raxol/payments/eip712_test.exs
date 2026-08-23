@@ -368,6 +368,110 @@ defmodule Raxol.Payments.EIP712Test do
     end
   end
 
+  describe "hash_with_separator/3" do
+    @permit2 "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+    @separator_types %{"Thing" => [{"x", "uint256"}]}
+    @separator_message %{"x" => 42}
+
+    test "agrees with hash/3 when given the separator hash/3 would have built" do
+      # Supplying the same domain in a different form must not change the
+      # digest, or the two entry points would disagree about what was signed.
+      domain = %{name: "Permit2", chainId: 8453, verifyingContract: @permit2}
+
+      {:ok, computed} = EIP712.hash(domain, @separator_types, @separator_message)
+
+      {:ok, supplied} =
+        EIP712.hash_with_separator(
+          domain_separator(domain),
+          @separator_types,
+          @separator_message
+        )
+
+      assert supplied == computed
+    end
+
+    test "a different separator gives a different digest, so the domain is load-bearing" do
+      # The whole point of the arity-3 form: the domain half comes from the
+      # caller (in production, read from the verifying contract), so a domain
+      # this module would have built differently is visible rather than
+      # cancelled out on both sides. See GitHub #772.
+      three_field =
+        domain_separator(%{name: "Permit2", chainId: 8453, verifyingContract: @permit2})
+
+      four_field =
+        domain_separator(%{
+          name: "Permit2",
+          version: nil,
+          chainId: 8453,
+          verifyingContract: @permit2
+        })
+
+      refute three_field == four_field
+
+      {:ok, a} = EIP712.hash_with_separator(three_field, @separator_types, @separator_message)
+      {:ok, b} = EIP712.hash_with_separator(four_field, @separator_types, @separator_message)
+
+      refute a == b
+    end
+
+    test "refuses a separator that is not 32 bytes rather than padding it" do
+      assert {:error, {:invalid_domain_separator_length, 4}} =
+               EIP712.hash_with_separator(<<1, 2, 3, 4>>, @separator_types, @separator_message)
+    end
+
+    # The separator comes off the wire -- an `eth_call` result a caller decoded --
+    # so a non-binary is a shape this is asked about, not a caller bug. Returning
+    # the error the spec promises beats raising out of a public function.
+    test "refuses a separator that is not a binary at all" do
+      for bad <- [nil, :error, 42, {:ok, <<0>>}] do
+        assert {:error, {:invalid_domain_separator, ^bad}} =
+                 EIP712.hash_with_separator(bad, @separator_types, @separator_message)
+      end
+    end
+
+    test "propagates an encoding error from the struct half" do
+      assert {:error, _} =
+               EIP712.hash_with_separator(
+                 :binary.copy(<<0>>, 32),
+                 %{"Thing" => [{"x", "address"}]},
+                 %{"x" => "not-an-address"}
+               )
+    end
+
+    # EIP712Domain separator built the long way, so the test does not lean on the
+    # function under test to produce its own oracle.
+    defp domain_separator(domain) do
+      fields =
+        [
+          {"name", "string", :name},
+          {"version", "string", :version},
+          {"chainId", "uint256", :chainId},
+          {"verifyingContract", "address", :verifyingContract},
+          {"salt", "bytes32", :salt}
+        ]
+        |> Enum.filter(fn {_n, _t, key} -> Map.has_key?(domain, key) end)
+
+      type_string =
+        "EIP712Domain(" <> Enum.map_join(fields, ",", fn {n, t, _} -> "#{t} #{n}" end) <> ")"
+
+      encoded =
+        Enum.map_join(fields, "", fn {_n, type, key} ->
+          encode_domain_field(type, Map.get(domain, key))
+        end)
+
+      ExKeccak.hash_256(ExKeccak.hash_256(type_string) <> encoded)
+    end
+
+    defp encode_domain_field("string", nil), do: ExKeccak.hash_256("")
+    defp encode_domain_field("string", v), do: ExKeccak.hash_256(v)
+    defp encode_domain_field("uint256", v), do: <<v::unsigned-big-256>>
+
+    defp encode_domain_field("address", "0x" <> hex),
+      do: <<0::size(96)>> <> Base.decode16!(hex, case: :mixed)
+
+    defp encode_domain_field("bytes32", "0x" <> hex), do: Base.decode16!(hex, case: :mixed)
+  end
+
   describe "pack_signature/1" do
     @r String.duplicate(<<0xAA>>, 32)
     @s String.duplicate(<<0xBB>>, 32)

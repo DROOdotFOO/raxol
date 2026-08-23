@@ -128,7 +128,23 @@ defmodule Raxol.Payments.Protocols.Permit2 do
     end
   end
 
-  @doc "Return the universal Permit2 contract address."
+  @doc """
+  Return the universal Permit2 contract address.
+
+  One address on every chain, because Permit2 ships through the deterministic
+  CREATE2 deployer. That holds across every corridor raxol settles on, and it is
+  what lets three separate decisions share this constant: the spender an approve
+  grants to (`Raxol.Earn.Onchain.Permit2Approver`), the `verifyingContract` a
+  served pull must declare (`Raxol.Payments.Protocols.Xochi`), and the contract
+  `Raxol.Earn.Xochi.PullPreflight` reads `DOMAIN_SEPARATOR()` from.
+
+  It is not universal in the arithmetic sense. A chain whose CREATE2 derivation
+  differs -- zkSync Era is the one in production, at
+  `0x0000000000225e31d15943971f47ad3022f714fa` -- hosts Permit2 somewhere else.
+  Adding such a corridor turns this into a per-chain lookup; until then a single
+  constant is the honest shape, and the failure it produces is a refusal to
+  sign (`{:authorization_mismatch, :pull_verifier}`) rather than a bad signature.
+  """
   @spec verifying_contract() :: String.t()
   def verifying_contract, do: @permit2_address
 

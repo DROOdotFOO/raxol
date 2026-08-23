@@ -53,6 +53,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
   @behaviour Raxol.Payments.Protocol
 
   alias Raxol.Payments.Poll
+  alias Raxol.Payments.Protocols.Permit2
   alias Raxol.Payments.Xochi.{Capabilities, Client, DepositAttestation}
 
   alias Raxol.Payments.Xochi.Schemas.{
@@ -707,6 +708,15 @@ defmodule Raxol.Payments.Protocols.Xochi do
   # spender pin is ALWAYS required (fail-closed): with no allowlist configured a
   # permit2 pull is rejected before signing. The `OriginPullWitness` ties the
   # permit to one intent on-chain. See GitHub #333.
+  #
+  # `verifyingContract` is pinned to the canonical Permit2 for the same reason
+  # the ERC-3009 rail pins its own to the request's token: it decides WHO checks
+  # this signature. Leaving it to the quote lets the served payload nominate its
+  # own verifier -- a contract whose `DOMAIN_SEPARATOR()` agrees with whatever it
+  # served -- while the allowance being spent was granted to Permit2 and the pull
+  # runs there. A constant rather than a per-corridor lookup because Permit2 is
+  # at one address on every chain raxol settles on; see
+  # `Permit2.verifying_contract/0` for the exception that would end that.
   defp validate_permit2_pull(pull, request) do
     domain = pull["domain"] || %{}
     message = pull["message"] || %{}
@@ -715,6 +725,7 @@ defmodule Raxol.Payments.Protocols.Xochi do
     first_mismatch([
       {:pull_type, valid_envelope?(pull, @permit2_primary_type, @permit2_fields)},
       {:pull_token, addr_match?(permitted["token"], request.from_token)},
+      {:pull_verifier, addr_match?(domain["verifyingContract"], Permit2.verifying_contract())},
       {:pull_chain, int_match?(domain["chainId"], request.from_chain_id)},
       {:pull_value, int_within?(permitted["amount"], request.from_amount)},
       {:pull_spender, solver_allowed?(message["spender"], :permit2)},
@@ -918,7 +929,22 @@ defmodule Raxol.Payments.Protocols.Xochi do
     end)
   end
 
-  defp eip712_types(eip712) do
+  @doc """
+  The served `types` map, projected into the shape `Raxol.Payments.EIP712` encodes.
+
+  `EIP712Domain` is dropped: the domain is hashed from `eip712_domain/1` (or, for
+  a checker, read from the verifying contract), and leaving it here would make it
+  a second root type and the primary type ambiguous.
+
+  Public for the same reason `eip712_domain/1` is, and it is the same reason
+  twice: a second copy of this mapping agrees with itself. `EIP712.hash_struct/3`
+  is pinned against ethers-generated vectors, but the projection FEEDING it is
+  not, so a checker that re-derived this would rebuild a different struct hash
+  the moment either copy changed -- and would report that as the signature being
+  bad. `Raxol.Earn.Xochi.PullPreflight` calls this rather than mirroring it.
+  """
+  @spec eip712_types(map()) :: map()
+  def eip712_types(eip712) do
     (eip712["types"] || %{})
     |> Map.drop(["EIP712Domain"])
     |> Enum.into(%{}, fn {name, fields} ->

@@ -14,9 +14,19 @@ defmodule Raxol.Earn.Onchain.Permit2ApproverTest do
   defp zero_word, do: "0x" <> String.duplicate("0", 64)
 
   describe "permit2_address/0" do
-    test "matches the universal Permit2 address the payments protocol signs against" do
+    test "is taken from the payments protocol rather than restated" do
       assert Permit2Approver.permit2_address() ==
                Raxol.Payments.Protocols.Permit2.verifying_contract()
+    end
+
+    test "is the universal Permit2 deployment" do
+      # This address decides three things at once: the spender an approve grants
+      # to, the `verifyingContract` a served pull must declare, and the contract
+      # `PullPreflight` reads DOMAIN_SEPARATOR() from. Pinning the external fact
+      # belongs in a test; a second copy in production code is what the
+      # preflight exists to catch.
+      assert Permit2Approver.permit2_address() ==
+               "0x000000000022D473030F116dDEE9F6B43aC78BA3"
     end
   end
 

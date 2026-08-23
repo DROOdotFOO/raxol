@@ -1,0 +1,714 @@
+defmodule Raxol.Earn.Xochi.PullPreflight do
+  @moduledoc """
+  Read-only check that the origin pull a buyer just signed will actually be
+  accepted on chain, before anything is escrowed or funded.
+
+  The pull is the step that has failed every funded attempt on GitHub #772. It
+  fails at the far end of a long sequence -- quote, sign, `createJob`, fund,
+  provider `setBudget`, solver relay -- and reports back as a status string with
+  no detail (`validation_failed`, or a bare `pull_failed`), so each attempt cost
+  a job, an escrow, and a round trip through two other repositories to learn one
+  bit. This asks the two contracts involved the same question directly, for the
+  price of four read-only calls: `eth_chainId` (which chain the node speaks for),
+  `eth_getCode` (which branch the pull will take), and one `eth_call` each for
+  the separator and the signature check. An EOA buyer costs three -- there is no
+  `isValidSignature` to call.
+
+  ## What it proves
+
+      separator  = VerifyingContract.DOMAIN_SEPARATOR()      -- read from chain
+      structHash = hashStruct(served types, served message)
+      digest     = keccak256(0x1901 || separator || structHash)
+      magic      = Account.isValidSignature(digest, pull_signature)
+
+  A `0x1626ba7e` means the account vouches for that signature over that digest,
+  and the digest was built on the separator the verifier itself will rebuild. So
+  the pull's signature check passes.
+
+  The separator being READ rather than computed is the whole point. Checking our
+  own signature against a digest from our own `domain` projection is circular:
+  both sides of the comparison carry the same mistake and agree. #772 was exactly
+  that -- a `version` field we inserted and Permit2 never declared, which every
+  test agreed with because every test rebuilt the domain the same way we did.
+  Sourcing the domain half from the contract breaks the loop.
+
+  The struct half is not chain-sourced. It is encoded by `Raxol.Payments.EIP712`,
+  which the Permit2 and ERC-3009 conformance suites pin against ethers-generated
+  vectors, and projected into that encoder by
+  `Raxol.Payments.Protocols.Xochi.eip712_types/1` -- the SIGNER's own function,
+  called rather than mirrored. Those are two different guarantees and only the
+  first is a vector pin: what the shared call buys is that this module and the
+  signer cannot drift into rebuilding different struct hashes, which would
+  surface as a REJECTED verdict on a signature that was fine.
+
+  ## What it does not prove
+
+  Only the signature check. A pull can still revert on allowance, balance,
+  an expired deadline, or a spent nonce, and this deliberately does not read
+  those: they are properties of funding time, not signing time, and the order
+  task reports the allowance separately.
+
+  It does not bind the pull to the corridor the OPERATOR asked for. `same_chain/2`
+  compares the served `domain.chainId` against the node, never against a
+  requested origin -- so a pull for the wrong chain, checked against a node that
+  speaks for that wrong chain, passes here. That binding is
+  `Protocols.Xochi.validate_pull/3`'s `:pull_chain` check, which runs before
+  signing and is a precondition of using this module rather than a duplicate of
+  it. A caller reaching for `verify/4` on its own owes itself that check.
+
+  Three narrower limits are worth stating rather than leaving to be discovered.
+
+  The EOA branch checks what `ecrecover` checks: a canonical 65 bytes, `v` of 27
+  or 28, and a recovered address equal to the buyer's. Any acceptance policy the
+  verifier layers ON TOP of that -- signature malleability rules, for instance --
+  is the verifier's and is not modelled here, so a pass is a statement about
+  recovery rather than about every rule the contract may apply.
+
+  Both branches also read chain state at preflight time, and the pull happens
+  later. `signer_kind` in particular is a snapshot: a 7702 delegation set or
+  revoked between here and settlement moves the buyer between the ERC-1271 and
+  ecrecover branches, and the verdict was for the branch that was live when the
+  question was asked.
+
+  It also needs a `verifyingContract` to ask, so it covers the pull (Permit2 or
+  the ERC-3009 token) and not the Xochi intent signature, whose domain is keyed
+  by `salt` with no contract behind it.
+
+  One blind spot is worth naming, because it is the same shape as the bug this
+  exists to catch. Permit2 builds its `PermitWitnessTransferFrom` typehash by
+  concatenating a fixed stub with the caller's witness type string, where EIP-712
+  sorts referenced types alphabetically. For `OriginPullWitness` the two agree --
+  `OriginPullWitness` sorts before `TokenPermissions` -- so the struct hash here
+  matches Permit2's. A witness type renamed to sort after `TokenPermissions`
+  would diverge, and this check would not see it: it would encode the struct the
+  same wrong way the signer did, and both would agree. Only the domain half is
+  sourced from the chain. Pinning the witness type string is the guard for that,
+  not this.
+
+  ## Three outcomes, and which of them may spend money
+
+  `verify/4` answers `{:ok, _}`, `{:rejected, _}` or `{:inconclusive, _}`, and
+  the three are separate constructors rather than shades of `{:error, _}` on
+  purpose. A caller that funds on anything but `{:ok, _}` is spending money on an
+  unanswered question, and an `{:error, _}` catch-all is precisely how that
+  happens: every reason not yet enumerated lands in it silently, so the set of
+  ways to fund an unverifiable pull grows every time a new failure mode is added
+  here. With three constructors the caller must name what it does about each, and
+  a new reason joins an existing constructor rather than inventing a fourth path.
+
+  The split between `:rejected` and `:inconclusive` carries no safety weight --
+  neither may fund. It exists so the operator learns whether to fix the payload
+  or the environment.
+  """
+
+  alias Raxol.Earn.ABI
+  alias Raxol.Earn.Onchain.RPC
+  alias Raxol.Payments.EIP712
+  alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
+
+  # ERC-1271: bytes4(keccak256("isValidSignature(bytes32,bytes)"))
+  @erc1271_magic <<0x16, 0x26, 0xBA, 0x7E>>
+
+  @type details :: %{
+          optional(:digest) => binary(),
+          optional(:separator) => binary(),
+          optional(:verifying_contract) => String.t(),
+          optional(:signer_kind) => :contract | :eoa,
+          optional(:returned) => term(),
+          optional(:reason) => term()
+        }
+
+  @type outcome ::
+          {:ok, details()}
+          | {:rejected, details()}
+          | {:inconclusive, term()}
+
+  @doc """
+  Verify `signature` against `account` over the digest the pull's verifying
+  contract will build from `served`.
+
+  `served` is the quote's `pull_authorization` verbatim -- its `"domain"`,
+  `"types"` and `"message"` as the worker sent them.
+
+  ## Options
+
+  - `:rpc` -- an `Raxol.Earn.Onchain.RPC` client. Built from application config
+    when absent.
+  - `:expect_verifier` (REQUIRED) -- the address the caller's rail says will
+    verify this signature: the canonical Permit2, or the origin token for
+    ERC-3009. The served `domain.verifyingContract` must match it or the pull is
+    rejected.
+
+    Required rather than defaulted, because every default available here is
+    drawn from the served payload, and the payload is the thing under audit.
+    A caller that does not name the verifier is asking the party who wrote the
+    envelope which contract to ask about the envelope. There is no safe value to
+    fall back to, so there is no fallback: omitting it raises rather than
+    quietly checking something weaker.
+
+  Returns:
+
+  - `{:ok, details}` -- the verifier vouches for this signature over the digest
+    it will rebuild. This is the ONLY outcome a funded run may proceed on.
+  - `{:rejected, details}` -- the signature provably will not verify, either
+    because the verifier said so or because the payload cannot produce a
+    verifiable signature at all. `details.reason` says which.
+  - `{:inconclusive, reason}` -- the check could not be completed, so this is NOT
+    a verdict on the signature and must not be reported as one. It is still not
+    permission to fund.
+  """
+  @spec verify(map(), String.t(), String.t(), keyword()) :: outcome()
+  def verify(served, signature, account, opts \\ []) when is_map(served) do
+    client = Keyword.get_lazy(opts, :rpc, fn -> RPC.client() end)
+    expected = expected_verifier!(opts)
+
+    with {:ok, sig_bytes} <- signature_bytes(signature),
+         {:ok, details} <- describe_target(client, served, account, expected) do
+      details.signer_kind
+      |> check(client, account, details.digest, sig_bytes)
+      |> verdict(details)
+    else
+      # A defect found before the target resolved has no digest or separator to
+      # report alongside it, only the reason it stopped there.
+      {:rejected_because, reason} -> {:rejected, %{reason: reason}}
+      {:inconclusive, _} = out -> out
+    end
+  end
+
+  # Everything the verdict is about, resolved before the signature is looked at:
+  # that the node speaks for the chain the domain names, which contract verifies,
+  # the separator it rebuilds, the digest that yields, and whether the buyer is
+  # asked by ERC-1271 or by recovery.
+  defp describe_target(client, served, account, expected) do
+    with :ok <- same_chain(client, served),
+         {:ok, verifying_contract} <- verifying_contract(served, expected),
+         {:ok, separator} <- domain_separator(client, verifying_contract),
+         {:ok, digest} <- digest(separator, served),
+         {:ok, kind} <- signer_kind(client, account) do
+      {:ok,
+       %{
+         digest: digest,
+         separator: separator,
+         verifying_contract: verifying_contract,
+         signer_kind: kind
+       }}
+    end
+  end
+
+  defp verdict(:ok, details), do: {:ok, details}
+
+  defp verdict({:rejected, returned}, details),
+    do: {:rejected, details |> Map.put(:returned, returned) |> Map.put(:reason, :answered)}
+
+  defp verdict({:rejected_because, reason}, details),
+    do: {:rejected, Map.put(details, :reason, reason)}
+
+  defp verdict({:inconclusive, _} = out, _details), do: out
+
+  @doc """
+  One line describing the outcome, for the order task's log.
+  """
+  @spec describe(outcome()) :: String.t()
+  def describe({:ok, %{verifying_contract: vc, digest: digest, signer_kind: kind}}) do
+    "pull preflight: OK -- the signature covers the digest #{short(vc)} will rebuild " <>
+      "(#{short_hex(digest)}), verified #{via(kind)}"
+  end
+
+  def describe({:rejected, %{reason: :answered} = details}) do
+    %{verifying_contract: vc, returned: returned, signer_kind: kind} = details
+
+    "pull preflight: REJECTED -- #{short(vc)} rebuilds a digest this signature does not " <>
+      "cover (#{via(kind)} answered #{describe_returned(kind, returned)}). The pull would " <>
+      "revert, so funding this order would escrow a fee for a settlement that cannot happen."
+  end
+
+  def describe({:rejected, %{reason: reason}}) do
+    "pull preflight: REJECTED -- #{describe_defect(reason)}. No signature over this " <>
+      "authorization can verify, so funding this order would escrow a fee for a settlement " <>
+      "that cannot happen."
+  end
+
+  def describe({:inconclusive, reason}) do
+    "pull preflight: INCONCLUSIVE (#{inspect(reason)}) -- this is not a verdict on the " <>
+      "signature; #{describe_gap(reason)}. Funding is refused either way: an unanswered " <>
+      "check is not permission to escrow."
+  end
+
+  # -- Internal --
+
+  # The caller's answer to "who checks this signature", validated at the door so
+  # a bad one stops at the call site rather than travelling in as a FunctionClause
+  # from somewhere three functions deeper. Naming the verifier is a decision the
+  # caller has already made by choosing a rail; getting it wrong is a bug there.
+  defp expected_verifier!(opts) do
+    case Keyword.fetch(opts, :expect_verifier) do
+      {:ok, "0x" <> _ = address} ->
+        address
+
+      {:ok, other} ->
+        raise ArgumentError,
+              ":expect_verifier must be a 0x address, got #{inspect(other)}"
+
+      :error ->
+        raise ArgumentError,
+              ":expect_verifier is required -- name the contract your rail pulls " <>
+                "through (Permit2, or the origin token for ERC-3009). There is no " <>
+                "default: every candidate comes from the payload under audit."
+    end
+  end
+
+  # A served `verifyingContract` is a claim about WHO will check the signature,
+  # made by the same party whose payload is under audit. Reading a separator from
+  # an address the quote chose would let a hostile worker nominate a contract
+  # whose DOMAIN_SEPARATOR() it controls, and the check would agree with the
+  # payload exactly the way #772's tests agreed with #772. So the served address
+  # is never the pin -- it is only ever checked AGAINST one.
+  defp verifying_contract(served, expected) do
+    with {:ok, address} <- declared_verifier(served) do
+      pinned_verifier(expected, address)
+    end
+  end
+
+  defp declared_verifier(served) do
+    case get_in(served, ["domain", "verifyingContract"]) do
+      "0x" <> _ = address -> {:ok, address}
+      nil -> {:rejected_because, :no_verifying_contract}
+      other -> {:rejected_because, {:invalid_verifying_contract, other}}
+    end
+  end
+
+  # The CALLER's address is what gets dialed, not the served one that just
+  # matched it. `normalize_address/1` trims and downcases, so the two can match
+  # while differing byte-for-byte -- a served `"0x…BA3 "` passes the pin and then
+  # goes to `eth_call` verbatim as `to:`, where the node refuses it and every
+  # funded run stops INCONCLUSIVE blaming an endpoint that is fine. Comparing
+  # against the pin and then asking the payload's copy of it also contradicts
+  # the rule this function exists to enforce.
+  defp pinned_verifier(expected, address) do
+    if EIP712.normalize_address(address) == EIP712.normalize_address(expected) do
+      {:ok, expected}
+    else
+      {:rejected_because, {:verifier_mismatch, address, expected}}
+    end
+  end
+
+  # Permit2's separator commits to the chain id, and Permit2 is deployed at the
+  # SAME address everywhere -- so a node for the wrong chain answers this call
+  # happily with 32 valid-looking bytes that belong to a different domain. The
+  # digest then differs for a reason that has nothing to do with the signature,
+  # and reporting it as a rejection would tell the operator their signing is
+  # broken when their RPC url is.
+  #
+  # Both callers can reach it. The live gate reads `XOCHI_ORDER_RPC_<chain>` per
+  # corridor, so a mesh run points at whichever endpoint that names. `mix
+  # raxol_earn.order` falls `ORDER_RPC_<from>` back to `ORDER_RPC_8453` -- which
+  # today is the same chain, since `assert_acp_origin!/1` pins the origin to the
+  # ACP core's, but the fallback is what would surface a non-Base origin here
+  # rather than as a bad signature the moment that pin widens.
+  defp same_chain(client, served) do
+    served_chain_id = get_in(served, ["domain", "chainId"])
+
+    case to_uint(served_chain_id) do
+      nil -> {:rejected_because, chain_id_defect(served_chain_id)}
+      declared -> compare_chain_id(client, declared)
+    end
+  end
+
+  defp compare_chain_id(client, declared) do
+    case RPC.eth_chain_id(client) do
+      {:ok, ^declared} -> :ok
+      {:ok, other} -> {:inconclusive, {:wrong_chain, declared: declared, node: other}}
+      {:error, reason} -> {:inconclusive, {:chain_id_unavailable, reason}}
+    end
+  end
+
+  # A payload that declares a chainId this module cannot read is a different
+  # defect from one that declares none, and reporting a negative or non-numeric
+  # value as "declares no domain.chainId" sends the operator looking for a field
+  # that is right there in the payload they captured.
+  defp chain_id_defect(nil), do: :no_chain_id
+  defp chain_id_defect(other), do: {:invalid_chain_id, other}
+
+  defp to_uint(n) when is_integer(n) and n >= 0, do: n
+
+  # Trimmed, to agree with `Protocols.Xochi`'s parser of the same field. Nothing
+  # reaching here can currently differ -- `EIP712` refuses a padded uint256 at
+  # signing, several steps earlier -- but two parsers of one field disagreeing is
+  # a bug waiting for a caller, and the disagreement here would surface as a hard
+  # rejection reading "declares no domain.chainId" for a payload that declares one.
+  defp to_uint(s) when is_binary(s) do
+    case Integer.parse(String.trim(s)) do
+      {n, ""} when n >= 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp to_uint(_), do: nil
+
+  # The separator the contract itself rebuilds. Every domain we pull against
+  # -- Permit2 and the ERC-3009 tokens -- exposes it as an immutable public
+  # getter, so this is a cache-free read of the exact 32 bytes the on-chain
+  # verification will use.
+  defp domain_separator(client, verifying_contract) do
+    call = %{to: verifying_contract, data: selector()}
+
+    with {:ok, hex} <- RPC.eth_call(client, call) do
+      interpret_separator(hex)
+    else
+      {:error, reason} ->
+        {:inconclusive, {:domain_separator_unavailable, verifying_contract, reason}}
+    end
+  end
+
+  # A separator that came back but is not 32 bytes of hex is a different gap
+  # from one that never came back, and folding the two reported a node returning
+  # garbage as a node that was down -- which sends an operator to check
+  # connectivity that is fine.
+  defp interpret_separator(hex) do
+    case decode_hex(hex, :domain_separator) do
+      {:ok, <<separator::binary-size(32)>>} -> {:ok, separator}
+      {:ok, other} -> {:inconclusive, {:domain_separator_length, byte_size(other)}}
+      {:error, _} -> {:inconclusive, {:domain_separator_malformed, hex}}
+    end
+  end
+
+  defp selector, do: ABI.function_selector("DOMAIN_SEPARATOR()")
+
+  # A served envelope this module cannot encode is one no signature can cover:
+  # the signer encoded SOMETHING, and it was not this. That is a defect in the
+  # payload, not a gap in the check.
+  # The struct half is projected by the SIGNER's own function, not a copy of it.
+  # A copy would agree with itself and diverge from production the moment either
+  # side changed -- and it would report that divergence as the signature being
+  # bad, which is the false verdict this module exists to avoid. It also does not
+  # make the check circular in any way the moduledoc does not already own: the
+  # domain half is what is sourced from the chain, and this step has no judgment
+  # in it beyond dropping EIP712Domain, which both sides must do identically or
+  # neither is encoding EIP-712.
+  #
+  # Wrapped because the encoder can RAISE on a served payload, not only return
+  # an error: `EIP712`'s primary-type detection raises `ArgumentError` when the
+  # types map has more than one unreferenced root, and `served` comes off the
+  # wire. In `mix raxol_earn.order` that is pre-empted -- signing runs the same
+  # encoder first and would have raised there -- but the live gate calls
+  # `verify/4` once per cell with no rescue, so one malformed payload took down
+  # a ninety-cell matrix instead of failing its own cell. A payload this module
+  # cannot encode is a rejection either way; the shape of the failure should not
+  # decide whether the other eighty-nine cells run.
+  defp digest(separator, served) do
+    case encode_digest(separator, served) do
+      {:ok, digest} -> {:ok, digest}
+      {:error, reason} -> {:rejected_because, {:digest_failed, reason}}
+    end
+  end
+
+  defp encode_digest(separator, served) do
+    types = XochiProtocol.eip712_types(served)
+    message = served["message"] || %{}
+
+    EIP712.hash_with_separator(separator, types, message)
+  rescue
+    error -> {:error, {:unencodable_types, Exception.message(error)}}
+  end
+
+  # Permit2 and the ERC-3009 tokens branch on whether the owner has code: a
+  # contract account is asked via ERC-1271, an EOA is recovered with ecrecover.
+  # Checking the wrong one would answer a question the pull never asks -- an EOA
+  # has no `isValidSignature` to call, and a 7702 account's wrapped envelope
+  # cannot recover. A 7702 delegation designator IS code, so this splits them.
+  #
+  # `RPC.get_code/3` head-matches `"0x" <> _`, so an account without the prefix
+  # would raise a FunctionClauseError out of a function that documents exactly
+  # three outcomes. The buyer address is the caller's, so getting it wrong is a
+  # bug there rather than a fact about the chain -- but it must still leave by
+  # one of the three doors.
+  defp signer_kind(_client, account) when not is_binary(account),
+    do: {:rejected_because, {:invalid_account, account}}
+
+  defp signer_kind(client, "0x" <> _ = account) do
+    case RPC.deployed?(client, account) do
+      {:ok, true} -> {:ok, :contract}
+      {:ok, false} -> {:ok, :eoa}
+      {:error, reason} -> {:inconclusive, {:signer_kind_unavailable, account, reason}}
+    end
+  end
+
+  defp signer_kind(_client, account),
+    do: {:rejected_because, {:invalid_account, account}}
+
+  defp check(:contract, client, account, digest, sig_bytes) do
+    case call_erc1271(client, account, digest, sig_bytes) do
+      {:ok, @erc1271_magic} -> :ok
+      {:ok, returned} -> {:rejected, returned}
+      {:rejected_because, _} = out -> out
+      {:inconclusive, _} = out -> out
+    end
+  end
+
+  defp check(:eoa, _client, account, digest, sig_bytes) do
+    case recover(digest, sig_bytes) do
+      {:ok, recovered} ->
+        if EIP712.normalize_address(recovered) == EIP712.normalize_address(account) do
+          :ok
+        else
+          {:rejected, recovered}
+        end
+
+      # Permit2 and the ERC-3009 tokens run this same recovery against this same
+      # account. A signature that cannot be recovered here cannot be recovered
+      # there either, which makes this a verdict and not a gap.
+      {:error, reason} ->
+        {:rejected_because, {:recover_failed, reason}}
+    end
+  end
+
+  defp recover(digest, <<r::binary-size(32), s::binary-size(32), v::8>>) when v in [27, 28] do
+    case ExSecp256k1.recover(digest, r, s, v - 27) do
+      {:ok, pubkey} -> {:ok, EIP712.address_from_pubkey(pubkey)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # EIP-2098 compact form: `r || vs`, where `vs` is `s` with the recovery bit
+  # occupying its top position. Permit2's `SignatureVerification` accepts this
+  # alongside the 65-byte form, and the ERC-3009 tokens go through the same
+  # library, so refusing it here would be a false REJECTED on a signature the
+  # pull would take -- and the message would send the operator after a 7702
+  # delegation that is not the problem. Widened to what the verifier accepts
+  # rather than to what we happen to emit: `EIP712.pack_signature/1` is 65
+  # bytes, but the signature under audit was not necessarily produced by it.
+  defp recover(digest, <<r::binary-size(32), y_parity::1, s::bitstring-size(255)>>) do
+    recover(digest, <<r::binary, 0::1, s::bitstring, 27 + y_parity>>)
+  end
+
+  # A 65-byte signature whose `v` is neither 27 nor 28 is a DIFFERENT defect
+  # from one of the wrong length, and reporting it by length alone produced
+  # "this signature is 65 bytes rather than a canonical 65" -- which says
+  # nothing, and then sent the operator after a 7702 delegation that is not the
+  # problem. Solidity's `ecrecover` yields the zero address for any other `v`,
+  # so the pull rejects this too; it just rejects it for the reason named here.
+  defp recover(_digest, <<_r::binary-size(32), _s::binary-size(32), v::8>>),
+    do: {:error, {:non_canonical_v, v}}
+
+  # An EOA pull carries a canonical 65-byte signature. Anything else is a
+  # wrapped envelope on an account with no code to unwrap it, which the pull
+  # would reject.
+  defp recover(_digest, sig), do: {:error, {:not_a_canonical_signature, byte_size(sig)}}
+
+  defp call_erc1271(client, account, digest, sig_bytes) do
+    data =
+      ABI.encode_call("isValidSignature(bytes32,bytes)", [
+        {"bytes32", "0x" <> Base.encode16(digest, case: :lower)},
+        {"bytes", sig_bytes}
+      ])
+
+    # `:data` is handed over as raw bytes: RPC.eth_call/3 hex-encodes it.
+    call = %{to: account, data: data}
+
+    with {:ok, hex} <- RPC.eth_call(client, call),
+         {:ok, bytes} <- decode_hex(hex, :magic_value) do
+      # A bytes4 return is left-aligned in its 32-byte word.
+      {:ok, binary_part(bytes, 0, min(4, byte_size(bytes)))}
+    else
+      {:error, reason} -> classify_erc1271_failure(account, reason)
+    end
+  end
+
+  # An account that REVERTS rather than returning a value is a VERDICT, not a
+  # gap. This used to read every `eth_call` failure as `:inconclusive` on the
+  # grounds that a revert is indistinguishable from a node that dropped the
+  # call. It is not: `RPC.request/3` reports a node that answered with a
+  # JSON-RPC error separately from one that could not be reached
+  # (`{:transport, _}`), and by the time this runs the same client has already
+  # answered `eth_chainId`, `eth_getCode` and `DOMAIN_SEPARATOR()`.
+  #
+  # Collapsing the two mattered because it is the DEFAULT shape for the account
+  # this module was built for. Plenty of ERC-1271 implementations -- including
+  # smart accounts on the 7702 path of GitHub #772 -- revert on a bad signature
+  # instead of returning `0xffffffff`. Read as inconclusive, that stays soft
+  # under `--dry-run` and soft in the live gate, so the rehearsal scored PASS on
+  # exactly the defect it exists to find, and the funded run was left as the
+  # only thing catching it.
+  #
+  # Only an EXECUTION revert converts. A rate limit, a method the node does not
+  # serve, an internal error -- all still `{:rpc_error, _}`, none of them a
+  # statement about the signature -- stay inconclusive, because a false REJECTED
+  # sends an operator after a signing defect that is not there.
+  defp classify_erc1271_failure(account, {:rpc_error, error} = reason) do
+    if execution_revert?(error) do
+      {:rejected_because, {:erc1271_reverted, error_detail(error)}}
+    else
+      {:inconclusive, {:erc1271_call_failed, account, reason}}
+    end
+  end
+
+  defp classify_erc1271_failure(account, reason),
+    do: {:inconclusive, {:erc1271_call_failed, account, reason}}
+
+  # What the EVM executing and reverting looks like on the wire. Geth and its
+  # descendants answer code `3` and carry the revert data; the -32000 range is
+  # server-defined, so there the message is what says which kind of failure it
+  # was. Anything this does not recognize is treated as not-a-revert, since the
+  # cost of that mistake is a re-run and the cost of the opposite is chasing a
+  # signature that was fine.
+  defp execution_revert?(%{code: 3}), do: true
+
+  defp execution_revert?(%{code: code, message: message})
+       when is_integer(code) and code <= -32_000 and code >= -32_099 and is_binary(message) do
+    String.contains?(String.downcase(message), "revert")
+  end
+
+  defp execution_revert?(%{message: message}) when is_binary(message) do
+    String.contains?(String.downcase(message), "execution reverted")
+  end
+
+  defp execution_revert?(_error), do: false
+
+  defp error_detail(%{message: message}) when is_binary(message), do: message
+  defp error_detail(error), do: inspect(error)
+
+  # A signature that is not hex is not a signature. The pull is handed these same
+  # bytes, so there is nothing here for a working RPC to resolve later.
+  defp signature_bytes(signature) do
+    case decode_hex(signature, :signature) do
+      {:ok, bytes} -> {:ok, bytes}
+      {:error, reason} -> {:rejected_because, reason}
+    end
+  end
+
+  defp decode_hex("0x" <> hex, label), do: decode_hex(hex, label)
+
+  defp decode_hex(hex, label) when is_binary(hex) do
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, bytes} -> {:ok, bytes}
+      :error -> {:error, {:invalid_hex, label}}
+    end
+  end
+
+  defp decode_hex(other, label), do: {:error, {:invalid_hex, label, other}}
+
+  defp short("0x" <> hex) when byte_size(hex) > 10 do
+    "0x" <> binary_part(hex, 0, 6) <> ".." <> binary_part(hex, byte_size(hex) - 4, 4)
+  end
+
+  defp short(other), do: to_string(other)
+
+  defp short_hex(bytes) when is_binary(bytes),
+    do: short("0x" <> Base.encode16(bytes, case: :lower))
+
+  defp via(:contract), do: "on-chain via ERC-1271 isValidSignature"
+  defp via(:eoa), do: "by ecrecover against the buyer address"
+
+  # What is wrong with the payload, in the operator's terms. These are all
+  # defects in what the quote served or what was signed over it, so each one
+  # names the artifact to capture rather than a knob to turn.
+  defp describe_defect(:no_verifying_contract),
+    do:
+      "the served pull declares no domain.verifyingContract, so nothing on chain " <>
+        "claims to verify it"
+
+  defp describe_defect(:no_chain_id),
+    do: "the served pull declares no domain.chainId, so it names no chain to settle on"
+
+  defp describe_defect({:invalid_chain_id, other}),
+    do:
+      "the served domain.chainId is not a chain id (#{inspect(other)}), so the separator it " <>
+        "commits to names no chain this can read"
+
+  defp describe_defect({:invalid_verifying_contract, other}),
+    do: "the served domain.verifyingContract is not an address (#{inspect(other)})"
+
+  defp describe_defect({:verifier_mismatch, served, expected}),
+    do:
+      "the served domain.verifyingContract is #{short(served)}, not #{short(expected)}, which " <>
+        "is what this rail pulls through. Asking the served address about the signature would " <>
+        "be asking the party that chose it, so the check stops here"
+
+  defp describe_defect({:digest_failed, reason}),
+    do: "the served types and message cannot be EIP-712 encoded (#{inspect(reason)})"
+
+  defp describe_defect({:recover_failed, {:not_a_canonical_signature, size}}),
+    do:
+      "the buyer has no code on this chain, so the pull recovers with ecrecover, and this " <>
+        "signature is #{size} bytes rather than the 65 or the compact 64 the verifier accepts. " <>
+        "A wrapped envelope needs an account that can unwrap it -- check whether the 7702 " <>
+        "delegation is actually set"
+
+  defp describe_defect({:invalid_account, account}),
+    do:
+      "the buyer address this was asked about is not an 0x address (#{inspect(account)}), so " <>
+        "there is no account to check the signature against. That is a defect in what called " <>
+        "this, not in the quote or the chain"
+
+  defp describe_defect({:recover_failed, {:non_canonical_v, v}}),
+    do:
+      "the signature is a canonical 65 bytes but its recovery id is #{v}, not 27 or 28, so " <>
+        "ecrecover yields the zero address and the pull rejects it. This is the signer's " <>
+        "packing rather than the buyer's account -- capture what produced the signature"
+
+  defp describe_defect({:recover_failed, reason}),
+    do: "this signature does not recover to any address (#{inspect(reason)})"
+
+  defp describe_defect({:erc1271_reverted, detail}),
+    do:
+      "the buyer's isValidSignature REVERTED on this digest (#{detail}). A revert is the " <>
+        "account refusing the signature, and the pull calls it the same way, so the pull " <>
+        "reverts too. Capture the served pull_authorization and the signature: this is the " <>
+        "payload, not the endpoint"
+
+  defp describe_defect({:invalid_hex, :signature}),
+    do: "the signature is not hex"
+
+  defp describe_defect(other), do: inspect(other)
+
+  # What stopped the check, and what the operator does about it. Every one of
+  # these is environmental, so every one of them is worth a retry -- unlike the
+  # defects above.
+  # Deliberately names no environment variable. Two callers reach this with
+  # different ones -- `mix raxol_earn.order` reads `ORDER_RPC_<chain>`, the live
+  # gate reads `XOCHI_ORDER_RPC_<chain>` -- so a name hardcoded here is wrong in
+  # one of them, and pointing an operator at a variable that does not exist is
+  # the failure this whole module was built to stop doing. Each caller names its
+  # own knob in its own error text; this says which chain the endpoint must
+  # answer for.
+  defp describe_gap({:wrong_chain, declared: declared, node: node}),
+    do:
+      "the RPC answers for chain #{node} while the pull is for chain #{declared}, so the " <>
+        "separator read back belongs to a different domain. Permit2 is at one address on " <>
+        "every chain, which is why this reads as a mismatch rather than an error. Point this " <>
+        "run's ORIGIN-chain endpoint at chain #{declared}"
+
+  defp describe_gap({:chain_id_unavailable, _}),
+    do: "the RPC did not answer eth_chainId, so which chain it speaks for is unknown"
+
+  defp describe_gap({:domain_separator_unavailable, vc, _}),
+    do: "#{short(vc)} did not answer DOMAIN_SEPARATOR()"
+
+  defp describe_gap({:domain_separator_length, n}),
+    do: "DOMAIN_SEPARATOR() answered #{n} bytes rather than 32"
+
+  defp describe_gap({:domain_separator_malformed, _hex}),
+    do:
+      "DOMAIN_SEPARATOR() answered something that is not hex, so the endpoint is answering " <>
+        "but not with a separator"
+
+  defp describe_gap({:signer_kind_unavailable, account, _}),
+    do: "eth_getCode did not answer for #{short(account)}, so the pull's own branch is unknown"
+
+  # An execution revert no longer lands here -- `classify_erc1271_failure/2`
+  # converts it to a rejection. What is left is the node failing to answer, or
+  # answering with an error that says nothing about the signature (a rate limit,
+  # an unserved method). Neither is a verdict, so neither may fund.
+  defp describe_gap({:erc1271_call_failed, account, _}),
+    do:
+      "#{short(account)} did not answer isValidSignature, and the answer was not an " <>
+        "execution revert -- so this says nothing about the signature. Check the endpoint's " <>
+        "rate limits and that it serves eth_call for #{short(account)}"
+
+  defp describe_gap(_other), do: "the check itself could not run"
+
+  # An ERC-1271 refusal is a 4-byte magic value; an EOA mismatch is the address
+  # the signature actually recovers to, which says far more than "not equal".
+  defp describe_returned(:eoa, address), do: "recovered #{short(address)}"
+  defp describe_returned(:contract, magic), do: short_hex(magic)
+end

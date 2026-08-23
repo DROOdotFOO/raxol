@@ -329,4 +329,63 @@ defmodule Mix.Tasks.RaxolEarn.OrderTest do
       assert message =~ "is not a USDC amount"
     end
   end
+
+  # The preflight's own suite proves it classifies outcomes correctly. This
+  # proves the run SPENDS on that classification -- a distinct claim, and the one
+  # that was untested while a catch-all funded every outcome but one.
+  describe "what a preflight outcome authorizes" do
+    test "a funded run proceeds only on a pass" do
+      assert Order.decide_preflight({:ok, %{}}, false) == :ok
+    end
+
+    test "a funded run stops on a rejection" do
+      assert Order.decide_preflight({:rejected, %{reason: :no_verifying_contract}}, false) ==
+               {:error, :pull_signature_rejected}
+    end
+
+    test "a funded run stops on an inconclusive check too" do
+      # An unanswered question is not permission to escrow. The RPC that could
+      # not answer it is the same one the createJob and fund writes go to.
+      assert Order.decide_preflight({:inconclusive, {:chain_id_unavailable, :timeout}}, false) ==
+               {:error, :pull_preflight_inconclusive}
+    end
+
+    # `scripts/run_live_gates.sh --dry-run` scores every cell on this task's exit
+    # status, so a rejection that returned :ok here scored the rehearsal PASS on
+    # the single defect the rehearsal exists to find.
+    test "a dry run FAILS on a rejection, since the rehearsal is what CI scores" do
+      assert Order.decide_preflight({:rejected, %{reason: :no_verifying_contract}}, true) ==
+               {:error, :pull_signature_rejected}
+    end
+
+    # Not a verdict on the payload, and the usual cause is an origin-chain
+    # endpoint the rehearsing machine was never given. Failing on it trains an
+    # operator to ignore the exit code.
+    test "a dry run carries on when the check could not run" do
+      assert Order.decide_preflight({:inconclusive, :whatever}, true) == :ok
+    end
+  end
+
+  # The gate can only check a signature it is handed. Reading a missing one as
+  # "nothing to check" would switch the gate off for exactly the payload it was
+  # built to gate, which is the fail-open shape PullPreflight refuses to offer
+  # its callers one level down.
+  describe "a bundle with no pull signature" do
+    test "aborts rather than funding an unchecked pull" do
+      quote_resp = %{pull_authorization: %{"domain" => %{}}}
+      cfg = %{buyer: "0x0", rpc: "http://stub.invalid", src_token: "0x0"}
+
+      assert {:error, {:pull_signature_missing, nil}} =
+               Order.preflight_pull(cfg, quote_resp, %{signature: "0xabc"}, [])
+
+      assert {:error, {:pull_signature_missing, nil}} =
+               Order.preflight_pull(cfg, quote_resp, %{}, dry_run: true)
+    end
+
+    test "a quote that served no pull has nothing to check and is not blocked" do
+      cfg = %{buyer: "0x0", rpc: "http://stub.invalid", src_token: "0x0"}
+
+      assert :ok = Order.preflight_pull(cfg, %{pull_authorization: nil}, %{}, [])
+    end
+  end
 end

@@ -51,6 +51,31 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
   `--dry-run` stops after signing and spends nothing.
 
+  Every run, `--dry-run` included, ends the signing step by asking the origin
+  pull's verifying contract for its own `DOMAIN_SEPARATOR()` and asking the buyer
+  whether the signature just produced covers the digest that yields. Four
+  read-only calls (`eth_chainId`, `eth_getCode`, and one `eth_call` each), no
+  writes.
+
+  A real run proceeds only when that check PASSES. A rejection means the pull
+  would revert on settlement; an inconclusive result means nobody knows. Either
+  way the run stops before escrowing a fee it cannot earn, and the log line
+  distinguishes the two so the next move is clear.
+
+  A rejection also fails `--dry-run`, non-zero: a rehearsal that reports the
+  defect and exits 0 is not rehearsing the real thing. An inconclusive check
+  stays soft there, because it says nothing about the payload and the usual
+  cause is an `ORDER_RPC_8453` the rehearsing machine cannot reach.
+
+  Note this is the MANUAL path. `scripts/run_live_gates.sh` does not invoke this
+  task; its `acp` cells drive the `:live_xochi_order_preflight` gate, which runs
+  the same `PullPreflight.verify/4` and applies the same rule there.
+
+  A quote that served a pull with no signature in the signed bundle aborts BOTH
+  modes. That is not a preflight verdict to rehearse -- it is a bundle with
+  nothing in it to check, so there is no version of the run worth continuing.
+  See `Raxol.Earn.Xochi.PullPreflight` and GitHub #772.
+
   ## Origin pull: the `--solver` pin
 
   The signed intent carries an origin-pull authorization letting the solver collect
@@ -145,8 +170,11 @@ defmodule Mix.Tasks.RaxolEarn.Order do
     Transport
   }
 
+  alias Raxol.Earn.Onchain.RPC
   alias Raxol.Earn.Xochi.OriginPull
+  alias Raxol.Earn.Xochi.PullPreflight
   alias Raxol.Payments.Assets
+  alias Raxol.Payments.Protocols.Permit2
   alias Raxol.Payments.Protocols.Xochi, as: XochiProtocol
   alias Raxol.Payments.Xochi.{PullContracts, Schemas.QuoteRequest}
 
@@ -741,10 +769,108 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     with {:ok, quote_resp} <- XochiProtocol.get_quote(cfg.xochi_config, request),
          {:ok, pull} <- check_origin_pull(cfg, quote_resp, opts),
-         {:ok, bundle} <- XochiProtocol.sign_intent(quote_resp, cfg.intent_wallet, request) do
+         {:ok, bundle} <- XochiProtocol.sign_intent(quote_resp, cfg.intent_wallet, request),
+         :ok <- preflight_pull(cfg, quote_resp, bundle, opts) do
       {:ok, {bundle, pull}}
     end
   end
+
+  # `check_origin_pull/3` decides the pull's SHAPE is safe to sign. This asks
+  # whether the signature just produced will actually be accepted, which is a
+  # different question and the one every funded attempt on GitHub #772 has lost:
+  # the shape passed each time, and the digest was wrong. Four read-only calls
+  # cost nothing and happen before any write.
+  #
+  # A real run proceeds on `{:ok, _}` and nothing else. Continuing on anything
+  # weaker would `createJob` and escrow a fee for a settlement nobody has
+  # confirmed can execute, which is how job 74047 ended up funded, unsettleable,
+  # and expired. A REJECTION fails `--dry-run` too, with a non-zero exit,
+  # because a rehearsal that reports the defect and exits 0 is reporting it, not
+  # rehearsing it.
+  #
+  # An inconclusive check blocks too. Refusing costs a re-run; proceeding costs
+  # an escrow, and there is no reading of "nobody could answer" that makes the
+  # escrow the better bet. This reads `cfg.rpc`, which `assert_acp_origin!/1`
+  # constrains to the ACP core's own chain -- so for this task it resolves to the
+  # SAME `ORDER_RPC_8453` the `createJob` and `fund` writes go to, and an
+  # inconclusive result here does mean those writes are in doubt as well. What it
+  # must not do is claim the SIGNATURE is bad, and `PullPreflight.describe/1`
+  # keeps those separate in the log.
+  # Public, like `decide_preflight/2`, only so the money decision can be tested.
+  # A missing signature aborts `--dry-run` too: it is not a preflight VERDICT to
+  # rehearse, it is a bundle with nothing in it to check, and a dry run whose
+  # purpose is to rehearse the real thing should say so.
+  @doc false
+  def preflight_pull(_cfg, %{pull_authorization: nil}, _bundle, _opts), do: :ok
+
+  def preflight_pull(cfg, quote_resp, bundle, opts) do
+    with {:ok, signature} <- pull_signature(bundle) do
+      outcome =
+        PullPreflight.verify(
+          quote_resp.pull_authorization,
+          signature,
+          cfg.buyer,
+          rpc: RPC.client(url: cfg.rpc),
+          expect_verifier: expected_verifier(quote_resp.payment_method, cfg)
+        )
+
+      log(PullPreflight.describe(outcome))
+      decide_preflight(outcome, Keyword.get(opts, :dry_run, false))
+    end
+  end
+
+  # The quote served a pull authorization, so the bundle must carry a signature
+  # over it. Reading a missing one as "nothing to check" would turn the gate off
+  # for exactly the payload it was built to gate -- the fail-open shape
+  # `PullPreflight` refuses to offer its callers, one level up.
+  defp pull_signature(bundle) do
+    case Map.get(bundle, :pull_signature) do
+      sig when is_binary(sig) -> {:ok, sig}
+      other -> {:error, {:pull_signature_missing, other}}
+    end
+  end
+
+  # WHO will check this signature, decided from the rail we asked for rather than
+  # from the payload under audit. `PullPreflight` reads `DOMAIN_SEPARATOR()` from
+  # this address, so leaving it to the served `verifyingContract` would let a
+  # hostile quote nominate its own oracle. Permit2 is one address on every chain;
+  # the ERC-3009 verifier is the origin token itself.
+  # Two clauses, no catch-all. `validate_pull/3` refused every other
+  # payment_method before this quote was signed, so a third value here is an
+  # impossibility rather than a case to handle -- and a FunctionClauseError says
+  # that, before any write, where a `nil` fallback would instead hand
+  # `PullPreflight` a missing pin.
+  defp expected_verifier("permit2", _cfg), do: Permit2.verifying_contract()
+  defp expected_verifier("erc3009", cfg), do: cfg.src_token
+
+  @doc false
+  # Public only so the money decision itself can be tested. Every clause is
+  # explicit and there is no catch-all: a `PullPreflight` outcome nobody named
+  # here raises `FunctionClauseError` inside `sign_intent/2`, which aborts the run
+  # before any write. Elixir will not tell you at compile time -- `mix dialyzer`
+  # is what catches the spec going stale -- but the runtime failure is the safe
+  # one, which is the property that matters.
+  @spec decide_preflight(PullPreflight.outcome(), boolean()) :: :ok | {:error, atom()}
+  def decide_preflight({:ok, _details}, _dry_run?), do: :ok
+
+  # A rejection fails BOTH modes, and the exit code is the point. Returning `:ok`
+  # here made the rehearsal PASS on the one defect the rehearsal exists to find,
+  # leaving it as a single log line. Rehearsing a failure means reproducing it
+  # without spending, not reporting it without failing. The live-gate path
+  # applies the same rule at its own layer (`live_order_test.exs` fails the
+  # preflight cell on a REJECTED verdict); this task is the manual entry point.
+  def decide_preflight({:rejected, _details}, _dry_run?),
+    do: {:error, :pull_signature_rejected}
+
+  # An inconclusive check stays soft under `--dry-run`. It is not a verdict on
+  # the payload, and the usual cause is an `ORDER_RPC_8453` the rehearsing
+  # machine cannot reach -- failing a rehearsal for that trains an operator to
+  # ignore the exit code, which costs more than the signal is worth. A funded run
+  # still refuses.
+  def decide_preflight({:inconclusive, _reason}, true = _dry_run?), do: :ok
+
+  def decide_preflight({:inconclusive, _reason}, false),
+    do: {:error, :pull_preflight_inconclusive}
 
   # The Permit2 rail pulls through a standing ERC-20 allowance. Refusing an
   # unpinned or mismatched spender happens HERE, before the signature -- an
@@ -1256,6 +1382,68 @@ defmodule Mix.Tasks.RaxolEarn.Order do
 
     Do not widen the pin to whatever the quote served -- checking that value is
     the entire point of it.
+    """
+  end
+
+  # The signature exists and is well-formed; the contract that will verify it
+  # rebuilds a different digest. Settling is impossible, so the run stops here
+  # rather than at the far side of an escrow.
+  defp sign_intent_error(:pull_signature_rejected) do
+    """
+    the origin pull's signature will not verify on chain.
+
+    Nothing was written and nothing was escrowed. The preflight line above shows
+    which contract was asked and what it answered: the digest it rebuilds is not
+    the one this signature covers, so the pull would revert and the job would sit
+    funded and unsettleable until it expired.
+
+    That is a defect in what was signed, not a configuration you can retry
+    around. The domain the quote serves and the domain the verifier declares have
+    diverged -- see GitHub #772, where an extra `version` field cost four funded
+    attempts. Capture the served pull_authorization and compare its domain to the
+    verifying contract's own DOMAIN_SEPARATOR() before re-running.
+
+    --dry-run reproduces this for free, and fails the same way: a rehearsal that
+    printed this and exited 0 would not be rehearsing it.
+    """
+  end
+
+  # The check could not be completed, which is NOT a verdict on the signature.
+  # It still stops the run: an unanswered question is not permission to escrow,
+  # and the endpoint that could not answer it is the one the funding writes go to.
+  defp sign_intent_error(:pull_preflight_inconclusive) do
+    """
+    the origin pull's signature could not be checked against the chain.
+
+    Nothing was written and nothing was escrowed. The preflight line above says
+    what stopped the check and what to do about it -- read it before changing
+    anything.
+
+    This is not a claim that the signature is bad. It is a refusal to escrow a
+    fee on a question nobody answered -- and since --corridor's origin is pinned
+    to the ACP core's own chain, the endpoint that could not answer is the SAME
+    ORDER_RPC_8453 the createJob and fund writes go to, so those are in doubt as
+    well.
+
+    Re-run once ORDER_RPC_8453 answers, or with --dry-run to rehearse for free.
+    """
+  end
+
+  # The quote served a pull to sign and the bundle came back without a signature
+  # over it. Nothing is wrong on chain; the signing path did not produce what the
+  # settlement needs, and the gate cannot check a signature that is not there.
+  defp sign_intent_error({:pull_signature_missing, got}) do
+    """
+    the quote served an origin pull, but the signed bundle carries no
+    pull_signature (got #{inspect(got)}).
+
+    Nothing was written and nothing was escrowed. The solver will be asked to
+    pull funds on the origin chain and will have no authorization to do it with,
+    so this would strand a funded job exactly the way a bad signature does.
+
+    This is a defect in the signing path rather than in the quote or the chain:
+    Protocols.Xochi.sign_intent/4 attaches :pull_signature whenever the quote
+    carries a pull_authorization. Capture the bundle it returned.
     """
   end
 
