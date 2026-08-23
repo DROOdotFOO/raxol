@@ -89,6 +89,37 @@ defmodule Raxol.Symphony.WorkspaceTest do
     end
   end
 
+  describe "run_hook/4 timeout" do
+    # A hook we have stopped waiting for has to actually be DEAD. `before_remove`
+    # is followed by an `rm_rf` of the very directory the hook is still writing
+    # to, and a hook that survives its timeout survives once per retry.
+    #
+    # The witnesses are what a survivor leaves behind, so the assertion is their
+    # ABSENCE once the hook's own natural runtime has elapsed. Only a survivor
+    # can create them, which is what keeps this from being a wall-clock race:
+    # slow machines cannot fail it, they can only stop proving anything.
+    @tag :tmp_dir
+    test "kills a timed-out hook and the children it spawned", %{tmp_dir: tmp_dir} do
+      hook_witness = Path.join(tmp_dir, "hook_finished")
+      child_witness = Path.join(tmp_dir, "child_finished")
+
+      script = """
+      ( sleep 2; touch #{child_witness} ) &
+      sleep 2
+      touch #{hook_witness}
+      """
+
+      config = build_config(tmp_dir, %{before_run: script, timeout_ms: 200})
+
+      assert {:error, :timeout} = Workspace.run_hook(config, :before_run, tmp_dir)
+
+      Process.sleep(2_400)
+
+      refute File.exists?(hook_witness)
+      refute File.exists?(child_witness)
+    end
+  end
+
   describe "run_before_run_hook/2" do
     @tag :tmp_dir
     test "noop when hook is not set", %{tmp_dir: tmp_dir} do
