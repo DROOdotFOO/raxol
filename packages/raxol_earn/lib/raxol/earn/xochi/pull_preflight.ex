@@ -48,7 +48,15 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   those: they are properties of funding time, not signing time, and the order
   task reports the allowance separately.
 
-  Two narrower limits are worth stating rather than leaving to be discovered.
+  It does not bind the pull to the corridor the OPERATOR asked for. `same_chain/2`
+  compares the served `domain.chainId` against the node, never against a
+  requested origin -- so a pull for the wrong chain, checked against a node that
+  speaks for that wrong chain, passes here. That binding is
+  `Protocols.Xochi.validate_pull/3`'s `:pull_chain` check, which runs before
+  signing and is a precondition of using this module rather than a duplicate of
+  it. A caller reaching for `verify/4` on its own owes itself that check.
+
+  Three narrower limits are worth stating rather than leaving to be discovered.
 
   The EOA branch checks what `ecrecover` checks: a canonical 65 bytes, `v` of 27
   or 28, and a recovered address equal to the buyer's. Any acceptance policy the
@@ -289,8 +297,14 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   # happily with 32 valid-looking bytes that belong to a different domain. The
   # digest then differs for a reason that has nothing to do with the signature,
   # and reporting it as a rejection would tell the operator their signing is
-  # broken when their RPC url is. `ORDER_RPC_<from>` falls back to the Base
-  # endpoint when unset, so this is the DEFAULT path for any non-Base origin.
+  # broken when their RPC url is.
+  #
+  # Both callers can reach it. The live gate reads `XOCHI_ORDER_RPC_<chain>` per
+  # corridor, so a mesh run points at whichever endpoint that names. `mix
+  # raxol_earn.order` falls `ORDER_RPC_<from>` back to `ORDER_RPC_8453` -- which
+  # today is the same chain, since `assert_acp_origin!/1` pins the origin to the
+  # ACP core's, but the fallback is what would surface a non-Base origin here
+  # rather than as a bad signature the moment that pin widens.
   defp same_chain(client, served) do
     served_chain_id = get_in(served, ["domain", "chainId"])
 
@@ -338,18 +352,23 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   defp domain_separator(client, verifying_contract) do
     call = %{to: verifying_contract, data: selector()}
 
-    with {:ok, hex} <- RPC.eth_call(client, call),
-         {:ok, bytes} <- decode_hex(hex, :domain_separator) do
-      case bytes do
-        <<separator::binary-size(32)>> ->
-          {:ok, separator}
-
-        other ->
-          {:inconclusive, {:domain_separator_length, byte_size(other)}}
-      end
+    with {:ok, hex} <- RPC.eth_call(client, call) do
+      interpret_separator(hex)
     else
       {:error, reason} ->
         {:inconclusive, {:domain_separator_unavailable, verifying_contract, reason}}
+    end
+  end
+
+  # A separator that came back but is not 32 bytes of hex is a different gap
+  # from one that never came back, and folding the two reported a node returning
+  # garbage as a node that was down -- which sends an operator to check
+  # connectivity that is fine.
+  defp interpret_separator(hex) do
+    case decode_hex(hex, :domain_separator) do
+      {:ok, <<separator::binary-size(32)>>} -> {:ok, separator}
+      {:ok, other} -> {:inconclusive, {:domain_separator_length, byte_size(other)}}
+      {:error, _} -> {:inconclusive, {:domain_separator_malformed, hex}}
     end
   end
 
@@ -366,14 +385,30 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   # domain half is what is sourced from the chain, and this step has no judgment
   # in it beyond dropping EIP712Domain, which both sides must do identically or
   # neither is encoding EIP-712.
+  #
+  # Wrapped because the encoder can RAISE on a served payload, not only return
+  # an error: `EIP712`'s primary-type detection raises `ArgumentError` when the
+  # types map has more than one unreferenced root, and `served` comes off the
+  # wire. In `mix raxol_earn.order` that is pre-empted -- signing runs the same
+  # encoder first and would have raised there -- but the live gate calls
+  # `verify/4` once per cell with no rescue, so one malformed payload took down
+  # a ninety-cell matrix instead of failing its own cell. A payload this module
+  # cannot encode is a rejection either way; the shape of the failure should not
+  # decide whether the other eighty-nine cells run.
   defp digest(separator, served) do
-    types = XochiProtocol.eip712_types(served)
-    message = served["message"] || %{}
-
-    case EIP712.hash_with_separator(separator, types, message) do
+    case encode_digest(separator, served) do
       {:ok, digest} -> {:ok, digest}
       {:error, reason} -> {:rejected_because, {:digest_failed, reason}}
     end
+  end
+
+  defp encode_digest(separator, served) do
+    types = XochiProtocol.eip712_types(served)
+    message = served["message"] || %{}
+
+    EIP712.hash_with_separator(separator, types, message)
+  rescue
+    error -> {:error, {:unencodable_types, Exception.message(error)}}
   end
 
   # Permit2 and the ERC-3009 tokens branch on whether the owner has code: a
@@ -405,6 +440,7 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
     case call_erc1271(client, account, digest, sig_bytes) do
       {:ok, @erc1271_magic} -> :ok
       {:ok, returned} -> {:rejected, returned}
+      {:rejected_because, _} = out -> out
       {:inconclusive, _} = out -> out
     end
   end
@@ -471,15 +507,65 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
 
     with {:ok, hex} <- RPC.eth_call(client, call),
          {:ok, bytes} <- decode_hex(hex, :magic_value) do
-      # A bytes4 return is left-aligned in its 32-byte word. An account that
-      # REVERTS rather than returning a value surfaces as an RPC error above and
-      # is classified `:inconclusive` -- indistinguishable here from a node that
-      # dropped the call, and both block, so the safe reading wins.
+      # A bytes4 return is left-aligned in its 32-byte word.
       {:ok, binary_part(bytes, 0, min(4, byte_size(bytes)))}
     else
-      {:error, reason} -> {:inconclusive, {:erc1271_call_failed, account, reason}}
+      {:error, reason} -> classify_erc1271_failure(account, reason)
     end
   end
+
+  # An account that REVERTS rather than returning a value is a VERDICT, not a
+  # gap. This used to read every `eth_call` failure as `:inconclusive` on the
+  # grounds that a revert is indistinguishable from a node that dropped the
+  # call. It is not: `RPC.request/3` reports a node that answered with a
+  # JSON-RPC error separately from one that could not be reached
+  # (`{:transport, _}`), and by the time this runs the same client has already
+  # answered `eth_chainId`, `eth_getCode` and `DOMAIN_SEPARATOR()`.
+  #
+  # Collapsing the two mattered because it is the DEFAULT shape for the account
+  # this module was built for. Plenty of ERC-1271 implementations -- including
+  # smart accounts on the 7702 path of GitHub #772 -- revert on a bad signature
+  # instead of returning `0xffffffff`. Read as inconclusive, that stays soft
+  # under `--dry-run` and soft in the live gate, so the rehearsal scored PASS on
+  # exactly the defect it exists to find, and the funded run was left as the
+  # only thing catching it.
+  #
+  # Only an EXECUTION revert converts. A rate limit, a method the node does not
+  # serve, an internal error -- all still `{:rpc_error, _}`, none of them a
+  # statement about the signature -- stay inconclusive, because a false REJECTED
+  # sends an operator after a signing defect that is not there.
+  defp classify_erc1271_failure(account, {:rpc_error, error} = reason) do
+    if execution_revert?(error) do
+      {:rejected_because, {:erc1271_reverted, error_detail(error)}}
+    else
+      {:inconclusive, {:erc1271_call_failed, account, reason}}
+    end
+  end
+
+  defp classify_erc1271_failure(account, reason),
+    do: {:inconclusive, {:erc1271_call_failed, account, reason}}
+
+  # What the EVM executing and reverting looks like on the wire. Geth and its
+  # descendants answer code `3` and carry the revert data; the -32000 range is
+  # server-defined, so there the message is what says which kind of failure it
+  # was. Anything this does not recognize is treated as not-a-revert, since the
+  # cost of that mistake is a re-run and the cost of the opposite is chasing a
+  # signature that was fine.
+  defp execution_revert?(%{code: 3}), do: true
+
+  defp execution_revert?(%{code: code, message: message})
+       when is_integer(code) and code <= -32_000 and code >= -32_099 and is_binary(message) do
+    String.contains?(String.downcase(message), "revert")
+  end
+
+  defp execution_revert?(%{message: message}) when is_binary(message) do
+    String.contains?(String.downcase(message), "execution reverted")
+  end
+
+  defp execution_revert?(_error), do: false
+
+  defp error_detail(%{message: message}) when is_binary(message), do: message
+  defp error_detail(error), do: inspect(error)
 
   # A signature that is not hex is not a signature. The pull is handed these same
   # bytes, so there is nothing here for a working RPC to resolve later.
@@ -563,6 +649,13 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   defp describe_defect({:recover_failed, reason}),
     do: "this signature does not recover to any address (#{inspect(reason)})"
 
+  defp describe_defect({:erc1271_reverted, detail}),
+    do:
+      "the buyer's isValidSignature REVERTED on this digest (#{detail}). A revert is the " <>
+        "account refusing the signature, and the pull calls it the same way, so the pull " <>
+        "reverts too. Capture the served pull_authorization and the signature: this is the " <>
+        "payload, not the endpoint"
+
   defp describe_defect({:invalid_hex, :signature}),
     do: "the signature is not hex"
 
@@ -594,18 +687,23 @@ defmodule Raxol.Earn.Xochi.PullPreflight do
   defp describe_gap({:domain_separator_length, n}),
     do: "DOMAIN_SEPARATOR() answered #{n} bytes rather than 32"
 
+  defp describe_gap({:domain_separator_malformed, _hex}),
+    do:
+      "DOMAIN_SEPARATOR() answered something that is not hex, so the endpoint is answering " <>
+        "but not with a separator"
+
   defp describe_gap({:signer_kind_unavailable, account, _}),
     do: "eth_getCode did not answer for #{short(account)}, so the pull's own branch is unknown"
 
-  # A revert lands here rather than in a rejection, because this cannot tell a
-  # reverting `isValidSignature` (which IS a verdict -- the pull reverts too)
-  # from a node that dropped the call. Erring toward "retry" is the safe
-  # direction for a check that blocks either way, but say what a repeat means so
-  # the operator is not sent after the RPC forever.
+  # An execution revert no longer lands here -- `classify_erc1271_failure/2`
+  # converts it to a rejection. What is left is the node failing to answer, or
+  # answering with an error that says nothing about the signature (a rate limit,
+  # an unserved method). Neither is a verdict, so neither may fund.
   defp describe_gap({:erc1271_call_failed, account, _}),
     do:
-      "#{short(account)} did not answer isValidSignature. If it answers other calls, this is " <>
-        "the account REVERTING rather than the node failing, and the signature is the suspect"
+      "#{short(account)} did not answer isValidSignature, and the answer was not an " <>
+        "execution revert -- so this says nothing about the signature. Check the endpoint's " <>
+        "rate limits and that it serves eth_call for #{short(account)}"
 
   defp describe_gap(_other), do: "the check itself could not run"
 

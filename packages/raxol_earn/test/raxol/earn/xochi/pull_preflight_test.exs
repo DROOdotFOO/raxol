@@ -607,7 +607,11 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       end
     end
 
-    test "a separator that cannot be read is inconclusive" do
+    # A node that ANSWERS with something that is not a separator is a different
+    # gap from one that never answered, and folding the two reported garbage on
+    # the wire as an endpoint that was down -- sending the operator to check
+    # connectivity that is fine.
+    test "a separator that comes back unreadable is inconclusive, and says so" do
       plug = fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         req = Jason.decode!(body)
@@ -625,8 +629,167 @@ defmodule Raxol.Earn.Xochi.PullPreflightTest do
       client = RPC.client(url: "http://stub.invalid/rpc", plug: plug)
       served = served_pull()
 
+      assert {:inconclusive, {:domain_separator_malformed, _}} =
+               verify(served, current_signature(served), @account, rpc: client)
+    end
+
+    test "a separator the endpoint never answers for is its own gap" do
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        req = Jason.decode!(body)
+
+        payload =
+          if req["method"] == "eth_chainId" do
+            %{"result" => "0x2105"}
+          else
+            %{"error" => %{"code" => -32_603, "message" => "internal error"}}
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(Map.merge(%{"jsonrpc" => "2.0", "id" => req["id"]}, payload))
+        )
+      end
+
+      client = RPC.client(url: "http://stub.invalid/rpc", plug: plug)
+      served = served_pull()
+
       assert {:inconclusive, {:domain_separator_unavailable, _vc, _reason}} =
                verify(served, current_signature(served), @account, rpc: client)
+    end
+  end
+
+  # The default shape for the account this module was built for. A smart account
+  # that REVERTS on a bad signature rather than returning 0xffffffff was read as
+  # "the check could not run" -- which stays soft under `--dry-run` and soft in
+  # the live gate, so the rehearsal scored PASS on exactly the defect it exists
+  # to find. A revert is the account refusing the signature, and the pull calls
+  # it the same way, so the pull reverts too.
+  describe "an isValidSignature that reverts" do
+    # `eth_call` erroring rather than returning: what a reverting contract
+    # actually looks like on the wire.
+    defp erc1271_error_chain(error) do
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        req = Jason.decode!(body)
+
+        payload =
+          case req["method"] do
+            "eth_chainId" ->
+              %{"result" => "0x2105"}
+
+            "eth_getCode" ->
+              %{"result" => "0xef0100" <> String.duplicate("11", 20)}
+
+            "eth_call" ->
+              [%{"to" => to} | _] = req["params"]
+
+              if String.downcase(to) == String.downcase(@account) do
+                %{"error" => error}
+              else
+                %{"result" => "0x" <> Base.encode16(@permit2_separator, case: :lower)}
+              end
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(Map.merge(%{"jsonrpc" => "2.0", "id" => req["id"]}, payload))
+        )
+      end
+
+      RPC.client(url: "http://stub.invalid/rpc", plug: plug)
+    end
+
+    test "is a REJECTION, so the rehearsal fails on it" do
+      served = served_pull()
+
+      chain =
+        erc1271_error_chain(%{"code" => 3, "message" => "execution reverted", "data" => "0x"})
+
+      assert {:rejected, %{reason: {:erc1271_reverted, _detail}}} =
+               verify(served, current_signature(served), @account, rpc: chain)
+    end
+
+    # The -32000 range is server-defined, so the message is what says which kind
+    # of failure it was.
+    test "is recognized in the server-defined error range too" do
+      served = served_pull()
+
+      chain =
+        erc1271_error_chain(%{
+          "code" => -32_000,
+          "message" => "execution reverted: InvalidContractSignature()"
+        })
+
+      assert {:rejected, %{reason: {:erc1271_reverted, _}}} =
+               verify(served, current_signature(served), @account, rpc: chain)
+    end
+
+    # The other direction, and the reason this converts only an execution
+    # revert. A rate limit is still an RPC error and still says nothing about
+    # the signature; a false REJECTED there sends an operator after a signing
+    # defect that is not present.
+    test "but a rate limit is not a verdict and stays inconclusive" do
+      served = served_pull()
+
+      chain =
+        erc1271_error_chain(%{"code" => -32_005, "message" => "rate limit exceeded"})
+
+      assert {:inconclusive, {:erc1271_call_failed, _account, _reason}} =
+               verify(served, current_signature(served), @account, rpc: chain)
+    end
+
+    test "and a node that cannot be reached at all stays inconclusive" do
+      served = served_pull()
+
+      plug = fn conn -> Plug.Conn.send_resp(conn, 503, "upstream down") end
+
+      assert {:inconclusive, _} =
+               verify(served, current_signature(served), @account,
+                 rpc: RPC.client(url: "http://stub.invalid/rpc", plug: plug)
+               )
+    end
+
+    test "the rejection line names the payload, not the endpoint" do
+      line =
+        PullPreflight.describe({:rejected, %{reason: {:erc1271_reverted, "execution reverted"}}})
+
+      assert line =~ "REJECTED"
+      assert line =~ "REVERTED"
+      assert line =~ "this is the payload, not the endpoint"
+    end
+  end
+
+  # `verify/4` documents exactly three outcomes, and a served payload could
+  # break that by RAISING: `EIP712`'s primary-type detection raises when the
+  # types map has more than one unreferenced root. The order task never saw it
+  # (signing runs the same encoder first), but the live gate calls this once per
+  # cell with no rescue, so one malformed payload took down a ninety-cell matrix
+  # instead of failing its own cell.
+  describe "a served types map the encoder cannot handle" do
+    test "leaves by one of the three doors rather than raising" do
+      served =
+        update_in(served_pull(), ["types"], fn types ->
+          Map.put(types, "Orphan", [%{"name" => "x", "type" => "uint256"}])
+        end)
+
+      assert {:rejected, %{reason: {:digest_failed, {:unencodable_types, _}}}} =
+               verify(served, current_signature(served_pull()), @account, rpc: chain())
+    end
+
+    test "and the other eighty-nine cells could still run" do
+      # Same payload, called twice: the point is that it returns rather than
+      # unwinding the caller, so a sibling cell is unaffected.
+      served = update_in(served_pull(), ["types"], &Map.put(&1, "Orphan", []))
+
+      assert {:rejected, _} = verify(served, "0x00", @account, rpc: chain())
+
+      assert {:ok, _} =
+               verify(served_pull(), current_signature(served_pull()), @account, rpc: chain())
     end
   end
 
