@@ -49,15 +49,20 @@ defmodule Raxol.Symphony.PortReaperTest do
     end
   end
 
-  # Resolved rather than hardcoded to /bin/kill, which slim images do not have.
-  # Deliberately not the module's own resolution: a test oracle that shares the
-  # implementation's lookup cannot catch the implementation losing it.
-  defp kill_exe do
-    System.find_executable("kill") || "/bin/kill"
-  end
-
+  # Spelled out here rather than routed through `PortReaper`, so the oracle
+  # cannot agree with the implementation by sharing its bug -- but through bash's
+  # `kill` BUILTIN, because `kill(1)` is not an oracle at all on Linux. procps-ng
+  # answers `kill -0 -<pgid>` with exit 0 whether or not the group exists, so an
+  # oracle built on it reports every process alive forever and turns every
+  # `refute alive?` red for the wrong reason.
   defp alive?(target) do
-    {_out, status} = System.cmd(kill_exe(), ["-0", target], stderr_to_stdout: true)
+    {_out, status} =
+      System.cmd(
+        System.find_executable("bash"),
+        ["-c", ~s(kill "$1" "$2"), "reaper-test-oracle", "-0", target],
+        stderr_to_stdout: true
+      )
+
     status == 0
   end
 

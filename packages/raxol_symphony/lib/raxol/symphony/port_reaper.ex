@@ -251,13 +251,24 @@ defmodule Raxol.Symphony.PortReaper do
   # costing the full grace.
   defp signal(:unavailable, _target, _flag), do: {:error, :unavailable}
 
-  defp signal({:exe, path}, target, flag) do
-    run_signal(path, [flag, signal_arg(target)])
-  end
-
-  # `kill(1)` is a separate package (`procps` on Debian) that slim images leave
-  # out, while `bash` is already a hard dependency of every call site -- both
-  # spawn their child through it. Its builtin `kill` does the same job.
+  # Signals go through bash's `kill` BUILTIN, never `kill(1)`.
+  #
+  # procps-ng's `kill` -- `/usr/bin/kill` on Debian and Ubuntu, which is what CI
+  # runs -- takes a negative pid in its own argv slot, does NOTHING with it, and
+  # exits 0. Measured on linux/aarch64 with the group live:
+  # `System.cmd(kill, ["-KILL", "-57"])` returned `{"", 0}` and both members
+  # were still running afterwards. That is the worst failure available to this
+  # module, a reap that reports success and reaps nothing, and the exit status
+  # gives away none of it. `kill -s KILL -- -57` is no way out either: procps
+  # has no `--` and answers with a usage error.
+  #
+  # macOS's `/bin/kill` handles the same argv correctly, which is exactly why
+  # this was green on a developer machine and red on Linux CI.
+  #
+  # The builtin is POSIX about negative pids on both, and bash is already a hard
+  # dependency of every call site -- `Session.start/5` and
+  # `Workspace.execute_script/3` each spawn their child through it -- so where
+  # bash is missing there is no port child to reap in the first place.
   #
   # Arguments are passed positionally rather than interpolated into the script,
   # so nothing about the target can be read as shell.
@@ -278,15 +289,9 @@ defmodule Raxol.Symphony.PortReaper do
   end
 
   defp signaller do
-    case System.find_executable("kill") do
-      path when is_binary(path) ->
-        {:exe, path}
-
-      nil ->
-        case System.find_executable("bash") do
-          path when is_binary(path) -> {:bash, path}
-          nil -> :unavailable
-        end
+    case System.find_executable("bash") do
+      path when is_binary(path) -> {:bash, path}
+      nil -> :unavailable
     end
   end
 
