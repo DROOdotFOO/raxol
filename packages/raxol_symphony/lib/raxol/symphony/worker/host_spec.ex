@@ -137,6 +137,26 @@ defmodule Raxol.Symphony.Worker.HostSpec do
   # flag. Reject whitespace + shell metacharacters throughout.
   @path_re ~r/\A[A-Za-z0-9._\/~][A-Za-z0-9._\-\/~]*\z/
 
+  # `workspace_root` is held to more than @path_re, because two other modules
+  # each build their own model of this string and they have to agree.
+  #
+  # `Raxol.Symphony.PathSafety.remote_workspace_path/2` treats ANY `~`-leading
+  # root as home-anchored and measures containment against that reading.
+  # `Raxol.Symphony.Ssh.quote_path/1` expands only `~` and `~user`, and quotes
+  # anything else whole so the remote shell cannot expand it. @path_re admits
+  # the prefixes bash gives a meaning that is neither: `~-` is `$OLDPWD`, `~0`
+  # and `~-1` are directory-stack entries. Those made the two models disagree --
+  # containment computed against a home-relative path, while the shell operated
+  # on a literal directory named `~-` under wherever the login shell started. It
+  # stayed contained (create and remove quote identically), and it was still a
+  # root nobody could point at.
+  #
+  # Requiring a rooted path also moves the refusal to config time. A relative
+  # root resolves against whatever directory the remote login shell happens to
+  # start in, which `normalize_remote/1` already rejects -- but it rejected it at
+  # first dispatch, one issue at a time, rather than when the config was read.
+  @workspace_root_re ~r{\A(/|~([A-Za-z_][A-Za-z0-9._-]*)?(/|\z))}
+
   # Reject any spec whose host/user/path fields carry characters that could
   # break out of a later `ssh` command. This is the single validation point
   # shared by config validation and pool construction, so a malformed target
@@ -152,7 +172,7 @@ defmodule Raxol.Symphony.Worker.HostSpec do
       not safe_optional_path?(spec.identity_file) ->
         {:error, {:invalid_ssh_host, raw}}
 
-      not safe_optional_path?(spec.workspace_root) ->
+      not safe_optional_workspace_root?(spec.workspace_root) ->
         {:error, {:invalid_ssh_host, raw}}
 
       not safe_optional_path?(spec.known_hosts) ->
@@ -182,6 +202,16 @@ defmodule Raxol.Symphony.Worker.HostSpec do
 
   defp safe_optional_path?(nil), do: true
   defp safe_optional_path?(value), do: Regex.match?(@path_re, value)
+
+  # @path_re first (no whitespace, no shell metacharacters, no leading `-`),
+  # then rooted at `/` or at a tilde prefix the transport will actually expand.
+  defp safe_optional_workspace_root?(nil), do: true
+
+  defp safe_optional_workspace_root?(value) when is_binary(value) do
+    safe_optional_path?(value) and Regex.match?(@workspace_root_re, value)
+  end
+
+  defp safe_optional_workspace_root?(_value), do: false
 
   # Config front matter is atomized (trusted WORKFLOW.md), but tolerate
   # string keys too so a directly-built config still normalizes.

@@ -58,6 +58,17 @@ defmodule Raxol.Symphony.Ssh do
   @tilde_prefix ~r/\A~([A-Za-z_][A-Za-z0-9._-]*)?\z/
 
   @doc """
+  How long `ssh` will spend trying to establish the connection, in milliseconds.
+
+  Public because a caller that bounds its own wait on a remote command has to
+  cover this FIRST: the remote deadline is a `sleep` that does not start until
+  the connection is up and `bash` is running, so a local timer sized to the
+  deadline alone can expire while `ssh` is still dialling.
+  """
+  @spec connect_timeout_ms() :: pos_integer()
+  def connect_timeout_ms, do: @connect_timeout_seconds * 1000
+
+  @doc """
   Resolve the `ssh` executable, refusing anything not named `ssh`.
   """
   @spec executable() :: {:ok, binary()} | {:error, :ssh_not_allowed}
@@ -229,14 +240,41 @@ defmodule Raxol.Symphony.Ssh do
     "set -m; { " <>
       command <>
       "\n} <&0 & __rx_pid=$!; set +m; __rx_ppid=$PPID; " <>
-      "{ while kill -0 $__rx_pid 2>/dev/null; do " <>
+      "{ #{reap_own_sleep("__rx_ws")}" <>
+      "while kill -0 $__rx_pid 2>/dev/null; do " <>
       "ps -p $__rx_ppid >/dev/null 2>&1 || { #{kill_tree()} break; }; " <>
-      "sleep #{@reap_poll_seconds}; done; } >/dev/null 2>&1 & __rx_watch=$!; " <>
+      "#{interruptible_sleep(@reap_poll_seconds, "__rx_ws")}" <>
+      "done; } >/dev/null 2>&1 & __rx_watch=$!; " <>
       deadline_clause(deadline) <>
       "wait $__rx_pid; __rx_status=$?; " <>
       "kill $__rx_watch #{deadline_pid_ref(deadline)}2>/dev/null; " <>
       "exit $__rx_status"
   end
+
+  # `kill $__rx_watch` reaches the watcher SUBSHELL, and a subshell blocked in
+  # `sleep` has that `sleep` as a child in the shell's own process group -- so
+  # killing the subshell orphaned the `sleep`, which then ran out its full
+  # interval reparented to init. Both helpers did it, on every invocation: after
+  # a one-second hook with a sixty-second deadline, two `sleep` processes
+  # survived on the host with ppid 1. Reproduced on bash 3.2 and 5.3.
+  #
+  # A group kill is not available here the way it is for the workload: `set +m`
+  # has already run by this point, so the helpers share the shell's process
+  # group and `kill -- -$__rx_watch` would signal the shell itself.
+  #
+  # So each helper reaps its own. `sleep` runs in the background and the helper
+  # `wait`s on it, which is what makes the TERM arrive as an interrupt rather
+  # than being deferred until the sleep finishes.
+  #
+  # The trap body is double-quoted with an escaped `$` so it expands when the
+  # trap FIRES, not when it is defined -- at definition time the pid variable is
+  # still unset, and the trap would then kill nothing. Still single-quote-free,
+  # so it survives `remote_bash/1`'s quoting unchanged.
+  defp reap_own_sleep(var),
+    do: ~s|trap "kill \\$#{var} 2>/dev/null; exit" TERM; |
+
+  defp interruptible_sleep(seconds, var),
+    do: "sleep #{seconds} & #{var}=$!; wait $#{var}; "
 
   # Signal the command's whole process GROUP, not just the subshell.
   #
@@ -252,6 +290,13 @@ defmodule Raxol.Symphony.Ssh do
   # the shell stops announcing job transitions -- with `-m` left on, bash writes
   # `[1]  Done …` into the hook's own captured output.
   #
+  # That covers the normal path, not every path. On bash 3.2 (still the system
+  # shell on macOS hosts) a job KILLED by the deadline is reported anyway, as
+  # `Terminated: 15`, regardless of `-m`. Harmless here because the only reader
+  # of that output is the `hook_timed_out` log line, which is reporting a
+  # timeout in any case -- but it is one line of shell chatter, not a guarantee
+  # of a clean channel.
+  #
   # The plain `kill` is the fallback for a shell where the group kill did not
   # apply, so the subshell still dies rather than nothing happening.
   defp kill_tree, do: "kill -- -$__rx_pid 2>/dev/null; kill $__rx_pid 2>/dev/null;"
@@ -259,7 +304,8 @@ defmodule Raxol.Symphony.Ssh do
   defp deadline_clause(nil), do: ""
 
   defp deadline_clause(seconds) when is_integer(seconds) and seconds > 0 do
-    "{ sleep #{seconds}; #{kill_tree()} } >/dev/null 2>&1 & __rx_dead=$!; "
+    "{ #{reap_own_sleep("__rx_ds")}#{interruptible_sleep(seconds, "__rx_ds")}" <>
+      "#{kill_tree()} } >/dev/null 2>&1 & __rx_dead=$!; "
   end
 
   defp deadline_pid_ref(nil), do: ""

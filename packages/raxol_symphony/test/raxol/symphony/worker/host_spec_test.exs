@@ -165,6 +165,52 @@ defmodule Raxol.Symphony.Worker.HostSpecTest do
                })
     end
 
+    # `workspace_root` is read by two modules that each build their own model of
+    # it, and they only agree on a root that is rooted at `/` or at a tilde
+    # prefix the transport will actually expand. `PathSafety` reads any
+    # `~`-leading root as home-anchored and measures containment there;
+    # `Ssh.quote_path/1` expands only `~` and `~user`. A root the two read
+    # differently is refused at config time rather than resolving to a
+    # different directory per connection.
+    test "accepts a workspace_root the path checker and the transport agree on" do
+      for root <- ["/var/lib/symphony", "~/symphony", "~build/ws", "~", "~_svc/ws"] do
+        assert {:ok, %HostSpec{workspace_root: ^root}} =
+                 HostSpec.normalize(%{host: "h", workspace_root: root}),
+               "expected #{root} to be accepted"
+      end
+    end
+
+    test "refuses a bash tilde prefix that is not a home directory" do
+      # `~-` is $OLDPWD, `~+` is $PWD, `~0` / `~-1` are directory-stack entries.
+      # Each resolves to wherever the login shell happened to have been, which
+      # is a different directory per connection and outside the root containment
+      # was measured against.
+      for root <- ["~-/ws", "~0/ws", "~-1/ws", "~+/ws", "~-", "~2"] do
+        assert {:error, {:invalid_ssh_host, _}} =
+                 HostSpec.normalize(%{host: "h", workspace_root: root}),
+               "expected #{root} to be refused"
+      end
+    end
+
+    test "refuses a relative workspace_root, which has no fixed meaning on the host" do
+      for root <- ["symphony", "ws/issues", "./ws", "../ws"] do
+        assert {:error, {:invalid_ssh_host, _}} =
+                 HostSpec.normalize(%{host: "h", workspace_root: root}),
+               "expected #{root} to be refused"
+      end
+    end
+
+    test "an absent workspace_root is still fine -- it falls back to the configured root" do
+      assert {:ok, %HostSpec{workspace_root: nil}} = HostSpec.normalize(%{host: "h"})
+    end
+
+    # The other path fields are handed to `ssh` as argv, never to a shell, so
+    # they keep the looser rule. Narrowing them would reject an ordinary
+    # relative `-i` path for no gain.
+    test "the tightening applies to workspace_root only" do
+      assert {:ok, _} = HostSpec.normalize(%{host: "h", identity_file: "keys/id_ci"})
+    end
+
     test "rejects an unknown mode from map input and a directly-built struct" do
       assert {:error, {:invalid_ssh_host, _}} =
                HostSpec.normalize(%{host: "h", strict_host_key_checking: "maybe"})

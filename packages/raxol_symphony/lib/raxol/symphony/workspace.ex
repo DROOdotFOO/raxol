@@ -535,10 +535,22 @@ defmodule Raxol.Symphony.Workspace do
 
   defp deadline_seconds(_non_positive), do: nil
 
-  # With no remote deadline to wait for, the local timer is the only bound there
-  # is, so it keeps `timeout_ms` exactly.
-  defp local_wait_ms(nil, timeout_ms), do: timeout_ms
-  defp local_wait_ms(deadline, _timeout_ms), do: deadline * 1000 + @remote_kill_grace_ms
+  # Both forms budget for the CONNECTION as well as the work.
+  #
+  # The remote deadline is a `sleep` that does not start until `ssh` is up and
+  # `bash -lc` is running, so a local timer sized to the deadline alone expires
+  # while `ssh` is still dialling. With `ConnectTimeout=15` and a `hooks
+  # .timeout_ms` of 10s or less the local half always won that race, and
+  # `classify_remote_result/2` then reported a host that never accepted the
+  # connection as a hook that ran too long -- fatal to the attempt on
+  # `before_run`, with a diagnosis pointing at the hook instead of the host.
+  #
+  # With no remote deadline the local timer is the only bound there is, so it
+  # keeps `timeout_ms` -- plus the same connection budget, for the same reason.
+  defp local_wait_ms(nil, timeout_ms), do: max(timeout_ms, 0) + Ssh.connect_timeout_ms()
+
+  defp local_wait_ms(deadline, _timeout_ms),
+    do: deadline * 1000 + @remote_kill_grace_ms + Ssh.connect_timeout_ms()
 
   # Unlinked on purpose: an `ssh` invocation that crashes must not take the
   # calling orchestrator down with it.

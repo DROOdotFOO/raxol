@@ -775,14 +775,40 @@ defmodule Raxol.Symphony.Orchestrator do
             {:cont, {:ok, [Map.put(slot, :workspace_path, path) | acc]}}
 
           {:error, reason} ->
-            {:halt, {:error, reason}}
+            {:halt, {:error, reason, acc}}
         end
       end)
 
     case result do
-      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
-      err -> err
+      {:ok, prepared} ->
+        {:ok, Enum.reverse(prepared)}
+
+      {:error, reason, created} ->
+        discard_batch_workspaces(state, created)
+        {:error, reason}
     end
+  end
+
+  # Unwind the workspaces this batch already created before one of them failed.
+  #
+  # The batch is about to be failed whole and retried, and a workspace left
+  # behind is found by the retry's `ensure/3` as an EXISTING directory: it
+  # reports `created_now: false`, `after_create` is skipped, and the run then
+  # proceeds in a workspace nothing prepared. That is the same silent
+  # consequence `Workspace.remove/3` logs `remote_remove_failed` about, arrived
+  # at from the other direction.
+  #
+  # `remove/3` is best-effort by contract and always answers `:ok`, so this
+  # cannot fail the unwind; what it does do is run `before_remove` and log
+  # loudly if the directory survives. Each one is removed on the machine that
+  # created it, which is why the slot's host is threaded through.
+  defp discard_batch_workspaces(%State{} = state, created) do
+    Enum.each(created, fn slot ->
+      Workspace.remove(state.config, slot.workspace_path,
+        host: Map.get(slot, :host),
+        ssh: state.ssh
+      )
+    end)
   end
 
   # Reserve one host slot per batch slot (one-worker-lifetime-per-host), so a

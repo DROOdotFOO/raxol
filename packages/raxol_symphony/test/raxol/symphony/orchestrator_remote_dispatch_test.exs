@@ -129,6 +129,71 @@ defmodule Raxol.Symphony.OrchestratorRemoteDispatchTest do
     assert_receive {:runner_host, nil}, 2_000
   end
 
+  # A batch that fails to prepare one workspace is failed WHOLE and retried, so
+  # the ones it already created have to go back -- and on a remote worker they
+  # are directories on someone else's machine. Left behind, the retry's
+  # `ensure/3` finds one present, reports `created_now: false`, skips
+  # `after_create`, and the run proceeds in a workspace nothing prepared: the
+  # silent consequence `Workspace.remove/3` logs `remote_remove_failed` about,
+  # reached from the other side.
+  test "a batch that fails mid-preparation takes back the workspaces it made", %{
+    workspace_root: root
+  } do
+    host_root = Path.join(root, "host")
+    File.mkdir_p!(host_root)
+
+    Memory.put_issues([
+      %Issue{id: "a", identifier: "RD-1", title: "T", state: "Todo"},
+      %Issue{id: "b", identifier: "RD-2", title: "T", state: "Todo"}
+    ])
+
+    # Fail the mkdir for RD-2 only, and let everything else -- including the
+    # unwind's `rm -rf` -- run for real against the stand-in host.
+    real = FakeSsh.exec_fn([])
+
+    selective = fn ssh, argv, opts ->
+      command = List.last(argv)
+
+      if String.contains?(command, "mkdir -p") and String.contains?(command, "RD-2") do
+        {"mkdir: permission denied", 1}
+      else
+        real.(ssh, argv, opts)
+      end
+    end
+
+    config =
+      config(
+        [
+          %{host: "build-1", workspace_root: host_root},
+          %{host: "build-2", workspace_root: host_root}
+        ],
+        %{workflow_mode: :graph_parallel, workflow_parallelism: 2}
+      )
+
+    pid =
+      start_supervised!(
+        {Orchestrator,
+         config: config,
+         runner_module: HostReportingRunner,
+         auto_start_tick: false,
+         name: nil,
+         ssh: [exec_fn: selective, executable: "/usr/bin/ssh"]},
+        id: {Orchestrator, make_ref()}
+      )
+
+    :ok = Orchestrator.tick_now(pid)
+
+    # Nothing dispatched: the batch failed whole.
+    assert Orchestrator.snapshot(pid).counts.batches == 0
+
+    # RD-1's directory was created on the host before RD-2 failed, and did not
+    # survive the failure. The unwind runs inside the tick, and `snapshot/1`
+    # above already round-tripped through the same GenServer, so there is
+    # nothing left in flight to wait for.
+    refute File.dir?(Path.join(host_root, "RD-1")),
+           "the batch left a workspace on the host for the retry to reuse unprepared"
+  end
+
   test "a resumed run runs on its ORIGINAL host, not locally (host: nil)", %{
     workspace_root: root
   } do
