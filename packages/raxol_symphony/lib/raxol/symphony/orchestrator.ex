@@ -615,36 +615,27 @@ defmodule Raxol.Symphony.Orchestrator do
          workspace_path,
          host
        ) do
-    parent = self()
     config = state.config
+
+    # One map rather than a widening positional list. `:ssh` joined it when the
+    # worker task took over running the workspace hooks -- a remote hook needs
+    # the same transport options `Workspace.ensure/3` was given -- and every
+    # field here is read by both payload clauses.
+    dispatch = %{
+      parent: self(),
+      attempt: attempt,
+      workspace_path: workspace_path,
+      host: host,
+      ssh: state.ssh
+    }
 
     Task.Supervisor.async_nolink(
       task_supervisor(state),
-      fn ->
-        run_worker_payload(
-          config.workflow_mode,
-          config,
-          runner_mod,
-          issue,
-          attempt,
-          workspace_path,
-          host,
-          parent
-        )
-      end
+      fn -> run_worker_payload(config.workflow_mode, config, runner_mod, issue, dispatch) end
     )
   end
 
-  defp run_worker_payload(
-         :graph,
-         config,
-         runner_mod,
-         issue,
-         attempt,
-         workspace_path,
-         host,
-         parent
-       ) do
+  defp run_worker_payload(:graph, config, runner_mod, %Issue{} = issue, dispatch) do
     case GraphAdapter.from_workflow([]) do
       {:ok, compiled} ->
         state =
@@ -653,10 +644,11 @@ defmodule Raxol.Symphony.Orchestrator do
             runner_module: runner_mod,
             candidates: [issue],
             candidate: issue,
-            parent_pid: parent,
-            attempt: attempt,
-            workspace_path: workspace_path,
-            host: host
+            parent_pid: dispatch.parent,
+            attempt: dispatch.attempt,
+            workspace_path: dispatch.workspace_path,
+            host: dispatch.host,
+            ssh: dispatch.ssh
           )
 
         graph_outcome(WorkflowCompiled.invoke(compiled, state))
@@ -666,28 +658,42 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
-  defp run_worker_payload(
-         _mode,
-         config,
-         runner_mod,
-         issue,
-         attempt,
-         workspace_path,
-         host,
-         parent
-       ) do
+  defp run_worker_payload(_mode, config, runner_mod, %Issue{} = issue, dispatch) do
     runner_opts = [
-      parent: parent,
-      attempt: attempt,
-      workspace_path: workspace_path,
-      host: host
+      parent: dispatch.parent,
+      attempt: dispatch.attempt,
+      workspace_path: dispatch.workspace_path,
+      host: dispatch.host
     ]
 
-    run_runner(runner_mod, issue, config, runner_opts)
+    run_runner(runner_mod, issue, config, runner_opts,
+      host: dispatch.host,
+      ssh: dispatch.ssh
+    )
   end
 
-  defp run_runner(runner_mod, %Issue{} = issue, config, runner_opts) do
-    case runner_mod.run(issue, config, runner_opts) do
+  # SPEC s9.4: a `before_run` failure is fatal to this run ATTEMPT. Exiting is
+  # how that is said here -- the task's exit is what schedules the failure
+  # retry, so the hook fails the attempt exactly the way a failing runner does,
+  # and the workspace itself survives for the retry to reuse.
+  #
+  # Both hooks run INSIDE the worker task rather than in the orchestrator. They
+  # carry `hooks.timeout_ms` and shell out (over SSH for a remote worker), so
+  # running them in the GenServer would block every other issue's dispatch for
+  # the duration.
+  defp run_runner(runner_mod, %Issue{} = issue, config, runner_opts, hook_opts) do
+    workspace = Keyword.fetch!(runner_opts, :workspace_path)
+
+    case Workspace.around_run(config, workspace, hook_opts, fn ->
+           runner_mod.run(issue, config, runner_opts)
+         end) do
+      {:error, reason} -> exit(reason)
+      {:ok, result} -> interpret_runner_result(result, issue, runner_opts)
+    end
+  end
+
+  defp interpret_runner_result(result, %Issue{} = issue, runner_opts) do
+    case result do
       :ok ->
         :ok
 
@@ -872,6 +878,7 @@ defmodule Raxol.Symphony.Orchestrator do
     parent = self()
     config = state.config
     max_candidates = length(issues)
+    ssh = state.ssh
 
     Task.Supervisor.async_nolink(
       task_supervisor(state),
@@ -883,12 +890,19 @@ defmodule Raxol.Symphony.Orchestrator do
           workspaces,
           hosts,
           max_candidates,
-          parent
+          parent,
+          ssh
         )
       end
     )
   end
 
+  # `ssh` is carried in for the same reason the single-issue graph payload
+  # carries it: the slots now bracket their runner with `before_run`/`after_run`,
+  # and on a remote worker those shell out over the transport. Left out, every
+  # parallel slot ran its hooks with DEFAULT transport options while the other
+  # two modes used the orchestrator's -- and the mode test could not see it,
+  # because all three modes run with `host: nil` unless a pool is configured.
   defp run_parallel_batch_payload(
          config,
          runner_mod,
@@ -896,7 +910,8 @@ defmodule Raxol.Symphony.Orchestrator do
          workspaces,
          hosts,
          max_candidates,
-         parent
+         parent,
+         ssh
        ) do
     case GraphAdapter.from_workflow_parallel(max_candidates: max_candidates) do
       {:ok, compiled} ->
@@ -907,7 +922,8 @@ defmodule Raxol.Symphony.Orchestrator do
             candidates: issues,
             workspaces: workspaces,
             hosts: hosts,
-            parent_pid: parent
+            parent_pid: parent,
+            ssh: ssh
           )
 
         results =
@@ -1344,6 +1360,7 @@ defmodule Raxol.Symphony.Orchestrator do
        ) do
     parent = self()
     config = state.config
+    ssh = state.ssh
 
     Task.Supervisor.async_nolink(
       task_supervisor(state),
@@ -1359,7 +1376,15 @@ defmodule Raxol.Symphony.Orchestrator do
           host: host
         ]
 
-        run_runner(runner_mod, issue, config, runner_opts)
+        # `before_run` runs again on a resume, and `after_run` did not run when
+        # this attempt paused. So the two are NOT matched one-for-one: a run
+        # that pauses N times gets N+1 `before_run`s and a single `after_run`
+        # when it finally ends. One `before_run` per stretch of actual running
+        # is the intent -- a resumed run genuinely is starting again, on a
+        # remote worker possibly after the host rebooted -- but it makes
+        # idempotence a REQUIREMENT of `before_run` rather than a nicety. A pair
+        # that starts a container has to tolerate being asked twice.
+        run_runner(runner_mod, issue, config, runner_opts, host: host, ssh: ssh)
       end
     )
   end

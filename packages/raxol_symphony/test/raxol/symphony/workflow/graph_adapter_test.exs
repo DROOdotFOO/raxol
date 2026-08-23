@@ -29,7 +29,15 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
         prompt_template: ""
       })
 
-    %{config: config}
+    # A runner dispatch needs a real directory to run in (SPEC s9.5 Invariant 1),
+    # and `Workspace.around_run/4` refuses a blank one for the runner as well as
+    # for the hooks. These tests build graph state by hand, so they have to
+    # supply what the orchestrator supplies from `Workspace.ensure/3`.
+    workspace = Path.join(System.tmp_dir!(), "sym_ga_#{:erlang.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+    on_exit(fn -> File.rm_rf(workspace) end)
+
+    %{config: config, workspace: workspace}
   end
 
   defp issue(id, identifier, state) do
@@ -69,7 +77,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("MT-1", {:succeed_after, 0})
 
       {:ok, compiled} = GraphAdapter.from_workflow([])
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       assert {:ok, final, meta} = Compiled.invoke(compiled, state)
 
@@ -85,7 +99,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
     test "graceful handling when tracker returns no issues", ctx do
       # No issue seeded in Memory tracker.
       {:ok, compiled} = GraphAdapter.from_workflow([])
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       assert {:ok, final, meta} = Compiled.invoke(compiled, state)
       assert meta.nodes_executed == 5
@@ -101,7 +121,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("MT-2", {:fail_after, 0, :simulated})
 
       {:ok, compiled} = GraphAdapter.from_workflow([])
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
 
@@ -123,7 +149,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       {:ok, compiled} = GraphAdapter.from_workflow(saver: saver)
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       # First invoke: runner pauses, runner_wait interrupts.
       assert {:interrupted, run_id, paused_state, interrupt_value} =
@@ -157,7 +189,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       {:ok, compiled} = GraphAdapter.from_workflow(saver: saver)
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       {:ok, _final, meta} = Compiled.invoke(compiled, state)
 
@@ -206,7 +244,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("PAR-2", {:succeed_after, 0})
 
       {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 2)
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
 
@@ -226,7 +270,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("PAR-3", {:succeed_after, 0})
 
       {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 3)
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
 
@@ -242,7 +292,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("PAR-5", {:fail_after, 0, :boom})
 
       {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 2)
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
 
@@ -256,7 +312,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("PAR-6", {:pause, :awaiting_review, %{token: 1}})
 
       {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 1)
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       # The run COMPLETES (no interrupt); the pause rides through aggregate.
       assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
@@ -274,7 +336,13 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("PAR-8", {:pause, :awaiting_review, %{token: 2}})
 
       {:ok, compiled} = GraphAdapter.from_workflow_parallel(max_candidates: 2)
-      state = GraphAdapter.initial_state(config: ctx.config, runner_module: Noop)
+
+      state =
+        GraphAdapter.initial_state(
+          config: ctx.config,
+          runner_module: Noop,
+          workspace_path: ctx.workspace
+        )
 
       assert {:ok, final, _meta} = Compiled.invoke(compiled, state)
 

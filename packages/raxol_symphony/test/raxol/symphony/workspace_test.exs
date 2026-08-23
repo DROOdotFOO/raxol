@@ -174,4 +174,41 @@ defmodule Raxol.Symphony.WorkspaceTest do
       refute File.dir?("/tmp/some/other/place_should_not_exist_anyway")
     end
   end
+
+  # SPEC s9.5 Invariant 1 depends on the workspace being a real directory.
+  # `bash`'s `cd ''` SUCCEEDS and changes nothing, so a blank path sails through
+  # the `cd WS && { … }` guard and the work lands in whatever directory the
+  # shell started in. `GraphAdapter` defaults a missing workspace to `""` in two
+  # places, so this is fail-closed for a default that is one off-by-one from
+  # being reachable.
+  describe "around_run/4 with no workspace to run in" do
+    @tag :tmp_dir
+    test "refuses before the hooks AND before the runner", %{tmp_dir: tmp_dir} do
+      config = build_config(tmp_dir, %{before_run: "true", after_run: "true"})
+
+      for blank <- ["", "   ", nil, :none] do
+        assert {:error, {:invalid_workspace, ^blank}} =
+                 Workspace.around_run(config, blank, [], fn -> flunk("runner should not run") end)
+      end
+    end
+
+    # The case guarding the hook alone did not cover: with nothing configured,
+    # `:no_hook` short-circuits before any check, so the runner was dispatched
+    # into an empty path anyway.
+    @tag :tmp_dir
+    test "refuses even when no hooks are configured", %{tmp_dir: tmp_dir} do
+      config = build_config(tmp_dir)
+
+      assert {:error, {:invalid_workspace, ""}} =
+               Workspace.around_run(config, "", [], fn -> flunk("runner should not run") end)
+    end
+
+    @tag :tmp_dir
+    test "a real workspace still runs, and gets its result back", %{tmp_dir: tmp_dir} do
+      config = build_config(tmp_dir)
+      {:ok, %{path: path}} = Workspace.ensure(config, "MT-1")
+
+      assert {:ok, :ran} = Workspace.around_run(config, path, [], fn -> :ran end)
+    end
+  end
 end

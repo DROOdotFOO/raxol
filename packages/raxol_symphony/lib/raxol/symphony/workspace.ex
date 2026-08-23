@@ -134,6 +134,113 @@ defmodule Raxol.Symphony.Workspace do
   end
 
   @doc """
+  Runs `fun` bracketed by the `before_run` and `after_run` hooks.
+
+  Returns `{:ok, result}` with whatever `fun` returned, or `{:error, reason}`
+  when `before_run` failed -- in which case `fun` never ran. The caller decides
+  what a `before_run` failure means in its own terms (SPEC s9.4 makes it fatal
+  to the run ATTEMPT, not to the workspace), which is why this reports rather
+  than exits.
+
+  The three seams that invoke a runner share this so the bracket cannot drift
+  between workflow modes: a hook that fires under `:default` and not under
+  `:graph_parallel` is worse than one that never fires, because only one of
+  those is visible.
+
+  ## When `after_run` fires
+
+  On any outcome the worker task RETURNS FROM, including a runner that returned
+  an error or raised. `after_run` is the counterpart to `before_run`, so a run
+  that started a dev server or a container in `before_run` must get its teardown
+  even when -- especially when -- the run went badly. Skipping it on failure
+  leaks exactly the resources it exists to reclaim.
+
+  It does NOT fire on `{:pause, _, _}`. A paused run is not over: the
+  orchestrator parks the token, holds the workspace and the host slot, and
+  re-dispatches later. Tearing down there would run the teardown mid-run and
+  then run `before_run` a second time on resume.
+
+  It also cannot fire when the worker task is KILLED rather than returning --
+  `terminate_running/4` and the stall reconcile both `Process.exit(pid, :kill)`,
+  which no `after` or `catch` can intercept. So a run torn down by the
+  orchestrator leaves whatever `before_run` started, and the thing that reclaims
+  it is `before_remove` on the eventual `remove/3`. Worth knowing when writing
+  the pair: `after_run` is the normal teardown, not a guaranteed one.
+
+  Its own failure is logged and ignored, per s9.4, so it cannot turn a
+  successful run into a failed one.
+
+  A blank `path` is refused before `before_run` runs AND before `fun` does, so
+  neither a hook nor the runner it brackets can land in whatever directory the
+  shell happened to start in. It reports as a `before_run` failure would, which
+  s9.4 already makes fatal to the attempt and retryable.
+  """
+  # `opts` carries no default on purpose. A default before a required argument
+  # is legal but reads as optional, and `around_run(config, path, opts)` would
+  # then silently bind `opts` to `fun` and die on the guard instead of saying
+  # what was left out. All four seams pass both.
+  @spec around_run(Config.t(), Path.t(), keyword(), (-> result)) ::
+          {:ok, result} | {:error, term()}
+        when result: term()
+  def around_run(%Config{} = config, path, opts, fun)
+      when is_list(opts) and is_function(fun, 0) do
+    with :ok <- runnable_workspace(path),
+         :ok <- run_before_run_hook(config, path, opts) do
+      bracket(config, path, opts, fun)
+    end
+  end
+
+  # The RUNNER needs a real directory as much as the hooks do, so the refusal
+  # belongs here rather than only in `execute_hook_script/4`.
+  #
+  # Guarding the hook alone left the fail-open default in place for the thing
+  # the hook brackets: `GraphAdapter` defaults a missing workspace to `""` in
+  # two places (`slot_workspace/2`, `runner_dispatch_node/1`), and with no hooks
+  # configured `:no_hook` short-circuits before any check, so the runner was
+  # dispatched into an empty path anyway. `bash`'s `cd ''` succeeds and changes
+  # nothing, so SPEC s9.5 Invariant 1's `cd WS && { … }` guard passes and the
+  # work lands in whatever directory the shell started in.
+  #
+  # Costs a run ATTEMPT, not a workspace: it lands where a `before_run` failure
+  # lands, which s9.4 already makes fatal to the attempt and retryable.
+  defp runnable_workspace(path) when is_binary(path) do
+    if String.trim(path) == "", do: {:error, {:invalid_workspace, path}}, else: :ok
+  end
+
+  defp runnable_workspace(path), do: {:error, {:invalid_workspace, path}}
+
+  defp bracket(config, path, opts, fun) do
+    try do
+      fun.()
+    catch
+      # An exit is how a runner reports failure to its task, so this is a
+      # terminal outcome like any other. Re-raised verbatim afterwards: the
+      # teardown is not license to swallow the reason the run died.
+      kind, reason ->
+        run_after_run_hook(config, path, opts)
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    else
+      result ->
+        unless paused?(result), do: run_after_run_hook(config, path, opts)
+        {:ok, result}
+    end
+  end
+
+  # `is_atom(reason)` matches every other reader of this shape, and the match
+  # has to be exact for the same reason the bracket is shared: a run the
+  # orchestrator treats as OVER must get its teardown.
+  #
+  # `Runner.result/0` is `{:pause, atom(), term()}`, and each consumer guards on
+  # it -- `Orchestrator.interpret_runner_result/3` (`exit({:runner_bad_return,
+  # _})`), `apply_batch_issue_result/3` (continuation retry) and
+  # `GraphAdapter.store_runner_result/2`. Unguarded here, a `{:pause, "string",
+  # token}` was the one shape read as paused by this and as terminated by all
+  # three: the run was retried and `after_run` never fired, so whatever
+  # `before_run` started was never reclaimed.
+  defp paused?({:pause, reason, _token}) when is_atom(reason), do: true
+  defp paused?(_result), do: false
+
+  @doc """
   Removes a workspace, running `before_remove` first (best-effort).
 
   With a `:host` the containment check is measured against that host's remote
@@ -451,7 +558,36 @@ defmodule Raxol.Symphony.Workspace do
     :ok
   end
 
+  # A hook needs a directory to run IN, and a blank path is not one.
+  #
+  # `bash`'s `cd ''` SUCCEEDS and changes nothing, so the `cd WS && { … }` guard
+  # that carries SPEC s9.5 Invariant 1 across the network passes for an empty
+  # workspace and the hook runs in the login shell's home -- exactly the escape
+  # the group was built to prevent. Locally it is the same shape: `cd: ""` names
+  # no directory either.
+  #
+  # `GraphAdapter` defaults a missing workspace to `""` in two places
+  # (`slot_workspace/2` and `runner_dispatch_node/1`), which is unreachable on
+  # today's call paths and is a fail-OPEN default one off-by-one away from being
+  # reachable. Refusing here is fail-closed and costs a run attempt, not a
+  # workspace: it lands as a `before_run` failure, which SPEC s9.4 already makes
+  # fatal to the attempt.
+  #
+  # Checked here rather than in `run_hook/4` so a workspace with no hooks
+  # configured is unaffected -- `:no_hook` never reaches this.
+  defp execute_hook_script(_script, path, _timeout_ms, _opts)
+       when not is_binary(path),
+       do: {:error, {:invalid_workspace, path}}
+
   defp execute_hook_script(script, path, timeout_ms, opts) do
+    if String.trim(path) == "" do
+      {:error, {:invalid_workspace, path}}
+    else
+      do_execute_hook_script(script, path, timeout_ms, opts)
+    end
+  end
+
+  defp do_execute_hook_script(script, path, timeout_ms, opts) do
     case host_opt(opts) do
       nil ->
         execute_script(script, path, timeout_ms)
