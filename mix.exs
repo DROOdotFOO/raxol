@@ -300,7 +300,7 @@ defmodule Raxol.MixProject do
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
 
       # AI development tools
-      {:tidewave, "~> 0.8.1", only: :dev},
+      {:tidewave, "~> 0.9.0", only: :dev},
       {:usage_rules, "~> 1.2", only: :dev},
 
       # Testing
