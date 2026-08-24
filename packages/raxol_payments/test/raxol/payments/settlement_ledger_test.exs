@@ -152,7 +152,12 @@ defmodule Raxol.Payments.SettlementLedgerTest do
   end
 
   describe "demand_by_destination/2" do
-    defp fill(id, to_chain, symbol, amount) do
+    # `dollars` is what the corridor actually delivered; the fixture converts to
+    # the ATOMIC units `to_amount` is stored in, the same as every other leg on an
+    # entry. Written this way on purpose: a fixture that stashed "500" raw and
+    # asserted "500" back would agree with a `demand_by_destination/2` that never
+    # converted at all, and inventory floors are human dollars.
+    defp fill(id, to_chain, symbol, dollars) do
       %{
         intent_id: id,
         from_chain_id: 8453,
@@ -161,11 +166,33 @@ defmodule Raxol.Payments.SettlementLedgerTest do
         fee_collected: "100",
         fee_currency: symbol,
         fee_decimals: 6,
-        to_amount: Decimal.new(amount),
+        to_amount: Raxol.Payments.Assets.to_atomic(dollars, 6),
         to_symbol: symbol,
         to_decimals: 6,
         gas_status: :confirmed
       }
+    end
+
+    test "reports human units, not the atomic units it stores", %{ledger: ledger} do
+      # The bug this pins: `peak` handed back atomic would be 500_000_000 against
+      # a $5 floor, so every configured chain reads as permanently underfunded the
+      # moment a multiplier is set.
+      assert {:ok, :recorded} =
+               SettlementLedger.record_settlement(ledger, fill("u1", 8453, "USDC", "500"))
+
+      peak = SettlementLedger.demand_by_destination(ledger)[8453]["USDC"].peak
+
+      assert Decimal.equal?(peak, Decimal.new("500"))
+    end
+
+    test "skips a fill whose amount cannot be denominated", %{ledger: ledger} do
+      # No `to_decimals`, so the atomic amount cannot be converted. Guessing a
+      # denomination is how a 6-decimal assumption silently mis-sizes an
+      # 18-decimal corridor.
+      entry = Map.delete(fill("u2", 8453, "USDC", "500"), :to_decimals)
+
+      assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, entry)
+      assert SettlementLedger.demand_by_destination(ledger) == %{}
     end
 
     test "totals and peaks outflow per destination chain and symbol", %{ledger: ledger} do

@@ -69,4 +69,112 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
 
     assert [{:refuel_gas, %{chain_id: 8453}}] = RebalanceMonitor.sweep_now(monitor)
   end
+
+  describe "demand-aware floors reach the sweep" do
+    # $5 floor / $25 target for USDC on Base, and the solver holds $20 there --
+    # comfortably above the static floor, so only demand can make this a deficit.
+    defp inventory_policy(opts) do
+      %RebalancePolicy{
+        gas_floor: %{},
+        gas_target: %{},
+        inventory_floor: %{8453 => %{"USDC" => Decimal.new("5")}},
+        inventory_target: %{8453 => %{"USDC" => Decimal.new("25")}},
+        asset_tiers: %{"USDC" => :stable}
+      }
+      |> RebalancePolicy.with_demand(opts)
+    end
+
+    defp usdc_reader do
+      {:ok, token} = Raxol.Payments.Assets.address(8453, "USDC")
+      Stub.new(erc20: %{{8453, token, "0xsolver"} => 20_000_000})
+    end
+
+    defp record_fill(ledger, dollars, extra \\ %{}) do
+      entry =
+        Map.merge(
+          %{
+            intent_id: "rm_#{System.unique_integer([:positive])}",
+            from_chain_id: 42_161,
+            to_chain_id: 8453,
+            token_symbol: "USDC",
+            fee_collected: "100",
+            fee_currency: "USDC",
+            fee_decimals: 6,
+            to_amount: Raxol.Payments.Assets.to_atomic(dollars, 6),
+            to_symbol: "USDC",
+            to_decimals: 6,
+            gas_status: :confirmed
+          },
+          extra
+        )
+
+      assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, entry)
+    end
+
+    defp sweep(ledger, policy) do
+      RebalanceMonitor.advise_once(
+        ledger: ledger,
+        reader: usdc_reader(),
+        solver_address: "0xsolver",
+        policy: policy,
+        chains: [8453],
+        price_fn: eth_price()
+      )
+    end
+
+    test "a large recent fill raises the floor through the real sweep", %{ledger: ledger} do
+      # The end-to-end path the feature exists for: a $500 order landed on Base,
+      # so at 0.1x that chain should be carrying $50 and its $20 is short $30.
+      # Nothing here hands the advisor a hand-built demand map -- `advise_once/1`
+      # reads it off the ledger, which is what makes this a test of the wiring.
+      record_fill(ledger, "500")
+
+      assert [{:alert, alert}] = sweep(ledger, inventory_policy(demand_multiplier: "0.1"))
+      assert alert.kind == :inventory_underfunded
+      assert Decimal.equal?(alert.deficit, Decimal.new("30"))
+    end
+
+    test "the same ledger with no multiplier configured changes nothing", %{ledger: ledger} do
+      record_fill(ledger, "500")
+
+      assert [] = sweep(ledger, inventory_policy([]))
+    end
+
+    test "the cap bounds what one whale order can demand", %{ledger: ledger} do
+      record_fill(ledger, "5000")
+
+      policy = inventory_policy(demand_multiplier: "0.1", demand_floor_cap: "25")
+
+      assert [{:alert, alert}] = sweep(ledger, policy)
+      # Uncapped the floor would be $500; capped it is $25, so $20 is short $5.
+      assert Decimal.equal?(alert.deficit, Decimal.new("5"))
+    end
+
+    test "a fill older than the window no longer sizes the floor", %{ledger: ledger} do
+      # `peak` never decays, so an unwindowed read would let this one historic
+      # order pin the floor for the life of the ledger. Stamped at the epoch
+      # rather than sized against a tight window, so the assertion is about the
+      # window existing at all and not about a millisecond boundary.
+      record_fill(ledger, "500", %{timestamp_ms: 1_000})
+
+      policy = inventory_policy(demand_multiplier: "0.1")
+
+      assert [] = sweep(ledger, policy)
+
+      # The same fill, inside a window wide enough to reach 1970, is evidence
+      # again -- so the emptiness above is the window and not a lost entry.
+      assert [{:alert, %{deficit: deficit}}] =
+               RebalanceMonitor.advise_once(
+                 ledger: ledger,
+                 reader: usdc_reader(),
+                 solver_address: "0xsolver",
+                 policy: policy,
+                 chains: [8453],
+                 price_fn: eth_price(),
+                 demand_window_ms: System.system_time(:millisecond)
+               )
+
+      assert Decimal.equal?(deficit, Decimal.new("30"))
+    end
+  end
 end

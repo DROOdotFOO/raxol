@@ -79,17 +79,58 @@ defmodule Raxol.Payments.RebalancePolicy do
   end
 
   @doc """
+  Turn demand-aware floors on, from the deployment's accounting config.
+
+  Reads `:demand_multiplier` and `:demand_floor_cap` (`Decimal`, or a string or
+  number this converts). Both absent leaves the policy exactly as passed, which
+  is what keeps the feature off until a deployment asks for it.
+
+  This is the seam between `Raxol.Payments.Accounting`'s env contract and the
+  advisor. `default/0` stays pure so a test policy is a struct literal and not a
+  function of whatever is in the application environment.
+  """
+  @spec with_demand(t(), keyword()) :: t()
+  def with_demand(%__MODULE__{} = policy, opts) when is_list(opts) do
+    %{
+      policy
+      | demand_multiplier: to_decimal_or_nil(Keyword.get(opts, :demand_multiplier)),
+        demand_floor_cap: to_decimal_or_nil(Keyword.get(opts, :demand_floor_cap))
+    }
+  end
+
+  @doc """
+  True when this policy would widen any floor -- i.e. `demand_multiplier` is set.
+
+  Lets a caller skip gathering demand at all rather than scanning the ledger for
+  a signal nothing will read.
+  """
+  @spec demand_aware?(t()) :: boolean()
+  def demand_aware?(%__MODULE__{demand_multiplier: nil}), do: false
+  def demand_aware?(%__MODULE__{}), do: true
+
+  defp to_decimal_or_nil(nil), do: nil
+  defp to_decimal_or_nil(%Decimal{} = d), do: d
+  defp to_decimal_or_nil(value) when is_integer(value), do: Decimal.new(value)
+  defp to_decimal_or_nil(value) when is_float(value), do: Decimal.from_float(value)
+
+  # A malformed knob has to fail loudly at boot rather than silently leave the
+  # feature off: an operator who configured a multiplier and got static floors
+  # anyway has no way to tell that from the feature not working.
+  defp to_decimal_or_nil(value) when is_binary(value), do: Decimal.new(value)
+
+  @doc """
   The inventory floor for `{chain, symbol}`, widened by observed demand.
 
   `nil` when the chain/symbol has no configured floor. Demand only ever RAISES a
   floor that already exists: inventing one would recommend stocking an asset on
   a chain the policy never said it supports.
 
-  `demand` is `Raxol.Payments.SettlementLedger.demand_by_destination/2` output.
-  The widened floor is `peak * demand_multiplier`, capped at `demand_floor_cap`
-  and never below the static floor -- so a chain that has just filled a large
-  order is restocked for the NEXT one instead of waiting to dip under a fixed
-  floor first, by which time the order is already unfillable.
+  `demand` is `Raxol.Payments.SettlementLedger.demand_by_destination/2` output,
+  whose `peak` is in the same human units as `inventory_floor`. The widened floor
+  is `peak * demand_multiplier`, capped at `demand_floor_cap` and never below the
+  static floor -- so a chain that has just filled a large order is restocked for
+  the NEXT one instead of waiting to dip under a fixed floor first, by which time
+  the order is already unfillable.
 
   Sizing on `peak` rather than `total` is the point. The question a floor
   answers is "can the next large order be filled here", and a window of many

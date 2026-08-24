@@ -57,9 +57,10 @@ defmodule Mix.Tasks.RaxolEarn.Rebalance do
       ledger: ledger,
       reader: ChainReader.JSONRPC.new(chains: rpc_urls),
       solver_address: solver,
-      policy: RebalancePolicy.default(),
+      policy: RebalancePolicy.with_demand(RebalancePolicy.default(), acc),
       chains: Map.keys(rpc_urls),
-      price_source: Keyword.get(acc, :price_source, :coingecko)
+      price_source: Keyword.get(acc, :price_source, :coingecko),
+      demand_window_ms: Keyword.get(acc, :demand_window_ms)
     )
     |> print()
   end

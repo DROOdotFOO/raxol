@@ -18,6 +18,14 @@ defmodule Raxol.Payments.Accounting do
   | `XOCHI_SOLVER_ADDRESS`      | Solver wallet to read balances for        | (unset)     |
   | `RAXOL_REBALANCE_INTERVAL_MS`| RebalanceMonitor sweep interval          | `300000`    |
   | `RAXOL_PRICE_SOURCE`        | USD price source for margin              | `coingecko` |
+  | `RAXOL_REBALANCE_DEMAND_MULTIPLIER` | Demand-aware floors: `peak * this` | (unset/off) |
+  | `RAXOL_REBALANCE_DEMAND_FLOOR_CAP`  | Ceiling on a demand-widened floor  | (unset)     |
+  | `RAXOL_REBALANCE_DEMAND_WINDOW_MS`  | How far back demand is read        | `86400000`  |
+
+  Demand-aware inventory floors are off unless `RAXOL_REBALANCE_DEMAND_MULTIPLIER`
+  is set: floors then track the largest recent fill per corridor rather than a
+  fixed number (`Raxol.Payments.RebalancePolicy.with_demand/2`). Set the cap too
+  -- uncapped, one whale order sizes the floor.
 
   Read-only by construction: no wallet key is read here and none of the started
   processes move funds (the Riddler auto-rebalancer executes; the monitor only
@@ -37,6 +45,7 @@ defmodule Raxol.Payments.Accounting do
 
   @default_rebalance_interval_ms "300000"
   @default_price_source "coingecko"
+  @default_demand_window_ms "86400000"
 
   @doc """
   Reads the accounting contract into the two config values a deployment sets.
@@ -51,7 +60,10 @@ defmodule Raxol.Payments.Accounting do
       rpc_urls: rpc_urls(),
       solver_address: System.get_env("XOCHI_SOLVER_ADDRESS"),
       rebalance_interval_ms: rebalance_interval_ms(),
-      price_source: price_source()
+      price_source: price_source(),
+      demand_multiplier: System.get_env("RAXOL_REBALANCE_DEMAND_MULTIPLIER"),
+      demand_floor_cap: System.get_env("RAXOL_REBALANCE_DEMAND_FLOOR_CAP"),
+      demand_window_ms: demand_window_ms()
     ]
 
     {accounting, enabled?()}
@@ -86,5 +98,12 @@ defmodule Raxol.Payments.Accounting do
   @spec price_source() :: atom()
   defp price_source do
     String.to_atom(System.get_env("RAXOL_PRICE_SOURCE") || @default_price_source)
+  end
+
+  @spec demand_window_ms() :: pos_integer()
+  defp demand_window_ms do
+    String.to_integer(
+      System.get_env("RAXOL_REBALANCE_DEMAND_WINDOW_MS") || @default_demand_window_ms
+    )
   end
 end

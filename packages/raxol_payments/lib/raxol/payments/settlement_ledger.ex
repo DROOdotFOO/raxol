@@ -96,6 +96,10 @@ defmodule Raxol.Payments.SettlementLedger do
   @typedoc """
   Observed outflow for one `{destination chain, symbol}` inside a window: the
   summed fill amount, the largest single fill, and how many there were.
+
+  `total` and `peak` are HUMAN units, not the atomic units `to_amount` is stored
+  in. The consumer is `RebalancePolicy.effective_inventory_floor/4`, and the
+  inventory floors it compares against are human dollars.
   """
   @type demand :: %{total: Decimal.t(), peak: Decimal.t(), count: pos_integer()}
 
@@ -181,8 +185,23 @@ defmodule Raxol.Payments.SettlementLedger do
   sum alone is satisfied by many small fills that say nothing about whether the
   next big one can be filled at all.
 
-  An entry missing its destination chain, amount, or symbol is skipped: a fill
-  that cannot be attributed to a corridor cannot be evidence about one.
+  Amounts are converted to HUMAN units on the way out. `to_amount` is stored
+  atomic, the same as every other leg on an entry (`leg_usd/5` divides by
+  `to_decimals` before pricing for exactly this reason), and the only consumer
+  compares the result against inventory floors denominated in dollars. Handing
+  back atomic units would size a floor 10^6 too high on a 6-decimal stable and
+  report every chain permanently underfunded.
+
+  An entry missing its destination chain, amount, symbol, or `to_decimals` is
+  skipped: a fill that cannot be attributed to a corridor -- or whose amount
+  cannot be denominated -- cannot be evidence about one.
+
+  ## Windows
+
+  `:since_ms` is what makes `peak` a statement about recent demand. WITHOUT one
+  this returns an all-time high-water mark, and since `peak` never decays, a
+  single historic whale order pins the floor for the life of the ledger. Callers
+  sizing a floor should always pass a window; `RebalanceMonitor` does.
   """
   @spec demand_by_destination(GenServer.server(), keyword()) ::
           %{pos_integer() => %{String.t() => demand()}}
@@ -193,12 +212,19 @@ defmodule Raxol.Payments.SettlementLedger do
   end
 
   defp accumulate_demand(
-         %{to_chain_id: chain, to_amount: %Decimal{} = amount, to_symbol: symbol},
+         %{
+           to_chain_id: chain,
+           to_amount: %Decimal{} = amount,
+           to_symbol: symbol,
+           to_decimals: decimals
+         },
          acc
        )
-       when is_integer(chain) and is_binary(symbol) do
-    Map.update(acc, chain, %{symbol => first_demand(amount)}, fn per ->
-      Map.update(per, symbol, first_demand(amount), &add_demand(&1, amount))
+       when is_integer(chain) and is_binary(symbol) and is_integer(decimals) and decimals > 0 do
+    human = Assets.to_human(amount, decimals)
+
+    Map.update(acc, chain, %{symbol => first_demand(human)}, fn per ->
+      Map.update(per, symbol, first_demand(human), &add_demand(&1, human))
     end)
   end
 
