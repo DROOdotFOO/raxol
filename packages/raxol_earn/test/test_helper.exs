@@ -8,6 +8,8 @@
 #   :live_solver_fee -- validates the solver sizes the on-chain ACP budget at
 #     XOCHI_FEE_BPS of the live-signed principal (take-rate). Moves NO funds
 #     (off-chain intent signature + captured on-chain write).
+#   :live_parity -- re-checks the live Xochi quote shape against the committed
+#     fixture. Read-only, no funds, but it does call out to the network.
 #   :cli_signer -- spawns the riddler-client CLI; auto-enabled when
 #     RIDDLER_CLI_DIR is set.
 #
@@ -20,7 +22,8 @@ live_exclude = [
   :live_relay,
   :live_xochi_order,
   :live_xochi_order_preflight,
-  :live_solver_fee
+  :live_solver_fee,
+  :live_parity
 ]
 
 cli_exclude = if System.get_env("RIDDLER_CLI_DIR"), do: [], else: [:cli_signer]
