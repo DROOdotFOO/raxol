@@ -63,6 +63,13 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   # far side on disconnect -- but that path costs a poll interval and reaps the
   # remote codex with a signal instead of letting it exit on the EOF, so it is
   # worth waiting to avoid.
+  #
+  # Longer than the 5s a `Task.Supervisor` child gets to shut down, which is
+  # deliberate. A worker torn down with the tree is killed outright and never
+  # reaches this `after` at all -- `PortReaper.watch/1` is what reaps then, and
+  # it is supervised so that shutdown reaches it. Shortening this to fit inside
+  # the shutdown window would buy nothing there and would SIGKILL healthy ssh
+  # clients on every ordinary stop.
   @remote_stop_grace_ms 10_000
 
   # ---------------------------------------------------------------------------
@@ -201,7 +208,7 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
       stop_port(
         port,
         Map.get(session, :stop_grace_ms) || @stop_grace_ms,
-        Map.get(session, :reap_target, :none)
+        reap_target(session)
       )
 
     # Released last: until the reap has actually happened the watcher is the
@@ -247,6 +254,30 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
 
   defp current_or_captured(:none, captured_at_start), do: captured_at_start
   defp current_or_captured(current, _captured_at_start), do: current
+
+  # `stop/1` runs in the `after` of every codex run, and an exception raised
+  # there discards whatever `run_turns` was returning or raising. `PortReaper`'s
+  # signal functions guard their target and raise on anything outside it -- which
+  # is right at that layer, since a bad target there means signalling pid 0 or 1
+  # -- so a session map from an unexpected source is normalised here instead of
+  # being handed straight through.
+  defp reap_target(session) do
+    case Map.get(session, :reap_target, :none) do
+      {kind, id} = target when kind in [:group, :pid] and is_integer(id) and id > 1 ->
+        target
+
+      :none ->
+        :none
+
+      other ->
+        Logger.warning(
+          "symphony.runners.codex.bad_reap_target target=#{inspect(other)} " <>
+            "detail=session_stopped_without_fallback_reap"
+        )
+
+        :none
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Handshake

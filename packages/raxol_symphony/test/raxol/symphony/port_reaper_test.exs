@@ -244,6 +244,61 @@ defmodule Raxol.Symphony.PortReaperTest do
              "the watcher must outlive the owner it is cleaning up after"
     end
 
+    test "stands down when released by a process other than the owner" do
+      # Holding the watcher pid is the authority to disarm it. Pinning the
+      # release to the owner made `release/1` a silent no-op from anywhere else,
+      # which leaves a watcher armed to SIGKILL a target the caller has already
+      # reaped -- and `release/1` cannot report that it failed.
+      test_pid = self()
+
+      owner =
+        spawn(fn ->
+          port = open_child("echo ready; sleep 30")
+          {:group, pgid} = target = PortReaper.capture(port)
+          send(test_pid, {:spawned, pgid, PortReaper.watch(target)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:spawned, pgid, watcher}, @wait_ms
+
+      # Released from the TEST process, not from `owner`.
+      assert :ok = PortReaper.release(watcher)
+      assert wait_until(fn -> not Process.alive?(watcher) end)
+
+      Process.exit(owner, :kill)
+      refute wait_until(fn -> not alive?("-#{pgid}") end, 500)
+
+      PortReaper.kill({:group, pgid})
+    end
+
+    test "reaps when the watcher itself is shut down" do
+      # An orchestrator restart tears the supervision tree down while its workers
+      # are still alive, so the owner-death path never fires. A watcher that just
+      # dies with the tree abandons the process tree it was covering.
+      test_pid = self()
+
+      owner =
+        spawn(fn ->
+          port = open_child("echo ready; sleep 30")
+          {:group, pgid} = target = PortReaper.capture(port)
+          send(test_pid, {:spawned, pgid, PortReaper.watch(target)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:spawned, pgid, watcher}, @wait_ms
+      assert alive?("-#{pgid}")
+
+      # What a supervisor sends a child on the way down. The owner stays alive
+      # throughout, so only the shutdown path can account for the reap.
+      Process.exit(watcher, :shutdown)
+
+      assert wait_until(fn -> not alive?("-#{pgid}") end),
+             "a watcher taken down with its tree still has to reap first"
+
+      assert Process.alive?(owner)
+      Process.exit(owner, :kill)
+    end
+
     test "stands down after release/1" do
       test_pid = self()
 
