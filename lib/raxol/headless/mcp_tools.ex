@@ -240,8 +240,20 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
+  # Tidewave 0.9.0 widened this record from `{tools, dispatch}` to
+  # `{tools, dispatch, browser_tools, browser_dispatch}`. The browser halves are
+  # carried through untouched: they are Tidewave's own, and merging our tools
+  # into them would offer a browser-only client tools it cannot run.
+  #
+  # The arity is matched rather than ignored with a trailing `_`. A shape change
+  # is exactly what happened here, and it has to fail loudly enough to reach
+  # `{:error, {:sys_replace_failed, _}}` rather than write a record Tidewave
+  # will later fail to read.
   defp do_ets_inject do
-    [{:tools, {existing_tools, existing_dispatch}}] =
+    [
+      {:tools,
+       {existing_tools, existing_dispatch, browser_tools, browser_dispatch}}
+    ] =
       :ets.lookup(:tidewave_tools, :tools)
 
     our_tools = tools()
@@ -262,7 +274,9 @@ defmodule Raxol.Headless.McpTools do
 
     :ets.insert(
       :tidewave_tools,
-      {:tools, {filtered_tools ++ our_tools, new_dispatch}}
+      {:tools,
+       {filtered_tools ++ our_tools, new_dispatch, browser_tools,
+        browser_dispatch}}
     )
   end
 
