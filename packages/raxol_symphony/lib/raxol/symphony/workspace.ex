@@ -754,11 +754,18 @@ defmodule Raxol.Symphony.Workspace do
         # that, a hook that leaks a process per timeout leaks one per retry, and
         # the orchestrator retries.
         #
-        # Killed BEFORE the close, not after. While the port is open the child's
-        # pid is still ours -- `erl_child_setup` has not reaped it, so the OS
-        # cannot recycle it -- and signalling into that window is the only way
-        # to be sure the pid still names our hook. Nothing here is waiting on
-        # the child's output, so there is no reason to hand it an EOF first.
+        # Killed BEFORE the close, not after. Nothing here is waiting on the
+        # child's output, so there is no reason to hand it an EOF and then wait
+        # out a grace; killing first is the narrowest window available.
+        #
+        # Narrowest, not zero. An open port does NOT prove the pid is still
+        # ours: ERTS withholds the exit status until the inherited stdout
+        # reaches EOF, so a hook that backgrounds a child and exits leaves the
+        # port open indefinitely while `Port.info/2` goes on naming a pid that
+        # has already been reaped. What keeps the reap correct there is
+        # `PortReaper.capture/1` resolving the target against the process GROUP
+        # rather than that pid -- a group id cannot be recycled while the group
+        # still has a member, which is precisely when there is work to do.
         #
         # SIGKILL outright, where the remote deadline sends SIGTERM. There the
         # status is read back (`@killed_by_deadline`); here nothing reads it, we

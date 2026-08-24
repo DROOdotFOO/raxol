@@ -112,6 +112,32 @@ defmodule Raxol.Symphony.Runners.Codex.SessionStopTest do
            "the app-server exits on EOF, but its tool subprocess does not"
   end
 
+  test "reaps the orphans of a codex that exited on its own and closed the port" do
+    # codex pipes its exec-tool output rather than sharing the port's stdout, so
+    # an orphan does NOT keep the port open: the exit status arrives, the VM
+    # closes the port, and `stop/1` finds nothing left to capture. This is the
+    # `{:error, {:port_exit, _}}` path out of both receive loops, and the
+    # handshake failures take the same shape.
+    #
+    # The target captured at start-up is the only one that still names the
+    # group, so the session has to carry it forward.
+    {port, os_pid} =
+      open_session_port("( sleep 30 >/dev/null 2>&1 </dev/null ) & echo ready; sleep 0.5; exit 0")
+
+    assert {:group, ^os_pid} = target = PortReaper.capture(port)
+
+    assert wait_until(fn -> Port.info(port, :os_pid) == nil end),
+           "the codex exiting should have closed its own port"
+
+    assert PortReaper.capture(port) == :none
+    assert alive?("-#{os_pid}"), "the orphaned tool subprocess should still be running"
+
+    assert :ok = Session.stop(%{port: port, reap_target: target})
+
+    assert wait_until(fn -> not alive?("-#{os_pid}") end),
+           "a closed port must fall back to the target captured at start-up"
+  end
+
   test "accepts a session map and a already-dead port" do
     {port, os_pid} = open_session_port("echo ready; sleep 30")
 

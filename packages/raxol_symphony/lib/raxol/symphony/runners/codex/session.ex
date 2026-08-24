@@ -30,6 +30,7 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
           required(:policy) => map(),
           required(:turn_id) => pos_integer(),
           optional(:reaper) => PortReaper.watcher(),
+          optional(:reap_target) => PortReaper.target(),
           optional(:stop_grace_ms) => non_neg_integer()
         }
 
@@ -92,7 +93,13 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
     # untrappable exit skips `stop/1` entirely -- and the orchestrator tears
     # workers down exactly that way (`stop_run`, stall detection,
     # reconcile-kill), so `try/after` never runs.
-    reaper = PortReaper.watch(PortReaper.capture(port))
+    #
+    # The target is kept as well as watched. It is readable only while the port
+    # is open, and the paths that need it most are the ones where it no longer
+    # is: a codex that exits on its own closes its own port, and `stop/1` then
+    # has nothing left to capture.
+    target = PortReaper.capture(port)
+    reaper = PortReaper.watch(target)
 
     with :ok <- send_initialize(port, policy.read_timeout_ms),
          {:ok, thread_id} <- send_thread_start(port, workspace, policy) do
@@ -104,13 +111,16 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
          policy: policy,
          turn_id: @default_turn_id,
          reaper: reaper,
+         reap_target: target,
          stop_grace_ms: grace_ms
        }}
     else
       {:error, _} = err ->
         # A handshake that fails has still left a codex running, and only a
-        # session that was built ever reaches `stop/1`.
-        stop_port(port, grace_ms)
+        # session that was built ever reaches `stop/1`. The usual reason to be
+        # here is a codex that died answering `initialize`, which has already
+        # closed the port -- so the captured target is the only one there is.
+        stop_port(port, grace_ms, target)
         PortReaper.release(reaper)
         err
     end
@@ -187,7 +197,12 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   """
   @spec stop(session() | port()) :: :ok
   def stop(%{port: port} = session) do
-    result = stop_port(port, Map.get(session, :stop_grace_ms) || @stop_grace_ms)
+    result =
+      stop_port(
+        port,
+        Map.get(session, :stop_grace_ms) || @stop_grace_ms,
+        Map.get(session, :reap_target, :none)
+      )
 
     # Released last: until the reap has actually happened the watcher is the
     # only thing still covering us if this process dies mid-stop.
@@ -195,14 +210,25 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
     result
   end
 
-  def stop(port) when is_port(port), do: stop_port(port, @stop_grace_ms)
+  # A bare port has no start-up target to fall back on, so a codex that has
+  # already closed its own port takes its orphans with it unreaped. Callers with
+  # a session map do not have that gap.
+  def stop(port) when is_port(port), do: stop_port(port, @stop_grace_ms, :none)
 
   def stop(_), do: :ok
 
-  defp stop_port(port, grace_ms) do
-    # Captured while the port is still open: after the child exits, the process
-    # group its orphans are in can no longer be read back off anything.
-    target = PortReaper.capture(port)
+  defp stop_port(port, grace_ms, captured_at_start) do
+    # Re-read while the port is open, since that answer is current. It is only
+    # available while the port IS open, though: every path where the codex exits
+    # on its own -- `{:error, {:port_exit, _}}` out of either receive loop, and
+    # the handshake failures -- gets here with the port already closed by the
+    # VM, and `capture/1` can only answer `:none`.
+    #
+    # Falling back to what start-up captured is what makes those paths reap at
+    # all. Its staleness is bounded the same way the watcher's is: a group id
+    # cannot be recycled while the group still has a member, so the fallback is
+    # exact for as long as there is anything to kill.
+    target = current_or_captured(PortReaper.capture(port), captured_at_start)
     close_port(port)
 
     case PortReaper.await_exit(target, grace_ms) do
@@ -218,6 +244,9 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
         :ok
     end
   end
+
+  defp current_or_captured(:none, captured_at_start), do: captured_at_start
+  defp current_or_captured(current, _captured_at_start), do: current
 
   # ---------------------------------------------------------------------------
   # Handshake

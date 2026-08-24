@@ -120,6 +120,31 @@ defmodule Raxol.Symphony.WorkspaceTest do
       refute File.exists?(hook_witness)
       refute File.exists?(child_witness)
     end
+
+    # The same leak, one step meaner: the hook's own bash exits IMMEDIATELY and
+    # only the background child is left. That child still holds the inherited
+    # stdout, so no exit status is delivered, the port stays open, and the
+    # timeout fires as before -- but now against a pid that has already been
+    # reaped. Resolving the kill target off that pid signals a corpse and leaves
+    # the child running; resolving it off the process group reaps it.
+    @tag :tmp_dir
+    test "kills the children of a hook that exited before its own timeout", %{tmp_dir: tmp_dir} do
+      child_witness = Path.join(tmp_dir, "orphan_finished")
+
+      script = """
+      ( sleep 1; touch #{child_witness} ) &
+      exit 0
+      """
+
+      config = build_config(tmp_dir, %{before_run: script, timeout_ms: 200})
+
+      assert {:error, :timeout} = Workspace.run_hook(config, :before_run, tmp_dir)
+
+      # Past the point the orphan would have finished its own work.
+      Process.sleep(1_200)
+
+      refute File.exists?(child_witness)
+    end
   end
 
   describe "run_before_run_hook/2" do

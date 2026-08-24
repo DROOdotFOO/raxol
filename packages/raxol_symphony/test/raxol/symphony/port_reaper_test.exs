@@ -100,6 +100,32 @@ defmodule Raxol.Symphony.PortReaperTest do
       PortReaper.kill({:group, pgid})
     end
 
+    test "resolves the group when the parent has exited but its orphan holds the port open" do
+      # The commonest leak shape: the hook backgrounds a child and exits. ERTS
+      # withholds the exit status until the inherited stdout reaches EOF and the
+      # orphan is still holding it, so the port stays OPEN while `Port.info/2`
+      # goes on naming a pid that has already been reaped.
+      #
+      # Resolving the target off that pid -- asking `ps` for its pgid -- fails,
+      # because `ps` cannot see a corpse. Resolving it off the process GROUP
+      # succeeds, because the group is what is still running.
+      port = open_child("( sleep 30 ) & echo ready; exit 0")
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+
+      assert wait_until(fn -> not alive?("#{os_pid}") end),
+             "the parent should have exited on its own"
+
+      assert alive?("-#{os_pid}"), "the orphan should still hold the group"
+      assert Port.info(port, :os_pid) == {:os_pid, os_pid}, "the port should still be open"
+
+      assert {:group, ^os_pid} = target = PortReaper.capture(port)
+
+      assert :ok = PortReaper.kill(target)
+      assert wait_until(fn -> not alive?("-#{os_pid}") end)
+
+      close(port)
+    end
+
     test "is :none once the port is closed" do
       port = open_child("echo ready; sleep 30")
       target = PortReaper.capture(port)
@@ -164,8 +190,11 @@ defmodule Raxol.Symphony.PortReaperTest do
 
       assert alive?("-#{pgid}"), "the orphaned tool should still hold the group"
 
+      # Polled, not asserted outright: `await_exit/2` returns once the SIGKILL
+      # has been ACCEPTED, and a killed group member stays in the group until it
+      # is reaped, so the transition is not synchronous with the return.
       assert :ok = PortReaper.await_exit(target, @wait_ms)
-      refute alive?("-#{pgid}")
+      assert wait_until(fn -> not alive?("-#{pgid}") end)
     end
 
     test "returns as soon as a well-behaved child exits, without spending the grace" do

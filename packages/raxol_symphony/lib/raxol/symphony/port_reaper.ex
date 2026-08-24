@@ -39,12 +39,14 @@ defmodule Raxol.Symphony.PortReaper do
   @typedoc """
   Why a reap could not be carried out.
 
-  `:unavailable` is the one that matters: it means we could not run a signal at
-  all, so nothing was verified and nothing was killed. It must never be
-  reported as success -- a caller that is about to delete the target's working
-  directory is relying on the difference.
+  Neither may be reported as success: a caller that is about to delete the
+  target's working directory is relying on the difference.
+
+  `:unavailable` means no signal could be run at all, so nothing was verified
+  and nothing was killed. `:refused` means the kernel rejected the signal
+  (EPERM) -- the target is demonstrably still there, and still running.
   """
-  @type reason :: :unavailable
+  @type reason :: :unavailable | :refused
 
   # A pid of 0 means "my own process group" and 1 means "everything I am
   # allowed to signal". Neither is ever a port child, and either one turned
@@ -61,10 +63,14 @@ defmodule Raxol.Symphony.PortReaper do
   @doc """
   Read the signal target off a live port.
 
-  Call this BEFORE closing the port. Once the child has exited, `ps` answers
-  nothing about it, and the process group its orphans are still in is no longer
-  recoverable -- a process group outlives its leader, which is exactly the case
-  worth reaping.
+  Call this BEFORE closing the port. `Port.info/2` is the only thing that knows
+  the child's pid, and a closed port has forgotten it, so from then on the
+  process group the orphans are still in is unrecoverable -- and a group
+  outliving its leader is exactly the case worth reaping.
+
+  `:none` means the PORT is closed. It does not mean nothing is running. A
+  caller that can reach a closed port should keep the target it captured while
+  the port was open and fall back to that.
   """
   @spec capture(port()) :: target()
   def capture(port) when is_port(port) do
@@ -122,8 +128,15 @@ defmodule Raxol.Symphony.PortReaper do
 
   Note the target was captured before the port closed, so across a long
   `grace_ms` there is a window in which the group could drain and the OS recycle
-  the pid onto something unrelated. `kill/1` before the close avoids that
-  entirely and is the right call wherever the EOF is not wanted.
+  the pid onto something unrelated. `kill/1` before the close narrows that
+  window and is the right call wherever the EOF is not wanted, but it does not
+  close it: a port stays open for as long as ANY descendant holds the inherited
+  stdout, so the child can already be dead and reaped while `Port.info/2` still
+  reports its pid.
+
+  Nothing pid-based can close that window. What bounds it is that a group id
+  cannot be recycled while the group still has a member, so a stale target can
+  only mislead once the reap has nothing left to do anyway.
   """
   @spec await_exit(target(), non_neg_integer()) :: :ok | {:error, reason()}
   def await_exit(:none, grace_ms) when is_integer(grace_ms) and grace_ms >= 0, do: :ok
@@ -199,7 +212,9 @@ defmodule Raxol.Symphony.PortReaper do
       :gone ->
         :ok
 
-      {:error, :unavailable} = err ->
+      # Waiting cannot fix either of these, and both mean the target may still
+      # be running, so they are answered now rather than at the deadline.
+      {:error, _reason} = err ->
         err
 
       :ok ->
@@ -232,15 +247,18 @@ defmodule Raxol.Symphony.PortReaper do
         Logger.debug("symphony.port_reaper.already_gone target=#{inspect(target)}")
         :ok
 
-      {:error, :unavailable} = err ->
+      {:error, reason} = err ->
         Logger.warning(
-          "symphony.port_reaper.kill_unavailable target=#{inspect(target)} " <>
-            "detail=no_kill_executable_and_no_bash"
+          "symphony.port_reaper.kill_failed target=#{inspect(target)} " <>
+            "reason=#{inspect(reason)} detail=#{unreaped_detail(reason)}"
         )
 
         err
     end
   end
+
+  defp unreaped_detail(:unavailable), do: "no_bash_on_path"
+  defp unreaped_detail(:refused), do: "kernel_refused_the_signal_target_still_running"
 
   # `kill -0` reports whether anything signallable is left. Against a GROUP that
   # is the question worth asking: the leader can be gone while an orphaned tool
@@ -276,16 +294,43 @@ defmodule Raxol.Symphony.PortReaper do
     run_signal(path, ["-c", ~s(kill "$1" "$2"), "raxol-port-reaper", flag, signal_arg(target)])
   end
 
+  # The builtin exits 1 for EVERY failure, so the status alone cannot tell
+  # "already dead" (ESRCH) from "the kernel refused" (EPERM). Only the errno
+  # text can, and it is read with the locale pinned to C: macOS libc does not
+  # translate `strerror` at all, but glibc does, and CI is glibc.
   defp run_signal(path, args) do
-    case System.cmd(path, args, stderr_to_stdout: true) do
+    case System.cmd(path, args, stderr_to_stdout: true, env: [{"LC_ALL", "C"}, {"LANG", "C"}]) do
       {_output, 0} -> :ok
-      {_output, _status} -> :gone
+      {output, _status} -> classify_failure(output)
     end
   rescue
     # The executable resolved a moment ago and cannot be run now.
     e in [ErlangError, ArgumentError] ->
       Logger.debug("symphony.port_reaper.signal_raised error=#{inspect(e)}")
       {:error, :unavailable}
+  end
+
+  # EPERM is matched POSITIVELY and ESRCH is the default, rather than the other
+  # way round, because the two are not equally likely and the failure directions
+  # are not equally cheap.
+  #
+  # "Already gone" is the routine answer -- the whole point of the grace is that
+  # the target usually exits inside it. A refusal needs something in the port
+  # child's own process group that this uid may not signal, which takes a setuid
+  # binary in a hook. So an unrecognised message degrades to exactly the
+  # behaviour this module had before the distinction existed, instead of turning
+  # every routine reap into a spurious "could not reap" warning ahead of an
+  # `rm_rf` -- and, through `classify/1`, into a group target for a group that
+  # is not there.
+  #
+  # The distinction is diagnostics. Nothing about whether a reap actually lands
+  # depends on getting it right.
+  defp classify_failure(output) do
+    if output =~ ~r/operation not permitted/i do
+      {:error, :refused}
+    else
+      :gone
+    end
   end
 
   defp signaller do
@@ -310,19 +355,44 @@ defmodule Raxol.Symphony.PortReaper do
   # take the VM down with it. The `{:pid, _}` fallback loses the descendants and
   # keeps the VM.
   #
+  # The check is a `kill -0` against the GROUP rather than a `ps` read of the
+  # child's pgid, and that is load-bearing rather than a tidy-up.
+  #
+  # A process group's id is the pid of its leader, and that pid stays allocated
+  # for as long as the group has any member at all. So "group `os_pid` answers
+  # a signal" can only be true if the process holding pid `os_pid` -- our child,
+  # since the port is open -- is the one that led it. A child that is NOT a
+  # group leader has no group under its own id, the probe says so, and the
+  # fallback keeps the VM. The BEAM's own group is unreachable here by
+  # construction rather than by inspection.
+  #
+  # `ps` could not answer this at all in the case that matters most. A hook that
+  # backgrounds a child and exits leaves the port OPEN -- ERTS withholds the
+  # exit status until the inherited stdout reaches EOF and the orphan is still
+  # holding it -- while `Port.info/2` goes on reporting the dead parent's pid.
+  # `ps -o pgid= -p <dead pid>` fails there, which classified the live group as
+  # `{:pid, <corpse>}`, SIGKILLed a pid nobody owns, and reported success while
+  # the orphan the reap exists for kept running. It was also the module's only
+  # dependency on a `ps` that busybox does not implement.
+  #
   # Falling back is safe but not free -- it silently drops the descendants --
   # so it says so rather than degrading quietly.
   defp classify(os_pid) do
-    case process_group(os_pid) do
-      {:ok, ^os_pid} ->
+    case signal(signaller(), {:group, os_pid}, "-0") do
+      :ok ->
         {:group, os_pid}
 
-      {:ok, pgid} ->
-        warn_no_group_kill(os_pid, "not_group_leader pgid=#{pgid}")
+      # EPERM is an existence proof: the kernel can only refuse a signal to
+      # something that is there.
+      {:error, :refused} ->
+        {:group, os_pid}
+
+      :gone ->
+        warn_no_group_kill(os_pid, "no_process_group_under_that_id")
         {:pid, os_pid}
 
-      :error ->
-        warn_no_group_kill(os_pid, "pgid_unavailable")
+      {:error, :unavailable} ->
+        warn_no_group_kill(os_pid, "no_bash_to_probe_with")
         {:pid, os_pid}
     end
   end
@@ -332,20 +402,5 @@ defmodule Raxol.Symphony.PortReaper do
       "symphony.port_reaper.no_group_kill os_pid=#{os_pid} reason=#{reason} " <>
         "detail=descendants_will_survive"
     )
-  end
-
-  # A `ps` that is missing, fails, or answers something unparseable resolves the
-  # same conservative way, for the same reason.
-  defp process_group(os_pid) do
-    with ps_path when is_binary(ps_path) <- System.find_executable("ps"),
-         {output, 0} <-
-           System.cmd(ps_path, ["-o", "pgid=", "-p", "#{os_pid}"], stderr_to_stdout: true),
-         {pgid, ""} <- output |> String.trim() |> Integer.parse() do
-      {:ok, pgid}
-    else
-      _ -> :error
-    end
-  rescue
-    _ -> :error
   end
 end
