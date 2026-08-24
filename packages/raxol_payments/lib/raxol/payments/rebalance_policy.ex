@@ -34,7 +34,9 @@ defmodule Raxol.Payments.RebalancePolicy do
           asset_tiers: %{String.t() => :stable | :volatile},
           gas_refuel_sources: [:unwrap_weth | :swap_stable],
           min_notional: %{l1: Decimal.t() | nil, l2: Decimal.t() | nil},
-          refuel_source_chain: pos_integer() | nil
+          refuel_source_chain: pos_integer() | nil,
+          demand_multiplier: Decimal.t() | nil,
+          demand_floor_cap: Decimal.t() | nil
         }
 
   defstruct gas_floor: %{},
@@ -49,7 +51,9 @@ defmodule Raxol.Payments.RebalancePolicy do
             },
             gas_refuel_sources: [:unwrap_weth, :swap_stable],
             min_notional: %{l1: nil, l2: nil},
-            refuel_source_chain: nil
+            refuel_source_chain: nil,
+            demand_multiplier: nil,
+            demand_floor_cap: nil
 
   @evm_chains [1, 10, 137, 8453, 42_161, 4663]
   @stables ["USDC", "USDT", "USDG"]
@@ -73,6 +77,81 @@ defmodule Raxol.Payments.RebalancePolicy do
       refuel_source_chain: nil
     }
   end
+
+  @doc """
+  The inventory floor for `{chain, symbol}`, widened by observed demand.
+
+  `nil` when the chain/symbol has no configured floor. Demand only ever RAISES a
+  floor that already exists: inventing one would recommend stocking an asset on
+  a chain the policy never said it supports.
+
+  `demand` is `Raxol.Payments.SettlementLedger.demand_by_destination/2` output.
+  The widened floor is `peak * demand_multiplier`, capped at `demand_floor_cap`
+  and never below the static floor -- so a chain that has just filled a large
+  order is restocked for the NEXT one instead of waiting to dip under a fixed
+  floor first, by which time the order is already unfillable.
+
+  Sizing on `peak` rather than `total` is the point. The question a floor
+  answers is "can the next large order be filled here", and a window of many
+  small fills is evidence about throughput, not about that.
+
+  With `demand_multiplier` unset this returns the static floor, so the behaviour
+  is unchanged until it is configured.
+  """
+  @spec effective_inventory_floor(t(), pos_integer(), String.t(), map()) :: Decimal.t() | nil
+  def effective_inventory_floor(%__MODULE__{} = policy, chain, symbol, demand \\ %{}) do
+    case get_in(policy.inventory_floor, [chain, symbol]) do
+      nil -> nil
+      static -> widen(policy, static, get_in(demand, [chain, symbol]))
+    end
+  end
+
+  @doc """
+  The inventory target for `{chain, symbol}`, moved to keep its headroom above
+  `effective_inventory_floor/4`.
+
+  A target below its own floor would make one balance simultaneously a deficit
+  (under floor) and a surplus (over target), and the advisor would recommend
+  draining a chain into itself. Raising the floor for demand has to carry the
+  target with it, or configuring `demand_multiplier` would introduce exactly
+  that. The clamp also covers a statically misconfigured band.
+
+  A chain that has a target but no floor is a pure surplus source and keeps its
+  static target: there is no floor to widen, so demand has nothing to say.
+  """
+  @spec effective_inventory_target(t(), pos_integer(), String.t(), map()) :: Decimal.t() | nil
+  def effective_inventory_target(%__MODULE__{} = policy, chain, symbol, demand \\ %{}) do
+    case get_in(policy.inventory_target, [chain, symbol]) do
+      nil -> nil
+      static_target -> target_above_floor(policy, chain, symbol, demand, static_target)
+    end
+  end
+
+  defp target_above_floor(policy, chain, symbol, demand, static_target) do
+    case get_in(policy.inventory_floor, [chain, symbol]) do
+      nil ->
+        static_target
+
+      static_floor ->
+        headroom = Decimal.max(Decimal.sub(static_target, static_floor), Decimal.new(0))
+        Decimal.add(widen(policy, static_floor, get_in(demand, [chain, symbol])), headroom)
+    end
+  end
+
+  defp widen(%__MODULE__{demand_multiplier: nil}, static_floor, _demand), do: static_floor
+  defp widen(_policy, static_floor, nil), do: static_floor
+
+  defp widen(policy, static_floor, %{peak: %Decimal{} = peak}) do
+    peak
+    |> Decimal.mult(policy.demand_multiplier)
+    |> cap_at(policy.demand_floor_cap)
+    |> Decimal.max(static_floor)
+  end
+
+  defp widen(_policy, static_floor, _demand), do: static_floor
+
+  defp cap_at(value, nil), do: value
+  defp cap_at(value, %Decimal{} = cap), do: Decimal.min(value, cap)
 
   @doc """
   Minimum economic notional (human dollars) for a fill whose destination is

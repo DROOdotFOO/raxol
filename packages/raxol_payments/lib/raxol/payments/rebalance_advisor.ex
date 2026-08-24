@@ -16,6 +16,17 @@ defmodule Raxol.Payments.RebalanceAdvisor do
       deficit chains (USDC via CCTP; USDT/USDG via a bridge). A deficit with no
       surplus source becomes an `:inventory_underfunded` alert.
 
+  ## Demand-aware floors
+
+  Pass `opts[:demand]` (from `Raxol.Payments.SettlementLedger.demand_by_destination/2`)
+  to size inventory floors on what a chain has actually been asked for rather
+  than on a fixed number. A static floor only reacts AFTER a chain has been
+  drained under it, which is one large order too late: the order that would have
+  emptied it is the order that gets rejected. A floor carrying the last window's
+  largest fill is already stocked for the next one.
+
+  Off unless `RebalancePolicy.demand_multiplier` is set.
+
   `recommend/4` is pure and testable; `gather_gas_balances/3` and
   `gather_inventory/4` are the only IO; `advise/4` wraps `recommend/4` with
   telemetry.
@@ -89,9 +100,10 @@ defmodule Raxol.Payments.RebalanceAdvisor do
   @spec recommend(RebalancePolicy.t(), balances(), map(), keyword()) :: [recommendation()]
   def recommend(policy, balances, drain, opts \\ []) do
     price_fn = Keyword.get(opts, :price_fn, fn _sym -> nil end)
+    demand = Keyword.get(opts, :demand, %{})
 
     refuels = refuel_recommendations(policy, balances, drain, price_fn)
-    {rebalances, alerts} = inventory_recommendations(policy, balances)
+    {rebalances, alerts} = inventory_recommendations(policy, balances, demand)
 
     refuels ++ rebalances ++ alerts
   end
@@ -197,21 +209,24 @@ defmodule Raxol.Payments.RebalanceAdvisor do
 
   # -- Inventory rebalance (per stable asset) --
 
-  defp inventory_recommendations(policy, balances) do
+  defp inventory_recommendations(policy, balances, demand) do
     # A surplus can live on a chain that only appears in inventory_target, so scan
     # the union of both maps' chains.
     chains = Enum.uniq(Map.keys(policy.inventory_floor) ++ Map.keys(policy.inventory_target))
 
     Enum.reduce(RebalancePolicy.stables(policy), {[], []}, fn symbol, {racc, aacc} ->
-      {moves, alerts} = rebalance_symbol(policy, balances, symbol, chains)
+      {moves, alerts} = rebalance_symbol(policy, balances, symbol, chains, demand)
       {racc ++ moves, aacc ++ alerts}
     end)
   end
 
-  defp rebalance_symbol(policy, balances, symbol, chains) do
+  # Both sides read their bound through `RebalancePolicy`, which widens the floor
+  # by observed demand and carries the target up with it. With no
+  # `demand_multiplier` configured those are the static maps and nothing changes.
+  defp rebalance_symbol(policy, balances, symbol, chains, demand) do
     deficits =
       for chain <- chains,
-          floor = get_in(policy.inventory_floor, [chain, symbol]),
+          floor = RebalancePolicy.effective_inventory_floor(policy, chain, symbol, demand),
           not is_nil(floor),
           bal = inventory_balance(balances, chain, symbol),
           Decimal.compare(bal, floor) == :lt,
@@ -219,7 +234,7 @@ defmodule Raxol.Payments.RebalanceAdvisor do
 
     surpluses =
       for chain <- chains,
-          target = get_in(policy.inventory_target, [chain, symbol]),
+          target = RebalancePolicy.effective_inventory_target(policy, chain, symbol, demand),
           not is_nil(target),
           bal = inventory_balance(balances, chain, symbol),
           Decimal.compare(bal, target) == :gt,

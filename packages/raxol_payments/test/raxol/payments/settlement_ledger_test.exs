@@ -150,4 +150,71 @@ defmodule Raxol.Payments.SettlementLedgerTest do
 
     assert [%{intent_id: "xi_1"}] = SettlementLedger.list_settlements(ledger, to_chain_id: 1)
   end
+
+  describe "demand_by_destination/2" do
+    defp fill(id, to_chain, symbol, amount) do
+      %{
+        intent_id: id,
+        from_chain_id: 8453,
+        to_chain_id: to_chain,
+        token_symbol: symbol,
+        fee_collected: "100",
+        fee_currency: symbol,
+        fee_decimals: 6,
+        to_amount: Decimal.new(amount),
+        to_symbol: symbol,
+        to_decimals: 6,
+        gas_status: :confirmed
+      }
+    end
+
+    test "totals and peaks outflow per destination chain and symbol", %{ledger: ledger} do
+      for f <- [
+            fill("d1", 42_161, "USDC", "100"),
+            fill("d2", 42_161, "USDC", "500"),
+            fill("d3", 42_161, "USDT", "20"),
+            fill("d4", 1, "USDC", "7")
+          ] do
+        assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, f)
+      end
+
+      demand = SettlementLedger.demand_by_destination(ledger)
+
+      arb_usdc = demand[42_161]["USDC"]
+      assert Decimal.equal?(arb_usdc.total, Decimal.new("600"))
+      # The peak is what sizes a floor: one $500 order, not the $600 of throughput.
+      assert Decimal.equal?(arb_usdc.peak, Decimal.new("500"))
+      assert arb_usdc.count == 2
+
+      assert Decimal.equal?(demand[42_161]["USDT"].peak, Decimal.new("20"))
+      assert Decimal.equal?(demand[1]["USDC"].peak, Decimal.new("7"))
+    end
+
+    test "a fill that cannot be attributed to a corridor is skipped", %{ledger: ledger} do
+      # No to_amount/to_symbol: it is evidence about nothing.
+      assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, l1_fill())
+
+      assert SettlementLedger.demand_by_destination(ledger) == %{}
+    end
+
+    test "honours the :since_ms window", %{ledger: ledger} do
+      assert {:ok, :recorded} =
+               SettlementLedger.record_settlement(
+                 ledger,
+                 Map.put(fill("old", 42_161, "USDC", "900"), :timestamp_ms, 1_000)
+               )
+
+      assert {:ok, :recorded} =
+               SettlementLedger.record_settlement(
+                 ledger,
+                 Map.put(fill("new", 42_161, "USDC", "10"), :timestamp_ms, 9_000)
+               )
+
+      recent = SettlementLedger.demand_by_destination(ledger, since_ms: 5_000)
+
+      # The $900 order is outside the window, so it no longer sizes the floor.
+      assert Decimal.equal?(recent[42_161]["USDC"].peak, Decimal.new("10"))
+      assert recent[42_161]["USDC"].count == 1
+    end
+  end
 end

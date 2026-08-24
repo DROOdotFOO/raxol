@@ -93,6 +93,12 @@ defmodule Raxol.Payments.SettlementLedger do
           usd_margin: Decimal.t() | nil
         }
 
+  @typedoc """
+  Observed outflow for one `{destination chain, symbol}` inside a window: the
+  summed fill amount, the largest single fill, and how many there were.
+  """
+  @type demand :: %{total: Decimal.t(), peak: Decimal.t(), count: pos_integer()}
+
   @stablecoins ["USDC", "USDT", "USDBC", "PYUSD", "DAI"]
 
   # -- Public API --
@@ -162,6 +168,46 @@ defmodule Raxol.Payments.SettlementLedger do
     |> Enum.reduce(%{}, fn e, acc ->
       Map.update(acc, e.gas_chain_id, e.gas_native, &Decimal.add(&1, e.gas_native))
     end)
+  end
+
+  @doc """
+  Per-destination-chain, per-symbol outflow: what the solver actually PAID OUT
+  there, over whatever window `:since_ms` selects.
+
+  This is the demand signal behind a proactive inventory floor. `total` is the
+  throughput the window saw; `peak` is the largest single fill in it, and `peak`
+  is the one that sizes a floor. A chain that has just served a large order is
+  the chain most likely to be asked for another, whereas a floor built from the
+  sum alone is satisfied by many small fills that say nothing about whether the
+  next big one can be filled at all.
+
+  An entry missing its destination chain, amount, or symbol is skipped: a fill
+  that cannot be attributed to a corridor cannot be evidence about one.
+  """
+  @spec demand_by_destination(GenServer.server(), keyword()) ::
+          %{pos_integer() => %{String.t() => demand()}}
+  def demand_by_destination(server, opts \\ []) do
+    server
+    |> list_settlements(filter_opts(opts))
+    |> Enum.reduce(%{}, &accumulate_demand/2)
+  end
+
+  defp accumulate_demand(
+         %{to_chain_id: chain, to_amount: %Decimal{} = amount, to_symbol: symbol},
+         acc
+       )
+       when is_integer(chain) and is_binary(symbol) do
+    Map.update(acc, chain, %{symbol => first_demand(amount)}, fn per ->
+      Map.update(per, symbol, first_demand(amount), &add_demand(&1, amount))
+    end)
+  end
+
+  defp accumulate_demand(_entry, acc), do: acc
+
+  defp first_demand(amount), do: %{total: amount, peak: amount, count: 1}
+
+  defp add_demand(%{total: total, peak: peak, count: count}, amount) do
+    %{total: Decimal.add(total, amount), peak: Decimal.max(peak, amount), count: count + 1}
   end
 
   @doc """
