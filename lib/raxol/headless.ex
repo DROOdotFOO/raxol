@@ -341,36 +341,52 @@ defmodule Raxol.Headless do
     end
   end
 
+  # Read and parse are answered, not raised. `File.read!` and a strict
+  # `{:ok, ast} =` match both blow up INSIDE the `Raxol.Headless` GenServer,
+  # which is a singleton holding every other caller's session -- so one
+  # unreadable or non-Elixir file took down sessions that had nothing to do with
+  # it. The caller asked whether this file could start; "no" is an answer.
   defp compile_and_find_module(path) do
-    # Parse the file AST, extract only defmodule blocks (skip top-level
-    # side effects like Raxol.start_link and receive), then compile them.
-    source = File.read!(path)
-
-    {:ok, ast} = Code.string_to_quoted(source, file: path)
-
-    module_asts = extract_module_defs(ast)
-
-    if module_asts == [] do
-      {:error, :no_modules_found}
-    else
-      modules =
-        module_asts
-        |> Enum.flat_map(fn mod_ast ->
-          Code.compile_quoted(mod_ast, path)
-        end)
-        |> Enum.map(fn {module, _bytecode} -> module end)
-
-      tea_module =
-        Enum.find(modules, fn mod ->
-          Code.ensure_loaded?(mod) and function_exported?(mod, :view, 1)
-        end)
-
-      if tea_module do
-        {:ok, tea_module}
-      else
-        {:error, :no_tea_module_found}
-      end
+    with {:ok, source} <- read_source(path),
+         {:ok, ast} <- Code.string_to_quoted(source, file: path) do
+      compile_modules(extract_module_defs(ast), path)
     end
+  end
+
+  defp read_source(path) do
+    case File.read(path) do
+      {:ok, source} -> {:ok, source}
+      {:error, reason} -> {:error, {:unreadable_file, path, reason}}
+    end
+  end
+
+  defp compile_modules([], _path), do: {:error, :no_modules_found}
+
+  # Only defmodule blocks are compiled, skipping top-level side effects like
+  # `Raxol.start_link` and `receive`. That is a CONVENIENCE, not a sandbox:
+  # compiling a `defmodule` executes its body, so anything at module scope runs.
+  # What bounds this is the caller -- `Raxol.Headless.McpTools` confines the path
+  # to a configured root, and the programmatic callers pass their own file.
+  #
+  # Rescued for availability, not safety: a module body that raises at compile
+  # time would otherwise take this singleton GenServer down and with it every
+  # unrelated session it holds.
+  defp compile_modules(module_asts, path) do
+    modules =
+      module_asts
+      |> Enum.flat_map(fn mod_ast -> Code.compile_quoted(mod_ast, path) end)
+      |> Enum.map(fn {module, _bytecode} -> module end)
+
+    case Enum.find(modules, &tea_module?/1) do
+      nil -> {:error, :no_tea_module_found}
+      tea_module -> {:ok, tea_module}
+    end
+  rescue
+    e -> {:error, {:compile_failed, path, Exception.message(e)}}
+  end
+
+  defp tea_module?(mod) do
+    Code.ensure_loaded?(mod) and function_exported?(mod, :view, 1)
   end
 
   # Extract top-level defmodule blocks from AST, ignoring other expressions.
