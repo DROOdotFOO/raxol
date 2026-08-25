@@ -335,4 +335,70 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       assert anthropic.note == nil
     end
   end
+
+  describe "diagnostics/0 against an unusable op CLI" do
+    # A fake `op` that records every invocation and always fails, standing in
+    # for a signed-out CLI. A locked vault behaves worse still: each call blocks
+    # on a desktop authorization prompt until the timeout.
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-op-count-#{System.os_time(:millisecond)}-" <>
+            "#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      log = Path.join(dir, "calls")
+      fake_op = Path.join(dir, "op")
+
+      File.write!(fake_op, "#!/bin/sh\necho \"$@\" >> #{log}\nexit 1\n")
+      File.chmod!(fake_op, 0o755)
+
+      prev_path = System.get_env("PATH")
+      System.put_env("PATH", dir <> ":" <> (prev_path || ""))
+
+      on_exit(fn ->
+        System.put_env("PATH", prev_path || "")
+        File.rm_rf!(dir)
+      end)
+
+      %{log: log}
+    end
+
+    test "probes op once for status, not once per provider", %{log: log} do
+      # Every provider carries a stored reference, so before the fix each one
+      # shelled out to `op read` on top of the single `op whoami` -- a serial
+      # storm that made `/inspect` take 12 to 22 seconds against a locked vault
+      # and raised one authorization prompt per provider.
+      for var <- ~w(RAXOL_ANTHROPIC_OP RAXOL_OPENAI_OP RAXOL_KIMI_OP RAXOL_OPENROUTER_OP) do
+        System.put_env(var, "op://vault/#{var}/credential")
+      end
+
+      diag = Resolver.diagnostics()
+
+      assert diag.op == :not_signed_in
+
+      calls =
+        if File.exists?(log), do: log |> File.read!() |> String.split("\n", trim: true), else: []
+
+      assert length(calls) == 1,
+             "expected one `op whoami`, got #{length(calls)}: #{inspect(calls)}"
+
+      assert hd(calls) =~ "whoami"
+    end
+
+    test "a stored reference still reports why it is unavailable" do
+      # Skipping the probe must not cost the diagnostic its answer: the note is
+      # the same conclusion the probe would have reached, minus the wait.
+      System.put_env("RAXOL_ANTHROPIC_OP", "op://vault/anthropic/credential")
+
+      anthropic =
+        Resolver.diagnostics().providers
+        |> Enum.find(&(&1.harness == :anthropic))
+
+      refute anthropic.available?
+      assert anthropic.note =~ "op signin"
+    end
+  end
 end

@@ -13,6 +13,20 @@ unless System.get_env("RAXOL_SESSIONS_DIR") do
   System.at_exit(fn _ -> File.rm_rf(sessions_dir) end)
 end
 
+# Bound every `op` shell-out for the whole run. The production default is 15s,
+# sized so an interactive 1Password approval still fits -- but under test that
+# is longer than the budget of any assertion waiting on the other side of it,
+# so a LOCKED vault (which blocks `op` on its desktop authorization prompt)
+# turns a passing test red on a machine state that has nothing to do with the
+# code. `/inspect` was failing exactly this way.
+#
+# Set rather than defaulted: an unlocked vault answers in well under a second,
+# so this only ever truncates a wait that was going to be answered by a human
+# who is not there. Tests that drive the timeout itself override it locally.
+unless System.get_env("RAXOL_OP_TIMEOUT_MS") do
+  System.put_env("RAXOL_OP_TIMEOUT_MS", "2000")
+end
+
 # The invariant suite's fault-injection harness lives under test/invariants/
 # (not test/support/, which elixirc_paths compiles) — load it explicitly.
 Code.require_file("invariants/support/fault_journal.ex", __DIR__)

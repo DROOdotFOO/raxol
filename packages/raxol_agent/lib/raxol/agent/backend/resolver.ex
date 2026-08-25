@@ -216,6 +216,9 @@ defmodule Raxol.Agent.Backend.Resolver do
   Returns `%{op: op_status, providers: [%{harness, label, keyless?,
   available?, source, note}]}`. Probing may shell out to `op` for stored
   references, so treat it as a point-in-time snapshot.
+
+  The `op` state is read ONCE and, when it is unusable, the per-provider `op`
+  probes are skipped entirely. See `provider_diag/2`.
   """
   @spec diagnostics() :: %{op: atom(), providers: [map()]}
   def diagnostics do
@@ -223,9 +226,19 @@ defmodule Raxol.Agent.Backend.Resolver do
     %{op: op, providers: Enum.map(@providers, &provider_diag(&1, op))}
   end
 
+  # A stored `op://` reference cannot resolve while the CLI is absent or signed
+  # out, so probing one here is a shell-out per provider that is guaranteed to
+  # fail. Against a LOCKED vault each probe additionally raises a desktop
+  # authorization prompt and then waits out the full `op` timeout, and there is
+  # one per provider: measured, that turned `/inspect` into a 12-to-22 second
+  # stall where `op_status/0` alone accounted for under 7s of it.
+  #
+  # Skipping costs no information. `diag_note/3` already answers a stored
+  # reference under a signed-out CLI with "run `op signin`" -- the same
+  # conclusion the probe spends 15 seconds arriving at.
   defp provider_diag(spec, op) do
     {available?, source} =
-      case detect_available(spec, []) do
+      case detect_available(spec, skip_op: op != :ok) do
         {:ok, _config, src} -> {true, src}
         _ -> {false, nil}
       end
@@ -409,10 +422,13 @@ defmodule Raxol.Agent.Backend.Resolver do
 
   # -- key resolution ---------------------------------------------------------
 
+  # `:skip_op` is set only by `provider_diag/2`. The resolution path proper never
+  # skips: a user actually starting a turn wants their stored key read, and is
+  # willing to wait for an unlock prompt to do it. A diagnostic is not.
   defp resolve_key(spec, opts) do
     first_ok([
       fn -> explicit_key(opts) end,
-      fn -> op_key(spec) end,
+      fn -> if Keyword.get(opts, :skip_op, false), do: :none, else: op_key(spec) end,
       fn -> env_key(spec) end
     ])
   end
