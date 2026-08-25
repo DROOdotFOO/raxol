@@ -105,7 +105,9 @@ defmodule Raxol.MCP.Transport.Stdio do
             id = Map.get(message, :id)
 
             if id do
-              error = Protocol.error_response(id, Protocol.internal_error(), "Internal server error")
+              error =
+                Protocol.error_response(id, Protocol.internal_error(), "Internal server error")
+
               write_response(state.output_device, error)
             end
         end

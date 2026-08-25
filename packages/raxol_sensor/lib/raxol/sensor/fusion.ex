@@ -86,16 +86,14 @@ defmodule Raxol.Sensor.Fusion do
   def handle_call({:subscribe, pid}, _from, %__MODULE__{} = state) do
     Process.monitor(pid)
 
-    {:reply, :ok,
-     %__MODULE__{state | subscribers: MapSet.put(state.subscribers, pid)}}
+    {:reply, :ok, %__MODULE__{state | subscribers: MapSet.put(state.subscribers, pid)}}
   end
 
   @impl true
   def handle_cast({:register_feed, sensor_id, feed_pid}, %__MODULE__{} = state) do
     Process.monitor(feed_pid)
 
-    {:noreply,
-     %__MODULE__{state | feeds: Map.put(state.feeds, sensor_id, feed_pid)}}
+    {:noreply, %__MODULE__{state | feeds: Map.put(state.feeds, sensor_id, feed_pid)}}
   end
 
   @impl true

@@ -57,8 +57,7 @@ defmodule Raxol.Terminal.Driver.TerminalReportTest do
 
       send(driver_pid, {:raw_input, "\e[>0;282;0c\e[B"})
 
-      assert_receive {:"$gen_cast",
-                      {:dispatch, %Event{type: :key, data: %{key: :down}}}},
+      assert_receive {:"$gen_cast", {:dispatch, %Event{type: :key, data: %{key: :down}}}},
                      500
 
       refute_receive {:"$gen_cast", {:dispatch, %Event{type: :key}}}, 200

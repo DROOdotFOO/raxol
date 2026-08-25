@@ -68,12 +68,16 @@ defmodule Raxol.PluginTest do
 
     test "handle_command/3 can be overridden" do
       {:ok, state} = CustomPlugin.init(%{})
-      assert {:ok, _state, "Hello, World!"} = CustomPlugin.handle_command(:greet, ["World"], state)
+
+      assert {:ok, _state, "Hello, World!"} =
+               CustomPlugin.handle_command(:greet, ["World"], state)
     end
 
     test "handle_command/3 can return errors" do
       {:ok, state} = CustomPlugin.init(%{})
-      assert {:error, :intentional_failure, _state} = CustomPlugin.handle_command(:fail, [], state)
+
+      assert {:error, :intentional_failure, _state} =
+               CustomPlugin.handle_command(:fail, [], state)
     end
 
     test "get_commands/0 can be overridden" do

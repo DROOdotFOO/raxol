@@ -19,7 +19,6 @@ defmodule Raxol.Terminal.Buffer.ScrollRegion do
   * Managing content within the region
   """
 
-
   alias Raxol.Terminal.Cell
   alias Raxol.Terminal.ScreenBuffer
   alias Raxol.Terminal.ScreenBuffer.Core, as: ScreenBufferCore

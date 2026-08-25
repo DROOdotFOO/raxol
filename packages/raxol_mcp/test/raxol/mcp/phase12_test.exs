@@ -161,12 +161,42 @@ defmodule Raxol.MCP.Phase12Test do
   describe "FocusLens :hover mode" do
     setup do
       tools = [
-        %{name: "search.type_into", description: "Type", inputSchema: %{}, callback: fn _ -> {:ok, "ok"} end},
-        %{name: "search.clear", description: "Clear", inputSchema: %{}, callback: fn _ -> {:ok, "ok"} end},
-        %{name: "btn1.click", description: "Click btn1", inputSchema: %{}, callback: fn _ -> {:ok, "ok"} end},
-        %{name: "btn2.click", description: "Click btn2", inputSchema: %{}, callback: fn _ -> {:ok, "ok"} end},
-        %{name: "table.select_row", description: "Select", inputSchema: %{}, callback: fn _ -> {:ok, "ok"} end},
-        %{name: "global_action", description: "Global", inputSchema: %{}, callback: fn _ -> {:ok, "ok"} end}
+        %{
+          name: "search.type_into",
+          description: "Type",
+          inputSchema: %{},
+          callback: fn _ -> {:ok, "ok"} end
+        },
+        %{
+          name: "search.clear",
+          description: "Clear",
+          inputSchema: %{},
+          callback: fn _ -> {:ok, "ok"} end
+        },
+        %{
+          name: "btn1.click",
+          description: "Click btn1",
+          inputSchema: %{},
+          callback: fn _ -> {:ok, "ok"} end
+        },
+        %{
+          name: "btn2.click",
+          description: "Click btn2",
+          inputSchema: %{},
+          callback: fn _ -> {:ok, "ok"} end
+        },
+        %{
+          name: "table.select_row",
+          description: "Select",
+          inputSchema: %{},
+          callback: fn _ -> {:ok, "ok"} end
+        },
+        %{
+          name: "global_action",
+          description: "Global",
+          inputSchema: %{},
+          callback: fn _ -> {:ok, "ok"} end
+        }
       ]
 
       %{tools: tools}
@@ -214,7 +244,14 @@ defmodule Raxol.MCP.Phase12Test do
     end
 
     test "hover respects max_tools limit", %{tools: tools} do
-      result = FocusLens.filter(tools, mode: :hover, focused_id: "search", hover_id: "btn1", max_tools: 3)
+      result =
+        FocusLens.filter(tools,
+          mode: :hover,
+          focused_id: "search",
+          hover_id: "btn1",
+          max_tools: 3
+        )
+
       assert length(result) <= 3
     end
 

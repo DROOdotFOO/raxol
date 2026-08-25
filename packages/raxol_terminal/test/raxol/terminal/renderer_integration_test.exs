@@ -55,8 +55,7 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
   defp parse_hex("#" <> hex), do: parse_hex(hex)
 
   defp parse_hex(<<r::binary-size(2), g::binary-size(2), b::binary-size(2)>>) do
-    {String.to_integer(r, 16), String.to_integer(g, 16),
-     String.to_integer(b, 16)}
+    {String.to_integer(r, 16), String.to_integer(g, 16), String.to_integer(b, 16)}
   end
 
   describe "integration with Manipulation module" do
@@ -248,9 +247,7 @@ defmodule Raxol.Terminal.RendererIntegrationTest do
       text = "Red text"
 
       buffer =
-        Enum.reduce(Enum.with_index(String.graphemes(text)), buffer, fn {char,
-                                                                         col},
-                                                                        acc ->
+        Enum.reduce(Enum.with_index(String.graphemes(text)), buffer, fn {char, col}, acc ->
           ScreenBuffer.write_char(acc, col, 0, char, style)
         end)
 

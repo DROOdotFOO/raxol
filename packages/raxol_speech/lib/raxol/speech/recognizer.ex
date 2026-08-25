@@ -173,9 +173,7 @@ defmodule Raxol.Speech.Recognizer do
       e ->
         require Logger
 
-        Logger.warning(
-          "Failed to load Whisper model #{model_name}: #{Exception.message(e)}"
-        )
+        Logger.warning("Failed to load Whisper model #{model_name}: #{Exception.message(e)}")
 
         nil
     end

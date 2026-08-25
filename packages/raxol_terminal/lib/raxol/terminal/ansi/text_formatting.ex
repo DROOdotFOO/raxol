@@ -360,6 +360,7 @@ defmodule Raxol.Terminal.ANSI.TextFormatting do
   @impl true
   def get_background(style), do: Core.get_background(style)
   def set_underline_color(style, color), do: Core.set_underline_color(style, color)
+
   def set_underline_style(style, underline_style),
     do: Core.set_underline_style(style, underline_style)
 

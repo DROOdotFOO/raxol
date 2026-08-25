@@ -16,7 +16,6 @@ defmodule Raxol.Terminal.Session do
 
   use Raxol.Core.Behaviours.BaseManager
 
-
   alias Raxol.Terminal.Env
 
   alias Raxol.Terminal.Emulator.Struct, as: EmulatorStruct
@@ -325,9 +324,7 @@ defmodule Raxol.Terminal.Session do
       :ok
   catch
     :exit, reason ->
-      Raxol.Core.Runtime.Log.error(
-        "Failed to register session #{id}: #{inspect(reason)}"
-      )
+      Raxol.Core.Runtime.Log.error("Failed to register session #{id}: #{inspect(reason)}")
 
       :ok
   end

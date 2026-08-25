@@ -252,8 +252,7 @@ defmodule Raxol.Terminal.ScrollRegionManagerTest do
       {:ok, sio} = StringIO.open("")
 
       final =
-        Enum.reduce([24, 80, 30, 6, 120], SRM.start(sio, 24, 3), fn rows,
-                                                                    state ->
+        Enum.reduce([24, 80, 30, 6, 120], SRM.start(sio, 24, 3), fn rows, state ->
           state =
             if SRM.rows(state) == rows, do: state, else: SRM.resize(state, rows)
 

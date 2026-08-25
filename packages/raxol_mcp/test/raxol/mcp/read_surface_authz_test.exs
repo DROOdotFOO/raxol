@@ -12,9 +12,7 @@ defmodule Raxol.MCP.ReadSurfaceAuthzTest do
     {:ok, _} = Registry.start_link(name: registry_name)
 
     {:ok, server} =
-      Server.start_link(
-        [name: server_name, registry: registry_name] ++ server_opts
-      )
+      Server.start_link([name: server_name, registry: registry_name] ++ server_opts)
 
     {server, registry_name}
   end
@@ -239,15 +237,13 @@ defmodule Raxol.MCP.ReadSurfaceAuthzTest do
         "uri" => "raxol://a"
       })
 
-      assert_receive {:mcp_notification,
-                      %{method: "notifications/resources/updated"}},
+      assert_receive {:mcp_notification, %{method: "notifications/resources/updated"}},
                      1_000
 
       # Other notification methods are unaffected by subscription state.
       Server.notify(server, "notifications/tools/list_changed", %{})
 
-      assert_receive {:mcp_notification,
-                      %{method: "notifications/tools/list_changed"}},
+      assert_receive {:mcp_notification, %{method: "notifications/tools/list_changed"}},
                      1_000
     end
   end

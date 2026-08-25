@@ -44,7 +44,9 @@ defmodule RaxolPlugin.MixProject do
   end
 
   defp raxol_dep(name, version, path) do
-    if System.get_env("HEX_BUILD") || !File.dir?(path), do: {name, version}, else: {name, version, path: path}
+    if System.get_env("HEX_BUILD") || !File.dir?(path),
+      do: {name, version},
+      else: {name, version, path: path}
   end
 
   defp description do

@@ -45,9 +45,14 @@ mix dialyzer                  # Type checking
 ```
 
 Packages format at their own line length (98), not the root's 80. The root
-`.formatter.exs` delegates to the packages CI format-gates (`:subdirectories`),
-so a root `mix format` handles those correctly. For any other package, format
-from inside it: `cd packages/<pkg> && mix format`.
+`.formatter.exs` delegates every `packages/*` path to that package's own config
+(`:subdirectories`), so `mix format` from the repo root is correct for any file
+in the repo and matches what CI checks.
+
+CI gates the same thing in two places, both in the `format` job: the root
+`mix format --check-formatted`, then a loop running each package's own gate.
+Every package is covered, so `cd packages/<pkg> && mix format` is a no-op on a
+clean tree. If it rewrites files, that is a real diff and not drift.
 
 ### Running examples
 

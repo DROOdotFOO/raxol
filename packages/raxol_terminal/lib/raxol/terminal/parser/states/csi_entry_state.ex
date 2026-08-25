@@ -27,7 +27,6 @@ defmodule Raxol.Terminal.Parser.States.CSIEntryState do
   end
 
   defp dispatch_byte(byte, data) do
-
     Raxol.Core.Runtime.Log.warning("Invalid byte in CSI Entry state: #{inspect(byte)}")
 
     {:ground, data}

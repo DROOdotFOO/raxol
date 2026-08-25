@@ -16,22 +16,13 @@
   # editor save does in a monorepo workspace -- rewraps those files at 80 and
   # reverts exactly what the per-package CI gate blessed.
   #
-  # This list tracks the `package-tests` matrix in .github/workflows/ci-unified.yml,
-  # which is the only place a package is format-gated. Widening it to `packages/*`
-  # pulls the ungated packages (169 files of pre-existing drift) into the root
-  # check, so a package joins here when it joins that matrix.
-  subdirectories: [
-    "packages/raxol_agent",
-    "packages/raxol_agent_client_protocol",
-    "packages/raxol_cli",
-    "packages/raxol_console",
-    "packages/raxol_core",
-    "packages/raxol_earn",
-    "packages/raxol_gateway",
-    "packages/raxol_payments",
-    "packages/raxol_symphony",
-    "packages/raxol_telegram"
-  ],
+  # Every package, by glob. This used to be an explicit list tracking the
+  # `package-tests` matrix, because the packages outside that matrix carried
+  # ~145 files of drift and pulling them in would have made the root check
+  # unsatisfiable. That drift is now gone and the `format` job in
+  # .github/workflows/ci-unified.yml gates all of them, so the two agree by
+  # construction rather than by keeping two lists in step.
+  subdirectories: ["packages/*"],
   locals_without_parens: [
     # Phoenix
     action_fallback: 1,

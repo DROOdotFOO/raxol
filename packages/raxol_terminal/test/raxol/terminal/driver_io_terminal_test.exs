@@ -15,8 +15,7 @@ defmodule Raxol.Terminal.DriverIOTerminalTest do
 
   describe "Driver with IOTerminal backend" do
     if @termbox_available do
-      @tag skip:
-             "termbox2 NIF loaded; Driver only falls back to IOTerminal without it"
+      @tag skip: "termbox2 NIF loaded; Driver only falls back to IOTerminal without it"
     end
 
     test "initializes with IOTerminal when termbox2_nif not available" do
@@ -44,8 +43,7 @@ defmodule Raxol.Terminal.DriverIOTerminalTest do
     end
 
     if @termbox_available do
-      @tag skip:
-             "termbox2 NIF loaded; IOTerminal size fallback not reachable here"
+      @tag skip: "termbox2 NIF loaded; IOTerminal size fallback not reachable here"
     end
 
     test "Driver uses IOTerminal for size detection when termbox unavailable" do
@@ -60,8 +58,7 @@ defmodule Raxol.Terminal.DriverIOTerminalTest do
 
   describe "IOTerminal fallback behavior" do
     if @termbox_available do
-      @describetag skip:
-                     "termbox2 NIF loaded; IOTerminal-only fallback not reachable here"
+      @describetag skip: "termbox2 NIF loaded; IOTerminal-only fallback not reachable here"
     end
 
     test "get_termbox_width uses IOTerminal when NIF unavailable" do
@@ -106,8 +103,7 @@ defmodule Raxol.Terminal.DriverIOTerminalTest do
 
   describe "terminal operations without termbox2_nif" do
     if @termbox_available do
-      @describetag skip:
-                     "termbox2 NIF loaded; IOTerminal-only path not reachable here"
+      @describetag skip: "termbox2 NIF loaded; IOTerminal-only path not reachable here"
     end
 
     setup do

@@ -10,7 +10,6 @@ defmodule Raxol.Terminal.EventProcessor do
   - Performance monitoring integration
   """
 
-
   alias Raxol.Core.Events.Event
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Events.Handler

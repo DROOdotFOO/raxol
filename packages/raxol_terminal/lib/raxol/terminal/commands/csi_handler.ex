@@ -311,8 +311,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
 
   def handle_bracketed_paste_start(emulator) do
     if emulator.mode_manager.bracketed_paste_mode do
-      {:ok,
-       %{emulator | bracketed_paste_active: true, bracketed_paste_buffer: ""}}
+      {:ok, %{emulator | bracketed_paste_active: true, bracketed_paste_buffer: ""}}
     else
       {:ok, emulator}
     end
@@ -320,8 +319,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
 
   def handle_bracketed_paste_end(emulator) do
     if emulator.bracketed_paste_active do
-      {:ok,
-       %{emulator | bracketed_paste_active: false, bracketed_paste_buffer: ""}}
+      {:ok, %{emulator | bracketed_paste_active: false, bracketed_paste_buffer: ""}}
     else
       {:ok, emulator}
     end

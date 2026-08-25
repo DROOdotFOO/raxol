@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
   Manages alternate screen buffer switching and related functionality.
   """
 
-
   alias Raxol.Terminal.ANSI.TextFormatting
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ModeManager

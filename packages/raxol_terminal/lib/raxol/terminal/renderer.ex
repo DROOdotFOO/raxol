@@ -464,18 +464,14 @@ defmodule Raxol.Terminal.Renderer do
   defp parse_hex_color("#" <> hex), do: parse_hex_digits(hex)
   defp parse_hex_color(hex) when is_binary(hex), do: parse_hex_digits(hex)
 
-  defp parse_hex_digits(
-         <<_::binary-size(2), _::binary-size(2), _::binary-size(2)>> = hex
-       ) do
+  defp parse_hex_digits(<<_::binary-size(2), _::binary-size(2), _::binary-size(2)>> = hex) do
     case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_6(hex) do
       {:ok, r, g, b, _a} -> {:ok, r, g, b}
       {:error, _} -> :error
     end
   end
 
-  defp parse_hex_digits(
-         <<_::binary-size(1), _::binary-size(1), _::binary-size(1)>> = hex
-       ) do
+  defp parse_hex_digits(<<_::binary-size(1), _::binary-size(1), _::binary-size(1)>> = hex) do
     case Raxol.Terminal.Color.TrueColor.AnsiCodes.parse_hex_3(hex) do
       {:ok, r, g, b, _a} -> {:ok, r, g, b}
       {:error, _} -> :error

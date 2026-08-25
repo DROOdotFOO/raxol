@@ -176,8 +176,8 @@ defmodule Raxol.MCP.RegistryTest do
 
       :ok = Registry.register_tools(r, [sample_tool()])
 
-      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref,
-                      %{count: 1}, %{action: :register, names: ["test_tool"]}}
+      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref, %{count: 1},
+                      %{action: :register, names: ["test_tool"]}}
     end
 
     test "emits tools_changed on unregister", %{registry: r} do
@@ -190,8 +190,8 @@ defmodule Raxol.MCP.RegistryTest do
 
       :ok = Registry.unregister_tools(r, ["test_tool"])
 
-      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref,
-                      %{count: 1}, %{action: :unregister, names: ["test_tool"]}}
+      assert_receive {[:raxol, :mcp, :registry, :tools_changed], ^ref, %{count: 1},
+                      %{action: :unregister, names: ["test_tool"]}}
     end
   end
 

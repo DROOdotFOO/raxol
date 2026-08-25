@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Parser.States.OSCStringMaybeSTState do
   Handles the :osc_string_maybe_st state of the terminal parser.
   """
 
-
   alias Raxol.Terminal.Commands.Executor
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State

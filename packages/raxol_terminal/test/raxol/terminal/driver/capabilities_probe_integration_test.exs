@@ -79,27 +79,27 @@ defmodule Raxol.Terminal.Driver.CapabilitiesProbeIntegrationTest do
       # Keystrokes survive, in order, none dropped, none duplicated, none
       # reordered relative to the replies they rode alongside.
       assert_receive {:"$gen_cast",
-                       {:dispatch, %Event{type: :key, data: %{key: :char, char: "a"}}}}
+                      {:dispatch, %Event{type: :key, data: %{key: :char, char: "a"}}}}
 
       assert_receive {:"$gen_cast",
-                       {:dispatch, %Event{type: :key, data: %{key: :char, char: "b"}}}}
+                      {:dispatch, %Event{type: :key, data: %{key: :char, char: "b"}}}}
 
       assert_receive {:"$gen_cast",
-                       {:dispatch, %Event{type: :key, data: %{key: :char, char: "c"}}}}
+                      {:dispatch, %Event{type: :key, data: %{key: :char, char: "c"}}}}
 
       # Compat side effect #1: the old OSC 11 background event, preserved
       # verbatim for existing consumers.
       assert_receive {:"$gen_cast",
-                       {:dispatch,
-                        %Event{type: :terminal_background, data: %{color: {16, 16, 16}}}}}
+                      {:dispatch,
+                       %Event{type: :terminal_background, data: %{color: {16, 16, 16}}}}}
 
       # New side effect: the full classified capabilities record.
       assert_receive {:"$gen_cast",
-                       {:dispatch,
-                        %Event{
-                          type: :terminal_capabilities,
-                          data: %{capabilities: %Capabilities{} = caps}
-                        }}}
+                      {:dispatch,
+                       %Event{
+                         type: :terminal_capabilities,
+                         data: %{capabilities: %Capabilities{} = caps}
+                       }}}
 
       assert caps.background == {16, 16, 16}
       assert caps.foreground == {232, 232, 232}
@@ -131,7 +131,7 @@ defmodule Raxol.Terminal.Driver.CapabilitiesProbeIntegrationTest do
       send(driver_pid, {:raw_input, "x"})
 
       assert_receive {:"$gen_cast",
-                       {:dispatch, %Event{type: :key, data: %{key: :char, char: "x"}}}}
+                      {:dispatch, %Event{type: :key, data: %{key: :char, char: "x"}}}}
 
       GenServer.stop(driver_pid)
     end
@@ -145,11 +145,11 @@ defmodule Raxol.Terminal.Driver.CapabilitiesProbeIntegrationTest do
       send(driver_pid, :capabilities_probe_clock)
 
       assert_receive {:"$gen_cast",
-                       {:dispatch,
-                        %Event{
-                          type: :terminal_capabilities,
-                          data: %{capabilities: %Capabilities{} = caps}
-                        }}}
+                      {:dispatch,
+                       %Event{
+                         type: :terminal_capabilities,
+                         data: %{capabilities: %Capabilities{} = caps}
+                       }}}
 
       assert caps.background == nil
       assert caps.foreground == nil
@@ -176,11 +176,11 @@ defmodule Raxol.Terminal.Driver.CapabilitiesProbeIntegrationTest do
       send(driver_pid, :capabilities_probe_clock)
 
       assert_receive {:"$gen_cast",
-                       {:dispatch,
-                        %Event{
-                          type: :terminal_capabilities,
-                          data: %{capabilities: %Capabilities{} = caps}
-                        }}}
+                      {:dispatch,
+                       %Event{
+                         type: :terminal_capabilities,
+                         data: %{capabilities: %Capabilities{} = caps}
+                       }}}
 
       assert caps.tier == :core_minus
       assert caps.background == nil
@@ -204,11 +204,11 @@ defmodule Raxol.Terminal.Driver.CapabilitiesProbeIntegrationTest do
       send(driver_pid, :capabilities_probe_clock)
 
       assert_receive {:"$gen_cast",
-                       {:dispatch,
-                        %Event{
-                          type: :terminal_capabilities,
-                          data: %{capabilities: %Capabilities{}}
-                        }}}
+                      {:dispatch,
+                       %Event{
+                         type: :terminal_capabilities,
+                         data: %{capabilities: %Capabilities{}}
+                       }}}
 
       # The probe is done; its job is over. A later, wholly unrelated lone
       # ESC keystroke (its own chunk, no more bytes behind it -- exactly
@@ -217,8 +217,7 @@ defmodule Raxol.Terminal.Driver.CapabilitiesProbeIntegrationTest do
       # "partial" and discarded on the next chunk.
       send(driver_pid, {:raw_input, "\e"})
 
-      assert_receive {:"$gen_cast",
-                       {:dispatch, %Event{type: :key, data: %{key: :escape}}}}
+      assert_receive {:"$gen_cast", {:dispatch, %Event{type: :key, data: %{key: :escape}}}}
 
       assert Process.alive?(driver_pid)
       GenServer.stop(driver_pid)

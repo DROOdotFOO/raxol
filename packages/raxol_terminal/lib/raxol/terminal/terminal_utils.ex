@@ -138,9 +138,7 @@ defmodule Raxol.Terminal.TerminalUtils do
              {:ok, width, height}
            else
              {:error, reason} ->
-               Raxol.Core.Runtime.Log.debug(
-                 "io.columns/rows error: #{inspect(reason)}"
-               )
+               Raxol.Core.Runtime.Log.debug("io.columns/rows error: #{inspect(reason)}")
 
                {:error, reason}
 
@@ -156,9 +154,7 @@ defmodule Raxol.Terminal.TerminalUtils do
         result
 
       {:error, reason} ->
-        Raxol.Core.Runtime.Log.debug(
-          "Error in detect_with_io: #{inspect(reason)}"
-        )
+        Raxol.Core.Runtime.Log.debug("Error in detect_with_io: #{inspect(reason)}")
 
         {:error, reason}
     end
@@ -212,9 +208,7 @@ defmodule Raxol.Terminal.TerminalUtils do
                end
 
              {output, code} ->
-               Raxol.Core.Runtime.Log.debug(
-                 "stty exited with code #{code}: #{inspect(output)}"
-               )
+               Raxol.Core.Runtime.Log.debug("stty exited with code #{code}: #{inspect(output)}")
 
                {:error, {:exit_code, code}}
            end
@@ -223,9 +217,7 @@ defmodule Raxol.Terminal.TerminalUtils do
         result
 
       {:error, reason} ->
-        Raxol.Core.Runtime.Log.debug(
-          "Error in detect_with_stty: #{inspect(reason)}"
-        )
+        Raxol.Core.Runtime.Log.debug("Error in detect_with_stty: #{inspect(reason)}")
 
         {:error, reason}
     end

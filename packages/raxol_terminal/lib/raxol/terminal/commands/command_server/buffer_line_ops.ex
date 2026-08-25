@@ -2,7 +2,6 @@ defmodule Raxol.Terminal.Commands.CommandServer.BufferLineOps do
   @moduledoc false
   @compile {:no_warn_undefined, Raxol.Terminal.Commands.CommandServer.Helpers}
 
-
   alias Raxol.Terminal.Cell
   alias Raxol.Terminal.Commands.CommandServer.Helpers
   alias Raxol.Terminal.Emulator

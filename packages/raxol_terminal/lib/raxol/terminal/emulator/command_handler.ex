@@ -590,7 +590,6 @@ defmodule Raxol.Terminal.Emulator.CommandHandler do
   defp extract_emulator(emulator), do: emulator
 
   defp handle_csi_command(final_byte, params, emulator, intermediates) do
-
     Raxol.Core.Runtime.Log.debug(
       "handle_csi_command: final_byte=#{inspect(final_byte)}, params=#{inspect(params)}"
     )
