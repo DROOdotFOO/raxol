@@ -75,6 +75,8 @@ defmodule Raxol.Agent.Interrupt do
   `interrupt/3` implements this behaviour; the red suite runs green against it.
   """
 
+  alias Raxol.Core.ProcessGroup
+
   @signal :interrupt_signaled
   @wait :interrupt_waited
   @kill :interrupt_killed
@@ -85,8 +87,9 @@ defmodule Raxol.Agent.Interrupt do
   # Executable for the mutating `kill` shell-outs. Overridable via
   # `config :raxol_agent, :interrupt_kill_sh` so a test can force an OS-level
   # signal failure (a permission-denied kill) without an unkillable live
-  # process. Only the `kill` calls honor this seam — every `ps`/pgid read uses
-  # the real binary, so liveness and pgid derivation stay truthful.
+  # process. Only the `kill` calls honor this seam — every `ps` read and every
+  # target RESOLUTION uses the real binary, so liveness and group derivation
+  # stay truthful while the signal itself is made to fail.
   @kill_sh "/bin/sh"
 
   @typedoc "The three staged-kill event types, in escalation order."
@@ -474,21 +477,20 @@ defmodule Raxol.Agent.Interrupt do
   # signalable (a non-positive/invalid pid).
   defp group_signal(os_pid, signal)
        when is_integer(os_pid) and os_pid > 1 and is_binary(signal) do
-    if group_leader_safe?(os_pid) do
-      {_out, status} =
-        System.cmd(kill_sh(), ["-c", "kill #{signal} -#{os_pid} 2>/dev/null"])
+    case ProcessGroup.resolve(os_pid) do
+      {:group, _} = target ->
+        {ProcessGroup.signal(target, signal, shell: kill_sh()) == :ok, :group}
 
-      {status == 0, :group}
-    else
-      # Enumerate the whole subtree BEFORE signaling the parent: killing the
-      # parent first reparents its children and loses the ppid linkage.
-      descendants = descendants_of(os_pid)
+      _ ->
+        # Enumerate the whole subtree BEFORE signaling the parent: killing the
+        # parent first reparents its children and loses the ppid linkage.
+        descendants = descendants_of(os_pid)
 
-      {_out, status} =
-        System.cmd(kill_sh(), ["-c", "kill #{signal} #{os_pid} 2>/dev/null"])
+        parent_ok? =
+          ProcessGroup.signal({:pid, os_pid}, signal, shell: kill_sh()) == :ok
 
-      swept_ok? = descendants |> Enum.map(&individual_signal(&1, signal)) |> Enum.all?()
-      {status == 0 and swept_ok?, {:fallback, descendants}}
+        swept_ok? = descendants |> Enum.map(&individual_signal(&1, signal)) |> Enum.all?()
+        {parent_ok? and swept_ok?, {:fallback, descendants}}
     end
   end
 
@@ -496,8 +498,7 @@ defmodule Raxol.Agent.Interrupt do
 
   # Signal one pid; returns whether the `kill` exited 0 (status not discarded).
   defp individual_signal(pid, signal) when is_integer(pid) and pid > 1 do
-    {_out, status} = System.cmd(kill_sh(), ["-c", "kill #{signal} #{pid} 2>/dev/null"])
-    status == 0
+    ProcessGroup.signal({:pid, pid}, signal, shell: kill_sh()) == :ok
   end
 
   defp individual_signal(_pid, _signal), do: false
@@ -592,14 +593,29 @@ defmodule Raxol.Agent.Interrupt do
   # derivation works on this host — a nil pgid silently degrades group-kill to
   # the per-pid fallback (the macOS/BSD pgid-derivation regression).
   @doc false
-  def group_leader_safe?(os_pid) do
-    with pgid when is_integer(pgid) <- pgid_of(os_pid),
-         own when is_integer(own) <- own_pgid() do
-      pgid == os_pid and pgid != own
-    else
-      _ -> false
-    end
+  def group_leader_safe?(os_pid) when is_integer(os_pid) and os_pid > 1 do
+    # This used to read the pgid out of `ps` and require `pgid == os_pid and
+    # pgid != own_pgid()`. Both halves are subsumed by probing the group
+    # directly, and the probe answers a case the read could not.
+    #
+    # `pgid == os_pid`: a group's id is its leader's pid, and that pid stays
+    # allocated while the group has any member. So a group answering under
+    # `os_pid` can only be one this pid led.
+    #
+    # `pgid != own_pgid()`: a child that is NOT a group leader sits in the
+    # BEAM's group, whose id is the BEAM's leader's pid -- never `os_pid`, which
+    # is a live child. The probe therefore finds no group under `os_pid` and
+    # falls back. The VM's own group is unreachable here by construction rather
+    # than by inspection.
+    #
+    # What the read could not do: see a corpse. A tool that backgrounds a child
+    # and exits leaves `ps -o pgid= -p <corpse>` empty, so the group kill was
+    # skipped for the one topology it is most needed in -- and the fallback's
+    # ppid sweep cannot reach a reparented orphan either.
+    ProcessGroup.group_leader?(os_pid)
   end
+
+  def group_leader_safe?(_os_pid), do: false
 
   # Derive a pid's process-group id. The primary form (`-o pgid=`, empty-header
   # suppression) works on GNU ps and modern macOS/BSD ps; the fallback requests
@@ -637,10 +653,6 @@ defmodule Raxol.Agent.Interrupt do
         nil
     end
   end
-
-  defp own_pgid, do: pgid_of(os_getpid())
-
-  defp os_getpid, do: :os.getpid() |> to_string() |> String.to_integer()
 
   # All transitive descendants of `root` from ONE `ps -Ao pid=,ppid=` table
   # scan (portable across GNU and BSD ps; `--ppid` is not) walked breadth-first

@@ -303,6 +303,40 @@ defmodule Raxol.Agent.Red.U5InterruptRedTest do
     end
   end
 
+  describe "P11 — an orphan whose parent already exited is still reaped" do
+    @tag :unix_only
+    test "the group is resolved off the surviving group, not off the corpse's pgid" do
+      # The commonest leak shape: the tool backgrounds something and exits. Its
+      # own pid is a corpse, so a `ps -o pgid= -p <corpse>` read comes back
+      # empty, the group-kill path is never taken, and the per-pid fallback's
+      # ppid sweep cannot see the orphan either -- it was reparented to init the
+      # moment its parent died. Both halves of the old derivation miss it.
+      #
+      # The surviving process GROUP still names it, which is what resolving via
+      # `kill -0 -<pgid>` finds.
+      lab = KillLab.spawn_orphaning(sleep: 30)
+      on_exit(fn -> KillLab.reap(lab) end)
+
+      assert KillLab.await_dead(lab.os_pid, 3_000),
+             "test premise broken: the tool's top process should have exited on its own"
+
+      assert KillLab.alive?(lab.child_pid),
+             "test premise broken: the orphan should still be running"
+
+      assert Interrupt.group_leader_safe?(lab.os_pid),
+             "a corpse still leads a live group -- resolving the target off `ps` " <>
+               "cannot see that, and drops to a sweep that cannot reach the orphan"
+
+      {disposition, confirmed?, _os_pid} = Interrupt.kill_os_pid(lab.os_pid)
+
+      assert KillLab.await_dead(lab.child_pid, 3_000),
+             "the orphan survived the kill: this is the leak the group path exists to close"
+
+      assert disposition == :killed
+      assert confirmed?, "the group was signalled, so group death is observable"
+    end
+  end
+
   describe "P9 — the liveness oracle is state-aware (a zombie is dead, not alive)" do
     @tag :unix_only
     test "a killed-but-unreaped (zombie) child is reported dead, though ps -p exits 0" do
