@@ -42,7 +42,7 @@ defmodule Raxol.Symphony.Workspace do
 
   require Logger
 
-  alias Raxol.Symphony.{Config, PathSafety, Ssh}
+  alias Raxol.Symphony.{Config, PathSafety, PortReaper, Ssh}
   alias Raxol.Symphony.Worker.HostSpec
 
   # Distinctive enough that a login banner or profile chatter on the remote
@@ -747,12 +747,47 @@ defmodule Raxol.Symphony.Workspace do
         {:error, {:exit, status, IO.iodata_to_binary(Enum.reverse(acc))}}
     after
       timeout_ms ->
-        # Port.close kills the OS process via SIGKILL when :exit_status was
-        # requested. Drain the message queue to avoid leaks.
-        Port.close(port)
+        # Giving up on a hook does not stop it. `Port.close/1` signals nothing,
+        # so the hook runs on -- and `before_remove` is the sharp case, since
+        # `remove/3` then `rm_rf`s the workspace out from under a hook still
+        # writing to it. `after_create`'s failure path has the same shape. Past
+        # that, a hook that leaks a process per timeout leaks one per retry, and
+        # the orchestrator retries.
+        #
+        # Killed BEFORE the close, not after. Nothing here is waiting on the
+        # child's output, so there is no reason to hand it an EOF and then wait
+        # out a grace; killing first is the narrowest window available.
+        #
+        # Narrowest, not zero. An open port does NOT prove the pid is still
+        # ours: ERTS withholds the exit status until the inherited stdout
+        # reaches EOF, so a hook that backgrounds a child and exits leaves the
+        # port open indefinitely while `Port.info/2` goes on naming a pid that
+        # has already been reaped. What keeps the reap correct there is
+        # `PortReaper.capture/1` resolving the target against the process GROUP
+        # rather than that pid -- a group id cannot be recycled while the group
+        # still has a member, which is precisely when there is work to do.
+        #
+        # SIGKILL outright, where the remote deadline sends SIGTERM. There the
+        # status is read back (`@killed_by_deadline`); here nothing reads it, we
+        # have already stopped waiting, and the workspace may be deleted next.
+        target = PortReaper.capture(port)
+        reaped = PortReaper.kill(target)
+        PortReaper.close(port)
         flush_port_messages(port)
+        warn_if_unreaped(reaped, target)
         {:error, :timeout}
     end
+  end
+
+  # `remove/3` may `rm_rf` this workspace next, so a kill we could not carry out
+  # is not a detail to swallow: the hook is still in there writing to it.
+  defp warn_if_unreaped(:ok, _target), do: :ok
+
+  defp warn_if_unreaped({:error, reason}, target) do
+    Logger.warning(
+      "symphony.workspace.hook_unreaped target=#{inspect(target)} reason=#{inspect(reason)} " <>
+        "detail=hook_may_still_be_running"
+    )
   end
 
   defp flush_port_messages(port) do
