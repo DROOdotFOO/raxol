@@ -145,15 +145,57 @@ defmodule Raxol.Core.Boundary.Path do
     case :file.read_link(candidate) do
       {:ok, target} ->
         # A symlink resolves against its REAL parent (`base`): an absolute target
-        # restarts from the filesystem root, a relative one (possibly with `..`)
-        # is spliced ahead of the remaining components and resolved against base.
-        case Path.split(to_string(target)) do
-          ["/" | target_rest] -> walk_real("/", target_rest ++ rest, depth + 1)
-          target_rest -> walk_real(base, target_rest ++ rest, depth + 1)
-        end
+        # restarts from its own anchor, a relative one (possibly with `..`) is
+        # spliced ahead of the remaining components and resolved against base.
+        {anchor, target_rest} = anchor_target(to_string(target), base)
+        walk_real(anchor, target_rest ++ rest, depth + 1)
 
       {:error, _not_a_symlink_or_missing} ->
         walk_real(candidate, rest, depth)
     end
   end
+
+  # Split a symlink target into the base it resolves against and the components
+  # to walk from there.
+  #
+  # `Path.split/1` is `:filename.split/1`, whose notion of "absolute" is
+  # OS-dependent: a Windows absolute target splits as `["c:/", "tmp", ...]`,
+  # keeping the drive as its own anchor, while the SAME string on Unix splits as
+  # `["c:", "tmp", ...]` with no anchor at all. Matching only the POSIX `"/"`
+  # anchor therefore sent every Windows-absolute target down the relative branch,
+  # where it was spliced onto `base` and landed back INSIDE the root -- an escape
+  # `escape_gate/2` could not see, because nothing had left.
+  #
+  # A drive anchor counts on EVERY host rather than only on Windows. Deciding it
+  # per-host would mean the same link is contained on one platform and not on
+  # another, and one rule errs the safe way: on Unix a target of `c:/outside/x`
+  # names a directory literally called `c:`, so treating it as absolute refuses a
+  # pathological-but-legal relative path instead of admitting a real escape.
+  defp anchor_target(target, base) do
+    case Path.split(target) do
+      ["/" | rest] ->
+        {"/", rest}
+
+      [anchor | rest] = split ->
+        case drive_root(anchor) do
+          nil -> {base, split}
+          root -> {root, rest}
+        end
+
+      [] ->
+        {base, []}
+    end
+  end
+
+  # `"c:/"` is how Windows splits a drive-absolute target; `"c:"` is how Unix
+  # splits the same string. A bare drive is drive-RELATIVE on Windows rather than
+  # absolute, but anchoring it at the drive root refuses it, which is the safe
+  # direction for a boundary.
+  defp drive_root(<<letter, ?:>>) when letter in ?A..?Z or letter in ?a..?z,
+    do: <<letter, ?:, ?/>>
+
+  defp drive_root(<<letter, ?:, ?/>>) when letter in ?A..?Z or letter in ?a..?z,
+    do: <<letter, ?:, ?/>>
+
+  defp drive_root(_), do: nil
 end

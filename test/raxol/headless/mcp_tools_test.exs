@@ -134,14 +134,13 @@ defmodule Raxol.Headless.McpToolsTest do
       assert target =~ Path.basename(root)
     end
 
-    # Unix only. `confine/3` resolves a symlink target through
-    # `walk_real/3`, which recognizes an absolute target by the POSIX
-    # `["/" | rest]` shape alone -- a Windows `c:/...` target does not match it
-    # and is spliced onto the base as if relative, landing back inside the root.
-    # The escape is real there and goes undetected; that is a defect in the
-    # shared primitive, not in this caller, and it is filed separately. Running
-    # this here would assert a refusal the platform cannot currently make.
-    @tag :unix_only
+    # Runs on every platform, Windows included. It did not always: `walk_real/3`
+    # recognized an absolute symlink target by the POSIX `["/" | rest]` shape
+    # alone, so a Windows `c:/...` target was spliced onto the base as if
+    # relative and landed back inside the root. Fixed in
+    # `Raxol.Core.Boundary.Path` under a shared conformance vector
+    # (`drive_absolute_symlink_escape`), so this asserting on Windows is the
+    # end-to-end half of that proof.
     test "a symlink inside the root pointing outside it is refused", %{
       root: root
     } do

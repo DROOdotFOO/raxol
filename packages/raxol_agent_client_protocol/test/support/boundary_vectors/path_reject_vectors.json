@@ -156,6 +156,36 @@
         }
       ],
       "expect": "symlink_escape"
+    },
+    {
+      "name": "drive_absolute_symlink_escape",
+      "root": "root",
+      "requested": "link",
+      "setup": [
+        {
+          "dir": "root"
+        },
+        {
+          "symlink": "root/link",
+          "target": "c:/outside/secret.txt"
+        }
+      ],
+      "expect": "symlink_escape"
+    },
+    {
+      "name": "drive_absolute_ancestor_symlink_escape",
+      "root": "root",
+      "requested": "esc/secret.txt",
+      "setup": [
+        {
+          "dir": "root"
+        },
+        {
+          "symlink": "root/esc",
+          "target": "c:/outside"
+        }
+      ],
+      "expect": "symlink_escape"
     }
   ]
 }
