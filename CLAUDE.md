@@ -459,6 +459,7 @@ These namespaces are settled; don't create new top-level alternatives:
 - `HEX_BUILD=1` - Strip path deps for Hex publishing (`HEX_BUILD=1 mix hex.publish`)
 - `RAXOL_SSH_CODE` / `RAXOL_SSH_CODE_TENANTS` / `RAXOL_SSH_CODE_BUDGET_USD` - Hosted multi-tenant coding agent (all three required; `RAXOL_SSH_CODE_PORT` defaults to 2223)
 - `RAXOL_SESSIONS_DIR` - Coding-agent journal base (default `~/.raxol/sessions/`); `RAXOL_SHARE_SECRET` signs `/share` tokens
+- `RAXOL_HEADLESS_PATH_ROOT` (or `config :raxol, :headless_path_root`) - Directory the `raxol_start` MCP tool may start scripts from. Unset, the tool's `path` argument is refused outright: starting from a path compiles the file, and compiling a `defmodule` executes its body, so that argument is arbitrary code execution rather than a file read. Set, the requested path is confined under this root by `Raxol.Core.Boundary.Path.confine/3` (symlinks out of the root are refused, not followed) and must name an `.ex`/`.exs` file. The `module` argument is unaffected
 
 ## Dialyzer
 
