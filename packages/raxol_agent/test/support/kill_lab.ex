@@ -82,6 +82,31 @@ defmodule Raxol.Agent.KillLab do
   end
 
   @doc """
+  Spawn a tool that **exits immediately** after backgrounding its child, so the
+  child is orphaned and reparented to init while the tool's own pid becomes a
+  corpse. Returns `%{port:, os_pid:, child_pid:}`.
+
+  The port stays OPEN throughout: ERTS withholds the exit status until the
+  inherited stdout reaches EOF, and the orphan is still holding it, so
+  `Port.info/2` goes on reporting a pid that has already been reaped.
+
+  This is the topology a pgid-via-`ps` derivation cannot resolve -- `ps` cannot
+  see a corpse, so the group is never found -- and that a ppid sweep cannot
+  reach either, since the orphan's ppid is already `1`. Only the surviving
+  process GROUP still names it.
+  """
+  @spec spawn_orphaning(keyword()) :: %{
+          port: port(),
+          os_pid: non_neg_integer(),
+          child_pid: non_neg_integer()
+        }
+  def spawn_orphaning(opts \\ []) do
+    secs = Keyword.get(opts, :sleep, 30)
+    cmd = "sleep #{secs} & echo RAXOL_CHILD $!; exit 0"
+    spawn_tool(cmd)
+  end
+
+  @doc """
   Spawn a tool that manufactures a **zombie**: a short-lived child exits under
   a parent (`exec sleep`) that never reaps it, so the child sits in STAT `Z`
   until the parent dies. Returns `%{port:, os_pid:, child_pid:}` where
@@ -102,9 +127,7 @@ defmodule Raxol.Agent.KillLab do
   @doc "True iff `ps` reports `pid` in a zombie (`Z*`) state."
   @spec zombie?(non_neg_integer()) :: boolean()
   def zombie?(pid) when is_integer(pid) do
-    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)],
-           stderr_to_stdout: true
-         ) do
+    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
       {out, 0} -> out |> String.trim() |> String.starts_with?("Z")
       _ -> false
     end
@@ -258,9 +281,7 @@ defmodule Raxol.Agent.KillLab do
   end
 
   defp pgid_of(pid) do
-    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)],
-           stderr_to_stdout: true
-         ) do
+    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
       {out, 0} -> out |> String.trim() |> parse_int()
       _ -> nil
     end
