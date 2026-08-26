@@ -74,8 +74,7 @@ defmodule Raxol.Payments.RebalanceMonitor do
 
     gas = RebalanceAdvisor.gather_gas_balances(reader, solver, chains)
     inventory = RebalanceAdvisor.gather_inventory(reader, solver, chains, symbols)
-    drain = SettlementLedger.native_drain_by_chain(ledger)
-    demand = gather_demand(ledger, policy, opts)
+    %{drain: drain, demand: demand} = gather_ledger_signals(ledger, policy, opts)
 
     RebalanceAdvisor.advise(policy, %{gas: gas, inventory: inventory}, drain,
       price_fn: price_fn,
@@ -83,21 +82,25 @@ defmodule Raxol.Payments.RebalanceMonitor do
     )
   end
 
-  # Skipped entirely unless the policy would actually widen a floor, so a
-  # deployment that has not configured a multiplier does not scan the ledger
-  # every sweep for a signal nothing reads.
+  # Every ledger read walks the whole table inside the process that also serves
+  # `record_settlement/2`, so a sweep buys both signals with one pass rather than
+  # putting a second scan in front of the write path.
+  #
+  # Demand is skipped entirely unless the policy would actually widen a floor, so
+  # a deployment that has not configured a multiplier keeps exactly the single
+  # drain read it always had.
   #
   # The window is mandatory rather than defaulted at the ledger: `peak` never
   # decays, so an unwindowed read pins each floor to the largest fill in the
   # ledger's whole history instead of to recent demand.
-  defp gather_demand(ledger, policy, opts) do
+  defp gather_ledger_signals(ledger, policy, opts) do
     if RebalancePolicy.demand_aware?(policy) do
       window_ms = Keyword.get(opts, :demand_window_ms) || @default_demand_window_ms
       since_ms = System.system_time(:millisecond) - window_ms
 
-      SettlementLedger.demand_by_destination(ledger, since_ms: since_ms)
+      SettlementLedger.sweep_signals(ledger, since_ms: since_ms)
     else
-      %{}
+      %{drain: SettlementLedger.native_drain_by_chain(ledger), demand: %{}}
     end
   end
 

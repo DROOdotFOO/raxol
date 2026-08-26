@@ -243,5 +243,31 @@ defmodule Raxol.Payments.SettlementLedgerTest do
       assert Decimal.equal?(recent[42_161]["USDC"].peak, Decimal.new("10"))
       assert recent[42_161]["USDC"].count == 1
     end
+
+    test "one read answers both sweep signals", %{ledger: ledger} do
+      # Every read here walks the table inside the process that also serves
+      # `record_settlement/2`, so the sweep buys drain and demand together. The
+      # window has to bound demand ONLY: a refuel is sized against all the gas the
+      # solver has ever burned.
+      for {id, ts, dollars, gas} <- [{"s_old", 1_000, "900", 1_000}, {"s_new", 9_000, "10", 500}] do
+        entry =
+          Map.merge(fill(id, 42_161, "USDC", dollars), %{
+            timestamp_ms: ts,
+            gas_native: gas,
+            gas_chain_id: 42_161
+          })
+
+        assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, entry)
+      end
+
+      %{drain: drain, demand: demand} = SettlementLedger.sweep_signals(ledger, since_ms: 5_000)
+
+      assert Decimal.equal?(drain[42_161], Decimal.new(1_500))
+      assert Decimal.equal?(demand[42_161]["USDC"].peak, Decimal.new("10"))
+
+      # Same answers as the two separate reads it replaces.
+      assert drain == SettlementLedger.native_drain_by_chain(ledger)
+      assert demand == SettlementLedger.demand_by_destination(ledger, since_ms: 5_000)
+    end
   end
 end

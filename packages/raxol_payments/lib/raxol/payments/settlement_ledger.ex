@@ -168,6 +168,11 @@ defmodule Raxol.Payments.SettlementLedger do
   def native_drain_by_chain(server, opts \\ []) do
     server
     |> list_settlements(filter_opts(opts))
+    |> fold_drain()
+  end
+
+  defp fold_drain(entries) do
+    entries
     |> Enum.reject(&is_nil(&1.gas_native))
     |> Enum.reduce(%{}, fn e, acc ->
       Map.update(acc, e.gas_chain_id, e.gas_native, &Decimal.add(&1, e.gas_native))
@@ -202,14 +207,54 @@ defmodule Raxol.Payments.SettlementLedger do
   this returns an all-time high-water mark, and since `peak` never decays, a
   single historic whale order pins the floor for the life of the ledger. Callers
   sizing a floor should always pass a window; `RebalanceMonitor` does.
+
+  ## Cost
+
+  Like every read here this walks the whole table inside this GenServer, which
+  also serves `record_settlement/2` -- so a long scan sits in front of the write
+  path. `:since_ms` bounds what is AGGREGATED, not what is read; the window is
+  applied after `:ets.tab2list/1`. A sweep that wants both this and the drain
+  should call `sweep_signals/2` and pay for one pass, not two.
   """
   @spec demand_by_destination(GenServer.server(), keyword()) ::
           %{pos_integer() => %{String.t() => demand()}}
   def demand_by_destination(server, opts \\ []) do
     server
     |> list_settlements(filter_opts(opts))
-    |> Enum.reduce(%{}, &accumulate_demand/2)
+    |> fold_demand()
   end
+
+  @doc """
+  Both signals a `RebalanceMonitor` sweep needs, from ONE pass over the ledger:
+  all-time native drain per chain, and demand per destination inside `:since_ms`.
+
+  Calling `native_drain_by_chain/2` and `demand_by_destination/2` separately
+  costs the write path two full scans of this GenServer per sweep. They can share
+  a read: the drain is all-time by definition and the demand window is a subset of
+  it, so the caller filters the window itself and both folds run outside the
+  ledger process.
+
+  `:since_ms` bounds the demand half only. The drain half deliberately ignores it,
+  since a refuel is sized against everything the solver has ever spent on gas.
+  """
+  @spec sweep_signals(GenServer.server(), keyword()) :: %{
+          drain: %{pos_integer() => Decimal.t()},
+          demand: %{pos_integer() => %{String.t() => demand()}}
+        }
+  def sweep_signals(server, opts \\ []) do
+    entries = list_settlements(server)
+    since_ms = Keyword.get(opts, :since_ms)
+
+    %{
+      drain: fold_drain(entries),
+      demand: entries |> Enum.filter(&since?(&1, since_ms)) |> fold_demand()
+    }
+  end
+
+  defp since?(_entry, nil), do: true
+  defp since?(%{timestamp_ms: ts}, since_ms), do: ts >= since_ms
+
+  defp fold_demand(entries), do: Enum.reduce(entries, %{}, &accumulate_demand/2)
 
   defp accumulate_demand(
          %{
