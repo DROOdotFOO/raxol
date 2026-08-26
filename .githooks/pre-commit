@@ -8,6 +8,24 @@
 # Installed via `git config core.hooksPath .githooks` (run by `mix setup`).
 set -euo pipefail
 
+# --- toolchain -----------------------------------------------------------
+# `MIX_HOME` on a mise setup points at that toolchain's `.mix`, while a
+# Homebrew `mix` may come first on PATH. A Hex archive built for one Elixir and
+# loaded by another fails deep inside dep resolution
+# (`function Enum.__in__/2 is undefined`), which reads like a lockfile bug and
+# is not one. So prefer the toolchain `.tool-versions` names, when it is
+# installed; otherwise leave PATH alone and let the gates report normally.
+if [[ -f .tool-versions ]]; then
+  _ex="$(awk '$1 == "elixir" { print $2; exit }' .tool-versions || true)"
+  _erl="$(awk '$1 == "erlang" { print $2; exit }' .tool-versions || true)"
+  for _cand in \
+    "${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs/elixir/${_ex}/bin" \
+    "${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs/erlang/${_erl}/bin"; do
+    [[ -n "${_ex}" && -d "$_cand" ]] && PATH="$_cand:$PATH"
+  done
+  export PATH
+fi
+
 staged="$(git diff --cached --name-only --diff-filter=ACM)"
 status=0
 
@@ -17,7 +35,11 @@ status=0
 # `mix deps.get --check-locked` step after the push to master.
 if printf '%s\n' "$staged" | grep -qE '(^|/)mix\.(exs|lock)$'; then
   echo "pre-commit: verifying mix.lock is consistent..."
-  if ! output="$(mix deps.get --check-locked 2>&1)"; then
+  if ! command -v mix >/dev/null 2>&1; then
+    echo "pre-commit: no \`mix\` on PATH, cannot verify mix.lock." >&2
+    echo "  Install the toolchain \`.tool-versions\` names, or bypass knowingly." >&2
+    status=1
+  elif ! output="$(mix deps.get --check-locked 2>&1)"; then
     echo "$output" >&2
     cat >&2 <<'MSG'
 
@@ -43,10 +65,15 @@ if [[ -n "$md_files" ]]; then
   echo "pre-commit: linting staged Markdown..."
   args=()
   while IFS= read -r f; do
-    [[ -n "$f" ]] && args+=(--files "$f")
+    [[ -n "$f" ]] && args+=("$f")
   done <<<"$md_files"
 
-  if ! mix raxol.check_docs --only prose "${args[@]}"; then
+  # Deliberately `elixir`, not `mix`. The rules are the same module either way,
+  # but this route loads no project, so a docs commit cannot be blocked by deps
+  # that do not match the branch's lock, a `_build` from another Elixir, or a
+  # root lock that no longer re-resolves. None of those are facts about prose.
+  # CI still runs `mix raxol.check_docs`, which additionally checks the catalog.
+  if ! elixir scripts/prose_lint.exs "${args[@]}"; then
     cat >&2 <<'MSG'
 
 pre-commit: Markdown prose check failed.

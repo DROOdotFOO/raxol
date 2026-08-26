@@ -107,6 +107,60 @@ defmodule Raxol.Docs.ProseLint do
       link_findings(path, content, root)
   end
 
+  @doc """
+  Lint a list of candidate paths, keeping only the Markdown this repo owns.
+
+  Drops non-`.md` paths, `node_modules/`, and vendored copies, then sorts by
+  `{path, line}` so output is stable regardless of the order paths arrive in.
+
+  Lives here rather than in the Mix task because two entry points need it: the
+  task, and `scripts/prose_lint.exs`, which the pre-commit hook runs WITHOUT
+  Mix. Keeping selection next to the rules means the hook and CI cannot come to
+  different conclusions about which files are in scope.
+  """
+  @spec lint_files([String.t()], keyword()) :: [finding()]
+  def lint_files(paths, opts \\ []) do
+    # `:root` is forwarded, not just `:headings`. `check_file/2` joins the path
+    # onto the root, so dropping it made every path resolve against `"."` and an
+    # unreadable file lints as clean -- a linter silently passing is worse than
+    # one that errors.
+    lint_opts = [
+      headings: Keyword.get(opts, :headings, false),
+      root: Keyword.get(opts, :root, ".")
+    ]
+
+    paths
+    |> Enum.filter(&String.ends_with?(&1, ".md"))
+    |> Enum.reject(&(String.contains?(&1, "node_modules/") or vendored?(&1)))
+    |> Enum.flat_map(&check_file(&1, lint_opts))
+    |> Enum.sort_by(&{&1.path, &1.line})
+  end
+
+  # Upstream sources we re-publish unmodified. Rewriting their prose would make
+  # the vendored copy diverge from the thing it is a copy of.
+  defp vendored?(path), do: String.contains?(path, "termbox2/README.md")
+
+  @doc """
+  Render findings as display lines, two per finding (location, then the text).
+
+  Returns lines rather than printing them so the Mix task can route them
+  through `Mix.shell/0` and the hook script can put them on stderr.
+  """
+  @spec format_findings([finding()]) :: [String.t()]
+  def format_findings(findings) do
+    Enum.flat_map(findings, fn f ->
+      [
+        "  #{f.path}:#{f.line}  [#{f.rule}] #{f.message}",
+        "      #{truncate(f.text)}"
+      ]
+    end)
+  end
+
+  defp truncate(text) when byte_size(text) > 120,
+    do: binary_part(text, 0, 117) <> "..."
+
+  defp truncate(text), do: text
+
   # --- code masking -------------------------------------------------------
 
   # Replace fenced blocks and inline code spans with same-length filler so
