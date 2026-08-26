@@ -222,7 +222,10 @@ defmodule Raxol.Payments.RebalanceAdvisor do
 
   # Both sides read their bound through `RebalancePolicy`, which widens the floor
   # by observed demand and carries the target up with it. With no
-  # `demand_multiplier` configured those are the static maps and nothing changes.
+  # `demand_multiplier` configured the floor is the static map, and the target is
+  # the static one clamped up to its own floor -- a band configured target-below-
+  # floor would otherwise make one balance both a deficit and a surplus, and this
+  # would recommend draining a chain into itself.
   defp rebalance_symbol(policy, balances, symbol, chains, demand) do
     deficits =
       for chain <- chains,

@@ -78,6 +78,13 @@ defmodule Raxol.Payments.RebalancePolicy do
     }
   end
 
+  @demand_env %{
+    demand_multiplier: "RAXOL_REBALANCE_DEMAND_MULTIPLIER",
+    demand_floor_cap: "RAXOL_REBALANCE_DEMAND_FLOOR_CAP"
+  }
+
+  @demand_keys Map.keys(@demand_env)
+
   @doc """
   Turn demand-aware floors on, from the deployment's accounting config.
 
@@ -87,21 +94,28 @@ defmodule Raxol.Payments.RebalancePolicy do
   leaves the policy exactly as passed, which is what keeps the feature off until
   a deployment asks for it.
 
-  The two knobs are one setting and have to be configured together, so half of
-  one raises here:
+  The two knobs are ONE setting, which decides what a partial `opts` means:
 
-    * A multiplier alone sizes floors off `peak`, which comes from settled fills
-      -- i.e. from orders anyone can place through the public storefront -- and
-      those floors become recommendations the auto-rebalancer executes. Uncapped,
-      one large order sets a corridor's floor to an unbounded multiple of itself
-      for the whole window. The cap is the bound on that, so it is not optional.
-    * A cap alone is the mirror: `demand_aware?/1` is false without a multiplier,
+    * Supplying one and leaving the other unconfigured RAISES. A multiplier alone
+      sizes floors off `peak`, which comes from settled fills -- i.e. from orders
+      anyone can place through the public storefront -- and those floors become
+      recommendations the auto-rebalancer executes. Uncapped, one large order sets
+      a corridor's floor to an unbounded multiple of itself for the whole window.
+      A cap alone is the mirror: `demand_aware?/1` is false without a multiplier,
       so nothing ever reads the cap and the operator quietly gets static floors
       from a deployment that looks configured for demand-aware ones.
+    * Supplying one as EMPTY (`nil`, or the `""` a set-but-empty env var yields)
+      clears BOTH. That is the "unset the multiplier to keep static floors" the
+      error above tells an operator to do, so it cannot itself be an error, and
+      leaving the other half in place would only re-raise on the next call.
 
-  Failing at boot is the same call `to_decimal_or_nil/1` makes about a malformed
-  value: an operator has no way to tell "my knob did nothing" from "the feature
-  does nothing".
+  A malformed or non-positive value raises too, naming the knob and its env var:
+  an operator has no way to tell "my knob did nothing" from "the feature does
+  nothing", and a multiplier of zero or less is exactly the former.
+
+  Every field this touches is normalized, including one already on `policy`, so a
+  hand-built struct handed back through here cannot carry a float or a string
+  into the advisor's `Decimal` arithmetic later.
 
   This is the seam between `Raxol.Payments.Accounting`'s env contract and the
   advisor. `default/0` stays pure so a test policy is a struct literal and not a
@@ -110,16 +124,23 @@ defmodule Raxol.Payments.RebalancePolicy do
   @spec with_demand(t(), keyword()) :: t()
   def with_demand(%__MODULE__{} = policy, opts) when is_list(opts) do
     policy
-    |> put_demand(opts, :demand_multiplier)
-    |> put_demand(opts, :demand_floor_cap)
+    |> put_demand(opts)
     |> validate_demand_pair()
   end
 
-  defp put_demand(policy, opts, key) do
-    case Keyword.fetch(opts, key) do
-      {:ok, value} -> Map.put(policy, key, to_decimal_or_nil(value))
-      :error -> policy
+  defp put_demand(policy, opts) do
+    values = Map.new(@demand_keys, &{&1, demand_value(policy, opts, &1)})
+
+    case Enum.any?(@demand_keys, &(Keyword.has_key?(opts, &1) and is_nil(values[&1]))) do
+      true -> %{policy | demand_multiplier: nil, demand_floor_cap: nil}
+      false -> Map.merge(policy, values)
     end
+  end
+
+  defp demand_value(policy, opts, key) do
+    opts
+    |> Keyword.get(key, Map.fetch!(policy, key))
+    |> to_decimal(key)
   end
 
   defp validate_demand_pair(%__MODULE__{demand_multiplier: nil, demand_floor_cap: nil} = policy),
@@ -139,13 +160,16 @@ defmodule Raxol.Payments.RebalancePolicy do
   end
 
   defp validate_demand_pair(%__MODULE__{demand_floor_cap: nil}) do
-    raise ArgumentError,
-          ":demand_multiplier (RAXOL_REBALANCE_DEMAND_MULTIPLIER) is set without " <>
-            ":demand_floor_cap (RAXOL_REBALANCE_DEMAND_FLOOR_CAP). A demand-widened floor is " <>
-            "sized off the largest recent fill, which anyone can place through the storefront: " <>
-            "uncapped, one order sizes a corridor's floor for the whole window and the " <>
-            "auto-rebalancer moves funds to meet it. Set the cap, or unset the multiplier to " <>
-            "keep static floors."
+    raise ArgumentError, cap_required()
+  end
+
+  defp cap_required do
+    ":demand_multiplier (RAXOL_REBALANCE_DEMAND_MULTIPLIER) is set without " <>
+      ":demand_floor_cap (RAXOL_REBALANCE_DEMAND_FLOOR_CAP). A demand-widened floor is " <>
+      "sized off the largest recent fill, which anyone can place through the storefront: " <>
+      "uncapped, one order sizes a corridor's floor for the whole window and the " <>
+      "auto-rebalancer moves funds to meet it. Set the cap, or unset the multiplier to " <>
+      "keep static floors."
   end
 
   @doc """
@@ -158,15 +182,48 @@ defmodule Raxol.Payments.RebalancePolicy do
   def demand_aware?(%__MODULE__{demand_multiplier: nil}), do: false
   def demand_aware?(%__MODULE__{}), do: true
 
-  defp to_decimal_or_nil(nil), do: nil
-  defp to_decimal_or_nil(%Decimal{} = d), do: d
-  defp to_decimal_or_nil(value) when is_integer(value), do: Decimal.new(value)
-  defp to_decimal_or_nil(value) when is_float(value), do: Decimal.from_float(value)
+  defp to_decimal(nil, _key), do: nil
+  defp to_decimal(%Decimal{} = d, key), do: positive(d, key)
+  defp to_decimal(value, key) when is_integer(value), do: positive(Decimal.new(value), key)
+  defp to_decimal(value, key) when is_float(value), do: positive(Decimal.from_float(value), key)
+
+  # A SET BUT EMPTY value means unset. `FOO=` is the ordinary shape of "no value"
+  # in a fly.toml, a docker-compose file, or a cleared secret, and
+  # `Accounting.rpc_urls/0` already reads it that way -- the two halves of one
+  # config reader cannot disagree about what empty means.
+  defp to_decimal(value, key) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> parse_decimal(trimmed, key)
+    end
+  end
+
+  defp to_decimal(value, key), do: raise(ArgumentError, malformed(key, value))
+
+  defp parse_decimal(value, key) do
+    case Decimal.parse(value) do
+      {%Decimal{} = d, ""} -> positive(d, key)
+      _ -> raise ArgumentError, malformed(key, value)
+    end
+  end
 
   # A malformed knob has to fail loudly at boot rather than silently leave the
   # feature off: an operator who configured a multiplier and got static floors
-  # anyway has no way to tell that from the feature not working.
-  defp to_decimal_or_nil(value) when is_binary(value), do: Decimal.new(value)
+  # anyway has no way to tell that from the feature not working. A non-positive
+  # or non-finite one lands in the same place -- a multiplier of zero or less can
+  # only widen a floor DOWN to the static one -- so it fails the same way.
+  # `Decimal.positive?/1` is true for infinity, which as a cap is no cap at all.
+  defp positive(%Decimal{} = d, key) do
+    case Decimal.positive?(d) and not Decimal.inf?(d) do
+      true -> d
+      false -> raise ArgumentError, malformed(key, Decimal.to_string(d, :normal))
+    end
+  end
+
+  defp malformed(key, value) do
+    ":#{key} (#{Map.fetch!(@demand_env, key)}) must be a positive decimal " <>
+      "(e.g. \"1.5\"), or empty to leave demand-aware floors off. Got: #{inspect(value)}"
+  end
 
   @doc """
   The inventory floor for `{chain, symbol}`, widened by observed demand.
@@ -241,7 +298,13 @@ defmodule Raxol.Payments.RebalancePolicy do
 
   defp widen(_policy, static_floor, _demand), do: static_floor
 
-  defp cap_at(value, nil), do: value
+  # The pair check in `with_demand/2` is a config-time check, not an invariant:
+  # `demand_floor_cap` is a public struct field, so a policy assembled by hand and
+  # handed to the advisor would otherwise widen a floor without a bound. This is
+  # the line where an unbounded floor becomes funds the auto-rebalancer moves, so
+  # it is where the pair is enforced. Only reachable with a multiplier set --
+  # `widen/3`'s first clause returns the static floor without one.
+  defp cap_at(_value, nil), do: raise(ArgumentError, cap_required())
   defp cap_at(value, %Decimal{} = cap), do: Decimal.min(value, cap)
 
   @doc """

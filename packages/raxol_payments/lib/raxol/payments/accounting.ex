@@ -29,6 +29,12 @@ defmodule Raxol.Payments.Accounting do
   off orders anyone can place and an uncapped floor is unbounded in what it asks
   the auto-rebalancer to move.
 
+  Every var here reads SET BUT EMPTY as unset -- `FOO=` is what a fly.toml, a
+  docker-compose file, or a cleared secret leaves behind -- and every var that
+  does parse refuses a malformed or non-positive value with a message naming
+  itself. An operator has to be able to tell "my knob did nothing" from "the
+  feature does nothing".
+
   Read-only by construction: no wallet key is read here and none of the started
   processes move funds (the Riddler auto-rebalancer executes; the monitor only
   recommends). Omitting `XOCHI_SOLVER_ADDRESS` yields ledger-only mode -- the
@@ -102,10 +108,33 @@ defmodule Raxol.Payments.Accounting do
     String.to_atom(System.get_env("RAXOL_PRICE_SOURCE") || @default_price_source)
   end
 
+  # Blank means unset (the same reading `rpc_urls/0` gives `FOO=`), and anything
+  # that is not a positive integer of milliseconds fails NAMING the variable: it
+  # is documented as optional, so `String.to_integer/1`'s "not a textual
+  # representation of an integer" would crash a boot without saying which knob
+  # did it. Zero or negative would make the window select nothing (or the whole
+  # ledger), which the pos_integer() spec already says is not a value.
   @spec demand_window_ms() :: pos_integer()
   defp demand_window_ms do
-    String.to_integer(
-      System.get_env("RAXOL_REBALANCE_DEMAND_WINDOW_MS") || @default_demand_window_ms
-    )
+    "RAXOL_REBALANCE_DEMAND_WINDOW_MS"
+    |> System.get_env("")
+    |> String.trim()
+    |> case do
+      "" -> String.to_integer(@default_demand_window_ms)
+      value -> positive_integer(value)
+    end
+  end
+
+  defp positive_integer(value) do
+    case Integer.parse(value) do
+      {ms, ""} when ms > 0 ->
+        ms
+
+      _ ->
+        raise ArgumentError,
+              "RAXOL_REBALANCE_DEMAND_WINDOW_MS must be a positive whole number of " <>
+                "milliseconds (e.g. \"86400000\"), or empty for the #{@default_demand_window_ms} " <>
+                "default. Got: #{inspect(value)}"
+    end
   end
 end

@@ -8,6 +8,8 @@ defmodule Raxol.Payments.AccountingTest do
     RAXOL_ACCOUNTING_ENABLED
     RPC_ETH RPC_OPTIMISM RPC_POLYGON RPC_BASE RPC_ARBITRUM RPC_ROBINHOOD
     XOCHI_SOLVER_ADDRESS RAXOL_REBALANCE_INTERVAL_MS RAXOL_PRICE_SOURCE
+    RAXOL_REBALANCE_DEMAND_MULTIPLIER RAXOL_REBALANCE_DEMAND_FLOOR_CAP
+    RAXOL_REBALANCE_DEMAND_WINDOW_MS
   )
 
   setup do
@@ -77,6 +79,45 @@ defmodule Raxol.Payments.AccountingTest do
       assert opts[:solver_address] == "0x97D4"
       assert opts[:rebalance_interval_ms] == 60_000
       assert opts[:price_source] == :none
+    end
+  end
+
+  describe "the demand window" do
+    test "defaults to a day, and reads a set value" do
+      {opts, _} = Accounting.env_config()
+      assert opts[:demand_window_ms] == 86_400_000
+
+      System.put_env("RAXOL_REBALANCE_DEMAND_WINDOW_MS", "3600000")
+      {opts, _} = Accounting.env_config()
+      assert opts[:demand_window_ms] == 3_600_000
+    end
+
+    test "a blank value is unset, matching how the RPC vars read" do
+      System.put_env("RAXOL_REBALANCE_DEMAND_WINDOW_MS", "")
+
+      {opts, _} = Accounting.env_config()
+
+      assert opts[:demand_window_ms] == 86_400_000
+    end
+
+    test "a malformed value names the variable it came from" do
+      # The var is documented as optional, so an operator who typos it gets a
+      # boot crash naming nothing unless the reader says which knob it was.
+      System.put_env("RAXOL_REBALANCE_DEMAND_WINDOW_MS", "24h")
+
+      assert_raise ArgumentError, ~r/RAXOL_REBALANCE_DEMAND_WINDOW_MS/, fn ->
+        Accounting.env_config()
+      end
+    end
+
+    test "a non-positive window is refused, as the spec claims" do
+      for value <- ["0", "-1"] do
+        System.put_env("RAXOL_REBALANCE_DEMAND_WINDOW_MS", value)
+
+        assert_raise ArgumentError, ~r/RAXOL_REBALANCE_DEMAND_WINDOW_MS/, fn ->
+          Accounting.env_config()
+        end
+      end
     end
   end
 end

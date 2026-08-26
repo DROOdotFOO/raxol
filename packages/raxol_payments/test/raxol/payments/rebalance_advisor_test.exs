@@ -147,9 +147,13 @@ defmodule Raxol.Payments.RebalanceAdvisorTest do
   end
 
   describe "demand-aware inventory floors" do
-    # $5 floor / $25 target on two chains, USDC only.
+    # $5 floor / $25 target on two chains, USDC only. Demand is configured through
+    # `with_demand/2` -- the seam every caller uses -- so these exercise a policy
+    # that can actually exist: a multiplier without a cap is one the advisor
+    # refuses to widen a floor with. The default cap is set far above anything
+    # here, since only one test is about the cap binding.
     defp demand_policy(opts \\ []) do
-      %RebalancePolicy{
+      base = %RebalancePolicy{
         gas_floor: %{},
         gas_target: %{},
         inventory_floor: %{
@@ -159,10 +163,19 @@ defmodule Raxol.Payments.RebalanceAdvisorTest do
         inventory_target: %{
           8453 => %{"USDC" => Decimal.new("25")},
           42_161 => %{"USDC" => Decimal.new("25")}
-        },
-        demand_multiplier: Keyword.get(opts, :multiplier),
-        demand_floor_cap: Keyword.get(opts, :cap)
+        }
       }
+
+      case Keyword.get(opts, :multiplier) do
+        nil ->
+          base
+
+        multiplier ->
+          RebalancePolicy.with_demand(base,
+            demand_multiplier: multiplier,
+            demand_floor_cap: Keyword.get(opts, :cap, Decimal.new("1000000"))
+          )
+      end
     end
 
     defp fills(chain, symbol, peak, total) do

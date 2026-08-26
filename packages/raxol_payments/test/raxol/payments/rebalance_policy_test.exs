@@ -95,5 +95,139 @@ defmodule Raxol.Payments.RebalancePolicyTest do
       refute RebalancePolicy.demand_aware?(cleared)
       assert is_nil(cleared.demand_floor_cap)
     end
+
+    test "clearing half the pair clears the whole setting" do
+      # The two knobs are one setting, so unsetting the multiplier is exactly the
+      # "unset the multiplier to keep static floors" the pair error advises. It
+      # cannot itself be an error.
+      configured =
+        RebalancePolicy.with_demand(RebalancePolicy.default(),
+          demand_multiplier: "0.1",
+          demand_floor_cap: "500"
+        )
+
+      cleared = RebalancePolicy.with_demand(configured, demand_multiplier: nil)
+
+      refute RebalancePolicy.demand_aware?(cleared)
+      assert is_nil(cleared.demand_floor_cap)
+    end
+
+    test "an empty value is unset, not a parse error" do
+      # `FOO=` in a fly.toml, a docker-compose entry, or a cleared secret is the
+      # ordinary shape of "no value", and the accounting reader hands
+      # `System.get_env/1` through untouched.
+      policy =
+        RebalancePolicy.with_demand(RebalancePolicy.default(),
+          demand_multiplier: "",
+          demand_floor_cap: "  "
+        )
+
+      refute RebalancePolicy.demand_aware?(policy)
+    end
+
+    test "a malformed value names the knob and the shape it wanted" do
+      assert_raise ArgumentError, ~r/RAXOL_REBALANCE_DEMAND_MULTIPLIER.*positive decimal/s, fn ->
+        RebalancePolicy.with_demand(RebalancePolicy.default(),
+          demand_multiplier: "1.5x",
+          demand_floor_cap: "500"
+        )
+      end
+    end
+
+    test "a non-positive knob is refused like a malformed one" do
+      # A multiplier of zero or less can only ever widen a floor DOWN to the
+      # static one, which is the "my knob did nothing" outcome the loud failure
+      # exists to prevent.
+      for value <- ["0", "-1"] do
+        assert_raise ArgumentError, ~r/positive/, fn ->
+          RebalancePolicy.with_demand(RebalancePolicy.default(),
+            demand_multiplier: value,
+            demand_floor_cap: "500"
+          )
+        end
+
+        assert_raise ArgumentError, ~r/positive/, fn ->
+          RebalancePolicy.with_demand(RebalancePolicy.default(),
+            demand_multiplier: "0.1",
+            demand_floor_cap: value
+          )
+        end
+      end
+    end
+
+    test "a hand-built policy is normalized, not passed through to fail later" do
+      # Normalizing only what it WRITES is not enough: a struct built by hand and
+      # handed back through here would otherwise carry a float straight into the
+      # advisor's Decimal arithmetic.
+      policy =
+        RebalancePolicy.with_demand(
+          struct(RebalancePolicy, demand_multiplier: 0.1, demand_floor_cap: 500),
+          []
+        )
+
+      assert Decimal.equal?(policy.demand_multiplier, Decimal.from_float(0.1))
+      assert Decimal.equal?(policy.demand_floor_cap, Decimal.new(500))
+    end
+
+    test "a value of a type that is not a number at all is refused by name" do
+      assert_raise ArgumentError, ~r/RAXOL_REBALANCE_DEMAND_FLOOR_CAP/, fn ->
+        RebalancePolicy.with_demand(RebalancePolicy.default(),
+          demand_multiplier: "0.1",
+          demand_floor_cap: :five_hundred
+        )
+      end
+    end
+  end
+
+  describe "effective_inventory_floor/4" do
+    defp floor_policy(fields) do
+      struct(
+        %RebalancePolicy{
+          inventory_floor: %{8453 => %{"USDC" => Decimal.new("5")}},
+          inventory_target: %{8453 => %{"USDC" => Decimal.new("25")}}
+        },
+        fields
+      )
+    end
+
+    defp demand(peak),
+      do: %{8453 => %{"USDC" => %{peak: Decimal.new(peak), total: Decimal.new(peak), count: 1}}}
+
+    test "a multiplier with no cap refuses to widen, however the policy was built" do
+      # `demand_floor_cap` is a public struct field, so the boot-time pair check
+      # is not an invariant on its own: the widening site is where an unbounded
+      # floor turns into funds the auto-rebalancer moves.
+      policy = floor_policy(demand_multiplier: Decimal.new("10"))
+
+      assert_raise ArgumentError, ~r/demand_floor_cap/, fn ->
+        RebalancePolicy.effective_inventory_floor(policy, 8453, "USDC", demand("1000000"))
+      end
+    end
+
+    test "the cap bounds the widened floor" do
+      policy =
+        floor_policy(demand_multiplier: Decimal.new("10"), demand_floor_cap: Decimal.new("900"))
+
+      floor = RebalancePolicy.effective_inventory_floor(policy, 8453, "USDC", demand("1000000"))
+
+      assert Decimal.equal?(floor, Decimal.new("900"))
+    end
+  end
+
+  describe "effective_inventory_target/4" do
+    test "a floor above its own target pulls the target up, demand off" do
+      # A misconfigured band ($50 floor under a $10 target) would otherwise make
+      # one balance both a deficit and a surplus, and the advisor would recommend
+      # draining a chain into itself. The clamp covers that with demand off too.
+      policy = %RebalancePolicy{
+        inventory_floor: %{8453 => %{"USDC" => Decimal.new("50")}},
+        inventory_target: %{8453 => %{"USDC" => Decimal.new("10")}}
+      }
+
+      assert Decimal.equal?(
+               RebalancePolicy.effective_inventory_target(policy, 8453, "USDC"),
+               Decimal.new("50")
+             )
+    end
   end
 end
