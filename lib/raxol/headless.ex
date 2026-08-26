@@ -77,10 +77,11 @@ defmodule Raxol.Headless do
   Starts a headless session.
 
   First argument is either a module atom or a file path string. Either way the
-  module has to be a Raxol application: it declares
-  `Raxol.Core.Runtime.Application`, or exports `init/1`, `update/2` and
-  `view/1`. When given a path, the file is compiled and the first module
-  meeting that contract is used.
+  module has to be a Raxol application: it must export `init/1`, `update/2` and
+  `view/1`. Declaring `Raxol.Core.Runtime.Application` is not sufficient on its
+  own, since the attribute can be present with none of the callbacks behind it.
+  When given a path, the file is compiled and the first module meeting that
+  contract is used.
 
   ## Options
 
@@ -509,47 +510,40 @@ defmodule Raxol.Headless do
     )
   end
 
-  # `Raxol.Core.Runtime.Application` is the formal TEA behaviour, so it is asked
-  # first: a module that declares it has said what it is, and that beats
-  # inferring it from exports.
+  # The gate is the three callbacks, never the `@behaviour` attribute.
   #
-  # It cannot be the WHOLE test, though, because the runtime itself does not
-  # require it. `Lifecycle.Initializer` decides on
-  # `function_exported?(mod, :init, 1)` and never reads the attribute, so a
-  # module implementing the three callbacks without `use`-ing the behaviour runs
-  # correctly today -- `Raxol.Examples.Demos.IntegratedAccessibilityDemo` in
-  # this repo is exactly that, the only one of the 53 TEA modules on this tree
-  # that does not declare it. Refusing it would break a public API that has
-  # always started it.
+  # Declaring `Raxol.Core.Runtime.Application` and implementing none of it
+  # compiles: Elixir warns about the missing callbacks, it does not refuse. So
+  # accepting the attribute ADMITS a module that cannot be driven, and `start/2`
+  # answers `{:ok, id}` for it and then renders an empty frame forever. A silent
+  # do-nothing session is worse than the clean error it replaced.
   #
-  # The fallback is the full triple rather than `view/1` alone because `view/1`
-  # is only the part this module happens to consume: a screenshot needs it, but
-  # the runtime drives `init/1` and `update/2` too, and a gate should name the
-  # contract it is gating.
+  # Nothing is lost by leaving the attribute out. Surveyed across every module
+  # compiled on this tree: the set that declares the behaviour WITHOUT exporting
+  # the triple is empty, so the attribute decides no case the exports do not
+  # already decide.
+  #
+  # The test cannot run the other way round and REQUIRE the attribute either,
+  # because the runtime does not: `Lifecycle.Initializer` reads
+  # `function_exported?(mod, :init, 1)` and never the attribute, and
+  # `Raxol.Examples.Demos.IntegratedAccessibilityDemo` exports the triple
+  # without declaring it. That module runs correctly today, and refusing it
+  # would break a public API that has always started it.
+  #
+  # The triple rather than `view/1` alone because `view/1` is only the part this
+  # module consumes: a screenshot needs it, but the runtime drives `init/1` and
+  # `update/2` too, and a gate should name the contract it gates.
   @spec tea_module?(term()) :: boolean()
   defp tea_module?(mod) when is_atom(mod) do
-    # Both halves answer for a LOADED module only, and under `mix mcp.server`
-    # code loads on demand -- so without this a module that is compiled and
-    # sitting on the code path gets refused for being unloaded rather than for
-    # failing the contract. Loading a beam runs nothing at module scope; the
-    # compile branch is what executes code, and it is confined separately.
-    Code.ensure_loaded?(mod) and
-      (tea_behaviour?(mod) or tea_callbacks_exported?(mod))
+    # Answers for a LOADED module only, and under `mix mcp.server` code loads on
+    # demand -- so without this a module that is compiled and sitting on the
+    # code path gets refused for being unloaded rather than for failing the
+    # contract. Loading a beam runs nothing at module scope; the compile branch
+    # is what executes code, and it is confined separately.
+    Code.ensure_loaded?(mod) and tea_callbacks_exported?(mod)
   end
 
   defp tea_module?(_other), do: false
-
-  # `module_info/1`, not `__info__/1`: the latter exists only on Elixir modules,
-  # so an Erlang module named by a caller would raise here instead of being
-  # refused. `@behaviour` compiles to the Erlang `behaviour` attribute, and
-  # repeating the attribute appends entries rather than replacing them.
-  @spec tea_behaviour?(module()) :: boolean()
-  defp tea_behaviour?(mod) do
-    mod.module_info(:attributes)
-    |> Keyword.get_values(:behaviour)
-    |> List.flatten()
-    |> Enum.member?(Raxol.Core.Runtime.Application)
-  end
 
   @spec tea_callbacks_exported?(module()) :: boolean()
   defp tea_callbacks_exported?(mod) do

@@ -444,6 +444,32 @@ defmodule Raxol.HeadlessTest do
       assert {:ok, :after_mojibake} =
                Headless.start(TestApp, id: :after_mojibake)
     end
+
+    # Declaring `@behaviour Raxol.Core.Runtime.Application` and implementing
+    # none of it compiles: Elixir warns about the missing callbacks, it does not
+    # refuse. So a gate that accepts the ATTRIBUTE admits a module nothing can
+    # drive, and the session that follows renders an empty frame forever -- a
+    # silent do-nothing where there used to be a clean error. Reachable from
+    # `mix raxol.render`, `Raxol.MCP.Test.start_session/2` and `raxol_start`'s
+    # `path` once a root is configured.
+    #
+    # `tea_module?/1` is shared with the module branch, so this pins the compile
+    # branch specifically: it is the one that regressed when the check moved
+    # from exports to the attribute.
+    test "a module that declares the behaviour but implements nothing is refused",
+         %{dir: dir} do
+      n = System.unique_integer([:positive])
+      path = Path.join(dir, "decl_only_#{n}.exs")
+
+      File.write!(path, """
+      defmodule HeadlessDeclOnly#{n} do
+        @behaviour Raxol.Core.Runtime.Application
+      end
+      """)
+
+      assert {:error, :no_tea_module_found} =
+               Headless.start(path, id: :decl_only)
+    end
   end
 
   describe "custom dimensions" do

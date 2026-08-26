@@ -203,54 +203,6 @@ defmodule Raxol.Headless.McpToolsTest do
 
       refute message =~ "path"
     end
-
-    # The atom table is not the same question as "does this module exist".
-    # Interactive code loading -- `mix mcp.server`, the documented workflow -- is
-    # the normal case, and there a module's atom does not exist until something
-    # loads it. Refusing on the atom table alone therefore refuses modules that
-    # are compiled and sitting on the code path, which is what `raxol_start`
-    # asks for. An OTP release boots `:embedded` with everything pre-loaded, so
-    # this hides on fly.io and shows up locally.
-    #
-    # Compiled by a SEPARATE OS PROCESS on purpose: compiling it here would mint
-    # the atom in this VM and the test would pass against either version.
-    test "a compiled-but-unloaded module on the code path resolves" do
-      name = "HeadlessUnloadedProbe#{System.unique_integer([:positive])}"
-      dir = compile_out_of_vm(name)
-
-      # No one in this VM has ever named it.
-      assert_raise ArgumentError, fn ->
-        String.to_existing_atom("Elixir." <> name)
-      end
-
-      Code.append_path(dir)
-      on_exit(fn -> Code.delete_path(dir) end)
-
-      assert {:resolved, target} = resolved_target(%{"module" => name})
-      assert Atom.to_string(target) == "Elixir." <> name
-    end
-
-    defp compile_out_of_vm(name) do
-      dir =
-        Path.join(
-          System.tmp_dir!(),
-          "raxol-unloaded-#{System.unique_integer([:positive])}"
-        )
-
-      File.mkdir_p!(dir)
-      source = Path.join(dir, "probe.ex")
-      File.write!(source, "defmodule #{name} do\n  def view(_), do: :ok\nend\n")
-      on_exit(fn -> File.rm_rf!(dir) end)
-
-      elixirc =
-        System.find_executable("elixirc") ||
-          flunk("elixirc is required to compile a module outside this VM")
-
-      case System.cmd(elixirc, ["-o", dir, source], stderr_to_stdout: true) do
-        {_output, 0} -> dir
-        {output, status} -> flunk("elixirc exited #{status}: #{output}")
-      end
-    end
   end
 
   # Resolving a name is not the same as accepting it. These run the tool with a
@@ -301,6 +253,84 @@ defmodule Raxol.Headless.McpToolsTest do
       assert missing =~ "unknown module"
       refute missing =~ "is not a Raxol application"
       refute not_an_app =~ "unknown module"
+    end
+
+    # The atom table is not the same question as "does this module exist".
+    # Interactive code loading -- `mix mcp.server`, the documented workflow --
+    # is the normal case, and there a module's atom does not exist until
+    # something loads it. Refusing on the atom table alone therefore refuses
+    # modules that are compiled and sitting on the code path, which is what
+    # `raxol_start` asks for. An OTP release boots `:embedded` with everything
+    # pre-loaded, so this hides on fly.io and shows up locally.
+    #
+    # It lives in THIS describe, behind a real `Raxol.Headless`, because the
+    # contract gate runs server-side. Asserted from a block with no server, the
+    # call exits `:noproc` before ever reaching the gate, and the test passes on
+    # an artefact of the downed server rather than on the answer an operator
+    # gets.
+    #
+    # Compiled by a SEPARATE OS PROCESS on purpose: compiling it here would mint
+    # the atom in this VM and the test would pass against either version.
+    test "a compiled-but-unloaded module on the code path starts" do
+      name = "HeadlessUnloadedProbe#{System.unique_integer([:positive])}"
+      dir = compile_out_of_vm(name)
+
+      # No one in this VM has ever named it.
+      assert_raise ArgumentError, fn ->
+        String.to_existing_atom("Elixir." <> name)
+      end
+
+      Code.append_path(dir)
+      on_exit(fn -> Code.delete_path(dir) end)
+
+      assert {:ok, message} =
+               start_tool_result(%{"module" => name, "id" => "unloaded_probe"})
+
+      assert message =~ "unloaded_probe"
+
+      # The session dies with the `Raxol.Headless` the setup started, so in the
+      # normal case there is nothing to clean up -- and an unguarded stop races
+      # that teardown and exits `:noproc`. Guarded rather than dropped because
+      # the setup REUSES an already-running server when it finds one, and then
+      # the session really would outlive this test.
+      on_exit(fn ->
+        if Process.whereis(Raxol.Headless),
+          do: Raxol.Headless.stop("unloaded_probe")
+      end)
+    end
+
+    # The full TEA triple, not `view/1` alone: this fixture stands in for a real
+    # application, and a gate that names `init/1, update/2 and view/1` has to be
+    # given something that satisfies it or the test is measuring the gate's
+    # refusal instead of the code-path lookup it is about.
+    defp compile_out_of_vm(name) do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-unloaded-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      source = Path.join(dir, "probe.ex")
+
+      File.write!(source, """
+      defmodule #{name} do
+        def init(_), do: %{}
+        def update(_msg, model), do: model
+        def view(_), do: :ok
+      end
+      """)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      elixirc =
+        System.find_executable("elixirc") ||
+          flunk("elixirc is required to compile a module outside this VM")
+
+      case System.cmd(elixirc, ["-o", dir, source], stderr_to_stdout: true) do
+        {_output, 0} -> dir
+        {output, status} -> flunk("elixirc exited #{status}: #{output}")
+      end
     end
   end
 

@@ -16,12 +16,17 @@ defmodule Raxol.Headless.McpTools do
       %{
         name: "raxol_start",
         description: """
-        Starts a headless Raxol session. Accepts either a module name
-        (atom) or a file path to an example script. Returns the session ID.
+        Starts a headless Raxol session from a module name. The module must be
+        a Raxol application: it has to export init/1, update/2 and view/1.
+        Returns the session ID.
+
+        A "path" argument also exists, but it is DISABLED unless the deployment
+        sets RAXOL_HEADLESS_PATH_ROOT, because starting from a path compiles the
+        file. Prefer "module"; the path property below has the details.
 
         Examples:
           {"module": "RaxolDemo"}
-          {"path": "examples/demo.exs", "id": "demo"}
+          {"module": "RaxolDemo", "id": "demo"}
           {"module": "RaxolDemo", "width": 120, "height": 40}
         """,
         inputSchema: %{
