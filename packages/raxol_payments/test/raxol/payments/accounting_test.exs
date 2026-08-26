@@ -40,11 +40,40 @@ defmodule Raxol.Payments.AccountingTest do
     end
   end
 
+  # `config/runtime.exs` calls `env_config/0` UNCONDITIONALLY at prod boot, while
+  # `Raxol.Earn.Supervisor` reads the opts only inside its accounting branch. So
+  # a var belonging to a feature that is not running must not be able to abort a
+  # release, and the only way to guarantee that is to not parse it at all.
+  describe "env_config/0 while accounting is off" do
+    test "returns no opts and does not parse anything" do
+      assert {[], false} = Accounting.env_config()
+    end
+
+    test "a malformed value for a disabled subsystem does not abort the boot" do
+      # Each of these raises when accounting is ON -- that is the point of the
+      # refusals, and it is tested below. With it OFF they must be inert:
+      # RAXOL_PRICE_SOURCE=CoinGecko took down a node that would never have
+      # priced anything.
+      System.put_env("RAXOL_PRICE_SOURCE", "not-a-source")
+      System.put_env("RAXOL_REBALANCE_INTERVAL_MS", "5 minutes")
+      System.put_env("RAXOL_REBALANCE_DEMAND_WINDOW_MS", "24h")
+
+      assert {[], false} = Accounting.env_config()
+    end
+  end
+
   describe "env_config/0" do
+    # The opts are not parsed at all while the subsystem is off, so every test
+    # below that reads them has to turn it on first. See `accounting_opts/1`.
+    setup do
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "true")
+      :ok
+    end
+
     test "defaults: empty rpc map, nil solver, 5-min interval, coingecko" do
       {opts, enabled?} = Accounting.env_config()
 
-      refute enabled?
+      assert enabled?
       assert opts[:rpc_urls] == %{}
       assert opts[:solver_address] == nil
       assert opts[:rebalance_interval_ms] == 300_000
@@ -105,6 +134,13 @@ defmodule Raxol.Payments.AccountingTest do
   end
 
   describe "the sweep interval" do
+    # The opts are not parsed at all while the subsystem is off, so every test
+    # below that reads them has to turn it on first. See `accounting_opts/1`.
+    setup do
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "true")
+      :ok
+    end
+
     test "a blank value is unset, matching how the RPC vars read" do
       # `String.to_integer("")` used to crash the boot here, naming nothing.
       System.put_env("RAXOL_REBALANCE_INTERVAL_MS", "")
@@ -126,6 +162,13 @@ defmodule Raxol.Payments.AccountingTest do
   end
 
   describe "the price source" do
+    # The opts are not parsed at all while the subsystem is off, so every test
+    # below that reads them has to turn it on first. See `accounting_opts/1`.
+    setup do
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "true")
+      :ok
+    end
+
     test "defaults to coingecko, and reads the sources the monitor knows" do
       {opts, _} = Accounting.env_config()
       assert opts[:price_source] == :coingecko
@@ -149,7 +192,7 @@ defmodule Raxol.Payments.AccountingTest do
     end
 
     test "an unrecognized source is refused rather than silently pricing nothing" do
-      for value <- ["gecko", "coingeko", "CoinGecko"] do
+      for value <- ["gecko", "coingeko", "chainlink"] do
         System.put_env("RAXOL_PRICE_SOURCE", value)
 
         assert_raise ArgumentError, ~r/RAXOL_PRICE_SOURCE/, fn ->
@@ -157,9 +200,33 @@ defmodule Raxol.Payments.AccountingTest do
         end
       end
     end
+
+    # The module this names is spelled `Raxol.Payments.Prices.CoinGecko` and the
+    # vendor spells itself CoinGecko, so the mis-cased value is the natural one
+    # for an operator to type. Refusing it aborted a whole release boot over the
+    # shape of a word rather than its meaning.
+    test "the source is matched case-insensitively" do
+      for value <- ["CoinGecko", "COINGECKO", "  CoinGecko  "] do
+        System.put_env("RAXOL_PRICE_SOURCE", value)
+
+        {opts, _} = Accounting.env_config()
+        assert opts[:price_source] == :coingecko, "#{inspect(value)} should resolve"
+      end
+
+      System.put_env("RAXOL_PRICE_SOURCE", "NONE")
+      {opts, _} = Accounting.env_config()
+      assert opts[:price_source] == :none
+    end
   end
 
   describe "the demand window" do
+    # The opts are not parsed at all while the subsystem is off, so every test
+    # below that reads them has to turn it on first. See `accounting_opts/1`.
+    setup do
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "true")
+      :ok
+    end
+
     test "defaults to a day, and reads a set value" do
       {opts, _} = Accounting.env_config()
       assert opts[:demand_window_ms] == 86_400_000

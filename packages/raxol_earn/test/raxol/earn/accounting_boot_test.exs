@@ -129,6 +129,17 @@ defmodule Raxol.Earn.AccountingBootTest do
   end
 
   describe "the one-shot sweep reads the same environment" do
+    # `env_config/0` parses nothing while accounting is off, so the gate has to
+    # be ON for there to be a pair to half-configure at all. Without this the
+    # test passed for the wrong reason once that gating landed: no opts, so no
+    # pair, so no raise.
+    setup do
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "true")
+      System.put_env("XOCHI_SOLVER_ADDRESS", "0x97D4")
+      on_exit(fn -> System.delete_env("RAXOL_ACCOUNTING_ENABLED") end)
+      :ok
+    end
+
     test "a half-configured pair fails the task the way it fails a boot" do
       # `mix raxol_earn.rebalance` builds its policy from the same env contract,
       # so it must not accept config the release refuses.

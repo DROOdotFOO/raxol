@@ -309,6 +309,13 @@ defmodule Raxol.Payments.RebalancePolicy do
     end
   end
 
+  # `demand` is one `{chain, symbol}` entry of
+  # `Raxol.Payments.SettlementLedger.demand_by_destination/2`, or `nil` where the
+  # window saw no fill for that corridor. The last clause is the one that keeps
+  # this total: anything without a `%Decimal{}` `:peak` is not evidence about
+  # demand, so it yields the static floor rather than guessing at a number the
+  # rebalancer would then move funds to meet.
+  @spec widen(t(), Decimal.t(), map() | nil) :: Decimal.t()
   defp widen(%__MODULE__{demand_multiplier: nil}, static_floor, _demand), do: static_floor
   defp widen(_policy, static_floor, nil), do: static_floor
 
@@ -327,6 +334,10 @@ defmodule Raxol.Payments.RebalancePolicy do
   # the line where an unbounded floor becomes funds the auto-rebalancer moves, so
   # it is where the pair is enforced. Only reachable with a multiplier set --
   # `widen/3`'s first clause returns the static floor without one.
+  #
+  # The `nil` clause RAISES rather than returning, so it has no return value to
+  # spec: the spec describes the capped path, which is the only one that answers.
+  @spec cap_at(Decimal.t(), Decimal.t() | nil) :: Decimal.t()
   defp cap_at(_value, nil), do: raise(ArgumentError, cap_required())
   defp cap_at(value, %Decimal{} = cap), do: Decimal.min(value, cap)
 

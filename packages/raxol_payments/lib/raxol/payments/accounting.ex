@@ -37,13 +37,26 @@ defmodule Raxol.Payments.Accounting do
   down, in `with_demand/2`, which normalizes `""` to the same `nil` an unset var
   gives it.
 
-  Beyond that, every var parsed here refuses a value it does not recognize with a
-  message naming itself, because an operator has to be able to tell "my knob did
-  nothing" from "the feature does nothing". Both halves are load-bearing:
+  Beyond that, the vars parsed here refuse a value they do not recognize with a
+  message naming themselves, because an operator has to be able to tell "my knob
+  did nothing" from "the feature does nothing". Both halves are load-bearing:
   `RAXOL_PRICE_SOURCE=` used to yield the atom `:""`, which falls through
   `RebalanceMonitor`'s price-source catch-all and silently dropped USD pricing
   from the whole sweep, and `RAXOL_REBALANCE_INTERVAL_MS=` used to abort the boot
   with `String.to_integer/1`'s message, which names nothing.
+
+  Two deliberate exceptions to that rule:
+
+  `RAXOL_ACCOUNTING_ENABLED` is the gate, so it cannot refuse. It is read as
+  exactly `"true"` and ANY other value -- including `"1"`, `"yes"` and `"TRUE"`
+  -- means off, silently. Refusing there would abort a release over a var whose
+  only job is to say the subsystem is not running, which is the failure the rest
+  of this section exists to prevent. Set it to the literal `"true"`.
+
+  And nothing else here is parsed AT ALL while that gate is off: `env_config/0`
+  reads it first and returns an empty opts list, so a malformed value for a
+  feature that is not running cannot take a boot down. The refusals below
+  therefore only ever fire on a deployment that asked for the subsystem.
 
   Read-only by construction: no wallet key is read here and none of the started
   processes move funds (the Riddler auto-rebalancer executes; the monitor only
@@ -84,7 +97,27 @@ defmodule Raxol.Payments.Accounting do
   """
   @spec env_config() :: {keyword(), boolean()}
   def env_config do
-    accounting = [
+    enabled? = enabled?()
+    {accounting_opts(enabled?), enabled?}
+  end
+
+  # Parsed only when the subsystem is ON, and that ordering is the point.
+  #
+  # `config/runtime.exs` calls `env_config/0` unconditionally, and the readers
+  # below refuse a value they do not recognize. Together those meant a typo in a
+  # var belonging to a feature that is NOT RUNNING aborted the whole release
+  # boot -- `RAXOL_PRICE_SOURCE=CoinGecko` with accounting off took down a node
+  # that would never have priced anything.
+  #
+  # Nothing is lost by waiting. `Raxol.Earn.Supervisor` gates its entire
+  # accounting tree on the second element of this tuple and reads these opts
+  # only inside that branch, so an opts list nobody reads is exactly as useful
+  # as one that was never built.
+  @spec accounting_opts(boolean()) :: keyword()
+  defp accounting_opts(false), do: []
+
+  defp accounting_opts(true) do
+    [
       rpc_urls: rpc_urls(),
       solver_address: solver_address(),
       rebalance_interval_ms: rebalance_interval_ms(),
@@ -93,8 +126,6 @@ defmodule Raxol.Payments.Accounting do
       demand_floor_cap: System.get_env("RAXOL_REBALANCE_DEMAND_FLOOR_CAP"),
       demand_window_ms: demand_window_ms()
     ]
-
-    {accounting, enabled?()}
   end
 
   @doc "True when `RAXOL_ACCOUNTING_ENABLED` is exactly `\"true\"`."
@@ -135,11 +166,16 @@ defmodule Raxol.Payments.Accounting do
     env_milliseconds("RAXOL_REBALANCE_INTERVAL_MS", @default_rebalance_interval_ms)
   end
 
+  # Matched case-INSENSITIVELY. The module this names is spelled
+  # `Raxol.Payments.Prices.CoinGecko` and the vendor spells itself CoinGecko, so
+  # the mis-cased value is the natural one for an operator to type, and refusing
+  # it would fail a boot over the shape of a word rather than its meaning.
   @spec price_source() :: price_source()
   defp price_source do
     "RAXOL_PRICE_SOURCE"
     |> System.get_env("")
     |> String.trim()
+    |> String.downcase()
     |> case do
       "" -> @default_price_source
       value -> known_price_source(value)
