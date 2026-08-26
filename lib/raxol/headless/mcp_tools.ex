@@ -386,16 +386,20 @@ defmodule Raxol.Headless.McpTools do
   # atom table until the VM aborts. `Raxol.Application` registers these tools at
   # startup, so this is a reachable surface rather than a dev-only one.
   #
-  # A miss is answered rather than minted. Nothing is lost by it: an atom for a
-  # module that has never been loaded only fails later at `Raxol.Headless.start/2`.
-  #
-  # `safe_to_atom/1` and `parse_key/1` in this module already resolve the same way
-  # (existing-only, and an explicit allowlist).
+  # But the atom table alone answers the wrong question. Under `mix mcp.server`
+  # the VM loads code on demand, so a module that is compiled and sitting on the
+  # code path has no atom until something reaches for it -- and reaching for it
+  # is precisely what this tool is asked to do. So the code path decides, and the
+  # atom is minted only once a beam file for that exact name is found there:
+  # bounded by what is on disk, not by what a caller can type.
   defp resolve_module_or_path(%{"module" => mod}) when is_binary(mod) do
-    {:ok, String.to_existing_atom("Elixir." <> mod)}
-  rescue
-    ArgumentError ->
-      {:error, "unknown module #{inspect(mod)}: it is not loaded in this VM"}
+    case existing_module(mod) do
+      {:ok, module} ->
+        {:ok, module}
+
+      :error ->
+        {:error, "unknown module #{inspect(mod)}: it is not loaded in this VM"}
+    end
   end
 
   # Starting from a path is ARBITRARY CODE EXECUTION, not a file read.
@@ -437,6 +441,36 @@ defmodule Raxol.Headless.McpTools do
   # trade a refused lookup for something much worse.
   defp resolve_module_or_path(_),
     do: {:error, "Either 'module' or 'path' is required"}
+
+  # `:code.where_is_file/1` walks the code path for the beam, which is what
+  # `Code.ensure_loaded?/1` would have to find anyway -- asking first just means
+  # a name that exists nowhere never becomes an atom.
+  defp existing_module(name) do
+    prefixed = "Elixir." <> name
+
+    case atom_if_exists(prefixed) do
+      {:ok, module} -> {:ok, module}
+      :error -> beam_on_code_path(prefixed)
+    end
+  end
+
+  defp atom_if_exists(prefixed) do
+    {:ok, String.to_existing_atom(prefixed)}
+  rescue
+    ArgumentError -> :error
+  end
+
+  # The mint stays bounded because the file has to be there: `where_is_file/1`
+  # appends the name to each code-path directory and stats it, so the reachable
+  # set is the beams already on disk, which a caller supplying names cannot
+  # grow. The `Elixir.` prefix leads, so a separator-bearing name looks for a
+  # directory literally called `Elixir.<something>` and finds nothing.
+  defp beam_on_code_path(prefixed) do
+    case :code.where_is_file(String.to_charlist(prefixed <> ".beam")) do
+      :non_existing -> :error
+      _path -> {:ok, String.to_atom(prefixed)}
+    end
+  end
 
   defp confine_path(root, path) do
     case Raxol.Core.Boundary.Path.confine(root, path, ref_format: ~r/\.exs?$/) do
