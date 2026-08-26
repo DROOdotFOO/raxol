@@ -847,7 +847,7 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
         {"/", rest}
 
       [anchor | rest] = split ->
-        case drive_root(anchor) do
+        case absolute_anchor(anchor) do
           nil -> {base, split}
           root -> {root, rest}
         end
@@ -861,13 +861,29 @@ defmodule Raxol.AgentClientProtocol.Client.FsSandbox do
   # splits the same string. A bare drive is drive-RELATIVE on Windows rather than
   # absolute, but anchoring it at the drive root refuses it, which is the safe
   # direction for a boundary.
-  defp drive_root(<<letter, ?:>>) when letter in ?A..?Z or letter in ?a..?z,
+  defp absolute_anchor(<<letter, ?:>>) when letter in ?A..?Z or letter in ?a..?z,
     do: <<letter, ?:, ?/>>
 
-  defp drive_root(<<letter, ?:, ?/>>) when letter in ?A..?Z or letter in ?a..?z,
-    do: <<letter, ?:, ?/>>
+  defp absolute_anchor(<<letter, ?:, ?/>>)
+       when letter in ?A..?Z or letter in ?a..?z,
+       do: <<letter, ?:, ?/>>
 
-  defp drive_root(_), do: nil
+  # UNC, the same anchor bug one shape over. `:filename.split/1` on Windows gives
+  # a UNC path its own `"//"` component (both `"//host/share/x"` and the
+  # `"\\\\host\\share\\x"` spelling land there), which is no drive letter -- so it
+  # took the very relative branch the drive case was fixed out of.
+  #
+  # The clause matches TWO IDENTICAL separators, mirroring the `Slash, Slash`
+  # guard `:filename.win32_splitb/1` decides UNC by. That also covers the shape
+  # Unix produces: a backslash is an ordinary character there, so
+  # `"\\\\host\\share\\x"` never splits at all and arrives whole as the anchor,
+  # relative-looking. Same link, contained on Unix and escaping on Windows, which
+  # is exactly the per-host divergence this function exists to remove -- so the
+  # whole anchor is returned as the root and refused on both.
+  defp absolute_anchor(<<sep, sep, _::binary>> = unc) when sep in [?/, ?\\],
+    do: unc
+
+  defp absolute_anchor(_), do: nil
 
   defp slice(content, nil, _limit), do: content
 
