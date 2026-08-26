@@ -186,7 +186,11 @@ defmodule Raxol.Headless.McpToolsTest do
       name = "NoSuchHeadlessModule#{System.unique_integer([:positive])}"
 
       assert {:error, message} = call_start(%{"module" => name})
-      assert message =~ "not loaded"
+
+      # The refusal says the BEAM is missing, not that the module is unloaded:
+      # unloaded is the ordinary state under `mix mcp.server`, and saying so
+      # sends an operator looking for a loading problem that is not there.
+      assert message =~ "no compiled module by that name is loadable"
 
       assert_raise ArgumentError, fn ->
         String.to_existing_atom("Elixir." <> name)
@@ -246,6 +250,57 @@ defmodule Raxol.Headless.McpToolsTest do
         {_output, 0} -> dir
         {output, status} -> flunk("elixirc exited #{status}: #{output}")
       end
+    end
+  end
+
+  # Resolving a name is not the same as accepting it. These run the tool with a
+  # real `Raxol.Headless` behind it, because the contract gate lives there and
+  # the point of the tool's wording is what an operator reads at the end of the
+  # whole call.
+  describe "raxol_start module contract" do
+    setup do
+      case Process.whereis(Raxol.Headless) do
+        nil -> start_supervised!({Raxol.Headless, [name: Raxol.Headless]})
+        pid -> pid
+      end
+
+      :ok
+    end
+
+    defp start_tool_result(args),
+      do:
+        Enum.find(McpTools.tools(), &(&1.name == "raxol_start")).callback.(args)
+
+    # A `BaseManager` GenServer, so it exports `init/1` and nothing else the
+    # runtime wants. It is one of the 527 modules on this tree that would have
+    # satisfied a bare `Code.ensure_loaded?/1`, and starting it ran its
+    # GenServer `init/1` outside any supervisor.
+    test "a real module that is not a Raxol application is refused" do
+      assert {:error, message} =
+               start_tool_result(%{
+                 "module" => "Raxol.Terminal.Buffer.BufferServer",
+                 "id" => "not_an_app"
+               })
+
+      assert message =~ "is not a Raxol application"
+      assert message =~ "init/1, update/2 and view/1"
+    end
+
+    # The two refusals send an operator in opposite directions -- go compile it
+    # versus go pick a different module -- so the wording has to separate them.
+    test "a missing module and a non-application module read differently" do
+      assert {:error, missing} =
+               start_tool_result(%{"module" => "NoSuchHeadlessAppAtAll"})
+
+      assert {:error, not_an_app} =
+               start_tool_result(%{
+                 "module" => "Raxol.Terminal.Buffer.BufferServer",
+                 "id" => "not_an_app_again"
+               })
+
+      assert missing =~ "unknown module"
+      refute missing =~ "is not a Raxol application"
+      refute not_an_app =~ "unknown module"
     end
   end
 

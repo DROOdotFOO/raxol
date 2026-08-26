@@ -103,6 +103,39 @@ defmodule Raxol.HeadlessTest do
                Headless.start(NoSuchModule, id: :bad)
     end
 
+    # `Raxol.start_link/2` CALLS `init/1`, so admitting a module on "a beam
+    # exists for this name" starts whatever was named. 527 modules on this tree
+    # export `init/1` against 53 that implement TEA, and this is one of the
+    # former: a `BaseManager` GenServer whose `init/1` would have run here
+    # outside any supervisor.
+    test "refuses a real module that is not a Raxol application" do
+      assert {:error,
+              {:not_a_raxol_application, Raxol.Terminal.Buffer.BufferServer}} =
+               Headless.start(Raxol.Terminal.Buffer.BufferServer, id: :not_app)
+    end
+
+    # The gate asks the behaviour first, but it cannot ask ONLY that: the
+    # runtime does not, and `Raxol.Examples.Demos.IntegratedAccessibilityDemo`
+    # is a TEA app in this repo that never declares it. This module is that
+    # shape deliberately -- three callbacks, no `use`, no `@behaviour`.
+    defmodule UndeclaredApp do
+      def init(_context), do: %{}
+      def update(_message, model), do: {model, []}
+      def view(_model), do: Raxol.Core.Renderer.View.text("undeclared")
+    end
+
+    test "accepts a TEA app that never declared the behaviour" do
+      refute Raxol.Core.Runtime.Application in List.flatten(
+               Keyword.get_values(
+                 UndeclaredApp.module_info(:attributes),
+                 :behaviour
+               )
+             )
+
+      assert {:ok, :undeclared} =
+               Headless.start(UndeclaredApp, id: :undeclared)
+    end
+
     test "returns error for missing file" do
       assert {:error, {:file_not_found, _}} =
                Headless.start("nonexistent.exs", id: :bad)
@@ -222,7 +255,9 @@ defmodule Raxol.HeadlessTest do
   describe "file loading" do
     test "loads module from example script" do
       {:ok, id} =
-        Headless.start("examples/getting_started/counter.exs", id: :counter_test)
+        Headless.start("examples/getting_started/counter.exs",
+          id: :counter_test
+        )
 
       assert id == :counter_test
       Process.sleep(300)

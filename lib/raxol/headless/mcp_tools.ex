@@ -303,8 +303,20 @@ defmodule Raxol.Headless.McpTools do
 
   defp do_start(module_or_path, opts) do
     case Raxol.Headless.start(module_or_path, opts) do
-      {:ok, session_id} -> {:ok, "Session started: #{session_id}"}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:ok, session_id} ->
+        {:ok, "Session started: #{session_id}"}
+
+      # Spelled out rather than `inspect`ed because this is the refusal an
+      # operator is most likely to hit by naming a real module that simply is
+      # not an app, and the tuple alone does not say what the contract IS.
+      {:error, {:not_a_raxol_application, module}} ->
+        {:error,
+         "#{inspect(module)} exists but is not a Raxol application: it neither " <>
+           "declares Raxol.Core.Runtime.Application nor exports init/1, " <>
+           "update/2 and view/1"}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
     end
   end
 
@@ -397,8 +409,13 @@ defmodule Raxol.Headless.McpTools do
       {:ok, module} ->
         {:ok, module}
 
+      # Not "it is not loaded": the code path is what decided, and a module
+      # being unloaded is the normal state under `mix mcp.server` rather than a
+      # reason to refuse anything. What is missing is the beam itself.
       :error ->
-        {:error, "unknown module #{inspect(mod)}: it is not loaded in this VM"}
+        {:error,
+         "unknown module #{inspect(mod)}: no compiled module by that name is " <>
+           "loadable in this VM"}
     end
   end
 
