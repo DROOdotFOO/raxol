@@ -116,7 +116,7 @@ defmodule Raxol.Symphony.PortReaper do
   """
   @spec kill(target()) :: :ok | {:error, reason()}
   def kill(:none), do: :ok
-  def kill(target) when is_signallable(target), do: do_kill(target)
+  def kill(target) when is_signallable(target), do: do_kill(target, signal_opts())
 
   @doc """
   Wait up to `grace_ms` for the target to exit on its own, then SIGKILL it.
@@ -151,8 +151,14 @@ defmodule Raxol.Symphony.PortReaper do
 
   def await_exit(target, grace_ms)
       when is_signallable(target) and is_integer(grace_ms) and grace_ms >= 0 do
-    poll_then_kill(target, grace_ms)
+    poll_then_kill(target, grace_ms, signal_opts())
   end
+
+  # The shell is resolved ONCE here and threaded through everything that follows.
+  # `await_gone/3` polls every 50ms for the whole grace window and every
+  # resolution is a full PATH scan, so leaving it to default would put one scan
+  # on each tick of every reap.
+  defp signal_opts, do: [shell: ProcessGroup.shell()]
 
   @doc """
   Reap `target` if the calling process dies before calling `release/1`.
@@ -268,8 +274,8 @@ defmodule Raxol.Symphony.PortReaper do
 
   # The grace, then the kill. `await_gone/3` answers `:timeout` when the target
   # outlived the grace, which is the only case that still needs a signal.
-  defp poll_then_kill(target, deadline_ms) do
-    case ProcessGroup.await_gone(target, deadline_ms) do
+  defp poll_then_kill(target, grace_ms, opts) do
+    case ProcessGroup.await_gone(target, grace_ms, opts) do
       :ok ->
         :ok
 
@@ -281,17 +287,17 @@ defmodule Raxol.Symphony.PortReaper do
           "symphony.port_reaper.grace_expired target=#{inspect(target)} action=killed"
         )
 
-        do_kill(target)
+        do_kill(target, opts)
 
       {:error, _reason} = err ->
         err
     end
   end
 
-  defp do_kill(target), do: do_kill(target, @kill_attempts)
+  defp do_kill(target, opts), do: do_kill(target, opts, @kill_attempts)
 
-  defp do_kill(target, attempts_left) do
-    case ProcessGroup.signal(target, "-KILL") do
+  defp do_kill(target, opts, attempts_left) do
+    case ProcessGroup.signal(target, "-KILL", opts) do
       :ok ->
         :ok
 
@@ -305,7 +311,7 @@ defmodule Raxol.Symphony.PortReaper do
       # budget rather than reporting a fork failure as an unreaped target.
       {:error, :spawn_failed} when attempts_left > 1 ->
         Process.sleep(@retry_ms)
-        do_kill(target, attempts_left - 1)
+        do_kill(target, opts, attempts_left - 1)
 
       {:error, reason} = err ->
         Logger.warning(
@@ -317,8 +323,8 @@ defmodule Raxol.Symphony.PortReaper do
     end
   end
 
-  defp unreaped_detail(:unavailable), do: "no_bash_on_path"
+  defp unreaped_detail(:unavailable), do: "no_shell_on_path"
   defp unreaped_detail(:refused), do: "kernel_refused_the_signal_target_still_running"
-  defp unreaped_detail(:spawn_failed), do: "could_not_run_bash_target_not_verified"
+  defp unreaped_detail(:spawn_failed), do: "could_not_run_the_shell_target_not_verified"
   defp unreaped_detail(:unknown), do: "unrecognised_kill_failure_target_not_verified"
 end

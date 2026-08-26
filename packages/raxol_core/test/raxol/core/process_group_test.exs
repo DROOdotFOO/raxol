@@ -81,6 +81,42 @@ defmodule Raxol.Core.ProcessGroupTest do
     end
   end
 
+  # A shell that records each invocation and then hands the argv to the real
+  # `/bin/sh`, so a caller's probes can be counted without changing what they do.
+  defp counting_shell do
+    dir = Path.join(System.tmp_dir!(), "raxol-pg-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    log = Path.join(dir, "invocations")
+    script = Path.join(dir, "shell")
+
+    File.write!(script, """
+    #!/bin/sh
+    echo x >> #{log}
+    exec /bin/sh "$@"
+    """)
+
+    File.chmod!(script, 0o700)
+    {script, log}
+  end
+
+  defp invocations(log) do
+    case File.read(log) do
+      {:ok, contents} -> contents |> String.split("\n", trim: true) |> length()
+      {:error, :enoent} -> 0
+    end
+  end
+
+  describe "shell/0" do
+    test "resolves an executable POSIX shell on this host" do
+      path = ProcessGroup.shell()
+
+      assert is_binary(path)
+      assert {:ok, %File.Stat{type: :regular}} = File.stat(path)
+    end
+  end
+
   describe "resolve/1" do
     test "reports a spawned child as its own process group leader" do
       port = open_child("echo ready; sleep 30")
@@ -180,6 +216,25 @@ defmodule Raxol.Core.ProcessGroupTest do
       ProcessGroup.signal({:group, pid}, "-KILL")
     end
 
+    test "tells a live group from a drained one through the host's real /bin/sh" do
+      # `classify/1` reads ESRCH out of the errno TEXT, and `/bin/sh` is dash on
+      # Debian and Ubuntu where it is bash-in-sh-mode on macOS -- so the shell
+      # that reaches the classifier on CI is not the one it was authored
+      # against, and a wording mismatch would answer {:error, :unknown} where
+      # :gone is correct. Driving the host's own `/bin/sh` makes this a claim
+      # about the shell that is actually there.
+      port = open_child("( sleep 30 ) & echo ready; sleep 30")
+      pid = os_pid(port)
+      target = {:group, pid}
+
+      assert :ok = ProcessGroup.signal(target, "-0", shell: "/bin/sh")
+
+      assert :ok = ProcessGroup.signal(target, "-KILL", shell: "/bin/sh")
+      assert wait_until(fn -> not alive?("-#{pid}") end)
+
+      assert :gone = ProcessGroup.signal(target, "-0", shell: "/bin/sh")
+    end
+
     test "is :gone for :none and refuses a target that would signal the world" do
       assert ProcessGroup.signal(:none, "-KILL") == :gone
 
@@ -215,6 +270,26 @@ defmodule Raxol.Core.ProcessGroupTest do
       target = ProcessGroup.resolve(pid)
 
       assert :timeout = ProcessGroup.await_gone(target, 100)
+
+      ProcessGroup.signal(target, "-KILL")
+    end
+
+    test "every poll goes through the shell the caller resolved" do
+      # What lets a caller resolve the shell ONCE for a whole grace window --
+      # `PortReaper.await_exit/2` does, because each resolution is a full PATH
+      # scan and this loop ticks every 50ms. A loop that honoured `:shell` on
+      # the first probe and let the rest default would leave a single line in
+      # the log and quietly go back to a scan per tick.
+      port = open_child("echo ready; sleep 30")
+      pid = os_pid(port)
+      target = ProcessGroup.resolve(pid)
+      {script, log} = counting_shell()
+
+      assert :timeout = ProcessGroup.await_gone(target, 1_000, shell: script)
+
+      # A count, not a duration: the budget is long enough that reaching one
+      # probe would take a fork of over a second.
+      assert invocations(log) > 1
 
       ProcessGroup.signal(target, "-KILL")
     end

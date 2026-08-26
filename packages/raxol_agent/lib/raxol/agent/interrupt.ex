@@ -92,6 +92,13 @@ defmodule Raxol.Agent.Interrupt do
   # stay truthful while the signal itself is made to fail.
   @kill_sh "/bin/sh"
 
+  # The override is read in a TEST build only. What it names is an executable
+  # this VM then runs with its own privileges on every kill, and a config file
+  # is not where that choice belongs: the whole purpose of the seam is to make a
+  # kill FAIL, which is never something a deployment wants. Compile-time, so a
+  # release carries no path from config to an exec at all.
+  @kill_sh_overridable? if Code.ensure_loaded?(Mix), do: Mix.env() == :test, else: false
+
   @typedoc "The three staged-kill event types, in escalation order."
   @type stage :: :interrupt_signaled | :interrupt_waited | :interrupt_killed
 
@@ -503,7 +510,11 @@ defmodule Raxol.Agent.Interrupt do
 
   defp individual_signal(_pid, _signal), do: false
 
-  defp kill_sh, do: Application.get_env(:raxol_agent, :interrupt_kill_sh, @kill_sh)
+  if @kill_sh_overridable? do
+    defp kill_sh, do: Application.get_env(:raxol_agent, :interrupt_kill_sh, @kill_sh)
+  else
+    defp kill_sh, do: @kill_sh
+  end
 
   # Poll the single-pid oracle until `os_pid` is gone or the budget elapses.
   # Used only where the group is not observable — it can short-circuit the

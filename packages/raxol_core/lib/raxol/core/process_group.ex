@@ -38,7 +38,11 @@ defmodule Raxol.Core.ProcessGroup do
   correctly, which is why this class of bug is green on a developer machine and
   red on Linux CI.
 
-  Shell builtins are POSIX about negative pids on both.
+  Shell builtins are POSIX about negative pids on both, and any POSIX shell will
+  do: bash, dash and busybox ash were each measured signalling a real group
+  through `-<pgid>` and reporting the same errno text back. `shell/0` prefers
+  bash and settles for `sh`, so a host with only the latter keeps the group kill
+  rather than degrading to a bare-pid reap that leaves the descendants running.
 
   ## Callers
 
@@ -71,8 +75,8 @@ defmodule Raxol.Core.ProcessGroup do
   NONE of these may be reported as success: a caller about to delete the
   target's working directory is relying on the difference.
 
-  `:unavailable` -- no shell to signal with, so nothing was verified and nothing
-  was killed.
+  `:unavailable` -- no shell on PATH to signal with, so nothing was verified and
+  nothing was killed.
 
   `:refused` -- the kernel rejected the signal (EPERM). The target is
   demonstrably still there, and still running.
@@ -89,10 +93,10 @@ defmodule Raxol.Core.ProcessGroup do
   @type reason :: :unavailable | :refused | :spawn_failed | :unknown
 
   @typedoc """
-  * `:shell` -- shell to deliver signals through. Defaults to `bash` on PATH.
-    Honoured by `signal/3` and `await_gone/3` only; `resolve/1` always uses the
-    real shell, so an injected failing shell simulates a failing KILL without
-    also corrupting the target it is aimed at.
+  * `:shell` -- shell to deliver signals through, `shell/0` when absent.
+    Honoured by `signal/3` and `await_gone/3` only; `resolve/1` takes no opts at
+    all, so an injected failing shell simulates a failing KILL without also
+    corrupting the target it is aimed at.
   """
   @type opts :: [shell: String.t() | nil]
 
@@ -109,18 +113,36 @@ defmodule Raxol.Core.ProcessGroup do
   @poll_ms 50
 
   @doc """
+  The shell signals are delivered through, or `nil` when this host has none.
+
+  Public because resolving it is a full PATH scan and a poll loop must not repeat
+  one: `await_gone/3` ticks every #{@poll_ms}ms for a whole grace window, so a
+  caller resolves once here and threads the answer down through `:shell`.
+
+  `bash` first, then any POSIX `sh`. The preference is habit, not requirement:
+  both things this module asks of the builtin -- that `-<pgid>` names a process
+  group, and that a failure carries `strerror` (see `classify/1`) -- were
+  measured identical on Debian's dash and on busybox ash. Settling for `sh`
+  matters because those are the hosts with no bash to find, and answering
+  `:unavailable` there would give up the group kill on exactly the systems the
+  moduledoc cites as the reason not to depend on `ps`.
+  """
+  @spec shell() :: String.t() | nil
+  def shell, do: System.find_executable("bash") || System.find_executable("sh")
+
+  @doc """
   Resolve the safe signal target for a spawned child's OS pid.
 
   `{:group, os_pid}` when a process group under that id answers a signal, which
   can only be true if this child led it. `{:pid, os_pid}` otherwise -- safe, but
   it silently drops the descendants, so it is logged.
 
-  Always uses the real shell, never an injected one: this decides WHAT gets
+  Takes no opts, so an injected shell cannot reach it: this decides WHAT gets
   signalled, and a wrong answer here is the unrecoverable failure.
   """
   @spec resolve(pos_integer()) :: target()
   def resolve(os_pid) when is_integer(os_pid) and os_pid > 1 do
-    case signal({:group, os_pid}, "-0", shell: nil) do
+    case signal({:group, os_pid}, "-0", shell: shell()) do
       :ok ->
         {:group, os_pid}
 
@@ -168,7 +190,7 @@ defmodule Raxol.Core.ProcessGroup do
   def signal(:none, _flag, _opts), do: :gone
 
   def signal(target, flag, opts) when is_signallable(target) and is_binary(flag) do
-    case shell(opts) do
+    case shell_for(opts) do
       nil -> {:error, :unavailable}
       path -> run(path, flag, arg(target))
     end
@@ -232,7 +254,8 @@ defmodule Raxol.Core.ProcessGroup do
   #
   # The locale is pinned to C because the errno text is the only thing that can
   # tell ESRCH from EPERM -- the builtin exits 1 for both. macOS libc does not
-  # translate `strerror`, but glibc does, and CI is glibc.
+  # translate `strerror`, but glibc does, and CI is glibc. Pinning it is also
+  # what makes `classify/1` a claim about libc rather than about a shell.
   defp run(path, flag, arg) do
     args = ["-c", ~s(kill "$1" "$2"), "raxol-process-group", flag, arg]
     env = [{"BASH_ENV", nil}, {"ENV", nil}, {"LC_ALL", "C"}, {"LANG", "C"}]
@@ -256,6 +279,23 @@ defmodule Raxol.Core.ProcessGroup do
   # that reach this and are not EPERM: a seccomp or LSM filter answers EACCES,
   # whose text is "Permission denied" and not "Operation not permitted"; and a
   # shell whose builtin rejects the flag answers with a usage error.
+  #
+  # These patterns are NOT bash's wording, and that distinction is the whole
+  # reason to write them down: `/bin/sh` is dash on Debian and Ubuntu and CI is
+  # Linux, so the shell whose text reaches here is routinely not the one this
+  # was authored against. What makes the match portable is that each builtin
+  # prints `strerror(errno)` verbatim and varies only in what it puts in FRONT
+  # of it, which a substring match ignores. Measured under `LC_ALL=C`, ESRCH
+  # then EPERM (the prefix each one adds is elided; dash's carries `$0`):
+  #
+  #   bash 5   ... kill: (-57) - No such process       ... kill: (1) - Operation not permitted
+  #   dash     ... kill: No such process               ... kill: Operation not permitted
+  #   busybox  ... can't kill pid -57: No such process ... can't kill pid 1: Operation not permitted
+  #
+  # So the locale pin above is what makes this a claim about libc rather than
+  # about a shell, and the pattern is only how the claim is read. A builtin that
+  # hid `strerror` entirely would land on `:unknown`, which is the safe half of
+  # the inversion.
   defp classify(output) do
     cond do
       output =~ ~r/no such process/i -> :gone
@@ -264,10 +304,10 @@ defmodule Raxol.Core.ProcessGroup do
     end
   end
 
-  defp shell(opts) do
+  defp shell_for(opts) do
     case Keyword.get(opts, :shell) do
       path when is_binary(path) -> path
-      _ -> System.find_executable("bash")
+      _ -> shell()
     end
   end
 
