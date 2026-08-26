@@ -85,29 +85,43 @@ defmodule Raxol.Payments.RebalancePolicy do
 
   @demand_keys Map.keys(@demand_env)
 
+  @typedoc "One half of the demand setting: the two knobs `with_demand/2` reads."
+  @type demand_key :: :demand_multiplier | :demand_floor_cap
+
   @doc """
   Turn demand-aware floors on, from the deployment's accounting config.
 
   Reads `:demand_multiplier` and `:demand_floor_cap` (`Decimal`, or a string or
   number this converts). A key ABSENT from `opts` leaves that field as it already
-  is on `policy`; only keys actually supplied are written. Both absent therefore
-  leaves the policy exactly as passed, which is what keeps the feature off until
-  a deployment asks for it.
+  is on `policy`; a key PRESENT writes whatever it normalizes to, including the
+  `nil` an unset env var yields and the `nil` a set-but-empty one (`""`) yields.
+  Both absent therefore leaves the policy exactly as passed, which is what keeps
+  the feature off until a deployment asks for it.
 
-  The two knobs are ONE setting, which decides what a partial `opts` means:
+  The two knobs are ONE setting, and the rule is stated over the RESULTING pair
+  rather than over how either key arrived: after the merge, both fields are set
+  or neither is, and anything else raises. It has to be stated that way. The only
+  path that reaches here is `Raxol.Payments.Accounting.env_config/0`, which calls
+  `System.get_env/1` for both knobs unconditionally, so "the operator cleared
+  this one" and "this one was never set" arrive as the same `nil`. A rule phrased
+  about which key the caller supplied cannot tell those apart, and phrasing it
+  that way is what left the check dead on every production call.
 
-    * Supplying one and leaving the other unconfigured RAISES. A multiplier alone
-      sizes floors off `peak`, which comes from settled fills -- i.e. from orders
-      anyone can place through the public storefront -- and those floors become
-      recommendations the auto-rebalancer executes. Uncapped, one large order sets
-      a corridor's floor to an unbounded multiple of itself for the whole window.
-      A cap alone is the mirror: `demand_aware?/1` is false without a multiplier,
+  Half a pair is refused because either half alone is a silent misconfiguration:
+
+    * A multiplier alone sizes floors off `peak`, which comes from settled fills
+      -- i.e. from orders anyone can place through the public storefront -- and
+      those floors become recommendations the auto-rebalancer executes. Uncapped,
+      one large order sets a corridor's floor to an unbounded multiple of itself
+      for the whole window.
+    * A cap alone is the mirror: `demand_aware?/1` is false without a multiplier,
       so nothing ever reads the cap and the operator quietly gets static floors
       from a deployment that looks configured for demand-aware ones.
-    * Supplying one as EMPTY (`nil`, or the `""` a set-but-empty env var yields)
-      clears BOTH. That is the "unset the multiplier to keep static floors" the
-      error above tells an operator to do, so it cannot itself be an error, and
-      leaving the other half in place would only re-raise on the next call.
+
+  Clearing a configured policy therefore means clearing BOTH knobs. Clearing one
+  raises exactly as configuring one does, and the error says so -- there is no
+  way to honour "unset the multiplier" alone while a cap is still configured,
+  since that lands on the other half of the same rule.
 
   A malformed or non-positive value raises too, naming the knob and its env var:
   an operator has no way to tell "my knob did nothing" from "the feature does
@@ -128,21 +142,21 @@ defmodule Raxol.Payments.RebalancePolicy do
     |> validate_demand_pair()
   end
 
+  @spec put_demand(t(), keyword()) :: t()
   defp put_demand(policy, opts) do
-    values = Map.new(@demand_keys, &{&1, demand_value(policy, opts, &1)})
-
-    case Enum.any?(@demand_keys, &(Keyword.has_key?(opts, &1) and is_nil(values[&1]))) do
-      true -> %{policy | demand_multiplier: nil, demand_floor_cap: nil}
-      false -> Map.merge(policy, values)
-    end
+    Map.merge(policy, Map.new(@demand_keys, &{&1, demand_value(policy, opts, &1)}))
   end
 
+  @spec demand_value(t(), keyword(), demand_key()) :: Decimal.t() | nil
   defp demand_value(policy, opts, key) do
     opts
     |> Keyword.get(key, Map.fetch!(policy, key))
     |> to_decimal(key)
   end
 
+  # Total over the pair `put_demand/2` produces: it normalizes both fields, so each
+  # is a `Decimal` or `nil` by the time this sees them.
+  @spec validate_demand_pair(t()) :: t()
   defp validate_demand_pair(%__MODULE__{demand_multiplier: nil, demand_floor_cap: nil} = policy),
     do: policy
 
@@ -156,20 +170,29 @@ defmodule Raxol.Payments.RebalancePolicy do
           ":demand_floor_cap (RAXOL_REBALANCE_DEMAND_FLOOR_CAP) is set without " <>
             ":demand_multiplier (RAXOL_REBALANCE_DEMAND_MULTIPLIER). Nothing reads the cap " <>
             "without a multiplier, so this deployment would run static inventory floors while " <>
-            "looking configured for demand-aware ones."
+            "looking configured for demand-aware ones. " <> set_both_or_neither()
   end
 
   defp validate_demand_pair(%__MODULE__{demand_floor_cap: nil}) do
     raise ArgumentError, cap_required()
   end
 
+  @spec cap_required() :: String.t()
   defp cap_required do
     ":demand_multiplier (RAXOL_REBALANCE_DEMAND_MULTIPLIER) is set without " <>
       ":demand_floor_cap (RAXOL_REBALANCE_DEMAND_FLOOR_CAP). A demand-widened floor is " <>
       "sized off the largest recent fill, which anyone can place through the storefront: " <>
       "uncapped, one order sizes a corridor's floor for the whole window and the " <>
-      "auto-rebalancer moves funds to meet it. Set the cap, or unset the multiplier to " <>
-      "keep static floors."
+      "auto-rebalancer moves funds to meet it. " <> set_both_or_neither()
+  end
+
+  # The advice both halves of the pair check give. It says BOTH deliberately: an
+  # unset var and a cleared one reach `with_demand/2` as the same `nil`, so
+  # unsetting only one knob lands on the other half of this same rule. Advice the
+  # code cannot honour is worse than none.
+  @spec set_both_or_neither() :: String.t()
+  defp set_both_or_neither do
+    "Set both knobs to run demand-aware floors, or unset both to keep static ones."
   end
 
   @doc """

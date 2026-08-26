@@ -36,16 +36,40 @@ defmodule Raxol.Payments.RebalancePolicyTest do
       # `peak` is sized off settled fills, so it is an input an attacker can move
       # by placing an order. Uncapped, that sizes a floor the auto-rebalancer then
       # moves funds to meet -- so this is a boot failure, not a default.
-      assert_raise ArgumentError, ~r/without :demand_floor_cap/, fn ->
-        RebalancePolicy.with_demand(RebalancePolicy.default(), demand_multiplier: "0.1")
+      #
+      # The nil-cap case is the one that matters: `Accounting.env_config/0` calls
+      # `System.get_env/1` for both knobs unconditionally, so an operator who sets
+      # only the multiplier arrives here with the cap PRESENT as nil. Testing only
+      # the absent-key shape tests a call no caller in this repo makes.
+      for opts <- [[demand_multiplier: "0.1"], [demand_multiplier: "0.1", demand_floor_cap: nil]] do
+        assert_raise ArgumentError, ~r/without :demand_floor_cap/, fn ->
+          RebalancePolicy.with_demand(RebalancePolicy.default(), opts)
+        end
       end
     end
 
     test "a cap without a multiplier refuses too, rather than being ignored" do
       # `demand_aware?/1` is false without a multiplier, so the cap would never be
-      # read and the operator would silently get static floors.
-      assert_raise ArgumentError, ~r/without :demand_multiplier/, fn ->
-        RebalancePolicy.with_demand(RebalancePolicy.default(), demand_floor_cap: "500")
+      # read and the operator would silently get static floors. Same two shapes:
+      # the production path supplies the missing half as an explicit nil.
+      for opts <- [[demand_floor_cap: "500"], [demand_multiplier: nil, demand_floor_cap: "500"]] do
+        assert_raise ArgumentError, ~r/without :demand_multiplier/, fn ->
+          RebalancePolicy.with_demand(RebalancePolicy.default(), opts)
+        end
+      end
+    end
+
+    test "both halves of the pair error advise something the code can honour" do
+      # The advice used to be "unset the multiplier", which raises the OTHER half
+      # of this same rule when a cap is still configured. An error whose fix does
+      # not work is worse than no advice.
+      for opts <- [
+            [demand_multiplier: "0.1", demand_floor_cap: nil],
+            [demand_multiplier: nil, demand_floor_cap: "500"]
+          ] do
+        assert_raise ArgumentError, ~r/unset both to keep static ones/, fn ->
+          RebalancePolicy.with_demand(RebalancePolicy.default(), opts)
+        end
       end
     end
 
@@ -62,7 +86,17 @@ defmodule Raxol.Payments.RebalancePolicyTest do
     end
 
     test "neither leaves the feature off" do
-      policy = RebalancePolicy.with_demand(RebalancePolicy.default(), [])
+      # Both shapes of "neither": no keys at all, and the two explicit nils an
+      # undeployed pair of env vars produces.
+      assert RebalancePolicy.with_demand(RebalancePolicy.default(), []) ==
+               RebalancePolicy.default()
+
+      policy =
+        RebalancePolicy.with_demand(RebalancePolicy.default(),
+          demand_multiplier: nil,
+          demand_floor_cap: nil
+        )
+
       refute RebalancePolicy.demand_aware?(policy)
     end
 
@@ -96,20 +130,26 @@ defmodule Raxol.Payments.RebalancePolicyTest do
       assert is_nil(cleared.demand_floor_cap)
     end
 
-    test "clearing half the pair clears the whole setting" do
-      # The two knobs are one setting, so unsetting the multiplier is exactly the
-      # "unset the multiplier to keep static floors" the pair error advises. It
-      # cannot itself be an error.
+    test "clearing half a configured pair raises like configuring half does" do
+      # The rule is over the RESULTING pair, so "clear one knob" and "set one
+      # knob" are the same state and get the same refusal. Letting a nil clear
+      # its partner instead is what made the guard dead: the production caller
+      # supplies BOTH keys and an unset var is indistinguishable from a cleared
+      # one, so every half-configured deployment would have silently cleared
+      # itself back to static floors.
       configured =
         RebalancePolicy.with_demand(RebalancePolicy.default(),
           demand_multiplier: "0.1",
           demand_floor_cap: "500"
         )
 
-      cleared = RebalancePolicy.with_demand(configured, demand_multiplier: nil)
+      assert_raise ArgumentError, ~r/without :demand_multiplier/, fn ->
+        RebalancePolicy.with_demand(configured, demand_multiplier: nil)
+      end
 
-      refute RebalancePolicy.demand_aware?(cleared)
-      assert is_nil(cleared.demand_floor_cap)
+      assert_raise ArgumentError, ~r/without :demand_floor_cap/, fn ->
+        RebalancePolicy.with_demand(configured, demand_floor_cap: "")
+      end
     end
 
     test "an empty value is unset, not a parse error" do

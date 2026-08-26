@@ -80,6 +80,83 @@ defmodule Raxol.Payments.AccountingTest do
       assert opts[:rebalance_interval_ms] == 60_000
       assert opts[:price_source] == :none
     end
+
+    test "a blank solver address is unset, not the empty address" do
+      # `Raxol.Earn.Supervisor` branches on truthiness to decide whether to start
+      # the RebalanceMonitor, and `""` is truthy in Elixir -- so a blank var would
+      # start the monitor reading balances for the empty address.
+      System.put_env("XOCHI_SOLVER_ADDRESS", "  ")
+
+      {opts, _} = Accounting.env_config()
+
+      assert opts[:solver_address] == nil
+    end
+
+    test "the demand knobs are passed through raw for the policy to parse" do
+      # This module deliberately does not parse them: `RebalancePolicy` owns the
+      # pair rule, and it can only enforce it if it sees BOTH keys every time.
+      System.put_env("RAXOL_REBALANCE_DEMAND_MULTIPLIER", "2")
+
+      {opts, _} = Accounting.env_config()
+
+      assert Keyword.fetch(opts, :demand_multiplier) == {:ok, "2"}
+      assert Keyword.fetch(opts, :demand_floor_cap) == {:ok, nil}
+    end
+  end
+
+  describe "the sweep interval" do
+    test "a blank value is unset, matching how the RPC vars read" do
+      # `String.to_integer("")` used to crash the boot here, naming nothing.
+      System.put_env("RAXOL_REBALANCE_INTERVAL_MS", "")
+
+      {opts, _} = Accounting.env_config()
+
+      assert opts[:rebalance_interval_ms] == 300_000
+    end
+
+    test "a malformed or non-positive value names the variable it came from" do
+      for value <- ["5 minutes", "0", "-1", "300000ms"] do
+        System.put_env("RAXOL_REBALANCE_INTERVAL_MS", value)
+
+        assert_raise ArgumentError, ~r/RAXOL_REBALANCE_INTERVAL_MS/, fn ->
+          Accounting.env_config()
+        end
+      end
+    end
+  end
+
+  describe "the price source" do
+    test "defaults to coingecko, and reads the sources the monitor knows" do
+      {opts, _} = Accounting.env_config()
+      assert opts[:price_source] == :coingecko
+
+      for {value, expected} <- [{"coingecko", :coingecko}, {"none", :none}] do
+        System.put_env("RAXOL_PRICE_SOURCE", value)
+        {opts, _} = Accounting.env_config()
+        assert opts[:price_source] == expected
+      end
+    end
+
+    test "a blank value is unset, not the atom :\"\"" do
+      # `String.to_atom("")` used to yield `:""`, which falls through
+      # `RebalanceMonitor.build_price_fn/1`'s catch-all to a price fn returning
+      # nil -- silently dropping USD pricing from the whole sweep.
+      System.put_env("RAXOL_PRICE_SOURCE", "")
+
+      {opts, _} = Accounting.env_config()
+
+      assert opts[:price_source] == :coingecko
+    end
+
+    test "an unrecognized source is refused rather than silently pricing nothing" do
+      for value <- ["gecko", "coingeko", "CoinGecko"] do
+        System.put_env("RAXOL_PRICE_SOURCE", value)
+
+        assert_raise ArgumentError, ~r/RAXOL_PRICE_SOURCE/, fn ->
+          Accounting.env_config()
+        end
+      end
+    end
   end
 
   describe "the demand window" do
