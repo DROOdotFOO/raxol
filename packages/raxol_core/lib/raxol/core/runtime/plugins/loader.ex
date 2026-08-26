@@ -7,7 +7,6 @@ defmodule Raxol.Core.Runtime.Plugins.Loader do
 
   @behaviour Raxol.Core.Runtime.Plugins.LoaderBehaviour
 
-
   defstruct [
     :loaded_plugins,
     :plugin_configs,

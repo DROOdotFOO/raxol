@@ -56,8 +56,8 @@ defmodule Raxol.Agent.Policy.CacheTest do
           table: "agent_cache"
         )
 
-      assert {Raxol.Agent.Cache.Postgrex,
-              %{conn: MyApp.Postgrex, table: "agent_cache"}} = policy.storage
+      assert {Raxol.Agent.Cache.Postgrex, %{conn: MyApp.Postgrex, table: "agent_cache"}} =
+               policy.storage
     end
 
     test "raises without :conn" do

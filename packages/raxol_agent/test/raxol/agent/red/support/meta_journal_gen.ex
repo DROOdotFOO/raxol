@@ -111,9 +111,7 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
       })
 
     trusted_meta =
-      rec(depth + 2, :meta, :extract, meta_payload(:extract, [depth + 1]),
-        trust: "trusted"
-      )
+      rec(depth + 2, :meta, :extract, meta_payload(:extract, [depth + 1]), trust: "trusted")
 
     records = [entry | chain] ++ [trusted_loop, trusted_meta]
 
@@ -156,7 +154,9 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
           id,
           :loop,
           :tool_result,
-          %{name: "fetch", result: "r#{id}", refs: []}, trust: trust)
+          %{name: "fetch", result: "r#{id}", refs: []},
+          trust: trust
+        )
       end
 
     metas =
@@ -165,7 +165,9 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
           id,
           :meta,
           :speculation,
-          meta_payload(:speculation, [id - 1, id - 2]), trust: trust)
+          meta_payload(:speculation, [id - 1, id - 2]),
+          trust: trust
+        )
       end
 
     %{
@@ -276,9 +278,7 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
           List.replace_at(
             rs,
             -1,
-            rec(length(rs), :meta, :research, meta_payload(:research, [1]),
-              source: "probe_c5"
-            )
+            rec(length(rs), :meta, :research, meta_payload(:research, [1]), source: "probe_c5")
           )
     end)
   end
@@ -298,10 +298,8 @@ defmodule Raxol.Agent.Red.MetaJournalGen do
     _ = seed
 
     gens = [
-      {[1, 2], %{"kind" => "human", "id" => "u-42"},
-       %{kind: :human, id: "u-42"}},
-      {[3, 4], %{"kind" => "agent", "id" => "agent-7"},
-       %{kind: :agent, id: "agent-7"}},
+      {[1, 2], %{"kind" => "human", "id" => "u-42"}, %{kind: :human, id: "u-42"}},
+      {[3, 4], %{"kind" => "agent", "id" => "agent-7"}, %{kind: :agent, id: "agent-7"}},
       # Absent actor generation — stamped nil, expected system by rule.
       {[5, 6], nil, %{kind: :system}}
     ]

@@ -29,9 +29,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
   describe "taint fails CLOSED on unknown trust (§2.1 pt.1)" do
     test "(a) a record with provenance.trust \"poisoned\" decodes to :tainted, never :trusted" do
       poisoned =
-        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, []),
-          trust: "poisoned"
-        )
+        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, []), trust: "poisoned")
 
       assert {:ok, %Event{provenance: %{trust: :tainted}}} =
                Meta.decode(poisoned),
@@ -48,9 +46,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
         )
 
       dependent =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
-          trust: "trusted"
-        )
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
 
       derived = Meta.derive_taint([entry, dependent])
 
@@ -71,9 +67,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
              "absent provenance must default to the frozen grandfather value"
 
       dependent =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
-          trust: "trusted"
-        )
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
 
       # A meta event whose only ref is a grandfathered (absent-provenance) leaf
       # stays trusted — the grandfather path is NOT the same as fail-closed.
@@ -95,14 +89,10 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
         |> Map.put("provenance", "garbage")
 
       dep_a =
-        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [1]),
-          trust: "trusted"
-        )
+        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
 
       dep_b =
-        Gen.rec(4, :meta, :extract, Gen.meta_payload(:extract, [2]),
-          trust: "trusted"
-        )
+        Gen.rec(4, :meta, :extract, Gen.meta_payload(:extract, [2]), trust: "trusted")
 
       derived = Meta.derive_taint([leaf_trustless, leaf_nonmap, dep_a, dep_b])
 
@@ -131,9 +121,7 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       }
 
       dep_c =
-        Gen.rec(6, :meta, :extract, Gen.meta_payload(:extract, [5]),
-          trust: "trusted"
-        )
+        Gen.rec(6, :meta, :extract, Gen.meta_payload(:extract, [5]), trust: "trusted")
 
       assert {:ok, %Event{provenance: %{source: :primary, trust: :trusted}}} =
                Meta.decode(absent)
@@ -390,19 +378,13 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       # predicted a naive node-keyed memo would introduce. Computed fresh,
       # X -> A -> T is found and X is `:tainted`.
       t =
-        Gen.rec(1, :loop, :tool_result, %{name: "f", result: "r", refs: []},
-          trust: "tainted"
-        )
+        Gen.rec(1, :loop, :tool_result, %{name: "f", result: "r", refs: []}, trust: "tainted")
 
       a =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [3, 1]),
-          trust: "tainted"
-        )
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [3, 1]), trust: "tainted")
 
       x =
-        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [2]),
-          trust: "tainted"
-        )
+        Gen.rec(3, :meta, :extract, Gen.meta_payload(:extract, [2]), trust: "tainted")
 
       derived = Meta.derive_taint([t, a, x])
 
@@ -418,14 +400,10 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
       # reachable tainted leaf is reached via a simple path — pinned here so a
       # future change to the cycle arm is a deliberate decision, not drift.
       a =
-        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, [2]),
-          trust: "trusted"
-        )
+        Gen.rec(1, :meta, :extract, Gen.meta_payload(:extract, [2]), trust: "trusted")
 
       b =
-        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]),
-          trust: "trusted"
-        )
+        Gen.rec(2, :meta, :extract, Gen.meta_payload(:extract, [1]), trust: "trusted")
 
       derived = Meta.derive_taint([a, b])
       assert derived[1] == :trusted

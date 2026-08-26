@@ -55,12 +55,10 @@ defmodule Raxol.Agent.Code.Replay do
         store_events(session_id, opts)
 
       {:ok, records} ->
-        {:ok, :journal,
-         decode_records(records, to_offset: Keyword.get(opts, :to_offset))}
+        {:ok, :journal, decode_records(records, to_offset: Keyword.get(opts, :to_offset))}
 
       {:error, :damaged} ->
-        {:error,
-         "session #{session_id}: journal damaged — nothing safely replayable"}
+        {:error, "session #{session_id}: journal damaged — nothing safely replayable"}
     end
   end
 
@@ -107,8 +105,7 @@ defmodule Raxol.Agent.Code.Replay do
         {:ok, :store, events}
 
       {:error, :not_found} ->
-        {:error,
-         "session #{session_id} not found (no journal, no saved session)"}
+        {:error, "session #{session_id} not found (no journal, no saved session)"}
     end
   end
 

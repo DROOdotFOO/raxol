@@ -104,9 +104,7 @@ defmodule Mix.Tasks.Raxol.Setup do
         do_connect_browser(provider)
 
       true ->
-        usage_error(
-          "give one of --op, --api-key, --browser, or --remove for #{provider}"
-        )
+        usage_error("give one of --op, --api-key, --browser, or --remove for #{provider}")
     end
   end
 
@@ -202,10 +200,7 @@ defmodule Mix.Tasks.Raxol.Setup do
     do: IO.puts("#{harness} credential validated ✓")
 
   defp report_validation(harness, {:rejected, status}),
-    do:
-      fail(
-        "#{harness} credential rejected (HTTP #{status}) — check the key/reference"
-      )
+    do: fail("#{harness} credential rejected (HTTP #{status}) — check the key/reference")
 
   defp report_validation(harness, {:reachable_error, status}),
     do: fail("#{harness} endpoint returned HTTP #{status}")
@@ -217,10 +212,7 @@ defmodule Mix.Tasks.Raxol.Setup do
     do: IO.puts("#{harness} stored (no validation endpoint for this provider)")
 
   defp report_validation(harness, {:no_key, _}),
-    do:
-      fail(
-        "#{harness} reference stored but no key resolved — is `op` signed in?"
-      )
+    do: fail("#{harness} reference stored but no key resolved — is `op` signed in?")
 
   defp report_validation(harness, :no_provider),
     do: fail("could not resolve a provider for #{harness}")

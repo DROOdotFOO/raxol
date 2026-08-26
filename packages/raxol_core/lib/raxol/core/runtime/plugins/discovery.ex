@@ -8,7 +8,6 @@ defmodule Raxol.Core.Runtime.Plugins.Discovery do
   - Handling plugin dependencies
   """
 
-
   alias Raxol.Core.Runtime.Plugins.{FileWatcher, Loader, StateManager}
 
   @doc """

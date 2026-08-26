@@ -95,9 +95,7 @@ defmodule Raxol.Agent.ClientProtocol.LoginTest do
         # The seam returns :ok even though the launch failed, so the flow does
         # not abandon a port the user can still redeem by hand.
         assert :ok =
-                 Keyword.fetch!(opts, :browser_fn).(
-                   "https://openrouter.ai/auth?x=1"
-                 )
+                 Keyword.fetch!(opts, :browser_fn).("https://openrouter.ai/auth?x=1")
 
         {:ok, %{provider: provider, validation: :valid}}
       end

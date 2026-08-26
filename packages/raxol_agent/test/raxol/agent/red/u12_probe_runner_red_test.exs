@@ -90,8 +90,7 @@ defmodule Raxol.Agent.Red.U12ProbeRunnerRedTest do
     %{
       session_id: Keyword.get(opts, :session_id, "u12-red"),
       tip_offset: Keyword.get(opts, :tip_offset, 41),
-      prefix_ref:
-        Keyword.get(opts, :prefix_ref, {:captured, L.primary_prefix()}),
+      prefix_ref: Keyword.get(opts, :prefix_ref, {:captured, L.primary_prefix()}),
       taint: Keyword.get(opts, :taint, :trusted),
       budget_scope: Keyword.get(opts, :budget_scope, :session_then_run),
       read_set: Keyword.get(opts, :read_set, [])

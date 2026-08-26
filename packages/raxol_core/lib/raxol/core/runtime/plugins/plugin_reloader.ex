@@ -3,7 +3,6 @@ defmodule Raxol.Core.Runtime.Plugins.PluginReloader do
   Handles plugin reloading operations including reloading by ID and from disk.
   """
 
-
   @doc """
   Reloads a plugin by ID.
   """

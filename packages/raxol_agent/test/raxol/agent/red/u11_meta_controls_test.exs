@@ -87,9 +87,7 @@ defmodule Raxol.Agent.Red.U11MetaControlsTest do
          if disagreements == tainted and
               Enum.all?(tainted, &(correct[&1] == :tainted)),
             do: :caught,
-            else:
-              {:missed,
-               %{seed: seed, disagreements: disagreements, tainted: tainted}}
+            else: {:missed, %{seed: seed, disagreements: disagreements, tainted: tainted}}
        end},
       {:n_u11_4_scope_check_deleted,
        fn seed ->
@@ -128,16 +126,12 @@ defmodule Raxol.Agent.Red.U11MetaControlsTest do
 
          if promote_offsets != [] and laundered == promote_offsets,
            do: :caught,
-           else:
-             {:missed,
-              %{seed: seed, promotes: promote_offsets, laundered: laundered}}
+           else: {:missed, %{seed: seed, promotes: promote_offsets, laundered: laundered}}
        end},
       {:n_u11_6_strict_reader_seam,
        fn seed ->
          unknown =
-           Gen.rec(1, :meta, :from_the_future_v9, %{refs: []},
-             source: "probe_x"
-           )
+           Gen.rec(1, :meta, :from_the_future_v9, %{refs: []}, source: "probe_x")
 
          correct = Oracle.decode_correct(unknown)
          broken = Oracle.decode_strict(unknown)
@@ -183,9 +177,7 @@ defmodule Raxol.Agent.Red.U11MetaControlsTest do
 
          if reader_caught? and producer_caught?,
            do: :caught,
-           else:
-             {:missed,
-              %{seed: seed, reader: reader_caught?, producer: producer_caught?}}
+           else: {:missed, %{seed: seed, reader: reader_caught?, producer: producer_caught?}}
        end},
       {:n_u11_9_head_wins_precedence,
        fn seed ->

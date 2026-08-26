@@ -695,8 +695,7 @@ defmodule Raxol.Agent.Session do
   defp bridge_name_opts(session_id) do
     if Process.whereis(Raxol.Agent.Registry) do
       [
-        name:
-          {:via, Registry, {Raxol.Agent.Registry, {:emit_bridge, session_id}}}
+        name: {:via, Registry, {Raxol.Agent.Registry, {:emit_bridge, session_id}}}
       ]
     else
       []

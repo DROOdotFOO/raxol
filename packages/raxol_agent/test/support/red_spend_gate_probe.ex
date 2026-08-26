@@ -214,7 +214,9 @@ defmodule Raxol.Agent.Red.SpendGateProbe do
     {peak, _running} =
       records
       |> Enum.sort_by(& &1.seq)
-      |> Enum.reduce({0, 0}, fn record, {peak, running} -> fold_reserved(record, estimate_by_ref, peak, running) end)
+      |> Enum.reduce({0, 0}, fn record, {peak, running} ->
+        fold_reserved(record, estimate_by_ref, peak, running)
+      end)
 
     if peak <= cap, do: :ok, else: {:error, {:over_reserve, peak, cap}}
   end
@@ -224,7 +226,12 @@ defmodule Raxol.Agent.Red.SpendGateProbe do
     {max(peak, new_running), new_running}
   end
 
-  defp fold_reserved(%{kind: :settle, cost_ref: cost_ref, actual: actual}, estimate_by_ref, peak, running) do
+  defp fold_reserved(
+         %{kind: :settle, cost_ref: cost_ref, actual: actual},
+         estimate_by_ref,
+         peak,
+         running
+       ) do
     refund = Map.get(estimate_by_ref, cost_ref, actual) - actual
     new_running = running - refund
     {max(peak, new_running), new_running}

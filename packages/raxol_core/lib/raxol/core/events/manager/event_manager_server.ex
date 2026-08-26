@@ -99,8 +99,7 @@ defmodule Raxol.Core.Events.EventManager.EventManagerServer do
 
     GenServer.call(
       server,
-      {:register_handler_struct, event_type, handler_id, handler_struct,
-       priority}
+      {:register_handler_struct, event_type, handler_id, handler_struct, priority}
     )
   end
 
@@ -279,8 +278,7 @@ defmodule Raxol.Core.Events.EventManager.EventManagerServer do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(
-        {:register_handler_struct, event_type, handler_id, handler_struct,
-         priority},
+        {:register_handler_struct, event_type, handler_id, handler_struct, priority},
         _from,
         state
       ) do
@@ -513,9 +511,7 @@ defmodule Raxol.Core.Events.EventManager.EventManagerServer do
       case handler do
         # Traditional module/function handler
         {module, function, _priority} when is_atom(module) and is_atom(function) ->
-          Log.debug(
-            "EventManager calling #{module}.#{function} with event: #{inspect(event)}"
-          )
+          Log.debug("EventManager calling #{module}.#{function} with event: #{inspect(event)}")
 
           execute_module_function_handler(event, module, function)
 
@@ -600,9 +596,7 @@ defmodule Raxol.Core.Events.EventManager.EventManagerServer do
         )
 
       {:error, reason} ->
-        Log.error(
-          "Event handler #{module}.#{function} failed: #{inspect(reason)}"
-        )
+        Log.error("Event handler #{module}.#{function} failed: #{inspect(reason)}")
     end
   end
 

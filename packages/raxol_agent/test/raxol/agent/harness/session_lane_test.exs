@@ -20,9 +20,7 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
   setup do
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 
-    start_supervised!(
-      {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one}
-    )
+    start_supervised!({DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one})
 
     start_supervised!(Raxol.Agent.SessionStreamer)
     :ok
@@ -51,8 +49,7 @@ defmodule Raxol.Agent.Harness.SessionLaneTest do
 
       assert :ok = SessionLane.interrupt(session, %{turn_id: "turn-7"})
 
-      assert_receive {:harness_command,
-                      {:interrupt, ^session_id, %{turn_id: "turn-7"}}}
+      assert_receive {:harness_command, {:interrupt, ^session_id, %{turn_id: "turn-7"}}}
     end
 
     test "an empty payload dispatches an empty interrupt payload" do

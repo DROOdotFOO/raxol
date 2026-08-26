@@ -130,8 +130,7 @@ defmodule Raxol.Agent.ExecutorConfigTest do
     test "a model embedding an executor never leaks the key into the envelope" do
       model = %{
         input: "hello",
-        executor:
-          ExecutorConfig.new(harness: :openai, auth: %{api_key: @secret})
+        executor: ExecutorConfig.new(harness: :openai, auth: %{api_key: @secret})
       }
 
       {:ok, envelope} = Snapshot.dump(model)

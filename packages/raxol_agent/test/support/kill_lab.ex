@@ -102,9 +102,7 @@ defmodule Raxol.Agent.KillLab do
   @doc "True iff `ps` reports `pid` in a zombie (`Z*`) state."
   @spec zombie?(non_neg_integer()) :: boolean()
   def zombie?(pid) when is_integer(pid) do
-    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)],
-           stderr_to_stdout: true
-         ) do
+    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
       {out, 0} -> out |> String.trim() |> String.starts_with?("Z")
       _ -> false
     end
@@ -258,9 +256,7 @@ defmodule Raxol.Agent.KillLab do
   end
 
   defp pgid_of(pid) do
-    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)],
-           stderr_to_stdout: true
-         ) do
+    case System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
       {out, 0} -> out |> String.trim() |> parse_int()
       _ -> nil
     end

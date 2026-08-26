@@ -3,7 +3,6 @@ defmodule Raxol.Core.Runtime.Plugins.FileWatcher do
   Handles file watching and plugin reloading functionality.
   """
 
-
   @doc """
   Sets up file watching for plugin hot-reloading.
   """

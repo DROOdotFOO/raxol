@@ -135,9 +135,7 @@ defmodule Raxol.Agent.Red.MetaOracle do
   def validate_no_scope_check(_), do: :ok
 
   @doc "N-U11.10 dead injector — speculation `:begin` refs hardcoded to length 1."
-  def validate_singular_refs(
-        %{family: :meta, type: :speculation, payload: payload} = event
-      ) do
+  def validate_singular_refs(%{family: :meta, type: :speculation, payload: payload} = event) do
     with :ok <- validate_correct(event) do
       case payload do
         %{phase: :begin, refs: refs} when length(refs) == 1 ->

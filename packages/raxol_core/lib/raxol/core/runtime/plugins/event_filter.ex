@@ -7,7 +7,6 @@ defmodule Raxol.Core.Runtime.Plugins.EventFilter do
   - Handling event halting
   """
 
-
   @doc """
   Filters an event through registered plugin filters.
   Returns the filtered event or :halt if the event should be stopped.

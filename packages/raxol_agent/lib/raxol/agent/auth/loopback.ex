@@ -157,8 +157,7 @@ defmodule Raxol.Agent.Auth.Loopback do
         {:done, {:ok, code}}
 
       %{"error" => error} when is_binary(error) ->
-        {:done,
-         {:error, {:oauth_error, error, Map.get(params, "error_description")}}}
+        {:done, {:error, {:oauth_error, error, Map.get(params, "error_description")}}}
 
       _ ->
         :continue

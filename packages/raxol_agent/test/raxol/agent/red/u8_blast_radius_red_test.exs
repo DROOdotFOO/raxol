@@ -243,17 +243,13 @@ defmodule Raxol.Agent.Red.U8BlastRadiusControlsTest do
 
   # {site, injector, contour id, signature-predicate function name}
   @injector_table [
-    {:executes_while_pending, ExecutesWhilePending, :c1,
-     :sig_executed_while_locked},
+    {:executes_while_pending, ExecutesWhilePending, :c1, :sig_executed_while_locked},
     {:emits_meta_family, EmitsMetaFamily, :c2, :sig_not_loop_family},
     {:forgets_deny, ForgetsDeny, :c4, :sig_proceeded_after_deny},
-    {:accepts_forged_decision, AcceptsForgedDecision, :c7,
-     :sig_forged_accepted},
+    {:accepts_forged_decision, AcceptsForgedDecision, :c7, :sig_forged_accepted},
     {:in_memory_only, InMemoryOnly, :c6, :sig_rebuild_diverged},
-    {:reads_destructive_hint_c8, ReadsDestructiveHint, :c8,
-     :sig_predicate_wrong},
-    {:reads_destructive_hint_c9, ReadsDestructiveHint, :c9,
-     :sig_trusted_self_report},
+    {:reads_destructive_hint_c8, ReadsDestructiveHint, :c8, :sig_predicate_wrong},
+    {:reads_destructive_hint_c9, ReadsDestructiveHint, :c9, :sig_trusted_self_report},
     {:ignores_taint, IgnoresTaint, :c10, :sig_tainted_auto_proceeded},
     {:reads_stamped_trust, ReadsStampedTrust, :c10, :sig_mis_stamped_proceeded}
   ]

@@ -212,8 +212,7 @@ defmodule Raxol.Agent.Journal.FileStore.Writer do
       offset: offset,
       schema_version: schema_version,
       immediate_types: immediate_types,
-      sync_ceiling_ms:
-        Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms),
+      sync_ceiling_ms: Keyword.get(opts, :sync_ceiling_ms, @default_sync_ceiling_ms),
       lock_path: lock_path
     }
 

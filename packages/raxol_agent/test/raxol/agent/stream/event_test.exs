@@ -32,9 +32,7 @@ defmodule Raxol.Agent.Stream.EventTest do
 
     test "lifts tool_result" do
       assert %Event.ToolResult{name: "x", result: %{ok: true}} =
-               Event.from_tuple(
-                 {:tool_result, %{name: "x", result: %{ok: true}}}
-               )
+               Event.from_tuple({:tool_result, %{name: "x", result: %{ok: true}}})
     end
 
     test "lifts turn_complete with defaults" do

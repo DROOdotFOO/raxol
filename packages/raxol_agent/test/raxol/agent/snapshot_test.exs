@@ -373,8 +373,8 @@ defmodule Raxol.Agent.SnapshotTest do
       assert log =~ "persist:"
 
       assert_received {:telemetry_event,
-                        [:raxol, :agent, :snapshot, :persist_redacted_by_heuristic], %{count: 1},
-                        %{path: ["client_secret_version"]}}
+                       [:raxol, :agent, :snapshot, :persist_redacted_by_heuristic], %{count: 1},
+                       %{path: ["client_secret_version"]}}
     end
 
     # explicit redact still beats explicit persist — already proven by the

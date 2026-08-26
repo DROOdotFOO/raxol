@@ -42,13 +42,9 @@ defmodule Raxol.Agent.KeystoneCloseTest do
     # named singleton that a later start_supervised!-based test would collide on.
     ensure_registry(:duplicate, EmitBus.registry_name())
 
-    ensure_running(
-      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
-    )
+    ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
 
-    ensure_running(
-      {DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one}
-    )
+    ensure_running({DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one})
 
     # Per-test singletons owned by ExUnit (auto-stopped at test end): the agent
     # Registry (matches session_test/team_test) and the named SessionStreamer the
@@ -138,8 +134,7 @@ defmodule Raxol.Agent.KeystoneCloseTest do
 
       # Wait until the sink has emitted turn_completed — guarantees all four were
       # processed (durable ones appended before publish).
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_completed}},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_completed}},
                      1_000
 
       # Simulate the BEAM going away: stop the sink, which flushes + closes the
@@ -180,16 +175,13 @@ defmodule Raxol.Agent.KeystoneCloseTest do
       :ok = SessionStreamer.subscribe(session_id)
       :ok = Session.send_message(agent_id(sess), {:say, "hi"})
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_started} = started},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_started} = started},
                      1_000
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :item_completed} = item},
+      assert_receive {:session_event, ^session_id, %Event{type: :item_completed} = item},
                      1_000
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_completed} = completed},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_completed} = completed},
                      1_000
 
       # session_id is non-nil (acceptance #4) and the turn_id is one stable value
@@ -215,12 +207,10 @@ defmodule Raxol.Agent.KeystoneCloseTest do
       :ok = SessionStreamer.subscribe(session_id)
       :ok = Session.send_message(agent_id(sess), :boom)
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_started} = started},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_started} = started},
                      1_000
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :error} = error},
+      assert_receive {:session_event, ^session_id, %Event{type: :error} = error},
                      1_000
 
       assert error.tier == :durable
@@ -247,8 +237,7 @@ defmodule Raxol.Agent.KeystoneCloseTest do
       # A successful durable append: offset 1.
       publish(session_id, :turn_started, :durable, %{prompt: "p"}, "t1")
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_started, id: 1}},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_started, id: 1}},
                      1_000
 
       # Kill the journal writer underneath the bridge (stands in for disk-full /
@@ -261,8 +250,7 @@ defmodule Raxol.Agent.KeystoneCloseTest do
       # The durable event was NOT published with a fabricated id. Instead a
       # loud ephemeral :error signal came out, pinned to the unchanged last
       # durable offset.
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :error} = failure},
+      assert_receive {:session_event, ^session_id, %Event{type: :error} = failure},
                      1_000
 
       assert failure.tier == :ephemeral
@@ -277,8 +265,7 @@ defmodule Raxol.Agent.KeystoneCloseTest do
       # on-disk offset, and takes a fresh non-colliding id (2).
       publish(session_id, :turn_completed, :durable, %{}, "t1")
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_completed, id: 2}},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_completed, id: 2}},
                      1_000
 
       GenServer.stop(bridge)
@@ -314,16 +301,13 @@ defmodule Raxol.Agent.KeystoneCloseTest do
       :ok = SessionStreamer.subscribe(session_id)
       :ok = Session.send_message(agent_id(sess), {:say, "hi"})
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_started} = started},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_started} = started},
                      1_000
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :item_completed} = turn_item},
+      assert_receive {:session_event, ^session_id, %Event{type: :item_completed} = turn_item},
                      1_000
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :turn_completed}},
+      assert_receive {:session_event, ^session_id, %Event{type: :turn_completed}},
                      1_000
 
       assert turn_item.turn_id == started.turn_id
@@ -333,8 +317,7 @@ defmodule Raxol.Agent.KeystoneCloseTest do
       # finished turn's id.
       send(dispatcher(sess), {:subscription, :tick})
 
-      assert_receive {:session_event, ^session_id,
-                      %Event{type: :item_completed} = item},
+      assert_receive {:session_event, ^session_id, %Event{type: :item_completed} = item},
                      1_000
 
       assert is_nil(item.turn_id)
@@ -468,9 +451,7 @@ defmodule Raxol.Agent.KeystoneCloseTest do
   end
 
   defp publish(session_id, type, tier, payload, turn_id) do
-    EmitBus.publish(
-      EmitBus.build(session_id, type, tier, payload, turn_id: turn_id)
-    )
+    EmitBus.publish(EmitBus.build(session_id, type, tier, payload, turn_id: turn_id))
   end
 
   defp agent_id(sess) do

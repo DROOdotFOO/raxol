@@ -92,8 +92,7 @@ defmodule Raxol.Agent.Harness.McpTools do
       },
       %{
         name: "harness_read_transcript",
-        description:
-          "Returns a session's conversation (role-prefixed messages).",
+        description: "Returns a session's conversation (role-prefixed messages).",
         inputSchema: %{
           type: "object",
           required: ["session_id"],
@@ -105,8 +104,7 @@ defmodule Raxol.Agent.Harness.McpTools do
       },
       %{
         name: "harness_list_sessions",
-        description:
-          "Lists saved coding-agent sessions, most recently updated first.",
+        description: "Lists saved coding-agent sessions, most recently updated first.",
         inputSchema: %{type: "object", properties: %{}},
         callback: &list_sessions/1
       }
@@ -170,8 +168,7 @@ defmodule Raxol.Agent.Harness.McpTools do
          {:ok, prompt} <- required(args, "prompt") do
       case Store.load(Store.default_dir(), key) do
         {:error, :not_found} ->
-          {:error,
-           "unknown session #{inspect(key)}; call harness_start_session first"}
+          {:error, "unknown session #{inspect(key)}; call harness_start_session first"}
 
         {:ok, session} ->
           run_turn(key, session, prompt, args)
@@ -421,8 +418,7 @@ defmodule Raxol.Agent.Harness.McpTools do
   # -- helpers ----------------------------------------------------------------
 
   defp mint_session_key,
-    do:
-      "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
+    do: "sess-#{System.system_time(:second)}-#{System.unique_integer([:positive])}"
 
   # Session ids come off the wire: basename-sanitize so a crafted id cannot
   # escape the sessions directory (same rule the TUI store applies).

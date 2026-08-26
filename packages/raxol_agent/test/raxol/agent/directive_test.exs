@@ -69,8 +69,7 @@ defmodule Raxol.Agent.DirectiveTest do
       assert_receive {:command_result, :first, %{turn_id: "turn-orig"}}, 1_000
       assert_receive {:command_result, :second, %{turn_id: "turn-orig"}}, 1_000
 
-      assert_receive {:command_result, {:progress, 50},
-                      %{turn_id: "turn-orig"}},
+      assert_receive {:command_result, {:progress, 50}, %{turn_id: "turn-orig"}},
                      1_000
     end
 
@@ -92,8 +91,7 @@ defmodule Raxol.Agent.DirectiveTest do
       directive = Directive.shell("echo hello-from-shell")
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 
-      assert_receive {:command_result,
-                      {:shell_result, %{exit_status: 0, output: output}},
+      assert_receive {:command_result, {:shell_result, %{exit_status: 0, output: output}},
                       %{turn_id: nil}},
                      5_000
 
@@ -104,8 +102,7 @@ defmodule Raxol.Agent.DirectiveTest do
       directive = Directive.shell("exit 7")
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 
-      assert_receive {:command_result, {:shell_result, %{exit_status: 7}},
-                      %{turn_id: nil}},
+      assert_receive {:command_result, {:shell_result, %{exit_status: 7}}, %{turn_id: nil}},
                      5_000
     end
 
@@ -113,8 +110,7 @@ defmodule Raxol.Agent.DirectiveTest do
       directive = Directive.shell("sleep 5", timeout: 100)
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 
-      assert_receive {:command_result,
-                      {:shell_result, %{exit_status: :timeout}},
+      assert_receive {:command_result, {:shell_result, %{exit_status: :timeout}},
                       %{turn_id: nil}},
                      2_000
     end
@@ -128,8 +124,7 @@ defmodule Raxol.Agent.DirectiveTest do
       directive = Directive.shell("cat", timeout: 5_000)
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 
-      assert_receive {:command_result,
-                      {:shell_result, %{exit_status: 0, output: ""}},
+      assert_receive {:command_result, {:shell_result, %{exit_status: 0, output: ""}},
                       %{turn_id: nil}},
                      2_000
     end
@@ -139,8 +134,7 @@ defmodule Raxol.Agent.DirectiveTest do
       directive = Directive.shell("cat | wc -l", timeout: 5_000)
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 
-      assert_receive {:command_result,
-                      {:shell_result, %{exit_status: 0, output: output}},
+      assert_receive {:command_result, {:shell_result, %{exit_status: 0, output: output}},
                       %{turn_id: nil}},
                      2_000
 
@@ -153,8 +147,7 @@ defmodule Raxol.Agent.DirectiveTest do
       directive = Directive.send_agent("nobody", :payload)
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 
-      assert_receive {:command_result,
-                      {:send_agent_error, :not_found, "nobody"},
+      assert_receive {:command_result, {:send_agent_error, :not_found, "nobody"},
                       %{turn_id: nil}},
                      1_000
     end
@@ -185,8 +178,7 @@ defmodule Raxol.Agent.DirectiveTest do
       directive = Directive.send_agent("causation-target", :payload)
       Executor.execute(directive, %{pid: self(), runtime_pid: self()})
 
-      assert_receive {:"$gen_cast",
-                      {:send_message, :payload, %{causation_id: ^span_id}}},
+      assert_receive {:"$gen_cast", {:send_message, :payload, %{causation_id: ^span_id}}},
                      1_000
     after
       Raxol.Core.Telemetry.TraceContext.clear()

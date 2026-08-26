@@ -115,9 +115,7 @@ defmodule Raxol.Agent.ThreadLogRouter do
     audit_metadata = Map.drop(metadata, [:agent_id, :agent_module])
 
     _ =
-      ThreadLog.append(adapter, thread_id, kind, payload,
-        metadata: audit_metadata
-      )
+      ThreadLog.append(adapter, thread_id, kind, payload, metadata: audit_metadata)
 
     :ok
   end
