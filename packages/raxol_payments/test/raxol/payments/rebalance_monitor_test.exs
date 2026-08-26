@@ -129,7 +129,11 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
       # reads it off the ledger, which is what makes this a test of the wiring.
       record_fill(ledger, "500")
 
-      assert [{:alert, alert}] = sweep(ledger, inventory_policy(demand_multiplier: "0.1"))
+      # The cap is mandatory but set well clear of $50 so it is not what is
+      # under test here.
+      policy = inventory_policy(demand_multiplier: "0.1", demand_floor_cap: "1000")
+
+      assert [{:alert, alert}] = sweep(ledger, policy)
       assert alert.kind == :inventory_underfunded
       assert Decimal.equal?(alert.deficit, Decimal.new("30"))
     end
@@ -157,7 +161,7 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
       # window existing at all and not about a millisecond boundary.
       record_fill(ledger, "500", %{timestamp_ms: 1_000})
 
-      policy = inventory_policy(demand_multiplier: "0.1")
+      policy = inventory_policy(demand_multiplier: "0.1", demand_floor_cap: "1000")
 
       assert [] = sweep(ledger, policy)
 

@@ -24,8 +24,10 @@ defmodule Raxol.Payments.Accounting do
 
   Demand-aware inventory floors are off unless `RAXOL_REBALANCE_DEMAND_MULTIPLIER`
   is set: floors then track the largest recent fill per corridor rather than a
-  fixed number (`Raxol.Payments.RebalancePolicy.with_demand/2`). Set the cap too
-  -- uncapped, one whale order sizes the floor.
+  fixed number (`Raxol.Payments.RebalancePolicy.with_demand/2`). The multiplier and
+  the cap are one setting: either alone refuses to boot, because `peak` is sized
+  off orders anyone can place and an uncapped floor is unbounded in what it asks
+  the auto-rebalancer to move.
 
   Read-only by construction: no wallet key is read here and none of the started
   processes move funds (the Riddler auto-rebalancer executes; the monitor only

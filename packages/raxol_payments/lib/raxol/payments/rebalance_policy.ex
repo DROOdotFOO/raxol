@@ -82,8 +82,26 @@ defmodule Raxol.Payments.RebalancePolicy do
   Turn demand-aware floors on, from the deployment's accounting config.
 
   Reads `:demand_multiplier` and `:demand_floor_cap` (`Decimal`, or a string or
-  number this converts). Both absent leaves the policy exactly as passed, which
-  is what keeps the feature off until a deployment asks for it.
+  number this converts). A key ABSENT from `opts` leaves that field as it already
+  is on `policy`; only keys actually supplied are written. Both absent therefore
+  leaves the policy exactly as passed, which is what keeps the feature off until
+  a deployment asks for it.
+
+  The two knobs are one setting and have to be configured together, so half of
+  one raises here:
+
+    * A multiplier alone sizes floors off `peak`, which comes from settled fills
+      -- i.e. from orders anyone can place through the public storefront -- and
+      those floors become recommendations the auto-rebalancer executes. Uncapped,
+      one large order sets a corridor's floor to an unbounded multiple of itself
+      for the whole window. The cap is the bound on that, so it is not optional.
+    * A cap alone is the mirror: `demand_aware?/1` is false without a multiplier,
+      so nothing ever reads the cap and the operator quietly gets static floors
+      from a deployment that looks configured for demand-aware ones.
+
+  Failing at boot is the same call `to_decimal_or_nil/1` makes about a malformed
+  value: an operator has no way to tell "my knob did nothing" from "the feature
+  does nothing".
 
   This is the seam between `Raxol.Payments.Accounting`'s env contract and the
   advisor. `default/0` stays pure so a test policy is a struct literal and not a
@@ -91,11 +109,43 @@ defmodule Raxol.Payments.RebalancePolicy do
   """
   @spec with_demand(t(), keyword()) :: t()
   def with_demand(%__MODULE__{} = policy, opts) when is_list(opts) do
-    %{
-      policy
-      | demand_multiplier: to_decimal_or_nil(Keyword.get(opts, :demand_multiplier)),
-        demand_floor_cap: to_decimal_or_nil(Keyword.get(opts, :demand_floor_cap))
-    }
+    policy
+    |> put_demand(opts, :demand_multiplier)
+    |> put_demand(opts, :demand_floor_cap)
+    |> validate_demand_pair()
+  end
+
+  defp put_demand(policy, opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} -> Map.put(policy, key, to_decimal_or_nil(value))
+      :error -> policy
+    end
+  end
+
+  defp validate_demand_pair(%__MODULE__{demand_multiplier: nil, demand_floor_cap: nil} = policy),
+    do: policy
+
+  defp validate_demand_pair(
+         %__MODULE__{demand_multiplier: %Decimal{}, demand_floor_cap: %Decimal{}} = policy
+       ),
+       do: policy
+
+  defp validate_demand_pair(%__MODULE__{demand_multiplier: nil}) do
+    raise ArgumentError,
+          ":demand_floor_cap (RAXOL_REBALANCE_DEMAND_FLOOR_CAP) is set without " <>
+            ":demand_multiplier (RAXOL_REBALANCE_DEMAND_MULTIPLIER). Nothing reads the cap " <>
+            "without a multiplier, so this deployment would run static inventory floors while " <>
+            "looking configured for demand-aware ones."
+  end
+
+  defp validate_demand_pair(%__MODULE__{demand_floor_cap: nil}) do
+    raise ArgumentError,
+          ":demand_multiplier (RAXOL_REBALANCE_DEMAND_MULTIPLIER) is set without " <>
+            ":demand_floor_cap (RAXOL_REBALANCE_DEMAND_FLOOR_CAP). A demand-widened floor is " <>
+            "sized off the largest recent fill, which anyone can place through the storefront: " <>
+            "uncapped, one order sizes a corridor's floor for the whole window and the " <>
+            "auto-rebalancer moves funds to meet it. Set the cap, or unset the multiplier to " <>
+            "keep static floors."
   end
 
   @doc """
