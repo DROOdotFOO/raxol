@@ -232,6 +232,108 @@ defmodule Raxol.HeadlessTest do
     end
   end
 
+  # `Code.compile_quoted/2` EXECUTES module bodies, so whoever chooses the script
+  # chooses what runs here -- and here is the singleton holding every other
+  # caller's session. The body can end its own process three ways, of which a
+  # `rescue` sees one, and it need not end at all: a body that never returns does
+  # not kill this GenServer, it wedges it. Each case asserts BOTH halves: the
+  # answer the caller gets, and that unrelated callers are still served.
+  describe "start/2 with a script that misbehaves at compile time" do
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol_headless_compile_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      %{dir: dir}
+    end
+
+    # A fresh module name per script: these are compiled for real into this VM,
+    # and reusing a name would only add redefinition noise.
+    defp script(dir, body) do
+      n = System.unique_integer([:positive])
+      path = Path.join(dir, "hostile_#{n}.exs")
+      File.write!(path, "defmodule HostileScript#{n} do\n  #{body}\nend\n")
+      path
+    end
+
+    test "a body that raises is answered, not propagated", %{dir: dir} do
+      path = script(dir, ~s|raise "boom at module scope"|)
+      manager = Process.whereis(Headless)
+
+      assert {:error, {:compile_failed, ^path, message}} =
+               Headless.start(path, id: :raiser)
+
+      assert message =~ "boom at module scope"
+
+      assert Process.whereis(Headless) == manager
+      assert {:ok, :after_raise} = Headless.start(TestApp, id: :after_raise)
+    end
+
+    test "a body that throws is answered, which `rescue` alone never did", %{
+      dir: dir
+    } do
+      path = script(dir, ~s|throw(:thrown_at_module_scope)|)
+      manager = Process.whereis(Headless)
+
+      assert {:error, {:compile_failed, ^path, message}} =
+               Headless.start(path, id: :thrower)
+
+      assert message =~ "thrown_at_module_scope"
+
+      assert Process.whereis(Headless) == manager
+      assert {:ok, :after_throw} = Headless.start(TestApp, id: :after_throw)
+    end
+
+    test "a body that exits is answered, which `rescue` alone never did", %{
+      dir: dir
+    } do
+      path = script(dir, ~s|exit(:exited_at_module_scope)|)
+      manager = Process.whereis(Headless)
+
+      assert {:error, {:compile_failed, ^path, message}} =
+               Headless.start(path, id: :exiter)
+
+      assert message =~ "exited_at_module_scope"
+
+      assert Process.whereis(Headless) == manager
+      assert {:ok, :after_exit} = Headless.start(TestApp, id: :after_exit)
+    end
+
+    test "a body that never returns is answered on a budget", %{dir: dir} do
+      prev = Application.get_env(:raxol, :headless_compile_timeout_ms)
+      Application.put_env(:raxol, :headless_compile_timeout_ms, 150)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:raxol, :headless_compile_timeout_ms, prev),
+          else: Application.delete_env(:raxol, :headless_compile_timeout_ms)
+      end)
+
+      path = script(dir, ~s|:timer.sleep(:infinity)|)
+      manager = Process.whereis(Headless)
+
+      # The ANSWER, not the clock. A wedge and a slow compile look identical on a
+      # stopwatch, and timing assertions are this repo's most reliable source of
+      # macOS flakes -- what makes this case a wedge is that no answer ever comes,
+      # so the answer coming at all is the whole proof.
+      assert {:error, {:compile_timed_out, ^path, 150}} =
+               Headless.start(path, id: :wedge)
+
+      # Not just alive: still able to compile, after a compile was brutal-killed
+      # out from under the code server.
+      assert Process.whereis(Headless) == manager
+
+      good = script(dir, ~s|def noop, do: :ok|)
+
+      assert {:error, :no_tea_module_found} =
+               Headless.start(good, id: :after_wedge)
+    end
+  end
+
   describe "custom dimensions" do
     test "respects width and height options" do
       {:ok, _} = Headless.start(TestApp, id: :dim_test, width: 60, height: 15)

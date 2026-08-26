@@ -38,6 +38,13 @@ defmodule Raxol.Headless do
   @default_height 40
   @default_dispatch_wait_ms 50
 
+  # Deliberately SHORTER than the 5s the other calls in this module give
+  # themselves: the compile happens inside `handle_call`, so this budget is also
+  # the longest an unrelated session's `screenshot/1` can be made to wait. One
+  # bad script should not be able to fail a healthy session's call, and 2s is
+  # generous for compiling a single script.
+  @default_compile_timeout_ms 2_000
+
   defmodule Session do
     @moduledoc false
     defstruct [:id, :module, :lifecycle_pid, :synchronizer_pid, :width, :height]
@@ -368,21 +375,79 @@ defmodule Raxol.Headless do
   # What bounds this is the caller -- `Raxol.Headless.McpTools` confines the path
   # to a configured root, and the programmatic callers pass their own file.
   #
-  # Rescued for availability, not safety: a module body that raises at compile
-  # time would otherwise take this singleton GenServer down and with it every
-  # unrelated session it holds.
+  # Which is why the compile does not happen HERE. This is a singleton GenServer
+  # holding every other caller's session, and a module body can end its own
+  # process in three ways -- `raise`, `throw`, `exit` -- of which a `rescue` sees
+  # one. Worse, it need not end at all: `:timer.sleep(:infinity)` at module scope
+  # does not kill this process, it WEDGES it, and no `try` can interrupt that.
+  #
+  # So the compile runs in a monitored child on a budget, which answers all four
+  # the same way: a crash arrives as `:DOWN`, a timeout is brutal-killed, and the
+  # caller gets an error instead of an unrelated session losing its manager.
   defp compile_modules(module_asts, path) do
+    with {:ok, modules} <- compile_off_thread(module_asts, path) do
+      case Enum.find(modules, &tea_module?/1) do
+        nil -> {:error, :no_tea_module_found}
+        tea_module -> {:ok, tea_module}
+      end
+    end
+  end
+
+  defp compile_off_thread(module_asts, path) do
+    parent = self()
+    budget = compile_timeout_ms()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        send(parent, {:compiled, self(), compile_quoted_all(module_asts, path)})
+      end)
+
+    receive do
+      {:compiled, ^pid, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      # A body that killed itself untrappably (`Process.exit(self(), :kill)`), or
+      # took a linked compiler process down with it.
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, {:compile_failed, path, Exception.format_exit(reason)}}
+    after
+      budget ->
+        Process.demonitor(ref, [:flush])
+        Process.exit(pid, :brutal_kill)
+        {:error, {:compile_timed_out, path, budget}}
+    end
+  end
+
+  # `catch` alongside `rescue`: `Code.compile_quoted/2` EXECUTES module bodies,
+  # so a bare `throw` or `exit` at module scope is as reachable as a `raise` and
+  # `rescue` sees neither.
+  defp compile_quoted_all(module_asts, path) do
     modules =
       module_asts
       |> Enum.flat_map(fn mod_ast -> Code.compile_quoted(mod_ast, path) end)
       |> Enum.map(fn {module, _bytecode} -> module end)
 
-    case Enum.find(modules, &tea_module?/1) do
-      nil -> {:error, :no_tea_module_found}
-      tea_module -> {:ok, tea_module}
-    end
+    {:ok, modules}
   rescue
     e -> {:error, {:compile_failed, path, Exception.message(e)}}
+  catch
+    :throw, value ->
+      {:error, {:compile_failed, path, "threw #{inspect(value)}"}}
+
+    :exit, reason ->
+      {:error, {:compile_failed, path, Exception.format_exit(reason)}}
+  end
+
+  # A compile budget is a property of the deployment, not of this module: how
+  # long a legitimate script may take to compile depends on the script. It is
+  # also what makes the wedge case assertable without a test that sleeps.
+  defp compile_timeout_ms do
+    Application.get_env(
+      :raxol,
+      :headless_compile_timeout_ms,
+      @default_compile_timeout_ms
+    )
   end
 
   defp tea_module?(mod) do
