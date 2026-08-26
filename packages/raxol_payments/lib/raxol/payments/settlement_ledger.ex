@@ -236,13 +236,18 @@ defmodule Raxol.Payments.SettlementLedger do
 
   `:since_ms` bounds the demand half only. The drain half deliberately ignores it,
   since a refuel is sized against everything the solver has ever spent on gas.
+  The other filters (`:from_chain_id`, `:to_chain_id`, `:settlement_type`) bind
+  BOTH halves, the same as every sibling read: silently answering globally would
+  hand a corridor-scoped caller the whole ledger and read as if it had worked.
   """
   @spec sweep_signals(GenServer.server(), keyword()) :: %{
           drain: %{pos_integer() => Decimal.t()},
           demand: %{pos_integer() => %{String.t() => demand()}}
         }
   def sweep_signals(server, opts \\ []) do
-    entries = list_settlements(server)
+    # The window is applied to the demand fold below rather than at the ledger, so
+    # it cannot narrow the all-time drain.
+    entries = list_settlements(server, opts |> filter_opts() |> Keyword.delete(:since_ms))
     since_ms = Keyword.get(opts, :since_ms)
 
     %{

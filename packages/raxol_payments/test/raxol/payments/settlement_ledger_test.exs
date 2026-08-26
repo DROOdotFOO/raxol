@@ -269,5 +269,22 @@ defmodule Raxol.Payments.SettlementLedgerTest do
       assert drain == SettlementLedger.native_drain_by_chain(ledger)
       assert demand == SettlementLedger.demand_by_destination(ledger, since_ms: 5_000)
     end
+
+    test "the non-window filters bind both halves", %{ledger: ledger} do
+      # Every sibling read runs `filter_opts/1`; a `sweep_signals/2` that quietly
+      # answered globally would hand a corridor-scoped caller the whole ledger.
+      for {id, to_chain, gas_chain} <- [{"f_arb", 42_161, 42_161}, {"f_base", 8453, 8453}] do
+        entry =
+          Map.merge(fill(id, to_chain, "USDC", "10"), %{gas_native: 700, gas_chain_id: gas_chain})
+
+        assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, entry)
+      end
+
+      %{drain: drain, demand: demand} =
+        SettlementLedger.sweep_signals(ledger, to_chain_id: 8453, since_ms: 0)
+
+      assert Map.keys(demand) == [8453]
+      assert Map.keys(drain) == [8453]
+    end
   end
 end
