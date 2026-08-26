@@ -37,6 +37,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0029](0029-the-terminal-cell-model.md) | The Terminal Cell Model | Accepted | 2026-07-14 |
 | [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Accepted | 2026-07-18 |
 | [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
+| [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed | 2026-08-26 |
 
 ## Template
 
@@ -131,7 +132,8 @@ They preserve context for why decisions were made, help new contributors underst
 - [0027: delegate_task summary-only subagents](0027-delegate-task-subagents.md)
 - [0028: Auxiliary-model routing](0028-auxiliary-model-routing.md)
 - [0031: Raxol as a Virtuals ACP Console runtime](0031-console-runtime-integration.md)
+- [0032: Multi-root filesystem grants for agent sessions](0032-agent-filesystem-grants.md)
 
 ## Coverage
 
-29 authored ADRs (27 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, and the Virtuals ACP Console runtime integration. (Numbers 0004 and 0006 are withdrawn placeholders.)
+30 authored ADRs (28 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, and multi-root filesystem grants for agent sessions. (Numbers 0004 and 0006 are withdrawn placeholders.)
