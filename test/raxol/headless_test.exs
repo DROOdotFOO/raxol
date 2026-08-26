@@ -323,14 +323,91 @@ defmodule Raxol.HeadlessTest do
       assert {:error, {:compile_timed_out, ^path, 150}} =
                Headless.start(path, id: :wedge)
 
-      # Not just alive: still able to compile, after a compile was brutal-killed
-      # out from under the code server.
+      # Not just alive: still able to compile, after a compile was killed out
+      # from under the code server.
       assert Process.whereis(Headless) == manager
 
       good = script(dir, ~s|def noop, do: :ok|)
 
       assert {:error, :no_tea_module_found} =
                Headless.start(good, id: :after_wedge)
+    end
+
+    # The case above passes even when the kill does not land, because a
+    # non-trapping body dies of anything. `:brutal_kill` is a Supervisor
+    # shutdown SPEC; to `Process.exit/2` it is an ordinary, trappable reason, so
+    # a body that traps exits outlived its own budget -- one leaked process per
+    # hostile call, each still holding the code server's claim on the module
+    # name it was compiling, which denies that name to every later script for
+    # the life of the VM. So this asserts the corpse and the freed name, not
+    # merely that the caller was answered.
+    test "a body that traps exits is killed anyway, freeing its module name", %{
+      dir: dir
+    } do
+      prev = Application.get_env(:raxol, :headless_compile_timeout_ms)
+      Application.put_env(:raxol, :headless_compile_timeout_ms, 150)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:raxol, :headless_compile_timeout_ms, prev),
+          else: Application.delete_env(:raxol, :headless_compile_timeout_ms)
+      end)
+
+      # The compiling process IS the module body's process, so the body can hand
+      # its own pid back here. Nothing else can: the compile runs in a child the
+      # manager spawns and never names.
+      Process.register(self(), :headless_trap_probe)
+      n = System.unique_integer([:positive])
+      name = "HeadlessTrapProbe#{n}"
+      wedge = Path.join(dir, "trap_#{n}.exs")
+
+      File.write!(wedge, """
+      defmodule #{name} do
+        Process.flag(:trap_exit, true)
+        send(:headless_trap_probe, {:compiling, self()})
+        :timer.sleep(:infinity)
+      end
+      """)
+
+      assert {:error, {:compile_timed_out, ^wedge, 150}} =
+               Headless.start(wedge, id: :trap_wedge)
+
+      assert_received {:compiling, compiler}
+
+      # Monitoring after the fact races with a kill that already landed, and
+      # `:noproc` is that race resolving the right way.
+      ref = Process.monitor(compiler)
+      assert_receive {:DOWN, ^ref, :process, ^compiler, reason}, 1_000
+      assert reason in [:killed, :noproc]
+
+      # The point of killing it rather than merely answering the caller: the
+      # module name it held is usable again.
+      good = Path.join(dir, "trap_ok_#{n}.exs")
+      File.write!(good, "defmodule #{name} do\n  def noop, do: :ok\nend\n")
+
+      assert {:error, :no_tea_module_found} =
+               Headless.start(good, id: :after_trap)
+    end
+
+    # `Code.string_to_quoted/2` charlist-converts its input before parsing, so
+    # invalid encoding RAISES instead of answering -- inside `handle_call`, which
+    # takes the singleton and every unrelated session it holds. Reachable through
+    # the confined path too: the root check tests only the extension, so any
+    # binary file named `*.exs` inside the root is this.
+    test "a file that is not valid UTF-8 is answered, not raised", %{dir: dir} do
+      path = Path.join(dir, "mojibake.exs")
+      File.write!(path, <<0xFF, 0xFE, "defmodule Mojibake do\nend\n">>)
+      manager = Process.whereis(Headless)
+
+      assert {:error, {:unparseable_file, ^path, message}} =
+               Headless.start(path, id: :mojibake)
+
+      assert is_binary(message)
+
+      assert Process.whereis(Headless) == manager
+
+      assert {:ok, :after_mojibake} =
+               Headless.start(TestApp, id: :after_mojibake)
     end
   end
 

@@ -348,14 +348,15 @@ defmodule Raxol.Headless do
     end
   end
 
-  # Read and parse are answered, not raised. `File.read!` and a strict
-  # `{:ok, ast} =` match both blow up INSIDE the `Raxol.Headless` GenServer,
-  # which is a singleton holding every other caller's session -- so one
-  # unreadable or non-Elixir file took down sessions that had nothing to do with
-  # it. The caller asked whether this file could start; "no" is an answer.
+  # Read and parse are answered, not raised. `File.read!`, a strict
+  # `{:ok, ast} =` match, and `Code.string_to_quoted/2` itself all blow up INSIDE
+  # the `Raxol.Headless` GenServer, which is a singleton holding every other
+  # caller's session -- so one unreadable or non-Elixir file took down sessions
+  # that had nothing to do with it. The caller asked whether this file could
+  # start; "no" is an answer.
   defp compile_and_find_module(path) do
     with {:ok, source} <- read_source(path),
-         {:ok, ast} <- Code.string_to_quoted(source, file: path) do
+         {:ok, ast} <- parse_source(source, path) do
       compile_modules(extract_module_defs(ast), path)
     end
   end
@@ -365,6 +366,17 @@ defmodule Raxol.Headless do
       {:ok, source} -> {:ok, source}
       {:error, reason} -> {:error, {:unreadable_file, path, reason}}
     end
+  end
+
+  # `Code.string_to_quoted/2` answers a SYNTAX error and raises an ENCODING one:
+  # it charlist-converts the whole binary before the parser ever sees it, so
+  # `<<0xFF, ...>>` is a `UnicodeConversionError` out of `String.to_charlist/1`.
+  # Nothing upstream excludes that file -- the confined path checks the
+  # extension, and any binary can be named `*.exs`.
+  defp parse_source(source, path) do
+    Code.string_to_quoted(source, file: path)
+  rescue
+    e -> {:error, {:unparseable_file, path, Exception.message(e)}}
   end
 
   defp compile_modules([], _path), do: {:error, :no_modules_found}
@@ -382,8 +394,8 @@ defmodule Raxol.Headless do
   # does not kill this process, it WEDGES it, and no `try` can interrupt that.
   #
   # So the compile runs in a monitored child on a budget, which answers all four
-  # the same way: a crash arrives as `:DOWN`, a timeout is brutal-killed, and the
-  # caller gets an error instead of an unrelated session losing its manager.
+  # the same way: a crash arrives as `:DOWN`, a timeout is killed, and the caller
+  # gets an error instead of an unrelated session losing its manager.
   defp compile_modules(module_asts, path) do
     with {:ok, modules} <- compile_off_thread(module_asts, path) do
       case Enum.find(modules, &tea_module?/1) do
@@ -412,9 +424,13 @@ defmodule Raxol.Headless do
       {:DOWN, ^ref, :process, ^pid, reason} ->
         {:error, {:compile_failed, path, Exception.format_exit(reason)}}
     after
+      # `:kill`, not `:brutal_kill`. The latter is a Supervisor shutdown SPEC,
+      # and `Process.exit/2` reads it as an ordinary reason a body can trap --
+      # so a body that traps would outlive its own budget, still holding the
+      # code server's claim on the module name it was compiling.
       budget ->
         Process.demonitor(ref, [:flush])
-        Process.exit(pid, :brutal_kill)
+        Process.exit(pid, :kill)
         {:error, {:compile_timed_out, path, budget}}
     end
   end
