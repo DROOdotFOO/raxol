@@ -181,9 +181,10 @@ jobs:
       - name: Check singleton allowlist
         run: bash scripts/check_singletons.sh
 
-      # raxol_agent is a local gate, not a per-PR CI package — but a
-      # schema_version bump that ships without a frozen golden journal is
-      # unrecoverable, so the guard runs here. Dependency-free by design.
+      # raxol_agent now has its own package-tests cell, but this guard stays
+      # here: a schema_version bump that ships without a frozen golden journal
+      # is unrecoverable, and this check is dependency-free, so it answers in
+      # seconds without waiting on that cell's compile. Deliberately redundant.
       - name: Check journal golden fixtures
         run: elixir scripts/check_journal_goldens.exs
 
@@ -290,10 +291,13 @@ jobs:
     name: Package Tests (${{ matrix.package }})
     needs: setup
     runs-on: ubuntu-latest
-    # A backstop, not a budget: the suites finish in single-digit minutes. If a
+    # A backstop, not a budget. Most suites finish in single-digit minutes; if a
     # live test ever escapes its exclusion it blocks on a network call, and the
-    # default 6h job timeout would let it sit there.
-    timeout-minutes: 20
+    # default 6h job timeout would let it sit there. Raised from 20 for
+    # raxol_agent, whose 2426 tests take ~6 minutes on an 8-core dev box on top
+    # of compiling main raxol and the termbox2 NIF, so 20 left no headroom on a
+    # two-core runner.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -312,10 +316,25 @@ jobs:
         # the same reason the others were: nothing in per-PR CI ran it. It joins
         # already clean, so this adds a gate rather than fixing drift.
         #
+        # raxol_core and raxol_agent hold the containment boundaries and were
+        # gated by nothing. Raxol.Core.Boundary.Path is the centralized
+        # path-traversal confinement for the agent's fs tools; its 18 accept and
+        # reject vectors live in packages/raxol_core/test/support/boundary_vectors/
+        # and are copied verbatim into raxol_agent_client_protocol, which is the
+        # only thing that makes the module's own claim -- "drift is a red test,
+        # not a silent fork" -- true. Only the ACP copy had a red test available.
+        # A one-sided corpus is a fork with extra steps.
+        #
+        # The same hole covers the process-kill work now landing in raxol_core
+        # (killing an escaped port's whole process group by negative pgid): a
+        # wrong target there takes the VM or the host down, and its tests would
+        # have shipped unrun. raxol_agent is the package that consumes both, so
+        # both join together.
+        #
         # Keep on ONE line: test/raxol/formatter_delegation_test.exs parses this
         # matrix with `^\s*package: \[...\]` to prove every gated package is also
         # delegated by the root .formatter.exs. A block sequence parses as absent.
-        package: [raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony]
+        package: [raxol_core, raxol_agent, raxol_gateway, raxol_telegram, raxol_cli, raxol_payments, raxol_earn, raxol_agent_client_protocol, raxol_console, raxol_symphony]
 
     steps:
       - uses: actions/checkout@v7
@@ -362,6 +381,13 @@ jobs:
       # the live suite -- which compile-gates on the same one variable -- starts
       # issuing requests on every PR, forks included. ExUnit unions these with
       # the helper's list, so nothing here can un-exclude a tag.
+      #
+      # :skip_on_ci is the repo-wide "this needs a real workstation" marker, and
+      # the root suite honours it whenever SKIP_TERMBOX2_TESTS is set -- which is
+      # workflow-global here. raxol_agent's test_helper never wired it up, so its
+      # one tagged test (a chmod-0500 write-failure fault in the journal Writer)
+      # was inert. Excluding it here applies the convention rather than inventing
+      # a package-local one. No other gated package uses the tag.
       - name: Run package tests
         working-directory: packages/${{ matrix.package }}
         run: |
@@ -379,7 +405,8 @@ jobs:
             --exclude live_chain \
             --exclude live_bundler \
             --exclude live_acp_dev \
-            --exclude cli_signer
+            --exclude cli_signer \
+            --exclude skip_on_ci
 
       # Last, not first. The root Format Check reads the root .formatter.exs,
       # whose inputs cover only root lib/config/examples/test, so before this
