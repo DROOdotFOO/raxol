@@ -360,6 +360,22 @@ defmodule Raxol.Headless do
   defp resolve_module(module) when is_atom(module),
     do: resolve_named_module(module)
 
+  defp resolve_module(path) when is_binary(path) do
+    full_path =
+      if Path.type(path) == :absolute,
+        do: path,
+        else: Path.join(File.cwd!(), path)
+
+    if File.exists?(full_path) do
+      compile_and_find_module(full_path)
+    else
+      {:error, {:file_not_found, full_path}}
+    end
+  end
+
+  # Split out from the clause above so it can carry a spec of its own: the two
+  # `resolve_module/1` clauses answer with different error vocabularies, and one
+  # `@spec` over both could only state their union.
   @spec resolve_named_module(module()) ::
           {:ok, module()} | {:error, module_refusal()}
   defp resolve_named_module(module) do
@@ -372,19 +388,6 @@ defmodule Raxol.Headless do
 
       true ->
         {:error, {:module_not_found, module}}
-    end
-  end
-
-  defp resolve_module(path) when is_binary(path) do
-    full_path =
-      if Path.type(path) == :absolute,
-        do: path,
-        else: Path.join(File.cwd!(), path)
-
-    if File.exists?(full_path) do
-      compile_and_find_module(full_path)
-    else
-      {:error, {:file_not_found, full_path}}
     end
   end
 
