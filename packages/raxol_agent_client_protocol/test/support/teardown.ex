@@ -36,7 +36,9 @@ defmodule Raxol.AgentClientProtocol.Test.Teardown do
 
   # Long enough for an orderly shutdown of the two-process pairs in this
   # package, short enough that a wedged supervisor cannot hold the whole suite.
-  # Spent at most twice: once waiting on `Supervisor.stop`, once on the `:DOWN`.
+  # Spent at most twice PER supervisor: once waiting on `Supervisor.stop`, once
+  # on the `:DOWN`. `stop_all/1` therefore has a worst-case budget of
+  # `2 * @stop_timeout_ms * length(supervisors)`.
   @stop_timeout_ms 500
 
   @doc """
@@ -47,7 +49,7 @@ defmodule Raxol.AgentClientProtocol.Test.Teardown do
   leak shows up as an unrelated later test inheriting a process it never
   started.
   """
-  @spec stop_all([GenServer.server()]) :: :ok
+  @spec stop_all([pid() | atom()]) :: :ok
   def stop_all(supervisors) when is_list(supervisors) do
     Enum.each(supervisors, &stop_quietly/1)
   end
@@ -62,7 +64,7 @@ defmodule Raxol.AgentClientProtocol.Test.Teardown do
   A supervisor that does not go down inside the budget is killed, so this
   cannot hang a suite on a wedged `terminate/2`.
   """
-  @spec stop_quietly(GenServer.server()) :: :ok
+  @spec stop_quietly(pid() | atom()) :: :ok
   def stop_quietly(supervisor) do
     case GenServer.whereis(supervisor) do
       nil -> :ok
