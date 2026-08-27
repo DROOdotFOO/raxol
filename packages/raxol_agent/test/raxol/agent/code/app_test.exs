@@ -279,8 +279,7 @@ defmodule Raxol.Agent.Code.AppTest do
 
       {model, []} =
         App.update(
-          {:command_result,
-           {:models_list, ref, {:ok, ["gpt-4o-mini", "gpt-4o"]}}},
+          {:command_result, {:models_list, ref, {:ok, ["gpt-4o-mini", "gpt-4o"]}}},
           model
         )
 
@@ -302,8 +301,7 @@ defmodule Raxol.Agent.Code.AppTest do
 
       {model, []} =
         App.update(
-          {:command_result,
-           {:models_list, model.models_ref, {:ok, ["a", "b", "c"]}}},
+          {:command_result, {:models_list, model.models_ref, {:ok, ["a", "b", "c"]}}},
           model
         )
 
@@ -352,9 +350,7 @@ defmodule Raxol.Agent.Code.AppTest do
       test_pid = self()
 
       model =
-        connected_model(
-          models_fetcher: fn _o, _r, _a -> send(test_pid, :fetched) end
-        )
+        connected_model(models_fetcher: fn _o, _r, _a -> send(test_pid, :fetched) end)
 
       {model, []} = slash(model, "/model claude-sonnet-5")
 
@@ -706,14 +702,12 @@ defmodule Raxol.Agent.Code.AppTest do
       stored =
         [
           {"t1", 1, "turn_started", %{"prompt" => "one"}},
-          {"t1", 2, "item_started",
-           %{"item_id" => "i1", "item_type" => "message"}},
+          {"t1", 2, "item_started", %{"item_id" => "i1", "item_type" => "message"}},
           {"t1", 3, "item_completed",
            %{"item_id" => "i1", "item_type" => "message", "content" => "a"}},
           {"t1", 4, "turn_completed", %{"final" => true}},
           {"t2", 1, "turn_started", %{"prompt" => "two"}},
-          {"t2", 2, "item_started",
-           %{"item_id" => "i1", "item_type" => "message"}},
+          {"t2", 2, "item_started", %{"item_id" => "i1", "item_type" => "message"}},
           {"t2", 3, "item_completed",
            %{"item_id" => "i1", "item_type" => "message", "content" => "b"}},
           {"t2", 4, "turn_completed", %{"final" => true}}
@@ -1095,8 +1089,7 @@ defmodule Raxol.Agent.Code.AppTest do
 
       {model, []} =
         App.update(
-          {:command_result,
-           {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}},
+          {:command_result, {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}},
           model
         )
 
@@ -1134,8 +1127,7 @@ defmodule Raxol.Agent.Code.AppTest do
       {model, []} =
         App.update(
           {:command_result,
-           {:sessions_list, model.sessions_ref,
-            Raxol.Agent.Code.Store.list(dir)}},
+           {:sessions_list, model.sessions_ref, Raxol.Agent.Code.Store.list(dir)}},
           model
         )
 
@@ -1991,8 +1983,7 @@ defmodule Raxol.Agent.Code.AppTest do
 
       task = Task.async(fn -> auth.(tool, %{}, %{}) end)
 
-      assert_receive {:command_result,
-                      {:authorize_request, ref, from, "mcp__fs__write"}}
+      assert_receive {:command_result, {:authorize_request, ref, from, "mcp__fs__write"}}
 
       send(from, {:authorize_decision, ref, {:deny, :test_denied}})
       assert Task.await(task) == {:deny, :test_denied}

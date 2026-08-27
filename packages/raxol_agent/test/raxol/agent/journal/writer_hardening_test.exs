@@ -158,6 +158,7 @@ defmodule Raxol.Agent.Journal.WriterHardeningTest do
       File.mkdir_p!(blocker)
 
       assert {:error, _reason} = Writer.start_link(dir: dir, session_id: s)
+
       refute File.exists?(Path.join(dir, "writer.lock")),
              "the lock must be released when init fails after acquiring it"
 

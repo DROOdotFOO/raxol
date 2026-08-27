@@ -24,8 +24,7 @@ defmodule Raxol.Agent.ThreadLog.EtsTest do
       assert {:ok, %ThreadEvent{sequence: 0}} =
                Ets.append(config, "thr-1", :directive, %{step: 1})
 
-      assert {:ok,
-              %ThreadEvent{sequence: 0, kind: :directive, payload: %{step: 1}}} =
+      assert {:ok, %ThreadEvent{sequence: 0, kind: :directive, payload: %{step: 1}}} =
                Ets.latest(config, "thr-1")
     end
 

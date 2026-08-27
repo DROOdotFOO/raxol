@@ -113,8 +113,7 @@ defmodule Raxol.Agent.Code.Store do
       "title" => Map.get(attrs, :title, ""),
       # A forked session records the id it was copied from.
       "parent" => Map.get(attrs, :parent),
-      "messages" =>
-        attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1),
+      "messages" => attrs |> Map.get(:messages, []) |> Enum.map(&encode_message/1),
       # Durable projection events, stored as-is (already JSON-encodable);
       # EventCodec decodes them back to projection shape on load.
       "events" => Map.get(attrs, :events, [])
@@ -168,8 +167,7 @@ defmodule Raxol.Agent.Code.Store do
         |> Map.get("messages", [])
         |> Enum.map(&decode_message/1)
         |> Enum.reject(&is_nil/1),
-      events:
-        Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
+      events: Raxol.Agent.Code.EventCodec.decode_all(Map.get(json, "events", []))
     }
   end
 

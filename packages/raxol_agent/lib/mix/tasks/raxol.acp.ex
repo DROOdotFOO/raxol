@@ -65,9 +65,7 @@ defmodule Mix.Tasks.Raxol.Acp do
     # comes up on stderr instead of putting every startup log line on the wire.
     # (`Serve` re-asserts this after boot.) Mix's own `==> dep` announcements go
     # to stdout too, hence the quiet shell and the skipped checks.
-    Application.put_env(:logger, :default_handler,
-      config: %{type: :standard_error}
-    )
+    Application.put_env(:logger, :default_handler, config: %{type: :standard_error})
 
     Application.put_env(:raxol, :skip_endpoint, true)
     Application.put_env(:raxol, :startup_mode, :mcp)

@@ -3,7 +3,6 @@ defmodule Raxol.Core.Preferences.Persistence do
   Handles persistence (loading/saving) of user preferences to a file.
   """
 
-
   @default_filename "user_preferences.bin"
 
   @doc """

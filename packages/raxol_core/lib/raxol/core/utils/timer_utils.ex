@@ -11,7 +11,6 @@ defmodule Raxol.Core.Utils.TimerUtils do
   This consolidates the 84+ timer patterns found across the codebase.
   """
 
-
   @type timer_ref :: reference() | nil
   @type timer_type :: :periodic | :delayed | :debounced
   @type timer_opts :: [

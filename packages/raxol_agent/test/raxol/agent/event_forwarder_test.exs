@@ -65,16 +65,12 @@ defmodule Raxol.Agent.EventForwarderTest do
       ]
 
       assert :ok =
-               EventForwarder.to_parent(stream, self(), "k",
-                 halt_on_error?: false
-               )
+               EventForwarder.to_parent(stream, self(), "k", halt_on_error?: false)
     end
 
     test "custom :tag" do
       :ok =
-        EventForwarder.to_parent([{:done, %{content: ""}}], self(), :alpha,
-          tag: :symphony
-        )
+        EventForwarder.to_parent([{:done, %{content: ""}}], self(), :alpha, tag: :symphony)
 
       assert_received {:symphony, :alpha, %{event: :turn_completed}}
     end
@@ -83,9 +79,7 @@ defmodule Raxol.Agent.EventForwarderTest do
       stream = [{:text_delta, "raw"}, {:done, %{content: ""}}]
 
       :ok =
-        EventForwarder.to_parent(stream, self(), "k",
-          transform: &Function.identity/1
-        )
+        EventForwarder.to_parent(stream, self(), "k", transform: &Function.identity/1)
 
       assert_received {:run_event, "k", {:text_delta, "raw"}}
       assert_received {:run_event, "k", {:done, _}}

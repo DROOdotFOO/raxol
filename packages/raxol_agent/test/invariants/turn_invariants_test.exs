@@ -56,9 +56,7 @@ defmodule Raxol.Agent.Invariants.TurnInvariantsTest do
   setup do
     FaultJournal.ensure_registry(:duplicate, EmitBus.registry_name())
 
-    FaultJournal.ensure_running(
-      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
-    )
+    FaultJournal.ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
 
     FaultJournal.ensure_running(
       {DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one}

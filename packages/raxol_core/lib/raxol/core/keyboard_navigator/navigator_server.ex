@@ -40,7 +40,6 @@ defmodule Raxol.Core.KeyboardNavigator.NavigatorServer do
 
   use Raxol.Core.Behaviours.BaseManager
 
-
   alias Raxol.Core.Events.EventManager, as: EventManager
   alias Raxol.Core.FocusManager
   alias Raxol.Core.NavigationUtils

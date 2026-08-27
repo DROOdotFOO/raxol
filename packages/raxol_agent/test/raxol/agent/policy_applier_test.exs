@@ -247,13 +247,11 @@ defmodule Raxol.Agent.PolicyApplierTest do
     test "applied fires once per apply/3 call with the outcome tag" do
       PolicyApplier.apply([], fn _ -> {:ok, :ok_thing} end, nil)
 
-      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _,
-                      %{outcome: :ok}}
+      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _, %{outcome: :ok}}
 
       PolicyApplier.apply([], fn _ -> {:error, :bad} end, nil)
 
-      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _,
-                      %{outcome: :error}}
+      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _, %{outcome: :error}}
     end
 
     test "retry_attempt fires with attempt + reason + backoff_ms" do
@@ -282,11 +280,9 @@ defmodule Raxol.Agent.PolicyApplierTest do
       PolicyApplier.apply([policy], fn _ -> {:ok, :v} end, nil)
       PolicyApplier.apply([policy], fn _ -> {:ok, :v} end, nil)
 
-      assert_receive {:tel, [:raxol, :agent, :policy, :cache_miss], _,
-                      %{key: :only_key}}
+      assert_receive {:tel, [:raxol, :agent, :policy, :cache_miss], _, %{key: :only_key}}
 
-      assert_receive {:tel, [:raxol, :agent, :policy, :cache_hit], _,
-                      %{key: :only_key}}
+      assert_receive {:tel, [:raxol, :agent, :policy, :cache_hit], _, %{key: :only_key}}
     end
 
     test "timeout fires when fun overruns" do
@@ -301,8 +297,7 @@ defmodule Raxol.Agent.PolicyApplierTest do
         nil
       )
 
-      assert_receive {:tel, [:raxol, :agent, :policy, :timeout], _,
-                      %{wall_ms: 20}}
+      assert_receive {:tel, [:raxol, :agent, :policy, :timeout], _, %{wall_ms: 20}}
     end
   end
 end

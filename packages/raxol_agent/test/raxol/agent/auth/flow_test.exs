@@ -121,8 +121,7 @@ defmodule Raxol.Agent.Auth.FlowTest do
       capture = fn url ->
         send(
           caller,
-          {:challenge,
-           url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()}
+          {:challenge, url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()}
         )
 
         browser().(url)

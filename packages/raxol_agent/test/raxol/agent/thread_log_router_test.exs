@@ -75,9 +75,7 @@ defmodule Raxol.Agent.ThreadLogRouterTest do
 
       attempts =
         retry_events
-        |> Enum.filter(
-          &(&1.payload.policy == :retry and &1.payload.decision == :attempt)
-        )
+        |> Enum.filter(&(&1.payload.policy == :retry and &1.payload.decision == :attempt))
         |> Enum.map(& &1.payload.attempt)
 
       assert 1 in attempts
@@ -110,8 +108,7 @@ defmodule Raxol.Agent.ThreadLogRouterTest do
       kinds =
         Enum.map(
           events,
-          &{&1.kind, get_in(&1.payload, [:policy]),
-           get_in(&1.payload, [:decision])}
+          &{&1.kind, get_in(&1.payload, [:policy]), get_in(&1.payload, [:decision])}
         )
 
       assert {:policy_result, :cache, :miss} in kinds

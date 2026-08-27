@@ -324,8 +324,7 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
 
       if count == 0 do
         raise ExUnit.AssertionError,
-          message:
-            "dead injector never fired: #{inspect(site)} (armed but silent = green lies)"
+          message: "dead injector never fired: #{inspect(site)} (armed but silent = green lies)"
       end
 
       :ok
@@ -411,8 +410,7 @@ defmodule Raxol.Agent.Red.Support.U10Compaction do
     defp select_latest_healthy(dir, records, [cp | rest], skipped) do
       case restore_from(dir, records, cp) do
         {:ok, model, _info} ->
-          {:ok, model,
-           %{selected_offset: cp["id"], skipped: Enum.reverse(skipped)}}
+          {:ok, model, %{selected_offset: cp["id"], skipped: Enum.reverse(skipped)}}
 
         {:error, reason} ->
           select_latest_healthy(dir, records, rest, [

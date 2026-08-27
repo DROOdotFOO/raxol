@@ -256,7 +256,13 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
     probe = P.new_probe() |> P.arm(:call_on_refused)
     # Cap 0 ⇒ every reserve is refused.
     budget = P.new_budget(0)
-    ctx = %{emit: P.emit_fun(j), probe: probe, budget: budget, try_reserve: P.try_reserve_fun(budget)}
+
+    ctx = %{
+      emit: P.emit_fun(j),
+      probe: probe,
+      budget: budget,
+      try_reserve: P.try_reserve_fun(budget)
+    }
 
     assert {:error, {:reserve_refused, _}} =
              CallOnRefusedInjector.around(ctx, "c1", 100, P.call_fun(p, "c1", 100))
@@ -308,7 +314,13 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
     p = P.new_provider()
     probe = P.new_probe() |> P.arm(:duplicate_reserve)
     budget = P.new_budget(1000)
-    ctx = %{emit: P.emit_fun(j), probe: probe, budget: budget, try_reserve: P.try_reserve_fun(budget)}
+
+    ctx = %{
+      emit: P.emit_fun(j),
+      probe: probe,
+      budget: budget,
+      try_reserve: P.try_reserve_fun(budget)
+    }
 
     assert {:ok, _} = DuplicateReserveInjector.around(ctx, "c1", 100, P.call_fun(p, "c1", 80))
 
@@ -326,7 +338,13 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
     p = P.new_provider()
     probe = P.new_probe() |> P.arm(:double_settle)
     budget = P.new_budget(1000)
-    ctx = %{emit: P.emit_fun(j), probe: probe, budget: budget, try_reserve: P.try_reserve_fun(budget)}
+
+    ctx = %{
+      emit: P.emit_fun(j),
+      probe: probe,
+      budget: budget,
+      try_reserve: P.try_reserve_fun(budget)
+    }
 
     assert {:ok, _} = DoubleSettleInjector.around(ctx, "c1", 100, P.call_fun(p, "c1", 70))
 
@@ -389,7 +407,9 @@ defmodule Raxol.Agent.Red.U7SpendGateControlsTest do
     # Pin that the PEAK fix (not a raised cap) is what makes this pass: the
     # naive cumulative sum of every :reserve estimate WOULD have wrongly
     # rejected this well-formed, budget-respecting trace.
-    cumulative = recs |> Enum.filter(&(&1.kind == :reserve)) |> Enum.map(& &1.estimate) |> Enum.sum()
+    cumulative =
+      recs |> Enum.filter(&(&1.kind == :reserve)) |> Enum.map(& &1.estimate) |> Enum.sum()
+
     assert cumulative > cap
   end
 

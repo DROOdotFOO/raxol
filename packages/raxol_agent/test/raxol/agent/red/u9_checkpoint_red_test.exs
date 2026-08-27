@@ -185,9 +185,7 @@ defmodule Raxol.Agent.Red.U9CheckpointRedTest do
 
       # Checkpoint captures the model as of the tip.
       assert {:ok, _cp_off} =
-               Checkpoint.write(j, CR.fold(CR.raw_records(dir)),
-                 reason: "manual"
-               )
+               Checkpoint.write(j, CR.fold(CR.raw_records(dir)), reason: "manual")
 
       # Mutate the conversation forward past the checkpoint.
       CR.append_all!(j, [

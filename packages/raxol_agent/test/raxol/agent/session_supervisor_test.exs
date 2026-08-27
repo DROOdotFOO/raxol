@@ -43,23 +43,17 @@ defmodule Raxol.Agent.Session.SupervisorTest do
     # App-level singletons: tolerate an already-running instance.
     ensure_registry(:duplicate, EmitBus.registry_name())
 
-    ensure_running(
-      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
-    )
+    ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
 
     # The lifecycle's own DynamicSupervisor (used by Lifecycle.start_link).
-    ensure_running(
-      {DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one}
-    )
+    ensure_running({DynamicSupervisor, name: Raxol.DynamicSupervisor, strategy: :one_for_one})
 
     # Per-test singletons owned by ExUnit (auto-stopped at test end): the agent
     # Registry, the DynSup the session trees run under, and the named
     # SessionStreamer the sink emits into.
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 
-    start_supervised!(
-      {DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one}
-    )
+    start_supervised!({DynamicSupervisor, name: Raxol.Agent.DynSup, strategy: :one_for_one})
 
     start_supervised!(Raxol.Agent.SessionStreamer)
 

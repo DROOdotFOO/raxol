@@ -220,9 +220,7 @@ defmodule Raxol.Agent.Code.Launcher do
         )
 
       is_binary(tenants) and keys not in [nil, ""] ->
-        usage_error!(
-          "--authorized-keys and --ssh-tenants are mutually exclusive"
-        )
+        usage_error!("--authorized-keys and --ssh-tenants are mutually exclusive")
 
       Keyword.get(parsed, :continue, false) || Keyword.get(parsed, :resume) ->
         usage_error!(

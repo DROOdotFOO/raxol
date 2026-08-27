@@ -236,9 +236,7 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
         cond do
           openings != 1 or terminals != 1 ->
-            {:halt,
-             {:error,
-              {:lifecycle, run_id, %{openings: openings, terminals: terminals}}}}
+            {:halt, {:error, {:lifecycle, run_id, %{openings: openings, terminals: terminals}}}}
 
           post_terminal?(events, run_id) ->
             {:halt, {:error, {:post_terminal, run_id}}}
@@ -275,9 +273,7 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
   defp terminal_seq(events, run_id) do
     events
-    |> Enum.filter(
-      &(&1.kind == :probe_run and &1.run_id == run_id and &1.status in @terminal)
-    )
+    |> Enum.filter(&(&1.kind == :probe_run and &1.run_id == run_id and &1.status in @terminal))
     |> Enum.map(& &1.seq)
     |> case do
       [] -> nil
@@ -330,15 +326,11 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
   the primary's. On divergence, names the first divergent byte offset.
   """
   def prefix_identity(captures, primary) do
-    Enum.reduce_while(captures, :ok, fn %{run_id: run_id, prefix: prefix},
-                                        :ok ->
+    Enum.reduce_while(captures, :ok, fn %{run_id: run_id, prefix: prefix}, :ok ->
       if prefix == primary,
         do: {:cont, :ok},
         else:
-          {:halt,
-           {:error,
-            {:prefix_divergence, first_divergent_offset(primary, prefix),
-             run_id}}}
+          {:halt, {:error, {:prefix_divergence, first_divergent_offset(primary, prefix), run_id}}}
     end)
   end
 
@@ -380,8 +372,7 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
           {:halt, {:error, {:bad_source, m.run_id, m.source}}}
 
         m.trust != expected_trust ->
-          {:halt,
-           {:error, {:trust_not_absorbed, m.run_id, m.trust, expected_trust}}}
+          {:halt, {:error, {:trust_not_absorbed, m.run_id, m.trust, expected_trust}}}
 
         true ->
           {:cont, :ok}
@@ -805,9 +796,7 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def interpret(_response, context),
-      do:
-        {:ok,
-         [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
+      do: {:ok, [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
   end
 
   defmodule SlowMultiCallProbe do
@@ -851,9 +840,7 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def interpret(_response, context),
-      do:
-        {:ok,
-         [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
+      do: {:ok, [%{type: :extract, op: :add, item: "rule", refs: [context.tip_offset]}]}
   end
 
   defmodule LoopDraftProbe do
@@ -917,9 +904,7 @@ defmodule Raxol.Agent.Red.ProbeRunnerLab do
 
     @impl true
     def interpret(_response, context),
-      do:
-        {:ok,
-         [%{type: :gate_decision, trust: :trusted, refs: [context.tip_offset]}]}
+      do: {:ok, [%{type: :gate_decision, trust: :trusted, refs: [context.tip_offset]}]}
   end
 
   # ===========================================================================

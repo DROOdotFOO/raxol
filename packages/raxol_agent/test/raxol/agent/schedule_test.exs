@@ -108,7 +108,8 @@ defmodule Raxol.Agent.ScheduleTest do
     test "a rare-but-valid date (Feb 29) lands on the next leap year" do
       {:ok, schedule} = Schedule.parse("0 0 29 2 *")
       # 2027 is not a leap year; the next Feb 29 is in 2028.
-      assert {:ok, ~U[2028-02-29 00:00:00Z]} = Schedule.next_fire(schedule, ~U[2026-03-01 00:00:00Z])
+      assert {:ok, ~U[2028-02-29 00:00:00Z]} =
+               Schedule.next_fire(schedule, ~U[2026-03-01 00:00:00Z])
     end
 
     test "rejects an out-of-range field" do

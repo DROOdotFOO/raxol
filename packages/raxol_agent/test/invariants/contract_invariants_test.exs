@@ -57,9 +57,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
   setup do
     FaultJournal.ensure_registry(:duplicate, EmitBus.registry_name())
 
-    FaultJournal.ensure_running(
-      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
-    )
+    FaultJournal.ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
 
     # pump/3 emits into the NAMED SessionStreamer.
     start_supervised!(Raxol.Agent.SessionStreamer)
@@ -112,9 +110,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
       for family <- @snapshot["enums"]["family"] do
         event =
-          EmitBus.build("s", :app_update, :durable, %{},
-            family: String.to_existing_atom(family)
-          )
+          EmitBus.build("s", :app_update, :durable, %{}, family: String.to_existing_atom(family))
 
         assert to_string(event.family) == family
       end
@@ -132,8 +128,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
       stream = [
         {:text_delta, "chunk one"},
-        {:tool_use,
-         %{name: "read_file", arguments: %{path: "/x"}, id: "call-1"}},
+        {:tool_use, %{name: "read_file", arguments: %{path: "/x"}, id: "call-1"}},
         {:tool_result, %{name: "read_file", result: "contents"}},
         {:turn_complete, %{iteration: 1, usage: %{input_tokens: 1}}},
         {:done, %{content: "final answer", usage: %{output_tokens: 2}}}
@@ -261,11 +256,7 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
 
           payload = Map.fetch!(neutral_payloads, neutral)
 
-          EmitBus.publish(
-            EmitBus.build(session_id, neutral_type, tier, payload,
-              turn_id: "t1"
-            )
-          )
+          EmitBus.publish(EmitBus.build(session_id, neutral_type, tier, payload, turn_id: "t1"))
 
           ev = await_event!(session_id)
 
@@ -314,18 +305,14 @@ defmodule Raxol.Agent.Invariants.ContractInvariantsTest do
       :ok = SessionStreamer.subscribe(session_id, streamer)
 
       # Open, then kill the writer to force the append-failure signal.
-      EmitBus.publish(
-        EmitBus.build(session_id, :turn_started, :durable, %{message: "p"})
-      )
+      EmitBus.publish(EmitBus.build(session_id, :turn_started, :durable, %{message: "p"}))
 
       _started = await_event!(session_id)
 
       %{journal: %FileStore{writer: writer}} = :sys.get_state(bridge)
       GenServer.stop(writer)
 
-      EmitBus.publish(
-        EmitBus.build(session_id, :app_update, :durable, %{message: "lost"})
-      )
+      EmitBus.publish(EmitBus.build(session_id, :app_update, :durable, %{message: "lost"}))
 
       failure = await_event!(session_id)
 

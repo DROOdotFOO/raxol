@@ -6,7 +6,6 @@ defmodule Raxol.Core.Runtime.Plugins.TimerManager do
   timer handling across the plugin system.
   """
 
-
   alias Raxol.Core.Utils.TimerManager
 
   @doc """

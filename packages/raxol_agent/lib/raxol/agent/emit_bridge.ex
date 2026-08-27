@@ -328,8 +328,7 @@ defmodule Raxol.Agent.EmitBridge do
             {:ok, state, offset}
 
           {:error, detail} ->
-            {:error, drop_dead_journal(state, detail), :journal_append_failed,
-             detail}
+            {:error, drop_dead_journal(state, detail), :journal_append_failed, detail}
         end
 
       {:error, state, detail} ->

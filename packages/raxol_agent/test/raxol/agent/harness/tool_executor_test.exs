@@ -350,8 +350,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
           await_decision: fn _rid, _meta -> {:allow, "allow"} end
         )
 
-      assert {:approval_requested,
-              %{tool_name: "edit_file", request_id: rid, options: opts}} =
+      assert {:approval_requested, %{tool_name: "edit_file", request_id: rid, options: opts}} =
                Enum.find(events, &match?({:approval_requested, _}, &1))
 
       assert is_list(opts) and Enum.any?(opts, &(&1.kind == :allow_once))
@@ -634,8 +633,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
           end
         )
 
-      assert {:tool_result,
-              %{name: "edit_file", result: {:error, :stale_approval}}} =
+      assert {:tool_result, %{name: "edit_file", result: {:error, :stale_approval}}} =
                Enum.find(events, &match?({:tool_result, _}, &1))
 
       # Our edit was NEVER applied -- the file keeps the drifted content.
@@ -649,8 +647,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
       events =
         run(
           [
-            {:tool_calls,
-             [%{"name" => "delete_everything", "arguments" => %{}, "id" => "x"}]},
+            {:tool_calls, [%{"name" => "delete_everything", "arguments" => %{}, "id" => "x"}]},
             {:content, "ok"}
           ],
           actions: Workspace.all(),
@@ -850,8 +847,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
                usage: %{},
                reasoning: "first I plan the read"
              }},
-            {:response,
-             %{content: "the answer", usage: %{}, reasoning: "now I conclude"}}
+            {:response, %{content: "the answer", usage: %{}, reasoning: "now I conclude"}}
           ],
           actions: Fs.all(),
           gate?: false
@@ -903,8 +899,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
                metadata: %{
                  finish_reason: :length,
                  truncated: true,
-                 marker:
-                   "⚠ response truncated — hit token limit; raise AI_MAX_TOKENS"
+                 marker: "⚠ response truncated — hit token limit; raise AI_MAX_TOKENS"
                }
              }}
           ],
@@ -959,8 +954,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
              usage: %{},
              reasoning: "first, read the file"
            }},
-          {:response,
-           %{content: "done reading", usage: %{}, reasoning: "now, answer"}}
+          {:response, %{content: "done reading", usage: %{}, reasoning: "now, answer"}}
         ])
 
       stream =
@@ -1058,8 +1052,7 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
           {:reasoning, "got it"},
           {:chunk, "the file says "},
           {:chunk, "hello world"},
-          {:done,
-           %{content: "the file says hello world", tool_calls: [], usage: %{}}}
+          {:done, %{content: "the file says hello world", tool_calls: [], usage: %{}}}
         ]
       ]
 

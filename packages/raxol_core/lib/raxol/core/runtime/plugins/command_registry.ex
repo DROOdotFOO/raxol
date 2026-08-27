@@ -6,7 +6,6 @@ defmodule Raxol.Core.Runtime.Plugins.CommandRegistry do
   `{name, {module, function, arity}, metadata}` tuples as values.
   """
 
-
   @type command_name :: String.t()
   @type command_handler :: (list(), map() -> term())
   @type command_metadata :: %{

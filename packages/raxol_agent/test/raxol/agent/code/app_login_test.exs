@@ -242,8 +242,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
       {model, []} =
         App.update(
-          {:command_result,
-           {:browser_signin, ref, :openrouter, {:ok, %{validation: :valid}}}},
+          {:command_result, {:browser_signin, ref, :openrouter, {:ok, %{validation: :valid}}}},
           model
         )
 
@@ -332,8 +331,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
       model = type(model, "/login openai sk-good")
 
-      assert_receive {:command_result,
-                      {:login_validation, ref, :openai, :valid}} = msg
+      assert_receive {:command_result, {:login_validation, ref, :openai, :valid}} = msg
 
       assert ref == model.login_ref
 
@@ -350,8 +348,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
       model = type(model, "/login openai sk-bad")
 
-      assert_receive {:command_result,
-                      {:login_validation, _ref, :openai, {:rejected, 401}}} =
+      assert_receive {:command_result, {:login_validation, _ref, :openai, {:rejected, 401}}} =
                        msg
 
       {model, []} = App.update(msg, model)
@@ -367,8 +364,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
       model = type(model, "/login lm_studio")
 
-      assert_receive {:command_result,
-                      {:login_validation, _ref, :lm_studio, :unreachable}} = msg
+      assert_receive {:command_result, {:login_validation, _ref, :lm_studio, :unreachable}} = msg
 
       {model, []} = App.update(msg, model)
       assert model.status_line =~ "unreachable"
@@ -383,8 +379,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
       {model, []} =
         App.update(
-          {:command_result,
-           {:login_validation, stale, :openai, {:rejected, 401}}},
+          {:command_result, {:login_validation, stale, :openai, {:rejected, 401}}},
           model
         )
 

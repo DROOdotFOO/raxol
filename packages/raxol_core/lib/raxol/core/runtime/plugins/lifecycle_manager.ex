@@ -3,7 +3,6 @@ defmodule Raxol.Core.Runtime.Plugins.LifecycleManager do
   Handles plugin lifecycle operations including loading, unloading, enabling, and disabling plugins.
   """
 
-
   @doc """
   Loads a plugin with the given configuration.
   """

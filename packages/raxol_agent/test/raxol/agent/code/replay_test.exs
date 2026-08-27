@@ -95,8 +95,7 @@ defmodule Raxol.Agent.Code.ReplayTest do
     stored =
       [
         {"t1", 1, "turn_started", %{"prompt" => "old prompt"}},
-        {"t1", 2, "item_started",
-         %{"item_id" => "i1", "item_type" => "message"}},
+        {"t1", 2, "item_started", %{"item_id" => "i1", "item_type" => "message"}},
         {"t1", 3, "item_completed",
          %{
            "item_id" => "i1",

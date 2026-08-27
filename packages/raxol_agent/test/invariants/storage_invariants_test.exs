@@ -662,9 +662,7 @@ defmodule Raxol.Agent.Invariants.StorageInvariantsTest do
             :ok
 
           {:error, reason} ->
-            flunk(
-              "HEAD torn after kill: #{inspect(reason)} — atomic write violated"
-            )
+            flunk("HEAD torn after kill: #{inspect(reason)} — atomic write violated")
         end
 
         FaultJournal.assert_all_fired!(harness, {:kill_after, n})

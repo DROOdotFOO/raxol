@@ -45,9 +45,7 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
   setup do
     FaultJournal.ensure_registry(:duplicate, EmitBus.registry_name())
 
-    FaultJournal.ensure_running(
-      {Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences}
-    )
+    FaultJournal.ensure_running({Raxol.Core.UserPreferences, name: Raxol.Core.UserPreferences})
 
     base =
       Path.join(
@@ -445,9 +443,7 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
   # --- oracle helpers ----------------------------------------------------------
 
   defp publish(ctx, type, tier, payload) do
-    EmitBus.publish(
-      EmitBus.build(ctx.session_id, type, tier, payload, turn_id: "t1")
-    )
+    EmitBus.publish(EmitBus.build(ctx.session_id, type, tier, payload, turn_id: "t1"))
   end
 
   # Receive the next live durable event and assert I3 at the moment of first
@@ -483,9 +479,7 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         )
     after
       2_000 ->
-        flunk(
-          "timed out waiting for #{inspect(type)} (schedule: #{inspect(ctx.schedule)})"
-        )
+        flunk("timed out waiting for #{inspect(type)} (schedule: #{inspect(ctx.schedule)})")
     end
   end
 
@@ -508,9 +502,7 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         )
     after
       2_000 ->
-        flunk(
-          "timed out waiting for #{inspect(reason)} (schedule: #{inspect(ctx.schedule)})"
-        )
+        flunk("timed out waiting for #{inspect(reason)} (schedule: #{inspect(ctx.schedule)})")
     end
   end
 
@@ -555,9 +547,7 @@ defmodule Raxol.Agent.Invariants.IdentityInvariantsTest do
         writer
 
       %{journal: nil} ->
-        flunk(
-          "fault site needs an open journal; schedule must front-load durables"
-        )
+        flunk("fault site needs an open journal; schedule must front-load durables")
     end
   end
 
