@@ -43,7 +43,9 @@ defmodule Raxol.Headless.McpTools do
                 "Script path RELATIVE to the configured headless path root, e.g. " <>
                   "\"examples/demo.exs\". Disabled unless RAXOL_HEADLESS_PATH_ROOT " <>
                   "(or config :raxol, :headless_path_root) is set, because starting " <>
-                  "from a path compiles the file. Mutually exclusive with module."
+                  "from a path compiles the file. An absolute path is REFUSED " <>
+                  "rather than resolved under the root, so the file that runs is " <>
+                  "always the file you named. Mutually exclusive with module."
             },
             id: %{
               type: "string",
@@ -494,7 +496,61 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
-  defp confine_path(root, path) do
+  # An absolute path is REFUSED here rather than left to `confine/3`.
+  #
+  # `confine/3` is safe either way: it does `Path.join(root, requested)`, so
+  # `/etc/evil.exs` is jailed to `<root>/etc/evil.exs` and never honoured. But
+  # jailing it means the tool compiles a DIFFERENT file than the one it was
+  # asked for and says nothing, and the schema already documents this argument
+  # as relative to the root. For an argument whose whole job is choosing which
+  # code executes, answering a different file silently is the worse of the two
+  # available behaviours -- so the mismatch is named instead.
+  #
+  defp confine_path(root, path) when path != "" do
+    case anchored_kind(path) do
+      nil -> do_confine_path(root, path)
+      kind -> {:error, absolute_refusal(path, kind)}
+    end
+  end
+
+  defp confine_path(_root, _path),
+    do: {:error, "path must not be empty"}
+
+  # `nil` for a genuinely relative path; otherwise what it is anchored at.
+  #
+  # `Path.type/1` alone is not enough, because it is OS-dependent in exactly the
+  # direction that hurts: on Unix `Path.type("c:/x")` is `:relative`, so the
+  # same argument would be refused on Windows and rewritten under the root on
+  # Unix. `Raxol.Core.Boundary.Path` settled this question one layer down --
+  # a drive or UNC anchor counts on EVERY host, because one rule erring toward
+  # refusal beats two rules disagreeing about the same string -- and this
+  # mirrors it rather than inventing a second answer.
+  defp anchored_kind(path) do
+    cond do
+      Path.type(path) != :relative -> Path.type(path)
+      drive_anchored?(path) -> :drive_absolute
+      unc_anchored?(path) -> :unc_absolute
+      true -> nil
+    end
+  end
+
+  defp drive_anchored?(<<letter, ?:, _::binary>>)
+       when letter in ?A..?Z or letter in ?a..?z,
+       do: true
+
+  defp drive_anchored?(_), do: false
+
+  defp unc_anchored?(<<sep, sep, _::binary>>) when sep in [?/, ?\\], do: true
+  defp unc_anchored?(_), do: false
+
+  defp absolute_refusal(path, kind) do
+    "path must be RELATIVE to the configured headless path root, and " <>
+      "#{inspect(path)} is #{kind}. It would be jailed under the root rather " <>
+      "than honoured, so the file that ran would not be the file you named. " <>
+      "Drop the leading separator or drive."
+  end
+
+  defp do_confine_path(root, path) do
     case Raxol.Core.Boundary.Path.confine(root, path, ref_format: ~r/\.exs?$/) do
       {:ok, real} ->
         {:ok, real}

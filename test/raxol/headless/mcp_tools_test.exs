@@ -82,13 +82,27 @@ defmodule Raxol.Headless.McpToolsTest do
       assert message =~ "disabled"
     end
 
-    test "a path inside the configured root is accepted", %{root: root} do
+    test "a path inside the configured root resolves to the file named", %{
+      root: root
+    } do
       System.put_env("RAXOL_HEADLESS_PATH_ROOT", root)
 
-      # Not `{:error, _}` from RESOLUTION: it either reached Headless or came
-      # back with Headless's own answer. Either way the path was let through.
-      result = call_start(%{"path" => "inside/ok.exs"})
+      # Asserts WHICH file, not merely that resolution did not refuse. A test
+      # that only ruled out the refusal branches would still pass if the path
+      # were silently rewritten -- which is exactly the behaviour the absolute
+      # case below now refuses, so the accepting case has to prove the opposite
+      # rather than assume it.
+      assert {:resolved, target} = resolved_target(%{"path" => "inside/ok.exs"})
 
+      # Compared against the root's REAL path, because that is what `confine/3`
+      # documents itself as returning -- and it is load-bearing on macOS, where
+      # `System.tmp_dir!()` hands back `/tmp`, a symlink to `/private/tmp`.
+      # Asserting the lexical path here would fail for the right behaviour.
+      real_root = File.cd!(root, &File.cwd!/0)
+
+      assert target == Path.join(real_root, "inside/ok.exs")
+
+      result = call_start(%{"path" => "inside/ok.exs"})
       refute match?({:error, "starting from a path is disabled" <> _}, result)
       refute match?({:error, "path is outside" <> _}, result)
     end
@@ -119,19 +133,42 @@ defmodule Raxol.Headless.McpToolsTest do
       end
     end
 
-    test "an absolute path is jailed under the root, never honoured verbatim",
+    # `confine/3` alone would JOIN this under the root, landing it at
+    # <root>/etc/evil.exs. That is safe -- `/etc/evil.exs` is never honoured --
+    # but it means the tool compiles a different file than the one it was asked
+    # for and says nothing, while the schema documents the argument as relative.
+    # For the argument that decides which code executes, a silent substitution
+    # is the worse of the two safe behaviours, so the mismatch is named.
+    test "an absolute path is refused, not silently jailed under the root",
          %{root: root} do
       System.put_env("RAXOL_HEADLESS_PATH_ROOT", root)
 
-      # `confine/3` JOINS the request under the root, so an absolute path is
-      # remapped rather than refused -- it lands at <root>/etc/evil.exs, which
-      # is the safe outcome and the one worth pinning. Refusing would be fine
-      # too; silently honouring `/etc/evil.exs` would not.
-      assert {:resolved, target} = resolved_target(%{"path" => "/etc/evil.exs"})
+      assert {:error, message} = call_start(%{"path" => "/etc/evil.exs"})
 
-      refute target == "/etc/evil.exs"
-      assert String.ends_with?(target, "/etc/evil.exs")
-      assert target =~ Path.basename(root)
+      assert message =~ "must be RELATIVE"
+      assert message =~ "would not be the file you named"
+    end
+
+    # The refusal must not be a leading-slash check. A Windows drive path is
+    # absolute too, and `/foo` on Windows is volume-relative -- neither is the
+    # relative path the caller was asked for, and both would otherwise be
+    # rewritten under the root.
+    test "a drive-absolute path is refused as well", %{root: root} do
+      System.put_env("RAXOL_HEADLESS_PATH_ROOT", root)
+
+      assert {:error, message} = call_start(%{"path" => "c:/windows/evil.exs"})
+
+      assert message =~ "must be RELATIVE"
+    end
+
+    test "an empty path is refused rather than resolving to the root", %{
+      root: root
+    } do
+      System.put_env("RAXOL_HEADLESS_PATH_ROOT", root)
+
+      assert {:error, message} = call_start(%{"path" => ""})
+
+      assert message =~ "must not be empty"
     end
 
     # Runs on every platform, Windows included. It did not always: `walk_real/3`

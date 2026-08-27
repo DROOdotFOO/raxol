@@ -83,6 +83,30 @@ defmodule Raxol.Headless do
   When given a path, the file is compiled and the first module meeting that
   contract is used.
 
+  ## Passing a path executes code
+
+  Compiling a `defmodule` runs its body, so **whoever chooses the path string
+  chooses what runs in this VM**, with the VM's privileges. That is arbitrary
+  code execution, not a file read, and it is a property of this function rather
+  than of any one caller.
+
+  The AST filter that keeps only `defmodule` nodes is a convenience -- it skips
+  an example script's boot code -- and never a sandbox. What bounds the compile
+  is a monitored child on a budget, which bounds the DAMAGE to this process
+  (a body that raises, throws, exits, or never returns is answered rather than
+  taking the session manager down with it). It does not bound what the body may
+  do while it runs.
+
+  So the path argument is only ever as safe as the caller that chooses it.
+  Callers that take one from outside the VM must confine it themselves:
+  `Raxol.Headless.McpTools` refuses the argument entirely unless a deployment
+  sets `RAXOL_HEADLESS_PATH_ROOT`, and then confines it under that root with
+  `Raxol.Core.Boundary.Path.confine/3`. The programmatic callers
+  (`Raxol.Recording.Video`, `Raxol.MCP.Test`) pass a path they already chose.
+
+  The `module` argument carries no such hazard: loading a beam runs nothing at
+  module scope, and the TEA contract above is checked before anything starts.
+
   ## Options
 
     * `:id` - Session identifier (default: module name as atom)
