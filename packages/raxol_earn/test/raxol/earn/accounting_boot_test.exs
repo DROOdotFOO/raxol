@@ -146,9 +146,8 @@ defmodule Raxol.Earn.AccountingBootTest do
       System.put_env("RAXOL_REBALANCE_DEMAND_MULTIPLIER", "2")
       {opts, _} = Accounting.env_config()
 
-      assert_raise ArgumentError, ~r/without :demand_floor_cap/, fn ->
-        Mix.Tasks.RaxolEarn.Rebalance.resolve_policy(opts, [])
-      end
+      assert {:error, message} = Mix.Tasks.RaxolEarn.Rebalance.resolve_policy(opts, [])
+      assert message =~ "without :demand_floor_cap"
     end
   end
 
