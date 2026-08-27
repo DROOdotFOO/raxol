@@ -13,7 +13,12 @@ defmodule Mix.Tasks.Raxol.Acp do
   stderr. The provider resolves like every other coding-agent entrypoint
   (explicit `--backend`, else `Raxol.Agent.Backend.Resolver` auto-detect);
   with nothing configured the task exits 1 with a setup hint. Turns run the
-  read-only toolset — see `Raxol.Agent.ClientProtocol.StdioAgent`.
+  FULL toolset, every sensitive call gated on a `session/request_permission`
+  round trip — see `Raxol.Agent.ClientProtocol.StdioAgent`.
+
+  Note that a native-CLI backend (`--backend claude_native` and friends) runs
+  its own tool loop instead, so none of that gating applies; the task says so
+  on stderr at boot.
 
   ## Editor wiring (Zed)
 

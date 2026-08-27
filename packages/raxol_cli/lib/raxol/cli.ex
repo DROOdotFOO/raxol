@@ -8,7 +8,7 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent code p acp playground new help)
+  @commands ~w(agent code p acp login setup doctor playground new help)
 
   @doc "Dispatch `argv`, returning an exit code."
   @spec main([String.t()]) :: non_neg_integer()
@@ -26,6 +26,11 @@ defmodule Raxol.CLI do
   # The interactive setup an ACP client relaunches us for (Terminal Auth): the
   # args here are the ones `initialize` advertises, so the two cannot drift.
   def main(["login" | rest]), do: Raxol.Agent.ClientProtocol.Login.run(rest)
+  # The headless twin of `login`, and the same code `mix raxol.setup` runs.
+  # Reachable from the packaged binary because connecting a provider is the
+  # first thing a fresh install needs, and an npm install has no Mix tasks.
+  def main(["setup" | rest]), do: with_app(fn -> Raxol.Agent.Setup.CLI.run(rest) end)
+  def main(["doctor" | rest]), do: with_app(fn -> Raxol.CLI.Doctor.run(rest) end)
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
   def main([help]) when help in ~w(help --help -h), do: help()
@@ -149,6 +154,14 @@ defmodule Raxol.CLI do
     :ok
   end
 
+  # Subcommands that only need the agent application up (no terminal, no
+  # launcher): start it, then run. Both of these resolve providers, which
+  # reaches `Raxol.Agent.Backend.Resolver` and may shell out to `op`.
+  defp with_app(fun) do
+    {:ok, _} = Application.ensure_all_started(:raxol_agent)
+    fun.()
+  end
+
   # -- playground -------------------------------------------------------------
 
   # Start the interactive component-catalog TUI. Needs a real terminal; over a
@@ -228,6 +241,8 @@ defmodule Raxol.CLI do
       p "prompt"    Headless one-shot: answer to stdout, events to stderr
       acp           Serve over the Agent Client Protocol on stdio
       login         Connect an LLM provider (browser sign-in, or a key)
+      setup         Connect/inspect a provider headlessly (CI, remote boxes)
+      doctor        Report this install: build, runtime, providers, config
       playground    Browse the interactive component catalog
       new [name]    Scaffold a new Raxol application
       help          Show this help
@@ -240,11 +255,42 @@ defmodule Raxol.CLI do
 
   defp banner, do: "raxol #{version()} -- terminal AI agent + TUI toolkit"
 
-  defp version do
+  # The commit this binary was built from, resolved at COMPILE time and baked
+  # in. A packaged binary otherwise reports only its release version, which
+  # changes far less often than its contents: a months-old build and a build
+  # from five minutes ago both say "0.2.6", and the only way to tell them apart
+  # is to diff their behaviour. (That is not hypothetical — a stale
+  # `burrito_out` binary was found serving a pre-fix ACP handshake while
+  # claiming the current version.)
+  #
+  # `@external_resource` on `.git/HEAD` recompiles this module when the commit
+  # moves, so the stamp cannot go stale on its own.
+  @git_head Path.join([__DIR__, "..", "..", "..", "..", ".git", "HEAD"])
+  if File.exists?(@git_head), do: @external_resource(@git_head)
+
+  @build_sha (case System.cmd("git", ["rev-parse", "--short", "HEAD"], stderr_to_stdout: true) do
+                {sha, 0} -> String.trim(sha)
+                _ -> nil
+              end)
+
+  @doc false
+  # Public so `Raxol.CLI.Doctor` reports the same string the banner does.
+  @spec version() :: String.t()
+  def version do
     case :application.get_key(:raxol_cli, :vsn) do
-      {:ok, vsn} -> List.to_string(vsn)
-      _ -> "dev"
+      {:ok, vsn} -> stamped(List.to_string(vsn))
+      _ -> stamped("dev")
     end
+  end
+
+  # A build with no git available (a Hex install, a source tarball) reports the
+  # bare version rather than inventing a provenance it does not have. Selected
+  # at compile time: `@build_sha` is a constant, so a runtime guard on it would
+  # leave one clause provably dead.
+  if is_binary(@build_sha) do
+    defp stamped(vsn), do: vsn <> "+" <> @build_sha
+  else
+    defp stamped(vsn), do: vsn
   end
 
   @doc false

@@ -184,20 +184,24 @@ jobs:
         with:
           pattern: cli-*
           merge-multiple: true
-          path: packages/raxol_cli/npm/vendor
+          path: packages/raxol_cli/burrito_out
 
-      - name: Stage binaries
+      # Builds one @raxol/cli-<platform>-<arch> package per binary, each
+      # declaring os/cpu. The `raxol` wrapper lists them as optionalDependencies
+      # so npm downloads only the matching one (~68MB, not ~270MB).
+      - name: Build platform packages
+        run: packages/raxol_cli/npm/scripts/pack.sh
+
+      - name: Pack tarballs
         working-directory: packages/raxol_cli/npm
         run: |
-          chmod +x vendor/raxol_cli_* || true
-          echo "Vendored binaries:"
-          ls -lh vendor/
+          npm pack
+          for dir in platforms/*/; do
+            (cd "$dir" && npm pack --pack-destination ../..)
+          done
+          ls -lh ./*.tgz
 
-      - name: Pack tarball
-        working-directory: packages/raxol_cli/npm
-        run: npm pack
-
-      - name: Upload npm tarball
+      - name: Upload npm tarballs
         uses: actions/upload-artifact@v4
         with:
           name: raxol-npm-tarball
@@ -208,6 +212,10 @@ jobs:
       # ships the release binaries (see the `release` job); claiming the `raxol`
       # name on npm is a separate, deliberate act. Publish with a manual run:
       #   gh workflow run release-raxol-cli.yml -f publish=true
+      #
+      # Order matters: the platform packages go first. The wrapper pins them by
+      # exact version, so publishing it against a registry that does not yet
+      # have them leaves a window where `npm i -g raxol` resolves nothing.
       - name: Publish to npm
         if: inputs.publish == true
         working-directory: packages/raxol_cli/npm
@@ -216,6 +224,9 @@ jobs:
             echo "::error::publish=true but the NPM_TOKEN secret is unset or empty." >&2
             exit 1
           fi
+          for dir in platforms/*/; do
+            (cd "$dir" && npm publish --access public)
+          done
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

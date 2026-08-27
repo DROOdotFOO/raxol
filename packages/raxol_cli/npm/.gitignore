@@ -1,3 +1,5 @@
-# built binaries (populated by scripts/pack.sh, shipped in the tarball, not committed)
+# Built binaries and the per-platform packages generated from them
+# (scripts/pack.sh). Published to npm, never committed.
 vendor/
+platforms/
 *.tgz

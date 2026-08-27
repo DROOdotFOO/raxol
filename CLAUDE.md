@@ -119,7 +119,72 @@ mix docs                      # Generate documentation
 ./scripts/dev.sh check           # Pre-commit quality checks
 ./scripts/dev.sh dialyzer        # Static analysis with PLT caching
 ./scripts/dev.sh setup           # Environment setup
+./scripts/check_toolchain.sh     # Verify the active Elixir/OTP matches .tool-versions
+./scripts/acp_probe.py CMD ARGS  # Drive an ACP agent over stdio, record the wire
 ```
+
+### Install paths
+
+The packaged CLI is self-contained (Burrito wraps its own ERTS), so none of
+these need Elixir at run time:
+
+```bash
+curl -fsSL https://raxol.io/install | bash   # scripts/install.sh, checksum-verified
+brew install droodotfoo/tap/raxol            # scripts/gen_homebrew_formula.sh emits the formula
+npm install -g raxol                         # wrapper + one per-platform binary
+```
+
+npm ships as a small `raxol` launcher plus per-platform packages
+(`@raxol/cli-<platform>-<arch>`) declared as `optionalDependencies` with
+`os`/`cpu` set, so an install pulls one ~68MB binary instead of all four.
+`packages/raxol_cli/npm/scripts/pack.sh` builds them from `burrito_out` and
+fails if the wrapper's pinned versions drift from its own. Platform packages
+publish before the wrapper, since the wrapper pins them exactly.
+
+`raxol doctor` reports build commit, packaging, runtime, whether the ACP
+surface is compiled in, and every provider it resolves. `raxol setup` is the
+headless provider connect (`Raxol.Agent.Setup.CLI`, which `mix raxol.setup`
+also shims), so a fresh npm install can connect a provider without Mix.
+
+### Toolchain
+
+`.tool-versions` is authoritative (currently elixir 1.20.2-otp-29, erlang
+29.0.3, via mise). Running a different Elixir than `$MIX_HOME` was populated
+for does not report a version conflict; it fails inside Hex on any
+`mix deps.get` with:
+
+```
+** (UndefinedFunctionError) function Enum.__in__/2 is undefined or private
+```
+
+which looks like a corrupt dependency. The usual cause is a Homebrew-first
+PATH with `$MIX_HOME` pointing at a mise install. `scripts/check_toolchain.sh`
+names it and prints the fix. Burrito releases must be built on this toolchain
+too: `BURRITO_TARGET=macos mix release raxol_cli` builds one target instead of
+four, and the unpack cache (`~/Library/Application Support/.burrito/`) has to
+be cleared afterwards or the new binary silently runs the old payload. The
+CLI banner carries the build commit (`raxol 0.2.6+cfa343ea7`) so a stale
+binary is visible at a glance.
+
+### Probing the ACP surface
+
+`scripts/acp_probe.py` is a dependency-free ACP client: it spawns the agent,
+runs initialize -> session/new -> session/prompt, answers
+`session/request_permission`, and records every frame. It catches what unit
+tests cannot see, such as non-JSON reaching stdout before frame one (which
+`mix raxol.acp` still does, since Mix reconsiders the termbox2 NIF on every
+boot and prints `==> raxol_terminal` to the wire; the Burrito-packaged
+`raxol acp` is clean). A `__NON_JSON_STDOUT__` entry in the transcript is a
+wire defect.
+
+Note that the native-CLI backends (`:claude_native`, `:grok_native`) run their
+own tool loop (`Raxol.Agent.Backend.Native` reports
+`handles_tools_internally? == true`), so on those backends raxol's Actions,
+per-session cwd scoping and `session/request_permission` never execute. The
+tools carry the other agent's names and its refusals are indistinguishable on
+the wire from ours, so conclusions drawn there are about code that never ran.
+`raxol acp` says so on stderr at boot. Test those paths with an API-key
+backend or at the Action level.
 
 ## Architecture
 
