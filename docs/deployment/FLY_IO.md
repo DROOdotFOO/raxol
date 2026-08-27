@@ -119,6 +119,10 @@ ENV SKIP_TERMBOX2_TESTS="true"
 ENV TMPDIR="/tmp"
 ```
 
+## Exposed surfaces
+
+Anything in `[[services]]` is on the public internet, and Fly routes it to every public address the app holds. The shared IPv4 proxies 80/443 only, so a raw TCP service can look closed when probed against the hostname while a dedicated IPv6 (`fly ips list`) serves it to anyone scanning. Verify every declared exposure from outside the app, on both address families. Anonymous SSH surfaces additionally require their own acknowledgment and resource caps, and the BEAM's `epmd`/distribution ports bind every interface by default; see [SSH deployment: anonymous surface defaults and Erlang distribution](../cookbook/SSH_DEPLOYMENT.md#anonymous-surface-defaults).
+
 ## Monitoring
 
 ```bash

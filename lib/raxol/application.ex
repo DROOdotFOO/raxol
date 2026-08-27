@@ -352,12 +352,26 @@ defmodule Raxol.Application do
         Raxol.SSH.Server,
         # The playground is a public, read-only component catalog: anonymous
         # access is intended. A fund-bearing surface must set authorized_keys_dir.
+        # Anonymous surfaces bind loopback unless RAXOL_SSH_ANONYMOUS_PUBLIC=1
+        # separately acknowledges the exposure, and must state every resource
+        # cap or the server refuses to start.
         app_module: Raxol.Playground.App,
         port: port,
         host_keys_dir: host_keys_dir,
+        allow_anonymous: true,
         max_connections: max_connections,
-        allow_anonymous: true
+        max_per_ip: ssh_env_int("RAXOL_SSH_MAX_PER_IP", 10),
+        idle_timeout: :timer.seconds(ssh_env_int("RAXOL_SSH_IDLE_SECONDS", 300)),
+        max_session_duration:
+          :timer.seconds(ssh_env_int("RAXOL_SSH_MAX_SESSION_SECONDS", 3600))
       }
+    end
+  end
+
+  defp ssh_env_int(name, default) do
+    case System.get_env(name) do
+      nil -> default
+      val -> String.to_integer(val)
     end
   end
 

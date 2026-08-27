@@ -7,7 +7,10 @@ defmodule Raxol.SSH.Server do
 
   ## Usage
 
-      Raxol.SSH.serve(CounterExample, port: 2222)
+      Raxol.SSH.serve(CounterExample,
+        port: 2222,
+        authorized_keys_dir: "/etc/raxol/authorized"
+      )
 
   Then connect: `ssh localhost -p 2222`
 
@@ -16,11 +19,25 @@ defmodule Raxol.SSH.Server do
     * `:port` - Port to listen on (default: 2222)
     * `:host_keys_dir` - Directory for SSH host keys (default: `~/.raxol/ssh_keys`,
       a persistent path so keys survive restarts)
-    * `:max_connections` - Maximum concurrent connections (default: 50)
-    * `:max_per_ip` - Maximum concurrent connections from one peer IP (default: 10),
-      so a single host cannot flood the pool
+    * `:max_connections` - Maximum concurrent connections (default: 50;
+      REQUIRED explicitly when anonymous)
+    * `:max_per_ip` - Maximum concurrent connections from one peer IP (default: 10,
+      REQUIRED explicitly when anonymous), so a single host cannot flood the pool
+    * `:idle_timeout` - Milliseconds without client input before a session is
+      closed (REQUIRED when anonymous; also passed to the daemon as `idle_time`
+      for connections holding no channel)
+    * `:max_session_duration` - Milliseconds a session may exist before it is
+      closed regardless of activity (REQUIRED when anonymous)
     * `:negotiation_timeout` - Milliseconds a connection may spend in key exchange
       and auth before it is dropped (default: 30_000), bounding slow-handshake holds
+    * `:anonymous_public` - `true` lets an anonymous server bind non-loopback
+      interfaces. Without it (or `RAXOL_SSH_ANONYMOUS_PUBLIC=1`), anonymous
+      servers bind loopback only, so one flag cannot carry a surface from
+      laptop demo to public internet.
+
+  On boot the server logs one posture line naming the resulting exposure
+  (bind address, port, auth mode, caps, host key algorithms), so what was
+  deployed is visible in the first log anyone reads.
 
   ## Authentication (fail-closed)
 
@@ -28,6 +45,9 @@ defmodule Raxol.SSH.Server do
   authentication is required unless anonymous access is explicitly requested:
 
     * `:allow_anonymous` - `true` accepts any connection (BBS/playground use).
+      Binds loopback unless `:anonymous_public` acknowledges the exposure, and
+      refuses to start unless all four resource caps (`:max_connections`,
+      `:max_per_ip`, `:idle_timeout`, `:max_session_duration`) are explicit.
     * `:authorized_keys_dir` - a directory holding an `authorized_keys` file;
       connections must present a listed public key. Single-tenant: every
       keyholder is the same principal regardless of the username they claim.
@@ -55,9 +75,13 @@ defmodule Raxol.SSH.Server do
     :daemon_ref,
     :app_module,
     :port,
+    :bind,
+    :auth,
     :host_keys_dir,
     :max_connections,
     :max_per_ip,
+    :idle_timeout,
+    :max_session_duration,
     connections: 0,
     per_ip: %{}
   ]
@@ -115,6 +139,126 @@ defmodule Raxol.SSH.Server do
 
       true ->
         {:error, :ssh_auth_required}
+    end
+  end
+
+  @doc """
+  The address the daemon binds, decided from the auth posture.
+
+  Anonymous surfaces bind loopback unless the exposure is separately
+  acknowledged with `anonymous_public: true` (or `RAXOL_SSH_ANONYMOUS_PUBLIC=1`
+  in the environment), so `allow_anonymous: true` alone can never open a
+  surface to the network. Key-authenticated surfaces bind all interfaces.
+  """
+  @spec bind_address(keyword()) :: :any | :loopback
+  def bind_address(opts) do
+    anonymous? = Keyword.get(opts, :allow_anonymous, false) == true
+
+    acknowledged? =
+      Keyword.get(
+        opts,
+        :anonymous_public,
+        System.get_env("RAXOL_SSH_ANONYMOUS_PUBLIC") == "1"
+      ) == true
+
+    if anonymous? and not acknowledged?, do: :loopback, else: :any
+  end
+
+  @anonymous_required_caps [
+    :max_connections,
+    :max_per_ip,
+    :idle_timeout,
+    :max_session_duration
+  ]
+
+  @doc """
+  The resource caps an anonymous surface must declare, or the empty list.
+
+  When auth is off, every cap is required explicitly (a positive integer;
+  the timeouts are milliseconds) rather than defaulted: fifty concurrent
+  anonymous shells must be a stated decision, not an omission. Authenticated
+  surfaces keep their defaults and return `[]`.
+  """
+  @spec missing_anonymous_caps(keyword()) :: [atom()]
+  def missing_anonymous_caps(opts) do
+    if Keyword.get(opts, :allow_anonymous, false) == true do
+      Enum.reject(@anonymous_required_caps, fn key ->
+        case Keyword.get(opts, key) do
+          n when is_integer(n) and n > 0 -> true
+          _ -> false
+        end
+      end)
+    else
+      []
+    end
+  end
+
+  @doc """
+  One greppable line stating the security posture this server resolved to:
+  bind address, port, auth mode, resource caps, and host key algorithms.
+  Logged at boot; the posture is the thing that goes wrong silently, so it
+  is said out loud where people already look.
+  """
+  @spec posture_line(map()) :: String.t()
+  def posture_line(%{} = p) do
+    "[SSH] listening #{format_bind(p.bind)}:#{p.port}" <>
+      " auth=#{p.auth}" <>
+      " max_conn=#{p.max_connections} per_ip=#{p.max_per_ip}" <>
+      " idle=#{format_cap_ms(p.idle_timeout)}" <>
+      " session_max=#{format_cap_ms(p.max_session_duration)}" <>
+      " host_keys=#{format_host_keys(p.host_key_algs, p.host_keys_dir)}"
+  end
+
+  defp format_bind(:any), do: "0.0.0.0"
+  defp format_bind(:loopback), do: "127.0.0.1"
+  defp format_bind(ip) when is_tuple(ip), do: to_string(:inet.ntoa(ip))
+
+  defp format_cap_ms(ms) when is_integer(ms) and ms > 0, do: "#{div(ms, 1000)}s"
+  defp format_cap_ms(_), do: "none"
+
+  defp format_host_keys([], dir), do: "none(#{dir})"
+  defp format_host_keys(algs, dir), do: "#{Enum.join(algs, "+")}(#{dir})"
+
+  @doc """
+  A peer address as a loggable string; anything that is not an IP tuple
+  (the `:unknown` bucket) is printed as-is rather than crashing a log line.
+  """
+  @spec format_peer(term()) :: String.t()
+  def format_peer(ip) when is_tuple(ip), do: to_string(:inet.ntoa(ip))
+  def format_peer(:unknown), do: "unknown"
+  def format_peer(other), do: inspect(other)
+
+  @doc """
+  Probe an SSH listener by reading its banner, not just opening a socket.
+
+  A daemon that accepts and immediately hangs up is indistinguishable from a
+  working one to a bare connect, so a health check built on connect alone
+  passes during the outage it exists to catch. `:ok` only when the peer
+  actually says `SSH-2.0`.
+  """
+  @spec banner_probe(
+          charlist() | String.t() | :inet.ip_address(),
+          :inet.port_number(),
+          timeout()
+        ) ::
+          :ok | {:error, :no_banner | :not_ssh | {:connect_failed, term()}}
+  def banner_probe(host, port, timeout \\ 2_000) do
+    host = if is_binary(host), do: String.to_charlist(host), else: host
+
+    case :gen_tcp.connect(host, port, [:binary, active: false], timeout) do
+      {:ok, socket} ->
+        result =
+          case :gen_tcp.recv(socket, 0, timeout) do
+            {:ok, <<"SSH-2.0", _::binary>>} -> :ok
+            {:ok, _other} -> {:error, :not_ssh}
+            {:error, _} -> {:error, :no_banner}
+          end
+
+        :gen_tcp.close(socket)
+        result
+
+      {:error, reason} ->
+        {:error, {:connect_failed, reason}}
     end
   end
 
@@ -181,6 +325,15 @@ defmodule Raxol.SSH.Server do
   end
 
   @doc """
+  The port the daemon is actually listening on (resolved even when the
+  server was started with port 0).
+  """
+  @spec port(GenServer.server()) :: :inet.port_number()
+  def port(server \\ __MODULE__) do
+    GenServer.call(server, :port)
+  end
+
+  @doc """
   Registers a new connection from `peer_ip`.
 
   Returns `:ok`, `{:error, :max_connections}` (global cap), or
@@ -234,17 +387,26 @@ defmodule Raxol.SSH.Server do
   @impl true
   def init(opts) do
     # Resolve authentication first: refuse to open the daemon at all when the
-    # surface would be silently anonymous.
-    case auth_daemon_opts(opts) do
-      {:ok, auth_opts} ->
-        start_daemon(opts, auth_opts)
-
+    # surface would be silently anonymous, and refuse an anonymous surface
+    # that has not stated its resource caps.
+    with {:ok, auth_opts} <- auth_daemon_opts(opts),
+         [] <- missing_anonymous_caps(opts) do
+      start_daemon(opts, auth_opts)
+    else
       {:error, :ssh_auth_required} ->
         {:stop,
          {:ssh_auth_required,
           "SSH server refused to start: no authentication configured. Pass " <>
             "allow_anonymous: true for anonymous access (e.g. a playground), or " <>
             "authorized_keys_dir: <dir> to require public-key auth."}}
+
+      missing when is_list(missing) ->
+        {:stop,
+         {:anonymous_caps_required, missing,
+          "SSH server refused to start: anonymous access without resource " <>
+            "caps. An unauthenticated surface must state its limits; pass " <>
+            Enum.map_join(missing, ", ", &"#{&1}:") <>
+            " (positive integers, timeouts in milliseconds)."}}
     end
   end
 
@@ -252,61 +414,109 @@ defmodule Raxol.SSH.Server do
     app_module = Keyword.fetch!(opts, :app_module)
     port = Keyword.get(opts, :port, @default_port)
     host_keys_dir = Keyword.get(opts, :host_keys_dir, default_host_keys_dir())
+    bind = bind_address(opts)
 
     max_connections =
       Keyword.get(opts, :max_connections, @default_max_connections)
 
     max_per_ip = Keyword.get(opts, :max_per_ip, @default_max_per_ip)
+    idle_timeout = Keyword.get(opts, :idle_timeout)
+    max_session_duration = Keyword.get(opts, :max_session_duration)
     server_name = Keyword.get(opts, :name, __MODULE__)
 
     negotiation_timeout =
       Keyword.get(opts, :negotiation_timeout, @default_negotiation_timeout_ms)
 
-    ensure_host_keys(host_keys_dir)
+    case ensure_host_keys(host_keys_dir) do
+      :ok ->
+        daemon_opts =
+          [
+            system_dir: String.to_charlist(host_keys_dir),
+            ssh_cli:
+              {Raxol.SSH.CLIHandler,
+               [
+                 app_module: app_module,
+                 server: server_name,
+                 # Per-server app options, passed into every connection's app
+                 # instance (`context.options`); connection-scoped values (size,
+                 # io_writer) are added per session, and per-TENANT options
+                 # (from :tenant_opts, keyed by the authenticated username)
+                 # override these.
+                 app_opts: Keyword.get(opts, :app_opts, []),
+                 tenant_opts: Keyword.get(opts, :tenant_opts),
+                 idle_timeout: idle_timeout,
+                 max_session_duration: max_session_duration
+               ]},
+            negotiation_timeout: negotiation_timeout
+          ] ++
+            idle_time_opt(idle_timeout) ++ auth_opts
 
-    daemon_opts =
-      [
-        system_dir: String.to_charlist(host_keys_dir),
-        ssh_cli:
-          {Raxol.SSH.CLIHandler,
-           [
-             app_module: app_module,
-             server: server_name,
-             # Per-server app options, passed into every connection's app
-             # instance (`context.options`); connection-scoped values (size,
-             # io_writer) are added per session, and per-TENANT options
-             # (from :tenant_opts, keyed by the authenticated username)
-             # override these.
-             app_opts: Keyword.get(opts, :app_opts, []),
-             tenant_opts: Keyword.get(opts, :tenant_opts)
-           ]},
-        negotiation_timeout: negotiation_timeout
-      ] ++ auth_opts
+        boot_daemon(bind, port, daemon_opts, %__MODULE__{
+          app_module: app_module,
+          bind: bind,
+          auth: auth_mode(auth_opts),
+          host_keys_dir: host_keys_dir,
+          max_connections: max_connections,
+          max_per_ip: max_per_ip,
+          idle_timeout: idle_timeout,
+          max_session_duration: max_session_duration
+        })
 
-    case :ssh.daemon(port, daemon_opts) do
+      {:error, reason} ->
+        {:stop, reason}
+    end
+  end
+
+  # `idle_time` covers a connection holding no channel; per-session input
+  # idleness is enforced by the CLIHandler timer.
+  defp idle_time_opt(ms) when is_integer(ms) and ms > 0, do: [idle_time: ms]
+  defp idle_time_opt(_), do: []
+
+  defp auth_mode(auth_opts) do
+    if Keyword.get(auth_opts, :no_auth_needed) == true,
+      do: :none,
+      else: :publickey
+  end
+
+  defp boot_daemon(bind, port, daemon_opts, state) do
+    case :ssh.daemon(bind, port, daemon_opts) do
       {:ok, daemon_ref} ->
-        Raxol.Core.Runtime.Log.info(
-          "[SSH.Server] Listening on port #{port} for #{inspect(app_module)} (max #{max_connections} connections, #{max_per_ip}/peer)"
-        )
+        state = %{
+          state
+          | daemon_ref: daemon_ref,
+            port: resolve_port(daemon_ref, port)
+        }
 
-        {:ok,
-         %__MODULE__{
-           daemon_ref: daemon_ref,
-           app_module: app_module,
-           port: port,
-           host_keys_dir: host_keys_dir,
-           max_connections: max_connections,
-           max_per_ip: max_per_ip
-         }}
+        state
+        |> Map.from_struct()
+        |> Map.put(:host_key_algs, host_key_algs(state.host_keys_dir))
+        |> posture_line()
+        |> Raxol.Core.Runtime.Log.info()
+
+        {:ok, state}
 
       {:error, reason} ->
         {:stop, {:ssh_daemon_failed, reason}}
     end
   end
 
+  # Port 0 asks the OS for an ephemeral port; report the one actually bound,
+  # so the posture line and `port/1` never claim a port nothing listens on.
+  defp resolve_port(daemon_ref, port) do
+    case :ssh.daemon_info(daemon_ref) do
+      {:ok, info} -> Keyword.get(info, :port, port)
+      _ -> port
+    end
+  end
+
   @impl true
   def handle_call(:connection_count, _from, state) do
     {:reply, state.connections, state}
+  end
+
+  @impl true
+  def handle_call(:port, _from, state) do
+    {:reply, state.port, state}
   end
 
   @impl true
@@ -320,7 +530,8 @@ defmodule Raxol.SSH.Server do
          ) do
       {:ok, connections, per_ip} ->
         Raxol.Core.Runtime.Log.info(
-          "[SSH.Server] Connection accepted (#{connections}/#{state.max_connections})"
+          "[SSH] accept peer=#{format_peer(peer_ip)} " <>
+            "(#{connections}/#{state.max_connections})"
         )
 
         {:reply, :ok, %{state | connections: connections, per_ip: per_ip}}
@@ -348,24 +559,83 @@ defmodule Raxol.SSH.Server do
 
   def terminate(_reason, _state), do: :ok
 
-  defp ensure_host_keys(dir) do
-    File.mkdir_p!(dir)
-    host_key_path = Path.join(dir, "ssh_host_rsa_key")
+  # File name -> algorithm label, in preference order (ed25519 first).
+  @host_key_files [
+    {"ssh_host_ed25519_key", "ed25519"},
+    {"ssh_host_ecdsa_key", "ecdsa"},
+    {"ssh_host_rsa_key", "rsa"},
+    {"ssh_host_dsa_key", "dsa"}
+  ]
 
-    unless File.exists?(host_key_path) do
-      Raxol.Core.Runtime.Log.info("[SSH.Server] Generating host keys in #{dir}")
-      generate_host_key(dir)
+  @doc """
+  Ensure `dir` holds a usable host key, generating an ed25519 key (mode 0600)
+  when none exists. Fails closed with `{:error, {:ssh_host_keys_insecure, paths}}`
+  when any existing key is group- or world-readable: a readable host key means
+  every client's host-key trust is forgeable, so the server must not start.
+  """
+  @spec ensure_host_keys(String.t()) ::
+          :ok | {:error, {:ssh_host_keys_insecure, [String.t()]}}
+  def ensure_host_keys(dir) do
+    File.mkdir_p!(dir)
+
+    case insecure_host_keys(dir) do
+      [] ->
+        if host_key_algs(dir) == [] do
+          Raxol.Core.Runtime.Log.info(
+            "[SSH.Server] Generating ed25519 host key in #{dir}"
+          )
+
+          generate_host_key(dir)
+        end
+
+        :ok
+
+      insecure ->
+        {:error, {:ssh_host_keys_insecure, insecure}}
     end
   end
 
-  defp generate_host_key(dir) do
-    rsa_key = :public_key.generate_key({:rsa, 2048, 65_537})
+  @doc "Algorithm labels of the host keys present in `dir`, ed25519 first."
+  @spec host_key_algs(String.t()) :: [String.t()]
+  def host_key_algs(dir) do
+    for {file, alg} <- @host_key_files,
+        File.exists?(Path.join(dir, file)),
+        do: alg
+  end
 
-    rsa_pem =
+  defp insecure_host_keys(dir) do
+    for {file, _alg} <- @host_key_files,
+        path = Path.join(dir, file),
+        File.exists?(path),
+        insecure_mode?(path),
+        do: path
+  end
+
+  defp insecure_mode?(path) do
+    case File.stat(path) do
+      # Any group/other bit set makes the private key readable beyond the
+      # owner; a stat failure counts as insecure rather than assumed fine.
+      {:ok, %File.Stat{mode: mode}} -> Bitwise.band(mode, 0o077) != 0
+      {:error, _} -> true
+    end
+  end
+
+  # ed25519 in PKCS#8 PEM, which Erlang's ssh reads directly. (OTP's
+  # openssh_key_v1 encoder writes a 32-byte private blob its own decoder
+  # rejects, so the experimental format is avoided.) Written 0600 via a
+  # temp file + rename, so no reader ever observes a world-readable key.
+  defp generate_host_key(dir) do
+    key = :public_key.generate_key({:namedCurve, :ed25519})
+
+    pem =
       :public_key.pem_encode([
-        :public_key.pem_entry_encode(:RSAPrivateKey, rsa_key)
+        :public_key.pem_entry_encode(:PrivateKeyInfo, key)
       ])
 
-    File.write!(Path.join(dir, "ssh_host_rsa_key"), rsa_pem)
+    path = Path.join(dir, "ssh_host_ed25519_key")
+    tmp = path <> ".tmp"
+    File.write!(tmp, pem)
+    File.chmod!(tmp, 0o600)
+    File.rename!(tmp, path)
   end
 end

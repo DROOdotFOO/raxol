@@ -47,13 +47,12 @@ defmodule RaxolPlaygroundWeb.HealthController do
     if System.get_env("RAXOL_SSH_PLAYGROUND") == "true" do
       port = String.to_integer(System.get_env("RAXOL_SSH_PORT") || "2222")
 
-      case :gen_tcp.connect(~c"127.0.0.1", port, [], 2_000) do
-        {:ok, socket} ->
-          :gen_tcp.close(socket)
-          "ok"
-
-        {:error, _} ->
-          "down"
+      # Probe the protocol, not the socket: a daemon that accepts and hangs
+      # up would pass a bare connect during exactly the outage this check
+      # exists to catch. "ok" requires an SSH-2.0 banner.
+      case Raxol.SSH.Server.banner_probe(~c"127.0.0.1", port, 2_000) do
+        :ok -> "ok"
+        {:error, _} -> "down"
       end
     else
       "not_configured"
