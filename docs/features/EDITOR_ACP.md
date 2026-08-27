@@ -69,6 +69,85 @@ A client spawns the agent with `Transport.Stdio.start_spawn("elixir", ["--no-hal
 resolves the connection pid, and calls `initialize` before any other request. For BEAM-local
 wiring with no subprocess, swap in `Transport.Paired.create_pair/0`.
 
+## Running raxol as your agent
+
+The sections above are about writing an agent with the package. This one is for
+a host that wants to drive Raxol's own coding agent over ACP: an editor, or any
+tool that spawns agent CLIs.
+
+Install the CLI, then point the host at `raxol acp`:
+
+```bash
+curl -fsSL https://raxol.io/install | bash   # or: brew install droodotfoo/tap/raxol
+raxol doctor                                 # confirms "acp surface: available"
+```
+
+Zed, and anything sharing its `agent_servers` shape:
+
+```json
+{
+  "agent_servers": {
+    "Raxol": {
+      "command": "/usr/local/bin/raxol",
+      "args": ["acp"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+What the handshake tells you: `agentInfo` names `raxol` and its version,
+`agentCapabilities` advertises `loadSession`, and `authMethods` offers both of
+the registry's accepted kinds (browser sign-in per provider, plus Terminal Auth
+via `raxol login`). Nothing on the ACP wire carries a model, so the provider is
+resolved from the host's own configuration.
+
+Three behaviours worth knowing before wiring up:
+
+- **`session/new`'s `cwd` scopes the session.** The fs, grep, and glob tools
+  resolve every path under it, so one server can drive several projects at once
+  and each session is contained under its own root. A blank `cwd` falls back to
+  the process working directory.
+- **Turns run the full toolset, and writes are gated.** Every sensitive call
+  costs one `session/request_permission` round trip offering allow-once and
+  reject-once. Reads are not gated, so a read-heavy turn adds no protocol
+  traffic. The gate is fail-closed on the DECISION: a client that refuses,
+  times out, disconnects, or does not implement the method at all denies the
+  write and keeps reading. A host that implements nothing still gets a working
+  read-only agent.
+- **Sessions are durable.** Ids are stable across restarts and name a journal on
+  disk, so a host can store one and hand it back to `session/load` later. The
+  replay re-sends the same `session/update` frames the original turn delivered.
+
+### Verifying an integration
+
+`scripts/acp_probe.py` is a dependency-free ACP client that runs the full
+handshake, answers `session/request_permission`, and records every frame. Point
+it at the same command your host will spawn:
+
+```bash
+scripts/acp_probe.py raxol acp --backend mock
+```
+
+A `__NON_JSON_STDOUT__` entry in the transcript means something wrote non-JSON
+to the wire before a frame, which a strict NDJSON client would reject.
+
+### Two caveats
+
+**The ACP surface is a source-build feature.** `raxol_agent_client_protocol` is
+a path dependency of `raxol_agent`, so a Hex install of `raxol_agent` is
+compiled without `Raxol.Agent.ClientProtocol.StdioAgent` and has no ACP surface
+at all; adding the dependency downstream does not retroactively enable it. The
+packaged CLI (npm, Homebrew, the install script) is built from source and does
+have it. `raxol doctor` reports which you have.
+
+**Native-CLI backends bypass all of the above.** With `--backend claude_native`
+or another passthrough, the turn runs the other CLI's tool loop: raxol's
+Actions, the `cwd` scoping, and `session/request_permission` never execute. The
+tools carry the other agent's names, and its refusals look identical on the wire
+to our gate denying something. `raxol acp` warns about this on stderr at boot.
+Use an API-key backend when testing these paths.
+
 ## Durable resumable sessions
 
 `Ext.*` is a vendor extension (carried on the standard `_meta["raxol.io"]` rider plus new
@@ -103,3 +182,4 @@ package `NOTICE.md`.
 
 - [Agent Commerce Protocol](ACP.md): the unrelated on-chain payments ACP.
 - [Coding Agent](CODING_AGENT.md): Raxol's own terminal coding agent.
+- `scripts/acp_probe.py`: a minimal ACP client for verifying an integration.

@@ -21,6 +21,40 @@ defmodule Raxol.CLITest do
       assert out =~ "Agent Client Protocol"
       assert "acp" in CLI.commands()
     end
+
+    # `login` shipped in the help text but not in `commands/0`, so anything
+    # driving the declared list (completions, docs) could not see it.
+    test "every command in the help text is also a declared command" do
+      for command <- ~w(agent code p acp login setup doctor playground new help) do
+        assert command in CLI.commands(), "#{command} missing from commands/0"
+      end
+    end
+
+    # The banner carries the build commit so a stale packaged binary is visible
+    # without diffing its behaviour.
+    test "the banner reports a version" do
+      out = capture_io(fn -> assert CLI.main(["help"]) == 0 end)
+
+      assert out =~ ~r/raxol \d+\.\d+\.\d+/
+      assert CLI.version() =~ ~r/^\d+\.\d+\.\d+|^dev/
+    end
+  end
+
+  describe "setup subcommand" do
+    test "setup --help prints its own usage, not the agent's" do
+      out = capture_io(fn -> assert CLI.main(["setup", "--help"]) == 0 end)
+
+      assert out =~ "Usage: raxol setup"
+      assert out =~ "--provider"
+    end
+
+    # 64 is the usage-error code the Mix task already used; the shared front
+    # end has to keep returning it now that two shims depend on the value.
+    test "an unknown setup option is a usage error, not a crash" do
+      capture_io(:stderr, fn ->
+        assert CLI.main(["setup", "--definitely-not-a-flag"]) == 64
+      end)
+    end
   end
 
   describe "acp subcommand" do

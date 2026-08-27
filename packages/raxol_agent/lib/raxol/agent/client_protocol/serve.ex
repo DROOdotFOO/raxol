@@ -113,12 +113,39 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
   defp resolve_provider(opts) do
     case Raxol.Agent.Backend.Cli.resolve_executor(opts, nil) do
       {:ok, executor, _source} ->
+        warn_if_tools_are_the_backend_s(executor)
         {:ok, executor}
 
       {:error, message} ->
         IO.puts(:stderr, "raxol acp: #{message}")
         {:error, message}
     end
+  end
+
+  # A native-CLI backend (`:claude_native`, `:grok_native`, …) runs its OWN
+  # tool loop — `Raxol.Agent.Backend.Native` reports
+  # `handles_tools_internally? == true` — so on that path raxol's Actions never
+  # execute: no `session/request_permission`, no per-session `cwd` scoping, no
+  # `:tool_authorizer`. The surface still works, but it is the CLI's agent
+  # wearing our protocol, not ours.
+  #
+  # Said out loud here because the failure mode is silent and expensive: the
+  # turn looks normal, the tools have the OTHER agent's names, and a write
+  # refused by the CLI's own prompt is indistinguishable on the wire from our
+  # gate denying it. Anyone testing this surface against such a backend will
+  # draw conclusions about code that never ran.
+  defp warn_if_tools_are_the_backend_s(executor) do
+    with {:ok, module, _opts} <- Raxol.Agent.Backend.Selector.select(executor),
+         true <- Raxol.Agent.AIBackend.handles_tools_internally?(module) do
+      IO.puts(
+        :stderr,
+        "raxol acp: backend #{inspect(executor.backend)} runs its own tool " <>
+          "loop; raxol's Actions, cwd scoping and session/request_permission " <>
+          "are NOT in play on this session"
+      )
+    end
+
+    :ok
   end
 
   defp usage_error(message) do
@@ -294,7 +321,6 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
     1
   end
 
-  # Read-only toolset, matching the StdioAgent contract.
   # The FULL toolset, mutating tools included. Safe because every sensitive
   # call is gated on a `session/request_permission` round trip -- see
   # `Raxol.Agent.ClientProtocol.Permission`, whose gate `TurnRunner` injects
