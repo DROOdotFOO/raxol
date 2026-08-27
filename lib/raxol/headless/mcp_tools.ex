@@ -411,6 +411,9 @@ defmodule Raxol.Headless.McpTools do
   # is precisely what this tool is asked to do. So the code path decides, and the
   # atom is minted only once a beam file for that exact name is found there:
   # bounded by what is on disk, not by what a caller can type.
+  defp resolve_module_or_path(%{"module" => _mod, "path" => _path}),
+    do: {:error, "'module' and 'path' are mutually exclusive"}
+
   defp resolve_module_or_path(%{"module" => mod}) when is_binary(mod) do
     case existing_module(mod) do
       {:ok, module} ->
@@ -506,15 +509,17 @@ defmodule Raxol.Headless.McpTools do
   # code executes, answering a different file silently is the worse of the two
   # available behaviours -- so the mismatch is named instead.
   #
-  defp confine_path(root, path) when path != "" do
+  defp confine_path(root, path) when is_binary(path) and path != "" do
     case anchored_kind(path) do
       nil -> do_confine_path(root, path)
       kind -> {:error, absolute_refusal(path, kind)}
     end
   end
 
-  defp confine_path(_root, _path),
+  defp confine_path(_root, path) when is_binary(path),
     do: {:error, "path must not be empty"}
+
+  defp confine_path(_root, _path), do: {:error, "path must be a string"}
 
   # `nil` for a genuinely relative path; otherwise what it is anchored at.
   #

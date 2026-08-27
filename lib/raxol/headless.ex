@@ -44,6 +44,7 @@ defmodule Raxol.Headless do
   # bad script should not be able to fail a healthy session's call, and 2s is
   # generous for compiling a single script.
   @default_compile_timeout_ms 2_000
+  @max_compile_timeout_ms 4_500
 
   defmodule Session do
     @moduledoc false
@@ -104,8 +105,10 @@ defmodule Raxol.Headless do
   `Raxol.Core.Boundary.Path.confine/3`. The programmatic callers
   (`Raxol.Recording.Video`, `Raxol.MCP.Test`) pass a path they already chose.
 
-  The `module` argument carries no such hazard: loading a beam runs nothing at
-  module scope, and the TEA contract above is checked before anything starts.
+  The `module` argument does not compile source, but loading a beam can execute
+  an `@on_load` callback. The TEA contract is checked after the module loads and
+  before a session starts; callers must therefore treat the VM's code path as
+  trusted deployment input.
 
   ## Options
 
@@ -527,11 +530,17 @@ defmodule Raxol.Headless do
   # long a legitimate script may take to compile depends on the script. It is
   # also what makes the wedge case assertable without a test that sleeps.
   defp compile_timeout_ms do
-    Application.get_env(
-      :raxol,
-      :headless_compile_timeout_ms,
-      @default_compile_timeout_ms
-    )
+    case Application.get_env(
+           :raxol,
+           :headless_compile_timeout_ms,
+           @default_compile_timeout_ms
+         ) do
+      timeout when is_integer(timeout) and timeout > 0 ->
+        min(timeout, @max_compile_timeout_ms)
+
+      _invalid ->
+        @default_compile_timeout_ms
+    end
   end
 
   # The gate is the three callbacks, never the `@behaviour` attribute.
