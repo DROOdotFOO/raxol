@@ -118,7 +118,31 @@ defmodule Raxol.Earn.Xochi.SolverAgentPropertyTest do
     end
   end
 
+  # Built by collapsing a plain list into a map, NOT by `map_of/3`.
+  #
+  # `map_of/3` gets its distinct keys from `uniq_list_of`, which is rejection
+  # sampling: it draws, discards duplicates, and raises
+  # `StreamData.TooManyDuplicatesError` after 10 consecutive collisions. That
+  # cannot work against this key space. `job_key_gen/0` spans `1..3` chains and
+  # `1..5` jobs, which is FIFTEEN keys total, and `max_length: 8` asks for up to
+  # eight of them -- so once seven are drawn, better than half of every
+  # subsequent draw is a duplicate and ten in a row is routine. It failed in CI
+  # with exactly that shape: seven keys generated, one left to find.
+  #
+  # Widening the key space would fix the sampling and gut the property. The
+  # space is small ON PURPOSE: `key` is drawn independently, and the invariant
+  # under test (a funded key settles its own session and no other) is only
+  # exercised when `key` actually collides with something in `sessions`. Make
+  # keys unlikely to collide and the property still passes, having tested
+  # nothing.
+  #
+  # So the collisions stay and the rejection goes. `Map.new/1` keeps the last
+  # value for a repeated key, which is the same distinct-key map `map_of/3` was
+  # after, reached by construction instead of by retrying. The map may hold
+  # fewer than eight entries; it always used to as well.
   defp sessions_gen do
-    map_of(job_key_gen(), session_gen(), max_length: 8)
+    gen all(pairs <- list_of({job_key_gen(), session_gen()}, max_length: 8)) do
+      Map.new(pairs)
+    end
   end
 end
