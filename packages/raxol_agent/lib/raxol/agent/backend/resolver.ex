@@ -50,6 +50,16 @@ defmodule Raxol.Agent.Backend.Resolver do
   # `:local` server, or a `:free` tier. Ordering still matters within the
   # allowed set, and the subscription harness comes first because it is the
   # one that costs nothing extra AND is a frontier model.
+  # What one `op read` may cost inside `diagnostics/0`.
+  #
+  # Deliberately far below the 15s interactive default, which is sized so a
+  # human can approve a 1Password prompt. Nobody is on the other side of
+  # `/inspect`, so the only thing that budget buys there is a wait for an
+  # approval that is not coming. And because a timeout demotes `op` to
+  # `:unresponsive` for the rest of the sweep, this is the ceiling for the whole
+  # diagnostic rather than the price of each provider.
+  @diagnostic_op_timeout_ms 1_500
+
   @providers [
     %{
       harness: :claude_native,
@@ -169,11 +179,30 @@ defmodule Raxol.Agent.Backend.Resolver do
   """
   @spec resolve(keyword()) :: resolution()
   def resolve(opts \\ []) do
+    opts = seal_internal_opts(opts)
+
     case explicit_harness(opts) do
       nil -> auto_detect(opts)
       harness -> resolve_explicit(harness, opts)
     end
   end
+
+  # `:skip_op` is INTERNAL to the diagnostic path and is dropped here rather
+  # than trusted.
+  #
+  # It reads as harmless -- "do not shell out to `op`" -- but what it actually
+  # does is silence the vault and let resolution fall through to environment
+  # variables. A caller that set it, deliberately or by forwarding an opts list
+  # it did not audit, would get a credential from `$ANTHROPIC_API_KEY` where the
+  # operator had stored an `op://` reference, and nothing would say so. The
+  # comment on `resolve_key/2` asserted only this path sets it; a comment is not
+  # a boundary, and this function is public.
+  @internal_opts [:skip_op]
+
+  defp seal_internal_opts(opts) when is_list(opts),
+    do: Keyword.drop(opts, @internal_opts)
+
+  defp seal_internal_opts(opts), do: opts
 
   @doc """
   Per-provider availability, for the setup panel and `/login` status.
@@ -223,7 +252,24 @@ defmodule Raxol.Agent.Backend.Resolver do
   @spec diagnostics() :: %{op: atom(), providers: [map()]}
   def diagnostics do
     op = Credentials.op_status()
-    %{op: op, providers: Enum.map(@providers, &provider_diag(&1, op))}
+
+    # Threaded, not mapped, so one unresponsive vault stops the sweep.
+    #
+    # Skipping when `op_status/0` says the CLI is unusable covers signed-out and
+    # absent. It does NOT cover the state that is slowest: signed in, so
+    # `op whoami` exits 0 and the status reads `:ok`, while every `op read`
+    # still waits on a desktop authorization the user has not given. There the
+    # skip never fires and each provider pays a full budget in series.
+    #
+    # A timed-out read is evidence about the VAULT rather than about the
+    # provider whose reference happened to be first, so the first one demotes
+    # `op` to `:unresponsive` for the rest of the sweep and the others are
+    # answered from the same knowledge without paying for it again. Worst case
+    # is one diagnostic budget, not one per provider.
+    {providers, final_op} =
+      Enum.map_reduce(@providers, op, &provider_diag/2)
+
+    %{op: final_op, providers: providers}
   end
 
   # A stored `op://` reference cannot resolve while the CLI is absent or signed
@@ -237,13 +283,10 @@ defmodule Raxol.Agent.Backend.Resolver do
   # reference under a signed-out CLI with "run `op signin`" -- the same
   # conclusion the probe spends 15 seconds arriving at.
   defp provider_diag(spec, op) do
-    {available?, source} =
-      case detect_available(spec, skip_op: op != :ok) do
-        {:ok, _config, src} -> {true, src}
-        _ -> {false, nil}
-      end
+    {op_result, op} = probe_op_ref(spec, op)
+    {available?, source} = diag_availability(spec, op_result)
 
-    %{
+    diag = %{
       harness: spec.harness,
       label: spec.label,
       keyless?: spec.keyless,
@@ -251,6 +294,48 @@ defmodule Raxol.Agent.Backend.Resolver do
       source: source,
       note: diag_note(spec, available?, op)
     }
+
+    {diag, op}
+  end
+
+  # The diagnostic owns the `op` probe outright, rather than letting
+  # `resolve_key/2` do it: only from here can a timeout be seen for what it is
+  # and charged to the vault instead of to this provider.
+  #
+  # A diagnostic budget rather than the interactive one. The 15s default is
+  # sized so a human can approve a 1Password prompt; nobody is waiting on the
+  # other side of `/inspect`, and the wait it buys is a wait for an approval
+  # that is not coming.
+  defp probe_op_ref(spec, op) do
+    ref = op_ref(spec.harness)
+
+    cond do
+      op != :ok -> {:skipped, op}
+      is_nil(ref) -> {:skipped, op}
+      true -> read_diag_ref(ref, op)
+    end
+  end
+
+  defp read_diag_ref(ref, op) do
+    case Credentials.read_ref(ref, timeout_ms: @diagnostic_op_timeout_ms) do
+      {:ok, secret} -> {{:ok, secret}, op}
+      # Evidence about the vault, not about this provider: demote once so the
+      # remaining providers are answered without each paying the budget again.
+      {:error, :op_timeout} -> {:unresponsive, :unresponsive}
+      {:error, _other} -> {:failed, op}
+    end
+  end
+
+  # `skip_op: true` unconditionally, because `probe_op_ref/2` has already had
+  # its turn. Letting `resolve_key/2` try again would spend a second budget to
+  # reach the answer we are already holding.
+  defp diag_availability(_spec, {:ok, _secret}), do: {true, :op}
+
+  defp diag_availability(spec, _op_result) do
+    case detect_available(spec, skip_op: true) do
+      {:ok, _config, src} -> {true, src}
+      _ -> {false, nil}
+    end
   end
 
   defp diag_note(_spec, true, _op), do: nil
@@ -265,6 +350,10 @@ defmodule Raxol.Agent.Backend.Resolver do
 
   defp op_hint(:not_signed_in), do: "op reference stored, run `op signin`"
   defp op_hint(:absent), do: "op reference stored, but the `op` CLI is not installed"
+
+  defp op_hint(:unresponsive),
+    do: "op reference stored, but the vault did not answer -- unlock 1Password"
+
   defp op_hint(_status), do: nil
 
   defp empty_env_key(%{env_keys: keys}) do

@@ -397,13 +397,27 @@ defmodule Raxol.Agent.Backend.Credentials do
   Returns `{:ok, secret}` (trimmed), or `{:error, reason}` when `op` is
   missing, not signed in, or the reference does not resolve. The secret is
   returned to the caller and never logged or persisted here.
+
+  ## Options
+
+    * `:timeout_ms` - override the default `op` budget for THIS read.
+
+  The default budget is sized so an interactive 1Password approval fits, which
+  is right when a user is starting a turn and wrong when nobody is waiting on
+  the answer. A caller that will not spend that long says so here rather than
+  changing it globally: `RAXOL_OP_TIMEOUT_MS` is process-wide and would also
+  shorten the reads a user IS waiting for. `{:error, :op_timeout}` on expiry.
   """
-  @spec read_ref(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def read_ref("op://" <> _ = ref) do
-    ["read", ref] |> run_op() |> interpret_op_output()
+  @spec read_ref(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def read_ref(ref, opts \\ [])
+
+  def read_ref("op://" <> _ = ref, opts) do
+    ["read", ref]
+    |> run_op(Keyword.get(opts, :timeout_ms))
+    |> interpret_op_output()
   end
 
-  def read_ref(_other), do: {:error, :not_an_op_ref}
+  def read_ref(_other, _opts), do: {:error, :not_an_op_ref}
 
   defp interpret_op_output({out, 0}) do
     case String.trim(out) do

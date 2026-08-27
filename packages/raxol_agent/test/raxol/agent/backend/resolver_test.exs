@@ -401,4 +401,163 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       assert anthropic.note =~ "op signin"
     end
   end
+
+  # The state the skip above does NOT cover, and the slow one: signed in, so
+  # `op whoami` exits 0 and the status reads `:ok`, while every `op read` waits
+  # on a desktop authorization nobody is going to give. Each provider then paid
+  # a full budget in SERIES.
+  describe "diagnostics/0 against a signed-in but unresponsive vault" do
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-op-hang-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      log = Path.join(dir, "calls")
+      fake_op = Path.join(dir, "op")
+
+      # `whoami` answers instantly (signed in); every `read` hangs, the way a
+      # locked vault does while it waits for an approval.
+      File.write!(fake_op, """
+      #!/bin/sh
+      echo "$@" >> #{log}
+      case "$1" in
+        whoami) exit 0 ;;
+        read) sleep 30 ;;
+      esac
+      exit 1
+      """)
+
+      File.chmod!(fake_op, 0o755)
+
+      prev_path = System.get_env("PATH")
+      System.put_env("PATH", dir <> ":" <> (prev_path || ""))
+
+      # The suite-wide 2s pin would mask the per-read diagnostic budget under
+      # test, so the interactive default is restored for this block only.
+      prev_timeout = System.get_env("RAXOL_OP_TIMEOUT_MS")
+      System.put_env("RAXOL_OP_TIMEOUT_MS", "15000")
+
+      on_exit(fn ->
+        System.put_env("PATH", prev_path || "")
+
+        if prev_timeout,
+          do: System.put_env("RAXOL_OP_TIMEOUT_MS", prev_timeout),
+          else: System.delete_env("RAXOL_OP_TIMEOUT_MS")
+
+        File.rm_rf!(dir)
+      end)
+
+      %{log: log}
+    end
+
+    test "one hung read ends the sweep instead of costing one per provider", %{log: log} do
+      for var <- ~w(RAXOL_ANTHROPIC_OP RAXOL_OPENAI_OP RAXOL_KIMI_OP RAXOL_OPENROUTER_OP) do
+        System.put_env(var, "op://vault/#{var}/credential")
+      end
+
+      {elapsed_us, diag} = :timer.tc(&Resolver.diagnostics/0)
+
+      # A timeout is evidence about the VAULT, so the first one demotes `op`
+      # and the rest are answered from that without paying again.
+      assert diag.op == :unresponsive
+
+      reads =
+        log
+        |> File.read!()
+        |> String.split("\n", trim: true)
+        |> Enum.filter(&String.starts_with?(&1, "read"))
+
+      assert length(reads) == 1,
+             "expected the sweep to stop after one hung read, got #{length(reads)}: " <>
+               inspect(reads)
+
+      # Four references, one budget. Asserted generously -- the point is that
+      # this is not four budgets, not where it lands inside one.
+      assert elapsed_us < 10_000_000,
+             "diagnostics took #{div(elapsed_us, 1000)}ms; a per-provider budget is back"
+    end
+
+    test "the stored references say the vault did not answer" do
+      System.put_env("RAXOL_ANTHROPIC_OP", "op://vault/anthropic/credential")
+      System.put_env("RAXOL_OPENAI_OP", "op://vault/openai/credential")
+
+      providers = Resolver.diagnostics().providers
+
+      for harness <- [:anthropic, :openai] do
+        entry = Enum.find(providers, &(&1.harness == harness))
+
+        refute entry.available?
+
+        assert entry.note =~ "did not answer",
+               "#{harness} got #{inspect(entry.note)}"
+      end
+    end
+  end
+
+  describe "resolve/1 opts" do
+    # A fake `op` that RESOLVES, so the two outcomes are distinguishable: the
+    # vault answers "from-the-vault" and the environment answers something
+    # else. Without a working `op` this test would pass either way.
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-op-seal-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      fake_op = Path.join(dir, "op")
+
+      File.write!(fake_op, """
+      #!/bin/sh
+      case "$1" in
+        whoami) exit 0 ;;
+        read) echo "from-the-vault" ; exit 0 ;;
+      esac
+      exit 1
+      """)
+
+      File.chmod!(fake_op, 0o755)
+
+      prev_path = System.get_env("PATH")
+      System.put_env("PATH", dir <> ":" <> (prev_path || ""))
+
+      on_exit(fn ->
+        System.put_env("PATH", prev_path || "")
+        File.rm_rf!(dir)
+      end)
+
+      :ok
+    end
+
+    test ":skip_op from a caller is dropped, so the vault still wins" do
+      # `:skip_op` reads as harmless -- "do not shell out to `op`" -- but what
+      # it does is silence the vault and let resolution fall through to
+      # environment variables. A caller that set it, or forwarded an opts list
+      # it never audited, would get $ANTHROPIC_API_KEY where the operator had
+      # stored an `op://` reference, and nothing would say so.
+      #
+      # The old guarantee was a comment on `resolve_key/2` saying only the
+      # diagnostic sets it. A comment is not a boundary, and `resolve/1` is
+      # public.
+      System.put_env("RAXOL_ANTHROPIC_OP", "op://vault/anthropic/credential")
+      System.put_env("ANTHROPIC_API_KEY", "from-the-environment")
+
+      assert {:ok, sealed, source} =
+               Resolver.resolve(harness: :anthropic, skip_op: true)
+
+      assert sealed.auth[:api_key] == "from-the-vault",
+             "a caller-supplied :skip_op downgraded the vault to the environment"
+
+      assert source == :op
+
+      # Identical to the call that never passed the option, which is the
+      # property: the option changes nothing.
+      assert {:ok, plain, :op} = Resolver.resolve(harness: :anthropic)
+      assert plain.auth[:api_key] == sealed.auth[:api_key]
+    end
+  end
 end
