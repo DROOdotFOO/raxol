@@ -15,15 +15,31 @@ set -euo pipefail
 # (`function Enum.__in__/2 is undefined`), which reads like a lockfile bug and
 # is not one. So prefer the toolchain `.tool-versions` names, when it is
 # installed; otherwise leave PATH alone and let the gates report normally.
+#
+# The version is VALIDATED before it is interpolated, because `.tool-versions`
+# is a repo-controlled file and the result of this goes on PATH. A branch
+# carrying `elixir ../../../../../../../tmp/evil` otherwise resolves to
+# `/tmp/evil/bin`, prepends it, and every `mix` and `elixir` below runs from
+# there -- arbitrary execution on `git commit`, which is an ordinary thing to do
+# after checking out someone else's branch. A version is a digit followed by
+# version punctuation; anything else is not one, and is skipped rather than
+# resolved. The pattern admits no `/`, and cannot match `..`.
 if [[ -f .tool-versions ]]; then
-  _ex="$(awk '$1 == "elixir" { print $2; exit }' .tool-versions || true)"
-  _erl="$(awk '$1 == "erlang" { print $2; exit }' .tool-versions || true)"
-  for _cand in \
-    "${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs/elixir/${_ex}/bin" \
-    "${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs/erlang/${_erl}/bin"; do
-    [[ -n "${_ex}" && -d "$_cand" ]] && PATH="$_cand:$PATH"
+  _mise_installs="${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs"
+
+  for _tool in elixir erlang; do
+    _ver="$(awk -v tool="$_tool" '$1 == tool { print $2; exit }' .tool-versions || true)"
+
+    if [[ "$_ver" =~ ^[0-9][0-9A-Za-z._+-]*$ ]]; then
+      _cand="$_mise_installs/$_tool/$_ver/bin"
+      if [[ -d "$_cand" ]]; then
+        PATH="$_cand:$PATH"
+      fi
+    fi
   done
+
   export PATH
+  unset _mise_installs _tool _ver _cand
 fi
 
 staged="$(git diff --cached --name-only --diff-filter=ACM)"
@@ -73,7 +89,15 @@ if [[ -n "$md_files" ]]; then
   # that do not match the branch's lock, a `_build` from another Elixir, or a
   # root lock that no longer re-resolves. None of those are facts about prose.
   # CI still runs `mix raxol.check_docs`, which additionally checks the catalog.
-  if ! elixir scripts/prose_lint.exs "${args[@]}"; then
+  #
+  # Guarded the way the lockfile gate guards `mix`: without this, a missing
+  # `elixir` exits 127 and the message below blames the prose, which is the one
+  # diagnosis this gate exists to get right.
+  if ! command -v elixir >/dev/null 2>&1; then
+    echo "pre-commit: no \`elixir\` on PATH, cannot lint prose." >&2
+    echo "  Install the toolchain \`.tool-versions\` names, or bypass knowingly." >&2
+    status=1
+  elif ! elixir scripts/prose_lint.exs "${args[@]}"; then
     cat >&2 <<'MSG'
 
 pre-commit: Markdown prose check failed.
