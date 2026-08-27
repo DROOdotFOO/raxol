@@ -16,12 +16,17 @@ defmodule Raxol.Headless.McpTools do
       %{
         name: "raxol_start",
         description: """
-        Starts a headless Raxol session. Accepts either a module name
-        (atom) or a file path to an example script. Returns the session ID.
+        Starts a headless Raxol session from a module name. The module must be
+        a Raxol application: it has to export init/1, update/2 and view/1.
+        Returns the session ID.
+
+        A "path" argument also exists, but it is DISABLED unless the deployment
+        sets RAXOL_HEADLESS_PATH_ROOT, because starting from a path compiles the
+        file. Prefer "module"; the path property below has the details.
 
         Examples:
           {"module": "RaxolDemo"}
-          {"path": "examples/demo.exs", "id": "demo"}
+          {"module": "RaxolDemo", "id": "demo"}
           {"module": "RaxolDemo", "width": 120, "height": 40}
         """,
         inputSchema: %{
@@ -35,7 +40,12 @@ defmodule Raxol.Headless.McpTools do
             path: %{
               type: "string",
               description:
-                "File path to an example script (e.g. \"examples/demo.exs\"). Mutually exclusive with module."
+                "Script path RELATIVE to the configured headless path root, e.g. " <>
+                  "\"examples/demo.exs\". Disabled unless RAXOL_HEADLESS_PATH_ROOT " <>
+                  "(or config :raxol, :headless_path_root) is set, because starting " <>
+                  "from a path compiles the file. An absolute path is REFUSED " <>
+                  "rather than resolved under the root, so the file that runs is " <>
+                  "always the file you named. Mutually exclusive with module."
             },
             id: %{
               type: "string",
@@ -291,15 +301,29 @@ defmodule Raxol.Headless.McpTools do
         opts = build_start_opts(id, width, height)
         do_start(module_or_path, opts)
 
+      # Already a human-readable sentence, unlike the `inspect`ed terms the other
+      # callbacks report.
       {:error, reason} ->
-        {:error, inspect(reason)}
+        {:error, reason}
     end
   end
 
   defp do_start(module_or_path, opts) do
     case Raxol.Headless.start(module_or_path, opts) do
-      {:ok, session_id} -> {:ok, "Session started: #{session_id}"}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:ok, session_id} ->
+        {:ok, "Session started: #{session_id}"}
+
+      # Spelled out rather than `inspect`ed because this is the refusal an
+      # operator is most likely to hit by naming a real module that simply is
+      # not an app, and the tuple alone does not say what the contract IS.
+      {:error, {:not_a_raxol_application, module}} ->
+        {:error,
+         "#{inspect(module)} exists but is not a Raxol application: it neither " <>
+           "declares Raxol.Core.Runtime.Application nor exports init/1, " <>
+           "update/2 and view/1"}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
     end
   end
 
@@ -376,17 +400,179 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
+  # `"module"` arrives from an MCP client, and atoms are never garbage collected:
+  # minting one per distinct string lets a caller looping on a wrong name grow the
+  # atom table until the VM aborts. `Raxol.Application` registers these tools at
+  # startup, so this is a reachable surface rather than a dev-only one.
+  #
+  # But the atom table alone answers the wrong question. Under `mix mcp.server`
+  # the VM loads code on demand, so a module that is compiled and sitting on the
+  # code path has no atom until something reaches for it -- and reaching for it
+  # is precisely what this tool is asked to do. So the code path decides, and the
+  # atom is minted only once a beam file for that exact name is found there:
+  # bounded by what is on disk, not by what a caller can type.
+  defp resolve_module_or_path(%{"module" => _mod, "path" => _path}),
+    do: {:error, "'module' and 'path' are mutually exclusive"}
+
   defp resolve_module_or_path(%{"module" => mod}) when is_binary(mod) do
-    {:ok, String.to_existing_atom("Elixir." <> mod)}
-  rescue
-    ArgumentError -> {:ok, String.to_atom("Elixir." <> mod)}
+    case existing_module(mod) do
+      {:ok, module} ->
+        {:ok, module}
+
+      # Not "it is not loaded": the code path is what decided, and a module
+      # being unloaded is the normal state under `mix mcp.server` rather than a
+      # reason to refuse anything. What is missing is the beam itself.
+      :error ->
+        {:error,
+         "unknown module #{inspect(mod)}: no compiled module by that name is " <>
+           "loadable in this VM"}
+    end
   end
 
-  defp resolve_module_or_path(%{"path" => path}) when is_binary(path),
-    do: {:ok, path}
+  # Starting from a path is ARBITRARY CODE EXECUTION, not a file read.
+  # `Raxol.Headless.start/2` runs the file through `Code.compile_quoted/2`, and
+  # compiling a `defmodule` executes its body -- so whoever chooses this string
+  # chooses what runs in this VM. The AST filter that keeps only `defmodule`
+  # nodes is a convenience (it skips an example's boot code), never a sandbox.
+  #
+  # So the branch is off unless a deployment opts in by naming a root, and the
+  # candidate is confined under it. Unset is the default, and it REFUSES rather
+  # than falling back to the cwd: an MCP server's working directory is not a
+  # security boundary anyone chose.
+  #
+  # Containment is `Raxol.Core.Boundary.Path.confine/3`, the repo's shared
+  # primitive -- lexical check, then a real-path resolution of BOTH sides, then a
+  # re-check, so a symlink pointing out of the root is refused rather than
+  # followed. Deciding this on the lexical path alone is the bug it exists to
+  # prevent. `:ref_format` additionally requires an Elixir extension, since a
+  # path that cannot be compiled has no business reaching the compiler.
+  #
+  # Note `confine/3` joins the request under the root, so an ABSOLUTE path is
+  # jailed rather than honoured. That is the intent, and it costs nothing: the
+  # documented use (`examples/demo.exs`) was always relative.
+  defp resolve_module_or_path(%{"path" => path}) when is_binary(path) do
+    case headless_path_root() do
+      nil ->
+        {:error,
+         "starting from a path is disabled: it compiles the file, which executes " <>
+           "module bodies. Set RAXOL_HEADLESS_PATH_ROOT (or config :raxol, " <>
+           ":headless_path_root) to the directory scripts may be started from."}
 
+      root ->
+        confine_path(root, path)
+    end
+  end
+
+  # Deliberately does NOT mention 'path'. That branch compiles whatever it is
+  # given, so steering a caller who fat-fingered a module name onto it would
+  # trade a refused lookup for something much worse.
   defp resolve_module_or_path(_),
     do: {:error, "Either 'module' or 'path' is required"}
+
+  # `:code.where_is_file/1` walks the code path for the beam, which is what
+  # `Code.ensure_loaded?/1` would have to find anyway -- asking first just means
+  # a name that exists nowhere never becomes an atom.
+  defp existing_module(name) do
+    prefixed = "Elixir." <> name
+
+    case atom_if_exists(prefixed) do
+      {:ok, module} -> {:ok, module}
+      :error -> beam_on_code_path(prefixed)
+    end
+  end
+
+  defp atom_if_exists(prefixed) do
+    {:ok, String.to_existing_atom(prefixed)}
+  rescue
+    ArgumentError -> :error
+  end
+
+  # The mint stays bounded because the file has to be there: `where_is_file/1`
+  # appends the name to each code-path directory and stats it, so the reachable
+  # set is the beams already on disk, which a caller supplying names cannot
+  # grow. The `Elixir.` prefix leads, so a separator-bearing name looks for a
+  # directory literally called `Elixir.<something>` and finds nothing.
+  defp beam_on_code_path(prefixed) do
+    case :code.where_is_file(String.to_charlist(prefixed <> ".beam")) do
+      :non_existing -> :error
+      _path -> {:ok, String.to_atom(prefixed)}
+    end
+  end
+
+  # An absolute path is REFUSED here rather than left to `confine/3`.
+  #
+  # `confine/3` is safe either way: it does `Path.join(root, requested)`, so
+  # `/etc/evil.exs` is jailed to `<root>/etc/evil.exs` and never honoured. But
+  # jailing it means the tool compiles a DIFFERENT file than the one it was
+  # asked for and says nothing, and the schema already documents this argument
+  # as relative to the root. For an argument whose whole job is choosing which
+  # code executes, answering a different file silently is the worse of the two
+  # available behaviours -- so the mismatch is named instead.
+  #
+  defp confine_path(root, path) when is_binary(path) and path != "" do
+    case anchored_kind(path) do
+      nil -> do_confine_path(root, path)
+      kind -> {:error, absolute_refusal(path, kind)}
+    end
+  end
+
+  defp confine_path(_root, path) when is_binary(path),
+    do: {:error, "path must not be empty"}
+
+  # `nil` for a genuinely relative path; otherwise what it is anchored at.
+  #
+  # `Path.type/1` alone is not enough, because it is OS-dependent in exactly the
+  # direction that hurts: on Unix `Path.type("c:/x")` is `:relative`, so the
+  # same argument would be refused on Windows and rewritten under the root on
+  # Unix. `Raxol.Core.Boundary.Path` settled this question one layer down --
+  # a drive or UNC anchor counts on EVERY host, because one rule erring toward
+  # refusal beats two rules disagreeing about the same string -- and this
+  # mirrors it rather than inventing a second answer.
+  defp anchored_kind(path) do
+    cond do
+      Path.type(path) != :relative -> Path.type(path)
+      drive_anchored?(path) -> :drive_absolute
+      unc_anchored?(path) -> :unc_absolute
+      true -> nil
+    end
+  end
+
+  defp drive_anchored?(<<letter, ?:, _::binary>>)
+       when letter in ?A..?Z or letter in ?a..?z,
+       do: true
+
+  defp drive_anchored?(_), do: false
+
+  defp unc_anchored?(<<sep, sep, _::binary>>) when sep in [?/, ?\\], do: true
+  defp unc_anchored?(_), do: false
+
+  defp absolute_refusal(path, kind) do
+    "path must be RELATIVE to the configured headless path root, and " <>
+      "#{inspect(path)} is #{kind}. It would be jailed under the root rather " <>
+      "than honoured, so the file that ran would not be the file you named. " <>
+      "Drop the leading separator or drive."
+  end
+
+  defp do_confine_path(root, path) do
+    case Raxol.Core.Boundary.Path.confine(root, path, ref_format: ~r/\.exs?$/) do
+      {:ok, real} ->
+        {:ok, real}
+
+      {:error, :malformed_ref} ->
+        {:error, "path must name an .ex or .exs file"}
+
+      {:error, reason} ->
+        {:error,
+         "path is outside the configured headless path root (#{reason})"}
+    end
+  end
+
+  defp headless_path_root do
+    case System.get_env("RAXOL_HEADLESS_PATH_ROOT") do
+      root when is_binary(root) and root != "" -> root
+      _ -> Application.get_env(:raxol, :headless_path_root)
+    end
+  end
 
   @special_keys ~w(tab enter escape backspace up down left right home end page_up page_down delete insert f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12)
 

@@ -145,15 +145,73 @@ defmodule Raxol.Core.Boundary.Path do
     case :file.read_link(candidate) do
       {:ok, target} ->
         # A symlink resolves against its REAL parent (`base`): an absolute target
-        # restarts from the filesystem root, a relative one (possibly with `..`)
-        # is spliced ahead of the remaining components and resolved against base.
-        case Path.split(to_string(target)) do
-          ["/" | target_rest] -> walk_real("/", target_rest ++ rest, depth + 1)
-          target_rest -> walk_real(base, target_rest ++ rest, depth + 1)
-        end
+        # restarts from its own anchor, a relative one (possibly with `..`) is
+        # spliced ahead of the remaining components and resolved against base.
+        {anchor, target_rest} = anchor_target(to_string(target), base)
+        walk_real(anchor, target_rest ++ rest, depth + 1)
 
       {:error, _not_a_symlink_or_missing} ->
         walk_real(candidate, rest, depth)
     end
   end
+
+  # Split a symlink target into the base it resolves against and the components
+  # to walk from there.
+  #
+  # `Path.split/1` is `:filename.split/1`, whose notion of "absolute" is
+  # OS-dependent: a Windows absolute target splits as `["c:/", "tmp", ...]`,
+  # keeping the drive as its own anchor, while the SAME string on Unix splits as
+  # `["c:", "tmp", ...]` with no anchor at all. Matching only the POSIX `"/"`
+  # anchor therefore sent every Windows-absolute target down the relative branch,
+  # where it was spliced onto `base` and landed back INSIDE the root -- an escape
+  # `escape_gate/2` could not see, because nothing had left.
+  #
+  # A drive anchor counts on EVERY host rather than only on Windows. Deciding it
+  # per-host would mean the same link is contained on one platform and not on
+  # another, and one rule errs the safe way: on Unix a target of `c:/outside/x`
+  # names a directory literally called `c:`, so treating it as absolute refuses a
+  # pathological-but-legal relative path instead of admitting a real escape.
+  defp anchor_target(target, base) do
+    case Path.split(target) do
+      ["/" | rest] ->
+        {"/", rest}
+
+      [anchor | rest] = split ->
+        case absolute_anchor(anchor) do
+          nil -> {base, split}
+          root -> {root, rest}
+        end
+
+      [] ->
+        {base, []}
+    end
+  end
+
+  # `"c:/"` is how Windows splits a drive-absolute target; `"c:"` is how Unix
+  # splits the same string. A bare drive is drive-RELATIVE on Windows rather than
+  # absolute, but anchoring it at the drive root refuses it, which is the safe
+  # direction for a boundary.
+  defp absolute_anchor(<<letter, ?:>>) when letter in ?A..?Z or letter in ?a..?z,
+    do: <<letter, ?:, ?/>>
+
+  defp absolute_anchor(<<letter, ?:, ?/>>)
+       when letter in ?A..?Z or letter in ?a..?z,
+       do: <<letter, ?:, ?/>>
+
+  # UNC, the same anchor bug one shape over. `:filename.split/1` on Windows gives
+  # a UNC path its own `"//"` component (both `"//host/share/x"` and the
+  # `"\\\\host\\share\\x"` spelling land there), which is no drive letter -- so it
+  # took the very relative branch the drive case was fixed out of.
+  #
+  # The clause matches TWO IDENTICAL separators, mirroring the `Slash, Slash`
+  # guard `:filename.win32_splitb/1` decides UNC by. That also covers the shape
+  # Unix produces: a backslash is an ordinary character there, so
+  # `"\\\\host\\share\\x"` never splits at all and arrives whole as the anchor,
+  # relative-looking. Same link, contained on Unix and escaping on Windows, which
+  # is exactly the per-host divergence this function exists to remove -- so the
+  # whole anchor is returned as the root and refused on both.
+  defp absolute_anchor(<<sep, sep, _::binary>> = unc) when sep in [?/, ?\\],
+    do: unc
+
+  defp absolute_anchor(_), do: nil
 end

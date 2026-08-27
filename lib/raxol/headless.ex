@@ -38,6 +38,14 @@ defmodule Raxol.Headless do
   @default_height 40
   @default_dispatch_wait_ms 50
 
+  # Deliberately SHORTER than the 5s the other calls in this module give
+  # themselves: the compile happens inside `handle_call`, so this budget is also
+  # the longest an unrelated session's `screenshot/1` can be made to wait. One
+  # bad script should not be able to fail a healthy session's call, and 2s is
+  # generous for compiling a single script.
+  @default_compile_timeout_ms 2_000
+  @max_compile_timeout_ms 4_500
+
   defmodule Session do
     @moduledoc false
     defstruct [:id, :module, :lifecycle_pid, :synchronizer_pid, :width, :height]
@@ -53,12 +61,54 @@ defmodule Raxol.Headless do
     )
   end
 
+  @typedoc """
+  Why a name could not become a runnable module.
+
+  `:not_a_raxol_application` is deliberately distinct from `:module_not_found`.
+  One says nothing on the code path answers to that name at all; the other says
+  the name resolved to real code that does not implement TEA. An operator fixes
+  those two by doing completely different things, so collapsing them into one
+  refusal costs them the diagnosis.
+  """
+  @type module_refusal ::
+          {:module_not_found, module()}
+          | {:not_a_raxol_application, module()}
+
   @doc """
   Starts a headless session.
 
-  First argument is either a module atom or a file path string.
-  When given a path, the file is compiled and the first module defined
-  with a `view/1` function is used.
+  First argument is either a module atom or a file path string. Either way the
+  module has to be a Raxol application: it must export `init/1`, `update/2` and
+  `view/1`. Declaring `Raxol.Core.Runtime.Application` is not sufficient on its
+  own, since the attribute can be present with none of the callbacks behind it.
+  When given a path, the file is compiled and the first module meeting that
+  contract is used.
+
+  ## Passing a path executes code
+
+  Compiling a `defmodule` runs its body, so **whoever chooses the path string
+  chooses what runs in this VM**, with the VM's privileges. That is arbitrary
+  code execution, not a file read, and it is a property of this function rather
+  than of any one caller.
+
+  The AST filter that keeps only `defmodule` nodes is a convenience -- it skips
+  an example script's boot code -- and never a sandbox. What bounds the compile
+  is a monitored child on a budget, which bounds the DAMAGE to this process
+  (a body that raises, throws, exits, or never returns is answered rather than
+  taking the session manager down with it). It does not bound what the body may
+  do while it runs.
+
+  So the path argument is only ever as safe as the caller that chooses it.
+  Callers that take one from outside the VM must confine it themselves:
+  `Raxol.Headless.McpTools` refuses the argument entirely unless a deployment
+  sets `RAXOL_HEADLESS_PATH_ROOT`, and then confines it under that root with
+  `Raxol.Core.Boundary.Path.confine/3`. The programmatic callers
+  (`Raxol.Recording.Video`, `Raxol.MCP.Test`) pass a path they already chose.
+
+  The `module` argument does not compile source, but loading a beam can execute
+  an `@on_load` callback. The TEA contract is checked after the module loads and
+  before a session starts; callers must therefore treat the VM's code path as
+  trusted deployment input.
 
   ## Options
 
@@ -320,13 +370,23 @@ defmodule Raxol.Headless do
     end
   end
 
-  defp resolve_module(module) when is_atom(module) do
-    if Code.ensure_loaded?(module) do
-      {:ok, module}
-    else
-      {:error, {:module_not_found, module}}
-    end
-  end
+  # The gate lives HERE rather than in `Raxol.Headless.McpTools` because this is
+  # the one point every entry reaches: the `raxol_start` MCP tool,
+  # `Raxol.Recording.Video` and `Raxol.MCP.Test` all arrive through
+  # `start/2`. Gating at the MCP tool would leave the other two handing an
+  # arbitrary module to `Raxol.start_link/2`, whose `Lifecycle.Initializer`
+  # CALLS `init/1` -- the same defect one door down. It also puts both branches
+  # on one predicate: the compile branch has always picked a module out of a
+  # script by this test, and a name should not be admitted on weaker terms than
+  # a file is.
+  #
+  # `Code.ensure_loaded?/1` alone answers "is there a beam for this name", which
+  # is a far larger set than "is this a Raxol application": 527 modules on this
+  # tree export `init/1`, every `BaseManager` GenServer among them, against 53
+  # that implement TEA. `Raxol.Terminal.Buffer.BufferServer` is one of the 527,
+  # and starting it here ran its GenServer `init/1` outside any supervisor.
+  defp resolve_module(module) when is_atom(module),
+    do: resolve_named_module(module)
 
   defp resolve_module(path) when is_binary(path) do
     full_path =
@@ -341,36 +401,187 @@ defmodule Raxol.Headless do
     end
   end
 
+  # Split out from the clause above so it can carry a spec of its own: the two
+  # `resolve_module/1` clauses answer with different error vocabularies, and one
+  # `@spec` over both could only state their union.
+  @spec resolve_named_module(module()) ::
+          {:ok, module()} | {:error, module_refusal()}
+  defp resolve_named_module(module) do
+    cond do
+      tea_module?(module) ->
+        {:ok, module}
+
+      Code.ensure_loaded?(module) ->
+        {:error, {:not_a_raxol_application, module}}
+
+      true ->
+        {:error, {:module_not_found, module}}
+    end
+  end
+
+  # Read and parse are answered, not raised. `File.read!`, a strict
+  # `{:ok, ast} =` match, and `Code.string_to_quoted/2` itself all blow up INSIDE
+  # the `Raxol.Headless` GenServer, which is a singleton holding every other
+  # caller's session -- so one unreadable or non-Elixir file took down sessions
+  # that had nothing to do with it. The caller asked whether this file could
+  # start; "no" is an answer.
   defp compile_and_find_module(path) do
-    # Parse the file AST, extract only defmodule blocks (skip top-level
-    # side effects like Raxol.start_link and receive), then compile them.
-    source = File.read!(path)
+    with {:ok, source} <- read_source(path),
+         {:ok, ast} <- parse_source(source, path) do
+      compile_modules(extract_module_defs(ast), path)
+    end
+  end
 
-    {:ok, ast} = Code.string_to_quoted(source, file: path)
+  defp read_source(path) do
+    case File.read(path) do
+      {:ok, source} -> {:ok, source}
+      {:error, reason} -> {:error, {:unreadable_file, path, reason}}
+    end
+  end
 
-    module_asts = extract_module_defs(ast)
+  # `Code.string_to_quoted/2` answers a SYNTAX error and raises an ENCODING one:
+  # it charlist-converts the whole binary before the parser ever sees it, so
+  # `<<0xFF, ...>>` is a `UnicodeConversionError` out of `String.to_charlist/1`.
+  # Nothing upstream excludes that file -- the confined path checks the
+  # extension, and any binary can be named `*.exs`.
+  defp parse_source(source, path) do
+    Code.string_to_quoted(source, file: path)
+  rescue
+    e -> {:error, {:unparseable_file, path, Exception.message(e)}}
+  end
 
-    if module_asts == [] do
-      {:error, :no_modules_found}
-    else
-      modules =
-        module_asts
-        |> Enum.flat_map(fn mod_ast ->
-          Code.compile_quoted(mod_ast, path)
-        end)
-        |> Enum.map(fn {module, _bytecode} -> module end)
+  defp compile_modules([], _path), do: {:error, :no_modules_found}
 
-      tea_module =
-        Enum.find(modules, fn mod ->
-          Code.ensure_loaded?(mod) and function_exported?(mod, :view, 1)
-        end)
-
-      if tea_module do
-        {:ok, tea_module}
-      else
-        {:error, :no_tea_module_found}
+  # Only defmodule blocks are compiled, skipping top-level side effects like
+  # `Raxol.start_link` and `receive`. That is a CONVENIENCE, not a sandbox:
+  # compiling a `defmodule` executes its body, so anything at module scope runs.
+  # What bounds this is the caller -- `Raxol.Headless.McpTools` confines the path
+  # to a configured root, and the programmatic callers pass their own file.
+  #
+  # Which is why the compile does not happen HERE. This is a singleton GenServer
+  # holding every other caller's session, and a module body can end its own
+  # process in three ways -- `raise`, `throw`, `exit` -- of which a `rescue` sees
+  # one. Worse, it need not end at all: `:timer.sleep(:infinity)` at module scope
+  # does not kill this process, it WEDGES it, and no `try` can interrupt that.
+  #
+  # So the compile runs in a monitored child on a budget, which answers all four
+  # the same way: a crash arrives as `:DOWN`, a timeout is killed, and the caller
+  # gets an error instead of an unrelated session losing its manager.
+  defp compile_modules(module_asts, path) do
+    with {:ok, modules} <- compile_off_thread(module_asts, path) do
+      case Enum.find(modules, &tea_module?/1) do
+        nil -> {:error, :no_tea_module_found}
+        tea_module -> {:ok, tea_module}
       end
     end
+  end
+
+  defp compile_off_thread(module_asts, path) do
+    parent = self()
+    budget = compile_timeout_ms()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        send(parent, {:compiled, self(), compile_quoted_all(module_asts, path)})
+      end)
+
+    receive do
+      {:compiled, ^pid, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      # A body that killed itself untrappably (`Process.exit(self(), :kill)`), or
+      # took a linked compiler process down with it.
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, {:compile_failed, path, Exception.format_exit(reason)}}
+    after
+      # `:kill`, not `:brutal_kill`. The latter is a Supervisor shutdown SPEC,
+      # and `Process.exit/2` reads it as an ordinary reason a body can trap --
+      # so a body that traps would outlive its own budget, still holding the
+      # code server's claim on the module name it was compiling.
+      budget ->
+        Process.demonitor(ref, [:flush])
+        Process.exit(pid, :kill)
+        {:error, {:compile_timed_out, path, budget}}
+    end
+  end
+
+  # `catch` alongside `rescue`: `Code.compile_quoted/2` EXECUTES module bodies,
+  # so a bare `throw` or `exit` at module scope is as reachable as a `raise` and
+  # `rescue` sees neither.
+  defp compile_quoted_all(module_asts, path) do
+    modules =
+      module_asts
+      |> Enum.flat_map(fn mod_ast -> Code.compile_quoted(mod_ast, path) end)
+      |> Enum.map(fn {module, _bytecode} -> module end)
+
+    {:ok, modules}
+  rescue
+    e -> {:error, {:compile_failed, path, Exception.message(e)}}
+  catch
+    :throw, value ->
+      {:error, {:compile_failed, path, "threw #{inspect(value)}"}}
+
+    :exit, reason ->
+      {:error, {:compile_failed, path, Exception.format_exit(reason)}}
+  end
+
+  # A compile budget is a property of the deployment, not of this module: how
+  # long a legitimate script may take to compile depends on the script. It is
+  # also what makes the wedge case assertable without a test that sleeps.
+  defp compile_timeout_ms do
+    case Application.get_env(
+           :raxol,
+           :headless_compile_timeout_ms,
+           @default_compile_timeout_ms
+         ) do
+      timeout when is_integer(timeout) and timeout > 0 ->
+        min(timeout, @max_compile_timeout_ms)
+
+      _invalid ->
+        @default_compile_timeout_ms
+    end
+  end
+
+  # The gate is the three callbacks, never the `@behaviour` attribute.
+  #
+  # Declaring `Raxol.Core.Runtime.Application` and implementing none of it
+  # compiles: Elixir warns about the missing callbacks, it does not refuse. So
+  # accepting the attribute ADMITS a module that cannot be driven, and `start/2`
+  # answers `{:ok, id}` for it and then renders an empty frame forever. A silent
+  # do-nothing session is worse than the clean error it replaced.
+  #
+  # Nothing is lost by leaving the attribute out. Surveyed across every module
+  # compiled on this tree: the set that declares the behaviour WITHOUT exporting
+  # the triple is empty, so the attribute decides no case the exports do not
+  # already decide.
+  #
+  # The test cannot run the other way round and REQUIRE the attribute either,
+  # because the runtime does not: `Lifecycle.Initializer` reads
+  # `function_exported?(mod, :init, 1)` and never the attribute, and
+  # `Raxol.Examples.Demos.IntegratedAccessibilityDemo` exports the triple
+  # without declaring it. That module runs correctly today, and refusing it
+  # would break a public API that has always started it.
+  #
+  # The triple rather than `view/1` alone because `view/1` is only the part this
+  # module consumes: a screenshot needs it, but the runtime drives `init/1` and
+  # `update/2` too, and a gate should name the contract it gates.
+  @spec tea_module?(term()) :: boolean()
+  defp tea_module?(mod) when is_atom(mod) do
+    # Answers for a LOADED module only, and under `mix mcp.server` code loads on
+    # demand -- so without this a module that is compiled and sitting on the
+    # code path gets refused for being unloaded rather than for failing the
+    # contract. Loading a beam runs nothing at module scope; the compile branch
+    # is what executes code, and it is confined separately.
+    Code.ensure_loaded?(mod) and tea_callbacks_exported?(mod)
+  end
+
+  defp tea_module?(_other), do: false
+
+  @spec tea_callbacks_exported?(module()) :: boolean()
+  defp tea_callbacks_exported?(mod) do
+    function_exported?(mod, :init, 1) and function_exported?(mod, :update, 2) and
+      function_exported?(mod, :view, 1)
   end
 
   # Extract top-level defmodule blocks from AST, ignoring other expressions.

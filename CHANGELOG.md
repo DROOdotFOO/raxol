@@ -17,6 +17,10 @@
 - **Phoenix LiveDashboard 0.9.0** in the root development environment, including
   its resolved runtime companions Phoenix LiveView 1.2.11, telemetry_metrics
   1.2.0, and Ecto 3.14.2.
+- **Headless sessions now require the full TEA callback contract** (`init/1`,
+  `update/2`, and `view/1`). Modules that exported only `view/1` are refused as
+  `:not_a_raxol_application` instead of starting a session that cannot process
+  events.
 - **Spending budgets halt a running turn (#819)** instead of only the next prompt, and a model with no price fails closed once a ledger and policy are wired (an unpriced model bills real tokens while the ledger records $0.00).
 - **The web release carries the agent stack (#819)**: `raxol_agent`, `raxol_payments`, and `req` are release dependencies. Without them the hosted coding agent could not have started or made an LLM call, and `Raxol.Application` now declines to serve the surface rather than standing up a broken one.
 
