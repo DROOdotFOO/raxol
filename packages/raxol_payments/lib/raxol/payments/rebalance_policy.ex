@@ -266,6 +266,24 @@ defmodule Raxol.Payments.RebalancePolicy do
   answers is "can the next large order be filled here", and a window of many
   small fills is evidence about throughput, not about that.
 
+  ## The cap is PER CORRIDOR
+
+  `demand_floor_cap` bounds ONE `{chain, symbol}` floor, not a deployment's
+  total exposure. `default/0` spans six EVM chains and three stables, so a cap
+  of `500` authorizes up to `500` on every corridor that carries a static floor
+  -- an order of magnitude more than the number reads.
+
+  That is worth stating because it is exactly the quantity the mandatory cap
+  exists to bound. `peak` is an attacker-controlled input: it comes from settled
+  fills, and anyone can place an order through the public storefront. One order
+  per corridor holds every floor at its cap for the whole window, and the
+  auto-rebalancer moves funds to meet them. Size the cap against
+  `corridors * cap`, not against `cap`.
+
+  `peak` also does not decay inside the window, so a floor stays pinned for
+  `RAXOL_REBALANCE_DEMAND_WINDOW_MS` (default 24h) after one order, and one
+  order per window renews it.
+
   With `demand_multiplier` unset this returns the static floor, so the behaviour
   is unchanged until it is configured.
   """

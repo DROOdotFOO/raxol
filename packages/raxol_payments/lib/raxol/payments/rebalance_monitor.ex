@@ -107,8 +107,37 @@ defmodule Raxol.Payments.RebalanceMonitor do
   defp build_price_fn(:coingecko), do: Raxol.Payments.Prices.CoinGecko.price_fn()
   defp build_price_fn(_source), do: fn _sym -> nil end
 
+  # Runs `with_demand/2` over the policy's OWN demand fields, which is a no-op
+  # for a well-formed policy and raises the same named ArgumentError for a
+  # half-configured one. Reusing that function rather than restating the rule
+  # keeps one definition of "a usable demand pair".
+  defp validate_policy(opts) do
+    policy = Keyword.get(opts, :policy, RebalancePolicy.default())
+
+    RebalancePolicy.with_demand(policy,
+      demand_multiplier: policy.demand_multiplier,
+      demand_floor_cap: policy.demand_floor_cap
+    )
+
+    :ok
+  end
+
   @impl true
   def init(opts) do
+    # Checked HERE so a policy that cannot widen a floor fails at boot.
+    #
+    # `cap_at/2` raises on a multiplier with no cap, and that check lives at the
+    # widening site on purpose: `demand_floor_cap` is a public struct field, so
+    # a hand-built policy can reach the advisor without ever passing through
+    # `with_demand/2`. But the widening site is inside the periodic sweep, and a
+    # raise there is not a refusal -- it is a crash, a supervisor restart, and
+    # the same crash on the next tick, forever, over a value that was wrong
+    # before the process ever started.
+    #
+    # So the invariant stays where it is and is ALSO asserted once, up front,
+    # where being wrong is a start-up failure an operator sees immediately.
+    :ok = validate_policy(opts)
+
     state = %{
       opts:
         Keyword.take(opts, [

@@ -49,9 +49,13 @@ defmodule Raxol.Payments.Accounting do
 
   `RAXOL_ACCOUNTING_ENABLED` is the gate, so it cannot refuse. It is read as
   exactly `"true"` and ANY other value -- including `"1"`, `"yes"` and `"TRUE"`
-  -- means off, silently. Refusing there would abort a release over a var whose
-  only job is to say the subsystem is not running, which is the failure the rest
-  of this section exists to prevent. Set it to the literal `"true"`.
+  -- means off. Refusing there would abort a release over a var whose only job
+  is to say the subsystem is not running, which is the failure the rest of this
+  section exists to prevent. Set it to the literal `"true"`.
+
+  It does WARN on a value that is neither `"true"` nor empty, because otherwise
+  "off" and "you typed `yes` and got off" are the same silence -- and telling
+  those apart is what this whole section is for.
 
   And nothing else here is parsed AT ALL while that gate is off: `env_config/0`
   reads it first and returns an empty opts list, so a malformed value for a
@@ -128,10 +132,36 @@ defmodule Raxol.Payments.Accounting do
     ]
   end
 
-  @doc "True when `RAXOL_ACCOUNTING_ENABLED` is exactly `\"true\"`."
+  @doc """
+  True when `RAXOL_ACCOUNTING_ENABLED` is exactly `"true"`.
+
+  A value that is neither `"true"` nor empty is still OFF, and still does not
+  raise -- this is the gate, so refusing here would abort a release over a
+  variable whose only job is to say the subsystem is not running. But it WARNS,
+  because "off" and "you typed `yes` and got off" are the same silence
+  otherwise, and this module's whole posture is that an operator must be able to
+  tell "my knob did nothing" from "the feature does nothing".
+  """
   @spec enabled?() :: boolean()
-  def enabled?,
-    do: System.get_env("RAXOL_ACCOUNTING_ENABLED", "false") == "true"
+  def enabled? do
+    case System.get_env("RAXOL_ACCOUNTING_ENABLED", "") |> String.trim() do
+      "true" -> true
+      "" -> false
+      other -> warn_unrecognized_gate(other)
+    end
+  end
+
+  defp warn_unrecognized_gate(value) do
+    require Logger
+
+    Logger.warning(
+      "RAXOL_ACCOUNTING_ENABLED is #{inspect(value)}, which is not \"true\", so " <>
+        "settlement accounting is OFF. It is matched exactly: \"1\", \"yes\" and " <>
+        "\"TRUE\" all mean off. Set it to the literal \"true\" to enable."
+    )
+
+    false
+  end
 
   # Only chains with a non-empty RPC URL are included, so a partial deployment
   # (say, Base + Optimism only) reads just those corridors.

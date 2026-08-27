@@ -181,4 +181,58 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
       assert Decimal.equal?(deficit, Decimal.new("30"))
     end
   end
+
+  # `cap_at/2` raises on a multiplier with no cap, and it lives at the widening
+  # site on purpose -- `demand_floor_cap` is a public struct field, so a policy
+  # built by hand reaches the advisor without ever passing through
+  # `with_demand/2`. But the widening site is inside the periodic sweep, where a
+  # raise is not a refusal: it is a crash, a supervisor restart, and the same
+  # crash on the next tick, forever, over a value that was wrong before the
+  # process started. So the invariant is ALSO asserted once at init.
+  describe "a policy that cannot widen a floor is refused at start" do
+    defp half_configured do
+      struct(RebalancePolicy,
+        inventory_floor: %{8453 => %{"USDC" => Decimal.new("5")}},
+        inventory_target: %{8453 => %{"USDC" => Decimal.new("25")}},
+        demand_multiplier: Decimal.new("0.1")
+      )
+    end
+
+    test "init refuses a multiplier with no cap", %{ledger: ledger} do
+      assert_raise ArgumentError, ~r/demand_floor_cap/, fn ->
+        RebalanceMonitor.init(
+          ledger: ledger,
+          reader: Stub.new([]),
+          solver_address: "0xsolver",
+          policy: half_configured()
+        )
+      end
+    end
+
+    test "a well-formed demand policy starts", %{ledger: ledger} do
+      policy =
+        RebalancePolicy.with_demand(half_configured(),
+          demand_multiplier: "0.1",
+          demand_floor_cap: "1000"
+        )
+
+      assert {:ok, _state} =
+               RebalanceMonitor.init(
+                 ledger: ledger,
+                 reader: Stub.new([]),
+                 solver_address: "0xsolver",
+                 policy: policy
+               )
+    end
+
+    test "a policy with no demand config starts, unchanged", %{ledger: ledger} do
+      assert {:ok, _state} =
+               RebalanceMonitor.init(
+                 ledger: ledger,
+                 reader: Stub.new([]),
+                 solver_address: "0xsolver",
+                 policy: RebalancePolicy.default()
+               )
+    end
+  end
 end

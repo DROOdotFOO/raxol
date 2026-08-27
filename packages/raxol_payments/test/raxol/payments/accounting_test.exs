@@ -264,4 +264,59 @@ defmodule Raxol.Payments.AccountingTest do
       end
     end
   end
+
+  describe "the accounting gate" do
+    test "exactly \"true\" turns it on" do
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "true")
+      assert Accounting.enabled?()
+    end
+
+    test "unset and blank are off, quietly" do
+      for value <- [nil, "", "   "] do
+        if value, do: System.put_env("RAXOL_ACCOUNTING_ENABLED", value)
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            refute Accounting.enabled?()
+          end)
+
+        assert log == "", "#{inspect(value)} should not warn"
+        System.delete_env("RAXOL_ACCOUNTING_ENABLED")
+      end
+    end
+
+    # The gate cannot RAISE -- aborting a release over a variable whose only job
+    # is to say the subsystem is not running is the failure the rest of this
+    # module's refusals exist to prevent. But it must not be silent either:
+    # "off" and "you typed yes and got off" were the same silence, in a module
+    # whose whole posture is that an operator can tell "my knob did nothing"
+    # from "the feature does nothing".
+    test "a value that is not \"true\" is off AND says so" do
+      for value <- ["1", "yes", "TRUE", "True", "on", "enabled"] do
+        System.put_env("RAXOL_ACCOUNTING_ENABLED", value)
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            refute Accounting.enabled?()
+          end)
+
+        assert log =~ "RAXOL_ACCOUNTING_ENABLED",
+               "#{inspect(value)} was silently off"
+
+        assert log =~ inspect(value)
+      end
+    end
+
+    test "the gate stays off, so nothing downstream is parsed" do
+      # The warning must not become an accidental opt-in: a warned value still
+      # yields the empty opts list, so a malformed knob for a subsystem that is
+      # not running still cannot abort a boot.
+      System.put_env("RAXOL_ACCOUNTING_ENABLED", "yes")
+      System.put_env("RAXOL_PRICE_SOURCE", "not-a-source")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {[], false} = Accounting.env_config()
+      end)
+    end
+  end
 end
