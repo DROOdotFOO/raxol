@@ -49,7 +49,7 @@ defmodule Raxol.AgentClientProtocol.Test.Teardown do
   leak shows up as an unrelated later test inheriting a process it never
   started.
   """
-  @spec stop_all([pid() | atom()]) :: :ok
+  @spec stop_all([pid()]) :: :ok
   def stop_all(supervisors) when is_list(supervisors) do
     Enum.each(supervisors, &stop_quietly/1)
   end
@@ -57,27 +57,25 @@ defmodule Raxol.AgentClientProtocol.Test.Teardown do
   @doc """
   Stop one supervisor and wait for it to actually be gone.
 
-  Returns `:ok` whether it was alive, already dead, or never registered.
-  Nothing here asserts: a teardown helper has no verdict to give, and the one
-  it used to give was inverted.
+  Returns `:ok` whether the captured supervisor PID was alive or already dead.
+  It exits only if a process survives the final untrappable kill; returning
+  success without the promised postcondition would hide a cross-test leak.
 
   A supervisor that does not go down inside the budget is killed, so this
   cannot hang a suite on a wedged `terminate/2`.
   """
-  @spec stop_quietly(pid() | atom()) :: :ok
-  def stop_quietly(supervisor) do
-    case GenServer.whereis(supervisor) do
-      nil -> :ok
-      pid -> stop_and_await(pid)
-    end
-  end
+  @spec stop_quietly(pid()) :: :ok
+  def stop_quietly(supervisor) when is_pid(supervisor), do: stop_and_await(supervisor)
 
   defp stop_and_await(pid) do
-    # Monitored BEFORE the stop, so a supervisor that dies during the call is
-    # still reported rather than leaving nothing to wait on. Monitoring a pid
-    # that is already dead delivers `:DOWN` with `:noproc` immediately, which
-    # is the same answer by a shorter route.
-    ref = Process.monitor(pid)
+    # Snapshot and monitor the tree BEFORE the stop. Killing only a wedged
+    # supervisor is insufficient: its `:killed` exit reaches a trapping child
+    # as an ordinary, trappable signal, so that child can survive the parent.
+    monitors =
+      pid
+      |> supervision_tree()
+      |> Enum.uniq()
+      |> Map.new(&{&1, Process.monitor(&1)})
 
     try do
       Supervisor.stop(pid, :normal, @stop_timeout_ms)
@@ -87,7 +85,14 @@ defmodule Raxol.AgentClientProtocol.Test.Teardown do
       :exit, _reason -> :ok
     end
 
-    await_down(pid, ref)
+    monitors
+    |> Map.keys()
+    |> Enum.reverse()
+    |> Enum.each(&kill_if_alive/1)
+
+    Enum.each(monitors, fn {monitored_pid, ref} ->
+      await_down(monitored_pid, ref)
+    end)
   end
 
   defp await_down(pid, ref) do
@@ -96,10 +101,29 @@ defmodule Raxol.AgentClientProtocol.Test.Teardown do
     after
       @stop_timeout_ms ->
         Process.demonitor(ref, [:flush])
-        # `:kill` rather than a trappable reason: the only way to be here is a
-        # supervisor that already declined an orderly stop.
-        Process.exit(pid, :kill)
-        :ok
+        exit({:teardown_process_survived_kill, pid})
     end
+  end
+
+  defp supervision_tree(pid) do
+    children =
+      try do
+        Supervisor.which_children(pid)
+      catch
+        :exit, _reason -> []
+      end
+
+    descendants =
+      Enum.flat_map(children, fn
+        {_id, child, :supervisor, _modules} when is_pid(child) -> supervision_tree(child)
+        {_id, child, _type, _modules} when is_pid(child) -> [child]
+        _other -> []
+      end)
+
+    [pid | descendants]
+  end
+
+  defp kill_if_alive(pid) do
+    if Process.alive?(pid), do: Process.exit(pid, :kill)
   end
 end

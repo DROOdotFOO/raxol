@@ -46,10 +46,6 @@ defmodule Raxol.AgentClientProtocol.TeardownTest do
       assert Teardown.stop_quietly(sup) == :ok
     end
 
-    test "returns :ok for a name that was never registered" do
-      assert Teardown.stop_quietly(:no_such_supervisor_registered) == :ok
-    end
-
     # The reason this waits on a monitor instead of enumerating exit reasons.
     # A supervisor whose child blocks in `terminate/2` makes `Supervisor.stop`
     # exit with a NESTED reason (`GenServer.stop` around `:sys.terminate`
@@ -57,9 +53,12 @@ defmodule Raxol.AgentClientProtocol.TeardownTest do
     # shutdown had already got. The helper must be gone-or-killed either way.
     test "kills a supervisor that will not shut down inside the budget" do
       sup = start_sup([{__MODULE__.Wedged, []}])
+      [{_id, child, :worker, _modules}] = Supervisor.which_children(sup)
+      on_exit(fn -> Process.exit(child, :kill) end)
 
       assert Teardown.stop_quietly(sup) == :ok
       refute Process.alive?(sup)
+      refute Process.alive?(child)
     end
   end
 
