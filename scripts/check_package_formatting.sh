@@ -25,20 +25,16 @@ err() {
   printf '::error::%s\n' "$1" >&2
 }
 
-# The deps a package's formatter config would make `mix format` LOAD.
-#
-# Evaluated rather than grepped. `import_deps: []` and `import_deps: [:phoenix]`
-# differ by one character and a multi-line list defeats a line-based match
-# entirely, so a regex here is a gate that reports clean for the shape it exists
-# to catch. A .formatter.exs is a literal term; evaluating it is what `mix
-# format` itself does.
-import_deps_of() {
-  elixir -e '
-    [path] = System.argv()
-    {opts, _bindings} = Code.eval_file(path)
-    opts |> Keyword.get(:import_deps, []) |> Enum.join(", ") |> IO.write()
-  ' "$1"
+# Evaluate the formatter config in a child process, as `mix format` does. The
+# child validates loader options itself and communicates only through its exit
+# status and stderr. Formatter files are executable Elixir and may write to
+# stdout, so stdout cannot safely carry a line-oriented result protocol.
+formatter_loader_error() {
+  elixir scripts/check_formatter_loaders.exs "$1" >/dev/null
 }
+
+shopt -s nullglob
+package_count=0
 
 for dir in packages/*/; do
   pkg="$(basename "$dir")"
@@ -51,19 +47,19 @@ for dir in packages/*/; do
     continue
   fi
 
+  package_count=$((package_count + 1))
+
   if [[ ! -f "$dir/.formatter.exs" ]]; then
     err "$pkg has no .formatter.exs, so the root glob formats it at 80 columns while its own gate expects 98. Add one (copy any sibling package's)."
     failed=1
     continue
   fi
 
-  # This script's cheapness is the reason it is not in `package-tests`, and
-  # `import_deps:` is the one option that would cost it: the formatter loads the
-  # named deps, and nothing here runs `mix deps.get` inside a package. Caught by
-  # name so the failure does not arrive as an unrelated "could not find dep".
-  deps="$(import_deps_of "$dir/.formatter.exs")"
-  if [[ -n "$deps" ]]; then
-    err "$pkg sets import_deps: [$deps], which makes mix format load those deps. This check does not fetch them. Either drop it, or move this package into the package-tests matrix where deps are available."
+  # This script's cheapness is the reason it is not in `package-tests`.
+  # `import_deps:` and `plugins:` both make the formatter load compiled code,
+  # while nothing here fetches or compiles package dependencies.
+  if ! loader_error="$(formatter_loader_error "$dir/.formatter.exs" 2>&1)"; then
+    err "$pkg $loader_error"
     failed=1
     continue
   fi
@@ -73,6 +69,11 @@ for dir in packages/*/; do
     failed=1
   fi
 done
+
+if [[ "$package_count" -eq 0 ]]; then
+  err "no packages found; run this check from a checkout containing packages/*/mix.exs"
+  failed=1
+fi
 
 if [[ "$failed" -eq 0 ]]; then
   echo "All packages formatted."

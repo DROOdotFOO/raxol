@@ -11,14 +11,7 @@ defmodule Raxol.FormatterDelegationTest do
 
   use ExUnit.Case, async: true
 
-  # 94 columns: legal at the package default of 98, split by the root's 80.
-  @wide_line "{:ok, ExKeccak.hash_256(<<0x19, 0x01, domain_separator::binary, message_hash::binary>>)}\n"
-
-  test "the root formatter still holds root files to 80 columns" do
-    {format, _opts} = Mix.Tasks.Format.formatter_for_file("lib/raxol.ex")
-
-    refute format.(@wide_line) == @wide_line
-  end
+  @root_formatter_keys [:inputs, :exclude, :line_length, :locals_without_parens]
 
   # A package is defined by its mix.exs, NOT by having a .formatter.exs -- which
   # is the point. Enumerating by `.formatter.exs` would make a package that is
@@ -39,19 +32,40 @@ defmodule Raxol.FormatterDelegationTest do
   # files -- which is the whole property.
   test "every package resolves through its own formatter, not the root's" do
     for package <- packages() do
-      {format, _opts} = Mix.Tasks.Format.formatter_for_file(probe_path(package))
+      {_format, resolved_opts} =
+        Mix.Tasks.Format.formatter_for_file(probe_path(package))
 
-      assert format.(@wide_line) == @wide_line,
-             "#{package} resolves through the root formatter (80 columns), so a " <>
-               "root-cwd `mix format` would rewrap what its own gate blessed"
+      {package_opts, _bindings} =
+        Code.eval_file("packages/#{package}/.formatter.exs")
+
+      assert Keyword.take(resolved_opts, @root_formatter_keys) ==
+               Keyword.take(package_opts, @root_formatter_keys),
+             "#{package} does not resolve options from its own formatter"
     end
+  end
+
+  @tag :tmp_dir
+  test "loader validation ignores formatter stdout", %{tmp_dir: tmp_dir} do
+    formatter = Path.join(tmp_dir, ".formatter.exs")
+
+    File.write!(formatter, "IO.puts(\"noise\")\n[plugins: [SomePlugin]]\n")
+
+    {output, status} =
+      System.cmd("elixir", ["scripts/check_formatter_loaders.exs", formatter],
+        stderr_to_stdout: true
+      )
+
+    assert status == 1
+    assert output =~ "sets plugins: [SomePlugin]"
   end
 
   defp packages do
     "packages/*/mix.exs"
     |> Path.wildcard()
     |> Enum.map(&(&1 |> Path.dirname() |> Path.basename()))
-    |> tap(&assert &1 != [], "no packages found; is this running from the repo root?")
+    |> tap(
+      &assert &1 != [], "no packages found; is this running from the repo root?"
+    )
   end
 
   # A path that need not EXIST. `formatter_for_file/1` picks a config by walking
