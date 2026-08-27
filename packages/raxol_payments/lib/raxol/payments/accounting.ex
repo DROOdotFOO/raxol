@@ -144,7 +144,7 @@ defmodule Raxol.Payments.Accounting do
   """
   @spec enabled?() :: boolean()
   def enabled? do
-    case System.get_env("RAXOL_ACCOUNTING_ENABLED", "") |> String.trim() do
+    case System.get_env("RAXOL_ACCOUNTING_ENABLED", "") do
       "true" -> true
       "" -> false
       other -> warn_unrecognized_gate(other)

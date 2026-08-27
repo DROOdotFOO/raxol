@@ -257,7 +257,8 @@ defmodule Raxol.Payments.SettlementLedger do
   end
 
   defp since?(_entry, nil), do: true
-  defp since?(%{timestamp_ms: ts}, since_ms), do: ts >= since_ms
+  defp since?(%{timestamp_ms: ts}, since_ms) when is_integer(ts), do: ts >= since_ms
+  defp since?(_entry, _since_ms), do: false
 
   defp fold_demand(entries), do: Enum.reduce(entries, %{}, &accumulate_demand/2)
 

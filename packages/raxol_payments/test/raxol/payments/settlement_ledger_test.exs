@@ -270,6 +270,14 @@ defmodule Raxol.Payments.SettlementLedgerTest do
       assert demand == SettlementLedger.demand_by_destination(ledger, since_ms: 5_000)
     end
 
+    test "a missing timestamp is not treated as recent demand", %{ledger: ledger} do
+      entry =
+        Map.merge(fill("missing_ts", 8453, "USDC", "10"), %{timestamp_ms: nil})
+
+      assert {:ok, :recorded} = SettlementLedger.record_settlement(ledger, entry)
+      assert %{demand: %{}} = SettlementLedger.sweep_signals(ledger, since_ms: 0)
+    end
+
     test "the non-window filters bind both halves", %{ledger: ledger} do
       # Every sibling read runs `filter_opts/1`; a `sweep_signals/2` that quietly
       # answered globally would hand a corridor-scoped caller the whole ledger.

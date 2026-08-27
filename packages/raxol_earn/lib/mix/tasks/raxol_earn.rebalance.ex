@@ -71,12 +71,16 @@ defmodule Mix.Tasks.RaxolEarn.Rebalance do
   @spec resolve_policy(keyword(), keyword()) ::
           {:ok, RebalancePolicy.t()} | {:static, RebalancePolicy.t()} | {:error, String.t()}
   def resolve_policy(acc, opts) do
-    configured = RebalancePolicy.with_demand(RebalancePolicy.default(), acc)
+    try do
+      configured = RebalancePolicy.with_demand(RebalancePolicy.default(), acc)
 
-    case {RebalancePolicy.demand_aware?(configured), Keyword.get(opts, :static_floors, false)} do
-      {false, _} -> {:ok, configured}
-      {true, true} -> {:static, RebalancePolicy.default()}
-      {true, false} -> {:error, demand_refusal()}
+      case {RebalancePolicy.demand_aware?(configured), Keyword.get(opts, :static_floors, false)} do
+        {false, _} -> {:ok, configured}
+        {true, true} -> {:static, RebalancePolicy.default()}
+        {true, false} -> {:error, demand_refusal()}
+      end
+    rescue
+      error in ArgumentError -> {:error, Exception.message(error)}
     end
   end
 

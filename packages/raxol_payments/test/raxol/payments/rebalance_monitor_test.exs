@@ -225,6 +225,21 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
                )
     end
 
+    test "init stores the normalized demand policy", %{ledger: ledger} do
+      policy = %{half_configured() | demand_multiplier: 0.1, demand_floor_cap: 1_000}
+
+      assert {:ok, %{opts: opts}} =
+               RebalanceMonitor.init(
+                 ledger: ledger,
+                 reader: Stub.new([]),
+                 solver_address: "0xsolver",
+                 policy: policy
+               )
+
+      assert %Decimal{} = opts[:policy].demand_multiplier
+      assert %Decimal{} = opts[:policy].demand_floor_cap
+    end
+
     test "a policy with no demand config starts, unchanged", %{ledger: ledger} do
       assert {:ok, _state} =
                RebalanceMonitor.init(

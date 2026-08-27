@@ -29,15 +29,14 @@ defmodule Mix.Tasks.RaxolEarn.RebalanceTest do
       refute RebalancePolicy.demand_aware?(policy)
     end
 
-    test "half the pair still fails the way it does at boot" do
+    test "half the pair is returned as an operator-facing error" do
       # The second shape is the one `Accounting.env_config/0` actually produces:
       # it reads both vars unconditionally, so the unset half arrives PRESENT as
       # nil. Only the first shape was covered here, which is how a dead pair
       # guard shipped twice.
       for acc <- [[demand_multiplier: "0.1"], [demand_multiplier: "0.1", demand_floor_cap: nil]] do
-        assert_raise ArgumentError, ~r/without :demand_floor_cap/, fn ->
-          Rebalance.resolve_policy(acc, [])
-        end
+        assert {:error, message} = Rebalance.resolve_policy(acc, [])
+        assert message =~ "without :demand_floor_cap"
       end
     end
   end

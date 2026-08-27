@@ -118,8 +118,6 @@ defmodule Raxol.Payments.RebalanceMonitor do
       demand_multiplier: policy.demand_multiplier,
       demand_floor_cap: policy.demand_floor_cap
     )
-
-    :ok
   end
 
   @impl true
@@ -136,7 +134,8 @@ defmodule Raxol.Payments.RebalanceMonitor do
     #
     # So the invariant stays where it is and is ALSO asserted once, up front,
     # where being wrong is a start-up failure an operator sees immediately.
-    :ok = validate_policy(opts)
+    policy = validate_policy(opts)
+    opts = Keyword.put(opts, :policy, policy)
 
     state = %{
       opts:

@@ -271,8 +271,8 @@ defmodule Raxol.Payments.AccountingTest do
       assert Accounting.enabled?()
     end
 
-    test "unset and blank are off, quietly" do
-      for value <- [nil, "", "   "] do
+    test "unset and empty are off, quietly" do
+      for value <- [nil, ""] do
         if value, do: System.put_env("RAXOL_ACCOUNTING_ENABLED", value)
 
         log =
@@ -292,7 +292,7 @@ defmodule Raxol.Payments.AccountingTest do
     # whose whole posture is that an operator can tell "my knob did nothing"
     # from "the feature does nothing".
     test "a value that is not \"true\" is off AND says so" do
-      for value <- ["1", "yes", "TRUE", "True", "on", "enabled"] do
+      for value <- ["1", "yes", "TRUE", "True", "on", "enabled", " true ", "   "] do
         System.put_env("RAXOL_ACCOUNTING_ENABLED", value)
 
         log =
