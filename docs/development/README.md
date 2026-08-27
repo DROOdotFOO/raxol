@@ -43,6 +43,14 @@ Hex archive built for one is being loaded by the other. The hook prepends the
 toolchain `.tool-versions` names when it finds it installed under mise; for a
 manual command, put that toolchain's `bin` first on `PATH`.
 
+Set `RAXOL_HOOK_NO_TOOLCHAIN=1` to skip that and use `PATH` as-is, which is what
+you want when deliberately committing against a different Elixir.
+
+The hook is not a defence against a branch you do not trust. It runs
+`scripts/prose_lint.exs`, and the lockfile gate evaluates `mix.exs`, so a
+checked-out branch already chooses code that runs on `git commit`. That is true
+of any repo with hooks enabled. Review the branch, or use `--no-verify`.
+
 ## Commands
 
 ### Testing

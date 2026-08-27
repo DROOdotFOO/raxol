@@ -16,15 +16,29 @@ set -euo pipefail
 # is not one. So prefer the toolchain `.tool-versions` names, when it is
 # installed; otherwise leave PATH alone and let the gates report normally.
 #
+# Set RAXOL_HOOK_NO_TOOLCHAIN=1 to skip this and use PATH as-is, which is what
+# you want when deliberately testing against a different Elixir.
+#
 # The version is VALIDATED before it is interpolated, because `.tool-versions`
 # is a repo-controlled file and the result of this goes on PATH. A branch
 # carrying `elixir ../../../../../../../tmp/evil` otherwise resolves to
 # `/tmp/evil/bin`, prepends it, and every `mix` and `elixir` below runs from
-# there -- arbitrary execution on `git commit`, which is an ordinary thing to do
-# after checking out someone else's branch. A version is a digit followed by
-# version punctuation; anything else is not one, and is skipped rather than
-# resolved. The pattern admits no `/`, and cannot match `..`.
-if [[ -f .tool-versions ]]; then
+# there. A version is a digit followed by version punctuation; anything else is
+# not one, and is skipped rather than resolved. The pattern admits no `/`, and
+# cannot match `..`.
+#
+# What that is NOT is a general defence against a hostile branch. This hook runs
+# `scripts/prose_lint.exs`, which `Code.require_file`s `lib/raxol/docs/
+# prose_lint.ex`; both are repo-controlled, so a branch you do not trust already
+# chooses code that runs on `git commit`, and `mix deps.get` below evaluates
+# `mix.exs`. That is true of essentially any repo with hooks enabled and is not
+# something a version regex changes. The regex closes one specific hole -- a
+# value this hook itself puts on PATH -- and the honest scope is "the hook does
+# not ADD a vector", not "committing on an untrusted branch is safe". Review the
+# branch, or commit with --no-verify.
+if [[ -n "${RAXOL_HOOK_NO_TOOLCHAIN:-}" ]]; then
+  :
+elif [[ -f .tool-versions ]]; then
   _mise_installs="${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs"
 
   for _tool in elixir erlang; do

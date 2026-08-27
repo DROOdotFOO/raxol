@@ -46,7 +46,7 @@ defmodule Githooks.PreCommitTest do
 
   # Runs the block with `cwd` as the repo and `mise_root` standing in for the
   # mise data dir, and returns the PATH it produced.
-  defp resulting_path(cwd, mise_root) do
+  defp resulting_path(cwd, mise_root, extra_env \\ []) do
     script = """
     set -euo pipefail
     cd #{cwd}
@@ -56,10 +56,16 @@ defmodule Githooks.PreCommitTest do
 
     {out, 0} =
       System.cmd("bash", ["-c", script],
-        env: [
-          {"MISE_DATA_DIR", mise_root},
-          {"PATH", "/usr/bin:/bin"}
-        ],
+        env:
+          [
+            {"MISE_DATA_DIR", mise_root},
+            {"PATH", "/usr/bin:/bin"},
+            # Cleared explicitly. `System.cmd` MERGES with the caller's
+            # environment rather than replacing it, so a developer who has the
+            # escape hatch exported would otherwise turn every assertion below
+            # into a no-op that still passes.
+            {"RAXOL_HOOK_NO_TOOLCHAIN", nil}
+          ] ++ extra_env,
         stderr_to_stdout: true
       )
 
@@ -122,6 +128,30 @@ defmodule Githooks.PreCommitTest do
       write_tool_versions(Path.join(repo, ".tool-versions"), "1.20.2-otp-29")
 
       assert resulting_path(repo, mise) =~ installed
+    end
+
+    # The override has to be checkable, or a developer deliberately running
+    # against a different Elixir gets silently put back on the pinned one every
+    # time they commit, with nothing on screen saying so.
+    test "RAXOL_HOOK_NO_TOOLCHAIN leaves PATH alone even when installed", %{
+      dir: dir
+    } do
+      repo = Path.join(dir, "repo")
+      mise = Path.join(dir, "mise")
+      File.mkdir_p!(repo)
+
+      installed =
+        Path.join([mise, "installs", "elixir", "1.20.2-otp-29", "bin"])
+
+      File.mkdir_p!(installed)
+      write_tool_versions(Path.join(repo, ".tool-versions"), "1.20.2-otp-29")
+
+      # Same fixture as the test above, which DOES prepend -- so this pins the
+      # override and not merely a version that was never going to resolve.
+      assert resulting_path(repo, mise) =~ installed
+
+      assert resulting_path(repo, mise, [{"RAXOL_HOOK_NO_TOOLCHAIN", "1"}]) ==
+               "/usr/bin:/bin"
     end
 
     test "leaves PATH alone when the pinned version is not installed", %{
