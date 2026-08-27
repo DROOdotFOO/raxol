@@ -36,7 +36,10 @@ defmodule Raxol.Agent.Setup do
   A point-in-time detection snapshot: the `op` CLI state plus each provider's
   availability. Delegates to `Resolver.diagnostics/0`.
   """
-  @spec status() :: %{op: atom(), providers: [map()]}
+  @spec status() :: %{
+          op: Raxol.Agent.Backend.Resolver.diagnostic_op_status(),
+          providers: [map()]
+        }
   def status, do: Resolver.diagnostics()
 
   @doc """

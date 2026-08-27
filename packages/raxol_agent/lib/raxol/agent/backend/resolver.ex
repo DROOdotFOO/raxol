@@ -249,7 +249,9 @@ defmodule Raxol.Agent.Backend.Resolver do
   The `op` state is read ONCE and, when it is unusable, the per-provider `op`
   probes are skipped entirely. See `provider_diag/2`.
   """
-  @spec diagnostics() :: %{op: atom(), providers: [map()]}
+  @type diagnostic_op_status :: :absent | :not_signed_in | :ok | :unresponsive
+
+  @spec diagnostics() :: %{op: diagnostic_op_status(), providers: [map()]}
   def diagnostics do
     op = Credentials.op_status()
 
