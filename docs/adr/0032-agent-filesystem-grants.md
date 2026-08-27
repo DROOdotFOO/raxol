@@ -238,6 +238,26 @@ file that shows up in `git status` and in the diff the operator reviews. The con
 holds in both layouts is the read-only config, which is what decides where hooks are read
 from.
 
+**Read-only `config` is necessary and not sufficient**, because it is not the only file under
+`.git` that decides what git executes. A `gitcommon` grant of `:rw` with a single `config`
+carve-out still admits:
+
+| path | why it executes something |
+| ---- | ------------------------- |
+| `.git/info/attributes` | selects which `filter.<name>.clean/smudge` applies to which paths; the driver itself is named in `config`, but this decides where it fires, and it is untracked so it never shows in a diff |
+| `.git/modules/<sub>/config` | a submodule's own config, reached by `--git-dir`, carrying its own `core.hooksPath` and filter drivers |
+| `.git/worktrees/<name>/config.worktree` | already `:ro` above, listed here because it is easy to grant by granting its parent |
+
+The last two are why the grants are derived from `git rev-parse` rather than assembled by
+path arithmetic: `--git-dir` answers per worktree and per submodule, and a set built by
+appending `.git` to a toplevel gets exactly one of them right.
+
+Enumerating carve-outs is the wrong shape long-term. An implementation should invert it for
+`.git`: `:none` by default, with `:rw` granted to the specific paths git needs to write
+(`index`, `objects`, `refs`, `logs`, `packed-refs`, `HEAD`), rather than `:rw` with a
+deny-list that has to stay ahead of git's feature set. This ADR does not settle which, but it
+does record that the deny-list version is the one that ages badly.
+
 ### The enforcement seam
 
 The first draft defined one behaviour, `Enforcement`, with `resolve/2`, `open/3`, and
@@ -298,7 +318,7 @@ it currently has.
 
 | Host | Subprocess backend | Requires | fs tools | shell under `jail: true` |
 | ---- | ------------------ | -------- | -------- | ------------------------ |
-| macOS | `Seatbelt` | nothing, ships with the OS | confined, resolve-time | contained, enabled |
+| macOS | `Seatbelt` (deprecated interface, see below) | nothing, ships with the OS | confined, resolve-time | contained, enabled |
 | Linux with bubblewrap and unprivileged userns | `Bwrap` | `bwrap` on PATH | confined, resolve-time | contained, enabled |
 | Linux without either | `None` | | confined, resolve-time | disabled, as today |
 | Windows | `None` | | confined, resolve-time | absent, as today |
@@ -309,9 +329,24 @@ capability: `jail: true` together with a working shell.**
 
 Two deployment notes. Serving jailed sessions on Fly would need `bubblewrap` added to
 `docker/Dockerfile.web`, whose runner is a slim Debian bullseye image
-(`Dockerfile.web:6-9`) running as `USER nobody` (`:78`) with no sandbox tooling. And `sandbox-exec` is marked deprecated in its own man page; because the
-grant set is data and the profile is generated from it, replacing that backend is a change to
-one compile step rather than a redesign.
+(`Dockerfile.web:6-9`) running as `USER nobody` (`:78`) with no sandbox tooling.
+
+And the macOS row rests on a deprecated interface. `sandbox-exec` is marked deprecated in its
+own man page, its SBPL profile language is unversioned and undocumented, and Apple has changed
+its behaviour across releases without notice. That is worth stating plainly rather than
+leaving in a footnote, because macOS is the row where the table promises `jail: true` together
+with a working shell. The one platform delivering the capability this design is justified
+by is the one whose mechanism Apple has told us not to rely on.
+
+Taken anyway, for two reasons. It ships with the OS, needing no install, no approval and no
+reboot, which is what makes it usable from `mix raxol.code` at all; and it is what OpenAI
+Codex and Anthropic's `sandbox-runtime` both landed on, so the deprecation is priced in across
+the ecosystem rather than a bet this repo is making alone. Because the grant set is data and
+the profile is generated from it, replacing that backend is a change to one compile step
+rather than a redesign. An implementation should treat "Seatbelt stops working on a macOS
+release" as a foreseeable event with a fail-closed answer: refuse to start a jailed session
+rather than silently degrade to `Spawn.None`, which is the same fail-closed selection rule
+the enforcement seam already specifies.
 
 ## Alternatives considered
 
@@ -455,40 +490,50 @@ How we know the design is right, written as the tests an implementation must pro
 ## Prerequisites
 
 A containment boundary should not land in a package nothing gates, and until #915 neither
-`raxol_agent` nor `raxol_core` had a per-PR CI job. #915 adds both to the `package-tests`
-matrix and is the prerequisite this ADR depends on.
+`raxol_agent` nor `raxol_core` had a per-PR CI job. #915 added both to the `package-tests`
+matrix and has landed, so this prerequisite is met.
 
-It is not sufficient on its own. `package-tests` runs `ubuntu-latest` only, and the sole
-non-Linux lane, `test-cross-platform` (`ci-unified.yml:670-683`), runs the root suite rather
-than any package suite. So both packages gated still buys zero Windows coverage for `Fs`,
-which is where #912 started. Closing that needs either an OS matrix on those two entries or
-the vectors running in the root suite, and the ADR takes no position on which.
+It is not sufficient on its own, and the gap is the one this ADR is about.
+`package-tests` runs `ubuntu-latest` only, and the sole non-Linux lane,
+`test-cross-platform`, runs the root suite rather than any package suite. So both packages
+gated buys **zero Windows coverage** for `Fs`, which is where #912 started, and #910's fix
+is specifically about `:filename.split/1` behaving differently on Windows. Closing that needs
+either an OS matrix on those two entries or the vectors running in the root suite, and this
+ADR takes no position on which.
 
-One mechanical constraint on editing that matrix:
-`test/raxol/formatter_delegation_test.exs` parses it with `^\s*package: \[...\]`, so the list
-must stay on one line, and an entry there moves together with the root `.formatter.exs`
-`subdirectories` list.
+What does exist as of #910 is a drift guard between the two copies of the shared vector
+corpus (`test/raxol/boundary_vector_parity_test.exs`, in the root suite). Before it, the
+"drift is a red test, not a silent fork" claim in three separate files was enforced by
+nothing. It proves the two corpora are byte-identical; it does not prove either
+implementation runs them on Windows.
 
 ## Defects surfaced while writing this
 
-Both are context for the decision rather than part of it, and both want their own issue.
+Both are context for the decision rather than part of it, and both are filed: an ADR is not
+a tracker, and a defect recorded only in prose is one nobody is assigned.
 
-1. `Actions.Code.shell_jail_allow/1` (`code.ex:447`) re-enables the shell inside a jail for
-   any `%Sandbox.Shell{}` present in the context, including `Sandbox.Shell.none()`, whose
-   `allowed?/2` returns `true` unconditionally. The check is `match?` on the struct type, so
-   the seam reads "a struct is present" where it means "the struct restricts". Nothing sets
-   `:shell_sandbox` today, so the gate holds in practice, and this ADR's `Spawn` backends are
-   what would first put a value there.
-2. `Raxol.Symphony.Runners.RaxolAgent` never reads its `:workspace_path` option, so it passes
-   no `:cwd` and no `:jail` into the agent context. Symphony's Raxol-side runs are unconfined
-   by construction, while its Codex runner gets `thread_sandbox: "workspace-write"` from
-   Codex's own sandbox.
+1. **#919**: `Actions.Code.shell_jail_allow/1` (`code.ex:447`) re-enables the shell inside a
+   jail for any `%Sandbox.Shell{}` present in the context, including `Sandbox.Shell.none()`,
+   whose `allowed?/2` returns `true` unconditionally. The check is `match?` on the struct
+   type, so the seam reads "a struct is present" where it means "the struct restricts".
+   Nothing sets `:shell_sandbox` today, so the gate holds in practice, and this ADR's
+   `Spawn` backends are what would first put a value there, which makes it a prerequisite
+   rather than a footnote: the change that makes `jail: true` useful is the change that makes
+   this reachable.
+2. **#920**: `Raxol.Symphony.Runners.RaxolAgent` never reads its `:workspace_path` option,
+   so it passes no `:cwd` and no `:jail` into the agent context. Symphony's Raxol-side runs
+   are unconfined by construction, while its Codex runner gets
+   `thread_sandbox: "workspace-write"` from Codex's own sandbox.
 
 ## References
 
 - #912: the Windows defect that surfaced the model, and the one site left for this ADR
-- #910: `Boundary.Path.confine/3` and `FsSandbox` drive-anchor fix, and the shared vectors
-- #915: gates `raxol_core` and `raxol_agent` in per-PR CI, the prerequisite above
+- #910: `Boundary.Path.confine/3` and `FsSandbox` drive-anchor fix, the shared vectors, and
+  the parity guard that makes "drift is a red test" true
+- #915: gated `raxol_core` and `raxol_agent` in per-PR CI, the prerequisite above (merged)
+- #919: `shell_jail_allow/1` accepts `Sandbox.Shell.none()`, which this ADR's `Spawn` backends
+  would make reachable
+- #920: Symphony's `RaxolAgent` runner ignores `:workspace_path`, so its runs are unconfined
 - ADR-0020: `Raxol.Agent.Sandbox`, which reserved and deferred the Filesystem dimension
 - ADR-0023: the gateway, for how a frozen contract plus optional backends has worked before
 - ADR-0024: pluggable execution backends, for "opt-in behaviour, default stays local"
