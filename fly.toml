@@ -18,10 +18,12 @@ kill_signal = 'SIGTERM'
   PHX_HOST = 'raxol.io'
   PORT = '8080'
   RAXOL_MODE = 'minimal'
-  RAXOL_SSH_PLAYGROUND = 'true'
-  RAXOL_SSH_PORT = '2222'
-  RAXOL_SSH_MAX_CONNECTIONS = '50'
-  RAXOL_SSH_HOST_KEYS_DIR = '/app/ssh_keys'
+  # The anonymous SSH playground (port 2222) is deliberately absent: it was
+  # suspended 2026-08-26 after review found it reachable, unauthenticated, on
+  # the app's dedicated IPv6. Re-enabling it is a separate, explicit decision
+  # gated on the SSH safety defaults (loopback-unless-acknowledged bind, boot
+  # posture line, accept/close logging, host keys on a persistent volume) and
+  # on verification from outside the app over BOTH address families.
   # Hosted coding agent (multi-tenant, port 2223): flip on once a tenants
   # volume exists. The build already carries raxol_agent, raxol_payments and
   # req (see web/mix.exs); boot refuses to serve without all three, and
@@ -51,13 +53,6 @@ kill_signal = 'SIGTERM'
     method = "GET"
     timeout = "5s"
     path = "/health"
-
-[[services]]
-  internal_port = 2222
-  protocol = 'tcp'
-
-  [[services.ports]]
-    port = 2222
 
 [[vm]]
   memory = '1gb'
