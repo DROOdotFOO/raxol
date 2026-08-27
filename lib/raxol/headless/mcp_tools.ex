@@ -519,8 +519,6 @@ defmodule Raxol.Headless.McpTools do
   defp confine_path(_root, path) when is_binary(path),
     do: {:error, "path must not be empty"}
 
-  defp confine_path(_root, _path), do: {:error, "path must be a string"}
-
   # `nil` for a genuinely relative path; otherwise what it is anchored at.
   #
   # `Path.type/1` alone is not enough, because it is OS-dependent in exactly the
