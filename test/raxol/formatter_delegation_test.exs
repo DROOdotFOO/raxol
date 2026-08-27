@@ -11,6 +11,8 @@ defmodule Raxol.FormatterDelegationTest do
 
   use ExUnit.Case, async: true
 
+  @root_formatter_keys [:inputs, :exclude, :line_length, :locals_without_parens]
+
   # A package is defined by its mix.exs, NOT by having a .formatter.exs -- which
   # is the point. Enumerating by `.formatter.exs` would make a package that is
   # missing one invisible to the very test that exists to catch it, and the root
@@ -36,10 +38,25 @@ defmodule Raxol.FormatterDelegationTest do
       {package_opts, _bindings} =
         Code.eval_file("packages/#{package}/.formatter.exs")
 
-      assert Keyword.get(resolved_opts, :line_length) ==
-               Keyword.get(package_opts, :line_length),
-             "#{package} does not resolve the line length from its own formatter"
+      assert Keyword.take(resolved_opts, @root_formatter_keys) ==
+               Keyword.take(package_opts, @root_formatter_keys),
+             "#{package} does not resolve options from its own formatter"
     end
+  end
+
+  @tag :tmp_dir
+  test "loader validation ignores formatter stdout", %{tmp_dir: tmp_dir} do
+    formatter = Path.join(tmp_dir, ".formatter.exs")
+
+    File.write!(formatter, "IO.puts(\"noise\")\n[plugins: [SomePlugin]]\n")
+
+    {output, status} =
+      System.cmd("elixir", ["scripts/check_formatter_loaders.exs", formatter],
+        stderr_to_stdout: true
+      )
+
+    assert status == 1
+    assert output =~ "sets plugins: [SomePlugin]"
   end
 
   defp packages do

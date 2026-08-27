@@ -25,22 +25,12 @@ err() {
   printf '::error::%s\n' "$1" >&2
 }
 
-# The deps a package's formatter config would make `mix format` LOAD.
-#
-# Evaluated rather than grepped. `import_deps: []` and `import_deps: [:phoenix]`
-# differ by one character and a multi-line list defeats a line-based match
-# entirely, so a regex here is a gate that reports clean for the shape it exists
-# to catch. A .formatter.exs is a literal term; evaluating it is what `mix
-# format` itself does.
-formatter_loaders() {
-  elixir -e '
-    [path] = System.argv()
-    {opts, _bindings} = Code.eval_file(path)
-    import_deps = opts |> Keyword.get(:import_deps, []) |> Enum.join(", ")
-    plugins = opts |> Keyword.get(:plugins, []) |> Enum.map_join(", ", &inspect/1)
-    IO.puts(import_deps)
-    IO.write(plugins)
-  ' "$1"
+# Evaluate the formatter config in a child process, as `mix format` does. The
+# child validates loader options itself and communicates only through its exit
+# status and stderr. Formatter files are executable Elixir and may write to
+# stdout, so stdout cannot safely carry a line-oriented result protocol.
+formatter_loader_error() {
+  elixir scripts/check_formatter_loaders.exs "$1" >/dev/null
 }
 
 shopt -s nullglob
@@ -65,21 +55,11 @@ for dir in packages/*/; do
     continue
   fi
 
-  # This script's cheapness is the reason it is not in `package-tests`, and
-  # `import_deps:` is the one option that would cost it: the formatter loads the
-  # named deps, and nothing here runs `mix deps.get` inside a package. Caught by
-  # name so the failure does not arrive as an unrelated "could not find dep".
-  loaders="$(formatter_loaders "$dir/.formatter.exs")"
-  deps="$(printf '%s\n' "$loaders" | sed -n '1p')"
-  plugins="$(printf '%s\n' "$loaders" | sed -n '2p')"
-  if [[ -n "$deps" ]]; then
-    err "$pkg sets import_deps: [$deps], which makes mix format load those deps. This check does not fetch them. Either drop it, or move this package into the package-tests matrix where deps are available."
-    failed=1
-    continue
-  fi
-
-  if [[ -n "$plugins" ]]; then
-    err "$pkg sets plugins: [$plugins], which makes mix format load compiled plugin modules. This check does not fetch or compile them. Drop the plugins, or move this package into the package-tests matrix where deps are available."
+  # This script's cheapness is the reason it is not in `package-tests`.
+  # `import_deps:` and `plugins:` both make the formatter load compiled code,
+  # while nothing here fetches or compiles package dependencies.
+  if ! loader_error="$(formatter_loader_error "$dir/.formatter.exs" 2>&1)"; then
+    err "$pkg $loader_error"
     failed=1
     continue
   fi
