@@ -20,6 +20,7 @@ defmodule Raxol.AgentClientProtocol.AgentTest do
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Handler.Codegen
   alias Raxol.AgentClientProtocol.MethodTable
+  alias Raxol.AgentClientProtocol.Test.Teardown
   alias Raxol.AgentClientProtocol.Transport
 
   # -- fixtures -----------------------------------------------------------
@@ -262,10 +263,7 @@ defmodule Raxol.AgentClientProtocol.AgentTest do
           handler_arg: self()
         )
 
-      on_exit(fn ->
-        catch_exit(Supervisor.stop(agent_sup, :normal, 500))
-        catch_exit(Supervisor.stop(client_sup, :normal, 500))
-      end)
+      on_exit(fn -> Teardown.stop_all([agent_sup, client_sup]) end)
 
       client_conn = connection_pid(client_sup)
 
