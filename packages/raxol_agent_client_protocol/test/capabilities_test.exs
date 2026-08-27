@@ -17,6 +17,7 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
 
   alias Raxol.AgentClientProtocol.Capabilities
   alias Raxol.AgentClientProtocol.MethodTable
+  alias Raxol.AgentClientProtocol.Test.Teardown
 
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.AgentAuthCapabilities
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.AgentCapabilities
@@ -371,10 +372,7 @@ defmodule Raxol.AgentClientProtocol.CapabilitiesTest do
       {:ok, client_sup} =
         Client.start_link(GateClient, transport: {Transport.Paired, client_handle})
 
-      on_exit(fn ->
-        catch_exit(Supervisor.stop(agent_sup, :normal, 500))
-        catch_exit(Supervisor.stop(client_sup, :normal, 500))
-      end)
+      on_exit(fn -> Teardown.stop_all([agent_sup, client_sup]) end)
 
       {:ok, agent_conn: connection_pid(agent_sup), client_conn: connection_pid(client_sup)}
     end
