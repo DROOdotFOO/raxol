@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Escape.Parsers.BaseParser do
   Provides common functionality for logging and handling unknown sequences.
   """
 
-
   @doc """
   Logs an unknown escape sequence for debugging purposes.
 

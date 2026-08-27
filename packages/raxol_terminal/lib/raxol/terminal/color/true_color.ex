@@ -32,7 +32,6 @@ defmodule Raxol.Terminal.Color.TrueColor do
       accessible? = TrueColor.wcag_compliant?(red, blue, :aa)
   """
 
-
   @compile {:no_warn_undefined, Raxol.Terminal.Color.TrueColor.Conversion}
   @compile {:no_warn_undefined, Raxol.Terminal.Color.TrueColor.Detection}
   @compile {:no_warn_undefined, Raxol.Terminal.Color.TrueColor.Palette}

@@ -292,7 +292,10 @@ defmodule Raxol.MCP.ToolSynchronizer do
             Map.put(acc, key, proj_fn.(model))
           rescue
             e ->
-              Logger.warning("[MCP.ToolSynchronizer] Projection #{inspect(key)} failed: #{Exception.message(e)}")
+              Logger.warning(
+                "[MCP.ToolSynchronizer] Projection #{inspect(key)} failed: #{Exception.message(e)}"
+              )
+
               acc
           end
         end)

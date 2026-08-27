@@ -53,9 +53,7 @@ defmodule Raxol.Terminal.Driver.TermboxLifecycle do
             {:noreply, state}
 
           {:error, init_reason} ->
-            Log.error(
-              "Failed to recover from termbox error: #{inspect(init_reason)}"
-            )
+            Log.error("Failed to recover from termbox error: #{inspect(init_reason)}")
 
             {:stop, {:termbox_error, reason}, state}
         end

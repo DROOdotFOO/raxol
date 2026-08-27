@@ -118,6 +118,7 @@ defmodule Raxol.Watch.Push.FCMTest do
       data = FCM.build_data_payload(%{title: "t", body: "b", actions: [], location: loc})
 
       assert is_binary(data["raxol_location"])
+
       assert Jason.decode!(data["raxol_location"]) == %{
                "lat" => 37.7749,
                "lng" => -122.4194,

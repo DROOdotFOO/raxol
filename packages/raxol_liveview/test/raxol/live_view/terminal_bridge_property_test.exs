@@ -25,9 +25,7 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   defp box_drawing_gen do
     StreamData.map(
       StreamData.list_of(
-        StreamData.member_of(
-          Enum.to_list(0x2500..0x257F) ++ Enum.to_list(0x250C..0x2573)
-        ),
+        StreamData.member_of(Enum.to_list(0x2500..0x257F) ++ Enum.to_list(0x250C..0x2573)),
         min_length: 1,
         max_length: 20
       ),
@@ -93,11 +91,18 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   end
 
   defp escape_html_binary(<<>>, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
-  defp escape_html_binary(<<?&, rest::binary>>, acc), do: escape_html_binary(rest, ["&amp;" | acc])
+
+  defp escape_html_binary(<<?&, rest::binary>>, acc),
+    do: escape_html_binary(rest, ["&amp;" | acc])
+
   defp escape_html_binary(<<?<, rest::binary>>, acc), do: escape_html_binary(rest, ["&lt;" | acc])
   defp escape_html_binary(<<?>, rest::binary>>, acc), do: escape_html_binary(rest, ["&gt;" | acc])
-  defp escape_html_binary(<<?", rest::binary>>, acc), do: escape_html_binary(rest, ["&quot;" | acc])
-  defp escape_html_binary(<<?', rest::binary>>, acc), do: escape_html_binary(rest, ["&#39;" | acc])
+
+  defp escape_html_binary(<<?", rest::binary>>, acc),
+    do: escape_html_binary(rest, ["&quot;" | acc])
+
+  defp escape_html_binary(<<?', rest::binary>>, acc),
+    do: escape_html_binary(rest, ["&#39;" | acc])
 
   defp escape_html_binary(<<c::utf8, rest::binary>>, acc),
     do: escape_html_binary(rest, [<<c::utf8>> | acc])
@@ -105,7 +110,7 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   # --- Properties ---
 
   property "escape_html_text never crashes on any valid UTF-8 string" do
-    check all text <- unicode_gen(), max_runs: 500 do
+    check all(text <- unicode_gen(), max_runs: 500) do
       result = escape_html_text(text)
       assert is_binary(result)
     end
@@ -113,14 +118,16 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
 
   property "escape_html_text preserves string length for non-special chars" do
     # For strings without HTML-special chars, content length is preserved
-    check all text <- StreamData.one_of([ascii_printable_gen(), cjk_gen(), box_drawing_gen()]),
-              not String.contains?(text, ["&", "<", ">", "\"", "'"]) do
+    check all(
+            text <- StreamData.one_of([ascii_printable_gen(), cjk_gen(), box_drawing_gen()]),
+            not String.contains?(text, ["&", "<", ">", "\"", "'"])
+          ) do
       assert escape_html_text(text) == text
     end
   end
 
   property "escape_html_text roundtrips: unescape(escape(x)) == x" do
-    check all text <- unicode_gen(), max_runs: 300 do
+    check all(text <- unicode_gen(), max_runs: 300) do
       escaped = escape_html_text(text)
 
       unescaped =
@@ -136,14 +143,14 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   end
 
   property "escape_html_text produces valid UTF-8" do
-    check all text <- unicode_gen(), max_runs: 300 do
+    check all(text <- unicode_gen(), max_runs: 300) do
       result = escape_html_text(text)
       assert String.valid?(result)
     end
   end
 
   property "escape_html_text handles box-drawing characters" do
-    check all text <- box_drawing_gen(), max_runs: 200 do
+    check all(text <- box_drawing_gen(), max_runs: 200) do
       result = escape_html_text(text)
       assert is_binary(result)
       assert String.valid?(result)
@@ -153,7 +160,7 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   end
 
   property "escape_html_text handles CJK characters" do
-    check all text <- cjk_gen(), max_runs: 200 do
+    check all(text <- cjk_gen(), max_runs: 200) do
       result = escape_html_text(text)
       assert is_binary(result)
       assert String.valid?(result)
@@ -162,7 +169,7 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   end
 
   property "escape_html_text handles extended Latin" do
-    check all text <- latin_extended_gen(), max_runs: 200 do
+    check all(text <- latin_extended_gen(), max_runs: 200) do
       result = escape_html_text(text)
       assert is_binary(result)
       assert String.valid?(result)
@@ -171,7 +178,7 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   end
 
   property "escape_html_text escapes all five HTML-special characters" do
-    check all text <- html_special_gen(), max_runs: 200 do
+    check all(text <- html_special_gen(), max_runs: 200) do
       result = escape_html_text(text)
       # No raw < or > should survive
       refute String.contains?(result, ["<", ">"])
@@ -191,18 +198,21 @@ defmodule Raxol.LiveView.TerminalBridgePropertyTest do
   end
 
   property "escape_html_text handles mixed ASCII + CJK + box-drawing + specials" do
-    check all parts <- StreamData.list_of(
-                         StreamData.one_of([
-                           ascii_printable_gen(),
-                           cjk_gen(),
-                           box_drawing_gen(),
-                           latin_extended_gen(),
-                           html_special_gen()
-                         ]),
-                         min_length: 1,
-                         max_length: 5
-                       ),
-                       max_runs: 200 do
+    check all(
+            parts <-
+              StreamData.list_of(
+                StreamData.one_of([
+                  ascii_printable_gen(),
+                  cjk_gen(),
+                  box_drawing_gen(),
+                  latin_extended_gen(),
+                  html_special_gen()
+                ]),
+                min_length: 1,
+                max_length: 5
+              ),
+            max_runs: 200
+          ) do
       text = Enum.join(parts)
       result = escape_html_text(text)
       assert is_binary(result)

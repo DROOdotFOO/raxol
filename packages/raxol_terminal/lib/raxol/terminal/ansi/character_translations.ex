@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.ANSI.CharacterTranslations do
   Maps characters between different character sets according to ANSI standards.
   """
 
-
   # US ASCII character set (G0)
   @us_ascii_map %{
                   # Control characters (0x00-0x1F) are not translated

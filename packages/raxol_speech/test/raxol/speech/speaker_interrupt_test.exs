@@ -23,34 +23,29 @@ defmodule Raxol.Speech.SpeakerInterruptTest do
 
   describe "priority interrupt" do
     test "high-priority announcement calls stop/0 before speak/1" do
-      send(Speaker, {:announcement_added, make_ref(),
-                     %{message: "URGENT", priority: :high}})
+      send(Speaker, {:announcement_added, make_ref(), %{message: "URGENT", priority: :high}})
 
       assert :ok = wait_for_calls(2)
       assert [:stop, {:speak, "URGENT"}] = Tracking.calls()
     end
 
     test "normal-priority announcement does NOT call stop/0 first" do
-      send(Speaker, {:announcement_added, make_ref(),
-                     %{message: "info", priority: :normal}})
+      send(Speaker, {:announcement_added, make_ref(), %{message: "info", priority: :normal}})
 
       assert :ok = wait_for_calls(1)
       assert [{:speak, "info"}] = Tracking.calls()
     end
 
     test "back-to-back high-priority announcements each interrupt" do
-      send(Speaker, {:announcement_added, make_ref(),
-                     %{message: "first", priority: :high}})
-      send(Speaker, {:announcement_added, make_ref(),
-                     %{message: "second", priority: :high}})
+      send(Speaker, {:announcement_added, make_ref(), %{message: "first", priority: :high}})
+      send(Speaker, {:announcement_added, make_ref(), %{message: "second", priority: :high}})
 
       assert :ok = wait_for_calls(4)
       assert [:stop, {:speak, "first"}, :stop, {:speak, "second"}] = Tracking.calls()
     end
 
     test "low-priority announcement is treated as normal (no interrupt)" do
-      send(Speaker, {:announcement_added, make_ref(),
-                     %{message: "low", priority: :low}})
+      send(Speaker, {:announcement_added, make_ref(), %{message: "low", priority: :low}})
 
       assert :ok = wait_for_calls(1)
       assert [{:speak, "low"}] = Tracking.calls()

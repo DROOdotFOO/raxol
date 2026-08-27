@@ -12,10 +12,11 @@ defmodule Raxol.Plugin.API do
       Raxol.Plugin.API.list()
   """
 
-  @compile {:no_warn_undefined, [
-    Raxol.Core.Runtime.Plugins.PluginManager,
-    Raxol.Core.Runtime.Plugins.PluginLifecycle
-  ]}
+  @compile {:no_warn_undefined,
+            [
+              Raxol.Core.Runtime.Plugins.PluginManager,
+              Raxol.Core.Runtime.Plugins.PluginLifecycle
+            ]}
 
   @type plugin_id :: atom() | String.t()
 
@@ -93,7 +94,7 @@ defmodule Raxol.Plugin.API do
 
   # Wraps calls in try/catch :exit for when the PluginManager/Lifecycle
   # GenServer is not running.
-  @spec call((() -> result)) :: result | {:error, :plugin_manager_not_running} when result: term()
+  @spec call((-> result)) :: result | {:error, :plugin_manager_not_running} when result: term()
   defp call(fun) do
     fun.()
   catch

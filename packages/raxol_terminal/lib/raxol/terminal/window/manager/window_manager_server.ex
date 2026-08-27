@@ -34,7 +34,6 @@ defmodule Raxol.Terminal.Window.Manager.WindowManagerServer do
 
   use Raxol.Core.Behaviours.BaseManager
 
-
   alias Raxol.Terminal.{Config, Window}
   alias Raxol.Terminal.Window.Manager.{NavigationOps, StateOps}
 

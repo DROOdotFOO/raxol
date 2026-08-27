@@ -1,7 +1,6 @@
 defmodule Raxol.Terminal.Commands.ParameterValidation do
   @moduledoc false
 
-
   @spec get_valid_param(
           list(integer() | nil),
           non_neg_integer(),

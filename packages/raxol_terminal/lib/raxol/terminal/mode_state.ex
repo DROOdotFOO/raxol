@@ -9,7 +9,6 @@ defmodule Raxol.Terminal.ModeState do
   - Providing mode state queries
   """
 
-
   # DEC Private Mode codes and their corresponding mode atoms
   @dec_private_modes %{
     # Cursor Keys Mode

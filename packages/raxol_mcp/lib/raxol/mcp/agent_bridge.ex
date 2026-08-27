@@ -62,8 +62,7 @@ defmodule Raxol.MCP.AgentBridge do
     [
       %{
         name: "agent.list",
-        description:
-          "List all active agent sessions with their IDs and status.",
+        description: "List all active agent sessions with their IDs and status.",
         inputSchema: %{type: "object", properties: %{}},
         callback: &list_agents/1
       },
@@ -148,8 +147,7 @@ defmodule Raxol.MCP.AgentBridge do
                [
                  %{
                    type: "text",
-                   text:
-                     "Enqueued #{String.length(message)} keystrokes for agent #{id}"
+                   text: "Enqueued #{String.length(message)} keystrokes for agent #{id}"
                  }
                ]}
 
@@ -176,8 +174,7 @@ defmodule Raxol.MCP.AgentBridge do
          function_exported?(Raxol.Headless, :get_model, 1) do
       with {:ok, session} <- existing_session_atom(id),
            {:ok, model} <- Raxol.Headless.get_model(session) do
-        {:ok,
-         [%{type: "text", text: inspect(model, pretty: true, limit: :infinity)}]}
+        {:ok, [%{type: "text", text: inspect(model, pretty: true, limit: :infinity)}]}
       else
         {:error, :unknown_session} -> {:error, "Unknown agent session: #{id}"}
         {:error, reason} -> {:error, reason}

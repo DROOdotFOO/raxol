@@ -83,7 +83,13 @@ defmodule Raxol.Sensor.HUDOverlayTest do
 
       fused = %{
         sensors: %{
-          temp: %{values: %{value: 50.0}, quality: 1.0, latest_timestamp: 0, reading_count: 1, alerts: []}
+          temp: %{
+            values: %{value: 50.0},
+            quality: 1.0,
+            latest_timestamp: 0,
+            reading_count: 1,
+            alerts: []
+          }
         },
         fused_at: 0
       }
@@ -108,8 +114,20 @@ defmodule Raxol.Sensor.HUDOverlayTest do
 
       fused = %{
         sensors: %{
-          temp: %{values: %{value: 50.0}, quality: 1.0, latest_timestamp: 0, reading_count: 1, alerts: []},
-          prox: %{values: %{level: :high, bearing: 45}, quality: 1.0, latest_timestamp: 0, reading_count: 1, alerts: []}
+          temp: %{
+            values: %{value: 50.0},
+            quality: 1.0,
+            latest_timestamp: 0,
+            reading_count: 1,
+            alerts: []
+          },
+          prox: %{
+            values: %{level: :high, bearing: 45},
+            quality: 1.0,
+            latest_timestamp: 0,
+            reading_count: 1,
+            alerts: []
+          }
         },
         fused_at: 0
       }

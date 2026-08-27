@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Parser.States.DesignateCharsetState do
   Handles the :designate_charset state of the terminal parser.
   """
 
-
   alias Raxol.Terminal.ANSI.CharacterSets
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State

@@ -55,9 +55,7 @@ defmodule Raxol.Terminal.Driver.Dispatch do
   Parses test input data into an Event struct.
   """
   def parse_test_input(input_data) when is_binary(input_data) do
-    Log.debug(
-      "[TerminalDriver.parse_test_input] Parsing: #{inspect(input_data)}"
-    )
+    Log.debug("[TerminalDriver.parse_test_input] Parsing: #{inspect(input_data)}")
 
     case InputParser.parse(input_data) do
       [event | _] -> event

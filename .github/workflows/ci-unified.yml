@@ -178,6 +178,15 @@ jobs:
       - name: Check formatting
         run: mix format --check-formatted
 
+      # The root check above reads the root .formatter.exs, whose `inputs` stop
+      # at the repo root -- so it reaches a package file only when a caller
+      # names one. This walks every package and runs its own gate. It compiles
+      # nothing, which is why it lives here and not in `package-tests`; the
+      # script says why at length, and asserts the two conditions that would
+      # make that untrue.
+      - name: Check package formatting
+        run: bash scripts/check_package_formatting.sh
+
       - name: Check singleton allowlist
         run: bash scripts/check_singletons.sh
 
@@ -306,11 +315,10 @@ jobs:
         # with a compiler warning nobody could fail on, because nothing here ran
         # them. Adding them required unbreaking both suites first -- see the PR.
         #
-        # raxol_agent_client_protocol joins for the format half: ungated, five of
-        # its files had been rewrapped at the root's 80 columns and no check
-        # anywhere disagreed. A package earns its entry in the root
-        # .formatter.exs `subdirectories` list by being gated here, so the two
-        # lists move together.
+        # Formatting is NOT what this matrix is for any more. Every package is
+        # format-checked by the `format` job, which needs no compile, and the
+        # root .formatter.exs delegates `packages/*` by glob -- so a package
+        # joins here to get its TESTS run, not to earn a formatter entry.
         #
         # raxol_console boots agent packages onto the gateway and was ungated for
         # the same reason the others were: nothing in per-PR CI ran it. It joins
@@ -408,12 +416,11 @@ jobs:
             --exclude cli_signer \
             --exclude skip_on_ci
 
-      # Last, not first. The root Format Check reads the root .formatter.exs,
-      # whose inputs cover only root lib/config/examples/test, so before this
-      # step no file under packages/ was format-checked anywhere in CI (25 files
-      # over three packages had drifted). But this job is named "Package Tests"
-      # and two of its cells move real money: a red X here has to mean the tests
-      # ran, not that a line was two columns too wide before compile started.
+      # Kept as a per-package backstop, and kept LAST. The `format` job checks
+      # every package now, so this is redundant on the happy path -- but this
+      # job is named "Package Tests" and two of its cells move real money, so a
+      # red X here has to mean the tests ran, not that a line was two columns
+      # too wide before compile started.
       - name: Check formatting
         working-directory: packages/${{ matrix.package }}
         run: mix format --check-formatted

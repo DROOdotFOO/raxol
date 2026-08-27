@@ -66,7 +66,10 @@ defmodule Raxol.Speech.Speaker do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: :high}}, state) do
+  def handle_manager_info(
+        {:announcement_added, _ref, %{message: message, priority: :high}},
+        state
+      ) do
     if should_speak?() do
       state.tts_backend.stop()
 
@@ -82,7 +85,10 @@ defmodule Raxol.Speech.Speaker do
     {:noreply, state}
   end
 
-  def handle_manager_info({:announcement_added, _ref, %{message: message, priority: priority}}, state) do
+  def handle_manager_info(
+        {:announcement_added, _ref, %{message: message, priority: priority}},
+        state
+      ) do
     if should_speak?() do
       do_speak(state.tts_backend, message, %{source: :announcement, priority: priority})
     end

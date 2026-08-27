@@ -54,11 +54,11 @@ defmodule Raxol.Plugin do
       def get_commands, do: []
 
       defoverridable terminate: 2,
-                       enable: 1,
-                       disable: 1,
-                       filter_event: 2,
-                       handle_command: 3,
-                       get_commands: 0
+                     enable: 1,
+                     disable: 1,
+                     filter_event: 2,
+                     handle_command: 3,
+                     get_commands: 0
     end
   end
 end

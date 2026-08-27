@@ -103,9 +103,7 @@ defmodule Raxol.Sensor.Feed do
 
   @impl true
   def handle_continue(:connect, %__MODULE__{} = state) do
-    case state.module.connect(
-           [sensor_id: state.sensor_id] ++ state.connect_opts
-         ) do
+    case state.module.connect([sensor_id: state.sensor_id] ++ state.connect_opts) do
       {:ok, sensor_state} ->
         state = %__MODULE__{
           state
@@ -117,9 +115,7 @@ defmodule Raxol.Sensor.Feed do
         {:noreply, schedule_poll(state)}
 
       {:error, reason} ->
-        Logger.warning(
-          "Sensor #{state.sensor_id} connect failed: #{inspect(reason)}"
-        )
+        Logger.warning("Sensor #{state.sensor_id} connect failed: #{inspect(reason)}")
 
         state = %__MODULE__{state | status: :error}
         {:noreply, schedule_backoff(state)}

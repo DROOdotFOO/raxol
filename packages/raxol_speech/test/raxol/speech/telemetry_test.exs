@@ -29,8 +29,7 @@ defmodule Raxol.Speech.TelemetryTest do
       assert_receive {[:raxol_speech, :tts, :speak, :start], _ref, _,
                       %{source: :api, backend: Noop, byte_size: 5}}
 
-      assert_receive {[:raxol_speech, :tts, :speak, :stop], _ref,
-                      %{duration: duration},
+      assert_receive {[:raxol_speech, :tts, :speak, :stop], _ref, %{duration: duration},
                       %{source: :api, backend: Noop, result: :ok}}
 
       assert is_integer(duration) and duration >= 0
@@ -46,8 +45,10 @@ defmodule Raxol.Speech.TelemetryTest do
 
   describe "announcement-driven speech" do
     test "normal-priority announcement emits a :speak span with announcement source" do
-      send(Speaker, {:announcement_added, make_ref(),
-                     %{message: "build complete", priority: :normal}})
+      send(
+        Speaker,
+        {:announcement_added, make_ref(), %{message: "build complete", priority: :normal}}
+      )
 
       assert_receive {[:raxol_speech, :tts, :speak, :start], _, _,
                       %{source: :announcement, priority: :normal}}
@@ -56,8 +57,10 @@ defmodule Raxol.Speech.TelemetryTest do
     end
 
     test "high-priority announcement emits :interrupted before the :speak span" do
-      send(Speaker, {:announcement_added, make_ref(),
-                     %{message: "build failed", priority: :high}})
+      send(
+        Speaker,
+        {:announcement_added, make_ref(), %{message: "build failed", priority: :high}}
+      )
 
       assert_receive {[:raxol_speech, :tts, :interrupted], _, _,
                       %{priority: :high, backend: Noop}}

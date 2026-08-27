@@ -7,8 +7,7 @@ defmodule Raxol.Sensor.HUD do
   """
 
   @type cell ::
-          {non_neg_integer(), non_neg_integer(), String.t(), atom(), atom(),
-           map()}
+          {non_neg_integer(), non_neg_integer(), String.t(), atom(), atom(), map()}
   @type region ::
           {non_neg_integer(), non_neg_integer(), pos_integer(), pos_integer()}
 

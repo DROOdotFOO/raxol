@@ -5,7 +5,6 @@ defmodule Raxol.Terminal.Integration.Config do
 
   @default_scrollback Raxol.Core.Defaults.scrollback_limit()
 
-
   alias Raxol.Terminal.{
     Config,
     Rendering.RenderServer,

@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.ANSI.StateMachine do
   This module provides a more efficient alternative to regex-based parsing.
   """
 
-
   # Guard macros for ANSI byte classification
   defmacro param_byte?(byte),
     do: quote(do: unquote(byte) >= ?0 and unquote(byte) <= ?9)

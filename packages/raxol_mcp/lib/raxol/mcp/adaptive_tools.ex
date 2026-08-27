@@ -109,8 +109,7 @@ defmodule Raxol.MCP.AdaptiveTools do
         properties: %{
           window_count: %{
             type: "integer",
-            description:
-              "Number of recent aggregate windows to return (default: 3)"
+            description: "Number of recent aggregate windows to return (default: 3)"
           }
         }
       },
@@ -206,11 +205,9 @@ defmodule Raxol.MCP.AdaptiveTools do
         most_used_panes: Enum.map(agg.most_used_panes, &to_string/1),
         least_used_panes: Enum.map(agg.least_used_panes, &to_string/1),
         scroll_frequency: stringify_keys(Map.get(agg, :scroll_frequency, %{})),
-        takeover_duration_ms:
-          stringify_keys(Map.get(agg, :takeover_duration_ms, %{})),
+        takeover_duration_ms: stringify_keys(Map.get(agg, :takeover_duration_ms, %{})),
         layout_override_count: Map.get(agg, :layout_override_count, 0),
-        command_concentration:
-          stringify_keys(Map.get(agg, :command_concentration, %{}))
+        command_concentration: stringify_keys(Map.get(agg, :command_concentration, %{}))
       }
     end)
   end

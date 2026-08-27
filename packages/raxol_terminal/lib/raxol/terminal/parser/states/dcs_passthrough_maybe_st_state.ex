@@ -3,7 +3,6 @@ defmodule Raxol.Terminal.Parser.States.DCSPassthroughMaybeSTState do
   Handles the :dcs_passthrough_maybe_st state of the terminal parser.
   """
 
-
   alias Raxol.Terminal.Commands.Executor
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State

@@ -49,6 +49,7 @@ defmodule Raxol.Terminal.Registry do
         :set,
         read_concurrency: true
       ])
+
     {:ok, %{table: table, name: Keyword.get(opts, :name, __MODULE__)}}
   end
 

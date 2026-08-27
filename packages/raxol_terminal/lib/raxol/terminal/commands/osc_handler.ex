@@ -432,9 +432,7 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
               if color_spec == "" do
                 {:reset, index}
               else
-                case Raxol.Terminal.Commands.OSCHandler.ColorParser.parse(
-                       color_spec
-                     ) do
+                case Raxol.Terminal.Commands.OSCHandler.ColorParser.parse(color_spec) do
                   {:ok, color} -> {:set, index, color}
                   error -> error
                 end
@@ -634,8 +632,7 @@ defmodule Raxol.Terminal.Commands.OSCHandler do
         [family, size, style] ->
           case Integer.parse(size) do
             {size_val, ""} ->
-              {:ok,
-               %{family: family, size: size_val, style: parse_style(style)}}
+              {:ok, %{family: family, size: size_val, style: parse_style(style)}}
 
             _ ->
               {:error, :invalid_size}

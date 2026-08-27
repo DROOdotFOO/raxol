@@ -7,8 +7,7 @@ defmodule Raxol.Terminal.ANSI.Sequences.Colors do
   """
 
   # Style.Colors lives in main raxol; guarded at runtime
-  @compile {:no_warn_undefined,
-            [Raxol.Style.Colors.Advanced, Raxol.Style.Colors.Color]}
+  @compile {:no_warn_undefined, [Raxol.Style.Colors.Advanced, Raxol.Style.Colors.Color]}
 
   alias Raxol.Terminal.ANSI.TextFormatting
 
