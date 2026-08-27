@@ -178,24 +178,14 @@ jobs:
       - name: Check formatting
         run: mix format --check-formatted
 
-      # The root check reads the root .formatter.exs, which delegates every
-      # `packages/*` path to that package's own config -- so it covers package
-      # files only for paths its own `inputs` reach, and those inputs stop at
-      # the repo root. This walks each package and runs its gate directly.
-      #
-      # Deliberately here and not in the `package-tests` matrix: that job
-      # compiles and runs a full suite per package, so gating all 17 there would
-      # add a lot of CI for a check that needs neither. `mix format` reads
-      # .formatter.exs and the source; nothing is compiled.
+      # The root check above reads the root .formatter.exs, whose `inputs` stop
+      # at the repo root -- so it reaches a package file only when a caller
+      # names one. This walks every package and runs its own gate. It compiles
+      # nothing, which is why it lives here and not in `package-tests`; the
+      # script says why at length, and asserts the two conditions that would
+      # make that untrue.
       - name: Check package formatting
-        run: |
-          failed=0
-          for dir in packages/*/; do
-            if [ -f "$dir/.formatter.exs" ]; then
-              (cd "$dir" && mix format --check-formatted) || failed=1
-            fi
-          done
-          exit $failed
+        run: bash scripts/check_package_formatting.sh
 
       - name: Check singleton allowlist
         run: bash scripts/check_singletons.sh

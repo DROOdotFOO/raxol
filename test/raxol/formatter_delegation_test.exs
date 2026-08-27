@@ -20,14 +20,26 @@ defmodule Raxol.FormatterDelegationTest do
     refute format.(@wide_line) == @wide_line
   end
 
+  # A package is defined by its mix.exs, NOT by having a .formatter.exs -- which
+  # is the point. Enumerating by `.formatter.exs` would make a package that is
+  # missing one invisible to the very test that exists to catch it, and the root
+  # glob would quietly format it at 80 columns. CI's `Check package formatting`
+  # step makes the same assertion; this is the cheaper of the two signals.
+  test "every package carries its own .formatter.exs" do
+    for package <- packages() do
+      assert File.exists?("packages/#{package}/.formatter.exs"),
+             "#{package} has no .formatter.exs, so the root glob formats it at " <>
+               "80 columns while its own CI gate expects 98"
+    end
+  end
+
   # Asked of the formatter rather than of the config's shape. The delegation list
   # is a glob now, so string-matching a package name against it would pass while
   # proving nothing about what `mix format` actually does to that package's
   # files -- which is the whole property.
   test "every package resolves through its own formatter, not the root's" do
     for package <- packages() do
-      file = sample_file(package)
-      {format, _opts} = Mix.Tasks.Format.formatter_for_file(file)
+      {format, _opts} = Mix.Tasks.Format.formatter_for_file(probe_path(package))
 
       assert format.(@wide_line) == @wide_line,
              "#{package} resolves through the root formatter (80 columns), so a " <>
@@ -36,20 +48,18 @@ defmodule Raxol.FormatterDelegationTest do
   end
 
   defp packages do
-    "packages/*/.formatter.exs"
+    "packages/*/mix.exs"
     |> Path.wildcard()
     |> Enum.map(&(&1 |> Path.dirname() |> Path.basename()))
+    |> tap(&assert &1 != [], "no packages found; is this running from the repo root?")
   end
 
-  # Any real source file under the package will do: the question is which
-  # formatter config `mix format` picks for that path, not what the file holds.
-  defp sample_file(package) do
-    "packages/#{package}/lib/**/*.ex"
-    |> Path.wildcard()
-    |> List.first()
-    |> case do
-      nil -> flunk("#{package} has no lib/**/*.ex to probe delegation with")
-      file -> file
-    end
-  end
+  # A path that need not EXIST. `formatter_for_file/1` picks a config by walking
+  # up from the path, so it answers for a hypothetical file just as well as a
+  # real one -- and asking about a hypothetical removes two ways for this test
+  # to fail for reasons that are not the property: a package whose `lib/` is
+  # empty or absent (docs-only, or code not landed yet) used to `flunk`, and
+  # picking `List.first()` out of a wildcard made the subject depend on
+  # directory order.
+  defp probe_path(package), do: "packages/#{package}/lib/formatter_probe.ex"
 end
