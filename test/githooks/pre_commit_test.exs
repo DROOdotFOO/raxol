@@ -189,4 +189,32 @@ defmodule Githooks.PreCommitTest do
              "a version string was executed as shell"
     end
   end
+
+  describe "scripts/prose_lint.exs" do
+    @script Path.expand("../../scripts/prose_lint.exs", __DIR__)
+
+    test "returns 0 for clean prose and 1 for findings", %{dir: dir} do
+      clean = Path.join(dir, "clean.md")
+      bad = Path.join(dir, "bad.md")
+      File.write!(clean, "Clean prose.\n")
+      File.write!(bad, "An em-dash \u2014 here.\n")
+
+      assert {_, 0} =
+               System.cmd("elixir", [@script, clean], stderr_to_stdout: true)
+
+      assert {output, 1} =
+               System.cmd("elixir", [@script, bad], stderr_to_stdout: true)
+
+      assert output =~ "unicode_punctuation"
+    end
+
+    test "returns 2 when it cannot run the requested lint", %{dir: dir} do
+      missing = Path.join(dir, "missing.md")
+
+      assert {output, 2} =
+               System.cmd("elixir", [@script, missing], stderr_to_stdout: true)
+
+      assert output =~ "cannot read"
+    end
+  end
 end

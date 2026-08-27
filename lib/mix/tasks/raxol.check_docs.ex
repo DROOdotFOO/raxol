@@ -16,7 +16,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
       mix raxol.check_docs                    # everything, all tracked Markdown
       mix raxol.check_docs --only prose       # skip the catalog counts
       mix raxol.check_docs --only counts      # skip the prose lint
-      mix raxol.check_docs --files a.md b.md  # lint just these (pre-commit hook)
+      mix raxol.check_docs --files a.md b.md  # lint just these
       mix raxol.check_docs --headings         # add the opt-in heading-case sweep
       mix raxol.check_docs --headings --warnings-as-errors
 

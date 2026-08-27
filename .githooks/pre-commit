@@ -111,15 +111,23 @@ if [[ -n "$md_files" ]]; then
     echo "pre-commit: no \`elixir\` on PATH, cannot lint prose." >&2
     echo "  Install the toolchain \`.tool-versions\` names, or bypass knowingly." >&2
     status=1
-  elif ! elixir scripts/prose_lint.exs "${args[@]}"; then
-    cat >&2 <<'MSG'
+  else
+    prose_status=0
+    elixir scripts/prose_lint.exs "${args[@]}" || prose_status=$?
+
+    if [[ "$prose_status" -eq 1 ]]; then
+      cat >&2 <<'MSG'
 
 pre-commit: Markdown prose check failed.
 
   Fix the findings above, or see `mix help raxol.check_docs` for the rules.
 
 MSG
-    status=1
+      status=1
+    elif [[ "$prose_status" -ne 0 ]]; then
+      echo "pre-commit: Markdown prose check could not run (exit $prose_status)." >&2
+      status=1
+    fi
   fi
 fi
 
