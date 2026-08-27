@@ -5,6 +5,10 @@
 Proposed, 2026-08-26. Nothing is implemented; this records the model and settles the platform
 question before code is written.
 
+Implementation order is part of this proposal: fix and bind `Actions.Fs` to the shared
+conformance vectors before introducing grant sets. The agent-runtime maintainers own that
+migration and its release note; the grant-set implementation must not merge first.
+
 Completes the `Sandbox.Filesystem` dimension that ADR-0020 named and deferred
 (`packages/raxol_agent/lib/raxol/agent/sandbox.ex:22-26`: "Filesystem, Network, and Resource
 dimensions are planned but deferred to a follow-up because their enforcement layer is
@@ -321,7 +325,7 @@ it currently has.
 | macOS | `Seatbelt` (deprecated interface, see below) | nothing, ships with the OS | confined, resolve-time | contained, enabled |
 | Linux with bubblewrap and unprivileged userns | `Bwrap` | `bwrap` on PATH | confined, resolve-time | contained, enabled |
 | Linux without either | `None` | | confined, resolve-time | disabled, as today |
-| Windows | `None` | | confined, resolve-time | absent, as today |
+| Windows | `None` | | legacy single-root; #912 remains in `Actions.Fs` | absent, as today |
 
 So the floor is: **the grant set is the baseline and the supported configuration on every
 platform, and an OS backend is an upgrade that, where the host allows it, unlocks one specific
@@ -441,7 +445,8 @@ posture; closing it would mean file I/O primitives Erlang does not expose.
 
 Adopting `confine/3` changes observable behaviour on real repositories, which is why the
 migration stalled once already: symlinked configs, `.asdf` shims, and monorepo package links
-all resolve differently under it. The migration wants a release note.
+all resolve differently under it. The agent-runtime maintainers own the migration and must
+ship its release note before the grant-set implementation lands.
 
 ### What this ADR does not decide
 
@@ -511,6 +516,10 @@ implementation runs them on Windows.
 
 Both are context for the decision rather than part of it, and both are filed: an ADR is not
 a tracker, and a defect recorded only in prose is one nobody is assigned.
+
+Publishing this ADR also publishes the analyses below before their fixes have landed. That is
+an explicit disclosure choice for this public repository. #919 is not reachable under current
+configuration; #920 is live and must be treated as an open confinement defect until fixed.
 
 1. **#919**: `Actions.Code.shell_jail_allow/1` (`code.ex:447`) re-enables the shell inside a
    jail for any `%Sandbox.Shell{}` present in the context, including `Sandbox.Shell.none()`,
