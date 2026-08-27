@@ -233,4 +233,42 @@ defmodule Raxol.Docs.ProseLintTest do
       assert ProseLint.format_findings([]) == []
     end
   end
+  # `check_file/2` joined every path onto `:root`, and `Path.join(".", "/tmp/x")`
+  # is `"./tmp/x"` -- so an absolute path read as MISSING and lint as clean.
+  # `scripts/prose_lint.exs` made that reachable in the worst way: its
+  # "named files must exist" guard resolved the real path while the lint
+  # resolved the joined one, so an absolute argument passed the guard and then
+  # silently found nothing.
+  describe "check_file/2 with an absolute path" do
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "prose_lint_abs_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      %{dir: dir}
+    end
+
+    test "reads the file rather than joining it onto the root", %{dir: dir} do
+      path = Path.join(dir, "abs.md")
+      File.write!(path, "An em-dash \u2014 here.")
+
+      assert [%{rule: :unicode_punctuation}] = ProseLint.check_file(path)
+    end
+
+    test "lint_files/2 finds it too, which is the path the hook script takes",
+         %{dir: dir} do
+      path = Path.join(dir, "abs.md")
+      File.write!(path, "An em-dash \u2014 here.")
+
+      assert [%{rule: :unicode_punctuation}] = ProseLint.lint_files([path])
+    end
+
+    test "a missing absolute path is still clean, not a crash", %{dir: dir} do
+      assert ProseLint.check_file(Path.join(dir, "nope.md")) == []
+    end
+  end
 end

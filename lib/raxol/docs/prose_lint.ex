@@ -82,11 +82,29 @@ defmodule Raxol.Docs.ProseLint do
   """
   @spec check_file(String.t(), keyword()) :: [finding()]
   def check_file(path, opts \\ []) do
-    root = Keyword.get(opts, :root, ".")
-
-    case File.read(Path.join(root, path)) do
+    case File.read(resolve_under_root(Keyword.get(opts, :root, "."), path)) do
       {:ok, content} -> check_content(path, content, opts)
       {:error, _} -> []
+    end
+  end
+
+  # An ABSOLUTE path is read as given, never joined.
+  #
+  # `Path.join(".", "/tmp/x.md")` is `"./tmp/x.md"`, which does not exist -- so
+  # joining an absolute path turned a real file into a CLEAN lint. That is the
+  # same defect as dropping `:root` (see `lint_files/2`), and it is worse than a
+  # crash both times: a linter that silently passes is indistinguishable from
+  # one with nothing to say.
+  #
+  # It bites hardest where nothing looks wrong. `scripts/prose_lint.exs` checks
+  # that every named file exists before linting, and that check used the real
+  # path while this one used the joined one -- so an absolute argument passed
+  # the guard and then lint as clean. The hook itself only ever passes git's
+  # repo-relative output, which is why it went unnoticed.
+  defp resolve_under_root(root, path) do
+    case Path.type(path) do
+      :relative -> Path.join(root, path)
+      _absolute_or_volumerelative -> path
     end
   end
 

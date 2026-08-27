@@ -54,17 +54,32 @@ case System.argv() do
       |> Enum.map(&Path.relative_to_cwd/1)
       |> Raxol.Docs.ProseLint.lint_files()
 
-    {errors, _warnings} = Enum.split_with(findings, &(&1.severity == :error))
+    {errors, warnings} = Enum.split_with(findings, &(&1.severity == :error))
 
-    if errors == [] do
-      System.halt(0)
-    else
-      IO.puts(:stderr, "\n#{length(errors)} error(s):")
+    report = fn
+      [], _label ->
+        :ok
 
-      errors
-      |> Raxol.Docs.ProseLint.format_findings()
-      |> Enum.each(&IO.puts(:stderr, &1))
+      found, label ->
+        IO.puts(:stderr, "\n#{length(found)} #{label}(s):")
 
-      System.halt(1)
+        found
+        |> Raxol.Docs.ProseLint.format_findings()
+        |> Enum.each(&IO.puts(:stderr, &1))
     end
+
+    report.(errors, "error")
+
+    # Warnings are PRINTED and not fatal, matching `mix raxol.check_docs`, which
+    # counts them toward failure only under `--warnings-as-errors`.
+    #
+    # Unreachable as things stand: the only warning-severity rule is
+    # `:heading_case`, which is opt-in via `headings: true` and nothing here
+    # enables it. Written anyway because the alternative is a silent `_warnings`
+    # discard, and the day the hook does pass `--headings` that discard is a
+    # hook withholding what CI is about to say -- the same hook-versus-CI split
+    # this script exists to close on scope, one axis over.
+    report.(warnings, "warning")
+
+    System.halt(if errors == [], do: 0, else: 1)
 end
