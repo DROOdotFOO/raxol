@@ -19,6 +19,38 @@ mix deps.get
 mix compile
 ```
 
+### Pre-commit hooks
+
+`mix setup` points `core.hooksPath` at `.githooks`. Two gates run, each only
+when the files it guards are staged: `mix.lock` consistency, and the Markdown
+prose rules.
+
+The prose gate runs `elixir scripts/prose_lint.exs`, deliberately not `mix`.
+The rules are the same `Raxol.Docs.ProseLint` module either way, but that route
+loads no project, so a docs commit is not blocked by states that say nothing
+about prose:
+
+* `deps/` not matching the branch's `mix.lock`, which is routine when branches
+  carry different locks, since one checkout shares one `deps/`
+* a `_build` compiled by a different Elixir than the one on `PATH`
+* a root `mix.lock` that no longer re-resolves
+
+CI still runs `mix raxol.check_docs`, which additionally checks catalog counts.
+
+If a gate reports something like `function Enum.__in__/2 is undefined`, the
+`mix` on `PATH` and the one `MIX_HOME` points at are different installs, and a
+Hex archive built for one is being loaded by the other. The hook prepends the
+toolchain `.tool-versions` names when it finds it installed under mise; for a
+manual command, put that toolchain's `bin` first on `PATH`.
+
+Set `RAXOL_HOOK_NO_TOOLCHAIN=1` to skip that and use `PATH` as-is, which is what
+you want when deliberately committing against a different Elixir.
+
+The hook is not a defence against a branch you do not trust. It runs
+`scripts/prose_lint.exs`, and the lockfile gate evaluates `mix.exs`, so a
+checked-out branch already chooses code that runs on `git commit`. That is true
+of any repo with hooks enabled. Review the branch, or use `--no-verify`.
+
 ## Commands
 
 ### Testing

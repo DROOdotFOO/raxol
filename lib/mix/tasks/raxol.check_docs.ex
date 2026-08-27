@@ -16,7 +16,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
       mix raxol.check_docs                    # everything, all tracked Markdown
       mix raxol.check_docs --only prose       # skip the catalog counts
       mix raxol.check_docs --only counts      # skip the prose lint
-      mix raxol.check_docs --files a.md b.md  # lint just these (pre-commit hook)
+      mix raxol.check_docs --files a.md b.md  # lint just these
       mix raxol.check_docs --headings         # add the opt-in heading-case sweep
       mix raxol.check_docs --headings --warnings-as-errors
 
@@ -68,19 +68,12 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
 
   defp lint([], opts), do: lint(tracked_markdown(), opts)
 
-  defp lint(files, opts) do
-    lint_opts = [headings: Keyword.get(opts, :headings, false)]
-
-    files
-    |> Enum.filter(&String.ends_with?(&1, ".md"))
-    |> Enum.reject(&(String.contains?(&1, "node_modules/") or vendored?(&1)))
-    |> Enum.flat_map(&ProseLint.check_file(&1, lint_opts))
-    |> Enum.sort_by(&{&1.path, &1.line})
-  end
-
-  # Upstream sources we re-publish unmodified. Rewriting their prose would make
-  # the vendored copy diverge from the thing it is a copy of.
-  defp vendored?(path), do: String.contains?(path, "termbox2/README.md")
+  # Selection and filtering live in `ProseLint` so this task and
+  # `scripts/prose_lint.exs` (which the pre-commit hook runs without Mix) cannot
+  # disagree about which files are in scope.
+  defp lint(files, opts),
+    do:
+      ProseLint.lint_files(files, headings: Keyword.get(opts, :headings, false))
 
   defp tracked_markdown do
     case System.cmd("git", ["ls-files", "*.md"], stderr_to_stdout: true) do
@@ -98,16 +91,10 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
   defp report(findings, label) do
     Mix.shell().error("\n#{length(findings)} #{label}(s):")
 
-    Enum.each(findings, fn f ->
-      Mix.shell().error("  #{f.path}:#{f.line}  [#{f.rule}] #{f.message}")
-      Mix.shell().error("      #{truncate(f.text)}")
+    Enum.each(ProseLint.format_findings(findings), fn line ->
+      Mix.shell().error(line)
     end)
   end
-
-  defp truncate(text) when byte_size(text) > 120,
-    do: binary_part(text, 0, 117) <> "..."
-
-  defp truncate(text), do: text
 
   defp summary(only, files, warnings) do
     scope =

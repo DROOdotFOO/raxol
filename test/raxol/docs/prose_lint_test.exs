@@ -22,7 +22,9 @@ defmodule Raxol.Docs.ProseLintTest do
 
     test "skips files where the character is the subject" do
       allowed = "test/fixtures/harness/sessions/adversarial.notes.md"
-      assert ProseLint.check_content(allowed, "the strip renders `—` here —") == []
+
+      assert ProseLint.check_content(allowed, "the strip renders `—` here —") ==
+               []
     end
   end
 
@@ -95,7 +97,9 @@ defmodule Raxol.Docs.ProseLintTest do
     end
 
     test "reports a warning, never an error" do
-      [finding] = ProseLint.check_content("probe.md", "## Next Steps", headings: true)
+      [finding] =
+        ProseLint.check_content("probe.md", "## Next Steps", headings: true)
+
       assert finding.severity == :warning
     end
 
@@ -105,7 +109,10 @@ defmodule Raxol.Docs.ProseLintTest do
 
     test "does not fire past a colon or a dash separator" do
       assert rules("### Stage 3: Output generation", headings: true) == []
-      assert rules("### Sprint 5 - Critical Architectural Fixes", headings: true) == []
+
+      assert rules("### Sprint 5 - Critical Architectural Fixes",
+               headings: true
+             ) == []
     end
 
     test "does not fire on a known proper phrase or a quoted external name" do
@@ -133,6 +140,135 @@ defmodule Raxol.Docs.ProseLintTest do
       """
 
       assert rules(content, headings: true) == []
+    end
+  end
+
+  # `lint_files/2` and `format_findings/1` are the contract the pre-commit hook
+  # runs through `scripts/prose_lint.exs`, without Mix. They used to live in the
+  # Mix task, where the hook could not reach them; a disagreement about scope
+  # between the hook and CI is exactly what these pin.
+  describe "lint_files/2" do
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "prose_lint_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      %{dir: dir}
+    end
+
+    # Paths are relative to `:root`, the way the hook passes git's own
+    # repo-relative output.
+    defp write(dir, rel, content) do
+      path = Path.join(dir, rel)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, content)
+      rel
+    end
+
+    test "skips paths that are not Markdown", %{dir: dir} do
+      rel = write(dir, "notes.txt", "An em-dash — in a text file.")
+      assert ProseLint.lint_files([rel], root: dir) == []
+    end
+
+    test "skips node_modules", %{dir: dir} do
+      rel = write(dir, "node_modules/pkg/README.md", "An em-dash — here.")
+      assert ProseLint.lint_files([rel], root: dir) == []
+    end
+
+    test "skips the vendored termbox2 readme", %{dir: dir} do
+      rel = write(dir, "termbox2/README.md", "An em-dash — here.")
+      assert ProseLint.lint_files([rel], root: dir) == []
+    end
+
+    test "lints Markdown it does own", %{dir: dir} do
+      rel = write(dir, "own.md", "An em-dash — here.")
+
+      assert [%{rule: :unicode_punctuation}] =
+               ProseLint.lint_files([rel], root: dir)
+    end
+
+    test "resolves against :root rather than the cwd", %{dir: dir} do
+      rel = write(dir, "own.md", "An em-dash — here.")
+
+      # The regression this pins: dropping `:root` made every path resolve
+      # against "." and the unreadable result lint as clean.
+      assert ProseLint.lint_files([rel], root: dir) != []
+      assert ProseLint.lint_files([rel]) == []
+    end
+
+    test "sorts by path then line regardless of input order", %{dir: dir} do
+      b = write(dir, "b.md", "An em-dash — here.")
+      a = write(dir, "a.md", "Line one is fine.\nAn em-dash — here.\n")
+
+      assert [first, second] = ProseLint.lint_files([b, a], root: dir)
+      assert first.path == a and first.line == 2
+      assert second.path == b
+    end
+  end
+
+  describe "format_findings/1" do
+    test "renders two lines per finding" do
+      findings = ProseLint.check_content("probe.md", "An em-dash — here.")
+
+      assert [location, text] = ProseLint.format_findings(findings)
+      assert location =~ "probe.md:1"
+      assert location =~ "[unicode_punctuation]"
+      assert text =~ "An em-dash"
+    end
+
+    test "truncates a long source line" do
+      long = String.duplicate("x", 200)
+      findings = ProseLint.check_content("probe.md", "#{long} — tail")
+
+      assert [_location, text] = ProseLint.format_findings(findings)
+      assert String.ends_with?(text, "...")
+      assert String.length(text) < 130
+    end
+
+    test "renders nothing for no findings" do
+      assert ProseLint.format_findings([]) == []
+    end
+  end
+  # `check_file/2` joined every path onto `:root`, and `Path.join(".", "/tmp/x")`
+  # is `"./tmp/x"` -- so an absolute path read as MISSING and lint as clean.
+  # `scripts/prose_lint.exs` made that reachable in the worst way: its
+  # "named files must exist" guard resolved the real path while the lint
+  # resolved the joined one, so an absolute argument passed the guard and then
+  # silently found nothing.
+  describe "check_file/2 with an absolute path" do
+    setup do
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "prose_lint_abs_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      %{dir: dir}
+    end
+
+    test "reads the file rather than joining it onto the root", %{dir: dir} do
+      path = Path.join(dir, "abs.md")
+      File.write!(path, "An em-dash \u2014 here.")
+
+      assert [%{rule: :unicode_punctuation}] = ProseLint.check_file(path)
+    end
+
+    test "lint_files/2 finds it too, which is the path the hook script takes",
+         %{dir: dir} do
+      path = Path.join(dir, "abs.md")
+      File.write!(path, "An em-dash \u2014 here.")
+
+      assert [%{rule: :unicode_punctuation}] = ProseLint.lint_files([path])
+    end
+
+    test "a missing absolute path is still clean, not a crash", %{dir: dir} do
+      assert ProseLint.check_file(Path.join(dir, "nope.md")) == []
     end
   end
 end
