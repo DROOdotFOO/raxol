@@ -32,13 +32,19 @@ err() {
 # entirely, so a regex here is a gate that reports clean for the shape it exists
 # to catch. A .formatter.exs is a literal term; evaluating it is what `mix
 # format` itself does.
-import_deps_of() {
+formatter_loaders() {
   elixir -e '
     [path] = System.argv()
     {opts, _bindings} = Code.eval_file(path)
-    opts |> Keyword.get(:import_deps, []) |> Enum.join(", ") |> IO.write()
+    import_deps = opts |> Keyword.get(:import_deps, []) |> Enum.join(", ")
+    plugins = opts |> Keyword.get(:plugins, []) |> Enum.map_join(", ", &inspect/1)
+    IO.puts(import_deps)
+    IO.write(plugins)
   ' "$1"
 }
+
+shopt -s nullglob
+package_count=0
 
 for dir in packages/*/; do
   pkg="$(basename "$dir")"
@@ -51,6 +57,8 @@ for dir in packages/*/; do
     continue
   fi
 
+  package_count=$((package_count + 1))
+
   if [[ ! -f "$dir/.formatter.exs" ]]; then
     err "$pkg has no .formatter.exs, so the root glob formats it at 80 columns while its own gate expects 98. Add one (copy any sibling package's)."
     failed=1
@@ -61,9 +69,17 @@ for dir in packages/*/; do
   # `import_deps:` is the one option that would cost it: the formatter loads the
   # named deps, and nothing here runs `mix deps.get` inside a package. Caught by
   # name so the failure does not arrive as an unrelated "could not find dep".
-  deps="$(import_deps_of "$dir/.formatter.exs")"
+  loaders="$(formatter_loaders "$dir/.formatter.exs")"
+  deps="$(printf '%s\n' "$loaders" | sed -n '1p')"
+  plugins="$(printf '%s\n' "$loaders" | sed -n '2p')"
   if [[ -n "$deps" ]]; then
     err "$pkg sets import_deps: [$deps], which makes mix format load those deps. This check does not fetch them. Either drop it, or move this package into the package-tests matrix where deps are available."
+    failed=1
+    continue
+  fi
+
+  if [[ -n "$plugins" ]]; then
+    err "$pkg sets plugins: [$plugins], which makes mix format load compiled plugin modules. This check does not fetch or compile them. Drop the plugins, or move this package into the package-tests matrix where deps are available."
     failed=1
     continue
   fi
@@ -73,6 +89,11 @@ for dir in packages/*/; do
     failed=1
   fi
 done
+
+if [[ "$package_count" -eq 0 ]]; then
+  err "no packages found; run this check from a checkout containing packages/*/mix.exs"
+  failed=1
+fi
 
 if [[ "$failed" -eq 0 ]]; then
   echo "All packages formatted."
