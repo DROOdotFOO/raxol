@@ -67,20 +67,134 @@ defmodule Raxol.Earn.Seller.ResyncRecoveryTest do
     # it reads its defaults from Application on every dispatch, so the env set
     # above takes effect without recycling the singleton.
 
+    # Attached here rather than per test so nothing can land in the gap between
+    # acting and waiting. The drop events are the point: an offer the Queue
+    # refuses names its reason, and that reason is what `await_status/2` reports
+    # instead of timing out with no evidence. Transitions ride the same channel
+    # to wake a wait the moment one lands.
+    test_pid = self()
+    handler_id = {__MODULE__, test_pid}
+
+    :telemetry.attach_many(
+      handler_id,
+      [
+        [:raxol, :earn, :job_session, :transition],
+        [:raxol, :earn, :seller, :queue, :dropped]
+      ],
+      &__MODULE__.forward_event/4,
+      test_pid
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     {:ok, adapter: adapter}
+  end
+
+  # Public and named so `:telemetry` gets a module capture; an anonymous handler
+  # is a local function and telemetry logs about it on every attach.
+  @doc false
+  def forward_event(event, _measurements, metadata, test_pid) do
+    send(test_pid, {:job_event, List.last(event), metadata})
   end
 
   defp api(jobs), do: %{adapter: StubApi, config: %{jobs: jobs}}
   defp calls(ctx), do: length(Mock.sent_calls(ctx.adapter))
   defp deliver_count, do: :ets.lookup_element(@counter, :deliver, 2)
 
-  defp eventually(fun, attempts \\ 100) do
+  @await_timeout 5_000
+
+  # `Queue.dispatch/1` is a cast, so it returns before the Queue has looked at
+  # the event. Everything the event produces -- the provider adapter write and
+  # the `JobSession.apply_event` mirror, both synchronous calls -- happens
+  # inside that one callback, so a synchronous call to the Queue is a complete
+  # barrier: once it returns, the event is fully processed.
+  #
+  # This is what the old `Process.sleep(20)` poll was standing in for, and it
+  # was standing in badly. The poll could see a status transition while the
+  # Queue was still mid-callback, so assertions on the adapter that follow the
+  # status read a half-finished event.
+  defp settle_queue do
+    case Process.whereis(Queue) do
+      nil -> :ok
+      pid -> :sys.get_state(pid)
+    end
+
+    :ok
+  catch
+    # The Queue is a suite-wide singleton that `restart_queue!` deliberately
+    # kills; racing its restart is not a failure, it just leaves nothing to
+    # flush. These are the reasons a call against a dying process comes back
+    # with, and they are enumerated rather than caught wholesale.
+    :exit, {reason, _call} when reason in [:noproc, :normal, :shutdown, :killed] ->
+      :ok
+
+    # Anything else means the barrier did NOT hold, and `:timeout` is the one
+    # that matters: `:sys.get_state/1` gives up after 5s, which happens when the
+    # Queue is too busy to answer -- exactly the load under which the race this
+    # replaces is live. Swallowing it would quietly restore the sleep-and-hope
+    # behaviour precisely where it fails, and leave the assertions that follow
+    # reading a half-processed event with no sign anything went wrong.
+    :exit, reason ->
+      flunk("the Queue barrier did not hold: #{inspect(reason)}")
+  end
+
+  # The barrier settles the common case, so this returns without waiting. What
+  # remains genuinely asynchronous is a session stopping itself after a terminal
+  # transition, which is what the deadline is for.
+  #
+  # A refused offer is reported rather than left as an absence: the Queue drops
+  # with a named reason (`:no_provider_adapter`, `:at_capacity`,
+  # `:offering_not_registered`, `{:handler_error, _}`), and timing out with
+  # "condition never became true" throws that reason away.
+  defp await_status(job_id, target) do
+    settle_queue()
+    deadline = System.monotonic_time(:millisecond) + @await_timeout
+    await_status(job_id, target, deadline, [])
+  end
+
+  defp await_status(job_id, target, deadline, drops) do
+    actual = status(job_id)
+
+    cond do
+      actual == target ->
+        # Settled again on the way out, not just on the way in. The entry
+        # barrier covers the event the caller just dispatched; reaching the
+        # target during the WAIT means something else moved it -- a re-adopted
+        # job, a session's own follow-up -- and that work may still be
+        # mid-callback. Callers assert on the adapter and the checkpoint store
+        # right after this returns, so "the status changed" is not on its own
+        # enough to read those.
+        settle_queue()
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("""
+        #{job_id} never reached #{inspect(target)} within #{@await_timeout}ms.
+          last status: #{inspect(actual)}
+          queue drops: #{if drops == [], do: "none", else: inspect(Enum.reverse(drops))}
+        """)
+
+      true ->
+        receive do
+          {:job_event, :dropped, %{job_id: ^job_id} = meta} ->
+            await_status(job_id, target, deadline, [meta | drops])
+
+          {:job_event, _kind, _meta} ->
+            await_status(job_id, target, deadline, drops)
+        after
+          25 -> await_status(job_id, target, deadline, drops)
+        end
+    end
+  end
+
+  # Kept for waits that are not about a job's status, where there is no
+  # telemetry to ride.
+  defp eventually(what, fun, attempts \\ 100) do
     if fun.() do
       :ok
     else
-      if attempts == 0, do: flunk("condition never became true")
+      if attempts == 0, do: flunk("#{what} never became true")
       Process.sleep(20)
-      eventually(fun, attempts - 1)
+      eventually(what, fun, attempts - 1)
     end
   end
 
@@ -99,7 +213,7 @@ defmodule Raxol.Earn.Seller.ResyncRecoveryTest do
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, _, _}
 
-    eventually(fn ->
+    eventually("Queue restarted", fn ->
       case Process.whereis(Queue) do
         nil -> false
         new -> new != pid
@@ -119,11 +233,11 @@ defmodule Raxol.Earn.Seller.ResyncRecoveryTest do
       request: %{"p" => 1}
     })
 
-    eventually(fn -> status(job) == :budget_set end)
+    await_status(job, :budget_set)
     assert calls(ctx) == 1
 
     Queue.dispatch(%{type: :payment_received, job_id: job})
-    eventually(fn -> status(job) == :submitted end)
+    await_status(job, :submitted)
     assert deliver_count() == 1
     assert calls(ctx) == 2
 
@@ -151,14 +265,14 @@ defmodule Raxol.Earn.Seller.ResyncRecoveryTest do
                ])
              )
 
-    eventually(fn -> status(job) == :submitted end)
+    await_status(job, :submitted)
     assert deliver_count() == 1
     assert calls(ctx) == 2
 
     # external evaluator approval routes through the re-adopted job and
     # completes it; terminal cleanup drops the checkpoint records.
     Queue.dispatch(%{type: :approval_received, job_id: job, payload: %{}})
-    eventually(fn -> status(job) == :gone end)
+    await_status(job, :gone)
 
     store = Raxol.Earn.Checkpoint.store()
     assert :error = Checkpoint.fetch(store, Raxol.Earn.Checkpoint.key(@chain, job, :submit))
@@ -180,7 +294,7 @@ defmodule Raxol.Earn.Seller.ResyncRecoveryTest do
                ])
              )
 
-    eventually(fn -> status(job) == :budget_set end)
+    await_status(job, :budget_set)
   end
 
   test "a :submitted job is adopted so a later approval still completes it" do
@@ -198,10 +312,40 @@ defmodule Raxol.Earn.Seller.ResyncRecoveryTest do
                ])
              )
 
-    eventually(fn -> status(job) == :submitted end)
+    await_status(job, :submitted)
 
     Queue.dispatch(%{type: :approval_received, job_id: job, payload: %{}})
-    eventually(fn -> status(job) == :gone end)
+    await_status(job, :gone)
+  end
+
+  test "a refused offer is reported by name instead of as a bare timeout" do
+    # The whole point of riding telemetry rather than polling is that a job which
+    # never arrives says WHY. That only holds if the drop metadata still matches
+    # what `await_status/2` listens for -- if the shape ever drifts, the wait
+    # degrades silently to "condition never became true" and the diagnostic is
+    # worse than useless because it claims there were no drops.
+    #
+    # `:unknown_event` is the cheapest deterministic drop: no offering, no
+    # session, no adapter needed.
+    job = "drop_probe_#{System.unique_integer([:positive])}"
+
+    Queue.dispatch(%{type: :not_a_real_event, job_id: job})
+
+    # Barrier first, so the drop telemetry has certainly been emitted and is
+    # sitting in this process's mailbox. The wait below then has nothing to race
+    # and its deadline can be short without the result depending on the clock.
+    settle_queue()
+
+    # A short deadline rather than the 5s default: the drop is already queued, so
+    # the first receive drains it and the rest of the window is just the wait
+    # timing out as intended.
+    error =
+      assert_raise ExUnit.AssertionError, fn ->
+        await_status(job, :submitted, System.monotonic_time(:millisecond) + 250, [])
+      end
+
+    assert error.message =~ "unknown_event"
+    refute error.message =~ "queue drops: none"
   end
 
   test "unknown, numeric, and foreign-chain phases are skipped, not acted on" do
