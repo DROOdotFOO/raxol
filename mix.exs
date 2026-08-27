@@ -258,7 +258,7 @@ defmodule Raxol.MixProject do
       {:phoenix_live_view, "~> 1.2.3"},
       {:phoenix_html, "~> 4.3"},
       {:plug_cowboy, "~> 2.7"},
-      {:phoenix_live_dashboard, "~> 0.8.7", only: :dev},
+      {:phoenix_live_dashboard, "~> 0.9.0", only: :dev},
       {:phoenix_live_reload, "~> 1.7.0", only: :dev}
     ]
   end
