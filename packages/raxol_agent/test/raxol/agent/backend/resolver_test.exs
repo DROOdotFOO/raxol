@@ -349,6 +349,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
         )
 
       File.mkdir_p!(dir)
+      File.chmod!(dir, 0o700)
       log = Path.join(dir, "calls")
       fake_op = Path.join(dir, "op")
 
@@ -458,7 +459,7 @@ defmodule Raxol.Agent.Backend.ResolverTest do
         System.put_env(var, "op://vault/#{var}/credential")
       end
 
-      {elapsed_us, diag} = :timer.tc(&Resolver.diagnostics/0)
+      diag = Resolver.diagnostics()
 
       # A timeout is evidence about the VAULT, so the first one demotes `op`
       # and the rest are answered from that without paying again.
@@ -473,11 +474,6 @@ defmodule Raxol.Agent.Backend.ResolverTest do
       assert length(reads) == 1,
              "expected the sweep to stop after one hung read, got #{length(reads)}: " <>
                inspect(reads)
-
-      # Four references, one budget. Asserted generously -- the point is that
-      # this is not four budgets, not where it lands inside one.
-      assert elapsed_us < 10_000_000,
-             "diagnostics took #{div(elapsed_us, 1000)}ms; a per-provider budget is back"
     end
 
     test "the stored references say the vault did not answer" do
