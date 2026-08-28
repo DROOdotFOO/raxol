@@ -568,10 +568,12 @@ defmodule Raxol.SSH.Server do
   ]
 
   @doc """
-  Ensure `dir` holds a usable host key, generating an ed25519 key (mode 0600)
-  when none exists. Fails closed with `{:error, {:ssh_host_keys_insecure, paths}}`
-  when any existing key is group- or world-readable: a readable host key means
-  every client's host-key trust is forgeable, so the server must not start.
+  Ensure `dir` holds a usable host key, generating an ed25519 key with
+  owner-only permissions when none exists (mode 0600 on POSIX, a protected
+  current-user-only ACL on Windows). Fails closed with
+  `{:error, {:ssh_host_keys_insecure, paths}}` when an existing key is readable
+  by another identity: a readable host key means every client's host-key trust
+  is forgeable, so the server must not start.
   """
   @spec ensure_host_keys(String.t()) ::
           :ok | {:error, {:ssh_host_keys_insecure, [String.t()]}}
@@ -607,17 +609,65 @@ defmodule Raxol.SSH.Server do
     for {file, _alg} <- @host_key_files,
         path = Path.join(dir, file),
         File.exists?(path),
-        insecure_mode?(path),
+        not host_key_permissions_secure?(path),
         do: path
   end
 
-  defp insecure_mode?(path) do
+  @doc false
+  @spec host_key_permissions_secure?(String.t()) :: boolean()
+  def host_key_permissions_secure?(path) do
+    case :os.type() do
+      {:win32, _} -> windows_acl_secure?(path)
+      _ -> posix_mode_secure?(path)
+    end
+  end
+
+  defp posix_mode_secure?(path) do
     case File.stat(path) do
       # Any group/other bit set makes the private key readable beyond the
       # owner; a stat failure counts as insecure rather than assumed fine.
-      {:ok, %File.Stat{mode: mode}} -> Bitwise.band(mode, 0o077) != 0
-      {:error, _} -> true
+      {:ok, %File.Stat{mode: mode}} -> Bitwise.band(mode, 0o077) == 0
+      {:error, _} -> false
     end
+  end
+
+  @windows_set_acl ~S"""
+  $ErrorActionPreference = 'Stop'
+  $path = $env:RAXOL_SSH_KEY_PATH
+  $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $acl = [System.Security.AccessControl.FileSecurity]::new()
+  $acl.SetOwner($identity)
+  $acl.SetAccessRuleProtection($true, $false)
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+    $identity,
+    [System.Security.AccessControl.FileSystemRights]::FullControl,
+    [System.Security.AccessControl.AccessControlType]::Allow
+  )
+  $acl.AddAccessRule($rule)
+  Set-Acl -LiteralPath $path -AclObject $acl
+  """
+
+  @windows_verify_acl ~S"""
+  $ErrorActionPreference = 'Stop'
+  $path = $env:RAXOL_SSH_KEY_PATH
+  $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $acl = Get-Acl -LiteralPath $path
+  $rules = @($acl.GetAccessRules(
+    $true,
+    $true,
+    [System.Security.Principal.SecurityIdentifier]
+  ))
+  $full = [System.Security.AccessControl.FileSystemRights]::FullControl
+  $allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $secure = $acl.AreAccessRulesProtected -and $rules.Count -eq 1 -and
+    $rules[0].IdentityReference.Value -eq $identity.Value -and
+    $rules[0].AccessControlType -eq $allow -and
+    (($rules[0].FileSystemRights -band $full) -eq $full)
+  if (-not $secure) { exit 1 }
+  """
+
+  defp windows_acl_secure?(path) do
+    match?({:ok, _}, run_windows_acl(@windows_verify_acl, path))
   end
 
   # ed25519 in PKCS#8 PEM, which Erlang's ssh reads directly. (OTP's
@@ -640,14 +690,21 @@ defmodule Raxol.SSH.Server do
 
     try do
       File.write!(tmp, pem, [:write, :exclusive])
-      File.chmod!(tmp, 0o600)
+      secure_host_key_permissions!(tmp)
 
       case publish_host_key(tmp, path) do
         :ok ->
           :ok
 
-        {:error, :eexist} ->
-          :ok
+        {:error, reason} when reason in [:eexist, :eacces] ->
+          if File.regular?(path) do
+            :ok
+          else
+            raise File.Error,
+              reason: reason,
+              action: "publish",
+              path: path
+          end
 
         {:error, reason} ->
           raise File.Error, reason: reason, action: "link", path: path
@@ -662,5 +719,44 @@ defmodule Raxol.SSH.Server do
       {:win32, _} -> File.rename(tmp, path)
       _ -> File.ln(tmp, path)
     end
+  end
+
+  defp secure_host_key_permissions!(path) do
+    case :os.type() do
+      {:win32, _} ->
+        case run_windows_acl(@windows_set_acl, path) do
+          {:ok, _output} ->
+            :ok
+
+          {:error, reason} ->
+            raise File.Error,
+              reason: reason,
+              action: "secure Windows ACL for",
+              path: path
+        end
+
+      _ ->
+        File.chmod!(path, 0o600)
+    end
+  end
+
+  defp run_windows_acl(script, path) do
+    case System.find_executable("powershell.exe") do
+      nil ->
+        {:error, :powershell_unavailable}
+
+      executable ->
+        case System.cmd(
+               executable,
+               ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+               env: [{"RAXOL_SSH_KEY_PATH", path}],
+               stderr_to_stdout: true
+             ) do
+          {output, 0} -> {:ok, output}
+          {output, status} -> {:error, {:windows_acl_failed, status, output}}
+        end
+    end
+  rescue
+    error -> {:error, {:windows_acl_error, error}}
   end
 end

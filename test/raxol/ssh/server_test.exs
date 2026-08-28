@@ -584,7 +584,7 @@ defmodule Raxol.SSH.ServerTest do
       path = Path.join(dir, "ssh_host_ed25519_key")
       assert File.exists?(path)
       assert File.read!(path) =~ "BEGIN PRIVATE KEY"
-      assert Bitwise.band(File.stat!(path).mode, 0o077) == 0
+      assert Server.host_key_permissions_secure?(path)
       assert Server.host_key_algs(dir) == ["ed25519"]
     end
 
@@ -625,7 +625,7 @@ defmodule Raxol.SSH.ServerTest do
 
       path = Path.join(dir, "ssh_host_ed25519_key")
       assert File.read!(path) =~ "BEGIN PRIVATE KEY"
-      assert Bitwise.band(File.stat!(path).mode, 0o077) == 0
+      assert Server.host_key_permissions_secure?(path)
       assert Path.wildcard(path <> ".tmp.*") == []
     end
   end
