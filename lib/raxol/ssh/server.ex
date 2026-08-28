@@ -659,10 +659,13 @@ defmodule Raxol.SSH.Server do
   ))
   $full = [System.Security.AccessControl.FileSystemRights]::FullControl
   $allow = [System.Security.AccessControl.AccessControlType]::Allow
-  $secure = $acl.AreAccessRulesProtected -and $rules.Count -eq 1 -and
+  $secure = (
+    $acl.AreAccessRulesProtected -and
+    $rules.Count -eq 1 -and
     $rules[0].IdentityReference.Value -eq $identity.Value -and
     $rules[0].AccessControlType -eq $allow -and
     (($rules[0].FileSystemRights -band $full) -eq $full)
+  )
   if (-not $secure) { exit 1 }
   """
 
