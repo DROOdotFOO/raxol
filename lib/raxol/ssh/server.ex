@@ -623,8 +623,10 @@ defmodule Raxol.SSH.Server do
   # ed25519 in PKCS#8 PEM, which Erlang's ssh reads directly. (OTP's
   # openssh_key_v1 encoder writes a 32-byte private blob its own decoder
   # rejects, so the experimental format is avoided.) Written 0600 via a
-  # unique temp file + atomic hard-link, so no reader ever observes a
-  # world-readable key and concurrent boots cannot overwrite each other.
+  # unique temp file + atomic no-replace publication, so no reader ever
+  # observes a world-readable key and concurrent boots cannot overwrite each
+  # other. Unix uses a hard link; Windows does not reliably permit File.ln/2
+  # on CI volumes, and its rename refuses to replace an existing destination.
   defp generate_host_key(dir) do
     key = :public_key.generate_key({:namedCurve, :ed25519})
 
@@ -640,7 +642,7 @@ defmodule Raxol.SSH.Server do
       File.write!(tmp, pem, [:write, :exclusive])
       File.chmod!(tmp, 0o600)
 
-      case File.ln(tmp, path) do
+      case publish_host_key(tmp, path) do
         :ok ->
           :ok
 
@@ -652,6 +654,13 @@ defmodule Raxol.SSH.Server do
       end
     after
       _ = File.rm(tmp)
+    end
+  end
+
+  defp publish_host_key(tmp, path) do
+    case :os.type() do
+      {:win32, _} -> File.rename(tmp, path)
+      _ -> File.ln(tmp, path)
     end
   end
 end
