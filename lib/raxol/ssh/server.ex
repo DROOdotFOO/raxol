@@ -744,7 +744,7 @@ defmodule Raxol.SSH.Server do
   end
 
   defp run_windows_acl(script, path) do
-    case System.find_executable("powershell.exe") do
+    case windows_powershell_executable() do
       nil ->
         {:error, :powershell_unavailable}
 
@@ -761,5 +761,30 @@ defmodule Raxol.SSH.Server do
     end
   rescue
     error -> {:error, {:windows_acl_error, error}}
+  end
+
+  # PowerShell 7 can shadow the inbox Windows PowerShell executable on PATH,
+  # but its Microsoft.PowerShell.Security module is not guaranteed to include
+  # the Windows-only ACL cmdlets. Prefer the OS-owned executable that ships
+  # those cmdlets, retaining PATH lookup for non-standard Windows installs.
+  defp windows_powershell_executable do
+    system_root = System.get_env("SystemRoot") || System.get_env("WINDIR")
+
+    inbox =
+      if system_root do
+        Path.join([
+          system_root,
+          "System32",
+          "WindowsPowerShell",
+          "v1.0",
+          "powershell.exe"
+        ])
+      end
+
+    if inbox && File.regular?(inbox) do
+      inbox
+    else
+      System.find_executable("powershell.exe")
+    end
   end
 end
