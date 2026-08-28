@@ -644,14 +644,14 @@ defmodule Raxol.SSH.Server do
     [System.Security.AccessControl.AccessControlType]::Allow
   )
   $acl.AddAccessRule($rule)
-  Set-Acl -LiteralPath $path -AclObject $acl
+  [System.IO.File]::SetAccessControl($path, $acl)
   """
 
   @windows_verify_acl ~S"""
   $ErrorActionPreference = 'Stop'
   $path = $env:RAXOL_SSH_KEY_PATH
   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-  $acl = Get-Acl -LiteralPath $path
+  $acl = [System.IO.File]::GetAccessControl($path)
   $rules = @($acl.GetAccessRules(
     $true,
     $true,
