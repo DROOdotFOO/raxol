@@ -93,6 +93,16 @@ defmodule Raxol.Payments.SettlementLedger do
           usd_margin: Decimal.t() | nil
         }
 
+  @typedoc """
+  Observed outflow for one `{destination chain, symbol}` inside a window: the
+  summed fill amount, the largest single fill, and how many there were.
+
+  `total` and `peak` are HUMAN units, not the atomic units `to_amount` is stored
+  in. The consumer is `RebalancePolicy.effective_inventory_floor/4`, and the
+  inventory floors it compares against are human dollars.
+  """
+  @type demand :: %{total: Decimal.t(), peak: Decimal.t(), count: pos_integer()}
+
   @stablecoins ["USDC", "USDT", "USDBC", "PYUSD", "DAI"]
 
   # -- Public API --
@@ -158,10 +168,123 @@ defmodule Raxol.Payments.SettlementLedger do
   def native_drain_by_chain(server, opts \\ []) do
     server
     |> list_settlements(filter_opts(opts))
+    |> fold_drain()
+  end
+
+  defp fold_drain(entries) do
+    entries
     |> Enum.reject(&is_nil(&1.gas_native))
     |> Enum.reduce(%{}, fn e, acc ->
       Map.update(acc, e.gas_chain_id, e.gas_native, &Decimal.add(&1, e.gas_native))
     end)
+  end
+
+  @doc """
+  Per-destination-chain, per-symbol outflow: what the solver actually PAID OUT
+  there, over whatever window `:since_ms` selects.
+
+  This is the demand signal behind a proactive inventory floor. `total` is the
+  throughput the window saw; `peak` is the largest single fill in it, and `peak`
+  is the one that sizes a floor. A chain that has just served a large order is
+  the chain most likely to be asked for another, whereas a floor built from the
+  sum alone is satisfied by many small fills that say nothing about whether the
+  next big one can be filled at all.
+
+  Amounts are converted to HUMAN units on the way out. `to_amount` is stored
+  atomic, the same as every other leg on an entry (`leg_usd/5` divides by
+  `to_decimals` before pricing for exactly this reason), and the only consumer
+  compares the result against inventory floors denominated in dollars. Handing
+  back atomic units would size a floor 10^6 too high on a 6-decimal stable and
+  report every chain permanently underfunded.
+
+  An entry missing its destination chain, amount, symbol, or `to_decimals` is
+  skipped: a fill that cannot be attributed to a corridor -- or whose amount
+  cannot be denominated -- cannot be evidence about one.
+
+  ## Windows
+
+  `:since_ms` is what makes `peak` a statement about recent demand. WITHOUT one
+  this returns an all-time high-water mark, and since `peak` never decays, a
+  single historic whale order pins the floor for the life of the ledger. Callers
+  sizing a floor should always pass a window; `RebalanceMonitor` does.
+
+  ## Cost
+
+  Like every read here this walks the whole table inside this GenServer, which
+  also serves `record_settlement/2` -- so a long scan sits in front of the write
+  path. `:since_ms` bounds what is AGGREGATED, not what is read; the window is
+  applied after `:ets.tab2list/1`. A sweep that wants both this and the drain
+  should call `sweep_signals/2` and pay for one pass, not two.
+  """
+  @spec demand_by_destination(GenServer.server(), keyword()) ::
+          %{pos_integer() => %{String.t() => demand()}}
+  def demand_by_destination(server, opts \\ []) do
+    server
+    |> list_settlements(filter_opts(opts))
+    |> fold_demand()
+  end
+
+  @doc """
+  Both signals a `RebalanceMonitor` sweep needs, from ONE pass over the ledger:
+  all-time native drain per chain, and demand per destination inside `:since_ms`.
+
+  Calling `native_drain_by_chain/2` and `demand_by_destination/2` separately
+  costs the write path two full scans of this GenServer per sweep. They can share
+  a read: the drain is all-time by definition and the demand window is a subset of
+  it, so the caller filters the window itself and both folds run outside the
+  ledger process.
+
+  `:since_ms` bounds the demand half only. The drain half deliberately ignores it,
+  since a refuel is sized against everything the solver has ever spent on gas.
+  The other filters (`:from_chain_id`, `:to_chain_id`, `:settlement_type`) bind
+  BOTH halves, the same as every sibling read: silently answering globally would
+  hand a corridor-scoped caller the whole ledger and read as if it had worked.
+  """
+  @spec sweep_signals(GenServer.server(), keyword()) :: %{
+          drain: %{pos_integer() => Decimal.t()},
+          demand: %{pos_integer() => %{String.t() => demand()}}
+        }
+  def sweep_signals(server, opts \\ []) do
+    # The window is applied to the demand fold below rather than at the ledger, so
+    # it cannot narrow the all-time drain.
+    entries = list_settlements(server, opts |> filter_opts() |> Keyword.delete(:since_ms))
+    since_ms = Keyword.get(opts, :since_ms)
+
+    %{
+      drain: fold_drain(entries),
+      demand: entries |> Enum.filter(&since?(&1, since_ms)) |> fold_demand()
+    }
+  end
+
+  defp since?(_entry, nil), do: true
+  defp since?(%{timestamp_ms: ts}, since_ms) when is_integer(ts), do: ts >= since_ms
+  defp since?(_entry, _since_ms), do: false
+
+  defp fold_demand(entries), do: Enum.reduce(entries, %{}, &accumulate_demand/2)
+
+  defp accumulate_demand(
+         %{
+           to_chain_id: chain,
+           to_amount: %Decimal{} = amount,
+           to_symbol: symbol,
+           to_decimals: decimals
+         },
+         acc
+       )
+       when is_integer(chain) and is_binary(symbol) and is_integer(decimals) and decimals > 0 do
+    human = Assets.to_human(amount, decimals)
+
+    Map.update(acc, chain, %{symbol => first_demand(human)}, fn per ->
+      Map.update(per, symbol, first_demand(human), &add_demand(&1, human))
+    end)
+  end
+
+  defp accumulate_demand(_entry, acc), do: acc
+
+  defp first_demand(amount), do: %{total: amount, peak: amount, count: 1}
+
+  defp add_demand(%{total: total, peak: peak, count: count}, amount) do
+    %{total: Decimal.add(total, amount), peak: Decimal.max(peak, amount), count: count + 1}
   end
 
   @doc """

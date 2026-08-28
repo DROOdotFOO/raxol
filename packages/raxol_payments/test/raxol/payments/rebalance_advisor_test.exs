@@ -145,4 +145,136 @@ defmodule Raxol.Payments.RebalanceAdvisorTest do
     assert_receive {:tele, [:raxol, :payments, :rebalance, :advice], %{count: 1},
                     %{refuel_count: 1}}
   end
+
+  describe "demand-aware inventory floors" do
+    # $5 floor / $25 target on two chains, USDC only. Demand is configured through
+    # `with_demand/2` -- the seam every caller uses -- so these exercise a policy
+    # that can actually exist: a multiplier without a cap is one the advisor
+    # refuses to widen a floor with. The default cap is set far above anything
+    # here, since only one test is about the cap binding.
+    defp demand_policy(opts \\ []) do
+      base = %RebalancePolicy{
+        gas_floor: %{},
+        gas_target: %{},
+        inventory_floor: %{
+          8453 => %{"USDC" => Decimal.new("5")},
+          42_161 => %{"USDC" => Decimal.new("5")}
+        },
+        inventory_target: %{
+          8453 => %{"USDC" => Decimal.new("25")},
+          42_161 => %{"USDC" => Decimal.new("25")}
+        }
+      }
+
+      case Keyword.get(opts, :multiplier) do
+        nil ->
+          base
+
+        multiplier ->
+          RebalancePolicy.with_demand(base,
+            demand_multiplier: multiplier,
+            demand_floor_cap: Keyword.get(opts, :cap, Decimal.new("1000000"))
+          )
+      end
+    end
+
+    defp fills(chain, symbol, peak, total) do
+      %{chain => %{symbol => %{peak: Decimal.new(peak), total: Decimal.new(total), count: 2}}}
+    end
+
+    test "a chain sitting above its static floor is not a deficit without demand" do
+      balances =
+        inv(%{8453 => %{"USDC" => Decimal.new("20")}, 42_161 => %{"USDC" => Decimal.new("60")}})
+
+      assert [] =
+               RebalanceAdvisor.recommend(demand_policy(), balances, %{},
+                 demand: fills(8453, "USDC", "500", "900")
+               )
+               |> Enum.filter(&match?({:rebalance_inventory, _}, &1))
+    end
+
+    test "the same chain becomes a deficit once a large fill raises its floor" do
+      # $20 on Base clears the static $5 floor, but a $500 order just landed
+      # there. At 0.1x that chain should be carrying $50, so it is short $30 --
+      # and Arbitrum's surplus over its $25 target can cover it.
+      balances =
+        inv(%{8453 => %{"USDC" => Decimal.new("20")}, 42_161 => %{"USDC" => Decimal.new("60")}})
+
+      assert [{:rebalance_inventory, move}] =
+               RebalanceAdvisor.recommend(
+                 demand_policy(multiplier: Decimal.new("0.1")),
+                 balances,
+                 %{},
+                 demand: fills(8453, "USDC", "500", "900")
+               )
+               |> Enum.filter(&match?({:rebalance_inventory, _}, &1))
+
+      assert move.to_chain == 8453
+      assert move.from_chain == 42_161
+      assert move.rail == :cctp
+      assert Decimal.equal?(move.amount, Decimal.new("30"))
+    end
+
+    test "the cap bounds what one whale order can demand" do
+      balances =
+        inv(%{8453 => %{"USDC" => Decimal.new("20")}, 42_161 => %{"USDC" => Decimal.new("60")}})
+
+      policy = demand_policy(multiplier: Decimal.new("0.1"), cap: Decimal.new("25"))
+
+      assert [{:rebalance_inventory, move}] =
+               RebalanceAdvisor.recommend(policy, balances, %{},
+                 demand: fills(8453, "USDC", "5000", "5000")
+               )
+               |> Enum.filter(&match?({:rebalance_inventory, _}, &1))
+
+      # Uncapped the floor would be $500; capped it is $25, so the deficit is $5.
+      assert Decimal.equal?(move.amount, Decimal.new("5"))
+    end
+
+    test "a demand-raised floor carries its target, so no chain is both deficit and surplus" do
+      # The floor lands at $50, above the static $25 target. If the target did
+      # not move with it, $30 would read as BOTH under floor and over target and
+      # the advisor would recommend draining this chain into itself.
+      balances = inv(%{8453 => %{"USDC" => Decimal.new("30")}})
+
+      recs =
+        RebalanceAdvisor.recommend(demand_policy(multiplier: Decimal.new("0.1")), balances, %{},
+          demand: fills(8453, "USDC", "500", "500")
+        )
+
+      refute Enum.any?(recs, fn
+               {:rebalance_inventory, m} -> m.from_chain == m.to_chain
+               _ -> false
+             end)
+
+      # It is short, and with no surplus anywhere it is an alert rather than a move.
+      assert [alert] =
+               for({:alert, a} <- recs, a.chain_id == 8453, do: a)
+
+      assert alert.kind == :inventory_underfunded
+      assert Decimal.equal?(alert.deficit, Decimal.new("20"))
+    end
+
+    test "demand on a chain the policy has no floor for is ignored" do
+      # Demand must not invent a floor: a chain absent from inventory_floor is
+      # one the policy never said carries this asset.
+      balances = inv(%{999 => %{"USDC" => Decimal.new("0")}})
+
+      recs =
+        RebalanceAdvisor.recommend(
+          demand_policy(multiplier: Decimal.new("1")),
+          balances,
+          %{},
+          demand: fills(999, "USDC", "500", "500")
+        )
+
+      # The configured chains still report their own shortfalls; chain 999 is
+      # simply not one this policy stocks, so demand there says nothing.
+      refute Enum.any?(recs, fn
+               {:alert, a} -> a.chain_id == 999
+               {:rebalance_inventory, m} -> 999 in [m.to_chain, m.from_chain]
+               _ -> false
+             end)
+    end
+  end
 end

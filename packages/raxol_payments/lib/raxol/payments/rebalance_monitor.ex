@@ -23,6 +23,8 @@ defmodule Raxol.Payments.RebalanceMonitor do
     * `:interval_ms` -- sweep period (default 5 min).
     * `:initial_delay_ms` -- delay before the first sweep (default `:interval_ms`).
     * `:price_fn` -- `native_symbol -> Decimal | nil` for sizing conversions.
+    * `:demand_window_ms` -- how far back to read fill demand when the policy is
+      demand-aware (default 24h). Ignored otherwise.
   """
 
   use GenServer
@@ -33,6 +35,10 @@ defmodule Raxol.Payments.RebalanceMonitor do
 
   @default_interval_ms 300_000
   @default_chains [1, 10, 137, 8453, 42_161, 4663]
+
+  # A day of fills. Long enough that a quiet corridor still has evidence, short
+  # enough that a floor tracks current demand rather than the ledger's history.
+  @default_demand_window_ms 86_400_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -68,16 +74,69 @@ defmodule Raxol.Payments.RebalanceMonitor do
 
     gas = RebalanceAdvisor.gather_gas_balances(reader, solver, chains)
     inventory = RebalanceAdvisor.gather_inventory(reader, solver, chains, symbols)
-    drain = SettlementLedger.native_drain_by_chain(ledger)
+    %{drain: drain, demand: demand} = gather_ledger_signals(ledger, policy, opts)
 
-    RebalanceAdvisor.advise(policy, %{gas: gas, inventory: inventory}, drain, price_fn: price_fn)
+    RebalanceAdvisor.advise(policy, %{gas: gas, inventory: inventory}, drain,
+      price_fn: price_fn,
+      demand: demand
+    )
+  end
+
+  # Every ledger read walks the whole table inside the process that also serves
+  # `record_settlement/2`, so a sweep buys both signals with one pass rather than
+  # putting a second scan in front of the write path.
+  #
+  # Demand is skipped entirely unless the policy would actually widen a floor, so
+  # a deployment that has not configured a multiplier keeps exactly the single
+  # drain read it always had.
+  #
+  # The window is mandatory rather than defaulted at the ledger: `peak` never
+  # decays, so an unwindowed read pins each floor to the largest fill in the
+  # ledger's whole history instead of to recent demand.
+  defp gather_ledger_signals(ledger, policy, opts) do
+    if RebalancePolicy.demand_aware?(policy) do
+      window_ms = Keyword.get(opts, :demand_window_ms) || @default_demand_window_ms
+      since_ms = System.system_time(:millisecond) - window_ms
+
+      SettlementLedger.sweep_signals(ledger, since_ms: since_ms)
+    else
+      %{drain: SettlementLedger.native_drain_by_chain(ledger), demand: %{}}
+    end
   end
 
   defp build_price_fn(:coingecko), do: Raxol.Payments.Prices.CoinGecko.price_fn()
   defp build_price_fn(_source), do: fn _sym -> nil end
 
+  # Runs `with_demand/2` over the policy's OWN demand fields, which is a no-op
+  # for a well-formed policy and raises the same named ArgumentError for a
+  # half-configured one. Reusing that function rather than restating the rule
+  # keeps one definition of "a usable demand pair".
+  defp validate_policy(opts) do
+    policy = Keyword.get(opts, :policy, RebalancePolicy.default())
+
+    RebalancePolicy.with_demand(policy,
+      demand_multiplier: policy.demand_multiplier,
+      demand_floor_cap: policy.demand_floor_cap
+    )
+  end
+
   @impl true
   def init(opts) do
+    # Checked HERE so a policy that cannot widen a floor fails at boot.
+    #
+    # `cap_at/2` raises on a multiplier with no cap, and that check lives at the
+    # widening site on purpose: `demand_floor_cap` is a public struct field, so
+    # a hand-built policy can reach the advisor without ever passing through
+    # `with_demand/2`. But the widening site is inside the periodic sweep, and a
+    # raise there is not a refusal -- it is a crash, a supervisor restart, and
+    # the same crash on the next tick, forever, over a value that was wrong
+    # before the process ever started.
+    #
+    # So the invariant stays where it is and is ALSO asserted once, up front,
+    # where being wrong is a start-up failure an operator sees immediately.
+    policy = validate_policy(opts)
+    opts = Keyword.put(opts, :policy, policy)
+
     state = %{
       opts:
         Keyword.take(opts, [
@@ -87,7 +146,8 @@ defmodule Raxol.Payments.RebalanceMonitor do
           :policy,
           :chains,
           :price_fn,
-          :price_source
+          :price_source,
+          :demand_window_ms
         ]),
       interval_ms: Keyword.get(opts, :interval_ms, @default_interval_ms)
     }

@@ -92,6 +92,7 @@ defmodule Raxol.Earn.Supervisor do
       ledger_name = Raxol.Payments.SettlementLedger
       reader = Raxol.Payments.ChainReader.JSONRPC.new(chains: Keyword.get(acc, :rpc_urls, %{}))
       solver = Keyword.get(acc, :solver_address)
+      policy = Raxol.Payments.RebalancePolicy.default()
 
       base = [
         {Raxol.Payments.SettlementLedger, [name: ledger_name]},
@@ -109,7 +110,11 @@ defmodule Raxol.Earn.Supervisor do
                reader: reader,
                solver_address: solver,
                interval_ms: Keyword.get(acc, :rebalance_interval_ms, 300_000),
-               price_source: Keyword.get(acc, :price_source, :none)
+               price_source: Keyword.get(acc, :price_source, :none),
+               # Demand-aware floors are a deployment knob, so the policy is built
+               # here rather than left to the monitor's `default/0` fallback.
+               policy: Raxol.Payments.RebalancePolicy.with_demand(policy, acc),
+               demand_window_ms: Keyword.get(acc, :demand_window_ms)
              ]}
           ]
       else
