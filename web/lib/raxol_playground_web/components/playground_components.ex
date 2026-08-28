@@ -14,9 +14,17 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
 
   def ssh_copy_block(assigns) do
     ~H"""
-    <div class="ssh-hero" id={@id} phx-hook="CopyToClipboard" data-copy={@cmd}>
+    <button
+      type="button"
+      class="ssh-hero"
+      id={@id}
+      phx-hook="CopyToClipboard"
+      data-copy={@cmd}
+      aria-label={"Copy command: #{@cmd}"}
+    >
       <span class="prompt">$ </span><%= @cmd %><span class="cursor-blink text-axol-coral">_</span>
-    </div>
+      <span class="sr-only" data-copy-status aria-live="polite"></span>
+    </button>
     """
   end
 
@@ -170,7 +178,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
           id={@id}
           phx-hook="CopyToClipboard"
           data-copy={@command}
-          class="copy-chip opacity-0 group-hover:opacity-100 transition-opacity"
+          class="copy-chip opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           aria-label={"Copy command: #{@command}"}
         >
           copy

@@ -71,7 +71,18 @@ IO.puts("Connect with: ssh localhost -p 2222")
 # it spawns a new Lifecycle running SSHCounterExample. The SSH channel
 # data is translated to Raxol keyboard events, and rendered output is
 # sent back over the channel.
-{:ok, _server} = Raxol.SSH.serve(SSHCounterExample, port: 2222)
+#
+# An anonymous surface states its resource caps or refuses to start, and
+# binds loopback only (pass anonymous_public: true to expose it).
+{:ok, _server} =
+  Raxol.SSH.serve(SSHCounterExample,
+    port: 2222,
+    allow_anonymous: true,
+    max_connections: 10,
+    max_per_ip: 2,
+    idle_timeout: :timer.minutes(5),
+    max_session_duration: :timer.hours(1)
+  )
 
 # Keep the script alive
 Process.sleep(:infinity)

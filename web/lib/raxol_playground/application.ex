@@ -60,12 +60,22 @@ defmodule RaxolPlayground.Application do
          {:ok, _} <- Application.ensure_all_started(:ssh) do
       spec =
         Supervisor.child_spec(
-          {Raxol.SSH.Server,
-           app_module: Raxol.Playground.App,
-           port: ssh_port(),
-           host_keys_dir: System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys",
-           max_connections: ssh_max_connections(),
-           allow_anonymous: true},
+          {
+            Raxol.SSH.Server,
+            # An anonymous surface must state ALL its resource caps or the
+            # server refuses to start; it also binds loopback only unless
+            # RAXOL_SSH_ANONYMOUS_PUBLIC=1 separately acknowledges the
+            # exposure. Both defaults exist because this surface once reached
+            # the public internet on one env var.
+            app_module: Raxol.Playground.App,
+            port: ssh_port(),
+            host_keys_dir: System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys",
+            allow_anonymous: true,
+            max_connections: ssh_max_connections(),
+            max_per_ip: env_int("RAXOL_SSH_MAX_PER_IP", 10),
+            idle_timeout: :timer.seconds(env_int("RAXOL_SSH_IDLE_SECONDS", 300)),
+            max_session_duration: :timer.seconds(env_int("RAXOL_SSH_MAX_SESSION_SECONDS", 3600))
+          },
           restart: :temporary
         )
 
@@ -86,6 +96,13 @@ defmodule RaxolPlayground.Application do
 
   defp ssh_max_connections,
     do: String.to_integer(System.get_env("RAXOL_SSH_MAX_CONNECTIONS") || "50")
+
+  defp env_int(name, default) do
+    case System.get_env(name) do
+      nil -> default
+      val -> String.to_integer(val)
+    end
+  end
 
   @impl true
   def config_change(changed, _new, removed) do

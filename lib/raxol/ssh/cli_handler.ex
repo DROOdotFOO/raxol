@@ -10,6 +10,11 @@ defmodule Raxol.SSH.CLIHandler do
     :channel_id,
     :connection_ref,
     :tenant_opts,
+    :idle_timeout,
+    :max_session_duration,
+    :connected_at,
+    :last_activity,
+    :outcome,
     app_opts: [],
     registered: false
   ]
@@ -26,7 +31,9 @@ defmodule Raxol.SSH.CLIHandler do
        app_module: app_module,
        server: server,
        app_opts: app_opts,
-       tenant_opts: tenant_opts
+       tenant_opts: tenant_opts,
+       idle_timeout: Keyword.get(opts, :idle_timeout),
+       max_session_duration: Keyword.get(opts, :max_session_duration)
      }}
   end
 
@@ -36,12 +43,18 @@ defmodule Raxol.SSH.CLIHandler do
 
     case Raxol.SSH.Server.register_connection(state.server, peer_ip) do
       :ok ->
+        now = System.monotonic_time(:millisecond)
+        arm_session_deadline(state.max_session_duration)
+        arm_idle_check(state.idle_timeout)
+
         {:ok,
          %{
            state
            | channel_id: channel_id,
              connection_ref: connection_ref,
              peer_ip: peer_ip,
+             connected_at: now,
+             last_activity: now,
              registered: true
          }}
 
@@ -58,6 +71,32 @@ defmodule Raxol.SSH.CLIHandler do
     end
   end
 
+  # The absolute session cap: fires once, regardless of activity. Required
+  # for anonymous surfaces, where an eternal shell is a stated non-goal.
+  @impl true
+  def handle_msg(:session_deadline, %__MODULE__{} = state) do
+    close_with_notice(state, "Session time limit reached. Goodbye.\r\n")
+    {:stop, state.channel_id, %{state | outcome: :session_cap}}
+  end
+
+  # Input idleness: compare against the last :data/resize, and either close
+  # or re-arm for exactly the remaining window, so an active session is
+  # never interrupted and an idle one is caught within one period.
+  @impl true
+  def handle_msg({:idle_check, idle_ms}, %__MODULE__{} = state) do
+    elapsed =
+      System.monotonic_time(:millisecond) -
+        (state.last_activity || state.connected_at)
+
+    if elapsed >= idle_ms do
+      close_with_notice(state, "Idle timeout. Goodbye.\r\n")
+      {:stop, state.channel_id, %{state | outcome: :idle_timeout}}
+    else
+      Process.send_after(self(), {:idle_check, idle_ms}, idle_ms - elapsed)
+      {:ok, state}
+    end
+  end
+
   @impl true
   def handle_msg(msg, state) do
     Raxol.Core.Runtime.Log.debug(
@@ -70,7 +109,7 @@ defmodule Raxol.SSH.CLIHandler do
   @impl true
   def handle_ssh_msg({:ssh_cm, _conn, {:data, _ch, _type, data}}, state) do
     maybe_send(state.session_pid, {:ssh_data, data})
-    {:ok, state}
+    {:ok, touch_activity(state)}
   end
 
   # A second pty-req on a channel that already has a session is a RESIZE, not
@@ -137,7 +176,7 @@ defmodule Raxol.SSH.CLIHandler do
         state
       ) do
     maybe_send(state.session_pid, {:resize, width, height})
-    {:ok, state}
+    {:ok, touch_activity(state)}
   end
 
   @impl true
@@ -154,19 +193,63 @@ defmodule Raxol.SSH.CLIHandler do
   @impl true
   def handle_ssh_msg({:ssh_cm, _conn, {:closed, _ch}}, state) do
     maybe_send(state.session_pid, :closed)
-    {:stop, state.channel_id, state}
+    {:stop, state.channel_id, %{state | outcome: state.outcome || :closed}}
   end
 
   @impl true
   def handle_ssh_msg(_msg, state), do: {:ok, state}
 
   @impl true
-  def terminate(_reason, %__MODULE__{registered: true} = state) do
+  def terminate(reason, %__MODULE__{registered: true} = state) do
     Raxol.SSH.Server.unregister_connection(state.server, state.peer_ip)
+
+    duration_s =
+      div(System.monotonic_time(:millisecond) - (state.connected_at || 0), 1000)
+
+    # The close log is what makes an unauthenticated surface auditable: who
+    # connected, as whom, for how long, and how it ended. Without it, whether
+    # the surface is worth running is unanswerable.
+    Raxol.Core.Runtime.Log.info(
+      "[SSH] close peer=#{Raxol.SSH.Server.format_peer(state.peer_ip)}" <>
+        " user=#{connection_user(state.connection_ref) || "?"}" <>
+        " duration=#{duration_s}s outcome=#{close_outcome(state, reason)}"
+    )
+
     :ok
   end
 
   def terminate(_reason, _state), do: :ok
+
+  defp close_outcome(%__MODULE__{outcome: outcome}, _reason)
+       when not is_nil(outcome),
+       do: outcome
+
+  defp close_outcome(_state, :normal), do: :closed
+  defp close_outcome(_state, {:shutdown, _}), do: :shutdown
+  defp close_outcome(_state, reason), do: inspect(reason)
+
+  defp close_with_notice(state, notice) do
+    _ = :ssh_connection.send(state.connection_ref, state.channel_id, notice)
+    _ = :ssh_connection.close(state.connection_ref, state.channel_id)
+    :ok
+  end
+
+  defp arm_session_deadline(ms) when is_integer(ms) and ms > 0 do
+    Process.send_after(self(), :session_deadline, ms)
+  end
+
+  defp arm_session_deadline(_), do: :ok
+
+  defp arm_idle_check(ms) when is_integer(ms) and ms > 0 do
+    Process.send_after(self(), {:idle_check, ms}, ms)
+  end
+
+  defp arm_idle_check(_), do: :ok
+
+  defp touch_activity(%__MODULE__{registered: true} = state),
+    do: %{state | last_activity: System.monotonic_time(:millisecond)}
+
+  defp touch_activity(state), do: state
 
   defp maybe_send(nil, _msg), do: :ok
   defp maybe_send(pid, msg), do: send(pid, msg)

@@ -89,4 +89,6 @@ function main() {
   process.exit(result.status ?? 0);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { BINARIES, resolveBinary };

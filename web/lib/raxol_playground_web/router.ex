@@ -13,6 +13,7 @@ defmodule RaxolPlaygroundWeb.Router do
   # Raw endpoints (no session, no layout, no CSRF)
   scope "/", RaxolPlaygroundWeb do
     get("/health", HealthController, :check)
+    get("/install", InstallController, :show)
     get("/skill.md", SkillController, :show)
     get("/llms.txt", CapabilitiesController, :llms_txt)
     get("/llms-full.txt", CapabilitiesController, :llms_full)
