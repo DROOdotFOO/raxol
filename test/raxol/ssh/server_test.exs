@@ -609,6 +609,25 @@ defmodule Raxol.SSH.ServerTest do
       assert Server.ensure_host_keys(dir) == :ok
       assert File.read!(Path.join(dir, "ssh_host_ed25519_key")) == original
     end
+
+    test "concurrent first boots converge on one owner-only key" do
+      dir = tmp_keys_dir("concurrent")
+
+      results =
+        1..12
+        |> Task.async_stream(fn _ -> Server.ensure_host_keys(dir) end,
+          ordered: false,
+          max_concurrency: 12
+        )
+        |> Enum.to_list()
+
+      assert Enum.all?(results, &match?({:ok, :ok}, &1))
+
+      path = Path.join(dir, "ssh_host_ed25519_key")
+      assert File.read!(path) =~ "BEGIN PRIVATE KEY"
+      assert Bitwise.band(File.stat!(path).mode, 0o077) == 0
+      assert Path.wildcard(path <> ".tmp.*") == []
+    end
   end
 
   describe "anonymous server end to end" do

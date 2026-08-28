@@ -16,7 +16,9 @@ defmodule RaxolPlaygroundWeb.InstallController do
   def show(conn, _params) do
     conn
     |> put_resp_content_type("text/plain")
-    |> put_resp_header("cache-control", "public, max-age=3600")
+    # This endpoint is executable content. Revalidate every request so a
+    # security fix or rollback is not held behind an hour-old edge cache.
+    |> put_resp_header("cache-control", "no-cache, max-age=0, must-revalidate")
     |> send_resp(200, @install_script)
   end
 end

@@ -15,8 +15,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   use Phoenix.Component
 
   alias RaxolPlayground.Capabilities
-  alias RaxolPlaygroundWeb.Playground.Helpers
-
   import Phoenix.HTML, only: [raw: 1]
 
   import RaxolPlaygroundWeb.PlaygroundComponents,
@@ -67,6 +65,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @counter_code Makeup.highlight_inner_html(@counter_source)
   @agent_code Makeup.highlight_inner_html(@agent_source)
+  @install_command "curl -fsSL https://raxol.io/install | bash"
 
   @faqs [
     %{
@@ -97,7 +96,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     %{
       q: "What does the SSH demo give me?",
       a:
-        "ssh -p 2222 playground@raxol.io drops you into the same widget catalog you can run locally with `mix raxol.playground`. Each connection is a supervised channel with its own crash boundary."
+        "Raxol's SSH surface gives every connection a supervised channel with its own crash boundary. The hosted playground is currently browser-only; run `mix raxol.playground --ssh` to try the SSH surface locally."
     }
   ]
 
@@ -121,7 +120,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a href="/skill.md" class="nav-link">Skill</a>
           <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
         </div>
-        <button phx-click="toggle_mobile_menu" class="md:hidden p-1 text-pearl-50" aria-label="Toggle menu">
+        <button
+          type="button"
+          phx-click="toggle_mobile_menu"
+          class="md:hidden p-3 text-pearl-50"
+          aria-label={if @mobile_menu_open, do: "Close menu", else: "Open menu"}
+          aria-expanded={to_string(@mobile_menu_open)}
+          aria-controls="mobile-navigation"
+        >
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <%= if @mobile_menu_open do %>
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -132,7 +138,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </button>
       </div>
       <%= if @mobile_menu_open do %>
-        <div class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-50">
+        <div id="mobile-navigation" class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-50">
           <a href="/playground">Playground</a>
           <a href="/gallery">Gallery</a>
           <a href="https://hexdocs.pm/raxol">Docs</a>
@@ -152,7 +158,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:terminal_html, :boolean, required: true)
 
   def hero_section(assigns) do
-    assigns = assign(assigns, :ssh_cmd, Helpers.ssh_command())
+    assigns = assign(assigns, :install_command, @install_command)
 
     ~H"""
     <section class="landing-section px-6 pt-24 pb-14 md:pt-32 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
@@ -187,8 +193,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <% end %>
 
       <div class="mb-10">
-        <.ssh_copy_block id="ssh-copy" cmd={@ssh_cmd} />
-        <p class="label-text mt-3">Zero install. Click to copy.</p>
+        <.ssh_copy_block id="install-copy" cmd={@install_command} />
+        <p class="label-text mt-3">Self-contained binary. Click to copy.</p>
       </div>
 
       <div class="flex items-center justify-center gap-4 flex-wrap">
@@ -211,8 +217,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <span class="stat-label">packages</span>
         </div>
         <div class="stat-cell" role="listitem">
-          <span class="stat-value">0</span>
-          <span class="stat-label">install</span>
+          <span class="stat-value">1</span>
+          <span class="stat-label">binary</span>
         </div>
         <div class="stat-cell" role="listitem">
           <span class="stat-value">OTP</span>
@@ -311,15 +317,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # ---------------------------------------------------------------------------
 
   def ssh_deep_dive(assigns) do
-    assigns = assign(assigns, :ssh_cmd, Helpers.ssh_command())
-
     ~H"""
     <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="ssh-deep-title">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 items-center">
         <div>
           <span class="section-numeral" aria-hidden="true">02</span>
-          <span class="section-eyebrow">Zero install</span>
-          <h2 id="ssh-deep-title" class="heading-2xl mb-3">Try it without installing anything.</h2>
+          <span class="section-eyebrow">SSH surface</span>
+          <h2 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h2>
           <p class="body-text mb-6">
             Every Raxol app is one SSH connection away. Each session is a
             supervised BEAM process: crash-isolated, hot-reloadable, observable.
@@ -331,9 +335,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             <li>One line to enable in your app</li>
           </ul>
         </div>
-        <div class="text-center">
-          <.ssh_copy_block id="ssh-copy-deep" cmd={@ssh_cmd} />
-          <p class="label-text mt-3">Click to copy</p>
+        <div class="text-center space-y-4">
+          <a href="/playground" class="btn-primary">Open Browser Playground</a>
+          <p class="label-text">Hosted SSH is temporarily offline.</p>
         </div>
       </div>
     </section>
@@ -491,14 +495,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # ---------------------------------------------------------------------------
 
   def try_section(assigns) do
-    assigns = assign(assigns, :ssh_cmd, Helpers.ssh_command())
+    assigns = assign(assigns, :install_command, @install_command)
 
     ~H"""
     <section class="landing-section px-6 py-12 md:py-20 max-w-4xl mx-auto" aria-labelledby="try-title">
       <h2 id="try-title" class="heading-2xl mb-10">Try it</h2>
 
       <div class="space-y-3 mb-10">
-        <.copyable_command id="copy-ssh" command={@ssh_cmd} comment="zero install" tone={:coral} />
+        <.copyable_command id="copy-install" command={@install_command} comment="self-contained binary" tone={:coral} />
+        <.copyable_command id="copy-npm" command="npm i -g raxol" comment="Node users" tone={:sky} />
         <.copyable_command id="copy-playground" command="mix raxol.playground" comment="interactive demos" tone={:sky} />
         <.copyable_command id="copy-demo" command="mix run examples/demo.exs" comment="BEAM dashboard" tone={:sky} />
       </div>

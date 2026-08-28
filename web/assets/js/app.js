@@ -13,11 +13,15 @@ Hooks.CopyToClipboard = {
       const text = this.el.dataset.copy
       if (!text) return
 
-      navigator.clipboard.writeText(text).then(() => {
-        const original = this.el.innerHTML
-        this.el.innerHTML = '<span style="color: #58a1c6;">copied</span>'
-        setTimeout(() => { this.el.innerHTML = original }, 1500)
-      }).catch(() => {
+      const announceCopied = () => {
+        const status = this.el.querySelector('[data-copy-status]')
+        if (status) {
+          status.textContent = 'Copied to clipboard'
+          setTimeout(() => { status.textContent = '' }, 1500)
+        }
+      }
+
+      navigator.clipboard.writeText(text).then(announceCopied).catch(() => {
         // Fallback for older browsers
         const textarea = document.createElement('textarea')
         textarea.value = text
@@ -28,9 +32,7 @@ Hooks.CopyToClipboard = {
         document.execCommand('copy')
         document.body.removeChild(textarea)
 
-        const original = this.el.innerHTML
-        this.el.innerHTML = '<span style="color: #58a1c6;">copied</span>'
-        setTimeout(() => { this.el.innerHTML = original }, 1500)
+        announceCopied()
       })
     })
   }

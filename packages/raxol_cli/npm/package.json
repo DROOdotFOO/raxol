@@ -5,6 +5,9 @@
   "bin": {
     "raxol": "bin/launcher.js"
   },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "files": [
     "bin/"
   ],

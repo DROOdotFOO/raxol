@@ -9,7 +9,9 @@
 # exists so Node is not a prerequisite for a terminal tool that does not
 # otherwise need it.
 #
-# Every download is checksum-verified against the release's SHA256SUMS.
+# Every download is checksum-verified against the release's SHA256SUMS. The
+# installer fails closed when either the checksum file or a SHA-256 utility is
+# unavailable.
 #
 # Environment:
 #   RAXOL_VERSION       version to install (default: latest release)
@@ -24,8 +26,14 @@ INSTALL_DIR="${RAXOL_INSTALL_DIR:-$HOME/.local/bin}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version) VERSION="${2:-}"; shift 2 ;;
-    --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
+    --version)
+      [[ $# -ge 2 && -n "$2" ]] || { printf 'install: --version requires a value\n' >&2; exit 64; }
+      VERSION="$2"; shift 2
+      ;;
+    --dir)
+      [[ $# -ge 2 && -n "$2" ]] || { printf 'install: --dir requires a value\n' >&2; exit 64; }
+      INSTALL_DIR="$2"; shift 2
+      ;;
     -h|--help)
       # Print the header comment, stopping at the first line that is not one.
       # A fixed line range goes stale the moment the header is edited.
@@ -88,28 +96,22 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$base/$binary" -o "$tmp/$binary" ||
   die "download failed: $base/$binary (is $tag a published release?)"
 
-if curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null; then
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(sha256sum "$tmp/$binary" | awk '{print $1}')
-  elif command -v shasum >/dev/null 2>&1; then
-    actual=$(shasum -a 256 "$tmp/$binary" | awk '{print $1}')
-  else
-    actual=""
-    note "install: no sha256sum/shasum available; skipping checksum verification"
-  fi
+curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null ||
+  die "no SHA256SUMS for $tag; refusing an unverified install"
 
-  if [[ -n "$actual" ]]; then
-    expected=$(awk -v b="$binary" '$2 == b || $2 == "*" b {print $1}' "$tmp/SHA256SUMS" | head -n 1)
-    [[ -n "$expected" ]] || die "no checksum for $binary in SHA256SUMS"
-    [[ "$actual" == "$expected" ]] ||
-      die "checksum mismatch for $binary (expected $expected, got $actual)"
-    note "raxol: checksum ok"
-  fi
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$tmp/$binary" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  actual=$(shasum -a 256 "$tmp/$binary" | awk '{print $1}')
 else
-  # Refuse silently-unverified installs only when the release should have had
-  # sums; older releases predate them, so this is a warning, not a failure.
-  note "install: no SHA256SUMS for $tag; proceeding unverified"
+  die "sha256sum or shasum is required; refusing an unverified install"
 fi
+
+expected=$(awk -v b="$binary" '$2 == b || $2 == "*" b {print $1}' "$tmp/SHA256SUMS" | head -n 1)
+[[ -n "$expected" ]] || die "no checksum for $binary in SHA256SUMS"
+[[ "$actual" == "$expected" ]] ||
+  die "checksum mismatch for $binary (expected $expected, got $actual)"
+note "raxol: checksum ok"
 
 # -- install -----------------------------------------------------------------
 
