@@ -732,10 +732,12 @@ defmodule Raxol.SSH.Server do
             :ok
 
           {:error, reason} ->
-            raise File.Error,
-              reason: reason,
-              action: "secure Windows ACL for",
-              path: path
+            # Not a File.Error: :file.format_error/1 reads a 3-tuple reason
+            # as {Line, Mod, Term} and calls Mod.format_error/1, so a
+            # non-posix reason crashes exception formatting and destroys
+            # the actual PowerShell output.
+            raise "cannot secure Windows ACL for #{path}: " <>
+                    windows_acl_error_message(reason)
         end
 
       _ ->
@@ -762,6 +764,15 @@ defmodule Raxol.SSH.Server do
   rescue
     error -> {:error, {:windows_acl_error, error}}
   end
+
+  defp windows_acl_error_message(:powershell_unavailable),
+    do: "no PowerShell executable found on PATH"
+
+  defp windows_acl_error_message({:windows_acl_failed, status, output}),
+    do: "ACL script exited #{status}: #{String.trim(output)}"
+
+  defp windows_acl_error_message({:windows_acl_error, error}),
+    do: Exception.message(error)
 
   # PowerShell 7 can shadow the inbox Windows PowerShell executable on PATH,
   # but its Microsoft.PowerShell.Security module is not guaranteed to include
