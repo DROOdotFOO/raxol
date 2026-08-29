@@ -69,7 +69,7 @@ Sensor examples: `sensor_hud_demo.exs` (3 mock sensors with gauge, sparkline, th
 
 Adaptive examples: `adaptive_ui_demo.exs` (behavior tracking, layout recommendations, feedback loop).
 
-Playground: `mix raxol.playground` is an interactive Component catalog with 40 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). Production SSH enabled via `RAXOL_SSH_PLAYGROUND=true` env var in fly.toml.
+Playground: `mix raxol.playground` is an interactive Component catalog with 41 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). Production SSH enabled via `RAXOL_SSH_PLAYGROUND=true` env var in fly.toml.
 
 ### Coding agent
 
@@ -303,7 +303,7 @@ lib/raxol/
 │   ├── discovery.ex   # libcluster wrapper with strategy presets
 │   ├── strategy/      # Custom libcluster strategies (Tailscale)
 │   └── crdt/          # LWWRegister, ORSet (pure functional)
-├── playground/      # Interactive Component catalog (40 demos, 8 categories)
+├── playground/      # Interactive Component catalog (41 demos, 8 categories)
 ├── ssh/             # SSH serving
 ├── repl/            # Interactive REPL
 ├── performance/     # Performance monitoring, profiling, caching

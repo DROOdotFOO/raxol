@@ -4,7 +4,7 @@
 
 ### Playground
 
-40 demos across 8 categories with live preview:
+41 demos across 8 categories with live preview:
 
 ```bash
 mix raxol.playground
