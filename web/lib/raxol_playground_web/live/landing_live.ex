@@ -1,8 +1,9 @@
 defmodule RaxolPlaygroundWeb.LandingLive do
   @moduledoc """
-  Landing page for raxol.io. Mounts a single demo (the live BEAM
-  dashboard) into a TEALive bridge and orchestrates the section layout.
-  Auto-restarts the demo on timeout instead of showing a retry button
+  Landing page for raxol.io. The hero autoplays recorded frames (no server
+  work, no socket traffic) until the visitor clicks "take over live", which
+  starts the live BEAM dashboard demo through a TEALive bridge. Timeout
+  reverts to the recorded frames rather than showing a retry button
   (different policy than the playground/demo screens).
 
   All section markup lives in `RaxolPlaygroundWeb.LandingComponents`.
@@ -38,7 +39,6 @@ defmodule RaxolPlaygroundWeb.LandingLive do
         pause_source: nil,
         demo_component: demo_component
       )
-      |> start_landing_demo()
 
     {:ok, socket}
   end
@@ -79,6 +79,29 @@ defmodule RaxolPlaygroundWeb.LandingLive do
     end
   end
 
+  # "take over live": swap the hero's recorded frames for a live demo
+  # session. The demo starts here, not at mount, so a visitor who never
+  # interacts costs no server work and no socket frames.
+  def handle_event("take_over", _params, socket) do
+    if socket.assigns[:lifecycle_pid] do
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> assign(demo_paused: false, pause_source: nil)
+       |> start_landing_demo()}
+    end
+  end
+
+  # "back to the tour": stop the live session and return to the recorded
+  # frames (the HeroDemo hook restarts the player when data-live drops).
+  def handle_event("end_take_over", _params, socket) do
+    {:noreply,
+     socket
+     |> DemoLifecycle.stop_demo()
+     |> assign(terminal_html: false, demo_error: nil, demo_paused: false, pause_source: nil)}
+  end
+
   # Forward terminal key events from the RaxolTerminal hook into the demo, so
   # the embedded demo is interactive (same path as DemoLive).
   def handle_event("keydown", params, socket) do
@@ -99,20 +122,30 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   def handle_info({:render_update, html, _animation_css}, socket),
     do: {:noreply, socket |> DemoLifecycle.render_update(html) |> maybe_pause_after_frame()}
 
-  # Landing's policy: auto-restart on timeout instead of show-retry.
+  # Landing's policy: a timed-out live session reverts to the recorded
+  # frames (terminal_html: false re-renders the frame player, and the
+  # HeroDemo hook restarts it). No retry button, no auto-restart loop.
   def handle_info(:demo_timeout, socket) do
     socket =
       socket
       |> DemoLifecycle.stop_demo()
-      |> assign(terminal_html: false, demo_error: nil)
-      |> start_landing_demo()
+      |> assign(terminal_html: false, demo_error: nil, demo_paused: false, pause_source: nil)
 
     {:noreply, socket}
   end
 
+  # A crashed live session also reverts to the recorded frames.
   def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
     if pid == socket.assigns[:lifecycle_pid] do
-      {:noreply, assign(socket, lifecycle_pid: nil, demo_error: true)}
+      {:noreply,
+       assign(socket,
+         lifecycle_pid: nil,
+         dispatcher_pid: nil,
+         terminal_html: false,
+         demo_error: nil,
+         demo_paused: false,
+         pause_source: nil
+       )}
     else
       {:noreply, socket}
     end

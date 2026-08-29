@@ -161,6 +161,147 @@ Hooks.RaxolTerminal = {
   }
 }
 
+// Hero surface-tabbed demo. All content is server-rendered; this hook only
+// toggles hidden/aria-selected: it auto-advances the surface tabs and steps
+// the recorded terminal frames on a fixed-timestep rAF accumulator
+// (while-loop catch-up keeps wall-clock lockstep on any refresh rate).
+// Clicking a tab stops the auto-advance. Reduced motion pauses everything,
+// with a live change listener; the pause button is the manual override.
+// When the server swaps in the live session (data-live), the player stops.
+Hooks.HeroDemo = {
+  FRAME_MS: 850,
+  TAB_MS: 3400,
+
+  mounted() {
+    this.tab = 0
+    this.frame = 0
+    this.autoTabs = true
+    this.acc = {frame: 0, tab: 0}
+    this.raf = null
+
+    this.mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+    this.userPaused = this.mql.matches
+    this.onMql = (e) => this.setPaused(e.matches)
+    this.mql.addEventListener('change', this.onMql)
+
+    // Delegated clicks survive LiveView patches of the children.
+    this.onClick = (e) => {
+      const tabBtn = e.target.closest('.hero-tab')
+      if (tabBtn && this.el.contains(tabBtn)) {
+        this.autoTabs = false
+        this.showTab(parseInt(tabBtn.dataset.i, 10))
+        return
+      }
+      const pauseBtn = e.target.closest('[data-role="player-pause"]')
+      if (pauseBtn && this.el.contains(pauseBtn)) {
+        this.setPaused(!this.userPaused)
+      }
+    }
+    this.el.addEventListener('click', this.onClick)
+
+    this.syncPauseLabel()
+    this.sync()
+  },
+
+  updated() {
+    // A patch may or may not have touched the toggled attributes; derive
+    // state from the DOM rather than assuming.
+    const sel = this.el.querySelector('.hero-tab[aria-selected="true"]')
+    this.tab = sel ? parseInt(sel.dataset.i, 10) : 0
+    const vis = this.el.querySelector('.hero-frames [data-frame]:not([hidden])')
+    this.frame = vis ? parseInt(vis.dataset.frame, 10) : 0
+    this.syncPauseLabel()
+    this.sync()
+  },
+
+  destroyed() {
+    this.stopLoop()
+    this.mql.removeEventListener('change', this.onMql)
+    this.el.removeEventListener('click', this.onClick)
+  },
+
+  live() { return this.el.dataset.live === 'true' },
+  playing() { return !this.live() && !this.userPaused },
+
+  setPaused(v) {
+    this.userPaused = v
+    this.syncPauseLabel()
+    this.sync()
+  },
+
+  syncPauseLabel() {
+    const btn = this.el.querySelector('[data-role="player-pause"]')
+    if (btn) btn.textContent = this.userPaused ? 'play' : 'pause'
+  },
+
+  sync() {
+    if (this.playing()) this.startLoop()
+    else this.stopLoop()
+  },
+
+  startLoop() {
+    if (this.raf) return
+    this.last = undefined
+    if (!this.step) {
+      this.step = (ts) => {
+        if (this.last === undefined) this.last = ts
+        // Clamp dt: rAF suspends in background tabs, and an unclamped
+        // accumulator would fast-forward the whole hidden interval on return.
+        const dt = Math.min(ts - this.last, 1000)
+        this.last = ts
+        this.acc.frame += dt
+        this.acc.tab += dt
+        while (this.acc.frame >= this.FRAME_MS) {
+          this.acc.frame -= this.FRAME_MS
+          this.nextFrame()
+        }
+        while (this.acc.tab >= this.TAB_MS) {
+          this.acc.tab -= this.TAB_MS
+          if (this.autoTabs) this.showTab((this.tab + 1) % this.tabCount())
+        }
+        this.raf = requestAnimationFrame(this.step)
+      }
+    }
+    this.raf = requestAnimationFrame(this.step)
+  },
+
+  stopLoop() {
+    if (this.raf) {
+      cancelAnimationFrame(this.raf)
+      this.raf = null
+    }
+  },
+
+  tabCount() {
+    return this.el.querySelectorAll('.hero-tab').length
+  },
+
+  nextFrame() {
+    const frames = this.el.querySelectorAll('.hero-frames [data-frame]')
+    if (frames.length < 2) return
+    this.frame = (this.frame + 1) % frames.length
+    frames.forEach((f) => {
+      f.hidden = parseInt(f.dataset.frame, 10) !== this.frame
+    })
+  },
+
+  showTab(n) {
+    this.tab = n
+    const tabs = this.el.querySelectorAll('.hero-tab')
+    tabs.forEach((t) => {
+      t.setAttribute('aria-selected', String(parseInt(t.dataset.i, 10) === n))
+    })
+    this.el.querySelectorAll('.hero-out').forEach((o) => {
+      o.hidden = parseInt(o.dataset.surface, 10) !== n
+    })
+    const active = tabs[n]
+    const title = this.el.querySelector('[data-role="title"]')
+    const label = this.el.querySelector('[data-role="out-label"]')
+    if (active && title) title.textContent = active.dataset.title
+    if (active && label) label.textContent = active.dataset.label
+  }
+}
+
 // Motion preference reporter. CSS media queries can gate stylesheet
 // animation but not server-pushed terminal frames, so the LiveView needs
 // to know. Reports at connect (only when reduce is on) and on every
