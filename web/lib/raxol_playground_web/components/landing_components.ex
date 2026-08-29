@@ -15,6 +15,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   use Phoenix.Component
 
   alias RaxolPlayground.Capabilities
+  alias RaxolPlayground.RecordedFrames
   import Phoenix.HTML, only: [raw: 1]
 
   import RaxolPlaygroundWeb.PlaygroundComponents,
@@ -63,9 +64,86 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
   """
 
+  # The module the hero's surface tabs render. scripts/gen_landing_frames.exs
+  # at the repo root records EXACTLY this module through Raxol.Headless into
+  # priv/hero_frames/ -- keep the two sources identical and rerun the script
+  # after editing, so the pane and the frames stay the same program.
+  @hero_counter_source ~S"""
+  defmodule Counter do
+    use Raxol.Core.Runtime.Application
+
+    @impl true
+    def init(_), do: %{count: 0}
+
+    @impl true
+    def update(:inc, m),
+      do: {%{m | count: m.count + 1}, []}
+
+    def update(%{data: %{char: "+"}}, m),
+      do: update(:inc, m)
+
+    def update(_, m), do: {m, []}
+
+    @impl true
+    def view(m) do
+      column style: %{padding: 1, gap: 1} do
+        [
+          text("Count: #{m.count}", style: [:bold]),
+          button("+", on_click: :inc)
+        ]
+      end
+    end
+  end
+  """
+
   @counter_code Makeup.highlight_inner_html(@counter_source)
   @agent_code Makeup.highlight_inner_html(@agent_source)
+  @hero_counter_code Makeup.highlight_inner_html(@hero_counter_source)
   @install_command "curl -fsSL https://raxol.io/install | bash"
+
+  # Authored output panes for the hero's non-terminal surfaces (the
+  # terminal and SSH panes embed real recorded frames instead). Kept as
+  # pre-escaped HTML strings: whitespace is significant inside <pre>, and
+  # a HEEx heredoc cannot carry flush-left lines.
+  @hero_out_browser ~S"""
+  <span class="hc">$ mix phx.server</span>
+
+  &lt;div <span class="hk">data-raxol-id</span>=<span class="hg">"counter"</span>&gt;
+    &lt;span <span class="hk">class</span>=<span class="hg">"bold"</span>&gt;Count: 3&lt;/span&gt;
+    &lt;button <span class="hk">phx-click</span>=<span class="hg">"inc"</span>&gt;+&lt;/button&gt;
+  &lt;/div&gt;
+
+  <span class="hc">TerminalBridge, cell-level patches</span>
+  <span class="hc">same model, same view/1</span>
+  """
+
+  @hero_out_mcp ~S"""
+  <span class="hc">$ mix mcp.server</span>
+
+  {
+    <span class="hk">"tools"</span>: [
+      { <span class="hk">"name"</span>: <span class="hg">"counter_click"</span>,
+        <span class="hk">"desc"</span>: <span class="hg">"Press the + button"</span> },
+      { <span class="hk">"name"</span>: <span class="hg">"counter_read"</span>,
+        <span class="hk">"desc"</span>: <span class="hg">"Read the count"</span> }
+    ]
+  }
+
+  <span class="hc">derived from the widget tree</span>
+  """
+
+  @hero_out_acp ~S"""
+  <span class="hc">$ raxol acp</span>
+
+  <span class="hc">-&gt;</span> { <span class="hk">"method"</span>: <span class="hg">"session/prompt"</span>,
+       <span class="hk">"params"</span>: { <span class="hk">"sessionId"</span>: <span class="hg">"..."</span> } }
+
+  <span class="hc">&lt;-</span> { <span class="hk">"method"</span>: <span class="hg">"session/update"</span>,
+       <span class="hk">"update"</span>: { <span class="hk">"sessionUpdate"</span>:
+         <span class="hg">"agent_message_chunk"</span> } }
+
+  <span class="hc">Zed, JetBrains, neovim, Emacs</span>
+  """
 
   # Version claims derive from Capabilities.packages() so the FAQ can never
   # drift from the package table the capability endpoints serve.
@@ -173,52 +251,19 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <%!-- MotionPref reports prefers-reduced-motion to the LiveView (at
          connect and on preference change) so the server stops pushing
-         demo frames; CSS media queries cannot gate those. --%>
-    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-24 pb-14 md:pt-32 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
-      <h1 id="hero-title" class="font-mono font-bold tracking-tight text-axol-coral mb-6" style="font-size: clamp(3.5rem, 2.5rem + 5vw, 7rem); line-height: 1;">
-        raxol
+         live demo frames after takeover; CSS media queries cannot gate
+         those. The recorded-frames player gates itself client-side. --%>
+    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-20 pb-14 md:pt-28 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
+      <h1 id="hero-title" class="font-mono font-bold tracking-tight text-pearl mb-5" style="font-size: clamp(1.9rem, 1.3rem + 2.6vw, 3.4rem); line-height: 1.2;">
+        One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
       </h1>
-
-      <p class="font-mono tracking-normal text-pearl-80 mb-4" style="font-size: clamp(1.05rem, 0.95rem + 0.5vw, 1.35rem); line-height: 1.4;">
-        One app. Terminal, browser, SSH, or agent.
-      </p>
 
       <p class="body-text-dim mb-10 max-w-2xl mx-auto">
         Write a TEA module in Elixir. It renders everywhere: crash isolation,
         hot reload, AI agents, and distributed swarm from OTP.
       </p>
 
-      <%!-- Live terminal embed (HTML injected by RaxolTerminal hook) --%>
-      <%= if @terminal_html do %>
-        <%!-- max-w-3xl: the 80-col demo at 14px monospace is ~706px wide
-             incl. padding; the old max-w-2xl (672px) forced a scrollbar. --%>
-        <div class="terminal-chrome mb-10 mx-auto text-left max-w-3xl">
-          <.terminal_chrome title="raxol" />
-          <%!-- phx-update="ignore": the hook owns this element's content
-               (innerHTML injection); without it any hero re-render (e.g.
-               the pause button label) patches it back to empty. --%>
-          <div
-            id="landing-terminal"
-            phx-hook="RaxolTerminal"
-            phx-update="ignore"
-            class="raxol-terminal p-4 bg-synthwave-bg"
-            data-theme="synthwave84"
-            data-no-scroll="true"
-            tabindex="-1"
-            role="img"
-            aria-label="Raxol demo"
-          ></div>
-          <div class="flex justify-end px-2 py-1 border-t border-subtle">
-            <button
-              type="button"
-              phx-click="toggle_demo_motion"
-              class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
-            >
-              <%= if @demo_paused, do: "play demo", else: "pause demo" %>
-            </button>
-          </div>
-        </div>
-      <% end %>
+      <.hero_demo terminal_html={@terminal_html} demo_paused={@demo_paused} />
 
       <div class="mb-10">
         <.ssh_copy_block id="install-copy" cmd={@install_command} />
@@ -254,6 +299,153 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
     </section>
+    """
+  end
+
+  # ---------------------------------------------------------------------------
+  # 1b. Hero demo: one module, five surfaces
+  #
+  # All five surface panes are server-rendered (the dead render before the
+  # socket connects carries the module pane and terminal frame one); the
+  # HeroDemo hook only toggles `hidden`/aria-selected, auto-advancing tabs
+  # and stepping the recorded frames on a fixed-timestep rAF accumulator.
+  # Clicking a tab stops the auto-advance; "take over live" swaps the
+  # terminal pane's recorded frames for the live DemoLifecycle session.
+  # ---------------------------------------------------------------------------
+
+  attr(:terminal_html, :boolean, required: true)
+  attr(:demo_paused, :boolean, required: true)
+
+  def hero_demo(assigns) do
+    assigns =
+      assign(assigns,
+        hero_code: @hero_counter_code,
+        hero_frames: RecordedFrames.hero_frames(),
+        ssh_frame: List.last(RecordedFrames.hero_frames()),
+        out_browser: @hero_out_browser,
+        out_mcp: @hero_out_mcp,
+        out_acp: @hero_out_acp
+      )
+
+    ~H"""
+    <div id="hero-demo" phx-hook="HeroDemo" data-live={@terminal_html && "true"} class="hero-demo mb-10 mx-auto text-left">
+      <div class="hero-demo-bar">
+        <span class="hd-dot"></span><span class="hd-dot"></span><span class="hd-dot"></span>
+        <span :if={!@terminal_html} class="hd-title" data-role="title">counter.ex -- rendering to the terminal</span>
+        <span :if={@terminal_html} class="hd-title">beam dashboard -- live from this page's VM</span>
+      </div>
+
+      <%= if @terminal_html do %>
+        <%!-- Live takeover: the surface tour is replaced by a real
+             supervised session streaming from this page's BEAM. --%>
+        <div class="hero-live-wrap">
+          <%!-- phx-update="ignore": the RaxolTerminal hook owns this
+               element's content; without it any hero re-render patches
+               it back to empty. --%>
+          <div
+            id="landing-terminal"
+            phx-hook="RaxolTerminal"
+            phx-update="ignore"
+            class="raxol-terminal bg-synthwave-bg"
+            data-theme="synthwave84"
+            data-no-scroll="true"
+            tabindex="-1"
+            role="img"
+            aria-label="Raxol live demo"
+          ></div>
+        </div>
+      <% else %>
+      <div class="hero-tabs" role="tablist" aria-label="Render surface">
+        <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title="counter.ex -- rendering to the terminal" data-label="Rendered to the terminal">Terminal</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title="counter.ex -- rendering to Phoenix LiveView" data-label="Rendered to the browser">Browser</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title="counter.ex -- served over SSH" data-label="Served over SSH">SSH</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title="counter.ex -- exposed as MCP tools" data-label="Exposed to agents">Agent / MCP</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="4" data-title="counter.ex -- driven over ACP" data-label="Driven from your editor">Editor / ACP</button>
+      </div>
+
+      <div class="hero-panes">
+        <div class="hero-pane">
+          <div class="hero-pane-label">The module (never changes)</div>
+          <pre class="hero-code"><code class="syntax-elixir"><%= raw(@hero_code) %></code></pre>
+        </div>
+
+        <div class="hero-pane">
+          <div class="hero-pane-label" data-role="out-label">Rendered to the terminal</div>
+
+          <div class="hero-out" data-surface="0">
+            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run counter.exs</span></pre>
+            <%!-- Recorded frames: real Headless output, committed under
+                 priv/hero_frames/. Frame one ships visible in the dead
+                 render; the hook steps the rest. --%>
+            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true">
+              <%= for {frame, i} <- Enum.with_index(@hero_frames) do %>
+                <div class="hero-frame" data-frame={i} hidden={i != 0}><%= raw(frame) %></div>
+              <% end %>
+            </div>
+            <pre class="hero-pre hero-note" aria-hidden="true"><span class="hc">termbox2 NIF, direct cell diff</span></pre>
+          </div>
+
+          <div class="hero-out" data-surface="1" hidden>
+            <pre class="hero-pre"><%= raw(@out_browser) %></pre>
+          </div>
+
+          <div class="hero-out" data-surface="2" hidden>
+            <%!-- A local example on purpose: hosted SSH is suspended, and
+                 the landing must not advertise playground@raxol.io (the
+                 component test enforces this). --%>
+            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh -p 2222 demo@localhost</span></pre>
+            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true">
+              <div class="hero-frame"><%= raw(@ssh_frame) %></div>
+            </div>
+            <pre class="hero-pre hero-note" aria-hidden="true"><span class="hc">one supervised BEAM process per connection</span></pre>
+          </div>
+
+          <div class="hero-out" data-surface="3" hidden>
+            <pre class="hero-pre"><%= raw(@out_mcp) %></pre>
+          </div>
+
+          <div class="hero-out" data-surface="4" hidden>
+            <pre class="hero-pre"><%= raw(@out_acp) %></pre>
+          </div>
+        </div>
+      </div>
+      <% end %>
+
+      <div class="hero-demo-foot">
+        <%= if @terminal_html do %>
+          <span class="hero-live-badge">live session</span>
+          <button
+            type="button"
+            phx-click="toggle_demo_motion"
+            class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
+          >
+            <%= if @demo_paused, do: "play demo", else: "pause demo" %>
+          </button>
+          <button
+            type="button"
+            phx-click="end_take_over"
+            class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
+          >
+            back to the tour
+          </button>
+        <% else %>
+          <button
+            type="button"
+            data-role="player-pause"
+            class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
+          >
+            pause
+          </button>
+          <button
+            type="button"
+            phx-click="take_over"
+            class="label-text cursor-pointer text-axol-coral hover:text-pearl-80 transition-colors"
+          >
+            take over live
+          </button>
+        <% end %>
+      </div>
+    </div>
     """
   end
 

@@ -10,7 +10,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     hero =
       render_component(&LandingComponents.hero_section/1,
         raxol_version: "2.5",
-        terminal_html: false
+        terminal_html: false,
+        demo_paused: false
       )
 
     deep_dive = render_component(&LandingComponents.ssh_deep_dive/1, %{})
