@@ -335,6 +335,41 @@ html, body {
   color: var(--pearl-cream);
 }
 
+/* Everything on the site sets in monospace faces; lining tabular figures
+   keep every digit on the character grid (stat values, versions, counts). */
+html {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Cap a mono container at 80 columns, rounded down to a whole number of
+   character cells so the right edge lands on the grid (The Monospace Web).
+   The bare 80ch line is the fallback for browsers without round(). */
+.ch-snap {
+  max-width: 80ch;
+  max-width: calc(min(80ch, round(down, 100%, 1ch)));
+}
+
+/* Keyboard skip link: visually hidden until focused, first tab stop on
+   every page (root layout), targets each page's <main id="main-content">. */
+.skip-link {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--obsidian);
+  color: var(--axol-coral);
+  border: 1px solid var(--coral-40);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  transform: translateY(calc(-100% - 1.5rem));
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
 /* =============================================================================
    Atmospheric Background Layers
    ============================================================================= */
@@ -696,6 +731,42 @@ html, body {
 }
 
 /* =============================================================================
+   Install-method tabs (hero): curl / brew / npm / hex over one command line.
+   Same recipe as .hero-tab, centered; panes are .ssh-hero copy blocks.
+   ============================================================================= */
+
+.install-tabs__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.install-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease-smooth),
+              border-color var(--duration-fast) var(--ease-smooth);
+}
+
+.install-tab:hover { color: var(--pearl-cream); }
+
+.install-tab[aria-selected="true"] {
+  color: var(--axol-coral);
+  border-bottom-color: var(--axol-coral);
+}
+
+/* =============================================================================
    Badge
    ============================================================================= */
 
@@ -897,17 +968,34 @@ html, body {
 }
 
 /* =============================================================================
-   Surface chips (multi-surface deep dive)
+   Surface chips (multi-surface deep dive), grouped into three buckets:
+   in your terminal / in your browser / where your agents are.
    ============================================================================= */
 
-.surface-grid {
+.surface-buckets {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.surface-bucket__label {
+  font-family: var(--font-mono);
+  font-size: clamp(0.6rem, 0.55rem + 0.25vw, 0.7rem);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-secondary);
+  margin: 0 0 0.75rem;
+}
+
+.surface-bucket__chips {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 1rem;
 }
 
 @media (min-width: 768px) {
-  .surface-grid { grid-template-columns: repeat(4, 1fr); }
+  .surface-bucket__chips { grid-template-columns: repeat(4, 1fr); }
 }
 
 .surface-chip {

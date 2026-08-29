@@ -78,7 +78,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
     ~H"""
     <.atmosphere />
 
-    <div class="relative min-h-screen z-10">
+    <main id="main-content" tabindex="-1" class="relative min-h-screen z-10">
       <%!-- Header --%>
       <header class="surface-bar">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -198,7 +198,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
           </div>
         <% end %>
       </div>
-    </div>
+    </main>
     """
   end
 

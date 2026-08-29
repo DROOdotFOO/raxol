@@ -5,12 +5,13 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
   alias RaxolPlaygroundWeb.Playground.Helpers
 
   @doc """
-  The SSH-command callout that appears on landing twice: once in the hero,
-  once in the deep dive. Each needs its own DOM id because the hook attaches
-  per element.
+  The copy-to-clipboard command callout used across the landing page. Each
+  caller needs its own DOM id because the hook attaches per element. Set
+  `prompt: nil` for content that is not a shell command (a mix.exs dep).
   """
   attr(:id, :string, required: true)
   attr(:cmd, :string, required: true)
+  attr(:prompt, :any, default: "$ ")
 
   def ssh_copy_block(assigns) do
     ~H"""
@@ -22,7 +23,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
       data-copy={@cmd}
       aria-label={"Copy command: #{@cmd}"}
     >
-      <span class="prompt">$ </span><%= @cmd %><span class="cursor-blink text-axol-coral">_</span>
+      <span :if={@prompt} class="prompt"><%= @prompt %></span><%= @cmd %><span class="cursor-blink text-axol-coral">_</span>
       <span class="sr-only" data-copy-status aria-live="polite"></span>
     </button>
     """

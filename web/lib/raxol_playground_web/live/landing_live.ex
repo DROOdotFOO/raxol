@@ -12,7 +12,6 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   use RaxolPlaygroundWeb, :live_view
 
   alias Raxol.Playground.Catalog
-  alias RaxolPlayground.Capabilities
   alias RaxolPlaygroundWeb.Playground.DemoLifecycle
 
   import RaxolPlaygroundWeb.LandingComponents
@@ -28,7 +27,6 @@ defmodule RaxolPlaygroundWeb.LandingLive do
       socket
       |> assign(
         page_title: "Raxol",
-        raxol_version: Capabilities.version_minor(),
         mobile_menu_open: false,
         terminal_html: false,
         lifecycle_pid: nil,
@@ -176,12 +174,8 @@ defmodule RaxolPlaygroundWeb.LandingLive do
 
     <div class="relative min-h-screen z-10">
       <.nav_bar mobile_menu_open={@mobile_menu_open} />
-      <main>
-        <.hero_section
-          raxol_version={@raxol_version}
-          terminal_html={@terminal_html}
-          demo_paused={@demo_paused}
-        />
+      <main id="main-content" tabindex="-1">
+        <.hero_section terminal_html={@terminal_html} demo_paused={@demo_paused} />
         <hr class="section-divider" aria-hidden="true" />
         <.code_example_section />
         <hr class="section-divider" aria-hidden="true" />

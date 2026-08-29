@@ -100,6 +100,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @agent_code Makeup.highlight_inner_html(@agent_source)
   @hero_counter_code Makeup.highlight_inner_html(@hero_counter_source)
   @install_command "curl -fsSL https://raxol.io/install | bash"
+  @brew_command "brew install droodotfoo/tap/raxol"
+  @npm_command "npm i -g raxol"
 
   # Authored output panes for the hero's non-terminal surfaces (the
   # terminal and SSH panes embed real recorded frames instead). Kept as
@@ -203,6 +205,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <div class="hidden md:flex items-center gap-6 text-sm font-mono tracking-wide">
           <a href="/playground" class="nav-link">Playground</a>
           <a href="/gallery" class="nav-link">Gallery</a>
+          <a href="/demos" class="nav-link">Demos</a>
           <a href="https://hexdocs.pm/raxol" class="nav-link">Docs</a>
           <a href="/skill.md" class="nav-link">Skill</a>
           <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
@@ -228,6 +231,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <div id="mobile-navigation" class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-60">
           <a href="/playground">Playground</a>
           <a href="/gallery">Gallery</a>
+          <a href="/demos">Demos</a>
           <a href="https://hexdocs.pm/raxol">Docs</a>
           <a href="/skill.md">Skill</a>
           <a href="https://github.com/DROOdotFOO/raxol">GitHub</a>
@@ -241,19 +245,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # 1. Hook: SSH + live demo + CTAs
   # ---------------------------------------------------------------------------
 
-  attr(:raxol_version, :string, required: true)
   attr(:terminal_html, :boolean, required: true)
   attr(:demo_paused, :boolean, required: true)
 
   def hero_section(assigns) do
-    assigns = assign(assigns, :install_command, @install_command)
-
     ~H"""
     <%!-- MotionPref reports prefers-reduced-motion to the LiveView (at
          connect and on preference change) so the server stops pushing
          live demo frames after takeover; CSS media queries cannot gate
          those. The recorded-frames player gates itself client-side. --%>
-    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-20 pb-14 md:pt-28 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
+    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-20 pb-14 md:pt-28 md:pb-24 max-w-5xl mx-auto text-center" aria-labelledby="hero-title">
       <h1 id="hero-title" class="font-mono font-bold tracking-tight text-pearl mb-5" style="font-size: clamp(1.9rem, 1.3rem + 2.6vw, 3.4rem); line-height: 1.2;">
         One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
       </h1>
@@ -266,18 +267,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <.hero_demo terminal_html={@terminal_html} demo_paused={@demo_paused} />
 
       <div class="mb-10">
-        <.ssh_copy_block id="install-copy" cmd={@install_command} />
-        <p class="label-text mt-3">Self-contained binary. Click to copy.</p>
+        <.install_tabs />
       </div>
 
-      <div class="flex items-center justify-center gap-4 flex-wrap">
+      <div class="flex items-center justify-center gap-4 flex-wrap mb-12">
         <a href="/playground" class="btn-primary">Open Playground</a>
         <a href="/skill.md" class="btn-sky">Agent Skill</a>
         <a href="https://github.com/DROOdotFOO/raxol" class="btn-secondary">GitHub</a>
-      </div>
-
-      <div class="mt-10 mb-12">
-        <code class="font-mono detail-text bg-inset border border-subtle px-4 py-2 rounded-sm"><%= raw("{:raxol, \"~> #{@raxol_version}\"}") %></code>
       </div>
 
       <div class="stat-grid max-w-2xl mx-auto" role="list" aria-label="Project stats">
@@ -299,6 +295,52 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
     </section>
+    """
+  end
+
+  # ---------------------------------------------------------------------------
+  # 1a. Install tabs: four methods over one command line
+  #
+  # All four panes ship in the dead render; the InstallTabs hook only
+  # toggles `hidden`/aria-selected, so the block works (showing curl)
+  # before JS and never round-trips the server.
+  # ---------------------------------------------------------------------------
+
+  def install_tabs(assigns) do
+    assigns =
+      assign(assigns,
+        curl_cmd: @install_command,
+        brew_cmd: @brew_command,
+        npm_cmd: @npm_command,
+        hex_dep: Capabilities.dep("raxol")
+      )
+
+    ~H"""
+    <div id="install-tabs" phx-hook="InstallTabs" class="install-tabs mx-auto">
+      <div class="install-tabs__row" role="tablist" aria-label="Install method">
+        <button type="button" class="install-tab" role="tab" aria-selected="true" data-m="curl">curl</button>
+        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="brew">brew</button>
+        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="npm">npm</button>
+        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="hex">hex</button>
+      </div>
+
+      <div class="install-pane" data-m="curl">
+        <.ssh_copy_block id="install-copy-curl" cmd={@curl_cmd} />
+        <p class="label-text mt-3">Self-contained binary. macOS and Linux. Click to copy.</p>
+      </div>
+      <div class="install-pane" data-m="brew" hidden>
+        <.ssh_copy_block id="install-copy-brew" cmd={@brew_cmd} />
+        <p class="label-text mt-3">Homebrew tap. macOS and Linux.</p>
+      </div>
+      <div class="install-pane" data-m="npm" hidden>
+        <.ssh_copy_block id="install-copy-npm" cmd={@npm_cmd} />
+        <p class="label-text mt-3">One wrapper, one per-platform binary. Needs Node.</p>
+      </div>
+      <div class="install-pane" data-m="hex" hidden>
+        <.ssh_copy_block id="install-copy-hex" cmd={@hex_dep} prompt={nil} />
+        <p class="label-text mt-3">Add to mix.exs in an existing Elixir app.</p>
+      </div>
+    </div>
     """
   end
 
@@ -457,23 +499,23 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :counter_code, @counter_code)
 
     ~H"""
-    <section class="landing-section px-6 py-12 md:py-20 max-w-4xl mx-auto" aria-labelledby="code-title">
+    <section class="landing-section px-6 py-12 md:py-20 max-w-5xl mx-auto" aria-labelledby="code-title">
       <h2 id="code-title" class="heading-2xl mb-3">Hello World</h2>
-      <p class="body-text mb-8">
+      <p class="body-text mb-8 max-w-2xl">
         Every Raxol app follows The Elm Architecture:
         <span class="text-axol-coral">init</span>,
         <span class="text-axol-coral">update</span>,
         <span class="text-axol-coral">view</span>.
       </p>
 
-      <div class="terminal-chrome mb-8">
+      <div class="terminal-chrome mb-8 ch-snap">
         <.terminal_chrome title="counter.exs" />
         <div class="terminal-chrome-body">
           <pre class="code-block"><code class="syntax-elixir"><%= Phoenix.HTML.raw(@counter_code) %></code></pre>
         </div>
       </div>
 
-      <p class="body-text-dim">
+      <p class="body-text-dim max-w-2xl">
         That counter works in a terminal, Phoenix LiveView, and over SSH. One codebase.
       </p>
     </section>
@@ -492,40 +534,57 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <span class="section-eyebrow">Surfaces</span>
         <h2 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h2>
         <p class="body-text max-w-2xl">
-          Write the TEA module once. Render to a terminal, embed in Phoenix
-          LiveView, serve over SSH, expose to agents over MCP, or reach a phone
-          via Telegram, watch push, and voice. Same model. Same view.
+          Write the TEA module once. It meets you in three places you already
+          are: your terminal, your browser, and wherever your agents work.
+          Same model. Same view.
         </p>
       </div>
 
-      <div class="surface-grid">
-        <div class="surface-chip">
-          <span class="surface-chip__name">Terminal</span>
-          <span class="surface-chip__cmd">termbox2 NIF</span>
+      <div class="surface-buckets">
+        <div class="surface-bucket">
+          <h3 class="surface-bucket__label">In your terminal</h3>
+          <div class="surface-bucket__chips">
+            <div class="surface-chip">
+              <span class="surface-chip__name">Terminal</span>
+              <span class="surface-chip__cmd">termbox2 NIF</span>
+            </div>
+            <div class="surface-chip">
+              <span class="surface-chip__name">SSH</span>
+              <span class="surface-chip__cmd">Erlang :ssh daemon</span>
+            </div>
+          </div>
         </div>
-        <div class="surface-chip">
-          <span class="surface-chip__name">Browser</span>
-          <span class="surface-chip__cmd">Phoenix LiveView</span>
+
+        <div class="surface-bucket">
+          <h3 class="surface-bucket__label">In your browser</h3>
+          <div class="surface-bucket__chips">
+            <div class="surface-chip">
+              <span class="surface-chip__name">Browser</span>
+              <span class="surface-chip__cmd">Phoenix LiveView</span>
+            </div>
+          </div>
         </div>
-        <div class="surface-chip">
-          <span class="surface-chip__name">SSH</span>
-          <span class="surface-chip__cmd">Erlang :ssh daemon</span>
-        </div>
-        <div class="surface-chip">
-          <span class="surface-chip__name">MCP</span>
-          <span class="surface-chip__cmd">JSON-RPC over stdio</span>
-        </div>
-        <div class="surface-chip">
-          <span class="surface-chip__name">Telegram</span>
-          <span class="surface-chip__cmd">Telegex HTTP</span>
-        </div>
-        <div class="surface-chip">
-          <span class="surface-chip__name">Watch</span>
-          <span class="surface-chip__cmd">APNS + FCM push</span>
-        </div>
-        <div class="surface-chip">
-          <span class="surface-chip__name">Speech</span>
-          <span class="surface-chip__cmd">TTS + STT</span>
+
+        <div class="surface-bucket">
+          <h3 class="surface-bucket__label">Where your agents are</h3>
+          <div class="surface-bucket__chips">
+            <div class="surface-chip">
+              <span class="surface-chip__name">MCP</span>
+              <span class="surface-chip__cmd">JSON-RPC over stdio</span>
+            </div>
+            <div class="surface-chip">
+              <span class="surface-chip__name">Telegram</span>
+              <span class="surface-chip__cmd">Telegex HTTP</span>
+            </div>
+            <div class="surface-chip">
+              <span class="surface-chip__name">Watch</span>
+              <span class="surface-chip__cmd">APNS + FCM push</span>
+            </div>
+            <div class="surface-chip">
+              <span class="surface-chip__name">Speech</span>
+              <span class="surface-chip__cmd">TTS + STT</span>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -572,7 +631,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :agent_code, @agent_code)
 
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-4xl mx-auto" aria-labelledby="agent-deep-title">
+    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="agent-deep-title">
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">03</span>
         <span class="section-eyebrow">Agent runtime</span>
@@ -586,14 +645,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </p>
       </div>
 
-      <div class="terminal-chrome mb-6">
+      <div class="terminal-chrome mb-6 ch-snap">
         <.terminal_chrome title="researcher.exs" />
         <div class="terminal-chrome-body">
           <pre class="code-block"><code class="syntax-elixir"><%= Phoenix.HTML.raw(@agent_code) %></code></pre>
         </div>
       </div>
 
-      <p class="body-text-dim">
+      <p class="body-text-dim max-w-2xl">
         Streaming LLM output via <code class="text-axol-coral">:async</code> commands.
         Inter-agent messages routed through a unique <code class="text-axol-coral">Registry</code>.
         Bring your own key for Anthropic, OpenAI, OpenRouter, Ollama, Lumo, or Kimi, or run mock.
@@ -648,7 +707,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section px-6 py-12 md:py-20 max-w-5xl mx-auto" aria-labelledby="packages-title">
       <h2 id="packages-title" class="heading-2xl mb-3">Pick what you need</h2>
-      <p class="body-text mb-10">Full framework or just the parts that matter.</p>
+      <p class="body-text mb-10 max-w-2xl">Full framework or just the parts that matter.</p>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <.package_card id="raxol" name="raxol" dep={Capabilities.dep("raxol")} description="Full framework: TEA runtime, rendering, widgets, effects" accent={true} />
@@ -695,10 +754,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :faqs, @faqs)
 
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-3xl mx-auto" aria-labelledby="faq-title">
+    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="faq-title">
       <span class="section-eyebrow">FAQ</span>
       <h2 id="faq-title" class="heading-2xl mb-10">Questions, answered.</h2>
-      <div class="faq-list">
+      <div class="faq-list max-w-3xl">
         <%= for {%{q: q, a: a}, i} <- Enum.with_index(@faqs) do %>
           <details class="faq-item" id={"faq-#{i}"}>
             <summary><%= q %></summary>
@@ -718,10 +777,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :install_command, @install_command)
 
     ~H"""
-    <section class="landing-section px-6 py-12 md:py-20 max-w-4xl mx-auto" aria-labelledby="try-title">
-      <h2 id="try-title" class="heading-2xl mb-10">Try it</h2>
+    <section class="landing-section px-6 py-12 md:py-20 max-w-5xl mx-auto" aria-labelledby="try-title">
+      <h2 id="try-title" class="heading-2xl mb-3">One module away from every surface.</h2>
+      <p class="body-text mb-10 max-w-2xl">Starting is genuinely four commands.</p>
 
-      <div class="space-y-3 mb-10">
+      <div class="space-y-3 mb-10 ch-snap">
         <.copyable_command id="copy-install" command={@install_command} comment="self-contained binary" tone={:coral} />
         <.copyable_command id="copy-npm" command="npm i -g raxol" comment="Node users" tone={:sky} />
         <.copyable_command id="copy-playground" command="mix raxol.playground" comment="interactive demos" tone={:sky} />
@@ -743,7 +803,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def footer_section(assigns) do
     ~H"""
     <footer class="landing-section px-6 py-16 border-t border-subtle">
-      <div class="max-w-4xl mx-auto">
+      <div class="max-w-5xl mx-auto">
         <div class="flex flex-wrap gap-6 font-mono mb-10 tracking-wide text-sm">
           <a href="https://github.com/DROOdotFOO/raxol" class="footer-link">GitHub</a>
           <a href="https://hex.pm/packages/raxol" class="footer-link">Hex.pm</a>
