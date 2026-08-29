@@ -64,6 +64,17 @@ defmodule Raxol.REPL.Sandbox do
     {Kernel, :exit, "process termination"},
     {String, :to_atom, "dynamic atom creation"},
     {List, :to_atom, "dynamic atom creation"},
+    # Atoms are never garbage collected, so the evaluation timeout and the heap
+    # cap do not undo one of these -- the table stays grown after the process
+    # dies. Every primitive that can mint one from runtime data belongs here.
+    # `Module.concat` builds an atom from its parts; `Jason.decode` with
+    # `keys: :atoms` does it in BULK from attacker-supplied JSON, and the option
+    # can arrive in a variable, so the call is refused rather than inspected.
+    {Module, :concat, "dynamic atom creation"},
+    {Module, :safe_concat, "dynamic atom creation"},
+    {Jason, :decode, "bulk dynamic atom creation (keys: :atoms)"},
+    {Jason, :decode!, "bulk dynamic atom creation (keys: :atoms)"},
+    {:erlang, :apply, "dynamic function application"},
     {Process, :send, "message sending"},
     {Process, :send_after, "delayed message sending"},
     {Process, :whereis, "process lookup"},
@@ -178,6 +189,34 @@ defmodule Raxol.REPL.Sandbox do
       check_denied_call(mod, func)
     else
       ["#{inspect(mod)}.#{func} is not allowed (module not in whitelist)"]
+    end
+  end
+
+  # A dot-CALL whose module is neither a literal alias nor a literal atom --
+  # `m = String; m.to_atom(s)`, `mod.().f()`, `hd(mods).f()`. Neither level can
+  # decide it: a whitelist cannot confirm the module is allowed and a blocklist
+  # cannot confirm it is not, so every named check above is simply bypassed.
+  # `apply` was already refused for exactly this reason; this is the same hole
+  # reached through the dot.
+  #
+  # `map.field` has the SAME AST shape as `mod.fun()` and must stay allowed --
+  # it is how you read a map in a REPL. The two are told apart by `no_parens`,
+  # which the parser sets on field access and not on a call.
+  #
+  # Both levels refuse the call form. Dynamic dispatch is a legitimate thing to
+  # want, and `:none` is where it lives -- a level that exists to constrain
+  # untrusted input cannot also resolve arbitrary modules at runtime.
+  defp check_node({{:., _, [_mod, func]}, meta, _args}, level)
+       when level in [:standard, :strict] and is_list(meta) do
+    # Reached only when the earlier clauses did not match, i.e. the module is
+    # neither a literal alias nor a literal atom.
+    if Keyword.get(meta, :no_parens, false) do
+      []
+    else
+      [
+        "#{func} on a computed module is not allowed " <>
+          "(dynamic dispatch cannot be checked)"
+      ]
     end
   end
 

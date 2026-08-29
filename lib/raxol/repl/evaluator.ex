@@ -11,6 +11,8 @@ defmodule Raxol.REPL.Evaluator do
       result.value  #=> 30
   """
 
+  alias Raxol.REPL.CaptureIO
+
   @default_timeout Raxol.Core.Defaults.timeout_ms()
   @default_max_history Raxol.Core.Defaults.history_limit()
   @default_max_heap_bytes 64 * 1024 * 1024
@@ -82,13 +84,27 @@ defmodule Raxol.REPL.Evaluator do
     word_size = :erlang.system_info(:wordsize)
     heap_words = div(max_heap_bytes + word_size - 1, word_size)
 
+    # Tags this evaluation's result. Without it a result that arrives just as
+    # the timeout fires stays in the mailbox -- `demonitor(ref, [:flush])`
+    # flushes only the :DOWN -- and the NEXT eval's receive matches it, quietly
+    # attributing one expression's output to another.
+    tag = make_ref()
+
     {pid, ref} =
       :erlang.spawn_opt(
         fn ->
           result =
-            eval_with_capture(full_code, evaluator.bindings, evaluator.env)
+            eval_with_capture(
+              full_code,
+              evaluator.bindings,
+              evaluator.env,
+              max_result_bytes
+            )
 
-          send(parent, {:eval_result, bound_result(result, max_result_bytes)})
+          send(
+            parent,
+            {:eval_result, tag, bound_result(result, max_result_bytes)}
+          )
         end,
         [
           :monitor,
@@ -96,7 +112,13 @@ defmodule Raxol.REPL.Evaluator do
         ]
       )
 
-    handle_eval_response(evaluator, code, pid, ref, timeout, max_heap_bytes)
+    handle_eval_response(evaluator, code, %{
+      pid: pid,
+      ref: ref,
+      tag: tag,
+      timeout: timeout,
+      max_heap_bytes: max_heap_bytes
+    })
   end
 
   defp bound_result(
@@ -117,27 +139,43 @@ defmodule Raxol.REPL.Evaluator do
 
   defp bound_result(result, _max_result_bytes), do: result
 
-  defp handle_eval_response(evaluator, code, pid, ref, timeout, max_heap_bytes) do
+  defp handle_eval_response(evaluator, code, %{} = st) do
+    %{pid: pid, ref: ref, tag: tag} = st
+
     receive do
-      {:eval_result, {:ok, value, new_bindings, output}} ->
+      {:eval_result, ^tag, {:ok, value, new_bindings, output}} ->
         Process.demonitor(ref, [:flush])
         build_success(evaluator, code, value, new_bindings, output)
 
-      {:eval_result, {:error, message}} ->
+      {:eval_result, ^tag, {:error, message}} ->
         Process.demonitor(ref, [:flush])
         {:error, message, evaluator}
 
       {:DOWN, ^ref, :process, ^pid, :killed} ->
-        {:error, "Evaluation exceeded the #{max_heap_bytes}-byte memory limit",
+        {:error,
+         "Evaluation exceeded the #{st.max_heap_bytes}-byte memory limit",
          evaluator}
 
       {:DOWN, ^ref, :process, ^pid, reason} ->
         {:error, "Process crashed: #{Exception.format_exit(reason)}", evaluator}
     after
-      timeout ->
-        Process.demonitor(ref, [:flush])
-        Process.exit(pid, :brutal_kill)
-        {:error, "Evaluation timed out after #{timeout}ms", evaluator}
+      st.timeout ->
+        stop_eval(pid, ref, tag)
+        {:error, "Evaluation timed out after #{st.timeout}ms", evaluator}
+    end
+  end
+
+  defp stop_eval(pid, ref, tag) do
+    Process.demonitor(ref, [:flush])
+    Process.exit(pid, :brutal_kill)
+
+    # A result that raced the kill would otherwise sit in the mailbox. It can
+    # no longer be mistaken for a later evaluation's (the tag is unique), but
+    # leaving it there grows the mailbox for the life of the session.
+    receive do
+      {:eval_result, ^tag, _} -> :ok
+    after
+      0 -> :ok
     end
   end
 
@@ -175,10 +213,16 @@ defmodule Raxol.REPL.Evaluator do
 
   # -- Private --
 
-  @spec eval_with_capture(String.t(), keyword(), Macro.Env.t() | nil) ::
+  @spec eval_with_capture(
+          String.t(),
+          keyword(),
+          Macro.Env.t() | nil,
+          pos_integer()
+        ) ::
           {:ok, term(), keyword(), String.t()} | {:error, String.t()}
-  defp eval_with_capture(code, bindings, env) do
-    {output, result} = capture_io(fn -> do_eval(code, bindings, env) end)
+  defp eval_with_capture(code, bindings, env, output_limit) do
+    {output, result} =
+      capture_io(fn -> do_eval(code, bindings, env) end, output_limit)
 
     case result do
       {:ok, value, new_bindings} -> {:ok, value, new_bindings, output}
@@ -198,19 +242,30 @@ defmodule Raxol.REPL.Evaluator do
       {:error, Exception.format(kind, reason, __STACKTRACE__)}
   end
 
-  defp capture_io(fun) do
-    {:ok, string_io} = StringIO.open("")
+  # `Raxol.REPL.CaptureIO` rather than `StringIO`: output written to a separate
+  # process does not count against this one's `max_heap_size`, so an unbounded
+  # capture is a hole straight through the memory limit. CaptureIO counts what
+  # it accepts and stops at the cap. See its moduledoc for why measuring the
+  # process from outside does not work.
+  defp capture_io(fun, output_limit) do
+    {:ok, capture} = CaptureIO.start(output_limit)
     original_gl = Process.group_leader()
-    Process.group_leader(self(), string_io)
+    Process.group_leader(self(), capture)
 
     try do
       result = fun.()
-      {_, captured} = StringIO.contents(string_io)
-      {captured, result}
+      {captured, truncated?} = CaptureIO.contents(capture)
+      {maybe_note_truncation(captured, truncated?, output_limit), result}
     after
       Process.group_leader(self(), original_gl)
-      StringIO.close(string_io)
+      CaptureIO.close(capture)
     end
+  end
+
+  defp maybe_note_truncation(captured, false, _limit), do: captured
+
+  defp maybe_note_truncation(captured, true, limit) do
+    captured <> "\n[output truncated at #{limit} bytes]"
   end
 
   @spec base_env() :: Macro.Env.t()
