@@ -1031,6 +1031,34 @@ html {
 }
 
 /* =============================================================================
+   Hero halo (the axol face dithered into character cells, HaloField hook)
+   ============================================================================= */
+
+.hero-halo {
+  height: clamp(120px, 18vw, 180px);
+  max-width: 40rem;
+  margin: 0 auto 1.5rem;
+  font-family: var(--font-mono);
+}
+
+.hero-halo canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Install-method pane links (only channels that exist are linked). */
+.install-link {
+  color: var(--sky);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  margin-left: 0.4rem;
+  transition: color var(--duration-fast) var(--ease-smooth);
+}
+
+.install-link:hover { color: var(--pearl-cream); }
+
+/* =============================================================================
    Privacy tier ladder (agent payments deep dive)
    ============================================================================= */
 

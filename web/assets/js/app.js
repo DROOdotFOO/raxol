@@ -409,6 +409,253 @@ Hooks.InstallTabs = {
   }
 }
 
+// The hero brand mark: the axol face (AxolFace.glyph/3 frames, exported by
+// the server in data-faces) dithered into character cells, framed by a
+// drifting edge texture -- the Halo treatment. Face and halo are two
+// separate tones that never mix: the face draws from the block ramp only
+// (alpha 0.58-1.0), the halo from the punctuation ramp (alpha 0.05-0.37).
+// Reduced motion renders one static frame mid-pass, never the empty t=0.
+Hooks.HaloField = {
+  FACE_RAMP: '░▒▓█',
+  HALO_RAMP: '·:-=+*#%',
+  FRAME_MS: 110,
+  EYE_MS: 500,
+  STATE_MS: 2600,
+
+  mounted() {
+    this.canvas = this.el.querySelector('canvas')
+    this.ctx = this.canvas.getContext('2d')
+    this.faces = JSON.parse(this.el.dataset.faces)
+    this.stateIdx = 0
+    this.frameIdx = 0
+    this.t = 0
+    this.acc = {frame: 0, eye: 0, state: 0}
+    this.raf = null
+
+    const rootStyle = getComputedStyle(document.documentElement)
+    this.faceColor = rootStyle.getPropertyValue('--axol-coral').trim() || '#ffcd9c'
+    this.haloColor = rootStyle.getPropertyValue('--pearl-cream').trim() || '#e8e4dc'
+    this.fontFamily = getComputedStyle(this.el).fontFamily
+
+    this.mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+    this.onMql = () => this.sync()
+    this.mql.addEventListener('change', this.onMql)
+
+    this.onResize = () => {
+      clearTimeout(this.resizeTimer)
+      this.resizeTimer = setTimeout(() => { this.layout(); this.sync() }, 200)
+    }
+    window.addEventListener('resize', this.onResize)
+
+    this.layout()
+    this.sync()
+  },
+
+  destroyed() {
+    if (this.raf) cancelAnimationFrame(this.raf)
+    clearTimeout(this.resizeTimer)
+    this.mql.removeEventListener('change', this.onMql)
+    window.removeEventListener('resize', this.onResize)
+  },
+
+  face() { return this.faces[this.stateIdx].frames[this.frameIdx % 4] },
+
+  // Measure the character grid, size the backing store for the device
+  // pixel ratio, and rebuild the face coverage mask.
+  layout() {
+    const rect = this.el.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return
+    const dpr = window.devicePixelRatio || 1
+    this.w = rect.width
+    this.h = rect.height
+    this.canvas.width = Math.round(this.w * dpr)
+    this.canvas.height = Math.round(this.h * dpr)
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+    this.fontPx = 13
+    this.ctx.font = `${this.fontPx}px ${this.fontFamily}`
+    this.cellW = this.ctx.measureText('█').width || this.fontPx * 0.6
+    this.cellH = Math.round(this.fontPx * 1.15)
+    this.cols = Math.max(8, Math.floor(this.w / this.cellW))
+    this.rows = Math.max(4, Math.floor(this.h / this.cellH))
+    this.buildMask()
+  },
+
+  // Draw the face string to an offscreen canvas supersampled 3x per axis,
+  // then box-filter each 3x3 block to a per-cell coverage fraction.
+  buildMask() {
+    const S = 3
+    const off = document.createElement('canvas')
+    off.width = this.cols * S
+    off.height = this.rows * S
+    const octx = off.getContext('2d', {willReadFrequently: true})
+
+    const glyph = this.face()
+    let px = off.height * 0.72
+    octx.font = `${px}px ${this.fontFamily}`
+    const maxW = off.width * 0.58
+    const w = octx.measureText(glyph).width
+    if (w > maxW) {
+      px = px * (maxW / w)
+      octx.font = `${px}px ${this.fontFamily}`
+    }
+    octx.fillStyle = '#fff'
+    octx.textAlign = 'center'
+    octx.textBaseline = 'middle'
+    octx.fillText(glyph, off.width / 2, off.height * 0.54)
+
+    const data = octx.getImageData(0, 0, off.width, off.height).data
+    this.mask = new Float32Array(this.cols * this.rows)
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        let sum = 0
+        for (let sy = 0; sy < S; sy++) {
+          for (let sx = 0; sx < S; sx++) {
+            sum += data[((y * S + sy) * off.width + (x * S + sx)) * 4 + 3]
+          }
+        }
+        this.mask[y * this.cols + x] = sum / (S * S * 255)
+      }
+    }
+
+    // Dilated keep-out (3 cells x, 2 cells y) so the halo texture tracks
+    // the glyph outline instead of crowding it.
+    this.keepOut = new Uint8Array(this.cols * this.rows)
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        if (this.mask[y * this.cols + x] <= 0.2) continue
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -3; dx <= 3; dx++) {
+            const nx = x + dx, ny = y + dy
+            if (nx >= 0 && nx < this.cols && ny >= 0 && ny < this.rows) {
+              this.keepOut[ny * this.cols + nx] = 1
+            }
+          }
+        }
+      }
+    }
+  },
+
+  // Hash-based 2D value noise with smoothstep interpolation.
+  hash(x, y) {
+    let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) ^ 1274126177
+    h = Math.imul(h ^ (h >>> 13), 1274126177)
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967295
+  },
+
+  noise(fx, fy) {
+    const x0 = Math.floor(fx), y0 = Math.floor(fy)
+    const tx = fx - x0, ty = fy - y0
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty)
+    const a = this.hash(x0, y0), b = this.hash(x0 + 1, y0)
+    const c = this.hash(x0, y0 + 1), d = this.hash(x0 + 1, y0 + 1)
+    return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
+  },
+
+  sync() {
+    if (this.mql.matches) {
+      this.stopLoop()
+      // One static frame mid-pass: idle face, drift field at a non-zero
+      // phase, so reduced motion still gets a composed image.
+      this.stateIdx = 0
+      this.frameIdx = 0
+      this.t = 37
+      this.buildMask()
+      this.draw()
+    } else {
+      this.startLoop()
+    }
+  },
+
+  startLoop() {
+    if (this.raf) return
+    // Paint immediately: the first accumulator tick is ~110ms away, and
+    // the hero must never show a blank mark while waiting for it.
+    this.draw()
+    this.last = undefined
+    const step = (ts) => {
+      if (this.last === undefined) this.last = ts
+      // Clamp dt: rAF suspends in background tabs, and an unclamped
+      // accumulator would fast-forward the whole hidden interval.
+      const dt = Math.min(ts - this.last, 1000)
+      this.last = ts
+      this.acc.frame += dt
+      this.acc.eye += dt
+      this.acc.state += dt
+      let dirty = false
+      while (this.acc.frame >= this.FRAME_MS) {
+        this.acc.frame -= this.FRAME_MS
+        this.t += 1
+        dirty = true
+      }
+      let faceDirty = false
+      while (this.acc.eye >= this.EYE_MS) {
+        this.acc.eye -= this.EYE_MS
+        this.frameIdx += 1
+        faceDirty = true
+      }
+      while (this.acc.state >= this.STATE_MS) {
+        this.acc.state -= this.STATE_MS
+        this.stateIdx = (this.stateIdx + 1) % this.faces.length
+        this.frameIdx = 0
+        faceDirty = true
+      }
+      if (faceDirty) this.buildMask()
+      if (dirty || faceDirty) this.draw()
+      this.raf = requestAnimationFrame(step)
+    }
+    this.raf = requestAnimationFrame(step)
+  },
+
+  stopLoop() {
+    if (this.raf) cancelAnimationFrame(this.raf)
+    this.raf = null
+  },
+
+  draw() {
+    if (!this.mask) return
+    const ctx = this.ctx
+    ctx.clearRect(0, 0, this.w, this.h)
+    ctx.font = `${this.fontPx}px ${this.fontFamily}`
+    ctx.textBaseline = 'top'
+    const t = this.t * 0.06
+
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        const cov = this.mask[y * this.cols + x]
+        const cx = x * this.cellW
+        const cy = y * this.cellH
+
+        if (cov > 0.2) {
+          // Face: threshold then rescale with a floor, so a half-covered
+          // edge cell still lands on a solid block.
+          const c = 0.3 + 0.7 * ((cov - 0.2) / 0.8)
+          const g = this.FACE_RAMP[Math.min(3, Math.floor(c * 4))]
+          ctx.globalAlpha = 0.58 + 0.42 * c
+          ctx.fillStyle = this.faceColor
+          ctx.fillText(g, cx, cy)
+          continue
+        }
+        if (this.keepOut[y * this.cols + x]) continue
+
+        // Halo: edge weight is the PRODUCT of per-axis depths (max would
+        // draw a rectangle), boundary jittered by the drift noise itself.
+        const centX = 1 - Math.abs((2 * x) / (this.cols - 1) - 1)
+        const centY = 1 - Math.abs((2 * y) / (this.rows - 1) - 1)
+        const n = this.noise(x * 0.35 + t * 0.9, y * 0.55 + t * 0.2)
+        const w = Math.max(0, Math.min(1, 1 - centX * centY + (n - 0.5) * 0.3))
+        const v = n * w
+        if (v < 0.14) continue
+        const idx = Math.min(7, Math.floor(((v - 0.14) / 0.86) * 8))
+        ctx.globalAlpha = 0.05 + 0.32 * ((v - 0.14) / 0.86)
+        ctx.fillStyle = this.haloColor
+        ctx.fillText(this.HALO_RAMP[idx], cx, cy)
+      }
+    }
+    ctx.globalAlpha = 1
+  }
+}
+
 // Initialize LiveSocket
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
