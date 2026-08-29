@@ -96,7 +96,7 @@ nix develop github:DROOdotFOO/raxol   # dev shell with elixir, erlang, NIF + spe
 ```bash
 git clone https://github.com/DROOdotFOO/raxol.git
 cd raxol && mix deps.get
-mix raxol.playground          # 40 live demos, browse/search/filter
+mix raxol.playground          # 41 live demos, browse/search/filter
 ```
 
 The flagship demo is a live BEAM dashboard with scheduler utilization, memory sparklines, and a process table:
