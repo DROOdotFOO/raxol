@@ -168,10 +168,10 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
     <div class="terminal-chrome copyable-command relative group">
       <div class="terminal-chrome-body copyable-command__body flex items-center justify-between">
         <div>
-          <span class="text-pearl-35">$</span>
+          <span class="text-pearl-60">$</span>
           <span class={["ml-2", command_tone_class(@tone)]}><%= @command %></span>
           <%= if @comment do %>
-            <span class="text-pearl-25 ml-4"># <%= @comment %></span>
+            <span class="text-pearl-60 ml-4"># <%= @comment %></span>
           <% end %>
         </div>
         <button

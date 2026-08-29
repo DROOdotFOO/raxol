@@ -11,24 +11,13 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   use RaxolPlaygroundWeb, :live_view
 
   alias Raxol.Playground.Catalog
+  alias RaxolPlayground.Capabilities
   alias RaxolPlaygroundWeb.Playground.DemoLifecycle
 
   import RaxolPlaygroundWeb.LandingComponents
   import RaxolPlaygroundWeb.PlaygroundComponents, only: [atmosphere: 1]
 
   @demo_name "BEAM Dashboard"
-
-  @raxol_version (case :application.get_key(:raxol, :vsn) do
-                    {:ok, vsn} ->
-                      vsn
-                      |> to_string()
-                      |> String.split(".")
-                      |> Enum.take(2)
-                      |> Enum.join(".")
-
-                    _ ->
-                      "2.4"
-                  end)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -38,13 +27,15 @@ defmodule RaxolPlaygroundWeb.LandingLive do
       socket
       |> assign(
         page_title: "Raxol",
-        raxol_version: @raxol_version,
+        raxol_version: Capabilities.version_minor(),
         mobile_menu_open: false,
         terminal_html: false,
         lifecycle_pid: nil,
         topic: nil,
         demo_error: nil,
         demo_timer: nil,
+        demo_paused: false,
+        pause_source: nil,
         demo_component: demo_component
       )
       |> start_landing_demo()
@@ -55,6 +46,37 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   @impl true
   def handle_event("toggle_mobile_menu", _params, socket) do
     {:noreply, assign(socket, :mobile_menu_open, !socket.assigns.mobile_menu_open)}
+  end
+
+  # The MotionPref hook reports prefers-reduced-motion at connect and on
+  # every preference change. Server-pushed frames ARE motion, so a reduce
+  # preference pauses the demo (after one frame has painted, so the hero
+  # shows a static frame rather than nothing). A user who pressed play or
+  # pause keeps their choice; only motion-sourced pauses auto-resume.
+  def handle_event("motion_pref", %{"reduce" => true}, socket) do
+    if socket.assigns.demo_paused do
+      {:noreply, socket}
+    else
+      socket = assign(socket, demo_paused: true, pause_source: :motion)
+      {:noreply, maybe_pause_after_frame(socket)}
+    end
+  end
+
+  def handle_event("motion_pref", %{"reduce" => false}, socket) do
+    if socket.assigns.demo_paused and socket.assigns.pause_source == :motion do
+      {:noreply, resume_demo(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_demo_motion", _params, socket) do
+    if socket.assigns.demo_paused do
+      {:noreply, resume_demo(socket)}
+    else
+      socket = assign(socket, demo_paused: true, pause_source: :user)
+      {:noreply, maybe_pause_after_frame(socket)}
+    end
   end
 
   # Forward terminal key events from the RaxolTerminal hook into the demo, so
@@ -72,10 +94,10 @@ defmodule RaxolPlaygroundWeb.LandingLive do
 
   @impl true
   def handle_info({:render_update, html}, socket),
-    do: {:noreply, DemoLifecycle.render_update(socket, html)}
+    do: {:noreply, socket |> DemoLifecycle.render_update(html) |> maybe_pause_after_frame()}
 
   def handle_info({:render_update, html, _animation_css}, socket),
-    do: {:noreply, DemoLifecycle.render_update(socket, html)}
+    do: {:noreply, socket |> DemoLifecycle.render_update(html) |> maybe_pause_after_frame()}
 
   # Landing's policy: auto-restart on timeout instead of show-retry.
   def handle_info(:demo_timeout, socket) do
@@ -112,7 +134,11 @@ defmodule RaxolPlaygroundWeb.LandingLive do
     <div class="relative min-h-screen z-10">
       <.nav_bar mobile_menu_open={@mobile_menu_open} />
       <main>
-        <.hero_section raxol_version={@raxol_version} terminal_html={@terminal_html} />
+        <.hero_section
+          raxol_version={@raxol_version}
+          terminal_html={@terminal_html}
+          demo_paused={@demo_paused}
+        />
         <hr class="section-divider" aria-hidden="true" />
         <.code_example_section />
         <hr class="section-divider" aria-hidden="true" />
@@ -145,6 +171,28 @@ defmodule RaxolPlaygroundWeb.LandingLive do
           timeout_ms: :timer.minutes(5),
           topic_prefix: "landing"
         )
+    end
+  end
+
+  # Pausing stops the Lifecycle (no more server-pushed frames, no idle
+  # server work) but keeps `terminal_html` true, so the hook's last
+  # injected frame stays on screen as the static hero. Deferred until a
+  # frame exists so a pre-first-frame pause never blanks the hero.
+  defp maybe_pause_after_frame(socket) do
+    if socket.assigns.demo_paused and socket.assigns[:lifecycle_pid] do
+      DemoLifecycle.stop_demo(socket)
+    else
+      socket
+    end
+  end
+
+  defp resume_demo(socket) do
+    socket = assign(socket, demo_paused: false, pause_source: nil)
+
+    if socket.assigns[:lifecycle_pid] do
+      socket
+    else
+      start_landing_demo(socket)
     end
   end
 end

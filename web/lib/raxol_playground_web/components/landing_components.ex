@@ -67,6 +67,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @agent_code Makeup.highlight_inner_html(@agent_source)
   @install_command "curl -fsSL https://raxol.io/install | bash"
 
+  # Version claims derive from Capabilities.packages() so the FAQ can never
+  # drift from the package table the capability endpoints serve.
+  @faq_versions Capabilities.packages()
+                |> Enum.group_by(& &1.version, & &1.name)
+                |> Enum.sort_by(fn {version, _names} -> version end, :desc)
+                |> Enum.map_join("; ", fn {version, names} ->
+                  "#{Enum.join(names, ", ")} at #{String.replace(version, "~> ", "v")}"
+                end)
+
   @faqs [
     %{
       q: "What is Raxol?",
@@ -91,7 +100,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     %{
       q: "Is this production-ready?",
       a:
-        "raxol, raxol_core, raxol_terminal, raxol_agent, raxol_mcp, raxol_liveview, raxol_plugin, and raxol_sensor are at v2.5 on Hex; raxol_speech, raxol_telegram, and raxol_watch at 0.2; raxol_payments at 0.1. raxol_earn and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
+        "On Hex: #{@faq_versions}. raxol_earn and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
     },
     %{
       q: "What does the SSH demo give me?",
@@ -123,7 +132,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <button
           type="button"
           phx-click="toggle_mobile_menu"
-          class="md:hidden p-3 text-pearl-50"
+          class="md:hidden p-3 text-pearl-60"
           aria-label={if @mobile_menu_open, do: "Close menu", else: "Open menu"}
           aria-expanded={to_string(@mobile_menu_open)}
           aria-controls="mobile-navigation"
@@ -138,7 +147,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </button>
       </div>
       <%= if @mobile_menu_open do %>
-        <div id="mobile-navigation" class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-50">
+        <div id="mobile-navigation" class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-60">
           <a href="/playground">Playground</a>
           <a href="/gallery">Gallery</a>
           <a href="https://hexdocs.pm/raxol">Docs</a>
@@ -156,12 +165,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   attr(:raxol_version, :string, required: true)
   attr(:terminal_html, :boolean, required: true)
+  attr(:demo_paused, :boolean, required: true)
 
   def hero_section(assigns) do
     assigns = assign(assigns, :install_command, @install_command)
 
     ~H"""
-    <section class="landing-section px-6 pt-24 pb-14 md:pt-32 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
+    <%!-- MotionPref reports prefers-reduced-motion to the LiveView (at
+         connect and on preference change) so the server stops pushing
+         demo frames; CSS media queries cannot gate those. --%>
+    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-24 pb-14 md:pt-32 md:pb-24 max-w-4xl mx-auto text-center" aria-labelledby="hero-title">
       <h1 id="hero-title" class="font-mono font-bold tracking-tight text-axol-coral mb-6" style="font-size: clamp(3.5rem, 2.5rem + 5vw, 7rem); line-height: 1;">
         raxol
       </h1>
@@ -181,9 +194,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              incl. padding; the old max-w-2xl (672px) forced a scrollbar. --%>
         <div class="terminal-chrome mb-10 mx-auto text-left max-w-3xl">
           <.terminal_chrome title="raxol" />
+          <%!-- phx-update="ignore": the hook owns this element's content
+               (innerHTML injection); without it any hero re-render (e.g.
+               the pause button label) patches it back to empty. --%>
           <div
             id="landing-terminal"
             phx-hook="RaxolTerminal"
+            phx-update="ignore"
             class="raxol-terminal p-4 bg-synthwave-bg"
             data-theme="synthwave84"
             data-no-scroll="true"
@@ -191,6 +208,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             role="img"
             aria-label="Raxol demo"
           ></div>
+          <div class="flex justify-end px-2 py-1 border-t border-subtle">
+            <button
+              type="button"
+              phx-click="toggle_demo_motion"
+              class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
+            >
+              <%= if @demo_paused, do: "play demo", else: "pause demo" %>
+            </button>
+          </div>
         </div>
       <% end %>
 
@@ -206,7 +232,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="mt-10 mb-12">
-        <code class="font-mono detail-text text-pearl-40 bg-inset border border-subtle px-4 py-2 rounded-sm"><%= raw("{:raxol, \"~> #{@raxol_version}\"}") %></code>
+        <code class="font-mono detail-text bg-inset border border-subtle px-4 py-2 rounded-sm"><%= raw("{:raxol, \"~> #{@raxol_version}\"}") %></code>
       </div>
 
       <div class="stat-grid max-w-2xl mx-auto" role="list" aria-label="Project stats">

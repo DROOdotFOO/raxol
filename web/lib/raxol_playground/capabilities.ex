@@ -26,15 +26,15 @@ defmodule RaxolPlayground.Capabilities do
     %{name: "raxol", version: "~> 2.6", purpose: "Full framework"},
     %{name: "raxol_agent", version: "~> 2.6", purpose: "AI agents"},
     %{name: "raxol_mcp", version: "~> 2.6", purpose: "MCP server"},
-    %{name: "raxol_payments", version: "~> 0.1", purpose: "Agent commerce"},
+    %{name: "raxol_payments", version: "~> 0.2", purpose: "Agent commerce"},
     %{name: "raxol_liveview", version: "~> 2.6", purpose: "LiveView bridge"},
     %{name: "raxol_sensor", version: "~> 2.6", purpose: "Sensor fusion"},
     %{name: "raxol_terminal", version: "~> 2.6", purpose: "Terminal emulation"},
     %{name: "raxol_core", version: "~> 2.6", purpose: "Behaviours, events"},
     %{name: "raxol_plugin", version: "~> 2.6", purpose: "Plugin SDK"},
-    %{name: "raxol_speech", version: "~> 0.2", purpose: "TTS/STT"},
-    %{name: "raxol_telegram", version: "~> 0.2", purpose: "Telegram bot"},
-    %{name: "raxol_watch", version: "~> 0.2", purpose: "Push notifications"}
+    %{name: "raxol_speech", version: "~> 0.1", purpose: "TTS/STT"},
+    %{name: "raxol_telegram", version: "~> 0.1", purpose: "Telegram bot"},
+    %{name: "raxol_watch", version: "~> 0.1", purpose: "Push notifications"}
   ]
 
   # Named LLM harnesses plus Groq (reached via the OpenAI-compatible base URL).
@@ -62,6 +62,12 @@ defmodule RaxolPlayground.Capabilities do
       {:ok, vsn} -> to_string(vsn)
       _ -> "2.6.0"
     end
+  end
+
+  @doc "Major.minor of `version/0`, the form the landing page displays."
+  @spec version_minor() :: String.t()
+  def version_minor do
+    version() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
   end
 
   @doc "Rendering surfaces the same TEA module targets."

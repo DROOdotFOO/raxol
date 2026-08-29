@@ -161,6 +161,22 @@ Hooks.RaxolTerminal = {
   }
 }
 
+// Motion preference reporter. CSS media queries can gate stylesheet
+// animation but not server-pushed terminal frames, so the LiveView needs
+// to know. Reports at connect (only when reduce is on) and on every
+// preference change, live, not just once at mount.
+Hooks.MotionPref = {
+  mounted() {
+    this.mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+    this.report = () => this.pushEvent("motion_pref", {reduce: this.mql.matches})
+    this.mql.addEventListener('change', this.report)
+    if (this.mql.matches) this.report()
+  },
+  destroyed() {
+    if (this.mql) this.mql.removeEventListener('change', this.report)
+  }
+}
+
 // Initialize LiveSocket
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
