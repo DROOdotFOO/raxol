@@ -317,6 +317,17 @@ defmodule Raxol.Playground.Catalog do
     },
     # --- Chart/Visualization widgets ---
     %{
+      name: "BEAM Dashboard",
+      module: Demos.BeamDashboardDemo,
+      category: :visualization,
+      description:
+        "Live dashboard of the VM rendering it: schedulers, memory, events",
+      complexity: :intermediate,
+      tags: ["dashboard", "beam", "introspection", "streaming"],
+      code_snippet:
+        ~s':erlang.statistics(:scheduler_wall_time) # sampled each tick'
+    },
+    %{
       name: "Sparkline",
       module: Demos.SparklineDemo,
       category: :visualization,
