@@ -15,13 +15,31 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   @themes Helpers.themes()
   @demo_timeout_ms :timer.minutes(30)
 
+  # Same order the TUI sorts its sidebar by (Raxol.Playground.App): the
+  # catalog list leads with curated highlights, which would otherwise
+  # split categories into duplicate sidebar runs.
+  @category_order %{
+    input: 0,
+    display: 1,
+    feedback: 2,
+    navigation: 3,
+    overlay: 4,
+    layout: 5,
+    visualization: 6,
+    effects: 7
+  }
+
+  defp sort_components(components) do
+    Enum.sort_by(components, &Map.get(@category_order, &1.category, 99))
+  end
+
   # =========================================================================
   # Mount
   # =========================================================================
 
   @impl true
   def mount(params, _session, socket) do
-    components = Catalog.list_components()
+    components = sort_components(Catalog.list_components())
 
     initial_name = params["component"]
 
@@ -34,12 +52,15 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     socket =
       socket
       |> assign(:components, components)
+      |> assign(:total_count, length(components))
       |> assign(:selected, selected)
       |> assign(:search_query, "")
       |> assign(:terminal_html, false)
       |> assign(:lifecycle_pid, nil)
       |> assign(:topic, nil)
-      |> assign(:show_code, false)
+      # ?code=1 opens the code panel on arrival -- the gallery's "code"
+      # link is a broken promise otherwise.
+      |> assign(:show_code, params["code"] in ["1", "true"])
       |> assign(:show_shortcuts, false)
       |> assign(:show_users_panel, false)
       |> assign(:sync_enabled, false)
@@ -83,9 +104,26 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     end
   end
 
+  # j/k from the PlaygroundKeys hook: select the previous/next component
+  # directly (the web has no separate cursor -- selection IS the cursor,
+  # unlike the TUI where Enter confirms).
+  def handle_event("nav_component", %{"dir" => dir}, socket)
+      when dir in ["next", "prev"] do
+    case socket.assigns.components do
+      [] ->
+        {:noreply, socket}
+
+      comps ->
+        idx = Enum.find_index(comps, &selected?(socket.assigns.selected, &1)) || 0
+        step = if dir == "next", do: 1, else: -1
+        next = Enum.at(comps, Integer.mod(idx + step, length(comps)))
+        handle_event("select_component", %{"component" => next.name}, socket)
+    end
+  end
+
   def handle_event("search_components", %{"query" => query}, socket) do
     search = if query == "", do: nil, else: query
-    components = Catalog.filter(search: search)
+    components = sort_components(Catalog.filter(search: search))
 
     {:noreply, socket |> assign(:search_query, query) |> assign(:components, components)}
   end
@@ -206,7 +244,10 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     assigns = assign(assigns, :theme_bg, theme_bg)
 
     ~H"""
-    <div class="playground-container h-screen flex flex-col bg-obsidian">
+    <%!-- PlaygroundKeys mirrors the TUI's keymap (j/k nav, c code,
+         ? help), guarded so the demo terminal and form fields keep
+         their own keystrokes. --%>
+    <div id="playground-root" phx-hook="PlaygroundKeys" class="playground-container h-screen flex flex-col bg-obsidian">
       <%!-- Header --%>
       <div class="px-6 py-3 surface-bar">
         <div class="flex items-center justify-between">
@@ -305,13 +346,39 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
                   </div>
                 <% end %>
               </div>
+
+              <%!-- Inline code panel, below the demo like the TUI's
+                   'c' toggle (not a side column). --%>
+              <%= if @selected && @show_code do %>
+                <div class="pg-code">
+                  <div class="pg-code-head">
+                    <span>Code</span>
+                    <button
+                      id="pg-code-copy"
+                      phx-hook="CopyToClipboard"
+                      data-copy={String.trim(@selected.code_snippet)}
+                      class="copy-chip"
+                      aria-label="Copy code snippet"
+                    >
+                      copy
+                    </button>
+                  </div>
+                  <pre class="pg-code-snippet"><%= String.trim(@selected.code_snippet) %></pre>
+                </div>
+              <% end %>
             </div>
 
-            <%= if @selected do %>
-              <.code_panel show={@show_code} code={@selected.code_snippet} />
-            <% end %>
           </div>
         </div>
+      </div>
+
+      <%!-- Status bar: the TUI's signature key-hint line. Every key
+           listed is wired (PlaygroundKeys hook + '/' in the global
+           handler). --%>
+      <div class="pg-statusbar font-mono">
+        <span class="pg-statusbar-chip">playground</span>
+        <span class="pg-statusbar-keys">j/k nav &middot; / focus demo &middot; esc back &middot; c code &middot; ? help</span>
+        <span class="pg-statusbar-count"><%= length(@components) %>/<%= @total_count %> widgets</span>
       </div>
 
       <%!-- Shortcuts Overlay --%>
@@ -336,6 +403,12 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   # =========================================================================
 
   defp sidebar(assigns) do
+    # Category runs mirror the TUI sidebar: one dim uppercase header per
+    # category, dense name-only rows underneath. @components is already
+    # category-sorted (sort_components/1), so chunking cannot split a
+    # category into duplicate runs and j/k follows the visual order.
+    assigns = assign(assigns, :groups, Enum.chunk_by(assigns.components, & &1.category))
+
     ~H"""
     <aside class={[
       "overflow-y-auto transition-all duration-200 bg-panel-subtle border-r border-subtle-faint",
@@ -372,23 +445,33 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
             />
           </form>
 
-          <div class="space-y-0.5" role="listbox" aria-label="Components">
-            <%= for comp <- @components do %>
-              <button
-                type="button"
-                class={[
-                  "w-full text-left p-2 rounded transition-colors font-mono border",
-                  selected?(@selected, comp) && "sidebar-row--active",
-                  not selected?(@selected, comp) && "border-transparent"
-                ]}
-                phx-click="select_component"
-                phx-value-component={comp.name}
-                role="option"
-                aria-selected={selected?(@selected, comp)}
-              >
-                <div class={["font-medium", if(selected?(@selected, comp), do: "text-sky", else: "text-pearl")]} style="font-size: 0.8rem;"><%= comp.name %></div>
-                <div class="text-pearl-35" style="font-size: 0.65rem; line-height: 1.4;"><%= comp.description %></div>
-              </button>
+          <div class="pg-sidebar-count font-mono">
+            <%= if length(@components) == @total_count do %>
+              <%= @total_count %> widgets
+            <% else %>
+              <%= length(@components) %>/<%= @total_count %> widgets
+            <% end %>
+          </div>
+
+          <div role="listbox" aria-label="Components">
+            <%= if @components == [] do %>
+              <div class="pg-sidebar-empty font-mono">No matches</div>
+            <% end %>
+            <%= for group <- @groups do %>
+              <div class="pg-cat font-mono" aria-hidden="true">
+                <%= Helpers.category_label(hd(group).category) %>
+              </div>
+              <%= for comp <- group do %>
+                <button
+                  type="button"
+                  class={["pg-item font-mono", selected?(@selected, comp) && "pg-item--active"]}
+                  phx-click="select_component"
+                  phx-value-component={comp.name}
+                  title={comp.description}
+                  role="option"
+                  aria-selected={selected?(@selected, comp)}
+                ><%= if selected?(@selected, comp), do: "> ", else: "  " %><%= comp.name %></button>
+              <% end %>
             <% end %>
           </div>
         <% else %>
@@ -424,11 +507,11 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     ~H"""
     <div class="px-4 py-2 surface-toolbar">
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
+        <div class="flex items-baseline gap-2 min-w-0">
           <%= if @selected do %>
-            <span class="font-mono font-semibold text-pearl" style="font-size: 0.8rem;"><%= @selected.name %></span>
-            <.complexity_badge level={@selected.complexity} />
-            <span class="font-mono label-text-dim"><%= Helpers.category_label(@selected.category) %></span>
+            <span class="font-mono font-semibold text-pearl shrink-0" style="font-size: 0.8rem;"><%= @selected.name %></span>
+            <span class={["font-mono shrink-0", "pg-cx-#{@selected.complexity}"]} style="font-size: 0.7rem;">[<%= @selected.complexity %>]</span>
+            <span class="font-mono text-pearl-60 truncate hidden sm:inline" style="font-size: 0.7rem;"><%= @selected.description %></span>
           <% end %>
         </div>
 
@@ -461,20 +544,20 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
         <h3 class="font-mono font-semibold mb-4 text-pearl tracking-wide" style="font-size: 0.9rem;">Keyboard Shortcuts</h3>
         <div class="space-y-2 font-mono" style="font-size: 0.75rem;">
           <div class="flex justify-between gap-8">
-            <span class="text-pearl-60">Navigate components</span>
+            <span class="text-pearl-60">Next / previous component</span>
             <span class="text-gold">j / k</span>
-          </div>
-          <div class="flex justify-between gap-8">
-            <span class="text-pearl-60">Select component</span>
-            <span class="text-gold">Enter</span>
           </div>
           <div class="flex justify-between gap-8">
             <span class="text-pearl-60">Toggle code panel</span>
             <span class="text-gold">c</span>
           </div>
           <div class="flex justify-between gap-8">
-            <span class="text-pearl-60">Search</span>
+            <span class="text-pearl-60">Focus the demo terminal</span>
             <span class="text-gold">/</span>
+          </div>
+          <div class="flex justify-between gap-8">
+            <span class="text-pearl-60">Back from the demo terminal</span>
+            <span class="text-gold">Esc</span>
           </div>
           <div class="flex justify-between gap-8">
             <span class="text-pearl-60">Toggle shortcuts</span>

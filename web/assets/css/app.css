@@ -1720,6 +1720,121 @@ html, body {
   font-size: 0.7rem;
 }
 
+/* =============================================================================
+   Playground: TUI-mirroring chrome
+   The web playground is a projection of the mix raxol.playground TUI --
+   dense name-only sidebar with category runs and a > cursor, one info
+   line above the demo, the code panel inline below it, and a bottom
+   status bar of key hints.
+   ============================================================================= */
+
+.pg-sidebar-count {
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  padding: 0 0.4rem 0.35rem;
+}
+
+.pg-sidebar-empty {
+  font-size: 0.7rem;
+  color: var(--gold);
+  padding: 0.3rem 0.4rem;
+}
+
+.pg-cat {
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sky);
+  opacity: 0.75;
+  padding: 0.5rem 0.4rem 0.15rem;
+}
+
+.pg-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  padding: 0.1rem 0.4rem;
+  color: var(--text-secondary);
+  white-space: pre;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-smooth);
+}
+
+.pg-item:hover { color: var(--pearl-cream); }
+
+.pg-item--active {
+  color: var(--sky);
+  background: rgba(88, 161, 198, 0.08);
+}
+
+/* TUI complexity colors: basic green, intermediate yellow, advanced magenta */
+.pg-cx-basic { color: #8fca8f; }
+.pg-cx-intermediate { color: var(--gold); }
+.pg-cx-advanced { color: var(--coral-red); }
+
+.pg-code {
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+  padding: 0.55rem 1rem 0.75rem;
+}
+
+.pg-code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 0.35rem;
+}
+
+.pg-code-snippet {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--gold);
+  white-space: pre;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pg-code-snippet::-webkit-scrollbar { display: none; }
+
+.pg-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.3rem 1rem;
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+  font-size: 0.62rem;
+}
+
+.pg-statusbar-chip {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--obsidian);
+  background: var(--sky);
+  padding: 0.05rem 0.45rem;
+  border-radius: 2px;
+}
+
+.pg-statusbar-keys { color: var(--text-dim); }
+
+.pg-statusbar-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .category-tag--sm {
   font-size: 0.55rem;
   padding: 0.1rem 0.35rem;

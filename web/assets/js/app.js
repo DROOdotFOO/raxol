@@ -333,6 +333,38 @@ Hooks.HeroDemo = {
   }
 }
 
+// Playground keyboard parity with the mix raxol.playground TUI:
+// j/k navigate components, c toggles the code panel, ? toggles the
+// shortcuts overlay. Guarded so keystrokes aimed at the demo terminal,
+// the search box, or any form field pass through untouched.
+Hooks.PlaygroundKeys = {
+  mounted() {
+    this.onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const ae = document.activeElement
+      const tag = ae && ae.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+          (ae && ae.isContentEditable)) return
+      // The focused terminal owns every key (the TUI's :demo focus mode);
+      // Escape is the way back to sidebar mode, mirroring "Esc back".
+      if (ae && ae.id === 'playground-terminal') {
+        if (e.key === 'Escape') ae.blur()
+        return
+      }
+      if (e.key === 'j') this.pushEvent('nav_component', {dir: 'next'})
+      else if (e.key === 'k') this.pushEvent('nav_component', {dir: 'prev'})
+      else if (e.key === 'c') this.pushEvent('toggle_code', {})
+      else if (e.key === '?') this.pushEvent('toggle_shortcuts', {})
+      else return
+      e.preventDefault()
+    }
+    document.addEventListener('keydown', this.onKey)
+  },
+  destroyed() {
+    document.removeEventListener('keydown', this.onKey)
+  }
+}
+
 // Motion preference reporter. CSS media queries can gate stylesheet
 // animation but not server-pushed terminal frames, so the LiveView needs
 // to know. Reports at connect (only when reduce is on) and on every
