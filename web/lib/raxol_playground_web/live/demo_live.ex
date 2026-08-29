@@ -180,7 +180,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     ~H"""
     <.atmosphere />
 
-    <div class="relative min-h-screen z-10">
+    <main id="main-content" tabindex="-1" class="relative min-h-screen z-10">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div class="text-center mb-8">
           <h1 class="font-mono font-bold tracking-wide mb-4 text-pearl" style="font-size: clamp(1.5rem, 1.25rem + 1vw, 2.5rem);">
@@ -206,7 +206,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
           <% end %>
         </div>
       </div>
-    </div>
+    </main>
     """
   end
 
@@ -221,8 +221,9 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     <%!-- PlaygroundKeys: j/k patch to the adjacent demo, c toggles code,
          Esc leaves the focused terminal. data-keys omits '?' because
          this page has no shortcuts overlay. --%>
-    <div
-      id="demo-root"
+    <main
+      id="main-content"
+      tabindex="-1"
       phx-hook="PlaygroundKeys"
       data-terminal="demo-terminal"
       data-keys="jk,c"
@@ -357,7 +358,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
           <%= @demo_position %>/<%= @demo_total %> demos
         </span>
       </div>
-    </div>
+    </main>
     """
   end
 

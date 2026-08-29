@@ -247,7 +247,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     <%!-- PlaygroundKeys mirrors the TUI's keymap (j/k nav, c code,
          ? help), guarded so the demo terminal and form fields keep
          their own keystrokes. --%>
-    <div id="playground-root" phx-hook="PlaygroundKeys" class="playground-container h-screen flex flex-col bg-obsidian">
+    <main id="main-content" tabindex="-1" phx-hook="PlaygroundKeys" class="playground-container h-screen flex flex-col bg-obsidian">
       <%!-- Header --%>
       <div class="px-6 py-3 surface-bar">
         <div class="flex items-center justify-between">
@@ -394,7 +394,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
           <.users_panel online_users={@online_users} user_id={@user_id} sync_enabled={@sync_enabled} />
         </div>
       <% end %>
-    </div>
+    </main>
     """
   end
 

@@ -386,6 +386,29 @@ Hooks.MotionPref = {
   }
 }
 
+// Install-method tabs (hero). All four panes ship server-rendered; this
+// only toggles which is visible, so no server round trip and the curl
+// pane shows before JS loads. Delegated click survives LiveView patches.
+Hooks.InstallTabs = {
+  mounted() {
+    this.onClick = (e) => {
+      const btn = e.target.closest('.install-tab')
+      if (!btn || !this.el.contains(btn)) return
+      const method = btn.dataset.m
+      this.el.querySelectorAll('.install-tab').forEach((tab) => {
+        tab.setAttribute('aria-selected', tab.dataset.m === method ? 'true' : 'false')
+      })
+      this.el.querySelectorAll('.install-pane').forEach((pane) => {
+        pane.hidden = pane.dataset.m !== method
+      })
+    }
+    this.el.addEventListener('click', this.onClick)
+  },
+  destroyed() {
+    this.el.removeEventListener('click', this.onClick)
+  }
+}
+
 // Initialize LiveSocket
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
