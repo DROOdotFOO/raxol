@@ -14,6 +14,11 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   alias Raxol.Playground.Catalog
   alias RaxolPlaygroundWeb.Playground.DemoLifecycle
 
+  # The PAYMENTS solver's capability matrix -- deliberately aliased apart
+  # from RaxolPlayground.Capabilities (raxol.io's own agent surface, served
+  # at this app's /api/capabilities). Two different endpoints, same name.
+  alias Raxol.Payments.Xochi.Capabilities, as: XochiCapabilities
+
   import RaxolPlaygroundWeb.LandingComponents
   import RaxolPlaygroundWeb.PlaygroundComponents, only: [atmosphere: 1]
 
@@ -35,7 +40,12 @@ defmodule RaxolPlaygroundWeb.LandingLive do
         demo_timer: nil,
         demo_paused: false,
         pause_source: nil,
-        demo_component: demo_component
+        demo_component: demo_component,
+        # ETS-cached with a 300s TTL; nil config (dev/test, or prod without
+        # XOCHI_CAPABILITIES_BASE_URL) skips the network entirely and serves
+        # the static fallback, which renders as a "cached" badge.
+        xochi_matrix:
+          XochiCapabilities.get(Application.get_env(:raxol_playground, :xochi_capabilities))
       )
 
     {:ok, socket}
@@ -184,6 +194,10 @@ defmodule RaxolPlaygroundWeb.LandingLive do
         <.ssh_deep_dive />
         <hr class="section-divider" aria-hidden="true" />
         <.agent_deep_dive />
+        <hr class="section-divider" aria-hidden="true" />
+        <.coding_agent_deep_dive />
+        <hr class="section-divider" aria-hidden="true" />
+        <.payments_deep_dive matrix={@xochi_matrix} />
         <hr class="section-divider" aria-hidden="true" />
         <.features_section />
         <hr class="section-divider" aria-hidden="true" />

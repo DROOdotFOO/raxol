@@ -1031,6 +1031,149 @@ html {
 }
 
 /* =============================================================================
+   Privacy tier ladder (agent payments deep dive)
+   ============================================================================= */
+
+.ladder {
+  display: grid;
+  gap: 1px;
+  background: var(--panel-border);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rung {
+  background: rgba(10, 10, 12, 0.55);
+  display: grid;
+  grid-template-columns: 7rem 4.5rem 7rem 1fr;
+  gap: 0 1rem;
+  padding: 0.7rem 1.1rem;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 700px) {
+  .rung { grid-template-columns: 1fr 1fr; gap: 0.15rem 1rem; }
+}
+
+.rung--head {
+  background: rgba(18, 18, 26, 0.85);
+}
+
+.rung--head span {
+  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.rung__tier { font-weight: 600; color: var(--pearl-cream); }
+.rung__fee { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.rung__note { color: var(--text-dim); font-size: 0.8rem; }
+
+.set-public { color: var(--text-dim); }
+.set-stealth { color: var(--axol-coral); }
+.set-shielded { color: var(--sky); }
+
+/* =============================================================================
+   Solver reach matrix (agent payments deep dive)
+   ============================================================================= */
+
+.reach {
+  background: rgba(10, 10, 12, 0.55);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.reach-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(18, 18, 26, 0.85);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.reach-verb { color: var(--axol-coral); }
+
+.src-badge {
+  margin-left: auto;
+  padding: 0.14em 0.55em;
+  border-radius: 3px;
+  border: 1px solid var(--sky);
+  color: var(--sky);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.src-badge--cached {
+  border-color: var(--panel-border);
+  color: var(--text-dim);
+}
+
+/* Horizontal scroll on narrow screens, chrome hidden (design contract:
+   never overflow: hidden on terminal-style embeds). */
+.reach-scroll {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.reach-scroll::-webkit-scrollbar { display: none; }
+
+.reach-grid { min-width: 560px; }
+
+.reach-row {
+  display: grid;
+  grid-template-columns: 11rem 7rem 3.5rem 1fr;
+  gap: 0 1rem;
+  align-items: baseline;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.reach-row:last-child { border-bottom: none; }
+
+.reach-row__name { color: var(--pearl-cream); font-weight: 500; }
+.reach-row__id { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.reach-row__vm { color: var(--sky); font-size: 0.68rem; letter-spacing: 0.1em; }
+
+.reach-row--future .reach-row__name,
+.reach-row--future .reach-row__id,
+.reach-row--future .reach-row__vm { color: rgba(232, 228, 220, 0.32); }
+.reach-row--future .reach-row__note { color: rgba(232, 228, 220, 0.38); font-size: 0.72rem; }
+
+.reach-toks { display: flex; gap: 0.45rem; flex-wrap: wrap; }
+
+.tok {
+  padding: 0.1em 0.5em;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  border: 1px solid var(--coral-25);
+  color: var(--axol-coral);
+}
+
+.tok--alt { border-color: var(--sky-25); color: var(--sky); }
+.tok--dim { border-color: var(--panel-border); color: var(--text-dim); }
+
+.reach-foot {
+  padding: 0.6rem 1rem;
+  border-top: 1px solid var(--panel-border);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+/* =============================================================================
    FAQ accordion (native <details>)
    ============================================================================= */
 

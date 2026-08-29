@@ -23,6 +23,19 @@ if config_env() == :prod do
 
   config :raxol_playground, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # Xochi PAYMENTS solver capability endpoint for the landing reach matrix
+  # (distinct from this app's own /api/capabilities, the agent surface).
+  # Unset, the landing serves the static registry with a "cached" badge and
+  # never touches the network. Timeouts are tight because the fetch runs in
+  # LiveView mount: an outage costs one bounded stall per cache expiry, then
+  # the ETS stale-serve takes over.
+  if xochi_base_url = System.get_env("XOCHI_CAPABILITIES_BASE_URL") do
+    config :raxol_playground, :xochi_capabilities, %{
+      base_url: xochi_base_url,
+      req_options: [connect_options: [timeout: 2_500], receive_timeout: 2_500]
+    }
+  end
+
   config :raxol_playground, RaxolPlaygroundWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
