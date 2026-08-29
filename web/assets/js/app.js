@@ -472,7 +472,10 @@ Hooks.HaloField = {
     this.canvas.height = Math.round(this.h * dpr)
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    this.fontPx = 13
+    // Fine cells: the face's gill bars and eye dots need vertical
+    // resolution (~16 rows at the default height) to read as ≡··≡ rather
+    // than a blob.
+    this.fontPx = 10
     this.ctx.font = `${this.fontPx}px ${this.fontFamily}`
     this.cellW = this.ctx.measureText('█').width || this.fontPx * 0.6
     this.cellH = Math.round(this.fontPx * 1.15)
@@ -491,9 +494,9 @@ Hooks.HaloField = {
     const octx = off.getContext('2d', {willReadFrequently: true})
 
     const glyph = this.face()
-    let px = off.height * 0.72
+    let px = off.height * 0.78
     octx.font = `${px}px ${this.fontFamily}`
-    const maxW = off.width * 0.58
+    const maxW = off.width * 0.55
     const w = octx.measureText(glyph).width
     if (w > maxW) {
       px = px * (maxW / w)
@@ -618,7 +621,7 @@ Hooks.HaloField = {
     ctx.clearRect(0, 0, this.w, this.h)
     ctx.font = `${this.fontPx}px ${this.fontFamily}`
     ctx.textBaseline = 'top'
-    const t = this.t * 0.06
+    const t = this.t * 0.045
 
     for (let y = 0; y < this.rows; y++) {
       for (let x = 0; x < this.cols; x++) {
@@ -639,11 +642,13 @@ Hooks.HaloField = {
         if (this.keepOut[y * this.cols + x]) continue
 
         // Halo: edge weight is the PRODUCT of per-axis depths (max would
-        // draw a rectangle), boundary jittered by the drift noise itself.
+        // draw a rectangle), raised to push texture toward the frame, and
+        // the boundary is jittered by the drift noise itself.
         const centX = 1 - Math.abs((2 * x) / (this.cols - 1) - 1)
         const centY = 1 - Math.abs((2 * y) / (this.rows - 1) - 1)
-        const n = this.noise(x * 0.35 + t * 0.9, y * 0.55 + t * 0.2)
-        const w = Math.max(0, Math.min(1, 1 - centX * centY + (n - 0.5) * 0.3))
+        const n = this.noise(x * 0.3 + t * 0.5, y * 0.5 + t * 0.12)
+        const edge = Math.pow(Math.max(0, 1 - centX * centY), 1.6)
+        const w = Math.max(0, Math.min(1, edge + (n - 0.5) * 0.3))
         const v = n * w
         if (v < 0.14) continue
         const idx = Math.min(7, Math.floor(((v - 0.14) / 0.86) * 8))
