@@ -184,17 +184,57 @@ defmodule Raxol.Agent.Actions.CodeTest do
                Code.Bash.run(%{command: "echo ok"}, %{shell_sandbox: sandbox})
     end
 
-    test "refuses to run in a jailed session with no OS sandbox" do
+    # The acceptance criterion, run through the real tool rather than the policy
+    # function: with an `echo` allowlist configured, no wrapper in the corpus
+    # may read or write a sentinel file outside the workspace.
+    test "an allowlisted binary cannot be used to reach an outside sentinel" do
+      outside =
+        Path.join(
+          System.tmp_dir!(),
+          "raxol-sentinel-#{System.unique_integer([:positive])}"
+        )
+
+      File.write!(outside, "SENTINEL\n")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      sandbox = Sandbox.Shell.allowlist(["echo"])
+
+      attempts = [
+        "echo x; cat #{outside}",
+        "echo x && cat #{outside}",
+        "echo x | cat #{outside}",
+        "echo $(cat #{outside})",
+        "echo `cat #{outside}`",
+        "echo x\ncat #{outside}",
+        "echo pwned > #{outside}",
+        "echo x; rm -f #{outside}",
+        "echo x; sh -c 'cat #{outside}'"
+      ]
+
+      for command <- attempts do
+        assert {:error, {:shell_denied, ^command}} =
+                 Code.Bash.run(%{command: command}, %{shell_sandbox: sandbox}),
+               "expected a denial for: #{inspect(command)}"
+      end
+
+      # Untouched: not read out through a result, not overwritten, not deleted.
+      assert File.read!(outside) == "SENTINEL\n"
+    end
+
+    test "refuses to run in a jailed session" do
       # The cwd jail does not confine a shell command line, so a jailed
       # (multi-tenant) session must not get the shell at all until per-tenant
       # OS confinement is wired.
       assert {:error, :shell_disabled_in_jail} =
                Code.Bash.run(%{command: "cat ../../other/secret"}, %{jail: true})
 
-      # An explicit OS sandbox re-enables it (the sandbox is the confinement).
+      # A lexical policy does NOT re-enable it. This used to pass, on the
+      # strength of a `%Sandbox.Shell{}` being present at all -- which meant
+      # `Sandbox.Shell.none()`, documented as "any shell command allowed",
+      # handed a jailed tenant an unrestricted shell.
       sandbox = Sandbox.Shell.allowlist(["echo"])
 
-      assert {:ok, %{exit_status: 0}} =
+      assert {:error, :shell_disabled_in_jail} =
                Code.Bash.run(
                  %{command: "echo ok"},
                  %{jail: true, shell_sandbox: sandbox}
@@ -203,7 +243,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
   end
 
   describe "shell_jail_allow/1" do
-    test "refuses a jailed context without a sandbox" do
+    test "refuses a jailed context" do
       assert {:error, :shell_disabled_in_jail} =
                Code.shell_jail_allow(%{jail: true})
     end
@@ -213,9 +253,15 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert :ok = Code.shell_jail_allow(%{jail: false})
     end
 
-    test "allows a jailed context that carries an OS sandbox" do
-      sandbox = Sandbox.Shell.allowlist(["echo"])
-      assert :ok = Code.shell_jail_allow(%{jail: true, shell_sandbox: sandbox})
+    test "a lexical sandbox is not evidence of confinement" do
+      for sandbox <- [
+            Sandbox.Shell.none(),
+            Sandbox.Shell.allowlist(["echo"]),
+            Sandbox.Shell.denylist(["rm"])
+          ] do
+        assert {:error, :shell_disabled_in_jail} =
+                 Code.shell_jail_allow(%{jail: true, shell_sandbox: sandbox})
+      end
     end
   end
 
