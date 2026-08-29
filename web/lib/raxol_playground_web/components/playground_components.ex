@@ -108,24 +108,6 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
     """
   end
 
-  attr(:show, :boolean, required: true)
-  attr(:code, :string, default: "")
-
-  def code_panel(assigns) do
-    ~H"""
-    <%= if @show do %>
-      <div class="w-full lg:w-1/3 border-t lg:border-t-0 border-subtle flex flex-col max-h-64 lg:max-h-none bg-obsidian-85">
-        <div class="px-4 py-2 text-sm font-mono font-medium text-pearl-60 bg-panel-strong border-b border-subtle">
-          Code Snippet
-        </div>
-        <div class="flex-1 overflow-auto p-4">
-          <pre class="font-mono text-sm whitespace-pre-wrap text-sky"><%= String.trim(@code) %></pre>
-        </div>
-      </div>
-    <% end %>
-    """
-  end
-
   attr(:theme, :atom, required: true)
   attr(:themes, :list, required: true)
   attr(:form_id, :string, required: true)

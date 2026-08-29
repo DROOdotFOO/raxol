@@ -98,6 +98,24 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     {:noreply, assign(socket, :show_code, !socket.assigns.show_code)}
   end
 
+  # j/k from the PlaygroundKeys hook: patch to the adjacent demo, same as
+  # the prev/next header links. No wrap -- the ends are the ends, matching
+  # the visible buttons.
+  def handle_event("nav_component", %{"dir" => dir}, socket)
+      when dir in ["next", "prev"] do
+    target =
+      case dir do
+        "next" -> socket.assigns.next_component
+        "prev" -> socket.assigns.prev_component
+      end
+
+    if target do
+      {:noreply, push_patch(socket, to: "/demos/#{URI.encode(target)}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("keydown", params, socket) do
     if socket.assigns[:lifecycle_pid] do
       event = Raxol.LiveView.InputAdapter.translate_key_event(params)
@@ -200,19 +218,25 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     assigns = assign(assigns, :theme_bg, theme_bg)
 
     ~H"""
-    <div class="h-screen flex flex-col bg-obsidian">
+    <%!-- PlaygroundKeys: j/k patch to the adjacent demo, c toggles code,
+         Esc leaves the focused terminal. data-keys omits '?' because
+         this page has no shortcuts overlay. --%>
+    <div
+      id="demo-root"
+      phx-hook="PlaygroundKeys"
+      data-terminal="demo-terminal"
+      data-keys="jk,c"
+      class="h-screen flex flex-col bg-obsidian"
+    >
       <!-- Header -->
       <div class="px-8 py-5 surface-bar">
         <div class="flex items-center justify-between gap-8">
           <div class="flex items-center gap-6 min-w-0">
             <a href="/demos" class="font-mono text-sm subtle-link whitespace-nowrap" aria-label="Back to all demos">&larr; Back</a>
             <div class="min-w-0">
-              <div class="flex items-center gap-3">
+              <div class="flex items-baseline gap-2">
                 <h1 class="font-mono font-semibold text-pearl truncate" style="font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);"><%= @component.name %></h1>
-                <.complexity_badge level={@component.complexity} />
-                <span :if={@demo_position && @demo_total} class="font-mono text-pearl-40 text-sm whitespace-nowrap" aria-label={"Demo #{@demo_position} of #{@demo_total}"}>
-                  <%= @demo_position %> / <%= @demo_total %>
-                </span>
+                <span class={["font-mono shrink-0", "pg-cx-#{@component.complexity}"]} style="font-size: 0.7rem;">[<%= @component.complexity %>]</span>
               </div>
               <p class="font-mono detail-text truncate"><%= @component.description %></p>
             </div>
@@ -301,12 +325,38 @@ defmodule RaxolPlaygroundWeb.DemoLive do
               </div>
             <% end %>
           </div>
-        </div>
 
-        <.code_panel show={@show_code} code={@component.code_snippet} />
+          <%!-- Inline code panel, below the demo like the TUI's 'c'
+               toggle (not a side column). --%>
+          <%= if @show_code do %>
+            <div class="pg-code">
+              <div class="pg-code-head">
+                <span>Code</span>
+                <button
+                  id="demo-code-copy"
+                  phx-hook="CopyToClipboard"
+                  data-copy={String.trim(@component.code_snippet)}
+                  class="copy-chip"
+                  aria-label="Copy code snippet"
+                >
+                  copy
+                </button>
+              </div>
+              <pre class="pg-code-snippet"><%= String.trim(@component.code_snippet) %></pre>
+            </div>
+          <% end %>
+        </div>
       </div>
 
-      <.ssh_callout variant={:footer} />
+      <%!-- Status bar: same key-hint line as the playground; every key
+           listed is wired. --%>
+      <div class="pg-statusbar font-mono">
+        <span class="pg-statusbar-chip">demo</span>
+        <span class="pg-statusbar-keys">j/k prev/next &middot; / focus demo &middot; esc back &middot; c code</span>
+        <span :if={@demo_position && @demo_total} class="pg-statusbar-count">
+          <%= @demo_position %>/<%= @demo_total %> demos
+        </span>
+      </div>
     </div>
     """
   end
