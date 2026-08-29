@@ -100,7 +100,15 @@ Hooks.Flash = {
 // pushes terminal_html via push_event, and this hook sets innerHTML directly.
 Hooks.RaxolTerminal = {
   mounted() {
-    this.el.addEventListener('click', () => this.el.focus())
+    // Focus for keyboard input AND translate the click to buffer cell
+    // coordinates so on_click widgets (buttons, checkboxes) respond to
+    // the mouse like they do under a terminal mouse driver. The server
+    // hit-tests the cell against the positioned layout.
+    this.el.addEventListener('click', (e) => {
+      this.el.focus()
+      const cell = this.clickCell(e)
+      if (cell) this.pushEvent("terminal_click", cell)
+    })
 
     this.el.addEventListener('focus', () => {
       this.el.style.outline = '2px solid rgba(88, 161, 198, 0.4)'
@@ -154,6 +162,29 @@ Hooks.RaxolTerminal = {
 
   updated() {
     if (!this.noScroll) this.scrollToBottom()
+  },
+
+  // Pixel offset -> buffer cell. Cell metrics are measured live (a probe
+  // span for the char width, computed line-height for the row height)
+  // because the injected <pre> is replaced every frame and themes can
+  // change the font.
+  clickCell(e) {
+    const pre = this.el.querySelector('pre')
+    if (!pre) return null
+    const rect = pre.getBoundingClientRect()
+    const probe = document.createElement('span')
+    probe.textContent = '0'.repeat(100)
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre'
+    pre.appendChild(probe)
+    const cw = probe.getBoundingClientRect().width / 100
+    probe.remove()
+    const cs = getComputedStyle(pre)
+    const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize)
+    if (!cw || !lh) return null
+    const x = Math.floor((e.clientX - rect.left + pre.scrollLeft) / cw)
+    const y = Math.floor((e.clientY - rect.top + pre.scrollTop) / lh)
+    if (x < 0 || y < 0) return null
+    return {x, y}
   },
 
   scrollToBottom() {

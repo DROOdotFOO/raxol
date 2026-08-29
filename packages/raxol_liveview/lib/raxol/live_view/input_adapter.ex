@@ -40,6 +40,27 @@ defmodule Raxol.LiveView.InputAdapter do
   @modifier_keys ~w(Shift Control Alt Meta CapsLock)
 
   @doc """
+  Translates a terminal click (cell coordinates computed by the browser
+  hook from the pixel offset and cell metrics) into a mouse press
+  `Raxol.Core.Events.Event`.
+
+  The dispatcher hit-tests `%{action: :press, x: x, y: y}` against the
+  positioned layout, so a click lands on whatever `on_click` element
+  covers that cell: buttons rendered in the browser behave like buttons
+  under a terminal mouse driver.
+
+  Returns `nil` for malformed coordinates rather than raising: the
+  params arrive from a browser client.
+  """
+  @spec translate_click_event(map()) :: Event.t() | nil
+  def translate_click_event(%{"x" => x, "y" => y})
+      when is_integer(x) and x >= 0 and is_integer(y) and y >= 0 do
+    Event.new(:mouse, %{action: :press, button: :left, x: x, y: y})
+  end
+
+  def translate_click_event(_params), do: nil
+
+  @doc """
   Translates a browser keydown event map into a `Raxol.Core.Events.Event`.
 
   The input `params` map is expected to have keys like `"key"`, `"ctrlKey"`,

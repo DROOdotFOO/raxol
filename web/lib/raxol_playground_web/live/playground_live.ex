@@ -142,6 +142,16 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     end
   end
 
+  def handle_event("terminal_click", params, socket) do
+    event = Raxol.LiveView.InputAdapter.translate_click_event(params)
+
+    if event && socket.assigns[:lifecycle_pid] do
+      {:noreply, DemoLifecycle.dispatch_event(socket, event)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   # =========================================================================

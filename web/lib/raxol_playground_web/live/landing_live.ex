@@ -102,11 +102,21 @@ defmodule RaxolPlaygroundWeb.LandingLive do
      |> assign(terminal_html: false, demo_error: nil, demo_paused: false, pause_source: nil)}
   end
 
-  # Forward terminal key events from the RaxolTerminal hook into the demo, so
-  # the embedded demo is interactive (same path as DemoLive).
+  # Forward terminal key and click events from the RaxolTerminal hook into
+  # the demo, so the embedded demo is interactive (same path as DemoLive).
   def handle_event("keydown", params, socket) do
     if socket.assigns[:lifecycle_pid] do
       event = Raxol.LiveView.InputAdapter.translate_key_event(params)
+      {:noreply, DemoLifecycle.dispatch_event(socket, event)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("terminal_click", params, socket) do
+    event = Raxol.LiveView.InputAdapter.translate_click_event(params)
+
+    if event && socket.assigns[:lifecycle_pid] do
       {:noreply, DemoLifecycle.dispatch_event(socket, event)}
     else
       {:noreply, socket}

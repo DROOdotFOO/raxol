@@ -1481,20 +1481,29 @@ html, body {
   white-space: inherit;
 }
 
-/* The landing hero must stay horizontally scrollable (at phone widths a
-   374px slice of the 80-col demo is otherwise unreachable) but never show
-   scrollbar chrome: the bridge-injected <pre> also carries .raxol-terminal,
-   whose overflow-x:auto converts its overflow-y to auto and reserves a
-   gutter + paints a thumb on systems with always-visible scrollbars.
-   overflow:hidden is NOT the fix (it clips instead of scrolling). */
+/* Terminal embeds must stay scrollable (at phone widths a slice of the
+   80-col demo is otherwise unreachable) but never show scrollbar chrome:
+   the bridge-injected <pre> carries .raxol-terminal, whose overflow-x:auto
+   converts its computed overflow-y to auto, reserving a 15px gutter and
+   painting a thumb on systems with always-visible scrollbars (a 1px
+   line-height rounding overflow is enough to trigger it). overflow:hidden
+   is NOT the fix (it clips instead of scrolling). */
 #landing-terminal,
-#landing-terminal pre {
+#landing-terminal pre,
+#playground-terminal,
+#playground-terminal pre,
+#demo-terminal,
+#demo-terminal pre {
   overflow-x: auto;
   scrollbar-width: none;
 }
 
 #landing-terminal::-webkit-scrollbar,
-#landing-terminal pre::-webkit-scrollbar {
+#landing-terminal pre::-webkit-scrollbar,
+#playground-terminal::-webkit-scrollbar,
+#playground-terminal pre::-webkit-scrollbar,
+#demo-terminal::-webkit-scrollbar,
+#demo-terminal pre::-webkit-scrollbar {
   display: none;
 }
 
