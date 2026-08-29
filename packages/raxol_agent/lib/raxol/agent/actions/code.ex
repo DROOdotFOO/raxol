@@ -296,8 +296,7 @@ defmodule Raxol.Agent.Actions.Code do
     def run(%{command: command} = params, context) do
       timeout = Map.get(params, :timeout_ms) || 30_000
 
-      with :ok <- Raxol.Agent.Actions.Code.shell_jail_allow(context),
-           :ok <- Raxol.Agent.Actions.Code.sandbox_allow(context, command),
+      with :ok <- Raxol.Agent.Actions.Code.shell_allow(context, command),
            {:ok, cd} <- resolve_cd(Map.get(params, :cd), context) do
         {output, status} =
           Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
@@ -535,28 +534,53 @@ defmodule Raxol.Agent.Actions.Code do
   end
 
   @doc """
-  Refuse the shell surface for a jailed (multi-tenant) session that carries
-  no OS-level sandbox.
+  The single gate every shell surface passes through: the jail rule, then the
+  configured `Raxol.Agent.Sandbox.Shell` policy.
+
+  Use this rather than calling `shell_jail_allow/1` and `sandbox_allow/2`
+  separately. There are four places that run a shell string (the `bash` tool,
+  the `run_shell` tool, `Code.Hooks`, and the `Directive.Shell` executor), and
+  when each applied its own subset they disagreed about what was permitted --
+  one of them applied nothing at all.
+  """
+  @spec shell_allow(map(), String.t()) :: :ok | {:error, term()}
+  def shell_allow(context, command) do
+    with :ok <- shell_jail_allow(context), do: sandbox_allow(context, command)
+  end
+
+  @doc """
+  Refuse the shell surface for a jailed (multi-tenant) session.
 
   The cwd jail confines the *fs* tools (they resolve every path through
   `Fs.resolve/2`), but a `/bin/sh -c` command string is not a path — it can
   `cd ..`, name an absolute path, or read the daemon's own files, none of
   which `{:cd, cwd}` prevents. On a shared host that is a cross-tenant read
-  and write primitive, so until per-tenant OS confinement (separate uid /
-  chroot / bwrap, wired as a `:shell_sandbox`) exists, the only safe posture
-  is to withhold the shell entirely from a jailed session.
+  and write primitive.
+
+  A jail has NO unlock here. It used to accept any `%Sandbox.Shell{}` in the
+  context as evidence of confinement, but that struct is a string matcher:
+  `Sandbox.Shell.none()` satisfied the check and restored an unrestricted
+  shell, and even an allowlist only ever inspected the first token. What
+  would justify re-enabling this is OS-level confinement -- a separate uid,
+  a chroot, a container -- which does not exist here yet. When it does, it
+  gets its own explicit seam rather than reusing a lexical policy's struct
+  as a flag.
   """
   @spec shell_jail_allow(map()) :: :ok | {:error, :shell_disabled_in_jail}
   def shell_jail_allow(context) do
-    jailed? = is_map(context) and Map.get(context, :jail) not in [nil, false]
-
-    sandboxed? =
-      match?(%Raxol.Agent.Sandbox.Shell{}, Map.get(context, :shell_sandbox))
-
-    if jailed? and not sandboxed?,
-      do: {:error, :shell_disabled_in_jail},
-      else: :ok
+    if jailed?(context), do: {:error, :shell_disabled_in_jail}, else: :ok
   end
+
+  @doc """
+  Whether `context` marks a jailed (multi-tenant) session.
+
+  The one definition of what a jail is. `Raxol.Agent.Code.Hooks` used to carry
+  a copy of this test with a comment saying it mirrored this one, which is the
+  arrangement that lets two answers drift apart.
+  """
+  @spec jailed?(map()) :: boolean()
+  def jailed?(context),
+    do: is_map(context) and Map.get(context, :jail) not in [nil, false]
 
   @doc """
   Check a shell command against a `Raxol.Agent.Sandbox.Shell` in the

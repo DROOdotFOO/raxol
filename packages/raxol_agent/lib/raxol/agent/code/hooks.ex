@@ -189,12 +189,11 @@ defmodule Raxol.Agent.Code.Hooks do
 
   @doc """
   Whether `context` marks a jailed (multi-tenant) session, in which hooks
-  never run. Mirrors `Raxol.Agent.Actions.Code.shell_jail_allow/1`'s test so
-  the shell tool and the hook path cannot disagree about what a jail is.
+  never run. Delegates to `Raxol.Agent.Actions.Code.jailed?/1` so the shell
+  tools and the hook path cannot disagree about what a jail is.
   """
   @spec jailed?(map()) :: boolean()
-  def jailed?(context),
-    do: is_map(context) and Map.get(context, :jail) not in [nil, false]
+  defdelegate jailed?(context), to: Code
 
   defp cwd(context), do: Map.get(context, :hook_cwd) || File.cwd!()
 

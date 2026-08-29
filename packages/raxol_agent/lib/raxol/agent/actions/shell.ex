@@ -73,6 +73,18 @@ defmodule Raxol.Agent.Actions.Shell do
 
   @impl true
   def run(%{command: command} = params, context) do
+    case Raxol.Agent.Actions.Code.shell_allow(context, command) do
+      :ok -> run_allowed(params, context, command)
+      {:error, _} = error -> error
+    end
+  end
+
+  # This action had NO policy at all: no jail check, no sandbox check, while
+  # the sibling `bash` tool had both. It is not in `Code.all()` and no shipped
+  # toolset registers it, so it was a hazard for an embedder rather than a live
+  # escape -- but "the gate depends on which of two shell tools you wired" is
+  # not a property worth keeping.
+  defp run_allowed(params, context, command) do
     timeout = Map.get(params, :timeout_ms) || @default_timeout_ms
     cwd = Raxol.Agent.Actions.Fs.working_dir(context)
 
