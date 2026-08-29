@@ -47,11 +47,12 @@ defmodule Raxol.Console.RuntimeConfig do
   @typedoc """
   The resolved gateway authorization posture.
 
-    * `:open` -- every connected platform is allowed for everyone. `declared?`
-      distinguishes an operator who asked for this from one who said nothing;
-      only the latter is warned about at boot.
+    * `:open` -- every connected platform is allowed for everyone. Reachable
+      only by writing `pairing: :open`, so `declared?` is always true here.
     * `:enforce` -- `Raxol.Gateway.Pairing` decides, seeded from the three
-      allowlists and extended at runtime by the DM pairing flow.
+      allowlists and extended at runtime by the DM pairing flow. `declared?`
+      is false when no `:pairing` was set at all, which denies every route and
+      is what `Raxol.Console.Boot` warns about at boot.
   """
   @type pairing :: %{
           mode: :open | :enforce,
@@ -118,10 +119,9 @@ defmodule Raxol.Console.RuntimeConfig do
 
   ## Authorization
 
-  `:pairing` has three states, and the difference between two of them is only
-  whether the operator said anything:
+  `:pairing` has three states, and an omitted one denies:
 
-      # unset -- open, and warned about loudly at every boot
+      # unset -- enforced with nothing seeded: denies everyone, warned at boot
       # explicitly open, no warning: the operator has made this call
       pairing: :open
 
@@ -146,11 +146,13 @@ defmodule Raxol.Console.RuntimeConfig do
   platform, whose id namespaces are unrelated. Prefer `:platform_users` when a
   deployment connects more than one. See `Raxol.Gateway.Pairing`.
 
-  Open is the default because enforcing by default would lock out every Console
-  running today -- `Pairing`'s allowlists boot empty, so an unconfigured enforce
-  denies everyone. That makes silence the permissive answer, which is the wrong
-  way round; `Raxol.Console.Boot` compensates by making silence loud rather than
-  by making it safe.
+  An unconfigured Console denies everyone, and `Raxol.Console.Boot` says so at
+  boot. That locks out a deployment that never configured pairing, which is the
+  intended trade: the alternative made silence the permissive answer, so a
+  deployment could expose an agent's turns, tools and spend to anyone who could
+  reach a connected platform without a single line of config saying so. A lockout
+  is visible in one message; an open gate is discovered by whoever finds it first.
+  Adding `pairing: :open` restores the old behaviour explicitly.
 
   Open mode is not a bypass. It is seeded into `Pairing`'s own start options as
   `allow_platforms:` over the CONNECTED platforms, so the gate runs identically
@@ -263,13 +265,30 @@ defmodule Raxol.Console.RuntimeConfig do
 
   @pairing_keys [:allow_platforms, :allowed_users, :platform_users]
 
+  # An omitted `:pairing` denies. It is the only posture that can be reached by
+  # writing nothing, so it is the one that must not grant anything: silence is
+  # not consent to expose an agent's turns, tools and spend to every sender on
+  # every connected platform. Opening the gate takes the word `:open`.
   defp pairing(opts) do
     case Keyword.get(opts, :pairing) do
-      nil -> {:ok, open(false)}
+      nil -> {:ok, undeclared_enforce()}
       :open -> {:ok, open(true)}
       list when is_list(list) -> enforce(list)
       other -> {:error, {:invalid_pairing, other}}
     end
+  end
+
+  # Same shape `enforce([])` produces, but `declared?: false` so Boot can say
+  # WHY everyone is being denied. An operator who wrote `pairing: []` meant it
+  # and is not nagged; silence is.
+  defp undeclared_enforce do
+    %{
+      mode: :enforce,
+      declared?: false,
+      allow_platforms: [],
+      allowed_users: [],
+      platform_users: []
+    }
   end
 
   defp open(declared?) do
