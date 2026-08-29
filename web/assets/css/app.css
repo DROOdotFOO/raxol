@@ -72,7 +72,7 @@
   /* "axol.io" footer link variant */
   .axol-link {
     @apply font-mono transition-colors;
-    color: rgba(232, 228, 220, 0.35);
+    color: var(--text-dim);
   }
   .axol-link:hover { color: #ffcd9c; }
 
@@ -99,26 +99,26 @@
   .body-text-dim {
     @apply font-mono leading-relaxed;
     font-size: clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem);
-    color: rgba(232, 228, 220, 0.45);
+    color: var(--text-dim);
   }
 
   .detail-text {
     @apply font-mono leading-normal;
     font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
-    color: rgba(232, 228, 220, 0.45);
+    color: var(--text-dim);
   }
 
   .caption-text {
     @apply font-mono;
     font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
-    color: rgba(232, 228, 220, 0.3);
+    color: var(--text-dim);
   }
 
   .label-text {
     @apply font-mono uppercase;
     font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
     letter-spacing: 0.1em;
-    color: rgba(232, 228, 220, 0.35);
+    color: var(--text-dim);
   }
 
   .label-text-dim {
@@ -268,12 +268,16 @@
   --deep-night: #12121a;
   --shadow-deep: #12012c;
 
-  /* --- Text scale (mirrored as text-pearl-{N} in Tailwind) --- */
+  /* --- Text scale (mirrored as text-pearl-{N} in Tailwind) ---
+     Alpha floor is 0.52: on --obsidian that composites to 4.7:1, the
+     lowest that clears WCAG AA (4.5:1) for the 9-15px sizes these tokens
+     are set at. Two dim levels only; muted/ghost alias them so existing
+     call sites keep working. */
   --pearl-cream: #e8e4dc;
   --text-secondary: rgba(232, 228, 220, 0.6);
-  --text-muted: rgba(232, 228, 220, 0.5);
-  --text-dim: rgba(232, 228, 220, 0.4);
-  --text-ghost: rgba(232, 228, 220, 0.25);
+  --text-muted: rgba(232, 228, 220, 0.6);
+  --text-dim: rgba(232, 228, 220, 0.52);
+  --text-ghost: rgba(232, 228, 220, 0.52);
 
   /* --- Accent colors (mirrored in Tailwind) --- */
   --axol-coral: #ffcd9c;
@@ -726,12 +730,12 @@ html, body {
    Focus States (soft glow ring)
    ============================================================================= */
 
+/* Opaque coral (13.6:1 on --obsidian) via outline, not box-shadow: shadows
+   clip under overflow:hidden ancestors, and the offset gap keeps the ring
+   visible on coral-filled controls. */
 :focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--obsidian),
-    0 0 0 4px var(--gold-40),
-    0 0 12px rgba(168, 154, 128, 0.15);
+  outline: 2px solid var(--axol-coral);
+  outline-offset: 2px;
 }
 
 /* =============================================================================
@@ -1032,6 +1036,7 @@ html, body {
 }
 
 .panel:hover .pkg-copy-btn { opacity: 1; }
+.pkg-copy-btn:focus-visible { opacity: 1; }
 .pkg-copy-btn:hover {
   color: var(--axol-coral);
   border-color: var(--coral-25);
@@ -1476,13 +1481,21 @@ html, body {
   white-space: inherit;
 }
 
-/* The landing hero is sized to its 80x24 demo, so any scrollbar there is
-   a rendering bug. The bridge-injected <pre> also carries .raxol-terminal,
+/* The landing hero must stay horizontally scrollable (at phone widths a
+   374px slice of the 80-col demo is otherwise unreachable) but never show
+   scrollbar chrome: the bridge-injected <pre> also carries .raxol-terminal,
    whose overflow-x:auto converts its overflow-y to auto and reserves a
-   scrollbar gutter on systems with always-visible scrollbars. */
+   gutter + paints a thumb on systems with always-visible scrollbars.
+   overflow:hidden is NOT the fix (it clips instead of scrolling). */
 #landing-terminal,
 #landing-terminal pre {
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+#landing-terminal::-webkit-scrollbar,
+#landing-terminal pre::-webkit-scrollbar {
+  display: none;
 }
 
 /* Terminal theme overrides */
