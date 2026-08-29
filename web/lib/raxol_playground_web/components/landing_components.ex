@@ -662,6 +662,188 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
+  # 3d. Deep dive 04: Coding agent + ACP
+  # ---------------------------------------------------------------------------
+
+  def coding_agent_deep_dive(assigns) do
+    ~H"""
+    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="coding-agent-title">
+      <div class="mb-8">
+        <span class="section-numeral" aria-hidden="true">04</span>
+        <span class="section-eyebrow">Coding agent</span>
+        <h2 id="coding-agent-title" class="heading-2xl mb-3">raxol speaks ACP.</h2>
+        <p class="body-text max-w-2xl">
+          Open it in Zed, JetBrains, neovim, Emacs, or VS Code: raxol is listed
+          on <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>
+          beside Claude Agent, Codex CLI, Cursor, Gemini CLI, and GitHub
+          Copilot. The same agent loop serves four surfaces:
+        </p>
+      </div>
+
+      <div class="space-y-3 mb-6 ch-snap">
+        <.copyable_command id="copy-agent-code" command="mix raxol.code" comment="interactive coding-agent TUI" tone={:coral} />
+        <.copyable_command id="copy-agent-acp" command="raxol acp" comment="serve to Zed, JetBrains, neovim" tone={:sky} />
+        <.copyable_command id="copy-agent-p" command={~S(raxol -p "fix the failing test")} comment="headless, JSON events on stderr" tone={:sky} />
+        <.copyable_command id="copy-agent-mcp" command="mix mcp.server" comment="expose the UI itself as agent tools" tone={:sky} />
+      </div>
+
+      <p class="body-text-dim max-w-2xl">
+        The last line is one no competitor can print: deriving MCP tools from a
+        widget tree requires the UI framework and the agent runtime to be the
+        same system.
+      </p>
+    </section>
+    """
+  end
+
+  # ---------------------------------------------------------------------------
+  # 3e. Deep dive 05: Agent payments (privacy ladder + solver reach matrix)
+  #
+  # The reach matrix renders server-side from the PAYMENTS solver's
+  # capability endpoint (Raxol.Payments.Xochi.Capabilities) -- unrelated to
+  # raxol.io's own /api/capabilities (CapabilitiesController, the agent
+  # surface). `source: :fallback` renders a "cached" badge; liveness is
+  # never faked.
+  # ---------------------------------------------------------------------------
+
+  # Score ranges live in PrivacyTier's score_to_tier clauses (not exposed);
+  # the open/public notes describe opt-down tiers with no score gate.
+  @tier_notes %{
+    open: "rebate for full analytics",
+    public: "no fee, full disclosure",
+    standard: "trust score 0-24",
+    stealth: "trust score 25-49",
+    private: "trust score 50-74",
+    sovereign: "trust score 75 and above"
+  }
+
+  # Authored commentary on solver rails the matrix data does not carry.
+  @chain_notes %{4663 => "Permit2 pull", 728_126_428 => "relay rail"}
+
+  # Stables lead, WETH trails; unknown symbols land after, alphabetically.
+  @token_order %{"USDC" => 0, "USDT" => 1, "USDG" => 2, "WETH" => 3}
+
+  @payments_version Enum.find_value(Capabilities.packages(), fn
+                      %{name: "raxol_payments", version: v} -> String.replace(v, "~> ", "")
+                      _ -> nil
+                    end)
+
+  attr(:matrix, :map, required: true)
+
+  def payments_deep_dive(assigns) do
+    assigns =
+      assign(assigns,
+        tiers: Raxol.Payments.PrivacyTier.all(),
+        tier_notes: @tier_notes,
+        payments_version: @payments_version,
+        rows: reach_rows(assigns.matrix),
+        show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
+        live?: assigns.matrix.source == :live
+      )
+
+    ~H"""
+    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="payments-title">
+      <div class="mb-8">
+        <span class="section-numeral" aria-hidden="true">05</span>
+        <span class="section-eyebrow">Agent payments</span>
+        <h2 id="payments-title" class="heading-2xl mb-3">Agents that settle, privately.</h2>
+        <p class="body-text max-w-2xl">
+          First funded cross-chain settlement on 2026-06-28; the USDC transfer
+          offering has been live on Base since 2026-07-20. Trust is proven with
+          zero-knowledge attestations rather than disclosed, so a higher tier
+          reveals less while charging less. Stealth settlement derives a
+          one-time address per payment (ERC-5564); shielded settlement posts
+          the note into an Aztec execution environment.
+        </p>
+        <p class="caption-text mt-3">
+          Early, and labeled: the payments packages are at <%= @payments_version %> beside a 2.6
+          core. Dated on-chain events over claims.
+        </p>
+      </div>
+
+      <div class="ladder mb-10" role="table" aria-label="Privacy tiers">
+        <div class="rung rung--head" role="row">
+          <span role="columnheader">Tier</span>
+          <span role="columnheader">Fee</span>
+          <span role="columnheader">Settlement</span>
+          <span role="columnheader">Trust score</span>
+        </div>
+        <div :for={tier <- @tiers} class="rung" role="row">
+          <span class="rung__tier" role="cell"><%= tier.tier %></span>
+          <span class="rung__fee" role="cell"><%= tier.fee_bps %> bps</span>
+          <span class={["rung__set", settlement_class(tier.settlement)]} role="cell"><%= tier.settlement %></span>
+          <span class="rung__note" role="cell"><%= @tier_notes[tier.tier] %></span>
+        </div>
+      </div>
+
+      <h3 class="name-coral mb-2">Reach, from the solver's own matrix</h3>
+      <p class="body-text-dim max-w-2xl mb-4">
+        Rendered server-side from the Xochi solver's capability matrix
+        (<code>Raxol.Payments.Xochi.Capabilities.get/1</code>, five-minute
+        cache). When the endpoint is unreachable it degrades to the static
+        registry and says so. New solver chains light up with zero redeploy.
+      </p>
+
+      <div class="reach">
+        <div class="reach-bar">
+          <span><span class="reach-verb">GET</span> api.xochi.fi/api/capabilities</span>
+          <span class={["src-badge", !@live? && "src-badge--cached"]}>
+            <%= if @live?, do: "source: live", else: "source: cached" %>
+          </span>
+        </div>
+        <div class="reach-scroll">
+          <div class="reach-grid">
+            <div :for={row <- @rows} class="reach-row">
+              <span class="reach-row__name"><%= row.chain_name %></span>
+              <span class="reach-row__id"><%= row.chain_id %></span>
+              <span class="reach-row__vm"><%= row.vm %></span>
+              <span class="reach-toks">
+                <span :for={symbol <- row.tokens} class={["tok", symbol == "WETH" && "tok--alt"]}><%= symbol %></span>
+                <span :if={row.note} class="tok tok--dim"><%= row.note %></span>
+              </span>
+            </div>
+            <div :if={@show_future_svm} class="reach-row reach-row--future">
+              <span class="reach-row__name">Solana</span>
+              <span class="reach-row__id">--</span>
+              <span class="reach-row__vm">SVM</span>
+              <span class="reach-row__note">lights up when the solver ships it, zero redeploy</span>
+            </div>
+          </div>
+        </div>
+        <div class="reach-foot">
+          every corridor settles public,
+          <span class="set-stealth">stealth</span> (ERC-5564 one-time address), or
+          <span class="set-shielded">shielded</span> (Aztec) -- selected by trust tier
+        </div>
+      </div>
+    </section>
+    """
+  end
+
+  defp reach_rows(%{chains: chains, tokens: tokens}) do
+    Enum.map(chains, fn chain ->
+      symbols =
+        tokens
+        |> Enum.filter(&Map.has_key?(&1.addresses, chain.chain_id))
+        |> Enum.map(& &1.symbol)
+        |> Enum.uniq()
+        |> Enum.sort_by(&{Map.get(@token_order, &1, 99), &1})
+
+      %{
+        chain_name: chain.chain_name,
+        chain_id: chain.chain_id,
+        vm: chain.vm_type |> Atom.to_string() |> String.upcase(),
+        tokens: symbols,
+        note: @chain_notes[chain.chain_id]
+      }
+    end)
+  end
+
+  defp settlement_class(:public), do: "set-public"
+  defp settlement_class(:stealth), do: "set-stealth"
+  defp settlement_class(:shielded), do: "set-shielded"
+
+  # ---------------------------------------------------------------------------
   # 4. Features grid (numbered)
   # ---------------------------------------------------------------------------
 

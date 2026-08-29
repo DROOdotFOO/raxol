@@ -67,6 +67,72 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert open =~ ~s(href="/demos")
   end
 
+  @live_matrix %{
+    source: :live,
+    chains: [
+      %{chain_id: 8453, chain_name: "Base", vm_type: :evm},
+      %{chain_id: 728_126_428, chain_name: "Tron", vm_type: :tvm}
+    ],
+    tokens: [
+      %{symbol: "WETH", roles: [:origin, :destination], addresses: %{8453 => "0xweth"}},
+      %{symbol: "USDC", roles: [:origin, :destination], addresses: %{8453 => "0xabc"}},
+      %{
+        symbol: "USDT",
+        roles: [:origin, :destination],
+        addresses: %{8453 => "0xdef", 728_126_428 => "Txyz"}
+      }
+    ],
+    deposit_attestation_signer: nil
+  }
+
+  test "payments section renders the ladder, dated proof, and a live matrix honestly" do
+    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: @live_matrix)
+
+    # Dated proof leads; maturity is labeled.
+    assert payments =~ "2026-06-28"
+    assert payments =~ "2026-07-20"
+    assert payments =~ "0.2"
+
+    # Ladder derives from PrivacyTier.all/0.
+    assert payments =~ "sovereign"
+    assert payments =~ "-2 bps"
+    assert payments =~ "shielded"
+    assert payments =~ "rebate for full analytics"
+
+    # Matrix rows from the data, stables before WETH, authored rail notes.
+    assert payments =~ "source: live"
+    assert payments =~ "Base"
+    assert payments =~ "8453"
+    assert payments =~ "TVM"
+    assert payments =~ "relay rail"
+    assert payments =~ ~r/USDC.*USDT.*WETH/s
+
+    # No SVM chain in the data -> the greyed future row appears.
+    assert payments =~ "Solana"
+    assert payments =~ "lights up when the solver ships it"
+  end
+
+  test "an unreachable solver renders the cached badge, never fake liveness" do
+    fallback = Raxol.Payments.Xochi.Capabilities.fallback()
+    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: fallback)
+
+    assert payments =~ "source: cached"
+    refute payments =~ "source: live"
+    assert payments =~ "Robinhood Chain"
+    assert payments =~ "Permit2 pull"
+  end
+
+  test "coding agent section claims ACP membership and prints the four surfaces" do
+    coding = render_component(&LandingComponents.coding_agent_deep_dive/1, %{})
+
+    assert coding =~ "agentclientprotocol.com"
+    assert coding =~ "Zed"
+    assert coding =~ "mix raxol.code"
+    assert coding =~ "raxol acp"
+    assert coding =~ "raxol -p"
+    assert coding =~ "mix mcp.server"
+  end
+
   test "copy control and mobile menu use native accessible controls" do
     copy =
       render_component(&PlaygroundComponents.ssh_copy_block/1,
