@@ -138,37 +138,9 @@ Unix/macOS backend uses a termbox2 NIF; Windows uses a pure Elixir driver (usabl
 
 ## Documentation
 
-**Start here**
-
-- [Quickstart](docs/getting-started/QUICKSTART.md)
-- [Core Concepts](docs/getting-started/CORE_CONCEPTS.md)
-- [Component Gallery](docs/getting-started/COMPONENT_GALLERY.md)
-
-**Cookbook**
-
-- [Building Apps](docs/cookbook/BUILDING_APPS.md)
-- [SSH Deployment](docs/cookbook/SSH_DEPLOYMENT.md)
-- [Theming](docs/cookbook/THEMING.md)
-- [LiveView](docs/cookbook/LIVEVIEW_INTEGRATION.md)
-- [Performance](docs/cookbook/PERFORMANCE_OPTIMIZATION.md)
-
-**Reference**
-
-- [Architecture](docs/core/ARCHITECTURE.md)
-- [Buffer API](docs/core/BUFFER_API.md)
-- [Benchmarks](docs/bench/README.md)
-- [API Docs](https://hexdocs.pm/raxol)
-
-**Advanced**
-
-- [Agent Framework](docs/features/AGENT_FRAMEWORK.md)
-- [Agentic Commerce](docs/features/AGENTIC_COMMERCE.md)
-- [Sensor Fusion](docs/features/SENSOR_FUSION.md)
-- [Distributed Swarm](docs/features/DISTRIBUTED_SWARM.md)
-- [Recording & Replay](docs/features/RECORDING_REPLAY.md)
-- [Why OTP](docs/WHY_OTP.md)
-
-**Standalone packages**: grab just the subsystem you need. See [PACKAGES.md](docs/PACKAGES.md) for the full table.
+Start with the [documentation index](docs/README.md), or jump to the
+[Quickstart](docs/getting-started/QUICKSTART.md), [feature catalog](docs/features/README.md),
+[package map](docs/PACKAGES.md), or [API docs](https://hexdocs.pm/raxol).
 
 ## Development
 
