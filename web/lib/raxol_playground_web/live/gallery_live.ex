@@ -233,7 +233,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
           </div>
           <div class="flex gap-2.5 shrink-0">
             <a href={"/demos/#{@component.name}"} class="gallery-link">try live</a>
-            <a href={"/playground?component=#{@component.name}"} class="gallery-link gallery-link--dim">code</a>
+            <a href={"/playground?component=#{@component.name}&code=1"} class="gallery-link gallery-link--dim">code</a>
           </div>
         </div>
       </div>
@@ -263,7 +263,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
             <a href={"/demos/#{@component.name}"} class="btn-sky btn-compact">
               Try Live
             </a>
-            <a href={"/playground?component=#{@component.name}"} class="btn-secondary btn-compact">
+            <a href={"/playground?component=#{@component.name}&code=1"} class="btn-secondary btn-compact">
               View Code
             </a>
           </div>
