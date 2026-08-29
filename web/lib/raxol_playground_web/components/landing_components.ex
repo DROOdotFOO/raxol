@@ -14,6 +14,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   """
   use Phoenix.Component
 
+  alias Raxol.UI.Components.Harness.AxolFace
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.RecordedFrames
   import Phoenix.HTML, only: [raw: 1]
@@ -102,6 +103,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @install_command "curl -fsSL https://raxol.io/install | bash"
   @brew_command "brew install droodotfoo/tap/raxol"
   @npm_command "npm i -g raxol"
+
+  # The hero halo's face cycles the coding agent's REAL status glyphs:
+  # AxolFace.glyph/3 is the single source of truth every surface renders,
+  # and exporting its frames here keeps the page and the product in
+  # agreement. Four wrapped frames per state (cycles are 4/3/2/1 long, and
+  # the TUI wraps the same way).
+  @halo_faces Jason.encode!(
+                for state <- [:idle, :thinking, :working, :done] do
+                  %{state: state, frames: for(f <- 0..3, do: AxolFace.glyph(state, f))}
+                end
+              )
 
   # Authored output panes for the hero's non-terminal surfaces (the
   # terminal and SSH panes embed real recorded frames instead). Kept as
@@ -249,12 +261,29 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:demo_paused, :boolean, required: true)
 
   def hero_section(assigns) do
+    assigns = assign(assigns, :halo_faces, @halo_faces)
+
     ~H"""
     <%!-- MotionPref reports prefers-reduced-motion to the LiveView (at
          connect and on preference change) so the server stops pushing
          live demo frames after takeover; CSS media queries cannot gate
          those. The recorded-frames player gates itself client-side. --%>
-    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-20 pb-14 md:pt-28 md:pb-24 max-w-5xl mx-auto text-center" aria-labelledby="hero-title">
+    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-16 pb-14 md:pt-20 md:pb-24 max-w-5xl mx-auto text-center" aria-labelledby="hero-title">
+      <%!-- The brand mark: the axol face dithered into character cells,
+           framed by drifting edge texture (the Halo treatment). Pure
+           decoration -- aria-hidden, honors reduced motion client-side,
+           and the meaning is carried by the h1 below it. --%>
+      <div
+        id="hero-halo"
+        phx-hook="HaloField"
+        phx-update="ignore"
+        class="hero-halo"
+        aria-hidden="true"
+        data-faces={@halo_faces}
+      >
+        <canvas></canvas>
+      </div>
+
       <h1 id="hero-title" class="font-mono font-bold tracking-tight text-pearl mb-5" style="font-size: clamp(1.9rem, 1.3rem + 2.6vw, 3.4rem); line-height: 1.2;">
         One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
       </h1>
@@ -324,9 +353,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="hex">hex</button>
       </div>
 
+      <%!-- Only channels that exist get a link: the script this site
+           serves, and the published Hex package. brew/npm links land
+           when the tap repo and npm package publish. --%>
       <div class="install-pane" data-m="curl">
         <.ssh_copy_block id="install-copy-curl" cmd={@curl_cmd} />
-        <p class="label-text mt-3">Self-contained binary. macOS and Linux. Click to copy.</p>
+        <p class="label-text mt-3">
+          Self-contained binary. macOS and Linux. Click to copy.
+          <a href="/install" class="install-link">read the script</a>
+        </p>
       </div>
       <div class="install-pane" data-m="brew" hidden>
         <.ssh_copy_block id="install-copy-brew" cmd={@brew_cmd} />
@@ -338,7 +373,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
       <div class="install-pane" data-m="hex" hidden>
         <.ssh_copy_block id="install-copy-hex" cmd={@hex_dep} prompt={nil} />
-        <p class="label-text mt-3">Add to mix.exs in an existing Elixir app.</p>
+        <p class="label-text mt-3">
+          Add to mix.exs in an existing Elixir app.
+          <a href="https://hex.pm/packages/raxol" class="install-link">view on Hex</a>
+        </p>
       </div>
     </div>
     """
@@ -707,9 +745,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # ---------------------------------------------------------------------------
 
   # Score ranges live in PrivacyTier's score_to_tier clauses (not exposed);
-  # the open/public notes describe opt-down tiers with no score gate.
+  # the public note describes an opt-down tier with no score gate.
   @tier_notes %{
-    open: "rebate for full analytics",
     public: "no fee, full disclosure",
     standard: "trust score 0-24",
     stealth: "trust score 25-49",
@@ -731,9 +768,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:matrix, :map, required: true)
 
   def payments_deep_dive(assigns) do
+    # The :open rebate-for-analytics tier is retired as a product (a
+    # pay-for-order-flow-shaped rebate is unlawful in the EU) and must not
+    # be advertised; PrivacyTier still carries it in code, tracked as a
+    # payments-package follow-up.
     assigns =
       assign(assigns,
-        tiers: Raxol.Payments.PrivacyTier.all(),
+        tiers: Enum.reject(Raxol.Payments.PrivacyTier.all(), &(&1.tier == :open)),
         tier_notes: @tier_notes,
         payments_version: @payments_version,
         rows: reach_rows(assigns.matrix),

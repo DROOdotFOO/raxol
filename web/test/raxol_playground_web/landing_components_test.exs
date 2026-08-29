@@ -38,6 +38,31 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert tabs =~ ~s(aria-selected="true" data-m="curl")
     refute tabs =~ ~s(<div class="install-pane" data-m="curl" hidden>)
     assert tabs =~ ~s(<div class="install-pane" data-m="brew" hidden>)
+
+    # Only channels that exist are linked: the script this site serves and
+    # the published Hex package. brew/npm stay unlinked until they publish.
+    assert tabs =~ ~s(href="/install")
+    assert tabs =~ ~s(href="https://hex.pm/packages/raxol")
+    refute tabs =~ "npmjs.com"
+    refute tabs =~ "homebrew-tap"
+  end
+
+  test "the hero halo exports the coding agent's real face frames" do
+    hero =
+      render_component(&LandingComponents.hero_section/1,
+        terminal_html: false,
+        demo_paused: false
+      )
+
+    assert hero =~ ~s(phx-hook="HaloField")
+    assert hero =~ ~s(aria-hidden="true")
+    # data-faces carries AxolFace.glyph/3 output: the branded gills and the
+    # canonical state cycle, so the page and the TUI render the same face.
+    assert hero =~ "≡··≡"
+    assert hero =~ "idle"
+    assert hero =~ "thinking"
+    assert hero =~ "working"
+    assert hero =~ "done"
   end
 
   test "surface chips group into the three places you already are" do
@@ -93,11 +118,15 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert payments =~ "2026-07-20"
     assert payments =~ "0.2"
 
-    # Ladder derives from PrivacyTier.all/0.
+    # Ladder derives from PrivacyTier.all/0, minus the retired :open
+    # rebate tier (a PFOF-shaped rebate is unlawful in the EU -- the page
+    # must not advertise it even while the code still carries it).
     assert payments =~ "sovereign"
-    assert payments =~ "-2 bps"
     assert payments =~ "shielded"
-    assert payments =~ "rebate for full analytics"
+    assert payments =~ "no fee, full disclosure"
+    refute payments =~ "-2 bps"
+    refute payments =~ "rebate"
+    refute payments =~ ">open<"
 
     # Matrix rows from the data, stables before WETH, authored rail notes.
     assert payments =~ "source: live"
