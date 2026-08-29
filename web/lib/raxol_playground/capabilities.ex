@@ -131,19 +131,47 @@ defmodule RaxolPlayground.Capabilities do
   @spec mcp() :: map()
   def mcp, do: %{command: "mix", args: ["mcp.server"], tools: @mcp_tools}
 
-  @doc "Canonical outbound links for the manifest."
+  @ssh_command "ssh -p 2222 playground@raxol.io"
+
+  @doc """
+  The hosted SSH playground command, or `nil` when that surface is not serving.
+
+  Gated on the same `RAXOL_SSH_PLAYGROUND` env var the runtime itself reads
+  (`Raxol.Application.maybe_add_ssh_playground/0`, and the `/health` SSH probe),
+  so the site cannot advertise a port nothing is listening on. The surface was
+  suspended 2026-08-26; re-enabling it in `fly.toml` restores every mention with
+  no code change, which is why these render conditionally instead of being
+  deleted.
+  """
+  @spec ssh_command() :: String.t() | nil
+  def ssh_command, do: if(ssh_available?(), do: @ssh_command)
+
+  @doc "Whether the hosted SSH playground is configured to serve."
+  @spec ssh_available?() :: boolean()
+  def ssh_available?, do: System.get_env("RAXOL_SSH_PLAYGROUND") == "true"
+
+  @doc """
+  Canonical outbound links for the manifest.
+
+  `:ssh` is present only while that surface is serving -- a manifest is read by
+  agents, so a dead entry there is worse than a missing one.
+  """
   @spec links() :: map()
   def links do
-    %{
+    base = %{
       homepage: "https://raxol.io",
       skill: "https://raxol.io/skill.md",
       llms_txt: "https://raxol.io/llms.txt",
       capabilities: "https://raxol.io/api/capabilities",
       playground: "https://raxol.io/playground",
-      ssh: "ssh -p 2222 playground@raxol.io",
       docs: "https://hexdocs.pm/raxol",
       github: "https://github.com/DROOdotFOO/raxol",
       hex: "https://hex.pm/packages/raxol"
     }
+
+    case ssh_command() do
+      nil -> base
+      cmd -> Map.put(base, :ssh, cmd)
+    end
   end
 end

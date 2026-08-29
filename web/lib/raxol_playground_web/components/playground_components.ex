@@ -87,9 +87,11 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
           Try the real terminal:
         <% end %>
       </span>
-      <span class="text-axol-coral ml-2"><%= @ssh_cmd %></span>
-      <span class="text-pearl-25 mx-2">|</span>
-      <span class="text-sky">mix raxol.playground</span>
+      <%= if @ssh_cmd do %>
+        <span class="text-axol-coral ml-2"><%= @ssh_cmd %></span>
+        <span class="text-pearl-25 mx-2">|</span>
+      <% end %>
+      <span class={["text-sky", is_nil(@ssh_cmd) && "ml-2"]}>mix raxol.playground</span>
     </div>
     """
   end
@@ -104,7 +106,9 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
       <% end %>
       <p class="mb-4">For the full interactive experience:</p>
       <p class="text-sky">$ mix raxol.playground</p>
-      <p class="mt-1 text-axol-coral">$ <%= Helpers.ssh_command() %></p>
+      <%= if ssh = Helpers.ssh_command() do %>
+        <p class="mt-1 text-axol-coral">$ <%= ssh %></p>
+      <% end %>
     </div>
     """
   end

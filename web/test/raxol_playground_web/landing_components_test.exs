@@ -1,8 +1,11 @@
 defmodule RaxolPlaygroundWeb.LandingComponentsTest do
-  use ExUnit.Case, async: true
+  # Not async: the SSH-availability tests flip RAXOL_SSH_PLAYGROUND, which is
+  # VM-global. Four component renders are cheap; a racy env read is not.
+  use ExUnit.Case, async: false
 
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
+  alias RaxolPlayground.Capabilities
   alias RaxolPlaygroundWeb.LandingComponents
   alias RaxolPlaygroundWeb.PlaygroundComponents
 
@@ -178,5 +181,53 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert nav =~ ~s(aria-expanded="false")
     assert nav =~ ~s(aria-controls="mobile-navigation")
     assert nav =~ ~s(aria-label="Open menu")
+  end
+
+  describe "hosted SSH availability" do
+    # The landing page has never advertised the suspended host (the test above
+    # holds that line). These are the playground-side surfaces, which did: the
+    # gallery/demo banner, the demo footer, and the no-terminal fallback. With
+    # RAXOL_SSH_PLAYGROUND unset -- which is how it ships in fly.toml since the
+    # 2026-08-26 suspension -- nothing may name a port that is not listening.
+    test "callout and fallback offer only the local command while SSH is suspended" do
+      refute Capabilities.ssh_available?()
+      assert Capabilities.ssh_command() == nil
+
+      banner = render_component(&PlaygroundComponents.ssh_callout/1, variant: :banner)
+      footer = render_component(&PlaygroundComponents.ssh_callout/1, variant: :footer)
+      fallback = render_component(&PlaygroundComponents.terminal_fallback/1, %{})
+
+      rendered = Enum.join([banner, footer, fallback])
+
+      refute rendered =~ "playground@raxol.io"
+      refute rendered =~ "ssh -p"
+
+      # The surface still has to be useful, not just silent.
+      assert banner =~ "mix raxol.playground"
+      assert footer =~ "mix raxol.playground"
+      assert fallback =~ "mix raxol.playground"
+    end
+
+    test "the agent manifest omits the ssh link rather than publishing a dead one" do
+      refute Map.has_key?(Capabilities.links(), :ssh)
+
+      # The rest of the manifest is unaffected.
+      assert Capabilities.links().playground == "https://raxol.io/playground"
+    end
+
+    test "re-enabling the env var restores every mention with no code change" do
+      System.put_env("RAXOL_SSH_PLAYGROUND", "true")
+
+      try do
+        assert Capabilities.ssh_available?()
+        assert Capabilities.ssh_command() == "ssh -p 2222 playground@raxol.io"
+        assert Capabilities.links().ssh == "ssh -p 2222 playground@raxol.io"
+
+        banner = render_component(&PlaygroundComponents.ssh_callout/1, variant: :banner)
+        assert banner =~ "playground@raxol.io"
+      after
+        System.delete_env("RAXOL_SSH_PLAYGROUND")
+      end
+    end
   end
 end

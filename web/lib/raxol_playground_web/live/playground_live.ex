@@ -265,9 +265,11 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
           </div>
 
           <div class="flex items-center gap-3">
-            <span class="hidden lg:block font-mono caption-text">
-              <%= Helpers.ssh_command() %>
-            </span>
+            <%= if ssh = Helpers.ssh_command() do %>
+              <span class="hidden lg:block font-mono caption-text">
+                <%= ssh %>
+              </span>
+            <% end %>
 
             <button
               phx-click="toggle_users_panel"
