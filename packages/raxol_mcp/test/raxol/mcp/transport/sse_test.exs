@@ -123,4 +123,113 @@ defmodule Raxol.MCP.Transport.SSETest do
       assert conn.status == 404
     end
   end
+
+  # This transport serves many clients at once, so a request has to say which
+  # connection it belongs to before an elicitation can be bound to one. These
+  # cover the header plumbing that carries that; the ownership rules it feeds
+  # are in `Raxol.MCP.ElicitationTest`.
+  describe "connection identity" do
+    setup %{registry: registry} do
+      :ok =
+        Registry.register_tools(registry, [
+          %{
+            name: "spend",
+            description: "move money",
+            inputSchema: %{type: "object"},
+            callback: fn _args -> {:ok, "spent"} end
+          }
+        ])
+
+      server_name = :"idsrv_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Server.start_link(
+          name: server_name,
+          registry: registry,
+          authorizer: fn _tool, _args, _ctx -> {:ask, "Approve?"} end
+        )
+
+      %{ask_server: server_name}
+    end
+
+    defp post_as(server, message, headers) do
+      {:ok, body} = Jason.encode(message)
+
+      Enum.reduce(headers, conn(:post, "/mcp", body), fn {k, v}, c ->
+        put_req_header(c, k, v)
+      end)
+      |> put_req_header("content-type", "application/json")
+      |> Transport.SSE.call(server: server)
+    end
+
+    test "a POST carrying a session id is attributed to that connection", %{ask_server: s} do
+      # Stand in for the SSE stream process this session id belongs to.
+      Server.subscribe(s, self(), "sess-1")
+
+      post_as(s, Protocol.request(1, "initialize", %{capabilities: %{elicitation: %{}}}), [
+        {"mcp-session-id", "sess-1"}
+      ])
+
+      conn =
+        post_as(
+          s,
+          Protocol.request(2, "tools/call", %{"name" => "spend", "arguments" => %{}}),
+          [{"mcp-session-id", "sess-1"}]
+        )
+
+      # Parked, not answered inline -- and the prompt reached THIS connection.
+      assert conn.status == 204
+      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+    end
+
+    test "a POST with no session id cannot elicit, and is denied instead", %{ask_server: s} do
+      Server.subscribe(s, self(), "sess-1")
+
+      # Declared on an identified connection...
+      post_as(s, Protocol.request(1, "initialize", %{capabilities: %{elicitation: %{}}}), [
+        {"mcp-session-id", "sess-1"}
+      ])
+
+      # ...but this caller presents no id, so it is a different, anonymous
+      # connection: it cannot borrow sess-1's capability or its stream.
+      conn =
+        post_mcp(s, Protocol.request(2, "tools/call", %{"name" => "spend", "arguments" => %{}}))
+
+      assert conn.status == 200
+      {:ok, resp} = Jason.decode(conn.resp_body)
+      payload = Jason.decode!(hd(resp["result"]["content"])["text"])
+      assert payload["error"] == "authorization_required"
+
+      refute_receive {:mcp_notification, %{method: "elicitation/create"}}, 200
+    end
+
+    test "an unrelated POST cannot answer a session's elicitation", %{ask_server: s} do
+      Server.subscribe(s, self(), "sess-1")
+
+      post_as(s, Protocol.request(1, "initialize", %{capabilities: %{elicitation: %{}}}), [
+        {"mcp-session-id", "sess-1"}
+      ])
+
+      post_as(s, Protocol.request(7, "tools/call", %{"name" => "spend", "arguments" => %{}}), [
+        {"mcp-session-id", "sess-1"}
+      ])
+
+      assert_receive {:mcp_notification, %{method: "elicitation/create", id: elicit_id}}, 500
+
+      # The attacker has the id -- read off its own stream, or guessed when ids
+      # were a counter -- and POSTs an approval. Anonymously, and as a different
+      # named session; neither owns it.
+      approval = %{
+        jsonrpc: "2.0",
+        id: elicit_id,
+        result: %{action: "accept", content: %{approve: true}}
+      }
+
+      assert post_mcp(s, approval).status == 204
+      assert post_as(s, approval, [{"mcp-session-id", "sess-2"}]).status == 204
+
+      # The tool never ran, and sess-1's parked call is untouched.
+      refute_receive {:mcp_notification, %{id: 7}}, 200
+    end
+  end
 end

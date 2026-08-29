@@ -14,8 +14,6 @@ defmodule Raxol.MCP.ElicitationTest do
   alias Raxol.MCP.Registry
   alias Raxol.MCP.Server
 
-  @elicit_id "raxol-elicit-1"
-
   setup do
     registry = start_supervised!({Registry, name: :"reg_#{System.unique_integer([:positive])}"})
 
@@ -64,8 +62,15 @@ defmodule Raxol.MCP.ElicitationTest do
     })
   end
 
-  defp answer(server, result, id \\ @elicit_id) do
+  defp answer(server, result, id) do
     Server.handle_message(server, %{jsonrpc: "2.0", id: id, result: result})
+  end
+
+  # Elicit ids are minted unguessably, so a test learns one the same way a
+  # client does: off the wire.
+  defp await_elicit_id do
+    assert_receive {:mcp_notification, %{method: "elicitation/create"} = request}, 500
+    request.id
   end
 
   defp decoded_payload(%{result: %{content: [%{text: text} | _]}}), do: Jason.decode!(text)
@@ -104,16 +109,23 @@ defmodule Raxol.MCP.ElicitationTest do
 
       assert_receive {:mcp_notification, request}, 500
       assert request.method == "elicitation/create"
-      assert request.id == @elicit_id
       assert request.params.message == "Approve moving money?"
       assert request.params.requestedSchema.required == ["approve"]
+
+      # The id is server-minted and unguessable. Knowing it is not authority to
+      # answer -- ownership is -- but a predictable id handed the guess away for
+      # free, so it is no longer a counter.
+      assert "raxol-elicit-" <> suffix = request.id
+      assert byte_size(suffix) >= 16
+      refute request.id == "raxol-elicit-1"
     end
 
     test "accept with approval runs the tool and answers the ORIGINAL call id", %{server: server} do
       assert {:reply, nil} = call_spend(server, 42)
-      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+      elicit_id = await_elicit_id()
 
-      assert {:reply, nil} = answer(server, %{action: "accept", content: %{approve: true}})
+      assert {:reply, nil} =
+               answer(server, %{action: "accept", content: %{approve: true}}, elicit_id)
 
       assert_receive {:mcp_notification, response}, 500
       assert response.id == 42, "the client is waiting on its own request id"
@@ -129,9 +141,9 @@ defmodule Raxol.MCP.ElicitationTest do
         ] do
       test "#{label} fails closed and never runs the tool", %{server: server} do
         assert {:reply, nil} = call_spend(server)
-        assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+        elicit_id = await_elicit_id()
 
-        assert {:reply, nil} = answer(server, unquote(Macro.escape(result)))
+        assert {:reply, nil} = answer(server, unquote(Macro.escape(result)), elicit_id)
 
         assert_receive {:mcp_notification, response}, 500
         assert response.id == 2
@@ -141,12 +153,12 @@ defmodule Raxol.MCP.ElicitationTest do
 
     test "an error response to the prompt is a refusal, not a crash", %{server: server} do
       assert {:reply, nil} = call_spend(server)
-      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+      elicit_id = await_elicit_id()
 
       assert {:reply, nil} =
                Server.handle_message(server, %{
                  jsonrpc: "2.0",
-                 id: @elicit_id,
+                 id: elicit_id,
                  error: %{code: -32_601, message: "elicitation not supported after all"}
                })
 
@@ -172,10 +184,12 @@ defmodule Raxol.MCP.ElicitationTest do
 
     test "a late answer after the timeout is ignored, not double-replied", %{server: server} do
       assert {:reply, nil} = call_spend(server)
-      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+      elicit_id = await_elicit_id()
       assert_receive {:mcp_notification, %{id: 2}}, 2_000
 
-      assert {:reply, nil} = answer(server, %{action: "accept", content: %{approve: true}})
+      assert {:reply, nil} =
+               answer(server, %{action: "accept", content: %{approve: true}}, elicit_id)
+
       refute_receive {:mcp_notification, _}, 200
       assert Process.alive?(server)
     end
@@ -204,7 +218,164 @@ defmodule Raxol.MCP.ElicitationTest do
     end
   end
 
+  describe "two clients on one server" do
+    # The shape stdio never had to think about: one server, two connections.
+    # Before conn ids, `subscribers` and `client_capabilities` were global and
+    # every prompt and result was broadcast, so B could read A's prompt, read
+    # A's tool output, and -- knowing only an id that was minted by a counter --
+    # approve A's spend.
+    # Its own server with a long elicitation timeout: these tests deliberately
+    # wait on `refute_receive` before answering, and racing the outer 200ms
+    # expiry would make them fail for a reason unrelated to what they assert.
+    setup %{registry: registry} do
+      ask = fn _tool, _args, _ctx -> {:ask, "Approve moving money?"} end
+
+      server =
+        start_supervised!(
+          {Server,
+           name: :"two_#{System.unique_integer([:positive])}",
+           registry: registry,
+           authorizer: ask,
+           elicitation_timeout_ms: 30_000},
+          id: :two_client_server
+        )
+
+      me = self()
+
+      # B is a second, independent connection: its own subscriber process, its
+      # own conn id. The forwarder lets the test see exactly what B receives.
+      b = spawn_link(fn -> forward(me) end)
+      Server.subscribe(server, b, "conn-b")
+
+      :ok =
+        initialize(server, %{elicitation: %{}}, "conn-b")
+
+      # A is the connection under test.
+      Server.subscribe(server, self(), "conn-a")
+      :ok = initialize(server, %{elicitation: %{}}, "conn-a")
+      _ = Server.authorization_configured?(server)
+
+      {:ok, server: server, b: b}
+    end
+
+    test "B cannot observe A's prompt", %{server: server} do
+      assert {:reply, nil} = call_a(server)
+
+      assert_receive {:mcp_notification, %{method: "elicitation/create"}}, 500
+      refute_receive {:b_got, %{method: "elicitation/create"}}, 200
+    end
+
+    test "B cannot answer A's prompt, even knowing its id", %{server: server} do
+      assert {:reply, nil} = call_a(server)
+      elicit_id = await_elicit_id()
+
+      # B knows the id (handed to it here; on the wire it would have to guess).
+      # The answer is refused because B does not own the elicitation.
+      assert {:reply, nil} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: elicit_id,
+                   result: %{action: "accept", content: %{approve: true}}
+                 },
+                 "conn-b"
+               )
+
+      # The tool did not run: nobody got a result, and A's call is still parked.
+      refute_receive {:mcp_notification, %{id: 7}}, 200
+      refute_receive {:b_got, _}, 200
+
+      # ...and A can still answer its own prompt afterwards.
+      assert {:reply, nil} = answer_as(server, "conn-a", elicit_id)
+
+      assert_receive {:mcp_notification, %{id: 7} = response}, 500
+      assert %{content: [%{text: "spent 5"} | _]} = response.result
+    end
+
+    test "B cannot observe A's tool result", %{server: server} do
+      assert {:reply, nil} = call_a(server)
+      elicit_id = await_elicit_id()
+
+      assert {:reply, nil} = answer_as(server, "conn-a", elicit_id)
+
+      assert_receive {:mcp_notification, %{id: 7}}, 500
+      refute_receive {:b_got, _}, 200
+    end
+
+    test "B advertising elicitation does not turn prompting on for A", %{server: server} do
+      # A fresh connection that never advertised the capability must still get
+      # the machine-readable deny, even while B (which did advertise) is live.
+      Server.subscribe(server, self(), "conn-c")
+      :ok = initialize(server, %{}, "conn-c")
+
+      assert {:reply, response} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: 9,
+                   method: "tools/call",
+                   params: %{"name" => "spend", "arguments" => %{"amount" => 5}}
+                 },
+                 "conn-c"
+               )
+
+      assert %{"error" => "authorization_required"} = decoded_payload(response)
+      refute_receive {:mcp_notification, %{method: "elicitation/create"}}, 200
+    end
+
+    defp call_a(server) do
+      Server.handle_message(
+        server,
+        %{
+          jsonrpc: "2.0",
+          id: 7,
+          method: "tools/call",
+          params: %{"name" => "spend", "arguments" => %{"amount" => 5}}
+        },
+        "conn-a"
+      )
+    end
+
+    defp answer_as(server, conn_id, elicit_id) do
+      Server.handle_message(
+        server,
+        %{
+          jsonrpc: "2.0",
+          id: elicit_id,
+          result: %{action: "accept", content: %{approve: true}}
+        },
+        conn_id
+      )
+    end
+
+    defp forward(test_pid) do
+      receive do
+        {:mcp_notification, msg} ->
+          send(test_pid, {:b_got, msg})
+          forward(test_pid)
+      end
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
+
+  defp initialize(server, capabilities, conn_id) do
+    {:reply, _} =
+      Server.handle_message(
+        server,
+        %{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{capabilities: capabilities}
+        },
+        conn_id
+      )
+
+    :ok
+  end
 
   defp elicitation_client(%{server: server}) do
     :ok = initialize(server, %{elicitation: %{}})

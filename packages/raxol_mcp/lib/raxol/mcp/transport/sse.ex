@@ -12,6 +12,27 @@ if Code.ensure_loaded?(Plug.Router) do
     - `GET /mcp/sse` -- server-sent events stream for notifications
     - `GET /health` -- health check
 
+    ## Connection identity
+
+    Unlike stdio, this transport serves many clients at once, and each POST is
+    a separate short-lived process with nothing tying it to a stream. That
+    matters for elicitation: an approval prompt belongs to the client that
+    triggered it, and only that client may answer it.
+
+    `GET /mcp/sse` therefore mints a session id and emits it as the stream's
+    first event:
+
+        event: endpoint
+        data: {"sessionId":"..."}
+
+    A client echoes it on every POST via the `mcp-session-id` header. Requests
+    that carry it are attributed to that connection; requests without it are
+    unidentified, which is safe but limited -- an unidentified caller can make
+    ordinary requests and simply cannot elicit (an ASK resolves to the
+    machine-readable deny). It can never answer someone else's prompt, because
+    every unidentified request is a DISTINCT anonymous connection that owns
+    nothing.
+
     ## Usage
 
     Mount in a Plug pipeline or start standalone with `Plug.Cowboy`:
@@ -62,7 +83,7 @@ if Code.ensure_loaded?(Plug.Router) do
 
       if body do
         try do
-          {:reply, response} = Server.handle_message(server, body)
+          {:reply, response} = Server.handle_message(server, body, conn_id(conn))
 
           if response do
             json = Jason.encode!(response)
@@ -98,19 +119,26 @@ if Code.ensure_loaded?(Plug.Router) do
 
     get "/mcp/sse" do
       server = conn.private[:mcp_server] || Server
+      session_id = mint_session_id()
 
       conn =
         conn
         |> put_resp_content_type("text/event-stream")
         |> put_resp_header("cache-control", "no-cache")
-        |> put_resp_header("connection", "keep-alive")
+        |> put_resp_header("mcp-session-id", session_id)
         |> send_chunked(200)
 
-      # Subscribe this process to server notifications
-      Server.subscribe(server, self())
+      # Subscribe this process AS this connection. The same id the client is
+      # about to be told is what its POSTs must carry to be recognised.
+      Server.subscribe(server, self(), session_id)
 
-      # Send initial keepalive
-      {:ok, conn} = Plug.Conn.chunk(conn, ": keepalive\n\n")
+      # The client needs its id before it can send anything attributable, so it
+      # is the first frame -- not a keepalive.
+      {:ok, conn} =
+        Plug.Conn.chunk(
+          conn,
+          "event: endpoint\ndata: #{Jason.encode!(%{sessionId: session_id})}\n\n"
+        )
 
       sse_loop(conn)
     end
@@ -165,6 +193,22 @@ if Code.ensure_loaded?(Plug.Router) do
     end
 
     # -- Private ----------------------------------------------------------------
+
+    # The connection a request belongs to. A caller that presents no session id
+    # gets a FRESH anonymous id rather than a shared one: two unidentified
+    # callers must not land on the same connection, or one could answer the
+    # other's elicitation exactly as before. An anonymous connection has no
+    # subscriber, so it can never elicit and never owns anything to answer.
+    defp conn_id(conn) do
+      case Plug.Conn.get_req_header(conn, "mcp-session-id") do
+        [id | _] when is_binary(id) and id != "" -> id
+        _ -> {:anonymous, mint_session_id()}
+      end
+    end
+
+    defp mint_session_id do
+      Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+    end
 
     defp normalize_body_params(params) do
       # Plug.Parsers decodes JSON with string keys; normalize known fields
