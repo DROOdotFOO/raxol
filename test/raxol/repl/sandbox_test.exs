@@ -183,4 +183,57 @@ defmodule Raxol.REPL.SandboxTest do
       assert :ok = Sandbox.check("Enum.map([1, 2, 3], &(&1 * 2))", :strict)
     end
   end
+
+  # Atoms are never reclaimed, so neither the evaluation timeout nor the heap
+  # cap undoes one of these: the table stays grown after the process is killed.
+  # Each of these reached an atom-minting primitive that the named blocks above
+  # were meant to have closed.
+  describe "dynamic atom creation has no back door" do
+    test "a computed module cannot be dispatched through" do
+      # The check walks names, so a module held in a VARIABLE was invisible to
+      # it: `String.to_atom` is blocked, `m.to_atom` was not.
+      for level <- [:standard, :strict] do
+        assert {:error, [msg]} =
+                 Sandbox.check(~s|m = String; m.to_atom("x")|, level)
+
+        assert msg =~ "computed module"
+      end
+    end
+
+    test "map field access is not mistaken for dynamic dispatch" do
+      # `map.field` and `mod.fun()` are the same AST shape, and reading a map
+      # is most of what a REPL session does.
+      assert :ok = Sandbox.check("m = %{count: 1}; m.count", :strict)
+      assert :ok = Sandbox.check("s.a.b", :strict)
+      assert :ok = Sandbox.check("conn.assigns.user", :standard)
+    end
+
+    test ":erlang.apply is denied at standard" do
+      assert {:error, _} =
+               Sandbox.check(
+                 ~s|:erlang.apply(String, :to_atom, ["x"])|,
+                 :standard
+               )
+    end
+
+    test "Module.concat is denied at standard" do
+      assert {:error, _} =
+               Sandbox.check(~s|Module.concat(["a", "b"])|, :standard)
+
+      assert {:error, _} =
+               Sandbox.check(~s|Module.safe_concat(["a", "b"])|, :standard)
+    end
+
+    test "Jason.decode is denied even though Jason is whitelisted in strict" do
+      # `keys: :atoms` mints an atom per KEY from attacker-supplied JSON, and
+      # the option can arrive in a variable, so the call is refused outright.
+      assert {:error, _} =
+               Sandbox.check(~s|Jason.decode!(j, keys: :atoms)|, :strict)
+
+      assert {:error, _} = Sandbox.check(~s|Jason.decode(j)|, :strict)
+
+      # Encoding creates no atoms and stays available.
+      assert :ok = Sandbox.check(~s|Jason.encode!(%{a: 1})|, :strict)
+    end
+  end
 end

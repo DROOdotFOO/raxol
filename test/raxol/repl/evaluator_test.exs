@@ -139,4 +139,61 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert Keyword.get(Evaluator.bindings(eval), :x) == 1
     end
   end
+
+  describe "limits the heap cap alone does not cover" do
+    test "captured output stops accumulating at the limit" do
+      # Output goes to a SEPARATE process, so it never counted against the
+      # evaluation's own max_heap_size: this loop allocates almost nothing
+      # locally while growing that process without bound. Nor could the caller
+      # measure it -- output arrives as refc binaries, which live off-heap and
+      # are invisible to process_info(:memory). So the cap is enforced where
+      # the bytes are accepted.
+      eval = Evaluator.new()
+      limit = 100_000
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(
+                 eval,
+                 ~s|Enum.each(1..50_000, fn _ -> IO.puts(String.duplicate("x", 1024)) end)|,
+                 max_result_bytes: limit,
+                 timeout: 30_000
+               )
+
+      # 50MB was written; what is kept is bounded, and says it was cut.
+      assert byte_size(result.output) < limit + 100
+      assert result.output =~ "output truncated"
+    end
+
+    test "output under the limit is captured whole, unannotated" do
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(eval, ~s|IO.puts("hello"); IO.puts("world")|)
+
+      assert result.output == "hello\nworld\n"
+      refute result.output =~ "truncated"
+    end
+
+    test "another evaluation's result is never consumed as this one's" do
+      # The child's reply used to be untagged, and `demonitor(ref, [:flush])`
+      # flushes only the :DOWN. So a reply that raced its timeout stayed in the
+      # mailbox and the NEXT eval's receive matched it, attributing one
+      # expression's value to another.
+      #
+      # The race itself is not reproducible on demand, so this asserts the
+      # invariant that makes it impossible instead: a result this evaluation
+      # did not mint is not eligible, whatever it looks like.
+      send(self(), {:eval_result, {:ok, :stale_untagged, [], ""}})
+      send(self(), {:eval_result, make_ref(), {:ok, :stale_tagged, [], ""}})
+
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} = Evaluator.eval(eval, ":mine")
+      assert result.value == :mine
+
+      # Both plants are still queued: neither was mistaken for this result.
+      assert_received {:eval_result, {:ok, :stale_untagged, [], ""}}
+      assert_received {:eval_result, _, {:ok, :stale_tagged, [], ""}}
+    end
+  end
 end
