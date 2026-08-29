@@ -4,14 +4,24 @@ defmodule RaxolPlaygroundWeb.Playground.Helpers do
   Single source of truth for themes, SSH callout, and shared constants.
   """
 
+  alias RaxolPlayground.Capabilities
+
   @default_theme :synthwave84
-  @ssh_command "ssh -p 2222 playground@raxol.io"
 
   @doc "Returns the default terminal theme atom."
   def default_theme, do: @default_theme
 
-  @doc "Returns the SSH connection command string."
-  def ssh_command, do: @ssh_command
+  @doc """
+  The hosted SSH command, or `nil` when that surface is not serving.
+
+  Delegates to `RaxolPlayground.Capabilities`, which owns the string and the
+  availability gate, so the page and the capability manifest cannot disagree
+  about whether SSH is offered.
+  """
+  def ssh_command, do: Capabilities.ssh_command()
+
+  @doc "Whether the hosted SSH playground is configured to serve."
+  def ssh_available?, do: Capabilities.ssh_available?()
 
   @doc "Returns the background color for the default theme."
   def default_theme_bg do

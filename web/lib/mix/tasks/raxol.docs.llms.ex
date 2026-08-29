@@ -83,11 +83,16 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
   defp quick_start do
     dep = Capabilities.dep("raxol") || "{:raxol, \"~> 2.6\"}"
 
+    ssh =
+      case Capabilities.ssh_command() do
+        nil -> ""
+        cmd -> "    #{cmd}    # zero install\n"
+      end
+
     """
     ## Quick start
 
-        ssh -p 2222 playground@raxol.io    # zero install
-        #{dep}                 # add to mix.exs
+    #{ssh}    #{dep}                 # add to mix.exs
     """
   end
 

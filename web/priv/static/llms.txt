@@ -4,7 +4,6 @@
 
 ## Quick start
 
-    ssh -p 2222 playground@raxol.io    # zero install
     {:raxol, "~> 2.6"}                 # add to mix.exs
 
 ## Capability summary
@@ -34,15 +33,15 @@ Governance: an ALLOW/ASK/DENY authorization engine gates every tool call, and a 
 - raxol `{:raxol, "~> 2.6"}`: Full framework
 - raxol_agent `{:raxol_agent, "~> 2.6"}`: AI agents
 - raxol_mcp `{:raxol_mcp, "~> 2.6"}`: MCP server
-- raxol_payments `{:raxol_payments, "~> 0.1"}`: Agent commerce
+- raxol_payments `{:raxol_payments, "~> 0.2"}`: Agent commerce
 - raxol_liveview `{:raxol_liveview, "~> 2.6"}`: LiveView bridge
 - raxol_sensor `{:raxol_sensor, "~> 2.6"}`: Sensor fusion
 - raxol_terminal `{:raxol_terminal, "~> 2.6"}`: Terminal emulation
 - raxol_core `{:raxol_core, "~> 2.6"}`: Behaviours, events
 - raxol_plugin `{:raxol_plugin, "~> 2.6"}`: Plugin SDK
-- raxol_speech `{:raxol_speech, "~> 0.2"}`: TTS/STT
-- raxol_telegram `{:raxol_telegram, "~> 0.2"}`: Telegram bot
-- raxol_watch `{:raxol_watch, "~> 0.2"}`: Push notifications
+- raxol_speech `{:raxol_speech, "~> 0.1"}`: TTS/STT
+- raxol_telegram `{:raxol_telegram, "~> 0.1"}`: Telegram bot
+- raxol_watch `{:raxol_watch, "~> 0.1"}`: Push notifications
 
 ## Documentation
 
