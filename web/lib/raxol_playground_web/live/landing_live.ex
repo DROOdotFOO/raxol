@@ -1,9 +1,9 @@
 defmodule RaxolPlaygroundWeb.LandingLive do
   @moduledoc """
-  Landing page for raxol.io. Mounts a single demo (Button) into a TEALive
-  bridge and orchestrates the section layout. Auto-restarts the demo on
-  timeout instead of showing a retry button (different policy than the
-  playground/demo screens).
+  Landing page for raxol.io. Mounts a single demo (the live BEAM
+  dashboard) into a TEALive bridge and orchestrates the section layout.
+  Auto-restarts the demo on timeout instead of showing a retry button
+  (different policy than the playground/demo screens).
 
   All section markup lives in `RaxolPlaygroundWeb.LandingComponents`.
   """
@@ -16,7 +16,7 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   import RaxolPlaygroundWeb.LandingComponents
   import RaxolPlaygroundWeb.PlaygroundComponents, only: [atmosphere: 1]
 
-  @demo_name "Button"
+  @demo_name "BEAM Dashboard"
 
   @raxol_version (case :application.get_key(:raxol, :vsn) do
                     {:ok, vsn} ->
@@ -54,8 +54,7 @@ defmodule RaxolPlaygroundWeb.LandingLive do
 
   @impl true
   def handle_event("toggle_mobile_menu", _params, socket) do
-    {:noreply,
-     assign(socket, :mobile_menu_open, !socket.assigns.mobile_menu_open)}
+    {:noreply, assign(socket, :mobile_menu_open, !socket.assigns.mobile_menu_open)}
   end
 
   # Forward terminal key events from the RaxolTerminal hook into the demo, so

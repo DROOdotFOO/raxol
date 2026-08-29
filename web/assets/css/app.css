@@ -1476,6 +1476,15 @@ html, body {
   white-space: inherit;
 }
 
+/* The landing hero is sized to its 80x24 demo, so any scrollbar there is
+   a rendering bug. The bridge-injected <pre> also carries .raxol-terminal,
+   whose overflow-x:auto converts its overflow-y to auto and reserves a
+   scrollbar gutter on systems with always-visible scrollbars. */
+#landing-terminal,
+#landing-terminal pre {
+  overflow: hidden;
+}
+
 /* Terminal theme overrides */
 [data-theme="dracula"] .raxol-terminal { color: #f8f8f2; }
 [data-theme="nord"] .raxol-terminal { color: #d8dee9; }
