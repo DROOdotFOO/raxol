@@ -177,7 +177,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <%!-- Live terminal embed (HTML injected by RaxolTerminal hook) --%>
       <%= if @terminal_html do %>
-        <div class="terminal-chrome mb-10 mx-auto text-left max-w-2xl">
+        <%!-- max-w-3xl: the 80-col demo at 14px monospace is ~706px wide
+             incl. padding; the old max-w-2xl (672px) forced a scrollbar. --%>
+        <div class="terminal-chrome mb-10 mx-auto text-left max-w-3xl">
           <.terminal_chrome title="raxol" />
           <div
             id="landing-terminal"
