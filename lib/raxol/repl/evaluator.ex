@@ -13,6 +13,8 @@ defmodule Raxol.REPL.Evaluator do
 
   @default_timeout Raxol.Core.Defaults.timeout_ms()
   @default_max_history Raxol.Core.Defaults.history_limit()
+  @default_max_heap_bytes 64 * 1024 * 1024
+  @default_max_result_bytes 1024 * 1024
 
   @type t :: %__MODULE__{
           bindings: keyword(),
@@ -70,19 +72,52 @@ defmodule Raxol.REPL.Evaluator do
           {:ok, result(), t()} | {:error, String.t(), t()}
   def eval(evaluator, code, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
+    max_heap_bytes = Keyword.get(opts, :max_heap_bytes, @default_max_heap_bytes)
+
+    max_result_bytes =
+      Keyword.get(opts, :max_result_bytes, @default_max_result_bytes)
+
     parent = self()
     full_code = apply_prelude(evaluator.prelude, code)
+    word_size = :erlang.system_info(:wordsize)
+    heap_words = div(max_heap_bytes + word_size - 1, word_size)
 
     {pid, ref} =
-      spawn_monitor(fn ->
-        result = eval_with_capture(full_code, evaluator.bindings, evaluator.env)
-        send(parent, {:eval_result, result})
-      end)
+      :erlang.spawn_opt(
+        fn ->
+          result =
+            eval_with_capture(full_code, evaluator.bindings, evaluator.env)
 
-    handle_eval_response(evaluator, code, pid, ref, timeout)
+          send(parent, {:eval_result, bound_result(result, max_result_bytes)})
+        end,
+        [
+          :monitor,
+          {:max_heap_size, %{size: heap_words, kill: true, error_logger: false}}
+        ]
+      )
+
+    handle_eval_response(evaluator, code, pid, ref, timeout, max_heap_bytes)
   end
 
-  defp handle_eval_response(evaluator, code, pid, ref, timeout) do
+  defp bound_result(
+         {:ok, value, new_bindings, output} = result,
+         max_result_bytes
+       ) do
+    result_bytes =
+      :erlang.external_size(value) + :erlang.external_size(new_bindings) +
+        byte_size(output)
+
+    if result_bytes <= max_result_bytes do
+      result
+    else
+      {:error,
+       "Evaluation result exceeded the #{max_result_bytes}-byte result limit"}
+    end
+  end
+
+  defp bound_result(result, _max_result_bytes), do: result
+
+  defp handle_eval_response(evaluator, code, pid, ref, timeout, max_heap_bytes) do
     receive do
       {:eval_result, {:ok, value, new_bindings, output}} ->
         Process.demonitor(ref, [:flush])
@@ -91,6 +126,10 @@ defmodule Raxol.REPL.Evaluator do
       {:eval_result, {:error, message}} ->
         Process.demonitor(ref, [:flush])
         {:error, message, evaluator}
+
+      {:DOWN, ^ref, :process, ^pid, :killed} ->
+        {:error, "Evaluation exceeded the #{max_heap_bytes}-byte memory limit",
+         evaluator}
 
       {:DOWN, ^ref, :process, ^pid, reason} ->
         {:error, "Process crashed: #{Exception.format_exit(reason)}", evaluator}

@@ -46,8 +46,33 @@ defmodule Raxol.REPL.EvaluatorTest do
 
     test "times out on long-running code" do
       eval = Evaluator.new()
-      {:error, reason, _eval} = Evaluator.eval(eval, ":timer.sleep(10_000)", timeout: 100)
+
+      {:error, reason, _eval} =
+        Evaluator.eval(eval, ":timer.sleep(10_000)", timeout: 100)
+
       assert reason =~ "timed out"
+    end
+
+    test "kills evaluation that exceeds its heap budget" do
+      eval = Evaluator.new()
+
+      assert {:error, reason, ^eval} =
+               Evaluator.eval(eval, "List.duplicate(0, 1_000_000)",
+                 max_heap_bytes: 128_000
+               )
+
+      assert reason =~ "memory limit"
+    end
+
+    test "rejects oversized results before copying them to the owner" do
+      eval = Evaluator.new()
+
+      assert {:error, reason, ^eval} =
+               Evaluator.eval(eval, "String.duplicate(\"x\", 10_000)",
+                 max_result_bytes: 1_000
+               )
+
+      assert reason =~ "result limit"
     end
 
     test "preserves evaluator on error" do
@@ -75,7 +100,10 @@ defmodule Raxol.REPL.EvaluatorTest do
 
     test "evaluates pipe chains" do
       eval = Evaluator.new()
-      {:ok, result, _eval} = Evaluator.eval(eval, "[1,2,3] |> Enum.map(& &1 * 2) |> Enum.sum()")
+
+      {:ok, result, _eval} =
+        Evaluator.eval(eval, "[1,2,3] |> Enum.map(& &1 * 2) |> Enum.sum()")
+
       assert result.value == 12
     end
 

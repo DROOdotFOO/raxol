@@ -110,6 +110,21 @@ defmodule Raxol.REPL.SandboxTest do
       {:error, violations} = Sandbox.check("Process.list()", :strict)
       assert Enum.any?(violations, &String.contains?(&1, "not in whitelist"))
     end
+
+    test "denies irreversible dynamic atom creation" do
+      for code <- [
+            ~S[String.to_atom("attacker-controlled")],
+            ~S[List.to_atom(~c"attacker-controlled")],
+            ~S[Atom.to_string(:ok) |> String.to_atom()]
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :strict)
+
+        assert Enum.any?(
+                 violations,
+                 &String.contains?(&1, "dynamic atom creation")
+               )
+      end
+    end
   end
 
   # The strict level guards an SSH/web-exposed REPL that may share a node with

@@ -62,6 +62,8 @@ defmodule Raxol.REPL.Sandbox do
     {Kernel, :spawn_link, "process spawning"},
     {Kernel, :spawn_monitor, "process spawning"},
     {Kernel, :exit, "process termination"},
+    {String, :to_atom, "dynamic atom creation"},
+    {List, :to_atom, "dynamic atom creation"},
     {Process, :send, "message sending"},
     {Process, :send_after, "delayed message sending"},
     {Process, :whereis, "process lookup"},
