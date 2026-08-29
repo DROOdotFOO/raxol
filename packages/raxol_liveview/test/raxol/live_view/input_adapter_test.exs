@@ -114,4 +114,35 @@ defmodule Raxol.LiveView.InputAdapterTest do
       end
     end
   end
+
+  describe "translate_click_event/1" do
+    test "translates cell coordinates into a mouse press the dispatcher hit-tests" do
+      event = InputAdapter.translate_click_event(%{"x" => 5, "y" => 12})
+
+      assert %Event{
+               type: :mouse,
+               data: %{action: :press, button: :left, x: 5, y: 12}
+             } = event
+    end
+
+    test "origin cell is valid" do
+      assert %Event{data: %{x: 0, y: 0}} =
+               InputAdapter.translate_click_event(%{"x" => 0, "y" => 0})
+    end
+
+    test "malformed coordinates are refused, not raised" do
+      # The params arrive from a browser client; anything the hook did not
+      # produce is answered with nil rather than crashing the LiveView.
+      for params <- [
+            %{"x" => -1, "y" => 0},
+            %{"x" => 0, "y" => -3},
+            %{"x" => 1.5, "y" => 2},
+            %{"x" => "5", "y" => "5"},
+            %{"y" => 5},
+            %{}
+          ] do
+        assert InputAdapter.translate_click_event(params) == nil
+      end
+    end
+  end
 end
