@@ -121,15 +121,41 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert payments =~ "2026-07-20"
     assert payments =~ "0.2"
 
-    # Ladder derives from PrivacyTier.all/0, minus the retired :open
-    # rebate tier (a PFOF-shaped rebate is unlawful in the EU -- the page
-    # must not advertise it even while the code still carries it).
-    assert payments =~ "sovereign"
-    assert payments =~ "shielded"
-    assert payments =~ "no fee, full disclosure"
+    # Fees come from FeeSchedule, the pinned mirror of the solver's published
+    # schedule -- every tier, both asset classes, at the rates it actually
+    # charges.
+    for {tier, band, stable, volatile} <- [
+          {"standard", "0-24", "22 bps", "40 bps"},
+          {"trusted", "25-49", "19 bps", "35 bps"},
+          {"verified", "50-74", "15 bps", "29 bps"},
+          {"premium", "75-99", "12 bps", "25 bps"},
+          {"institutional", "100 and above", "10 bps", "22 bps"}
+        ] do
+      assert payments =~ tier
+      assert payments =~ band
+      assert payments =~ stable
+      assert payments =~ volatile
+    end
+
+    # The never-discounted floor is stated, because it is what makes a
+    # zero-fee tier impossible.
+    assert payments =~ "8 bps stable"
+    assert payments =~ "never discounted"
+    # Whitespace-tolerant: HEEx wraps prose across lines.
+    assert payments =~ ~r/no zero-fee\s+tier/
+
+    # The retired privacy-priced model must not come back: it named tiers no
+    # solver has, and advertised a free one.
+    refute payments =~ "sovereign"
+    refute payments =~ "no fee, full disclosure"
     refute payments =~ "-2 bps"
     refute payments =~ "rebate"
     refute payments =~ ">open<"
+    refute payments =~ "30 bps"
+
+    # Privacy is still described, as the settlement mode it is.
+    assert payments =~ "shielded"
+    assert payments =~ "Privacy is a settlement mode"
 
     # Matrix rows from the data, stables before WETH, authored rail notes.
     assert payments =~ "source: live"
