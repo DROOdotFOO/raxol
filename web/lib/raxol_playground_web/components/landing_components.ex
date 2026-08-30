@@ -9,7 +9,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   and exposes the highlighted HTML through Components that don't take any
   attributes. Callers don't need to know either source exists.
 
-  Components that take attributes (nav_bar, hero_section) receive only
+  Components that take attributes (nav_bar, screen_hero) receive only
   LiveView-driven state (mobile_menu_open, raxol_version, terminal_html).
   """
   use Phoenix.Component
@@ -69,37 +69,87 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # at the repo root records EXACTLY this module through Raxol.Headless into
   # priv/hero_frames/ -- keep the two sources identical and rerun the script
   # after editing, so the pane and the frames stay the same program.
-  @hero_counter_source ~S"""
-  defmodule Counter do
+  # The hero examples. Each is kept SHORT on purpose: the pane's claim is that
+  # you can read the whole program, so it has to fit one screen without
+  # scrolling. Each is byte-identical to the module
+  # `scripts/gen_landing_frames.exs` records into priv/hero_frames/<name>/,
+  # which is what makes the frames beside it real output of the code shown.
+  @pulse_source ~S"""
+  defmodule Pulse do
     use Raxol.Core.Runtime.Application
 
-    @impl true
-    def init(_), do: %{count: 0}
-
-    @impl true
-    def update(:inc, m),
-      do: {%{m | count: m.count + 1}, []}
-
-    def update(%{data: %{char: "+"}}, m),
-      do: update(:inc, m)
-
+    def init(_), do: %{t: 0}
+    def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def update(_, m), do: {m, []}
+    def subscribe(_), do: [subscribe_interval(90, :tick)]
 
-    @impl true
     def view(m) do
-      column style: %{padding: 1, gap: 1} do
-        [
-          text("Count: #{m.count}", style: [:bold]),
-          button("+", on_click: :inc)
-        ]
+      line_chart(series: series(m.t), width: 46, height: 12)
+    end
+
+    defp series(t) do
+      [
+        %{name: "sine", data: wave(t, &:math.sin/1), color: :cyan},
+        %{name: "cos", data: wave(t, &:math.cos/1), color: :magenta}
+      ]
+    end
+
+    defp wave(t, f),
+      do: for(i <- 0..29, do: round(50 + 35 * f.((t + i) * 0.2)))
+  end
+  """
+
+  # The page's own mark, as a program. The canvas version rasterizes the face
+  # glyph and dithers around it; a terminal needs no rasterizer, because the
+  # face IS characters there -- so the program is the drift field and a hole
+  # for the face to sit in.
+  @halo_source ~S"""
+  defmodule Halo do
+    use Raxol.Core.Runtime.Application
+
+    @ramp ["·", ":", "-", "=", "+", "*", "#", "%"]
+    @faces ["≡··≡", "≡''≡", "≡oo≡", "≡^^≡"]
+    @a 374_761_393
+    @b 668_265_263
+
+    def init(_), do: %{t: 0}
+    def update(:tick, m), do: {%{m | t: m.t + 1}, []}
+    def update(_, m), do: {m, []}
+    def subscribe(_), do: [subscribe_interval(110, :tick)]
+
+    def view(m) do
+      column do
+        for y <- 0..12, do: text(strip(m.t, y), fg: :cyan)
       end
+    end
+
+    defp strip(t, y),
+      do: for(x <- 0..45, into: "", do: cell(t, x, y))
+
+    defp cell(t, x, 6) when x in 21..24,
+      do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 21)
+
+    defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 18..27,
+      do: " "
+
+    defp cell(t, x, y) do
+      edge = min(1.0, abs(x - 23) / 23 + abs(y - 6) / 6)
+      n = rem(abs((x + div(t, 2)) * @a + (y - div(t, 3)) * @b), 9973)
+      v = n / 9973 * edge
+      if v < 0.2, do: " ", else: Enum.at(@ramp, trunc(v * 7))
     end
   end
   """
 
+  @hero_examples [
+    {"pulse", "pulse.ex", Makeup.highlight_inner_html(@pulse_source),
+     length(String.split(String.trim(@pulse_source), "\n"))},
+    {"halo", "halo.ex", Makeup.highlight_inner_html(@halo_source),
+     length(String.split(String.trim(@halo_source), "\n"))}
+  ]
+
   @counter_code Makeup.highlight_inner_html(@counter_source)
   @agent_code Makeup.highlight_inner_html(@agent_source)
-  @hero_counter_code Makeup.highlight_inner_html(@hero_counter_source)
   @install_command "curl -fsSL https://raxol.io/install | bash"
   @brew_command "brew install droodotfoo/tap/raxol"
   @npm_command "npm i -g raxol"
@@ -122,9 +172,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @hero_out_browser ~S"""
   <span class="hc">$ mix phx.server</span>
 
-  &lt;div <span class="hk">data-raxol-id</span>=<span class="hg">"counter"</span>&gt;
-    &lt;span <span class="hk">class</span>=<span class="hg">"bold"</span>&gt;Count: 3&lt;/span&gt;
-    &lt;button <span class="hk">phx-click</span>=<span class="hg">"inc"</span>&gt;+&lt;/button&gt;
+  &lt;div <span class="hk">data-raxol-id</span>=<span class="hg">"pulse"</span>&gt;
+    &lt;span <span class="hk">class</span>=<span class="hg">"fg-cyan"</span>&gt;⠈⠑⠢⠤⣀&lt;/span&gt;
+    &lt;span <span class="hk">class</span>=<span class="hg">"fg-magenta"</span>&gt;⠤⠔⠊⠉⠑&lt;/span&gt;
   &lt;/div&gt;
 
   <span class="hc">TerminalBridge, cell-level patches</span>
@@ -136,10 +186,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   {
     <span class="hk">"tools"</span>: [
-      { <span class="hk">"name"</span>: <span class="hg">"counter_click"</span>,
-        <span class="hk">"desc"</span>: <span class="hg">"Press the + button"</span> },
-      { <span class="hk">"name"</span>: <span class="hg">"counter_read"</span>,
-        <span class="hk">"desc"</span>: <span class="hg">"Read the count"</span> }
+      { <span class="hk">"name"</span>: <span class="hg">"pulse_screenshot"</span>,
+        <span class="hk">"desc"</span>: <span class="hg">"Read the chart"</span> },
+      { <span class="hk">"name"</span>: <span class="hg">"pulse_get_model"</span>,
+        <span class="hk">"desc"</span>: <span class="hg">"Read the tick"</span> }
     ]
   }
 
@@ -202,6 +252,115 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   ]
 
   # ---------------------------------------------------------------------------
+  # The one-screen landing: header / hero / footer, sized to the viewport.
+  #
+  # The rule these three obey is that nothing here scrolls. Anything that
+  # wants more room than a screen belongs on a page of its own -- the deep
+  # dives moved to `TopicLive`, the demos to /gallery -- and this page links
+  # to them rather than restating them.
+  # ---------------------------------------------------------------------------
+
+  attr(:mobile_menu_open, :boolean, required: true)
+
+  def screen_header(assigns) do
+    ~H"""
+    <header class="screen-header" role="banner">
+      <a href="/" class="screen-mark">raxol</a>
+
+      <nav class="screen-nav" aria-label="Main navigation">
+        <a href="/gallery" class="nav-link">Gallery</a>
+        <a href="/playground" class="nav-link">Playground</a>
+        <a href="https://hexdocs.pm/raxol" class="nav-link">Docs</a>
+        <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
+      </nav>
+
+      <button
+        type="button"
+        phx-click="toggle_mobile_menu"
+        class="screen-menu-btn"
+        aria-label={if @mobile_menu_open, do: "Close menu", else: "Open menu"}
+        aria-expanded={to_string(@mobile_menu_open)}
+        aria-controls="screen-mobile-nav"
+      >
+        <span aria-hidden="true">{if @mobile_menu_open, do: "close", else: "menu"}</span>
+      </button>
+
+      <nav
+        :if={@mobile_menu_open}
+        id="screen-mobile-nav"
+        class="screen-nav-mobile"
+        aria-label="Main navigation"
+      >
+        <a href="/gallery" class="nav-link">Gallery</a>
+        <a href="/playground" class="nav-link">Playground</a>
+        <a :for={{path, label} <- topic_links()} href={path} class="nav-link">{label}</a>
+        <a href="https://hexdocs.pm/raxol" class="nav-link">Docs</a>
+        <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
+      </nav>
+    </header>
+    """
+  end
+
+  attr(:example, :string, required: true)
+
+  def screen_hero(assigns) do
+    assigns = assign(assigns, :halo_faces, @halo_faces)
+
+    ~H"""
+    <%!-- The brand mark: the axol face dithered into character cells, framed
+         by drifting edge texture. Decoration -- aria-hidden, reduced-motion
+         aware client-side -- and the h1 below carries the meaning. Shorter
+         here than it was on the scrolling page, because it shares one
+         viewport with the demo now. --%>
+    <div
+      id="hero-halo"
+      phx-hook="HaloField"
+      phx-update="ignore"
+      class="hero-halo screen-halo"
+      aria-hidden="true"
+      data-faces={@halo_faces}
+    >
+      <canvas></canvas>
+    </div>
+
+    <h1 class="screen-title">
+      One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
+    </h1>
+
+    <p class="screen-sub">A TEA module in Elixir, rendered everywhere. Built on OTP.</p>
+
+    <.hero_demo example={@example} />
+
+    <div class="screen-install">
+      <.copyable_command
+        id="screen-install-cmd"
+        command="curl -fsSL https://raxol.io/install | bash"
+        tone={:coral}
+      />
+    </div>
+    """
+  end
+
+  def screen_footer(assigns) do
+    ~H"""
+    <footer class="screen-footer" role="contentinfo">
+      <nav class="screen-topics" aria-label="Deep dives">
+        <a :for={{path, label} <- topic_links()} href={path} class="topic-link">{label}</a>
+      </nav>
+
+      <span class="screen-meta">
+        v{Capabilities.version_minor()} &middot; {Capabilities.package_count()} packages &middot;
+        <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
+      </span>
+    </footer>
+    """
+  end
+
+  # The deep-dive pages, in one place so the header and footer cannot list
+  # different ones. `TopicLive` owns the paths; this only borrows them.
+  defp topic_links, do: RaxolPlaygroundWeb.TopicLive.links()
+
+  # ---------------------------------------------------------------------------
   # Navigation
   # ---------------------------------------------------------------------------
 
@@ -250,80 +409,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       <% end %>
     </nav>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 1. Hook: SSH + live demo + CTAs
-  # ---------------------------------------------------------------------------
-
-  attr(:terminal_html, :boolean, required: true)
-  attr(:demo_paused, :boolean, required: true)
-
-  def hero_section(assigns) do
-    assigns = assign(assigns, :halo_faces, @halo_faces)
-
-    ~H"""
-    <%!-- MotionPref reports prefers-reduced-motion to the LiveView (at
-         connect and on preference change) so the server stops pushing
-         live demo frames after takeover; CSS media queries cannot gate
-         those. The recorded-frames player gates itself client-side. --%>
-    <section id="hero" phx-hook="MotionPref" class="landing-section px-6 pt-16 pb-14 md:pt-20 md:pb-24 max-w-5xl mx-auto text-center" aria-labelledby="hero-title">
-      <%!-- The brand mark: the axol face dithered into character cells,
-           framed by drifting edge texture (the Halo treatment). Pure
-           decoration -- aria-hidden, honors reduced motion client-side,
-           and the meaning is carried by the h1 below it. --%>
-      <div
-        id="hero-halo"
-        phx-hook="HaloField"
-        phx-update="ignore"
-        class="hero-halo"
-        aria-hidden="true"
-        data-faces={@halo_faces}
-      >
-        <canvas></canvas>
-      </div>
-
-      <h1 id="hero-title" class="font-mono font-bold tracking-tight text-pearl mb-5" style="font-size: clamp(1.9rem, 1.3rem + 2.6vw, 3.4rem); line-height: 1.2;">
-        One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
-      </h1>
-
-      <p class="body-text-dim mb-10 max-w-2xl mx-auto">
-        Write a TEA module in Elixir. It renders everywhere: crash isolation,
-        hot reload, AI agents, and distributed swarm from OTP.
-      </p>
-
-      <.hero_demo terminal_html={@terminal_html} demo_paused={@demo_paused} />
-
-      <div class="mb-10">
-        <.install_tabs />
-      </div>
-
-      <div class="flex items-center justify-center gap-4 flex-wrap mb-12">
-        <a href="/playground" class="btn-primary">Open Playground</a>
-        <a href="/skill.md" class="btn-sky">Agent Skill</a>
-        <a href="https://github.com/DROOdotFOO/raxol" class="btn-secondary">GitHub</a>
-      </div>
-
-      <div class="stat-grid max-w-2xl mx-auto" role="list" aria-label="Project stats">
-        <div class="stat-cell" role="listitem">
-          <span class="stat-value"><%= Capabilities.surface_count() %></span>
-          <span class="stat-label">surfaces</span>
-        </div>
-        <div class="stat-cell" role="listitem">
-          <span class="stat-value"><%= Capabilities.package_count() %></span>
-          <span class="stat-label">packages</span>
-        </div>
-        <div class="stat-cell" role="listitem">
-          <span class="stat-value">1</span>
-          <span class="stat-label">binary</span>
-        </div>
-        <div class="stat-cell" role="listitem">
-          <span class="stat-value">OTP</span>
-          <span class="stat-label">native</span>
-        </div>
-      </div>
-    </section>
     """
   end
 
@@ -389,144 +474,127 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # socket connects carries the module pane and terminal frame one); the
   # HeroDemo hook only toggles `hidden`/aria-selected, auto-advancing tabs
   # and stepping the recorded frames on a fixed-timestep rAF accumulator.
-  # Clicking a tab stops the auto-advance; "take over live" swaps the
-  # terminal pane's recorded frames for the live DemoLifecycle session.
+  # Clicking a tab stops the auto-advance. Switching examples re-mounts the
+  # hook (the element id carries the example name).
   # ---------------------------------------------------------------------------
 
-  attr(:terminal_html, :boolean, required: true)
-  attr(:demo_paused, :boolean, required: true)
+  attr(:example, :string, required: true)
 
   def hero_demo(assigns) do
     assigns =
       assign(assigns,
-        hero_code: @hero_counter_code,
-        hero_frames: RecordedFrames.hero_frames(),
-        ssh_frame: List.last(RecordedFrames.hero_frames()),
+        source: example_code(assigns.example),
+        source_lines: example_lines(assigns.example),
+        title: example_title(assigns.example),
+        frames: RecordedFrames.hero_frames(assigns.example),
+        next: next_example(assigns.example),
         out_browser: @hero_out_browser,
         out_mcp: @hero_out_mcp,
         out_acp: @hero_out_acp
       )
 
     ~H"""
-    <div id="hero-demo" phx-hook="HeroDemo" data-live={@terminal_html && "true"} class="hero-demo mb-10 mx-auto text-left">
+    <%!-- The id carries the example so switching remounts the hook: the frame
+         player caches its frame nodes, and patching them underneath it would
+         leave it stepping elements that no longer exist. --%>
+    <div id={"hero-demo-#{@example}"} phx-hook="HeroDemo" class="hero-demo mx-auto text-left">
       <div class="hero-demo-bar">
         <span class="hd-dot"></span><span class="hd-dot"></span><span class="hd-dot"></span>
-        <span :if={!@terminal_html} class="hd-title" data-role="title">counter.ex -- rendering to the terminal</span>
-        <span :if={@terminal_html} class="hd-title">beam dashboard -- live from this page's VM</span>
+        <span class="hd-title" data-role="title">{@title} -- rendering to the terminal</span>
       </div>
 
-      <%= if @terminal_html do %>
-        <%!-- Live takeover: the surface tour is replaced by a real
-             supervised session streaming from this page's BEAM. --%>
-        <div class="hero-live-wrap">
-          <%!-- phx-update="ignore": the RaxolTerminal hook owns this
-               element's content; without it any hero re-render patches
-               it back to empty. --%>
-          <div
-            id="landing-terminal"
-            phx-hook="RaxolTerminal"
-            phx-update="ignore"
-            class="raxol-terminal bg-synthwave-bg"
-            data-theme="synthwave84"
-            data-no-scroll="true"
-            tabindex="-1"
-            role="img"
-            aria-label="Raxol live demo"
-          ></div>
-        </div>
-      <% else %>
       <div class="hero-tabs" role="tablist" aria-label="Render surface">
-        <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title="counter.ex -- rendering to the terminal" data-label="Rendered to the terminal">Terminal</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title="counter.ex -- rendering to Phoenix LiveView" data-label="Rendered to the browser">Browser</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title="counter.ex -- served over SSH" data-label="Served over SSH">SSH</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title="counter.ex -- exposed as MCP tools" data-label="Exposed to agents">Agent / MCP</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="4" data-title="counter.ex -- driven over ACP" data-label="Driven from your editor">Editor / ACP</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title={"#{@title} -- rendering to the terminal"} data-label="Rendered to the terminal">Terminal</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="Rendered to the browser">Browser</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="Served over SSH">SSH</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title={"#{@title} -- exposed as MCP tools"} data-label="Exposed to agents">Agent / MCP</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="4" data-title={"#{@title} -- driven over ACP"} data-label="Driven from your editor">Editor / ACP</button>
       </div>
 
       <div class="hero-panes">
         <div class="hero-pane">
-          <div class="hero-pane-label">The module (never changes)</div>
-          <pre class="hero-code"><code class="syntax-elixir"><%= raw(@hero_code) %></code></pre>
+          <div class="hero-pane-label">The module</div>
+          <%!-- The examples differ in length, and the pane is a fixed slice
+               of one screen, so the type size follows the line count rather
+               than being tuned per example. --%>
+          <pre class="hero-code" style={"--hero-lines: #{@source_lines}"}><code class="syntax-elixir">{raw(@source)}</code></pre>
         </div>
 
         <div class="hero-pane">
           <div class="hero-pane-label" data-role="out-label">Rendered to the terminal</div>
 
           <div class="hero-out" data-surface="0">
-            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run counter.exs</span></pre>
-            <%!-- Recorded frames: real Headless output, committed under
-                 priv/hero_frames/. Frame one ships visible in the dead
-                 render; the hook steps the rest. --%>
+            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run {@example}.exs</span></pre>
+            <%!-- Recorded frames: real Headless output of the module beside
+                 them, committed under priv/hero_frames/<example>/. Frame one
+                 ships visible in the dead render; the hook steps the rest. --%>
             <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true">
-              <%= for {frame, i} <- Enum.with_index(@hero_frames) do %>
-                <div class="hero-frame" data-frame={i} hidden={i != 0}><%= raw(frame) %></div>
-              <% end %>
+              <div :for={{frame, i} <- Enum.with_index(@frames)} class="hero-frame" data-frame={i} hidden={i != 0}>{raw(frame)}</div>
             </div>
-            <pre class="hero-pre hero-note" aria-hidden="true"><span class="hc">termbox2 NIF, direct cell diff</span></pre>
           </div>
 
           <div class="hero-out" data-surface="1" hidden>
-            <pre class="hero-pre"><%= raw(@out_browser) %></pre>
+            <pre class="hero-pre">{raw(@out_browser)}</pre>
           </div>
 
           <div class="hero-out" data-surface="2" hidden>
-            <%!-- A local example on purpose: hosted SSH is suspended, and
-                 the landing must not advertise playground@raxol.io (the
-                 component test enforces this). --%>
-            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh -p 2222 demo@localhost</span></pre>
+            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh demo@localhost -p 2222</span></pre>
             <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true">
-              <div class="hero-frame"><%= raw(@ssh_frame) %></div>
+              <div class="hero-frame">{raw(List.last(@frames) || "")}</div>
             </div>
-            <pre class="hero-pre hero-note" aria-hidden="true"><span class="hc">one supervised BEAM process per connection</span></pre>
           </div>
 
           <div class="hero-out" data-surface="3" hidden>
-            <pre class="hero-pre"><%= raw(@out_mcp) %></pre>
+            <pre class="hero-pre">{raw(@out_mcp)}</pre>
           </div>
 
           <div class="hero-out" data-surface="4" hidden>
-            <pre class="hero-pre"><%= raw(@out_acp) %></pre>
+            <pre class="hero-pre">{raw(@out_acp)}</pre>
           </div>
         </div>
       </div>
-      <% end %>
 
       <div class="hero-demo-foot">
-        <%= if @terminal_html do %>
-          <span class="hero-live-badge">live session</span>
-          <button
-            type="button"
-            phx-click="toggle_demo_motion"
-            class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
-          >
-            <%= if @demo_paused, do: "play demo", else: "pause demo" %>
-          </button>
-          <button
-            type="button"
-            phx-click="end_take_over"
-            class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
-          >
-            back to the tour
-          </button>
-        <% else %>
-          <button
-            type="button"
-            data-role="player-pause"
-            class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
-          >
-            pause
-          </button>
-          <button
-            type="button"
-            phx-click="take_over"
-            class="label-text cursor-pointer text-axol-coral hover:text-pearl-80 transition-colors"
-          >
-            take over live
-          </button>
-        <% end %>
+        <button
+          type="button"
+          data-role="player-pause"
+          class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
+        >
+          pause
+        </button>
+        <button
+          type="button"
+          phx-click="next_example"
+          class="label-text cursor-pointer text-axol-coral hover:text-pearl-80 transition-colors"
+        >
+          {example_title(@next)} &rarr;
+        </button>
       </div>
     </div>
     """
+  end
+
+  @doc "Hero examples in switch order."
+  def hero_example_names, do: Enum.map(@hero_examples, &elem(&1, 0))
+
+  defp example_title(name) do
+    Enum.find_value(@hero_examples, name, fn {n, t, _c, _l} -> n == name && t end)
+  end
+
+  # Counted from the SOURCE, not the highlighted HTML: Makeup wraps each line
+  # in markup, so counting there measures the highlighter, not the program.
+  defp example_lines(name) do
+    Enum.find_value(@hero_examples, 1, fn {n, _t, _c, lines} -> n == name && lines end)
+  end
+
+  defp example_code(name) do
+    Enum.find_value(@hero_examples, "", fn {n, _t, c, _l} -> n == name && c end)
+  end
+
+  defp next_example(name) do
+    names = hero_example_names()
+    idx = Enum.find_index(names, &(&1 == name)) || 0
+    Enum.at(names, rem(idx + 1, length(names)))
   end
 
   # ---------------------------------------------------------------------------

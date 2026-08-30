@@ -1802,10 +1802,18 @@ html {
 
 .hero-tabs {
   display: flex;
-  flex-wrap: wrap;
+  /* NOT wrap: wrapping to a second row makes the bar taller than the box it
+     sits in, and inside the one-screen flex column that shows up as a
+     scrollbar on the tab strip. One row, always. */
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--panel-border);
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
+
+.hero-tabs::-webkit-scrollbar { display: none; }
 
 .hero-tab {
   appearance: none;
@@ -2172,4 +2180,201 @@ input[type="range"]::-moz-range-thumb {
     --raxol-gray-800: #f9fafb;
     --raxol-gray-900: #ffffff;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   One-screen landing.
+
+   The page is a viewport-height grid: header, hero, footer. Nothing scrolls,
+   which is the whole point -- the detail lives on the topic pages and in the
+   gallery. Below `--screen-min` there is not enough height to honor that
+   honestly, so the constraint relaxes rather than clipping content.
+   --------------------------------------------------------------------------- */
+
+.screen {
+  position: relative;
+  z-index: 10;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 0;
+}
+
+.screen-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.9rem 1.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.screen-mark {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  color: var(--axol-coral);
+  margin-right: auto;
+}
+
+.screen-nav {
+  display: none;
+  align-items: center;
+  gap: 1.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+}
+
+.screen-menu-btn {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 0.4rem 0.6rem;
+}
+
+.screen-nav-mobile {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1rem 1.5rem;
+  background: var(--panel-strong);
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  z-index: 50;
+}
+
+@media (min-width: 768px) {
+  .screen-header { padding: 1rem 2rem; }
+  .screen-nav { display: flex; }
+  .screen-menu-btn, .screen-nav-mobile { display: none; }
+}
+
+.screen-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+  padding: 1.5rem 1.25rem;
+  min-height: 0; /* lets the demo shrink instead of forcing the grid taller */
+  text-align: center;
+}
+
+.screen-title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text-pearl);
+  font-size: clamp(1.35rem, 0.9rem + 2.1vw, 2.6rem);
+  margin: 0;
+}
+
+.screen-sub {
+  color: var(--text-muted);
+  font-size: clamp(0.85rem, 0.8rem + 0.2vw, 1rem);
+  margin: 0;
+}
+
+/* The demo is the centerpiece: it takes the height the text does not. */
+.screen-main .hero-demo {
+  margin: 0;
+  width: 100%;
+  max-width: 62rem;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.screen-main .hero-panes { min-height: 0; flex: 1 1 auto; }
+.screen-main .hero-pane { min-height: 0; overflow: hidden; }
+
+.screen-install { width: 100%; max-width: 42rem; }
+
+.screen-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  padding: 0.8rem 1.5rem;
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.screen-topics { display: flex; flex-wrap: wrap; gap: 1.1rem; }
+
+.topic-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.topic-link:hover, .topic-link:focus-visible {
+  color: var(--axol-coral);
+  border-bottom-color: currentColor;
+}
+
+.screen-meta { color: var(--text-dim); }
+
+/* Short viewports cannot hold a readable screen; scrolling beats clipping. */
+@media (min-height: 640px) and (min-width: 768px) {
+  .screen { height: 100dvh; overflow: hidden; }
+}
+
+/* Breadcrumb on the topic pages the landing hands off to. */
+.topic-crumb {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* The halo shares one viewport with the demo now, so it gets a height budget
+   rather than the 180px it could take on a scrolling page. It stays the first
+   thing on the page: it is the brand mark, not an ornament to shrink away. */
+.screen-halo {
+  height: clamp(104px, 13vh, 148px);
+  /* A flex child with a canvas inside has no intrinsic width and collapses
+     to nothing centred; the mark needs the row it is given. */
+  width: 100%;
+  max-width: 34rem;
+  margin: 0 auto;
+  flex: 0 0 auto;
+}
+
+/* The module has to fit without an inner scrollbar -- a pane clipped mid-`end`
+   reads as broken, and the point of the pane is that you can read the whole
+   program. */
+.screen-main .hero-code {
+  /* --hero-lines is set per example. The pane is a fixed slice of one screen,
+     so type size has to follow the program's length or a longer example gets
+     clipped -- and a clipped module contradicts the label above it. */
+  font-size: clamp(0.5rem, calc(18rem / var(--hero-lines, 24)), 0.7rem);
+  line-height: 1.34;
+}
+
+/* Tighter than the scrolling page's padding: the pane has to hold the longest
+   example whole, and a clipped module contradicts the label above it. */
+.screen-main .hero-pane { padding: 0.7rem 0.9rem; }
+
+/* Keys the live session actually responds to, named in the footer so the
+   payoff of taking over is legible rather than something to guess at. */
+.hero-demo-foot kbd {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0.05rem 0.3rem;
+  margin: 0 0.1rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  color: var(--axol-coral);
 }

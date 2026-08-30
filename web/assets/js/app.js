@@ -473,9 +473,11 @@ Hooks.HaloField = {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     // Fine cells: the face's gill bars and eye dots need vertical
-    // resolution (~16 rows at the default height) to read as ≡··≡ rather
-    // than a blob.
-    this.fontPx = 10
+    // resolution to read as ≡··≡ rather than a blob. ROWS are what matter,
+    // not the font size, so the cell shrinks on a short element instead of
+    // letting the row count collapse -- at 10px a 84px-tall mark gets seven
+    // rows, which is the difference between a face and a smudge.
+    this.fontPx = this.h < 150 ? 8 : 10
     this.ctx.font = `${this.fontPx}px ${this.fontFamily}`
     this.cellW = this.ctx.measureText('█').width || this.fontPx * 0.6
     this.cellH = Math.round(this.fontPx * 1.15)
@@ -632,9 +634,13 @@ Hooks.HaloField = {
         if (cov > 0.2) {
           // Face: threshold then rescale with a floor, so a half-covered
           // edge cell still lands on a solid block.
-          const c = 0.3 + 0.7 * ((cov - 0.2) / 0.8)
+          // Rescale hard: a cell inside the glyph should read as solid,
+          // not as a probability. The old floor (0.3) plus a 0.58 alpha
+          // base left edge cells at ~64% opacity on a mid ramp glyph,
+          // which is what made the mark look soft.
+          const c = 0.55 + 0.45 * ((cov - 0.2) / 0.8)
           const g = this.FACE_RAMP[Math.min(3, Math.floor(c * 4))]
-          ctx.globalAlpha = 0.58 + 0.42 * c
+          ctx.globalAlpha = 0.78 + 0.22 * c
           ctx.fillStyle = this.faceColor
           ctx.fillText(g, cx, cy)
           continue
@@ -652,7 +658,9 @@ Hooks.HaloField = {
         const v = n * w
         if (v < 0.14) continue
         const idx = Math.min(7, Math.floor(((v - 0.14) / 0.86) * 8))
-        ctx.globalAlpha = 0.05 + 0.32 * ((v - 0.14) / 0.86)
+        // Dimmer than it was: the halo is a frame for the face, and at the
+        // old ceiling it competed with it at small sizes.
+        ctx.globalAlpha = 0.04 + 0.24 * ((v - 0.14) / 0.86)
         ctx.fillStyle = this.haloColor
         ctx.fillText(this.HALO_RAMP[idx], cx, cy)
       }
