@@ -94,6 +94,22 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
+  # The pane's claim is that you can read the whole program, and the pane is a
+  # fixed slice of one screen. A longer example does not scroll, it clips --
+  # which is how halo grew to 35 lines and started cutting off mid-function
+  # without anything failing. The budget is what the pane holds at its type
+  # floor on the shortest viewport the page still calls one screen.
+  @max_example_lines 30
+
+  test "every hero example fits the pane it is displayed in" do
+    for name <- LandingComponents.hero_example_names() do
+      %{lines: lines} = LandingComponents.example_grid(name)
+
+      assert lines <= @max_example_lines,
+             "#{name}.ex is #{lines} lines; the pane holds #{@max_example_lines}"
+    end
+  end
+
   test "the hero renders four surfaces and claims no ACP one" do
     hero =
       render_component(&LandingComponents.screen_hero/1,

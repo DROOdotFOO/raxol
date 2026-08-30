@@ -113,24 +113,19 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     def subscribe(_), do: [subscribe_interval(110, :tick)]
 
     def view(m) do
-      column do
-        for y <- 0..12, do: text(strip(m.t, y), fg: :cyan)
-      end
+      column(do: for(y <- 0..12, do: text(strip(m.t, y), fg: :cyan)))
     end
 
-    defp strip(t, y),
-      do: for(x <- 0..67, into: "", do: cell(t, x, y))
+    defp strip(t, y), do: for(x <- 0..67, into: "", do: cell(t, x, y))
 
     defp cell(t, x, 6) when x in 32..35,
       do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 32)
 
-    defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38,
-      do: " "
+    defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38, do: " "
 
     defp cell(t, x, y) do
-      edge = min(1.0, abs(x - 34) / 34 + abs(y - 6) / 6)
       n = rem(abs((x + div(t, 2)) * @a + (y - div(t, 3)) * @b), 9973)
-      v = n / 9973 * edge
+      v = n / 9973 * min(1.0, abs(x - 34) / 34 + abs(y - 6) / 6)
       if v < 0.2, do: " ", else: Enum.at(@ramp, trunc(v * 7))
     end
   end
@@ -155,6 +150,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @counter_code Makeup.highlight_inner_html(@counter_source)
   @agent_code Makeup.highlight_inner_html(@agent_source)
+  # Counted from the registry `Xochi.Capabilities.fallback/0` derives from, so
+  # the headline cannot claim a corridor the solver does not have. Tron is
+  # reached over the relay rail rather than this table and is not counted.
+  @network_count length(Raxol.Payments.Assets.supported_chain_ids())
+
   @install_command "curl -fsSL https://raxol.io/install | bash"
   @brew_command "brew install droodotfoo/tap/raxol"
   @npm_command "npm i -g raxol"
@@ -265,7 +265,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:example, :string, required: true)
 
   def screen_hero(assigns) do
-    assigns = assign(assigns, :halo_faces, @halo_faces)
+    assigns = assign(assigns, halo_faces: @halo_faces, network_count: @network_count)
 
     ~H"""
     <%!-- The brand mark beside the claim rather than above it: an upright box
@@ -286,22 +286,26 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="screen-intro__text">
         <h1 class="screen-title">
-          One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
+          One module, every surface.
+          <span class="text-axol-coral">Agent, harness, and payments included.</span>
         </h1>
 
-        <p class="screen-sub">A TEA module in Elixir, rendered everywhere. Built on OTP.</p>
+        <p class="screen-sub">
+          Each ships as its own Hex package: take the runtime, the AI agent, the
+          coding harness, or private settlement across <%= @network_count %> networks.
+        </p>
+
+        <div class="screen-install">
+          <.copyable_command
+            id="screen-install-cmd"
+            command="curl -fsSL https://raxol.io/install | bash"
+            tone={:coral}
+          />
+        </div>
       </div>
     </div>
 
     <.hero_demo example={@example} />
-
-    <div class="screen-install">
-      <.copyable_command
-        id="screen-install-cmd"
-        command="curl -fsSL https://raxol.io/install | bash"
-        tone={:coral}
-      />
-    </div>
     """
   end
 
@@ -490,7 +494,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="hero-panes">
         <div class="hero-pane">
-          <div class="hero-pane-label">The module</div>
           <%!-- The examples differ in length, and the pane is a fixed slice
                of one screen, so the type size follows the line count rather
                than being tuned per example. --%>
@@ -498,8 +501,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
 
         <div class="hero-pane">
-          <div class="hero-pane-label" data-role="out-label">Rendered to the terminal</div>
-
           <div class="hero-out" data-surface="0">
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run {@example}.exs</span></pre>
             <%!-- Recorded frames: real Headless output of the module beside
@@ -556,7 +557,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     Enum.find_value(@hero_examples, name, fn {n, t, _c, _l} -> n == name && t end)
   end
 
-  defp example_grid(name) do
+  @doc "Line and column counts of one example's source, as the pane sizes from."
+  def example_grid(name) do
     Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _c, grid} ->
       n == name && grid
     end)

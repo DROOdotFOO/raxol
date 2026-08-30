@@ -1890,14 +1890,6 @@ html {
   }
 }
 
-.hero-pane-label {
-  font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 0.75rem;
-}
 
 .hero-pane pre {
   margin: 0;
@@ -2318,11 +2310,15 @@ input[type="range"]::-moz-range-thumb {
   margin: 0;
 }
 
-/* The demo is the centerpiece: it takes the height the text does not. */
+/* The demo is the centerpiece, but it no longer takes ALL the height the text
+   does not: capped, so the room freed by folding the install command into the
+   intro reads as whitespace under the demo rather than as empty panes. That
+   band is the slot an integrations row takes. */
 .screen-main .hero-demo {
   margin: 0;
   width: 100%;
   max-width: 62rem;
+  max-height: 30rem;
   min-height: 0;
   flex: 1 1 auto;
   display: flex;
@@ -2330,7 +2326,10 @@ input[type="range"]::-moz-range-thumb {
 }
 
 
-.screen-install { width: 100%; max-width: 42rem; }
+/* In the intro column beside the mark, not a band of its own -- the column
+   had slack the mark's height was already paying for, and the band it used to
+   occupy is what an integrations row will take. */
+.screen-install { width: 100%; max-width: 32rem; }
 
 .screen-footer {
   display: flex;
@@ -2428,12 +2427,12 @@ input[type="range"]::-moz-range-thumb {
      viewport; width alone was missing entirely, so a narrow pane ran the
      longest line off the right edge behind the hidden scrollbar. Either way
      the module stops being readable whole, which is the pane's only claim.
-     1.8rem covers the label, 0.63 is the font's character advance. */
+     0.63 is the font's character advance. */
   font-size: clamp(
     0.5rem,
     min(
       calc((100cqw - 0.4rem) / var(--hero-cols, 66) / 0.63),
-      calc((100cqh - 1.8rem) / var(--hero-lines, 24) / 1.34)
+      calc((100cqh - 0.2rem) / var(--hero-lines, 24) / 1.34)
     ),
     0.7rem
   );
@@ -2450,17 +2449,17 @@ input[type="range"]::-moz-range-thumb {
    stops the formula shrinking type past reading: where the floor binds, the
    page is already the scrolling one. */
 .screen-main .hero-src {
-  /* 3.2rem covers the pane label and the `$ ...` command line above. */
+  /* 2rem covers the `$ ...` command line above. */
   font-size: clamp(
     0.55rem,
-    calc((100cqh - 3.2rem) / var(--src-lines, 15) / 1.6),
+    calc((100cqh - 2rem) / var(--src-lines, 15) / 1.6),
     0.76rem
   );
 }
 
 /* Same fit for the recorded frames, whose grid is fixed by the recording. A
    chart cut off at its bottom rows reads as broken; one adrift in a box three
-   times its width reads as an accident. 4.8rem covers the pane label, the
+   times its width reads as an accident. 3.1rem covers the
    command line, and the frame's border and padding. Set on the `pre`, not the
    container: `.raxol-terminal` carries its own font-size, so a size on the
    wrapper would never be inherited. */
@@ -2473,7 +2472,7 @@ input[type="range"]::-moz-range-thumb {
     0.45rem,
     min(
       calc((100cqw - 1.6rem) / var(--frame-cols, 62) / 0.7),
-      calc((100cqh - 4.8rem) / var(--frame-rows, 13) / 1.5)
+      calc((100cqh - 3.1rem) / var(--frame-rows, 13) / 1.5)
     ),
     1.15rem
   );

@@ -327,9 +327,7 @@ Hooks.HeroDemo = {
     })
     const active = tabs[n]
     const title = this.el.querySelector('[data-role="title"]')
-    const label = this.el.querySelector('[data-role="out-label"]')
     if (active && title) title.textContent = active.dataset.title
-    if (active && label) label.textContent = active.dataset.label
   }
 }
 
