@@ -122,7 +122,7 @@ defmodule Raxol.Docs.ProseLint do
     punctuation_findings(path, masked) ++
       dash_findings(path, masked) ++
       headings ++
-      link_findings(path, content, root)
+      link_findings(path, content, root, Keyword.get(opts, :tracked))
   end
 
   @doc """
@@ -142,21 +142,162 @@ defmodule Raxol.Docs.ProseLint do
     # onto the root, so dropping it made every path resolve against `"."` and an
     # unreadable file lints as clean -- a linter silently passing is worse than
     # one that errors.
+    root = Keyword.get(opts, :root, ".")
+
     lint_opts = [
       headings: Keyword.get(opts, :headings, false),
-      root: Keyword.get(opts, :root, ".")
+      root: root,
+      # Read once, not once per link: the tracking check shells out to git, and
+      # a repo-wide run resolves thousands of links.
+      tracked: tracked_set(root)
     ]
 
     paths
-    |> Enum.filter(&String.ends_with?(&1, ".md"))
     |> Enum.reject(&(String.contains?(&1, "node_modules/") or vendored?(&1)))
-    |> Enum.flat_map(&check_file(&1, lint_opts))
+    |> Enum.flat_map(&lint_one(&1, lint_opts))
     |> Enum.sort_by(&{&1.path, &1.line})
+  end
+
+  defp lint_one(path, opts) do
+    cond do
+      String.ends_with?(path, ".md") -> check_file(path, opts)
+      String.ends_with?(path, [".ex", ".exs"]) -> check_source_docs(path, opts)
+      true -> []
+    end
   end
 
   # Upstream sources we re-publish unmodified. Rewriting their prose would make
   # the vendored copy diverge from the thing it is a copy of.
   defp vendored?(path), do: String.contains?(path, "termbox2/README.md")
+
+  @doc """
+  Check the relative documentation links inside a source file's `@moduledoc`
+  and `@doc` strings.
+
+  Moduledocs were unchecked, which is how `Raxol.Telegram.Guardian` shipped a
+  link four levels up that lands in `packages/` rather than the repo root.
+  Nothing rendered it there either: a moduledoc is not displayed on a source
+  page, so the only reader who ever follows one of these is on hexdocs.
+
+  That makes ExDoc's resolution the rule. ExDoc rewrites a relative link only
+  when it names one of the app's configured `:extras`, matched by the extra's
+  repo-root-relative source path. So a valid link is one written exactly that
+  way, and two shapes are always broken:
+
+    * a `../`-style path, which no extras entry can match, and
+    * a path outside the package that owns the file, which cannot be an extra
+      of that package because it does not ship in it.
+
+  Only path-like targets are considered (containing `/` or ending in `.md`).
+  Doc strings are full of bracket-and-paren text that is not a link at all --
+  CSS `:after`, `\\d+`, `[^/]+` -- and flagging those would make the rule noise.
+  """
+  @spec check_source_docs(String.t(), keyword()) :: [finding()]
+  def check_source_docs(path, opts \\ []) do
+    root = Keyword.get(opts, :root, ".")
+
+    case File.read(Path.expand(path, root)) do
+      {:ok, content} -> source_doc_findings(path, content, root)
+      {:error, _} -> []
+    end
+  end
+
+  # `~S` heredocs included: they are still rendered documentation, they merely
+  # skip interpolation.
+  @doc_string ~r/@(?:module)?doc\s+(?:~S)?"""(.*?)"""/s
+  @doc_link ~r/\[[^\]]+\]\((?!https?:|mailto:|#)([^)\s]+)\)/
+
+  defp source_doc_findings(path, content, root) do
+    @doc_string
+    |> Regex.scan(content, return: :index)
+    |> Enum.flat_map(fn [{whole_start, _}, {body_start, body_len}] ->
+      body = binary_part(content, body_start, body_len)
+      preceding_lines = line_number(content, whole_start) - 1
+
+      @doc_link
+      |> Regex.scan(body)
+      |> Enum.filter(fn [_, target] -> path_like?(target) end)
+      |> Enum.map(fn [whole, target] ->
+        line = preceding_lines + line_number(body, index_of(body, whole))
+        {whole, target, line}
+      end)
+    end)
+    |> Enum.flat_map(fn {whole, target, line} ->
+      doc_link_finding(path, line, whole, target, root)
+    end)
+  end
+
+  defp path_like?(target),
+    do: String.contains?(target, "/") or String.ends_with?(target, ".md")
+
+  defp index_of(haystack, needle) do
+    case :binary.match(haystack, needle) do
+      {start, _} -> start
+      :nomatch -> 0
+    end
+  end
+
+  defp doc_link_finding(path, line, whole, target, root) do
+    cond do
+      String.starts_with?(target, "../") or String.starts_with?(target, "./") ->
+        [
+          finding(
+            path,
+            line,
+            :broken_link,
+            :error,
+            "a doc-string link is resolved by ExDoc against the app's :extras, " <>
+              "not against this file, so a relative path cannot match one",
+            whole
+          )
+        ]
+
+      not File.exists?(Path.expand(target, root)) ->
+        [
+          finding(
+            path,
+            line,
+            :broken_link,
+            :error,
+            "link target does not exist",
+            whole
+          )
+        ]
+
+      outside_owning_package?(path, target) ->
+        [
+          finding(
+            path,
+            line,
+            :broken_link,
+            :error,
+            "link target is outside the package that owns this file, so it " <>
+              "cannot be one of its :extras and will not resolve on hexdocs",
+            whole
+          )
+        ]
+
+      true ->
+        []
+    end
+  end
+
+  # A package ships only what lives under its own directory, so a link out of it
+  # is unresolvable for the reader of that package's docs even when the target
+  # exists in this repo.
+  defp outside_owning_package?(path, target) do
+    case package_root(path) do
+      nil -> false
+      pkg -> not String.starts_with?(target, pkg <> "/")
+    end
+  end
+
+  defp package_root(path) do
+    case Path.split(path) do
+      ["packages", pkg | _] -> "packages/#{pkg}"
+      _ -> nil
+    end
+  end
 
   @doc """
   Render findings as display lines, two per finding (location, then the text).
@@ -305,15 +446,22 @@ defmodule Raxol.Docs.ProseLint do
 
   # Links are checked against the raw content: a link inside a fenced block is
   # still a link a reader will follow from a rendered page.
-  defp link_findings(path, content, root) do
+  defp link_findings(path, content, root, tracked) do
     dir = Path.dirname(path)
 
     ~r/\[[^\]]*\]\((?!https?:|mailto:|#\/)([^)#\s]*)(#[^)\s]*)?\)/
     |> Regex.scan(content, return: :index)
-    |> Enum.flat_map(&resolve_link(&1, path, content, dir, root))
+    |> Enum.flat_map(&resolve_link(&1, path, content, dir, root, tracked))
   end
 
-  defp resolve_link([{start, len}, target_idx | rest], path, content, dir, root) do
+  defp resolve_link(
+         [{start, len}, target_idx | rest],
+         path,
+         content,
+         dir,
+         root,
+         tracked
+       ) do
     whole = binary_part(content, start, len)
     target = slice(content, target_idx)
     fragment = rest |> List.first() |> then(&slice(content, &1))
@@ -338,11 +486,11 @@ defmodule Raxol.Docs.ProseLint do
         []
       end
     else
-      resolve_external(whole, target, fragment, line, path, dir, root)
+      resolve_external(whole, target, fragment, line, path, dir, root, tracked)
     end
   end
 
-  defp resolve_external(whole, target, fragment, line, path, dir, root) do
+  defp resolve_external(whole, target, fragment, line, path, dir, root, tracked) do
     absolute = dir |> Path.join(target) |> Path.expand(root)
 
     cond do
@@ -358,7 +506,7 @@ defmodule Raxol.Docs.ProseLint do
           )
         ]
 
-      untracked?(absolute, root) ->
+      untracked?(absolute, root, tracked) ->
         [
           finding(
             path,
@@ -399,12 +547,33 @@ defmodule Raxol.Docs.ProseLint do
   # copy) `git` answers nothing useful, and a linter that cannot tell must not
   # invent a violation. Directories are skipped: `git ls-files` lists blobs, so
   # a tracked directory reads as untracked.
-  defp untracked?(absolute, root) do
+  defp untracked?(absolute, root, tracked) do
     cond do
-      File.dir?(absolute) -> false
-      not File.dir?(Path.join(root, ".git")) -> false
-      true -> not tracked_by_git?(absolute, root)
+      File.dir?(absolute) ->
+        false
+
+      not File.dir?(Path.join(root, ".git")) ->
+        false
+
+      is_struct(tracked, MapSet) ->
+        not MapSet.member?(tracked, rel(absolute, root))
+
+      true ->
+        not tracked_by_git?(absolute, root)
     end
+  end
+
+  defp rel(absolute, root), do: absolute |> Path.relative_to(Path.expand(root))
+
+  # `nil` when git cannot answer, which `untracked?/3` reads as "fall back to
+  # asking per link" rather than "nothing is tracked".
+  defp tracked_set(root) do
+    case System.cmd("git", ["ls-files"], cd: root, stderr_to_stdout: true) do
+      {out, 0} -> out |> String.split("\n", trim: true) |> MapSet.new()
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp tracked_by_git?(absolute, root) do
