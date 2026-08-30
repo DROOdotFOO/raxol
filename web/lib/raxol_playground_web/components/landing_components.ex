@@ -791,6 +791,23 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # Authored commentary on solver rails the matrix data does not carry.
   @chain_notes %{4663 => "Permit2 pull", 728_126_428 => "relay rail"}
 
+  # Checked against Robinhood Chain's RPC, not an aggregator: eth_chainId
+  # 0x1237 (4663), symbol() "RAXOL", decimals() 18, and the pool's
+  # token0/token1 are VIRTUAL and this token. Re-verify before editing.
+  #
+  # Durable facts only. A market number would be stale by the next request.
+  @token %{
+    symbol: "RAXOL",
+    address: "0xf44702b17d9abD53815F703e772F35E9c71A53af",
+    chain_name: "Robinhood Chain",
+    chain_id: 4663,
+    quote: "VIRTUAL",
+    venue: "Uniswap",
+    pool: "0xa20b68e2e1de71f1426b546ed5514bf253215a48"
+  }
+
+  @token_pair_url "https://dexscreener.com/robinhood/#{@token.pool}"
+
   # Stables lead, WETH trails; unknown symbols land after, alphabetically.
   @token_order %{"USDC" => 0, "USDT" => 1, "USDG" => 2, "WETH" => 3}
 
@@ -814,6 +831,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         tier_proofs: @tier_proofs,
         solver_floor: Raxol.Payments.FeeSchedule.solver_base_bps(),
         payments_version: @payments_version,
+        token: @token,
+        token_pair_url: @token_pair_url,
         rows: reach_rows(assigns.matrix),
         show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
@@ -917,6 +936,34 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
+      <h3 class="name-coral mb-2 mt-12">${@token.symbol}</h3>
+      <p class="body-text-dim max-w-2xl mb-4">
+        The project token, on <%= @token.chain_name %>. It is not a settlement
+        asset -- the corridors quote, route and settle in stablecoins.
+      </p>
+
+      <div class="reach">
+        <div class="reach-bar">
+          <span><span class="reach-verb">ERC-20</span> <%= @token.chain_name %> (<%= @token.chain_id %>)</span>
+          <a href={@token_pair_url} rel="noopener" class="src-badge">live pair &rarr;</a>
+        </div>
+        <div class="token-facts">
+          <div class="token-fact">
+            <span class="token-fact__key">token</span>
+            <code class="token-fact__val"><%= @token.address %></code>
+          </div>
+          <div class="token-fact">
+            <span class="token-fact__key">pool</span>
+            <code class="token-fact__val"><%= @token.pool %></code>
+          </div>
+          <div class="token-fact">
+            <span class="token-fact__key">pair</span>
+            <span class="token-fact__val">
+              <%= @token.symbol %> / <%= @token.quote %> on <%= @token.venue %>
+            </span>
+          </div>
+        </div>
+      </div>
     </section>
     """
   end

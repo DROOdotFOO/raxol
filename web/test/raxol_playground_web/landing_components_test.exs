@@ -293,6 +293,32 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert payments =~ "Permit2 pull"
   end
 
+  # Pinned: these are the only strings on the site meant to be pasted into a
+  # chain explorer, and a wrong character looks identical to a right one.
+  test "the token block prints the verified contract and no market numbers" do
+    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: @live_matrix)
+
+    assert payments =~ "$RAXOL"
+    assert payments =~ "0xf44702b17d9abD53815F703e772F35E9c71A53af"
+    assert payments =~ "0xa20b68e2e1de71f1426b546ed5514bf253215a48"
+    assert payments =~ "Robinhood Chain"
+    assert payments =~ "4663"
+    assert payments =~ "VIRTUAL"
+    assert payments =~ "Uniswap"
+
+    assert payments =~
+             "https://dexscreener.com/robinhood/0xa20b68e2e1de71f1426b546ed5514bf253215a48"
+
+    # A token beside a fee schedule invites the reading that it is what the
+    # corridors move. Whitespace-tolerant: HEEx wraps prose across lines.
+    assert payments =~ ~r/not a settlement\s+asset/
+
+    # A market number would be stale by the next request.
+    refute payments =~ ~r/\$\d/
+    refute payments =~ ~r/\bFDV\b/i
+    refute payments =~ ~r/market cap/i
+  end
+
   test "coding agent section claims ACP membership and prints the four surfaces" do
     coding = render_component(&LandingComponents.coding_agent_deep_dive/1, %{})
 

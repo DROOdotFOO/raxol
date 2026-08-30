@@ -1202,6 +1202,30 @@ html {
   color: var(--text-dim);
 }
 
+/* Token facts: a key beside a value, where the value is usually an address.
+   Addresses are the point of the block, so they wrap rather than truncate --
+   a half-shown contract is worse than none. */
+.token-fact {
+  display: grid;
+  grid-template-columns: 5rem 1fr;
+  gap: 0 1rem;
+  align-items: baseline;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.token-fact:last-child { border-bottom: none; }
+
+.token-fact__key {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.token-fact__val { color: var(--pearl-cream); overflow-wrap: anywhere; }
 
 /* =============================================================================
    FAQ accordion (native <details>)
