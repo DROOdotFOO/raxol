@@ -85,6 +85,44 @@ defmodule Raxol.Docs.ProseLintTest do
       content = "## Quick start\n\nSee [above](#quick-start).\n"
       assert ProseLint.check_content("probe.md", content, root: dir) == []
     end
+
+    @tag :tmp_dir
+    test "flags a target that exists but is not in the repository", %{
+      tmp_dir: dir
+    } do
+      # The shape that made `docs/README.md` link to a gitignored `TODO.md`:
+      # the file is on the author's disk, so an existence check passes locally
+      # and the link is broken for everyone who clones. CI caught it only
+      # because its checkout has no untracked files.
+      System.cmd("git", ["init", "--quiet"], cd: dir)
+      File.write!(Path.join(dir, ".gitignore"), "IGNORED.md\n")
+      File.write!(Path.join(dir, "IGNORED.md"), "# Ignored\n")
+      File.write!(Path.join(dir, "TRACKED.md"), "# Tracked\n")
+      System.cmd("git", ["add", ".gitignore", "TRACKED.md"], cd: dir)
+
+      content = """
+      [ignored](./IGNORED.md)
+      [tracked](./TRACKED.md)
+      """
+
+      findings = ProseLint.check_content("probe.md", content, root: dir)
+
+      assert [%{rule: :broken_link, severity: :error} = finding] = findings
+      assert finding.message =~ "not in the repository"
+      assert finding.text =~ "IGNORED.md"
+    end
+
+    @tag :tmp_dir
+    test "outside a git checkout the tracking rule stays silent", %{
+      tmp_dir: dir
+    } do
+      # An unpacked Hex tarball or a vendored copy has no git metadata. A
+      # checker that cannot tell must not invent a violation.
+      File.write!(Path.join(dir, "other.md"), "# Other\n")
+
+      assert ProseLint.check_content("probe.md", "[x](./other.md)\n", root: dir) ==
+               []
+    end
   end
 
   describe "heading case" do
@@ -233,6 +271,7 @@ defmodule Raxol.Docs.ProseLintTest do
       assert ProseLint.format_findings([]) == []
     end
   end
+
   # `check_file/2` joined every path onto `:root`, and `Path.join(".", "/tmp/x")`
   # is `"./tmp/x"` -- so an absolute path read as MISSING and lint as clean.
   # `scripts/prose_lint.exs` made that reachable in the worst way: its

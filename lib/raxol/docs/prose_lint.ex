@@ -358,6 +358,19 @@ defmodule Raxol.Docs.ProseLint do
           )
         ]
 
+      untracked?(absolute, root) ->
+        [
+          finding(
+            path,
+            line,
+            :broken_link,
+            :error,
+            "link target is not in the repository, so it resolves only on a " <>
+              "working copy that happens to have it",
+            whole
+          )
+        ]
+
       fragment != "" and String.ends_with?(absolute, ".md") and
           not anchor_exists?(absolute, fragment) ->
         [
@@ -374,6 +387,44 @@ defmodule Raxol.Docs.ProseLint do
       true ->
         []
     end
+  end
+
+  # A link to a gitignored file resolves on the author's disk and is broken for
+  # every reader, so `File.exists?/1` alone answers differently depending on
+  # where it runs: green locally, red in CI, where the checkout has no untracked
+  # files. `docs/README.md` shipped a link to `TODO.md` (gitignored) for exactly
+  # that reason -- the local run could not see it.
+  #
+  # Fails OPEN. Outside a git checkout (an unpacked Hex tarball, a vendored
+  # copy) `git` answers nothing useful, and a linter that cannot tell must not
+  # invent a violation. Directories are skipped: `git ls-files` lists blobs, so
+  # a tracked directory reads as untracked.
+  defp untracked?(absolute, root) do
+    cond do
+      File.dir?(absolute) -> false
+      not File.dir?(Path.join(root, ".git")) -> false
+      true -> not tracked_by_git?(absolute, root)
+    end
+  end
+
+  defp tracked_by_git?(absolute, root) do
+    case System.cmd(
+           "git",
+           [
+             "ls-files",
+             "--error-unmatch",
+             "--",
+             Path.relative_to(absolute, root)
+           ],
+           cd: root,
+           stderr_to_stdout: true
+         ) do
+      {_out, 0} -> true
+      {_out, _} -> false
+    end
+  rescue
+    # No `git` on PATH. Same reasoning as above: cannot tell, so do not claim.
+    _ -> true
   end
 
   defp fragment_of("#" <> rest), do: rest
