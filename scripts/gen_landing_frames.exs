@@ -38,7 +38,7 @@ defmodule Pulse do
   def subscribe(_), do: [subscribe_interval(90, :tick)]
 
   def view(m) do
-    line_chart(series: series(m.t), width: 46, height: 12)
+    line_chart(series: series(m.t), width: 60, height: 12)
   end
 
   defp series(t) do
@@ -72,16 +72,16 @@ defmodule Halo do
   end
 
   defp strip(t, y),
-    do: for(x <- 0..45, into: "", do: cell(t, x, y))
+    do: for(x <- 0..67, into: "", do: cell(t, x, y))
 
-  defp cell(t, x, 6) when x in 21..24,
-    do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 21)
+  defp cell(t, x, 6) when x in 32..35,
+    do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 32)
 
-  defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 18..27,
+  defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38,
     do: " "
 
   defp cell(t, x, y) do
-    edge = min(1.0, abs(x - 23) / 23 + abs(y - 6) / 6)
+    edge = min(1.0, abs(x - 34) / 34 + abs(y - 6) / 6)
     n = rem(abs((x + div(t, 2)) * @a + (y - div(t, 3)) * @b), 9973)
     v = n / 9973 * edge
     if v < 0.2, do: " ", else: Enum.at(@ramp, trunc(v * 7))
@@ -118,8 +118,8 @@ defmodule GenLandingFrames do
   # wait is a few ticks long: consecutive frames must differ visibly, or the
   # hero plays what looks like a still image.
   @examples [
-    {"pulse", Pulse, {58, 17}},
-    {"halo", Halo, {48, 14}}
+    {"pulse", Pulse, {62, 13}},
+    {"halo", Halo, {70, 14}}
   ]
 
   defp hero do

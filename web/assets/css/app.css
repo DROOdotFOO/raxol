@@ -2449,16 +2449,24 @@ input[type="range"]::-moz-range-thumb {
   );
 }
 
-/* Same fit for the recorded frames, whose row count is fixed by the recording.
-   A chart cut off at its bottom rows reads as a broken render. 4.7rem covers
-   the pane label, the command line, and the frame's border and padding. Set on
-   the `pre`, not the container: `.raxol-terminal` carries its own font-size,
-   so a size on the wrapper would never be inherited. */
+/* Same fit for the recorded frames, whose grid is fixed by the recording. A
+   chart cut off at its bottom rows reads as broken; one adrift in a box three
+   times its width reads as an accident. 4.8rem covers the pane label, the
+   command line, and the frame's border and padding. Set on the `pre`, not the
+   container: `.raxol-terminal` carries its own font-size, so a size on the
+   wrapper would never be inherited. */
 .screen-main .hero-frames pre {
+  /* Fitted on BOTH axes, so the frame grows to fill a wide pane instead of
+     sitting at a fixed size with dead space beside it. 0.7 is the character
+     advance of the braille the charts are drawn in, rounded up so the width
+     term never overflows. */
   font-size: clamp(
     0.45rem,
-    calc((100cqh - 4.1rem) / var(--frame-rows, 17) / 1.5),
-    0.76rem
+    min(
+      calc((100cqw - 1.6rem) / var(--frame-cols, 62) / 0.7),
+      calc((100cqh - 4.8rem) / var(--frame-rows, 13) / 1.5)
+    ),
+    1.15rem
   );
   /* Stated, not inherited: `.raxol-terminal` sets its line height in absolute
      units, so shrinking the type alone leaves the rows their original height

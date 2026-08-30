@@ -79,7 +79,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     def subscribe(_), do: [subscribe_interval(90, :tick)]
 
     def view(m) do
-      line_chart(series: series(m.t), width: 46, height: 12)
+      line_chart(series: series(m.t), width: 60, height: 12)
     end
 
     defp series(t) do
@@ -119,16 +119,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     end
 
     defp strip(t, y),
-      do: for(x <- 0..45, into: "", do: cell(t, x, y))
+      do: for(x <- 0..67, into: "", do: cell(t, x, y))
 
-    defp cell(t, x, 6) when x in 21..24,
-      do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 21)
+    defp cell(t, x, 6) when x in 32..35,
+      do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 32)
 
-    defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 18..27,
+    defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38,
       do: " "
 
     defp cell(t, x, y) do
-      edge = min(1.0, abs(x - 23) / 23 + abs(y - 6) / 6)
+      edge = min(1.0, abs(x - 34) / 34 + abs(y - 6) / 6)
       n = rem(abs((x + div(t, 2)) * @a + (y - div(t, 3)) * @b), 9973)
       v = n / 9973 * edge
       if v < 0.2, do: " ", else: Enum.at(@ramp, trunc(v * 7))
@@ -451,7 +451,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         source_lines: example_lines(assigns.example),
         title: example_title(assigns.example),
         frames: RecordedFrames.hero_frames(assigns.example),
-        frame_rows: RecordedFrames.hero_frame_rows(assigns.example),
+        frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
         next: next_example(assigns.example),
         out_browser: RecordedFrames.hero_surface(assigns.example, :browser),
         out_ssh: RecordedFrames.hero_surface(assigns.example, :ssh),
@@ -495,7 +495,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             <%!-- Recorded frames: real Headless output of the module beside
                  them, committed under priv/hero_frames/<example>/. Frame one
                  ships visible in the dead render; the hook steps the rest. --%>
-            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@frame_rows}"}>
+            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@frame_grid.rows}; --frame-cols: #{@frame_grid.cols}"}>
               <div :for={{frame, i} <- Enum.with_index(@frames)} class="hero-frame" data-frame={i} hidden={i != 0}>{raw(frame)}</div>
             </div>
           </div>
