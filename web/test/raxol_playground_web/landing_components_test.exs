@@ -6,6 +6,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
   alias Raxol.Agent.Backend.Resolver
+  alias RaxolPlayground.BrandMarks
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.RecordedFrames
   alias RaxolPlayground.SurfaceSource
@@ -197,6 +198,63 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       refute hero =~ "integrations-track",
              "#{name}'s hero carries the integrations row, which must stay a sibling"
     end
+  end
+
+  # A mark decorates a derived entry, it never replaces one. The row still
+  # lists what the registry lists, and an entry whose brand has no mark shows
+  # its name. Both directions are held: a mark left behind for something no
+  # longer offered would otherwise rot in the directory unnoticed.
+  test "marks decorate the derived entries without narrowing them" do
+    entries = Enum.flat_map(LandingComponents.integration_groups(), &elem(&1, 1))
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    for entry <- entries do
+      assert row =~ ">#{entry}</span>", "the row drops #{entry}, which is derived"
+    end
+
+    for name <- BrandMarks.known() do
+      assert name in entries, "#{name} has a mark but is no longer an entry"
+    end
+
+    # Two runs are rendered: the visible one and the aria-hidden copy the loop
+    # needs, so every marked entry appears twice.
+    marked = Enum.filter(entries, &BrandMarks.path/1)
+    assert length(String.split(row, "integrations-item--marked")) - 1 == length(marked) * 2
+
+    # The no-mark path has to be live, not theoretical. Were every entry to
+    # gain a mark this test would still pass while the fallback rotted, so the
+    # fallback is asserted to be exercised by something.
+    assert Enum.any?(entries, &is_nil(BrandMarks.path(&1))),
+           "no entry exercises the no-mark fallback"
+  end
+
+  # The marks are inlined, not fetched: a logo row that reaches out over the
+  # network is a row that renders differently on a bad connection than in a
+  # test, and it leaks who reads the page to whoever hosts the icons.
+  test "every mark is a single inlined path, never a request" do
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    assert row =~ ~s(viewBox="0 0 24 24")
+    refute row =~ "<img"
+    refute row =~ "http"
+
+    for name <- BrandMarks.known() do
+      d = BrandMarks.path(name)
+      assert is_binary(d) and d != "", "#{name} has an empty mark"
+      assert String.starts_with?(d, ["M", "m"]), "#{name}'s mark is not path data"
+    end
+  end
+
+  # The name is markup, not something script swaps in on hover: it is what a
+  # screen reader reads, what an unmarked entry shows outright, and what sets
+  # the item's width so a cross-fade cannot reflow a moving row.
+  test "the name is always in the markup, hover only reveals it" do
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    assert row =~ ~s(class="integrations-name")
+    refute row =~ "phx-hook"
+    refute row =~ "onmouseover"
+    refute row =~ ~s(title=")
   end
 
   defp break_lines(artifact, :browser), do: SurfaceSource.dom_lines(artifact)

@@ -15,6 +15,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   use Phoenix.Component
 
   alias Raxol.UI.Components.Harness.AxolFace
+  alias RaxolPlayground.BrandMarks
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.RecordedFrames
   import Phoenix.HTML, only: [raw: 1]
@@ -313,16 +314,20 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   The integrations row, grouped, with empty groups dropped.
 
   Every entry derives from `Capabilities`: models from the agent's own provider
-  registry, surfaces from the table the manifest serves, editors from the ACP
-  client list gated on raxol's own ACP surface being compiled in. Nothing here
-  is written down twice, so a new backend reaches the landing page without an
-  edit. Public so a test can hold the rendered row against its source.
+  registry, editors from the ACP client list gated on raxol's own ACP surface
+  being compiled in. Nothing here is written down twice, so a new backend
+  reaches the landing page without an edit. Public so a test can hold the
+  rendered row against its source.
+
+  Only things with a vendor behind them. The surfaces belong to raxol rather
+  than to anyone it integrates with, and half of them (terminal, ssh, watch,
+  speech) are concepts with no mark to show, so they are the h1's business and
+  not this row's.
   """
   @spec integration_groups() :: [{String.t(), [String.t()]}]
   def integration_groups do
     [
       {"models", Capabilities.connectable_backends()},
-      {"surfaces", Capabilities.surface_names()},
       {"acp editors", Capabilities.acp_editors()}
     ]
     |> Enum.reject(fn {_label, items} -> items == [] end)
@@ -334,6 +339,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   A sibling of the hero rather than part of it: the hero must not say "ACP"
   (it claims four surfaces and an ACP tab is not one of them) and this row
   names ACP editors, so a test holds them apart.
+
+  Each entry shows its mark and reveals its name on hover. The name is always
+  in the markup, never swapped in by script: it is what a screen reader reads,
+  what an entry with no mark shows outright, and what sets the item's width, so
+  the cross-fade cannot reflow a moving row.
   """
   def screen_integrations(assigns) do
     assigns = assign(assigns, groups: integration_groups())
@@ -351,7 +361,21 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         >
           <span :for={{label, items} <- @groups} class="integrations-group">
             <span class="integrations-label">{label}</span>
-            <span :for={item <- items} class="integrations-item">{item}</span>
+            <span
+              :for={item <- items}
+              class={["integrations-item", BrandMarks.path(item) && "integrations-item--marked"]}
+            >
+              <svg
+                :if={BrandMarks.path(item)}
+                class="integrations-mark"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d={BrandMarks.path(item)} fill="currentColor" />
+              </svg>
+              <span class="integrations-name">{item}</span>
+            </span>
           </span>
         </div>
       </div>

@@ -2391,7 +2391,14 @@ input[type="range"]::-moz-range-thumb {
   white-space: nowrap;
 }
 
-.integrations-item { color: var(--text-muted); white-space: nowrap; }
+.integrations-item {
+  color: var(--text-muted);
+  white-space: nowrap;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* Separators live in CSS, not markup, so they never land in a test assertion
    or in what a screen reader reads out. */
@@ -2399,6 +2406,60 @@ input[type="range"]::-moz-range-thumb {
   content: "\00b7";
   color: var(--text-dim);
   margin-right: 0.85rem;
+}
+
+/* The mark sits in the flow, so a marked item is exactly as wide as its logo
+   and the row reads as an even rank of them. Sizing the item by the NAME
+   instead left every logo adrift in a box as wide as the word behind it,
+   which spaced the row by word length rather than by anything meaningful. */
+.integrations-mark {
+  width: 1.5em;
+  height: 1.5em;
+  color: var(--text-muted);
+  opacity: 0.85;
+  transition: opacity 120ms ease;
+}
+
+/* The name is lifted out of the flow and floated over the row, so revealing it
+   cannot change the item's width. A width that changed on hover would jump the
+   whole track sideways under the cursor. It overlaps its neighbours while
+   shown, which is what the backing is for, and the row is paused by the same
+   hover so nothing is moving underneath it. Padding stays horizontal: the row
+   clips its own overflow, and a taller pill would be cut off top and bottom. */
+.integrations-item--marked .integrations-name {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+  padding: 0 0.4rem;
+  border-radius: 3px;
+  background: var(--panel-bg-elevated);
+  border: 1px solid var(--panel-border);
+  color: var(--axol-coral);
+  transition: opacity 120ms ease;
+}
+
+.integrations-item--marked:hover { z-index: 2; }
+.integrations-item--marked:hover .integrations-name { opacity: 1; }
+.integrations-item--marked:hover .integrations-mark { opacity: 0; }
+
+/* Nothing reveals on a touch screen, where there is no hover to give. A mark
+   alone would be a name the reader can never reach, so the name goes back into
+   the flow and the mark steps aside. */
+@media (hover: none) {
+  .integrations-item--marked .integrations-name {
+    position: static;
+    transform: none;
+    opacity: 1;
+    padding: 0;
+    background: none;
+    border: none;
+    color: inherit;
+  }
+
+  .integrations-mark { display: none; }
 }
 
 /* The global reduced-motion reset above already stops the motion correctly:
