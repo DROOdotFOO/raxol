@@ -7,10 +7,12 @@ defmodule RaxolPlayground.Capabilities do
   `/llms.txt`) and the landing page stats all derive from this module, so the
   same facts are never restated in two places.
 
-  Backends are kept in sync with `Raxol.Agent.Backend.Selector` by hand: the web
-  app depends only on `raxol` (which does not depend on `raxol_agent`), so the
-  harness table cannot be imported here.
+  Backends are read from the agent's own provider registry rather than restated:
+  `web/mix.exs` takes `raxol_agent` as a path dep, so `Backend.Resolver` is on
+  the code path here and the list cannot drift from what the agent resolves.
   """
+
+  alias Raxol.Agent.Backend.Resolver
 
   @surfaces [
     %{name: "terminal", transport: "termbox2 NIF", dep: "raxol_terminal"},
@@ -37,18 +39,33 @@ defmodule RaxolPlayground.Capabilities do
     %{name: "raxol_watch", version: "~> 0.1", purpose: "Push notifications"}
   ]
 
-  # Named LLM harnesses plus Groq (reached via the OpenAI-compatible base URL).
-  @backends [
-    "Anthropic",
-    "OpenAI",
-    "Ollama",
-    "Kimi",
-    "Groq",
-    "LLM7",
-    "OpenRouter",
-    "Lumo",
-    "Mock"
-  ]
+  # The provider registry the agent actually resolves against, in its own
+  # resolution order. `Resolver.providers/0` is pure and reads no env, so it is
+  # safe at compile time -- unlike `status/0` and `diagnostics/0`, which shell
+  # out to `op` and can stall for seconds against a locked vault.
+  #
+  # Labels carry a parenthetical qualifier ("Anthropic (Claude)", "Ollama
+  # (local)") that a display list does not want, so the head is taken once here.
+  # Inlined rather than factored into a function because a module attribute
+  # cannot call a function of the module being defined.
+  @providers Enum.map(Resolver.providers(), fn %{harness: harness, label: label} ->
+               %{harness: harness, name: label |> String.split(" (") |> hd()}
+             end)
+
+  @backends Enum.map(@providers, & &1.name)
+
+  # Mock answers canned text offline. It belongs in the manifest an agent
+  # reads, and not in a list of providers a reader could connect to.
+  @connectable_backends @providers
+                        |> Enum.reject(&(&1.harness == :mock))
+                        |> Enum.map(& &1.name)
+
+  # ACP-speaking editors, from the registry raxol is itself listed on:
+  # https://agentclientprotocol.com/get-started/clients (checked 2026-08-30).
+  # These are third-party clients, so the list cannot be derived from this repo
+  # -- `acp_available?/0` is the part that is, and it decides whether any of
+  # them is named at all.
+  @acp_editors ["Zed", "JetBrains", "neovim", "Emacs", "VS Code"]
 
   @mcp_tools ~w(
     raxol_start raxol_screenshot raxol_send_key
@@ -111,9 +128,30 @@ defmodule RaxolPlayground.Capabilities do
     "{:#{name}, \"#{version}\"}"
   end
 
-  @doc "Agent LLM backends (display names)."
+  @doc "Agent LLM backends (display names), in the agent's resolution order."
   @spec backends() :: [String.t()]
   def backends, do: @backends
+
+  @doc """
+  Backends a reader can actually connect to: `backends/0` without the offline
+  Mock harness. This is what the landing page names.
+  """
+  @spec connectable_backends() :: [String.t()]
+  def connectable_backends, do: @connectable_backends
+
+  @doc """
+  Whether raxol's own ACP surface is compiled into this build.
+
+  `Raxol.Agent.ClientProtocol.StdioAgent` is compile-gated on the ACP package
+  being present, so a Hex install of `raxol_agent` has no ACP surface at all.
+  Same shape as `ssh_available?/0`: a channel is named only while it exists.
+  """
+  @spec acp_available?() :: boolean()
+  def acp_available?, do: Code.ensure_loaded?(Raxol.Agent.ClientProtocol.StdioAgent)
+
+  @doc "ACP-speaking editors, or `[]` when this build serves no ACP surface."
+  @spec acp_editors() :: [String.t()]
+  def acp_editors, do: if(acp_available?(), do: @acp_editors, else: [])
 
   @doc "Agent framework capabilities exposed to discovery clients."
   @spec agent() :: map()

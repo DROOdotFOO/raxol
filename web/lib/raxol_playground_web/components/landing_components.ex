@@ -309,6 +309,56 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     """
   end
 
+  @doc """
+  The integrations row, grouped, with empty groups dropped.
+
+  Every entry derives from `Capabilities`: models from the agent's own provider
+  registry, surfaces from the table the manifest serves, editors from the ACP
+  client list gated on raxol's own ACP surface being compiled in. Nothing here
+  is written down twice, so a new backend reaches the landing page without an
+  edit. Public so a test can hold the rendered row against its source.
+  """
+  @spec integration_groups() :: [{String.t(), [String.t()]}]
+  def integration_groups do
+    [
+      {"models", Capabilities.connectable_backends()},
+      {"surfaces", Capabilities.surface_names()},
+      {"acp editors", Capabilities.acp_editors()}
+    ]
+    |> Enum.reject(fn {_label, items} -> items == [] end)
+  end
+
+  @doc """
+  Reinforcement under the argument, in the band the capped demo frees.
+
+  A sibling of the hero rather than part of it: the hero must not say "ACP"
+  (it claims four surfaces and an ACP tab is not one of them) and this row
+  names ACP editors, so a test holds them apart.
+  """
+  def screen_integrations(assigns) do
+    assigns = assign(assigns, groups: integration_groups())
+
+    ~H"""
+    <%!-- Two identical runs, so translating the track by half its width loops
+         seamlessly. The copy is aria-hidden -- it exists for the animation,
+         and a screen reader reading the list twice would be a defect. --%>
+    <div class="screen-integrations">
+      <div class="integrations-track">
+        <div
+          :for={dup? <- [false, true]}
+          class={["integrations-run", dup? && "integrations-run--dup"]}
+          aria-hidden={dup? && "true"}
+        >
+          <span :for={{label, items} <- @groups} class="integrations-group">
+            <span class="integrations-label">{label}</span>
+            <span :for={item <- items} class="integrations-item">{item}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   def screen_footer(assigns) do
     ~H"""
     <footer class="screen-footer" role="contentinfo">

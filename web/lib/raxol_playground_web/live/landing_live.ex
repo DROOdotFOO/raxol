@@ -66,6 +66,7 @@ defmodule RaxolPlaygroundWeb.LandingLive do
 
       <main id="main-content" tabindex="-1" class="screen-main">
         <.screen_hero example={@example} />
+        <.screen_integrations />
       </main>
 
       <.screen_footer />
