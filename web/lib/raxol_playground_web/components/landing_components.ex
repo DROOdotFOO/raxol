@@ -65,15 +65,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
   """
 
-  # The module the hero's surface tabs render. scripts/gen_landing_frames.exs
-  # at the repo root records EXACTLY this module through Raxol.Headless into
-  # priv/hero_frames/ -- keep the two sources identical and rerun the script
-  # after editing, so the pane and the frames stay the same program.
-  # The hero examples. Each is kept SHORT on purpose: the pane's claim is that
-  # you can read the whole program, so it has to fit one screen without
-  # scrolling. Each is byte-identical to the module
-  # `scripts/gen_landing_frames.exs` records into priv/hero_frames/<name>/,
-  # which is what makes the frames beside it real output of the code shown.
+  # The hero examples, kept short so the whole program fits one screen. Each is
+  # byte-identical to the module `scripts/gen_landing_frames.exs` records into
+  # priv/hero_frames/<name>/; edit one, rerun the script, or the pane and the
+  # frames stop being the same program.
   @pulse_source ~S"""
   defmodule Pulse do
     use Raxol.Core.Runtime.Application
@@ -164,50 +159,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                   %{state: state, frames: for(f <- 0..3, do: AxolFace.glyph(state, f))}
                 end
               )
-
-  # Authored output panes for the hero's non-terminal surfaces (the
-  # terminal and SSH panes embed real recorded frames instead). Kept as
-  # pre-escaped HTML strings: whitespace is significant inside <pre>, and
-  # a HEEx heredoc cannot carry flush-left lines.
-  @hero_out_browser ~S"""
-  <span class="hc">$ mix phx.server</span>
-
-  &lt;div <span class="hk">data-raxol-id</span>=<span class="hg">"pulse"</span>&gt;
-    &lt;span <span class="hk">class</span>=<span class="hg">"fg-cyan"</span>&gt;⠈⠑⠢⠤⣀&lt;/span&gt;
-    &lt;span <span class="hk">class</span>=<span class="hg">"fg-magenta"</span>&gt;⠤⠔⠊⠉⠑&lt;/span&gt;
-  &lt;/div&gt;
-
-  <span class="hc">TerminalBridge, cell-level patches</span>
-  <span class="hc">same model, same view/1</span>
-  """
-
-  @hero_out_mcp ~S"""
-  <span class="hc">$ mix mcp.server</span>
-
-  {
-    <span class="hk">"tools"</span>: [
-      { <span class="hk">"name"</span>: <span class="hg">"pulse_screenshot"</span>,
-        <span class="hk">"desc"</span>: <span class="hg">"Read the chart"</span> },
-      { <span class="hk">"name"</span>: <span class="hg">"pulse_get_model"</span>,
-        <span class="hk">"desc"</span>: <span class="hg">"Read the tick"</span> }
-    ]
-  }
-
-  <span class="hc">derived from the widget tree</span>
-  """
-
-  @hero_out_acp ~S"""
-  <span class="hc">$ raxol acp</span>
-
-  <span class="hc">-&gt;</span> { <span class="hk">"method"</span>: <span class="hg">"session/prompt"</span>,
-       <span class="hk">"params"</span>: { <span class="hk">"sessionId"</span>: <span class="hg">"..."</span> } }
-
-  <span class="hc">&lt;-</span> { <span class="hk">"method"</span>: <span class="hg">"session/update"</span>,
-       <span class="hk">"update"</span>: { <span class="hk">"sessionUpdate"</span>:
-         <span class="hg">"agent_message_chunk"</span> } }
-
-  <span class="hc">Zed, JetBrains, neovim, Emacs</span>
-  """
 
   # Version claims derive from Capabilities.packages() so the FAQ can never
   # drift from the package table the capability endpoints serve.
@@ -307,27 +258,30 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :halo_faces, @halo_faces)
 
     ~H"""
-    <%!-- The brand mark: the axol face dithered into character cells, framed
-         by drifting edge texture. Decoration -- aria-hidden, reduced-motion
-         aware client-side -- and the h1 below carries the meaning. Shorter
-         here than it was on the scrolling page, because it shares one
-         viewport with the demo now. --%>
-    <div
-      id="hero-halo"
-      phx-hook="HaloField"
-      phx-update="ignore"
-      class="hero-halo screen-halo"
-      aria-hidden="true"
-      data-faces={@halo_faces}
-    >
-      <canvas></canvas>
+    <%!-- The brand mark beside the claim rather than above it: an upright box
+         of dithered character cells, which reads as a column of the same
+         monospace grid the demo below is made of. Decoration -- aria-hidden,
+         reduced-motion aware client-side -- and the h1 carries the meaning. --%>
+    <div class="screen-intro">
+      <div
+        id="hero-halo"
+        phx-hook="HaloField"
+        phx-update="ignore"
+        class="hero-halo screen-halo"
+        aria-hidden="true"
+        data-faces={@halo_faces}
+      >
+        <canvas></canvas>
+      </div>
+
+      <div class="screen-intro__text">
+        <h1 class="screen-title">
+          One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
+        </h1>
+
+        <p class="screen-sub">A TEA module in Elixir, rendered everywhere. Built on OTP.</p>
+      </div>
     </div>
-
-    <h1 class="screen-title">
-      One app. <span class="text-axol-coral">Terminal, browser, SSH, or agent.</span>
-    </h1>
-
-    <p class="screen-sub">A TEA module in Elixir, rendered everywhere. Built on OTP.</p>
 
     <.hero_demo example={@example} />
 
@@ -468,14 +422,24 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 1b. Hero demo: one module, five surfaces
+  # 1b. Hero demo: one module, four surfaces
   #
-  # All five surface panes are server-rendered (the dead render before the
-  # socket connects carries the module pane and terminal frame one); the
-  # HeroDemo hook only toggles `hidden`/aria-selected, auto-advancing tabs
-  # and stepping the recorded frames on a fixed-timestep rAF accumulator.
-  # Clicking a tab stops the auto-advance. Switching examples re-mounts the
-  # hook (the element id carries the example name).
+  # The four panes are four encodings of ONE render, all projected from the
+  # frame-zero buffer of the same `Raxol.Headless` session, the way
+  # `Raxol.Harness.Surface.Parity` projects a fixture onto cells, LiveView
+  # DOM, SSH ANSI and MCP JSON. None is authored: the browser pane is the
+  # source of the markup the terminal pane renders, and the other two come
+  # from committed artifacts (see `RaxolPlayground.SurfaceSource`).
+  #
+  # No ACP tab. ACP is the coding agent's editor protocol, not a surface a
+  # TEA module renders to, so a pane captioned "pulse, driven over ACP" would
+  # describe a program that does not exist. It has its own page.
+  #
+  # All four panes are server-rendered; the HeroDemo hook only toggles
+  # `hidden`/aria-selected, auto-advancing tabs and stepping the recorded
+  # frames on a fixed-timestep rAF accumulator. Clicking a tab stops the
+  # auto-advance. Switching examples re-mounts the hook (the element id
+  # carries the example name).
   # ---------------------------------------------------------------------------
 
   attr(:example, :string, required: true)
@@ -487,10 +451,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         source_lines: example_lines(assigns.example),
         title: example_title(assigns.example),
         frames: RecordedFrames.hero_frames(assigns.example),
+        frame_rows: RecordedFrames.hero_frame_rows(assigns.example),
         next: next_example(assigns.example),
-        out_browser: @hero_out_browser,
-        out_mcp: @hero_out_mcp,
-        out_acp: @hero_out_acp
+        out_browser: RecordedFrames.hero_surface(assigns.example, :browser),
+        out_ssh: RecordedFrames.hero_surface(assigns.example, :ssh),
+        out_mcp: RecordedFrames.hero_surface(assigns.example, :mcp),
+        browser_lines: RecordedFrames.hero_surface_lines(assigns.example, :browser),
+        ssh_lines: RecordedFrames.hero_surface_lines(assigns.example, :ssh),
+        mcp_lines: RecordedFrames.hero_surface_lines(assigns.example, :mcp)
       )
 
     ~H"""
@@ -505,10 +473,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="hero-tabs" role="tablist" aria-label="Render surface">
         <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title={"#{@title} -- rendering to the terminal"} data-label="Rendered to the terminal">Terminal</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="Rendered to the browser">Browser</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="Served over SSH">SSH</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title={"#{@title} -- exposed as MCP tools"} data-label="Exposed to agents">Agent / MCP</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="4" data-title={"#{@title} -- driven over ACP"} data-label="Driven from your editor">Editor / ACP</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="The DOM LiveView patches">Browser</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="The bytes down the channel">SSH</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title={"#{@title} -- exposed as MCP tools"} data-label="The tree an agent reads">Agent / MCP</button>
       </div>
 
       <div class="hero-panes">
@@ -528,28 +495,26 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             <%!-- Recorded frames: real Headless output of the module beside
                  them, committed under priv/hero_frames/<example>/. Frame one
                  ships visible in the dead render; the hook steps the rest. --%>
-            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true">
+            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@frame_rows}"}>
               <div :for={{frame, i} <- Enum.with_index(@frames)} class="hero-frame" data-frame={i} hidden={i != 0}>{raw(frame)}</div>
             </div>
           </div>
 
+          <%!-- The same frame, re-encoded three ways: the head of a committed
+               artifact, clamped with a marker naming what was cut. --%>
           <div class="hero-out" data-surface="1" hidden>
-            <pre class="hero-pre">{raw(@out_browser)}</pre>
+            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix phx.server</span></pre>
+            <pre class="hero-pre hero-src" style={"--src-lines: #{@browser_lines}"}>{raw(@out_browser)}</pre>
           </div>
 
           <div class="hero-out" data-surface="2" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh demo@localhost -p 2222</span></pre>
-            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true">
-              <div class="hero-frame">{raw(List.last(@frames) || "")}</div>
-            </div>
+            <pre class="hero-pre hero-src" style={"--src-lines: #{@ssh_lines}"}>{raw(@out_ssh)}</pre>
           </div>
 
           <div class="hero-out" data-surface="3" hidden>
-            <pre class="hero-pre">{raw(@out_mcp)}</pre>
-          </div>
-
-          <div class="hero-out" data-surface="4" hidden>
-            <pre class="hero-pre">{raw(@out_acp)}</pre>
+            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix mcp.server</span></pre>
+            <pre class="hero-pre hero-src" style={"--src-lines: #{@mcp_lines}"}>{raw(@out_mcp)}</pre>
           </div>
         </div>
       </div>
@@ -951,6 +916,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <span class="set-shielded">shielded</span> (Aztec) -- chosen per payment
         </div>
       </div>
+
     </section>
     """
   end
@@ -1129,8 +1095,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a href="/skill.md" class="footer-link">Skill</a>
         </div>
 
-        <div class="flex items-center justify-between font-mono caption-text tracking-wide">
-          <span>Elixir on OTP</span>
+        <div class="flex items-center justify-end font-mono caption-text tracking-wide">
           <span>Made by <a href="https://axol.io" class="axol-link">axol.io</a></span>
         </div>
       </div>

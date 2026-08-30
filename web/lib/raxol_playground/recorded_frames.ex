@@ -8,7 +8,15 @@ defmodule RaxolPlayground.RecordedFrames do
   and committed under `priv/hero_frames/` and `priv/demo_previews/`. Embedded
   at compile time so the dead render before the LiveView socket connects
   already carries frame one and every gallery preview.
+
+  An example directory holds its terminal frames plus two surface artifacts
+  projected from the frame-zero render: `surface.ansi` (the bytes the SSH
+  surface writes) and `surface.mcp.json` (the tree the MCP surface serves).
+  The browser surface needs no artifact, since frame zero is already the
+  LiveView encoding.
   """
+
+  alias RaxolPlayground.SurfaceSource
 
   hero_dir = Path.expand("../../priv/hero_frames", __DIR__)
   preview_dir = Path.expand("../../priv/demo_previews", __DIR__)
@@ -21,20 +29,83 @@ defmodule RaxolPlayground.RecordedFrames do
     |> Enum.sort()
     |> Enum.filter(&File.dir?(Path.join(hero_dir, &1)))
 
+  # Matched by name: the surface artifacts share this directory, and folding
+  # one into the playback list would put an ANSI dump where a frame belongs.
   hero_paths =
     Map.new(hero_examples, fn name ->
       dir = Path.join(hero_dir, name)
-      paths = dir |> File.ls!() |> Enum.sort() |> Enum.map(&Path.join(dir, &1))
+
+      paths =
+        dir
+        |> Path.join("frame_*.html")
+        |> Path.wildcard()
+        |> Enum.sort()
+
       {name, paths}
+    end)
+
+  surface_paths =
+    Map.new(hero_examples, fn name ->
+      dir = Path.join(hero_dir, name)
+
+      {name,
+       %{
+         ansi: Path.join(dir, "surface.ansi"),
+         mcp: Path.join(dir, "surface.mcp.json")
+       }}
     end)
 
   for {_name, paths} <- hero_paths, path <- paths do
     @external_resource path
   end
 
+  for {_name, %{ansi: ansi, mcp: mcp}} <- surface_paths, path <- [ansi, mcp] do
+    @external_resource path
+  end
+
   @hero_frames Map.new(hero_paths, fn {name, paths} ->
                  {name, Enum.map(paths, &File.read!/1)}
                end)
+
+  # The browser artifact is frame zero itself, so that pane shows the source
+  # of the markup the terminal pane renders and the two cannot disagree.
+  @hero_artifacts Map.new(surface_paths, fn {name, %{ansi: ansi, mcp: mcp}} ->
+                    {name,
+                     %{
+                       browser: hero_paths |> Map.fetch!(name) |> List.first() |> File.read!(),
+                       ssh: File.read!(ansi),
+                       mcp: File.read!(mcp)
+                     }}
+                  end)
+
+  # Derived once: the artifacts are compile-time constants, so the line
+  # breaking, clamping, escaping and colouring are too.
+  @hero_surfaces Map.new(@hero_artifacts, fn {name, artifacts} ->
+                   panes =
+                     Map.new(artifacts, fn {surface, artifact} ->
+                       lines =
+                         case surface do
+                           :browser -> SurfaceSource.dom_lines(artifact)
+                           :ssh -> SurfaceSource.ansi_lines(artifact)
+                           :mcp -> SurfaceSource.json_lines(artifact)
+                         end
+
+                       kind = %{browser: :dom, ssh: :ansi, mcp: :json}[surface]
+
+                       clamped =
+                         lines
+                         |> SurfaceSource.wrap()
+                         |> SurfaceSource.clamp(artifact)
+
+                       {surface,
+                        %{
+                          html: SurfaceSource.to_html(clamped, kind),
+                          lines: length(clamped)
+                        }}
+                     end)
+
+                   {name, panes}
+                 end)
 
   preview_paths =
     preview_dir
@@ -57,6 +128,54 @@ defmodule RaxolPlayground.RecordedFrames do
   @doc "Every hero example name that has recorded frames."
   @spec hero_examples() :: [String.t()]
   def hero_examples, do: @hero_frames |> Map.keys() |> Enum.sort()
+
+  @doc """
+  Pane markup for one hero example on one non-terminal surface, derived from
+  that example's recorded artifact by `RaxolPlayground.SurfaceSource`.
+  """
+  @spec hero_surface(String.t(), surface()) :: String.t()
+  def hero_surface(example, surface) do
+    example |> pane(surface) |> Map.get(:html, "")
+  end
+
+  @doc """
+  How many lines that pane holds. The CSS sizes type from this, so a short
+  viewport shrinks the type rather than cutting the truncation marker.
+  """
+  @spec hero_surface_lines(String.t(), surface()) :: pos_integer()
+  def hero_surface_lines(example, surface) do
+    example |> pane(surface) |> Map.get(:lines, 1)
+  end
+
+  defp pane(example, surface) do
+    @hero_surfaces |> Map.get(example, %{}) |> Map.get(surface, %{})
+  end
+
+  @doc """
+  Rows in one recorded terminal frame. The CSS sizes the frame's type from
+  this, so a short viewport shrinks it rather than clipping the last rows.
+  """
+  @spec hero_frame_rows(String.t()) :: pos_integer()
+  def hero_frame_rows(example) do
+    case hero_frames(example) do
+      # The encoder closes with a newline before `</pre>`, so the last split is
+      # the closing tag rather than a row.
+      [frame | _] -> max(length(String.split(frame, "\n")) - 1, 1)
+      [] -> 1
+    end
+  end
+
+  @doc """
+  The recorded artifact a pane was derived from, verbatim. Exposed so a test
+  can check every line the pane shows against it.
+  """
+  @spec hero_artifact(String.t(), surface()) :: String.t()
+  def hero_artifact(example, surface) do
+    @hero_artifacts |> Map.get(example, %{}) |> Map.get(surface, "")
+  end
+
+  @typedoc "A hero surface other than the terminal, which plays frames."
+  @type surface :: :browser | :ssh | :mcp
 
   @doc "Rendered preview frame for a catalog demo name, or nil."
   @spec preview(String.t()) :: String.t() | nil

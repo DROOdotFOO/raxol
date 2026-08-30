@@ -1202,6 +1202,7 @@ html {
   color: var(--text-dim);
 }
 
+
 /* =============================================================================
    FAQ accordion (native <details>)
    ============================================================================= */
@@ -1885,6 +1886,7 @@ html {
 .hero-code { color: var(--pearl-cream); }
 
 .hero-pre { color: var(--sky); }
+
 .hero-demo .hk { color: var(--axol-coral); }
 .hero-demo .hc { color: var(--text-dim); }
 .hero-demo .hg { color: #8fca8f; }
@@ -1901,6 +1903,11 @@ html {
   padding: 0.5rem 0.6rem;
   overflow-x: auto;
   scrollbar-width: none;
+  /* This element also carries `.raxol-terminal`, whose `white-space: pre`
+     would render the newlines BETWEEN the stacked frame divs as blank lines --
+     several rows of phantom height above whatever the visible frame needs.
+     The frames themselves are `pre` and keep their own spacing. */
+  white-space: normal;
 }
 
 .hero-frames::-webkit-scrollbar { display: none; }
@@ -2294,8 +2301,6 @@ input[type="range"]::-moz-range-thumb {
   flex-direction: column;
 }
 
-.screen-main .hero-panes { min-height: 0; flex: 1 1 auto; }
-.screen-main .hero-pane { min-height: 0; overflow: hidden; }
 
 .screen-install { width: 100%; max-width: 42rem; }
 
@@ -2326,9 +2331,18 @@ input[type="range"]::-moz-range-thumb {
 
 .screen-meta { color: var(--text-dim); }
 
-/* Short viewports cannot hold a readable screen; scrolling beats clipping. */
+/* Short viewports cannot hold a readable screen; scrolling beats clipping.
+   Everything that squeezes the demo into one screen belongs here, not
+   outside: below the threshold the panes take the height their content needs
+   and the page scrolls, rather than shrinking type until nothing reads. */
 @media (min-height: 640px) and (min-width: 768px) {
   .screen { height: 100dvh; overflow: hidden; }
+
+  .screen-main .hero-panes { min-height: 0; flex: 1 1 auto; }
+
+  /* A size container, so the type rules below can divide by the pane's real
+     height instead of guessing at it. */
+  .screen-main .hero-pane { min-height: 0; overflow: hidden; container-type: size; }
 }
 
 /* Breadcrumb on the topic pages the landing hands off to. */
@@ -2340,33 +2354,93 @@ input[type="range"]::-moz-range-thumb {
   gap: 0.5rem;
 }
 
-/* The halo shares one viewport with the demo now, so it gets a height budget
-   rather than the 180px it could take on a scrolling page. It stays the first
-   thing on the page: it is the brand mark, not an ornament to shrink away. */
-.screen-halo {
-  height: clamp(104px, 13vh, 148px);
-  /* A flex child with a canvas inside has no intrinsic width and collapses
-     to nothing centred; the mark needs the row it is given. */
+/* Mark and claim share a row, aligned to the demo below so their edges line
+   up. The text column is narrow enough that the title sets on three lines,
+   which is what gives the row its height. */
+.screen-intro {
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 3vw, 2.25rem);
   width: 100%;
-  max-width: 34rem;
-  margin: 0 auto;
+  max-width: 62rem;
   flex: 0 0 auto;
+  text-align: left;
+}
+
+.screen-intro__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+/* An upright box rather than a banner. A flex child with only a canvas in it
+   has no intrinsic size, so both axes are given. Sized generously: the mark is
+   a character grid, and below roughly 20 columns the face stops resolving into
+   gills and eyes and reads as noise. */
+.screen-halo {
+  height: clamp(150px, 21vh, 215px);
+  width: clamp(150px, 18vw, 230px);
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+/* Stacked and centred once the row would leave the title too narrow to set. */
+@media (max-width: 640px) {
+  .screen-intro { flex-direction: column; text-align: center; }
+  .screen-halo { width: 100%; max-width: 20rem; height: clamp(104px, 13vh, 148px); }
 }
 
 /* The module has to fit without an inner scrollbar -- a pane clipped mid-`end`
    reads as broken, and the point of the pane is that you can read the whole
    program. */
 .screen-main .hero-code {
-  /* --hero-lines is set per example. The pane is a fixed slice of one screen,
-     so type size has to follow the program's length or a longer example gets
-     clipped -- and a clipped module contradicts the label above it. */
-  font-size: clamp(0.5rem, calc(18rem / var(--hero-lines, 24)), 0.7rem);
+  /* --hero-lines is set per example, and the divisor is the pane's own height
+     rather than a fixed guess at it: the pane is a slice of one screen, so a
+     guess clips the tail of a longer example on a shorter viewport, and a
+     clipped module contradicts the label above it. 1.8rem covers the label. */
+  font-size: clamp(
+    0.5rem,
+    calc((100cqh - 1.8rem) / var(--hero-lines, 24) / 1.34),
+    0.7rem
+  );
   line-height: 1.34;
 }
 
 /* Tighter than the scrolling page's padding: the pane has to hold the longest
    example whole, and a clipped module contradicts the label above it. */
 .screen-main .hero-pane { padding: 0.7rem 0.9rem; }
+
+/* The surface panes show recorded output verbatim, and their last line is the
+   marker saying how much was left out. Losing that line off the bottom is the
+   one failure that misleads, so type follows the pane's real height. The floor
+   stops the formula shrinking type past reading: where the floor binds, the
+   page is already the scrolling one. */
+.screen-main .hero-src {
+  /* 3.2rem covers the pane label and the `$ ...` command line above. */
+  font-size: clamp(
+    0.55rem,
+    calc((100cqh - 3.2rem) / var(--src-lines, 15) / 1.6),
+    0.76rem
+  );
+}
+
+/* Same fit for the recorded frames, whose row count is fixed by the recording.
+   A chart cut off at its bottom rows reads as a broken render. 4.7rem covers
+   the pane label, the command line, and the frame's border and padding. Set on
+   the `pre`, not the container: `.raxol-terminal` carries its own font-size,
+   so a size on the wrapper would never be inherited. */
+.screen-main .hero-frames pre {
+  font-size: clamp(
+    0.45rem,
+    calc((100cqh - 4.1rem) / var(--frame-rows, 17) / 1.5),
+    0.76rem
+  );
+  /* Stated, not inherited: `.raxol-terminal` sets its line height in absolute
+     units, so shrinking the type alone leaves the rows their original height
+     and the frame keeps overflowing. */
+  line-height: 1.5;
+}
 
 /* Keys the live session actually responds to, named in the footer so the
    payoff of taking over is legible rather than something to guess at. */

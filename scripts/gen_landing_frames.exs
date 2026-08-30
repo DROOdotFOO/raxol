@@ -6,6 +6,12 @@
 #                                          example, each rendered through
 #                                          Raxol.Headless as its own interval
 #                                          subscription advances it
+#   web/priv/hero_frames/<example>/surface.ansi
+#                                       -- the same frame-zero render as the
+#                                          bytes the SSH surface writes
+#   web/priv/hero_frames/<example>/surface.mcp.json
+#                                       -- the same frame-zero render as the
+#                                          widget tree the MCP surface serves
 #   web/priv/demo_previews/<slug>.html  -- one rendered frame per playground
 #                                          catalog demo, for the gallery cards
 #
@@ -13,16 +19,16 @@
 #
 #   mix run scripts/gen_landing_frames.exs
 #
-# Frames are committed; rerun when the Counter source or a demo's first
-# render changes. A demo that fails to start headless is skipped with a
-# warning (its gallery card just renders without a preview).
+# Frames are committed; rerun when a hero example or a demo's first render
+# changes. A demo that fails to start headless is skipped with a warning (its
+# gallery card just renders without a preview).
 
 alias Raxol.LiveView.TerminalBridge
 
-# The module the hero displays. web/'s landing hero (@hero_source in
-# landing_components.ex) shows this exact source; keep the two byte-identical
-# (the whole point of recording is that the pane and the frames are the same
-# program).
+# The modules the hero displays. web/'s landing hero (@pulse_source and
+# @halo_source in landing_components.ex) shows these exact sources; keep each
+# pair byte-identical (the whole point of recording is that the pane and the
+# frames are the same program).
 defmodule Pulse do
   use Raxol.Core.Runtime.Application
 
@@ -132,10 +138,46 @@ defmodule GenLandingFrames do
         path = Path.join(dir, "frame_#{n}.html")
         File.write!(path, html)
         IO.puts("hero  #{path}")
+
+        if n == 0, do: surfaces(dir, module, id, buffer)
       end
 
       Raxol.Headless.stop(id)
     end
+  end
+
+  # The hero's non-terminal panes, all projected from the frame-zero buffer the
+  # loop just wrote, so the four tabs are four encodings of one frame rather
+  # than four separate recordings. The browser pane needs no artifact:
+  # frame_0.html is already the LiveView encoding.
+  defp surfaces(dir, module, id, buffer) do
+    ansi_path = Path.join(dir, "surface.ansi")
+    File.write!(ansi_path, ansi(buffer))
+    IO.puts("hero  #{ansi_path}")
+
+    mcp_path = Path.join(dir, "surface.mcp.json")
+    File.write!(mcp_path, mcp(module, id))
+    IO.puts("hero  #{mcp_path}")
+  end
+
+  # What the SSH surface writes down the channel. `style_batching: true`
+  # matches `Raxol.Core.Runtime.Rendering.Backends`, so these are the bytes a
+  # real session emits.
+  defp ansi(buffer) do
+    buffer
+    |> Raxol.Terminal.Renderer.new(%{}, %{}, true)
+    |> Raxol.Terminal.Renderer.render()
+  end
+
+  # What the MCP surface serves: the structured content behind
+  # `raxol_screenshot`, taken from the view tree, which is that tool's input.
+  defp mcp(module, id) do
+    {:ok, model} = Raxol.Headless.get_model(id)
+
+    model
+    |> module.view()
+    |> Raxol.MCP.StructuredScreenshot.from_view_tree()
+    |> Raxol.MCP.StructuredScreenshot.to_json()
   end
 
   defp previews do
