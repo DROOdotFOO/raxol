@@ -66,24 +66,19 @@ defmodule Halo do
   def subscribe(_), do: [subscribe_interval(110, :tick)]
 
   def view(m) do
-    column do
-      for y <- 0..12, do: text(strip(m.t, y), fg: :cyan)
-    end
+    column(do: for(y <- 0..12, do: text(strip(m.t, y), fg: :cyan)))
   end
 
-  defp strip(t, y),
-    do: for(x <- 0..67, into: "", do: cell(t, x, y))
+  defp strip(t, y), do: for(x <- 0..67, into: "", do: cell(t, x, y))
 
   defp cell(t, x, 6) when x in 32..35,
     do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 32)
 
-  defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38,
-    do: " "
+  defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38, do: " "
 
   defp cell(t, x, y) do
-    edge = min(1.0, abs(x - 34) / 34 + abs(y - 6) / 6)
     n = rem(abs((x + div(t, 2)) * @a + (y - div(t, 3)) * @b), 9973)
-    v = n / 9973 * edge
+    v = n / 9973 * min(1.0, abs(x - 34) / 34 + abs(y - 6) / 6)
     if v < 0.2, do: " ", else: Enum.at(@ramp, trunc(v * 7))
   end
 end
