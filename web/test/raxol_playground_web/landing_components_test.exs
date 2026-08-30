@@ -11,21 +11,52 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   test "landing promotes live install and browser paths, not the suspended SSH host" do
     hero =
-      render_component(&LandingComponents.hero_section/1,
-        terminal_html: false,
-        demo_paused: false
+      render_component(&LandingComponents.screen_hero/1,
+        example: List.first(LandingComponents.hero_example_names())
       )
 
     deep_dive = render_component(&LandingComponents.ssh_deep_dive/1, %{})
     try_section = render_component(&LandingComponents.try_section/1, %{})
 
-    assert hero =~ "https://raxol.io/install"
-    assert hero =~ "Self-contained binary"
+    # The one-screen hero carries ONE install path -- the curl script this
+    # site serves. The four-method tabs live in `install_tabs`, tested below.
+    assert hero =~ "curl -fsSL https://raxol.io/install | bash"
     assert deep_dive =~ "Hosted SSH is temporarily offline"
     assert deep_dive =~ ~s(href="/playground")
     assert try_section =~ "npm i -g raxol"
 
     refute Enum.join([hero, deep_dive, try_section]) =~ "playground@raxol.io"
+  end
+
+  # The landing is one screen. These are the two properties that keeps: it
+  # carries no deep-dive section (those are their own pages now), and the hero
+  # plays recorded frames rather than starting a live session.
+  test "the landing screen carries no deep dive and no live session" do
+    hero =
+      render_component(&LandingComponents.screen_hero/1,
+        example: List.first(LandingComponents.hero_example_names())
+      )
+
+    refute hero =~ "take over live"
+    refute hero =~ "run it live"
+    refute hero =~ ~s(phx-click="take_over")
+    refute hero =~ "RaxolTerminal"
+
+    # Recorded frames, and more than one, or the hero is a still image.
+    assert hero =~ ~s(class="hero-frame")
+    assert length(String.split(hero, ~s(class="hero-frame"))) - 1 > 1
+  end
+
+  test "every hero example has recorded frames and a readable module" do
+    for name <- LandingComponents.hero_example_names() do
+      frames = RaxolPlayground.RecordedFrames.hero_frames(name)
+
+      assert length(frames) > 1, "#{name} has #{length(frames)} recorded frame(s)"
+      assert Enum.uniq(frames) == frames, "#{name} recorded identical frames"
+
+      hero = render_component(&LandingComponents.screen_hero/1, example: name)
+      assert hero =~ "#{name}.ex"
+    end
   end
 
   test "install tabs carry all four methods with curl visible by default" do
@@ -52,9 +83,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   test "the hero halo exports the coding agent's real face frames" do
     hero =
-      render_component(&LandingComponents.hero_section/1,
-        terminal_html: false,
-        demo_paused: false
+      render_component(&LandingComponents.screen_hero/1,
+        example: List.first(LandingComponents.hero_example_names())
       )
 
     assert hero =~ ~s(phx-hook="HaloField")
