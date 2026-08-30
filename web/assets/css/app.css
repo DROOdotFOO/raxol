@@ -1878,7 +1878,11 @@ html {
 
 .hero-pane + .hero-pane { border-left: 1px solid var(--panel-border); }
 
-@media (max-width: 780px) {
+/* 767px, not 780: the one-screen rules start at 768px, so a wider stacking
+   breakpoint left a band where the panes stacked inside a height-locked
+   screen and each got half the room it needed. Panes stack only where the
+   page is free to scroll. */
+@media (max-width: 767px) {
   .hero-panes { grid-template-columns: 1fr; }
   .hero-pane + .hero-pane {
     border-left: none;
@@ -2419,13 +2423,18 @@ input[type="range"]::-moz-range-thumb {
    reads as broken, and the point of the pane is that you can read the whole
    program. */
 .screen-main .hero-code {
-  /* --hero-lines is set per example, and the divisor is the pane's own height
-     rather than a fixed guess at it: the pane is a slice of one screen, so a
-     guess clips the tail of a longer example on a shorter viewport, and a
-     clipped module contradicts the label above it. 1.8rem covers the label. */
+  /* Fitted on both axes against the pane's own box rather than a fixed guess
+     at it. Height alone clipped the tail of a longer example on a short
+     viewport; width alone was missing entirely, so a narrow pane ran the
+     longest line off the right edge behind the hidden scrollbar. Either way
+     the module stops being readable whole, which is the pane's only claim.
+     1.8rem covers the label, 0.63 is the font's character advance. */
   font-size: clamp(
     0.5rem,
-    calc((100cqh - 1.8rem) / var(--hero-lines, 24) / 1.34),
+    min(
+      calc((100cqw - 0.4rem) / var(--hero-cols, 66) / 0.63),
+      calc((100cqh - 1.8rem) / var(--hero-lines, 24) / 1.34)
+    ),
     0.7rem
   );
   line-height: 1.34;

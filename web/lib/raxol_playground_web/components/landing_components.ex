@@ -136,12 +136,22 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
   """
 
-  @hero_examples [
-    {"pulse", "pulse.ex", Makeup.highlight_inner_html(@pulse_source),
-     length(String.split(String.trim(@pulse_source), "\n"))},
-    {"halo", "halo.ex", Makeup.highlight_inner_html(@halo_source),
-     length(String.split(String.trim(@halo_source), "\n"))}
-  ]
+  # Lines and columns come from the SOURCE, not the highlighted HTML: Makeup
+  # wraps every line in markup, so counting there measures the highlighter. The
+  # pane sizes its type from both, so the module fits whole on either axis
+  # rather than running off the right edge behind a hidden scrollbar.
+  @hero_examples (for {name, file, source} <- [
+                        {"pulse", "pulse.ex", @pulse_source},
+                        {"halo", "halo.ex", @halo_source}
+                      ] do
+                    lines = source |> String.trim() |> String.split("\n")
+
+                    {name, file, Makeup.highlight_inner_html(source),
+                     %{
+                       lines: length(lines),
+                       cols: lines |> Enum.map(&String.length/1) |> Enum.max()
+                     }}
+                  end)
 
   @counter_code Makeup.highlight_inner_html(@counter_source)
   @agent_code Makeup.highlight_inner_html(@agent_source)
@@ -448,7 +458,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns =
       assign(assigns,
         source: example_code(assigns.example),
-        source_lines: example_lines(assigns.example),
+        source_grid: example_grid(assigns.example),
         title: example_title(assigns.example),
         frames: RecordedFrames.hero_frames(assigns.example),
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
@@ -484,7 +494,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <%!-- The examples differ in length, and the pane is a fixed slice
                of one screen, so the type size follows the line count rather
                than being tuned per example. --%>
-          <pre class="hero-code" style={"--hero-lines: #{@source_lines}"}><code class="syntax-elixir">{raw(@source)}</code></pre>
+          <pre class="hero-code" style={"--hero-lines: #{@source_grid.lines}; --hero-cols: #{@source_grid.cols}"}><code class="syntax-elixir">{raw(@source)}</code></pre>
         </div>
 
         <div class="hero-pane">
@@ -546,10 +556,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     Enum.find_value(@hero_examples, name, fn {n, t, _c, _l} -> n == name && t end)
   end
 
-  # Counted from the SOURCE, not the highlighted HTML: Makeup wraps each line
-  # in markup, so counting there measures the highlighter, not the program.
-  defp example_lines(name) do
-    Enum.find_value(@hero_examples, 1, fn {n, _t, _c, lines} -> n == name && lines end)
+  defp example_grid(name) do
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _c, grid} ->
+      n == name && grid
+    end)
   end
 
   defp example_code(name) do
