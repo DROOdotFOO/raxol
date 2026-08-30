@@ -1948,6 +1948,14 @@ html {
   padding: 0.5rem 0.6rem;
   overflow-x: auto;
   scrollbar-width: none;
+  /* The border wraps the recording, not the pane. The frame's grid is fixed by
+     the recording while the pane's is not, so whenever the type is limited by
+     height (every short viewport, where it sits on its floor) the text came out
+     far narrower than its box and the border enclosed about 150px of nothing to
+     its right. Hugging the content costs no legibility: it moves the edge in,
+     it does not scale anything down. */
+  width: fit-content;
+  max-width: 100%;
   /* This element also carries `.raxol-terminal`, whose `white-space: pre`
      would render the newlines BETWEEN the stacked frame divs as blank lines --
      several rows of phantom height above whatever the visible frame needs.
