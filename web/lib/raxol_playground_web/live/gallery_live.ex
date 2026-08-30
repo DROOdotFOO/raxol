@@ -19,6 +19,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
 
     socket =
       socket
+      |> assign(:page_title, "Gallery")
       |> assign(:components, components)
       |> assign(:total_count, length(components))
       |> assign(:categories, Catalog.list_categories())

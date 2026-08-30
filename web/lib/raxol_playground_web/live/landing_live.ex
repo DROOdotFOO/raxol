@@ -28,7 +28,9 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Raxol",
+       # The layout appends " · Raxol", so the brand alone rendered as
+       # "Raxol · Raxol". The claim reads better in a tab and in a search result.
+       page_title: "One module, every surface",
        mobile_menu_open: false,
        example: List.first(hero_example_names()),
        # ETS-cached with a 300s TTL; nil config (dev/test, or prod without
