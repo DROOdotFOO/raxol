@@ -1074,7 +1074,8 @@ html {
 .rung {
   background: rgba(10, 10, 12, 0.55);
   display: grid;
-  grid-template-columns: 7rem 4.5rem 7rem 1fr;
+  /* tier | trust score | stable | volatile | proof */
+  grid-template-columns: 7.5rem 6rem 5rem 5rem 1fr;
   gap: 0 1rem;
   padding: 0.7rem 1.1rem;
   align-items: baseline;
