@@ -42,9 +42,15 @@
 
 @layer components {
   /* --- Nav / header links with hover --- */
+  /* 24px minimum box, per WCAG 2.2 target size: the text alone was 18px
+     tall, so every header link was a target under the floor. Centring
+     inside a taller box grows the hit area without moving the type. */
   .nav-link {
     @apply font-mono text-sm tracking-wide transition-colors;
     color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.5rem;
   }
   .nav-link:hover { color: #e8e4dc; }
 
@@ -950,7 +956,9 @@ html {
   font-family: var(--font-mono);
   font-size: clamp(2.5rem, 2rem + 2.2vw, 3.75rem);
   font-weight: 300;
-  color: rgba(255, 205, 156, 0.16);
+  /* 0.16 measured 1.39:1, under the 3:1 large text needs. It is a section
+     marker, not decoration -- it numbers the deep dives in order. */
+  color: rgba(255, 205, 156, 0.45);
   letter-spacing: -0.02em;
   line-height: 1;
   display: block;

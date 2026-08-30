@@ -222,7 +222,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       ><%= raw(@preview) %></a>
       <div class="p-3 flex flex-col flex-1">
         <div class="flex items-baseline justify-between gap-2 mb-1">
-          <h3 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h3>
+          <h2 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h2>
           <span class="gallery-badge"><%= Helpers.complexity_label(@component.complexity) %></span>
         </div>
         <p class="font-mono detail-text gallery-desc mb-2"><%= @component.description %></p>
@@ -248,7 +248,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       <div class="flex items-start gap-6">
         <div class="flex-1 min-w-0">
           <div class="flex items-start justify-between mb-2">
-            <h3 class="font-mono font-semibold name-sky"><%= @component.name %></h3>
+            <h2 class="font-mono font-semibold name-sky"><%= @component.name %></h2>
             <.complexity_badge level={@component.complexity} />
           </div>
           <p class="font-mono mb-3 detail-text"><%= @component.description %></p>

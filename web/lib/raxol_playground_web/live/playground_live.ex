@@ -250,7 +250,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
          their own keystrokes. --%>
     <main id="main-content" tabindex="-1" phx-hook="PlaygroundKeys" class="playground-container h-screen flex flex-col bg-obsidian">
       <%!-- Header --%>
-      <div class="px-6 py-3 surface-bar">
+      <header class="px-6 py-3 surface-bar">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-4">
             <h1 class="name-coral">
@@ -292,7 +292,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
             </button>
           </div>
         </div>
-      </div>
+      </header>
 
       <%!-- Main Area --%>
       <div class="flex-1 flex overflow-hidden">

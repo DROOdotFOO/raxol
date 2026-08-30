@@ -230,10 +230,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <a href="/" class="screen-mark">raxol</a>
 
       <nav class="screen-nav" aria-label="Main navigation">
-        <a href="/gallery" class="nav-link">Gallery</a>
-        <a href="/playground" class="nav-link">Playground</a>
-        <a href="https://hexdocs.pm/raxol" class="nav-link">Docs</a>
-        <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
+        <a :for={{href, label} <- nav_links()} href={href} class="nav-link">{label}</a>
       </nav>
 
       <button
@@ -253,11 +250,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         class="screen-nav-mobile"
         aria-label="Main navigation"
       >
-        <a href="/gallery" class="nav-link">Gallery</a>
-        <a href="/playground" class="nav-link">Playground</a>
+        <a :for={{href, label} <- nav_links()} href={href} class="nav-link">{label}</a>
         <a :for={{path, label} <- topic_links()} href={path} class="nav-link">{label}</a>
-        <a href="https://hexdocs.pm/raxol" class="nav-link">Docs</a>
-        <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
       </nav>
     </header>
     """
@@ -411,6 +405,22 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # different ones. `TopicLive` owns the paths; this only borrows them.
   defp topic_links, do: RaxolPlaygroundWeb.TopicLive.links()
 
+  # One list for both site headers. The landing carried four links and the
+  # topic pages six, so the navigation changed shape when a reader crossed
+  # between them and neither list knew the other existed.
+  @nav_links [
+    {"/playground", "Playground"},
+    {"/gallery", "Gallery"},
+    {"/demos", "Demos"},
+    {"https://hexdocs.pm/raxol", "Docs"},
+    {"/skill.md", "Skill"},
+    {"https://github.com/DROOdotFOO/raxol", "GitHub"}
+  ]
+
+  @doc "Site navigation as `{href, label}`. Both headers render exactly this."
+  @spec nav_links() :: [{String.t(), String.t()}]
+  def nav_links, do: @nav_links
+
   # ---------------------------------------------------------------------------
   # Navigation
   # ---------------------------------------------------------------------------
@@ -432,12 +442,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           class="hidden md:flex items-center gap-6 text-sm font-mono tracking-wide"
           aria-label="Main navigation"
         >
-          <a href="/playground" class="nav-link">Playground</a>
-          <a href="/gallery" class="nav-link">Gallery</a>
-          <a href="/demos" class="nav-link">Demos</a>
-          <a href="https://hexdocs.pm/raxol" class="nav-link">Docs</a>
-          <a href="/skill.md" class="nav-link">Skill</a>
-          <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
+          <a :for={{href, label} <- nav_links()} href={href} class="nav-link">{label}</a>
         </nav>
         <button
           type="button"
@@ -462,12 +467,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-60"
           aria-label="Main navigation"
         >
-          <a href="/playground">Playground</a>
-          <a href="/gallery">Gallery</a>
-          <a href="/demos">Demos</a>
-          <a href="https://hexdocs.pm/raxol">Docs</a>
-          <a href="/skill.md">Skill</a>
-          <a href="https://github.com/DROOdotFOO/raxol">GitHub</a>
+          <a :for={{href, label} <- nav_links()} href={href}>{label}</a>
         </nav>
       <% end %>
     </header>
