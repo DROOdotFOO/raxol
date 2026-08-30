@@ -472,12 +472,12 @@ Hooks.HaloField = {
     this.canvas.height = Math.round(this.h * dpr)
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    // Fine cells: the face's gill bars and eye dots need vertical
-    // resolution to read as ≡··≡ rather than a blob. ROWS are what matter,
-    // not the font size, so the cell shrinks on a short element instead of
-    // letting the row count collapse -- at 10px a 84px-tall mark gets seven
-    // rows, which is the difference between a face and a smudge.
-    this.fontPx = this.h < 150 ? 8 : 10
+    // Definition comes from the row count, not the type size: the face's gill
+    // bars and eye dots need cells to resolve into ≡··≡ rather than a blob.
+    // So the cell is sized to hold a target number of rows at any box height
+    // -- a fixed cell turns a taller mark into bigger blocks rather than a
+    // finer one.
+    this.fontPx = Math.max(5, Math.min(10, this.h / 30))
     this.ctx.font = `${this.fontPx}px ${this.fontFamily}`
     this.cellW = this.ctx.measureText('█').width || this.fontPx * 0.6
     this.cellH = Math.round(this.fontPx * 1.15)
@@ -495,15 +495,15 @@ Hooks.HaloField = {
     off.height = this.rows * S
     const octx = off.getContext('2d', {willReadFrequently: true})
 
+    // Size the glyph from a share of the grid's WIDTH, capped by height, so
+    // the face keeps the same proportion whether the mark is a wide banner or
+    // an upright box. Sizing from height alone blew a portrait mark up into
+    // four chunky blocks that read as texture rather than a face.
     const glyph = this.face()
-    let px = off.height * 0.78
+    octx.font = `100px ${this.fontFamily}`
+    const unit = octx.measureText(glyph).width / 100
+    const px = Math.min((off.width * 0.46) / unit, off.height * 0.42)
     octx.font = `${px}px ${this.fontFamily}`
-    const maxW = off.width * 0.55
-    const w = octx.measureText(glyph).width
-    if (w > maxW) {
-      px = px * (maxW / w)
-      octx.font = `${px}px ${this.fontFamily}`
-    }
     octx.fillStyle = '#fff'
     octx.textAlign = 'center'
     octx.textBaseline = 'middle'

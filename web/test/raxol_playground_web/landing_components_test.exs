@@ -6,6 +6,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
   alias RaxolPlayground.Capabilities
+  alias RaxolPlayground.RecordedFrames
+  alias RaxolPlayground.SurfaceSource
   alias RaxolPlaygroundWeb.LandingComponents
   alias RaxolPlaygroundWeb.PlaygroundComponents
 
@@ -57,6 +59,87 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       hero = render_component(&LandingComponents.screen_hero/1, example: name)
       assert hero =~ "#{name}.ex"
     end
+  end
+
+  # The hero claims one module reaches four surfaces, each pane an encoding of
+  # one recorded render. These two tests stop a pane reverting to authored text.
+  test "every non-terminal hero pane is a recorded artifact, line for line" do
+    for name <- LandingComponents.hero_example_names(),
+        surface <- [:browser, :ssh, :mcp] do
+      artifact = RecordedFrames.hero_artifact(name, surface)
+      pane = RecordedFrames.hero_surface(name, surface)
+
+      assert artifact != "", "#{name}/#{surface} has no recorded artifact"
+      assert pane != "", "#{name}/#{surface} renders no pane"
+
+      lines = pane_lines(pane)
+      marker? = List.last(lines) =~ ~r/^\.\.\. \d+ more lines, \d+ bytes total$/
+      body = if marker?, do: Enum.drop(lines, -1), else: lines
+
+      for line <- body do
+        assert String.contains?(artifact, unspell(line, surface)),
+               "#{name}/#{surface} shows a line that is not in the artifact:\n#{inspect(line)}"
+      end
+
+      # A pane either says what it cut, or it cut nothing.
+      full = artifact |> break_lines(surface) |> SurfaceSource.wrap()
+
+      if marker? do
+        assert length(lines) == SurfaceSource.budget()
+        assert length(full) > SurfaceSource.budget()
+      else
+        assert body == full,
+               "#{name}/#{surface} shows #{length(body)} of #{length(full)} lines and says nothing"
+      end
+    end
+  end
+
+  test "the hero renders four surfaces and claims no ACP one" do
+    hero =
+      render_component(&LandingComponents.screen_hero/1,
+        example: List.first(LandingComponents.hero_example_names())
+      )
+
+    for label <- ["Terminal", "Browser", "SSH", "Agent / MCP"] do
+      assert hero =~ ">#{label}</button>"
+    end
+
+    assert length(String.split(hero, ~s(class="hero-tab"))) - 1 == 4
+    assert hero =~ ~s(data-surface="3")
+    refute hero =~ ~s(data-surface="4")
+
+    # ACP is the coding agent's editor protocol, not a surface a TEA chart
+    # renders to, so the hero may not caption an example module with it.
+    refute hero =~ "ACP"
+    refute hero =~ "session/prompt"
+    refute hero =~ "agent_message_chunk"
+  end
+
+  defp break_lines(artifact, :browser), do: SurfaceSource.dom_lines(artifact)
+  defp break_lines(artifact, :ssh), do: SurfaceSource.ansi_lines(artifact)
+  defp break_lines(artifact, :mcp), do: SurfaceSource.json_lines(artifact)
+
+  # Undoes SurfaceSource's colour spans and escaping, leaving the lines as its
+  # line-breaking produced them.
+  defp pane_lines(pane) do
+    pane
+    |> String.replace(~r{</?span[^>]*>}, "")
+    |> unescape()
+    |> String.split("\n")
+  end
+
+  # ANSI lines carry ESC spelled out; put the byte back before checking.
+  defp unspell(line, :ssh), do: String.replace(line, "ESC", "\e")
+  defp unspell(line, _surface), do: line
+
+  defp unescape(text) do
+    # &amp; last, or an escaped &amp;lt; would come back as a literal <.
+    text
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+    |> String.replace("&quot;", "\"")
+    |> String.replace("&#39;", "'")
+    |> String.replace("&amp;", "&")
   end
 
   test "install tabs carry all four methods with curl visible by default" do
