@@ -2375,11 +2375,18 @@ input[type="range"]::-moz-range-thumb {
   animation-play-state: paused;
 }
 
+/* Padded on both sides, not just the trailing one. The leading pad is what
+   keeps the first entry's reveal inside the row: its pill is centred on a
+   logo barely wider than the mark, so at rest it reached about 33px past the
+   left edge and lost its first word to the marquee's own clipping. Both runs
+   carry the same padding, so the loop still translates by exactly one run and
+   stays seamless. */
 .integrations-run {
   display: flex;
   align-items: center;
   gap: 2.5rem;
   padding-right: 2.5rem;
+  padding-left: 2.5rem;
 }
 
 .integrations-group { display: flex; align-items: center; gap: 0.85rem; }

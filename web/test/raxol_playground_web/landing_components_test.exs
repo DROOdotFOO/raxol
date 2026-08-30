@@ -207,25 +207,53 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   test "marks decorate the derived entries without narrowing them" do
     entries = Enum.flat_map(LandingComponents.integration_groups(), &elem(&1, 1))
     row = render_component(&LandingComponents.screen_integrations/1, %{})
+    names = Enum.map(entries, & &1.name)
 
     for entry <- entries do
-      assert row =~ ">#{entry}</span>", "the row drops #{entry}, which is derived"
+      shown = if entry.mark, do: entry.label, else: entry.name
+      assert row =~ ">#{shown}</span>", "the row drops #{entry.name}, which is derived"
     end
 
     for name <- BrandMarks.known() do
-      assert name in entries, "#{name} has a mark but is no longer an entry"
+      assert name in names, "#{name} has a mark but is no longer an entry"
     end
 
     # Two runs are rendered: the visible one and the aria-hidden copy the loop
     # needs, so every marked entry appears twice.
-    marked = Enum.filter(entries, &BrandMarks.path/1)
+    marked = Enum.filter(entries, & &1.mark)
     assert length(String.split(row, "integrations-item--marked")) - 1 == length(marked) * 2
 
     # The no-mark path has to be live, not theoretical. Were every entry to
     # gain a mark this test would still pass while the fallback rotted, so the
     # fallback is asserted to be exercised by something.
-    assert Enum.any?(entries, &is_nil(BrandMarks.path(&1))),
+    assert Enum.any?(entries, &is_nil(&1.mark)),
            "no entry exercises the no-mark fallback"
+  end
+
+  # The reveal shows the registry's own label rather than the shortened head of
+  # it. Two entries reach Claude, the CLI subscription and the API key, and the
+  # head is the one part of the label that cannot say which is which: they
+  # shorten to "Claude" and "Anthropic" and read as a duplicate.
+  test "a marked entry reveals the full label, not the short head" do
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    qualified =
+      Capabilities.connectable_providers()
+      |> Enum.filter(&(&1.label != &1.name and BrandMarks.path(&1.name)))
+
+    assert qualified != [], "no marked provider carries a qualifier worth revealing"
+
+    for %{label: label} <- qualified do
+      assert row =~ ">#{label}</span>", "the row never reveals #{label} in full"
+    end
+
+    # The flow still carries the short name for entries with no mark, so the
+    # row stays scannable and does not widen to fit every qualifier.
+    for %{name: name, label: label} <- Capabilities.connectable_providers(),
+        is_nil(BrandMarks.path(name)) and label != name do
+      assert row =~ ">#{name}</span>", "#{name} should sit in the flow unqualified"
+      refute row =~ ">#{label}</span>"
+    end
   end
 
   # The marks are inlined, not fetched: a logo row that reaches out over the

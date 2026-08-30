@@ -324,13 +324,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   speech) are concepts with no mark to show, so they are the h1's business and
   not this row's.
   """
-  @spec integration_groups() :: [{String.t(), [String.t()]}]
+  @spec integration_groups() :: [{String.t(), [map()]}]
   def integration_groups do
+    editors = Enum.map(Capabilities.acp_editors(), &%{name: &1, label: &1})
+
     [
-      {"models", Capabilities.connectable_backends()},
-      {"acp editors", Capabilities.acp_editors()}
+      {"models", Capabilities.connectable_providers()},
+      {"acp editors", editors}
     ]
-    |> Enum.reject(fn {_label, items} -> items == [] end)
+    |> Enum.reject(fn {_label, entries} -> entries == [] end)
+    |> Enum.map(fn {group, entries} ->
+      {group, Enum.map(entries, &Map.put(&1, :mark, BrandMarks.path(&1.name)))}
+    end)
   end
 
   @doc """
@@ -359,22 +364,26 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           class={["integrations-run", dup? && "integrations-run--dup"]}
           aria-hidden={dup? && "true"}
         >
-          <span :for={{label, items} <- @groups} class="integrations-group">
+          <span :for={{label, entries} <- @groups} class="integrations-group">
             <span class="integrations-label">{label}</span>
             <span
-              :for={item <- items}
-              class={["integrations-item", BrandMarks.path(item) && "integrations-item--marked"]}
+              :for={entry <- entries}
+              class={["integrations-item", entry.mark && "integrations-item--marked"]}
             >
               <svg
-                :if={BrandMarks.path(item)}
+                :if={entry.mark}
                 class="integrations-mark"
                 viewBox="0 0 24 24"
                 aria-hidden="true"
                 focusable="false"
               >
-                <path d={BrandMarks.path(item)} fill="currentColor" />
+                <path d={entry.mark} fill="currentColor" />
               </svg>
-              <span class="integrations-name">{item}</span>
+              <%!-- The reveal has room the row does not, so it shows the
+                   registry's own label. The short head is what fits in the
+                   flow, but it is also the part that cannot tell "Claude
+                   (subscription, via CLI)" from "Anthropic (Claude)". --%>
+              <span class="integrations-name">{if entry.mark, do: entry.label, else: entry.name}</span>
             </span>
           </span>
         </div>

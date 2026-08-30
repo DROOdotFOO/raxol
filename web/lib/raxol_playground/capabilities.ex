@@ -49,16 +49,16 @@ defmodule RaxolPlayground.Capabilities do
   # Inlined rather than factored into a function because a module attribute
   # cannot call a function of the module being defined.
   @providers Enum.map(Resolver.providers(), fn %{harness: harness, label: label} ->
-               %{harness: harness, name: label |> String.split(" (") |> hd()}
+               %{harness: harness, name: label |> String.split(" (") |> hd(), label: label}
              end)
 
   @backends Enum.map(@providers, & &1.name)
 
   # Mock answers canned text offline. It belongs in the manifest an agent
   # reads, and not in a list of providers a reader could connect to.
-  @connectable_backends @providers
-                        |> Enum.reject(&(&1.harness == :mock))
-                        |> Enum.map(& &1.name)
+  @connectable Enum.reject(@providers, &(&1.harness == :mock))
+  @connectable_backends Enum.map(@connectable, & &1.name)
+  @connectable_providers Enum.map(@connectable, &Map.take(&1, [:name, :label]))
 
   # ACP-speaking editors, from the registry raxol is itself listed on:
   # https://agentclientprotocol.com/get-started/clients (checked 2026-08-30).
@@ -138,6 +138,18 @@ defmodule RaxolPlayground.Capabilities do
   """
   @spec connectable_backends() :: [String.t()]
   def connectable_backends, do: @connectable_backends
+
+  @doc """
+  `connectable_backends/0` with each name paired to the registry's own label.
+
+  The name is the label's head, which is what a dense row can show, but the
+  head is also the one part that does not say which of two entries is which:
+  `:claude_native` and `:anthropic` both reach Claude and shorten to "Claude"
+  and "Anthropic", telling a reader nothing about subscription versus API key.
+  Callers that have room, like a hover reveal, should show `:label`.
+  """
+  @spec connectable_providers() :: [%{name: String.t(), label: String.t()}]
+  def connectable_providers, do: @connectable_providers
 
   @doc """
   Whether raxol's own ACP surface is compiled into this build.
