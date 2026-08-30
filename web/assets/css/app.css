@@ -2513,8 +2513,13 @@ input[type="range"]::-moz-range-thumb {
    a character grid, and below roughly 20 columns the face stops resolving into
    gills and eyes and reads as noise. */
 .screen-halo {
-  height: clamp(150px, 21vh, 215px);
-  width: clamp(150px, 18vw, 230px);
+  /* Grown into slack the row was already paying for: the intro's height is set
+     by the text column beside it, so the mark is free to get taller up to that
+     height without costing the screen a pixel. The width is raised far less --
+     it comes straight out of the title's measure, and the title wrapping to a
+     fourth line WOULD cost height. */
+  height: clamp(170px, 26vh, 250px);
+  width: clamp(160px, 19vw, 244px);
   margin: 0;
   flex: 0 0 auto;
 }

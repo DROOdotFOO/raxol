@@ -475,7 +475,14 @@ Hooks.HaloField = {
     // So the cell is sized to hold a target number of rows at any box height
     // -- a fixed cell turns a taller mark into bigger blocks rather than a
     // finer one.
-    this.fontPx = Math.max(5, Math.min(10, this.h / 30))
+    //
+    // 40 rows, not 30. Because the cell scales with the box, growing the mark
+    // alone bought bigger blocks at the same 26-row grid, which is a coarser
+    // face, not a larger one. The target row count is the only thing that
+    // makes it finer. The floor drops with it: these are solid block glyphs
+    // (░▒▓█), not letterforms, so they stay legible well under 5px where text
+    // would not.
+    this.fontPx = Math.max(4.5, Math.min(10, this.h / 40))
     this.ctx.font = `${this.fontPx}px ${this.fontFamily}`
     this.cellW = this.ctx.measureText('█').width || this.fontPx * 0.6
     this.cellH = Math.round(this.fontPx * 1.15)
@@ -500,7 +507,10 @@ Hooks.HaloField = {
     const glyph = this.face()
     octx.font = `100px ${this.fontFamily}`
     const unit = octx.measureText(glyph).width / 100
-    const px = Math.min((off.width * 0.46) / unit, off.height * 0.42)
+    // A larger share of the grid than it was: with a finer cell the keep-out
+    // ring costs proportionally less room, so the face can take more of the
+    // box without the halo losing the frame it needs.
+    const px = Math.min((off.width * 0.52) / unit, off.height * 0.46)
     octx.font = `${px}px ${this.fontFamily}`
     octx.fillStyle = '#fff'
     octx.textAlign = 'center'
