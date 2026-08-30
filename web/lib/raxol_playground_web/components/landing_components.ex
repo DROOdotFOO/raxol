@@ -744,14 +744,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # never faked.
   # ---------------------------------------------------------------------------
 
-  # Score ranges live in PrivacyTier's score_to_tier clauses (not exposed);
-  # the public note describes an opt-down tier with no score gate.
-  @tier_notes %{
-    public: "no fee, full disclosure",
-    standard: "trust score 0-24",
-    stealth: "trust score 25-49",
-    private: "trust score 50-74",
-    sovereign: "trust score 75 and above"
+  # What each tier must PROVE, beyond reaching the score. The proofs are
+  # `Raxol.Payments.FeeSchedule.tier_attestation_requirements/0`; this is the
+  # prose for them.
+  @tier_proofs %{
+    standard: "no proof required",
+    trusted: "no proof required",
+    verified: "compliance proof",
+    premium: "compliance + non-membership",
+    institutional: "compliance + non-membership"
   }
 
   # Authored commentary on solver rails the matrix data does not carry.
@@ -768,14 +769,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:matrix, :map, required: true)
 
   def payments_deep_dive(assigns) do
-    # The :open rebate-for-analytics tier is retired as a product (a
-    # pay-for-order-flow-shaped rebate is unlawful in the EU) and must not
-    # be advertised; PrivacyTier still carries it in code, tracked as a
-    # payments-package follow-up.
+    # Fees come from `Raxol.Payments.FeeSchedule`, the mirror of Riddler's
+    # FeePolicy that is pinned to the same generated schedule the Riddler SDK
+    # checks itself against. They used to come from `PrivacyTier`, which prices
+    # a different (retired) model: it put a table on this page that no tier has
+    # ever charged, including a `0 bps -- no fee` row that the never-discounted
+    # solver floor makes impossible.
     assigns =
       assign(assigns,
-        tiers: Enum.reject(Raxol.Payments.PrivacyTier.all(), &(&1.tier == :open)),
-        tier_notes: @tier_notes,
+        tiers: Raxol.Payments.FeeSchedule.all(),
+        tier_proofs: @tier_proofs,
+        solver_floor: Raxol.Payments.FeeSchedule.solver_base_bps(),
         payments_version: @payments_version,
         rows: reach_rows(assigns.matrix),
         show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
@@ -790,11 +794,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <h2 id="payments-title" class="heading-2xl mb-3">Agents that settle, privately.</h2>
         <p class="body-text max-w-2xl">
           First funded cross-chain settlement on 2026-06-28; the USDC transfer
-          offering has been live on Base since 2026-07-20. Trust is proven with
-          zero-knowledge attestations rather than disclosed, so a higher tier
-          reveals less while charging less. Stealth settlement derives a
-          one-time address per payment (ERC-5564); shielded settlement posts
-          the note into an Aztec execution environment.
+          offering has been live on Base since 2026-07-20. What a transfer costs
+          is set by the agent's trust score and by what it is moving -- the rates
+          below are the solver's own published schedule, mirrored in
+          <code>Raxol.Payments.FeeSchedule</code> and pinned to it in CI.
         </p>
         <p class="caption-text mt-3">
           Early, and labeled: the payments packages are at <%= @payments_version %> beside a 2.6
@@ -802,20 +805,43 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </p>
       </div>
 
-      <div class="ladder mb-10" role="table" aria-label="Privacy tiers">
+      <div class="ladder mb-4" role="table" aria-label="Fee tiers">
         <div class="rung rung--head" role="row">
           <span role="columnheader">Tier</span>
-          <span role="columnheader">Fee</span>
-          <span role="columnheader">Settlement</span>
           <span role="columnheader">Trust score</span>
+          <span role="columnheader">Stable</span>
+          <span role="columnheader">Volatile</span>
+          <span role="columnheader">Proof</span>
         </div>
         <div :for={tier <- @tiers} class="rung" role="row">
           <span class="rung__tier" role="cell"><%= tier.tier %></span>
-          <span class="rung__fee" role="cell"><%= tier.fee_bps %> bps</span>
-          <span class={["rung__set", settlement_class(tier.settlement)]} role="cell"><%= tier.settlement %></span>
-          <span class="rung__note" role="cell"><%= @tier_notes[tier.tier] %></span>
+          <span class="rung__note" role="cell"><%= score_band(tier) %></span>
+          <span class="rung__fee" role="cell"><%= tier.stable_bps %> bps</span>
+          <span class="rung__fee" role="cell"><%= tier.volatile_bps %> bps</span>
+          <span class="rung__note" role="cell"><%= @tier_proofs[tier.tier] %></span>
         </div>
       </div>
+
+      <p class="caption-text max-w-2xl mb-10">
+        Three additive layers: the solver spread, the Xochi venue cut, and the
+        raxol routing cut. A tier discounts the venue and routing layers only --
+        the solver spread (<%= @solver_floor.stable %> bps stable,
+        <%= @solver_floor.volatile %> bps volatile) is never discounted, because
+        it is the floor that keeps a fill cash-positive. There is no zero-fee
+        tier. An intent that originates from an ACP job pays no routing layer:
+        that cut is already in the job budget.
+      </p>
+
+      <h3 class="name-coral mb-2">Privacy is a settlement mode, not a price</h3>
+      <p class="body-text-dim max-w-2xl mb-10">
+        Every corridor settles one of three ways, and the choice is independent
+        of the fee tier: <strong>public</strong> on the destination chain,
+        <strong>stealth</strong> to a one-time address derived per payment
+        (ERC-5564), or <strong>shielded</strong> as a note posted into an Aztec
+        execution environment. Trust is proven with zero-knowledge attestations
+        rather than disclosed, so reaching a lower-fee tier reveals less about
+        the agent, not more.
+      </p>
 
       <h3 class="name-coral mb-2">Reach, from the solver's own matrix</h3>
       <p class="body-text-dim max-w-2xl mb-4">
@@ -854,7 +880,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <div class="reach-foot">
           every corridor settles public,
           <span class="set-stealth">stealth</span> (ERC-5564 one-time address), or
-          <span class="set-shielded">shielded</span> (Aztec) -- selected by trust tier
+          <span class="set-shielded">shielded</span> (Aztec) -- chosen per payment
         </div>
       </div>
     </section>
@@ -880,9 +906,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     end)
   end
 
-  defp settlement_class(:public), do: "set-public"
-  defp settlement_class(:stealth), do: "set-stealth"
-  defp settlement_class(:shielded), do: "set-shielded"
+  # The top tier is open-ended, so it reads as a threshold rather than a band.
+  defp score_band(%{min_score: min, max_score: nil}), do: "#{min} and above"
+  defp score_band(%{min_score: min, max_score: max}), do: "#{min}-#{max}"
 
   # ---------------------------------------------------------------------------
   # 4. Features grid (numbered)
