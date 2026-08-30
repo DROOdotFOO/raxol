@@ -25,6 +25,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
   def mount(%{"demo" => _name}, _session, socket) do
     socket =
       socket
+      |> assign(:page_title, "Demo")
       |> assign(:component, nil)
       |> assign(:prev_component, nil)
       |> assign(:next_component, nil)
@@ -48,6 +49,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
 
     socket =
       socket
+      |> assign(:page_title, "Demos")
       |> assign(:component, nil)
       |> assign(:components, components)
       |> assign(:total_count, length(components))
@@ -70,6 +72,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       socket =
         socket
         |> DemoLifecycle.stop_demo()
+        |> assign(:page_title, if(component, do: component.name, else: "Demo"))
         |> assign(:component, component)
         |> assign(:prev_component, pos.prev)
         |> assign(:next_component, pos.next)

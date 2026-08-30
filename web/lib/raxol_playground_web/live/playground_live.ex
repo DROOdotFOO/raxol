@@ -51,6 +51,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
     socket =
       socket
+      |> assign(:page_title, "Playground")
       |> assign(:components, components)
       |> assign(:total_count, length(components))
       |> assign(:selected, selected)

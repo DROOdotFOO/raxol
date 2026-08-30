@@ -419,19 +419,26 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def nav_bar(assigns) do
     ~H"""
-    <nav class="sticky top-0 z-50 surface-bar" aria-label="Main navigation">
+    <%!-- A banner landmark around the navigation, not a bare nav. The topic
+         pages had no `header` at all, so the one region a screen reader jumps
+         to first did not exist on five of them, and the brand link sat outside
+         any landmark. Matches `screen_header` on the landing. --%>
+    <header class="sticky top-0 z-50 surface-bar" role="banner">
       <div class="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
         <a href="/" class="font-mono text-lg font-bold text-axol-coral tracking-wide">
           raxol
         </a>
-        <div class="hidden md:flex items-center gap-6 text-sm font-mono tracking-wide">
+        <nav
+          class="hidden md:flex items-center gap-6 text-sm font-mono tracking-wide"
+          aria-label="Main navigation"
+        >
           <a href="/playground" class="nav-link">Playground</a>
           <a href="/gallery" class="nav-link">Gallery</a>
           <a href="/demos" class="nav-link">Demos</a>
           <a href="https://hexdocs.pm/raxol" class="nav-link">Docs</a>
           <a href="/skill.md" class="nav-link">Skill</a>
           <a href="https://github.com/DROOdotFOO/raxol" class="nav-link">GitHub</a>
-        </div>
+        </nav>
         <button
           type="button"
           phx-click="toggle_mobile_menu"
@@ -450,16 +457,20 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </button>
       </div>
       <%= if @mobile_menu_open do %>
-        <div id="mobile-navigation" class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-60">
+        <nav
+          id="mobile-navigation"
+          class="md:hidden px-6 py-4 flex flex-col gap-4 text-sm font-mono border-t border-subtle text-pearl-60"
+          aria-label="Main navigation"
+        >
           <a href="/playground">Playground</a>
           <a href="/gallery">Gallery</a>
           <a href="/demos">Demos</a>
           <a href="https://hexdocs.pm/raxol">Docs</a>
           <a href="/skill.md">Skill</a>
           <a href="https://github.com/DROOdotFOO/raxol">GitHub</a>
-        </div>
+        </nav>
       <% end %>
-    </nav>
+    </header>
     """
   end
 
@@ -698,7 +709,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="mb-10">
         <span class="section-numeral" aria-hidden="true">01</span>
         <span class="section-eyebrow">Surfaces</span>
-        <h2 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h2>
+        <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h1>
         <p class="body-text max-w-2xl">
           Write the TEA module once. It meets you in three places you already
           are: your terminal, your browser, and wherever your agents work.
@@ -708,7 +719,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="surface-buckets">
         <div class="surface-bucket">
-          <h3 class="surface-bucket__label">In your terminal</h3>
+          <h2 class="surface-bucket__label">In your terminal</h2>
           <div class="surface-bucket__chips">
             <div class="surface-chip">
               <span class="surface-chip__name">Terminal</span>
@@ -722,7 +733,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
 
         <div class="surface-bucket">
-          <h3 class="surface-bucket__label">In your browser</h3>
+          <h2 class="surface-bucket__label">In your browser</h2>
           <div class="surface-bucket__chips">
             <div class="surface-chip">
               <span class="surface-chip__name">Browser</span>
@@ -732,7 +743,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
 
         <div class="surface-bucket">
-          <h3 class="surface-bucket__label">Where your agents are</h3>
+          <h2 class="surface-bucket__label">Where your agents are</h2>
           <div class="surface-bucket__chips">
             <div class="surface-chip">
               <span class="surface-chip__name">MCP</span>
@@ -768,7 +779,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <div>
           <span class="section-numeral" aria-hidden="true">02</span>
           <span class="section-eyebrow">SSH surface</span>
-          <h2 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h2>
+          <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h1>
           <p class="body-text mb-6">
             Every Raxol app is one SSH connection away. Each session is a
             supervised BEAM process: crash-isolated, hot-reloadable, observable.
@@ -801,7 +812,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">03</span>
         <span class="section-eyebrow">Agent runtime</span>
-        <h2 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA apps.</h2>
+        <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA apps.</h1>
         <p class="body-text max-w-2xl">
           Same <span class="text-axol-coral">init</span> /
           <span class="text-axol-coral">update</span> /
@@ -837,7 +848,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">04</span>
         <span class="section-eyebrow">Coding agent</span>
-        <h2 id="coding-agent-title" class="heading-2xl mb-3">raxol speaks ACP.</h2>
+        <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol speaks ACP.</h1>
         <p class="body-text max-w-2xl">
           Open it in Zed, JetBrains, neovim, Emacs, or VS Code: raxol is listed
           on <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>
@@ -938,7 +949,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">05</span>
         <span class="section-eyebrow">Agent payments</span>
-        <h2 id="payments-title" class="heading-2xl mb-3">Agents that settle, privately.</h2>
+        <h1 id="payments-title" class="heading-2xl mb-3">Agents that settle, privately.</h1>
         <p class="body-text max-w-2xl">
           First funded cross-chain settlement on 2026-06-28; the USDC transfer
           offering has been live on Base since 2026-07-20. What a transfer costs
@@ -979,7 +990,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         that cut is already in the job budget.
       </p>
 
-      <h3 class="name-coral mb-2">Privacy is a settlement mode, not a price</h3>
+      <h2 class="name-coral mb-2">Privacy is a settlement mode, not a price</h2>
       <p class="body-text-dim max-w-2xl mb-10">
         Every corridor settles one of three ways, and the choice is independent
         of the fee tier: <strong>public</strong> on the destination chain,
@@ -990,7 +1001,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         the agent, not more.
       </p>
 
-      <h3 class="name-coral mb-2">Reach, from the solver's own matrix</h3>
+      <h2 class="name-coral mb-2">Reach, from the solver's own matrix</h2>
       <p class="body-text-dim max-w-2xl mb-4">
         Rendered server-side from the Xochi solver's capability matrix
         (<code>Raxol.Payments.Xochi.Capabilities.get/1</code>, five-minute
@@ -1016,11 +1027,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                 <span :if={row.note} class="tok tok--dim"><%= row.note %></span>
               </span>
             </div>
+            <%!-- The badge, not the dimming, is what says this corridor is not
+                 live. Greying alone said it in colour only, at a contrast a
+                 reader could not clear, so the one row that needed reading
+                 most was the hardest to read. --%>
             <div :if={@show_future_svm} class="reach-row reach-row--future">
               <span class="reach-row__name">Solana</span>
               <span class="reach-row__id">--</span>
               <span class="reach-row__vm">SVM</span>
-              <span class="reach-row__note">lights up when the solver ships it, zero redeploy</span>
+              <span class="reach-row__note">
+                <span class="tok tok--soon">not yet</span>
+                lights up when the solver ships it, zero redeploy
+              </span>
             </div>
           </div>
         </div>
@@ -1031,7 +1049,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <h3 class="name-coral mb-2 mt-12">${@token.symbol}</h3>
+      <h2 class="name-coral mb-2 mt-12">${@token.symbol}</h2>
       <p class="body-text-dim max-w-2xl mb-4">
         The project token, on <%= @token.chain_name %>. It is not a settlement
         asset -- the corridors quote, route and settle in stablecoins.
@@ -1118,7 +1136,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <div class="panel panel--glow feature-card p-6">
       <span class="feature-card__index"><%= @index %></span>
-      <h3 class="name-coral mb-2"><%= @title %></h3>
+      <h2 class="name-coral mb-2"><%= @title %></h2>
       <p class="detail-text leading-relaxed"><%= @description %></p>
     </div>
     """

@@ -46,7 +46,9 @@ defmodule RaxolPlaygroundWeb.TopicLive do
 
     {:ok,
      assign(socket,
-       page_title: "Raxol -- #{title}",
+       # The layout already appends " · Raxol", so naming the brand here put it
+       # in the tab twice.
+       page_title: title,
        title: title,
        mobile_menu_open: false,
        # Only the payments topic reads it; resolving it once here keeps mount

@@ -1176,10 +1176,14 @@ html {
 .reach-row__id { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .reach-row__vm { color: var(--sky); font-size: 0.68rem; letter-spacing: 0.1em; }
 
+/* Dimmer than a live corridor, but still readable: at 0.32 and 0.38 alpha this
+   row measured 2.45:1 and 3.01:1, under the 4.5:1 a reader needs. The status
+   is carried by the badge now, so the colour only has to reinforce it, and
+   these track the same tokens every other muted row uses. */
 .reach-row--future .reach-row__name,
 .reach-row--future .reach-row__id,
-.reach-row--future .reach-row__vm { color: rgba(232, 228, 220, 0.32); }
-.reach-row--future .reach-row__note { color: rgba(232, 228, 220, 0.38); font-size: 0.72rem; }
+.reach-row--future .reach-row__vm { color: var(--text-dim); }
+.reach-row--future .reach-row__note { color: var(--text-muted); font-size: 0.72rem; }
 
 .reach-toks { display: flex; gap: 0.45rem; flex-wrap: wrap; }
 
@@ -1193,6 +1197,19 @@ html {
 
 .tok--alt { border-color: var(--sky-25); color: var(--sky); }
 .tok--dim { border-color: var(--panel-border); color: var(--text-dim); }
+
+/* Dashed, so the status reads without colour: a corridor that is not live
+   differs from one that is by the shape of its badge and by the word in it,
+   not only by being fainter. */
+.tok--soon {
+  border-style: dashed;
+  border-color: var(--panel-border);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.62rem;
+  margin-right: 0.4rem;
+}
 
 .reach-foot {
   padding: 0.6rem 1rem;
