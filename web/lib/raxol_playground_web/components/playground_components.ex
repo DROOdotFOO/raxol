@@ -80,7 +80,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
       @variant == :footer && "px-6 py-3 bg-panel border-t border-subtle",
       @class
     ]}>
-      <span class="text-pearl-50">
+      <span class="text-pearl-60">
         <%= if @variant == :banner do %>
           Try the real terminal experience:
         <% else %>

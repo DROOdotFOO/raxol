@@ -200,7 +200,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
           <%= for comp <- @components do %>
             <a href={"/demos/#{comp.name}"} class="panel panel--glow block p-4 transition-all duration-200">
               <div class="flex items-start justify-between mb-2">
-                <h3 class="font-mono font-semibold name-sky"><%= comp.name %></h3>
+                <h2 class="font-mono font-semibold name-sky"><%= comp.name %></h2>
                 <.complexity_badge level={comp.complexity} />
               </div>
               <p class="font-mono mb-2 detail-text"><%= comp.description %></p>
@@ -233,7 +233,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       class="h-screen flex flex-col bg-obsidian"
     >
       <!-- Header -->
-      <div class="px-8 py-5 surface-bar">
+      <header class="px-8 py-5 surface-bar">
         <div class="flex items-center justify-between gap-8">
           <div class="flex items-center gap-6 min-w-0">
             <a href="/demos" class="font-mono text-sm subtle-link whitespace-nowrap" aria-label="Back to all demos">&larr; Back</a>
@@ -281,7 +281,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
             </button>
           </div>
         </div>
-      </div>
+      </header>
 
       <!-- Terminal + Code -->
       <div class="flex-1 flex overflow-hidden">
