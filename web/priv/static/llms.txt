@@ -10,7 +10,7 @@
 
 Raxol is an Elixir framework built on OTP. It uses The Elm Architecture (TEA): init/1, update/2, view/1. The same module renders to these surfaces without modification: terminal, liveview, ssh, mcp, telegram, watch, speech.
 
-Agent framework: TEA agents (message-driven) and Process agents (tick-driven), teams with coordinator/worker supervision, reasoning strategies (Direct, ReAct), a Turn driver that wires memory and skills and self-improvement, and a native multi-vendor harness (Claude Code, Cursor) that serves Raxol tools over MCP. Backends: Anthropic, OpenAI, Ollama, Kimi, Groq, LLM7, OpenRouter, Lumo, Mock.
+Agent framework: TEA agents (message-driven) and Process agents (tick-driven), teams with coordinator/worker supervision, reasoning strategies (Direct, ReAct), a Turn driver that wires memory and skills and self-improvement, and a native multi-vendor harness (Claude Code, Cursor) that serves Raxol tools over MCP. Backends: Claude, Grok, Anthropic, OpenAI, Kimi, OpenRouter, LongCat, Proton Lumo, Ollama, LM Studio, LLM7, Mock.
 
 Agent learning: a provider-stack memory layer, full-text session recall, a dialectic user model, an after-turn self-improvement loop, and agent-authored skills in the agentskills.io SKILL.md format.
 

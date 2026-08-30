@@ -2331,6 +2331,113 @@ input[type="range"]::-moz-range-thumb {
    occupy is what an integrations row will take. */
 .screen-install { width: 100%; max-width: 32rem; }
 
+/* The integrations row, in the band the capped demo frees above.
+
+   Every name in it is derived -- the provider registry the agent resolves
+   against, the surface table the manifest serves, the ACP client list gated on
+   our own ACP surface -- so the row's width is whatever those add up to, not a
+   number anyone chose. That is why it scrolls: at 62rem a static row would
+   silently drop the tail, and a cap nobody can see is worse than motion. */
+.screen-integrations {
+  width: 100%;
+  max-width: 62rem;
+  flex: 0 0 auto;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  line-height: 1.5;
+  padding: 0.15rem 0;
+  text-align: left;
+  /* Fade the edges rather than cut them, so a name half out of frame reads as
+     continuing rather than as clipped. */
+  -webkit-mask-image: linear-gradient(
+    90deg, transparent, #000 4rem, #000 calc(100% - 4rem), transparent
+  );
+  mask-image: linear-gradient(
+    90deg, transparent, #000 4rem, #000 calc(100% - 4rem), transparent
+  );
+}
+
+.integrations-track {
+  display: flex;
+  width: max-content;
+  animation: integrations-scroll 45s linear infinite;
+}
+
+/* Half the track is exactly one run, so the seam never shows. */
+@keyframes integrations-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.screen-integrations:hover .integrations-track,
+.screen-integrations:focus-within .integrations-track {
+  animation-play-state: paused;
+}
+
+.integrations-run {
+  display: flex;
+  align-items: center;
+  gap: 2.5rem;
+  padding-right: 2.5rem;
+}
+
+.integrations-group { display: flex; align-items: center; gap: 0.85rem; }
+
+.integrations-label {
+  color: var(--text-dim);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.integrations-item { color: var(--text-muted); white-space: nowrap; }
+
+/* Separators live in CSS, not markup, so they never land in a test assertion
+   or in what a screen reader reads out. */
+.integrations-item + .integrations-item::before {
+  content: "\00b7";
+  color: var(--text-dim);
+  margin-right: 0.85rem;
+}
+
+/* The global reduced-motion reset above already stops the motion correctly:
+   the animation runs to completion in 0.01ms and, with the default
+   `fill-mode: none`, the transform reverts to the base value, so the track
+   sits at its start rather than parked mid-loop. What it leaves behind is the
+   problem. The run measures about 1965px inside a 992px frame, so a static
+   clipped row shows roughly half the entries and offers no way to reach the
+   rest -- the silent cap the scrolling was there to avoid in the first place.
+
+   So: stop the animation outright, drop the duplicate run nobody needs once
+   nothing loops, and let the row scroll by hand. Every entry stays reachable
+   and nothing moves. No hook is involved -- a CSS query is live by
+   construction, which is why HaloField and HeroDemo need a `change` listener
+   and this does not. */
+@media (prefers-reduced-motion: reduce) {
+  .integrations-track { animation: none; }
+  .integrations-run--dup { display: none; }
+
+  .screen-integrations { overflow-x: auto; scrollbar-width: none; }
+  .screen-integrations::-webkit-scrollbar { display: none; }
+}
+
+/* Reinforcement, not the argument, so this is the right thing to drop when the
+   screen cannot hold everything.
+
+   949, not the 900 that eyeballing the free band suggests. The band is not a
+   fixed pocket -- the demo is `flex: 1 1 auto`, so a row added above the cap
+   comes straight out of the panes. The binding case is the 30-line example at
+   the 8px type floor, which needs 324.8px of pane content box. Measured, the
+   pane gets `viewport - 563px` without this row and `viewport - 601px` with
+   it, which moves the shortest workable screen from about 888px to about 926px.
+   Showing the row between those two heights would not be tight, it would clip
+   the module -- the row would be the cause. 949 is that floor with margin.
+   Dropped here exactly as the panes stop sharing a row under 768px. */
+@media (min-height: 640px) and (min-width: 768px) and (max-height: 949px) {
+  .screen-integrations { display: none; }
+}
+
 .screen-footer {
   display: flex;
   flex-wrap: wrap;

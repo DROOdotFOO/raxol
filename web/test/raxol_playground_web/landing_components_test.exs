@@ -5,6 +5,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
+  alias Raxol.Agent.Backend.Resolver
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.RecordedFrames
   alias RaxolPlayground.SurfaceSource
@@ -129,6 +130,73 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute hero =~ "ACP"
     refute hero =~ "session/prompt"
     refute hero =~ "agent_message_chunk"
+  end
+
+  # The row reinforces the claim with things that are true, so its entries have
+  # to come from the tables the rest of the site serves rather than from a list
+  # someone typed. A hand-kept copy is what put "Groq" on /api/capabilities and
+  # left four real providers off it. This fails rather than drifting.
+  test "the integrations row's models are the agent's own provider registry" do
+    expected =
+      Resolver.providers()
+      |> Enum.reject(&(&1.harness == :mock))
+      |> Enum.map(&(&1.label |> String.split(" (") |> hd()))
+
+    assert Capabilities.connectable_backends() == expected
+
+    # Mock answers canned text offline. It belongs in the manifest an agent
+    # reads, and not in a list of providers a reader could connect to.
+    assert "Mock" in Capabilities.backends()
+    refute "Mock" in expected
+
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    for name <- expected do
+      assert row =~ name,
+             "the integrations row omits #{name}, which the provider registry lists"
+    end
+  end
+
+  # npm and the Homebrew tap are built but unpublished and human-gated. The row
+  # names channels that exist today. `install_tabs` still advertises both and
+  # is rendered by nothing; that wart must not spread to a live component.
+  test "the integrations row names no unpublished install channel" do
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    refute row =~ "npm"
+    refute row =~ "brew"
+    refute row =~ "Homebrew"
+  end
+
+  # Editors are third-party ACP clients, so the honest gate is our own ACP
+  # surface: a build without it (a Hex install of raxol_agent compiles no
+  # StdioAgent) names no editor rather than five that cannot reach it. Asserted
+  # as a relationship, since a compile gate cannot be flipped from a test the
+  # way RAXOL_SSH_PLAYGROUND can.
+  test "editors appear only while raxol's own ACP surface is compiled in" do
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+    labels = Enum.map(LandingComponents.integration_groups(), &elem(&1, 0))
+
+    editors_named? = "acp editors" in labels
+
+    assert Capabilities.acp_available?() == (Capabilities.acp_editors() != [])
+    assert editors_named? == Capabilities.acp_available?()
+
+    for editor <- Capabilities.acp_editors() do
+      assert row =~ editor, "the integrations row omits #{editor}"
+    end
+  end
+
+  # The hero may not say "ACP" (above), and this row names ACP editors. Keeping
+  # the row a sibling of the hero rather than part of it is what keeps both
+  # true, so the separation is asserted instead of left to convention.
+  test "the integrations row is a sibling of the hero, not part of it" do
+    for name <- LandingComponents.hero_example_names() do
+      hero = render_component(&LandingComponents.screen_hero/1, example: name)
+
+      refute hero =~ "integrations-track",
+             "#{name}'s hero carries the integrations row, which must stay a sibling"
+    end
   end
 
   defp break_lines(artifact, :browser), do: SurfaceSource.dom_lines(artifact)
