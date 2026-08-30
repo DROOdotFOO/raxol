@@ -152,17 +152,46 @@ defmodule RaxolPlayground.RecordedFrames do
   end
 
   @doc """
-  Rows in one recorded terminal frame. The CSS sizes the frame's type from
-  this, so a short viewport shrinks it rather than clipping the last rows.
+  Rows and columns in one recorded terminal frame.
+
+  The CSS sizes the frame's type from both, so the frame grows to fill the
+  pane it is given and shrinks to fit a short one, instead of sitting at a
+  fixed size with dead space beside it.
   """
-  @spec hero_frame_rows(String.t()) :: pos_integer()
-  def hero_frame_rows(example) do
+  @spec hero_frame_grid(String.t()) :: %{rows: pos_integer(), cols: pos_integer()}
+  def hero_frame_grid(example) do
     case hero_frames(example) do
+      [frame | _] -> grid(frame)
+      [] -> %{rows: 1, cols: 1}
+    end
+  end
+
+  # Measured off the frame's own text: the recording geometry lives in the
+  # generator, and a second copy of it here would be free to drift.
+  defp grid(frame) do
+    lines =
+      frame
+      |> String.replace(~r/<[^>]*>/, "")
+      |> unescape()
+      |> String.split("\n")
       # The encoder closes with a newline before `</pre>`, so the last split is
       # the closing tag rather than a row.
-      [frame | _] -> max(length(String.split(frame, "\n")) - 1, 1)
-      [] -> 1
-    end
+      |> Enum.drop(-1)
+
+    %{
+      rows: max(length(lines), 1),
+      cols: lines |> Enum.map(&String.length/1) |> Enum.max(fn -> 1 end) |> max(1)
+    }
+  end
+
+  defp unescape(text) do
+    # &amp; last, or an escaped &amp;lt; would come back as a literal <.
+    text
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+    |> String.replace("&quot;", "\"")
+    |> String.replace("&#39;", "'")
+    |> String.replace("&amp;", "&")
   end
 
   @doc """
