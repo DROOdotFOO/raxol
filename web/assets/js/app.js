@@ -321,7 +321,17 @@ Hooks.HeroDemo = {
     // sequence (the terminal frame and the ANSI the SSH pane paints), so
     // element count is a multiple of the real frame count and using it would
     // step past every index and blank both panes.
-    const count = 1 + Math.max(...Array.from(frames, (f) => parseInt(f.dataset.frame, 10)))
+    //
+    // Indices are filtered rather than trusted: one unparseable `data-frame`
+    // makes `Math.max` NaN, `% NaN` NaN, and then no element's index equals
+    // `this.frame`, so every pane hides and the hero goes blank and stays
+    // blank. Falling back to the element count animates something wrong; the
+    // frames themselves are still on the page either way.
+    const indices = Array.from(frames, (f) => parseInt(f.dataset.frame, 10)).filter(
+      (n) => Number.isInteger(n) && n >= 0
+    )
+    if (indices.length < 2) return
+    const count = 1 + Math.max(...indices)
     this.frame = (this.frame + 1) % count
     frames.forEach((f) => {
       f.hidden = parseInt(f.dataset.frame, 10) !== this.frame
