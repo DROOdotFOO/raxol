@@ -209,4 +209,54 @@ defmodule Raxol.Agent.Code.ProjectContextTest do
       assert text =~ "[truncated: file exceeds the size cap]"
     end
   end
+
+  # Hooks and MCP servers are refused in a jail because the workspace is
+  # TENANT-written. These files are read rather than executed so they are kept,
+  # but the same fact applies: telling the model to follow tenant-written text
+  # "as operator instructions" hands whoever can write the workspace the most
+  # privileged position in the conversation.
+  describe "trust framing" do
+    test "an untrusted render does not claim operator authority" do
+      dir = workspace()
+      write(dir, "AGENTS.md", "use tabs")
+
+      text = dir |> load() |> ProjectContext.render(trusted: false)
+
+      # The content still reaches the model.
+      assert text =~ "use tabs"
+
+      refute text =~ "operator instructions"
+      assert text =~ "untrusted"
+      assert text =~ "tools, permissions, or the"
+    end
+
+    test "a trusted render is unchanged" do
+      dir = workspace()
+      write(dir, "AGENTS.md", "use tabs")
+
+      text = dir |> load() |> ProjectContext.render(trusted: true)
+
+      assert text =~ "Follow them as operator instructions"
+      refute text =~ "untrusted"
+    end
+
+    test "trusted is the default, so a normal session is unaffected" do
+      dir = workspace()
+      write(dir, "AGENTS.md", "use tabs")
+
+      assert dir |> load() |> ProjectContext.render() ==
+               dir |> load() |> ProjectContext.render(trusted: true)
+    end
+
+    test "augment/3 carries the framing through" do
+      dir = workspace()
+      write(dir, "AGENTS.md", "use tabs")
+
+      jailed = ProjectContext.augment("base", dir, root: dir, global: false, trusted: false)
+
+      assert jailed =~ "base"
+      assert jailed =~ "untrusted"
+      refute jailed =~ "operator instructions"
+    end
+  end
 end

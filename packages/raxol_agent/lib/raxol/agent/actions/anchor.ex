@@ -62,6 +62,15 @@ defmodule Raxol.Agent.Actions.Anchor do
   def join(lines, true), do: Enum.join(lines, "\n") <> "\n"
   def join(lines, false), do: Enum.join(lines, "\n")
 
+  @doc """
+  How many characters an anchor hash occupies.
+
+  Fixed, so a caller sizing a rendered line can count it instead of hashing
+  the line a second time just to measure the result.
+  """
+  @spec hash_length() :: pos_integer()
+  def hash_length, do: @hash_length
+
   @doc "The anchor hash of a single line's exact bytes."
   @spec hash(String.t()) :: String.t()
   def hash(line) do

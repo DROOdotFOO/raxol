@@ -81,6 +81,60 @@ defmodule Raxol.Agent.Actions.FsTest do
       assert {:error, :outside_cwd} =
                Fs.ReadFile.run(%{path: "../secrets"}, %{})
     end
+
+    # The cap branch fires on the ANCHORED cost (line + `LINE:HASH|` prefix)
+    # while the cut was against raw bytes, so a line a few bytes UNDER the cap
+    # could cost more than it -- and `binary_part/3` raises when asked for more
+    # bytes than the binary holds. Reading such a file crashed the tool.
+    @max_bytes 262_144
+
+    # An anchored line costs `bytes + hash(6) + digits(1) + 2`, so on line 1 the
+    # clamp branch fires at `bytes >= @max_bytes - 8` while the cut was against
+    # `bytes` alone. Slack 1..8 is the band where the branch fires on a line
+    # SHORTER than the cut it then asked for, which is what raised.
+    for slack <- [0, 1, 5, 8] do
+      test "a first line #{slack} bytes under the cap truncates instead of raising",
+           %{dir: dir} do
+        line = String.duplicate("x", @max_bytes - unquote(slack))
+        File.write!(Path.join(dir, "huge.txt"), line <> "\n")
+
+        assert {:ok, result} = Fs.ReadFile.run(%{path: "huge.txt"}, %{})
+        assert result.truncated
+        assert byte_size(result.content) <= @max_bytes
+      end
+    end
+
+    test "the longest line that still fits its anchor is not truncated", %{dir: dir} do
+      line = String.duplicate("x", @max_bytes - 9)
+      File.write!(Path.join(dir, "huge.txt"), line <> "\n")
+
+      assert {:ok, result} = Fs.ReadFile.run(%{path: "huge.txt"}, %{})
+      refute result.truncated
+      assert result.anchored
+    end
+
+    # An oversized line cannot carry an honest anchor: hashing the CLAMPED text
+    # gives one that never verifies, so `edit_file` would report the file as
+    # changed when it had not, and hashing the full line gives one that DOES
+    # verify and then replaces bytes the model never saw.
+    test "a clamped line is reported unanchored rather than given a false anchor",
+         %{dir: dir} do
+      line = String.duplicate("x", @max_bytes + 10)
+      File.write!(Path.join(dir, "huge.txt"), line <> "\n")
+
+      assert {:ok, result} = Fs.ReadFile.run(%{path: "huge.txt"}, %{})
+      assert result.truncated
+      refute result.anchored
+      refute result.content =~ "|"
+    end
+
+    test "a line that fits is still anchored and truncation is not claimed",
+         %{dir: dir} do
+      File.write!(Path.join(dir, "fits.txt"), String.duplicate("y", 1_000) <> "\n")
+
+      assert {:ok, %{anchored: true, truncated: false}} =
+               Fs.ReadFile.run(%{path: "fits.txt"}, %{})
+    end
   end
 
   describe "FileStat" do

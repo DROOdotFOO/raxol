@@ -505,6 +505,13 @@ A jailed (multi-tenant) session still reads its own workspace, since these files
 rather than executed, unlike hooks and MCP servers. What it does not get is anything above
 the jail: the walk is bounded to it, and the host's user-global file is skipped.
 
+It also does not get operator authority. In a jail the workspace is tenant-written, which
+is exactly why hooks and MCP servers are refused there, so the same bytes are introduced to
+the model as the workspace's request about coding conventions rather than as instructions
+from the operator, and it is told to ignore anything in them claiming to change its tools,
+permissions, or limits. Outside a jail the workspace is the operator's own and the files
+are presented as such.
+
 ## Hooks and MCP config
 
 Two optional per-project files, both read from `<cwd>/`:

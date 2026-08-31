@@ -147,10 +147,20 @@ defmodule Raxol.Agent.Actions.Fs do
       {kept, clamped?} = cap(window, start, anchors?)
       truncated? = clamped? or length(kept) < length(window)
 
+      # A clamped line cannot carry an honest anchor. Hashing the clamped text
+      # gives one that never verifies, so `edit_file` would answer
+      # `anchor_mismatch` -- "the file changed since you read it" -- about a
+      # file that did not change. Hashing the FULL line is worse: it verifies,
+      # and the range edit then replaces bytes the model never saw. So an
+      # oversized line degrades to the unanchored form, which is what it
+      # honestly is: content that cannot be addressed by anchor. `anchored`
+      # already carries that, and re-reading with a narrower window restores it.
+      anchored? = anchors? and not clamped?
+
       %{
         path: path,
-        content: text(kept, start, anchors?, trailing_newline? and not truncated?),
-        anchored: anchors?,
+        content: text(kept, start, anchored?, trailing_newline? and not truncated?),
+        anchored: anchored?,
         truncated: truncated?,
         offset: start,
         line_count: length(kept),
@@ -183,14 +193,24 @@ defmodule Raxol.Agent.Actions.Fs do
       |> then(fn {kept, _used, clamped?} -> {Enum.reverse(kept), clamped?} end)
     end
 
+    # The hash length is fixed, so this counts it rather than computing one.
+    # Hashing here meant every line was SHA-256'd twice on the way out -- once
+    # to size it and once to render it -- which on a large file is the whole
+    # cost of the read, paid twice, for a number that is a constant.
     defp line_cost(line, number, true),
-      do: byte_size(line) + byte_size(Anchor.hash(line)) + byte_size("#{number}") + 2
+      do: byte_size(line) + Anchor.hash_length() + byte_size("#{number}") + 2
 
     defp line_cost(line, _number, false), do: byte_size(line) + 1
 
+    # `min/2`, because the branch that calls this fires on the ANCHORED cost
+    # (the line plus its `LINE:HASH|` prefix) while the cut is against the raw
+    # bytes. A line a few bytes under the cap can therefore cost more than it,
+    # and asking `binary_part/3` for more bytes than the binary holds raises --
+    # so `read_file` crashed rather than truncating on a file whose first
+    # windowed line landed in that band.
     defp clamp(line) do
       line
-      |> binary_part(0, @max_bytes)
+      |> binary_part(0, min(@max_bytes, byte_size(line)))
       |> String.chunk(:valid)
       |> List.first()
       |> Kernel.||("")

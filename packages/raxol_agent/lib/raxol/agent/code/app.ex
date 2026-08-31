@@ -428,11 +428,17 @@ defmodule Raxol.Agent.Code.App do
   # does not get is anything above the jail: the walk is bounded to `cwd`
   # and the host's user-global file is skipped.
   defp load_project_context(cwd, jail?) do
-    opts = if jail?, do: [root: cwd, global: false], else: []
+    opts =
+      if jail?,
+        do: [root: cwd, global: false, trusted: false],
+        else: []
 
     case ProjectContext.load(cwd, opts) do
-      %{files: []} -> {nil, nil}
-      %{files: files} = context -> {ProjectContext.render(context), instructions_note(files)}
+      %{files: []} ->
+        {nil, nil}
+
+      %{files: files} = context ->
+        {ProjectContext.render(context, opts), instructions_note(files)}
     end
   end
 
