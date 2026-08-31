@@ -1,0 +1,72 @@
+[
+  {
+    "id": null,
+    "type": "flex",
+    "children": [
+      {
+        "id": null,
+        "label": "USDC 25.00  Base -> Arbitrum One",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "USDC 25.00  Base -> Arbitrum One"
+      },
+      {
+        "id": null,
+        "type": "flex",
+        "children": [
+          {
+            "id": null,
+            "label": "   standard        22 bps",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "   standard        22 bps"
+          },
+          {
+            "id": null,
+            "label": "   trusted         19 bps",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "   trusted         19 bps"
+          },
+          {
+            "id": null,
+            "label": "-> verified        15 bps",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "-> verified        15 bps"
+          },
+          {
+            "id": null,
+            "label": "   premium         12 bps",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "   premium         12 bps"
+          },
+          {
+            "id": null,
+            "label": "   institutional   10 bps",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "   institutional   10 bps"
+          }
+        ],
+        "role": "group"
+      },
+      {
+        "id": null,
+        "label": "USDC on Ethereum, Optimism, Polygon, Base, Arbitrum One",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "USDC on Ethereum, Optimism, Polygon, Base, Arbitrum One"
+      }
+    ],
+    "role": "group"
+  }
+]

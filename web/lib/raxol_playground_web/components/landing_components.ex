@@ -106,6 +106,87 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
   """
 
+  # The coding agent, as the harness's own components render it: the rows are
+  # `ToolCallBlock`, the module `mix raxol.code` draws a tool call with, rather
+  # than a picture of one -- so the glyph, the spinner and the layout are the
+  # product's. What is authored is the turn (which tools, in what state), the
+  # way `pulse` authors a wave.
+  #
+  # The statuses are fixed rather than advancing. A turn that progressed them
+  # needs the ladder as state, and the pane holds thirty lines: this is the
+  # version that fits, and the spinner on the running row is the animation.
+  @harness_source ~S"""
+  defmodule Harness do
+    use Raxol.Core.Runtime.Application
+
+    alias Raxol.UI.Components.Harness.ToolCallBlock, as: Tool
+
+    @calls [
+      {"read", "router.ex", :done},
+      {"edit", "router.ex:42", :running},
+      {"shell", "mix test", :pending}
+    ]
+
+    def init(_), do: %{t: 0}
+    def update(:tick, m), do: {%{m | t: m.t + 1}, []}
+    def update(_, m), do: {m, []}
+    def subscribe(_), do: [subscribe_interval(120, :tick)]
+
+    def view(m) do
+      column style: %{gap: 1} do
+        [
+          text("raxol code", style: [:bold]),
+          column(do: Enum.map(@calls, &call(&1, m.t)))
+        ]
+      end
+    end
+
+    defp call({n, a, s}, t) do
+      {:ok, st} = Tool.init(name: n, args: a, status: s, frame: t)
+      Tool.render(st, %{})
+    end
+  end
+  """
+
+  # Payments, with nothing authored but the corridor and the amount. Every rate
+  # is `FeeSchedule.all/0` -- the schedule pinned to the solver's own published
+  # one -- and the networks are the chains USDC is actually deployed on, read
+  # off `Assets.evm_tokens/0`. That sourcing is the point rather than a detail:
+  # this page rendered a hand-written fee table until 2026-08-30, and the
+  # numbers in it were ones no tier ever charged.
+  @settle_source ~S"""
+  defmodule Settle do
+    use Raxol.Core.Runtime.Application
+
+    alias Raxol.Payments.{Assets, FeeSchedule}
+    @tiers FeeSchedule.all()
+    @usdc Assets.evm_tokens()["USDC"] |> Map.keys() |> Enum.sort()
+    @on Enum.map_join(@usdc, ", ", &Assets.chain_name/1)
+
+    def init(_), do: %{t: 0}
+    def update(:tick, m), do: {%{m | t: m.t + 1}, []}
+    def update(_, m), do: {m, []}
+    def subscribe(_), do: [subscribe_interval(200, :tick)]
+
+    def view(m) do
+      at = rem(m.t, length(@tiers))
+      column style: %{gap: 1} do
+        [
+          text("USDC 25.00  Base -> Arbitrum One", style: [:bold]),
+          column(do: Enum.with_index(@tiers, &tier(&1, &2, at))),
+          text("USDC on " <> @on)
+        ]
+      end
+    end
+
+    defp tier(row, i, i), do: text(fmt("->", row), fg: :cyan)
+    defp tier(row, _i, _at), do: text(fmt("  ", row))
+
+    defp fmt(cur, %{tier: n, stable_bps: b}),
+      do: "#{cur} #{String.pad_trailing(to_string(n), 16)}#{b} bps"
+  end
+  """
+
   # Lines and columns come from the SOURCE, not the highlighted HTML: Makeup
   # wraps every line in markup, so counting there measures the highlighter. The
   # pane sizes its type from both, so the module fits whole on either axis
@@ -115,15 +196,28 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # pane heads its embedded page with it, and a name typed a second time here
   # would be free to stop matching the `defmodule` line the pane beside it
   # shows.
-  @hero_examples (for {name, file, source} <- [
-                        {"pulse", "pulse.ex", @pulse_source},
-                        {"halo", "halo.ex", @halo_source}
+  #
+  # The blurb is the other half of the h1's bargain. The headline names four
+  # things and the rotation runs one program per thing, but a reader landing on
+  # `settle.ex` cannot be expected to infer which noun it is answering, so each
+  # example says so in the title bar.
+  @hero_examples (for {name, file, blurb, source} <- [
+                        {"pulse", "pulse.ex", "one module, four surfaces",
+                         @pulse_source},
+                        {"halo", "halo.ex", "the mark, as a program",
+                         @halo_source},
+                        {"harness", "harness.ex",
+                         "the raxol code agent, in its own components",
+                         @harness_source},
+                        {"settle", "settle.ex",
+                         "USDC fees, off the pinned schedule", @settle_source}
                       ] do
                     lines = source |> String.trim() |> String.split("\n")
 
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
 
-                    {name, file, module, Makeup.highlight_inner_html(source),
+                    {name, file, module, blurb,
+                     Makeup.highlight_inner_html(source),
                      %{
                        lines: length(lines),
                        cols: lines |> Enum.map(&String.length/1) |> Enum.max()
@@ -131,10 +225,26 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                   end)
 
   @agent_code Makeup.highlight_inner_html(@agent_source)
-  # Counted from the registry `Xochi.Capabilities.fallback/0` derives from, so
-  # the headline cannot claim a corridor the solver does not have. Tron is
-  # reached over the relay rail rather than this table and is not counted.
-  @network_count length(Raxol.Payments.Assets.supported_chain_ids())
+  # Named, not counted. "N networks" is a number a reader cannot check, and the
+  # count over the whole token table (six) is not the number that matters to
+  # someone reading a USDC corridor: USDG carries Robinhood Chain, and WETH is
+  # not what an agent settles in. So the sub-line names the chains USDC itself
+  # is deployed on, straight from the registry `Xochi.Capabilities.fallback/0`
+  # derives from, and cannot claim a corridor the solver does not have. Tron is
+  # reached over the relay rail rather than this table and is not listed.
+  @usdc_networks Raxol.Payments.Assets.evm_tokens()
+                 |> Map.fetch!("USDC")
+                 |> Map.keys()
+                 |> Enum.sort()
+                 |> Enum.map(&Raxol.Payments.Assets.chain_name/1)
+
+  @usdc_network_sentence (case Enum.split(@usdc_networks, -1) do
+                            {[], [only]} ->
+                              only
+
+                            {front, [last]} ->
+                              Enum.join(front, ", ") <> ", and " <> last
+                          end)
 
   # Named once: the footer reaches for it as a mark, as a link to the package
   # directory behind the count beside it, and it used to be a nav entry too.
@@ -213,7 +323,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns =
       assign(assigns,
         halo_faces: @halo_faces,
-        network_count: @network_count,
+        usdc_networks: @usdc_network_sentence,
         install_command: @install_command
       )
 
@@ -240,9 +350,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <span class="text-axol-coral">Agent, harness, and payments included.</span>
         </h1>
 
+        <%!-- Each noun in the h1 is a tab away in the demo below, and this
+             line says which is which: "harness" means nothing to a reader who
+             has not met `raxol code`, and "N networks" is a number nobody can
+             check. Both are spelled out, and the networks are derived rather
+             than typed. --%>
         <p class="screen-sub">
-          Each ships as its own Hex package: take the runtime, the AI agent, the
-          coding harness, or private settlement across <%= @network_count %> networks.
+          Each is its own Hex package: the TEA runtime, the AI agent, the
+          <span class="text-axol-coral">raxol code</span> coding harness, and
+          USDC settlement on <%= @usdc_networks %>. The demo below runs them;
+          its title bar names which.
         </p>
 
         <div class="screen-install">
@@ -498,6 +615,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         source: example_code(assigns.example),
         source_grid: example_grid(assigns.example),
         title: example_title(assigns.example),
+        blurb: example_blurb(assigns.example),
         frames: RecordedFrames.hero_frames(assigns.example),
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
         frame_ms: RecordedFrames.hero_frame_interval(assigns.example),
@@ -528,7 +646,12 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            because they were clipped in place rather than below the fold. --%>
       <div class="hero-demo-bar">
         <span class="hd-dot"></span><span class="hd-dot"></span><span class="hd-dot"></span>
-        <span class="hd-title" data-role="title">{@title} -- rendering to the terminal</span>
+        <%!-- Two spans, because they answer different questions and only one
+             of them changes: which program this is (static, and the thing a
+             reader loses track of while clicking through surfaces) and which
+             surface it is rendering to (rewritten by the tab). --%>
+        <span class="hd-name"><b>{@title}</b> &middot; {@blurb}</span>
+        <span class="hd-title" data-role="title">rendering to the terminal</span>
 
         <div class="hd-controls">
           <button type="button" data-role="player-pause" class="hd-control">pause</button>
@@ -539,10 +662,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="hero-tabs" role="tablist" aria-label="Render surface">
-        <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title={"#{@title} -- rendering to the terminal"} data-label="Rendered to the terminal">Terminal</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="Embedded in a page">Browser</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="The same frame, painted down a channel">SSH</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title={"#{@title} -- exposed as MCP tools"} data-label="The tree an agent reads">Agent / MCP</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title="rendering to the terminal" data-label="Rendered to the terminal">Terminal</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title="rendering to Phoenix LiveView" data-label="Embedded in a page">Browser</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title="served over SSH" data-label="The same frame, painted down a channel">SSH</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title="exposed as MCP tools" data-label="The tree an agent reads">Agent / MCP</button>
       </div>
 
       <div class="hero-panes">
@@ -625,28 +748,35 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def hero_example_names, do: Enum.map(@hero_examples, &elem(&1, 0))
 
   defp example_title(name) do
-    Enum.find_value(@hero_examples, name, fn {n, t, _m, _c, _l} ->
+    Enum.find_value(@hero_examples, name, fn {n, t, _m, _b, _c, _l} ->
       n == name && t
     end)
   end
 
   @doc "The module an example defines, as its own source spells it."
   def example_module(name) do
-    Enum.find_value(@hero_examples, name, fn {n, _t, m, _c, _l} ->
+    Enum.find_value(@hero_examples, name, fn {n, _t, m, _b, _c, _l} ->
       n == name && m
+    end)
+  end
+
+  @doc "What one example demonstrates, for the title bar beside its filename."
+  def example_blurb(name) do
+    Enum.find_value(@hero_examples, "", fn {n, _t, _m, b, _c, _l} ->
+      n == name && b
     end)
   end
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
   def example_grid(name) do
-    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _c,
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _b, _c,
                                                               grid} ->
       n == name && grid
     end)
   end
 
   defp example_code(name) do
-    Enum.find_value(@hero_examples, "", fn {n, _t, _m, c, _l} ->
+    Enum.find_value(@hero_examples, "", fn {n, _t, _m, _b, c, _l} ->
       n == name && c
     end)
   end

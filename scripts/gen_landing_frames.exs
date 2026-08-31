@@ -19,9 +19,14 @@
 #   web/priv/demo_previews/<slug>.html  -- one rendered frame per playground
 #                                          catalog demo, for the gallery cards
 #
-# Run from the repo root:
+# Run from web/, not the repo root:
 #
-#   mix run scripts/gen_landing_frames.exs
+#   cd web && mix run ../scripts/gen_landing_frames.exs
+#
+# The paths above resolve from __DIR__, so the working directory only decides
+# which project's deps are loadable. It has to be web/: `settle` renders the
+# real fee schedule and the real USDC deployment table, and raxol_payments is
+# a dep of web/ rather than of root raxol (root would fail to compile it).
 #
 # Frames are committed; rerun when a hero example or a demo's first render
 # changes. A demo that fails to start headless is skipped with a warning (its
@@ -29,10 +34,10 @@
 
 alias Raxol.LiveView.TerminalBridge
 
-# The modules the hero displays. web/'s landing hero (@pulse_source and
-# @halo_source in landing_components.ex) shows these exact sources; keep each
-# pair byte-identical (the whole point of recording is that the pane and the
-# frames are the same program).
+# The modules the hero displays. web/'s landing hero (@pulse_source,
+# @halo_source, @harness_source and @settle_source in landing_components.ex)
+# shows these exact sources; keep each pair byte-identical (the whole point of
+# recording is that the pane and the frames are the same program).
 defmodule Pulse do
   use Raxol.Core.Runtime.Application
 
@@ -87,6 +92,69 @@ defmodule Halo do
   end
 end
 
+defmodule Harness do
+  use Raxol.Core.Runtime.Application
+
+  alias Raxol.UI.Components.Harness.ToolCallBlock, as: Tool
+
+  @calls [
+    {"read", "router.ex", :done},
+    {"edit", "router.ex:42", :running},
+    {"shell", "mix test", :pending}
+  ]
+
+  def init(_), do: %{t: 0}
+  def update(:tick, m), do: {%{m | t: m.t + 1}, []}
+  def update(_, m), do: {m, []}
+  def subscribe(_), do: [subscribe_interval(120, :tick)]
+
+  def view(m) do
+    column style: %{gap: 1} do
+      [
+        text("raxol code", style: [:bold]),
+        column(do: Enum.map(@calls, &call(&1, m.t)))
+      ]
+    end
+  end
+
+  defp call({n, a, s}, t) do
+    {:ok, st} = Tool.init(name: n, args: a, status: s, frame: t)
+    Tool.render(st, %{})
+  end
+end
+
+defmodule Settle do
+  use Raxol.Core.Runtime.Application
+
+  alias Raxol.Payments.{Assets, FeeSchedule}
+  @tiers FeeSchedule.all()
+  @usdc Assets.evm_tokens()["USDC"] |> Map.keys() |> Enum.sort()
+  @on Enum.map_join(@usdc, ", ", &Assets.chain_name/1)
+
+  def init(_), do: %{t: 0}
+  def update(:tick, m), do: {%{m | t: m.t + 1}, []}
+  def update(_, m), do: {m, []}
+  def subscribe(_), do: [subscribe_interval(200, :tick)]
+
+  def view(m) do
+    at = rem(m.t, length(@tiers))
+
+    column style: %{gap: 1} do
+      [
+        text("USDC 25.00  Base -> Arbitrum One", style: [:bold]),
+        column(do: Enum.with_index(@tiers, &tier(&1, &2, at))),
+        text("USDC on " <> @on)
+      ]
+    end
+  end
+
+  defp tier(row, i, i), do: text(fmt("->", row), fg: :cyan)
+  defp tier(row, _i, _at), do: text(fmt("  ", row))
+
+  defp fmt(cur, %{tier: n, stable_bps: b}),
+    do: "#{cur} #{String.pad_trailing(to_string(n), 16)}#{b} bps"
+end
+
 defmodule GenLandingFrames do
   @hero_dir Path.expand("../web/priv/hero_frames", __DIR__)
   @preview_dir Path.expand("../web/priv/demo_previews", __DIR__)
@@ -130,9 +198,21 @@ defmodule GenLandingFrames do
   #          48 is two full cycles. Its drift field is seeded on absolute t and
   #          never repeats, so nothing divides it; the face is what an eye
   #          tracks, and the field reads as noise either way.
+  #   harness
+  #          the only thing moving is the spinner on the one running tool, and
+  #          `ToolCallBlock` draws it from `Spinner`'s ten-frame table, so ten
+  #          frames is exactly one revolution. The statuses are fixed: a turn
+  #          that also advanced them would need the status ladder as state, and
+  #          the source pane holds thirty lines.
+  #   settle five tiers, one per tick. The cursor is the whole animation, so
+  #          the cycle is the ladder's own length and no two frames repeat.
+  #          200ms is the slowest the player allows, and a five-frame loop
+  #          wants every millisecond of it.
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63},
-    {"halo", Halo, {70, 14}, 110, 48}
+    {"halo", Halo, {70, 14}, 110, 48},
+    {"harness", Harness, {24, 5}, 120, 10},
+    {"settle", Settle, {56, 9}, 200, 5}
   ]
 
   defp hero do

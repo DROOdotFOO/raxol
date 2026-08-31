@@ -1,0 +1,117 @@
+[
+  {
+    "id": null,
+    "type": "flex",
+    "children": [
+      {
+        "id": null,
+        "label": "raxol code",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "raxol code"
+      },
+      {
+        "id": null,
+        "type": "flex",
+        "children": [
+          {
+            "id": null,
+            "type": "row",
+            "children": [
+              {
+                "id": "tool-call-11906-glyph",
+                "label": "✓",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "✓"
+              },
+              {
+                "id": "tool-call-11906-name",
+                "label": "read",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "read"
+              },
+              {
+                "id": "tool-call-11906-args",
+                "label": "router.ex",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "router.ex"
+              }
+            ],
+            "role": "group"
+          },
+          {
+            "id": null,
+            "type": "row",
+            "children": [
+              {
+                "id": "tool-call-11938-glyph",
+                "label": "⠸",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "⠸"
+              },
+              {
+                "id": "tool-call-11938-name",
+                "label": "edit",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "edit"
+              },
+              {
+                "id": "tool-call-11938-args",
+                "label": "router.ex:42",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "router.ex:42"
+              }
+            ],
+            "role": "group"
+          },
+          {
+            "id": null,
+            "type": "row",
+            "children": [
+              {
+                "id": "tool-call-11970-glyph",
+                "label": "○",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "○"
+              },
+              {
+                "id": "tool-call-11970-name",
+                "label": "shell",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "shell"
+              },
+              {
+                "id": "tool-call-11970-args",
+                "label": "mix test",
+                "type": "text",
+                "children": [],
+                "role": "text",
+                "content": "mix test"
+              }
+            ],
+            "role": "group"
+          }
+        ],
+        "role": "group"
+      }
+    ],
+    "role": "group"
+  }
+]

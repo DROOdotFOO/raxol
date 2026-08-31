@@ -6,6 +6,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
   alias Raxol.Agent.Backend.Resolver
+  alias Raxol.Payments.{Assets, FeeSchedule}
   alias RaxolPlayground.BrandMarks
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.RecordedFrames
@@ -404,6 +405,86 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
              "#{name}.ex is #{cols} columns wide; the pane holds #{@max_example_cols} " <>
                "at 768px, the narrowest one-screen viewport"
     end
+  end
+
+  # The h1 names four things. Three of them used to be assertions with nothing
+  # under them: the rotation was two rendering demos, so "agent, harness, and
+  # payments included" was a sentence rather than a claim you could check by
+  # clicking. Each noun now has a program, and this is what stops one being
+  # deleted while the sentence that promises it stays.
+  test "every noun in the headline has an example that runs it" do
+    names = LandingComponents.hero_example_names()
+
+    assert "harness" in names, "the h1 promises a harness and nothing demonstrates one"
+    assert "settle" in names, "the h1 promises payments and nothing demonstrates them"
+
+    for name <- names do
+      blurb = LandingComponents.example_blurb(name)
+
+      assert blurb != "", "#{name}.ex says nothing about what it demonstrates"
+
+      hero = render_component(&LandingComponents.screen_hero/1, example: name)
+      assert hero =~ blurb, "the #{name} title bar drops its blurb"
+    end
+  end
+
+  # The one that matters most, because the page has already got it wrong once:
+  # raxol.io rendered a hand-written fee table until 2026-08-30 whose numbers no
+  # tier ever charged (see the note in `Raxol.Payments.PrivacyTier`). Every rate
+  # the settle pane shows is held against the schedule pinned to the solver's
+  # own, so a landing page cannot quote a fee the product does not charge.
+  test "the settle pane quotes the pinned fee schedule, not a typed-in table" do
+    text = settle_pane()
+
+    for %{tier: tier, stable_bps: bps} <- FeeSchedule.all() do
+      assert text =~ to_string(tier), "the settle pane omits the #{tier} tier"
+
+      assert text =~ "#{bps} bps",
+             "the settle pane does not show #{tier} at its scheduled #{bps} bps"
+    end
+
+    # A rate that is not in the schedule is a rate nobody charges.
+    scheduled = Enum.map(FeeSchedule.all(), &"#{&1.stable_bps} bps")
+
+    for quoted <- ~r/\d+ bps/ |> Regex.scan(text) |> List.flatten() do
+      assert quoted in scheduled, "the settle pane quotes #{quoted}, which no tier charges"
+    end
+  end
+
+  # "N networks" is a number a reader cannot check, and the count across the
+  # whole token table is not the one a USDC corridor cares about. Both the
+  # sub-line and the pane name the chains USDC is actually deployed on.
+  test "the networks named are the chains USDC is deployed on" do
+    expected =
+      Assets.evm_tokens()["USDC"]
+      |> Map.keys()
+      |> Enum.sort()
+      |> Enum.map(&Assets.chain_name/1)
+
+    pane = settle_pane()
+
+    hero =
+      render_component(&LandingComponents.screen_hero/1,
+        example: List.first(LandingComponents.hero_example_names())
+      )
+
+    for chain <- expected do
+      assert pane =~ chain, "the settle pane omits #{chain}, a USDC network"
+      assert hero =~ chain, "the sub-line omits #{chain}, a USDC network"
+    end
+
+    # Robinhood Chain carries USDG rather than USDC, and WETH is not what an
+    # agent settles in. Counting the whole table would have claimed it.
+    refute hero =~ "Robinhood Chain"
+    refute pane =~ "Robinhood Chain"
+  end
+
+  defp settle_pane do
+    "settle"
+    |> RecordedFrames.hero_frames()
+    |> List.first()
+    |> String.replace(~r/<[^>]*>/, "")
+    |> unescape()
   end
 
   test "the hero renders four surfaces and claims no ACP one" do
