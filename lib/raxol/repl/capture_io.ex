@@ -78,17 +78,11 @@ defmodule Raxol.REPL.CaptureIO do
   defp io_request({:put_chars, chars}, state), do: put(chars, state)
   defp io_request({:put_chars, _encoding, chars}, state), do: put(chars, state)
 
-  defp io_request({:put_chars, mod, fun, args}, state) do
-    put(apply(mod, fun, args), state)
-  rescue
-    _ -> {{:error, :put_chars}, state}
-  end
+  defp io_request({:put_chars, mod, fun, args}, state),
+    do: put_mfa(mod, fun, args, state)
 
-  defp io_request({:put_chars, _encoding, mod, fun, args}, state) do
-    put(apply(mod, fun, args), state)
-  rescue
-    _ -> {{:error, :put_chars}, state}
-  end
+  defp io_request({:put_chars, _encoding, mod, fun, args}, state),
+    do: put_mfa(mod, fun, args, state)
 
   # A REPL evaluation has no stdin. `:eof` would read as "input ended", which
   # is a different and more misleading claim than "there is no input here".
@@ -120,6 +114,67 @@ defmodule Raxol.REPL.CaptureIO do
       {error, state} -> {error, state}
     end
   end
+
+  # Headroom for the expansion process itself and the term it builds on the way
+  # to a binary. The cap is a backstop against unbounded growth, not an exact
+  # byte budget.
+  @mfa_heap_slack_words 64 * 1024
+
+  # The MFA form of `put_chars` asks the GROUP LEADER to build the text, and
+  # `:io.format/2` uses exactly that form -- it sends `{put_chars, unicode,
+  # io_lib, format, [Format, Args]}` rather than the finished bytes. Applying
+  # it here ran the expansion in THIS process, which has no `max_heap_size`,
+  # so `:io.format("~1000000000c", [?x])` allocated a gigabyte before the byte
+  # cap below ever saw it -- straight through the limit this module exists to
+  # impose, since the caller's own cap does not cover work done on its behalf
+  # over here.
+  #
+  # So the expansion runs in a throwaway process capped at what the buffer
+  # could still accept. A breach kills that process and the write is refused;
+  # nothing else is affected, and the evaluation is told its write failed
+  # rather than the node dying.
+  defp put_mfa(mod, fun, args, state) do
+    remaining = max(state.limit - state.size, 0) + 1
+    words = div(remaining + word_size(), word_size()) + @mfa_heap_slack_words
+
+    parent = self()
+    ref = make_ref()
+
+    {pid, monitor} =
+      :erlang.spawn_opt(
+        fn ->
+          result =
+            try do
+              {:ok, IO.iodata_to_binary(apply(mod, fun, args))}
+            catch
+              _kind, _reason -> :error
+            end
+
+          send(parent, {ref, result})
+        end,
+        [
+          :monitor,
+          max_heap_size: %{size: words, kill: true, error_logger: false}
+        ]
+      )
+
+    receive do
+      {^ref, {:ok, data}} ->
+        Process.demonitor(monitor, [:flush])
+        put(data, state)
+
+      {^ref, :error} ->
+        Process.demonitor(monitor, [:flush])
+        {{:error, :put_chars}, state}
+
+      {:DOWN, ^monitor, :process, ^pid, _reason} ->
+        # Over the cap (or a crash while expanding). Recorded as truncated so
+        # the caller can say the output was cut rather than silently short.
+        {:ok, %{state | truncated?: true}}
+    end
+  end
+
+  defp word_size, do: :erlang.system_info(:wordsize)
 
   # Accepting past the limit is what the whole module exists to prevent, so the
   # write is dropped rather than partially kept: a half-written line spliced

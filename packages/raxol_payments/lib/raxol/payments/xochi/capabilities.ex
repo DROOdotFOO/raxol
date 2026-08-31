@@ -64,6 +64,10 @@ defmodule Raxol.Payments.Xochi.Capabilities do
 
   @table __MODULE__
   @default_ttl_ms 300_000
+  # Deliberately far shorter than the success TTL: this parks an OUTAGE, and
+  # parking one for five minutes would keep serving the degrade long after the
+  # worker came back.
+  @default_failure_ttl_ms 30_000
   @vm_types %{"evm" => :evm, "tvm" => :tvm, "svm" => :svm}
 
   # Solana has no EVM-style id; Relay's pseudo-id convention (Tron already
@@ -175,7 +179,22 @@ defmodule Raxol.Payments.Xochi.Capabilities do
 
   `config` as in `fetch/1`; `nil` config skips the network entirely and
   returns `fallback/0`, so callers without a configured worker keep the
-  static behavior. Options: `:ttl_ms` (default #{@default_ttl_ms}).
+  static behavior. Options: `:ttl_ms` (default #{@default_ttl_ms}) and
+  `:failure_ttl_ms` (default #{@default_failure_ttl_ms}).
+
+  ## Failures are cached too
+
+  Only successes used to be, which made an unreachable worker cost a fresh
+  blocking request on EVERY call rather than one per expiry: the degrade path
+  is correct but it is not cheap, and callers reach this from a LiveView
+  `mount/3`. A failure now parks for `:failure_ttl_ms` -- shorter than the
+  success TTL, so a recovered worker is picked up promptly -- and calls inside
+  that window serve the stale value or `fallback/0` without touching the
+  network.
+
+  This bounds an outage to one stall per failure window. It is not a stampede
+  guard: concurrent callers arriving on a cold cache still each fetch, since
+  serialising them needs a process and this is deliberately a bare read-through.
   """
   @spec get(map() | nil, keyword()) :: t()
   def get(config, opts \\ [])
@@ -184,6 +203,7 @@ defmodule Raxol.Payments.Xochi.Capabilities do
 
   def get(%{base_url: _} = config, opts) do
     ttl = Keyword.get(opts, :ttl_ms, @default_ttl_ms)
+    failure_ttl = Keyword.get(opts, :failure_ttl_ms, @default_failure_ttl_ms)
     now = System.monotonic_time(:millisecond)
 
     case lookup() do
@@ -191,27 +211,37 @@ defmodule Raxol.Payments.Xochi.Capabilities do
         caps
 
       stale ->
-        case fetch(config, opts) do
-          {:ok, caps} ->
-            store(caps, now)
-            caps
-
-          {:error, _reason} ->
-            case stale do
-              {:ok, caps, _} -> caps
-              :miss -> fallback()
-            end
-        end
+        refresh_or_degrade(config, opts, stale, now, failure_ttl)
     end
   end
 
   def get(_config, _opts), do: fallback()
 
-  @doc "Drop the cached matrix (tests / operator refresh)."
+  defp refresh_or_degrade(config, opts, stale, now, failure_ttl) do
+    if recently_failed?(now, failure_ttl) do
+      degrade(stale)
+    else
+      case fetch(config, opts) do
+        {:ok, caps} ->
+          store(caps, now)
+          caps
+
+        {:error, _reason} ->
+          store_failure(now)
+          degrade(stale)
+      end
+    end
+  end
+
+  defp degrade({:ok, caps, _fetched_at}), do: caps
+  defp degrade(:miss), do: fallback()
+
+  @doc "Drop the cached matrix and any parked failure (tests / operator refresh)."
   @spec reset() :: :ok
   def reset do
     ensure_table()
     :ets.delete(@table, :capabilities)
+    :ets.delete(@table, :last_failure)
     :ok
   end
 
@@ -380,7 +410,25 @@ defmodule Raxol.Payments.Xochi.Capabilities do
   defp store(caps, fetched_at) do
     ensure_table()
     :ets.insert(@table, {:capabilities, caps, fetched_at})
+    # A success retires the parked failure, so recovery is not held back by a
+    # window that has not run out yet.
+    :ets.delete(@table, :last_failure)
     :ok
+  end
+
+  defp store_failure(now) do
+    ensure_table()
+    :ets.insert(@table, {:last_failure, now})
+    :ok
+  end
+
+  defp recently_failed?(now, failure_ttl) do
+    ensure_table()
+
+    case :ets.lookup(@table, :last_failure) do
+      [{:last_failure, at}] -> now - at < failure_ttl
+      [] -> false
+    end
   end
 
   defp ensure_table do

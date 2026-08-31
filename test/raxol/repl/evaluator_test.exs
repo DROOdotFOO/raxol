@@ -196,4 +196,48 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert_received {:eval_result, _, {:ok, :stale_tagged, [], ""}}
     end
   end
+
+  # `:io.format/2` does not send the finished bytes -- it sends
+  # `{put_chars, unicode, io_lib, format, [Format, Args]}` and asks the GROUP
+  # LEADER to build them. `CaptureIO` applied that in its own process, which
+  # has no `max_heap_size`, so the expansion escaped both the evaluation's heap
+  # cap and the capture's byte cap: `~1000000000c` allocated a gigabyte before
+  # anything counted it.
+  describe "output built by the group leader is bounded too" do
+    test "an expansion far over the cap does not allocate it" do
+      eval = Evaluator.new()
+
+      before = :erlang.memory(:total)
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(
+                 eval,
+                 ~S|:io.format("~100000000c", [?x]); :done|,
+                 timeout: 15_000,
+                 max_result_bytes: 4_096,
+                 max_heap_bytes: 8 * 1024 * 1024
+               )
+
+      assert result.value == :done
+
+      # 100M characters. Anything close to that reaching the VM means the
+      # expansion ran unbounded somewhere.
+      growth = :erlang.memory(:total) - before
+
+      assert growth < 50_000_000,
+             "the group leader allocated #{growth} bytes for a capped write"
+    end
+
+    test "output within the cap still arrives" do
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(eval, ~S|:io.format("~s", ["hello"]); :ok|,
+                 max_result_bytes: 4_096
+               )
+
+      assert result.output =~ "hello"
+      assert result.value == :ok
+    end
+  end
 end

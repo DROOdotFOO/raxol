@@ -277,5 +277,65 @@ defmodule Raxol.Payments.Xochi.CapabilitiesTest do
     test "get with nil config never touches the network" do
       assert %{source: :fallback} = Capabilities.get(nil)
     end
+
+    # Only successes were cached, so an unreachable worker cost a fresh
+    # BLOCKING request on every call rather than one per window. Callers reach
+    # this from a LiveView mount/3, where that is a stall per render for as
+    # long as the outage lasts.
+    test "a failure is parked, so an outage costs one request per window" do
+      Capabilities.reset()
+      counter = :counters.new(1, [])
+
+      down = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [
+          plug: fn conn ->
+            :counters.add(counter, 1, 1)
+            json_plug(%{}, 503).(conn)
+          end
+        ]
+      }
+
+      assert %{source: :fallback} = Capabilities.get(down)
+      assert %{source: :fallback} = Capabilities.get(down)
+      assert %{source: :fallback} = Capabilities.get(down)
+
+      assert :counters.get(counter, 1) == 1,
+             "each call re-attempted an endpoint already known to be down"
+    end
+
+    test "the parked failure expires, so recovery is picked up" do
+      Capabilities.reset()
+      down = %{base_url: "https://api.xochi.fi", req_options: [plug: json_plug(%{}, 503)]}
+      assert %{source: :fallback} = Capabilities.get(down)
+
+      live = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(%{"source" => "live", "capabilities" => @wire_evm})]
+      }
+
+      # Still parked: the window has not run out.
+      assert %{source: :fallback} = Capabilities.get(live)
+
+      # Past it, the worker is tried again and answers.
+      assert %{source: :live} = Capabilities.get(live, failure_ttl_ms: 0)
+    end
+
+    test "a success retires the parked failure" do
+      Capabilities.reset()
+      down = %{base_url: "https://api.xochi.fi", req_options: [plug: json_plug(%{}, 503)]}
+      assert %{source: :fallback} = Capabilities.get(down)
+
+      live = %{
+        base_url: "https://api.xochi.fi",
+        req_options: [plug: json_plug(%{"source" => "live", "capabilities" => @wire_evm})]
+      }
+
+      assert %{source: :live} = Capabilities.get(live, failure_ttl_ms: 0)
+
+      # The next call is served from the fresh success, not held back by a
+      # failure window that has not elapsed.
+      assert %{source: :live} = Capabilities.get(live)
+    end
   end
 end

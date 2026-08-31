@@ -124,6 +124,55 @@ defmodule Raxol.MCP.Transport.SSETest do
     end
   end
 
+  # `handle_message/3` is a `GenServer.call(:infinity)`, so a frame the
+  # dispatcher cannot terminate on does not error -- it spins, and the server
+  # never answers anyone again. These are the shapes that reached a `tools/call`
+  # clause requiring keys the frame did not carry: `normalize_body_params/1`
+  # only sets `:params` when the client sent one, so an unauthenticated POST is
+  # all it took.
+  describe "a tools/call missing its params terminates" do
+    @malformed [
+      {"no params", %{jsonrpc: "2.0", id: 1, method: "tools/call"}},
+      {"no id", %{jsonrpc: "2.0", method: "tools/call", params: %{}}},
+      {"neither", %{jsonrpc: "2.0", method: "tools/call"}}
+    ]
+
+    for {label, message} <- @malformed do
+      test "#{label} answers instead of hanging", %{server: s} do
+        task = Task.async(fn -> post_mcp(s, unquote(Macro.escape(message))) end)
+
+        assert %Plug.Conn{} = Task.await(task, 2_000),
+               "the dispatcher did not terminate on this frame"
+
+        # ...and the server is still able to serve the next request.
+        conn = post_mcp(s, Protocol.request(99, "ping"))
+        assert conn.status == 200
+        assert {:ok, %{"id" => 99}} = Jason.decode(conn.resp_body)
+      end
+    end
+
+    test "a well-formed call still reaches the tool", %{server: s, registry: r} do
+      :ok =
+        Registry.register_tools(r, [
+          %{
+            name: "echo",
+            description: "echo",
+            inputSchema: %{type: "object"},
+            callback: fn _args -> {:ok, "echoed"} end
+          }
+        ])
+
+      conn =
+        post_mcp(
+          s,
+          Protocol.request(5, "tools/call", %{"name" => "echo", "arguments" => %{}})
+        )
+
+      assert conn.status == 200
+      assert {:ok, %{"id" => 5, "result" => _}} = Jason.decode(conn.resp_body)
+    end
+  end
+
   # This transport serves many clients at once, so a request has to say which
   # connection it belongs to before an elicitation can be bound to one. These
   # cover the header plumbing that carries that; the ownership rules it feeds

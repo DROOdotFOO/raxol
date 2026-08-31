@@ -51,7 +51,11 @@ defmodule Raxol.Agent.Sandbox.ShellTest do
       {"an input redirect", "cat < /etc/shadow"},
       {"a nested sh -c", "cat x; sh -c 'cat /etc/shadow'"},
       {"an env assignment prefix", "LD_PRELOAD=/tmp/e.so cat x"},
-      {"an escape", "cat x\\;cat /etc/shadow"}
+      {"an escape", "cat x\\;cat /etc/shadow"},
+      # `!` is POSIX pipeline negation: `sh -c '! cat x'` runs `cat` and
+      # inverts its status. The first token is `!`, so a denylist naming the
+      # binary never saw it -- the same shape as the assignment prefix above.
+      {"pipeline negation", "! cat /etc/shadow"}
     ]
 
     for {label, command} <- @wrappers do
