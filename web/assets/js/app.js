@@ -200,12 +200,19 @@ Hooks.RaxolTerminal = {
 // with a live change listener; the pause button is the manual override.
 // When the server swaps in the live session (data-live), the player stops.
 Hooks.HeroDemo = {
-  FRAME_MS: 850,
+  // Fallback only. The real rate comes from the recording via data-frame-ms:
+  // the generator samples each example at its module's own tick and writes
+  // that beside the frames, so playback runs at the speed the program runs.
+  // A constant here was a second place the frame rate lived, and the two had
+  // drifted -- 850ms playback over a recording sampled every 280ms.
+  FRAME_MS: 100,
   TAB_MS: 3400,
 
   mounted() {
     this.tab = 0
     this.frame = 0
+    const declared = parseInt(this.el.dataset.frameMs, 10)
+    if (Number.isFinite(declared) && declared > 0) this.FRAME_MS = declared
     this.autoTabs = true
     this.acc = {frame: 0, tab: 0}
     this.raf = null
@@ -310,7 +317,12 @@ Hooks.HeroDemo = {
   nextFrame() {
     const frames = this.el.querySelectorAll('.hero-frames [data-frame]')
     if (frames.length < 2) return
-    this.frame = (this.frame + 1) % frames.length
+    // Count DISTINCT indices, not elements: two panes now carry the same
+    // sequence (the terminal frame and the ANSI the SSH pane paints), so
+    // element count is a multiple of the real frame count and using it would
+    // step past every index and blank both panes.
+    const count = 1 + Math.max(...Array.from(frames, (f) => parseInt(f.dataset.frame, 10)))
+    this.frame = (this.frame + 1) % count
     frames.forEach((f) => {
       f.hidden = parseInt(f.dataset.frame, 10) !== this.frame
     })
