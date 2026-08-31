@@ -200,12 +200,44 @@ defmodule Raxol.REPL.SandboxTest do
       end
     end
 
-    test "map field access is not mistaken for dynamic dispatch" do
-      # `map.field` and `mod.fun()` are the same AST shape, and reading a map
-      # is most of what a REPL session does.
-      assert :ok = Sandbox.check("m = %{count: 1}; m.count", :strict)
-      assert :ok = Sandbox.check("s.a.b", :strict)
-      assert :ok = Sandbox.check("conn.assigns.user", :standard)
+    test "a zero-arity call on a computed module cannot be dispatched through" do
+      # The no-parens form was allowed on the premise that the parser sets
+      # `no_parens: true` on map field access and not on a call. It sets it on
+      # BOTH, and Elixir dispatches the call: this reached `System.halt/0` on an
+      # anonymously-exposed SSH REPL, and `System.get_env/0` dumped every
+      # secret in the environment. Arity is the only thing the parens form had
+      # that this one does not.
+      for level <- [:standard, :strict] do
+        for code <- [
+              "m = System; m.halt",
+              "m = System; m.stop",
+              "m = System; m.get_env",
+              "m = :init; m.stop",
+              "m = Process; m.list"
+            ] do
+          assert {:error, [msg]} = Sandbox.check(code, level),
+                 "expected #{inspect(code)} to be refused at #{level}"
+
+          assert msg =~ "computed receiver"
+        end
+      end
+    end
+
+    test "field access has a whitelisted replacement under a sandbox" do
+      # Refusing the ambiguous form costs `u.a`, because nothing in the AST
+      # separates it from a call. Both replacements stay available, including
+      # at :strict where `Map` is whitelisted.
+      assert {:error, _} = Sandbox.check("m = %{count: 1}; m.count", :strict)
+
+      assert :ok = Sandbox.check("m = %{count: 1}; m[:count]", :strict)
+
+      assert :ok =
+               Sandbox.check("m = %{count: 1}; Map.fetch!(m, :count)", :strict)
+    end
+
+    test "dot access is untouched at :none, the local-terminal level" do
+      assert :ok = Sandbox.check("m = %{count: 1}; m.count", :none)
+      assert :ok = Sandbox.check("conn.assigns.user", :none)
     end
 
     test ":erlang.apply is denied at standard" do
