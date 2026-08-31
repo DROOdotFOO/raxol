@@ -1,6 +1,6 @@
 # Web3 upstream survey: what raxol_web3 can draw from
 
-Companion to ADR-0032. Surveyed 2026-08-31. Every "verified live" entry below was
+Companion to ADR-0033. Surveyed 2026-08-31. Every "verified live" entry below was
 confirmed by completing a real MCP handshake or an HTTP request on that date.
 
 Verdicts are the point of this document:

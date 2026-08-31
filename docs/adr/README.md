@@ -38,7 +38,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Accepted | 2026-07-18 |
 | [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
 | [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed | 2026-08-26 |
-| [0032](0032-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
+| [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
 
 ## Template
 
@@ -112,7 +112,7 @@ They preserve context for why decisions were made, help new contributors underst
 
 ### AI & MCP
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
-- [0032: Indexer-agnostic web3 data surface (raxol_web3)](0032-web3-data-surface.md)
+- [0033: Indexer-agnostic web3 data surface (raxol_web3)](0033-web3-data-surface.md)
 - [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
 
 ### Orchestration

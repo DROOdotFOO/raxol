@@ -1,4 +1,4 @@
-# ADR-0032: Indexer-agnostic web3 data surface (`raxol_web3`)
+# ADR-0033: Indexer-agnostic web3 data surface (`raxol_web3`)
 
 ## Status
 
