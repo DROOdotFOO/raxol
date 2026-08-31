@@ -2062,23 +2062,61 @@ html {
 .ansi-italic { font-style: italic; }
 .ansi-underline { text-decoration: underline; }
 
-.hero-live-wrap {
-  padding: 1rem 1.25rem;
-}
-
-.hero-live-wrap .raxol-terminal {
+/* The browser pane's page. The chrome is the whole point: the terminal tab
+   shows the same recording bare, so what distinguishes this one is that the
+   frame is an ELEMENT here, with a URL above it and page text around it. Take
+   the chrome away and the two tabs are one picture twice. */
+.hero-browser {
   border: 1px solid var(--panel-border);
   border-radius: 6px;
-  padding: 0.75rem 0.9rem;
+  overflow: hidden;
 }
 
-.hero-live-badge {
+.hero-browser__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+}
+
+.hero-browser__dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--panel-border-hover);
+  flex: 0 0 auto;
+}
+
+.hero-browser__url {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #8fca8f;
-  margin-right: auto;
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  /* The bar is chrome and must never set the pane's width: an unclipped URL
+     on a narrow pane would widen the box past the frame it wraps. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero-browser__page {
+  padding: 0.7rem 0.8rem;
+}
+
+.hero-browser__heading {
+  font-family: var(--font-heading);
+  font-size: 0.95rem;
+  color: var(--pearl-cream);
+  margin: 0 0 0.5rem;
+}
+
+.hero-browser__caption {
+  font-family: var(--font-body);
+  font-size: 0.62rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: 0.5rem 0 0;
 }
 
 /* =============================================================================
@@ -2853,6 +2891,23 @@ input[type="range"]::-moz-range-thumb {
   /* Stated, not inherited: `.raxol-terminal` sets its line height in absolute
      units, so shrinking the type alone leaves the rows their original height
      and the frame keeps overflowing. */
+  line-height: 1.5;
+}
+
+/* The browser pane plays the same frames inside a page, so it fits them the
+   same way against a smaller budget: the URL bar, the heading and the caption
+   all sit between the pane's height and the frame's. Their heights are stated
+   here as one constant, the way the rule above states 3.1rem, because a
+   container query reports the pane's box and not its siblings'. */
+.screen-main .hero-browser .hero-frames pre {
+  font-size: clamp(
+    0.45rem,
+    min(
+      calc((100cqw - 3.4rem) / var(--frame-cols, 62) / 0.7),
+      calc((100cqh - 10.5rem) / var(--frame-rows, 13) / 1.5)
+    ),
+    1.15rem
+  );
   line-height: 1.5;
 }
 

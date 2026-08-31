@@ -136,13 +136,20 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # wraps every line in markup, so counting there measures the highlighter. The
   # pane sizes its type from both, so the module fits whole on either axis
   # rather than running off the right edge behind a hidden scrollbar.
+  #
+  # The module name is read out of the source for the same reason. The browser
+  # pane heads its embedded page with it, and a name typed a second time here
+  # would be free to stop matching the `defmodule` line the pane beside it
+  # shows.
   @hero_examples (for {name, file, source} <- [
                         {"pulse", "pulse.ex", @pulse_source},
                         {"halo", "halo.ex", @halo_source}
                       ] do
                     lines = source |> String.trim() |> String.split("\n")
 
-                    {name, file, Makeup.highlight_inner_html(source),
+                    [_, module] = Regex.run(~r/defmodule (\w+)/, source)
+
+                    {name, file, module, Makeup.highlight_inner_html(source),
                      %{
                        lines: length(lines),
                        cols: lines |> Enum.map(&String.length/1) |> Enum.max()
@@ -590,11 +597,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # 1b. Hero demo: one module, four surfaces
   #
   # The four panes are four encodings of ONE render, all projected from the
-  # frame-zero buffer of the same `Raxol.Headless` session, the way
-  # `Raxol.Harness.Surface.Parity` projects a fixture onto cells, LiveView
-  # DOM, SSH ANSI and MCP JSON. None is authored: the browser pane is the
-  # source of the markup the terminal pane renders, and the other two come
-  # from committed artifacts (see `RaxolPlayground.SurfaceSource`).
+  # same `Raxol.Headless` session, the way `Raxol.Harness.Surface.Parity`
+  # projects a fixture onto cells, LiveView DOM, SSH ANSI and MCP JSON. Every
+  # picture and every listing comes from a committed artifact (see
+  # `RaxolPlayground.SurfaceSource`); what a pane puts AROUND one is chrome, in
+  # the same sense the `$ mix run` line and the window dots above it are. The
+  # browser pane's URL bar and page furniture are that chrome, and the frame
+  # inside them is the recording.
   #
   # No ACP tab. ACP is the coding agent's editor protocol, not a surface a
   # TEA module renders to, so a pane captioned "pulse, driven over ACP" would
@@ -619,11 +628,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
         frame_ms: RecordedFrames.hero_frame_interval(assigns.example),
         next: next_example(assigns.example),
-        out_browser: RecordedFrames.hero_surface(assigns.example, :browser),
+        module: example_module(assigns.example),
         ssh_frames: RecordedFrames.hero_ssh_frames(assigns.example),
         out_mcp: RecordedFrames.hero_surface(assigns.example, :mcp),
-        browser_lines:
-          RecordedFrames.hero_surface_lines(assigns.example, :browser),
         ssh_grid: RecordedFrames.hero_ssh_grid(assigns.example),
         mcp_lines: RecordedFrames.hero_surface_lines(assigns.example, :mcp)
       )
@@ -659,7 +666,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="hero-tabs" role="tablist" aria-label="Render surface">
         <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title={"#{@title} -- rendering to the terminal"} data-label="Rendered to the terminal">Terminal</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="The DOM LiveView patches">Browser</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="Embedded in a page">Browser</button>
         <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="The same frame, painted down a channel">SSH</button>
         <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title={"#{@title} -- exposed as MCP tools"} data-label="The tree an agent reads">Agent / MCP</button>
       </div>
@@ -683,11 +690,33 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             </div>
           </div>
 
-          <%!-- The same frame, re-encoded three ways: the head of a committed
-               artifact, clamped with a marker naming what was cut. --%>
+          <%!-- The browser pane shows the app sitting in a page, because that
+               is what the surface is. It used to print `TerminalBridge`'s
+               markup as text -- fifteen lines of escaped spans over braille --
+               and markup shown as text says the library formats strings. What
+               `raxol_liveview` actually hands you is a component: the frame
+               below is the same recording the terminal pane steps, in a page
+               that has a URL and a heading around it. --%>
           <div class="hero-out" data-surface="1" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix phx.server</span></pre>
-            <pre class="hero-pre hero-src" style={"--src-lines: #{@browser_lines}"}>{raw(@out_browser)}</pre>
+
+            <div class="hero-browser">
+              <div class="hero-browser__bar" aria-hidden="true">
+                <span class="hero-browser__dot"></span>
+                <span class="hero-browser__url">localhost:4000/{@example}</span>
+              </div>
+
+              <div class="hero-browser__page">
+                <p class="hero-browser__heading">{@module}</p>
+                <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@frame_grid.rows}; --frame-cols: #{@frame_grid.cols}"}>
+                  <div :for={{frame, i} <- Enum.with_index(@frames)} class="hero-frame" data-frame={i} hidden={i != 0}>{raw(frame)}</div>
+                </div>
+                <p class="hero-browser__caption">
+                  One TerminalComponent on an ordinary page. Keydown goes back
+                  through InputAdapter into update/2.
+                </p>
+              </div>
+            </div>
           </div>
 
           <%!-- SSH is the one non-terminal surface that delivers a picture
@@ -704,6 +733,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             </div>
           </div>
 
+          <%!-- The one pane that is listed rather than painted, because what
+               an agent reads is a structure and not a picture: the head of a
+               committed artifact, clamped with a marker naming what was cut. --%>
           <div class="hero-out" data-surface="3" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix mcp.server</span></pre>
             <pre class="hero-pre hero-src" style={"--src-lines: #{@mcp_lines}"}>{raw(@out_mcp)}</pre>
@@ -719,20 +751,23 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def hero_example_names, do: Enum.map(@hero_examples, &elem(&1, 0))
 
   defp example_title(name) do
-    Enum.find_value(@hero_examples, name, fn {n, t, _c, _l} ->
-      n == name && t
-    end)
+    Enum.find_value(@hero_examples, name, fn {n, t, _m, _c, _l} -> n == name && t end)
+  end
+
+  @doc "The module an example defines, as its own source spells it."
+  def example_module(name) do
+    Enum.find_value(@hero_examples, name, fn {n, _t, m, _c, _l} -> n == name && m end)
   end
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
   def example_grid(name) do
-    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _c, grid} ->
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _c, grid} ->
       n == name && grid
     end)
   end
 
   defp example_code(name) do
-    Enum.find_value(@hero_examples, "", fn {n, _t, c, _l} -> n == name && c end)
+    Enum.find_value(@hero_examples, "", fn {n, _t, _m, c, _l} -> n == name && c end)
   end
 
   defp next_example(name) do
