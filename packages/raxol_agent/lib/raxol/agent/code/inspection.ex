@@ -37,6 +37,7 @@ defmodule Raxol.Agent.Code.Inspection do
       project: ProjectConfig.load(cwd),
       hooks: hooks_section(cwd),
       mcp_servers: mcp_section(cwd),
+      lsp: lsp_section(cwd),
       skills: skills_section(),
       sessions: sessions_section(Keyword.get(opts, :sessions_dir) || Store.default_dir())
     }
@@ -52,6 +53,7 @@ defmodule Raxol.Agent.Code.Inspection do
       render_project(snapshot.project),
       render_hooks(snapshot.hooks),
       render_mcp(snapshot.mcp_servers),
+      render_lsp(snapshot.lsp),
       render_skills(snapshot.skills),
       render_sessions(snapshot.sessions)
     ]
@@ -114,6 +116,21 @@ defmodule Raxol.Agent.Code.Inspection do
       args: server.args,
       env_keys: server |> Map.get(:env, %{}) |> Map.keys() |> Enum.sort()
     }
+  end
+
+  # Which servers WOULD serve this directory, and whether their command is
+  # installed. Nothing is started to find out.
+  defp lsp_section(cwd) do
+    cwd
+    |> Raxol.Agent.Lsp.Config.load()
+    |> Enum.map(fn server ->
+      %{
+        name: server.name,
+        command: server.command,
+        extensions: server.extensions,
+        installed: Raxol.Agent.Lsp.Config.available?(server)
+      }
+    end)
   end
 
   defp skills_section do
@@ -179,6 +196,21 @@ defmodule Raxol.Agent.Code.Inspection do
       |> Enum.join(" ")
 
     "project pin (.raxol/config.json): #{pin}"
+  end
+
+  defp render_lsp([]), do: "lsp (.raxol/lsp.json): none configured"
+
+  defp render_lsp(servers) do
+    lines =
+      Enum.map(servers, fn server ->
+        mark = if server.installed, do: "installed", else: "NOT installed"
+
+        "  #{server.name}  #{server.command} (#{mark})  " <>
+          Enum.join(server.extensions, " ")
+      end)
+
+    installed = Enum.count(servers, & &1.installed)
+    ["lsp: #{installed}/#{length(servers)} servers installed" | lines]
   end
 
   defp render_hooks(%{status: :none}), do: "hooks (.raxol/hooks.json): none"

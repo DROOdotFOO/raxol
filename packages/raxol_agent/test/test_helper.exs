@@ -78,6 +78,10 @@ ExUnit.start(
     :harness_red,
     # :live_longcat hits the real LongCat API; run with
     # `LONGCAT_API_KEY=<key> mix test --only live_longcat`.
-    :live_longcat
+    :live_longcat,
+    # :live_lsp drives a real language server (rust-analyzer) and indexes a
+    # crate, so it is minutes and a toolchain rather than seconds; run with
+    # `mix test --only live_lsp`.
+    :live_lsp
   ]
 )

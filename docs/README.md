@@ -60,7 +60,7 @@ distributed systems, developer tools, and alternate surfaces.
 | Capability details | `features/` |
 | Stable internals and API contracts | `core/`, `harness/`, `reference/` |
 | Accepted design decisions | `adr/` |
-| Current work | [`TODO.md`](../TODO.md) and [`ROADMAP.md`](../ROADMAP.md) |
+| Current work | [`ROADMAP.md`](../ROADMAP.md) |
 
 Keep proposals only while a decision is in flight. Once code, an ADR, or a
 canonical guide absorbs the decision, Git history is the archive.

@@ -86,6 +86,7 @@ defmodule Raxol.Agent.Code.App do
     jail? = Keyword.get(options, :jail, false) not in [nil, false]
     {hooks, hooks_note} = load_hooks(cwd, jail?)
     {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
+    {lsp_pool, lsp_note} = start_lsp(cwd, jail?, options)
 
     config(options, context)
     |> Map.merge(%{
@@ -95,14 +96,15 @@ defmodule Raxol.Agent.Code.App do
       events: session.events,
       next_event_id: length(session.events) + 1,
       messages: session.messages,
-      status_line: combine_notes([session.notice, hooks_note, mcp_note]),
+      status_line: combine_notes([session.notice, hooks_note, mcp_note, lsp_note]),
       session_key: session.key,
       sessions_dir: session.dir,
       title: session.title,
       parent: session.parent,
       cwd: cwd,
       hooks: hooks,
-      mcp_servers: mcp_servers
+      mcp_servers: mcp_servers,
+      lsp_pool: lsp_pool
     })
     |> maybe_open_initial_wizard()
     |> maybe_arm_launch_validation()
@@ -375,6 +377,37 @@ defmodule Raxol.Agent.Code.App do
       {:error, reason} -> {[], "mcp config error: #{inspect(reason)}"}
     end
   end
+
+  # A language server is arbitrary code execution on the workspace, twice
+  # over: `.raxol/lsp.json` names the binary, and the binary itself runs
+  # project code to answer anything (rust-analyzer executes `build.rs`,
+  # elixir-ls compiles the project). In a jail the workspace is
+  # TENANT-writable, so this is the hooks/MCP problem exactly, and a jailed
+  # session gets no LSP at all.
+  #
+  # The pool is unlinked and monitors this process — `init/1` runs in the
+  # Lifecycle process, whose death IS the session ending — so the servers go
+  # when the session does without any teardown path having to remember them.
+  defp start_lsp(_cwd, true, _options), do: {nil, "lsp disabled (jailed session)"}
+
+  defp start_lsp(cwd, _jail?, options) do
+    if Keyword.get(options, :lsp, true) do
+      servers = Raxol.Agent.Lsp.Config.load(cwd)
+      installed = Enum.filter(servers, &Raxol.Agent.Lsp.Config.available?/1)
+
+      case Raxol.Agent.Lsp.Pool.start(root: cwd, owner: self(), servers: servers) do
+        {:ok, pool} -> {pool, lsp_note(installed)}
+        {:error, _reason} -> {nil, "lsp unavailable"}
+      end
+    else
+      {nil, nil}
+    end
+  end
+
+  defp lsp_note([]), do: nil
+
+  defp lsp_note(installed),
+    do: "lsp: #{Enum.map_join(installed, ", ", & &1.name)}"
 
   defp combine_notes(notes) do
     case Enum.reject(notes, &is_nil/1) do
@@ -870,7 +903,13 @@ defmodule Raxol.Agent.Code.App do
     }
     |> maybe_add_skills()
     |> maybe_add_hooks(model)
+    |> maybe_add_lsp(model)
   end
+
+  defp maybe_add_lsp(context, %{lsp_pool: pool}) when is_pid(pool),
+    do: Map.put(context, :lsp_pool, pool)
+
+  defp maybe_add_lsp(context, _model), do: context
 
   # Wire the configured skills store under context[:skills] so the skill actions
   # can reach it. No-op when skills are disabled (default_context returns nil).
@@ -3244,6 +3283,7 @@ defmodule Raxol.Agent.Code.App do
     Raxol.Agent.Actions.Fs.all() ++
       Raxol.Agent.Actions.Code.all() ++
       Raxol.Agent.Actions.Task.all() ++
+      Raxol.Agent.Actions.Lsp.all() ++
       Raxol.Agent.Skills.enabled_actions()
   end
 

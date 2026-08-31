@@ -69,6 +69,6 @@ defmodule Mix.Tasks.Raxol.InspectTaskTest do
     assert decoded["cwd"] == ctx.cwd
 
     assert Map.keys(decoded) |> Enum.sort() ==
-             ~w(cwd hooks mcp_servers project provider sessions skills)
+             ~w(cwd hooks lsp mcp_servers project provider sessions skills)
   end
 end
