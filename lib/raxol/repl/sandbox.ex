@@ -209,19 +209,33 @@ defmodule Raxol.REPL.Sandbox do
   # `apply` was already refused for exactly this reason; this is the same hole
   # reached through the dot.
   #
-  # `map.field` has the SAME AST shape as `mod.fun()` and must stay allowed --
-  # it is how you read a map in a REPL. The two are told apart by `no_parens`,
-  # which the parser sets on field access and not on a call.
+  # `map.field` has the SAME AST shape as a zero-arity `mod.fun`, and NOTHING in
+  # the AST tells them apart. `no_parens: true` looked like it did, and does not:
+  # the parser sets it on a genuine remote call written without parentheses, and
+  # Elixir still dispatches that call. `m = System; m.halt` reached
+  # `System.halt/0` through this clause, as did `m.get_env` and `:init.stop` --
+  # at `:strict`, the level documented as safe for anonymous SSH exposure.
   #
-  # Both levels refuse the call form. Dynamic dispatch is a legitimate thing to
-  # want, and `:none` is where it lives -- a level that exists to constrain
-  # untrusted input cannot also resolve arbitrary modules at runtime.
+  # Deciding it needs the RECEIVER's value, which exists only at runtime. A
+  # checker that never evaluates therefore cannot allow the form safely, so both
+  # sandboxed levels refuse it whole. Dot access is not lost: `u[:a]` reads a
+  # map and `Map.fetch!(u, :a)` reads either (`Map` is whitelisted at `:strict`),
+  # and `:none` -- the local-terminal level -- is unaffected.
+  #
+  # Restoring `u.a` under a sandbox means rewriting the node to a guarded call
+  # that raises when the receiver is an atom, which makes `check/2` a transformer
+  # rather than a checker. That is a larger change than a security fix should
+  # carry; see the PR that introduced this comment.
   defp check_node({{:., _, [_mod, func]}, meta, _args}, level)
        when level in [:standard, :strict] and is_list(meta) do
     # Reached only when the earlier clauses did not match, i.e. the module is
     # neither a literal alias nor a literal atom.
     if Keyword.get(meta, :no_parens, false) do
-      []
+      [
+        "#{func} on a computed receiver is not allowed " <>
+          "(a zero-arity remote call and map field access are indistinguishable; " <>
+          "use u[:#{func}] or Map.fetch!(u, :#{func}) to read a field)"
+      ]
     else
       [
         "#{func} on a computed module is not allowed " <>

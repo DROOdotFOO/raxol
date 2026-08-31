@@ -195,6 +195,52 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert_received {:eval_result, {:ok, :stale_untagged, [], ""}}
       assert_received {:eval_result, _, {:ok, :stale_tagged, [], ""}}
     end
+
+    test "a killed evaluation leaves no capture server behind" do
+      # Cleanup lives in an `after` block, which does NOT run when the process
+      # is killed by `Process.exit(pid, :brutal_kill)` on timeout or by the VM
+      # on a max_heap_size breach -- the two paths hostile input is designed to
+      # take. `CaptureIO` is started unlinked, so each of those orphaned one
+      # server holding up to the output limit, on an anonymous SSH surface.
+      #
+      # Counted rather than tracked by pid: the capture is private to the
+      # evaluation, and what matters is that the count comes back, not which
+      # process went.
+      eval = Evaluator.new()
+      before = capture_server_count()
+
+      assert {:error, timed_out, _eval} =
+               Evaluator.eval(eval, "Process.sleep(:infinity)", timeout: 100)
+
+      assert timed_out =~ "timed out"
+
+      assert {:error, over_heap, _eval} =
+               Evaluator.eval(
+                 eval,
+                 "Enum.reduce(1..10_000_000, [], fn i, acc -> [i | acc] end)",
+                 max_heap_bytes: 2 * 1024 * 1024,
+                 timeout: 30_000
+               )
+
+      assert over_heap =~ "memory limit"
+
+      # The servers stop asynchronously on the owner's :DOWN.
+      Process.sleep(200)
+      assert capture_server_count() == before
+    end
+  end
+
+  defp capture_server_count do
+    Enum.count(Process.list(), fn pid ->
+      case Process.info(pid, :dictionary) do
+        {:dictionary, dict} ->
+          Keyword.get(dict, :"$initial_call") ==
+            {Raxol.REPL.CaptureIO, :init, 1}
+
+        nil ->
+          false
+      end
+    end)
   end
 
   # `:io.format/2` does not send the finished bytes -- it sends

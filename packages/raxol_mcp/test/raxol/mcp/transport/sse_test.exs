@@ -280,5 +280,20 @@ defmodule Raxol.MCP.Transport.SSETest do
       # The tool never ran, and sess-1's parked call is untouched.
       refute_receive {:mcp_notification, %{id: 7}}, 200
     end
+
+    test "unidentified POSTs do not grow the server's state", %{ask_server: s} do
+      # `initialize` records the caller's capabilities under its conn id, and
+      # that map is only ever evicted on a subscriber's `:DOWN`. Minting a fresh
+      # id per unidentified REQUEST therefore left one permanent entry behind
+      # per POST -- unauthenticated, unbounded, with a caller-supplied map as
+      # the value. Every unidentified caller shares one id instead.
+      capabilities = %{elicitation: %{}, padding: String.duplicate("x", 512)}
+
+      for _ <- 1..50 do
+        post_mcp(s, Protocol.request(1, "initialize", %{capabilities: capabilities}))
+      end
+
+      assert map_size(:sys.get_state(s).client_capabilities) == 1
+    end
   end
 end

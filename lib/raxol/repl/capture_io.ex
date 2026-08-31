@@ -28,15 +28,23 @@ defmodule Raxol.REPL.CaptureIO do
   use GenServer
 
   @doc """
-  Start a capture server holding at most `limit` bytes.
+  Start a capture server holding at most `limit` bytes, owned by the caller.
 
-  Started unlinked on purpose: the caller sets it as its own group leader and
-  closes it in an `after` block, and a link would turn a killed evaluation
-  into a crash report for a process that is simply no longer needed.
+  Unlinked on purpose: the caller sets it as its own group leader and closes it
+  in an `after` block, and a link would turn a killed evaluation into a crash
+  report for a process that is simply no longer needed.
+
+  Unlinked is not unattached. The caller is MONITORED, and the server stops
+  when it goes: an `after` block does not run when the evaluation is killed by
+  `Process.exit(pid, :brutal_kill)` on timeout, or by the VM on a
+  `max_heap_size` breach -- which are the two paths hostile input is meant to
+  take. Without the monitor each of them orphaned one capture server holding up
+  to `limit` bytes, forever, on a surface served anonymously over SSH. Stopping
+  on `:DOWN` is a normal exit, so it still produces no crash report.
   """
   @spec start(pos_integer()) :: {:ok, pid()}
   def start(limit) when is_integer(limit) and limit > 0 do
-    GenServer.start(__MODULE__, limit)
+    GenServer.start(__MODULE__, {limit, self()})
   end
 
   @doc """
@@ -54,8 +62,9 @@ defmodule Raxol.REPL.CaptureIO do
   end
 
   @impl GenServer
-  def init(limit) do
-    {:ok, %{buffer: [], size: 0, limit: limit, truncated?: false}}
+  def init({limit, owner}) do
+    Process.monitor(owner)
+    {:ok, %{buffer: [], size: 0, limit: limit, truncated?: false, owner: owner}}
   end
 
   @impl GenServer
@@ -69,6 +78,15 @@ defmodule Raxol.REPL.CaptureIO do
     {reply, state} = io_request(request, state)
     send(from, {:io_reply, reply_as, reply})
     {:noreply, state}
+  end
+
+  # The evaluation this capture belongs to is gone, so nothing will ever read
+  # the buffer or call `close/1`. Stop, whatever killed it.
+  def handle_info(
+        {:DOWN, _ref, :process, owner, _reason},
+        %{owner: owner} = state
+      ) do
+    {:stop, :normal, state}
   end
 
   def handle_info(_message, state), do: {:noreply, state}
