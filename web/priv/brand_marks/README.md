@@ -14,6 +14,14 @@ raxol works with, and imply no endorsement.
 Every file is a 24 by 24 viewBox with exactly one `path`. A test holds that
 shape, because the renderer inlines the path and nothing else.
 
+## Marks the site wears
+
+`github.svg` is not an integration. It is the repository link in the footer,
+reached through `BrandMarks.site_path/1` rather than `path/1` and absent from
+`known/0`, because that list answers to the provider registry and a mark for
+something that is not a provider would read there as one that outlived its
+entry. Same source, same version, same licence as the rest.
+
 ## Which entry each mark serves
 
 The row's entries are derived from `Raxol.Agent.Backend.Resolver.providers/0`

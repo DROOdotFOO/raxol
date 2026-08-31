@@ -2680,7 +2680,36 @@ input[type="range"]::-moz-range-thumb {
   border-bottom-color: currentColor;
 }
 
-.screen-meta { color: var(--text-dim); }
+.screen-meta {
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* A mark the site wears, not one it points at. Sized to the cap height of the
+   line it sits on, and given the 24px box WCAG 2.2 asks of a target -- the
+   glyph alone would be an 14px tap area. */
+.site-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  color: var(--text-dim);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.site-mark svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  display: block;
+}
+
+.site-mark:hover,
+.site-mark:focus-visible {
+  color: var(--pearl-cream);
+}
 
 /* Short viewports cannot hold a readable screen; scrolling beats clipping.
    Everything that squeezes the demo into one screen belongs here, not

@@ -44,19 +44,6 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     {:ok, socket}
   end
 
-  def mount(_params, _session, socket) do
-    components = Catalog.list_components()
-
-    socket =
-      socket
-      |> assign(:page_title, "Demos")
-      |> assign(:component, nil)
-      |> assign(:components, components)
-      |> assign(:total_count, length(components))
-
-    {:ok, socket}
-  end
-
   # -- Handle Params (drives demo swap on initial mount AND patch navigation) --
 
   @impl true
@@ -185,45 +172,15 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     :ok
   end
 
-  # -- Render: Index --
+  # -- Render --
+  #
+  # One clause. There used to be a second for `component: nil`, the index at
+  # /demos: the same catalog as /gallery, rendered as cards with no preview, no
+  # search and no filters, linking to exactly these pages. It was a strictly
+  # smaller gallery, and a third label in the navigation for a job that already
+  # had two. /gallery is the index now and /demos redirects to it.
 
   @impl true
-  def render(%{component: nil} = assigns) do
-    ~H"""
-    <.atmosphere />
-
-    <main id="main-content" tabindex="-1" class="relative min-h-screen z-10">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div class="text-center mb-8">
-          <h1 class="font-mono font-bold tracking-wide mb-4 text-pearl" style="font-size: clamp(1.5rem, 1.25rem + 1vw, 2.5rem);">
-            <a href="/" class="brand-link">Raxol</a> Interactive Demos
-          </h1>
-          <p class="font-mono body-text">
-            <%= @total_count %> widget demos. Click to try.
-          </p>
-        </div>
-
-        <.ssh_callout variant={:banner} class="mb-8" />
-
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          <%= for comp <- @components do %>
-            <a href={"/demos/#{comp.name}"} class="panel panel--glow block p-4 transition-all duration-200">
-              <div class="flex items-start justify-between mb-2">
-                <h2 class="font-mono font-semibold name-sky"><%= comp.name %></h2>
-                <.complexity_badge level={comp.complexity} />
-              </div>
-              <p class="font-mono mb-2 detail-text"><%= comp.description %></p>
-              <span class="font-mono label-text"><%= Helpers.category_label(comp.category) %></span>
-            </a>
-          <% end %>
-        </div>
-      </div>
-    </main>
-    """
-  end
-
-  # -- Render: Show --
-
   def render(assigns) do
     theme_bg = Helpers.theme_bg(assigns.terminal_theme)
 
@@ -245,7 +202,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       <header class="px-8 py-5 surface-bar">
         <div class="flex items-center justify-between gap-8">
           <div class="flex items-center gap-6 min-w-0">
-            <a href="/demos" class="font-mono text-sm subtle-link whitespace-nowrap" aria-label="Back to all demos">&larr; Back</a>
+            <a href="/gallery" class="font-mono text-sm subtle-link whitespace-nowrap" aria-label="Back to all components">&larr; Back</a>
             <div class="min-w-0">
               <div class="flex items-baseline gap-2">
                 <h1 class="font-mono font-semibold text-pearl truncate" style="font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);"><%= @component.name %></h1>

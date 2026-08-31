@@ -156,6 +156,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # reached over the relay rail rather than this table and is not counted.
   @network_count length(Raxol.Payments.Assets.supported_chain_ids())
 
+  # Named once: the footer reaches for it as a mark, as a link to the package
+  # directory behind the count beside it, and it used to be a nav entry too.
+  @repo_url "https://github.com/DROOdotFOO/raxol"
+
   @install_command "curl -fsSL https://raxol.io/install | bash"
   @brew_command "brew install droodotfoo/tap/raxol"
   @npm_command "npm i -g raxol"
@@ -398,6 +402,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   def screen_footer(assigns) do
+    assigns = assign(assigns, :repo_url, @repo_url)
+
     ~H"""
     <footer class="screen-footer" role="contentinfo">
       <div class="screen-bar">
@@ -405,12 +411,43 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a :for={{path, label} <- topic_links()} href={path} class="topic-link">{label}</a>
         </nav>
 
+        <%!-- The package count was the one claim in this line a reader could
+             not check. It is the number the capability endpoints serve, and
+             the directory it counts is public, so it links there. --%>
         <span class="screen-meta">
-          v{Capabilities.version_minor()} &middot; {Capabilities.package_count()} packages &middot;
-          <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
+          v{Capabilities.version_minor()} &middot;
+          <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
+            {Capabilities.package_count()} packages
+          </a>
+          &middot; <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a> &middot;
+          <a href="/skill.md" class="subtle-link">Skill</a>
+          <.github_mark />
         </span>
       </div>
     </footer>
+    """
+  end
+
+  @doc """
+  The repository, as its mark rather than as a word.
+
+  It used to sit in the header, where it competed with the two links a
+  first-time reader actually needs. Down here it is one glyph beside the other
+  places the code lives, which is the company it belongs in. The accessible
+  name carries the word the mark replaces.
+  """
+  def github_mark(assigns) do
+    assigns =
+      assigns
+      |> assign(:mark, BrandMarks.site_path("GitHub"))
+      |> assign(:repo_url, @repo_url)
+
+    ~H"""
+    <a href={@repo_url} class="site-mark" aria-label="raxol on GitHub">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d={@mark} fill="currentColor" />
+      </svg>
+    </a>
     """
   end
 
@@ -421,13 +458,20 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # One list for both site headers. The landing carried four links and the
   # topic pages six, so the navigation changed shape when a reader crossed
   # between them and neither list knew the other existed.
+  # Two, because two is what the site actually has to offer a first-time
+  # reader: somewhere to watch it run, and somewhere to read the API.
+  #
+  # It carried six. Playground, Gallery and Demos were three labels for one
+  # job, and no visitor could tell them apart from the words -- Demos was a
+  # strictly smaller copy of Gallery over the same catalog, and is gone;
+  # Playground is one link inside Components, where someone who wants the
+  # fuller tool is already standing. Skill and GitHub are reference material
+  # for a reader who has already decided, so they moved to the footer, GitHub
+  # as its mark. Nothing here was padded back to a round number: a third item
+  # added to reach one would be the same defect in a smaller font.
   @nav_links [
-    {"/playground", "Playground"},
-    {"/gallery", "Gallery"},
-    {"/demos", "Demos"},
-    {"https://hexdocs.pm/raxol", "Docs"},
-    {"/skill.md", "Skill"},
-    {"https://github.com/DROOdotFOO/raxol", "GitHub"}
+    {"/gallery", "Components"},
+    {"https://hexdocs.pm/raxol", "Docs"}
   ]
 
   @doc "Site navigation as `{href, label}`. Both headers render exactly this."
@@ -1280,8 +1324,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def footer_section(assigns) do
     ~H"""
     <footer class="landing-section py-16 border-t border-subtle" role="contentinfo">
-      <div class="measure flex items-center justify-end font-mono caption-text tracking-wide">
+      <div class="measure flex items-center justify-end gap-4 font-mono caption-text tracking-wide">
         <span>Made by <a href="https://axol.io" class="axol-link">axol.io</a></span>
+        <.github_mark />
       </div>
     </footer>
     """
