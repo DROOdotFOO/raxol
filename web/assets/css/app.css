@@ -2523,21 +2523,12 @@ input[type="range"]::-moz-range-thumb {
   .screen-integrations::-webkit-scrollbar { display: none; }
 }
 
-/* Reinforcement, not the argument, so this is the right thing to drop when the
-   screen cannot hold everything.
-
-   949, not the 900 that eyeballing the free band suggests. The band is not a
-   fixed pocket -- the demo is `flex: 1 1 auto`, so a row added above the cap
-   comes straight out of the panes. The binding case is the 30-line example at
-   the 8px type floor, which needs 324.8px of pane content box. Measured, the
-   pane gets `viewport - 563px` without this row and `viewport - 601px` with
-   it, which moves the shortest workable screen from about 888px to about 926px.
-   Showing the row between those two heights would not be tight, it would clip
-   the module -- the row would be the cause. 949 is that floor with margin.
-   Dropped here exactly as the panes stop sharing a row under 768px. */
-@media (min-height: 640px) and (min-width: 768px) and (max-height: 949px) {
-  .screen-integrations { display: none; }
-}
+/* The row is no longer hidden anywhere. It used to be dropped below 949px,
+   because the one-screen layout started at 640px and a row added there came
+   straight out of the panes: the demo is `flex: 1 1 auto`, so it would have
+   clipped the 30-line example rather than merely being tight. Now that one
+   screen starts at 950px, the only viewports that lock the height are the ones
+   with room for the row, and every shorter one scrolls and can simply show it. */
 
 .screen-footer {
   display: flex;
@@ -2569,8 +2560,16 @@ input[type="range"]::-moz-range-thumb {
 /* Short viewports cannot hold a readable screen; scrolling beats clipping.
    Everything that squeezes the demo into one screen belongs here, not
    outside: below the threshold the panes take the height their content needs
-   and the page scrolls, rather than shrinking type until nothing reads. */
-@media (min-height: 640px) and (min-width: 768px) {
+   and the page scrolls, rather than shrinking type until nothing reads.
+
+   950px, not the 640px this started at. The rule was right and the number was
+   wrong: measured, the 30-line example needs about 890px of viewport before it
+   stops clipping, and the integrations row needs 950. Between 640 and 950 the
+   page was claiming a screen it did not have, so it clipped the module and hid
+   the row instead of scrolling, and the only way to read the bottom of the page
+   was to zoom out until the viewport crossed the threshold in CSS pixels. One
+   screen now means a screen that actually holds it. */
+@media (min-height: 950px) and (min-width: 768px) {
   .screen { height: 100dvh; overflow: hidden; }
 
   .screen-main .hero-panes { min-height: 0; flex: 1 1 auto; }
