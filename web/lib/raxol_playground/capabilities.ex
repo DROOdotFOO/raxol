@@ -49,7 +49,11 @@ defmodule RaxolPlayground.Capabilities do
   # Inlined rather than factored into a function because a module attribute
   # cannot call a function of the module being defined.
   @providers Enum.map(Resolver.providers(), fn %{harness: harness, label: label} ->
-               %{harness: harness, name: label |> String.split(" (") |> hd(), label: label}
+               %{
+                 harness: harness,
+                 name: label |> String.split(" (") |> hd(),
+                 label: label
+               }
              end)
 
   @backends Enum.map(@providers, & &1.name)
@@ -159,7 +163,8 @@ defmodule RaxolPlayground.Capabilities do
   Same shape as `ssh_available?/0`: a channel is named only while it exists.
   """
   @spec acp_available?() :: boolean()
-  def acp_available?, do: Code.ensure_loaded?(Raxol.Agent.ClientProtocol.StdioAgent)
+  def acp_available?,
+    do: Code.ensure_loaded?(Raxol.Agent.ClientProtocol.StdioAgent)
 
   @doc "ACP-speaking editors, or `[]` when this build serves no ACP surface."
   @spec acp_editors() :: [String.t()]

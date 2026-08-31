@@ -72,7 +72,11 @@ defmodule RaxolPlayground.RecordedFrames do
   @hero_artifacts Map.new(surface_paths, fn {name, %{ansi: ansi, mcp: mcp}} ->
                     {name,
                      %{
-                       browser: hero_paths |> Map.fetch!(name) |> List.first() |> File.read!(),
+                       browser:
+                         hero_paths
+                         |> Map.fetch!(name)
+                         |> List.first()
+                         |> File.read!(),
                        ssh: File.read!(ansi),
                        mcp: File.read!(mcp)
                      }}
@@ -185,7 +189,10 @@ defmodule RaxolPlayground.RecordedFrames do
   pane it is given and shrinks to fit a short one, instead of sitting at a
   fixed size with dead space beside it.
   """
-  @spec hero_frame_grid(String.t()) :: %{rows: pos_integer(), cols: pos_integer()}
+  @spec hero_frame_grid(String.t()) :: %{
+          rows: pos_integer(),
+          cols: pos_integer()
+        }
   def hero_frame_grid(example) do
     case hero_frames(example) do
       [frame | _] -> grid(frame)
@@ -207,7 +214,8 @@ defmodule RaxolPlayground.RecordedFrames do
 
     %{
       rows: max(length(lines), 1),
-      cols: lines |> Enum.map(&String.length/1) |> Enum.max(fn -> 1 end) |> max(1)
+      cols:
+        lines |> Enum.map(&String.length/1) |> Enum.max(fn -> 1 end) |> max(1)
     }
   end
 

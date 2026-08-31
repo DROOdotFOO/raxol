@@ -2044,6 +2044,24 @@ html {
 .ansi-cyan { color: #00ffff; }
 .ansi-white { color: #ffffff; }
 
+.ansi-bright-black { color: #555555; }
+.ansi-bright-red { color: #ff5555; }
+.ansi-bright-green { color: #55ff55; }
+.ansi-bright-yellow { color: #ffff55; }
+.ansi-bright-blue { color: #5555ff; }
+.ansi-bright-magenta { color: #ff55ff; }
+.ansi-bright-cyan { color: #55ffff; }
+.ansi-bright-white { color: #ffffff; }
+
+/* Intensity and emphasis are orthogonal to colour, so these compose with the
+   colour classes above rather than replacing them: a bold cyan run carries
+   both. `SurfaceSource` refuses to decode an SGR code that has no class here,
+   so the two lists have to stay in step. */
+.ansi-bold { font-weight: 700; }
+.ansi-dim { opacity: 0.55; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }
+
 .hero-live-wrap {
   padding: 1rem 1.25rem;
 }

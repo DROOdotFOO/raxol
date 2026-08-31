@@ -30,9 +30,13 @@ defmodule RaxolPlaygroundWeb.CoreComponents do
     doc: "used for styling and flash lookup"
   )
 
-  attr(:rest, :global, doc: "the arbitrary HTML attributes to add to the flash container")
+  attr(:rest, :global,
+    doc: "the arbitrary HTML attributes to add to the flash container"
+  )
 
-  slot(:inner_block, doc: "the optional inner block that renders the flash message")
+  slot(:inner_block,
+    doc: "the optional inner block that renders the flash message"
+  )
 
   def flash(assigns) do
     assigns = assign_new(assigns, :id, fn -> "flash-#{assigns.kind}" end)
@@ -71,7 +75,11 @@ defmodule RaxolPlaygroundWeb.CoreComponents do
       <.flash_group flash={@flash} />
   """
   attr(:flash, :map, required: true, doc: "the map of flash messages")
-  attr(:id, :string, default: "flash-group", doc: "the optional id of flash container")
+
+  attr(:id, :string,
+    default: "flash-group",
+    doc: "the optional id of flash container"
+  )
 
   def flash_group(assigns) do
     ~H"""

@@ -97,13 +97,55 @@ defmodule RaxolPlayground.SurfaceSource do
     "34" => "ansi-blue",
     "35" => "ansi-magenta",
     "36" => "ansi-cyan",
-    "37" => "ansi-white"
+    "37" => "ansi-white",
+    "90" => "ansi-bright-black",
+    "91" => "ansi-bright-red",
+    "92" => "ansi-bright-green",
+    "93" => "ansi-bright-yellow",
+    "94" => "ansi-bright-blue",
+    "95" => "ansi-bright-magenta",
+    "96" => "ansi-bright-cyan",
+    "97" => "ansi-bright-white"
   }
+
+  # Intensity and emphasis are ORTHOGONAL to colour, which is why a run carries
+  # a set of classes rather than one. Holding a single class meant `bold cyan`
+  # had nowhere to go, so the decoder raised on SGR 1 -- and `text(..., style:
+  # [:bold])` is ordinary View DSL, used throughout the demo catalog. Promoting
+  # any of those demos to a hero example failed the build on a code the
+  # recording legitimately contained.
+  @sgr_attributes %{
+    "1" => :bold,
+    "2" => :dim,
+    "3" => :italic,
+    "4" => :underline
+  }
+
+  # The codes that turn an attribute back off, and the attributes each clears.
+  @sgr_resets %{
+    "22" => [:bold, :dim],
+    "23" => [:italic],
+    "24" => [:underline]
+  }
+
+  @attribute_classes %{
+    bold: "ansi-bold",
+    dim: "ansi-dim",
+    italic: "ansi-italic",
+    underline: "ansi-underline"
+  }
+
+  # Attribute order is fixed so the same styling always renders the same class
+  # string, which keeps the recorded markup stable across regenerations.
+  @attribute_order [:bold, :dim, :italic, :underline]
 
   @ansi_sequence ~r/\e\[[0-9;?]*[A-Za-z]/
 
-  @typedoc "A painted run: the class colouring it, or nil for the default."
-  @type run :: {String.t() | nil, String.t()}
+  @typedoc "The SGR state a run inherits: a colour class and set attributes."
+  @type style :: %{color: String.t() | nil, attributes: [atom()]}
+
+  @typedoc "A painted run: the classes styling it, and its text."
+  @type run :: {[String.t()], String.t()}
 
   @doc """
   Decodes an ANSI stream into rows of painted runs.
@@ -127,21 +169,36 @@ defmodule RaxolPlayground.SurfaceSource do
     ansi
     |> String.trim_trailing("\n")
     |> String.split("\n")
-    |> Enum.map_reduce(nil, &row_runs/2)
+    |> Enum.map_reduce(reset_style(), &row_runs/2)
     |> elem(0)
   end
 
-  defp row_runs(row, class) do
+  defp reset_style, do: %{color: nil, attributes: []}
+
+  defp row_runs(row, style) do
     @ansi_sequence
     |> Regex.split(row, include_captures: true, trim: true)
-    |> Enum.reduce({[], class}, fn
-      <<"\e[", _rest::binary>> = seq, {runs, cls} -> {runs, sgr_class!(seq, cls)}
-      text, {runs, cls} -> {[{cls, text} | runs], cls}
+    |> Enum.reduce({[], style}, fn
+      <<"\e[", _rest::binary>> = seq, {runs, sty} ->
+        {runs, sgr_style!(seq, sty)}
+
+      text, {runs, sty} ->
+        {[{classes(sty), text} | runs], sty}
     end)
-    |> then(fn {runs, cls} -> {Enum.reverse(runs), cls} end)
+    |> then(fn {runs, sty} -> {Enum.reverse(runs), sty} end)
   end
 
-  defp sgr_class!(sequence, class) do
+  # A colour first, then attributes in a fixed order.
+  defp classes(%{color: color, attributes: attributes}) do
+    ordered =
+      @attribute_order
+      |> Enum.filter(&(&1 in attributes))
+      |> Enum.map(&Map.fetch!(@attribute_classes, &1))
+
+    if color, do: [color | ordered], else: ordered
+  end
+
+  defp sgr_style!(sequence, style) do
     params =
       case String.split_at(sequence, -1) do
         {<<"\e[", params::binary>>, "m"} ->
@@ -154,19 +211,32 @@ defmodule RaxolPlayground.SurfaceSource do
 
     # No parameters is a reset: `ESC[m` and `ESC[0m` mean the same thing.
     case String.split(params, ";", trim: true) do
-      [] -> nil
-      codes -> Enum.reduce(codes, class, &apply_sgr!/2)
+      [] -> reset_style()
+      codes -> Enum.reduce(codes, style, &apply_sgr!/2)
     end
   end
 
-  defp apply_sgr!("0", _class), do: nil
+  defp apply_sgr!("0", _style), do: reset_style()
 
-  defp apply_sgr!(code, _class) do
-    Map.get_lazy(@sgr_colors, code, fn ->
-      raise ArgumentError,
-            "no colour is mapped for SGR #{code}; add it to SurfaceSource " <>
-              "alongside the CSS that paints it"
-    end)
+  # Default foreground, leaving attributes in place.
+  defp apply_sgr!("39", style), do: %{style | color: nil}
+
+  defp apply_sgr!(code, style) do
+    cond do
+      color = Map.get(@sgr_colors, code) ->
+        %{style | color: color}
+
+      attribute = Map.get(@sgr_attributes, code) ->
+        %{style | attributes: Enum.uniq([attribute | style.attributes])}
+
+      cleared = Map.get(@sgr_resets, code) ->
+        %{style | attributes: style.attributes -- cleared}
+
+      true ->
+        raise ArgumentError,
+              "no styling is mapped for SGR #{code}; add it to SurfaceSource " <>
+                "alongside the CSS that paints it"
+    end
   end
 
   @doc """
@@ -180,8 +250,11 @@ defmodule RaxolPlayground.SurfaceSource do
   def ansi_html(rows) do
     Enum.map_join(rows, "\n", fn runs ->
       Enum.map_join(runs, "", fn
-        {nil, text} -> escape(text)
-        {class, text} -> ~s(<span class="#{class}">#{escape(text)}</span>)
+        {[], text} ->
+          escape(text)
+
+        {classes, text} ->
+          ~s(<span class="#{Enum.join(classes, " ")}">#{escape(text)}</span>)
       end)
     end)
   end
@@ -196,7 +269,9 @@ defmodule RaxolPlayground.SurfaceSource do
   @spec ansi_grid([[run()]]) :: %{rows: pos_integer(), cols: pos_integer()}
   def ansi_grid(rows) do
     widths =
-      Enum.map(rows, fn runs -> Enum.reduce(runs, 0, &(String.length(elem(&1, 1)) + &2)) end)
+      Enum.map(rows, fn runs ->
+        Enum.reduce(runs, 0, &(String.length(elem(&1, 1)) + &2))
+      end)
 
     %{rows: max(length(rows), 1), cols: max(Enum.max(widths, fn -> 1 end), 1)}
   end
@@ -247,14 +322,23 @@ defmodule RaxolPlayground.SurfaceSource do
   # Values first, so one containing a word is not re-marked as a tag.
   defp colorize(line, :dom) do
     line
-    |> String.replace(~r/&quot;([^&]*)&quot;/, ~S(&quot;<span class="hg">\1</span>&quot;))
+    |> String.replace(
+      ~r/&quot;([^&]*)&quot;/,
+      ~S(&quot;<span class="hg">\1</span>&quot;)
+    )
     |> String.replace(~r{&lt;(/?[a-z]+)}, ~S(&lt;<span class="hk">\1</span>))
   end
 
   defp colorize(line, :json) do
     line
-    |> String.replace(~r/&quot;([^&]*)&quot;:/, ~S(&quot;<span class="hk">\1</span>&quot;:))
-    |> String.replace(~r/: &quot;([^&]*)&quot;/, ~S(: &quot;<span class="hg">\1</span>&quot;))
+    |> String.replace(
+      ~r/&quot;([^&]*)&quot;:/,
+      ~S(&quot;<span class="hk">\1</span>&quot;:)
+    )
+    |> String.replace(
+      ~r/: &quot;([^&]*)&quot;/,
+      ~S(: &quot;<span class="hg">\1</span>&quot;)
+    )
   end
 
   defp dim_marker(html) do

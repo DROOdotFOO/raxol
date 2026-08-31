@@ -49,9 +49,14 @@ defmodule RaxolPlayground.BrandMarks do
              raise "#{file} is not a 24x24 mark; the row's sizing assumes that viewBox"
            end
 
-           case Regex.scan(~r/<path[^>]*\sd="([^"]+)"/, svg, capture: :all_but_first) do
-             [[d]] -> {name, d}
-             found -> raise "#{file} has #{length(found)} paths; expected exactly 1"
+           case Regex.scan(~r/<path[^>]*\sd="([^"]+)"/, svg,
+                  capture: :all_but_first
+                ) do
+             [[d]] ->
+               {name, d}
+
+             found ->
+               raise "#{file} has #{length(found)} paths; expected exactly 1"
            end
          end)
 

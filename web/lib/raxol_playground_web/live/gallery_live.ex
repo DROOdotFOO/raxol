@@ -37,7 +37,10 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   def handle_event("filter_category", %{"category" => category}, socket) do
-    {:noreply, refilter(assign(socket, :active_category, String.to_existing_atom(category)))}
+    {:noreply,
+     refilter(
+       assign(socket, :active_category, String.to_existing_atom(category))
+     )}
   rescue
     ArgumentError -> {:noreply, socket}
   end
@@ -55,7 +58,10 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   def handle_event("filter_complexity", %{"level" => level}, socket) do
-    {:noreply, refilter(assign(socket, :complexity_filter, String.to_existing_atom(level)))}
+    {:noreply,
+     refilter(
+       assign(socket, :complexity_filter, String.to_existing_atom(level))
+     )}
   rescue
     ArgumentError -> {:noreply, socket}
   end
@@ -204,7 +210,8 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   defp component_card(assigns) do
-    assigns = assign(assigns, :preview, RecordedFrames.preview(assigns.component.name))
+    assigns =
+      assign(assigns, :preview, RecordedFrames.preview(assigns.component.name))
 
     ~H"""
     <div class="panel panel--glow transition-all duration-200 overflow-hidden flex flex-col">

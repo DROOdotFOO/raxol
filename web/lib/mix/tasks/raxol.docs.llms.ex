@@ -99,7 +99,14 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
   defp capability_summary do
     agent = Capabilities.agent()
     backends = Enum.join(agent.backends, ", ")
-    strategies = Enum.map_join(agent.strategies, ", ", &String.replace(&1, "Strategy.", ""))
+
+    strategies =
+      Enum.map_join(
+        agent.strategies,
+        ", ",
+        &String.replace(&1, "Strategy.", "")
+      )
+
     surfaces = Enum.map_join(Capabilities.surfaces(), ", ", & &1.name)
 
     """
@@ -223,7 +230,9 @@ defmodule Mix.Tasks.Raxol.Docs.Llms do
       |> Enum.uniq()
       |> Enum.map_join("\n\n", fn path ->
         rel = Path.relative_to(path, docs_root)
-        "<!-- docs/#{rel} -->\n\n" <> String.trim_trailing(File.read!(path)) <> "\n"
+
+        "<!-- docs/#{rel} -->\n\n" <>
+          String.trim_trailing(File.read!(path)) <> "\n"
       end)
 
     header <> body <> "\n"

@@ -55,7 +55,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     for name <- LandingComponents.hero_example_names() do
       frames = RaxolPlayground.RecordedFrames.hero_frames(name)
 
-      assert length(frames) > 1, "#{name} has #{length(frames)} recorded frame(s)"
+      assert length(frames) > 1,
+             "#{name} has #{length(frames)} recorded frame(s)"
+
       assert Enum.uniq(frames) == frames, "#{name} recorded identical frames"
 
       hero = render_component(&LandingComponents.screen_hero/1, example: name)
@@ -122,17 +124,22 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
       # The grid the CSS fits type to describes the frame it is given.
       grid = RecordedFrames.hero_ssh_grid(name)
-      rows = artifact |> strip_ansi() |> String.trim_trailing("\n") |> String.split("\n")
+
+      rows =
+        artifact
+        |> strip_ansi()
+        |> String.trim_trailing("\n")
+        |> String.split("\n")
 
       assert grid.rows == length(rows)
       assert grid.cols == rows |> Enum.map(&String.length/1) |> Enum.max()
     end
   end
 
-  # A recording is a build input, so a code with no colour behind it has to stop
-  # the build rather than reach the page as an unstyled run.
+  # A recording is a build input, so a code with no styling behind it has to
+  # stop the build rather than reach the page as an unstyled run.
   test "an unpaintable escape sequence fails loudly, not silently" do
-    assert_raise ArgumentError, ~r/no colour is mapped for SGR 7/, fn ->
+    assert_raise ArgumentError, ~r/no styling is mapped for SGR 7/, fn ->
       SurfaceSource.ansi_rows("\e[7mreversed\e[0m")
     end
 
@@ -147,10 +154,100 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     rows = SurfaceSource.ansi_rows("\e[36mone\ntwo\e[0m\nthree")
 
     assert rows == [
-             [{"ansi-cyan", "one"}],
-             [{"ansi-cyan", "two"}],
-             [{nil, "three"}]
+             [{["ansi-cyan"], "one"}],
+             [{["ansi-cyan"], "two"}],
+             [{[], "three"}]
            ]
+  end
+
+  # Intensity and emphasis are orthogonal to colour, so a run holds a SET of
+  # classes. Holding one meant `bold cyan` had nowhere to go and the decoder
+  # raised on SGR 1 -- which `text(..., style: [:bold])` emits, so promoting an
+  # ordinary catalog demo to a hero example failed the build on a code its own
+  # recording legitimately contained.
+  describe "attributes compose with colour" do
+    test "bold and colour are both carried" do
+      assert [[{classes, "hi"}]] = SurfaceSource.ansi_rows("\e[36m\e[1mhi\e[0m")
+      assert classes == ["ansi-cyan", "ansi-bold"]
+    end
+
+    test "a combined parameter list is applied in order" do
+      assert [[{classes, "hi"}]] = SurfaceSource.ansi_rows("\e[1;33mhi\e[0m")
+      assert classes == ["ansi-yellow", "ansi-bold"]
+    end
+
+    test "every attribute the demos use decodes" do
+      for {seq, class} <- [
+            {"1", "ansi-bold"},
+            {"2", "ansi-dim"},
+            {"3", "ansi-italic"},
+            {"4", "ansi-underline"}
+          ] do
+        assert [[{[^class], "x"}]] = SurfaceSource.ansi_rows("\e[#{seq}mx\e[0m")
+      end
+    end
+
+    test "bright colours decode" do
+      assert [[{["ansi-bright-cyan"], "x"}]] =
+               SurfaceSource.ansi_rows("\e[96mx\e[0m")
+    end
+
+    test "22 clears intensity but leaves colour" do
+      assert [[_bold, {classes, "b"}]] =
+               SurfaceSource.ansi_rows("\e[36;1ma\e[22mb\e[0m")
+
+      assert classes == ["ansi-cyan"]
+    end
+
+    test "39 clears colour but leaves attributes" do
+      assert [[_first, {classes, "b"}]] =
+               SurfaceSource.ansi_rows("\e[36;1ma\e[39mb\e[0m")
+
+      assert classes == ["ansi-bold"]
+    end
+
+    test "attributes carry across rows like colour does" do
+      rows = SurfaceSource.ansi_rows("\e[1mone\ntwo\e[0m\nthree")
+
+      assert rows == [
+               [{["ansi-bold"], "one"}],
+               [{["ansi-bold"], "two"}],
+               [{[], "three"}]
+             ]
+    end
+
+    test "the markup names every class the run carries" do
+      html =
+        "\e[36;1mhi\e[0m"
+        |> SurfaceSource.ansi_rows()
+        |> SurfaceSource.ansi_html()
+
+      assert html == ~s(<span class="ansi-cyan ansi-bold">hi</span>)
+    end
+
+    # The decoder refuses a code it has no class for, which stops an unstyled
+    # run reaching the page. It cannot tell whether the class it DOES emit is
+    # painted by anything, so a mapping added without its CSS would render as
+    # plain text and every test above would still pass.
+    @app_css Path.expand("../../assets/css/app.css", __DIR__)
+    @external_resource @app_css
+
+    test "every class the decoder can emit is painted by the stylesheet" do
+      css = File.read!(@app_css)
+
+      codes =
+        Enum.map(30..37, &to_string/1) ++
+          Enum.map(90..97, &to_string/1) ++ ["1", "2", "3", "4"]
+
+      for code <- codes do
+        assert [[{classes, "x"}]] = SurfaceSource.ansi_rows("\e[#{code}mx\e[0m")
+
+        for class <- classes do
+          assert css =~ ".#{class} ",
+                 "SGR #{code} decodes to .#{class}, which app.css does not paint"
+        end
+      end
+    end
   end
 
   # The hero shows a program's source; the frames beside it are that program's
@@ -165,11 +262,16 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     landing =
       File.read!(
-        Path.expand("../../lib/raxol_playground_web/components/landing_components.ex", __DIR__)
+        Path.expand(
+          "../../lib/raxol_playground_web/components/landing_components.ex",
+          __DIR__
+        )
       )
 
     for {name, module} <- [{"pulse", "Pulse"}, {"halo", "Halo"}] do
-      assert [_, tail] = String.split(landing, "@#{name}_source ~S\"\"\"\n", parts: 2)
+      assert [_, tail] =
+               String.split(landing, "@#{name}_source ~S\"\"\"\n", parts: 2)
+
       assert [heredoc, _] = String.split(tail, "\n  \"\"\"", parts: 2)
 
       shown =
@@ -323,13 +425,17 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # its name. Both directions are held: a mark left behind for something no
   # longer offered would otherwise rot in the directory unnoticed.
   test "marks decorate the derived entries without narrowing them" do
-    entries = Enum.flat_map(LandingComponents.integration_groups(), &elem(&1, 1))
+    entries =
+      Enum.flat_map(LandingComponents.integration_groups(), &elem(&1, 1))
+
     row = render_component(&LandingComponents.screen_integrations/1, %{})
     names = Enum.map(entries, & &1.name)
 
     for entry <- entries do
       shown = if entry.mark, do: entry.label, else: entry.name
-      assert row =~ ">#{shown}</span>", "the row drops #{entry.name}, which is derived"
+
+      assert row =~ ">#{shown}</span>",
+             "the row drops #{entry.name}, which is derived"
     end
 
     for name <- BrandMarks.known() do
@@ -339,7 +445,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     # Two runs are rendered: the visible one and the aria-hidden copy the loop
     # needs, so every marked entry appears twice.
     marked = Enum.filter(entries, & &1.mark)
-    assert length(String.split(row, "integrations-item--marked")) - 1 == length(marked) * 2
+
+    assert length(String.split(row, "integrations-item--marked")) - 1 ==
+             length(marked) * 2
 
     # The no-mark path has to be live, not theoretical. Were every entry to
     # gain a mark this test would still pass while the fallback rotted, so the
@@ -359,7 +467,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       Capabilities.connectable_providers()
       |> Enum.filter(&(&1.label != &1.name and BrandMarks.path(&1.name)))
 
-    assert qualified != [], "no marked provider carries a qualifier worth revealing"
+    assert qualified != [],
+           "no marked provider carries a qualifier worth revealing"
 
     for %{label: label} <- qualified do
       assert row =~ ">#{label}</span>", "the row never reveals #{label} in full"
@@ -369,7 +478,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     # row stays scannable and does not widen to fit every qualifier.
     for %{name: name, label: label} <- Capabilities.connectable_providers(),
         is_nil(BrandMarks.path(name)) and label != name do
-      assert row =~ ">#{name}</span>", "#{name} should sit in the flow unqualified"
+      assert row =~ ">#{name}</span>",
+             "#{name} should sit in the flow unqualified"
+
       refute row =~ ">#{label}</span>"
     end
   end
@@ -387,7 +498,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     for name <- BrandMarks.known() do
       d = BrandMarks.path(name)
       assert is_binary(d) and d != "", "#{name} has an empty mark"
-      assert String.starts_with?(d, ["M", "m"]), "#{name}'s mark is not path data"
+
+      assert String.starts_with?(d, ["M", "m"]),
+             "#{name}'s mark is not path data"
     end
   end
 
@@ -486,8 +599,11 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   end
 
   test "nav links the demo index on desktop and mobile" do
-    closed = render_component(&LandingComponents.nav_bar/1, mobile_menu_open: false)
-    open = render_component(&LandingComponents.nav_bar/1, mobile_menu_open: true)
+    closed =
+      render_component(&LandingComponents.nav_bar/1, mobile_menu_open: false)
+
+    open =
+      render_component(&LandingComponents.nav_bar/1, mobile_menu_open: true)
 
     assert closed =~ ~s(href="/demos")
     assert open =~ ~s(href="/demos")
@@ -500,8 +616,16 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       %{chain_id: 728_126_428, chain_name: "Tron", vm_type: :tvm}
     ],
     tokens: [
-      %{symbol: "WETH", roles: [:origin, :destination], addresses: %{8453 => "0xweth"}},
-      %{symbol: "USDC", roles: [:origin, :destination], addresses: %{8453 => "0xabc"}},
+      %{
+        symbol: "WETH",
+        roles: [:origin, :destination],
+        addresses: %{8453 => "0xweth"}
+      },
+      %{
+        symbol: "USDC",
+        roles: [:origin, :destination],
+        addresses: %{8453 => "0xabc"}
+      },
       %{
         symbol: "USDT",
         roles: [:origin, :destination],
@@ -512,7 +636,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   }
 
   test "payments section renders the ladder, dated proof, and a live matrix honestly" do
-    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: @live_matrix)
+    payments =
+      render_component(&LandingComponents.payments_deep_dive/1,
+        matrix: @live_matrix
+      )
 
     # Dated proof leads; maturity is labeled.
     assert payments =~ "2026-06-28"
@@ -570,7 +697,11 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   test "an unreachable solver renders the cached badge, never fake liveness" do
     fallback = Raxol.Payments.Xochi.Capabilities.fallback()
-    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: fallback)
+
+    payments =
+      render_component(&LandingComponents.payments_deep_dive/1,
+        matrix: fallback
+      )
 
     assert payments =~ "source: cached"
     refute payments =~ "source: live"
@@ -581,7 +712,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # Pinned: these are the only strings on the site meant to be pasted into a
   # chain explorer, and a wrong character looks identical to a right one.
   test "the token block prints the verified contract and no market numbers" do
-    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: @live_matrix)
+    payments =
+      render_component(&LandingComponents.payments_deep_dive/1,
+        matrix: @live_matrix
+      )
 
     assert payments =~ "$RAXOL"
     assert payments =~ "0xf44702b17d9abD53815F703e772F35E9c71A53af"
@@ -643,9 +777,14 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       refute Capabilities.ssh_available?()
       assert Capabilities.ssh_command() == nil
 
-      banner = render_component(&PlaygroundComponents.ssh_callout/1, variant: :banner)
-      footer = render_component(&PlaygroundComponents.ssh_callout/1, variant: :footer)
-      fallback = render_component(&PlaygroundComponents.terminal_fallback/1, %{})
+      banner =
+        render_component(&PlaygroundComponents.ssh_callout/1, variant: :banner)
+
+      footer =
+        render_component(&PlaygroundComponents.ssh_callout/1, variant: :footer)
+
+      fallback =
+        render_component(&PlaygroundComponents.terminal_fallback/1, %{})
 
       rendered = Enum.join([banner, footer, fallback])
 
@@ -673,7 +812,11 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
         assert Capabilities.ssh_command() == "ssh -p 2222 playground@raxol.io"
         assert Capabilities.links().ssh == "ssh -p 2222 playground@raxol.io"
 
-        banner = render_component(&PlaygroundComponents.ssh_callout/1, variant: :banner)
+        banner =
+          render_component(&PlaygroundComponents.ssh_callout/1,
+            variant: :banner
+          )
+
         assert banner =~ "playground@raxol.io"
       after
         System.delete_env("RAXOL_SSH_PLAYGROUND")

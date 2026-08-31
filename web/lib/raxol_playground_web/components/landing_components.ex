@@ -167,7 +167,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # the TUI wraps the same way).
   @halo_faces Jason.encode!(
                 for state <- [:idle, :thinking, :working, :done] do
-                  %{state: state, frames: for(f <- 0..3, do: AxolFace.glyph(state, f))}
+                  %{
+                    state: state,
+                    frames: for(f <- 0..3, do: AxolFace.glyph(state, f))
+                  }
                 end
               )
 
@@ -267,7 +270,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:example, :string, required: true)
 
   def screen_hero(assigns) do
-    assigns = assign(assigns, halo_faces: @halo_faces, network_count: @network_count)
+    assigns =
+      assign(assigns, halo_faces: @halo_faces, network_count: @network_count)
 
     ~H"""
     <%!-- The brand mark beside the claim rather than above it: an upright box
@@ -573,7 +577,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         out_browser: RecordedFrames.hero_surface(assigns.example, :browser),
         out_ssh: RecordedFrames.hero_surface(assigns.example, :ssh),
         out_mcp: RecordedFrames.hero_surface(assigns.example, :mcp),
-        browser_lines: RecordedFrames.hero_surface_lines(assigns.example, :browser),
+        browser_lines:
+          RecordedFrames.hero_surface_lines(assigns.example, :browser),
         ssh_grid: RecordedFrames.hero_ssh_grid(assigns.example),
         mcp_lines: RecordedFrames.hero_surface_lines(assigns.example, :mcp)
       )
@@ -662,7 +667,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def hero_example_names, do: Enum.map(@hero_examples, &elem(&1, 0))
 
   defp example_title(name) do
-    Enum.find_value(@hero_examples, name, fn {n, t, _c, _l} -> n == name && t end)
+    Enum.find_value(@hero_examples, name, fn {n, t, _c, _l} ->
+      n == name && t
+    end)
   end
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
@@ -932,8 +939,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @token_order %{"USDC" => 0, "USDT" => 1, "USDG" => 2, "WETH" => 3}
 
   @payments_version Enum.find_value(Capabilities.packages(), fn
-                      %{name: "raxol_payments", version: v} -> String.replace(v, "~> ", "")
-                      _ -> nil
+                      %{name: "raxol_payments", version: v} ->
+                        String.replace(v, "~> ", "")
+
+                      _ ->
+                        nil
                     end)
 
   attr(:matrix, :map, required: true)
@@ -954,7 +964,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         token: @token,
         token_pair_url: @token_pair_url,
         rows: reach_rows(assigns.matrix),
-        show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
+        show_future_svm:
+          not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
       )
 
