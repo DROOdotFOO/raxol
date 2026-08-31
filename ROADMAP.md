@@ -111,6 +111,23 @@ Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/ac
 
 The load-bearing unknown is external: the Console's third-party runtime-registration and container contract is undocumented, escalated to Virtuals (`~/Desktop/virtuals-console-runtime-questions.md`).
 
+### Web3 data surface (`raxol_web3`)
+
+One free, indexer-agnostic read layer over the chains we settle on, served as MCP tools and as agent Actions. Design in ADR-0032. Blockscout declined to index anything non-EVM without a funded per-chain agreement, and relicensed their MCP server and explorer in April and May 2026 (revocable, no redistribution, SaaS included), so forking is closed. Their hosted MCP is closing too: probing it on 2026-08-31 returned a free budget of 10 tool calls per session and notice that all requests require a PRO key from 2026-10-08. Consuming the public REST API carries no licence obligation and stays open today, which is the path taken, but the per-chain fallbacks are load-bearing rather than defensive. The package sits *below* `raxol_payments` because reads are more fundamental than payments, and that move dissolves the existing wart where `ChainReader` hand-rolls a second `Req` client purely to dodge a cycle. Three consumers: raxol's own settlement agents, a public free MCP server with the non-EVM coverage nobody else offers, and consolidation of the five competing RPC env conventions.
+
+| Item | What | Effort | Status |
+| ---- | ---- | ------ | ------ |
+| `Raxol.MCP.Aggregator` | The one missing conversion direction: upstream MCP server -> `Raxol.MCP.Registry` tool defs, over the existing `MCP.Client`. Janitor lifecycle and `admit/1` bounds copied from `Code.McpLoader` | S | Planned |
+| Package skeleton | `raxol_web3` at 0.1.0, standalone; `Backend` behaviour (6 required + 8 optional callbacks, CAIP-2/10/19 refs, opaque cursors) + `Stub` in `lib/`; move `ChainReader`, `Tron.Address`, `Pxe.Client` down with shims | M | Planned |
+| EVM backend | Blockscout REST v2 + Chainscout resolution (746 chains, keyless, includes 4663) + RPC fallback. Needs a browser User-Agent (Cloudflare 403s otherwise) and per-chain health checks (base and polygon were 500ing) | M | Planned |
+| Tron backend | TronGrid MCP (149 tools, keyless, verified live) and SQD Portal via `mcp_proxy`; TronScan secondary, pinned to a serialized policy since parallel calls on one session fail | S | Planned |
+| Solana backend | SQD Portal `solana-mainnet` + public RPC fallback. Requests per second binds long before monthly volume does | S | Planned |
+| Aztec backend | aztecscan keyless API, reusing `Pxe.Client`. Public state only; private state is architecturally unavailable | S | Planned |
+| Canton backend | ccscan MCP (13 tools, stateless) or Noves (MIT); Splice Scan client generated from the Apache-2.0 OpenAPI spec. Exercises party IDs and rounds, so it validates the optional half of the contract | M | Planned |
+| RPC config consolidation | Collapse `RPC_<NAME>` / `DERIVE_RPC_` / `ORDER_RPC_` / `XOCHI_ORDER_RPC_` / `GATE_RPC_` onto one resolver; repoint `derive_caps`, capacity gating, checkpoints | M | Planned |
+
+A second survey pass (`docs/proposals/web3-upstream-survey.md`) moved Canton from blocked to ordinary adapter work and shrank Tron, because both Tron explorers run keyless MCP servers that were verified live. The real design constraint turned out to be at the wire level: of three upstream servers probed, one is stateful and concurrency-safe, one is stateful and fails every parallel call on a shared session, and one is stateless, and two frame SSE incompatibly. Concurrency policy is therefore declared per backend rather than assumed. The remaining risk is concentration, since SQD backs several chains at once and its parent was acquired in October 2025, so per-chain fallbacks must stay exercised rather than merely present.
+
 ### RATE: Cross-Platform Test Bench
 
 RATE (Raxol Automated Testing Environment). Model: FFmpeg's FATE (end-to-end reference-hash suite over a distributed runner network) plus checkasm (a pure reference *oracle* that an optimized path must match byte-for-byte), adapted to Nix-pinned self-hosted runners spanning x86_64 and aarch64 (Linux + Darwin) over a Tailscale mesh. The flake *is* the bench: `checks.<system>`, `packages.raxol-burrito-<triple>`, and a NixOS runner config are all flake outputs, so every runner is reproducible and architecture is the only variable, not environment drift. Closes three current gaps: the `termbox2` NIF is skipped in all CI today (`SKIP_TERMBOX2_TESTS=true`), there is no aarch64-linux tier, and the swarm/CRDT paths never run against a real multi-node cluster. All four layers are planned.
