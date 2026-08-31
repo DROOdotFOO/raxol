@@ -227,23 +227,30 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def screen_header(assigns) do
     ~H"""
     <header class="screen-header" role="banner">
-      <a href="/" class="screen-mark">raxol</a>
+      <%!-- The bar spans the viewport so its rule does; the row inside it is
+           held to the same measure as the hero, so the mark starts on the
+           h1's column instead of out in the gutter. --%>
+      <div class="screen-bar">
+        <a href="/" class="screen-mark">raxol</a>
 
-      <nav class="screen-nav" aria-label="Main navigation">
-        <a :for={{href, label} <- nav_links()} href={href} class="nav-link">{label}</a>
-      </nav>
+        <nav class="screen-nav" aria-label="Main navigation">
+          <a :for={{href, label} <- nav_links()} href={href} class="nav-link">{label}</a>
+        </nav>
 
-      <button
-        type="button"
-        phx-click="toggle_mobile_menu"
-        class="screen-menu-btn"
-        aria-label={if @mobile_menu_open, do: "Close menu", else: "Open menu"}
-        aria-expanded={to_string(@mobile_menu_open)}
-        aria-controls="screen-mobile-nav"
-      >
-        <span aria-hidden="true">{if @mobile_menu_open, do: "close", else: "menu"}</span>
-      </button>
+        <button
+          type="button"
+          phx-click="toggle_mobile_menu"
+          class="screen-menu-btn"
+          aria-label={if @mobile_menu_open, do: "Close menu", else: "Open menu"}
+          aria-expanded={to_string(@mobile_menu_open)}
+          aria-controls="screen-mobile-nav"
+        >
+          <span aria-hidden="true">{if @mobile_menu_open, do: "close", else: "menu"}</span>
+        </button>
+      </div>
 
+      <%!-- Outside the measured row: the overlay spans the header's full width
+           and anchors to it, so it drops directly under the button. --%>
       <nav
         :if={@mobile_menu_open}
         id="screen-mobile-nav"
@@ -389,14 +396,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def screen_footer(assigns) do
     ~H"""
     <footer class="screen-footer" role="contentinfo">
-      <nav class="screen-topics" aria-label="Deep dives">
-        <a :for={{path, label} <- topic_links()} href={path} class="topic-link">{label}</a>
-      </nav>
+      <div class="screen-bar">
+        <nav class="screen-topics" aria-label="Deep dives">
+          <a :for={{path, label} <- topic_links()} href={path} class="topic-link">{label}</a>
+        </nav>
 
-      <span class="screen-meta">
-        v{Capabilities.version_minor()} &middot; {Capabilities.package_count()} packages &middot;
-        <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
-      </span>
+        <span class="screen-meta">
+          v{Capabilities.version_minor()} &middot; {Capabilities.package_count()} packages &middot;
+          <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
+        </span>
+      </div>
     </footer>
     """
   end
@@ -434,7 +443,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
          to first did not exist on five of them, and the brand link sat outside
          any landmark. Matches `screen_header` on the landing. --%>
     <header class="sticky top-0 z-50 surface-bar" role="banner">
-      <div class="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div class="measure py-3 flex items-center justify-between">
         <a href="/" class="font-mono text-lg font-bold text-axol-coral tracking-wide">
           raxol
         </a>
@@ -565,7 +574,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         out_ssh: RecordedFrames.hero_surface(assigns.example, :ssh),
         out_mcp: RecordedFrames.hero_surface(assigns.example, :mcp),
         browser_lines: RecordedFrames.hero_surface_lines(assigns.example, :browser),
-        ssh_lines: RecordedFrames.hero_surface_lines(assigns.example, :ssh),
+        ssh_grid: RecordedFrames.hero_ssh_grid(assigns.example),
         mcp_lines: RecordedFrames.hero_surface_lines(assigns.example, :mcp)
       )
 
@@ -574,15 +583,29 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
          player caches its frame nodes, and patching them underneath it would
          leave it stepping elements that no longer exist. --%>
     <div id={"hero-demo-#{@example}"} phx-hook="HeroDemo" class="hero-demo mx-auto text-left">
+      <%!-- The player's controls live in the title bar, where a window's
+           controls belong and where nothing can clip them. They used to sit in
+           a footer below the panes: the demo box is height-capped, so on any
+           viewport too short for the one-screen layout the panes overflowed it
+           and `overflow: hidden` swallowed the footer whole -- the pause button
+           and the example switcher were unreachable, and scrolling did not help
+           because they were clipped in place rather than below the fold. --%>
       <div class="hero-demo-bar">
         <span class="hd-dot"></span><span class="hd-dot"></span><span class="hd-dot"></span>
         <span class="hd-title" data-role="title">{@title} -- rendering to the terminal</span>
+
+        <div class="hd-controls">
+          <button type="button" data-role="player-pause" class="hd-control">pause</button>
+          <button type="button" phx-click="next_example" class="hd-control hd-control--next">
+            {example_title(@next)} &rarr;
+          </button>
+        </div>
       </div>
 
       <div class="hero-tabs" role="tablist" aria-label="Render surface">
         <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title={"#{@title} -- rendering to the terminal"} data-label="Rendered to the terminal">Terminal</button>
         <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="The DOM LiveView patches">Browser</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="The bytes down the channel">SSH</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="The same frame, painted down a channel">SSH</button>
         <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title={"#{@title} -- exposed as MCP tools"} data-label="The tree an agent reads">Agent / MCP</button>
       </div>
 
@@ -612,9 +635,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             <pre class="hero-pre hero-src" style={"--src-lines: #{@browser_lines}"}>{raw(@out_browser)}</pre>
           </div>
 
+          <%!-- SSH is the one non-terminal surface that delivers a picture
+               rather than a description of one, so it is painted rather than
+               listed: same frame, same colours, same two-axis fit as the
+               terminal pane, reached over a channel instead of a local tty.
+               That IS the claim the tab makes. --%>
           <div class="hero-out" data-surface="2" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh demo@localhost -p 2222</span></pre>
-            <pre class="hero-pre hero-src" style={"--src-lines: #{@ssh_lines}"}>{raw(@out_ssh)}</pre>
+            <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@ssh_grid.rows}; --frame-cols: #{@ssh_grid.cols}"}>
+              <pre class="hero-ansi">{raw(@out_ssh)}</pre>
+            </div>
           </div>
 
           <div class="hero-out" data-surface="3" hidden>
@@ -624,22 +654,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <div class="hero-demo-foot">
-        <button
-          type="button"
-          data-role="player-pause"
-          class="label-text cursor-pointer hover:text-pearl-80 transition-colors"
-        >
-          pause
-        </button>
-        <button
-          type="button"
-          phx-click="next_example"
-          class="label-text cursor-pointer text-axol-coral hover:text-pearl-80 transition-colors"
-        >
-          {example_title(@next)} &rarr;
-        </button>
-      </div>
     </div>
     """
   end
@@ -676,7 +690,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :counter_code, @counter_code)
 
     ~H"""
-    <section class="landing-section px-6 py-12 md:py-20 max-w-5xl mx-auto" aria-labelledby="code-title">
+    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="code-title">
       <h2 id="code-title" class="heading-2xl mb-3">Hello World</h2>
       <p class="body-text mb-8 max-w-2xl">
         Every Raxol app follows The Elm Architecture:
@@ -705,7 +719,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def surfaces_deep_dive(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="surfaces-title">
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="surfaces-title">
       <div class="mb-10">
         <span class="section-numeral" aria-hidden="true">01</span>
         <span class="section-eyebrow">Surfaces</span>
@@ -774,7 +788,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def ssh_deep_dive(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="ssh-deep-title">
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="ssh-deep-title">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 items-center">
         <div>
           <span class="section-numeral" aria-hidden="true">02</span>
@@ -808,7 +822,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :agent_code, @agent_code)
 
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="agent-deep-title">
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="agent-deep-title">
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">03</span>
         <span class="section-eyebrow">Agent runtime</span>
@@ -844,7 +858,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def coding_agent_deep_dive(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="coding-agent-title">
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="coding-agent-title">
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">04</span>
         <span class="section-eyebrow">Coding agent</span>
@@ -945,7 +959,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       )
 
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="payments-title">
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
         <span class="section-numeral" aria-hidden="true">05</span>
         <span class="section-eyebrow">Agent payments</span>
@@ -1110,7 +1124,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def features_section(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="features-title">
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="features-title">
       <span class="section-eyebrow">More capabilities</span>
       <h2 id="features-title" class="heading-2xl mb-10">What OTP gives you.</h2>
 
@@ -1148,7 +1162,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def packages_section(assigns) do
     ~H"""
-    <section class="landing-section px-6 py-12 md:py-20 max-w-5xl mx-auto" aria-labelledby="packages-title">
+    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="packages-title">
       <h2 id="packages-title" class="heading-2xl mb-3">Pick what you need</h2>
       <p class="body-text mb-10 max-w-2xl">Full framework or just the parts that matter.</p>
 
@@ -1197,7 +1211,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :faqs, @faqs)
 
     ~H"""
-    <section class="landing-section px-6 py-14 md:py-24 max-w-5xl mx-auto" aria-labelledby="faq-title">
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="faq-title">
       <span class="section-eyebrow">FAQ</span>
       <h2 id="faq-title" class="heading-2xl mb-10">Questions, answered.</h2>
       <div class="faq-list max-w-3xl">
@@ -1220,7 +1234,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, :install_command, @install_command)
 
     ~H"""
-    <section class="landing-section px-6 py-12 md:py-20 max-w-5xl mx-auto" aria-labelledby="try-title">
+    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="try-title">
       <h2 id="try-title" class="heading-2xl mb-3">One module away from every surface.</h2>
       <p class="body-text mb-10 max-w-2xl">Starting is genuinely four commands.</p>
 
@@ -1243,21 +1257,20 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # Footer
   # ---------------------------------------------------------------------------
 
+  @doc """
+  The topic pages' footer: a signature, not a second navigation.
+
+  It used to carry GitHub, Hex.pm, Docs, Playground and Skill. Four of those
+  five are in `nav_links/0`, three inches above on the same page, so the row
+  restated the header rather than adding to it -- a third of the page's links
+  pointing where the header already pointed. Hex.pm was the one destination it
+  owned, and the landing footer's meta line already carries it.
+  """
   def footer_section(assigns) do
     ~H"""
-    <footer class="landing-section px-6 py-16 border-t border-subtle">
-      <div class="max-w-5xl mx-auto">
-        <div class="flex flex-wrap gap-6 font-mono mb-10 tracking-wide text-sm">
-          <a href="https://github.com/DROOdotFOO/raxol" class="footer-link">GitHub</a>
-          <a href="https://hex.pm/packages/raxol" class="footer-link">Hex.pm</a>
-          <a href="https://hexdocs.pm/raxol" class="footer-link">Docs</a>
-          <a href="/playground" class="footer-link">Playground</a>
-          <a href="/skill.md" class="footer-link">Skill</a>
-        </div>
-
-        <div class="flex items-center justify-end font-mono caption-text tracking-wide">
-          <span>Made by <a href="https://axol.io" class="axol-link">axol.io</a></span>
-        </div>
+    <footer class="landing-section py-16 border-t border-subtle" role="contentinfo">
+      <div class="measure flex items-center justify-end font-mono caption-text tracking-wide">
+        <span>Made by <a href="https://axol.io" class="axol-link">axol.io</a></span>
       </div>
     </footer>
     """
