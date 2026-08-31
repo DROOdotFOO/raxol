@@ -44,15 +44,16 @@ defmodule Raxol.Console.InboundTest do
   end
 
   describe "unconfigured deployments" do
-    # The decision on #884: silence means allow, because Pairing's allowlists
-    # boot empty and enforcing by default would deny every Console running
-    # today. What silence must NOT mean is quiet -- so the posture is announced.
-    test "allow, and say so loudly" do
-      handler_id = "open-#{System.unique_integer([:positive])}"
+    # This REVERSES the #884 decision that silence means allow. Silence is the
+    # only posture reachable by writing nothing, so it cannot be the one that
+    # grants an arbitrary sender this agent's turns, tools and spend. It denies,
+    # and -- as before -- it is not quiet about it.
+    test "deny, and say so loudly" do
+      handler_id = "undeclared-#{System.unique_integer([:positive])}"
 
       :telemetry.attach(
         handler_id,
-        [:raxol_console, :pairing, :open],
+        [:raxol_console, :pairing, :undeclared],
         fn _e, _m, meta, pid -> send(pid, {:telemetry, meta}) end,
         self()
       )
@@ -62,24 +63,24 @@ defmodule Raxol.Console.InboundTest do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           report = boot(:inb_open, [])
-          assert report.pairing == :open
+          assert report.pairing == :enforce
         end)
 
-      assert log =~ "gateway authorization is OPEN and was not configured"
+      assert log =~ "DENYING EVERYONE"
       assert log =~ "pairing:"
 
       assert_receive {:telemetry,
                       %{console: :inb_open, declared?: false, platforms: [:in_memory]}}
 
-      assert :ok = Inbound.route(:inb_open, route("anyone"), %{text: "hi"})
+      # The acceptance criterion: an in-memory adapter with no pairing config
+      # cannot start an arbitrary user's session.
+      refute Inbound.authorized?(:inb_open, route("anyone"))
+      assert :deny = Pairing.authorize(Inbound.pairing_name(:inb_open), route("anyone"))
+      assert {:error, :unauthorized} = Inbound.route(:inb_open, route("anyone"), %{text: "hi"})
 
-      # Open is a real Pairing state, not a branch that skips the gate -- which
-      # is what makes both postures share one code path through Inbound.route/3.
-      assert :allow = Pairing.authorize(Inbound.pairing_name(:inb_open), route("anyone"))
-
-      # ...and it is open only on a platform the deployment actually connected.
+      # Deny is a real Pairing state, not a branch that skips the gate -- both
+      # postures share one code path through Inbound.route/3.
       assert :deny = Pairing.authorize(Inbound.pairing_name(:inb_open), route("x", :telegram))
-      refute Inbound.authorized?(:inb_open, route("x", :telegram))
     end
 
     test "an explicit :open is not nagged about" do
@@ -207,7 +208,7 @@ defmodule Raxol.Console.InboundTest do
     # forget its allowlist -- both silently, both with report.pairing still
     # claiming the posture the boot announced.
     test "an open Console is still open after its Pairing server crashes" do
-      boot(:inb_crash_open, [])
+      boot(:inb_crash_open, pairing: :open)
       assert Inbound.authorized?(:inb_crash_open, route("anyone"))
 
       restart_pairing(:inb_crash_open)

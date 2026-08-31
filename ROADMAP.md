@@ -8,7 +8,7 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ## What's Done
 
-**Framework core (Phases 1-6):** TEA architecture, full render pipeline, 23 widgets, focus + W3C-style event capture/bubble, terminal compat (color downsampling, Unicode width, synchronized output), playground (40 demos / 8 categories), 7 braille-resolution charts, Hex packaging, `mix raxol.new`, session recording.
+**Framework core (Phases 1-6):** TEA architecture, full render pipeline, 23 widgets, focus + W3C-style event capture/bubble, terminal compat (color downsampling, Unicode width, synchronized output), playground (41 demos / 8 categories), 7 braille-resolution charts, Hex packaging, `mix raxol.new`, session recording.
 
 **OTP differentiators:** process-per-component crash isolation, hot code reload, LiveView bridge, SSH app serving, time-travel debugging (snapshot every `update/2`), distributed swarm (CRDTs, topology election, libcluster + Tailscale).
 

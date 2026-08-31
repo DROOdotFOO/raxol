@@ -23,3 +23,9 @@ test/fixtures/harness/goldens/*.golden.txt text eol=lf
 # goldens above need `binary`.
 test/fixtures/harness/parity/*.txt text eol=lf
 priv/harness/parity.refs text eol=lf
+
+# Recorded hero surface artifacts. The pane renders these verbatim and the
+# SSH one holds raw ESC bytes, so eol normalization would change what the
+# page shows.
+web/priv/hero_frames/*/surface.ansi text eol=lf
+web/priv/hero_frames/*/surface.mcp.json text eol=lf

@@ -183,4 +183,151 @@ defmodule Raxol.REPL.SandboxTest do
       assert :ok = Sandbox.check("Enum.map([1, 2, 3], &(&1 * 2))", :strict)
     end
   end
+
+  # Atoms are never reclaimed, so neither the evaluation timeout nor the heap
+  # cap undoes one of these: the table stays grown after the process is killed.
+  # Each of these reached an atom-minting primitive that the named blocks above
+  # were meant to have closed.
+  describe "dynamic atom creation has no back door" do
+    test "a computed module cannot be dispatched through" do
+      # The check walks names, so a module held in a VARIABLE was invisible to
+      # it: `String.to_atom` is blocked, `m.to_atom` was not.
+      for level <- [:standard, :strict] do
+        assert {:error, [msg]} =
+                 Sandbox.check(~s|m = String; m.to_atom("x")|, level)
+
+        assert msg =~ "computed module"
+      end
+    end
+
+    test "a zero-arity call on a computed module cannot be dispatched through" do
+      # The no-parens form was allowed on the premise that the parser sets
+      # `no_parens: true` on map field access and not on a call. It sets it on
+      # BOTH, and Elixir dispatches the call: this reached `System.halt/0` on an
+      # anonymously-exposed SSH REPL, and `System.get_env/0` dumped every
+      # secret in the environment. Arity is the only thing the parens form had
+      # that this one does not.
+      for level <- [:standard, :strict] do
+        for code <- [
+              "m = System; m.halt",
+              "m = System; m.stop",
+              "m = System; m.get_env",
+              "m = :init; m.stop",
+              "m = Process; m.list"
+            ] do
+          assert {:error, [msg]} = Sandbox.check(code, level),
+                 "expected #{inspect(code)} to be refused at #{level}"
+
+          assert msg =~ "computed receiver"
+        end
+      end
+    end
+
+    test "field access has a whitelisted replacement under a sandbox" do
+      # Refusing the ambiguous form costs `u.a`, because nothing in the AST
+      # separates it from a call. Both replacements stay available, including
+      # at :strict where `Map` is whitelisted.
+      assert {:error, _} = Sandbox.check("m = %{count: 1}; m.count", :strict)
+
+      assert :ok = Sandbox.check("m = %{count: 1}; m[:count]", :strict)
+
+      assert :ok =
+               Sandbox.check("m = %{count: 1}; Map.fetch!(m, :count)", :strict)
+    end
+
+    test "dot access is untouched at :none, the local-terminal level" do
+      assert :ok = Sandbox.check("m = %{count: 1}; m.count", :none)
+      assert :ok = Sandbox.check("conn.assigns.user", :none)
+    end
+
+    test ":erlang.apply is denied at standard" do
+      assert {:error, _} =
+               Sandbox.check(
+                 ~s|:erlang.apply(String, :to_atom, ["x"])|,
+                 :standard
+               )
+    end
+
+    test "Module.concat is denied at standard" do
+      assert {:error, _} =
+               Sandbox.check(~s|Module.concat(["a", "b"])|, :standard)
+
+      assert {:error, _} =
+               Sandbox.check(~s|Module.safe_concat(["a", "b"])|, :standard)
+    end
+
+    test "Jason.decode is denied even though Jason is whitelisted in strict" do
+      # `keys: :atoms` mints an atom per KEY from attacker-supplied JSON, and
+      # the option can arrive in a variable, so the call is refused outright.
+      assert {:error, _} =
+               Sandbox.check(~s|Jason.decode!(j, keys: :atoms)|, :strict)
+
+      assert {:error, _} = Sandbox.check(~s|Jason.decode(j)|, :strict)
+
+      # Encoding creates no atoms and stays available.
+      assert :ok = Sandbox.check(~s|Jason.encode!(%{a: 1})|, :strict)
+    end
+  end
+
+  # The denials above are about atoms the EVALUATION could mint. The checker
+  # resolved aliases with `Module.concat/1`, which mints one per alias in the
+  # submitted source -- before evaluation, so it happened whether or not the
+  # code was allowed to run, and neither the heap cap nor the timeout undoes
+  # one. `ReplDemo` is served anonymously over SSH.
+  describe "checking untrusted source mints no atoms of its own" do
+    # The tokenizer mints the bare alias (`Foo` -> `:Foo`) just to read the
+    # source, which is inherent to parsing Elixir and is not what these cover.
+    # What the checker added on top was a SECOND atom per alias, the
+    # `Elixir.`-prefixed module name, via `Module.concat/1`. That is the half
+    # under test.
+    #
+    # Asserted by NAME rather than by counting `:erlang.system_info(:atom_count)`
+    # around the call: this suite is async, so a VM-wide counter also sees every
+    # atom the tests running beside it mint, and the count answered 14 in CI for
+    # reasons that had nothing to do with this function. The names are exact and
+    # cannot drift.
+    for level <- [:standard, :strict] do
+      test "at #{level}, no module name in the source becomes an atom" do
+        names = Enum.map(1..200, &"NoSuchMod#{unquote(level)}#{&1}")
+        source = Enum.map_join(names, "\n", &"#{&1}.f()")
+
+        _ = Sandbox.check(source, unquote(level))
+
+        leaked =
+          Enum.filter(names, fn name ->
+            try do
+              _ = :erlang.binary_to_existing_atom("Elixir.#{name}", :utf8)
+              true
+            rescue
+              ArgumentError -> false
+            end
+          end)
+
+        assert leaked == [],
+               "checking #{unquote(level)} source minted #{length(leaked)} " <>
+                 "permanent module atoms, e.g. #{inspect(Enum.take(leaked, 3))}"
+      end
+    end
+
+    test "an unknown module is still refused at strict, by name" do
+      assert {:error, violations} =
+               Sandbox.check("Definitely.Not.Loaded.run()", :strict)
+
+      assert Enum.any?(violations, &String.contains?(&1, "not in whitelist"))
+    end
+
+    test "a whitelisted module still resolves at strict" do
+      assert :ok = Sandbox.check("Enum.map([1], & &1)", :strict)
+    end
+
+    test "a denied module still resolves at standard" do
+      assert {:error, violations} = Sandbox.check(~s|System.cmd("ls", [])|)
+      assert Enum.any?(violations, &String.contains?(&1, "System.cmd"))
+    end
+
+    test "an unknown module is allowed at standard, as before" do
+      # It is not on the denylist, and there is no such module to dispatch to.
+      assert :ok = Sandbox.check("Definitely.Not.Loaded.run()", :standard)
+    end
+  end
 end

@@ -1,0 +1,93 @@
+{
+  "surplus_share_pct": 15,
+  "tier_boundaries": [
+    {
+      "min_trust_score": 100,
+      "tier": "institutional"
+    },
+    {
+      "min_trust_score": 75,
+      "tier": "premium"
+    },
+    {
+      "min_trust_score": 50,
+      "tier": "verified"
+    },
+    {
+      "min_trust_score": 25,
+      "tier": "trusted"
+    },
+    {
+      "min_trust_score": 0,
+      "tier": "standard"
+    }
+  ],
+  "solver_base_bps": {
+    "stable": 8,
+    "volatile": 18
+  },
+  "venue_bps": {
+    "standard": {
+      "stable": 6,
+      "volatile": 10
+    },
+    "trusted": {
+      "stable": 5,
+      "volatile": 8
+    },
+    "verified": {
+      "stable": 3,
+      "volatile": 5
+    },
+    "premium": {
+      "stable": 2,
+      "volatile": 3
+    },
+    "institutional": {
+      "stable": 1,
+      "volatile": 2
+    }
+  },
+  "routing_bps": {
+    "standard": {
+      "stable": 8,
+      "volatile": 12
+    },
+    "trusted": {
+      "stable": 6,
+      "volatile": 9
+    },
+    "verified": {
+      "stable": 4,
+      "volatile": 6
+    },
+    "premium": {
+      "stable": 2,
+      "volatile": 4
+    },
+    "institutional": {
+      "stable": 1,
+      "volatile": 2
+    }
+  },
+  "price_impact": {
+    "k": 50,
+    "cap_bps": 150,
+    "max_fill_fraction": 0.25
+  },
+  "tier_attestation_requirements": {
+    "standard": [],
+    "trusted": [],
+    "verified": [
+      "compliance"
+    ],
+    "premium": [
+      "compliance",
+      "non_membership"
+    ],
+    "institutional": [
+      "compliance",
+      "non_membership"
+    ]
+  }
+}

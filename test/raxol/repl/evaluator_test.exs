@@ -139,4 +139,151 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert Keyword.get(Evaluator.bindings(eval), :x) == 1
     end
   end
+
+  describe "limits the heap cap alone does not cover" do
+    test "captured output stops accumulating at the limit" do
+      # Output goes to a SEPARATE process, so it never counted against the
+      # evaluation's own max_heap_size: this loop allocates almost nothing
+      # locally while growing that process without bound. Nor could the caller
+      # measure it -- output arrives as refc binaries, which live off-heap and
+      # are invisible to process_info(:memory). So the cap is enforced where
+      # the bytes are accepted.
+      eval = Evaluator.new()
+      limit = 100_000
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(
+                 eval,
+                 ~s|Enum.each(1..50_000, fn _ -> IO.puts(String.duplicate("x", 1024)) end)|,
+                 max_result_bytes: limit,
+                 timeout: 30_000
+               )
+
+      # 50MB was written; what is kept is bounded, and says it was cut.
+      assert byte_size(result.output) < limit + 100
+      assert result.output =~ "output truncated"
+    end
+
+    test "output under the limit is captured whole, unannotated" do
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(eval, ~s|IO.puts("hello"); IO.puts("world")|)
+
+      assert result.output == "hello\nworld\n"
+      refute result.output =~ "truncated"
+    end
+
+    test "another evaluation's result is never consumed as this one's" do
+      # The child's reply used to be untagged, and `demonitor(ref, [:flush])`
+      # flushes only the :DOWN. So a reply that raced its timeout stayed in the
+      # mailbox and the NEXT eval's receive matched it, attributing one
+      # expression's value to another.
+      #
+      # The race itself is not reproducible on demand, so this asserts the
+      # invariant that makes it impossible instead: a result this evaluation
+      # did not mint is not eligible, whatever it looks like.
+      send(self(), {:eval_result, {:ok, :stale_untagged, [], ""}})
+      send(self(), {:eval_result, make_ref(), {:ok, :stale_tagged, [], ""}})
+
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} = Evaluator.eval(eval, ":mine")
+      assert result.value == :mine
+
+      # Both plants are still queued: neither was mistaken for this result.
+      assert_received {:eval_result, {:ok, :stale_untagged, [], ""}}
+      assert_received {:eval_result, _, {:ok, :stale_tagged, [], ""}}
+    end
+
+    test "a killed evaluation leaves no capture server behind" do
+      # Cleanup lives in an `after` block, which does NOT run when the process
+      # is killed by `Process.exit(pid, :brutal_kill)` on timeout or by the VM
+      # on a max_heap_size breach -- the two paths hostile input is designed to
+      # take. `CaptureIO` is started unlinked, so each of those orphaned one
+      # server holding up to the output limit, on an anonymous SSH surface.
+      #
+      # Counted rather than tracked by pid: the capture is private to the
+      # evaluation, and what matters is that the count comes back, not which
+      # process went.
+      eval = Evaluator.new()
+      before = capture_server_count()
+
+      assert {:error, timed_out, _eval} =
+               Evaluator.eval(eval, "Process.sleep(:infinity)", timeout: 100)
+
+      assert timed_out =~ "timed out"
+
+      assert {:error, over_heap, _eval} =
+               Evaluator.eval(
+                 eval,
+                 "Enum.reduce(1..10_000_000, [], fn i, acc -> [i | acc] end)",
+                 max_heap_bytes: 2 * 1024 * 1024,
+                 timeout: 30_000
+               )
+
+      assert over_heap =~ "memory limit"
+
+      # The servers stop asynchronously on the owner's :DOWN.
+      Process.sleep(200)
+      assert capture_server_count() == before
+    end
+  end
+
+  defp capture_server_count do
+    Enum.count(Process.list(), fn pid ->
+      case Process.info(pid, :dictionary) do
+        {:dictionary, dict} ->
+          Keyword.get(dict, :"$initial_call") ==
+            {Raxol.REPL.CaptureIO, :init, 1}
+
+        nil ->
+          false
+      end
+    end)
+  end
+
+  # `:io.format/2` does not send the finished bytes -- it sends
+  # `{put_chars, unicode, io_lib, format, [Format, Args]}` and asks the GROUP
+  # LEADER to build them. `CaptureIO` applied that in its own process, which
+  # has no `max_heap_size`, so the expansion escaped both the evaluation's heap
+  # cap and the capture's byte cap: `~1000000000c` allocated a gigabyte before
+  # anything counted it.
+  describe "output built by the group leader is bounded too" do
+    test "an expansion far over the cap does not allocate it" do
+      eval = Evaluator.new()
+
+      before = :erlang.memory(:total)
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(
+                 eval,
+                 ~S|:io.format("~100000000c", [?x]); :done|,
+                 timeout: 15_000,
+                 max_result_bytes: 4_096,
+                 max_heap_bytes: 8 * 1024 * 1024
+               )
+
+      assert result.value == :done
+
+      # 100M characters. Anything close to that reaching the VM means the
+      # expansion ran unbounded somewhere.
+      growth = :erlang.memory(:total) - before
+
+      assert growth < 50_000_000,
+             "the group leader allocated #{growth} bytes for a capped write"
+    end
+
+    test "output within the cap still arrives" do
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(eval, ~S|:io.format("~s", ["hello"]); :ok|,
+                 max_result_bytes: 4_096
+               )
+
+      assert result.output =~ "hello"
+      assert result.value == :ok
+    end
+  end
 end

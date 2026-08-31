@@ -1,151 +1,78 @@
 defmodule RaxolPlaygroundWeb.LandingLive do
   @moduledoc """
-  Landing page for raxol.io. Mounts a single demo (Button) into a TEALive
-  bridge and orchestrates the section layout. Auto-restarts the demo on
-  timeout instead of showing a retry button (different policy than the
-  playground/demo screens).
+  Landing page for raxol.io: one screen, no scrolling.
 
-  All section markup lives in `RaxolPlaygroundWeb.LandingComponents`.
+  The hero plays recorded frames of a real `Raxol.Headless` session and lets
+  the visitor switch between examples. There is no live session here any more.
+  A "take over live" button used to start a supervised demo in this page's
+  BEAM, which cost a `DemoLifecycle`, a timeout timer, keydown and click
+  forwarding, crash handling and a reduced-motion pause path -- and what the
+  visitor got for it was a second demo running. The recorded frames make the
+  same point at none of that cost.
+
+  The deep dives this page used to stack live at `RaxolPlaygroundWeb.TopicLive`;
+  the demos live at `/gallery`.
   """
 
   use RaxolPlaygroundWeb, :live_view
 
-  alias Raxol.Playground.Catalog
-  alias RaxolPlaygroundWeb.Playground.DemoLifecycle
+  # The PAYMENTS solver's capability matrix -- deliberately aliased apart
+  # from RaxolPlayground.Capabilities (raxol.io's own agent surface, served
+  # at this app's /api/capabilities). Two different endpoints, same name.
+  alias Raxol.Payments.Xochi.Capabilities, as: XochiCapabilities
 
   import RaxolPlaygroundWeb.LandingComponents
   import RaxolPlaygroundWeb.PlaygroundComponents, only: [atmosphere: 1]
 
-  @demo_name "Button"
-
-  @raxol_version (case :application.get_key(:raxol, :vsn) do
-                    {:ok, vsn} ->
-                      vsn
-                      |> to_string()
-                      |> String.split(".")
-                      |> Enum.take(2)
-                      |> Enum.join(".")
-
-                    _ ->
-                      "2.4"
-                  end)
-
   @impl true
   def mount(_params, _session, socket) do
-    demo_component = Catalog.get_component(@demo_name)
-
-    socket =
-      socket
-      |> assign(
-        page_title: "Raxol",
-        raxol_version: @raxol_version,
-        mobile_menu_open: false,
-        terminal_html: false,
-        lifecycle_pid: nil,
-        topic: nil,
-        demo_error: nil,
-        demo_timer: nil,
-        demo_component: demo_component
-      )
-      |> start_landing_demo()
-
-    {:ok, socket}
+    {:ok,
+     assign(socket,
+       # The layout appends " · Raxol", so the brand alone rendered as
+       # "Raxol · Raxol". The claim reads better in a tab and in a search result.
+       page_title: "One module, every surface",
+       mobile_menu_open: false,
+       example: List.first(hero_example_names()),
+       # ETS-cached with a 300s TTL; nil config (dev/test, or prod without
+       # XOCHI_CAPABILITIES_BASE_URL) skips the network entirely and serves
+       # the static fallback, which renders as a "cached" badge.
+       xochi_matrix:
+         XochiCapabilities.get(Application.get_env(:raxol_playground, :xochi_capabilities))
+     )}
   end
 
   @impl true
   def handle_event("toggle_mobile_menu", _params, socket) do
-    {:noreply,
-     assign(socket, :mobile_menu_open, !socket.assigns.mobile_menu_open)}
+    {:noreply, update(socket, :mobile_menu_open, &(!&1))}
   end
 
-  # Forward terminal key events from the RaxolTerminal hook into the demo, so
-  # the embedded demo is interactive (same path as DemoLive).
-  def handle_event("keydown", params, socket) do
-    if socket.assigns[:lifecycle_pid] do
-      event = Raxol.LiveView.InputAdapter.translate_key_event(params)
-      {:noreply, DemoLifecycle.dispatch_event(socket, event)}
-    else
-      {:noreply, socket}
-    end
+  def handle_event("next_example", _params, socket) do
+    names = hero_example_names()
+    idx = Enum.find_index(names, &(&1 == socket.assigns.example)) || 0
+    {:noreply, assign(socket, :example, Enum.at(names, rem(idx + 1, length(names))))}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_info({:render_update, html}, socket),
-    do: {:noreply, DemoLifecycle.render_update(socket, html)}
-
-  def handle_info({:render_update, html, _animation_css}, socket),
-    do: {:noreply, DemoLifecycle.render_update(socket, html)}
-
-  # Landing's policy: auto-restart on timeout instead of show-retry.
-  def handle_info(:demo_timeout, socket) do
-    socket =
-      socket
-      |> DemoLifecycle.stop_demo()
-      |> assign(terminal_html: false, demo_error: nil)
-      |> start_landing_demo()
-
-    {:noreply, socket}
-  end
-
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
-    if pid == socket.assigns[:lifecycle_pid] do
-      {:noreply, assign(socket, lifecycle_pid: nil, demo_error: true)}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_info(_msg, socket), do: {:noreply, socket}
-
-  @impl true
-  def terminate(_reason, socket) do
-    _ = DemoLifecycle.stop_demo(socket)
-    :ok
-  end
-
-  @impl true
   def render(assigns) do
     ~H"""
-    <.atmosphere orbs={true} />
+    <.atmosphere />
 
-    <div class="relative min-h-screen z-10">
-      <.nav_bar mobile_menu_open={@mobile_menu_open} />
-      <main>
-        <.hero_section raxol_version={@raxol_version} terminal_html={@terminal_html} />
-        <hr class="section-divider" aria-hidden="true" />
-        <.code_example_section />
-        <hr class="section-divider" aria-hidden="true" />
-        <.surfaces_deep_dive />
-        <hr class="section-divider" aria-hidden="true" />
-        <.ssh_deep_dive />
-        <hr class="section-divider" aria-hidden="true" />
-        <.agent_deep_dive />
-        <hr class="section-divider" aria-hidden="true" />
-        <.features_section />
-        <hr class="section-divider" aria-hidden="true" />
-        <.packages_section />
-        <hr class="section-divider" aria-hidden="true" />
-        <.faq_section />
-        <hr class="section-divider" aria-hidden="true" />
-        <.try_section />
+    <%!-- One screen, deliberately. The page used to stack eleven sections
+         that restated the README; the detail now lives on its own pages
+         (TopicLive) and in the gallery, and this is a claim, a way to run
+         it, and the thing running. --%>
+    <div class="screen">
+      <.screen_header mobile_menu_open={@mobile_menu_open} />
+
+      <main id="main-content" tabindex="-1" class="screen-main">
+        <.screen_hero example={@example} />
+        <.screen_integrations />
       </main>
-      <.footer_section />
+
+      <.screen_footer />
     </div>
     """
-  end
-
-  defp start_landing_demo(socket) do
-    case socket.assigns.demo_component do
-      nil ->
-        socket
-
-      component ->
-        DemoLifecycle.start_demo(socket, component,
-          timeout_ms: :timer.minutes(5),
-          topic_prefix: "landing"
-        )
-    end
   end
 end

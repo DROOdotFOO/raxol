@@ -2,6 +2,12 @@ defmodule Raxol.Playground.AppTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Playground.App
+  alias Raxol.Playground.Catalog
+
+  # Derived, not hardcoded: this is the catalog's own count, so adding a demo
+  # does not turn N unrelated assertions red. It was 40 until the BEAM Dashboard
+  # demo landed, and only some of the copies were bumped.
+  defp catalog_count, do: length(Catalog.list_components())
 
   defp key_event(char) do
     %Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: char}}
@@ -14,7 +20,7 @@ defmodule Raxol.Playground.AppTest do
   describe "init/1" do
     test "initializes with components and first selected" do
       model = App.init(nil)
-      assert length(model.components) == 40
+      assert length(model.components) == catalog_count()
       assert model.cursor == 0
       assert model.selected != nil
       assert model.focus == :sidebar
@@ -189,7 +195,7 @@ defmodule Raxol.Playground.AppTest do
       # After cycling through all categories, next press returns to nil
       {model, []} = App.update(key_event("f"), model)
       assert model.category_filter == nil
-      assert length(model.components) == 40
+      assert length(model.components) == catalog_count()
     end
 
     test "f resets cursor to 0" do

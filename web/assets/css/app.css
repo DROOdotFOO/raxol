@@ -42,9 +42,15 @@
 
 @layer components {
   /* --- Nav / header links with hover --- */
+  /* 24px minimum box, per WCAG 2.2 target size: the text alone was 18px
+     tall, so every header link was a target under the floor. Centring
+     inside a taller box grows the hit area without moving the type. */
   .nav-link {
     @apply font-mono text-sm tracking-wide transition-colors;
     color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.5rem;
   }
   .nav-link:hover { color: #e8e4dc; }
 
@@ -72,7 +78,7 @@
   /* "axol.io" footer link variant */
   .axol-link {
     @apply font-mono transition-colors;
-    color: rgba(232, 228, 220, 0.35);
+    color: var(--text-dim);
   }
   .axol-link:hover { color: #ffcd9c; }
 
@@ -99,26 +105,26 @@
   .body-text-dim {
     @apply font-mono leading-relaxed;
     font-size: clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem);
-    color: rgba(232, 228, 220, 0.45);
+    color: var(--text-dim);
   }
 
   .detail-text {
     @apply font-mono leading-normal;
     font-size: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
-    color: rgba(232, 228, 220, 0.45);
+    color: var(--text-dim);
   }
 
   .caption-text {
     @apply font-mono;
     font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
-    color: rgba(232, 228, 220, 0.3);
+    color: var(--text-dim);
   }
 
   .label-text {
     @apply font-mono uppercase;
     font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
     letter-spacing: 0.1em;
-    color: rgba(232, 228, 220, 0.35);
+    color: var(--text-dim);
   }
 
   .label-text-dim {
@@ -268,12 +274,17 @@
   --deep-night: #12121a;
   --shadow-deep: #12012c;
 
-  /* --- Text scale (mirrored as text-pearl-{N} in Tailwind) --- */
+  /* --- Text scale (mirrored as text-pearl-{N} in Tailwind) ---
+     Alpha floor is 0.52: on --obsidian that composites to 4.7:1, the
+     lowest that clears WCAG AA (4.5:1) for the 9-15px sizes these tokens
+     are set at. Two dim levels only; muted/ghost alias them so existing
+     call sites keep working. */
   --pearl-cream: #e8e4dc;
+  --text-pearl: var(--pearl-cream);
   --text-secondary: rgba(232, 228, 220, 0.6);
-  --text-muted: rgba(232, 228, 220, 0.5);
-  --text-dim: rgba(232, 228, 220, 0.4);
-  --text-ghost: rgba(232, 228, 220, 0.25);
+  --text-muted: rgba(232, 228, 220, 0.6);
+  --text-dim: rgba(232, 228, 220, 0.52);
+  --text-ghost: rgba(232, 228, 220, 0.52);
 
   /* --- Accent colors (mirrored in Tailwind) --- */
   --axol-coral: #ffcd9c;
@@ -297,6 +308,15 @@
   --panel-bg-subtle: rgba(18, 18, 26, 0.7);
   --panel-border: rgba(168, 154, 128, 0.12);
   --panel-border-hover: rgba(168, 154, 128, 0.2);
+
+  /* The screen layout reaches for these two names. They alias the panel
+     tokens above rather than carrying their own values, so the header rule
+     and the nav overlay cannot drift away from the panels they sit against.
+     --panel-strong is the most opaque of the three panel fills, which is what
+     the mobile nav needs: it is an absolutely positioned overlay with no
+     backdrop-filter, so page content shows through whatever alpha it gets. */
+  --border-subtle: var(--panel-border);
+  --panel-strong: var(--panel-bg-elevated);
 
   /* --- Atmospheric pearls (used by .pearl-bg gradient stops) --- */
   --pearl-violet: rgba(40, 51, 139, 0.4);
@@ -329,6 +349,41 @@ html, body {
   font-family: var(--font-body);
   background: var(--obsidian);
   color: var(--pearl-cream);
+}
+
+/* Everything on the site sets in monospace faces; lining tabular figures
+   keep every digit on the character grid (stat values, versions, counts). */
+html {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Cap a mono container at 80 columns, rounded down to a whole number of
+   character cells so the right edge lands on the grid (The Monospace Web).
+   The bare 80ch line is the fallback for browsers without round(). */
+.ch-snap {
+  max-width: 80ch;
+  max-width: calc(min(80ch, round(down, 100%, 1ch)));
+}
+
+/* Keyboard skip link: visually hidden until focused, first tab stop on
+   every page (root layout), targets each page's <main id="main-content">. */
+.skip-link {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--obsidian);
+  color: var(--axol-coral);
+  border: 1px solid var(--coral-40);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  transform: translateY(calc(-100% - 1.5rem));
+}
+
+.skip-link:focus {
+  transform: none;
 }
 
 /* =============================================================================
@@ -692,6 +747,42 @@ html, body {
 }
 
 /* =============================================================================
+   Install-method tabs (hero): curl / brew / npm / hex over one command line.
+   Same recipe as .hero-tab, centered; panes are .ssh-hero copy blocks.
+   ============================================================================= */
+
+.install-tabs__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.install-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease-smooth),
+              border-color var(--duration-fast) var(--ease-smooth);
+}
+
+.install-tab:hover { color: var(--pearl-cream); }
+
+.install-tab[aria-selected="true"] {
+  color: var(--axol-coral);
+  border-bottom-color: var(--axol-coral);
+}
+
+/* =============================================================================
    Badge
    ============================================================================= */
 
@@ -726,12 +817,12 @@ html, body {
    Focus States (soft glow ring)
    ============================================================================= */
 
+/* Opaque coral (13.6:1 on --obsidian) via outline, not box-shadow: shadows
+   clip under overflow:hidden ancestors, and the offset gap keeps the ring
+   visible on coral-filled controls. */
 :focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--obsidian),
-    0 0 0 4px var(--gold-40),
-    0 0 12px rgba(168, 154, 128, 0.15);
+  outline: 2px solid var(--axol-coral);
+  outline-offset: 2px;
 }
 
 /* =============================================================================
@@ -875,7 +966,9 @@ html, body {
   font-family: var(--font-mono);
   font-size: clamp(2.5rem, 2rem + 2.2vw, 3.75rem);
   font-weight: 300;
-  color: rgba(255, 205, 156, 0.16);
+  /* 0.16 measured 1.39:1, under the 3:1 large text needs. It is a section
+     marker, not decoration -- it numbers the deep dives in order. */
+  color: rgba(255, 205, 156, 0.45);
   letter-spacing: -0.02em;
   line-height: 1;
   display: block;
@@ -893,17 +986,34 @@ html, body {
 }
 
 /* =============================================================================
-   Surface chips (multi-surface deep dive)
+   Surface chips (multi-surface deep dive), grouped into three buckets:
+   in your terminal / in your browser / where your agents are.
    ============================================================================= */
 
-.surface-grid {
+.surface-buckets {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.surface-bucket__label {
+  font-family: var(--font-mono);
+  font-size: clamp(0.6rem, 0.55rem + 0.25vw, 0.7rem);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-secondary);
+  margin: 0 0 0.75rem;
+}
+
+.surface-bucket__chips {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 1rem;
 }
 
 @media (min-width: 768px) {
-  .surface-grid { grid-template-columns: repeat(4, 1fr); }
+  .surface-bucket__chips { grid-template-columns: repeat(4, 1fr); }
 }
 
 .surface-chip {
@@ -937,6 +1047,220 @@ html, body {
   word-break: break-word;
   line-height: 1.5;
 }
+
+/* =============================================================================
+   Hero halo (the axol face dithered into character cells, HaloField hook)
+   ============================================================================= */
+
+.hero-halo {
+  height: clamp(120px, 18vw, 180px);
+  max-width: 40rem;
+  margin: 0 auto 1.5rem;
+  font-family: var(--font-mono);
+}
+
+.hero-halo canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Install-method pane links (only channels that exist are linked). */
+.install-link {
+  color: var(--sky);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  margin-left: 0.4rem;
+  transition: color var(--duration-fast) var(--ease-smooth);
+}
+
+.install-link:hover { color: var(--pearl-cream); }
+
+/* =============================================================================
+   Privacy tier ladder (agent payments deep dive)
+   ============================================================================= */
+
+.ladder {
+  display: grid;
+  gap: 1px;
+  background: var(--panel-border);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rung {
+  background: rgba(10, 10, 12, 0.55);
+  display: grid;
+  /* tier | trust score | stable | volatile | proof */
+  grid-template-columns: 7.5rem 6rem 5rem 5rem 1fr;
+  gap: 0 1rem;
+  padding: 0.7rem 1.1rem;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 700px) {
+  .rung { grid-template-columns: 1fr 1fr; gap: 0.15rem 1rem; }
+}
+
+.rung--head {
+  background: rgba(18, 18, 26, 0.85);
+}
+
+.rung--head span {
+  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.rung__tier { font-weight: 600; color: var(--pearl-cream); }
+.rung__fee { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.rung__note { color: var(--text-dim); font-size: 0.8rem; }
+
+.set-public { color: var(--text-dim); }
+.set-stealth { color: var(--axol-coral); }
+.set-shielded { color: var(--sky); }
+
+/* =============================================================================
+   Solver reach matrix (agent payments deep dive)
+   ============================================================================= */
+
+.reach {
+  background: rgba(10, 10, 12, 0.55);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.reach-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(18, 18, 26, 0.85);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.reach-verb { color: var(--axol-coral); }
+
+.src-badge {
+  margin-left: auto;
+  padding: 0.14em 0.55em;
+  border-radius: 3px;
+  border: 1px solid var(--sky);
+  color: var(--sky);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.src-badge--cached {
+  border-color: var(--panel-border);
+  color: var(--text-dim);
+}
+
+/* Horizontal scroll on narrow screens, chrome hidden (design contract:
+   never overflow: hidden on terminal-style embeds). */
+.reach-scroll {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.reach-scroll::-webkit-scrollbar { display: none; }
+
+.reach-grid { min-width: 560px; }
+
+.reach-row {
+  display: grid;
+  grid-template-columns: 11rem 7rem 3.5rem 1fr;
+  gap: 0 1rem;
+  align-items: baseline;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.reach-row:last-child { border-bottom: none; }
+
+.reach-row__name { color: var(--pearl-cream); font-weight: 500; }
+.reach-row__id { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.reach-row__vm { color: var(--sky); font-size: 0.68rem; letter-spacing: 0.1em; }
+
+/* Dimmer than a live corridor, but still readable: at 0.32 and 0.38 alpha this
+   row measured 2.45:1 and 3.01:1, under the 4.5:1 a reader needs. The status
+   is carried by the badge now, so the colour only has to reinforce it, and
+   these track the same tokens every other muted row uses. */
+.reach-row--future .reach-row__name,
+.reach-row--future .reach-row__id,
+.reach-row--future .reach-row__vm { color: var(--text-dim); }
+.reach-row--future .reach-row__note { color: var(--text-muted); font-size: 0.72rem; }
+
+.reach-toks { display: flex; gap: 0.45rem; flex-wrap: wrap; }
+
+.tok {
+  padding: 0.1em 0.5em;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  border: 1px solid var(--coral-25);
+  color: var(--axol-coral);
+}
+
+.tok--alt { border-color: var(--sky-25); color: var(--sky); }
+.tok--dim { border-color: var(--panel-border); color: var(--text-dim); }
+
+/* Dashed, so the status reads without colour: a corridor that is not live
+   differs from one that is by the shape of its badge and by the word in it,
+   not only by being fainter. */
+.tok--soon {
+  border-style: dashed;
+  border-color: var(--panel-border);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.62rem;
+  margin-right: 0.4rem;
+}
+
+.reach-foot {
+  padding: 0.6rem 1rem;
+  border-top: 1px solid var(--panel-border);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+/* Token facts: a key beside a value, where the value is usually an address.
+   Addresses are the point of the block, so they wrap rather than truncate --
+   a half-shown contract is worse than none. */
+.token-fact {
+  display: grid;
+  grid-template-columns: 5rem 1fr;
+  gap: 0 1rem;
+  align-items: baseline;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.token-fact:last-child { border-bottom: none; }
+
+.token-fact__key {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.token-fact__val { color: var(--pearl-cream); overflow-wrap: anywhere; }
 
 /* =============================================================================
    FAQ accordion (native <details>)
@@ -1032,6 +1356,7 @@ html, body {
 }
 
 .panel:hover .pkg-copy-btn { opacity: 1; }
+.pkg-copy-btn:focus-visible { opacity: 1; }
 .pkg-copy-btn:hover {
   color: var(--axol-coral);
   border-color: var(--coral-25);
@@ -1476,6 +1801,383 @@ html, body {
   white-space: inherit;
 }
 
+/* Terminal embeds must stay scrollable (at phone widths a slice of the
+   80-col demo is otherwise unreachable) but never show scrollbar chrome:
+   the bridge-injected <pre> carries .raxol-terminal, whose overflow-x:auto
+   converts its computed overflow-y to auto, reserving a 15px gutter and
+   painting a thumb on systems with always-visible scrollbars (a 1px
+   line-height rounding overflow is enough to trigger it). overflow:hidden
+   is NOT the fix (it clips instead of scrolling). */
+#landing-terminal,
+#landing-terminal pre,
+#playground-terminal,
+#playground-terminal pre,
+#demo-terminal,
+#demo-terminal pre {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+#landing-terminal::-webkit-scrollbar,
+#landing-terminal pre::-webkit-scrollbar,
+#playground-terminal::-webkit-scrollbar,
+#playground-terminal pre::-webkit-scrollbar,
+#demo-terminal::-webkit-scrollbar,
+#demo-terminal pre::-webkit-scrollbar {
+  display: none;
+}
+
+/* =============================================================================
+   Hero surface-tabbed demo (one module, five surfaces)
+   ============================================================================= */
+
+.hero-demo {
+  background: rgba(10, 10, 12, 0.75);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.hero-demo-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+}
+
+.hd-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--panel-border);
+}
+
+.hd-title {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  margin-left: 0.3rem;
+}
+
+.hero-tabs {
+  display: flex;
+  /* NOT wrap: wrapping to a second row makes the bar taller than the box it
+     sits in, and inside the one-screen flex column that shows up as a
+     scrollbar on the tab strip. One row, always. */
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--panel-border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.hero-tabs::-webkit-scrollbar { display: none; }
+
+.hero-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease-smooth),
+              border-color var(--duration-fast) var(--ease-smooth);
+}
+
+.hero-tab:hover { color: var(--pearl-cream); }
+
+.hero-tab[aria-selected="true"] {
+  color: var(--axol-coral);
+  border-bottom-color: var(--axol-coral);
+}
+
+.hero-panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.hero-pane {
+  padding: 1.1rem 1.25rem;
+  min-width: 0;
+  text-align: left;
+}
+
+.hero-pane + .hero-pane { border-left: 1px solid var(--panel-border); }
+
+/* 767px, not 780: the one-screen rules start at 768px, so a wider stacking
+   breakpoint left a band where the panes stacked inside a height-locked
+   screen and each got half the room it needed. Panes stack only where the
+   page is free to scroll. */
+@media (max-width: 767px) {
+  .hero-panes { grid-template-columns: 1fr; }
+  .hero-pane + .hero-pane {
+    border-left: none;
+    border-top: 1px solid var(--panel-border);
+  }
+}
+
+
+.hero-pane pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.hero-pane pre::-webkit-scrollbar { display: none; }
+
+.hero-code { color: var(--pearl-cream); }
+
+.hero-pre { color: var(--sky); }
+
+.hero-demo .hk { color: var(--axol-coral); }
+.hero-demo .hc { color: var(--text-dim); }
+.hero-demo .hg { color: #8fca8f; }
+
+.hero-cmd { margin-bottom: 0.75rem; }
+.hero-note { margin-top: 0.75rem; }
+
+/* Recorded frames: real 44-col Headless output at the terminal font size.
+   The stacked frames toggle via [hidden]; the container reserves nothing
+   extra because every frame has the same row count. */
+.hero-frames {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* The border wraps the recording, not the pane. The frame's grid is fixed by
+     the recording while the pane's is not, so whenever the type is limited by
+     height (every short viewport, where it sits on its floor) the text came out
+     far narrower than its box and the border enclosed about 150px of nothing to
+     its right. Hugging the content costs no legibility: it moves the edge in,
+     it does not scale anything down. */
+  width: fit-content;
+  max-width: 100%;
+  /* This element also carries `.raxol-terminal`, whose `white-space: pre`
+     would render the newlines BETWEEN the stacked frame divs as blank lines --
+     several rows of phantom height above whatever the visible frame needs.
+     The frames themselves are `pre` and keep their own spacing. */
+  white-space: normal;
+}
+
+.hero-frames::-webkit-scrollbar { display: none; }
+
+.hero-live-wrap {
+  padding: 1rem 1.25rem;
+}
+
+.hero-live-wrap .raxol-terminal {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 0.75rem 0.9rem;
+}
+
+.hero-demo-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.45rem 0.9rem;
+  border-top: 1px solid var(--panel-border);
+}
+
+.hero-live-badge {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8fca8f;
+  margin-right: auto;
+}
+
+/* =============================================================================
+   Gallery card previews
+   Real rendered frames of each demo (committed under priv/demo_previews/,
+   generated by scripts/gen_landing_frames.exs), scaled to thumbnail size.
+   ============================================================================= */
+
+.gallery-preview {
+  display: block;
+  border-bottom: 1px solid var(--panel-border);
+  overflow: hidden;
+  max-height: 9.5rem;
+}
+
+.gallery-preview .raxol-terminal {
+  font-size: 8.5px;
+  line-height: 1.25;
+  padding: 0.55rem 0.65rem;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+.gallery-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.gallery-badge {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.gallery-link {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sky);
+  transition: color var(--duration-fast) var(--ease-smooth);
+}
+
+.gallery-link:hover { color: var(--axol-coral); }
+.gallery-link--dim { color: var(--text-dim); }
+
+.btn-compact {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.7rem;
+}
+
+/* =============================================================================
+   Playground: TUI-mirroring chrome
+   The web playground is a projection of the mix raxol.playground TUI --
+   dense name-only sidebar with category runs and a > cursor, one info
+   line above the demo, the code panel inline below it, and a bottom
+   status bar of key hints.
+   ============================================================================= */
+
+.pg-sidebar-count {
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  padding: 0 0.4rem 0.35rem;
+}
+
+.pg-sidebar-empty {
+  font-size: 0.7rem;
+  color: var(--gold);
+  padding: 0.3rem 0.4rem;
+}
+
+.pg-cat {
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sky);
+  opacity: 0.75;
+  padding: 0.5rem 0.4rem 0.15rem;
+}
+
+.pg-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  padding: 0.1rem 0.4rem;
+  color: var(--text-secondary);
+  white-space: pre;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-smooth);
+}
+
+.pg-item:hover { color: var(--pearl-cream); }
+
+.pg-item--active {
+  color: var(--sky);
+  background: rgba(88, 161, 198, 0.08);
+}
+
+/* TUI complexity colors: basic green, intermediate yellow, advanced magenta */
+.pg-cx-basic { color: #8fca8f; }
+.pg-cx-intermediate { color: var(--gold); }
+.pg-cx-advanced { color: var(--coral-red); }
+
+.pg-code {
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+  padding: 0.55rem 1rem 0.75rem;
+}
+
+.pg-code-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 0.35rem;
+}
+
+.pg-code-snippet {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--gold);
+  white-space: pre;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pg-code-snippet::-webkit-scrollbar { display: none; }
+
+.pg-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.3rem 1rem;
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+  font-size: 0.62rem;
+}
+
+.pg-statusbar-chip {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--obsidian);
+  background: var(--sky);
+  padding: 0.05rem 0.45rem;
+  border-radius: 2px;
+}
+
+.pg-statusbar-keys { color: var(--text-dim); }
+
+.pg-statusbar-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.category-tag--sm {
+  font-size: 0.55rem;
+  padding: 0.1rem 0.35rem;
+}
+
 /* Terminal theme overrides */
 [data-theme="dracula"] .raxol-terminal { color: #f8f8f2; }
 [data-theme="nord"] .raxol-terminal { color: #d8dee9; }
@@ -1549,4 +2251,467 @@ input[type="range"]::-moz-range-thumb {
     --raxol-gray-800: #f9fafb;
     --raxol-gray-900: #ffffff;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   One-screen landing.
+
+   The page is a viewport-height grid: header, hero, footer. Nothing scrolls,
+   which is the whole point -- the detail lives on the topic pages and in the
+   gallery. Below `--screen-min` there is not enough height to honor that
+   honestly, so the constraint relaxes rather than clipping content.
+   --------------------------------------------------------------------------- */
+
+.screen {
+  position: relative;
+  z-index: 10;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 0;
+}
+
+.screen-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.9rem 1.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.screen-mark {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  color: var(--axol-coral);
+  margin-right: auto;
+}
+
+.screen-nav {
+  display: none;
+  align-items: center;
+  gap: 1.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+}
+
+.screen-menu-btn {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 0.4rem 0.6rem;
+}
+
+.screen-nav-mobile {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1rem 1.5rem;
+  background: var(--panel-strong);
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  z-index: 50;
+}
+
+@media (min-width: 768px) {
+  .screen-header { padding: 1rem 2rem; }
+  .screen-nav { display: flex; }
+  .screen-menu-btn, .screen-nav-mobile { display: none; }
+}
+
+.screen-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+  padding: 1.5rem 1.25rem;
+  min-height: 0; /* lets the demo shrink instead of forcing the grid taller */
+  text-align: center;
+}
+
+.screen-title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text-pearl);
+  font-size: clamp(1.35rem, 0.9rem + 2.1vw, 2.6rem);
+  margin: 0;
+}
+
+.screen-sub {
+  color: var(--text-muted);
+  font-size: clamp(0.85rem, 0.8rem + 0.2vw, 1rem);
+  margin: 0;
+}
+
+/* The demo is the centerpiece, but it no longer takes ALL the height the text
+   does not: capped, so the room freed by folding the install command into the
+   intro reads as whitespace under the demo rather than as empty panes. That
+   band is the slot an integrations row takes. */
+.screen-main .hero-demo {
+  margin: 0;
+  width: 100%;
+  max-width: 62rem;
+  max-height: 30rem;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* In the intro column beside the mark, not a band of its own -- the column
+   had slack the mark's height was already paying for, and the band it used to
+   occupy is what an integrations row will take. */
+.screen-install { width: 100%; max-width: 32rem; }
+
+/* The integrations row, in the band the capped demo frees above.
+
+   Every name in it is derived -- the provider registry the agent resolves
+   against, the surface table the manifest serves, the ACP client list gated on
+   our own ACP surface -- so the row's width is whatever those add up to, not a
+   number anyone chose. That is why it scrolls: at 62rem a static row would
+   silently drop the tail, and a cap nobody can see is worse than motion. */
+.screen-integrations {
+  width: 100%;
+  max-width: 62rem;
+  flex: 0 0 auto;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  line-height: 1.5;
+  padding: 0.15rem 0;
+  text-align: left;
+  /* Fade the edges rather than cut them, so a name half out of frame reads as
+     continuing rather than as clipped. */
+  -webkit-mask-image: linear-gradient(
+    90deg, transparent, #000 4rem, #000 calc(100% - 4rem), transparent
+  );
+  mask-image: linear-gradient(
+    90deg, transparent, #000 4rem, #000 calc(100% - 4rem), transparent
+  );
+}
+
+.integrations-track {
+  display: flex;
+  width: max-content;
+  animation: integrations-scroll 45s linear infinite;
+}
+
+/* Half the track is exactly one run, so the seam never shows. */
+@keyframes integrations-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.screen-integrations:hover .integrations-track,
+.screen-integrations:focus-within .integrations-track {
+  animation-play-state: paused;
+}
+
+/* Padded on both sides, not just the trailing one. The leading pad is what
+   keeps the first entry's reveal inside the row: its pill is centred on a
+   logo barely wider than the mark, so at rest it reached about 33px past the
+   left edge and lost its first word to the marquee's own clipping. Both runs
+   carry the same padding, so the loop still translates by exactly one run and
+   stays seamless. */
+.integrations-run {
+  display: flex;
+  align-items: center;
+  gap: 2.5rem;
+  padding-right: 2.5rem;
+  padding-left: 2.5rem;
+}
+
+.integrations-group { display: flex; align-items: center; gap: 0.85rem; }
+
+.integrations-label {
+  color: var(--text-dim);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.integrations-item {
+  color: var(--text-muted);
+  white-space: nowrap;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Separators live in CSS, not markup, so they never land in a test assertion
+   or in what a screen reader reads out. */
+.integrations-item + .integrations-item::before {
+  content: "\00b7";
+  color: var(--text-dim);
+  margin-right: 0.85rem;
+}
+
+/* The mark sits in the flow, so a marked item is exactly as wide as its logo
+   and the row reads as an even rank of them. Sizing the item by the NAME
+   instead left every logo adrift in a box as wide as the word behind it,
+   which spaced the row by word length rather than by anything meaningful. */
+.integrations-mark {
+  width: 1.5em;
+  height: 1.5em;
+  color: var(--text-muted);
+  opacity: 0.85;
+  transition: opacity 120ms ease;
+}
+
+/* The name is lifted out of the flow and floated over the row, so revealing it
+   cannot change the item's width. A width that changed on hover would jump the
+   whole track sideways under the cursor. It overlaps its neighbours while
+   shown, which is what the backing is for, and the row is paused by the same
+   hover so nothing is moving underneath it. Padding stays horizontal: the row
+   clips its own overflow, and a taller pill would be cut off top and bottom. */
+.integrations-item--marked .integrations-name {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+  padding: 0 0.4rem;
+  border-radius: 3px;
+  background: var(--panel-bg-elevated);
+  border: 1px solid var(--panel-border);
+  color: var(--axol-coral);
+  transition: opacity 120ms ease;
+}
+
+.integrations-item--marked:hover { z-index: 2; }
+.integrations-item--marked:hover .integrations-name { opacity: 1; }
+.integrations-item--marked:hover .integrations-mark { opacity: 0; }
+
+/* Nothing reveals on a touch screen, where there is no hover to give. A mark
+   alone would be a name the reader can never reach, so the name goes back into
+   the flow and the mark steps aside. */
+@media (hover: none) {
+  .integrations-item--marked .integrations-name {
+    position: static;
+    transform: none;
+    opacity: 1;
+    padding: 0;
+    background: none;
+    border: none;
+    color: inherit;
+  }
+
+  .integrations-mark { display: none; }
+}
+
+/* The global reduced-motion reset above already stops the motion correctly:
+   the animation runs to completion in 0.01ms and, with the default
+   `fill-mode: none`, the transform reverts to the base value, so the track
+   sits at its start rather than parked mid-loop. What it leaves behind is the
+   problem. The run measures about 1965px inside a 992px frame, so a static
+   clipped row shows roughly half the entries and offers no way to reach the
+   rest -- the silent cap the scrolling was there to avoid in the first place.
+
+   So: stop the animation outright, drop the duplicate run nobody needs once
+   nothing loops, and let the row scroll by hand. Every entry stays reachable
+   and nothing moves. No hook is involved -- a CSS query is live by
+   construction, which is why HaloField and HeroDemo need a `change` listener
+   and this does not. */
+@media (prefers-reduced-motion: reduce) {
+  .integrations-track { animation: none; }
+  .integrations-run--dup { display: none; }
+
+  .screen-integrations { overflow-x: auto; scrollbar-width: none; }
+  .screen-integrations::-webkit-scrollbar { display: none; }
+}
+
+/* The row is no longer hidden anywhere. It used to be dropped below 949px,
+   because the one-screen layout started at 640px and a row added there came
+   straight out of the panes: the demo is `flex: 1 1 auto`, so it would have
+   clipped the 30-line example rather than merely being tight. Now that one
+   screen starts at 950px, the only viewports that lock the height are the ones
+   with room for the row, and every shorter one scrolls and can simply show it. */
+
+.screen-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  padding: 0.8rem 1.5rem;
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.screen-topics { display: flex; flex-wrap: wrap; gap: 1.1rem; }
+
+.topic-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.topic-link:hover, .topic-link:focus-visible {
+  color: var(--axol-coral);
+  border-bottom-color: currentColor;
+}
+
+.screen-meta { color: var(--text-dim); }
+
+/* Short viewports cannot hold a readable screen; scrolling beats clipping.
+   Everything that squeezes the demo into one screen belongs here, not
+   outside: below the threshold the panes take the height their content needs
+   and the page scrolls, rather than shrinking type until nothing reads.
+
+   950px, not the 640px this started at. The rule was right and the number was
+   wrong: measured, the 30-line example needs about 890px of viewport before it
+   stops clipping, and the integrations row needs 950. Between 640 and 950 the
+   page was claiming a screen it did not have, so it clipped the module and hid
+   the row instead of scrolling, and the only way to read the bottom of the page
+   was to zoom out until the viewport crossed the threshold in CSS pixels. One
+   screen now means a screen that actually holds it. */
+@media (min-height: 950px) and (min-width: 768px) {
+  .screen { height: 100dvh; overflow: hidden; }
+
+  .screen-main .hero-panes { min-height: 0; flex: 1 1 auto; }
+
+  /* A size container, so the type rules below can divide by the pane's real
+     height instead of guessing at it. */
+  .screen-main .hero-pane { min-height: 0; overflow: hidden; container-type: size; }
+}
+
+/* Breadcrumb on the topic pages the landing hands off to. */
+.topic-crumb {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Mark and claim share a row, aligned to the demo below so their edges line
+   up. The text column is narrow enough that the title sets on three lines,
+   which is what gives the row its height. */
+.screen-intro {
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 3vw, 2.25rem);
+  width: 100%;
+  max-width: 62rem;
+  flex: 0 0 auto;
+  text-align: left;
+}
+
+.screen-intro__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+/* An upright box rather than a banner. A flex child with only a canvas in it
+   has no intrinsic size, so both axes are given. Sized generously: the mark is
+   a character grid, and below roughly 20 columns the face stops resolving into
+   gills and eyes and reads as noise. */
+.screen-halo {
+  /* Grown into slack the row was already paying for: the intro's height is set
+     by the text column beside it, so the mark is free to get taller up to that
+     height without costing the screen a pixel. The width is raised far less --
+     it comes straight out of the title's measure, and the title wrapping to a
+     fourth line WOULD cost height. */
+  height: clamp(170px, 26vh, 250px);
+  width: clamp(160px, 19vw, 244px);
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+/* Stacked and centred once the row would leave the title too narrow to set. */
+@media (max-width: 640px) {
+  .screen-intro { flex-direction: column; text-align: center; }
+  .screen-halo { width: 100%; max-width: 20rem; height: clamp(104px, 13vh, 148px); }
+}
+
+/* The module has to fit without an inner scrollbar -- a pane clipped mid-`end`
+   reads as broken, and the point of the pane is that you can read the whole
+   program. */
+.screen-main .hero-code {
+  /* Fitted on both axes against the pane's own box rather than a fixed guess
+     at it. Height alone clipped the tail of a longer example on a short
+     viewport; width alone was missing entirely, so a narrow pane ran the
+     longest line off the right edge behind the hidden scrollbar. Either way
+     the module stops being readable whole, which is the pane's only claim.
+     0.63 is the font's character advance. */
+  font-size: clamp(
+    0.5rem,
+    min(
+      calc((100cqw - 0.4rem) / var(--hero-cols, 66) / 0.63),
+      calc((100cqh - 0.2rem) / var(--hero-lines, 24) / 1.34)
+    ),
+    0.7rem
+  );
+  line-height: 1.34;
+}
+
+/* Tighter than the scrolling page's padding: the pane has to hold the longest
+   example whole, and a clipped module contradicts the label above it. */
+.screen-main .hero-pane { padding: 0.7rem 0.9rem; }
+
+/* The surface panes show recorded output verbatim, and their last line is the
+   marker saying how much was left out. Losing that line off the bottom is the
+   one failure that misleads, so type follows the pane's real height. The floor
+   stops the formula shrinking type past reading: where the floor binds, the
+   page is already the scrolling one. */
+.screen-main .hero-src {
+  /* 2rem covers the `$ ...` command line above. */
+  font-size: clamp(
+    0.55rem,
+    calc((100cqh - 2rem) / var(--src-lines, 15) / 1.6),
+    0.76rem
+  );
+}
+
+/* Same fit for the recorded frames, whose grid is fixed by the recording. A
+   chart cut off at its bottom rows reads as broken; one adrift in a box three
+   times its width reads as an accident. 3.1rem covers the
+   command line, and the frame's border and padding. Set on the `pre`, not the
+   container: `.raxol-terminal` carries its own font-size, so a size on the
+   wrapper would never be inherited. */
+.screen-main .hero-frames pre {
+  /* Fitted on BOTH axes, so the frame grows to fill a wide pane instead of
+     sitting at a fixed size with dead space beside it. 0.7 is the character
+     advance of the braille the charts are drawn in, rounded up so the width
+     term never overflows. */
+  font-size: clamp(
+    0.45rem,
+    min(
+      calc((100cqw - 1.6rem) / var(--frame-cols, 62) / 0.7),
+      calc((100cqh - 3.1rem) / var(--frame-rows, 13) / 1.5)
+    ),
+    1.15rem
+  );
+  /* Stated, not inherited: `.raxol-terminal` sets its line height in absolute
+     units, so shrinking the type alone leaves the rows their original height
+     and the frame keeps overflowing. */
+  line-height: 1.5;
+}
+
+/* Keys the live session actually responds to, named in the footer so the
+   payoff of taking over is legible rather than something to guess at. */
+.hero-demo-foot kbd {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0.05rem 0.3rem;
+  margin: 0 0.1rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  color: var(--axol-coral);
 }

@@ -1,0 +1,410 @@
+[
+  {
+    "id": null,
+    "label": "line chart",
+    "type": "line_chart",
+    "children": [
+      {
+        "id": null,
+        "label": "⣀⣀⣀⠤⠤⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⣀⣀⣀⠤⠤⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⢀⣀⡠⠤⠤⠤⢄⣀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⢀⣀⡠⠤⠤⠤⢄⣀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠉⠉⠒⠤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠉⠉⠒⠤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⡠⠔⠊⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⡠⠔⠊⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠉⠒⢄⡀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠉⠒⢄⡀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠑⢄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠑⢄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⢀⠔⠉",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⢀⠔⠉"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠜",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠜"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⣀⠔⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⣀⠔⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀"
+      },
+      {
+        "id": null,
+        "label": "⠑⢄",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠑⢄"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠢⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠢⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⡠⠊",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⡠⠊"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠑⢄",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠑⢄"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢢⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢢⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⢀⠔⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⢀⠔⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠑⢄",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠑⢄"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⢀⠔⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⢀⠔⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠔⠁⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠑⡄",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠑⡄"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⢀⠔⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⢀⠔⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⠔⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⠔⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠈⠢⢄⡀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠈⠢⢄⡀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⡀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⡀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⢀⠔⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⢀⠔⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡠⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡠⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠈⠢⢄",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠈⠢⢄"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢢⣤",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢢⣤"
+      },
+      {
+        "id": null,
+        "label": "⠊⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠊⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠤⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠤⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠑⠢⣀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠑⠢⣀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⣀⠤⠔⠒⠁",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⣀⠤⠔⠒⠁"
+      },
+      {
+        "id": null,
+        "label": "⠀⠉⠒⢄⡀⠀⠀⠀⠀⠀⠀⢀⡠⠔⠊⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠉⠒⢄⡀⠀⠀⠀⠀⠀⠀⢀⡠⠔⠊⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      },
+      {
+        "id": null,
+        "label": "⠉⠑⠒⠒⠒⠊⠉",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠉⠑⠒⠒⠒⠊⠉"
+      },
+      {
+        "id": null,
+        "label": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠒⠒⠒⠒⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠒⠒⠒⠒⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+      }
+    ],
+    "role": "img"
+  }
+]

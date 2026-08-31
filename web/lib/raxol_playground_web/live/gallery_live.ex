@@ -7,8 +7,10 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   use RaxolPlaygroundWeb, :live_view
 
   alias Raxol.Playground.Catalog
+  alias RaxolPlayground.RecordedFrames
   alias RaxolPlaygroundWeb.Playground.Helpers
 
+  import Phoenix.HTML, only: [raw: 1]
   import RaxolPlaygroundWeb.PlaygroundComponents
 
   @impl true
@@ -17,6 +19,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
 
     socket =
       socket
+      |> assign(:page_title, "Gallery")
       |> assign(:components, components)
       |> assign(:total_count, length(components))
       |> assign(:categories, Catalog.list_categories())
@@ -76,7 +79,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
     ~H"""
     <.atmosphere />
 
-    <div class="relative min-h-screen z-10">
+    <main id="main-content" tabindex="-1" class="relative min-h-screen z-10">
       <%!-- Header --%>
       <header class="surface-bar">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -177,7 +180,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       <%!-- Component Grid/List --%>
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <%= if @view_mode == "grid" do %>
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             <%= for comp <- @components do %>
               <.component_card component={comp} />
             <% end %>
@@ -191,35 +194,49 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
         <% end %>
 
         <%= if @components == [] do %>
-          <div class="text-center py-12 font-mono text-pearl-40">
+          <div class="text-center py-12 font-mono text-pearl-60">
             No components match your filters.
           </div>
         <% end %>
       </div>
-    </div>
+    </main>
     """
   end
 
   defp component_card(assigns) do
+    assigns = assign(assigns, :preview, RecordedFrames.preview(assigns.component.name))
+
     ~H"""
-    <div class="panel panel--glow p-4 transition-all duration-200">
-      <div class="flex items-start justify-between mb-2">
-        <h3 class="font-mono font-semibold name-sky"><%= @component.name %></h3>
-        <.complexity_badge level={@component.complexity} />
-      </div>
-      <p class="font-mono mb-3 detail-text"><%= @component.description %></p>
-      <div class="flex flex-wrap gap-1 mb-3">
-        <%= for tag <- @component.tags do %>
-          <span class="category-tag" style="font-size: 0.55rem;"><%= tag %></span>
-        <% end %>
-      </div>
-      <div class="flex gap-2">
-        <a href={"/demos/#{@component.name}"} class="btn-sky flex-1 text-center" style="padding: 0.375rem 0.75rem; font-size: 0.7rem;">
-          Try Live
-        </a>
-        <a href={"/playground?component=#{@component.name}"} class="btn-secondary" style="padding: 0.375rem 0.75rem; font-size: 0.7rem;">
-          Code
-        </a>
+    <div class="panel panel--glow transition-all duration-200 overflow-hidden flex flex-col">
+      <%!-- A real rendered frame of the demo (committed under
+           priv/demo_previews/), not a screenshot or a GIF. The link is a
+           pointer shortcut duplicating "try live" below, so it stays out
+           of the tab order and the accessibility tree. --%>
+      <a
+        :if={@preview}
+        href={"/demos/#{@component.name}"}
+        class="gallery-preview bg-synthwave-bg"
+        data-theme="synthwave84"
+        aria-hidden="true"
+        tabindex="-1"
+      ><%= raw(@preview) %></a>
+      <div class="p-3 flex flex-col flex-1">
+        <div class="flex items-baseline justify-between gap-2 mb-1">
+          <h2 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h2>
+          <span class="gallery-badge"><%= Helpers.complexity_label(@component.complexity) %></span>
+        </div>
+        <p class="font-mono detail-text gallery-desc mb-2"><%= @component.description %></p>
+        <div class="flex items-center justify-between gap-2 mt-auto">
+          <div class="flex gap-1 overflow-hidden">
+            <%= for tag <- Enum.take(@component.tags, 3) do %>
+              <span class="category-tag category-tag--sm"><%= tag %></span>
+            <% end %>
+          </div>
+          <div class="flex gap-2.5 shrink-0">
+            <a href={"/demos/#{@component.name}"} class="gallery-link">try live</a>
+            <a href={"/playground?component=#{@component.name}&code=1"} class="gallery-link gallery-link--dim">code</a>
+          </div>
+        </div>
       </div>
     </div>
     """
@@ -231,7 +248,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       <div class="flex items-start gap-6">
         <div class="flex-1 min-w-0">
           <div class="flex items-start justify-between mb-2">
-            <h3 class="font-mono font-semibold name-sky"><%= @component.name %></h3>
+            <h2 class="font-mono font-semibold name-sky"><%= @component.name %></h2>
             <.complexity_badge level={@component.complexity} />
           </div>
           <p class="font-mono mb-3 detail-text"><%= @component.description %></p>
@@ -240,14 +257,14 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
           </div>
           <div class="flex flex-wrap gap-1 mb-4">
             <%= for tag <- @component.tags do %>
-              <span class="category-tag" style="font-size: 0.55rem;"><%= tag %></span>
+              <span class="category-tag category-tag--sm"><%= tag %></span>
             <% end %>
           </div>
           <div class="flex gap-3">
-            <a href={"/demos/#{@component.name}"} class="btn-sky" style="padding: 0.375rem 0.75rem; font-size: 0.7rem;">
+            <a href={"/demos/#{@component.name}"} class="btn-sky btn-compact">
               Try Live
             </a>
-            <a href={"/playground?component=#{@component.name}"} class="btn-secondary" style="padding: 0.375rem 0.75rem; font-size: 0.7rem;">
+            <a href={"/playground?component=#{@component.name}&code=1"} class="btn-secondary btn-compact">
               View Code
             </a>
           </div>

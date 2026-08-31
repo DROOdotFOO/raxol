@@ -246,9 +246,17 @@ defmodule Raxol.Payments.Xochi.StealthE2ETest do
       assert Router.settlement_for(trust_score: 55) == :shielded
     end
 
-    test "stealth tier fee is 25 bps" do
+    test "a privacy tier prices nothing" do
+      # It carried a fee_bps that no solver charged. Fees are a function of
+      # trust tier and asset class -- `Raxol.Payments.FeeSchedule`, pinned to
+      # the solver's published schedule -- and a score of 30 buys the
+      # `:trusted` fee tier while buying `:stealth` settlement. Two axes.
       tier = PrivacyTier.from_trust_score(30)
-      assert tier.fee_bps == 25
+
+      refute Map.has_key?(tier, :fee_bps)
+      assert tier.settlement == :stealth
+      assert Raxol.Payments.FeeSchedule.tier_for_score(30) == :trusted
+      assert Raxol.Payments.FeeSchedule.headline_bps(:trusted, :stable) == 19
     end
 
     test "stealth tier retains wallet + amount ranges only" do

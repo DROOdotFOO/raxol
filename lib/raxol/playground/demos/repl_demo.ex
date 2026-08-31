@@ -12,6 +12,15 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   @box_height 16
   @max_history Raxol.Core.Defaults.history_limit()
   @eval_timeout Raxol.Core.Defaults.timeout_ms()
+
+  # Sized for the deployment, not for a developer's laptop. This demo is the
+  # only strict-sandbox caller and it is served anonymously over SSH, where the
+  # playground allows 50 concurrent connections on a 1GB machine -- the
+  # evaluator's own 64MB default would let a handful of sessions exhaust it
+  # between them. Small enough that a session cannot hurt its neighbours;
+  # generous for anything a REPL demo legitimately computes.
+  @eval_max_heap_bytes 8 * 1024 * 1024
+  @eval_max_output_bytes 256 * 1024
   @max_bindings 8
   @inspect_limit 5
   @inspect_width 30
@@ -144,7 +153,11 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   end
 
   defp do_eval(model, code) do
-    case Evaluator.eval(model.evaluator, code, timeout: @eval_timeout) do
+    case Evaluator.eval(model.evaluator, code,
+           timeout: @eval_timeout,
+           max_heap_bytes: @eval_max_heap_bytes,
+           max_result_bytes: @eval_max_output_bytes
+         ) do
       {:ok, result, new_eval} ->
         output_lines = format_result(result)
         new_history = [code | model.input_history] |> Enum.take(@max_history)

@@ -187,6 +187,9 @@ defmodule Raxol.Console.BootTest do
       {:ok, rc} =
         RuntimeConfig.build(pkg,
           bundle_default_mcp: false,
+          # These exercise chat plumbing, not authorization; an unset
+          # :pairing now denies every route.
+          pairing: :open,
           channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}],
           agent_opts: [
             backend: Raxol.Agent.Backend.Mock,
@@ -228,6 +231,71 @@ defmodule Raxol.Console.BootTest do
       assert_receive {:gateway_sent, ^route, "final answer"}
     end
 
+    # The same path as the test above, minus the `pairing: :open` it had to add.
+    # This is the acceptance criterion for the unset-pairing default: the refusal
+    # has to hold at the ROUTER, not only at `Inbound.authorized?/2`, because the
+    # router is what a live adapter feed reaches. A gate that only guards the
+    # helper is a gate the real path walks around.
+    test "an unconfigured deployment cannot start an arbitrary user's session" do
+      pid = self()
+
+      pkg = %Package{
+        runtime: :raxol,
+        soul_md: "# Bot\n\nHi.",
+        agents_md: nil,
+        tasks: [],
+        skills: []
+      }
+
+      {:ok, rc} =
+        RuntimeConfig.build(pkg,
+          bundle_default_mcp: false,
+          channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}],
+          agent_opts: [
+            backend: Raxol.Agent.Backend.Mock,
+            backend_opts: [response: "should never be reached"]
+          ]
+        )
+
+      assert rc.pairing.mode == :enforce
+      refute rc.pairing.declared?
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, _report} =
+          Boot.start(rc,
+            name: :console_denied,
+            scheduler_name: :console_denied_sched,
+            reconciler_name: :console_denied_recon
+          )
+      end)
+
+      on_exit(fn ->
+        try do
+          Supervisor.stop(:console_denied)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      raw = %{
+        platform: :in_memory,
+        chat_type: :dm,
+        chat_id: "c",
+        user_id: "mallory",
+        event: %{text: "hi"}
+      }
+
+      {:ok, route, event} = InMemory.normalize_event(raw)
+      router = :"console_denied.router"
+
+      assert {:error, :unauthorized} = SessionRouter.route(router, route, event)
+      assert {:error, :unauthorized} = SessionRouter.start_session(router, route)
+
+      # No session started, and nothing was sent back.
+      assert SessionRouter.session_count(router) == 0
+      refute_receive {:gateway_sent, _, _}, 200
+    end
+
     # The same boot path in `:app` mode: the reply is a TEA app's rendered frame
     # rather than an LLM turn, and the persona reaches the app through its own
     # `init/1` instead of being applied for free. See GitHub #763.
@@ -248,6 +316,9 @@ defmodule Raxol.Console.BootTest do
       {:ok, rc} =
         RuntimeConfig.build(pkg,
           bundle_default_mcp: false,
+          # These exercise chat plumbing, not authorization; an unset
+          # :pairing now denies every route.
+          pairing: :open,
           handler_mode: :app,
           app_template: "probe",
           channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}]
@@ -500,6 +571,9 @@ defmodule Raxol.Console.BootTest do
       {:ok, rc} =
         RuntimeConfig.build(bot_package(),
           bundle_default_mcp: false,
+          # These exercise chat plumbing, not authorization; an unset
+          # :pairing now denies every route.
+          pairing: :open,
           channels: [%{platform: :in_memory, adapter: InMemory, config: %{sink: pid}}],
           agent_opts: [
             backend: Raxol.Agent.Backend.Mock,

@@ -25,6 +25,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
   def mount(%{"demo" => _name}, _session, socket) do
     socket =
       socket
+      |> assign(:page_title, "Demo")
       |> assign(:component, nil)
       |> assign(:prev_component, nil)
       |> assign(:next_component, nil)
@@ -48,6 +49,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
 
     socket =
       socket
+      |> assign(:page_title, "Demos")
       |> assign(:component, nil)
       |> assign(:components, components)
       |> assign(:total_count, length(components))
@@ -64,12 +66,21 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     if current && current.name == name do
       {:noreply, socket}
     else
-      component = Catalog.get_component(name)
+      # A name the catalog does not have is a wrong URL. Without this the nil
+      # falls through to the `component: nil` render clause, which is the index
+      # and reads assigns only the index mount sets -- a KeyError served as a
+      # 500. Raise before `catalog_position/1`, so nothing downstream has to
+      # carry a nil component.
+      component =
+        Catalog.get_component(name) ||
+          raise RaxolPlaygroundWeb.NotFoundError, "no demo named #{inspect(name)}"
+
       pos = catalog_position(name)
 
       socket =
         socket
         |> DemoLifecycle.stop_demo()
+        |> assign(:page_title, component.name)
         |> assign(:component, component)
         |> assign(:prev_component, pos.prev)
         |> assign(:next_component, pos.next)
@@ -98,9 +109,37 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     {:noreply, assign(socket, :show_code, !socket.assigns.show_code)}
   end
 
+  # j/k from the PlaygroundKeys hook: patch to the adjacent demo, same as
+  # the prev/next header links. No wrap -- the ends are the ends, matching
+  # the visible buttons.
+  def handle_event("nav_component", %{"dir" => dir}, socket)
+      when dir in ["next", "prev"] do
+    target =
+      case dir do
+        "next" -> socket.assigns.next_component
+        "prev" -> socket.assigns.prev_component
+      end
+
+    if target do
+      {:noreply, push_patch(socket, to: "/demos/#{URI.encode(target)}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("keydown", params, socket) do
     if socket.assigns[:lifecycle_pid] do
       event = Raxol.LiveView.InputAdapter.translate_key_event(params)
+      {:noreply, DemoLifecycle.dispatch_event(socket, event)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("terminal_click", params, socket) do
+    event = Raxol.LiveView.InputAdapter.translate_click_event(params)
+
+    if event && socket.assigns[:lifecycle_pid] do
       {:noreply, DemoLifecycle.dispatch_event(socket, event)}
     else
       {:noreply, socket}
@@ -152,7 +191,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     ~H"""
     <.atmosphere />
 
-    <div class="relative min-h-screen z-10">
+    <main id="main-content" tabindex="-1" class="relative min-h-screen z-10">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div class="text-center mb-8">
           <h1 class="font-mono font-bold tracking-wide mb-4 text-pearl" style="font-size: clamp(1.5rem, 1.25rem + 1vw, 2.5rem);">
@@ -169,7 +208,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
           <%= for comp <- @components do %>
             <a href={"/demos/#{comp.name}"} class="panel panel--glow block p-4 transition-all duration-200">
               <div class="flex items-start justify-between mb-2">
-                <h3 class="font-mono font-semibold name-sky"><%= comp.name %></h3>
+                <h2 class="font-mono font-semibold name-sky"><%= comp.name %></h2>
                 <.complexity_badge level={comp.complexity} />
               </div>
               <p class="font-mono mb-2 detail-text"><%= comp.description %></p>
@@ -178,7 +217,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
           <% end %>
         </div>
       </div>
-    </div>
+    </main>
     """
   end
 
@@ -190,19 +229,26 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     assigns = assign(assigns, :theme_bg, theme_bg)
 
     ~H"""
-    <div class="h-screen flex flex-col bg-obsidian">
+    <%!-- PlaygroundKeys: j/k patch to the adjacent demo, c toggles code,
+         Esc leaves the focused terminal. data-keys omits '?' because
+         this page has no shortcuts overlay. --%>
+    <main
+      id="main-content"
+      tabindex="-1"
+      phx-hook="PlaygroundKeys"
+      data-terminal="demo-terminal"
+      data-keys="jk,c"
+      class="h-screen flex flex-col bg-obsidian"
+    >
       <!-- Header -->
-      <div class="px-8 py-5 surface-bar">
+      <header class="px-8 py-5 surface-bar">
         <div class="flex items-center justify-between gap-8">
           <div class="flex items-center gap-6 min-w-0">
             <a href="/demos" class="font-mono text-sm subtle-link whitespace-nowrap" aria-label="Back to all demos">&larr; Back</a>
             <div class="min-w-0">
-              <div class="flex items-center gap-3">
+              <div class="flex items-baseline gap-2">
                 <h1 class="font-mono font-semibold text-pearl truncate" style="font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);"><%= @component.name %></h1>
-                <.complexity_badge level={@component.complexity} />
-                <span :if={@demo_position && @demo_total} class="font-mono text-pearl-40 text-sm whitespace-nowrap" aria-label={"Demo #{@demo_position} of #{@demo_total}"}>
-                  <%= @demo_position %> / <%= @demo_total %>
-                </span>
+                <span class={["font-mono shrink-0", "pg-cx-#{@component.complexity}"]} style="font-size: 0.7rem;">[<%= @component.complexity %>]</span>
               </div>
               <p class="font-mono detail-text truncate"><%= @component.description %></p>
             </div>
@@ -243,7 +289,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
             </button>
           </div>
         </div>
-      </div>
+      </header>
 
       <!-- Terminal + Code -->
       <div class="flex-1 flex overflow-hidden">
@@ -291,13 +337,39 @@ defmodule RaxolPlaygroundWeb.DemoLive do
               </div>
             <% end %>
           </div>
-        </div>
 
-        <.code_panel show={@show_code} code={@component.code_snippet} />
+          <%!-- Inline code panel, below the demo like the TUI's 'c'
+               toggle (not a side column). --%>
+          <%= if @show_code do %>
+            <div class="pg-code">
+              <div class="pg-code-head">
+                <span>Code</span>
+                <button
+                  id="demo-code-copy"
+                  phx-hook="CopyToClipboard"
+                  data-copy={String.trim(@component.code_snippet)}
+                  class="copy-chip"
+                  aria-label="Copy code snippet"
+                >
+                  copy
+                </button>
+              </div>
+              <pre class="pg-code-snippet"><%= String.trim(@component.code_snippet) %></pre>
+            </div>
+          <% end %>
+        </div>
       </div>
 
-      <.ssh_callout variant={:footer} />
-    </div>
+      <%!-- Status bar: same key-hint line as the playground; every key
+           listed is wired. --%>
+      <div class="pg-statusbar font-mono">
+        <span class="pg-statusbar-chip">demo</span>
+        <span class="pg-statusbar-keys">j/k prev/next &middot; / focus demo &middot; esc back &middot; c code</span>
+        <span :if={@demo_position && @demo_total} class="pg-statusbar-count">
+          <%= @demo_position %>/<%= @demo_total %> demos
+        </span>
+      </div>
+    </main>
     """
   end
 

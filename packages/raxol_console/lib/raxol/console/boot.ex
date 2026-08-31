@@ -105,8 +105,10 @@ defmodule Raxol.Console.Boot do
   # deployment never connected stays denied even when open.
   # `RuntimeConfig.build/2` always resolves a posture map, so a nil is a struct
   # someone built by hand rather than a fourth posture. It reads as unset, which
-  # is what an unset `:pairing` option means.
-  defp pairing_opts(%{pairing: nil}, adapters), do: [allow_platforms: Map.keys(adapters)]
+  # now means DENY -- seeding allow-all here would reintroduce the fail-open the
+  # unset default was changed to close, through the one door that skips build/2.
+  defp pairing_opts(%{pairing: nil}, _adapters),
+    do: [allow_platforms: [], allowed_users: [], platform_users: []]
 
   defp pairing_opts(%{pairing: %{mode: :open}}, adapters),
     do: [allow_platforms: Map.keys(adapters)]
@@ -124,14 +126,19 @@ defmodule Raxol.Console.Boot do
   # surface to authorize, so warning about an open one would be false.
   defp announce_posture(_rc, adapters, _base) when map_size(adapters) == 0, do: :none
 
-  defp announce_posture(%{pairing: nil} = rc, adapters, base) do
-    announce_open(rc.pairing, Map.keys(adapters), base)
-    :open
+  defp announce_posture(%{pairing: nil}, adapters, base) do
+    announce_undeclared_deny(Map.keys(adapters), base)
+    :enforce
   end
 
   defp announce_posture(%{pairing: %{mode: :open} = pairing}, adapters, base) do
     announce_open(pairing, Map.keys(adapters), base)
     :open
+  end
+
+  defp announce_posture(%{pairing: %{declared?: false}}, adapters, base) do
+    announce_undeclared_deny(Map.keys(adapters), base)
+    :enforce
   end
 
   defp announce_posture(%{pairing: pairing}, adapters, base) do
@@ -162,9 +169,41 @@ defmodule Raxol.Console.Boot do
     end
   end
 
-  # The whole point of defaulting to open is that it cannot be silent. An
-  # operator who wrote `pairing: :open` has already made this call and is not
-  # nagged; only silence is.
+  # An unconfigured Console denies every route. That is the safe direction, but
+  # it is not the obvious one from the outside -- messages simply go unanswered --
+  # so name it at boot with the two ways out. The telemetry event carries the
+  # same posture the old open-by-default one did, so a deployment watching for it
+  # still learns that pairing was never configured.
+  defp announce_undeclared_deny(platforms, base) do
+    :telemetry.execute(
+      [:raxol_console, :pairing, :undeclared],
+      %{system_time: System.system_time()},
+      %{console: base, platforms: platforms, declared?: false}
+    )
+
+    Logger.warning("""
+    #{base}: gateway authorization is DENYING EVERYONE, because no :pairing
+    option was set.
+
+    Connected: #{inspect(platforms)}. Every inbound chat on them is refused
+    before a session exists, so the agent will look silent rather than broken.
+
+    Set one in your deployment config:
+
+        config :raxol_console,
+          pairing: [allowed_users: ["12345"]]         # admit these senders
+          pairing: [allow_platforms: [:telegram]]     # admit a whole platform
+          pairing: :open                              # admit everyone, explicitly
+
+    Silence used to mean OPEN. It now means denied: an unconfigured Console
+    would otherwise expose this agent's turns, tools and spend to anyone who
+    could reach a connected platform.
+    """)
+  end
+
+  # An operator who wrote `pairing: :open` has already made this call and is not
+  # nagged. The undeclared branch no longer reaches here from `RuntimeConfig`,
+  # but a hand-built `%{mode: :open, declared?: false}` still warns.
   defp announce_open(%{declared?: true}, _platforms, _base), do: :ok
 
   defp announce_open(_pairing, platforms, base) do

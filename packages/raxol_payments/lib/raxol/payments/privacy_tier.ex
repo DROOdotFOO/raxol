@@ -1,10 +1,22 @@
 defmodule Raxol.Payments.PrivacyTier do
   @moduledoc """
-  Maps trust scores to privacy tiers, fees, and settlement targets.
+  Maps trust scores to privacy tiers and settlement targets.
 
-  Based on the Xochi whitepaper Glass Cube model. Higher trust scores
-  unlock deeper privacy at lower fees. Users can always opt into less
-  privacy than their score allows.
+  Based on the Xochi whitepaper Glass Cube model. Higher trust scores unlock
+  deeper privacy, and users can always opt into less privacy than their score
+  allows.
+
+  ## This module does not price anything
+
+  It used to carry a `fee_bps` per tier, which said that privacy determined
+  what a transfer cost. The shipped model prices on TRUST TIER and asset class
+  instead -- see `Raxol.Payments.FeeSchedule`, which mirrors the solver's own
+  published schedule and is pinned to it. The two were never reconciled, so the
+  numbers here drifted into fiction: they named tiers no solver has, and
+  included a `0 bps` tier that the never-discounted solver floor makes
+  impossible. raxol.io rendered that table until 2026-08-30.
+
+  Privacy is a settlement MODE, chosen per payment. It is orthogonal to price.
 
   ## Attestations are pre-verified
 
@@ -18,14 +30,14 @@ defmodule Raxol.Payments.PrivacyTier do
 
   ## Tiers
 
-  | Score | Tier      | Fee (bps) | Settlement |
-  | ----- | --------- | --------- | ---------- |
-  | --    | Open      | -2        | public     |
-  | --    | Public    | 0         | public     |
-  | 0-24  | Standard  | 30        | public     |
-  | 25-49 | Stealth   | 25        | stealth    |
-  | 50-74 | Private   | 20        | shielded   |
-  | 75+   | Sovereign | 15        | shielded   |
+  | Score | Tier      | Settlement | Retention      |
+  | ----- | --------- | ---------- | -------------- |
+  | --    | Open      | public     | full analytics |
+  | --    | Public    | public     | full           |
+  | 0-24  | Standard  | public     | amounts        |
+  | 25-49 | Stealth   | stealth    | ranges         |
+  | 50-74 | Private   | shielded   | wallet         |
+  | 75+   | Sovereign | shielded   | nothing        |
   """
 
   @type tier :: :open | :public | :standard | :stealth | :private | :sovereign
@@ -33,18 +45,17 @@ defmodule Raxol.Payments.PrivacyTier do
 
   @type t :: %{
           tier: tier(),
-          fee_bps: integer(),
           settlement: settlement(),
           data_retention: :full_analytics | :full | :amounts | :ranges | :wallet | :nothing
         }
 
   @tiers %{
-    open: %{fee_bps: -2, settlement: :public, data_retention: :full_analytics},
-    public: %{fee_bps: 0, settlement: :public, data_retention: :full},
-    standard: %{fee_bps: 30, settlement: :public, data_retention: :amounts},
-    stealth: %{fee_bps: 25, settlement: :stealth, data_retention: :ranges},
-    private: %{fee_bps: 20, settlement: :shielded, data_retention: :wallet},
-    sovereign: %{fee_bps: 15, settlement: :shielded, data_retention: :nothing}
+    open: %{settlement: :public, data_retention: :full_analytics},
+    public: %{settlement: :public, data_retention: :full},
+    standard: %{settlement: :public, data_retention: :amounts},
+    stealth: %{settlement: :stealth, data_retention: :ranges},
+    private: %{settlement: :shielded, data_retention: :wallet},
+    sovereign: %{settlement: :shielded, data_retention: :nothing}
   }
 
   @tier_order [:open, :public, :standard, :stealth, :private, :sovereign]

@@ -8,7 +8,6 @@ defmodule Raxol.Payments.PrivacyTierTest do
       tier = PrivacyTier.from_trust_score(nil)
       assert tier.tier == :standard
       assert tier.settlement == :public
-      assert tier.fee_bps == 30
     end
 
     test "score 0 maps to standard" do
@@ -27,7 +26,6 @@ defmodule Raxol.Payments.PrivacyTierTest do
       tier = PrivacyTier.from_trust_score(25)
       assert tier.tier == :stealth
       assert tier.settlement == :stealth
-      assert tier.fee_bps == 25
     end
 
     test "score 49 maps to stealth" do
@@ -39,7 +37,6 @@ defmodule Raxol.Payments.PrivacyTierTest do
       tier = PrivacyTier.from_trust_score(50)
       assert tier.tier == :private
       assert tier.settlement == :shielded
-      assert tier.fee_bps == 20
     end
 
     test "score 74 maps to private" do
@@ -51,7 +48,6 @@ defmodule Raxol.Payments.PrivacyTierTest do
       tier = PrivacyTier.from_trust_score(75)
       assert tier.tier == :sovereign
       assert tier.settlement == :shielded
-      assert tier.fee_bps == 15
     end
 
     test "score 120 maps to sovereign" do
@@ -82,7 +78,6 @@ defmodule Raxol.Payments.PrivacyTierTest do
     test "returns tier info for named tier" do
       info = PrivacyTier.info(:open)
       assert info.tier == :open
-      assert info.fee_bps == -2
       assert info.settlement == :public
       assert info.data_retention == :full_analytics
     end

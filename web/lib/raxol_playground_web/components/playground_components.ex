@@ -5,12 +5,13 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
   alias RaxolPlaygroundWeb.Playground.Helpers
 
   @doc """
-  The SSH-command callout that appears on landing twice: once in the hero,
-  once in the deep dive. Each needs its own DOM id because the hook attaches
-  per element.
+  The copy-to-clipboard command callout used across the landing page. Each
+  caller needs its own DOM id because the hook attaches per element. Set
+  `prompt: nil` for content that is not a shell command (a mix.exs dep).
   """
   attr(:id, :string, required: true)
   attr(:cmd, :string, required: true)
+  attr(:prompt, :any, default: "$ ")
 
   def ssh_copy_block(assigns) do
     ~H"""
@@ -22,7 +23,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
       data-copy={@cmd}
       aria-label={"Copy command: #{@cmd}"}
     >
-      <span class="prompt">$ </span><%= @cmd %><span class="cursor-blink text-axol-coral">_</span>
+      <span :if={@prompt} class="prompt"><%= @prompt %></span><%= @cmd %><span class="cursor-blink text-axol-coral">_</span>
       <span class="sr-only" data-copy-status aria-live="polite"></span>
     </button>
     """
@@ -79,16 +80,18 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
       @variant == :footer && "px-6 py-3 bg-panel border-t border-subtle",
       @class
     ]}>
-      <span class="text-pearl-50">
+      <span class="text-pearl-60">
         <%= if @variant == :banner do %>
           Try the real terminal experience:
         <% else %>
           Try the real terminal:
         <% end %>
       </span>
-      <span class="text-axol-coral ml-2"><%= @ssh_cmd %></span>
-      <span class="text-pearl-25 mx-2">|</span>
-      <span class="text-sky">mix raxol.playground</span>
+      <%= if @ssh_cmd do %>
+        <span class="text-axol-coral ml-2"><%= @ssh_cmd %></span>
+        <span class="text-pearl-25 mx-2">|</span>
+      <% end %>
+      <span class={["text-sky", is_nil(@ssh_cmd) && "ml-2"]}>mix raxol.playground</span>
     </div>
     """
   end
@@ -103,26 +106,10 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
       <% end %>
       <p class="mb-4">For the full interactive experience:</p>
       <p class="text-sky">$ mix raxol.playground</p>
-      <p class="mt-1 text-axol-coral">$ <%= Helpers.ssh_command() %></p>
+      <%= if ssh = Helpers.ssh_command() do %>
+        <p class="mt-1 text-axol-coral">$ <%= ssh %></p>
+      <% end %>
     </div>
-    """
-  end
-
-  attr(:show, :boolean, required: true)
-  attr(:code, :string, default: "")
-
-  def code_panel(assigns) do
-    ~H"""
-    <%= if @show do %>
-      <div class="w-full lg:w-1/3 border-t lg:border-t-0 border-subtle flex flex-col max-h-64 lg:max-h-none bg-obsidian-85">
-        <div class="px-4 py-2 text-sm font-mono font-medium text-pearl-60 bg-panel-strong border-b border-subtle">
-          Code Snippet
-        </div>
-        <div class="flex-1 overflow-auto p-4">
-          <pre class="font-mono text-sm whitespace-pre-wrap text-sky"><%= String.trim(@code) %></pre>
-        </div>
-      </div>
-    <% end %>
     """
   end
 
@@ -168,10 +155,10 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
     <div class="terminal-chrome copyable-command relative group">
       <div class="terminal-chrome-body copyable-command__body flex items-center justify-between">
         <div>
-          <span class="text-pearl-35">$</span>
+          <span class="text-pearl-60">$</span>
           <span class={["ml-2", command_tone_class(@tone)]}><%= @command %></span>
           <%= if @comment do %>
-            <span class="text-pearl-25 ml-4"># <%= @comment %></span>
+            <span class="text-pearl-60 ml-4"># <%= @comment %></span>
           <% end %>
         </div>
         <button

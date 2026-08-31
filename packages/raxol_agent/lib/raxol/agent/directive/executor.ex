@@ -29,6 +29,36 @@ defimpl Raxol.Core.Runtime.Directive.Executor,
   alias Raxol.Agent.Directive.Shell
 
   def execute(%Shell{command: command, opts: opts}, context) do
+    # The same gate the shell TOOLS pass through. This path ran `/bin/sh -c`
+    # with nothing applied: `Raxol.Agent.SandboxHook` can deny a Shell
+    # directive, but only when the agent declares a `sandbox/0` (it is a
+    # pass-through otherwise) and it has no notion of a jail at all.
+    #
+    # It binds on whatever the dispatcher context carries. That context is
+    # built by the runtime and does NOT carry `:jail` or `:shell_sandbox`
+    # today, so for the surfaces in this repo the check passes -- it is here
+    # so that a surface which does scope its dispatcher context gets the same
+    # answer at the directive as it gets at the tool, rather than two gates
+    # that disagree. Confining this path for a jailed session needs those keys
+    # plumbed into the dispatcher context, which is not done here.
+    case Raxol.Agent.Actions.Code.shell_allow(context, command) do
+      :ok -> run_shell_directive(command, opts, context)
+      {:error, reason} -> deny(reason, context)
+    end
+  end
+
+  defp deny(reason, context) do
+    meta = %{turn_id: Map.get(context, :turn_id)}
+
+    send(
+      context.pid,
+      {:command_result, {:shell_result, {:error, reason}}, meta}
+    )
+
+    :ok
+  end
+
+  defp run_shell_directive(command, opts, context) do
     timeout =
       Keyword.get(
         opts,

@@ -2,7 +2,7 @@ defmodule Raxol.Telegram.Guardian do
   @moduledoc """
   Behaviour for screening Telegram `chat_join_request` updates.
 
-  See [`docs/adr/0014-telegram-ai-guardian.md`](../../../../docs/adr/0014-telegram-ai-guardian.md).
+  See `docs/adr/0014-telegram-ai-guardian.md` for the design rationale.
   Designed for AI moderation: a coding agent (or simple predicate) decides
   whether an applicant should be admitted, declined, or pushed through a
   consumer-hosted mini-app for verification.

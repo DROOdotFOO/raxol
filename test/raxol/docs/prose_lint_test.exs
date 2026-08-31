@@ -85,6 +85,171 @@ defmodule Raxol.Docs.ProseLintTest do
       content = "## Quick start\n\nSee [above](#quick-start).\n"
       assert ProseLint.check_content("probe.md", content, root: dir) == []
     end
+
+    @tag :tmp_dir
+    test "flags a target that exists but is not in the repository", %{
+      tmp_dir: dir
+    } do
+      # The shape that made `docs/README.md` link to a gitignored `TODO.md`:
+      # the file is on the author's disk, so an existence check passes locally
+      # and the link is broken for everyone who clones. CI caught it only
+      # because its checkout has no untracked files.
+      System.cmd("git", ["init", "--quiet"], cd: dir)
+      File.write!(Path.join(dir, ".gitignore"), "IGNORED.md\n")
+      File.write!(Path.join(dir, "IGNORED.md"), "# Ignored\n")
+      File.write!(Path.join(dir, "TRACKED.md"), "# Tracked\n")
+      System.cmd("git", ["add", ".gitignore", "TRACKED.md"], cd: dir)
+
+      content = """
+      [ignored](./IGNORED.md)
+      [tracked](./TRACKED.md)
+      """
+
+      findings = ProseLint.check_content("probe.md", content, root: dir)
+
+      assert [%{rule: :broken_link, severity: :error} = finding] = findings
+      assert finding.message =~ "not in the repository"
+      assert finding.text =~ "IGNORED.md"
+
+      # Same verdict through `lint_files/2`, which reads the tracked set ONCE
+      # instead of asking git per link. Two code paths, one answer -- a repo-wide
+      # run must not decide differently from a single-file check.
+      File.write!(Path.join(dir, "probe.md"), content)
+
+      assert [%{rule: :broken_link} = batched] =
+               ProseLint.lint_files(["probe.md"], root: dir)
+
+      assert batched.message =~ "not in the repository"
+    end
+
+    @tag :tmp_dir
+    test "outside a git checkout the tracking rule stays silent", %{
+      tmp_dir: dir
+    } do
+      # An unpacked Hex tarball or a vendored copy has no git metadata. A
+      # checker that cannot tell must not invent a violation.
+      File.write!(Path.join(dir, "other.md"), "# Other\n")
+
+      assert ProseLint.check_content("probe.md", "[x](./other.md)\n", root: dir) ==
+               []
+    end
+  end
+
+  # A moduledoc is not rendered on a source page, so the only reader who follows
+  # one of these links is on hexdocs, where ExDoc resolves it against the app's
+  # :extras. Nothing checked them until a package moduledoc shipped a link four
+  # levels up that lands in packages/ rather than the repo root.
+  describe "doc-string links" do
+    setup %{tmp_dir: dir} do
+      File.mkdir_p!(Path.join(dir, "docs/adr"))
+      File.write!(Path.join(dir, "docs/adr/0014.md"), "# ADR\n")
+      File.mkdir_p!(Path.join(dir, "packages/raxol_telegram/lib"))
+      File.mkdir_p!(Path.join(dir, "packages/raxol_telegram/docs"))
+
+      File.write!(
+        Path.join(dir, "packages/raxol_telegram/docs/own.md"),
+        "# Own\n"
+      )
+
+      :ok
+    end
+
+    defp write_source(dir, rel, doc) do
+      path = Path.join(dir, rel)
+      File.mkdir_p!(Path.dirname(path))
+
+      File.write!(
+        path,
+        "defmodule P do\n  @moduledoc \"\"\"\n#{doc}\n  \"\"\"\nend\n"
+      )
+
+      rel
+    end
+
+    @tag :tmp_dir
+    test "flags a relative path, which no :extras entry can match", %{
+      tmp_dir: dir
+    } do
+      rel =
+        write_source(
+          dir,
+          "packages/raxol_telegram/lib/guardian.ex",
+          "  See [adr](../../../../docs/adr/0014.md)."
+        )
+
+      assert [%{rule: :broken_link, severity: :error} = f] =
+               ProseLint.lint_files([rel], root: dir)
+
+      assert f.message =~ ":extras"
+    end
+
+    @tag :tmp_dir
+    test "flags a target outside the package that owns the file", %{
+      tmp_dir: dir
+    } do
+      # Resolves in this repo, and still cannot ship in the package's docs.
+      rel =
+        write_source(
+          dir,
+          "packages/raxol_telegram/lib/guardian.ex",
+          "  See [adr](docs/adr/0014.md)."
+        )
+
+      assert [%{rule: :broken_link} = f] =
+               ProseLint.lint_files([rel], root: dir)
+
+      assert f.message =~ "outside the package"
+    end
+
+    @tag :tmp_dir
+    test "accepts a target the owning package ships", %{tmp_dir: dir} do
+      rel =
+        write_source(
+          dir,
+          "packages/raxol_telegram/lib/guardian.ex",
+          "  See [own](packages/raxol_telegram/docs/own.md)."
+        )
+
+      assert ProseLint.lint_files([rel], root: dir) == []
+    end
+
+    @tag :tmp_dir
+    test "accepts a root-app extras path", %{tmp_dir: dir} do
+      # How `Raxol.UI` links the Quickstart: exactly the extras source path.
+      rel =
+        write_source(dir, "lib/raxol/ui.ex", "  See [adr](docs/adr/0014.md).")
+
+      assert ProseLint.lint_files([rel], root: dir) == []
+    end
+
+    @tag :tmp_dir
+    test "ignores bracket-and-paren text that is not a path", %{tmp_dir: dir} do
+      # Doc strings are full of this. Flagging it would make the rule noise.
+      rel =
+        write_source(
+          dir,
+          "lib/raxol/ui.ex",
+          ~S"""
+            CSS pseudo-elements [x](:after) and [y](:before), a regex [r](\d+),
+            and a character class [c]([^x]+).
+          """
+        )
+
+      assert ProseLint.lint_files([rel], root: dir) == []
+    end
+
+    @tag :tmp_dir
+    test "leaves code outside doc strings alone", %{tmp_dir: dir} do
+      path = Path.join(dir, "lib/raxol/ui.ex")
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, ~S|defmodule P do
+  # a comment with [a](../../nope.md)
+  def f, do: "[b](../../also_nope.md)"
+end
+|)
+
+      assert ProseLint.lint_files(["lib/raxol/ui.ex"], root: dir) == []
+    end
   end
 
   describe "heading case" do
@@ -233,6 +398,7 @@ defmodule Raxol.Docs.ProseLintTest do
       assert ProseLint.format_findings([]) == []
     end
   end
+
   # `check_file/2` joined every path onto `:root`, and `Path.join(".", "/tmp/x")`
   # is `"./tmp/x"` -- so an absolute path read as MISSING and lint as clean.
   # `scripts/prose_lint.exs` made that reachable in the worst way: its

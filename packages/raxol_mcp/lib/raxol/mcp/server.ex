@@ -78,17 +78,22 @@ defmodule Raxol.MCP.Server do
   # machine-readable deny it would have received without elicitation.
   @default_elicitation_timeout_ms 60_000
 
+  # The implicit single connection. stdio has exactly one peer and the OS
+  # process boundary IS the principal, so it never names a connection and every
+  # message it carries belongs to this one. A multi-client transport must mint
+  # real ids instead; see `Raxol.MCP.Transport.SSE`.
+  @default_conn :default
+
   defstruct [
     :registry,
     :authorizer,
     :read_authorizer,
     initialized: false,
     log_level: :info,
-    subscribers: [],
+    subscribers: %{},
     resource_subscriptions: %{},
     client_capabilities: %{},
     pending_elicitations: %{},
-    elicitation_seq: 0,
     elicitation_timeout_ms: @default_elicitation_timeout_ms
   ]
 
@@ -106,23 +111,32 @@ defmodule Raxol.MCP.Server do
             | :critical
             | :alert
             | :emergency,
-          subscribers: [pid()],
+          subscribers: %{conn_id() => pid()},
           resource_subscriptions: %{String.t() => boolean()},
-          client_capabilities: map(),
+          client_capabilities: %{conn_id() => map()},
           pending_elicitations: %{String.t() => pending_elicitation()},
-          elicitation_seq: non_neg_integer(),
           elicitation_timeout_ms: pos_integer()
         }
 
   @typedoc """
+  Identifies one client connection. `:default` is the implicit single
+  connection used by stdio and by direct callers; a network transport mints an
+  opaque per-connection value.
+  """
+  @type conn_id :: term()
+
+  @typedoc """
   A `tools/call` parked awaiting the client's elicitation answer. `request_id`
-  is the ORIGINAL call's id -- the one the client is still waiting on.
+  is the ORIGINAL call's id -- the one the client is still waiting on, and
+  `owner` is the connection that made it. Only `owner` may answer, and the
+  answer goes only to `owner`.
   """
   @type pending_elicitation :: %{
           request_id: term(),
           tool: String.t(),
           arguments: map(),
-          timer: reference()
+          timer: reference(),
+          owner: conn_id()
         }
 
   @log_levels [
@@ -154,12 +168,27 @@ defmodule Raxol.MCP.Server do
   """
   @spec handle_message(GenServer.server(), map()) :: {:reply, map() | nil}
   def handle_message(server \\ __MODULE__, message) do
+    handle_message(server, message, @default_conn)
+  end
+
+  @doc """
+  Handle a decoded JSON-RPC message attributed to a specific connection.
+
+  `conn_id` is what binds an elicitation to the client that triggered it: only
+  the connection that parked a `tools/call` may answer its prompt, and the
+  prompt and result are delivered to that connection alone. A transport that
+  cannot tell its clients apart must NOT invent ids -- passing an unidentified
+  connection is safe (it can still make ordinary requests, and simply cannot
+  elicit), whereas reusing one client's id for another hands over its approvals.
+  """
+  @spec handle_message(GenServer.server(), map(), conn_id()) :: {:reply, map() | nil}
+  def handle_message(server, message, conn_id) do
     # :infinity, not the default 5s: tool callbacks run inline in the server
     # (Registry.call_tool invokes them in the calling process), and a slow
     # tool — an agent turn, a screenshot of a busy app — must stall the
     # transport, never crash it with a call-timeout exit. Slow tools bound
     # their own work; the transport's job is to wait for the reply.
-    GenServer.call(server, {:handle_message, message}, :infinity)
+    GenServer.call(server, {:handle_message, message, conn_id}, :infinity)
   end
 
   @doc """
@@ -170,7 +199,19 @@ defmodule Raxol.MCP.Server do
   """
   @spec subscribe(GenServer.server(), pid()) :: :ok
   def subscribe(server \\ __MODULE__, pid) do
-    GenServer.cast(server, {:subscribe, pid})
+    subscribe(server, pid, @default_conn)
+  end
+
+  @doc """
+  Subscribe a transport process as a named connection.
+
+  The id is what later elicitation prompts and results are addressed to, so it
+  must be the same value the transport passes to `handle_message/3` for that
+  client's requests.
+  """
+  @spec subscribe(GenServer.server(), pid(), conn_id()) :: :ok
+  def subscribe(server, pid, conn_id) do
+    GenServer.cast(server, {:subscribe, pid, conn_id})
   end
 
   @doc "Send a notification to all subscribed transports."
@@ -216,8 +257,8 @@ defmodule Raxol.MCP.Server do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_call({:handle_message, message}, _from, state) do
-    {response, state} = dispatch(message, state)
+  def handle_manager_call({:handle_message, message, conn_id}, _from, state) do
+    {response, state} = dispatch(message, state, conn_id)
     {:reply, {:reply, response}, state}
   end
 
@@ -227,12 +268,31 @@ defmodule Raxol.MCP.Server do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_cast({:subscribe, pid}, state) do
-    if pid in state.subscribers do
+  def handle_manager_cast({:subscribe, pid, conn_id}, state) do
+    if Map.get(state.subscribers, conn_id) == pid do
       {:noreply, state}
     else
-      Process.monitor(pid)
-      {:noreply, %{state | subscribers: [pid | state.subscribers]}}
+      # Taking an id AWAY from a live subscriber is a new connection on it, so
+      # it starts clean. The `:DOWN` path already reasons that a stale id must
+      # not hand its capabilities or its parked elicitation to whoever takes it
+      # next; that is just as true when the id is rebound while the old
+      # subscriber is still alive, which `Map.put` alone let through.
+      #
+      # Only on a REBIND. A first subscribe must not clear, or it would discard
+      # the capabilities of a connection that sent `initialize` before it
+      # subscribed -- which is the order a direct in-VM caller naturally uses.
+      state =
+        if Map.has_key?(state.subscribers, conn_id),
+          do: drop_connection(conn_id, state),
+          else: state
+
+      # One monitor per PID, not per connection. `{:DOWN, ...}` already drops
+      # every id that pid held, so a process subscribed under several ids
+      # would otherwise accumulate monitors and deliver as many DOWNs, all but
+      # the first finding nothing left to clean up.
+      unless pid in Map.values(state.subscribers), do: Process.monitor(pid)
+
+      {:noreply, %{state | subscribers: Map.put(state.subscribers, conn_id, pid)}}
     end
   end
 
@@ -260,8 +320,17 @@ defmodule Raxol.MCP.Server do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
+  # A dead subscriber takes its connection with it: the capabilities it declared
+  # and any elicitation it parked die too. Leaving either behind would let the
+  # next connection to reuse the id inherit them, and would leave a pending
+  # entry answerable by a connection that no longer exists.
   def handle_manager_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    {:noreply, %{state | subscribers: List.delete(state.subscribers, pid)}}
+    gone =
+      state.subscribers
+      |> Enum.filter(fn {_conn_id, subscriber} -> subscriber == pid end)
+      |> Enum.map(fn {conn_id, _} -> conn_id end)
+
+    {:noreply, Enum.reduce(gone, state, &drop_connection/2)}
   end
 
   # The client advertised elicitation, was asked, and never answered. Close the
@@ -272,17 +341,17 @@ defmodule Raxol.MCP.Server do
       {:ok, pending} ->
         {_pending, state} = take_pending(state, id)
 
-        broadcast(
-          state.subscribers,
-          authorization_required(
-            pending.request_id,
-            pending.tool,
-            :ask,
-            "elicitation timed out"
-          )
-        )
-
-        {:noreply, state}
+        {:noreply,
+         answer_parked(
+           state,
+           pending,
+           authorization_required(
+             pending.request_id,
+             pending.tool,
+             :ask,
+             "elicitation timed out"
+           )
+         )}
 
       :error ->
         {:noreply, state}
@@ -293,15 +362,28 @@ defmodule Raxol.MCP.Server do
 
   # -- Dispatch -----------------------------------------------------------------
 
-  defp dispatch(%{method: "initialize", id: id} = msg, state) do
+  # Only four messages care WHICH connection sent them: `initialize` (whose
+  # capabilities are that client's alone), `tools/call` (which may park an
+  # elicitation owned by it), and the two response shapes that answer one. The
+  # rest are connection-independent and fall through to `dispatch/2`.
+
+  defp dispatch(%{method: "initialize", id: id} = msg, state, conn_id) do
     result = %{
       protocolVersion: Protocol.mcp_protocol_version(),
       capabilities: capabilities(),
       serverInfo: server_info()
     }
 
-    # Remember what the CLIENT can do. `elicitation` is the one that changes
-    # behaviour: it is the difference between denying an ASK and asking.
+    # Remember what the CLIENT can do, PER CONNECTION. `elicitation` is the one
+    # that changes behaviour: it is the difference between denying an ASK and
+    # asking. Held globally, one client advertising it would turn prompting on
+    # for every other client on the server.
+    #
+    # This map is keyed by connection and evicted on that connection's `:DOWN`,
+    # so every key must be one a subscriber can eventually own. A transport that
+    # mints a fresh key per REQUEST for callers it cannot identify would grow it
+    # without bound and without authentication; see `Transport.SSE`, which
+    # collapses those onto one shared key for that reason.
     client_capabilities =
       msg
       |> Map.get(:params, %{})
@@ -310,11 +392,68 @@ defmodule Raxol.MCP.Server do
     state = %{
       state
       | initialized: true,
-        client_capabilities: client_capabilities
+        client_capabilities: Map.put(state.client_capabilities, conn_id, client_capabilities)
     }
 
     {Protocol.response(id, result), state}
   end
+
+  defp dispatch(%{method: "tools/call", id: id, params: params}, state, conn_id) do
+    name = Map.get(params, "name") || Map.get(params, :name, "")
+    arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
+
+    # A sensitive tool with no authorizer never runs, whatever the transport.
+    # The boot check catches this for tools present at start; this catches one
+    # registered afterwards, which would otherwise slip past it.
+    if state.authorizer == nil and sensitive_tool?(state.registry, name) do
+      {authorization_required(id, name, :deny, :sensitive_tool_unguarded), state}
+    else
+      authorize_and_call(id, name, arguments, state, conn_id)
+    end
+  end
+
+  # The client's answer to an `elicitation/create` we sent. It arrives as an
+  # ordinary inbound message, so it is dispatched like one -- but it is a
+  # RESPONSE (id + result, no method), and it resumes a `tools/call` that is
+  # still parked.
+  #
+  # Knowing the id is NOT authority to answer: ids are server-minted and travel
+  # to exactly one connection, so a request from anyone else carrying one is
+  # either a forgery or a mix-up. `owned_pending/3` refuses both, and refuses
+  # them the same way an unknown id is refused, so a prober cannot use the
+  # difference to learn that an id exists.
+  defp dispatch(%{id: id, result: result}, state, conn_id) do
+    case owned_pending(state, id, conn_id) do
+      {:ok, pending, state} ->
+        {nil, answer_parked(state, pending, resume(pending, result, state))}
+
+      :error ->
+        dispatch(%{id: id, result: result}, state)
+    end
+  end
+
+  # An error response to our elicitation is a refusal, not a crash.
+  defp dispatch(%{id: id, error: error}, state, conn_id) do
+    case owned_pending(state, id, conn_id) do
+      {:ok, pending, state} ->
+        {nil,
+         answer_parked(
+           state,
+           pending,
+           authorization_required(
+             pending.request_id,
+             pending.tool,
+             :ask,
+             "elicitation failed"
+           )
+         )}
+
+      :error ->
+        dispatch(%{id: id, error: error}, state)
+    end
+  end
+
+  defp dispatch(msg, state, _conn_id), do: dispatch(msg, state)
 
   defp dispatch(%{method: "notifications/initialized"}, state) do
     {nil, state}
@@ -339,48 +478,28 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  defp dispatch(%{method: "tools/call", id: id, params: params}, state) do
-    name = Map.get(params, "name") || Map.get(params, :name, "")
-    arguments = Map.get(params, "arguments") || Map.get(params, :arguments, %{})
-
-    # A sensitive tool with no authorizer never runs, whatever the transport.
-    # The boot check catches this for tools present at start; this catches one
-    # registered afterwards, which would otherwise slip past it.
-    if state.authorizer == nil and sensitive_tool?(state.registry, name) do
-      {authorization_required(id, name, :deny, :sensitive_tool_unguarded), state}
-    else
-      authorize_and_call(id, name, arguments, state)
-    end
+  # The direct-caller entry to the conn-aware clause, guarded on the SAME keys
+  # that clause matches. Without the guard the two arities bounce a `tools/call`
+  # missing either key between them forever: the 3-arity clause declines it, the
+  # generic 3-arity forwards it here, and here forwards it back. That runs
+  # inside a `GenServer.call(:infinity)`, so one malformed frame -- which the
+  # SSE transport will happily decode, since `normalize_body_params/1` only sets
+  # `:params` when the client sent one -- spins the server forever and it never
+  # serves another request, for any client.
+  defp dispatch(%{method: "tools/call"} = msg, state)
+       when is_map_key(msg, :id) and is_map_key(msg, :params) do
+    dispatch(msg, state, @default_conn)
   end
 
-  # The client's answer to an `elicitation/create` we sent. It arrives as an
-  # ordinary inbound message, so it is dispatched like one -- but it is a
-  # RESPONSE (id + result, no method), and it resumes a `tools/call` that is
-  # still parked. Placed above the catch-all; an id we did not mint falls
-  # through to it and is ignored.
-  defp dispatch(%{id: id, result: result}, state)
-       when is_map_key(state.pending_elicitations, id) do
-    {pending, state} = take_pending(state, id)
-    Process.cancel_timer(pending.timer)
-    {nil, answer_parked(state, resume(pending, result, state))}
-  end
-
-  # An error response to our elicitation is a refusal, not a crash.
-  defp dispatch(%{id: id, error: _}, state)
-       when is_map_key(state.pending_elicitations, id) do
-    {pending, state} = take_pending(state, id)
-    Process.cancel_timer(pending.timer)
-
-    {nil,
-     answer_parked(
-       state,
-       authorization_required(
-         pending.request_id,
-         pending.tool,
-         :ask,
-         "elicitation failed"
-       )
-     )}
+  # A `tools/call` that names no tool. Answered as bad parameters rather than
+  # left to the catch-all, which would report a method it plainly recognises as
+  # unknown.
+  defp dispatch(%{method: "tools/call", id: id}, state) do
+    {Protocol.error_response(
+       id,
+       Protocol.invalid_params(),
+       "tools/call requires params"
+     ), state}
   end
 
   # -- Resources ---
@@ -727,7 +846,7 @@ defmodule Raxol.MCP.Server do
 
   # -- Sensitive-tool guard -----------------------------------------------------
 
-  defp authorize_and_call(id, name, arguments, state) do
+  defp authorize_and_call(id, name, arguments, state, conn_id) do
     # Authorize before the tool runs. A nil authorizer allows (stdio inherits
     # the OS boundary).
     case Authorizer.decide(state.authorizer, name, arguments, %{}) do
@@ -739,7 +858,7 @@ defmodule Raxol.MCP.Server do
          ), state}
 
       {:ask, prompt} ->
-        ask(id, name, arguments, prompt, state)
+        ask(id, name, arguments, prompt, state, conn_id)
 
       {:deny, reason} ->
         {authorization_required(id, name, :deny, reason), state}
@@ -799,26 +918,31 @@ defmodule Raxol.MCP.Server do
   # advertised the capability AND a transport subscribed to carry the request --
   # without a subscriber the prompt would go nowhere and the call would park
   # until it timed out, which is strictly worse than answering now.
-  defp ask(id, tool, arguments, prompt, state) do
-    if elicitation_capable?(state) do
-      start_elicitation(id, tool, arguments, prompt, state)
+  #
+  # Both conditions are read for THIS connection. Read globally, a second client
+  # merely holding a stream open satisfied the subscriber half for everyone, and
+  # any client's `initialize` satisfied the capability half.
+  defp ask(id, tool, arguments, prompt, state, conn_id) do
+    if elicitation_capable?(state, conn_id) do
+      start_elicitation(id, tool, arguments, prompt, state, conn_id)
     else
       {authorization_required(id, tool, :ask, prompt), state}
     end
   end
 
-  defp elicitation_capable?(state) do
-    state.subscribers != [] and
-      fetch_field(state.client_capabilities, "elicitation", nil) != nil
+  defp elicitation_capable?(state, conn_id) do
+    Map.has_key?(state.subscribers, conn_id) and
+      state.client_capabilities
+      |> Map.get(conn_id, %{})
+      |> fetch_field("elicitation", nil) != nil
   end
 
   # Park the call and ask. Returning `nil` is what makes this safe on a
   # synchronous transport: the transport's `handle_message` returns immediately
   # instead of blocking, so it stays free to READ the client's answer. Both the
-  # prompt and the eventual response go out over the subscriber channel.
-  defp start_elicitation(request_id, tool, arguments, prompt, state) do
-    seq = state.elicitation_seq + 1
-    elicit_id = "raxol-elicit-#{seq}"
+  # prompt and the eventual response go to the OWNING connection only.
+  defp start_elicitation(request_id, tool, arguments, prompt, state, conn_id) do
+    elicit_id = mint_elicit_id()
 
     timer =
       Process.send_after(
@@ -831,17 +955,54 @@ defmodule Raxol.MCP.Server do
       request_id: request_id,
       tool: tool,
       arguments: arguments,
-      timer: timer
+      timer: timer,
+      owner: conn_id
     }
 
     state = %{
       state
-      | elicitation_seq: seq,
-        pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending)
+      | pending_elicitations: Map.put(state.pending_elicitations, elicit_id, pending)
     }
 
-    broadcast(state.subscribers, elicitation_request(elicit_id, tool, prompt))
+    send_to(state, conn_id, elicitation_request(elicit_id, tool, prompt))
     {nil, state}
+  end
+
+  # Unguessable, not merely unique. Ownership is what actually decides who may
+  # answer, so this is defence in depth -- but a counter published the next id
+  # to anyone who saw one, and there is no reason to hand that out.
+  defp mint_elicit_id do
+    "raxol-elicit-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+  end
+
+  # Take a pending elicitation only for the connection that owns it. A wrong
+  # owner is treated exactly like an unknown id: no state change, and the caller
+  # falls through to the ordinary unknown-message path.
+  defp owned_pending(state, id, conn_id) do
+    case Map.fetch(state.pending_elicitations, id) do
+      {:ok, %{owner: ^conn_id} = pending} ->
+        {_pending, state} = take_pending(state, id)
+        Process.cancel_timer(pending.timer)
+        {:ok, pending, state}
+
+      _ ->
+        :error
+    end
+  end
+
+  # Forget everything scoped to a connection that has gone away.
+  defp drop_connection(conn_id, state) do
+    {mine, rest} =
+      Enum.split_with(state.pending_elicitations, fn {_id, p} -> p.owner == conn_id end)
+
+    Enum.each(mine, fn {_id, p} -> Process.cancel_timer(p.timer) end)
+
+    %{
+      state
+      | subscribers: Map.delete(state.subscribers, conn_id),
+        client_capabilities: Map.delete(state.client_capabilities, conn_id),
+        pending_elicitations: Map.new(rest)
+    }
   end
 
   # A server-initiated id lives in the SERVER's id space; a string prefix keeps
@@ -866,8 +1027,11 @@ defmodule Raxol.MCP.Server do
   # unparked it: what arrived was a JSON-RPC *response*, and a response never
   # gets a reply. This also makes all three resolutions -- answered, errored,
   # timed out -- take one identical path out.
-  defp answer_parked(state, response) do
-    broadcast(state.subscribers, response)
+  # The answer goes to the connection that made the call and nowhere else. The
+  # payload is that call's tool RESULT, so broadcasting it handed every other
+  # connected client the output of a tool they did not run.
+  defp answer_parked(state, pending, response) do
+    send_to(state, pending.owner, response)
     state
   end
 
@@ -911,9 +1075,25 @@ defmodule Raxol.MCP.Server do
 
   defp fetch_field(_map, _key, default), do: default
 
+  # Ordinary notifications DO go to every subscriber -- resource updates and log
+  # messages are server-wide events, not answers to one client's request. Only
+  # the elicitation path is per-connection, and it uses `send_to/3`.
   defp broadcast(subscribers, notification) do
-    for pid <- subscribers, Process.alive?(pid) do
+    for {_conn_id, pid} <- subscribers, Process.alive?(pid) do
       send(pid, {:mcp_notification, notification})
+    end
+  end
+
+  # Deliver to one connection. An unknown or dead connection drops the message:
+  # there is no fallback to "everyone", which is the whole point.
+  defp send_to(state, conn_id, message) do
+    case Map.get(state.subscribers, conn_id) do
+      pid when is_pid(pid) ->
+        if Process.alive?(pid), do: send(pid, {:mcp_notification, message})
+        :ok
+
+      nil ->
+        :ok
     end
   end
 

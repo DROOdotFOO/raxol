@@ -66,7 +66,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
 
   # --- prose --------------------------------------------------------------
 
-  defp lint([], opts), do: lint(tracked_markdown(), opts)
+  defp lint([], opts), do: lint(tracked_docs(), opts)
 
   # Selection and filtering live in `ProseLint` so this task and
   # `scripts/prose_lint.exs` (which the pre-commit hook runs without Mix) cannot
@@ -75,6 +75,8 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
     do:
       ProseLint.lint_files(files, headings: Keyword.get(opts, :headings, false))
 
+  # Prose-count scanning is Markdown-only: it reads sentences that quote a
+  # catalog number, which doc strings do not.
   defp tracked_markdown do
     case System.cmd("git", ["ls-files", "*.md"], stderr_to_stdout: true) do
       {out, 0} ->
@@ -83,6 +85,23 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
       _ ->
         Path.wildcard("{docs,packages,examples,web,test}/**/*.md") ++
           Path.wildcard("*.md")
+    end
+  end
+
+  # Markdown AND Elixir sources: a relative link in a `@moduledoc` is
+  # documentation a reader follows on hexdocs, and it went unchecked until a
+  # package moduledoc shipped one that pointed outside the repo root.
+  defp tracked_docs do
+    case System.cmd("git", ["ls-files", "*.md", "*.ex", "*.exs"],
+           stderr_to_stdout: true
+         ) do
+      {out, 0} ->
+        String.split(out, "\n", trim: true)
+
+      _ ->
+        Path.wildcard("{docs,packages,examples,web,test}/**/*.md") ++
+          Path.wildcard("*.md") ++
+          Path.wildcard("{lib,packages,web}/**/*.{ex,exs}")
     end
   end
 
@@ -99,7 +118,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
   defp summary(only, files, warnings) do
     scope =
       if files == [],
-        do: "all tracked Markdown",
+        do: "all tracked Markdown and doc strings",
         else: "#{length(files)} file(s)"
 
     warn =
