@@ -136,6 +136,40 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
+  # The SSH pane animates in lockstep with the terminal pane: same buffer, two
+  # surfaces, same moment. Equal counts is the property that keeps them in step,
+  # because the player indexes both by the same frame number.
+  test "the SSH pane has one painted frame per terminal frame" do
+    for name <- LandingComponents.hero_example_names() do
+      terminal = RecordedFrames.hero_frames(name)
+      ssh = RecordedFrames.hero_ssh_frames(name)
+
+      assert length(ssh) == length(terminal),
+             "#{name}: #{length(ssh)} ssh frames against #{length(terminal)} terminal frames"
+
+      assert length(ssh) > 1, "#{name}/ssh is a still image"
+      assert Enum.uniq(ssh) == ssh, "#{name}/ssh recorded identical frames"
+
+      for frame <- ssh do
+        refute frame =~ "ESC[", "#{name}/ssh is showing escape codes as text again"
+      end
+    end
+  end
+
+  # The recording plays back at the rate it was sampled at, and that rate ships
+  # with it rather than living as a constant in the player.
+  test "each recording declares the interval it was sampled at" do
+    for name <- LandingComponents.hero_example_names() do
+      interval = RecordedFrames.hero_frame_interval(name)
+
+      assert interval > 0
+      assert interval <= 200, "#{name} plays back at #{interval}ms, which is a slideshow"
+
+      hero = render_component(&LandingComponents.screen_hero/1, example: name)
+      assert hero =~ ~s(data-frame-ms="#{interval}")
+    end
+  end
+
   # A recording is a build input, so a code with no styling behind it has to
   # stop the build rather than reach the page as an unstyled run.
   test "an unpaintable escape sequence fails loudly, not silently" do

@@ -417,7 +417,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <span class="screen-meta">
           v{Capabilities.version_minor()} &middot;
           <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
-            {Capabilities.package_count()} packages
+            {Capabilities.repo_package_count()} packages
           </a>
           &middot; <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a> &middot;
           <a href="/skill.md" class="subtle-link">Skill</a>
@@ -617,9 +617,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         title: example_title(assigns.example),
         frames: RecordedFrames.hero_frames(assigns.example),
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
+        frame_ms: RecordedFrames.hero_frame_interval(assigns.example),
         next: next_example(assigns.example),
         out_browser: RecordedFrames.hero_surface(assigns.example, :browser),
-        out_ssh: RecordedFrames.hero_surface(assigns.example, :ssh),
+        ssh_frames: RecordedFrames.hero_ssh_frames(assigns.example),
         out_mcp: RecordedFrames.hero_surface(assigns.example, :mcp),
         browser_lines:
           RecordedFrames.hero_surface_lines(assigns.example, :browser),
@@ -631,7 +632,12 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <%!-- The id carries the example so switching remounts the hook: the frame
          player caches its frame nodes, and patching them underneath it would
          leave it stepping elements that no longer exist. --%>
-    <div id={"hero-demo-#{@example}"} phx-hook="HeroDemo" class="hero-demo mx-auto text-left">
+    <div
+      id={"hero-demo-#{@example}"}
+      phx-hook="HeroDemo"
+      class="hero-demo mx-auto text-left"
+      data-frame-ms={@frame_ms}
+    >
       <%!-- The player's controls live in the title bar, where a window's
            controls belong and where nothing can clip them. They used to sit in
            a footer below the panes: the demo box is height-capped, so on any
@@ -692,7 +698,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <div class="hero-out" data-surface="2" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh demo@localhost -p 2222</span></pre>
             <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@ssh_grid.rows}; --frame-cols: #{@ssh_grid.cols}"}>
-              <pre class="hero-ansi">{raw(@out_ssh)}</pre>
+              <div :for={{frame, i} <- Enum.with_index(@ssh_frames)} class="hero-frame" data-frame={i} hidden={i != 0}>
+                <pre class="hero-ansi">{raw(frame)}</pre>
+              </div>
             </div>
           </div>
 
