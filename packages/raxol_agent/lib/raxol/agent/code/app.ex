@@ -56,6 +56,7 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.Agent.Authorization.Engine
   alias Raxol.Agent.Authorization.Policy
   alias Raxol.Agent.Authorization.Verdict
+  alias Raxol.Agent.Code.ProjectContext
   alias Raxol.Agent.Contract
   alias Raxol.Agent.Journal.FileStore
   alias Raxol.Agent.SessionStreamer
@@ -87,6 +88,7 @@ defmodule Raxol.Agent.Code.App do
     {hooks, hooks_note} = load_hooks(cwd, jail?)
     {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
     {lsp_pool, lsp_note} = start_lsp(cwd, jail?, options)
+    {project_context, project_note} = load_project_context(cwd, jail?)
 
     config(options, context)
     |> Map.merge(%{
@@ -96,7 +98,14 @@ defmodule Raxol.Agent.Code.App do
       events: session.events,
       next_event_id: length(session.events) + 1,
       messages: session.messages,
-      status_line: combine_notes([session.notice, hooks_note, mcp_note, lsp_note]),
+      status_line:
+        combine_notes([
+          session.notice,
+          project_note,
+          hooks_note,
+          mcp_note,
+          lsp_note
+        ]),
       session_key: session.key,
       sessions_dir: session.dir,
       title: session.title,
@@ -104,7 +113,8 @@ defmodule Raxol.Agent.Code.App do
       cwd: cwd,
       hooks: hooks,
       mcp_servers: mcp_servers,
-      lsp_pool: lsp_pool
+      lsp_pool: lsp_pool,
+      project_context: project_context
     })
     |> maybe_open_initial_wizard()
     |> maybe_arm_launch_validation()
@@ -270,6 +280,10 @@ defmodule Raxol.Agent.Code.App do
       backend_opts: Keyword.get(options, :backend_opts, []),
       model_override: Keyword.get(options, :model),
       system: Keyword.get(options, :system, default_system()),
+      # Rendered `AGENTS.md`/`CLAUDE.md` text, appended to `:system` at send
+      # time rather than baked into it: the base prompt stays whatever the
+      # caller asked for, and `/context` can report the two separately.
+      project_context: nil,
       actions: Keyword.get(options, :actions, default_actions()),
       # Injectable so tests drive the loop without spawning a real turn.
       runner: Keyword.get(options, :runner, &__MODULE__.default_runner/4),
@@ -408,6 +422,25 @@ defmodule Raxol.Agent.Code.App do
 
   defp lsp_note(installed),
     do: "lsp: #{Enum.map_join(installed, ", ", & &1.name)}"
+
+  # `AGENTS.md`/`CLAUDE.md` are read, not executed, so unlike hooks and MCP
+  # a jailed session still gets its workspace's own instructions. What it
+  # does not get is anything above the jail: the walk is bounded to `cwd`
+  # and the host's user-global file is skipped.
+  defp load_project_context(cwd, jail?) do
+    opts = if jail?, do: [root: cwd, global: false], else: []
+
+    case ProjectContext.load(cwd, opts) do
+      %{files: []} -> {nil, nil}
+      %{files: files} = context -> {ProjectContext.render(context), instructions_note(files)}
+    end
+  end
+
+  defp instructions_note(files) do
+    files
+    |> Enum.map_join(", ", &Path.basename(&1.path))
+    |> then(&"instructions: #{&1}")
+  end
 
   defp combine_notes(notes) do
     case Enum.reject(notes, &is_nil/1) do
@@ -937,10 +970,16 @@ defmodule Raxol.Agent.Code.App do
     :ok
   end
 
-  defp system_prompt(%{plan_mode: true, system: system}),
-    do: system <> "\n\n" <> plan_directive()
+  # Base prompt, then the workspace's own instructions, then the plan-mode
+  # directive last — a repo's `AGENTS.md` must not be able to sit after the
+  # read-only directive and talk the model back out of it.
+  defp system_prompt(%{system: system} = model) do
+    plan = if Map.get(model, :plan_mode), do: plan_directive()
 
-  defp system_prompt(%{system: system}), do: system
+    [system, Map.get(model, :project_context), plan]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("\n\n")
+  end
 
   defp plan_directive do
     "PLAN MODE: You are in read-only planning mode. Investigate with the " <>
@@ -3289,8 +3328,22 @@ defmodule Raxol.Agent.Code.App do
 
   defp default_system do
     "You are a coding assistant running in a terminal at the user's " <>
-      "current working directory. Read files before editing them. Use " <>
-      "write_file/edit_file to change code and bash to run commands. Be concise."
+      "current working directory. Read files before editing them, and use " <>
+      "bash to run commands. Be concise.\n\n" <> edit_directive()
+  end
+
+  # The anchored path is the one that lands first try, so the prompt names it
+  # as the default rather than leaving the model to discover it in the tool
+  # schema. Stated once here and shared with the other surfaces.
+  @doc false
+  def edit_directive do
+    "read_file prefixes every line with a `LINE:HASH|` anchor. To change " <>
+      "code, copy those prefixes into edit_file's `from` (and `to` for a " <>
+      "range) and pass only the replacement text as `new_string` — never " <>
+      "retype the lines you are replacing, and never include the anchor " <>
+      "prefix in content you write. If an anchor is rejected the file " <>
+      "changed under you: read it again and redo the edit. Use " <>
+      "`old_string` only when you have not read the file with anchors."
   end
 
   defp maybe_put(opts, _key, nil), do: opts

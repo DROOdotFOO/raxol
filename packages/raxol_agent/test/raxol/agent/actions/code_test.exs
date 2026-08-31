@@ -112,7 +112,7 @@ defmodule Raxol.Agent.Actions.CodeTest do
         "a a a"
       )
 
-      assert {:error, :not_unique} =
+      assert {:error, {:not_unique, 3}} =
                Code.Edit.run(
                  %{path: "dup.txt", old_string: "a", new_string: "b"},
                  %{}
@@ -142,6 +142,188 @@ defmodule Raxol.Agent.Actions.CodeTest do
                  %{path: "hello.ex", old_string: "same", new_string: "same"},
                  %{}
                )
+    end
+  end
+
+  describe "Edit by anchor" do
+    alias Raxol.Agent.Actions.Anchor
+
+    # The anchor a model would copy out of read_file's output for `line`
+    # (1-based) of the fixture file.
+    defp anchor_for(dir, file, line) do
+      {lines, _trailing?} = dir |> Path.join(file) |> File.read!() |> Anchor.split()
+      content = Enum.at(lines, line - 1)
+      "#{line}:#{Anchor.hash(content)}"
+    end
+
+    test "replaces a single line", %{dir: dir} do
+      assert {:ok, result} =
+               Code.Edit.run(
+                 %{
+                   path: "hello.ex",
+                   from: anchor_for(dir, "hello.ex", 2),
+                   new_string: "  :earth"
+                 },
+                 %{}
+               )
+
+      assert result.replacements == 1
+
+      assert File.read!(Path.join(dir, "hello.ex")) ==
+               "defmodule Hello do\n  :earth\nend\n"
+    end
+
+    test "replaces a multi-line range with a different number of lines", %{dir: dir} do
+      assert {:ok, _result} =
+               Code.Edit.run(
+                 %{
+                   path: "hello.ex",
+                   from: anchor_for(dir, "hello.ex", 1),
+                   to: anchor_for(dir, "hello.ex", 3),
+                   new_string: "defmodule Hello do\n  :a\n  :b\nend"
+                 },
+                 %{}
+               )
+
+      assert File.read!(Path.join(dir, "hello.ex")) ==
+               "defmodule Hello do\n  :a\n  :b\nend\n"
+    end
+
+    test "an empty new_string deletes the range", %{dir: dir} do
+      assert {:ok, _result} =
+               Code.Edit.run(
+                 %{
+                   path: "hello.ex",
+                   from: anchor_for(dir, "hello.ex", 2),
+                   new_string: ""
+                 },
+                 %{}
+               )
+
+      assert File.read!(Path.join(dir, "hello.ex")) == "defmodule Hello do\nend\n"
+    end
+
+    test "a file without a trailing newline keeps not having one", %{dir: dir} do
+      File.write!(Path.join(dir, "bare.txt"), "one\ntwo")
+
+      assert {:ok, _result} =
+               Code.Edit.run(
+                 %{
+                   path: "bare.txt",
+                   from: anchor_for(dir, "bare.txt", 1),
+                   new_string: "ONE"
+                 },
+                 %{}
+               )
+
+      assert File.read!(Path.join(dir, "bare.txt")) == "ONE\ntwo"
+    end
+
+    test "a trailing newline in new_string does not add a blank line", %{dir: dir} do
+      assert {:ok, _result} =
+               Code.Edit.run(
+                 %{
+                   path: "hello.ex",
+                   from: anchor_for(dir, "hello.ex", 2),
+                   new_string: "  :earth\n"
+                 },
+                 %{}
+               )
+
+      assert File.read!(Path.join(dir, "hello.ex")) ==
+               "defmodule Hello do\n  :earth\nend\n"
+    end
+
+    test "refuses an anchor whose line changed since it was read", %{dir: dir} do
+      stale = anchor_for(dir, "hello.ex", 2)
+      File.write!(Path.join(dir, "hello.ex"), "defmodule Hello do\n  :mars\nend\n")
+
+      assert {:error, {:anchor_mismatch, 2, _expected, _actual}} =
+               Code.Edit.run(
+                 %{path: "hello.ex", from: stale, new_string: "  :earth"},
+                 %{}
+               )
+
+      assert File.read!(Path.join(dir, "hello.ex")) =~ ":mars"
+    end
+
+    test "refuses an anchor past the end of the file", %{dir: dir} do
+      anchor = anchor_for(dir, "hello.ex", 2)
+      line = "99:" <> (anchor |> String.split(":") |> List.last())
+
+      assert {:error, {:anchor_out_of_range, 99, 3}} =
+               Code.Edit.run(
+                 %{path: "hello.ex", from: line, new_string: "x"},
+                 %{}
+               )
+    end
+
+    test "refuses an inverted range", %{dir: dir} do
+      assert {:error, {:range_inverted, 3, 1}} =
+               Code.Edit.run(
+                 %{
+                   path: "hello.ex",
+                   from: anchor_for(dir, "hello.ex", 3),
+                   to: anchor_for(dir, "hello.ex", 1),
+                   new_string: "x"
+                 },
+                 %{}
+               )
+    end
+
+    test "refuses a malformed anchor" do
+      assert {:error, :malformed_anchor} =
+               Code.Edit.run(
+                 %{path: "hello.ex", from: "line two", new_string: "x"},
+                 %{}
+               )
+    end
+
+    test "refuses a call that addresses both ways", %{dir: dir} do
+      assert {:error, :ambiguous_addressing} =
+               Code.Edit.run(
+                 %{
+                   path: "hello.ex",
+                   from: anchor_for(dir, "hello.ex", 2),
+                   old_string: ":world",
+                   new_string: "x"
+                 },
+                 %{}
+               )
+    end
+
+    test "refuses a call that addresses neither way" do
+      assert {:error, :no_addressing} =
+               Code.Edit.run(%{path: "hello.ex", new_string: "x"}, %{})
+    end
+
+    test "rejects a replacement identical to the addressed range", %{dir: dir} do
+      assert {:error, :no_change} =
+               Code.Edit.run(
+                 %{
+                   path: "hello.ex",
+                   from: anchor_for(dir, "hello.ex", 2),
+                   new_string: "  :world"
+                 },
+                 %{}
+               )
+    end
+
+    test "an anchor copied straight out of read_file output works", %{dir: dir} do
+      assert {:ok, %{content: content}} =
+               Raxol.Agent.Actions.Fs.ReadFile.run(%{path: "hello.ex"}, %{})
+
+      # Exactly what a model reads off the wire: the prefix before the pipe.
+      [_first, second | _rest] = String.split(content, "\n")
+      [prefix, _line] = String.split(second, "|", parts: 2)
+
+      assert {:ok, _result} =
+               Code.Edit.run(
+                 %{path: "hello.ex", from: prefix, new_string: "  :earth"},
+                 %{}
+               )
+
+      assert File.read!(Path.join(dir, "hello.ex")) =~ ":earth"
     end
   end
 

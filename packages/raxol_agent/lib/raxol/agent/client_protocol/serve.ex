@@ -340,7 +340,8 @@ defmodule Raxol.Agent.ClientProtocol.Serve do
         "You are a coding assistant driven by an editor over ACP. Inspect " <>
           "files with the read tools, and use write_file, edit_file and bash " <>
           "to make changes. Editing tools ask the client for permission per " <>
-          "call, so a refusal is an answer, not an error. Be concise."
+          "call, so a refusal is an answer, not an error. Be concise.\n\n" <>
+          Raxol.Agent.Code.App.edit_directive()
     ]
   end
 

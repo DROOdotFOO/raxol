@@ -50,7 +50,7 @@ defmodule Raxol.Agent.Actions.FsContextCwdTest do
 
   test "read_file scopes to the context cwd", %{a: a, b: b} do
     assert {:ok, %{content: "alpha"}} =
-             Fs.ReadFile.run(%{path: "secret-a.txt"}, %{cwd: a})
+             Fs.ReadFile.run(%{path: "secret-a.txt", anchors: false}, %{cwd: a})
 
     # Relative names resolve INSIDE the context root: under tenant B the
     # same name is B's (missing) file, never A's.
@@ -106,7 +106,7 @@ defmodule Raxol.Agent.Actions.FsContextCwdTest do
 
     # A jailed session WITH a cwd is unaffected (still confined, still works).
     assert {:ok, %{content: "alpha"}} =
-             Fs.ReadFile.run(%{path: "secret-a.txt"}, %{cwd: a, jail: true})
+             Fs.ReadFile.run(%{path: "secret-a.txt", anchors: false}, %{cwd: a, jail: true})
 
     assert {:error, :outside_cwd} =
              Fs.resolve("../escape", %{cwd: a, jail: true})

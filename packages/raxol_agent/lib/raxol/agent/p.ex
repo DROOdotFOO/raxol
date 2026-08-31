@@ -149,7 +149,7 @@ defmodule Raxol.Agent.P do
     if profile.active? do
       IO.puts(
         :stderr,
-        ~s({"type":"benchmark_profile","payload":{"authorizer":"allow_all","write_tools":true,"skills":"off"}})
+        ~s({"type":"benchmark_profile","payload":{"authorizer":"allow_all","write_tools":true,"skills":"off","instructions":"off"}})
       )
     end
 
@@ -243,9 +243,22 @@ defmodule Raxol.Agent.P do
     [
       executor: executor,
       backend_opts: backend_opts,
-      system_prompt: system,
+      system_prompt: with_workspace_instructions(system, profile),
       actions: actions_for(write?, profile)
     ] ++ context_for(write?, profile)
+  end
+
+  # `AGENTS.md`/`CLAUDE.md` are workspace-supplied context, so the benchmark
+  # profile withholds them for the same reason it withholds skills: an
+  # attempt must depend on the task, not on what the checkout happens to
+  # carry. Everywhere else the run reads the repo it is standing in.
+  defp with_workspace_instructions(system, %BenchmarkProfile{active?: true}), do: system
+
+  defp with_workspace_instructions(system, _profile) do
+    Raxol.Agent.Code.ProjectContext.augment(
+      system,
+      Raxol.Agent.Actions.Fs.working_dir()
+    )
   end
 
   defp apply_profile_defaults(opts, %BenchmarkProfile{} = profile) do

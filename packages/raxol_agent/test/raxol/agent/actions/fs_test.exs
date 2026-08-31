@@ -59,9 +59,18 @@ defmodule Raxol.Agent.Actions.FsTest do
   end
 
   describe "ReadFile" do
-    test "reads content with truncation flag" do
-      assert {:ok, %{content: "hello world", truncated: false}} =
+    test "anchors each line by default" do
+      hash = Raxol.Agent.Actions.Anchor.hash("hello world")
+
+      assert {:ok, %{content: content, anchored: true, truncated: false}} =
                Fs.ReadFile.run(%{path: "hello.txt"}, %{})
+
+      assert content == "1:#{hash}|hello world"
+    end
+
+    test "anchors: false returns the raw bytes" do
+      assert {:ok, %{content: "hello world", anchored: false, truncated: false}} =
+               Fs.ReadFile.run(%{path: "hello.txt", anchors: false}, %{})
     end
 
     test "errors on missing file" do
@@ -139,7 +148,7 @@ defmodule Raxol.Agent.Actions.FsTest do
       assert abs == Path.join(dir, "hello.txt")
 
       assert {:ok, %{content: "hello world", truncated: false}} =
-               Fs.ReadFile.run(%{path: "hello.txt"}, %{})
+               Fs.ReadFile.run(%{path: "hello.txt", anchors: false}, %{})
 
       assert {:ok, %{entries: entries}} = Fs.ListDir.run(%{path: "."}, %{})
       assert "hello.txt" in entries

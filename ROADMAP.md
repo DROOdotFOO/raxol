@@ -77,6 +77,25 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
 
+### Coding agent parity
+
+Tracked in [#940](https://github.com/DROOdotFOO/raxol/issues/940). The Hermes analysis above measures the agent against a personal assistant; this measures `mix raxol.code` against a coding agent, [omp](https://github.com/can1357/oh-my-pi) (31 tools, 60+ providers, 14 LSP ops, 28 DAP ops). Both comparisons are kept, because they pull in different directions and neither alone describes the product.
+
+Shipped: `AGENTS.md`/`CLAUDE.md` discovery on all three surfaces, the hash-anchored edit format (`read_file` anchors every line, `edit_file` addresses ranges by anchor), actionable model-facing tool errors, and parallel sub-agent fan-out under a supervisor.
+
+| Item | What | Effort |
+| ---- | ---- | ------ |
+| LSP | `Raxol.Agent.LSPContext` is a working client wired to nothing: expose it as a tool, surface diagnostics after every write, rename through `workspace/willRenameFiles` ([#932](https://github.com/DROOdotFOO/raxol/issues/932)) | M |
+| Reach | `web_search` + `fetch`, so the agent can read outside the workspace ([#933](https://github.com/DROOdotFOO/raxol/issues/933)) | M |
+| `todo` | Session-scoped plan tracking that survives compaction ([#934](https://github.com/DROOdotFOO/raxol/issues/934)) | S |
+| Routing | Model roles, fallback chains, credential rotation; the sub-agent fan-out is the first beneficiary and the cost ledger makes it measurable ([#937](https://github.com/DROOdotFOO/raxol/issues/937)) | M |
+| `bash` | PTY and background jobs; today nothing over 30 seconds can run at all ([#938](https://github.com/DROOdotFOO/raxol/issues/938)) | M |
+| `ask` | Structured mid-turn questions ([#935](https://github.com/DROOdotFOO/raxol/issues/935)) | S |
+| Vision | Image content blocks on the Anthropic and OpenAI paths ([#936](https://github.com/DROOdotFOO/raxol/issues/936)) | S |
+| Inherited config | Read Cursor/Cline/Copilot/Windsurf instruction files where they already sit ([#939](https://github.com/DROOdotFOO/raxol/issues/939)) | S |
+
+**Do not build:** DAP/debugger control, structural `ast_edit`, persistent Python/JS eval cells, browser and desktop control, commit splitting, or read-write collab. Revisit only when pulled.
+
 ### Console runtime (Virtuals ACP)
 
 Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/acp/new`), beside Hermes and OpenClaw, with web3 native to the runtime (native `raxol_earn` plus the payment rails) rather than a bolted-on skill. Design in ADR-0031. It is the inverse of the `custom_console_agent` offering that already generates deployment packages for the other two runtimes.
