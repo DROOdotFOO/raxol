@@ -1,17 +1,21 @@
 # Generates the recorded frames raxol.io serves statically:
 #
-#   web/priv/hero_frames/<example>/frame_N.html
+#   web/priv/hero_frames/<example>/frame_NN.html
 #                                       -- the landing hero's terminal pane,
 #                                          one directory per switchable
 #                                          example, each rendered through
 #                                          Raxol.Headless as its own interval
 #                                          subscription advances it
-#   web/priv/hero_frames/<example>/surface.ansi
-#                                       -- the same frame-zero render as the
-#                                          bytes the SSH surface writes
+#   web/priv/hero_frames/<example>/ansi_NN.ansi
+#                                       -- the same buffers as the bytes the
+#                                          SSH surface writes, one per frame,
+#                                          so that pane animates in lockstep
+#   web/priv/hero_frames/<example>/interval_ms
+#                                       -- the tick the frames were sampled at,
+#                                          which is what the page plays back at
 #   web/priv/hero_frames/<example>/surface.mcp.json
-#                                       -- the same frame-zero render as the
-#                                          widget tree the MCP surface serves
+#                                       -- the frame-zero render as the widget
+#                                          tree the MCP surface serves
 #   web/priv/demo_previews/<slug>.html  -- one rendered frame per playground
 #                                          catalog demo, for the gallery cards
 #
@@ -88,9 +92,9 @@ defmodule GenLandingFrames do
   @preview_dir Path.expand("../web/priv/demo_previews", __DIR__)
 
   @preview_size {60, 14}
-  @hero_frames 6
   @hero_settle_ms 400
-  @hero_tick_ms 280
+  @hero_poll_ms 10
+  @hero_frame_timeout_ms 1500
   @preview_settle_ms 1600
 
   def run do
@@ -108,36 +112,107 @@ defmodule GenLandingFrames do
     end
   end
 
-  # Each example advances on its own interval subscription rather than on
-  # input, so the recorder waits between captures instead of sending keys. The
-  # wait is a few ticks long: consecutive frames must differ visibly, or the
-  # hero plays what looks like a still image.
+  # `{name, module, {w, h}, tick_ms, frames}`.
+  #
+  # The tick is the module's own `subscribe_interval`, and it is what the page
+  # plays the recording back at -- written beside the frames so the player does
+  # not carry a constant that has to be kept in step with this list by hand.
+  #
+  # The frame count is chosen so the loop closes where the ANIMATION closes,
+  # which is the only thing that stops a recording snapping back in the middle
+  # of a motion. Six frames at 850ms was a slideshow; twenty-four was smooth
+  # but cut a sine wave off at 76% of its cycle, so it visibly reset.
+  #
+  #   pulse  wave(t) has period 2*pi/0.2 = 31.416 ticks. 63 frames is two
+  #          periods to within 0.17 of a tick -- 5.7s, and the seam lands
+  #          inside the rounding.
+  #   halo   the face cycles every 24 ticks (four glyphs, six ticks each), so
+  #          48 is two full cycles. Its drift field is seeded on absolute t and
+  #          never repeats, so nothing divides it; the face is what an eye
+  #          tracks, and the field reads as noise either way.
   @examples [
-    {"pulse", Pulse, {62, 13}},
-    {"halo", Halo, {70, 14}}
+    {"pulse", Pulse, {62, 13}, 90, 63},
+    {"halo", Halo, {70, 14}, 110, 48}
   ]
 
   defp hero do
-    for {name, module, {w, h}} <- @examples do
+    for {name, module, {w, h}, tick_ms, frame_count} <- @examples do
       dir = Path.join(@hero_dir, name)
       File.mkdir_p!(dir)
+
+      # A shorter run must not leave a longer one's frames behind: the player
+      # counts the files it finds, not the number recorded here.
+      for stale <- Path.wildcard(Path.join(dir, "frame_*.html")),
+          do: File.rm!(stale)
+
+      for stale <- Path.wildcard(Path.join(dir, "ansi_*.ansi")),
+          do: File.rm!(stale)
+
+      File.rm(Path.join(dir, "surface.ansi"))
 
       {:ok, id} =
         Raxol.Headless.start(module, id: :"hero_#{name}", width: w, height: h)
 
-      for n <- 0..(@hero_frames - 1) do
-        Process.sleep(if n == 0, do: @hero_settle_ms, else: @hero_tick_ms)
+      Process.sleep(@hero_settle_ms)
 
-        {:ok, buffer} = Raxol.Headless.get_buffer(id)
+      Enum.reduce(0..(frame_count - 1), nil, fn n, previous ->
+        buffer =
+          if n == 0, do: buffer!(id), else: next_distinct!(id, previous, name)
+
+        # Zero-padded: `RecordedFrames` sorts these lexically, so frame_10
+        # would otherwise play before frame_2.
+        seq = String.pad_leading(to_string(n), 2, "0")
+
         html = TerminalBridge.buffer_to_html(buffer, aria_mode: :application)
-        path = Path.join(dir, "frame_#{n}.html")
-        File.write!(path, html)
-        IO.puts("hero  #{path}")
+        File.write!(Path.join(dir, "frame_#{seq}.html"), html)
 
-        if n == 0, do: surfaces(dir, module, id, buffer)
-      end
+        # The SSH pane paints this same buffer, so it gets the same number of
+        # frames and plays in lockstep. It used to be one still projected from
+        # frame zero, which read as a broken terminal beside a moving one.
+        File.write!(Path.join(dir, "ansi_#{seq}.ansi"), ansi(buffer))
+
+        if n == 0, do: surfaces(dir, module, id)
+        buffer
+      end)
+
+      IO.puts("hero  #{dir} (#{frame_count} frames @ #{tick_ms}ms)")
+
+      File.write!(Path.join(dir, "interval_ms"), to_string(tick_ms))
 
       Raxol.Headless.stop(id)
+    end
+  end
+
+  defp buffer!(id) do
+    {:ok, buffer} = Raxol.Headless.get_buffer(id)
+    buffer
+  end
+
+  # Waits for the frame to actually change rather than sleeping a guessed
+  # multiple of the tick. Sleeping exactly one tick races the scheduler and
+  # records the same buffer twice; sleeping several skips motion the page then
+  # has to play back slowly. Polling gives the tightest sampling that is still
+  # guaranteed to advance, which is what the "no identical frames" test in
+  # `landing_components_test.exs` asserts from the other side.
+  defp next_distinct!(id, previous, name) do
+    deadline = System.monotonic_time(:millisecond) + @hero_frame_timeout_ms
+    poll_until_changed!(id, previous, deadline, name)
+  end
+
+  defp poll_until_changed!(id, previous, deadline, name) do
+    Process.sleep(@hero_poll_ms)
+    buffer = buffer!(id)
+
+    cond do
+      buffer != previous ->
+        buffer
+
+      System.monotonic_time(:millisecond) < deadline ->
+        poll_until_changed!(id, previous, deadline, name)
+
+      true ->
+        raise "#{name} stopped changing within #{@hero_frame_timeout_ms}ms; " <>
+                "the hero would play a still image"
     end
   end
 
@@ -145,11 +220,11 @@ defmodule GenLandingFrames do
   # loop just wrote, so the four tabs are four encodings of one frame rather
   # than four separate recordings. The browser pane needs no artifact:
   # frame_0.html is already the LiveView encoding.
-  defp surfaces(dir, module, id, buffer) do
-    ansi_path = Path.join(dir, "surface.ansi")
-    File.write!(ansi_path, ansi(buffer))
-    IO.puts("hero  #{ansi_path}")
-
+  # The ANSI projection moved into the frame loop, since that pane animates
+  # now. What is left is the one artifact that does not: an agent's view of the
+  # tree, which is a structure rather than a picture and says the same thing in
+  # every frame.
+  defp surfaces(dir, module, id) do
     mcp_path = Path.join(dir, "surface.mcp.json")
     File.write!(mcp_path, mcp(module, id))
     IO.puts("hero  #{mcp_path}")

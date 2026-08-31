@@ -35,30 +35,41 @@ defmodule RaxolPlayground.BrandMarks do
     "Emacs" => "gnuemacs.svg"
   }
 
-  for file <- Map.values(@sources) do
+  # Marks the SITE wears, as opposed to the ones it points at. Kept apart from
+  # `@sources` because that map answers to the provider registry and a test
+  # holds every key in it against the derived entries -- a mark for something
+  # that is not a provider would read there as a mark that outlived its entry.
+  @site_sources %{"GitHub" => "github.svg"}
+
+  for file <- Map.values(@sources) ++ Map.values(@site_sources) do
     @external_resource Path.join(@dir, file)
   end
 
   # Each source is one 24x24 path. Anything else is a build error rather than a
   # silently half-drawn logo: the renderer inlines this one path and nothing
   # else, so a two-path icon would lose half of itself on the page.
-  @marks Map.new(@sources, fn {name, file} ->
-           svg = File.read!(Path.join(@dir, file))
+  # Extracted once over both sets, then split, so the two maps cannot drift
+  # into two different ideas of what a mark file has to look like.
+  @extracted Map.new(Map.merge(@sources, @site_sources), fn {name, file} ->
+               svg = File.read!(Path.join(@dir, file))
 
-           unless String.contains?(svg, ~s(viewBox="0 0 24 24")) do
-             raise "#{file} is not a 24x24 mark; the row's sizing assumes that viewBox"
-           end
+               unless String.contains?(svg, ~s(viewBox="0 0 24 24")) do
+                 raise "#{file} is not a 24x24 mark; the row's sizing assumes that viewBox"
+               end
 
-           case Regex.scan(~r/<path[^>]*\sd="([^"]+)"/, svg,
-                  capture: :all_but_first
-                ) do
-             [[d]] ->
-               {name, d}
+               case Regex.scan(~r/<path[^>]*\sd="([^"]+)"/, svg,
+                      capture: :all_but_first
+                    ) do
+                 [[d]] ->
+                   {name, d}
 
-             found ->
-               raise "#{file} has #{length(found)} paths; expected exactly 1"
-           end
-         end)
+                 found ->
+                   raise "#{file} has #{length(found)} paths; expected exactly 1"
+               end
+             end)
+
+  @marks Map.take(@extracted, Map.keys(@sources))
+  @site_marks Map.take(@extracted, Map.keys(@site_sources))
 
   @doc """
   The inlined path data for `name`, or `nil` when that entry has no mark.
@@ -72,4 +83,13 @@ defmodule RaxolPlayground.BrandMarks do
   @doc "Every display name that has a mark. Exposed so a test can check drift."
   @spec known() :: [String.t()]
   def known, do: @marks |> Map.keys() |> Enum.sort()
+
+  @doc """
+  The inlined path for one of the site's own marks, or `nil`.
+
+  Separate from `path/1`: these name places raxol lives rather than things it
+  integrates with, so they are not in the row and not in `known/0`.
+  """
+  @spec site_path(String.t()) :: String.t() | nil
+  def site_path(name) when is_binary(name), do: Map.get(@site_marks, name)
 end

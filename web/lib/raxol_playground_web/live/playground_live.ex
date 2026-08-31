@@ -266,9 +266,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
             <span class="hidden sm:flex items-center gap-2 font-mono text-pearl-35 tracking-wide" style="font-size: 0.65rem;">
               <a href="/" class="subtle-link">Home</a>
               <span>|</span>
-              <a href="/gallery" class="subtle-link">Gallery</a>
-              <span>|</span>
-              <a href="/demos" class="subtle-link">Demos</a>
+              <a href="/gallery" class="subtle-link">Components</a>
             </span>
           </div>
 

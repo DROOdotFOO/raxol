@@ -4,12 +4,12 @@ defmodule RaxolPlayground.SurfaceSource do
 
   Two shapes, because the surfaces carry two kinds of thing.
 
-  The browser and MCP artifacts are structured text, read line by line. The
-  line functions only re-break the stream, so every emitted line is a substring
-  of the artifact; `clamp/2` is the one step that drops anything, and it
-  appends a marker naming what it dropped. Lines are broken rather than wrapped
-  because the height budget is counted in lines: a wrapped line costs two and
-  pushes the marker off the pane.
+  The MCP artifact is structured text, read line by line. `json_lines/1` only
+  re-breaks the stream, so every emitted line is a substring of the artifact;
+  `clamp/2` is the one step that drops anything, and it appends a marker naming
+  what it dropped. Lines are broken rather than wrapped because the height
+  budget is counted in lines: a wrapped line costs two and pushes the marker
+  off the pane.
 
   The SSH artifact is a picture. `ansi_rows/1` decodes its colour instead of
   spelling it out, and nothing is clamped -- the pane reports its grid through
@@ -54,34 +54,6 @@ defmodule RaxolPlayground.SurfaceSource do
       |> Enum.chunk_every(@columns)
       |> Enum.map(&Enum.join/1)
     end
-  end
-
-  @doc """
-  Breaks emitted markup so one element occupies each line.
-
-  Splits before every `<`, then folds each closing tag back onto the line it
-  closes, so a line carries an element and its text rather than a lone
-  `&lt;/span&gt;`.
-  """
-  @spec dom_lines(String.t()) :: [String.t()]
-  def dom_lines(html) do
-    html
-    |> String.replace("<", "\n<")
-    |> String.split("\n")
-    |> Enum.reject(&(&1 == ""))
-    |> fold_onto_previous(&String.starts_with?(&1, "</"))
-  end
-
-  # A line with nothing before it stays put: the stream may open mid-construct.
-  defp fold_onto_previous(lines, continuation?) do
-    lines
-    |> Enum.reduce([], fn line, acc ->
-      case {continuation?.(line), acc} do
-        {true, [prev | rest]} -> [prev <> line | rest]
-        _ -> [line | acc]
-      end
-    end)
-    |> Enum.reverse()
   end
 
   # The SGR colours a recording may ask for, mapped to the class that paints
@@ -302,7 +274,7 @@ defmodule RaxolPlayground.SurfaceSource do
   Colouring runs over the escaped text, so it wraps entities and can never
   re-open markup the artifact contained.
   """
-  @spec to_html([String.t()], :dom | :json) :: String.t()
+  @spec to_html([String.t()], :json) :: String.t()
   def to_html(lines, kind) do
     lines
     |> Enum.map_join("\n", fn line ->
@@ -317,16 +289,6 @@ defmodule RaxolPlayground.SurfaceSource do
     text
     |> Phoenix.HTML.html_escape()
     |> Phoenix.HTML.safe_to_string()
-  end
-
-  # Values first, so one containing a word is not re-marked as a tag.
-  defp colorize(line, :dom) do
-    line
-    |> String.replace(
-      ~r/&quot;([^&]*)&quot;/,
-      ~S(&quot;<span class="hg">\1</span>&quot;)
-    )
-    |> String.replace(~r{&lt;(/?[a-z]+)}, ~S(&lt;<span class="hk">\1</span>))
   end
 
   defp colorize(line, :json) do

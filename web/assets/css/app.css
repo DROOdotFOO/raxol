@@ -754,42 +754,6 @@ html {
 }
 
 /* =============================================================================
-   Install-method tabs (hero): curl / brew / npm / hex over one command line.
-   Same recipe as .hero-tab, centered; panes are .ssh-hero copy blocks.
-   ============================================================================= */
-
-.install-tabs__row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  margin-bottom: 1rem;
-}
-
-.install-tab {
-  appearance: none;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 0.55rem 1rem;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--duration-fast) var(--ease-smooth),
-              border-color var(--duration-fast) var(--ease-smooth);
-}
-
-.install-tab:hover { color: var(--pearl-cream); }
-
-.install-tab[aria-selected="true"] {
-  color: var(--axol-coral);
-  border-bottom-color: var(--axol-coral);
-}
-
-/* =============================================================================
    Badge
    ============================================================================= */
 
@@ -874,45 +838,10 @@ html {
   color: var(--text-ghost);
 }
 
-/* Feature grid stagger animation */
-.feature-card {
-  animation: fadeInUp 0.5s ease-out both;
-}
-
-.feature-card:nth-child(1) { animation-delay: 0ms; }
-.feature-card:nth-child(2) { animation-delay: 80ms; }
-.feature-card:nth-child(3) { animation-delay: 160ms; }
-.feature-card:nth-child(4) { animation-delay: 240ms; }
-.feature-card:nth-child(5) { animation-delay: 320ms; }
-.feature-card:nth-child(6) { animation-delay: 400ms; }
-.feature-card:nth-child(7) { animation-delay: 480ms; }
-.feature-card:nth-child(8) { animation-delay: 560ms; }
-
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* Category tags */
-.category-tag {
-  padding: 0.25rem 0.75rem;
-  font-family: var(--font-mono);
-  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-secondary);
-  background: rgba(10, 10, 12, 0.5);
-  border: 1px solid var(--panel-border);
-  border-radius: 4px;
-}
-
-/* Cursor blink */
+/* The blinking cursor every copyable command block ends on. Kept when the dead
+   landing components went: `PlaygroundComponents.ssh_copy_block/1` still asks
+   for it by this exact name. The Tailwind config's `cursor-blink` entry builds
+   `animate-cursor-blink`, a different class, so it is not a substitute. */
 @keyframes cursorBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
@@ -920,6 +849,16 @@ html {
 
 .cursor-blink {
   animation: cursorBlink 1s step-end infinite;
+}
+
+/* `.repl-entry` and `.prompt` below animate with this by name. The Tailwind
+   config declares a matching keyframe, but Tailwind only emits keyframes for a
+   utility it actually generates, and no template uses `animate-fade-in` -- so
+   deleting this one stopped both animations rather than falling back to it.
+   `fadeInUp` went with the feature grid that was its only caller. */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* =============================================================================
@@ -1071,17 +1010,6 @@ html {
   width: 100%;
   height: 100%;
 }
-
-/* Install-method pane links (only channels that exist are linked). */
-.install-link {
-  color: var(--sky);
-  text-transform: none;
-  letter-spacing: 0.02em;
-  margin-left: 0.4rem;
-  transition: color var(--duration-fast) var(--ease-smooth);
-}
-
-.install-link:hover { color: var(--pearl-cream); }
 
 /* =============================================================================
    Privacy tier ladder (agent payments deep dive)
@@ -1268,106 +1196,6 @@ html {
 }
 
 .token-fact__val { color: var(--pearl-cream); overflow-wrap: anywhere; }
-
-/* =============================================================================
-   FAQ accordion (native <details>)
-   ============================================================================= */
-
-.faq-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.875rem;
-}
-
-.faq-item {
-  background: rgba(10, 10, 12, 0.4);
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  padding: 1.1rem 1.4rem;
-  transition: border-color var(--duration-normal) var(--ease-smooth);
-}
-
-.faq-item:hover { border-color: var(--panel-border-hover); }
-
-.faq-item summary {
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem);
-  color: var(--pearl-cream);
-  list-style: none;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-}
-
-.faq-item summary::-webkit-details-marker { display: none; }
-.faq-item summary::marker { display: none; content: ''; }
-
-.faq-item summary::after {
-  content: '+';
-  color: var(--axol-coral);
-  font-size: 1.15rem;
-  line-height: 1;
-  transition: transform var(--duration-normal) var(--ease-smooth);
-}
-
-.faq-item[open] summary::after { content: '\2212'; }
-
-.faq-item__body {
-  margin-top: 0.875rem;
-  padding-top: 0.875rem;
-  border-top: 1px solid var(--panel-border);
-  font-family: var(--font-mono);
-  font-size: clamp(0.78rem, 0.73rem + 0.25vw, 0.85rem);
-  line-height: 1.7;
-  color: var(--text-secondary);
-}
-
-/* =============================================================================
-   Feature card numeric index (small label above title)
-   ============================================================================= */
-
-.feature-card__index {
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--text-dim);
-  margin-bottom: 0.5rem;
-  display: block;
-}
-
-/* =============================================================================
-   Package card copy button (visible on hover)
-   ============================================================================= */
-
-.pkg-copy-btn {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-  opacity: 0;
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--text-secondary);
-  background: rgba(10, 10, 12, 0.6);
-  border: 1px solid var(--panel-border);
-  padding: 0.2rem 0.55rem;
-  border-radius: 3px;
-  cursor: pointer;
-  transition: opacity var(--duration-normal) var(--ease-smooth),
-              color var(--duration-normal) var(--ease-smooth),
-              border-color var(--duration-normal) var(--ease-smooth);
-}
-
-.panel:hover .pkg-copy-btn { opacity: 1; }
-.pkg-copy-btn:focus-visible { opacity: 1; }
-.pkg-copy-btn:hover {
-  color: var(--axol-coral);
-  border-color: var(--coral-25);
-}
 
 /* =============================================================================
    Playground Styles (existing, adapted to new tokens)
@@ -2062,23 +1890,61 @@ html {
 .ansi-italic { font-style: italic; }
 .ansi-underline { text-decoration: underline; }
 
-.hero-live-wrap {
-  padding: 1rem 1.25rem;
-}
-
-.hero-live-wrap .raxol-terminal {
+/* The browser pane's page. The chrome is the whole point: the terminal tab
+   shows the same recording bare, so what distinguishes this one is that the
+   frame is an ELEMENT here, with a URL above it and page text around it. Take
+   the chrome away and the two tabs are one picture twice. */
+.hero-browser {
   border: 1px solid var(--panel-border);
   border-radius: 6px;
-  padding: 0.75rem 0.9rem;
+  overflow: hidden;
 }
 
-.hero-live-badge {
+.hero-browser__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+}
+
+.hero-browser__dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--panel-border-hover);
+  flex: 0 0 auto;
+}
+
+.hero-browser__url {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #8fca8f;
-  margin-right: auto;
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  /* The bar is chrome and must never set the pane's width: an unclipped URL
+     on a narrow pane would widen the box past the frame it wraps. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero-browser__page {
+  padding: 0.7rem 0.8rem;
+}
+
+.hero-browser__heading {
+  font-family: var(--font-heading);
+  font-size: 0.95rem;
+  color: var(--pearl-cream);
+  margin: 0 0 0.5rem;
+}
+
+.hero-browser__caption {
+  font-family: var(--font-body);
+  font-size: 0.62rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: 0.5rem 0 0;
 }
 
 /* =============================================================================
@@ -2249,6 +2115,22 @@ html {
   margin-left: auto;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* The base every `.category-tag` carries; `--sm` below only overrides size.
+   Kept when the dead landing components went, because /gallery still uses it
+   for the filter row and the per-demo tags. */
+.category-tag {
+  padding: 0.25rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  background: rgba(10, 10, 12, 0.5);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
 }
 
 .category-tag--sm {
@@ -2680,7 +2562,36 @@ input[type="range"]::-moz-range-thumb {
   border-bottom-color: currentColor;
 }
 
-.screen-meta { color: var(--text-dim); }
+.screen-meta {
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* A mark the site wears, not one it points at. Sized to the cap height of the
+   line it sits on, and given the 24px box WCAG 2.2 asks of a target -- the
+   glyph alone would be an 14px tap area. */
+.site-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  color: var(--text-dim);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.site-mark svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  display: block;
+}
+
+.site-mark:hover,
+.site-mark:focus-visible {
+  color: var(--pearl-cream);
+}
 
 /* Short viewports cannot hold a readable screen; scrolling beats clipping.
    Everything that squeezes the demo into one screen belongs here, not
@@ -2824,6 +2735,23 @@ input[type="range"]::-moz-range-thumb {
   /* Stated, not inherited: `.raxol-terminal` sets its line height in absolute
      units, so shrinking the type alone leaves the rows their original height
      and the frame keeps overflowing. */
+  line-height: 1.5;
+}
+
+/* The browser pane plays the same frames inside a page, so it fits them the
+   same way against a smaller budget: the URL bar, the heading and the caption
+   all sit between the pane's height and the frame's. Their heights are stated
+   here as one constant, the way the rule above states 3.1rem, because a
+   container query reports the pane's box and not its siblings'. */
+.screen-main .hero-browser .hero-frames pre {
+  font-size: clamp(
+    0.45rem,
+    min(
+      calc((100cqw - 3.4rem) / var(--frame-cols, 62) / 0.7),
+      calc((100cqh - 10.5rem) / var(--frame-rows, 13) / 1.5)
+    ),
+    1.15rem
+  );
   line-height: 1.5;
 }
 

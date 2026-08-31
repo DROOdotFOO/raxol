@@ -200,12 +200,19 @@ Hooks.RaxolTerminal = {
 // with a live change listener; the pause button is the manual override.
 // When the server swaps in the live session (data-live), the player stops.
 Hooks.HeroDemo = {
-  FRAME_MS: 850,
+  // Fallback only. The real rate comes from the recording via data-frame-ms:
+  // the generator samples each example at its module's own tick and writes
+  // that beside the frames, so playback runs at the speed the program runs.
+  // A constant here was a second place the frame rate lived, and the two had
+  // drifted -- 850ms playback over a recording sampled every 280ms.
+  FRAME_MS: 100,
   TAB_MS: 3400,
 
   mounted() {
     this.tab = 0
     this.frame = 0
+    const declared = parseInt(this.el.dataset.frameMs, 10)
+    if (Number.isFinite(declared) && declared > 0) this.FRAME_MS = declared
     this.autoTabs = true
     this.acc = {frame: 0, tab: 0}
     this.raf = null
@@ -310,7 +317,22 @@ Hooks.HeroDemo = {
   nextFrame() {
     const frames = this.el.querySelectorAll('.hero-frames [data-frame]')
     if (frames.length < 2) return
-    this.frame = (this.frame + 1) % frames.length
+    // Count DISTINCT indices, not elements: two panes now carry the same
+    // sequence (the terminal frame and the ANSI the SSH pane paints), so
+    // element count is a multiple of the real frame count and using it would
+    // step past every index and blank both panes.
+    //
+    // Indices are filtered rather than trusted: one unparseable `data-frame`
+    // makes `Math.max` NaN, `% NaN` NaN, and then no element's index equals
+    // `this.frame`, so every pane hides and the hero goes blank and stays
+    // blank. Falling back to the element count animates something wrong; the
+    // frames themselves are still on the page either way.
+    const indices = Array.from(frames, (f) => parseInt(f.dataset.frame, 10)).filter(
+      (n) => Number.isInteger(n) && n >= 0
+    )
+    if (indices.length < 2) return
+    const count = 1 + Math.max(...indices)
+    this.frame = (this.frame + 1) % count
     frames.forEach((f) => {
       f.hidden = parseInt(f.dataset.frame, 10) !== this.frame
     })
@@ -387,26 +409,6 @@ Hooks.MotionPref = {
 // Install-method tabs (hero). All four panes ship server-rendered; this
 // only toggles which is visible, so no server round trip and the curl
 // pane shows before JS loads. Delegated click survives LiveView patches.
-Hooks.InstallTabs = {
-  mounted() {
-    this.onClick = (e) => {
-      const btn = e.target.closest('.install-tab')
-      if (!btn || !this.el.contains(btn)) return
-      const method = btn.dataset.m
-      this.el.querySelectorAll('.install-tab').forEach((tab) => {
-        tab.setAttribute('aria-selected', tab.dataset.m === method ? 'true' : 'false')
-      })
-      this.el.querySelectorAll('.install-pane').forEach((pane) => {
-        pane.hidden = pane.dataset.m !== method
-      })
-    }
-    this.el.addEventListener('click', this.onClick)
-  },
-  destroyed() {
-    this.el.removeEventListener('click', this.onClick)
-  }
-}
-
 // The hero brand mark: the axol face (AxolFace.glyph/3 frames, exported by
 // the server in data-faces) dithered into character cells, framed by a
 // drifting edge texture -- the Halo treatment. Face and halo are two

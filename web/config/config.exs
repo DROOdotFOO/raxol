@@ -3,6 +3,18 @@ import Config
 # Configure the endpoint
 config :raxol_playground, RaxolPlaygroundWeb.Endpoint,
   url: [host: "localhost"],
+  # Compress dynamic responses. `Plug.Static`'s `gzip:` covers pre-compressed
+  # assets on disk and nothing else, so every HTML response left here
+  # uncompressed: the landing page alone is hundreds of kilobytes, most of it
+  # the hero's recorded frames, which are braille and repeated spans and so
+  # compress about fortyfold.
+  #
+  # `compress: true` rather than a hand-written `stream_handlers` list under
+  # `protocol_options`: `Plug.Cowboy` reads both as TOP-LEVEL options and
+  # merges its own defaults last, so a nested list is silently overridden and
+  # the page ships uncompressed anyway. This form also keeps
+  # `cowboy_telemetry_h`, which naming the handlers by hand drops.
+  http: [compress: true],
   render_errors: [
     formats: [html: RaxolPlaygroundWeb.ErrorHTML, json: RaxolPlaygroundWeb.ErrorJSON],
     layout: false

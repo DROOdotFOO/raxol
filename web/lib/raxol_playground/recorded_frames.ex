@@ -9,11 +9,17 @@ defmodule RaxolPlayground.RecordedFrames do
   at compile time so the dead render before the LiveView socket connects
   already carries frame one and every gallery preview.
 
-  An example directory holds its terminal frames plus two surface artifacts
-  projected from the frame-zero render: `surface.ansi` (the bytes the SSH
-  surface writes) and `surface.mcp.json` (the tree the MCP surface serves).
-  The browser surface needs no artifact, since frame zero is already the
-  LiveView encoding.
+  An example directory holds two sequences and one still. `frame_NN.html` is
+  the terminal pane and `ansi_NN.ansi` is the same buffer as the bytes the SSH
+  surface writes -- one of each per captured frame, so the two panes step
+  together. `surface.mcp.json` is the tree the MCP surface serves, projected
+  from frame zero: a structure rather than a picture, and the same in every
+  frame. The browser surface needs no artifact of its own, because
+  `frame_NN.html` IS the LiveView encoding: that pane renders the same sequence
+  the terminal pane steps, inside a page, rather than deriving anything.
+
+  `interval_ms` carries the tick the recording was sampled at, which is what
+  the page plays it back at.
   """
 
   alias RaxolPlayground.SurfaceSource
@@ -21,8 +27,9 @@ defmodule RaxolPlayground.RecordedFrames do
   hero_dir = Path.expand("../../priv/hero_frames", __DIR__)
   preview_dir = Path.expand("../../priv/demo_previews", __DIR__)
 
-  # One directory per hero example. frame_0..frame_9 sort lexically; pad the
-  # generator's names before recording a sequence that reaches double digits.
+  # One directory per hero example. The generator zero-pads frame names, which
+  # is what lets this sort them lexically now that a recording runs to dozens
+  # of frames -- unpadded, frame_10 would play before frame_2.
   hero_examples =
     hero_dir
     |> File.ls!()
@@ -44,13 +51,28 @@ defmodule RaxolPlayground.RecordedFrames do
       {name, paths}
     end)
 
+  # The SSH pane animates, so its artifact is a sequence, not a still. Same
+  # padding and the same lexical sort as the terminal frames, and the counts
+  # match by construction: the generator writes one of each per captured buffer.
+  ansi_paths =
+    Map.new(hero_examples, fn name ->
+      paths =
+        hero_dir
+        |> Path.join(name)
+        |> Path.join("ansi_*.ansi")
+        |> Path.wildcard()
+        |> Enum.sort()
+
+      {name, paths}
+    end)
+
   surface_paths =
     Map.new(hero_examples, fn name ->
       dir = Path.join(hero_dir, name)
 
       {name,
        %{
-         ansi: Path.join(dir, "surface.ansi"),
+         ansi: ansi_paths |> Map.fetch!(name) |> List.first(),
          mcp: Path.join(dir, "surface.mcp.json")
        }}
     end)
@@ -63,23 +85,52 @@ defmodule RaxolPlayground.RecordedFrames do
     @external_resource path
   end
 
+  for {_name, paths} <- ansi_paths, path <- paths do
+    @external_resource path
+  end
+
   @hero_frames Map.new(hero_paths, fn {name, paths} ->
                  {name, Enum.map(paths, &File.read!/1)}
                end)
 
-  # The browser artifact is frame zero itself, so that pane shows the source
-  # of the markup the terminal pane renders and the two cannot disagree.
+  # The interval the recorder sampled at, written beside the frames. The player
+  # used to hold one constant for every example, which had to be kept in step
+  # with the generator by hand and was not: it played back at 850ms what was
+  # sampled at 280ms.
+  for name <- hero_examples do
+    @external_resource Path.join([hero_dir, name, "interval_ms"])
+  end
+
+  # Every ANSI frame, painted. One grid for the sequence rather than one per
+  # frame: the recording's terminal does not resize mid-animation, and a pane
+  # whose type rescaled between frames would jitter.
+  @hero_ssh_frames Map.new(ansi_paths, fn {name, paths} ->
+                     {name,
+                      Enum.map(paths, fn path ->
+                        path
+                        |> File.read!()
+                        |> SurfaceSource.ansi_rows()
+                        |> SurfaceSource.ansi_html()
+                      end)}
+                   end)
+
+  @hero_intervals Map.new(hero_examples, fn name ->
+                    path = Path.join([hero_dir, name, "interval_ms"])
+
+                    interval =
+                      case File.read(path) do
+                        {:ok, raw} ->
+                          raw |> String.trim() |> String.to_integer()
+
+                        {:error, _} ->
+                          raise "#{path} is missing; rerun gen_landing_frames.exs"
+                      end
+
+                    {name, interval}
+                  end)
+
   @hero_artifacts Map.new(surface_paths, fn {name, %{ansi: ansi, mcp: mcp}} ->
-                    {name,
-                     %{
-                       browser:
-                         hero_paths
-                         |> Map.fetch!(name)
-                         |> List.first()
-                         |> File.read!(),
-                       ssh: File.read!(ansi),
-                       mcp: File.read!(mcp)
-                     }}
+                    {name, %{ssh: File.read!(ansi), mcp: File.read!(mcp)}}
                   end)
 
   # Derived once: the artifacts are compile-time constants, so the line
@@ -87,12 +138,11 @@ defmodule RaxolPlayground.RecordedFrames do
   @hero_surfaces Map.new(@hero_artifacts, fn {name, artifacts} ->
                    panes =
                      Map.new(artifacts, fn
-                       # SSH is painted, not listed. The other two surfaces
-                       # carry structured text a reader reads line by line, so
-                       # they are broken to a line budget with a marker. This
-                       # one carries a picture, so it keeps its own grid whole
-                       # and the CSS fits the type to it, exactly as the
-                       # terminal pane beside it does.
+                       # SSH is painted, not listed: it carries a picture, so
+                       # it keeps its own grid whole and the CSS fits the type
+                       # to it, exactly as the terminal pane beside it does.
+                       # Frame zero only; the sequence it belongs to is built
+                       # below.
                        {:ssh, artifact} ->
                          rows = SurfaceSource.ansi_rows(artifact)
 
@@ -102,23 +152,19 @@ defmodule RaxolPlayground.RecordedFrames do
                             grid: SurfaceSource.ansi_grid(rows)
                           }}
 
-                       {surface, artifact} ->
-                         lines =
-                           case surface do
-                             :browser -> SurfaceSource.dom_lines(artifact)
-                             :mcp -> SurfaceSource.json_lines(artifact)
-                           end
-
-                         kind = %{browser: :dom, mcp: :json}[surface]
-
+                       # MCP carries structured text a reader reads line by
+                       # line, so it is broken to a line budget with a marker
+                       # naming what was cut.
+                       {:mcp, artifact} ->
                          clamped =
-                           lines
+                           artifact
+                           |> SurfaceSource.json_lines()
                            |> SurfaceSource.wrap()
                            |> SurfaceSource.clamp(artifact)
 
-                         {surface,
+                         {:mcp,
                           %{
-                            html: SurfaceSource.to_html(clamped, kind),
+                            html: SurfaceSource.to_html(clamped, :json),
                             lines: length(clamped)
                           }}
                      end)
@@ -149,6 +195,15 @@ defmodule RaxolPlayground.RecordedFrames do
   def hero_examples, do: @hero_frames |> Map.keys() |> Enum.sort()
 
   @doc """
+  Milliseconds between recorded frames, which is the module's own tick.
+
+  The page plays the recording back at the rate it was sampled at, so the
+  animation runs at the speed the program actually runs.
+  """
+  @spec hero_frame_interval(String.t()) :: pos_integer()
+  def hero_frame_interval(example), do: Map.get(@hero_intervals, example, 100)
+
+  @doc """
   Pane markup for one hero example on one non-terminal surface, derived from
   that example's recorded artifact by `RaxolPlayground.SurfaceSource`.
   """
@@ -177,6 +232,15 @@ defmodule RaxolPlayground.RecordedFrames do
   def hero_ssh_grid(example) do
     example |> pane(:ssh) |> Map.get(:grid, %{rows: 1, cols: 1})
   end
+
+  @doc """
+  Painted markup for every recorded ANSI frame, in playback order.
+
+  One per terminal frame, so the two panes step together: the same buffer, on
+  two surfaces, at the same moment.
+  """
+  @spec hero_ssh_frames(String.t()) :: [String.t()]
+  def hero_ssh_frames(example), do: Map.get(@hero_ssh_frames, example, [])
 
   defp pane(example, surface) do
     @hero_surfaces |> Map.get(example, %{}) |> Map.get(surface, %{})
@@ -238,8 +302,13 @@ defmodule RaxolPlayground.RecordedFrames do
     @hero_artifacts |> Map.get(example, %{}) |> Map.get(surface, "")
   end
 
-  @typedoc "A hero surface other than the terminal, which plays frames."
-  @type surface :: :browser | :ssh | :mcp
+  @typedoc """
+  A hero surface with an artifact of its own.
+
+  The terminal and browser panes both play `hero_frames/1` and so appear here
+  under neither name.
+  """
+  @type surface :: :ssh | :mcp
 
   @doc "Rendered preview frame for a catalog demo name, or nil."
   @spec preview(String.t()) :: String.t() | nil

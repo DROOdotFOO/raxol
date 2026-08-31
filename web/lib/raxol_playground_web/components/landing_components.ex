@@ -4,10 +4,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   the LiveView is just lifecycle (mount, handle_event, handle_info, render
   orchestration) and the markup lives here.
 
-  The counter and agent code samples are owned by this module: it stores
-  them as `~S\"""...\"""` literals, runs them through Makeup at compile time,
-  and exposes the highlighted HTML through Components that don't take any
-  attributes. Callers don't need to know either source exists.
+  The code samples are owned by this module: it stores them as `~S\"""...\"""`
+  literals, runs them through Makeup at compile time, and exposes the
+  highlighted HTML through Components that don't take any attributes. Callers
+  don't need to know the sources exist.
 
   Components that take attributes (nav_bar, screen_hero) receive only
   LiveView-driven state (mobile_menu_open, raxol_version, terminal_html).
@@ -21,33 +21,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   import Phoenix.HTML, only: [raw: 1]
 
   import RaxolPlaygroundWeb.PlaygroundComponents,
-    only: [copyable_command: 1, terminal_chrome: 1, ssh_copy_block: 1]
-
-  @counter_source ~S"""
-  defmodule Counter do
-    use Raxol.Core.Runtime.Application
-
-    @impl true
-    def init(_ctx), do: %{count: 0}
-
-    @impl true
-    def update(:increment, model), do: {%{model | count: model.count + 1}, []}
-    def update(:decrement, model), do: {%{model | count: model.count - 1}, []}
-    def update(_, model), do: {model, []}
-
-    @impl true
-    def view(model) do
-      column style: %{padding: 1, gap: 1} do
-        [
-          text("Count: #{model.count}", style: [:bold]),
-          row style: %{gap: 1} do
-            [button("+", on_click: :increment), button("-", on_click: :decrement)]
-          end
-        ]
-      end
-    end
-  end
-  """
+    only: [copyable_command: 1, terminal_chrome: 1]
 
   @agent_source ~S"""
   defmodule Researcher do
@@ -136,29 +110,37 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # wraps every line in markup, so counting there measures the highlighter. The
   # pane sizes its type from both, so the module fits whole on either axis
   # rather than running off the right edge behind a hidden scrollbar.
+  #
+  # The module name is read out of the source for the same reason. The browser
+  # pane heads its embedded page with it, and a name typed a second time here
+  # would be free to stop matching the `defmodule` line the pane beside it
+  # shows.
   @hero_examples (for {name, file, source} <- [
                         {"pulse", "pulse.ex", @pulse_source},
                         {"halo", "halo.ex", @halo_source}
                       ] do
                     lines = source |> String.trim() |> String.split("\n")
 
-                    {name, file, Makeup.highlight_inner_html(source),
+                    [_, module] = Regex.run(~r/defmodule (\w+)/, source)
+
+                    {name, file, module, Makeup.highlight_inner_html(source),
                      %{
                        lines: length(lines),
                        cols: lines |> Enum.map(&String.length/1) |> Enum.max()
                      }}
                   end)
 
-  @counter_code Makeup.highlight_inner_html(@counter_source)
   @agent_code Makeup.highlight_inner_html(@agent_source)
   # Counted from the registry `Xochi.Capabilities.fallback/0` derives from, so
   # the headline cannot claim a corridor the solver does not have. Tron is
   # reached over the relay rail rather than this table and is not counted.
   @network_count length(Raxol.Payments.Assets.supported_chain_ids())
 
+  # Named once: the footer reaches for it as a mark, as a link to the package
+  # directory behind the count beside it, and it used to be a nav entry too.
+  @repo_url "https://github.com/DROOdotFOO/raxol"
+
   @install_command "curl -fsSL https://raxol.io/install | bash"
-  @brew_command "brew install droodotfoo/tap/raxol"
-  @npm_command "npm i -g raxol"
 
   # The hero halo's face cycles the coding agent's REAL status glyphs:
   # AxolFace.glyph/3 is the single source of truth every surface renders,
@@ -173,48 +155,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                   }
                 end
               )
-
-  # Version claims derive from Capabilities.packages() so the FAQ can never
-  # drift from the package table the capability endpoints serve.
-  @faq_versions Capabilities.packages()
-                |> Enum.group_by(& &1.version, & &1.name)
-                |> Enum.sort_by(fn {version, _names} -> version end, :desc)
-                |> Enum.map_join("; ", fn {version, names} ->
-                  "#{Enum.join(names, ", ")} at #{String.replace(version, "~> ", "v")}"
-                end)
-
-  @faqs [
-    %{
-      q: "What is Raxol?",
-      a:
-        "An OTP-native runtime for building TUIs, AI agents, and live web apps from one Elixir module. The same init/update/view shape renders to a terminal, Phoenix LiveView, SSH, and MCP."
-    },
-    %{
-      q: "Do I need Elixir?",
-      a:
-        "Yes. Raxol is an Elixir framework distributed via Hex. If you want to drive a Raxol app from another stack, you can talk to it over MCP (JSON-RPC)."
-    },
-    %{
-      q: "Where do AI agents run?",
-      a:
-        "In your BEAM, supervised. Same app, same node. Bring your own API key (Anthropic, OpenAI, OpenRouter, Ollama, Lumo, Kimi) or run mock for development. The framework streams tokens and routes inter-agent messages over a Registry."
-    },
-    %{
-      q: "Can I drop Raxol into an existing Phoenix app?",
-      a:
-        "Yes. Add :raxol_liveview, mount your TEA module via TEALive or TerminalComponent. The terminal renders as an HTML <pre> diffed by LiveView."
-    },
-    %{
-      q: "Is this production-ready?",
-      a:
-        "On Hex: #{@faq_versions}. raxol_earn and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
-    },
-    %{
-      q: "What does the SSH demo give me?",
-      a:
-        "Raxol's SSH surface gives every connection a supervised channel with its own crash boundary. The hosted playground is currently browser-only; run `mix raxol.playground --ssh` to try the SSH surface locally."
-    }
-  ]
 
   # ---------------------------------------------------------------------------
   # The one-screen landing: header / hero / footer, sized to the viewport.
@@ -271,7 +211,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def screen_hero(assigns) do
     assigns =
-      assign(assigns, halo_faces: @halo_faces, network_count: @network_count)
+      assign(assigns,
+        halo_faces: @halo_faces,
+        network_count: @network_count,
+        install_command: @install_command
+      )
 
     ~H"""
     <%!-- The brand mark beside the claim rather than above it: an upright box
@@ -302,11 +246,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </p>
 
         <div class="screen-install">
-          <.copyable_command
-            id="screen-install-cmd"
-            command="curl -fsSL https://raxol.io/install | bash"
-            tone={:coral}
-          />
+          <.copyable_command id="screen-install-cmd" command={@install_command} tone={:coral} />
         </div>
       </div>
     </div>
@@ -398,6 +338,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   def screen_footer(assigns) do
+    assigns = assign(assigns, :repo_url, @repo_url)
+
     ~H"""
     <footer class="screen-footer" role="contentinfo">
       <div class="screen-bar">
@@ -405,12 +347,43 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a :for={{path, label} <- topic_links()} href={path} class="topic-link">{label}</a>
         </nav>
 
+        <%!-- The package count was the one claim in this line a reader could
+             not check. It is the number the capability endpoints serve, and
+             the directory it counts is public, so it links there. --%>
         <span class="screen-meta">
-          v{Capabilities.version_minor()} &middot; {Capabilities.package_count()} packages &middot;
-          <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
+          v{Capabilities.version_minor()} &middot;
+          <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
+            {Capabilities.repo_package_count()} packages
+          </a>
+          &middot; <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a> &middot;
+          <a href="/skill.md" class="subtle-link">Skill</a>
+          <.github_mark />
         </span>
       </div>
     </footer>
+    """
+  end
+
+  @doc """
+  The repository, as its mark rather than as a word.
+
+  It used to sit in the header, where it competed with the two links a
+  first-time reader actually needs. Down here it is one glyph beside the other
+  places the code lives, which is the company it belongs in. The accessible
+  name carries the word the mark replaces.
+  """
+  def github_mark(assigns) do
+    assigns =
+      assigns
+      |> assign(:mark, BrandMarks.site_path("GitHub"))
+      |> assign(:repo_url, @repo_url)
+
+    ~H"""
+    <a href={@repo_url} class="site-mark" aria-label="raxol on GitHub">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d={@mark} fill="currentColor" />
+      </svg>
+    </a>
     """
   end
 
@@ -421,13 +394,20 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # One list for both site headers. The landing carried four links and the
   # topic pages six, so the navigation changed shape when a reader crossed
   # between them and neither list knew the other existed.
+  # Two, because two is what the site actually has to offer a first-time
+  # reader: somewhere to watch it run, and somewhere to read the API.
+  #
+  # It carried six. Playground, Gallery and Demos were three labels for one
+  # job, and no visitor could tell them apart from the words -- Demos was a
+  # strictly smaller copy of Gallery over the same catalog, and is gone;
+  # Playground is one link inside Components, where someone who wants the
+  # fuller tool is already standing. Skill and GitHub are reference material
+  # for a reader who has already decided, so they moved to the footer, GitHub
+  # as its mark. Nothing here was padded back to a round number: a third item
+  # added to reach one would be the same defect in a smaller font.
   @nav_links [
-    {"/playground", "Playground"},
-    {"/gallery", "Gallery"},
-    {"/demos", "Demos"},
-    {"https://hexdocs.pm/raxol", "Docs"},
-    {"/skill.md", "Skill"},
-    {"https://github.com/DROOdotFOO/raxol", "GitHub"}
+    {"/gallery", "Components"},
+    {"https://hexdocs.pm/raxol", "Docs"}
   ]
 
   @doc "Site navigation as `{href, label}`. Both headers render exactly this."
@@ -488,69 +468,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 1a. Install tabs: four methods over one command line
-  #
-  # All four panes ship in the dead render; the InstallTabs hook only
-  # toggles `hidden`/aria-selected, so the block works (showing curl)
-  # before JS and never round-trips the server.
-  # ---------------------------------------------------------------------------
-
-  def install_tabs(assigns) do
-    assigns =
-      assign(assigns,
-        curl_cmd: @install_command,
-        brew_cmd: @brew_command,
-        npm_cmd: @npm_command,
-        hex_dep: Capabilities.dep("raxol")
-      )
-
-    ~H"""
-    <div id="install-tabs" phx-hook="InstallTabs" class="install-tabs mx-auto">
-      <div class="install-tabs__row" role="tablist" aria-label="Install method">
-        <button type="button" class="install-tab" role="tab" aria-selected="true" data-m="curl">curl</button>
-        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="brew">brew</button>
-        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="npm">npm</button>
-        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="hex">hex</button>
-      </div>
-
-      <%!-- Only channels that exist get a link: the script this site
-           serves, and the published Hex package. brew/npm links land
-           when the tap repo and npm package publish. --%>
-      <div class="install-pane" data-m="curl">
-        <.ssh_copy_block id="install-copy-curl" cmd={@curl_cmd} />
-        <p class="label-text mt-3">
-          Self-contained binary. macOS and Linux. Click to copy.
-          <a href="/install" class="install-link">read the script</a>
-        </p>
-      </div>
-      <div class="install-pane" data-m="brew" hidden>
-        <.ssh_copy_block id="install-copy-brew" cmd={@brew_cmd} />
-        <p class="label-text mt-3">Homebrew tap. macOS and Linux.</p>
-      </div>
-      <div class="install-pane" data-m="npm" hidden>
-        <.ssh_copy_block id="install-copy-npm" cmd={@npm_cmd} />
-        <p class="label-text mt-3">One wrapper, one per-platform binary. Needs Node.</p>
-      </div>
-      <div class="install-pane" data-m="hex" hidden>
-        <.ssh_copy_block id="install-copy-hex" cmd={@hex_dep} prompt={nil} />
-        <p class="label-text mt-3">
-          Add to mix.exs in an existing Elixir app.
-          <a href="https://hex.pm/packages/raxol" class="install-link">view on Hex</a>
-        </p>
-      </div>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 1b. Hero demo: one module, four surfaces
+  # 1. Hero demo: one module, four surfaces
   #
   # The four panes are four encodings of ONE render, all projected from the
-  # frame-zero buffer of the same `Raxol.Headless` session, the way
-  # `Raxol.Harness.Surface.Parity` projects a fixture onto cells, LiveView
-  # DOM, SSH ANSI and MCP JSON. None is authored: the browser pane is the
-  # source of the markup the terminal pane renders, and the other two come
-  # from committed artifacts (see `RaxolPlayground.SurfaceSource`).
+  # same `Raxol.Headless` session, the way `Raxol.Harness.Surface.Parity`
+  # projects a fixture onto cells, LiveView DOM, SSH ANSI and MCP JSON. Every
+  # picture and every listing comes from a committed artifact (see
+  # `RaxolPlayground.SurfaceSource`); what a pane puts AROUND one is chrome, in
+  # the same sense the `$ mix run` line and the window dots above it are. The
+  # browser pane's URL bar and page furniture are that chrome, and the frame
+  # inside them is the recording.
   #
   # No ACP tab. ACP is the coding agent's editor protocol, not a surface a
   # TEA module renders to, so a pane captioned "pulse, driven over ACP" would
@@ -573,12 +500,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         title: example_title(assigns.example),
         frames: RecordedFrames.hero_frames(assigns.example),
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
+        frame_ms: RecordedFrames.hero_frame_interval(assigns.example),
         next: next_example(assigns.example),
-        out_browser: RecordedFrames.hero_surface(assigns.example, :browser),
-        out_ssh: RecordedFrames.hero_surface(assigns.example, :ssh),
+        module: example_module(assigns.example),
+        ssh_frames: RecordedFrames.hero_ssh_frames(assigns.example),
         out_mcp: RecordedFrames.hero_surface(assigns.example, :mcp),
-        browser_lines:
-          RecordedFrames.hero_surface_lines(assigns.example, :browser),
         ssh_grid: RecordedFrames.hero_ssh_grid(assigns.example),
         mcp_lines: RecordedFrames.hero_surface_lines(assigns.example, :mcp)
       )
@@ -587,7 +513,12 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <%!-- The id carries the example so switching remounts the hook: the frame
          player caches its frame nodes, and patching them underneath it would
          leave it stepping elements that no longer exist. --%>
-    <div id={"hero-demo-#{@example}"} phx-hook="HeroDemo" class="hero-demo mx-auto text-left">
+    <div
+      id={"hero-demo-#{@example}"}
+      phx-hook="HeroDemo"
+      class="hero-demo mx-auto text-left"
+      data-frame-ms={@frame_ms}
+    >
       <%!-- The player's controls live in the title bar, where a window's
            controls belong and where nothing can clip them. They used to sit in
            a footer below the panes: the demo box is height-capped, so on any
@@ -609,7 +540,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="hero-tabs" role="tablist" aria-label="Render surface">
         <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title={"#{@title} -- rendering to the terminal"} data-label="Rendered to the terminal">Terminal</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="The DOM LiveView patches">Browser</button>
+        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title={"#{@title} -- rendering to Phoenix LiveView"} data-label="Embedded in a page">Browser</button>
         <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title={"#{@title} -- served over SSH"} data-label="The same frame, painted down a channel">SSH</button>
         <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title={"#{@title} -- exposed as MCP tools"} data-label="The tree an agent reads">Agent / MCP</button>
       </div>
@@ -633,11 +564,33 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             </div>
           </div>
 
-          <%!-- The same frame, re-encoded three ways: the head of a committed
-               artifact, clamped with a marker naming what was cut. --%>
+          <%!-- The browser pane shows the app sitting in a page, because that
+               is what the surface is. It used to print `TerminalBridge`'s
+               markup as text -- fifteen lines of escaped spans over braille --
+               and markup shown as text says the library formats strings. What
+               `raxol_liveview` actually hands you is a component: the frame
+               below is the same recording the terminal pane steps, in a page
+               that has a URL and a heading around it. --%>
           <div class="hero-out" data-surface="1" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix phx.server</span></pre>
-            <pre class="hero-pre hero-src" style={"--src-lines: #{@browser_lines}"}>{raw(@out_browser)}</pre>
+
+            <div class="hero-browser">
+              <div class="hero-browser__bar" aria-hidden="true">
+                <span class="hero-browser__dot"></span>
+                <span class="hero-browser__url">localhost:4000/{@example}</span>
+              </div>
+
+              <div class="hero-browser__page">
+                <p class="hero-browser__heading">{@module}</p>
+                <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@frame_grid.rows}; --frame-cols: #{@frame_grid.cols}"}>
+                  <div :for={{frame, i} <- Enum.with_index(@frames)} class="hero-frame" data-frame={i} hidden={i != 0}>{raw(frame)}</div>
+                </div>
+                <p class="hero-browser__caption">
+                  One TerminalComponent on an ordinary page. Keydown goes back
+                  through InputAdapter into update/2.
+                </p>
+              </div>
+            </div>
           </div>
 
           <%!-- SSH is the one non-terminal surface that delivers a picture
@@ -648,10 +601,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <div class="hero-out" data-surface="2" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh demo@localhost -p 2222</span></pre>
             <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@ssh_grid.rows}; --frame-cols: #{@ssh_grid.cols}"}>
-              <pre class="hero-ansi">{raw(@out_ssh)}</pre>
+              <div :for={{frame, i} <- Enum.with_index(@ssh_frames)} class="hero-frame" data-frame={i} hidden={i != 0}>
+                <pre class="hero-ansi">{raw(frame)}</pre>
+              </div>
             </div>
           </div>
 
+          <%!-- The one pane that is listed rather than painted, because what
+               an agent reads is a structure and not a picture: the head of a
+               committed artifact, clamped with a marker naming what was cut. --%>
           <div class="hero-out" data-surface="3" hidden>
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix mcp.server</span></pre>
             <pre class="hero-pre hero-src" style={"--src-lines: #{@mcp_lines}"}>{raw(@out_mcp)}</pre>
@@ -667,20 +625,30 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def hero_example_names, do: Enum.map(@hero_examples, &elem(&1, 0))
 
   defp example_title(name) do
-    Enum.find_value(@hero_examples, name, fn {n, t, _c, _l} ->
+    Enum.find_value(@hero_examples, name, fn {n, t, _m, _c, _l} ->
       n == name && t
+    end)
+  end
+
+  @doc "The module an example defines, as its own source spells it."
+  def example_module(name) do
+    Enum.find_value(@hero_examples, name, fn {n, _t, m, _c, _l} ->
+      n == name && m
     end)
   end
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
   def example_grid(name) do
-    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _c, grid} ->
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _c,
+                                                              grid} ->
       n == name && grid
     end)
   end
 
   defp example_code(name) do
-    Enum.find_value(@hero_examples, "", fn {n, _t, c, _l} -> n == name && c end)
+    Enum.find_value(@hero_examples, "", fn {n, _t, _m, c, _l} ->
+      n == name && c
+    end)
   end
 
   defp next_example(name) do
@@ -690,38 +658,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 2. Proof: counter example
-  # ---------------------------------------------------------------------------
-
-  def code_example_section(assigns) do
-    assigns = assign(assigns, :counter_code, @counter_code)
-
-    ~H"""
-    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="code-title">
-      <h2 id="code-title" class="heading-2xl mb-3">Hello World</h2>
-      <p class="body-text mb-8 max-w-2xl">
-        Every Raxol app follows The Elm Architecture:
-        <span class="text-axol-coral">init</span>,
-        <span class="text-axol-coral">update</span>,
-        <span class="text-axol-coral">view</span>.
-      </p>
-
-      <div class="terminal-chrome mb-8 ch-snap">
-        <.terminal_chrome title="counter.exs" />
-        <div class="terminal-chrome-body">
-          <pre class="code-block"><code class="syntax-elixir"><%= Phoenix.HTML.raw(@counter_code) %></code></pre>
-        </div>
-      </div>
-
-      <p class="body-text-dim max-w-2xl">
-        That counter works in a terminal, Phoenix LiveView, and over SSH. One codebase.
-      </p>
-    </section>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 3a. Deep dive 01: Surfaces
+  # 2a. Deep dive 01: Surfaces
   # ---------------------------------------------------------------------------
 
   def surfaces_deep_dive(assigns) do
@@ -790,7 +727,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3b. Deep dive 02: SSH zero-install
+  # 2b. Deep dive 02: SSH zero-install
   # ---------------------------------------------------------------------------
 
   def ssh_deep_dive(assigns) do
@@ -822,7 +759,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3c. Deep dive 03: Agent runtime
+  # 2c. Deep dive 03: Agent runtime
   # ---------------------------------------------------------------------------
 
   def agent_deep_dive(assigns) do
@@ -860,7 +797,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3d. Deep dive 04: Coding agent + ACP
+  # 2d. Deep dive 04: Coding agent + ACP
   # ---------------------------------------------------------------------------
 
   def coding_agent_deep_dive(assigns) do
@@ -895,7 +832,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3e. Deep dive 05: Agent payments (privacy ladder + solver reach matrix)
+  # 2e. Deep dive 05: Agent payments (privacy ladder + solver reach matrix)
   #
   # The reach matrix renders server-side from the PAYMENTS solver's
   # capability endpoint (Raxol.Payments.Xochi.Capabilities) -- unrelated to
@@ -961,8 +898,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         tier_proofs: @tier_proofs,
         solver_floor: Raxol.Payments.FeeSchedule.solver_base_bps(),
         payments_version: @payments_version,
-        token: @token,
-        token_pair_url: @token_pair_url,
         rows: reach_rows(assigns.matrix),
         show_future_svm:
           not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
@@ -1074,7 +1009,30 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <h2 class="name-coral mb-2 mt-12">${@token.symbol}</h2>
+    </section>
+    """
+  end
+
+  @doc """
+  The project token, on its own page.
+
+  It used to be the tail of the payments deep dive, which put it under a
+  heading about settlement and invited exactly the reading the copy then had to
+  deny: the corridors quote, route and settle in stablecoins, and this is not
+  one of them. A token and a payment rail are different subjects, and the page
+  said so more convincingly once they stopped sharing a page.
+  """
+  def token_deep_dive(assigns) do
+    assigns = assign(assigns, token: @token, token_pair_url: @token_pair_url)
+
+    ~H"""
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="token-title">
+      <div class="mb-8">
+        <span class="section-numeral" aria-hidden="true">06</span>
+        <span class="section-eyebrow">Token</span>
+        <h1 id="token-title" class="heading-2xl mb-3">${@token.symbol}</h1>
+      </div>
+
       <p class="body-text-dim max-w-2xl mb-4">
         The project token, on <%= @token.chain_name %>. It is not a settlement
         asset -- the corridors quote, route and settle in stablecoins.
@@ -1130,141 +1088,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   defp score_band(%{min_score: min, max_score: max}), do: "#{min}-#{max}"
 
   # ---------------------------------------------------------------------------
-  # 4. Features grid (numbered)
-  # ---------------------------------------------------------------------------
-
-  def features_section(assigns) do
-    ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="features-title">
-      <span class="section-eyebrow">More capabilities</span>
-      <h2 id="features-title" class="heading-2xl mb-10">What OTP gives you.</h2>
-
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <.feature_card index="01" title="Crash Isolation" description="Components crash and restart independently. Your UI keeps running." />
-        <.feature_card index="02" title="Hot Code Reload" description="Change view/1, save. The running app updates without restart." />
-        <.feature_card index="03" title="MCP Tools" description="Widgets auto-derive MCP tools. Agents interact with real UI programmatically." />
-        <.feature_card index="04" title="Time-Travel Debug" description="Snapshot every update/2 cycle. Step back, forward, jump, restore." />
-        <.feature_card index="05" title="Distributed Swarm" description="CRDTs, elections, discovery via gossip, DNS, or Tailscale." />
-        <.feature_card index="06" title="Agent Payments" description="x402 micropayments, Xochi cross-chain, stealth addresses. Autonomous commerce." />
-        <.feature_card index="07" title="Adaptive UI" description="Behavior tracking, layout recommendations, feedback loop. Self-evolving interfaces." />
-        <.feature_card index="08" title="Session Replay" description="Asciinema v2 recording. Replay any session, scrub the timeline, ship as evidence." />
-      </div>
-    </section>
-    """
-  end
-
-  attr(:index, :string, required: true)
-  attr(:title, :string, required: true)
-  attr(:description, :string, required: true)
-
-  defp feature_card(assigns) do
-    ~H"""
-    <div class="panel panel--glow feature-card p-6">
-      <span class="feature-card__index"><%= @index %></span>
-      <h2 class="name-coral mb-2"><%= @title %></h2>
-      <p class="detail-text leading-relaxed"><%= @description %></p>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 5. Packages
-  # ---------------------------------------------------------------------------
-
-  def packages_section(assigns) do
-    ~H"""
-    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="packages-title">
-      <h2 id="packages-title" class="heading-2xl mb-3">Pick what you need</h2>
-      <p class="body-text mb-10 max-w-2xl">Full framework or just the parts that matter.</p>
-
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <.package_card id="raxol" name="raxol" dep={Capabilities.dep("raxol")} description="Full framework: TEA runtime, rendering, widgets, effects" accent={true} />
-        <.package_card id="agent" name="raxol_agent" dep={Capabilities.dep("raxol_agent")} description="AI agents, teams, strategies, LLM streaming" />
-        <.package_card id="mcp" name="raxol_mcp" dep={Capabilities.dep("raxol_mcp")} description="MCP server, tool derivation from widgets" />
-        <.package_card id="payments" name="raxol_payments" dep={Capabilities.dep("raxol_payments")} description="x402, MPP, Xochi cross-chain, spending controls" />
-        <.package_card id="liveview" name="raxol_liveview" dep={Capabilities.dep("raxol_liveview")} description="Render TEA apps in Phoenix LiveView" />
-        <.package_card id="sensor" name="raxol_sensor" dep={Capabilities.dep("raxol_sensor")} description="Sensor fusion. Zero dependencies." />
-      </div>
-    </section>
-    """
-  end
-
-  attr(:id, :string, required: true)
-  attr(:name, :string, required: true)
-  attr(:dep, :string, required: true)
-  attr(:description, :string, required: true)
-  attr(:accent, :boolean, default: false)
-
-  defp package_card(assigns) do
-    ~H"""
-    <div class="panel panel--glow p-5 relative">
-      <h3 class={["name-sky-sm mb-1", if(@accent, do: "text-axol-coral", else: "text-sky")]}>
-        <%= @name %>
-      </h3>
-      <code class="caption-text"><%= @dep %></code>
-      <p class="detail-text mt-2"><%= @description %></p>
-      <button
-        id={"pkg-copy-#{@id}"}
-        phx-hook="CopyToClipboard"
-        data-copy={@dep}
-        class="pkg-copy-btn"
-        aria-label={"Copy #{@name} dependency"}
-      >copy</button>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 6. FAQ
-  # ---------------------------------------------------------------------------
-
-  def faq_section(assigns) do
-    assigns = assign(assigns, :faqs, @faqs)
-
-    ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="faq-title">
-      <span class="section-eyebrow">FAQ</span>
-      <h2 id="faq-title" class="heading-2xl mb-10">Questions, answered.</h2>
-      <div class="faq-list max-w-3xl">
-        <%= for {%{q: q, a: a}, i} <- Enum.with_index(@faqs) do %>
-          <details class="faq-item" id={"faq-#{i}"}>
-            <summary><%= q %></summary>
-            <div class="faq-item__body"><%= a %></div>
-          </details>
-        <% end %>
-      </div>
-    </section>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 7. CTA
-  # ---------------------------------------------------------------------------
-
-  def try_section(assigns) do
-    assigns = assign(assigns, :install_command, @install_command)
-
-    ~H"""
-    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="try-title">
-      <h2 id="try-title" class="heading-2xl mb-3">One module away from every surface.</h2>
-      <p class="body-text mb-10 max-w-2xl">Starting is genuinely four commands.</p>
-
-      <div class="space-y-3 mb-10 ch-snap">
-        <.copyable_command id="copy-install" command={@install_command} comment="self-contained binary" tone={:coral} />
-        <.copyable_command id="copy-npm" command="npm i -g raxol" comment="Node users" tone={:sky} />
-        <.copyable_command id="copy-playground" command="mix raxol.playground" comment="interactive demos" tone={:sky} />
-        <.copyable_command id="copy-demo" command="mix run examples/demo.exs" comment="BEAM dashboard" tone={:sky} />
-      </div>
-
-      <div class="flex gap-4 flex-wrap">
-        <a href="/playground" class="btn-primary">Open Playground</a>
-        <a href="/gallery" class="btn-secondary">Browse Gallery</a>
-      </div>
-    </section>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
   # Footer
   # ---------------------------------------------------------------------------
 
@@ -1280,8 +1103,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def footer_section(assigns) do
     ~H"""
     <footer class="landing-section py-16 border-t border-subtle" role="contentinfo">
-      <div class="measure flex items-center justify-end font-mono caption-text tracking-wide">
+      <div class="measure flex items-center justify-end gap-4 font-mono caption-text tracking-wide">
         <span>Made by <a href="https://axol.io" class="axol-link">axol.io</a></span>
+        <.github_mark />
       </div>
     </footer>
     """

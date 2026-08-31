@@ -27,7 +27,10 @@ defmodule RaxolPlaygroundWeb.Router do
     live("/", LandingLive, :index)
     live("/playground", PlaygroundLive, :index)
     live("/gallery", GalleryLive, :index)
-    live("/demos", DemoLive, :index)
+    # /demos was a smaller copy of /gallery over the same catalog. The index
+    # is gone; the per-demo pages it linked to are what /gallery links to, so
+    # they stay. The old index URL redirects rather than 404s.
+    get("/demos", RedirectController, :demos)
     live("/demos/:demo", DemoLive, :show)
     live("/repl", ReplLive, :index)
 
@@ -39,5 +42,6 @@ defmodule RaxolPlaygroundWeb.Router do
     live("/agent", TopicLive, :agent)
     live("/coding-agent", TopicLive, :coding_agent)
     live("/payments", TopicLive, :payments)
+    live("/token", TopicLive, :token)
   end
 end

@@ -27,10 +27,11 @@ defmodule RaxolPlaygroundWeb.TopicLive do
     ssh: {"/ssh", "SSH", "SSH"},
     agent: {"/agent", "Agents", "Agents"},
     coding_agent: {"/coding-agent", "Coding agent", "Coding agent"},
-    payments: {"/payments", "Agent payments", "Payments"}
+    payments: {"/payments", "Agent payments", "Payments"},
+    token: {"/token", "$RAXOL", "$RAXOL"}
   }
 
-  @order [:surfaces, :ssh, :agent, :coding_agent, :payments]
+  @order [:surfaces, :ssh, :agent, :coding_agent, :payments, :token]
 
   @doc "Every topic as `{path, label}`, in nav order."
   def links do
@@ -111,4 +112,6 @@ defmodule RaxolPlaygroundWeb.TopicLive do
 
   defp topic_body(%{topic: :payments} = assigns),
     do: ~H"<.payments_deep_dive matrix={@matrix} />"
+
+  defp topic_body(%{topic: :token} = assigns), do: ~H"<.token_deep_dive />"
 end
