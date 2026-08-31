@@ -194,15 +194,26 @@ if Code.ensure_loaded?(Plug.Router) do
 
     # -- Private ----------------------------------------------------------------
 
-    # The connection a request belongs to. A caller that presents no session id
-    # gets a FRESH anonymous id rather than a shared one: two unidentified
-    # callers must not land on the same connection, or one could answer the
-    # other's elicitation exactly as before. An anonymous connection has no
-    # subscriber, so it can never elicit and never owns anything to answer.
+    # The connection a request belongs to. Callers that present no session id
+    # all share ONE key. It is safe for them to: an elicitation can only be
+    # parked by a connection that has a subscriber (`elicitation_capable?/2`
+    # checks that first), and this key is never subscribed -- `GET /mcp/sse` is
+    # the only thing that subscribes, and it subscribes under the id it minted.
+    # So no elicitation can ever be owned here, and there is nothing for one
+    # unidentified caller to answer on another's behalf.
+    #
+    # A fresh id per request looked safer and was worse. `initialize` records
+    # capabilities under whatever key it is given, and that map is only ever
+    # evicted on a subscriber's `:DOWN` -- which a never-subscribed key does not
+    # have. One unauthenticated POST per permanent entry, with a caller-supplied
+    # map as its value, is unbounded memory growth with no way to reclaim it.
+    # One shared key is bounded by construction.
+    @anonymous_conn :anonymous
+
     defp conn_id(conn) do
       case Plug.Conn.get_req_header(conn, "mcp-session-id") do
         [id | _] when is_binary(id) and id != "" -> id
-        _ -> {:anonymous, mint_session_id()}
+        _ -> @anonymous_conn
       end
     end
 

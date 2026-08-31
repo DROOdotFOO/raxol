@@ -325,6 +325,68 @@ defmodule Raxol.MCP.ElicitationTest do
       refute_receive {:mcp_notification, %{method: "elicitation/create"}}, 200
     end
 
+    test "taking over a live connection's id inherits nothing from it", %{server: server} do
+      # `:DOWN` clears a departing connection's capabilities and parked
+      # elicitation so the next holder of the id cannot inherit them. Rebinding
+      # the id while the old subscriber is still ALIVE is the same handover and
+      # was not covered: `subscribe/3` overwrote the pid and left both behind.
+      assert {:reply, nil} = call_a(server)
+      elicit_id = await_elicit_id()
+
+      # A new process takes "conn-a" over. A's parked spend and A's advertised
+      # elicitation capability must not come with it.
+      me = self()
+      c = spawn_link(fn -> forward(me) end)
+      Server.subscribe(server, c, "conn-a")
+      _ = Server.authorization_configured?(server)
+
+      # The inherited elicitation is not answerable: A's spend stays unrun.
+      assert {:reply, nil} = answer_as(server, "conn-a", elicit_id)
+      refute_receive {:mcp_notification, %{id: 7}}, 200
+      refute_receive {:b_got, _}, 200
+
+      # And the inherited capability is not in force: the taker never
+      # advertised elicitation, so an ASK denies rather than prompts.
+      assert {:reply, response} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: 11,
+                   method: "tools/call",
+                   params: %{"name" => "spend", "arguments" => %{"amount" => 5}}
+                 },
+                 "conn-a"
+               )
+
+      assert %{"error" => "authorization_required"} = decoded_payload(response)
+      refute_receive {:b_got, %{method: "elicitation/create"}}, 200
+    end
+
+    test "an unsubscribed connection can never park an elicitation", %{server: server} do
+      # This is what lets `Transport.SSE` collapse every unidentified caller
+      # onto one shared conn id instead of minting a fresh one per request --
+      # the fresh ids were never evicted and grew without bound. The safety of
+      # sharing rests entirely on this: no subscriber, no elicitation to own,
+      # so nothing for one anonymous caller to answer on another's behalf.
+      :ok = initialize(server, %{elicitation: %{}}, :anonymous)
+
+      assert {:reply, response} =
+               Server.handle_message(
+                 server,
+                 %{
+                   jsonrpc: "2.0",
+                   id: 13,
+                   method: "tools/call",
+                   params: %{"name" => "spend", "arguments" => %{"amount" => 5}}
+                 },
+                 :anonymous
+               )
+
+      assert %{"error" => "authorization_required"} = decoded_payload(response)
+      refute_receive {:mcp_notification, %{method: "elicitation/create"}}, 200
+    end
+
     defp call_a(server) do
       Server.handle_message(
         server,

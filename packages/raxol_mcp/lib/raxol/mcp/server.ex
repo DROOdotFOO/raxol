@@ -272,6 +272,20 @@ defmodule Raxol.MCP.Server do
     if Map.get(state.subscribers, conn_id) == pid do
       {:noreply, state}
     else
+      # Taking an id AWAY from a live subscriber is a new connection on it, so
+      # it starts clean. The `:DOWN` path already reasons that a stale id must
+      # not hand its capabilities or its parked elicitation to whoever takes it
+      # next; that is just as true when the id is rebound while the old
+      # subscriber is still alive, which `Map.put` alone let through.
+      #
+      # Only on a REBIND. A first subscribe must not clear, or it would discard
+      # the capabilities of a connection that sent `initialize` before it
+      # subscribed -- which is the order a direct in-VM caller naturally uses.
+      state =
+        if Map.has_key?(state.subscribers, conn_id),
+          do: drop_connection(conn_id, state),
+          else: state
+
       # One monitor per PID, not per connection. `{:DOWN, ...}` already drops
       # every id that pid held, so a process subscribed under several ids
       # would otherwise accumulate monitors and deliver as many DOWNs, all but
@@ -364,6 +378,12 @@ defmodule Raxol.MCP.Server do
     # that changes behaviour: it is the difference between denying an ASK and
     # asking. Held globally, one client advertising it would turn prompting on
     # for every other client on the server.
+    #
+    # This map is keyed by connection and evicted on that connection's `:DOWN`,
+    # so every key must be one a subscriber can eventually own. A transport that
+    # mints a fresh key per REQUEST for callers it cannot identify would grow it
+    # without bound and without authentication; see `Transport.SSE`, which
+    # collapses those onto one shared key for that reason.
     client_capabilities =
       msg
       |> Map.get(:params, %{})
