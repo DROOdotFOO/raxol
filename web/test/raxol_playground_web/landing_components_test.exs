@@ -20,16 +20,15 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       )
 
     deep_dive = render_component(&LandingComponents.ssh_deep_dive/1, %{})
-    try_section = render_component(&LandingComponents.try_section/1, %{})
 
-    # The one-screen hero carries ONE install path -- the curl script this
-    # site serves. The four-method tabs live in `install_tabs`, tested below.
+    # The one-screen hero carries ONE install path: the curl script this site
+    # serves. The four-method install tabs are gone, along with every other
+    # component that rendered on no route.
     assert hero =~ "curl -fsSL https://raxol.io/install | bash"
     assert deep_dive =~ "Hosted SSH is temporarily offline"
     assert deep_dive =~ ~s(href="/playground")
-    assert try_section =~ "npm i -g raxol"
 
-    refute Enum.join([hero, deep_dive, try_section]) =~ "playground@raxol.io"
+    refute Enum.join([hero, deep_dive]) =~ "playground@raxol.io"
   end
 
   # The landing is one screen. These are the two properties that keeps: it
@@ -66,10 +65,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   end
 
   # The hero claims one module reaches four surfaces, each pane an encoding of
-  # one recorded render. These two tests stop a pane reverting to authored text.
-  test "every listed hero pane is a recorded artifact, line for line" do
+  # one recorded render. These tests stop a pane reverting to authored text.
+  test "the listed hero pane is a recorded artifact, line for line" do
     for name <- LandingComponents.hero_example_names(),
-        surface <- [:browser, :mcp] do
+        surface <- [:mcp] do
       artifact = RecordedFrames.hero_artifact(name, surface)
       pane = RecordedFrames.hero_surface(name, surface)
 
@@ -95,6 +94,44 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
         assert body == full,
                "#{name}/#{surface} shows #{length(body)} of #{length(full)} lines and says nothing"
       end
+    end
+  end
+
+  # The browser pane renders the recording rather than listing the markup of
+  # it, so it gets the same shape of invariant the SSH pane does.
+  test "the browser pane renders the recording inside a page" do
+    for name <- LandingComponents.hero_example_names() do
+      hero = render_component(&LandingComponents.screen_hero/1, example: name)
+      pane = surface_pane(hero, 1)
+      frames = RecordedFrames.hero_frames(name)
+
+      # The regression this pane exists to not have. Markup shown as text is
+      # what made the surface that renders to a browser read as a library that
+      # formats strings.
+      refute pane =~ "&lt;span",
+             "#{name}/browser is listing its markup as text again"
+
+      refute pane =~ "more lines,",
+             "#{name}/browser is clamping a listing instead of rendering a frame"
+
+      # Every recorded frame, and only those: one element each, contents
+      # verbatim, so the pane cannot drift from the recording beside it.
+      assert count(pane, ~s(class="hero-frame")) == length(frames)
+
+      for {frame, i} <- Enum.with_index(frames) do
+        assert pane =~ ~s(data-frame="#{i}")
+
+        assert String.contains?(pane, frame),
+               "#{name}/browser dropped frame #{i}"
+      end
+
+      # The page around the frame is what distinguishes this tab from the
+      # terminal tab, which shows the same recording bare.
+      assert pane =~ "localhost:4000/#{name}"
+
+      assert pane =~
+               ~r/hero-browser__heading">\s*#{LandingComponents.example_module(name)}\s*</,
+             "#{name}/browser does not head its page with the module the source defines"
     end
   end
 
@@ -151,7 +188,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       assert Enum.uniq(ssh) == ssh, "#{name}/ssh recorded identical frames"
 
       for frame <- ssh do
-        refute frame =~ "ESC[", "#{name}/ssh is showing escape codes as text again"
+        refute frame =~ "ESC[",
+               "#{name}/ssh is showing escape codes as text again"
       end
     end
   end
@@ -163,7 +201,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       interval = RecordedFrames.hero_frame_interval(name)
 
       assert interval > 0
-      assert interval <= 200, "#{name} plays back at #{interval}ms, which is a slideshow"
+
+      assert interval <= 200,
+             "#{name} plays back at #{interval}ms, which is a slideshow"
 
       hero = render_component(&LandingComponents.screen_hero/1, example: name)
       assert hero =~ ~s(data-frame-ms="#{interval}")
@@ -412,9 +452,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
-  # npm and the Homebrew tap are built but unpublished and human-gated. The row
-  # names channels that exist today. `install_tabs` still advertises both and
-  # is rendered by nothing; that wart must not spread to a live component.
+  # npm and the Homebrew tap are built but unpublished and human-gated, so the
+  # row names channels that exist today. The install tabs that advertised both
+  # while rendering on no route are gone.
   test "the integrations row names no unpublished install channel" do
     row = render_component(&LandingComponents.screen_integrations/1, %{})
 
@@ -550,10 +590,22 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute row =~ ~s(title=")
   end
 
-  defp break_lines(artifact, :browser), do: SurfaceSource.dom_lines(artifact)
   defp break_lines(artifact, :mcp), do: SurfaceSource.json_lines(artifact)
 
   defp strip_ansi(text), do: String.replace(text, ~r/\e\[[0-9;?]*[A-Za-z]/, "")
+
+  defp count(haystack, needle), do: length(String.split(haystack, needle)) - 1
+
+  # A rendered hero carries every surface at once, so a pane is the run between
+  # its own marker and the next one. The last pane has no next marker, which is
+  # why the tail is taken rather than a second split asserted.
+  defp surface_pane(hero, index) do
+    [_, rest] = String.split(hero, ~s(data-surface="#{index}"), parts: 2)
+
+    rest
+    |> String.split(~r/data-surface="\d+"/, parts: 2)
+    |> List.first()
+  end
 
   # Undoes SurfaceSource's colour spans and escaping, leaving the lines as its
   # line-breaking produced them.
@@ -572,28 +624,6 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     |> String.replace("&quot;", "\"")
     |> String.replace("&#39;", "'")
     |> String.replace("&amp;", "&")
-  end
-
-  test "install tabs carry all four methods with curl visible by default" do
-    tabs = render_component(&LandingComponents.install_tabs/1, %{})
-
-    assert tabs =~ ~s(aria-label="Install method")
-    assert tabs =~ "curl -fsSL https://raxol.io/install | bash"
-    assert tabs =~ "brew install droodotfoo/tap/raxol"
-    assert tabs =~ "npm i -g raxol"
-    assert tabs =~ "{:raxol,"
-
-    # The curl pane is the one visible before JS runs (dead render).
-    assert tabs =~ ~s(aria-selected="true" data-m="curl")
-    refute tabs =~ ~s(<div class="install-pane" data-m="curl" hidden>)
-    assert tabs =~ ~s(<div class="install-pane" data-m="brew" hidden>)
-
-    # Only channels that exist are linked: the script this site serves and
-    # the published Hex package. brew/npm stay unlinked until they publish.
-    assert tabs =~ ~s(href="/install")
-    assert tabs =~ ~s(href="https://hex.pm/packages/raxol")
-    refute tabs =~ "npmjs.com"
-    refute tabs =~ "homebrew-tap"
   end
 
   test "the hero halo exports the coding agent's real face frames" do
@@ -622,14 +652,6 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert surfaces =~ "termbox2 NIF"
     assert surfaces =~ "Phoenix LiveView"
     assert surfaces =~ "JSON-RPC over stdio"
-  end
-
-  test "the closing section leads with a claim, proven by the commands beneath" do
-    try_section = render_component(&LandingComponents.try_section/1, %{})
-
-    assert try_section =~ "One module away from every surface."
-    assert try_section =~ "four commands"
-    assert try_section =~ "curl -fsSL https://raxol.io/install | bash"
   end
 
   test "nav links the components entry on desktop and mobile" do
@@ -810,7 +832,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # settlement invited the reading its own copy then had to deny, so the
   # payments page must not carry it back.
   test "the payments page carries no token" do
-    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: @live_matrix)
+    payments =
+      render_component(&LandingComponents.payments_deep_dive/1,
+        matrix: @live_matrix
+      )
 
     refute payments =~ "$RAXOL"
     refute payments =~ "0xf44702b17d9abD53815F703e772F35E9c71A53af"

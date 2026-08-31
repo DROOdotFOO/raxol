@@ -14,8 +14,9 @@ defmodule RaxolPlayground.RecordedFrames do
   surface writes -- one of each per captured frame, so the two panes step
   together. `surface.mcp.json` is the tree the MCP surface serves, projected
   from frame zero: a structure rather than a picture, and the same in every
-  frame. The browser surface needs no artifact of its own, since frame zero is
-  already the LiveView encoding.
+  frame. The browser surface needs no artifact of its own, because
+  `frame_NN.html` IS the LiveView encoding: that pane renders the same sequence
+  the terminal pane steps, inside a page, rather than deriving anything.
 
   `interval_ms` carries the tick the recording was sampled at, which is what
   the page plays it back at.
@@ -118,26 +119,18 @@ defmodule RaxolPlayground.RecordedFrames do
 
                     interval =
                       case File.read(path) do
-                        {:ok, raw} -> raw |> String.trim() |> String.to_integer()
-                        {:error, _} -> raise "#{path} is missing; rerun gen_landing_frames.exs"
+                        {:ok, raw} ->
+                          raw |> String.trim() |> String.to_integer()
+
+                        {:error, _} ->
+                          raise "#{path} is missing; rerun gen_landing_frames.exs"
                       end
 
                     {name, interval}
                   end)
 
-  # The browser artifact is frame zero itself, so that pane shows the source
-  # of the markup the terminal pane renders and the two cannot disagree.
   @hero_artifacts Map.new(surface_paths, fn {name, %{ansi: ansi, mcp: mcp}} ->
-                    {name,
-                     %{
-                       browser:
-                         hero_paths
-                         |> Map.fetch!(name)
-                         |> List.first()
-                         |> File.read!(),
-                       ssh: File.read!(ansi),
-                       mcp: File.read!(mcp)
-                     }}
+                    {name, %{ssh: File.read!(ansi), mcp: File.read!(mcp)}}
                   end)
 
   # Derived once: the artifacts are compile-time constants, so the line
@@ -145,13 +138,11 @@ defmodule RaxolPlayground.RecordedFrames do
   @hero_surfaces Map.new(@hero_artifacts, fn {name, artifacts} ->
                    panes =
                      Map.new(artifacts, fn
-                       # SSH is painted, not listed. The other two surfaces
-                       # carry structured text a reader reads line by line, so
-                       # they are broken to a line budget with a marker. This
-                       # one carries a picture, so it keeps its own grid whole
-                       # and the CSS fits the type to it, exactly as the
-                       # terminal pane beside it does. Frame zero only; the
-                       # sequence it belongs to is built below.
+                       # SSH is painted, not listed: it carries a picture, so
+                       # it keeps its own grid whole and the CSS fits the type
+                       # to it, exactly as the terminal pane beside it does.
+                       # Frame zero only; the sequence it belongs to is built
+                       # below.
                        {:ssh, artifact} ->
                          rows = SurfaceSource.ansi_rows(artifact)
 
@@ -161,23 +152,19 @@ defmodule RaxolPlayground.RecordedFrames do
                             grid: SurfaceSource.ansi_grid(rows)
                           }}
 
-                       {surface, artifact} ->
-                         lines =
-                           case surface do
-                             :browser -> SurfaceSource.dom_lines(artifact)
-                             :mcp -> SurfaceSource.json_lines(artifact)
-                           end
-
-                         kind = %{browser: :dom, mcp: :json}[surface]
-
+                       # MCP carries structured text a reader reads line by
+                       # line, so it is broken to a line budget with a marker
+                       # naming what was cut.
+                       {:mcp, artifact} ->
                          clamped =
-                           lines
+                           artifact
+                           |> SurfaceSource.json_lines()
                            |> SurfaceSource.wrap()
                            |> SurfaceSource.clamp(artifact)
 
-                         {surface,
+                         {:mcp,
                           %{
-                            html: SurfaceSource.to_html(clamped, kind),
+                            html: SurfaceSource.to_html(clamped, :json),
                             lines: length(clamped)
                           }}
                      end)
@@ -315,8 +302,13 @@ defmodule RaxolPlayground.RecordedFrames do
     @hero_artifacts |> Map.get(example, %{}) |> Map.get(surface, "")
   end
 
-  @typedoc "A hero surface other than the terminal, which plays frames."
-  @type surface :: :browser | :ssh | :mcp
+  @typedoc """
+  A hero surface with an artifact of its own.
+
+  The terminal and browser panes both play `hero_frames/1` and so appear here
+  under neither name.
+  """
+  @type surface :: :ssh | :mcp
 
   @doc "Rendered preview frame for a catalog demo name, or nil."
   @spec preview(String.t()) :: String.t() | nil
