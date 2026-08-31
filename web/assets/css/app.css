@@ -280,6 +280,7 @@
      are set at. Two dim levels only; muted/ghost alias them so existing
      call sites keep working. */
   --pearl-cream: #e8e4dc;
+  --text-pearl: var(--pearl-cream);
   --text-secondary: rgba(232, 228, 220, 0.6);
   --text-muted: rgba(232, 228, 220, 0.6);
   --text-dim: rgba(232, 228, 220, 0.52);
@@ -307,6 +308,15 @@
   --panel-bg-subtle: rgba(18, 18, 26, 0.7);
   --panel-border: rgba(168, 154, 128, 0.12);
   --panel-border-hover: rgba(168, 154, 128, 0.2);
+
+  /* The screen layout reaches for these two names. They alias the panel
+     tokens above rather than carrying their own values, so the header rule
+     and the nav overlay cannot drift away from the panels they sit against.
+     --panel-strong is the most opaque of the three panel fills, which is what
+     the mobile nav needs: it is an absolutely positioned overlay with no
+     backdrop-filter, so page content shows through whatever alpha it gets. */
+  --border-subtle: var(--panel-border);
+  --panel-strong: var(--panel-bg-elevated);
 
   /* --- Atmospheric pearls (used by .pearl-bg gradient stops) --- */
   --pearl-violet: rgba(40, 51, 139, 0.4);
