@@ -55,6 +55,12 @@ defmodule Raxol.Agent.LSPContext do
           end: %{line: non_neg_integer(), character: non_neg_integer()}
         }
 
+  @type location :: %{uri: String.t(), range: range()}
+
+  @type text_edit :: %{range: range(), new_text: String.t()}
+
+  @type file_edit :: %{uri: String.t(), edits: [text_edit()]}
+
   defstruct [
     :command,
     :args,
@@ -64,6 +70,8 @@ defmodule Raxol.Agent.LSPContext do
     :buffer,
     :pending,
     :diagnostics_cache,
+    open_docs: %{},
+    diagnostic_waiters: %{},
     next_id: 1,
     status: :starting
   ]
@@ -77,6 +85,8 @@ defmodule Raxol.Agent.LSPContext do
           buffer: binary(),
           pending: %{pos_integer() => {GenServer.from(), atom()}},
           diagnostics_cache: %{String.t() => [diagnostic()]},
+          open_docs: %{String.t() => pos_integer()},
+          diagnostic_waiters: %{String.t() => [GenServer.from()]},
           next_id: pos_integer(),
           status: :starting | :initializing | :ready | :closed
         }
@@ -127,6 +137,97 @@ defmodule Raxol.Agent.LSPContext do
   @spec diagnostics(GenServer.server(), String.t()) :: {:ok, [diagnostic()]} | {:error, term()}
   def diagnostics(server, uri) do
     GenServer.call(server, {:diagnostics, uri}, @call_timeout)
+  end
+
+  @doc """
+  Tell the server about a document's content.
+
+  Servers publish diagnostics only for documents the client has opened, so
+  nothing analyses a file until this is sent. Re-opening an already-open URI
+  sends a `didChange` with a bumped version, which is how a file the agent
+  just wrote gets re-analysed.
+  """
+  @spec did_open(GenServer.server(), String.t(), String.t(), String.t()) :: :ok
+  def did_open(server, uri, language_id, text) do
+    GenServer.call(server, {:did_open, uri, language_id, text}, @call_timeout)
+  end
+
+  @doc "Tell the server to stop tracking a document."
+  @spec did_close(GenServer.server(), String.t()) :: :ok
+  def did_close(server, uri) do
+    GenServer.call(server, {:did_close, uri}, @call_timeout)
+  end
+
+  @doc """
+  Wait for the server to publish diagnostics for `uri`, up to `timeout` ms.
+
+  Diagnostics arrive as an unsolicited notification some time after
+  `did_open/4`, so a caller that reads the cache immediately sees an empty
+  list and cannot tell "clean" from "not analysed yet". This blocks until
+  the first publish for that URI and returns `{:error, :timeout}` if none
+  arrives, which is the honest answer rather than a misleading `[]`.
+
+  A publish that arrived before the call returns immediately.
+  """
+  @spec await_diagnostics(GenServer.server(), String.t(), timeout()) ::
+          {:ok, [diagnostic()]} | {:error, term()}
+  def await_diagnostics(server, uri, timeout \\ 5_000) do
+    GenServer.call(server, {:await_diagnostics, uri, timeout}, timeout + 1_000)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+  end
+
+  @doc "Locations where the symbol at a position is defined."
+  @spec definition(GenServer.server(), String.t(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, [location()]} | {:error, term()}
+  def definition(server, uri, line, character) do
+    GenServer.call(server, {:definition, uri, line, character}, @call_timeout)
+  end
+
+  @doc "Locations that reference the symbol at a position."
+  @spec references(
+          GenServer.server(),
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          boolean()
+        ) :: {:ok, [location()]} | {:error, term()}
+  def references(server, uri, line, character, include_declaration \\ true) do
+    GenServer.call(
+      server,
+      {:references, uri, line, character, include_declaration},
+      @call_timeout
+    )
+  end
+
+  @doc """
+  Ask the server for the edits that rename the symbol at a position.
+
+  Returns the workspace edit; applying it is the caller's job.
+  """
+  @spec rename(
+          GenServer.server(),
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          String.t()
+        ) :: {:ok, [file_edit()]} | {:error, term()}
+  def rename(server, uri, line, character, new_name) do
+    GenServer.call(server, {:rename, uri, line, character, new_name}, @call_timeout)
+  end
+
+  @doc """
+  Ask the server what must change before a file moves.
+
+  This is `workspace/willRenameFiles`: the server answers with the edits
+  that keep imports, re-exports, and barrel files pointing at the new path.
+  A move done without it is a rename of the file and a break of everything
+  that referred to it.
+  """
+  @spec will_rename(GenServer.server(), String.t(), String.t()) ::
+          {:ok, [file_edit()]} | {:error, term()}
+  def will_rename(server, old_uri, new_uri) do
+    GenServer.call(server, {:will_rename, old_uri, new_uri}, @call_timeout)
   end
 
   @doc "Get document symbols for a file URI."
@@ -237,8 +338,11 @@ defmodule Raxol.Agent.LSPContext do
         {String.to_charlist(k), String.to_charlist(v)}
       end)
 
+    # Stream mode, not `{:packet, N}`: LSP does its own Content-Length
+    # framing, and `open_port` accepts only 1, 2, or 4 for `:packet` anyway --
+    # `{:packet, 0}` raises `:badarg` before a server ever starts.
     port_opts =
-      [:binary, :exit_status, {:packet, 0}, :use_stdio]
+      [:binary, :exit_status, :use_stdio, :hide]
       |> maybe_add_opt(:env, if(charlist_env != [], do: charlist_env))
 
     case find_executable(state.command) do
@@ -301,6 +405,116 @@ defmodule Raxol.Agent.LSPContext do
     {:reply, {:error, {:not_ready, state.status}}, state}
   end
 
+  # A document already known to the server is a `didChange`, not a second
+  # `didOpen`: servers reject a duplicate open, and the agent re-sends after
+  # every write it makes.
+  def handle_manager_call({:did_open, uri, language_id, text}, _from, %{status: :ready} = state) do
+    case Map.get(state.open_docs, uri) do
+      nil ->
+        send_notification(state, "textDocument/didOpen", %{
+          textDocument: %{uri: uri, languageId: language_id, version: 1, text: text}
+        })
+
+        {:reply, :ok, %{state | open_docs: Map.put(state.open_docs, uri, 1)}}
+
+      version ->
+        next = version + 1
+
+        send_notification(state, "textDocument/didChange", %{
+          textDocument: %{uri: uri, version: next},
+          contentChanges: [%{text: text}]
+        })
+
+        # The cached diagnostics describe the previous version, so they are
+        # dropped rather than served as if they described this one.
+        {:reply, :ok,
+         %{
+           state
+           | open_docs: Map.put(state.open_docs, uri, next),
+             diagnostics_cache: Map.delete(state.diagnostics_cache, uri)
+         }}
+    end
+  end
+
+  def handle_manager_call({:did_open, _uri, _lang, _text}, _from, state) do
+    {:reply, {:error, {:not_ready, state.status}}, state}
+  end
+
+  def handle_manager_call({:did_close, uri}, _from, %{status: :ready} = state) do
+    if Map.has_key?(state.open_docs, uri) do
+      send_notification(state, "textDocument/didClose", %{textDocument: %{uri: uri}})
+    end
+
+    {:reply, :ok,
+     %{
+       state
+       | open_docs: Map.delete(state.open_docs, uri),
+         diagnostics_cache: Map.delete(state.diagnostics_cache, uri)
+     }}
+  end
+
+  def handle_manager_call({:did_close, _uri}, _from, state) do
+    {:reply, {:error, {:not_ready, state.status}}, state}
+  end
+
+  def handle_manager_call({:await_diagnostics, uri, timeout}, from, %{status: :ready} = state) do
+    case Map.fetch(state.diagnostics_cache, uri) do
+      {:ok, diags} ->
+        {:reply, {:ok, diags}, state}
+
+      :error ->
+        Process.send_after(self(), {:diagnostic_wait_timeout, uri, from}, timeout)
+        waiters = Map.update(state.diagnostic_waiters, uri, [from], &[from | &1])
+        {:noreply, %{state | diagnostic_waiters: waiters}}
+    end
+  end
+
+  def handle_manager_call({:await_diagnostics, _uri, _timeout}, _from, state) do
+    {:reply, {:error, {:not_ready, state.status}}, state}
+  end
+
+  def handle_manager_call({:definition, uri, line, character}, from, %{status: :ready} = state) do
+    request(state, from, :locations, "textDocument/definition", %{
+      textDocument: %{uri: uri},
+      position: %{line: line, character: character}
+    })
+  end
+
+  def handle_manager_call(
+        {:references, uri, line, character, include_declaration},
+        from,
+        %{status: :ready} = state
+      ) do
+    request(state, from, :locations, "textDocument/references", %{
+      textDocument: %{uri: uri},
+      position: %{line: line, character: character},
+      context: %{includeDeclaration: include_declaration}
+    })
+  end
+
+  def handle_manager_call(
+        {:rename, uri, line, character, new_name},
+        from,
+        %{status: :ready} = state
+      ) do
+    request(state, from, :workspace_edit, "textDocument/rename", %{
+      textDocument: %{uri: uri},
+      position: %{line: line, character: character},
+      newName: new_name
+    })
+  end
+
+  def handle_manager_call({:will_rename, old_uri, new_uri}, from, %{status: :ready} = state) do
+    request(state, from, :workspace_edit, "workspace/willRenameFiles", %{
+      files: [%{oldUri: old_uri, newUri: new_uri}]
+    })
+  end
+
+  def handle_manager_call(request, _from, state)
+      when elem(request, 0) in [:definition, :references, :rename, :will_rename] do
+    {:reply, {:error, {:not_ready, state.status}}, state}
+  end
+
   def handle_manager_call(:status, _from, state) do
     info = %{
       status: state.status,
@@ -328,7 +542,29 @@ defmodule Raxol.Agent.LSPContext do
     {:noreply, %{state | port: nil, status: :closed, pending: %{}}}
   end
 
+  # The server never published for this URI in time. Answer the waiter so it
+  # can distinguish "no diagnostics yet" from "no problems found".
+  def handle_manager_info({:diagnostic_wait_timeout, uri, from}, state) do
+    case Map.get(state.diagnostic_waiters, uri) do
+      nil ->
+        {:noreply, state}
+
+      waiters ->
+        if from in waiters do
+          GenServer.reply(from, {:error, :timeout})
+        end
+
+        {:noreply, put_waiters(state, uri, List.delete(waiters, from))}
+    end
+  end
+
   def handle_manager_info(_msg, state), do: {:noreply, state}
+
+  defp put_waiters(state, uri, []),
+    do: %{state | diagnostic_waiters: Map.delete(state.diagnostic_waiters, uri)}
+
+  defp put_waiters(state, uri, waiters),
+    do: %{state | diagnostic_waiters: Map.put(state.diagnostic_waiters, uri, waiters)}
 
   @impl GenServer
   def terminate(_reason, %{port: port}) when is_port(port) do
@@ -434,7 +670,20 @@ defmodule Raxol.Agent.LSPContext do
     uri = Map.get(params, "uri", "")
     raw_diags = Map.get(params, "diagnostics", [])
     parsed = Enum.map(raw_diags, &parse_diagnostic(uri, &1))
-    %{state | diagnostics_cache: Map.put(state.diagnostics_cache, uri, parsed)}
+
+    state
+    |> Map.update!(:diagnostics_cache, &Map.put(&1, uri, parsed))
+    |> wake_diagnostic_waiters(uri, parsed)
+  end
+
+  # A server request (not a notification) must be answered or it blocks:
+  # several send `client/registerCapability` or `workspace/configuration`
+  # during startup and wait. Nothing here needs to act on them, but an
+  # unanswered id leaves the server waiting forever, so they get a null
+  # result rather than silence.
+  defp handle_message(%{"id" => id, "method" => _method}, state) do
+    send_lsp_message(state, %{"jsonrpc" => "2.0", "id" => id, "result" => nil})
+    state
   end
 
   # Ignore other notifications
@@ -469,9 +718,37 @@ defmodule Raxol.Agent.LSPContext do
     state
   end
 
+  defp handle_result(:locations, result, from, state) do
+    GenServer.reply(from, {:ok, parse_locations(result)})
+    state
+  end
+
+  defp handle_result(:workspace_edit, result, from, state) do
+    GenServer.reply(from, {:ok, parse_workspace_edit(result)})
+    state
+  end
+
   defp handle_result(_type, _result, from, state) do
     if from != :init, do: GenServer.reply(from, {:ok, nil})
     state
+  end
+
+  defp request(state, from, type, method, params) do
+    {state, id} = next_id(state)
+    state = register_pending(state, id, from, type)
+    send_request(state, id, method, params)
+    {:noreply, state}
+  end
+
+  defp wake_diagnostic_waiters(state, uri, diagnostics) do
+    case Map.pop(state.diagnostic_waiters, uri) do
+      {nil, _waiters} ->
+        state
+
+      {waiters, remaining} ->
+        Enum.each(waiters, &GenServer.reply(&1, {:ok, diagnostics}))
+        %{state | diagnostic_waiters: remaining}
+    end
   end
 
   # -- Private: Initialize -------------------------------------------------------
@@ -482,13 +759,26 @@ defmodule Raxol.Agent.LSPContext do
     params = %{
       processId: System.pid() |> String.to_integer(),
       rootUri: state.root_uri,
+      # Only what this client actually implements. A capability advertised
+      # but unhandled invites the server to send messages nothing answers.
       capabilities: %{
         textDocument: %{
+          synchronization: %{didSave: false, willSave: false, dynamicRegistration: false},
           publishDiagnostics: %{relatedInformation: true},
           documentSymbol: %{
             hierarchicalDocumentSymbolSupport: true
           },
-          hover: %{contentFormat: ["markdown", "plaintext"]}
+          hover: %{contentFormat: ["markdown", "plaintext"]},
+          definition: %{linkSupport: true},
+          references: %{dynamicRegistration: false},
+          rename: %{dynamicRegistration: false, prepareSupport: false}
+        },
+        workspace: %{
+          workspaceEdit: %{documentChanges: true},
+          # The reason `will_rename/3` can be asked at all: without this the
+          # server has no obligation to answer, and a file move silently
+          # leaves every import behind.
+          fileOperations: %{dynamicRegistration: false, willRename: true}
         }
       },
       clientInfo: %{name: "raxol", version: "1.0.0"}
@@ -572,6 +862,62 @@ defmodule Raxol.Agent.LSPContext do
   end
 
   defp parse_range(_), do: %{start: %{line: 0, character: 0}, end: %{line: 0, character: 0}}
+
+  # `textDocument/definition` answers with a Location, a list of Locations, a
+  # list of LocationLinks, or null, and servers differ on which. All four
+  # collapse to the same list here so a caller never branches on wire shape.
+  defp parse_locations(nil), do: []
+  defp parse_locations(result) when is_list(result), do: Enum.flat_map(result, &parse_location/1)
+  defp parse_locations(result), do: parse_location(result)
+
+  defp parse_location(%{"uri" => uri, "range" => range}),
+    do: [%{uri: uri, range: parse_range(range)}]
+
+  # LocationLink: the target range is the whole symbol, the selection range
+  # is its name. The selection is what a reader wants to be shown.
+  defp parse_location(%{"targetUri" => uri} = link) do
+    range = Map.get(link, "targetSelectionRange") || Map.get(link, "targetRange")
+    [%{uri: uri, range: parse_range(range)}]
+  end
+
+  defp parse_location(_other), do: []
+
+  # A WorkspaceEdit arrives either as `changes` (a uri => edits map) or as
+  # `documentChanges` (an ordered list that may also carry create/rename/delete
+  # operations). Only text edits are returned; a server that answers with file
+  # operations is reporting work this client does not apply, and silently
+  # dropping them would misreport the rename as complete.
+  defp parse_workspace_edit(nil), do: []
+
+  defp parse_workspace_edit(%{"documentChanges" => changes}) when is_list(changes) do
+    Enum.flat_map(changes, fn
+      %{"textDocument" => %{"uri" => uri}, "edits" => edits} ->
+        [%{uri: uri, edits: parse_text_edits(edits)}]
+
+      _operation ->
+        []
+    end)
+  end
+
+  defp parse_workspace_edit(%{"changes" => changes}) when is_map(changes) do
+    changes
+    |> Enum.sort_by(fn {uri, _edits} -> uri end)
+    |> Enum.map(fn {uri, edits} -> %{uri: uri, edits: parse_text_edits(edits)} end)
+  end
+
+  defp parse_workspace_edit(_other), do: []
+
+  defp parse_text_edits(edits) when is_list(edits) do
+    Enum.flat_map(edits, fn
+      %{"range" => range} = edit ->
+        [%{range: parse_range(range), new_text: Map.get(edit, "newText", "")}]
+
+      _other ->
+        []
+    end)
+  end
+
+  defp parse_text_edits(_other), do: []
 
   defp extract_hover_text(contents) when is_binary(contents), do: contents
 

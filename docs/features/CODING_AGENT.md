@@ -197,9 +197,76 @@ sub-agent. Read-only tools run without a prompt; sensitive tools gate through ap
 | `edit_file` | Yes | `old_string` must match once unless `replace_all` |
 | `bash` | Yes | `/bin/sh -c`, combined stdout+stderr, output truncated past 64KB |
 | `task` | (delegating) | Delegates to a fresh read-only sub-agent that cannot write, run bash, or recurse |
+| `lsp` | No | Language-server queries: diagnostics, symbols, definition, references, hover |
+| `lsp_rename` | Yes | Renames a symbol through the language server and writes the edits |
 
 Skills tools (`skills_list`, `skill_view`, `skill_manage`) join the toolset when a
 skills provider is configured.
+
+## Language server
+
+The agent asks a language server about code rather than inferring it from text. `lsp`
+answers what the IDE would: `diagnostics` (whether an edit actually compiles), `symbols`
+(a file's outline), `definition`, `references` (before changing a signature), and `hover`.
+`lsp_rename` renames a symbol everywhere it appears using the server's own understanding
+of scope, and writes the result.
+
+That last one is the difference between a rename and a find-and-replace: it will not touch
+a same-named symbol in another scope, and it follows re-exports.
+
+Positions crossing the tool boundary are **1-based** `line` and `column`, matching the line
+numbers `read_file` prints. LSP itself is 0-based and counts columns in UTF-16 code units;
+both conversions happen inside the tool, so a rename on a line containing an emoji or CJK
+text lands on the right characters instead of one column early.
+
+### Which server
+
+Built-in defaults cover elixir (`elixir-ls`), rust (`rust-analyzer`), typescript
+(`typescript-language-server`), python (`pyright-langserver`), and go (`gopls`), matched on
+file extension. A repo overrides or extends them in `.raxol/lsp.json`:
+
+```json
+{
+  "servers": {
+    "elixir": { "command": "lexical" },
+    "zig": { "command": "zls", "extensions": [".zig"] }
+  }
+}
+```
+
+Overriding a built-in by name keeps its extensions, so pointing `elixir` at a different
+binary does not mean restating the file list. A server whose command is not on `PATH` is
+reported as such rather than silently doing nothing, and a malformed file falls back to the
+defaults rather than blocking boot. `mix raxol.inspect` (or `/inspect`) lists every server
+that would serve the directory and whether it is installed.
+
+### Lifecycle
+
+Servers start on first use, not at boot, and one per language is kept for the session:
+starting `rust-analyzer` per turn would mean indexing the crate per turn. Each is owned by
+a `Raxol.Agent.Lsp.Pool` that monitors the session process, so when the session ends by any
+path (a clean quit, an SSH disconnect, a crash) the pool exits and takes its servers, and
+their subprocesses, with it. No teardown path has to remember them. A server that crashes
+is dropped; the next request for that language starts a fresh one.
+
+### Containment
+
+Paths in go through the same cwd resolution as every other file tool. Results coming back
+are the server's, and a language server indexes whatever it likes: a definition can land in
+a dependency or the standard library. Those are reported as absolute paths in a normal
+session and dropped in a jailed one. A rename's edits are each re-checked against the
+workspace root before anything is written, so a server cannot direct a write outside it.
+
+**A jailed (multi-tenant) session gets no language server at all.** A server is arbitrary
+code execution on the workspace twice over: `.raxol/lsp.json` names the binary, and the
+binary runs project code to answer anything. `rust-analyzer` executes `build.rs`, and
+`elixir-ls` compiles the project. In a jail the workspace is tenant-written, which makes
+this the same refusal hooks and MCP servers already get.
+
+### Not yet
+
+Diagnostics are surfaced when the model asks for them, not automatically after every write.
+Post-write diagnostics are tracked in the parity epic.
 
 Every path expands relative to the working directory: the tool context's `:cwd`
 when the surface sets one (an ACP session root, a tenant jail), else

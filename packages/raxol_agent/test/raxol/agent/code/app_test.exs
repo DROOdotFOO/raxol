@@ -2095,4 +2095,76 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "fs"
     end
   end
+
+  describe "language server wiring" do
+    defp lsp_model(opts) do
+      dir = tmp_dir()
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      App.init(%{
+        options:
+          Keyword.merge(
+            [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir],
+            opts
+          )
+      })
+    end
+
+    test "a normal session owns a pool and passes it to the tool context" do
+      model = lsp_model([])
+
+      assert is_pid(model.lsp_pool)
+      assert Process.alive?(model.lsp_pool)
+    end
+
+    test "a jailed session gets no language server at all" do
+      # A language server runs project code to answer anything, and in a jail
+      # the project is tenant-written. This is the hooks/MCP refusal.
+      model = lsp_model(jail: true)
+
+      assert model.lsp_pool == nil
+      assert model.status_line =~ "lsp disabled (jailed session)"
+    end
+
+    test "the pool dies with the session that owns it" do
+      # `App.init/1` runs in the Lifecycle process, so the pool's owner is
+      # whichever process called init. Build the options here (on_exit only
+      # works in the test process) and call init over there.
+      dir = tmp_dir()
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      options = [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]
+      test = self()
+
+      owner =
+        spawn(fn ->
+          model = App.init(%{options: options})
+          send(test, {:pool, model.lsp_pool})
+          receive do: (:stop -> :ok)
+        end)
+
+      assert_receive {:pool, pool}, 5_000
+      assert is_pid(pool)
+      ref = Process.monitor(pool)
+      send(owner, :stop)
+
+      assert_receive {:DOWN, ^ref, :process, ^pool, _reason}, 5_000
+    end
+
+    test "the LSP tools are in the default toolset" do
+      names =
+        lsp_model([]).actions
+        |> Enum.map(& &1.__action_meta__().name)
+
+      assert "lsp" in names
+      assert "lsp_rename" in names
+    end
+
+    test "an explicit lsp: false starts nothing" do
+      model = lsp_model(lsp: false)
+      assert model.lsp_pool == nil
+    end
+  end
 end
