@@ -96,6 +96,44 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
+  # The hero shows a program's source; the frames beside it are that program's
+  # recorded output. They live in two files, and `gen_landing_frames.exs` asks
+  # in a comment that the pair be kept byte-identical -- which nothing checked,
+  # so the source could drift from the run that produced the frames and the
+  # pane would still pass every test above. It is a comment no longer.
+  @frames_script Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__)
+
+  test "each hero program is byte-identical to the one the frames were recorded from" do
+    script = File.read!(@frames_script)
+
+    landing =
+      File.read!(
+        Path.expand("../../lib/raxol_playground_web/components/landing_components.ex", __DIR__)
+      )
+
+    for {name, module} <- [{"pulse", "Pulse"}, {"halo", "Halo"}] do
+      assert [_, tail] = String.split(landing, "@#{name}_source ~S\"\"\"\n", parts: 2)
+      assert [heredoc, _] = String.split(tail, "\n  \"\"\"", parts: 2)
+
+      shown =
+        heredoc
+        |> String.split("\n")
+        |> Enum.map_join("\n", &String.replace_prefix(&1, "  ", ""))
+        |> String.trim()
+
+      recorded =
+        Regex.run(~r/^defmodule #{module} do\n.*?\nend$/ms, script)
+        |> case do
+          [source] -> String.trim(source)
+          nil -> flunk("#{@frames_script} has no `defmodule #{module}`")
+        end
+
+      assert shown == recorded,
+             "the #{name} pane shows a different program than the one its frames were " <>
+               "recorded from; keep landing_components.ex and gen_landing_frames.exs in step"
+    end
+  end
+
   # The pane's claim is that you can read the whole program, and the pane is a
   # fixed slice of one screen. A longer example does not scroll, it clips --
   # which is how halo grew to 35 lines and started cutting off mid-function
@@ -103,12 +141,35 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # floor on the shortest viewport the page still calls one screen.
   @max_example_lines 30
 
+  # The same argument on the other axis, which had no test: `example_grid/1`
+  # measures `cols` and the pane divides by it, so a wide-but-short example
+  # would run off the right edge behind the hidden scrollbar with nothing
+  # failing. Measured rather than assumed, at the narrowest viewport the page
+  # still calls one screen (the query starts at 768px wide):
+  #
+  #   .hero-demo caps at 62rem, so it is min(992, 768 - 40) = 728 wide
+  #   .hero-panes loses the 1px divider and splits in two   -> 363 per pane
+  #   .hero-pane pads 0.9rem a side                         -> 334.2 of content
+  #   Monaspace Argon advances 0.6201em, so at the 0.5rem type floor
+  #   one character is 4.9609px, and 334.2 / 4.9609 = 67.4
+  #
+  # 67, then. Note the pane's own formula assumes a 0.63 advance, which is
+  # deliberately ~2% conservative; the real advance is what decides whether
+  # glyphs actually fit once the clamp has floored the type, so it is what
+  # this ceiling is derived from. The margin at 67 is 1.8px -- tight on
+  # purpose, because it is the widest the pane can honestly hold.
+  @max_example_cols 67
+
   test "every hero example fits the pane it is displayed in" do
     for name <- LandingComponents.hero_example_names() do
-      %{lines: lines} = LandingComponents.example_grid(name)
+      %{lines: lines, cols: cols} = LandingComponents.example_grid(name)
 
       assert lines <= @max_example_lines,
              "#{name}.ex is #{lines} lines; the pane holds #{@max_example_lines}"
+
+      assert cols <= @max_example_cols,
+             "#{name}.ex is #{cols} columns wide; the pane holds #{@max_example_cols} " <>
+               "at 768px, the narrowest one-screen viewport"
     end
   end
 

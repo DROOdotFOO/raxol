@@ -66,10 +66,10 @@ defmodule Halo do
   def subscribe(_), do: [subscribe_interval(110, :tick)]
 
   def view(m) do
-    column(do: for(y <- 0..12, do: text(strip(m.t, y), fg: :cyan)))
+    column(do: for(y <- 0..12, do: text(scan(m.t, y), fg: :cyan)))
   end
 
-  defp strip(t, y), do: for(x <- 0..67, into: "", do: cell(t, x, y))
+  defp scan(t, y), do: for(x <- 0..67, into: "", do: cell(t, x, y))
 
   defp cell(t, x, 6) when x in 32..35,
     do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 32)
