@@ -1,8 +1,12 @@
 defmodule RaxolPlaygroundWeb.HealthController do
   use RaxolPlaygroundWeb, :controller
 
-  @memory_warn_mb String.to_integer(System.get_env("HEALTH_MEMORY_WARN_MB") || "500")
-  @memory_crit_mb String.to_integer(System.get_env("HEALTH_MEMORY_CRIT_MB") || "900")
+  @memory_warn_mb String.to_integer(
+                    System.get_env("HEALTH_MEMORY_WARN_MB") || "500"
+                  )
+  @memory_crit_mb String.to_integer(
+                    System.get_env("HEALTH_MEMORY_CRIT_MB") || "900"
+                  )
 
   def check(conn, _params) do
     checks = %{
@@ -15,7 +19,8 @@ defmodule RaxolPlaygroundWeb.HealthController do
     # PubSub down breaks LiveView, and critical memory is unsafe. SSH is an
     # optional playground extra and a memory "warning" is tolerable, so neither
     # degrades the service to 503; the JSON still reports the real state.
-    critical? = checks.pubsub in ["down", "error"] or checks.memory == "critical"
+    critical? =
+      checks.pubsub in ["down", "error"] or checks.memory == "critical"
 
     all_ok = Enum.all?(checks, fn {_k, v} -> v in ["ok", "not_configured"] end)
 

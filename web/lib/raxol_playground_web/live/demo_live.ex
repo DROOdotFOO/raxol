@@ -73,7 +73,8 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       # carry a nil component.
       component =
         Catalog.get_component(name) ||
-          raise RaxolPlaygroundWeb.NotFoundError, "no demo named #{inspect(name)}"
+          raise RaxolPlaygroundWeb.NotFoundError,
+                "no demo named #{inspect(name)}"
 
       pos = catalog_position(name)
 

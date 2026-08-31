@@ -72,7 +72,11 @@ defmodule RaxolPlayground.RecordedFrames do
   @hero_artifacts Map.new(surface_paths, fn {name, %{ansi: ansi, mcp: mcp}} ->
                     {name,
                      %{
-                       browser: hero_paths |> Map.fetch!(name) |> List.first() |> File.read!(),
+                       browser:
+                         hero_paths
+                         |> Map.fetch!(name)
+                         |> List.first()
+                         |> File.read!(),
                        ssh: File.read!(ansi),
                        mcp: File.read!(mcp)
                      }}
@@ -82,26 +86,41 @@ defmodule RaxolPlayground.RecordedFrames do
   # breaking, clamping, escaping and colouring are too.
   @hero_surfaces Map.new(@hero_artifacts, fn {name, artifacts} ->
                    panes =
-                     Map.new(artifacts, fn {surface, artifact} ->
-                       lines =
-                         case surface do
-                           :browser -> SurfaceSource.dom_lines(artifact)
-                           :ssh -> SurfaceSource.ansi_lines(artifact)
-                           :mcp -> SurfaceSource.json_lines(artifact)
-                         end
+                     Map.new(artifacts, fn
+                       # SSH is painted, not listed. The other two surfaces
+                       # carry structured text a reader reads line by line, so
+                       # they are broken to a line budget with a marker. This
+                       # one carries a picture, so it keeps its own grid whole
+                       # and the CSS fits the type to it, exactly as the
+                       # terminal pane beside it does.
+                       {:ssh, artifact} ->
+                         rows = SurfaceSource.ansi_rows(artifact)
 
-                       kind = %{browser: :dom, ssh: :ansi, mcp: :json}[surface]
+                         {:ssh,
+                          %{
+                            html: SurfaceSource.ansi_html(rows),
+                            grid: SurfaceSource.ansi_grid(rows)
+                          }}
 
-                       clamped =
-                         lines
-                         |> SurfaceSource.wrap()
-                         |> SurfaceSource.clamp(artifact)
+                       {surface, artifact} ->
+                         lines =
+                           case surface do
+                             :browser -> SurfaceSource.dom_lines(artifact)
+                             :mcp -> SurfaceSource.json_lines(artifact)
+                           end
 
-                       {surface,
-                        %{
-                          html: SurfaceSource.to_html(clamped, kind),
-                          lines: length(clamped)
-                        }}
+                         kind = %{browser: :dom, mcp: :json}[surface]
+
+                         clamped =
+                           lines
+                           |> SurfaceSource.wrap()
+                           |> SurfaceSource.clamp(artifact)
+
+                         {surface,
+                          %{
+                            html: SurfaceSource.to_html(clamped, kind),
+                            lines: length(clamped)
+                          }}
                      end)
 
                    {name, panes}
@@ -147,6 +166,18 @@ defmodule RaxolPlayground.RecordedFrames do
     example |> pane(surface) |> Map.get(:lines, 1)
   end
 
+  @doc """
+  Rows and columns in the decoded SSH pane, in painted characters.
+
+  The same two-axis fit the terminal frames get: the recording's grid is fixed
+  and the pane's is not, so the type follows the frame rather than the frame
+  being cut to a line budget it never fit.
+  """
+  @spec hero_ssh_grid(String.t()) :: %{rows: pos_integer(), cols: pos_integer()}
+  def hero_ssh_grid(example) do
+    example |> pane(:ssh) |> Map.get(:grid, %{rows: 1, cols: 1})
+  end
+
   defp pane(example, surface) do
     @hero_surfaces |> Map.get(example, %{}) |> Map.get(surface, %{})
   end
@@ -158,7 +189,10 @@ defmodule RaxolPlayground.RecordedFrames do
   pane it is given and shrinks to fit a short one, instead of sitting at a
   fixed size with dead space beside it.
   """
-  @spec hero_frame_grid(String.t()) :: %{rows: pos_integer(), cols: pos_integer()}
+  @spec hero_frame_grid(String.t()) :: %{
+          rows: pos_integer(),
+          cols: pos_integer()
+        }
   def hero_frame_grid(example) do
     case hero_frames(example) do
       [frame | _] -> grid(frame)
@@ -180,7 +214,8 @@ defmodule RaxolPlayground.RecordedFrames do
 
     %{
       rows: max(length(lines), 1),
-      cols: lines |> Enum.map(&String.length/1) |> Enum.max(fn -> 1 end) |> max(1)
+      cols:
+        lines |> Enum.map(&String.length/1) |> Enum.max(fn -> 1 end) |> max(1)
     }
   end
 

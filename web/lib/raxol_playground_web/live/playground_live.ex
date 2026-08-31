@@ -115,7 +115,9 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
         {:noreply, socket}
 
       comps ->
-        idx = Enum.find_index(comps, &selected?(socket.assigns.selected, &1)) || 0
+        idx =
+          Enum.find_index(comps, &selected?(socket.assigns.selected, &1)) || 0
+
         step = if dir == "next", do: 1, else: -1
         next = Enum.at(comps, Integer.mod(idx + step, length(comps)))
         handle_event("select_component", %{"component" => next.name}, socket)
@@ -126,7 +128,8 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     search = if query == "", do: nil, else: query
     components = sort_components(Catalog.filter(search: search))
 
-    {:noreply, socket |> assign(:search_query, query) |> assign(:components, components)}
+    {:noreply,
+     socket |> assign(:search_query, query) |> assign(:components, components)}
   end
 
   def handle_event("toggle_code", _params, socket) do
@@ -138,7 +141,8 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   end
 
   def handle_event("toggle_users_panel", _params, socket) do
-    {:noreply, assign(socket, :show_users_panel, !socket.assigns.show_users_panel)}
+    {:noreply,
+     assign(socket, :show_users_panel, !socket.assigns.show_users_panel)}
   end
 
   def handle_event("toggle_sync", _params, socket) do
@@ -146,7 +150,8 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   end
 
   def handle_event("toggle_sidebar", _params, socket) do
-    {:noreply, assign(socket, :sidebar_collapsed, !socket.assigns.sidebar_collapsed)}
+    {:noreply,
+     assign(socket, :sidebar_collapsed, !socket.assigns.sidebar_collapsed)}
   end
 
   def handle_event("select_theme", %{"theme" => theme}, socket) do
@@ -205,10 +210,12 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     do: {:noreply, DemoLifecycle.render_update(socket, html)}
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket),
-    do: {:noreply, assign(socket, :online_users, PlaygroundPresence.list_users())}
+    do:
+      {:noreply, assign(socket, :online_users, PlaygroundPresence.list_users())}
 
   def handle_info(
-        {:playground_event, :component_selected, %{component: name, user_id: from}},
+        {:playground_event, :component_selected,
+         %{component: name, user_id: from}},
         socket
       ) do
     if socket.assigns.sync_enabled and from != socket.assigns.user_id do
@@ -410,7 +417,8 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     # category, dense name-only rows underneath. @components is already
     # category-sorted (sort_components/1), so chunking cannot split a
     # category into duplicate runs and j/k follows the visual order.
-    assigns = assign(assigns, :groups, Enum.chunk_by(assigns.components, & &1.category))
+    assigns =
+      assign(assigns, :groups, Enum.chunk_by(assigns.components, & &1.category))
 
     ~H"""
     <aside class={[

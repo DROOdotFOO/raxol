@@ -13,7 +13,8 @@ defmodule RaxolPlayground.Application do
       [
         RaxolPlaygroundWeb.Telemetry,
         {DNSCluster,
-         query: Application.get_env(:raxol_playground, :dns_cluster_query) || :ignore},
+         query:
+           Application.get_env(:raxol_playground, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: RaxolPlayground.PubSub}
       ] ++
         maybe_raxol_pubsub() ++
@@ -69,19 +70,24 @@ defmodule RaxolPlayground.Application do
             # the public internet on one env var.
             app_module: Raxol.Playground.App,
             port: ssh_port(),
-            host_keys_dir: System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys",
+            host_keys_dir:
+              System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys",
             allow_anonymous: true,
             max_connections: ssh_max_connections(),
             max_per_ip: env_int("RAXOL_SSH_MAX_PER_IP", 10),
             idle_timeout: :timer.seconds(env_int("RAXOL_SSH_IDLE_SECONDS", 300)),
-            max_session_duration: :timer.seconds(env_int("RAXOL_SSH_MAX_SESSION_SECONDS", 3600))
+            max_session_duration:
+              :timer.seconds(env_int("RAXOL_SSH_MAX_SESSION_SECONDS", 3600))
           },
           restart: :temporary
         )
 
       case Supervisor.start_child(sup, spec) do
-        {:ok, _pid} -> :ok
-        {:error, reason} -> IO.puts("[SSH] playground not started: #{inspect(reason)}")
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          IO.puts("[SSH] playground not started: #{inspect(reason)}")
       end
     else
       _ -> :ok
@@ -92,7 +98,8 @@ defmodule RaxolPlayground.Application do
     :exit, reason -> IO.puts("[SSH] playground exit: #{inspect(reason)}")
   end
 
-  defp ssh_port, do: String.to_integer(System.get_env("RAXOL_SSH_PORT") || "2222")
+  defp ssh_port,
+    do: String.to_integer(System.get_env("RAXOL_SSH_PORT") || "2222")
 
   defp ssh_max_connections,
     do: String.to_integer(System.get_env("RAXOL_SSH_MAX_CONNECTIONS") || "50")
