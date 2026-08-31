@@ -2,8 +2,9 @@ defmodule Raxol.Agent.Code.Inspection do
   @moduledoc """
   One snapshot of every config source the coding agent will use in a
   directory: provider resolution (and why), the `.raxol/config.json` repo
-  pin, `.raxol/hooks.json` rules, `.mcp.json` servers, skills roots, and the
-  session store.
+  pin, the `AGENTS.md`/`CLAUDE.md` instruction files that reach the system
+  prompt, `.raxol/hooks.json` rules, `.mcp.json` servers, skills roots, and
+  the session store.
 
   `gather/2` assembles the snapshot as a plain JSON-encodable map; `render/1`
   formats it for humans. Both `mix raxol.inspect` and the TUI's `/inspect`
@@ -17,6 +18,7 @@ defmodule Raxol.Agent.Code.Inspection do
   alias Raxol.Agent.Code.Hooks
   alias Raxol.Agent.Code.McpConfig
   alias Raxol.Agent.Code.ProjectConfig
+  alias Raxol.Agent.Code.ProjectContext
   alias Raxol.Agent.Code.Store
   alias Raxol.Agent.Skills
 
@@ -35,6 +37,7 @@ defmodule Raxol.Agent.Code.Inspection do
       cwd: cwd,
       provider: provider_section(),
       project: ProjectConfig.load(cwd),
+      instructions: instructions_section(cwd),
       hooks: hooks_section(cwd),
       mcp_servers: mcp_section(cwd),
       lsp: lsp_section(cwd),
@@ -51,6 +54,7 @@ defmodule Raxol.Agent.Code.Inspection do
       "",
       render_providers(snapshot.provider),
       render_project(snapshot.project),
+      render_instructions(snapshot.instructions),
       render_hooks(snapshot.hooks),
       render_mcp(snapshot.mcp_servers),
       render_lsp(snapshot.lsp),
@@ -133,6 +137,17 @@ defmodule Raxol.Agent.Code.Inspection do
     end)
   end
 
+  # Content is deliberately dropped: the snapshot names which files reach
+  # the system prompt and how big they are, not what they say.
+  defp instructions_section(cwd) do
+    %{files: files, bytes: bytes} = ProjectContext.load(cwd)
+
+    %{
+      files: Enum.map(files, &Map.take(&1, [:path, :bytes, :truncated?])),
+      bytes: bytes
+    }
+  end
+
   defp skills_section do
     provider = Skills.default_provider()
     root = expand(config(:skills_root) || "~/.raxol/skills")
@@ -211,6 +226,19 @@ defmodule Raxol.Agent.Code.Inspection do
 
     installed = Enum.count(servers, & &1.installed)
     ["lsp: #{installed}/#{length(servers)} servers installed" | lines]
+  end
+
+  defp render_instructions(%{files: []}),
+    do: "instructions (#{Enum.join(ProjectContext.filenames(), ", ")}): none"
+
+  defp render_instructions(%{files: files, bytes: bytes}) do
+    lines =
+      Enum.map(files, fn file ->
+        mark = if file.truncated?, do: " (truncated)", else: ""
+        "  #{file.path}  #{file.bytes}B#{mark}"
+      end)
+
+    ["instructions: #{length(files)} file(s), #{bytes}B" | lines]
   end
 
   defp render_hooks(%{status: :none}), do: "hooks (.raxol/hooks.json): none"

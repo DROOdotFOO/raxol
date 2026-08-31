@@ -14,13 +14,42 @@ defmodule Raxol.Agent.Actions.Task do
   The sub-agent's backend comes from `context[:subagent]` (a map with
   `:executor` / `:backend` / `:backend_opts`), injected by the surface
   running the parent loop, so the sub-agent talks to the same model.
+
+  ## Fanning out
+
+  `prompts` takes a list and runs the delegations concurrently, returning
+  one result per prompt in the order given. Independent investigations
+  finish in the time of the slowest rather than the sum.
+
+  Each delegation is its own supervised, unlinked process, so one that
+  crashes or times out is reported as a failed entry while its siblings
+  and the parent turn carry on. Concurrency is capped at four in flight,
+  and a fan-out of more than eight prompts is refused rather than silently
+  trimmed — every prompt sent is a prompt run, or an error saying it was
+  not.
+
+  ## Spend
+
+  Each delegation meters into the same ledger as the parent, and reservations
+  are atomic, so a fan-out cannot spend past a cap unnoticed. What it can do is
+  overshoot by up to the concurrency cap: turns already in flight when the
+  budget runs out will each finish and be charged. Bounding that overshoot is
+  what `@max_parallel` buys, and it is why the cap is four rather than eight.
   """
 
   alias Raxol.Agent.Actions.Code
   alias Raxol.Agent.Actions.Fs
   alias Raxol.Agent.Stream
 
+  # `Stream` above is the agent's, not the stdlib's, and this module is
+  # itself named `Task`. Name the stdlib one explicitly so neither reads as
+  # the module it is not.
+  alias Task, as: ElixirTask
+
   @default_max_iterations 6
+  @max_parallel 4
+  @max_prompts 8
+  @subagent_timeout_ms 300_000
 
   defmodule Delegate do
     @moduledoc false
@@ -32,13 +61,20 @@ defmodule Raxol.Agent.Actions.Task do
           "(searching, reading, summarizing across many files) that would " <>
           "otherwise clutter the main conversation. The sub-agent has no " <>
           "prior context and cannot write files or run commands: give it " <>
-          "everything it needs in `prompt`.",
+          "everything it needs in the prompt.\n\n" <>
+          "Pass `prompt` for one subtask, or `prompts` (up to 8) to run " <>
+          "several independent investigations at once — prefer the list " <>
+          "whenever the subtasks do not depend on each other, since they " <>
+          "run concurrently and come back in the order given.",
       schema: [
         input: [
           prompt: [
             type: :string,
-            required: true,
-            description: "The self-contained subtask for the sub-agent"
+            description: "One self-contained subtask for the sub-agent"
+          ],
+          prompts: [
+            type: {:list, :string},
+            description: "Several independent subtasks to run concurrently (max 8)"
           ],
           max_iterations: [
             type: :integer,
@@ -46,13 +82,26 @@ defmodule Raxol.Agent.Actions.Task do
           ]
         ],
         output: [
-          result: [type: :string]
+          result: [type: :string],
+          results: [type: :list]
         ]
       ]
 
     @impl true
-    def run(%{prompt: prompt} = params, context) do
-      Raxol.Agent.Actions.Task.run_subagent(prompt, params, context)
+    def run(params, context) do
+      case {Map.get(params, :prompt), Map.get(params, :prompts)} do
+        {prompt, nil} when is_binary(prompt) ->
+          Raxol.Agent.Actions.Task.run_subagent(prompt, params, context)
+
+        {nil, prompts} when is_list(prompts) ->
+          Raxol.Agent.Actions.Task.run_fanout(prompts, params, context)
+
+        {nil, nil} ->
+          {:error, :no_prompt}
+
+        {_prompt, _prompts} ->
+          {:error, :ambiguous_prompt}
+      end
     end
   end
 
@@ -79,6 +128,87 @@ defmodule Raxol.Agent.Actions.Task do
       _other ->
         {:error, :subagent_no_result}
     end
+  end
+
+  @doc false
+  @spec run_fanout([String.t()], map(), map()) :: {:ok, map()} | {:error, term()}
+  def run_fanout(prompts, params, context) do
+    with :ok <- validate_fanout(prompts) do
+      results =
+        prompts
+        |> run_subagents(params, context)
+        |> Enum.zip(prompts)
+        |> Enum.with_index(1)
+        |> Enum.map(&fanout_entry/1)
+
+      {:ok, %{results: results}}
+    end
+  end
+
+  defp validate_fanout([]), do: {:error, :no_prompt}
+
+  defp validate_fanout(prompts) when length(prompts) > @max_prompts,
+    do: {:error, {:too_many_prompts, length(prompts), @max_prompts}}
+
+  defp validate_fanout(prompts) do
+    if Enum.all?(prompts, &(is_binary(&1) and String.trim(&1) != "")),
+      do: :ok,
+      else: {:error, :blank_prompt}
+  end
+
+  # Unlinked and supervised, so a sub-agent that crashes or wedges is one
+  # failed entry rather than a dead parent turn.
+  #
+  # The fallback for "no agent tree" used to be `Task.async_stream/3`, which
+  # LINKS its tasks to the caller: a crashing sub-agent took the parent turn
+  # with it instead of arriving as the failed entry this promises, and
+  # `fanout_entry/1`'s `{:exit, reason}` clause was unreachable on that path.
+  # A supervisor started for the duration costs one process and makes the two
+  # paths behave the same, which is the point of documenting the behaviour at
+  # all.
+  #
+  # Returns a LIST, not a stream: the temporary supervisor has to outlive the
+  # work, so the results are drained before it is stopped.
+  defp run_subagents(prompts, params, context) do
+    run = fn prompt -> run_subagent(prompt, params, context) end
+    opts = [max_concurrency: @max_parallel, timeout: @subagent_timeout_ms, on_timeout: :kill_task]
+
+    case Process.whereis(Raxol.Agent.TaskSupervisor) do
+      nil -> with_temporary_supervisor(prompts, run, opts)
+      sup -> drain(sup, prompts, run, opts)
+    end
+  end
+
+  defp with_temporary_supervisor(prompts, run, opts) do
+    {:ok, sup} = ElixirTask.Supervisor.start_link()
+
+    try do
+      drain(sup, prompts, run, opts)
+    after
+      Supervisor.stop(sup, :normal)
+    end
+  end
+
+  defp drain(sup, prompts, run, opts) do
+    sup
+    |> ElixirTask.Supervisor.async_stream_nolink(prompts, run, opts)
+    |> Enum.to_list()
+  end
+
+  defp fanout_entry({{{:ok, {:ok, %{result: result}}}, prompt}, index}),
+    do: %{index: index, prompt: prompt, status: "ok", result: result}
+
+  defp fanout_entry({{{:ok, {:error, reason}}, prompt}, index}),
+    do: failed(index, prompt, reason)
+
+  defp fanout_entry({{{:exit, :timeout}, prompt}, index}),
+    do: failed(index, prompt, :timeout)
+
+  defp fanout_entry({{{:exit, reason}, prompt}, index}),
+    do: failed(index, prompt, {:subagent_crashed, reason})
+
+  defp failed(index, prompt, reason) do
+    %{index: index, prompt: prompt, status: "error", error: inspect(reason)}
   end
 
   # `Stream.collect/1` keeps only the final content, so every round's usage --

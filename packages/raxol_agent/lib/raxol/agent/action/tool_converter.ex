@@ -331,6 +331,79 @@ defmodule Raxol.Agent.Action.ToolConverter do
         "#{Enum.join(written, ", ")}. The rename is INCOMPLETE — those files " <>
         "carry the new name and the rest do not."
 
+  # Edit failures are the model's to correct, so each says what to do next.
+  # Line numbers and anchor hashes are the model's own arguments echoed back
+  # plus the file's current shape at a line it already addressed: no content
+  # and nothing it could not obtain with the read tools it already holds.
+  def public_error(name, {:anchor_mismatch, line, expected, actual}),
+    do:
+      "[Tool error for #{name}]: line #{line} no longer holds the bytes you " <>
+        "anchored (you sent #{expected}, it is now #{actual}). The file " <>
+        "changed since you read it — read_file it again and redo the edit " <>
+        "against the current anchors."
+
+  def public_error(name, {:anchor_out_of_range, line, total}),
+    do:
+      "[Tool error for #{name}]: line #{line} is past the end of the file " <>
+        "(#{total} lines). Re-read the file and use an anchor it printed."
+
+  def public_error(name, {:range_inverted, from, to}),
+    do:
+      "[Tool error for #{name}]: `from` is line #{from} but `to` is line " <>
+        "#{to}; the range must run forwards."
+
+  def public_error(name, :malformed_anchor),
+    do:
+      "[Tool error for #{name}]: an anchor must be the `LINE:HASH` prefix " <>
+        "read_file printed, copied verbatim (for example `12:a3f1c2`)."
+
+  def public_error(name, :ambiguous_addressing),
+    do:
+      "[Tool error for #{name}]: pass either `from`/`to` anchors or " <>
+        "`old_string`, not both."
+
+  def public_error(name, :no_addressing),
+    do:
+      "[Tool error for #{name}]: nothing addressed. Pass `from` (the " <>
+        "`LINE:HASH` prefix read_file printed) or `old_string`."
+
+  def public_error(name, :no_match),
+    do:
+      "[Tool error for #{name}]: `old_string` was not found in the file. It " <>
+        "must match the file byte for byte, including indentation. Read the " <>
+        "file and edit by anchor instead."
+
+  def public_error(name, {:not_unique, count}),
+    do:
+      "[Tool error for #{name}]: `old_string` matches #{count} places. " <>
+        "Address one of them by anchor, or set `replace_all` to change all " <>
+        "#{count}."
+
+  def public_error(name, :no_change),
+    do: "[Tool error for #{name}]: the replacement is identical to what is already there."
+
+  def public_error(name, :enoent),
+    do: "[Tool error for #{name}]: no such file or directory."
+
+  def public_error(name, {:too_many_prompts, sent, max}),
+    do:
+      "[Tool error for #{name}]: #{sent} prompts is over the limit of " <>
+        "#{max}. Nothing ran — send at most #{max} per call."
+
+  def public_error(name, :ambiguous_prompt),
+    do: "[Tool error for #{name}]: pass either `prompt` or `prompts`, not both."
+
+  def public_error(name, :no_prompt),
+    do: "[Tool error for #{name}]: pass `prompt` for one subtask or `prompts` for several."
+
+  def public_error(name, :blank_prompt),
+    do: "[Tool error for #{name}]: every entry in `prompts` must be a non-empty string."
+
+  def public_error(name, :outside_cwd),
+    do:
+      "[Tool error for #{name}]: that path is outside the working directory " <>
+        "this session is scoped to."
+
   def public_error(name, _other), do: "[Tool error for #{name}]: tool error"
 
   @doc """

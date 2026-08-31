@@ -129,6 +129,82 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
+  describe "workspace instructions" do
+    # A workspace the upward walk stops at, so a stray AGENTS.md in a
+    # parent of the tmp dir cannot reach the assertion.
+    defp workspace_with(files) do
+      dir = tmp_dir()
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, ".git"), "gitdir: elsewhere\n")
+      Enum.each(files, fn {name, body} -> File.write!(Path.join(dir, name), body) end)
+      on_exit(fn -> File.rm_rf(dir) end)
+      dir
+    end
+
+    # Captures the opts the turn is launched with, so the assertion is on
+    # the prompt that would actually be sent.
+    defp capturing_runner(test) do
+      fn _session_id, _prompt, opts, _app ->
+        send(test, {:turn_opts, opts})
+        spawn(fn -> Process.sleep(60_000) end)
+      end
+    end
+
+    defp system_prompt_for(model) do
+      {_model, []} = App.update(key(:enter), %{model | input: "go"})
+      assert_receive {:turn_opts, opts}
+      Keyword.fetch!(opts, :system_prompt)
+    end
+
+    test "AGENTS.md in the working directory reaches the system prompt" do
+      dir = workspace_with(%{"AGENTS.md" => "always run mix format"})
+      model = new_model(cwd: dir, runner: capturing_runner(self()))
+
+      assert system_prompt_for(model) =~ "always run mix format"
+    end
+
+    test "a workspace with no instruction files leaves the prompt alone" do
+      dir = workspace_with(%{})
+      model = new_model(cwd: dir, runner: capturing_runner(self()))
+
+      refute system_prompt_for(model) =~ "Workspace instructions"
+    end
+
+    test "the plan directive stays last, after the workspace instructions" do
+      dir = workspace_with(%{"AGENTS.md" => "always run mix format"})
+      model = new_model(cwd: dir, runner: capturing_runner(self()))
+
+      prompt = system_prompt_for(%{model | plan_mode: true})
+
+      assert prompt =~ "always run mix format"
+      assert prompt =~ "PLAN MODE"
+
+      instructions = :binary.match(prompt, "always run mix format") |> elem(0)
+      plan = :binary.match(prompt, "PLAN MODE") |> elem(0)
+      assert plan > instructions
+    end
+
+    test "discovered files are named in the boot status line" do
+      dir = workspace_with(%{"AGENTS.md" => "rules", "CLAUDE.md" => "more rules"})
+      model = new_model(cwd: dir)
+
+      assert model.status_line =~ "instructions: AGENTS.md, CLAUDE.md"
+    end
+
+    test "a jailed session reads its own workspace but not above it" do
+      root = workspace_with(%{"AGENTS.md" => "host rules"})
+      jail = Path.join(root, "tenant/work")
+      File.mkdir_p!(jail)
+      File.write!(Path.join(jail, "AGENTS.md"), "tenant rules")
+
+      model = new_model(cwd: jail, jail: true, runner: capturing_runner(self()))
+      prompt = system_prompt_for(model)
+
+      assert prompt =~ "tenant rules"
+      refute prompt =~ "host rules"
+    end
+  end
+
   describe "contract-event fold drives the face" do
     test "turn_started -> thinking, tool activity -> working, final -> done" do
       model = %{new_model() | running?: true, face_state: :thinking}

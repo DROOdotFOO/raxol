@@ -328,8 +328,21 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
     # get independent roots and each tool call is contained under its own cwd.
     # A blank cwd leaves the server-wide default in place. Map pattern, not a
     # struct pattern, per the cross-package convention.
-    defp session_turn_opts(base_opts, %{cwd: cwd})
-         when is_binary(cwd) and cwd != "" do
+    defp session_turn_opts(base_opts, req) do
+      cwd = session_cwd(req)
+
+      base_opts
+      |> put_session_cwd(cwd)
+      |> put_workspace_instructions(cwd)
+    end
+
+    # A blank or absent cwd leaves the server-wide default in place.
+    defp session_cwd(%{cwd: cwd}) when is_binary(cwd) and cwd != "", do: cwd
+    defp session_cwd(_req), do: nil
+
+    defp put_session_cwd(base_opts, nil), do: base_opts
+
+    defp put_session_cwd(base_opts, cwd) do
       context =
         base_opts
         |> Keyword.get(:context)
@@ -339,7 +352,24 @@ if Code.ensure_loaded?(Raxol.AgentClientProtocol.Agent) do
       Keyword.put(base_opts, :context, context)
     end
 
-    defp session_turn_opts(base_opts, _req), do: base_opts
+    # The editor names the session root, so `AGENTS.md` resolves per session
+    # rather than once at boot. A `:system_prompt` source spec is left alone:
+    # `TurnRunner` resolves those itself, and there is no text to append to.
+    defp put_workspace_instructions(base_opts, cwd) do
+      root = cwd || Raxol.Agent.Actions.Fs.working_dir()
+
+      case Keyword.get(base_opts, :system_prompt) do
+        system when is_binary(system) ->
+          Keyword.put(
+            base_opts,
+            :system_prompt,
+            Raxol.Agent.Code.ProjectContext.augment(system, root)
+          )
+
+        _other ->
+          base_opts
+      end
+    end
 
     defp ensure_context_map(context) when is_map(context), do: context
     defp ensure_context_map(_other), do: %{}

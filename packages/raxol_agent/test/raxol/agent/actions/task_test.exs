@@ -126,6 +126,165 @@ defmodule Raxol.Agent.Actions.TaskTest do
              ToolConverter.dispatch_tool_call(call, Task.all(), subagent_ctx("ok"))
   end
 
+  describe "fan-out" do
+    # A backend that blocks until released, so concurrency is observable
+    # rather than inferred from wall-clock timing.
+    defmodule GateBackend do
+      @behaviour Raxol.Agent.AIBackend
+
+      @impl true
+      def complete(_messages, opts) do
+        test = Keyword.fetch!(opts, :test)
+        send(test, {:entered, self()})
+
+        receive do
+          :release -> {:ok, %{content: "done", usage: %{}, metadata: %{}}}
+        after
+          5_000 -> {:error, :never_released}
+        end
+      end
+
+      @impl true
+      def stream(messages, opts) do
+        {:ok, response} = complete(messages, opts)
+        {:ok, [{:chunk, response.content}, {:done, response}]}
+      end
+
+      @impl true
+      def available?, do: true
+      @impl true
+      def name, do: "GateBackend"
+      @impl true
+      def capabilities, do: [:completion, :streaming, :tool_use]
+    end
+
+    defmodule CrashBackend do
+      @behaviour Raxol.Agent.AIBackend
+
+      @impl true
+      def complete(_messages, opts) do
+        if Keyword.fetch!(opts, :crash?) do
+          exit(:boom)
+        else
+          {:ok, %{content: "survived", usage: %{}, metadata: %{}}}
+        end
+      end
+
+      @impl true
+      def stream(messages, opts) do
+        {:ok, response} = complete(messages, opts)
+        {:ok, [{:chunk, response.content}, {:done, response}]}
+      end
+
+      @impl true
+      def available?, do: true
+      @impl true
+      def name, do: "CrashBackend"
+      @impl true
+      def capabilities, do: [:completion, :streaming, :tool_use]
+    end
+
+    test "runs every prompt and returns results in the order given" do
+      assert {:ok, %{results: results}} =
+               Task.Delegate.run(
+                 %{prompts: ["one", "two", "three"]},
+                 subagent_ctx("sub result")
+               )
+
+      assert length(results) == 3
+      assert Enum.map(results, & &1.index) == [1, 2, 3]
+      assert Enum.map(results, & &1.prompt) == ["one", "two", "three"]
+      assert Enum.all?(results, &(&1.status == "ok"))
+      assert Enum.all?(results, &(&1.result == "sub result"))
+    end
+
+    test "delegations run concurrently, not one after another" do
+      test = self()
+
+      spawn_link(fn ->
+        send(
+          test,
+          {:fanout,
+           Task.Delegate.run(
+             %{prompts: ["a", "b", "c"]},
+             %{subagent: %{backend: GateBackend, backend_opts: [test: test]}}
+           )}
+        )
+      end)
+
+      # All three enter the backend before any is released: they are in
+      # flight together, which a sequential loop could not produce.
+      entered =
+        for _ <- 1..3 do
+          assert_receive {:entered, pid}, 5_000
+          pid
+        end
+
+      assert length(Enum.uniq(entered)) == 3
+      Enum.each(entered, &send(&1, :release))
+
+      assert_receive {:fanout, {:ok, %{results: results}}}, 5_000
+      assert Enum.all?(results, &(&1.status == "ok"))
+    end
+
+    test "one crashing delegation does not take down its siblings" do
+      # The supervised, unlinked path is the one under test.
+      start_supervised!({Elixir.Task.Supervisor, name: Raxol.Agent.TaskSupervisor})
+
+      assert {:ok, %{results: [first, second]}} =
+               Task.Delegate.run(
+                 %{prompts: ["crash", "survive"]},
+                 %{subagent: %{backend: CrashBackend, backend_opts: [crash?: false]}}
+               )
+
+      assert first.status == "ok"
+      assert second.status == "ok"
+    end
+
+    test "a crashing delegation is reported as a failed entry" do
+      start_supervised!({Elixir.Task.Supervisor, name: Raxol.Agent.TaskSupervisor})
+
+      assert {:ok, %{results: [entry]}} =
+               Task.Delegate.run(
+                 %{prompts: ["crash"]},
+                 %{subagent: %{backend: CrashBackend, backend_opts: [crash?: true]}}
+               )
+
+      assert entry.status == "error"
+      assert entry.index == 1
+      assert entry.prompt == "crash"
+    end
+
+    test "refuses more prompts than the cap rather than trimming" do
+      prompts = Enum.map(1..9, &"task #{&1}")
+
+      assert {:error, {:too_many_prompts, 9, 8}} =
+               Task.Delegate.run(%{prompts: prompts}, subagent_ctx("x"))
+    end
+
+    test "refuses a blank entry" do
+      assert {:error, :blank_prompt} =
+               Task.Delegate.run(%{prompts: ["fine", "  "]}, subagent_ctx("x"))
+    end
+
+    test "refuses an empty list" do
+      assert {:error, :no_prompt} =
+               Task.Delegate.run(%{prompts: []}, subagent_ctx("x"))
+    end
+
+    test "refuses both prompt and prompts" do
+      assert {:error, :ambiguous_prompt} =
+               Task.Delegate.run(
+                 %{prompt: "one", prompts: ["two"]},
+                 subagent_ctx("x")
+               )
+    end
+
+    test "refuses neither prompt nor prompts" do
+      assert {:error, :no_prompt} = Task.Delegate.run(%{}, subagent_ctx("x"))
+    end
+  end
+
   test "task is registered under the read-only-safe name" do
     assert [Task.Delegate] = Task.all()
     assert Task.Delegate.__action_meta__().name == "task"

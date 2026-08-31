@@ -66,9 +66,13 @@ defmodule Raxol.Agent.Actions.Fs do
       name: "read_file",
       description:
         "Read a text file (relative to the current working directory). " <>
+          "Each line comes back prefixed `LINE:HASH|`, which is the anchor " <>
+          "`edit_file` takes in `from`/`to` — copy the prefix verbatim to " <>
+          "address an edit, and never include it in content you write back. " <>
           "Optionally read a line range with `offset` (1-based start line) " <>
-          "and `limit` (line count). Returns at most 256KB; `truncated` " <>
-          "flags when the content was longer.",
+          "and `limit` (line count). Pass `anchors: false` for the raw bytes " <>
+          "when you need the file's exact content. Returns at most 256KB; " <>
+          "`truncated` flags when the content was longer.",
       schema: [
         input: [
           path: [type: :string, required: true, description: "File to read"],
@@ -79,16 +83,25 @@ defmodule Raxol.Agent.Actions.Fs do
           limit: [
             type: :integer,
             description: "Number of lines to read from `offset`"
+          ],
+          anchors: [
+            type: :boolean,
+            default: true,
+            description: "Prefix each line with its `LINE:HASH|` edit anchor (default true)"
           ]
         ],
         output: [
           path: [type: :string],
           content: [type: :string],
+          anchored: [type: :boolean],
           truncated: [type: :boolean],
           offset: [type: :integer],
-          line_count: [type: :integer]
+          line_count: [type: :integer],
+          total_lines: [type: :integer]
         ]
       ]
+
+    alias Raxol.Agent.Actions.Anchor
 
     @max_bytes 262_144
 
@@ -105,42 +118,102 @@ defmodule Raxol.Agent.Actions.Fs do
 
       with {:ok, abs} <- resolver.(path),
            {:ok, content} <- File.read(abs) do
-        {:ok, slice(path, content, Map.get(params, :offset), Map.get(params, :limit))}
+        {:ok,
+         slice(
+           path,
+           content,
+           Map.get(params, :offset),
+           Map.get(params, :limit),
+           Map.get(params, :anchors, true) != false
+         )}
       else
         {:error, reason} -> {:error, reason}
       end
     end
 
-    # Whole-file read: cap at @max_bytes.
-    defp slice(path, content, nil, nil) do
-      truncated = byte_size(content) > @max_bytes
+    # 1-based `offset`, optional `limit` lines; a blank `limit` reads to end
+    # of file. The byte cap is applied per whole line rather than to the
+    # joined text: an anchor only addresses a line that arrived intact, and
+    # a mid-codepoint cut would put invalid UTF-8 into the prompt.
+    defp slice(path, content, offset, limit, anchors?) do
+      {all_lines, trailing_newline?} = Anchor.split(content)
+      start = max(offset || 1, 1)
+
+      window =
+        all_lines
+        |> Enum.drop(start - 1)
+        |> take_limit(limit)
+
+      {kept, clamped?} = cap(window, start, anchors?)
+      truncated? = clamped? or length(kept) < length(window)
+
+      # A clamped line cannot carry an honest anchor. Hashing the clamped text
+      # gives one that never verifies, so `edit_file` would answer
+      # `anchor_mismatch` -- "the file changed since you read it" -- about a
+      # file that did not change. Hashing the FULL line is worse: it verifies,
+      # and the range edit then replaces bytes the model never saw. So an
+      # oversized line degrades to the unanchored form, which is what it
+      # honestly is: content that cannot be addressed by anchor. `anchored`
+      # already carries that, and re-reading with a narrower window restores it.
+      anchored? = anchors? and not clamped?
 
       %{
         path: path,
-        content: binary_part(content, 0, min(byte_size(content), @max_bytes)),
-        truncated: truncated,
-        offset: 1,
-        line_count: content |> String.split("\n") |> length()
+        content: text(kept, start, anchored?, trailing_newline? and not truncated?),
+        anchored: anchored?,
+        truncated: truncated?,
+        offset: start,
+        line_count: length(kept),
+        total_lines: length(all_lines)
       }
     end
 
-    # Line-range read: 1-based `offset`, optional `limit` lines. A blank
-    # `limit` reads to end of file.
-    defp slice(path, content, offset, limit) do
-      start = max(offset || 1, 1)
-      lines = String.split(content, "\n")
-      dropped = Enum.drop(lines, start - 1)
-      taken = if is_integer(limit), do: Enum.take(dropped, limit), else: dropped
-      text = Enum.join(taken, "\n")
-      truncated = byte_size(text) > @max_bytes
+    defp take_limit(lines, limit) when is_integer(limit), do: Enum.take(lines, limit)
+    defp take_limit(lines, _limit), do: lines
 
-      %{
-        path: path,
-        content: binary_part(text, 0, min(byte_size(text), @max_bytes)),
-        truncated: truncated,
-        offset: start,
-        line_count: length(taken)
-      }
+    defp text(lines, start, true, _trailing?), do: Anchor.render(lines, start)
+    defp text(lines, _start, false, trailing?), do: Anchor.join(lines, trailing?)
+
+    # Keep whole lines while they fit. A first line that alone exceeds the
+    # cap is kept and clamped, so an oversized line still returns something.
+    # Returns whether that clamp happened, since a clamped single line is
+    # truncated content even though no line was dropped.
+    defp cap(lines, start, anchors?) do
+      lines
+      |> Enum.with_index(start)
+      |> Enum.reduce_while({[], 0, false}, fn {line, number}, {kept, used, clamped?} ->
+        cost = line_cost(line, number, anchors?)
+
+        cond do
+          kept == [] and cost > @max_bytes -> {:halt, {[clamp(line)], used, true}}
+          used + cost > @max_bytes -> {:halt, {kept, used, clamped?}}
+          true -> {:cont, {[line | kept], used + cost, clamped?}}
+        end
+      end)
+      |> then(fn {kept, _used, clamped?} -> {Enum.reverse(kept), clamped?} end)
+    end
+
+    # The hash length is fixed, so this counts it rather than computing one.
+    # Hashing here meant every line was SHA-256'd twice on the way out -- once
+    # to size it and once to render it -- which on a large file is the whole
+    # cost of the read, paid twice, for a number that is a constant.
+    defp line_cost(line, number, true),
+      do: byte_size(line) + Anchor.hash_length() + byte_size("#{number}") + 2
+
+    defp line_cost(line, _number, false), do: byte_size(line) + 1
+
+    # `min/2`, because the branch that calls this fires on the ANCHORED cost
+    # (the line plus its `LINE:HASH|` prefix) while the cut is against the raw
+    # bytes. A line a few bytes under the cap can therefore cost more than it,
+    # and asking `binary_part/3` for more bytes than the binary holds raises --
+    # so `read_file` crashed rather than truncating on a file whose first
+    # windowed line landed in that band.
+    defp clamp(line) do
+      line
+      |> binary_part(0, min(@max_bytes, byte_size(line)))
+      |> String.chunk(:valid)
+      |> List.first()
+      |> Kernel.||("")
     end
   end
 

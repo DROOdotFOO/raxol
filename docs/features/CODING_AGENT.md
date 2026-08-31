@@ -191,12 +191,12 @@ sub-agent. Read-only tools run without a prompt; sensitive tools gate through ap
 
 | Tool | Sensitive? | Notes |
 |------|:---:|-------|
-| `list_dir`, `read_file`, `file_stat` | No | `read_file` supports `offset`/`limit` line ranges, caps at 256KB |
+| `list_dir`, `read_file`, `file_stat` | No | `read_file` anchors every line, supports `offset`/`limit` line ranges, caps at 256KB |
 | `grep`, `glob` | No | `grep` uses ripgrep when available, else a bounded pure-Elixir walk; `glob` is cwd-relative |
 | `write_file` | Yes | Refuses to clobber unless `overwrite: true`; returns a diff-shaped result |
-| `edit_file` | Yes | `old_string` must match once unless `replace_all` |
+| `edit_file` | Yes | Addresses lines by anchor (`from`/`to`), or `old_string` as a fallback |
 | `bash` | Yes | `/bin/sh -c`, combined stdout+stderr, output truncated past 64KB |
-| `task` | (delegating) | Delegates to a fresh read-only sub-agent that cannot write, run bash, or recurse |
+| `task` | (delegating) | Delegates to fresh read-only sub-agents that cannot write, run bash, or recurse; `prompts` fans out concurrently |
 | `lsp` | No | Language-server queries: diagnostics, symbols, definition, references, hover |
 | `lsp_rename` | Yes | Renames a symbol through the language server and writes the edits |
 
@@ -281,6 +281,73 @@ this the same refusal hooks and MCP servers already get.
 
 Diagnostics are surfaced when the model asks for them, not automatically after every write.
 Post-write diagnostics are tracked in the parity epic.
+
+### Delegating to sub-agents
+
+`task` runs a fresh sub-agent with a clean context and a read-only toolset. It inherits the
+parent's model and its jail root, and nothing else: no authorizer, no hooks, no write or
+shell tools, and not `task` itself, so a delegation can neither mutate the workspace nor
+recurse without bound.
+
+`prompt` delegates one subtask. `prompts` takes a list and runs them concurrently, up to
+four in flight, returning one entry per prompt in the order given:
+
+```json
+{"prompts": ["find every caller of resolve/2",
+             "list the modules that define an Action",
+             "summarise the journal format"]}
+```
+
+Independent investigations then finish in the time of the slowest rather than the sum.
+More than eight prompts is refused outright rather than trimmed, so a fan-out either runs
+every prompt it was given or says it ran none.
+
+Each delegation is an unlinked process under `Raxol.Agent.TaskSupervisor`, so one that
+crashes or exceeds its five-minute ceiling comes back as a failed entry beside its
+siblings' results, and the parent turn continues. Every sub-agent round reports its usage
+to the parent's ledger as it lands, so a fan-out cannot outrun a spending cap.
+
+### Editing by anchor
+
+`read_file` prefixes every line it returns with `LINE:HASH|`, where `HASH` is the first
+six hex digits of the SHA-256 of that line's exact bytes:
+
+```
+1:4d1a7c|defmodule Hello do
+2:106b08|  :world
+3:9f2ee1|end
+```
+
+`edit_file` takes those prefixes back in `from` and `to` and replaces the range with
+`new_string`:
+
+```json
+{"path": "hello.ex", "from": "2:106b08", "new_string": "  :earth"}
+```
+
+`to` is optional and defaults to `from`, so a single-line edit needs one anchor. An empty
+`new_string` deletes the range. A trailing newline in `new_string` is ignored, since the
+replacement is spliced as lines; whether the file ends with a newline is preserved from
+the original either way.
+
+Two things follow from this. The model never retypes the text it is replacing, which is
+where exact-match edit formats lose turns and tokens to whitespace and indentation drift.
+And the hash is proof the model is pointing at bytes it actually read: if the file changed
+underneath, the anchor no longer matches and the edit is refused rather than applied to
+content the model never saw.
+
+An anchor pair verifies both endpoints of the range exactly. Lines strictly between them
+are not hashed, because an anchor has to be reproducible from what the model read and it cannot
+hash a range itself. Endpoint drift catches the realistic case; a change confined to the
+interior of an addressed range does not.
+
+`old_string` remains as a fallback for callers that have not read the file with anchors.
+It must still match byte for byte, and be unique unless `replace_all` is set.
+
+Every failure mode answers with what to do next rather than a bare error. A mismatched
+anchor reports the line, the hash that was sent, and the hash now there, so the model can
+re-read and retry in one turn instead of guessing. `anchors: false` on `read_file` returns
+the raw bytes for when the exact content is what is wanted.
 
 Every path expands relative to the working directory: the tool context's `:cwd`
 when the surface sets one (an ACP session root, a tenant jail), else
@@ -402,6 +469,48 @@ and the eyes carry state. `--ascii` swaps the gills for `=`.
 
 Contract events drive the face: a started turn is `:thinking`, a running tool is
 `:working`, a finished turn is `:done`, and a failure is `:error`.
+
+## Workspace instructions
+
+The agent reads `AGENTS.md` and `CLAUDE.md` and appends them to its system prompt, so a
+repository's own conventions reach the model without being retyped every session.
+
+Discovery walks up from the working directory, one `AGENTS.md` then one `CLAUDE.md` per
+directory, and stops at the directory holding a `.git` (that directory is included). A
+directory with no `.git` above it contributes only itself: climbing to the filesystem root
+would read files that were never associated with this workspace. A user-global
+`~/.raxol/AGENTS.md` is read ahead of everything.
+
+Files are ordered outermost first, so the one nearest the working directory is read last
+and the most specific instructions win. The plan-mode directive is appended after all of
+them, so a repository file cannot talk the model out of read-only mode.
+
+Content is capped at 32KB per file and 64KB in total; a file over its share is truncated
+and marked as truncated in the prompt. Only regular files of valid UTF-8 text are read.
+
+`/inspect` (and `mix raxol.inspect`) lists which files were found and how large they are,
+never their content. The boot status line names them, e.g. `instructions: AGENTS.md`.
+
+The three surfaces differ where their working directory does:
+
+- **TUI**: discovers at boot from the session `cwd`.
+- **ACP**: discovers per session from the root the editor names in `session/new`, so two
+  sessions on one server get their own instructions.
+- **Headless (`raxol -p`)**: discovers from the process working directory, except under
+  `RAXOL_PROFILE=benchmark`, which withholds them for the reason it withholds skills: an
+  attempt must depend on the task, not on what the checkout happens to carry. The profile's
+  announce line reports `"instructions":"off"`.
+
+A jailed (multi-tenant) session still reads its own workspace, since these files are read
+rather than executed, unlike hooks and MCP servers. What it does not get is anything above
+the jail: the walk is bounded to it, and the host's user-global file is skipped.
+
+It also does not get operator authority. In a jail the workspace is tenant-written, which
+is exactly why hooks and MCP servers are refused there, so the same bytes are introduced to
+the model as the workspace's request about coding conventions rather than as instructions
+from the operator, and it is told to ignore anything in them claiming to change its tools,
+permissions, or limits. Outside a jail the workspace is the operator's own and the files
+are presented as such.
 
 ## Hooks and MCP config
 

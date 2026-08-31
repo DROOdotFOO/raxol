@@ -317,8 +317,10 @@ defmodule Raxol.Agent.Harness.ToolExecutorTest do
 
       refute :approval_requested in types(events)
 
-      assert {:tool_result, %{result: %{content: "inside"}}} =
+      assert {:tool_result, %{result: %{content: content}}} =
                Enum.find(events, &match?({:tool_result, _}, &1))
+
+      assert content =~ "inside"
     end
   end
 

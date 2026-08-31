@@ -107,16 +107,32 @@ defmodule Raxol.Agent.Actions.Code do
       name: "edit_file",
       sensitive: true,
       description:
-        "Replace `old_string` with `new_string` in a file (relative to " <>
-          "the current working directory). `old_string` must match exactly " <>
-          "once unless `replace_all` is true. Returns the before/after diff.",
+        "Replace part of a file (relative to the current working " <>
+          "directory). Returns the before/after diff.\n\n" <>
+          "PREFERRED — address lines by their anchor: pass `from` (and `to` " <>
+          "for a multi-line range) exactly as `read_file` printed the " <>
+          "`LINE:HASH` prefix, plus `new_string` as the replacement text. " <>
+          "An empty `new_string` deletes the range. You do not retype the " <>
+          "text being replaced, and a hash that no longer matches means the " <>
+          "file changed since you read it, so the edit is refused instead of " <>
+          "corrupting it — re-read and retry.\n\n" <>
+          "FALLBACK — pass `old_string` (must match exactly, and be unique " <>
+          "unless `replace_all` is true) with `new_string`. Use this only " <>
+          "when you have not read the file with anchors.",
       schema: [
         input: [
           path: [type: :string, required: true, description: "File to edit"],
+          from: [
+            type: :string,
+            description: "First line of the range, as the `LINE:HASH` prefix read_file printed"
+          ],
+          to: [
+            type: :string,
+            description: "Last line of the range as `LINE:HASH`; omit for a single-line edit"
+          ],
           old_string: [
             type: :string,
-            required: true,
-            description: "Exact text to replace (must be unique in the file)"
+            description: "Fallback: exact text to replace (must be unique in the file)"
           ],
           new_string: [
             type: :string,
@@ -126,7 +142,7 @@ defmodule Raxol.Agent.Actions.Code do
           replace_all: [
             type: :boolean,
             default: false,
-            description: "Replace every occurrence instead of requiring one"
+            description: "With `old_string`: replace every occurrence instead of requiring one"
           ]
         ],
         output: [
@@ -138,16 +154,50 @@ defmodule Raxol.Agent.Actions.Code do
         ]
       ]
 
+    alias Raxol.Agent.Actions.Anchor
+
     @impl true
-    def run(
-          %{path: path, old_string: old_string, new_string: new_string} = params,
-          context
-        ) do
+    def run(%{path: path, new_string: new_string} = params, context) do
+      with {:ok, mode} <- addressing(params),
+           {:ok, abs} <- Fs.resolve(path, context),
+           {:ok, content} <- File.read(abs) do
+        edit(mode, abs, path, content, new_string, params)
+      end
+    end
+
+    # Exactly one addressing mode: a call carrying both is ambiguous about
+    # which one bounds the edit, and guessing picks the model's mistake.
+    defp addressing(params) do
+      case {anchored?(params), string?(params)} do
+        {true, true} -> {:error, :ambiguous_addressing}
+        {true, false} -> {:ok, :anchored}
+        {false, true} -> {:ok, :string}
+        {false, false} -> {:error, :no_addressing}
+      end
+    end
+
+    defp anchored?(params), do: present?(Map.get(params, :from))
+    defp string?(params), do: is_binary(Map.get(params, :old_string))
+
+    defp present?(value), do: is_binary(value) and value != ""
+
+    defp edit(:anchored, abs, path, content, new_string, params) do
+      {lines, trailing_newline?} = Anchor.split(content)
+
+      with {:ok, from} <- Anchor.parse(Map.get(params, :from)),
+           {:ok, to} <- resolve_to(params, from),
+           :ok <- ordered(from, to),
+           :ok <- Anchor.verify(lines, from),
+           :ok <- Anchor.verify(lines, to) do
+        replace_range(abs, path, content, lines, trailing_newline?, from, to, new_string)
+      end
+    end
+
+    defp edit(:string, abs, path, content, new_string, params) do
+      old_string = Map.get(params, :old_string)
       replace_all = Map.get(params, :replace_all, false)
 
       with :ok <- reject_noop(old_string, new_string),
-           {:ok, abs} <- Fs.resolve(path, context),
-           {:ok, content} <- File.read(abs),
            {:ok, count} <- match_count(content, old_string, replace_all) do
         Raxol.Agent.Actions.Code.write_edit(
           abs,
@@ -159,13 +209,46 @@ defmodule Raxol.Agent.Actions.Code do
       end
     end
 
+    # -- anchored ------------------------------------------------------------
+
+    defp resolve_to(%{to: to}, _from) when is_binary(to) and to != "",
+      do: Anchor.parse(to)
+
+    defp resolve_to(_params, from), do: {:ok, from}
+
+    defp ordered({from, _}, {to, _}) when from <= to, do: :ok
+    defp ordered({from, _}, {to, _}), do: {:error, {:range_inverted, from, to}}
+
+    defp replace_range(abs, path, content, lines, trailing?, {from, _}, {to, _}, new_string) do
+      replaced = Enum.slice(lines, (from - 1)..(to - 1))
+      {new_lines, _trailing?} = Anchor.split(new_string)
+
+      if replaced == new_lines do
+        {:error, :no_change}
+      else
+        updated =
+          Enum.slice(lines, 0, from - 1) ++
+            new_lines ++ Enum.drop(lines, to)
+
+        Raxol.Agent.Actions.Code.write_content(
+          abs,
+          path,
+          content,
+          Anchor.join(updated, trailing?),
+          to - from + 1
+        )
+      end
+    end
+
+    # -- string --------------------------------------------------------------
+
     defp reject_noop(same, same), do: {:error, :no_change}
     defp reject_noop(_old, _new), do: :ok
 
     defp match_count(content, old_string, replace_all) do
       case {count_occurrences(content, old_string), replace_all} do
         {0, _} -> {:error, :no_match}
-        {n, false} when n > 1 -> {:error, :not_unique}
+        {n, false} when n > 1 -> {:error, {:not_unique, n}}
         {n, _} -> {:ok, n}
       end
     end
@@ -396,6 +479,26 @@ defmodule Raxol.Agent.Actions.Code do
 
     case File.write(abs, updated) do
       :ok -> {:ok, diff_result(path, content, updated, %{replacements: count})}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Write an already-composed edit image, reporting the same diff shape.
+
+  The anchored edit path splices lines rather than substituting a string,
+  so it arrives with the final content instead of a replacement triple.
+  """
+  @spec write_content(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          non_neg_integer()
+        ) :: {:ok, map()} | {:error, term()}
+  def write_content(abs, path, content, updated, replacements) do
+    case File.write(abs, updated) do
+      :ok -> {:ok, diff_result(path, content, updated, %{replacements: replacements})}
       {:error, reason} -> {:error, reason}
     end
   end
