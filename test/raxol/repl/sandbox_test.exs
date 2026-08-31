@@ -236,4 +236,66 @@ defmodule Raxol.REPL.SandboxTest do
       assert :ok = Sandbox.check(~s|Jason.encode!(%{a: 1})|, :strict)
     end
   end
+
+  # The denials above are about atoms the EVALUATION could mint. The checker
+  # resolved aliases with `Module.concat/1`, which mints one per alias in the
+  # submitted source -- before evaluation, so it happened whether or not the
+  # code was allowed to run, and neither the heap cap nor the timeout undoes
+  # one. `ReplDemo` is served anonymously over SSH.
+  describe "checking untrusted source mints no atoms of its own" do
+    # The tokenizer mints the bare alias (`Foo` -> `:Foo`) just to read the
+    # source, which is inherent to parsing Elixir and is not what these cover.
+    # What the checker added on top was a SECOND atom per alias, the
+    # `Elixir.`-prefixed module name, via `Module.concat/1`. That is the half
+    # under test, so parsing happens first and the count starts after it.
+    for level <- [:standard, :strict] do
+      test "at #{level}" do
+        source =
+          1..400
+          |> Enum.map_join("\n", fn i ->
+            "NoSuchMod#{unquote(level)}#{i}.f()"
+          end)
+
+        {:ok, _ast} = Code.string_to_quoted(source)
+
+        before = :erlang.system_info(:atom_count)
+        _ = Sandbox.check(source, unquote(level))
+        grown = :erlang.system_info(:atom_count) - before
+
+        assert grown == 0,
+               "checking #{unquote(level)} source minted #{grown} atoms " <>
+                 "beyond the ones parsing it already required"
+      end
+
+      test "at #{level}, the module name itself never becomes an atom" do
+        name = "NeverAnAtom#{unquote(level)}"
+        _ = Sandbox.check("#{name}.run()", unquote(level))
+
+        assert_raise ArgumentError, fn ->
+          :erlang.binary_to_existing_atom("Elixir.#{name}", :utf8)
+        end
+      end
+    end
+
+    test "an unknown module is still refused at strict, by name" do
+      assert {:error, violations} =
+               Sandbox.check("Definitely.Not.Loaded.run()", :strict)
+
+      assert Enum.any?(violations, &String.contains?(&1, "not in whitelist"))
+    end
+
+    test "a whitelisted module still resolves at strict" do
+      assert :ok = Sandbox.check("Enum.map([1], & &1)", :strict)
+    end
+
+    test "a denied module still resolves at standard" do
+      assert {:error, violations} = Sandbox.check(~s|System.cmd("ls", [])|)
+      assert Enum.any?(violations, &String.contains?(&1, "System.cmd"))
+    end
+
+    test "an unknown module is allowed at standard, as before" do
+      # It is not on the denylist, and there is no such module to dispatch to.
+      assert :ok = Sandbox.check("Definitely.Not.Loaded.run()", :standard)
+    end
+  end
 end

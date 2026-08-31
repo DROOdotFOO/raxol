@@ -435,10 +435,21 @@ defmodule Raxol.Agent.Actions.Code do
   configured `Raxol.Agent.Sandbox.Shell` policy.
 
   Use this rather than calling `shell_jail_allow/1` and `sandbox_allow/2`
-  separately. There are four places that run a shell string (the `bash` tool,
-  the `run_shell` tool, `Code.Hooks`, and the `Directive.Shell` executor), and
-  when each applied its own subset they disagreed about what was permitted --
-  one of them applied nothing at all.
+  separately. Four places run a shell string, and when each applied its own
+  subset they disagreed about what was permitted. What each does now:
+
+    * `Raxol.Agent.Actions.Code.Bash` -- calls this.
+    * `Raxol.Agent.Actions.Shell` -- calls this. It applied nothing at all.
+    * `Raxol.Agent.Code.Hooks` -- the jail half only, via `jailed?/1`. Hooks
+      are refused wholesale in a jail, so the sandbox half has nothing left
+      to decide.
+    * the `Directive.Shell` executor -- calls this, but binds on the
+      DISPATCHER context, which does not carry `:jail` or `:shell_sandbox`.
+      So it is a real gate for a surface that scopes that context and a
+      pass-through for the ones in this repo. Confining that path in a jail
+      needs those keys plumbed through the runtime, which is not done yet;
+      `Raxol.Agent.SandboxHook` is the only thing standing in front of it,
+      and it is opt-in on the agent's own `sandbox/0`.
   """
   @spec shell_allow(map(), String.t()) :: :ok | {:error, term()}
   def shell_allow(context, command) do

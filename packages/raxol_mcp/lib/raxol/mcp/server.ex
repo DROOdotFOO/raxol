@@ -272,7 +272,12 @@ defmodule Raxol.MCP.Server do
     if Map.get(state.subscribers, conn_id) == pid do
       {:noreply, state}
     else
-      Process.monitor(pid)
+      # One monitor per PID, not per connection. `{:DOWN, ...}` already drops
+      # every id that pid held, so a process subscribed under several ids
+      # would otherwise accumulate monitors and deliver as many DOWNs, all but
+      # the first finding nothing left to clean up.
+      unless pid in Map.values(state.subscribers), do: Process.monitor(pid)
+
       {:noreply, %{state | subscribers: Map.put(state.subscribers, conn_id, pid)}}
     end
   end
@@ -453,8 +458,28 @@ defmodule Raxol.MCP.Server do
     end
   end
 
-  defp dispatch(%{method: "tools/call"} = msg, state) do
+  # The direct-caller entry to the conn-aware clause, guarded on the SAME keys
+  # that clause matches. Without the guard the two arities bounce a `tools/call`
+  # missing either key between them forever: the 3-arity clause declines it, the
+  # generic 3-arity forwards it here, and here forwards it back. That runs
+  # inside a `GenServer.call(:infinity)`, so one malformed frame -- which the
+  # SSE transport will happily decode, since `normalize_body_params/1` only sets
+  # `:params` when the client sent one -- spins the server forever and it never
+  # serves another request, for any client.
+  defp dispatch(%{method: "tools/call"} = msg, state)
+       when is_map_key(msg, :id) and is_map_key(msg, :params) do
     dispatch(msg, state, @default_conn)
+  end
+
+  # A `tools/call` that names no tool. Answered as bad parameters rather than
+  # left to the catch-all, which would report a method it plainly recognises as
+  # unknown.
+  defp dispatch(%{method: "tools/call", id: id}, state) do
+    {Protocol.error_response(
+       id,
+       Protocol.invalid_params(),
+       "tools/call requires params"
+     ), state}
   end
 
   # -- Resources ---

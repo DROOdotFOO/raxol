@@ -51,12 +51,21 @@ defmodule RaxolPlaygroundWeb.TopicLive do
        page_title: title,
        title: title,
        mobile_menu_open: false,
-       # Only the payments topic reads it; resolving it once here keeps mount
-       # total rather than branching per topic.
-       xochi_matrix:
-         XochiCapabilities.get(Application.get_env(:raxol_playground, :xochi_capabilities))
+       xochi_matrix: xochi_matrix(socket.assigns.live_action)
      )}
   end
+
+  # Only the payments topic renders the matrix, and resolving it is a BLOCKING
+  # outbound request on a cache miss. Resolving it for every topic to keep
+  # mount total put four unrelated pages behind a third-party endpoint's
+  # availability; the branch is cheaper than that coupling.
+  defp xochi_matrix(:payments) do
+    XochiCapabilities.get(
+      Application.get_env(:raxol_playground, :xochi_capabilities)
+    )
+  end
+
+  defp xochi_matrix(_topic), do: nil
 
   @impl true
   def handle_event("toggle_mobile_menu", _params, socket) do
@@ -91,7 +100,9 @@ defmodule RaxolPlaygroundWeb.TopicLive do
 
   # One clause per topic rather than a dynamic component call: the mapping from
   # a URL to the function that renders it stays greppable.
-  defp topic_body(%{topic: :surfaces} = assigns), do: ~H"<.surfaces_deep_dive />"
+  defp topic_body(%{topic: :surfaces} = assigns),
+    do: ~H"<.surfaces_deep_dive />"
+
   defp topic_body(%{topic: :ssh} = assigns), do: ~H"<.ssh_deep_dive />"
   defp topic_body(%{topic: :agent} = assigns), do: ~H"<.agent_deep_dive />"
 

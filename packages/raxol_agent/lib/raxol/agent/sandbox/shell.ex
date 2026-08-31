@@ -149,7 +149,12 @@ defmodule Raxol.Agent.Sandbox.Shell do
     "\"",
     "'",
     "{",
-    "}"
+    "}",
+    # `!` is the POSIX pipeline-negation operator, so `! rm -rf /` runs `rm`
+    # while presenting `!` as its first token -- the same shape as the
+    # `FOO=1 rm` prefix below, reached through an operator instead of an
+    # assignment.
+    "!"
   ]
 
   @doc """
