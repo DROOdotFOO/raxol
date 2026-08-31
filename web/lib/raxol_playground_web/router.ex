@@ -42,5 +42,6 @@ defmodule RaxolPlaygroundWeb.Router do
     live("/agent", TopicLive, :agent)
     live("/coding-agent", TopicLive, :coding_agent)
     live("/payments", TopicLive, :payments)
+    live("/token", TopicLive, :token)
   end
 end

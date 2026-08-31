@@ -783,31 +783,48 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   # Pinned: these are the only strings on the site meant to be pasted into a
   # chain explorer, and a wrong character looks identical to a right one.
-  test "the token block prints the verified contract and no market numbers" do
-    payments =
-      render_component(&LandingComponents.payments_deep_dive/1,
-        matrix: @live_matrix
-      )
+  test "the token page prints the verified contract and no market numbers" do
+    token = render_component(&LandingComponents.token_deep_dive/1, %{})
 
-    assert payments =~ "$RAXOL"
-    assert payments =~ "0xf44702b17d9abD53815F703e772F35E9c71A53af"
-    assert payments =~ "0xa20b68e2e1de71f1426b546ed5514bf253215a48"
-    assert payments =~ "Robinhood Chain"
-    assert payments =~ "4663"
-    assert payments =~ "VIRTUAL"
-    assert payments =~ "Uniswap"
+    assert token =~ "$RAXOL"
+    assert token =~ "0xf44702b17d9abD53815F703e772F35E9c71A53af"
+    assert token =~ "0xa20b68e2e1de71f1426b546ed5514bf253215a48"
+    assert token =~ "Robinhood Chain"
+    assert token =~ "4663"
+    assert token =~ "VIRTUAL"
+    assert token =~ "Uniswap"
 
-    assert payments =~
+    assert token =~
              "https://dexscreener.com/robinhood/0xa20b68e2e1de71f1426b546ed5514bf253215a48"
 
-    # A token beside a fee schedule invites the reading that it is what the
-    # corridors move. Whitespace-tolerant: HEEx wraps prose across lines.
-    assert payments =~ ~r/not a settlement\s+asset/
+    # Whitespace-tolerant: HEEx wraps prose across lines.
+    assert token =~ ~r/not a settlement\s+asset/
 
     # A market number would be stale by the next request.
-    refute payments =~ ~r/\$\d/
-    refute payments =~ ~r/\bFDV\b/i
-    refute payments =~ ~r/market cap/i
+    refute token =~ ~r/\$\d/
+    refute token =~ ~r/\bFDV\b/i
+    refute token =~ ~r/market cap/i
+  end
+
+  # The two subjects are separate pages now. A token under a heading about
+  # settlement invited the reading its own copy then had to deny, so the
+  # payments page must not carry it back.
+  test "the payments page carries no token" do
+    payments = render_component(&LandingComponents.payments_deep_dive/1, matrix: @live_matrix)
+
+    refute payments =~ "$RAXOL"
+    refute payments =~ "0xf44702b17d9abD53815F703e772F35E9c71A53af"
+    refute payments =~ "dexscreener"
+  end
+
+  # `$RAXOL` reaches the footer through `TopicLive.links/0` like every other
+  # deep dive, so the page and the link to it cannot drift apart.
+  test "the token page is a topic the footer lists" do
+    assert {"/token", "$RAXOL"} in RaxolPlaygroundWeb.TopicLive.links()
+
+    footer = render_component(&LandingComponents.screen_footer/1, %{})
+    assert footer =~ ~s(href="/token")
+    assert footer =~ "$RAXOL"
   end
 
   test "coding agent section claims ACP membership and prints the four surfaces" do

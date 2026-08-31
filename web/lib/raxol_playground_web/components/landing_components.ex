@@ -1013,8 +1013,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         tier_proofs: @tier_proofs,
         solver_floor: Raxol.Payments.FeeSchedule.solver_base_bps(),
         payments_version: @payments_version,
-        token: @token,
-        token_pair_url: @token_pair_url,
         rows: reach_rows(assigns.matrix),
         show_future_svm:
           not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
@@ -1126,7 +1124,30 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <h2 class="name-coral mb-2 mt-12">${@token.symbol}</h2>
+    </section>
+    """
+  end
+
+  @doc """
+  The project token, on its own page.
+
+  It used to be the tail of the payments deep dive, which put it under a
+  heading about settlement and invited exactly the reading the copy then had to
+  deny: the corridors quote, route and settle in stablecoins, and this is not
+  one of them. A token and a payment rail are different subjects, and the page
+  said so more convincingly once they stopped sharing a page.
+  """
+  def token_deep_dive(assigns) do
+    assigns = assign(assigns, token: @token, token_pair_url: @token_pair_url)
+
+    ~H"""
+    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="token-title">
+      <div class="mb-8">
+        <span class="section-numeral" aria-hidden="true">06</span>
+        <span class="section-eyebrow">Token</span>
+        <h1 id="token-title" class="heading-2xl mb-3">${@token.symbol}</h1>
+      </div>
+
       <p class="body-text-dim max-w-2xl mb-4">
         The project token, on <%= @token.chain_name %>. It is not a settlement
         asset -- the corridors quote, route and settle in stablecoins.
