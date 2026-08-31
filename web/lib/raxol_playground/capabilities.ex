@@ -24,20 +24,83 @@ defmodule RaxolPlayground.Capabilities do
     %{name: "speech", transport: "TTS/STT (say/Whisper)", dep: "raxol_speech"}
   ]
 
-  @packages [
-    %{name: "raxol", version: "~> 2.6", purpose: "Full framework"},
-    %{name: "raxol_agent", version: "~> 2.6", purpose: "AI agents"},
-    %{name: "raxol_mcp", version: "~> 2.6", purpose: "MCP server"},
-    %{name: "raxol_payments", version: "~> 0.2", purpose: "Agent commerce"},
-    %{name: "raxol_liveview", version: "~> 2.6", purpose: "LiveView bridge"},
-    %{name: "raxol_sensor", version: "~> 2.6", purpose: "Sensor fusion"},
-    %{name: "raxol_terminal", version: "~> 2.6", purpose: "Terminal emulation"},
-    %{name: "raxol_core", version: "~> 2.6", purpose: "Behaviours, events"},
-    %{name: "raxol_plugin", version: "~> 2.6", purpose: "Plugin SDK"},
-    %{name: "raxol_speech", version: "~> 0.1", purpose: "TTS/STT"},
-    %{name: "raxol_telegram", version: "~> 0.1", purpose: "Telegram bot"},
-    %{name: "raxol_watch", version: "~> 0.1", purpose: "Push notifications"}
+  # ---------------------------------------------------------------------------
+  # Versions and package counts are READ, never typed.
+  #
+  # They used to be written out here by hand, and had drifted: raxol_speech,
+  # raxol_telegram and raxol_watch were all published at 0.2 while this list
+  # still said 0.1, and `version/0`'s fallback said 2.6.0 against a repo on
+  # 2.6.1. A number a reader can check against the repo has to come from the
+  # repo.
+  #
+  # Compile time, not runtime: every mix.exs is an @external_resource, so a
+  # version bump recompiles this module, and a deployed release never touches
+  # the filesystem or the network to answer.
+  # ---------------------------------------------------------------------------
+
+  @repo_root Path.expand("../../..", __DIR__)
+  @packages_dir Path.join(@repo_root, "packages")
+  @root_mix Path.join(@repo_root, "mix.exs")
+
+  # A directory with a mix.exs is a package; anything else in there is not.
+  @repo_packages @packages_dir
+                 |> File.ls!()
+                 |> Enum.sort()
+                 |> Enum.map(&{&1, Path.join([@packages_dir, &1, "mix.exs"])})
+                 |> Enum.filter(fn {_name, mix} -> File.exists?(mix) end)
+                 |> Enum.map(fn {name, mix} ->
+                   case Regex.run(~r/@version\s+"([^"]+)"/, File.read!(mix)) do
+                     [_, version] -> %{name: name, version: version}
+                     nil -> raise "#{mix} has no @version for Capabilities to read"
+                   end
+                 end)
+
+  for %{name: name} <- @repo_packages do
+    @external_resource Path.join([@packages_dir, name, "mix.exs"])
+  end
+
+  @external_resource @root_mix
+
+  @source_version (case Regex.run(~r/@version\s+"([^"]+)"/, File.read!(@root_mix)) do
+                     [_, version] -> version
+                     nil -> raise "#{@root_mix} has no @version for Capabilities to read"
+                   end)
+
+  # `raxol` is the root project rather than one of `packages/`, so it joins the
+  # lookup from there.
+  @versions @repo_packages
+            |> Map.new(&{&1.name, &1.version})
+            |> Map.put("raxol", @source_version)
+
+  # Which packages are ON HEX, and what each is for. This part IS a judgment
+  # call and stays written down: `packages/` also holds pre-alpha work nobody
+  # can `mix deps.get` yet, and the capability endpoints exist to tell an agent
+  # what it can actually depend on. Only the versions are derived.
+  @published [
+    {"raxol", "Full framework"},
+    {"raxol_agent", "AI agents"},
+    {"raxol_mcp", "MCP server"},
+    {"raxol_payments", "Agent commerce"},
+    {"raxol_liveview", "LiveView bridge"},
+    {"raxol_sensor", "Sensor fusion"},
+    {"raxol_terminal", "Terminal emulation"},
+    {"raxol_core", "Behaviours, events"},
+    {"raxol_plugin", "Plugin SDK"},
+    {"raxol_speech", "TTS/STT"},
+    {"raxol_telegram", "Telegram bot"},
+    {"raxol_watch", "Push notifications"}
   ]
+
+  @packages Enum.map(@published, fn {name, purpose} ->
+              version =
+                Map.get_lazy(@versions, name, fn ->
+                  raise "#{name} is listed as published but has no mix.exs in the repo"
+                end)
+
+              minor = version |> String.split(".") |> Enum.take(2) |> Enum.join(".")
+
+              %{name: name, version: "~> " <> minor, purpose: purpose}
+            end)
 
   # The provider registry the agent actually resolves against, in its own
   # resolution order. `Resolver.providers/0` is pure and reads no env, so it is
@@ -76,12 +139,26 @@ defmodule RaxolPlayground.Capabilities do
     raxol_get_model raxol_stop raxol_list
   )
 
-  @doc "Runtime `raxol` version, falling back to the build-time version."
+  @doc """
+  The `raxol` version this site is running, falling back to the one it was
+  built from.
+
+  Both ends are derived: the loaded application's version first, the repo's own
+  `mix.exs` when raxol is not started (rendering a component in a test, say).
+  The fallback used to be the string "2.6.0", which was already a minor behind
+  the repo.
+
+  This tracks the version the site was BUILT from, which is the released one in
+  a deploy-on-release setup, and costs no network call per render. It does not
+  poll hex.pm: a page that asks an external service what version it is can be
+  wrong in a way this cannot, and would be wrong on every render rather than
+  until the next deploy.
+  """
   @spec version() :: String.t()
   def version do
     case :application.get_key(:raxol, :vsn) do
       {:ok, vsn} -> to_string(vsn)
-      _ -> "2.6.0"
+      _ -> @source_version
     end
   end
 
@@ -107,6 +184,20 @@ defmodule RaxolPlayground.Capabilities do
 
   @spec package_count() :: non_neg_integer()
   def package_count, do: length(@packages)
+
+  @doc """
+  Every package in the repo's `packages/` directory, with its real version.
+
+  Wider than `packages/0`, which is the published-to-Hex subset. This is what
+  the footer counts, because the footer links to that directory and a count
+  that disagreed with what a reader finds on the other side of the link is
+  worse than no count.
+  """
+  @spec repo_packages() :: [%{name: String.t(), version: String.t()}]
+  def repo_packages, do: @repo_packages
+
+  @spec repo_package_count() :: non_neg_integer()
+  def repo_package_count, do: length(@repo_packages)
 
   @doc """
   Packages with a ready-to-paste `mix.exs` dep tuple attached, e.g.
