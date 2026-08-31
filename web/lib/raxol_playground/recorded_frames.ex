@@ -119,8 +119,11 @@ defmodule RaxolPlayground.RecordedFrames do
 
                     interval =
                       case File.read(path) do
-                        {:ok, raw} -> raw |> String.trim() |> String.to_integer()
-                        {:error, _} -> raise "#{path} is missing; rerun gen_landing_frames.exs"
+                        {:ok, raw} ->
+                          raw |> String.trim() |> String.to_integer()
+
+                        {:error, _} ->
+                          raise "#{path} is missing; rerun gen_landing_frames.exs"
                       end
 
                     {name, interval}

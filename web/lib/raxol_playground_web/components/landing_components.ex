@@ -4,10 +4,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   the LiveView is just lifecycle (mount, handle_event, handle_info, render
   orchestration) and the markup lives here.
 
-  The counter and agent code samples are owned by this module: it stores
-  them as `~S\"""...\"""` literals, runs them through Makeup at compile time,
-  and exposes the highlighted HTML through Components that don't take any
-  attributes. Callers don't need to know either source exists.
+  The code samples are owned by this module: it stores them as `~S\"""...\"""`
+  literals, runs them through Makeup at compile time, and exposes the
+  highlighted HTML through Components that don't take any attributes. Callers
+  don't need to know the sources exist.
 
   Components that take attributes (nav_bar, screen_hero) receive only
   LiveView-driven state (mobile_menu_open, raxol_version, terminal_html).
@@ -21,33 +21,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   import Phoenix.HTML, only: [raw: 1]
 
   import RaxolPlaygroundWeb.PlaygroundComponents,
-    only: [copyable_command: 1, terminal_chrome: 1, ssh_copy_block: 1]
-
-  @counter_source ~S"""
-  defmodule Counter do
-    use Raxol.Core.Runtime.Application
-
-    @impl true
-    def init(_ctx), do: %{count: 0}
-
-    @impl true
-    def update(:increment, model), do: {%{model | count: model.count + 1}, []}
-    def update(:decrement, model), do: {%{model | count: model.count - 1}, []}
-    def update(_, model), do: {model, []}
-
-    @impl true
-    def view(model) do
-      column style: %{padding: 1, gap: 1} do
-        [
-          text("Count: #{model.count}", style: [:bold]),
-          row style: %{gap: 1} do
-            [button("+", on_click: :increment), button("-", on_click: :decrement)]
-          end
-        ]
-      end
-    end
-  end
-  """
+    only: [copyable_command: 1, terminal_chrome: 1]
 
   @agent_source ~S"""
   defmodule Researcher do
@@ -156,7 +130,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                      }}
                   end)
 
-  @counter_code Makeup.highlight_inner_html(@counter_source)
   @agent_code Makeup.highlight_inner_html(@agent_source)
   # Counted from the registry `Xochi.Capabilities.fallback/0` derives from, so
   # the headline cannot claim a corridor the solver does not have. Tron is
@@ -168,8 +141,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @repo_url "https://github.com/DROOdotFOO/raxol"
 
   @install_command "curl -fsSL https://raxol.io/install | bash"
-  @brew_command "brew install droodotfoo/tap/raxol"
-  @npm_command "npm i -g raxol"
 
   # The hero halo's face cycles the coding agent's REAL status glyphs:
   # AxolFace.glyph/3 is the single source of truth every surface renders,
@@ -184,48 +155,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                   }
                 end
               )
-
-  # Version claims derive from Capabilities.packages() so the FAQ can never
-  # drift from the package table the capability endpoints serve.
-  @faq_versions Capabilities.packages()
-                |> Enum.group_by(& &1.version, & &1.name)
-                |> Enum.sort_by(fn {version, _names} -> version end, :desc)
-                |> Enum.map_join("; ", fn {version, names} ->
-                  "#{Enum.join(names, ", ")} at #{String.replace(version, "~> ", "v")}"
-                end)
-
-  @faqs [
-    %{
-      q: "What is Raxol?",
-      a:
-        "An OTP-native runtime for building TUIs, AI agents, and live web apps from one Elixir module. The same init/update/view shape renders to a terminal, Phoenix LiveView, SSH, and MCP."
-    },
-    %{
-      q: "Do I need Elixir?",
-      a:
-        "Yes. Raxol is an Elixir framework distributed via Hex. If you want to drive a Raxol app from another stack, you can talk to it over MCP (JSON-RPC)."
-    },
-    %{
-      q: "Where do AI agents run?",
-      a:
-        "In your BEAM, supervised. Same app, same node. Bring your own API key (Anthropic, OpenAI, OpenRouter, Ollama, Lumo, Kimi) or run mock for development. The framework streams tokens and routes inter-agent messages over a Registry."
-    },
-    %{
-      q: "Can I drop Raxol into an existing Phoenix app?",
-      a:
-        "Yes. Add :raxol_liveview, mount your TEA module via TEALive or TerminalComponent. The terminal renders as an HTML <pre> diffed by LiveView."
-    },
-    %{
-      q: "Is this production-ready?",
-      a:
-        "On Hex: #{@faq_versions}. raxol_earn and raxol_symphony are pre-alpha. raxol.io itself runs on Fly."
-    },
-    %{
-      q: "What does the SSH demo give me?",
-      a:
-        "Raxol's SSH surface gives every connection a supervised channel with its own crash boundary. The hosted playground is currently browser-only; run `mix raxol.playground --ssh` to try the SSH surface locally."
-    }
-  ]
 
   # ---------------------------------------------------------------------------
   # The one-screen landing: header / hero / footer, sized to the viewport.
@@ -282,7 +211,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def screen_hero(assigns) do
     assigns =
-      assign(assigns, halo_faces: @halo_faces, network_count: @network_count)
+      assign(assigns,
+        halo_faces: @halo_faces,
+        network_count: @network_count,
+        install_command: @install_command
+      )
 
     ~H"""
     <%!-- The brand mark beside the claim rather than above it: an upright box
@@ -313,11 +246,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </p>
 
         <div class="screen-install">
-          <.copyable_command
-            id="screen-install-cmd"
-            command="curl -fsSL https://raxol.io/install | bash"
-            tone={:coral}
-          />
+          <.copyable_command id="screen-install-cmd" command={@install_command} tone={:coral} />
         </div>
       </div>
     </div>
@@ -539,62 +468,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 1a. Install tabs: four methods over one command line
-  #
-  # All four panes ship in the dead render; the InstallTabs hook only
-  # toggles `hidden`/aria-selected, so the block works (showing curl)
-  # before JS and never round-trips the server.
-  # ---------------------------------------------------------------------------
-
-  def install_tabs(assigns) do
-    assigns =
-      assign(assigns,
-        curl_cmd: @install_command,
-        brew_cmd: @brew_command,
-        npm_cmd: @npm_command,
-        hex_dep: Capabilities.dep("raxol")
-      )
-
-    ~H"""
-    <div id="install-tabs" phx-hook="InstallTabs" class="install-tabs mx-auto">
-      <div class="install-tabs__row" role="tablist" aria-label="Install method">
-        <button type="button" class="install-tab" role="tab" aria-selected="true" data-m="curl">curl</button>
-        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="brew">brew</button>
-        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="npm">npm</button>
-        <button type="button" class="install-tab" role="tab" aria-selected="false" data-m="hex">hex</button>
-      </div>
-
-      <%!-- Only channels that exist get a link: the script this site
-           serves, and the published Hex package. brew/npm links land
-           when the tap repo and npm package publish. --%>
-      <div class="install-pane" data-m="curl">
-        <.ssh_copy_block id="install-copy-curl" cmd={@curl_cmd} />
-        <p class="label-text mt-3">
-          Self-contained binary. macOS and Linux. Click to copy.
-          <a href="/install" class="install-link">read the script</a>
-        </p>
-      </div>
-      <div class="install-pane" data-m="brew" hidden>
-        <.ssh_copy_block id="install-copy-brew" cmd={@brew_cmd} />
-        <p class="label-text mt-3">Homebrew tap. macOS and Linux.</p>
-      </div>
-      <div class="install-pane" data-m="npm" hidden>
-        <.ssh_copy_block id="install-copy-npm" cmd={@npm_cmd} />
-        <p class="label-text mt-3">One wrapper, one per-platform binary. Needs Node.</p>
-      </div>
-      <div class="install-pane" data-m="hex" hidden>
-        <.ssh_copy_block id="install-copy-hex" cmd={@hex_dep} prompt={nil} />
-        <p class="label-text mt-3">
-          Add to mix.exs in an existing Elixir app.
-          <a href="https://hex.pm/packages/raxol" class="install-link">view on Hex</a>
-        </p>
-      </div>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 1b. Hero demo: one module, four surfaces
+  # 1. Hero demo: one module, four surfaces
   #
   # The four panes are four encodings of ONE render, all projected from the
   # same `Raxol.Headless` session, the way `Raxol.Harness.Surface.Parity`
@@ -751,23 +625,30 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def hero_example_names, do: Enum.map(@hero_examples, &elem(&1, 0))
 
   defp example_title(name) do
-    Enum.find_value(@hero_examples, name, fn {n, t, _m, _c, _l} -> n == name && t end)
+    Enum.find_value(@hero_examples, name, fn {n, t, _m, _c, _l} ->
+      n == name && t
+    end)
   end
 
   @doc "The module an example defines, as its own source spells it."
   def example_module(name) do
-    Enum.find_value(@hero_examples, name, fn {n, _t, m, _c, _l} -> n == name && m end)
+    Enum.find_value(@hero_examples, name, fn {n, _t, m, _c, _l} ->
+      n == name && m
+    end)
   end
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
   def example_grid(name) do
-    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _c, grid} ->
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _c,
+                                                              grid} ->
       n == name && grid
     end)
   end
 
   defp example_code(name) do
-    Enum.find_value(@hero_examples, "", fn {n, _t, _m, c, _l} -> n == name && c end)
+    Enum.find_value(@hero_examples, "", fn {n, _t, _m, c, _l} ->
+      n == name && c
+    end)
   end
 
   defp next_example(name) do
@@ -777,38 +658,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 2. Proof: counter example
-  # ---------------------------------------------------------------------------
-
-  def code_example_section(assigns) do
-    assigns = assign(assigns, :counter_code, @counter_code)
-
-    ~H"""
-    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="code-title">
-      <h2 id="code-title" class="heading-2xl mb-3">Hello World</h2>
-      <p class="body-text mb-8 max-w-2xl">
-        Every Raxol app follows The Elm Architecture:
-        <span class="text-axol-coral">init</span>,
-        <span class="text-axol-coral">update</span>,
-        <span class="text-axol-coral">view</span>.
-      </p>
-
-      <div class="terminal-chrome mb-8 ch-snap">
-        <.terminal_chrome title="counter.exs" />
-        <div class="terminal-chrome-body">
-          <pre class="code-block"><code class="syntax-elixir"><%= Phoenix.HTML.raw(@counter_code) %></code></pre>
-        </div>
-      </div>
-
-      <p class="body-text-dim max-w-2xl">
-        That counter works in a terminal, Phoenix LiveView, and over SSH. One codebase.
-      </p>
-    </section>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 3a. Deep dive 01: Surfaces
+  # 2a. Deep dive 01: Surfaces
   # ---------------------------------------------------------------------------
 
   def surfaces_deep_dive(assigns) do
@@ -877,7 +727,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3b. Deep dive 02: SSH zero-install
+  # 2b. Deep dive 02: SSH zero-install
   # ---------------------------------------------------------------------------
 
   def ssh_deep_dive(assigns) do
@@ -909,7 +759,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3c. Deep dive 03: Agent runtime
+  # 2c. Deep dive 03: Agent runtime
   # ---------------------------------------------------------------------------
 
   def agent_deep_dive(assigns) do
@@ -947,7 +797,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3d. Deep dive 04: Coding agent + ACP
+  # 2d. Deep dive 04: Coding agent + ACP
   # ---------------------------------------------------------------------------
 
   def coding_agent_deep_dive(assigns) do
@@ -982,7 +832,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # 3e. Deep dive 05: Agent payments (privacy ladder + solver reach matrix)
+  # 2e. Deep dive 05: Agent payments (privacy ladder + solver reach matrix)
   #
   # The reach matrix renders server-side from the PAYMENTS solver's
   # capability endpoint (Raxol.Payments.Xochi.Capabilities) -- unrelated to
@@ -1236,141 +1086,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # The top tier is open-ended, so it reads as a threshold rather than a band.
   defp score_band(%{min_score: min, max_score: nil}), do: "#{min} and above"
   defp score_band(%{min_score: min, max_score: max}), do: "#{min}-#{max}"
-
-  # ---------------------------------------------------------------------------
-  # 4. Features grid (numbered)
-  # ---------------------------------------------------------------------------
-
-  def features_section(assigns) do
-    ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="features-title">
-      <span class="section-eyebrow">More capabilities</span>
-      <h2 id="features-title" class="heading-2xl mb-10">What OTP gives you.</h2>
-
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <.feature_card index="01" title="Crash Isolation" description="Components crash and restart independently. Your UI keeps running." />
-        <.feature_card index="02" title="Hot Code Reload" description="Change view/1, save. The running app updates without restart." />
-        <.feature_card index="03" title="MCP Tools" description="Widgets auto-derive MCP tools. Agents interact with real UI programmatically." />
-        <.feature_card index="04" title="Time-Travel Debug" description="Snapshot every update/2 cycle. Step back, forward, jump, restore." />
-        <.feature_card index="05" title="Distributed Swarm" description="CRDTs, elections, discovery via gossip, DNS, or Tailscale." />
-        <.feature_card index="06" title="Agent Payments" description="x402 micropayments, Xochi cross-chain, stealth addresses. Autonomous commerce." />
-        <.feature_card index="07" title="Adaptive UI" description="Behavior tracking, layout recommendations, feedback loop. Self-evolving interfaces." />
-        <.feature_card index="08" title="Session Replay" description="Asciinema v2 recording. Replay any session, scrub the timeline, ship as evidence." />
-      </div>
-    </section>
-    """
-  end
-
-  attr(:index, :string, required: true)
-  attr(:title, :string, required: true)
-  attr(:description, :string, required: true)
-
-  defp feature_card(assigns) do
-    ~H"""
-    <div class="panel panel--glow feature-card p-6">
-      <span class="feature-card__index"><%= @index %></span>
-      <h2 class="name-coral mb-2"><%= @title %></h2>
-      <p class="detail-text leading-relaxed"><%= @description %></p>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 5. Packages
-  # ---------------------------------------------------------------------------
-
-  def packages_section(assigns) do
-    ~H"""
-    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="packages-title">
-      <h2 id="packages-title" class="heading-2xl mb-3">Pick what you need</h2>
-      <p class="body-text mb-10 max-w-2xl">Full framework or just the parts that matter.</p>
-
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <.package_card id="raxol" name="raxol" dep={Capabilities.dep("raxol")} description="Full framework: TEA runtime, rendering, widgets, effects" accent={true} />
-        <.package_card id="agent" name="raxol_agent" dep={Capabilities.dep("raxol_agent")} description="AI agents, teams, strategies, LLM streaming" />
-        <.package_card id="mcp" name="raxol_mcp" dep={Capabilities.dep("raxol_mcp")} description="MCP server, tool derivation from widgets" />
-        <.package_card id="payments" name="raxol_payments" dep={Capabilities.dep("raxol_payments")} description="x402, MPP, Xochi cross-chain, spending controls" />
-        <.package_card id="liveview" name="raxol_liveview" dep={Capabilities.dep("raxol_liveview")} description="Render TEA apps in Phoenix LiveView" />
-        <.package_card id="sensor" name="raxol_sensor" dep={Capabilities.dep("raxol_sensor")} description="Sensor fusion. Zero dependencies." />
-      </div>
-    </section>
-    """
-  end
-
-  attr(:id, :string, required: true)
-  attr(:name, :string, required: true)
-  attr(:dep, :string, required: true)
-  attr(:description, :string, required: true)
-  attr(:accent, :boolean, default: false)
-
-  defp package_card(assigns) do
-    ~H"""
-    <div class="panel panel--glow p-5 relative">
-      <h3 class={["name-sky-sm mb-1", if(@accent, do: "text-axol-coral", else: "text-sky")]}>
-        <%= @name %>
-      </h3>
-      <code class="caption-text"><%= @dep %></code>
-      <p class="detail-text mt-2"><%= @description %></p>
-      <button
-        id={"pkg-copy-#{@id}"}
-        phx-hook="CopyToClipboard"
-        data-copy={@dep}
-        class="pkg-copy-btn"
-        aria-label={"Copy #{@name} dependency"}
-      >copy</button>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 6. FAQ
-  # ---------------------------------------------------------------------------
-
-  def faq_section(assigns) do
-    assigns = assign(assigns, :faqs, @faqs)
-
-    ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="faq-title">
-      <span class="section-eyebrow">FAQ</span>
-      <h2 id="faq-title" class="heading-2xl mb-10">Questions, answered.</h2>
-      <div class="faq-list max-w-3xl">
-        <%= for {%{q: q, a: a}, i} <- Enum.with_index(@faqs) do %>
-          <details class="faq-item" id={"faq-#{i}"}>
-            <summary><%= q %></summary>
-            <div class="faq-item__body"><%= a %></div>
-          </details>
-        <% end %>
-      </div>
-    </section>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # 7. CTA
-  # ---------------------------------------------------------------------------
-
-  def try_section(assigns) do
-    assigns = assign(assigns, :install_command, @install_command)
-
-    ~H"""
-    <section class="landing-section py-12 md:py-20 measure" aria-labelledby="try-title">
-      <h2 id="try-title" class="heading-2xl mb-3">One module away from every surface.</h2>
-      <p class="body-text mb-10 max-w-2xl">Starting is genuinely four commands.</p>
-
-      <div class="space-y-3 mb-10 ch-snap">
-        <.copyable_command id="copy-install" command={@install_command} comment="self-contained binary" tone={:coral} />
-        <.copyable_command id="copy-npm" command="npm i -g raxol" comment="Node users" tone={:sky} />
-        <.copyable_command id="copy-playground" command="mix raxol.playground" comment="interactive demos" tone={:sky} />
-        <.copyable_command id="copy-demo" command="mix run examples/demo.exs" comment="BEAM dashboard" tone={:sky} />
-      </div>
-
-      <div class="flex gap-4 flex-wrap">
-        <a href="/playground" class="btn-primary">Open Playground</a>
-        <a href="/gallery" class="btn-secondary">Browse Gallery</a>
-      </div>
-    </section>
-    """
-  end
 
   # ---------------------------------------------------------------------------
   # Footer
