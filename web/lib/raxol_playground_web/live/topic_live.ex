@@ -81,7 +81,7 @@ defmodule RaxolPlaygroundWeb.TopicLive do
     <div class="relative z-10">
       <.nav_bar mobile_menu_open={@mobile_menu_open} />
       <main id="main-content" tabindex="-1">
-        <nav class="topic-crumb max-w-5xl mx-auto px-6 pt-8" aria-label="Breadcrumb">
+        <nav class="topic-crumb measure pt-8" aria-label="Breadcrumb">
           <a href="/" class="subtle-link">raxol</a>
           <span aria-hidden="true">/</span>
           <span aria-current="page"><%= @title %></span>
@@ -89,7 +89,7 @@ defmodule RaxolPlaygroundWeb.TopicLive do
 
         <.topic_body topic={@live_action} matrix={@xochi_matrix} />
 
-        <div class="max-w-5xl mx-auto px-6 pb-16">
+        <div class="measure pb-16">
           <a href="/" class="subtle-link">&larr; back</a>
         </div>
       </main>

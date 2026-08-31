@@ -54,13 +54,6 @@
   }
   .nav-link:hover { color: #e8e4dc; }
 
-  /* Footer / dimmer links */
-  .footer-link {
-    @apply font-mono transition-colors;
-    color: var(--text-dim);
-  }
-  .footer-link:hover { color: #e8e4dc; }
-
   /* Brand link (coral that fades to pearl on hover) */
   .brand-link {
     @apply font-mono transition-colors;
@@ -317,6 +310,20 @@
      backdrop-filter, so page content shows through whatever alpha it gets. */
   --border-subtle: var(--panel-border);
   --panel-strong: var(--panel-bg-elevated);
+
+  /* --- Measure ---
+     The column every page centers its content in. The header and footer rules
+     span the viewport, but what sits inside them lines up with the hero, the
+     topic prose and the gallery below: one number, so the brand mark cannot
+     drift away from the first word it sits above.
+
+     The gutter is the breathing room outside that column, not inside it. Kept
+     separate because a page that pads within its measure starts its text a
+     gutter's width further in than one that pads outside, which is how the
+     landing and the topic pages came to disagree by 20px on where a line
+     begins. */
+  --screen-measure: 62rem;
+  --screen-gutter: 1.25rem;
 
   /* --- Atmospheric pearls (used by .pearl-bg gradient stops) --- */
   --pearl-violet: rgba(40, 51, 139, 0.4);
@@ -1854,11 +1861,51 @@ html {
   background: var(--panel-border);
 }
 
+/* Takes the slack, and gives it up before the controls do: the title is the
+   one thing in the bar that can be abbreviated, so it truncates rather than
+   pushing the buttons out of a narrow bar. */
 .hd-title {
   font-family: var(--font-mono);
   font-size: 0.74rem;
   color: var(--text-dim);
   margin-left: 0.3rem;
+  margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hd-controls {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  flex: 0 0 auto;
+}
+
+/* 24px minimum box, per WCAG 2.2 target size -- the same floor the header
+   links sit at. The type is small enough that the text alone would be under
+   it. */
+.hd-control {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.hd-control:hover,
+.hd-control:focus-visible {
+  color: var(--pearl-cream);
+}
+
+.hd-control--next {
+  color: var(--axol-coral);
 }
 
 .hero-tabs {
@@ -1975,6 +2022,28 @@ html {
 
 .hero-frames::-webkit-scrollbar { display: none; }
 
+/* The SSH pane's decoded stream. `pre` resets the `white-space: normal` its
+   container needs, and the container's own two-axis type fit applies here the
+   same way it does to a recorded frame. */
+.hero-ansi {
+  margin: 0;
+  white-space: pre;
+}
+
+/* ANSI SGR colours. These are terminal colours, not palette tokens: they must
+   equal what `TerminalBridge` writes into the recorded frames, or the SSH tab
+   and the terminal tab would show one program in two palettes. The full eight
+   are defined because `SurfaceSource` refuses to build against a code with no
+   colour behind it, and a recording is free to use any of them. */
+.ansi-black { color: #000000; }
+.ansi-red { color: #ff0000; }
+.ansi-green { color: #00ff00; }
+.ansi-yellow { color: #ffff00; }
+.ansi-blue { color: #0000ff; }
+.ansi-magenta { color: #ff00ff; }
+.ansi-cyan { color: #00ffff; }
+.ansi-white { color: #ffffff; }
+
 .hero-live-wrap {
   padding: 1rem 1.25rem;
 }
@@ -1983,15 +2052,6 @@ html {
   border: 1px solid var(--panel-border);
   border-radius: 6px;
   padding: 0.75rem 0.9rem;
-}
-
-.hero-demo-foot {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 1.25rem;
-  padding: 0.45rem 0.9rem;
-  border-top: 1px solid var(--panel-border);
 }
 
 .hero-live-badge {
@@ -2271,12 +2331,40 @@ input[type="range"]::-moz-range-thumb {
   gap: 0;
 }
 
+/* The rule spans the viewport; what sits on it does not. `position: relative`
+   is load-bearing: the mobile nav is absolutely positioned at `top: 100%`, and
+   without a positioned header it resolved against `.screen` -- a 100dvh grid --
+   which put the open menu a full viewport below the button that opened it. */
 .screen-header {
+  position: relative;
+  padding: 0.9rem var(--screen-gutter);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The measured row inside a full-bleed bar. Inline padding lives on the bar's
+   parent, not here, so the first character lines up with the hero's left edge
+   rather than sitting a padding's width inside it. */
+.screen-bar {
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  padding: 0.9rem 1.5rem;
-  border-bottom: 1px solid var(--border-subtle);
+  max-width: var(--screen-measure);
+  margin-inline: auto;
+}
+
+/* The same column for pages that are not the one-screen landing. The topic
+   pages reached for Tailwind's `max-w-5xl` (64rem), which put their header two
+   characters off from the landing's -- visible as a jump in the brand mark when
+   a reader crossed between them.
+
+   The gutter is padding here rather than a `px-*` class on each call site, and
+   the cap grows by it, so the CONTENT box is exactly `--screen-measure` and a
+   line starts on the same column as the landing's. Elements carrying this class
+   must not also carry `px-*`: that pads a second time, inside the measure. */
+.measure {
+  max-width: calc(var(--screen-measure) + 2 * var(--screen-gutter));
+  margin-inline: auto;
+  padding-inline: var(--screen-gutter);
 }
 
 .screen-mark {
@@ -2321,7 +2409,9 @@ input[type="range"]::-moz-range-thumb {
 }
 
 @media (min-width: 768px) {
-  .screen-header { padding: 1rem 2rem; }
+  /* Block padding only. The inline gutter stays at the hero's 1.25rem so the
+     brand mark and the h1 below it start on the same column. */
+  .screen-header { padding-block: 1rem; }
   .screen-nav { display: flex; }
   .screen-menu-btn, .screen-nav-mobile { display: none; }
 }
@@ -2332,8 +2422,15 @@ input[type="range"]::-moz-range-thumb {
   align-items: center;
   justify-content: center;
   gap: 1.1rem;
-  padding: 1.5rem 1.25rem;
+  padding: 1.5rem var(--screen-gutter);
   min-height: 0; /* lets the demo shrink instead of forcing the grid taller */
+  /* The same release on the other axis, and the one that was missing. As a
+     grid item this defaults to `min-width: auto`, so the track could never be
+     narrower than the hero's min-content -- a fixed 62rem. Every viewport under
+     that got a page 1032px wide and scrolled sideways, phones included. The
+     panes already stack under 767px and their `pre`s already scroll, so the
+     content has somewhere to go the moment the track is allowed to shrink. */
+  min-width: 0;
   text-align: center;
 }
 
@@ -2360,8 +2457,7 @@ input[type="range"]::-moz-range-thumb {
 .screen-main .hero-demo {
   margin: 0;
   width: 100%;
-  max-width: 62rem;
-  max-height: 30rem;
+  max-width: var(--screen-measure);
   min-height: 0;
   flex: 1 1 auto;
   display: flex;
@@ -2383,7 +2479,7 @@ input[type="range"]::-moz-range-thumb {
    silently drop the tail, and a cap nobody can see is worse than motion. */
 .screen-integrations {
   width: 100%;
-  max-width: 62rem;
+  max-width: var(--screen-measure);
   flex: 0 0 auto;
   overflow: hidden;
   font-family: var(--font-mono);
@@ -2541,15 +2637,16 @@ input[type="range"]::-moz-range-thumb {
    with room for the row, and every shorter one scrolls and can simply show it. */
 
 .screen-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
-  padding: 0.8rem 1.5rem;
+  padding: 0.8rem var(--screen-gutter);
   border-top: 1px solid var(--border-subtle);
   font-family: var(--font-mono);
   font-size: 0.78rem;
+}
+
+.screen-footer .screen-bar {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
 }
 
 .screen-topics { display: flex; flex-wrap: wrap; gap: 1.1rem; }
@@ -2587,6 +2684,14 @@ input[type="range"]::-moz-range-thumb {
   /* A size container, so the type rules below can divide by the pane's real
      height instead of guessing at it. */
   .screen-main .hero-pane { min-height: 0; overflow: hidden; container-type: size; }
+
+  /* The cap belongs with the rules that make it survivable, not outside them.
+     It used to apply at every height while the shrinking above it applied only
+     here, so a short viewport got a box capped at 30rem holding content that
+     could not shrink to fit -- and `overflow: hidden` ate the difference. Below
+     this threshold the page scrolls by design, so the demo takes the height it
+     needs and nothing is cut. */
+  .screen-main .hero-demo { max-height: 30rem; }
 }
 
 /* Breadcrumb on the topic pages the landing hands off to. */
@@ -2606,7 +2711,7 @@ input[type="range"]::-moz-range-thumb {
   align-items: center;
   gap: clamp(1rem, 3vw, 2.25rem);
   width: 100%;
-  max-width: 62rem;
+  max-width: var(--screen-measure);
   flex: 0 0 auto;
   text-align: left;
 }
@@ -2704,14 +2809,3 @@ input[type="range"]::-moz-range-thumb {
   line-height: 1.5;
 }
 
-/* Keys the live session actually responds to, named in the footer so the
-   payoff of taking over is legible rather than something to guess at. */
-.hero-demo-foot kbd {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  padding: 0.05rem 0.3rem;
-  margin: 0 0.1rem;
-  border: 1px solid var(--panel-border);
-  border-radius: 3px;
-  color: var(--axol-coral);
-}

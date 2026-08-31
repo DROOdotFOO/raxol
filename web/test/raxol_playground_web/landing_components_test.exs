@@ -65,9 +65,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   # The hero claims one module reaches four surfaces, each pane an encoding of
   # one recorded render. These two tests stop a pane reverting to authored text.
-  test "every non-terminal hero pane is a recorded artifact, line for line" do
+  test "every listed hero pane is a recorded artifact, line for line" do
     for name <- LandingComponents.hero_example_names(),
-        surface <- [:browser, :ssh, :mcp] do
+        surface <- [:browser, :mcp] do
       artifact = RecordedFrames.hero_artifact(name, surface)
       pane = RecordedFrames.hero_surface(name, surface)
 
@@ -79,7 +79,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       body = if marker?, do: Enum.drop(lines, -1), else: lines
 
       for line <- body do
-        assert String.contains?(artifact, unspell(line, surface)),
+        assert String.contains?(artifact, line),
                "#{name}/#{surface} shows a line that is not in the artifact:\n#{inspect(line)}"
       end
 
@@ -94,6 +94,63 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
                "#{name}/#{surface} shows #{length(body)} of #{length(full)} lines and says nothing"
       end
     end
+  end
+
+  # The SSH pane is painted rather than listed, so it gets its own invariant:
+  # the whole recording, in colour, with nothing authored and nothing dropped.
+  test "the SSH pane paints the whole recording and invents nothing" do
+    for name <- LandingComponents.hero_example_names() do
+      artifact = RecordedFrames.hero_artifact(name, :ssh)
+      pane = RecordedFrames.hero_surface(name, :ssh)
+
+      assert artifact != "", "#{name}/ssh has no recorded artifact"
+
+      # The regression this pane exists to not have: escape codes on screen
+      # read as a terminal failing to render, on the one tab that claims a
+      # terminal works.
+      refute pane =~ "ESC[",
+             "#{name}/ssh is showing escape codes as text again"
+
+      # Painted, not merely stripped -- the colours are the frame.
+      assert pane =~ ~s(class="ansi-),
+             "#{name}/ssh dropped its colour instead of painting it"
+
+      # Every character the artifact paints, and only those.
+      assert pane |> pane_lines() |> Enum.join("\n") ==
+               artifact |> strip_ansi() |> String.trim_trailing("\n"),
+             "#{name}/ssh does not show exactly what the recording paints"
+
+      # The grid the CSS fits type to describes the frame it is given.
+      grid = RecordedFrames.hero_ssh_grid(name)
+      rows = artifact |> strip_ansi() |> String.trim_trailing("\n") |> String.split("\n")
+
+      assert grid.rows == length(rows)
+      assert grid.cols == rows |> Enum.map(&String.length/1) |> Enum.max()
+    end
+  end
+
+  # A recording is a build input, so a code with no colour behind it has to stop
+  # the build rather than reach the page as an unstyled run.
+  test "an unpaintable escape sequence fails loudly, not silently" do
+    assert_raise ArgumentError, ~r/no colour is mapped for SGR 7/, fn ->
+      SurfaceSource.ansi_rows("\e[7mreversed\e[0m")
+    end
+
+    assert_raise ArgumentError, ~r/is not an SGR sequence/, fn ->
+      SurfaceSource.ansi_rows("\e[2Jcleared")
+    end
+  end
+
+  # Colour is terminal state, not per-row markup: a run left open at the end of
+  # one row still colours the next, the way it does down a real channel.
+  test "colour carries across rows until it is reset" do
+    rows = SurfaceSource.ansi_rows("\e[36mone\ntwo\e[0m\nthree")
+
+    assert rows == [
+             [{"ansi-cyan", "one"}],
+             [{"ansi-cyan", "two"}],
+             [{nil, "three"}]
+           ]
   end
 
   # The hero shows a program's source; the frames beside it are that program's
@@ -347,8 +404,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   end
 
   defp break_lines(artifact, :browser), do: SurfaceSource.dom_lines(artifact)
-  defp break_lines(artifact, :ssh), do: SurfaceSource.ansi_lines(artifact)
   defp break_lines(artifact, :mcp), do: SurfaceSource.json_lines(artifact)
+
+  defp strip_ansi(text), do: String.replace(text, ~r/\e\[[0-9;?]*[A-Za-z]/, "")
 
   # Undoes SurfaceSource's colour spans and escaping, leaving the lines as its
   # line-breaking produced them.
@@ -358,10 +416,6 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     |> unescape()
     |> String.split("\n")
   end
-
-  # ANSI lines carry ESC spelled out; put the byte back before checking.
-  defp unspell(line, :ssh), do: String.replace(line, "ESC", "\e")
-  defp unspell(line, _surface), do: line
 
   defp unescape(text) do
     # &amp; last, or an escaped &amp;lt; would come back as a literal <.
