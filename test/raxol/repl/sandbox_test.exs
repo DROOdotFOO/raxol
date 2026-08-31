@@ -247,33 +247,33 @@ defmodule Raxol.REPL.SandboxTest do
     # source, which is inherent to parsing Elixir and is not what these cover.
     # What the checker added on top was a SECOND atom per alias, the
     # `Elixir.`-prefixed module name, via `Module.concat/1`. That is the half
-    # under test, so parsing happens first and the count starts after it.
+    # under test.
+    #
+    # Asserted by NAME rather than by counting `:erlang.system_info(:atom_count)`
+    # around the call: this suite is async, so a VM-wide counter also sees every
+    # atom the tests running beside it mint, and the count answered 14 in CI for
+    # reasons that had nothing to do with this function. The names are exact and
+    # cannot drift.
     for level <- [:standard, :strict] do
-      test "at #{level}" do
-        source =
-          1..400
-          |> Enum.map_join("\n", fn i ->
-            "NoSuchMod#{unquote(level)}#{i}.f()"
+      test "at #{level}, no module name in the source becomes an atom" do
+        names = Enum.map(1..200, &"NoSuchMod#{unquote(level)}#{&1}")
+        source = Enum.map_join(names, "\n", &"#{&1}.f()")
+
+        _ = Sandbox.check(source, unquote(level))
+
+        leaked =
+          Enum.filter(names, fn name ->
+            try do
+              _ = :erlang.binary_to_existing_atom("Elixir.#{name}", :utf8)
+              true
+            rescue
+              ArgumentError -> false
+            end
           end)
 
-        {:ok, _ast} = Code.string_to_quoted(source)
-
-        before = :erlang.system_info(:atom_count)
-        _ = Sandbox.check(source, unquote(level))
-        grown = :erlang.system_info(:atom_count) - before
-
-        assert grown == 0,
-               "checking #{unquote(level)} source minted #{grown} atoms " <>
-                 "beyond the ones parsing it already required"
-      end
-
-      test "at #{level}, the module name itself never becomes an atom" do
-        name = "NeverAnAtom#{unquote(level)}"
-        _ = Sandbox.check("#{name}.run()", unquote(level))
-
-        assert_raise ArgumentError, fn ->
-          :erlang.binary_to_existing_atom("Elixir.#{name}", :utf8)
-        end
+        assert leaked == [],
+               "checking #{unquote(level)} source minted #{length(leaked)} " <>
+                 "permanent module atoms, e.g. #{inspect(Enum.take(leaked, 3))}"
       end
     end
 
