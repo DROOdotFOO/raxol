@@ -598,15 +598,53 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert try_section =~ "curl -fsSL https://raxol.io/install | bash"
   end
 
-  test "nav links the demo index on desktop and mobile" do
+  test "nav links the components entry on desktop and mobile" do
     closed =
       render_component(&LandingComponents.nav_bar/1, mobile_menu_open: false)
 
     open =
       render_component(&LandingComponents.nav_bar/1, mobile_menu_open: true)
 
-    assert closed =~ ~s(href="/demos")
-    assert open =~ ~s(href="/demos")
+    assert closed =~ ~s(href="/gallery")
+    assert open =~ ~s(href="/gallery")
+  end
+
+  # The navigation is the thing this page kept getting wrong: six labels for
+  # four destinations, three of them ("Playground", "Gallery", "Demos") naming
+  # one job. The count is the property worth holding, because the failure mode
+  # is adding "just one more" link until it is six again.
+  test "the header offers two destinations and no more" do
+    assert LandingComponents.nav_links() == [
+             {"/gallery", "Components"},
+             {"https://hexdocs.pm/raxol", "Docs"}
+           ]
+  end
+
+  # Reference material moved to the footer rather than being deleted: every
+  # destination the header dropped is still one click away.
+  test "the footer keeps what the header stopped carrying" do
+    footer = render_component(&LandingComponents.screen_footer/1, %{})
+
+    assert footer =~ ~s(href="/skill.md")
+    assert footer =~ ~s(href="https://hex.pm/packages/raxol")
+    assert footer =~ "github.com/DROOdotFOO/raxol"
+  end
+
+  # The mark replaces a word, so it has to carry that word for a screen reader,
+  # and it has to be an inlined path like every other mark on the page rather
+  # than a request to someone else's CDN.
+  test "the github mark is inlined and named" do
+    mark = render_component(&LandingComponents.github_mark/1, %{})
+
+    assert mark =~ ~s(aria-label="raxol on GitHub")
+    assert mark =~ ~s(viewBox="0 0 24 24")
+    assert mark =~ "<path"
+    refute mark =~ "<img"
+    assert is_binary(BrandMarks.site_path("GitHub"))
+
+    # Site marks are not integration marks: a test holds `known/0` against the
+    # provider registry, and GitHub is not a provider.
+    refute "GitHub" in BrandMarks.known()
   end
 
   @live_matrix %{

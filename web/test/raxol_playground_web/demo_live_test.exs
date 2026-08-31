@@ -7,11 +7,14 @@ defmodule RaxolPlaygroundWeb.DemoLiveTest do
 
   defp get_page(path), do: get(build_conn(), path)
 
-  test "GET /demos lists the catalog" do
+  # The index is folded into /gallery, which renders the same catalog with
+  # previews, search and filters. A deleted page is still a URL someone linked,
+  # so it answers rather than 404s.
+  test "GET /demos redirects to the gallery" do
     conn = get_page("/demos")
 
-    assert conn.status == 200
-    assert html_response(conn, 200) =~ "Interactive Demos"
+    assert conn.status == 301
+    assert redirected_to(conn, 301) == "/gallery"
   end
 
   test "GET /demos/:demo serves a known demo" do
@@ -22,11 +25,14 @@ defmodule RaxolPlaygroundWeb.DemoLiveTest do
     assert html_response(conn, 200) =~ component.name
   end
 
-  # A name that is not in the catalog is a wrong URL, not a broken server. The
-  # index render clause matches on `component: nil`, so an unknown name used to
-  # fall into it and reference assigns only the index mount sets -- a KeyError,
-  # served as a 500. The status is what is asserted here rather than the
-  # exception type: 404 is the contract, the module raised to produce it is not.
+  # A name that is not in the catalog is a wrong URL, not a broken server. This
+  # used to guard a sharper edge: the index render clause matched `component:
+  # nil`, so an unknown name fell into it and read assigns only the index mount
+  # set -- a KeyError served as a 500. The index is gone, and the raise in
+  # handle_params is now the only thing standing between a bad name and a nil
+  # component, so the test matters more rather than less. The status is what is
+  # asserted, not the exception type: 404 is the contract, the module that
+  # raised to produce it is not.
   test "GET /demos/:demo 404s on a name the catalog does not have" do
     status =
       try do
