@@ -245,9 +245,15 @@ that would serve the directory and whether it is installed.
 Servers start on first use, not at boot, and one per language is kept for the session:
 starting `rust-analyzer` per turn would mean indexing the crate per turn. Each is owned by
 a `Raxol.Agent.Lsp.Pool` that monitors the session process, so when the session ends by any
-path (a clean quit, an SSH disconnect, a crash) the pool exits and takes its servers, and
-their subprocesses, with it. No teardown path has to remember them. A server that crashes
-is dropped; the next request for that language starts a fresh one.
+path (a clean quit, an SSH disconnect, a crash) the pool stops every server it owns before
+going down. No teardown path has to remember them. A server that crashes is dropped; the
+next request for that language starts a fresh one.
+
+The pool stops them explicitly rather than relying on the process link. A pool that exits
+`:normal` does not take a linked, non-trapping process with it, so the clients, and the OS
+subprocesses behind them, would otherwise outlive the session. Waiting for a cold server
+to finish `initialize` also happens off the pool's own process, so a session that ends
+during a start is noticed immediately instead of after the start timeout.
 
 ### Containment
 
@@ -256,6 +262,14 @@ are the server's, and a language server indexes whatever it likes: a definition 
 a dependency or the standard library. Those are reported as absolute paths in a normal
 session and dropped in a jailed one. A rename's edits are each re-checked against the
 workspace root before anything is written, so a server cannot direct a write outside it.
+
+A rename is also bounded in width. Approval is asked before the server has answered, so
+the approver sees a position and a new name and cannot see how many files the rename
+reaches; a rename touching more than `max_files` (default 50) is refused with the count
+instead of performed. Retrying with an explicit `max_files` is a fresh call, and therefore
+a fresh approval that does carry the number. All the edits are composed before any of them
+is written, so an edit that cannot apply fails with nothing changed rather than partway
+through; if a write itself fails, the error names the files that already landed.
 
 **A jailed (multi-tenant) session gets no language server at all.** A server is arbitrary
 code execution on the workspace twice over: `.raxol/lsp.json` names the binary, and the

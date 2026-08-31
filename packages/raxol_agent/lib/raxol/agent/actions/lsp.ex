@@ -38,6 +38,10 @@ defmodule Raxol.Agent.Actions.Lsp do
 
   @query_ops ~w(diagnostics symbols definition references hover)
 
+  # Wide enough for a real rename across a module and its callers, narrow
+  # enough that a runaway one is stopped and re-approved rather than written.
+  @default_max_rename_files 50
+
   defmodule Query do
     @moduledoc false
     use Raxol.Agent.Action,
@@ -101,7 +105,13 @@ defmodule Raxol.Agent.Actions.Lsp do
           path: [type: :string, required: true, description: "File holding the symbol"],
           line: [type: :integer, required: true, description: "1-based line"],
           column: [type: :integer, required: true, description: "1-based column"],
-          new_name: [type: :string, required: true, description: "The new symbol name"]
+          new_name: [type: :string, required: true, description: "The new symbol name"],
+          max_files: [
+            type: :integer,
+            description:
+              "Refuse the rename if it would touch more than this many files " <>
+                "(default 50). Raise it deliberately for a wide rename."
+          ]
         ],
         output: [
           path: [type: :string],
@@ -189,6 +199,7 @@ defmodule Raxol.Agent.Actions.Lsp do
          {:ok, abs, client, _server} <- open(path, context),
          {:ok, file_edits} <-
            LSPContext.rename(client, Pool.path_to_uri(abs), line, column, valid_name),
+         :ok <- within_blast_radius(file_edits, params),
          {:ok, resolved} <- resolve_edit_targets(file_edits, context),
          :ok <- apply_edits(resolved) do
       {:ok,
@@ -200,6 +211,24 @@ defmodule Raxol.Agent.Actions.Lsp do
          edits: resolved |> Enum.map(fn {_rel, _abs, edits} -> length(edits) end) |> Enum.sum()
        }}
     end
+  end
+
+  # `sensitive: true` buys ONE approval, and it is shown before the server has
+  # answered -- so the approver sees a path, a position and a new name, and
+  # cannot see that this rename touches two hundred files. The count is only
+  # knowable here, after the fact and before any write.
+  #
+  # So a rename wider than the cap is refused rather than performed, and the
+  # error names the number. Retrying with an explicit `max_files` is a fresh
+  # tool call, which means a fresh approval whose arguments now carry the
+  # blast radius the first one could not.
+  defp within_blast_radius(file_edits, params) do
+    max_files = Map.get(params, :max_files) || @default_max_rename_files
+    count = length(file_edits)
+
+    if count > max_files,
+      do: {:error, {:rename_too_broad, count, max_files}},
+      else: :ok
   end
 
   # A server that answers with no edits has decided the symbol cannot be
@@ -226,16 +255,45 @@ defmodule Raxol.Agent.Actions.Lsp do
     end
   end
 
+  # Compose every file first, write only once they all composed. Reading and
+  # splicing interleaved with writing meant an edit that would not apply --
+  # a range past the end of the fourth file, an unreadable fifth -- surfaced
+  # only after the first three were already rewritten, leaving a half-renamed
+  # tree and an error that named the reason but not the files it had touched.
+  #
+  # Composition is where the failures actually live; a write that fails after
+  # its peers succeeded is a full disk, and that one is reported with the list
+  # of files that did land, so the state is recoverable rather than unknown.
   defp apply_edits(resolved) do
-    Enum.reduce_while(resolved, :ok, fn {_rel, abs, edits}, :ok ->
+    with {:ok, composed} <- compose_edits(resolved), do: write_composed(composed)
+  end
+
+  defp compose_edits(resolved) do
+    Enum.reduce_while(resolved, {:ok, []}, fn {rel, abs, edits}, {:ok, acc} ->
       with {:ok, content} <- File.read(abs),
-           {:ok, updated} <- apply_text_edits(content, edits),
-           :ok <- File.write(abs, updated) do
-        {:cont, :ok}
+           {:ok, updated} <- apply_text_edits(content, edits) do
+        {:cont, {:ok, [{rel, abs, updated} | acc]}}
       else
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+    |> case do
+      {:ok, composed} -> {:ok, Enum.reverse(composed)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp write_composed(composed) do
+    Enum.reduce_while(composed, {:ok, []}, fn {rel, abs, updated}, {:ok, written} ->
+      case File.write(abs, updated) do
+        :ok -> {:cont, {:ok, [rel | written]}}
+        {:error, reason} -> {:halt, {:error, {:partial_write, Enum.reverse(written), reason}}}
+      end
+    end)
+    |> case do
+      {:ok, _written} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Edits are applied last-first so an earlier edit's offset shift cannot

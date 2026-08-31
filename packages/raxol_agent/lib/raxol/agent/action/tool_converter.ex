@@ -315,6 +315,22 @@ defmodule Raxol.Agent.Action.ToolConverter do
   def public_error(name, :invalid_name),
     do: "[Tool error for #{name}]: that is not a usable symbol name."
 
+  def public_error(name, {:rename_too_broad, count, max}),
+    do:
+      "[Tool error for #{name}]: that rename would edit #{count} files, over " <>
+        "the limit of #{max}. Nothing was written. Check the position names " <>
+        "the symbol you meant; if #{count} files is right, retry with " <>
+        "`max_files` set to at least #{count}."
+
+  # Names what DID land. A caller told only that a write failed cannot tell a
+  # tree that was never touched from one that was half rewritten.
+  def public_error(name, {:partial_write, written, reason}),
+    do:
+      "[Tool error for #{name}]: writing failed (#{inspect(reason)}) after " <>
+        "#{length(written)} file(s) were already written: " <>
+        "#{Enum.join(written, ", ")}. The rename is INCOMPLETE — those files " <>
+        "carry the new name and the rest do not."
+
   def public_error(name, _other), do: "[Tool error for #{name}]: tool error"
 
   @doc """

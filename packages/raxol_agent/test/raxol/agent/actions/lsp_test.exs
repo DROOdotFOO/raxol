@@ -59,6 +59,35 @@ defmodule Raxol.Agent.Actions.LspTest do
 
   defp context(pool, extra \\ %{}), do: Map.merge(%{lsp_pool: pool}, extra)
 
+  # The OS pid behind a client, read off its port.
+  defp server_os_pid(client) do
+    port = :sys.get_state(client).port
+    assert is_port(port)
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    os_pid
+  end
+
+  # `kill -0` succeeds for a zombie, which a child the BEAM has not reaped yet
+  # still is, so a Z state counts as exited.
+  defp await_os_exit(os_pid, attempts \\ 50)
+  defp await_os_exit(_os_pid, 0), do: false
+
+  defp await_os_exit(os_pid, attempts) do
+    if os_process_gone?(os_pid) do
+      true
+    else
+      Process.sleep(100)
+      await_os_exit(os_pid, attempts - 1)
+    end
+  end
+
+  defp os_process_gone?(os_pid) do
+    case System.cmd("ps", ["-o", "stat=", "-p", to_string(os_pid)], stderr_to_stdout: true) do
+      {_out, status} when status != 0 -> true
+      {out, 0} -> String.trim(out) == "" or String.starts_with?(String.trim(out), "Z")
+    end
+  end
+
   describe "diagnostics" do
     test "reports what the server publishes for a file", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n  BROKEN thing\n  SUSPECT other\n")
@@ -184,6 +213,56 @@ defmodule Raxol.Agent.Actions.LspTest do
     end
   end
 
+  # `sensitive: true` buys one approval, shown BEFORE the server has answered,
+  # so the approver sees a position and a new name and cannot see the width of
+  # what they are approving.
+  describe "rename blast radius" do
+    test "a rename wider than the cap is refused with its count", %{dir: dir} do
+      write(dir, "a.toy", "def alpha\n  alpha and beta\ndef beta\n")
+
+      assert {:error, {:rename_too_broad, 1, 0}} =
+               Lsp.Rename.run(
+                 %{
+                   path: "a.toy",
+                   line: 1,
+                   column: 5,
+                   new_name: "renamed",
+                   max_files: 0
+                 },
+                 context(pool(dir))
+               )
+
+      # Refused, not performed.
+      assert File.read!(Path.join(dir, "a.toy")) =~ "def alpha"
+    end
+
+    test "raising the cap performs it", %{dir: dir} do
+      write(dir, "a.toy", "def alpha\n  alpha and beta\ndef beta\n")
+
+      assert {:ok, %{edits: 2}} =
+               Lsp.Rename.run(
+                 %{
+                   path: "a.toy",
+                   line: 1,
+                   column: 5,
+                   new_name: "renamed",
+                   max_files: 10
+                 },
+                 context(pool(dir))
+               )
+    end
+
+    test "the default cap leaves an ordinary rename alone", %{dir: dir} do
+      write(dir, "a.toy", "def alpha\n  alpha and beta\ndef beta\n")
+
+      assert {:ok, %{edits: 2}} =
+               Lsp.Rename.run(
+                 %{path: "a.toy", line: 1, column: 5, new_name: "renamed"},
+                 context(pool(dir))
+               )
+    end
+  end
+
   describe "rename" do
     test "rewrites every occurrence and reports the files touched", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n  alpha and beta\ndef beta\n")
@@ -287,6 +366,12 @@ defmodule Raxol.Agent.Actions.LspTest do
       assert Pool.running(p) == ["toy"]
     end
 
+    # This used to assert only that the POOL died, which it always did -- and
+    # that is why the leak shipped. The pool exits `:normal`, and a `:normal`
+    # exit signal is IGNORED by a linked process that is not trapping exits,
+    # which `LSPContext` is not. So the client survived its pool, its
+    # `terminate/2` never ran, and the OS subprocess stayed up for the life of
+    # the BEAM. The client and the subprocess are the things worth asserting.
     test "the pool dies with its owner, taking the server with it", %{dir: dir} do
       write(dir, "a.toy", "def alpha\n")
       test = self()
@@ -300,12 +385,64 @@ defmodule Raxol.Agent.Actions.LspTest do
         end)
 
       assert_receive {:ready, p}, 30_000
+
+      client = :sys.get_state(p).clients["toy"]
+      assert is_pid(client) and Process.alive?(client)
+      os_pid = server_os_pid(client)
+
       pool_ref = Process.monitor(p)
+      client_ref = Process.monitor(client)
 
       send(owner, :stop)
 
       assert_receive {:DOWN, ^pool_ref, :process, ^p, _reason}, 5_000
-      refute Process.alive?(p)
+
+      assert_receive {:DOWN, ^client_ref, :process, ^client, _reason},
+                     5_000,
+                     "the language server client outlived its pool"
+
+      assert await_os_exit(os_pid),
+             "the language server subprocess (#{os_pid}) outlived the session"
+    end
+
+    test "Pool.stop/1 also stops the servers it owns", %{dir: dir} do
+      write(dir, "a.toy", "def alpha\n")
+      {:ok, p} = Pool.start_link(root: dir, servers: servers())
+
+      assert {:ok, _} = Lsp.Query.run(%{op: "symbols", path: "a.toy"}, %{lsp_pool: p})
+      client = :sys.get_state(p).clients["toy"]
+      os_pid = server_os_pid(client)
+
+      :ok = Pool.stop(p)
+
+      refute Process.alive?(client)
+      assert await_os_exit(os_pid)
+    end
+
+    # Waiting for `initialize` used to happen inside `handle_call`, so the pool
+    # could not read its own mailbox for the whole start timeout -- including
+    # the owner's `:DOWN`. A session ending during a cold start therefore left
+    # the subprocess running until the wait finished.
+    test "a start in flight does not block the pool's mailbox", %{dir: dir} do
+      write(dir, "a.toy", "def alpha\n")
+      # The fake server sits on `initialize` for 2s, so the window below lands
+      # squarely inside the wait.
+      p = pool(dir, ["--slow-init", "2"])
+
+      caller =
+        Task.async(fn ->
+          Lsp.Query.run(%{op: "symbols", path: "a.toy"}, %{lsp_pool: p})
+        end)
+
+      Process.sleep(500)
+
+      # An unrelated call is answered promptly rather than queueing behind the
+      # start. A short timeout is the assertion: waiting inside `handle_call`
+      # made this exit, and the owner's `:DOWN` waited exactly as long.
+      assert GenServer.call(p, :running, 500) == []
+
+      assert {:ok, _} = Task.await(caller, 30_000)
+      assert Pool.running(p) == ["toy"]
     end
 
     test "a missing server binary is reported, not crashed on", %{dir: dir} do
