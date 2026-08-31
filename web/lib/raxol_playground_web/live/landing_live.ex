@@ -37,7 +37,9 @@ defmodule RaxolPlaygroundWeb.LandingLive do
        # XOCHI_CAPABILITIES_BASE_URL) skips the network entirely and serves
        # the static fallback, which renders as a "cached" badge.
        xochi_matrix:
-         XochiCapabilities.get(Application.get_env(:raxol_playground, :xochi_capabilities))
+         XochiCapabilities.get(
+           Application.get_env(:raxol_playground, :xochi_capabilities)
+         )
      )}
   end
 
@@ -49,7 +51,9 @@ defmodule RaxolPlaygroundWeb.LandingLive do
   def handle_event("next_example", _params, socket) do
     names = hero_example_names()
     idx = Enum.find_index(names, &(&1 == socket.assigns.example)) || 0
-    {:noreply, assign(socket, :example, Enum.at(names, rem(idx + 1, length(names))))}
+
+    {:noreply,
+     assign(socket, :example, Enum.at(names, rem(idx + 1, length(names))))}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
