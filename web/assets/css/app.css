@@ -1689,19 +1689,48 @@ html {
   background: var(--panel-border);
 }
 
-/* Takes the slack, and gives it up before the controls do: the title is the
-   one thing in the bar that can be abbreviated, so it truncates rather than
+/* The example's own name and what it demonstrates. Static: the surface
+   caption beside it is what changes with the tab, and a reader switching tabs
+   should not lose track of which of the four programs is running.
+
+   Takes the slack, and gives it up before the controls do: this is the one
+   thing in the bar that can be abbreviated, so it truncates rather than
    pushing the buttons out of a narrow bar. */
-.hd-title {
+.hd-name {
   font-family: var(--font-mono);
   font-size: 0.74rem;
-  color: var(--text-dim);
+  color: var(--text-muted);
   margin-left: 0.3rem;
   margin-right: auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.hd-name b {
+  color: var(--axol-coral);
+  font-weight: 600;
+}
+
+/* The surface caption, which the tab switch rewrites. Dropped on a narrow bar
+   rather than competing with the example's name for the same few characters:
+   the selected tab is already saying which surface this is. */
+.hd-title {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  .hd-title {
+    display: none;
+  }
 }
 
 .hd-controls {
@@ -1871,6 +1900,8 @@ html {
 .ansi-magenta { color: #ff00ff; }
 .ansi-cyan { color: #00ffff; }
 .ansi-white { color: #ffffff; }
+/* Weight, not colour: rides alongside any of the eight above, or alone. */
+.ansi-bold { font-weight: 700; }
 
 .ansi-bright-black { color: #555555; }
 .ansi-bright-red { color: #ff5555; }
