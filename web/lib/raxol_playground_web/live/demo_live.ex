@@ -66,13 +66,21 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     if current && current.name == name do
       {:noreply, socket}
     else
-      component = Catalog.get_component(name)
+      # A name the catalog does not have is a wrong URL. Without this the nil
+      # falls through to the `component: nil` render clause, which is the index
+      # and reads assigns only the index mount sets -- a KeyError served as a
+      # 500. Raise before `catalog_position/1`, so nothing downstream has to
+      # carry a nil component.
+      component =
+        Catalog.get_component(name) ||
+          raise RaxolPlaygroundWeb.NotFoundError, "no demo named #{inspect(name)}"
+
       pos = catalog_position(name)
 
       socket =
         socket
         |> DemoLifecycle.stop_demo()
-        |> assign(:page_title, if(component, do: component.name, else: "Demo"))
+        |> assign(:page_title, component.name)
         |> assign(:component, component)
         |> assign(:prev_component, pos.prev)
         |> assign(:next_component, pos.next)
