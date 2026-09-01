@@ -60,7 +60,6 @@ allowlist below.
 | Module | Why one-per-VM |
 |--------|----------------|
 | `Raxol.RBAC` | One role/permission set per node |
-| `Raxol.RateLimit` | VM-wide rate limiting Agent |
 | `Raxol.Dev.CodeReloader` | One reloader watches the VM in dev |
 | `Raxol.Core.Runtime.ProcessStore` | Explicit Process-dictionary replacement; VM-wide by design |
 | `Raxol.Core.Config.ConfigStore` | VM-wide config |
