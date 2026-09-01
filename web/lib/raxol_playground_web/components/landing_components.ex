@@ -121,39 +121,42 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # dependency edge added for one line of a hero pane would start a seller
   # supervision tree in the deployed site.
   #
-  # The statuses are fixed rather than advancing. A turn that progressed them
-  # needs the ladder as state, and the pane holds thirty lines: this is the
-  # version that fits, and the spinner on the running row is the animation.
+  # The ladder advances: one call lands per tick, and the turn finishes rather
+  # than sitting on `edit` forever with only the spinner moving, which read as
+  # a hang once `settle` beside it started completing. The statuses come from
+  # the tick, so `@calls` carries name and args only and `st/2` decides done,
+  # running or pending -- which is what buys the room, along with the shorter
+  # alias: the pane clips at thirty lines and sixty-seven columns.
   @harness_source ~S"""
   defmodule Harness do
     use Raxol.Core.Runtime.Application
-
-    alias Raxol.UI.Components.Harness.ToolCallBlock, as: Tool
+    alias Raxol.UI.Components.Harness.ToolCallBlock, as: T
     @calls [
-      {"read", "router.ex", :done},
-      {"edit", "router.ex:42", :running},
-      {"shell", "mix test", :pending}
+      {"read", "router.ex"},
+      {"edit", "router.ex:42"},
+      {"shell", "mix test"}
     ]
-
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def update(_, m), do: {m, []}
-    def subscribe(_), do: [subscribe_interval(120, :tick)]
-
+    def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
+      at = rem(m.t, length(@calls) + 1)
       column style: %{gap: 1} do
         [
           text("raxol code", style: [:bold]),
           text("virtuals acp  job 4812  usdc_transfer", fg: :cyan),
-          column(do: Enum.map(@calls, &call(&1, m.t)))
+          column(do: Enum.with_index(@calls, &call(&1, &2, at, m.t)))
         ]
       end
     end
-
-    defp call({n, a, s}, t) do
-      {:ok, st} = Tool.init(name: n, args: a, status: s, frame: t)
-      Tool.render(st, %{})
+    defp call({n, a}, i, x, t) do
+      {:ok, s} = T.init(name: n, args: a, status: st(i, x), frame: t)
+      T.render(s, %{})
     end
+    defp st(i, x) when i < x, do: :done
+    defp st(i, i), do: :running
+    defp st(_, _), do: :pending
   end
   """
 
