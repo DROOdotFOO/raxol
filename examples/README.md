@@ -52,6 +52,27 @@ The agent-framework primitives run from inside the `raxol_agent` package (they n
 - `react_agent.exs`: Actions + ReAct strategy + tools + shell commands
 - `agent_team.exs`: `Agent.Team` supervision + inter-agent messaging
 
+### Agent payments
+
+Agents that pay for things. These live in `packages/raxol_payments/examples/`
+for the same reason as the agent examples: they need `Raxol.Payments`, which the
+main app does not depend on. Run them from `packages/raxol_payments/`. All three
+are offline and spend nothing.
+
+- `agent_payment_tour.exs`: start here. The payment Actions an agent gets and
+  which move funds, the `Router.select/1` matrix that picks x402 vs Xochi vs
+  Relay, then a real x402 challenge paid end to end and the same call refused by
+  the spend gate.
+- `preflight.exs`: one request through the whole stack (wallet -> policy ->
+  ledger -> AutoPay -> Req) against the echo server, over a socket.
+- `crosschain_stealth_payment.exs`: the private cross-chain path, from
+  delegation mandate through stealth Xochi intent to settlement, plus the Tron
+  relay leg.
+
+The commerce side (selling agent services on Base) is in
+`packages/raxol_earn/examples/`. For real settlement that moves funds, see
+`scripts/run_live_gates.sh` at the repo root.
+
 ## Interactive Playground
 
 30 widget demos across 8 categories, searchable and filterable:
@@ -76,6 +97,8 @@ mix raxol.playground --ssh          # SSH mode (port 2222)
 - `swarm/`: Distributed CRDTs, discovery, topology
 - `workflow/`: Saga compensation and retry strategies
 - `subsystems/`: Subsystem demos (sensor fusion, adaptive UI)
+- Payments and commerce live in their packages, not here: see
+  `packages/raxol_payments/examples/` and `packages/raxol_earn/examples/`
 - `reference/`: Low-level Buffer/Box API and LiveView (needs a Phoenix host, not `mix run`)
 
 ## Related

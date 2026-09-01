@@ -6,6 +6,22 @@ map and the recommended order.
 
 Run everything from `packages/raxol_payments/`.
 
+## 0. See the whole surface (no funds, no network, one command)
+
+**`agent_payment_tour.exs`** answers "what can an agent pay with, and who picks
+the rail?" before you follow any single rail end to end. It prints the payment
+Actions an agent gets (read off the Actions themselves, so it cannot drift from
+the code) and which of them move funds, runs `Router.select/1` over a table of
+request shapes so the x402/Xochi/Relay routing rule is visible as a matrix, then
+pays a real x402 challenge and has the same call refused by the spend gate.
+
+It mounts `Raxol.Payments.EchoServer` as a Req plug rather than over a socket,
+so unlike step 1 it needs no second terminal.
+
+```bash
+MIX_ENV=test mix run examples/agent_payment_tour.exs
+```
+
 ## 1. Rehearse the pay-stack (no funds, no network)
 
 **`preflight.exs`** drives a single request through the whole stack: wallet ->
@@ -67,6 +83,7 @@ is in the script header.
 
 | Stage            | Entrypoint                             | Funds | Target                     |
 | ---------------- | -------------------------------------- | ----- | -------------------------- |
+| Survey           | `agent_payment_tour.exs`               | none  | in-process echo server     |
 | Rehearse         | `preflight.exs`                        | none  | local echo server          |
 | Launch path      | `crosschain_stealth_payment.exs`       | none  | in-process Xochi sim       |
 | Live (all rails) | `scripts/run_live_gates.sh` (repo root) | real | Xochi worker + Riddler Relay |
