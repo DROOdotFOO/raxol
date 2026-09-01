@@ -616,6 +616,18 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       assert name in names, "#{name} has a mark but is no longer an entry"
     end
 
+    # A mark that needs `evenodd` and does not get it still renders, just with
+    # its counters filled in, so nothing else here would catch the difference.
+    # The Virtuals Protocol mark is the one that needs it, and their brand
+    # guide is the reason it matters: a filled loop is a redrawn logo.
+    assert BrandMarks.fill_rule("Virtuals Protocol") == "evenodd"
+    assert row =~ ~s(fill-rule="evenodd")
+
+    for name <- BrandMarks.known(), rule = BrandMarks.fill_rule(name) do
+      assert rule in ["evenodd", "nonzero"],
+             "#{name} declares fill-rule #{inspect(rule)}, which is not a rule"
+    end
+
     # Two runs are rendered: the visible one and the aria-hidden copy the loop
     # needs, so every marked entry appears twice.
     marked = Enum.filter(entries, & &1.mark)

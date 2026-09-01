@@ -8,7 +8,9 @@ defmodule RaxolPlayground.BrandMarks do
   records where they came from, their licence, and why one entry has none.
 
   The map is keyed by the DISPLAY NAME the row derives, not by file name, so
-  the marks answer to the provider registry rather than the other way round.
+  the marks answer to the row rather than the other way round: most keys come
+  from the provider registry, and the rest have to be entries the row renders
+  or a test fails them as marks that outlived the thing they name.
   An entry with no mark is not an error: `path/1` returns `nil` and the row
   shows its name, which is what a newly added backend does until someone adds
   one. `known/0` exists so a test can hold every key against the derived
@@ -24,6 +26,11 @@ defmodule RaxolPlayground.BrandMarks do
   # assets normalized to this directory's shape (the README records each
   # source); LLM7 has no mark anywhere and is deliberately not mapped to a
   # near-miss.
+  #
+  # "Virtuals" is the one entry here that is not a model provider or an editor.
+  # It is the commerce protocol agents sell services on, so it answers to the
+  # row's own third group rather than to a registry, and its file is generated
+  # rather than sourced: see `priv/brand_marks/README.md`.
   @sources %{
     "Claude" => "claude.svg",
     "Anthropic" => "anthropic.svg",
@@ -39,7 +46,8 @@ defmodule RaxolPlayground.BrandMarks do
     "JetBrains" => "jetbrains.svg",
     "neovim" => "neovim.svg",
     "Emacs" => "gnuemacs.svg",
-    "VS Code" => "vscode.svg"
+    "VS Code" => "vscode.svg",
+    "Virtuals Protocol" => "virtuals.svg"
   }
 
   # Marks the SITE wears, as opposed to the ones it points at. Kept apart from
@@ -75,6 +83,26 @@ defmodule RaxolPlayground.BrandMarks do
                end
              end)
 
+  # A mark whose counter is wound the same way as its outer contour is a hole
+  # under evenodd and solid under nonzero, so a file that declares the rule has
+  # to keep it: rendering the Virtuals Protocol mark without it fills the loop
+  # in, which alters a logo their brand guide says not to alter. Most marks
+  # declare nothing and get the nonzero default, hence `nil` rather than a
+  # blanket rule the other eleven never asked for.
+  @fill_rules Map.new(Map.merge(@sources, @site_sources), fn {name, file} ->
+                svg = File.read!(Path.join(@dir, file))
+
+                rule =
+                  case Regex.run(~r/<path[^>]*\sfill-rule="([^"]+)"/, svg,
+                         capture: :all_but_first
+                       ) do
+                    [rule] -> rule
+                    nil -> nil
+                  end
+
+                {name, rule}
+              end)
+
   @marks Map.take(@extracted, Map.keys(@sources))
   @site_marks Map.take(@extracted, Map.keys(@site_sources))
 
@@ -90,6 +118,16 @@ defmodule RaxolPlayground.BrandMarks do
   @doc "Every display name that has a mark. Exposed so a test can check drift."
   @spec known() :: [String.t()]
   def known, do: @marks |> Map.keys() |> Enum.sort()
+
+  @doc """
+  The `fill-rule` `name`'s mark must render with, or `nil` for the default.
+
+  Only a mark that declares one gets one. Rendering a mark that needs
+  `evenodd` without it fills its counters in, which is a redrawn logo rather
+  than a styling choice.
+  """
+  @spec fill_rule(String.t()) :: String.t() | nil
+  def fill_rule(name) when is_binary(name), do: Map.get(@fill_rules, name)
 
   @doc """
   The inlined path for one of the site's own marks, or `nil`.
