@@ -63,23 +63,23 @@ defmodule RaxolSymphony.MixProject do
       # YAML front matter parsing.
       {:yaml_elixir, "~> 2.12"},
 
-      # Liquid template rendering for prompt body (Phase 5).
+      # Liquid template rendering for prompt body.
       {:solid, "~> 0.18", optional: true},
 
-      # File watcher for hot-reloading WORKFLOW.md (Phase 7).
+      # File watcher for hot-reloading WORKFLOW.md.
       {:file_system, "~> 1.1", optional: true},
 
       # JSON
       {:jason, "~> 1.4"},
 
-      # HTTP client for tracker adapters (Phase 6).
+      # HTTP client for tracker adapters.
       {:req, "~> 0.5", optional: true},
 
       # PostgreSQL driver for the paused-runs Postgrex saver. Optional;
       # consumers must add :postgrex and supervise a connection.
       {:postgrex, "~> 0.17", optional: true},
 
-      # Web surface deps (Phase 10) -- both optional, the JSON API and
+      # Web surface deps: both optional, since the JSON API and the
       # LiveView dashboard are gated at compile time on these being loaded.
       {:plug, "~> 1.14", optional: true},
       {:phoenix_live_view, "~> 1.0 or ~> 0.20", optional: true},

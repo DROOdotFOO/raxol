@@ -251,7 +251,8 @@ defmodule Raxol.Terminal.Output.Manager do
 
   @spec strip_ansi_codes(String.t()) :: String.t()
   defp strip_ansi_codes(content) do
-    # Basic ANSI code stripping - in a real implementation, you'd want a more robust parser
+    # Regex-level stripping of CSI and OSC sequences. Not a full parser:
+    # nested or malformed sequences are not handled.
     content
     |> String.replace(~r/\x1b\[[0-9;]*[a-zA-Z]/, "")
     |> String.replace(~r/\x1b\][0-9;]*[a-zA-Z]/, "")

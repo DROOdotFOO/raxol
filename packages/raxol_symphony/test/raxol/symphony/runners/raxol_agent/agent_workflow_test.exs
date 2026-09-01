@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
   @moduledoc """
-  Phase 7-specific tests for the multi-node `AgentWorkflow` graph:
+  Tests for the multi-node `AgentWorkflow` graph:
   the LLM turn (`:turn_N`) is checkpointed independently from the
   decision step (`:after_turn_N`), so a pause + resume cycle MUST
   re-run only the after node -- never the LLM stream.
@@ -72,10 +72,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
     end
   end
 
-  describe "Phase 7: per-turn checkpointing" do
+  describe "per-turn checkpointing" do
     test "pause + resume re-runs the after node, NOT the LLM turn" do
       # Stateful detector that pauses on its first invocation, then
-      # passes through. We expect exactly ONE :turn_completed event
+      # passes through. Exactly ONE :turn_completed event must be
       # forwarded across the entire pause+resume cycle.
       Memory.put_issue(%{issue() | state: "Done"})
 
@@ -94,7 +94,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
       assert {:pause, :awaiting_review, pause_token} =
                RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
 
-      # Resume. Phase 7's after_turn_1 re-runs, calls Workflow.interrupt
+      # Resume. after_turn_1 re-runs, calls Workflow.interrupt
       # which now returns the resume_value, clears pause_request,
       # checks tracker (Done -> :done), finishes with :ok. The :turn_1
       # node body does NOT re-run, so no second :turn_completed event
@@ -107,8 +107,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
                  resume_value: :approved
                )
 
-      # Phase 6 (single-node) would have produced 2 :turn_completed
-      # events here (turn re-ran on resume). Phase 7 produces 1.
+      # The earlier single-node graph produced 2 :turn_completed events
+      # here, because the turn re-ran on resume. The split graph produces 1.
       assert count_turn_completed("issue-1", 200) == 1
     end
 

@@ -52,9 +52,7 @@ defmodule Raxol.Animation.InterpolateTest do
     end
 
     test ~c"interpolates hue correctly (crossing 360/0 boundary, e.g., H:350 to H:10)" do
-      # From H:350 (Pinkish-Red) S:1, L:0.5 ->
-      # hsl_to_rgb(350,1.0,0.5) -> {255,0,42} ??? No, (255, 0, 43) if rounded
-      # Let's get an exact from HSL module:
+      # From H:350 (pinkish-red) S:1, L:0.5. Exact values from the HSL module:
       # Raxol.Style.Colors.HSL.hsl_to_rgb(350, 1.0, 0.5) -> {255, 0, 43}
       # Raxol.Style.Colors.HSL.hsl_to_rgb(10, 1.0, 0.5) -> {255, 43, 0}
 

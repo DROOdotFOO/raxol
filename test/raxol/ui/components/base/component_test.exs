@@ -202,7 +202,7 @@ defmodule Raxol.UI.Components.Base.ComponentTest do
           mounted
         end)
 
-      # Since render functions shouldn't update state, we'll just verify the component works
+      # Render must not update state, so the mounted flag is what is asserted.
       assert final.state.mounted
     end
   end

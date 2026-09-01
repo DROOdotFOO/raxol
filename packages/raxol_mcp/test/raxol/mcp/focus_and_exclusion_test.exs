@@ -1,7 +1,5 @@
-defmodule Raxol.MCP.Phase12Test do
+defmodule Raxol.MCP.FocusAndExclusionTest do
   @moduledoc """
-  Tests for Phase 12: MCP Widget + Agent Coverage.
-
   Covers @mcp_exclude, hover mode in FocusLens, and focus/hover
   tracking in ToolSynchronizer.
   """

@@ -79,7 +79,8 @@ defmodule Raxol.Agent.Supervisor do
   end
 
   # Start the Scheduler only when a :scheduler config (a keyword list) is set,
-  # so the whole cronjob subsystem stays opt-in (ADR-0025).
+  # so the whole cronjob subsystem stays opt-in: an unconfigured host must not
+  # acquire a timer wheel and a DETS file it never asked for.
   defp scheduler_children do
     case Application.get_env(:raxol_agent, :scheduler) do
       opts when is_list(opts) ->

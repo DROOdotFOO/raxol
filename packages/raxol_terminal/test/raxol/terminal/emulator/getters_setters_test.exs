@@ -18,8 +18,7 @@ defmodule Raxol.Terminal.Emulator.GettersSettersTest do
     # According to VT100/ANSI, \e[r resets scroll region to full window.
     # The actual behavior for what emulator.scroll_region becomes (nil or {0, height-1})
     # depends on the implementation within Emulator.process_input or ModeManager.
-    # For now, let's assume it sets it to nil, which means full window.
-    # If the implementation sets it to {0, height-1}, this assertion will need adjustment.
+    # The implementation sets it to nil, which means full window.
     {emulator_after_reset, _} =
       Emulator.process_input(emulator_after_set, "\e[r")
 

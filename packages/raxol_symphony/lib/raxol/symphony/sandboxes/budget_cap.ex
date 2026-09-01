@@ -30,8 +30,8 @@ defmodule Raxol.Symphony.Sandboxes.BudgetCap do
   ### Cost-from-event (set `cost_fn`)
 
   When `cost_fn` is set, authorization charges nothing -- `cost_per_turn`
-  becomes a *budget floor* used only for the deny check ("we'd need at
-  least `cost_per_turn` of headroom to allow this turn"). The actual
+  becomes a *budget floor* used only for the deny check: at least
+  `cost_per_turn` of headroom must remain for a turn to be allowed. The actual
   cost is settled per `:turn_completed` event via `settle/3`, which the
   Symphony RaxolAgent runner invokes automatically.
 

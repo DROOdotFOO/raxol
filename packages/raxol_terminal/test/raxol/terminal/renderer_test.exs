@@ -235,8 +235,8 @@ defmodule Raxol.Terminal.RendererTest do
       # Default fg: #AABBCC
       assert String.contains?(output, "\e[38;2;170;187;204m")
       # Default bg (#DDEEFF) is left unpainted: an unpainted background emits
-      # nothing so the cell stays transparent to the terminal's own background
-      # (ADR-0029). Painting the theme default here would fill every cell.
+      # nothing so the cell stays transparent to the terminal's own
+      # background. Painting the theme default here would fill every cell.
       refute String.contains?(output, "\e[48;2;221;238;255m")
       assert String.contains?(output, "\e[0m")
       # No bold/italic/underline

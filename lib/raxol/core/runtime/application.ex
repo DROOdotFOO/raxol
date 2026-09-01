@@ -138,9 +138,8 @@ defmodule Raxol.Core.Runtime.Application do
     handle_message: 2
   ]
 
-  # Placeholder for model type, user application should define this
-  # Or we rely on Dialyzer inference
-  # @type model :: %{required(integer) => any()} | map() # Example constraint
+  # The model type is the application's to define; this stays open so
+  # Dialyzer infers it from the application module.
   @type model :: any()
 
   defmacro __using__(_opts) do
@@ -491,5 +490,6 @@ defmodule Raxol.Core.Runtime.Application do
     end
   end
 
-  # Add other delegating functions as needed (view, subscriptions, handle_event)
+  # view/1, subscriptions/1 and handle_event/1 have no delegating wrapper here;
+  # callers reach them through the behaviour directly.
 end

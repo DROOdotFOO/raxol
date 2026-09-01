@@ -175,8 +175,8 @@ defmodule Raxol.Benchmark.EnhancedFormatter do
   end
 
   defp detect_regressions(scenarios) do
-    # This would compare with previous results if available
-    # For now, return empty as we'd need historical data
+    # Always empty: comparing against previous results needs a historical
+    # store this formatter does not have.
     %{
       regressions_detected: [],
       improvements_detected: [],

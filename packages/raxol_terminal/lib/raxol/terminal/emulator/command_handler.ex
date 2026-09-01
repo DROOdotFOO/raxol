@@ -4,7 +4,6 @@ defmodule Raxol.Terminal.Emulator.CommandHandler do
   Extracted from the main emulator module for clarity and maintainability.
   """
 
-  # Import/alias as needed for dependencies
   alias Raxol.Terminal.Emulator
 
   # handle_cursor_position/2

@@ -44,7 +44,7 @@ defmodule Raxol.Workflow.ResumeTest do
       assert state == %{prepared: true}
     end
 
-    test "checkpoints include a pause marker at the interrupting node (ADR-0017)",
+    test "checkpoints include a pause marker at the interrupting node",
          ctx do
       compiled = approval_graph(ctx.saver)
       {:interrupted, run_id, _, _} = Compiled.invoke(compiled, %{})
@@ -85,7 +85,7 @@ defmodule Raxol.Workflow.ResumeTest do
       {:ok, _, _} = Compiled.resume(compiled, run_id, :approved)
 
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
-      # ADR-0017: :__start__ + :prep + :approve (paused) + :approve
+      # :__start__ + :prep + :approve (paused) + :approve
       # (resumed-success) + :finalize = 5 checkpoints. The two
       # :approve entries are at different steps; the latest has no
       # :interrupt_reason in metadata.
@@ -184,7 +184,7 @@ defmodule Raxol.Workflow.ResumeTest do
       {:interrupted, run_id, _, :pause} =
         Compiled.invoke(compiled, %{seeded: :value})
 
-      # ADR-0017: __start__ at step 0 plus a pause checkpoint for :gate at
+      # __start__ at step 0 plus a pause checkpoint for :gate at
       # step 1. Initial state is preserved on the __start__ row.
       {:ok, checkpoints} = Ets.list(ctx.config, run_id, 10)
       assert length(checkpoints) == 2

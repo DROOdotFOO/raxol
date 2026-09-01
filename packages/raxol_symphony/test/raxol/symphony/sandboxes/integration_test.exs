@@ -3,7 +3,7 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
   End-to-end: wire `Raxol.Symphony.Sandboxes.{TurnRateLimit,
   TimeOfDayWindow}` through `agent.sandboxes` and run the
   `RaxolAgent` runner. Proves the reference impls compose with
-  the per-turn authorization wired in Phase 13.
+  the runner's per-turn authorization walk.
   """
 
   use ExUnit.Case, async: false

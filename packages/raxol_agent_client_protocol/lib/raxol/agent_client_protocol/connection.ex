@@ -45,16 +45,15 @@ end
 
 defmodule Raxol.AgentClientProtocol.Connection.TurnState do
   @moduledoc """
-  Per-session open-turn state, populated only on a client-role Connection
-  (transport-ordering design §4.2, ADR-0030 clauses 1/5).
+  Per-session open-turn state, populated only on a client-role Connection.
 
   Opened by `Connection`'s outbound submit path at a successful
   `session/prompt` async-owner submission (`reply_to = {:owner, ...}`);
   closed by whichever of response / timeout / cancel / transport-down
   resolves the request first. `token` is minted fresh (`make_ref/0`) at
-  open and never derived from any peer-supplied id (clause 5): a peer that
-  replays or reuses a session/request id cannot alias a stale turn's
-  straggler into a new turn, because the tokens differ by construction.
+  open and never derived from any peer-supplied id: a peer that replays or
+  reuses a session/request id cannot alias a stale turn's straggler into a
+  new turn, because the tokens differ by construction.
   """
 
   @enforce_keys [:token, :owner, :tag, :out_id]

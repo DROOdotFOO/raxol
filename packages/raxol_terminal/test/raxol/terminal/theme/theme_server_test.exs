@@ -233,9 +233,8 @@ defmodule Raxol.Terminal.Theme.ThemeServerTest do
     end
 
     test "returns error for inactive theme", %{pid: pid} do
-      # This test would require modifying a theme's status to :inactive
-      # Since the current implementation always sets status to :active,
-      # we'll test the error path by creating a theme with inactive status
+      # load_theme always sets status to :active, so the inactive status is
+      # written directly into the server state to reach the error path.
       {:ok, theme_id} =
         ThemeServer.load_theme("test/fixtures/themes/dark.json")
 

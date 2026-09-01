@@ -311,7 +311,7 @@ defmodule T0.VerdictResolver do
             "fewer than 2 tier-1 terminals have ground-truth C1+C2 measurements " <>
               "(measured: #{format_list(measured)}; missing: #{format_list(missing)}) -- " <>
               "the two-terminal floor refuses even a provisional D-PA from a single " <>
-              "terminal's evidence. Run Ring B per docs/proposals/in-flight/t0-runbook.md.",
+              "terminal's evidence. Run Ring B per docs/proposals/t0-runbook.md.",
           provisional: nil
         }
 

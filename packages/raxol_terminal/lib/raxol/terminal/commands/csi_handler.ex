@@ -375,7 +375,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler do
     ScreenHandlers.handle_erase_display(emulator, mode)
   end
 
-  # Missing functions that tests expect
+  # Cursor save/restore and scroll-region entry points.
 
   def handle_s(emulator, _params) do
     # Save cursor position - delegate to save_cursor_position for consistency
