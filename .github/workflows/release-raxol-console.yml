@@ -78,8 +78,8 @@ jobs:
       - name: Set up Erlang/Elixir
         uses: erlef/setup-beam@v1
         with:
-          otp-version: '29.0.3'
-          elixir-version: '1.20.2'
+          version-file: mise.toml
+          version-type: strict
 
       # Burrito requires an exact Zig; install it pinned rather than via Homebrew,
       # whose zig tracks latest. The macOS target builds natively here (this is an

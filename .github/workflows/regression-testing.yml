@@ -55,8 +55,6 @@ env:
   SKIP_TERMBOX2_TESTS: true
   TMPDIR: /tmp
   MIX_ENV: test
-  ELIXIR_VERSION: "1.20.2"
-  OTP_VERSION: "29.0.3"
 
 jobs:
   # Performance regression testing
@@ -69,23 +67,22 @@ jobs:
       github.event.inputs.test_type == '' ||
       github.event_name != 'workflow_dispatch'
 
-    strategy:
-      fail-fast: false
-      matrix:
-        elixir: ["1.20.2"]
-        otp: ["29.0.3"]
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
+    # The pin comes from `mise.toml`; the versions setup-beam reports installing
+    # stamp the cache keys below. This job used to carry a one-entry
+    # elixir/otp matrix, which was a second copy of the pin dressed as
+    # variation.
     - name: Set up Elixir
+      id: beam
       uses: erlef/setup-beam@v1
       with:
-        elixir-version: ${{ matrix.elixir }}
-        otp-version: ${{ matrix.otp }}
+        version-file: mise.toml
+        version-type: strict
 
     - name: Cache dependencies
       uses: actions/cache@v6
@@ -95,17 +92,17 @@ jobs:
           deps
           ~/.cache/rebar3
           ~/.hex
-        key: deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('mix.lock') }}
+        key: deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('mix.lock') }}
         restore-keys: |
-          deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-
+          deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
 
     - name: Cache PLT files
       uses: actions/cache@v6
       with:
         path: priv/plts
-        key: plt-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+        key: plt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('mix.lock') }}
         restore-keys: |
-          plt-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-
+          plt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
     - name: Install system dependencies
       run: |
@@ -219,7 +216,7 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       if: always()
       with:
-        name: performance-results-${{ matrix.elixir }}-${{ matrix.otp }}
+        name: performance-results-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}
         path: regression/performance/
         retention-days: 30
 
@@ -243,8 +240,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        elixir: ["1.20.2"]
-        otp: ["29.0.3"]
+        # Scenario is the only real axis. Elixir and OTP used to sit here as
+        # one-entry lists, which meant the pin was restated per workflow.
         scenario:
           - terminal_operations
           - plugin_system
@@ -257,10 +254,11 @@ jobs:
         fetch-depth: 0
 
     - name: Set up Elixir
+      id: beam
       uses: erlef/setup-beam@v1
       with:
-        elixir-version: ${{ matrix.elixir }}
-        otp-version: ${{ matrix.otp }}
+        version-file: mise.toml
+        version-type: strict
 
     - name: Cache dependencies
       uses: actions/cache@v6
@@ -270,9 +268,9 @@ jobs:
           deps
           ~/.cache/rebar3
           ~/.hex
-        key: deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('mix.lock') }}
+        key: deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('mix.lock') }}
         restore-keys: |
-          deps-${{ runner.os }}-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.exs') }}-
+          deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
 
     - name: Install system dependencies
       run: |
@@ -442,7 +440,7 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       if: always()
       with:
-        name: memory-results-${{ matrix.scenario }}-${{ matrix.elixir }}-${{ matrix.otp }}
+        name: memory-results-${{ matrix.scenario }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}
         path: regression/memory/
         retention-days: 30
 
@@ -655,8 +653,8 @@ jobs:
     - name: Set up Elixir
       uses: erlef/setup-beam@v1
       with:
-        elixir-version: ${{ env.ELIXIR_VERSION }}
-        otp-version: ${{ env.OTP_VERSION }}
+        version-file: mise.toml
+        version-type: strict
 
     - name: Install system dependencies
       run: |

@@ -31,7 +31,14 @@ jobs:
     name: Build + boot web release (minimal mode)
     runs-on: ubuntu-latest
     env:
-      # Match docker/Dockerfile.web so CI reflects the production build.
+      # Deliberately literal, and deliberately NOT `version-file: mise.toml`.
+      # mise.toml pins the reference toolchain every other workflow builds on
+      # (currently elixir 1.20.2 / erlang 29.0.3), but this job exists to boot
+      # what production boots, so it has to build on production's toolchain
+      # instead. These two mirror the `ARG ELIXIR_VERSION` / `ARG OTP_VERSION`
+      # defaults in docker/Dockerfile.web, which is the image fly.toml's
+      # `[build]` section deploys. Bump them and the Dockerfile ARGs together;
+      # drift either way and the gate stops reflecting the deploy.
       ELIXIR_VERSION: "1.17.1"
       OTP_VERSION: "27.0"
       MIX_ENV: prod

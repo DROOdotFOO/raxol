@@ -1,0 +1,16 @@
+# Single source of truth for this repository's reference toolchain.
+#
+# mise reads this natively (`mise install`, then `mise activate` in your shell).
+# CI reads the same file: `erlef/setup-beam@v1` accepts it as `version-file`
+# with `version-type: strict`, so a workflow never restates the pin. The
+# pre-commit hook and `scripts/check_toolchain.sh` parse it too.
+#
+# Change the pin here and nowhere else. Two workflows keep their own literals on
+# purpose and are the only place a second version may appear: nightly's
+# compatibility matrix, which exists to test older toolchains, and the web deploy
+# check, which must build on whatever `docker/Dockerfile.web` ships to production.
+
+[tools]
+erlang = "29.0.3"
+elixir = "1.20.2-otp-29"
+node = "latest"

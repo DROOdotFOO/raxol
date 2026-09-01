@@ -40,7 +40,7 @@ CI still runs `mix raxol.check_docs`, which additionally checks catalog counts.
 If a gate reports something like `function Enum.__in__/2 is undefined`, the
 `mix` on `PATH` and the one `MIX_HOME` points at are different installs, and a
 Hex archive built for one is being loaded by the other. The hook prepends the
-toolchain `.tool-versions` names when it finds it installed under mise; for a
+toolchain `mise.toml` names when it finds it installed under mise; for a
 manual command, put that toolchain's `bin` first on `PATH`.
 
 Set `RAXOL_HOOK_NO_TOOLCHAIN=1` to skip that and use `PATH` as-is, which is what

@@ -144,7 +144,7 @@ Start with the [documentation index](docs/README.md), or jump to the
 
 ## Development
 
-Working from source needs Elixir/OTP (versions in `.tool-versions`) and a C
+Working from source needs Elixir/OTP (versions in `mise.toml`) and a C
 toolchain: the termbox2 NIF compiles with `make` and `cc` (on Debian/Ubuntu,
 `apt-get install build-essential`). `nix develop` provides all of it in one
 shell. Every command below runs headless: no terminal is required for the

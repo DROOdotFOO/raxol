@@ -124,7 +124,7 @@ mix docs                      # Generate documentation
 ./scripts/dev.sh check           # Pre-commit quality checks
 ./scripts/dev.sh dialyzer        # Static analysis with PLT caching
 ./scripts/dev.sh setup           # Environment setup
-./scripts/check_toolchain.sh     # Verify the active Elixir/OTP matches .tool-versions
+./scripts/check_toolchain.sh     # Verify the active Elixir/OTP matches mise.toml
 ./scripts/acp_probe.py CMD ARGS  # Drive an ACP agent over stdio, record the wire
 ```
 
@@ -153,8 +153,15 @@ also shims), so a fresh npm install can connect a provider without Mix.
 
 ### Toolchain
 
-`.tool-versions` is authoritative (currently elixir 1.20.2-otp-29, erlang
-29.0.3, via mise). Running a different Elixir than `$MIX_HOME` was populated
+`mise.toml` is authoritative and is the ONLY place the reference pin appears
+(currently elixir 1.20.2-otp-29, erlang 29.0.3, node latest). mise reads it
+natively; CI reads the same file through `erlef/setup-beam`'s `version-file`
+input with `version-type: strict`, and `scripts/check_toolchain.sh` plus the
+pre-commit hook parse its `[tools]` table. Nightly and the older-toolchain jobs
+in `security.yml` and `web-deploy-check.yml` keep their own literals on purpose:
+they exist to test something other than the reference toolchain.
+
+Running a different Elixir than `$MIX_HOME` was populated
 for does not report a version conflict; it fails inside Hex on any
 `mix deps.get` with:
 
@@ -444,6 +451,7 @@ These namespaces are settled; don't create new top-level alternatives:
 - `Raxol.Earn.*` - Virtuals Agent Commerce Protocol (job sessions, offerings, hooks) in raxol_earn package
 - `Raxol.Plugin` - Plugin SDK macro (`use Raxol.Plugin`), API, testing in raxol_plugin package
 - `Raxol.Animation.*` - Animation hints (`Helpers`, `Hint`) in main raxol; CSS mapping in `Raxol.Core.Animation.Hint` (raxol_core package)
+- `Raxol.Core.TokenBucket` - Shared ETS token-bucket rate limiter in raxol_core; replaced the deleted `Raxol.RateLimit`, which was a fixed-window counter behind a global Agent
 
 ## Environment variables
 

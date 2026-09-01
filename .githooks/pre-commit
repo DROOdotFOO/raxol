@@ -13,15 +13,15 @@ set -euo pipefail
 # Homebrew `mix` may come first on PATH. A Hex archive built for one Elixir and
 # loaded by another fails deep inside dep resolution
 # (`function Enum.__in__/2 is undefined`), which reads like a lockfile bug and
-# is not one. So prefer the toolchain `.tool-versions` names, when it is
-# installed; otherwise leave PATH alone and let the gates report normally.
+# is not one. So prefer the toolchain `mise.toml` names, when it is installed;
+# otherwise leave PATH alone and let the gates report normally.
 #
 # Set RAXOL_HOOK_NO_TOOLCHAIN=1 to skip this and use PATH as-is, which is what
 # you want when deliberately testing against a different Elixir.
 #
-# The version is VALIDATED before it is interpolated, because `.tool-versions`
-# is a repo-controlled file and the result of this goes on PATH. A branch
-# carrying `elixir ../../../../../../../tmp/evil` otherwise resolves to
+# The version is VALIDATED before it is interpolated, because `mise.toml` is a
+# repo-controlled file and the result of this goes on PATH. A branch carrying
+# `elixir = "../../../../../../../tmp/evil"` otherwise resolves to
 # `/tmp/evil/bin`, prepends it, and every `mix` and `elixir` below runs from
 # there. A version is a digit followed by version punctuation; anything else is
 # not one, and is skipped rather than resolved. The pattern admits no `/`, and
@@ -38,11 +38,22 @@ set -euo pipefail
 # branch, or commit with --no-verify.
 if [[ -n "${RAXOL_HOOK_NO_TOOLCHAIN:-}" ]]; then
   :
-elif [[ -f .tool-versions ]]; then
+elif [[ -f mise.toml ]]; then
   _mise_installs="${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs"
 
+  # Reads `<tool> = "<version>"` out of the `[tools]` table only, taking the
+  # first quoted value on the line so a trailing comment is not part of the
+  # version. Deliberately not a full TOML parser: this picks one string out of
+  # a file the repo controls, and the regex below is what decides whether that
+  # string is allowed to reach PATH.
   for _tool in elixir erlang; do
-    _ver="$(awk -v tool="$_tool" '$1 == tool { print $2; exit }' .tool-versions || true)"
+    _ver="$(awk -v tool="$_tool" '
+      /^[[:space:]]*\[/ { in_tools = ($0 ~ /^[[:space:]]*\[tools\][[:space:]]*$/); next }
+      in_tools && $1 == tool && match($0, /"[^"]*"/) {
+        print substr($0, RSTART + 1, RLENGTH - 2)
+        exit
+      }
+    ' mise.toml || true)"
 
     if [[ "$_ver" =~ ^[0-9][0-9A-Za-z._+-]*$ ]]; then
       _cand="$_mise_installs/$_tool/$_ver/bin"
@@ -67,7 +78,7 @@ if printf '%s\n' "$staged" | grep -qE '(^|/)mix\.(exs|lock)$'; then
   echo "pre-commit: verifying mix.lock is consistent..."
   if ! command -v mix >/dev/null 2>&1; then
     echo "pre-commit: no \`mix\` on PATH, cannot verify mix.lock." >&2
-    echo "  Install the toolchain \`.tool-versions\` names, or bypass knowingly." >&2
+    echo "  Install the toolchain \`mise.toml\` names, or bypass knowingly." >&2
     status=1
   elif ! output="$(mix deps.get --check-locked 2>&1)"; then
     echo "$output" >&2
@@ -109,7 +120,7 @@ if [[ -n "$md_files" ]]; then
   # diagnosis this gate exists to get right.
   if ! command -v elixir >/dev/null 2>&1; then
     echo "pre-commit: no \`elixir\` on PATH, cannot lint prose." >&2
-    echo "  Install the toolchain \`.tool-versions\` names, or bypass knowingly." >&2
+    echo "  Install the toolchain \`mise.toml\` names, or bypass knowingly." >&2
     status=1
   else
     prose_status=0
