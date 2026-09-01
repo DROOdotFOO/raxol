@@ -97,20 +97,20 @@ defmodule Harness do
 
   alias Raxol.UI.Components.Harness.ToolCallBlock, as: T
   @calls [
-    {"read", "router.ex"},
-    {"edit", "router.ex:42"},
+    {"read", "spend_gate.ex"},
+    {"edit", "spend_gate.ex:42"},
     {"shell", "mix test"}
   ]
+  @ladder [0, 0, 1, 1, 1, 1, 1, 2, 2, 3]
   def init(_), do: %{t: 0}
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
   def update(_, m), do: {m, []}
   def subscribe(_), do: [subscribe_interval(200, :tick)]
   def view(m) do
-    at = rem(m.t, length(@calls) + 1)
+    at = Enum.at(@ladder, rem(m.t, length(@ladder)))
     column style: %{gap: 1} do
       [
-        text("raxol code", style: [:bold]),
-        text("virtuals acp  job 4812  usdc_transfer", fg: :cyan),
+        text("virtuals acp  bugfix  40.00 USDC", fg: :cyan),
         column(do: Enum.with_index(@calls, &call(&1, &2, at, m.t)))
       ]
     end
@@ -200,11 +200,12 @@ defmodule GenLandingFrames do
   #          never repeats, so nothing divides it; the face is what an eye
   #          tracks, and the field reads as noise either way.
   #   harness
-  #          the ladder advances one call per tick now, so the loop closes on
-  #          the ladder rather than on the spinner: three calls plus the state
-  #          where all three are done is four frames. The spinner no longer
-  #          gets a full revolution, but a turn that never finished read as a
-  #          hung agent, which is worse than a clipped ten-frame cycle.
+  #          `@ladder` is the dwell, one entry per frame, so the ten frames it
+  #          holds are the loop. The dwell is uneven on purpose: `edit` sits
+  #          for five of them because it is the call a reader wants to watch,
+  #          and one call per tick went by too fast to follow. All-done gets a
+  #          single frame -- it is the one state with no spinner, so a second
+  #          frame of it would be identical to the first.
   #   settle three steps of one transfer plus the empty state they start
   #          from: four states, one per tick, so four frames closes the loop
   #          and no two repeat. A step every OTHER tick reads better but
@@ -213,7 +214,7 @@ defmodule GenLandingFrames do
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63},
     {"halo", Halo, {70, 14}, 110, 48},
-    {"harness", Harness, {40, 7}, 200, 4},
+    {"harness", Harness, {36, 5}, 200, 10},
     {"settle", Settle, {56, 7}, 200, 4}
   ]
 

@@ -16,6 +16,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   alias Raxol.UI.Components.Harness.AxolFace
   alias RaxolPlayground.BrandMarks
+  alias RaxolPlayground.NetworkMarks
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.RecordedFrames
   import Phoenix.HTML, only: [raw: 1]
@@ -121,31 +122,37 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # dependency edge added for one line of a hero pane would start a seller
   # supervision tree in the deployed site.
   #
-  # The ladder advances: one call lands per tick, and the turn finishes rather
-  # than sitting on `edit` forever with only the spinner moving, which read as
-  # a hang once `settle` beside it started completing. The statuses come from
-  # the tick, so `@calls` carries name and args only and `st/2` decides done,
-  # running or pending -- which is what buys the room, along with the shorter
-  # alias: the pane clips at thirty lines and sixty-seven columns.
+  # The turn finishes rather than sitting on `edit` forever with only the
+  # spinner moving, which read as a hang once `settle` beside it started
+  # completing. `@ladder` is the dwell per frame, uneven so `edit` holds long
+  # enough to read. The statuses come from the tick, so `@calls` carries name
+  # and args only and `st/2` decides done, running or pending -- that, and the
+  # shorter alias, is what fits: the pane clips at thirty lines and sixty-seven
+  # columns.
+  #
+  # The job is a paid coding job, not `usdc_transfer`. A pane that announced a
+  # transfer offering and then edited `router.ex` described no one's work: the
+  # harness earns by doing the thing it is good at, so the job is a bugfix at a
+  # price, and the calls are that bugfix.
   @harness_source ~S"""
   defmodule Harness do
     use Raxol.Core.Runtime.Application
     alias Raxol.UI.Components.Harness.ToolCallBlock, as: T
     @calls [
-      {"read", "router.ex"},
-      {"edit", "router.ex:42"},
+      {"read", "spend_gate.ex"},
+      {"edit", "spend_gate.ex:42"},
       {"shell", "mix test"}
     ]
+    @ladder [0, 0, 1, 1, 1, 1, 1, 2, 2, 3]
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def update(_, m), do: {m, []}
     def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
-      at = rem(m.t, length(@calls) + 1)
+      at = Enum.at(@ladder, rem(m.t, length(@ladder)))
       column style: %{gap: 1} do
         [
-          text("raxol code", style: [:bold]),
-          text("virtuals acp  job 4812  usdc_transfer", fg: :cyan),
+          text("virtuals acp  bugfix  40.00 USDC", fg: :cyan),
           column(do: Enum.with_index(@calls, &call(&1, &2, at, m.t)))
         ]
       end
@@ -316,6 +323,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns =
       assign(assigns,
         halo_faces: @halo_faces,
+        network_marks: NetworkMarks.all(),
         install_command: @install_command
       )
 
@@ -353,6 +361,26 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <span class="text-axol-coral">raxol code</span> coding harness, and
           cross-chain settlement. The demo below runs them.
         </p>
+
+        <%!-- The chains, as marks rather than as a sentence. This is the row
+             the sub-line used to spell out; a logo does not date the way a
+             list of five names did, and it survives a corridor being added
+             without anyone rewriting a paragraph. Six EVM chains carry a
+             token in the asset registry and Tron is reached over the relay
+             rail, which is the seventh. --%>
+        <ul class="screen-networks" aria-label="Networks raxol settles on">
+          <li :for={mark <- @network_marks} class="screen-networks__item">
+            <svg
+              class="screen-networks__mark"
+              viewBox={mark.view_box}
+              role="img"
+              aria-label={mark.name}
+            >
+              <title>{mark.name}</title>
+              {Phoenix.HTML.raw(mark.body)}
+            </svg>
+          </li>
+        </ul>
 
         <div class="screen-install">
           <.copyable_command id="screen-install-cmd" command={@install_command} tone={:coral} />
