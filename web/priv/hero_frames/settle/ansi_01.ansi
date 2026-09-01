@@ -1,9 +1,7 @@
-[37m[1mUSDC 25.00  Base -> Arbitrum One[0m                        
+[37m[1mUSDC 25.00  via xochi[0m                                   
                                                         
-[37m   standard        22 bps[0m                               
-[37m   trusted         19 bps[0m                               
-[37m   verified        15 bps[0m                               
-[36m-> premium         12 bps[0m                               
-[37m   institutional   10 bps[0m                               
+[36mok  quote   Base -> Arbitrum One[0m                        
+[36mok  sign    EIP-712 intent[0m                              
+[37m    settle[0m                                              
                                                         
-[37mUSDC on Ethereum, Optimism, Polygon, Base, Arbitrum One[0m 
+[37mstables  USDC  USDG  USDT[0m                               
