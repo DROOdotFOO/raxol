@@ -127,7 +127,9 @@ covers public state only on Aztec. Tron alone has three token standards, TRC-10 
 numeric ID rather than an address, so the token identifier must be a tagged type rather than a
 bare address.
 
-Net: **six required callbacks and two optional**, not eight required.
+Net: two of the eight originally required callbacks (`get_block` and `list_token_transfers`)
+are demoted, leaving **six required**. ADR-0033's optional set is eight, since it also carries
+the six that were never required.
 
 ## Identifier and naming conventions
 
@@ -169,6 +171,22 @@ Modelled on Exa, which is the best-documented free public MCP server:
   reporting a confusing error.
 - Guard against agent retry storms by making non-retryable errors read as terminal, and by
   deduplicating identical calls within a short window.
+- **A caller-supplied upstream key is a credential we hold in transit.** It arrives per
+  request, stays in process memory for the life of that request, and never reaches a log line,
+  a telemetry measurement, a cache key, or a durable store. Upstream error bodies are relayed
+  only after redaction, since an upstream that echoes the failing URL echoes the key with it.
+  The repo has the pattern in the Telegram adapter's token-redacted `getFile` download.
+- **A caller-influenced upstream target is server-side request forgery unless it is
+  constrained.** A public instance runs on Fly.io, where the reachable set includes the cloud
+  metadata endpoint at `169.254.169.254` and the whole 6PN private range, so any URL, host,
+  dataset name, or chain-to-endpoint mapping a caller can steer has to be resolved and checked
+  before the request goes out. ADR-0033 section 7 states the constraints an implementation
+  must satisfy.
+- **Upstream tool names and descriptions are untrusted text.** Aggregating TronGrid's 149
+  tools and TronScan's 119 puts 268 third-party descriptions into an agent's tool list, which
+  is instruction text the model reads. The current spec says as much: descriptions and
+  annotations are untrusted unless the server is. Serve a normalized facade rather than
+  pass-through, which the tool-count finding above already argues for on context grounds.
 
 ## Unverified
 

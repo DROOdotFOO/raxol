@@ -112,8 +112,8 @@ They preserve context for why decisions were made, help new contributors underst
 
 ### AI & MCP
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
-- [0033: Indexer-agnostic web3 data surface (raxol_web3)](0033-web3-data-surface.md)
 - [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
+- [0033: Indexer-agnostic web3 data surface (raxol_web3)](0033-web3-data-surface.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)

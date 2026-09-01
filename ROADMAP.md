@@ -118,8 +118,8 @@ One free, indexer-agnostic read layer over the chains we settle on, served as MC
 | Item | What | Effort | Status |
 | ---- | ---- | ------ | ------ |
 | `Raxol.MCP.Aggregator` | The one missing conversion direction: upstream MCP server -> `Raxol.MCP.Registry` tool defs, over the existing `MCP.Client`. Janitor lifecycle and `admit/1` bounds copied from `Code.McpLoader` | S | Planned |
-| Package skeleton | `raxol_web3` at 0.1.0, standalone; `Backend` behaviour (6 required + 8 optional callbacks, CAIP-2/10/19 refs, opaque cursors) + `Stub` in `lib/`; move `ChainReader`, `Tron.Address`, `Pxe.Client` down with shims | M | Planned |
-| EVM backend | Blockscout REST v2 + Chainscout resolution (746 chains, keyless, includes 4663) + RPC fallback. Needs a browser User-Agent (Cloudflare 403s otherwise) and per-chain health checks (base and polygon were 500ing) | M | Planned |
+| Package skeleton | `raxol_web3` at 0.1.0, standalone on `raxol_core` + `raxol_mcp` + `req`; `Backend` behaviour (6 required + 8 optional callbacks, CAIP-2/10/19 refs, opaque cursors) + `Stub` in `lib/`; move `ChainReader`, `Tron.Address`, `Pxe.Client`, `Payments.Poll` down with shims; rate limiting reuses `Raxol.Core.TokenBucket`, and a `Cache` behaviour + ETS adapter is built here since `Raxol.Agent.Cache` is not reachable from this graph | L | Planned |
+| EVM backend | Blockscout REST v2 + Chainscout resolution (746 chains, keyless, includes 4663) + RPC fallback. Identifies honestly and treats a Cloudflare challenge as backend-unhealthy so the router fails over, rather than sending a browser User-Agent; per-chain health checks (base and polygon were 500ing) | M | Planned |
 | Tron backend | TronGrid MCP (149 tools, keyless, verified live) and SQD Portal via `mcp_proxy`; TronScan secondary, pinned to a serialized policy since parallel calls on one session fail | S | Planned |
 | Solana backend | SQD Portal `solana-mainnet` + public RPC fallback. Requests per second binds long before monthly volume does | S | Planned |
 | Aztec backend | aztecscan keyless API, reusing `Pxe.Client`. Public state only; private state is architecturally unavailable | S | Planned |
