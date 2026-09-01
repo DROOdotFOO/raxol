@@ -1040,6 +1040,18 @@ html {
   .rung { grid-template-columns: 1fr 1fr; gap: 0.15rem 1rem; }
 }
 
+/* Two columns, for the ladders that are a label and one value: the routing
+   table and the Action list. The five-column template above is the fee
+   ladder's, and reusing it here wrapped "same-chain API call" onto two lines
+   inside a 7.5rem cell with the rest of the row empty. */
+.ladder--pair .rung {
+  grid-template-columns: minmax(0, 22rem) 1fr;
+}
+
+@media (max-width: 700px) {
+  .ladder--pair .rung { grid-template-columns: minmax(0, 1fr) auto; }
+}
+
 .rung--head {
   background: rgba(18, 18, 26, 0.85);
 }
@@ -1054,6 +1066,11 @@ html {
 .rung__tier { font-weight: 600; color: var(--pearl-cream); }
 .rung__fee { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .rung__note { color: var(--text-dim); font-size: 0.8rem; }
+
+/* The Actions that move money. Same weight as the rest of the column would
+   have made the one distinction the table exists to draw invisible; it needs
+   more specificity than `.rung__note` to win the colour. */
+.rung .rung__note--gated { color: var(--axol-coral); }
 
 .set-public { color: var(--text-dim); }
 .set-stealth { color: var(--axol-coral); }

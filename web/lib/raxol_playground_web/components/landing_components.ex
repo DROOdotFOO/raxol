@@ -1067,6 +1067,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         solver_floor: Raxol.Payments.FeeSchedule.solver_base_bps(),
         payments_version: @payments_version,
         rows: reach_rows(assigns.matrix),
+        routes: routes(),
+        payment_actions: payment_actions(),
         show_future_svm:
           not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
@@ -1177,8 +1179,93 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
+      <h2 class="name-coral mt-14 mb-2">How an agent pays</h2>
+      <p class="body-text-dim max-w-2xl mb-4">
+        The page above prices a transfer and says where it can go. This is the
+        part an agent actually touches: which rail a request takes, and what it
+        can call. Both are read out of the code at render rather than written
+        here -- the rails from <code>Raxol.Payments.Router.select/1</code>, the
+        tools from the Actions themselves.
+      </p>
+
+      <div class="ladder ladder--pair mb-4" role="table" aria-label="Protocol routing">
+        <div class="rung rung--head" role="row">
+          <span role="columnheader">Request</span>
+          <span role="columnheader">Rail</span>
+        </div>
+        <div :for={row <- @routes} class="rung" role="row">
+          <span class="rung__note" role="cell"><%= row.label %></span>
+          <span class="rung__tier" role="cell"><%= row.protocol %></span>
+        </div>
+      </div>
+
+      <p class="caption-text max-w-2xl mb-10">
+        Read the last two together. A Tron leg wins over privacy because the
+        relay rail is public-only, so a stealth request bound for Tron routes
+        there and is then refused at the Action rather than quietly settling in
+        public. Riddler is reachable but never auto-selected: it is the B2B
+        path and it is cash-negative for an agent.
+      </p>
+
+      <h2 class="name-coral mb-2">
+        <%= length(@payment_actions) %> Actions on the agent
+      </h2>
+      <p class="body-text-dim max-w-2xl mb-4">
+        An Action marked <strong>moves funds</strong> is denied on the LLM
+        tool-call path unless the agent opts in with a
+        <code>:tool_authorizer</code>, so a model that hallucinates a transfer
+        cannot execute one. Reads are not gated.
+      </p>
+
+      <div class="ladder ladder--pair" role="table" aria-label="Payment Actions">
+        <div :for={action <- @payment_actions} class="rung" role="row">
+          <span class="rung__tier" role="cell"><%= action.name %></span>
+          <span
+            class={["rung__note", action.sensitive && "rung__note--gated"]}
+            role="cell"
+          >
+            <%= if action.sensitive, do: "moves funds", else: "read only" %>
+          </span>
+        </div>
+      </div>
     </section>
     """
+  end
+
+  # Both tables are derived at render rather than typed. The rails come from
+  # the router itself, so a page cannot advertise a route the product would not
+  # pick; the Actions come from `__action_meta__/0` on every module the
+  # raxol_payments application ships, so one added to the package appears here
+  # without this file being touched, and its `sensitive` flag is the same one
+  # the tool-call gate reads.
+  @routes [
+    {"same-chain API call", [cross_chain: false]},
+    {"cross-chain transfer", [cross_chain: true]},
+    {"privacy: stealth", [privacy: :stealth]},
+    {"privacy: shielded", [privacy: :shielded]},
+    {"leg into Tron", [from_chain_id: 8453, to_chain_id: 728_126_428]},
+    {"stealth, bound for Tron", [privacy: :stealth, to_chain_id: 728_126_428]}
+  ]
+
+  @doc false
+  @spec routes() :: [map()]
+  def routes do
+    Enum.map(@routes, fn {label, opts} ->
+      %{label: label, protocol: Raxol.Payments.Router.select(opts)}
+    end)
+  end
+
+  @doc false
+  @spec payment_actions() :: [map()]
+  def payment_actions do
+    {:ok, modules} = :application.get_key(:raxol_payments, :modules)
+
+    modules
+    |> Enum.filter(fn m ->
+      Code.ensure_loaded?(m) and function_exported?(m, :__action_meta__, 0)
+    end)
+    |> Enum.map(& &1.__action_meta__())
+    |> Enum.sort_by(& &1.name)
   end
 
   @doc """

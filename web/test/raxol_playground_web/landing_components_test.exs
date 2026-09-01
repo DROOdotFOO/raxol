@@ -10,6 +10,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   alias RaxolPlayground.BrandMarks
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.NetworkMarks
+  alias Raxol.Payments.Router
   alias RaxolPlayground.RecordedFrames
   alias RaxolPlayground.SurfaceSource
   alias RaxolPlaygroundWeb.LandingComponents
@@ -827,6 +828,53 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     ],
     deposit_attestation_signer: nil
   }
+
+  # The two tables under "How an agent pays" are the ones a reader would act
+  # on, so neither may be typed. The rails are held against the router itself
+  # and the tools against the Actions the package ships -- an Action added to
+  # raxol_payments has to appear on the page without anyone editing it, and its
+  # sensitivity has to be the flag the tool-call gate actually reads.
+  test "the routing table is the router's own answer" do
+    payments =
+      render_component(&LandingComponents.payments_deep_dive/1,
+        matrix: @live_matrix
+      )
+
+    for %{label: label, protocol: protocol} <- LandingComponents.routes() do
+      assert payments =~ label
+      assert payments =~ to_string(protocol)
+    end
+
+    # Not a fixture: this is the routing rule itself, so a page that drifted
+    # from it would be advertising a rail the product would not pick.
+    assert Router.select(cross_chain: false) == :x402
+    assert Router.select(cross_chain: true) == :xochi
+    assert Router.select(privacy: :stealth) == :xochi
+    assert Router.select(to_chain_id: 728_126_428) == :relay
+  end
+
+  test "every payment Action is listed with the sensitivity the gate reads" do
+    payments =
+      render_component(&LandingComponents.payments_deep_dive/1,
+        matrix: @live_matrix
+      )
+
+    actions = LandingComponents.payment_actions()
+
+    assert length(actions) > 0, "no payment Actions were derived at all"
+
+    for %{name: name, sensitive: sensitive} <- actions do
+      assert payments =~ name, "the Action table omits #{name}"
+
+      assert sensitive == Module.concat([
+               "Raxol.Payments.Actions.Payments",
+               Macro.camelize(String.replace(name, "payment_", ""))
+             ]).__action_meta__().sensitive
+    end
+
+    assert payments =~ "moves funds"
+    assert payments =~ "read only"
+  end
 
   test "payments section renders the ladder, dated proof, and a live matrix honestly" do
     payments =
