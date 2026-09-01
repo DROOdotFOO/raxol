@@ -158,12 +158,14 @@ Two consequences worth knowing:
 
 ## Region prominence
 
-> **Proposed (not yet implemented).** This section describes an intended
-> design. None of the modules or functions named below
-> (`Raxol.UI.ColorResolver`, `Raxol.UI.ColorIntent`,
-> `Raxol.UI.RegionPolicy.region_prominence/4`,
-> `Raxol.UI.Layout.Engine.stamp_region_prominence/2`, `@region_gamma`) exist in
-> the codebase yet. Do not treat it as a reference to shipped behavior.
+> **Partly built, not yet wired.** `Raxol.UI.ColorResolver`,
+> `Raxol.UI.ColorIntent`, and the `@region_gamma` solve exist and have their
+> own tests. The policy and engine halves do not:
+> `Raxol.UI.RegionPolicy.region_prominence/4` and
+> `Raxol.UI.Layout.Engine.stamp_region_prominence/2` are absent, so nothing
+> stamps the per-element prominence the resolver knows how to read, and no
+> render path calls the resolver yet. Read the bullets below as intended
+> design, not as a description of what a frame does today.
 
 Intent colors resolve to literals exactly once, at the render choke point:
 `Raxol.UI.ColorResolver` is the single whole-list pass that turns

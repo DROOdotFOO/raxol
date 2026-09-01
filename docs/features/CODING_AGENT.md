@@ -545,8 +545,10 @@ empty config.
 ACP-speaking editor (Zed and its ecosystem) can spawn and drive it: each
 `session/new` gets a real `Raxol.AgentClientProtocol.Session` running
 `Raxol.Agent.ClientProtocol.TurnRunner` over the same provider resolution
-as every other entrypoint. Turns are read-only on this surface until ACP's
-permission flow is bridged to the authorization engine. Each session's file
+as every other entrypoint. Turns run the full toolset: every sensitive call is
+gated on a `session/request_permission` round trip, and the gate is fail-closed
+on the decision, so a client that refuses, times out, or never implements the
+method denies the write and keeps reading. Each session's file
 tools scope to the `cwd` the editor names in `session/new`, so one server
 handles projects in different directories and every tool call is contained
 under its own session root. Point

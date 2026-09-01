@@ -1,123 +1,67 @@
-# Scripts Directory Structure
+# Scripts
 
-This directory contains organized utility scripts for the Raxol project. Scripts are categorized by function for better maintainability and discoverability.
+Utility scripts for the Raxol project, grouped by function. Anything a
+contributor runs routinely is either `dev.sh` or a top-level gate; the
+subdirectories hold narrower tooling.
 
-## Directory Organization
+## Main entry point
 
-```
-scripts/
-├── ci/              # CI/CD related scripts
-├── dev/             # Development utilities
-├── testing/         # Test-related scripts
-├── docs/            # Documentation generation
-├── quality/         # Code quality and checks
-├── db/              # Database utilities
-├── visualization/   # Visualization and demo scripts
-├── bin/             # Executable scripts
-├── archived/        # Archived/deprecated scripts
-└── dev.sh          # Main development script (entry point)
-```
-
-## Main Entry Point
-
-### `dev.sh`
-The unified development script that provides convenient access to common tasks:
-- `./dev.sh test [pattern]` - Run tests with optional pattern filter
-- `./dev.sh test-all` - Run comprehensive test suite
-- `./dev.sh format` - Format code
-- `./dev.sh check` - Run quality checks
-- `./dev.sh dialyzer` - Run Dialyzer analysis
-- `./dev.sh setup` - Setup development environment
-- `./dev.sh db [action]` - Database operations
-- `./dev.sh release` - Create release
-- `./dev.sh clean` - Clean build artifacts
-
-## Directory Contents
-
-### `ci/` - CI/CD Scripts
-- `build_and_test.sh` - Build and test automation
-- `ci_validate_structure.sh` - Validate project structure
-- `migrate-workflows.sh` - Migrate CI workflows
-- `rollback-workflows.sh` - Rollback CI workflows
-
-### `dev/` - Development Utilities
-- `release.exs` - Release management
-- `install_pre_commit.sh` - Pre-commit hook installation
-- `run_native_terminal.sh` - Native terminal testing
-- `verify_nix_env.sh` - Nix environment verification
-- Various cleanup and refactoring utilities
-
-### `testing/` - Testing Scripts
-- `run_tests.sh` - Test runner
-- `check_coverage.exs` - Coverage analysis
-- `analyze_tests.exs` - Test analysis
-- `run_platform_tests.exs` - Platform-specific tests
-- `summarize_test_errors.sh` - Error summary generation
-- Various test utilities
-
-### `quality/` - Code Quality
-- `pre_commit_check.exs` - Pre-commit validation
-- `code_quality_metrics.exs` - Quality metrics
-- `check_style.exs` - Style checking
-- `check_duplicate_filenames.exs` - Duplicate detection
-- `explain_credo_warning.exs` - Credo warning explanations
-- Various validation scripts
-
-### `db/` - Database Utilities
-- `setup_db.sh` - Database setup
-- `check_db.exs` - Connectivity check
-- `diagnose_db.exs` - Database diagnostics
-
-### `visualization/` - Visualization & Demos
-- `demo_videos.sh` - Demo video generation
-- `demo_showcase.md` - Demo documentation
-- `test_visualization.exs` - Visualization tests
-- `run_visualization_tests.exs` - Visualization test suite
-
-### `docs/` - Documentation Generation
-- `generate_docs.exs` - Main documentation generator
-- `generate_api_docs.exs` - API documentation
-- `simple_doc_generator.exs` - Simple doc generation
-- `check_links.js` - Link validation
-- `maintenance.js` - Documentation maintenance
-- `search.js` - Documentation search
-
-### `bin/` - Executable Scripts
-- `demo.exs` - Demo runner
-- `run_showcase.exs` - Showcase runner
-
-### `archived/` - Archived Scripts
-Contains deprecated, experimental, and refactoring scripts from previous sprints. These are kept for reference but are not actively maintained.
-
-## Usage examples
+`dev.sh` wraps the common tasks:
 
 ```bash
-# Run all tests
-./dev.sh test-all
-
-# Run tests matching a pattern
-./dev.sh test terminal
-
-# Check code quality before committing
-./dev.sh check
-
-# Setup development environment
-./dev.sh setup
-
-# Database operations
-./dev.sh db setup
-./dev.sh db check
-./dev.sh db diagnose
-
-# Create a release
-./dev.sh release
+./dev.sh test [pattern]   # run tests, optionally filtered
+./dev.sh test-all         # comprehensive suite
+./dev.sh format           # format code
+./dev.sh check            # quality checks
+./dev.sh dialyzer         # static analysis with PLT caching
+./dev.sh setup            # environment setup
+./dev.sh db [action]      # database operations
+./dev.sh release          # create a release
+./dev.sh clean            # clean build artifacts
 ```
 
-## Adding New Scripts
+## Top-level gates and tools
 
-When adding new scripts:
-1. Place them in the appropriate subdirectory based on function
-2. Update this README with a description
-3. If commonly used, consider adding to `dev.sh` for easier access
-4. Follow existing naming conventions (snake_case for scripts)
-5. Add proper documentation headers in the script itself
+| Script | What it does |
+| --- | --- |
+| `prose_lint.exs` | Markdown prose rules and relative-link resolution. The pre-commit hook and `mix raxol.check_docs` both run it |
+| `check_toolchain.sh` | Verifies the active Elixir/OTP matches `mise.toml` |
+| `check_singletons.sh` | Diffs `name: __MODULE__` registrations against `.singletons-allowlist` |
+| `check_duplicate_filenames.exs` | Reports duplicate basenames under `lib/` and `test/` |
+| `check_package_formatting.sh` | Runs each package's own `mix format` gate |
+| `check-lockstep-deps.sh` | Catches sibling-package version drift |
+| `check_formatter_loaders.exs` | Verifies `.formatter.exs` subdirectory delegation |
+| `check_journal_goldens.exs` | Harness journal golden check |
+| `check_domains.sh` | Domain and DNS checks |
+| `install.sh` | The `curl \| bash` installer served from raxol.io |
+| `gen_homebrew_formula.sh` | Emits the Homebrew tap formula |
+| `run_live_gates.sh` | The stablecoin cross-chain go-live matrix |
+| `smoke-test.sh` | Post-deploy smoke test |
+| `acp_probe.py` | Drives an ACP agent over stdio and records the wire |
+| `analyze_performance_regression.exs`, `analyze_memory_regression.exs` | Regression analysis over benchmark output |
+| `find_missing_moduledocs.exs` | Lists modules without a `@moduledoc` |
+| `gen_landing_frames.exs`, `social_preview.exs` | Web asset generation |
+| `deploy-raxol-solver.sh` | Solver deployment |
+
+## Directories
+
+| Directory | Contents |
+| --- | --- |
+| `ci/` | Build/test automation, structure validation, workflow migration |
+| `dev/` | Release management, native-terminal runner, Nix verification, one-off refactor helpers |
+| `testing/` | Test runner, coverage, platform tests, terminal verification |
+| `quality/` | Style, docs, type-safety, accessibility, and performance checks |
+| `db/` | Database setup and diagnostics |
+| `docs/` | API doc generation, link validation, docs search |
+| `visualization/` | Demo video generation and visualization benchmarks |
+| `harness/` | The T0 terminal-matrix measurement harness (see `docs/proposals/t0-runbook.md`) |
+| `deploy/` | Deployment build scripts |
+| `bin/` | Demo and showcase runners |
+
+## Adding a script
+
+1. Put it in the directory that matches its function, or at the top level if
+   it is a gate the whole repo runs.
+2. Add a row above.
+3. If it is commonly used, wire it into `dev.sh`.
+4. Use snake_case, and put a documentation header in the script itself.

@@ -1,98 +1,60 @@
 # Raxol test suite
 
-Welcome! This directory contains Raxol's comprehensive test suite, designed for reliability, speed, and maintainability.
+The root app's tests. Each extracted package under `packages/` has its own
+suite, run from inside that package. The full guide, including package
+commands, property-based testing, and the quality gate, is
+[docs/testing/README.md](../docs/testing/README.md).
 
----
+## Running
 
-## Test structure
-
-- `test/support/`: test helpers and support modules
-  - `data_case.ex`: database test setup
-  - `test_helpers.ex`: common test utilities
-- `test/`: test files organized by module or feature
-
----
-
-## Best practices
-
-- **No `Process.sleep`:**
-  Use event-based synchronization (`assert_receive`) or `Raxol.TestHelpers.wait_for_state/2` for polling.
-- **Resource Cleanup:**
-  Always use `on_exit` in `setup` blocks to clean up processes, ETS tables, and temp files.
-- **Database Tests:**
-  Use `Raxol.DataCase` and set `async: false` for shared state.
-- **Test Isolation:**
-  Use unique process names and reset shared state in `setup`.
-- **Event-Based Testing:**
-  Prefer `assert_receive` and `make_ref()` for precise event timing.
-
----
-
-## Test categories
-
-- **Unit Tests:**
-  Test individual functions/modules (`ExUnit.Case`, `async: true`).
-- **Integration Tests:**
-  Test component interactions (`ExUnit.Case, async: false`).
-- **Database Tests:**
-  Use `Raxol.DataCase`, always `async: false`.
-- **Performance Tests:**
-  Use `ExUnit.Case, async: false`, may require longer timeouts.
-
----
-
-## Running tests
+The suite expects `MIX_ENV=test`, `SKIP_TERMBOX2_TESTS=true`, and `TMPDIR=/tmp`.
 
 ```bash
-mix test                      # Run all tests
-mix test test/path/to/test.exs  # Run a specific test file
-mix test test/path/to/test.exs:123  # Run a specific test
+MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker
+MIX_ENV=test mix test test/path/to/test.exs
+MIX_ENV=test mix test test/path/to/test.exs:123
+MIX_ENV=test mix test --failed
 ```
 
----
+## Layout
 
-## Test configuration
+- `test/support/`: helpers and case templates
+- `test/property/`: StreamData property tests
+- `test/fixtures/`: checked-in fixtures (harness sessions and goldens, themes,
+  plugins, configs)
+- everything else: tests organized by module or feature. Test paths do not
+  always mirror `lib/` paths, so grep before concluding something is untested
 
-Configuration is in `config/test.exs`. Key settings:
+## Helpers
 
-- Database pool size: 10
-- Logger level: `:warn`
-- Assert receive timeout: 1000ms
-- Test mode enabled
-- Database enabled
+| Module | File | What it gives you |
+| --- | --- | --- |
+| `Raxol.Test.TestHelper` | `support/raxol_test_helper.ex` | Common setup, `wait_for_state/2` polling |
+| `Raxol.Test.IsolationHelper` | `support/isolation_helper.ex` | `reset_global_state/0` between tests |
+| `Raxol.Test.TestUtils` | `support/test_utils.ex` | Case template with shared utilities |
+| `Raxol.Test.SharedUtilities` | `support/shared_test_utilities.ex` | Utilities the other helpers share |
+| `Raxol.DataCase` | `support/data_case.ex` | Database-backed setup, always `async: false` |
+| `Raxol.Test.PropertyGenerators` | `support/property_generators.ex` | StreamData generators |
 
----
+Mocks for the core runtime behaviours are defined in `test_helper.exs`.
+Database tests run against a MockDB adapter, not an Ecto sandbox;
+`database_enabled` is false in `config/test.exs`.
 
-## Adding new tests
+## Conventions
 
-1. Choose the right test case (`ExUnit.Case`, `Raxol.DataCase`, or `Raxol.ConnCase`).
-2. Follow best practices above.
-3. Add cleanup in `setup` blocks.
-4. Use helpers from `Raxol.TestHelpers`.
-5. Document any special requirements.
+- **No `Process.sleep`.** Use `assert_receive` or `wait_for_state/2`.
+- **Clean up in `setup`.** `on_exit` for processes, ETS tables, and temp files.
+- **Isolate.** Unique process names, and reset shared state rather than relying
+  on test order.
+- **Async where safe.** `async: true` for pure unit tests, `async: false` for
+  anything touching a named process or the database.
 
----
-
-## Test helpers
-
-- **Raxol.TestHelpers:**
-  Event-based sync, process/ETS/registry cleanup, temp file handling.
-- **Raxol.DataCase:**
-  Transaction management, sandboxing, error handling, changeset validation.
-
----
+Tags auto-excluded by environment: `:docker` and `:skip_on_ci` (when
+`SKIP_TERMBOX2_TESTS=true`), `:unix_only` (on Windows), plus `:slow` and
+`:integration` when you pass the exclude flags above.
 
 ## Troubleshooting
 
-- **Flaky Tests:**
-  Replace `Process.sleep` with event-based sync, ensure cleanup, use unique state.
-- **Database Issues:**
-  Use `Raxol.DataCase`, set `async: false`, clean up after tests.
-- **Process Cleanup:**
-  Use `on_exit`, monitor process state, clean up resources.
-- **Event Timing:**
-  Use appropriate timeouts, add event tracing, check propagation.
-
----
-
-Happy testing!
+Flaky under a full run but green alone is almost always shared state. See
+[Test Isolation Guide](../docs/testing/TEST_ISOLATION_GUIDE.md) and
+[Quick Reference](../docs/testing/QUICK_REFERENCE.md).
