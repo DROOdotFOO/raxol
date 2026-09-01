@@ -22,7 +22,6 @@ packages/raxol_watch/lib/raxol/watch/supervisor.ex
 
 # Intentional VM-wide services
 lib/raxol/rbac.ex
-lib/raxol/rate_limit.ex
 lib/raxol/dev/code_reloader.ex
 packages/raxol_core/lib/raxol/core/runtime/process_store.ex
 packages/raxol_core/lib/raxol/core/config/config_store.ex
