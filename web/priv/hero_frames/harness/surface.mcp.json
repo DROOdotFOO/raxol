@@ -28,7 +28,7 @@
             "type": "row",
             "children": [
               {
-                "id": "tool-call-2472-glyph",
+                "id": "tool-call-5955-glyph",
                 "label": "✓",
                 "type": "text",
                 "children": [],
@@ -36,7 +36,7 @@
                 "content": "✓"
               },
               {
-                "id": "tool-call-2472-name",
+                "id": "tool-call-5955-name",
                 "label": "read",
                 "type": "text",
                 "children": [],
@@ -44,7 +44,7 @@
                 "content": "read"
               },
               {
-                "id": "tool-call-2472-args",
+                "id": "tool-call-5955-args",
                 "label": "router.ex",
                 "type": "text",
                 "children": [],
@@ -59,15 +59,15 @@
             "type": "row",
             "children": [
               {
-                "id": "tool-call-2504-glyph",
-                "label": "⠸",
+                "id": "tool-call-5987-glyph",
+                "label": "✓",
                 "type": "text",
                 "children": [],
                 "role": "text",
-                "content": "⠸"
+                "content": "✓"
               },
               {
-                "id": "tool-call-2504-name",
+                "id": "tool-call-5987-name",
                 "label": "edit",
                 "type": "text",
                 "children": [],
@@ -75,7 +75,7 @@
                 "content": "edit"
               },
               {
-                "id": "tool-call-2504-args",
+                "id": "tool-call-5987-args",
                 "label": "router.ex:42",
                 "type": "text",
                 "children": [],
@@ -90,15 +90,15 @@
             "type": "row",
             "children": [
               {
-                "id": "tool-call-2536-glyph",
-                "label": "○",
+                "id": "tool-call-6019-glyph",
+                "label": "⠹",
                 "type": "text",
                 "children": [],
                 "role": "text",
-                "content": "○"
+                "content": "⠹"
               },
               {
-                "id": "tool-call-2536-name",
+                "id": "tool-call-6019-name",
                 "label": "shell",
                 "type": "text",
                 "children": [],
@@ -106,7 +106,7 @@
                 "content": "shell"
               },
               {
-                "id": "tool-call-2536-args",
+                "id": "tool-call-6019-args",
                 "label": "mix test",
                 "type": "text",
                 "children": [],
