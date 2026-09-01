@@ -267,9 +267,16 @@ Hooks.HeroDemo = {
     this.sync()
   },
 
+  // Glyph for sight, label for everything else: `||` and `|>` carry no meaning
+  // to a screen reader, so the accessible name is the word and is kept in step
+  // with the glyph here rather than left on the markup's initial value.
   syncPauseLabel() {
     const btn = this.el.querySelector('[data-role="player-pause"]')
-    if (btn) btn.textContent = this.userPaused ? 'play' : 'pause'
+    if (!btn) return
+    const label = this.userPaused ? 'Play the demo' : 'Pause the demo'
+    btn.textContent = this.userPaused ? '|>' : '||'
+    btn.setAttribute('aria-label', label)
+    btn.setAttribute('title', label)
   },
 
   sync() {

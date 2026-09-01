@@ -673,10 +673,28 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <span class="hd-name"><b>{@title}</b> &middot; {@blurb}</span>
         <span class="hd-title" data-role="title">rendering to the terminal</span>
 
+        <%!-- Ruled off from the captions beside them. The bar reads left to
+             right as one run of small mono text, so the two things that are
+             actually clickable were indistinguishable from the sentence that
+             ends just before them. The transport is a glyph now (`||` and the
+             pipe, which the mono stack always has, where a media glyph would
+             be a font gamble) and the switcher wears a border, so the bar has
+             one label, one icon and one button rather than four phrases. --%>
         <div class="hd-controls">
-          <button type="button" data-role="player-pause" class="hd-control">pause</button>
-          <button type="button" phx-click="next_example" class="hd-control hd-control--next">
-            {example_title(@next)} &rarr;
+          <button
+            type="button"
+            data-role="player-pause"
+            class="hd-control hd-control--icon"
+            aria-label="Pause the demo"
+            title="Pause the demo"
+          >||</button>
+          <button
+            type="button"
+            phx-click="next_example"
+            class="hd-control hd-control--next"
+            aria-label={"Next example: #{example_title(@next)}"}
+          >
+            {example_title(@next)} <span aria-hidden="true">&rarr;</span>
           </button>
         </div>
       </div>
