@@ -1733,11 +1733,18 @@ html {
   }
 }
 
+/* Ruled off from the captions. Everything in this bar is small mono text, so
+   without the divider the surface caption ran straight into the transport and
+   the switcher and the whole right side read as one sentence -- the two things
+   you can actually click did not look clickable. */
 .hd-controls {
   display: flex;
   align-items: center;
-  gap: 1.1rem;
+  gap: 0.55rem;
   flex: 0 0 auto;
+  margin-left: 0.5rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--panel-border);
 }
 
 /* 24px minimum box, per WCAG 2.2 target size -- the same floor the header
@@ -1761,8 +1768,37 @@ html {
   color: var(--pearl-cream);
 }
 
+/* Square, and the one control that is a glyph rather than a word. The box is
+   the WCAG target floor; `||` and `|>` are narrow enough that the text alone
+   would be a few pixels wide. */
+.hd-control--icon {
+  justify-content: center;
+  min-width: 1.5rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  letter-spacing: 0;
+}
+
+.hd-control--icon:hover,
+.hd-control--icon:focus-visible {
+  border-color: var(--text-dim);
+}
+
+/* Bordered, because it is the one thing in the bar a reader is meant to press
+   and it used to be four coral words sitting flush against a caption. */
 .hd-control--next {
   color: var(--axol-coral);
+  gap: 0.35rem;
+  padding: 0 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--axol-coral) 35%, transparent);
+  border-radius: 3px;
+}
+
+.hd-control--next:hover,
+.hd-control--next:focus-visible {
+  color: var(--axol-coral);
+  border-color: var(--axol-coral);
+  background: color-mix(in srgb, var(--axol-coral) 10%, transparent);
 }
 
 .hero-tabs {
