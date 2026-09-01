@@ -103,7 +103,7 @@ defmodule Raxol.Harness.Surface do
   module therefore owns the transition as explicit, directly-callable
   API: `focus_transcript/1` (composing? false, enables jump/fold) and
   `focus_composer/1` (composing? true, the default). A future key or
-  mouse binding (a command palette, a focus-lens hover per ADR-0012)
+  mouse binding (a command palette, an attention-aware focus-lens hover)
   wires one of these directly; today's fixture-only assembly exposes them
   for a caller (or a test) to invoke. `focused_block_id` is threaded to
   `Keymap.resolve/2`'s context from `focused_index` (see "Fold/jump"

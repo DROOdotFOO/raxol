@@ -3,8 +3,8 @@ defmodule Raxol.Earn.JobSession.HandlerSeam do
   Maps a provider lifecycle point to the matching
   `Raxol.Earn.Offering.Handler` callback.
 
-  The v2 provider driver (Phase 1) uses this to invoke an offering's handler
-  at the right point in a `Raxol.Earn.JobSession` lifecycle:
+  The v2 provider driver uses this to invoke an offering's handler at the
+  right point in a `Raxol.Earn.JobSession` lifecycle:
 
   - `:request` -> `c:Raxol.Earn.Offering.Handler.handle_request/2` when a job
     is offered (before `set_budget`).

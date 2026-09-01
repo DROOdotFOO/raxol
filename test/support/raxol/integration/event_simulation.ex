@@ -211,13 +211,13 @@ defmodule Raxol.Test.Integration.EventSimulation do
   end
 
   defp process_dispatch_command(command, _component) do
-    # Handle other command types as needed
+    # Command types this helper does not simulate.
     IO.puts("Unhandled command: #{inspect(command)}")
   end
 
   defp handle_parent_dispatch(%{parent_id: parent_id}, parent_event) do
-    # For now, we'll need to access the parent component through the test context
-    # This is a simplified implementation - in a real system, we'd have proper parent references
+    # Parent references do not exist in this helper, so the dispatch is only
+    # reported. Reaching a real parent would require the test context.
     IO.puts("Would dispatch #{inspect(parent_event)} to parent #{parent_id}")
   end
 
@@ -272,9 +272,8 @@ defmodule Raxol.Test.Integration.EventSimulation do
 
   # Helper function to find a child component by ID in ComponentManager
   defp find_child_component_by_id_in_manager(child_id) do
-    # Get all components from ComponentManager and find the one with matching ID
-    # This is a test helper approach - in production you'd have a proper lookup
-    # We need to iterate through all components to find the one with the matching internal ID
+    # Linear scan of every component in ComponentManager. A test helper:
+    # production code resolves children through a real lookup, not a scan.
     ComponentManager.get_all_components()
     |> Enum.find_value(fn
       {_manager_id, %{state: %{id: ^child_id}} = component} -> component

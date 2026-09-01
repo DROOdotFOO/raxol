@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
   @moduledoc """
-  Phase 6: validates that `agent.workflow_mode: true` routes the
+  Validates that `agent.workflow_mode: true` routes the
   RaxolAgent runner through `Raxol.Workflow.Compiled.invoke/resume`
   while preserving the existing `Runner.run/3` contract:
 

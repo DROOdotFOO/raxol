@@ -217,8 +217,8 @@ defmodule Raxol.Core.Runtime.Plugins.PluginLifecycle do
   end
 
   def handle_call({:filter_event, event}, _from, state) do
-    # Pass event through — no plugins loaded means no filtering needed.
-    # If plugins were loaded, we'd iterate their filter_event/2 callbacks.
+    # No plugins loaded means no filtering; otherwise the loaded plugins'
+    # filter_event/2 callbacks run through EventFilter.
     if map_size(state.plugin_configs) == 0 do
       {:reply, {:ok, event}, state}
     else

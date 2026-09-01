@@ -1,7 +1,7 @@
 if Code.ensure_loaded?(Phoenix.LiveView) do
   defmodule Raxol.Symphony.Web.DashboardLive do
     @moduledoc """
-    Phoenix LiveView dashboard for the Symphony orchestrator (Phase 10).
+    Phoenix LiveView dashboard for the Symphony orchestrator.
 
     Mounts the orchestrator subscription, refreshes the snapshot every
     second, and renders running + paused + retrying tables in HTML.

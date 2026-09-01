@@ -1,15 +1,16 @@
 defmodule Raxol.Symphony.PauseReasonConventionTest do
   @moduledoc """
-  ADR-0018 §1 mechanical enforcement: every interrupt-reason atom a
-  runner declares via the optional `Raxol.Symphony.Runner.pause_reasons/0`
-  callback, AND every atom in `Raxol.Earn.Job.Workflow.pause_reasons/0`,
-  MUST satisfy `Raxol.Symphony.PauseReason.awaiting?/1`.
+  Mechanical enforcement of the operator-flow pause vocabulary: every
+  interrupt-reason atom a runner declares via the optional
+  `Raxol.Symphony.Runner.pause_reasons/0` callback, AND every atom in
+  `Raxol.Earn.Job.Workflow.pause_reasons/0`, MUST satisfy
+  `Raxol.Symphony.PauseReason.awaiting?/1`.
 
   The convention is `:awaiting_<subject>` where `<subject>` names the
   *external party* the run is waiting on. This test catches typos
   (`:awating_review`), shape drift (`:waiting_for_X`), and bare
-  `:awaiting_` (missing subject) at PR time -- the ADR is otherwise
-  enforced only by code review.
+  `:awaiting_` (missing subject) at PR time. Nothing else enforces the
+  shape, so without this the vocabulary drifts one runner at a time.
   """
 
   use ExUnit.Case, async: true
@@ -48,7 +49,7 @@ defmodule Raxol.Symphony.PauseReasonConventionTest do
                      "#{inspect(@runner)} declared a non-atom pause reason: #{inspect(atom)}"
 
               assert PauseReason.awaiting?(atom),
-                     "#{inspect(@runner)} declared reason #{inspect(atom)} that violates ADR-0018 §1 (:awaiting_<subject>)"
+                     "#{inspect(@runner)} declared reason #{inspect(atom)} that violates the :awaiting_<subject> convention"
             end
 
           :none ->
@@ -69,7 +70,7 @@ defmodule Raxol.Symphony.PauseReasonConventionTest do
 
       assert implementing != [],
              "no shipped runner implements the optional " <>
-               "Raxol.Symphony.Runner.pause_reasons/0 callback; ADR-0018 §1 has no mechanical enforcement"
+               "Raxol.Symphony.Runner.pause_reasons/0 callback; the pause vocabulary has no mechanical enforcement"
     end
 
     test "the callback is declared as optional on the behaviour" do
@@ -85,7 +86,7 @@ defmodule Raxol.Symphony.PauseReasonConventionTest do
 
         for atom <- atoms do
           assert PauseReason.awaiting?(atom),
-                 "ACP Job.Workflow declared reason #{inspect(atom)} that violates ADR-0018 §1"
+                 "ACP Job.Workflow declared reason #{inspect(atom)} that violates the :awaiting_<subject> convention"
         end
       end
     end
@@ -111,8 +112,8 @@ defmodule Raxol.Symphony.PauseReasonConventionTest do
 
   describe "PauseReason.canonical/0 vs runner declarations" do
     test "every shipped runner's declared reasons appear in PauseReason.canonical/0" do
-      # ADR-0018 §1 says the canonical list is the union of every
-      # runner's documented reasons. Drift between runner declarations
+      # The canonical list is the union of every runner's documented
+      # reasons. Drift between runner declarations
       # and PauseReason.canonical/0 means a new pause reason landed
       # without updating the canonical list (or vice versa).
       canonical_set = MapSet.new(PauseReason.canonical())

@@ -1,99 +1,96 @@
 # Raxol Metrics System
 
-Collects, aggregates, visualizes, and alerts on metrics across the terminal emulator.
+Collects, aggregates, visualizes, and alerts on metrics across the runtime.
 
-## Components
+## MetricsCollector
 
-### UnifiedCollector
-
-Central metric collection:
+`Raxol.Core.Metrics.MetricsCollector` is ETS-backed rather than
+mailbox-serialized: writes are direct `:ets` inserts from any process, reads are
+direct lookups, and the GenServer exists only for lifecycle and the periodic
+system-metrics sweep. Metric names are atoms.
 
 ```elixir
-{:ok, _pid} = Raxol.Core.Metrics.UnifiedCollector.start_link(
-  retention_period: :timer.hours(24),
-  max_samples: 1000,
-  flush_interval: :timer.seconds(5)
-)
+MetricsCollector.record_metric(:request_time, :performance, 45.2)
+MetricsCollector.record_metric(:cache_hits, :operation, 1, tags: [:api])
+MetricsCollector.record_performance(:parse_time, 3.3)
+MetricsCollector.record_resource(:memory_mb, 128.5)
 
-Raxol.Core.Metrics.UnifiedCollector.record_metric(
-  "buffer_operations",
-  :performance,
-  42,
-  tags: %{operation: "write", buffer: "main"}
-)
+MetricsCollector.get_metric(:request_time, :performance)
+MetricsCollector.get_all_metrics()
 ```
 
-### Aggregator
+Two ETS tables back it: `:raxol_metrics` (an `ordered_set`, so time-ordered
+queries are cheap) and `:raxol_metrics_meta` for metadata and aggregates.
+History is capped at `Raxol.Core.Defaults.history_limit/0`.
 
-Time-windowed aggregation with grouping:
+## Aggregator
+
+`Raxol.Core.Metrics.Aggregator` applies time-windowed aggregation rules with
+grouping. Defaults: an hourly window, `[:mean, :max, :min]`, a 7-day retention
+period, and a 60-second update interval.
 
 ```elixir
-Raxol.Core.Metrics.Aggregator.add_rule(%{
+Aggregator.add_rule(%{
   name: "hourly_buffer_ops",
   metric_name: "buffer_operations",
   type: :mean,
-  time_window: :timer.hours(1),
-  group_by: [:operation, :buffer]
+  window: :hour,
+  group_by: ["operation", "buffer"]
 })
+
+Aggregator.get_aggregated_metrics(rule_id)
+Aggregator.get_rules()
 ```
 
-### Visualizer
+## Visualizer
 
-Real-time charts:
+`Raxol.Core.Metrics.Visualizer` turns metric series into charts. Options default
+to a line chart, 800x400, legend and grid on.
 
 ```elixir
-{:ok, chart_id} = Raxol.Core.Metrics.Visualizer.create_chart(
-  "buffer_operations",
-  :line,
-  %{title: "Buffer Operations", time_range: :timer.hours(1), group_by: [:operation]}
-)
+{:ok, chart_id} =
+  Visualizer.create_chart(metrics, %{
+    type: :line,
+    title: "Buffer Operations",
+    time_range: :timer.hours(1)
+  })
+
+Visualizer.update_chart(chart_id, metrics)
+Visualizer.get_chart(chart_id)
 ```
 
-### AlertManager
+## AlertManager
 
-Threshold-based alerts with cooldown:
+`Raxol.Core.Metrics.AlertManager` evaluates threshold rules on a check interval
+and holds each rule down for a cooldown after it fires. Defaults: 60-second
+check interval, 300-second cooldown, `:warning` severity.
 
 ```elixir
-Raxol.Core.Metrics.AlertManager.add_rule(%{
+AlertManager.add_rule(%{
   name: "high_buffer_usage",
   metric_name: "buffer_usage",
-  condition: {:above, 90},
+  condition: :above,
+  threshold: 90,
   severity: :warning,
-  cooldown: :timer.minutes(5),
-  notification: %{type: :slack, channel: "#alerts"}
+  cooldown: 300,
+  notification_channels: ["#alerts"]
 })
+
+AlertManager.get_rules()
+AlertManager.get_alert_state(rule_id)
+AlertManager.get_alert_history(rule_id)
 ```
 
-## Configuration
+Every function takes an optional process as its last argument, so a test can
+run its own instance instead of the VM-wide singleton.
+
+## Starting them
+
+The Aggregator, Visualizer, and AlertManager use
+`Raxol.Core.Behaviours.BaseManager`, which supplies `start_link/1`:
 
 ```elixir
-config :raxol, :metrics_collector,
-  retention_period: :timer.hours(24),
-  max_samples: 1000,
-  flush_interval: :timer.seconds(5)
-
-config :raxol, :metrics_aggregator,
-  update_interval: :timer.seconds(60),
-  max_rules: 100
-
-config :raxol, :metrics_visualizer,
-  max_charts: 50,
-  default_time_range: :timer.hours(1)
-
-config :raxol, :metrics_alert_manager,
-  check_interval: :timer.seconds(30),
-  max_rules: 100,
-  default_cooldown: :timer.minutes(5)
-```
-
-## Migration from Legacy Metrics
-
-```elixir
-# Old
-Raxol.Terminal.Metrics.record("operation", value)
-
-# New
-Raxol.Core.Metrics.UnifiedCollector.record_metric(
-  "operation", :performance, value, tags: %{component: "terminal"}
-)
+Raxol.Core.Metrics.Aggregator.start_link(name: Raxol.Core.Metrics.Aggregator)
+Raxol.Core.Metrics.Visualizer.start_link(name: Raxol.Core.Metrics.Visualizer)
+Raxol.Core.Metrics.AlertManager.start_link(name: Raxol.Core.Metrics.AlertManager)
 ```

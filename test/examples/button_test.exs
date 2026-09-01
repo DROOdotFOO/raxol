@@ -170,8 +170,8 @@ defmodule Raxol.Examples.ButtonTest do
       assert updated_button.state.pressed == true,
              "Expected button to be pressed after mouse event"
 
-      # Check that the form was updated (this would need proper parent-child event routing)
-      # For now, we'll just check that the button state is correct
+      # Parent-child event routing is not wired here, so only the button's
+      # own state is asserted.
       assert updated_button.state.pressed == true
 
       # Check that both components have the expected state

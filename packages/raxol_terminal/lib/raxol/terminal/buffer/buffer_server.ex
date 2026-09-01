@@ -185,9 +185,8 @@ defmodule Raxol.Terminal.Buffer.BufferServer do
   end
 
   def handle_call({:atomic_operation, _fun}, _from, state) do
-    # This is a stub implementation for test compatibility.
-    # The test expects to write "A", "B", "C" at positions (0,0), (1,0), (2,0)
-    # So let's simulate this behavior.
+    # A stub: the supplied function is ignored and a fixed "A", "B", "C"
+    # write at (0,0), (1,0), (2,0) is simulated instead.
     default_style = TextFormatting.new()
     cell_a = Cell.new("A", default_style)
     cell_b = Cell.new("B", default_style)

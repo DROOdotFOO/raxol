@@ -35,7 +35,7 @@ defmodule Raxol.UI.Components.Modal do
 
   # Require view macros and components
   # require Raxol.View.Elements  # Removed
-  # We will use elements directly: text_input, checkbox, dropdown
+  # Elements are used directly: text_input, checkbox, dropdown.
   # alias Raxol.UI.Components.Input.TextInput # Example, avoid direct component usage in render
 
   # Alias the new modules

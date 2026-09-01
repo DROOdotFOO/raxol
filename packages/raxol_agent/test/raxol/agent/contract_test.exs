@@ -1106,7 +1106,7 @@ defmodule Raxol.Agent.ContractTest do
     test "the DoneGate reject reason is not observable on the wire before the marker (telemetry-only today)" do
       # This test pins the CURRENT payload shape's ceiling: nothing about
       # *why* the gate rejected survives onto `final.payload` apart from the
-      # new `evidence_rejected` detail this PR adds. It guards against a
+      # `evidence_rejected` detail. It guards against a
       # future regression that puts the raw verdict tuple (or an
       # `inspect/1` rendering of it) directly under an unexpected key.
       session_id = "u21-marker-reason-shape-#{System.unique_integer([:positive])}"

@@ -52,8 +52,8 @@ defmodule Raxol.ComponentTestHelpers do
     # Unmount the component
     unmounted = unmount_component(result)
 
-    # Return final state and lifecycle events
-    # For now, we'll return a list with at least one event to satisfy the test
+    # Return final state and lifecycle events. The event list is a single
+    # marker: individual lifecycle events are not yet recorded.
     {unmounted, [:lifecycle_completed]}
   end
 

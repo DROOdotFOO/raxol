@@ -153,10 +153,9 @@ defmodule Raxol.System.Updater.Network do
               "Executable replaced successfully. Please restart the application."
             )
 
-            # On Unix, we might not need to System.stop immediately,
-            # depending on how the restart is managed.
-            # For now, let's assume the caller handles the restart or exit logic
-            # after this function returns :ok.
+            # On Unix, System.stop is not required here: the restart
+            # strategy is the caller's, and this returns :ok so the caller
+            # can decide between restarting and exiting.
             :ok
 
           {:error, reason} ->

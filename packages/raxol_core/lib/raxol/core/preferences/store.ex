@@ -41,7 +41,6 @@ defmodule Raxol.Core.Preferences.Store do
         :animation_fps,
         :animation_loop,
         :animation_blend,
-        # Add other preference keys as needed
         :prompt,
         :welcome_message,
         :command_history_size,

@@ -49,11 +49,11 @@ defmodule Raxol.Core.Runtime.Rendering.Backends do
 
   # --- Incremental frame emission ---
   #
-  # One absolute-CUP vocabulary for both frame kinds (ADR-0029 inv 5): every row
-  # is emitted at \e[y;1H, so there are no \r\n row-joins and no full-screen
-  # clear on the common path. A keyframe is that same emit over every row, with
-  # a leading \e[2J; a diff emits only rows whose cells changed. `state.buffer`
-  # is the previous frame, already in hand -- the grid is its own diff basis.
+  # One absolute-CUP vocabulary for both frame kinds: every row is emitted at
+  # \e[y;1H, so there are no \r\n row-joins and no full-screen clear on the
+  # common path. A keyframe is that same emit over every row, with a leading
+  # \e[2J; a diff emits only rows whose cells changed. `state.buffer` is the
+  # previous frame, already in hand, so the grid is its own diff basis.
 
   @doc false
   def build_terminal_frame(prev, next, renderer, state) do

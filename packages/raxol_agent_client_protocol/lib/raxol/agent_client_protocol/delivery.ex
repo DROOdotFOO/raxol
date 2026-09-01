@@ -1,8 +1,16 @@
 defmodule Raxol.AgentClientProtocol.Delivery do
   @moduledoc """
   Delivery vocabulary shared by `Connection` (stamping + direct turn
-  delivery) and `Client` (turn consumption) — the transport-ordering design
-  (`TRANSPORT_ORDERING_DESIGN.md` §4, ADR-0030 clauses 1/2/5).
+  delivery) and `Client` (turn consumption).
+
+  The ordering key is a receiver-assigned contiguous per-turn ordinal,
+  stamped at the single sequential demux point before any per-session
+  fan-out. It is never read from the peer's `_meta`: arrival order is not
+  stable across a reattach onto a new connection, and a peer that supplied
+  the key could manufacture a gap to force the degraded path. Every
+  drop/gap decision emits telemetry rather than dropping silently, and the
+  per-turn namespace that scopes the ordinals is receiver-minted too, so a
+  peer reusing a turn id cannot alias a stale turn's straggler forward.
 
   ## Message shapes (the direct turn-delivery channel)
 

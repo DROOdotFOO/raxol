@@ -1,7 +1,7 @@
 defmodule Raxol.Harness.PanelProjectionTest do
   @moduledoc """
-  Red-first acceptance tests for `Raxol.Harness.PanelProjection` (phase 1
-  of the projection-panels build). Anchors on the tolerant-reading rule
+  Red-first acceptance tests for `Raxol.Harness.PanelProjection`.
+  Anchors on the tolerant-reading rule
   (unknown class/op/type/fields are skipped, never an error), the
   hostile-content clamp, the no-atom-creation guarantee, and the
   contract-shape fixture `test/fixtures/harness/sessions/projection-panels.jsonl`.

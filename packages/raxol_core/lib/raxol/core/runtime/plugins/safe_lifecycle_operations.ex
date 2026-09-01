@@ -374,8 +374,8 @@ defmodule Raxol.Core.Runtime.Plugins.SafeLifecycleOperations do
   end
 
   defp rollback_operation({:unload, _plugin_id}, state) do
-    # Rollback unload by reloading (if we have the backup)
-    # This is simplified - in reality we'd need the original config
+    # Rolling an unload back would mean reloading the plugin, which needs
+    # the original config. That is not retained, so this is a no-op.
     {:ok, state}
   end
 

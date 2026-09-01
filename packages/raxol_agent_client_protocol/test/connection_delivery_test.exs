@@ -1,5 +1,4 @@
-# Red-first suite for the transport-ordering design's Connection unit
-# (TRANSPORT_ORDERING_DESIGN.md §4, ADR-0030 clauses 1/2/3/5/9) -- the
+# Red-first suite for the Connection's delivery-ordering unit: the
 # ACTUAL fix for the shipped session/update drop/reorder bug: a
 # receiver-assigned per-turn ordinal stamped at the demux point
 # (`dispatch_inbound_notification/3`), delivered to the turn owner
@@ -331,7 +330,7 @@ defmodule Raxol.AgentClientProtocol.ConnectionDeliveryTest do
         |> File.read!()
 
       refute source =~ ~r/Process\.send_after/,
-             "client.ex must never arm a wall-clock timer (ADR-0030 clause 3)"
+             "client.ex must never arm a wall-clock timer: a gap is bounded by the buffer watermark, not by elapsed time"
 
       # A bare `after <integer> ->` inside a `receive do ... end` block is
       # the settle-window shape this design removes. `try/after` (cleanup)

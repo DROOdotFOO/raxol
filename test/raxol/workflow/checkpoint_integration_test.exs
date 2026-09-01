@@ -101,7 +101,7 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
       assert {:ok, []} = Ets.list(ctx.config, meta.run_id, 10)
     end
 
-    test "interrupt: pause checkpoint marks the interrupting node (ADR-0017)",
+    test "interrupt: pause checkpoint marks the interrupting node",
          ctx do
       compiled =
         Graph.new(:pause)

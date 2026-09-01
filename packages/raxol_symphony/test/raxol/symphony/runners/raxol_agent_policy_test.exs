@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
   @moduledoc """
-  Phase 12: verifies the `agent.policies` opt-in wraps each LLM turn
+  Verifies the `agent.policies` opt-in wraps each LLM turn
   via `Raxol.Agent.PolicyApplier.apply/3`.
 
   The verification strategy: attach a telemetry handler for

@@ -1,4 +1,4 @@
-# Cross-Chain Settlement (ADR-0019)
+# Cross-Chain Settlement
 #
 # Single ACP job settles on two chains simultaneously. Each chain gets
 # its own `createMemo`-style write running in a separate workflow
@@ -110,7 +110,7 @@ run_once = fn label, parallelism ->
   elapsed_ms
 end
 
-IO.puts("=== Cross-Chain Settlement (ADR-0019) ===")
+IO.puts("=== Cross-Chain Settlement ===")
 IO.puts("Chain A simulated RPC latency: 80 ms")
 IO.puts("Chain B simulated RPC latency: 120 ms")
 

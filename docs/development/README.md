@@ -1,5 +1,12 @@
 # Development Guide
 
+Also in this directory:
+
+- [Naming Conventions](NAMING_CONVENTIONS.md): filename standards and the duplicate-filename checker
+- [ASCII Standards](ASCII_STANDARDS.md): bracketed tags instead of emoji in output
+- [Debug Mode](DEBUG_MODE.md): `Raxol.Debug` verbosity levels and structured logging
+- [Type Spec Generator](TYPE_SPEC_GENERATOR.md): `mix raxol.gen.specs`
+
 ## Setup
 
 ### Quick start (Nix)
@@ -13,7 +20,8 @@ mix setup
 
 ### Manual setup
 ```bash
-# Requirements: Elixir 1.19+, Erlang/OTP 27+
+# Requirements: Elixir 1.17+, Erlang/OTP 27+
+# Reference toolchain: mise.toml (mise install)
 # Optional: Node.js 20+ and PostgreSQL 15+ (only needed for Phoenix/asset builds)
 mix deps.get
 mix compile

@@ -1,5 +1,12 @@
 # Testing Guide
 
+Also in this directory:
+
+- [Quick Reference](QUICK_REFERENCE.md): isolation patterns as before/after pairs, plus a flaky-test checklist
+- [Test Isolation Guide](TEST_ISOLATION_GUIDE.md): the six fixes for suite-order failures, and what is still undone
+- [RATE Bench](RATE_BENCH.md): the cross-platform bench on self-hosted runners
+- [RATE Runner Hardening](RATE_RUNNER_HARDENING.md): locking down those runners
+
 ## Running tests
 
 The suite expects `SKIP_TERMBOX2_TESTS=true` and `TMPDIR=/tmp`. Export them in your shell,

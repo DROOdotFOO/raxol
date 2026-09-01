@@ -625,11 +625,6 @@ defmodule Raxol.UI.Theming.Colors do
     |> elem(0)
   end
 
-  # --- Distance Calculation --- #
-
-  # Removed unused distance/2 function
-  # defp distance(c1, c2), do: :math.sqrt(color_distance_sq(c1, c2))
-
   @doc """
   Checks if two colors are accessible according to WCAG contrast requirements.
 

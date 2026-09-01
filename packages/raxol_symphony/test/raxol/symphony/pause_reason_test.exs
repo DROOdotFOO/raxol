@@ -6,7 +6,7 @@ defmodule Raxol.Symphony.PauseReasonTest do
   doctest PauseReason
 
   describe "canonical/0" do
-    test "returns the ADR-0018 documented set" do
+    test "returns the documented operator-flow set" do
       assert PauseReason.canonical() == [
                :awaiting_request_response,
                :awaiting_buyer_payment,

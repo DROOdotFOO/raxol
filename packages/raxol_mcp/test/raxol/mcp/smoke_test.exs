@@ -1,6 +1,6 @@
 defmodule Raxol.MCP.SmokeTest do
   @moduledoc """
-  End-to-end smoke tests for the Phase 9 tool derivation pipeline.
+  End-to-end smoke tests for the tool derivation pipeline.
 
   Verifies: ToolProvider -> TreeWalker -> FocusLens -> Registry -> ToolSynchronizer
   all work together with realistic widget trees.

@@ -17,9 +17,10 @@ defmodule Raxol.Gateway.Adapter do
 
   ## Stability
 
-  Frozen (ADR-0023): these five callbacks are the stable contract every
-  platform adapter builds against. Additions must be optional callbacks;
-  existing callbacks do not change shape.
+  Frozen: these five callbacks are the stable contract every platform
+  adapter builds against, including adapters that live outside this repo.
+  Additions must be optional callbacks; existing callbacks do not change
+  shape.
   """
 
   alias Raxol.Gateway.Route

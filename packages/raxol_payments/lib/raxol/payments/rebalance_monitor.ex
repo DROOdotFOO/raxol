@@ -9,9 +9,9 @@ defmodule Raxol.Payments.RebalanceMonitor do
   idiom). The gather+advise step is exposed as `advise_once/1` so the on-demand mix
   task shares the exact code path.
 
-  Phase 1 covers native gas-refuel recommendations (native balances only). USDC and
-  other-asset inventory rebalancing arrive with the multi-asset `ChainReader`
-  ERC-20 read.
+  Only native gas-refuel recommendations are produced today, because the reader
+  gathers native balances only. USDC and other-asset inventory rebalancing arrive
+  with the multi-asset `ChainReader` ERC-20 read.
 
   ## Options
 

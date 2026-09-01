@@ -215,27 +215,4 @@ defmodule Raxol.UI.Layout.Panels do
         |> min(available_space.height)
     }
   end
-
-  # Private helpers
-
-  # Unused
-  # defp calculate_inner_space(space, attrs) do
-  # ...
-  # end
-
-  # Unused
-  # defp get_border_width(attrs) do
-  # ...
-  # end
-
-  # Unused
-  # defp create_panel_elements(space, attrs) do
-  # ...
-  # end
-
-  # Unused
-  # defp get_border_chars(:none), do: nil
-  # defp get_border_chars(style) do
-  # ...
-  # end
 end
