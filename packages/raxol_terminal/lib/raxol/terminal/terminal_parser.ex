@@ -313,11 +313,4 @@ defmodule Raxol.Terminal.TerminalParser do
     new_parser_state = %Raxol.Terminal.Parser.ParserState{state: :ground}
     {emulator, new_parser_state, ""}
   end
-
-  # In parse_loop/3, add a log when executing a CSI command (look for ?r)
-  # defp parse_loop(emulator, parser_state, <<27, 91, rest::binary>>) do
-  #   Raxol.Core.Runtime.Log.debug("[Parser.parse_loop] CSI detected in input: #{inspect(rest)}")
-  #   # CSI handling should be delegated to the appropriate state handler or removed if not needed
-  #   {emulator, parser_state}
-  # end
 end

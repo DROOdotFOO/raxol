@@ -167,9 +167,6 @@ defmodule Raxol.Terminal.Operations.ScreenOperations do
     Raxol.Terminal.Emulator.get_cursor_position(emulator)
   end
 
-  # Remove unused function completely
-  # defp mode_to_type(_), do: :to_end
-
   # Functions expected by tests
   @doc """
   Erases the entire display (1-arity version).

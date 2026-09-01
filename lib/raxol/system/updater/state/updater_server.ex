@@ -21,10 +21,6 @@ defmodule Raxol.System.Updater.State.UpdaterServer do
 
   # start_link is provided by BaseManager
 
-  #  def start_link(opts \\ []) do
-  #    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  #  end
-
   @doc """
   Returns a child specification for this server.
   """
