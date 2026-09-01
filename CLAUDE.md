@@ -69,7 +69,7 @@ Sensor examples: `sensor_hud_demo.exs` (3 mock sensors with gauge, sparkline, th
 
 Adaptive examples: `adaptive_ui_demo.exs` (behavior tracking, layout recommendations, feedback loop).
 
-Playground: `mix raxol.playground` is an interactive Component catalog with 41 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). Production SSH enabled via `RAXOL_SSH_PLAYGROUND=true` env var in fly.toml.
+Playground: `mix raxol.playground` is an interactive Component catalog with 41 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). That surface is local-only in practice: production SSH was suspended on 2026-08-26 after review found it reachable unauthenticated on the app's dedicated IPv6, and `fly.toml` carries no `RAXOL_SSH_PLAYGROUND` entry. Re-enabling it is a separate, explicit decision.
 
 ### Coding agent
 
@@ -314,7 +314,6 @@ lib/raxol/
 ├── ssh/             # SSH serving
 ├── repl/            # Interactive REPL
 ├── performance/     # Performance monitoring, profiling, caching
-├── live_view/       # README only (code moved to packages/raxol_liveview)
 └── effects/         # Visual effects (CursorTrail, HoverHighlight)
 ```
 
@@ -486,7 +485,7 @@ flyctl status --app raxol  # Status
 flyctl logs --app raxol    # Logs
 ```
 
-Configuration: `fly.toml`, Dockerfile: `docker/Dockerfile.web`. The playground SSH surface is on (port 2222); the multi-tenant coding agent (`RAXOL_SSH_CODE`, port 2223) is present in the build but its env block stays commented out in `fly.toml` until a tenants volume exists.
+Configuration: `fly.toml`, Dockerfile: `docker/Dockerfile.web`. Neither SSH surface is served in production: the anonymous playground (port 2222) was suspended on 2026-08-26 after review found it reachable unauthenticated on the app's dedicated IPv6, and the multi-tenant coding agent (`RAXOL_SSH_CODE`, port 2223) is present in the build but its env block stays commented out until a tenants volume exists.
 
 ## Hex Publishing
 
