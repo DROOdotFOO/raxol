@@ -148,8 +148,8 @@ defmodule Raxol.Terminal.Emulator.StateStackTest do
       # Explicitly check it's different from original
       refute emulator.style == style_snapshot
 
-      # 5. Verify stack behavior (optional: DECRC ESC 8 should restore same cursor)
-      # Let's skip this as the main logic is tested above
+      # A second DECRC (ESC 8) restoring the same cursor is not asserted here;
+      # the restore logic is covered above.
     end
 
     test ~c"DEC mode 1047 switches to alternate buffer and restores state" do

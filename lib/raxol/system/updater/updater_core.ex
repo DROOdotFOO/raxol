@@ -12,10 +12,6 @@ defmodule Raxol.System.Updater.Core do
 
   # --- Client API ---
 
-  #  def start_link(opts \\ []) do
-  #    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  #  end
-
   def check_for_updates do
     settings = State.get_update_settings()
     handle_update_check(settings.auto_update, settings)

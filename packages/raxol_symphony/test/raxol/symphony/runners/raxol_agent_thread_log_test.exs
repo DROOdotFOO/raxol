@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
   @moduledoc """
-  Phase 11: verifies the `agent.thread_log` opt-in records a per-run
+  Verifies the `agent.thread_log` opt-in records a per-run
   audit trail at turn boundaries.
 
   Append points covered:

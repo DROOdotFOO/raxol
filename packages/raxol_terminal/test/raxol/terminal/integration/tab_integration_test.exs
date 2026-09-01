@@ -85,8 +85,8 @@ defmodule Raxol.Terminal.Integration.TabIntegrationTest do
       assert {:ok, state2} = TabServer.get_tab_state(tab2)
       updated_state2 = State.update(state2.window_state, "Tab 2 content")
 
-      # Verify states are different by checking the buffer content
-      # Since we're using mock buffer managers, we'll check that the states are different
+      # The buffer managers here are stand-ins, so the assertion is only that
+      # the two tab states diverge.
       assert updated_state1 != updated_state2
     end
   end

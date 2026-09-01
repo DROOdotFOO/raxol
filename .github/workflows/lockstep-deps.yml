@@ -7,19 +7,30 @@ name: Lockstep Deps
 #
 # Markdown is in scope too: every README install snippet is a constraint a user
 # will copy, and those drift silently. One sweep found 17 stale snippets.
+#
+# Because it triggers ON Markdown, this workflow is also where the prose and
+# link gate runs. `ci-unified.yml` carries `paths-ignore` for 'docs/**' and
+# '**.md', so its `mix raxol.check_docs` step skips exactly the pull requests
+# that change prose and links. The `prose` job below closes that hole.
 
 on:
   pull_request:
     paths:
       - "**/mix.exs"
       - "**/*.md"
+      - "docs/**"
       - "scripts/check-lockstep-deps.sh"
+      - "scripts/prose_lint.exs"
+      - "lib/raxol/docs/prose_lint.ex"
       - ".github/workflows/lockstep-deps.yml"
   push:
     branches: [master]
     paths:
       - "**/mix.exs"
       - "**/*.md"
+      - "docs/**"
+      - "scripts/prose_lint.exs"
+      - "lib/raxol/docs/prose_lint.ex"
 
 permissions:
   contents: read
@@ -32,3 +43,31 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check lockstep dep constraints
         run: ./scripts/check-lockstep-deps.sh
+  prose:
+    name: Prose and links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      # `scripts/prose_lint.exs` runs the same `Raxol.Docs.ProseLint` module
+      # that `mix raxol.check_docs` runs, loaded with `Code.require_file/1`.
+      # The module is stdlib-only, so this needs no `mix deps.get`, no
+      # `_build`, and no compile. That is what makes the gate affordable on a
+      # four-file Markdown diff; a full project compile would not be.
+      #
+      # The sweep is repo-wide rather than diff-scoped on purpose, matching
+      # `mix raxol.check_docs`: deleting a file breaks relative links in files
+      # the diff never touched.
+      #
+      # The catalog-count half of `mix raxol.check_docs` is deliberately NOT
+      # here. It reads `Raxol.Playground.Catalog`, so it needs the compile this
+      # job exists to avoid, and it stays in `ci-unified.yml`.
+      - name: Prose and link lint
+        shell: bash
+        run: git ls-files -z '*.md' | xargs -0 elixir scripts/prose_lint.exs

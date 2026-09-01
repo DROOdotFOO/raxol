@@ -11,7 +11,7 @@ Contributions welcome.
 ## Development setup
 
 ### Prerequisites
-- Elixir 1.17 or newer (1.20 recommended; `.tool-versions` pins the reference toolchain)
+- Elixir 1.17 or newer (1.20 recommended; `mise.toml` pins the reference toolchain, and `mise install` gets it)
 - Erlang/OTP 27 or newer (29 recommended)
 - Node.js 20+ (for VSCode extension dev)
 

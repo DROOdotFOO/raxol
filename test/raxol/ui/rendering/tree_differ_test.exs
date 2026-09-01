@@ -296,9 +296,8 @@ defmodule Raxol.UI.Rendering.TreeDifferTest do
 
       # Diffing old_child vs new_child with path [] should give an update for props.
       # This depends on how granular do_diff_trees is for non-children changes.
-      # Current do_diff_trees would do {:replace, new_child} if they are not `==`.
-      # For a more granular diff, do_diff_trees would need to compare props if types match.
-      # Let's assume current behavior: {:replace, new_child}
+      # do_diff_trees emits {:replace, new_child} when the two are not `==`.
+      # A granular diff would need it to compare props when the types match.
       expected_child_diff = {:replace, new_child}
 
       expected_ops = [

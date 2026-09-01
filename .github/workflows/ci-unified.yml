@@ -51,19 +51,21 @@ env:
   MIX_ENV: test
   SKIP_TERMBOX2_TESTS: true
   TMPDIR: /tmp
-  ELIXIR_VERSION: "1.20.2"
-  OTP_VERSION: "29.0.3"
 
 jobs:
   # ========================================
   # Setup and Cache Preparation
   # ========================================
+  # The toolchain pin lives in `mise.toml` and is read exactly once, here. The
+  # versions setup-beam actually resolved become job outputs, so every other job
+  # installs the same toolchain and every cache key is stamped with a real
+  # resolved version rather than a literal someone has to remember to bump.
   setup:
     name: Setup & Cache
     runs-on: ubuntu-latest
     outputs:
-      elixir-version: ${{ env.ELIXIR_VERSION }}
-      otp-version: ${{ env.OTP_VERSION }}
+      elixir-version: ${{ steps.beam.outputs.elixir-version }}
+      otp-version: ${{ steps.beam.outputs.otp-version }}
       cache-key: ${{ steps.cache-key.outputs.key }}
       deps-cache-hit: ${{ steps.deps-cache.outputs.cache-hit }}
       should-run-heavy: ${{ steps.check-changes.outputs.should-run-heavy }}
@@ -91,6 +93,15 @@ jobs:
             fi
           fi
       
+      # Ahead of the cache-key step, because the key is stamped with the
+      # versions this step reports having installed.
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
       - name: Generate cache keys
         id: cache-key
         run: |
@@ -98,14 +109,8 @@ jobs:
           # (which never touches mix.lock) busts the compiled _build cache. The
           # restore-keys fall back only within the same mix.exs, never across a
           # version change.
-          echo "key=deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}" >> $GITHUB_OUTPUT
-      
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
-      
+          echo "key=deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}" >> $GITHUB_OUTPUT
+
       - name: Cache dependencies
         id: deps-cache
         uses: actions/cache@v6
@@ -116,7 +121,7 @@ jobs:
             .raxol_cache
           key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
-            deps-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.exs') }}-
+            deps-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
       
       - name: Install dependencies
         run: |
@@ -155,6 +160,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -201,6 +207,13 @@ jobs:
       # em-dash substitute, and broken relative links/anchors. These regressed
       # repeatedly while they lived only in a style note, and the manual sweeps
       # that cleaned docs/ never covered packages/.
+      #
+      # This workflow's paths-ignore covers 'docs/**' and '**.md', so this step
+      # never runs on a documentation-only pull request. The prose half is
+      # gated there instead by the `prose` job in `lockstep-deps.yml`, which
+      # fires on Markdown and needs no compile. What is unique to this step is
+      # the catalog-count half, which reads `Raxol.Playground.Catalog` and so
+      # requires the compile.
       - name: Check documentation
         run: mix raxol.check_docs
 
@@ -217,6 +230,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -256,6 +270,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -352,6 +367,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
 
       - name: Cache package dependencies
         uses: actions/cache@v6
@@ -359,9 +375,9 @@ jobs:
           path: |
             packages/${{ matrix.package }}/deps
             packages/${{ matrix.package }}/_build
-          key: pkg-${{ matrix.package }}-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-${{ hashFiles(format('packages/{0}/mix.lock', matrix.package)) }}
+          key: pkg-${{ matrix.package }}-${{ runner.os }}-${{ needs.setup.outputs.elixir-version }}-${{ needs.setup.outputs.otp-version }}-${{ hashFiles(format('packages/{0}/mix.lock', matrix.package)) }}
           restore-keys: |
-            pkg-${{ matrix.package }}-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-
+            pkg-${{ matrix.package }}-${{ runner.os }}-${{ needs.setup.outputs.elixir-version }}-${{ needs.setup.outputs.otp-version }}-
 
       - name: Install hex and rebar
         run: |
@@ -428,9 +444,9 @@ jobs:
   # The local terminal input path is BEAM/OTP-coupled: keystrokes arrive by
   # tracing prim_tty's reader (a private protocol). Every unit test fabricates
   # that trace message, so none can catch an OTP change to it. This canary types
-  # real keystrokes into a real pty and asserts they decode -- so the PR that
-  # bumps OTP_VERSION fails here, loudly and per-PR, instead of on the nightly
-  # matrix at 2am. Sub-second decode; the pty boot is the only cost.
+  # real keystrokes into a real pty and asserts they decode, so the PR that bumps
+  # the OTP pin in `mise.toml` fails here, loudly and per-PR, instead of on the
+  # nightly matrix at 2am. Sub-second decode; the pty boot is the only cost.
   input-canary:
     name: Input protocol canary
     needs: setup
@@ -449,6 +465,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
 
       - name: Install hex and rebar
         run: |
@@ -461,9 +478,9 @@ jobs:
           path: |
             packages/raxol_terminal/deps
             packages/raxol_terminal/_build
-          key: pkg-raxol_terminal-canary-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-${{ hashFiles('packages/raxol_terminal/mix.lock') }}
+          key: pkg-raxol_terminal-canary-${{ runner.os }}-${{ needs.setup.outputs.elixir-version }}-${{ needs.setup.outputs.otp-version }}-${{ hashFiles('packages/raxol_terminal/mix.lock') }}
           restore-keys: |
-            pkg-raxol_terminal-canary-${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-
+            pkg-raxol_terminal-canary-${{ runner.os }}-${{ needs.setup.outputs.elixir-version }}-${{ needs.setup.outputs.otp-version }}-
 
       - name: Run input protocol canary
         working-directory: packages/raxol_terminal
@@ -504,6 +521,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -549,6 +567,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -598,6 +617,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -631,6 +651,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -674,6 +695,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Restore cache
         uses: actions/cache@v6
@@ -758,6 +780,7 @@ jobs:
         with:
           elixir-version: ${{ needs.setup.outputs.elixir-version }}
           otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
       
       - name: Cache dependencies
         uses: actions/cache@v6
@@ -832,12 +855,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       
+      # Reads the pin directly rather than through `needs.setup`, which this job
+      # does not depend on: those outputs resolve to empty here.
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: ${{ needs.setup.outputs.elixir-version }}
-          otp-version: ${{ needs.setup.outputs.otp-version }}
-      
+          version-file: mise.toml
+          version-type: strict
+
       - name: Download coverage artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

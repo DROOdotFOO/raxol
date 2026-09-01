@@ -21,8 +21,8 @@ Multi-surface runtime for Elixir on OTP. One TEA module renders to terminal, bro
 ## Quick start
 
 ```bash
-# Zero install, try it now
-ssh -p 2222 playground@raxol.io
+# Zero install, try it now: the playground runs in the browser
+open https://raxol.io/playground
 
 # Or add to your project
 mix new my_app && cd my_app
@@ -198,4 +198,3 @@ Raxol.Headless.send_key(session, "q")
 - GitHub: https://github.com/DROOdotFOO/raxol
 - Hex: https://hex.pm/packages/raxol
 - Playground: https://raxol.io/playground
-- SSH: `ssh -p 2222 playground@raxol.io`

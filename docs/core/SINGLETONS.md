@@ -43,8 +43,7 @@ allowlist below.
 
 | Module | Path |
 |--------|------|
-| `Raxol.Core.CoreSupervisor` | `lib/raxol/core/core_supervisor.ex` |
-| `Raxol.Core.Runtime.RuntimeSupervisor` | `lib/raxol/core/runtime/runtime_supervisor.ex` |
+| `Raxol.Core.Runtime.Supervisor` | `lib/raxol/core/runtime/runtime_supervisor.ex` |
 | `Raxol.Core.ServerRegistry` | `lib/raxol/core/server_registry.ex` |
 | `Raxol.DynamicSupervisor` | `lib/raxol/dynamic_supervisor.ex` |
 | `Raxol.Terminal.Supervisor` | `packages/raxol_terminal/lib/raxol/terminal/terminal_supervisor.ex` |
@@ -60,10 +59,9 @@ allowlist below.
 | Module | Why one-per-VM |
 |--------|----------------|
 | `Raxol.RBAC` | One role/permission set per node |
-| `Raxol.RateLimit` | VM-wide rate limiting Agent |
 | `Raxol.Dev.CodeReloader` | One reloader watches the VM in dev |
 | `Raxol.Core.Runtime.ProcessStore` | Explicit Process-dictionary replacement; VM-wide by design |
-| `Raxol.Core.Config.ConfigStore` | VM-wide config |
+| `Raxol.Core.Config.Store` | VM-wide config |
 | `Raxol.Core.Accessibility.Announcements` | One global accessibility queue |
 | `Raxol.Core.Runtime.Plugins.PluginLifecycle` | Plugins shared across Lifecycles; ETS-backed Registry, plugin_id-namespaced state. Confirmed by #229. |
 | `Raxol.Core.Runtime.Plugins.ResourceBudget` | One budget shared across plugins |

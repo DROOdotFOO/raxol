@@ -79,7 +79,7 @@ Any widget work honors these:
 3. **Lifecycle.** grown → live (breathes with its source, event-clocked) →
    completion blink → settled (dies into the log as a fact line with its
    receipt) → optionally pinned. Nothing accretes unboundedly.
-4. **The rim is earned.** `Raxol.UI.Components.Harness.StatusStrip` is the one
+4. **The rim is earned.** `Raxol.Harness.StatusStrip` is the one
    persistent rim lane, and it is itself a grown instrument: it renders only
    while the session has something true to say (a live turn, an approval wait,
    a stall alarm, an animating activity) and yields to silence between turns.

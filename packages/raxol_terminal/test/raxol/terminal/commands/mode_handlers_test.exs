@@ -135,8 +135,8 @@ defmodule Raxol.Terminal.Commands.ModeHandlerTest do
       assert res_set_132.mode_manager.column_width_mode == :wide
       assert ScreenBuffer.get_width(res_set_132.main_screen_buffer) == 132
 
-      # Ensure alt buffer also resized if it existed (or check default if created on demand)
-      # For simplicity, we'll assume main buffer resize is indicative
+      # Only the main buffer's resize is asserted; the alt buffer is taken
+      # to follow it.
 
       # Reset (should go to normal/80)
       {:ok, res_reset_80} =

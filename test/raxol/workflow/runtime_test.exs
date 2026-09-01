@@ -308,7 +308,7 @@ defmodule Raxol.Workflow.RuntimeTest do
       assert is_binary(trace_id) and is_binary(span_id)
     end
 
-    test "interrupt emits run.interrupted with interrupt_reason lifted (ADR-0017)" do
+    test "interrupt emits run.interrupted with interrupt_reason lifted" do
       {:ok, compiled} =
         Graph.new(:pause)
         |> Graph.add_node(:pause, fn _ -> {:interrupt, :wait} end)

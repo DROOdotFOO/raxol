@@ -105,9 +105,9 @@ defmodule Raxol.UI.Components.Modal.Rendering do
   end
 
   # A dialog is a surface raised above the canvas, not the canvas itself, so it
-  # is painted on purpose -- but with the theme's surface colour, not a literal.
-  # `:black` is a black slab on a light terminal, and the terminal owns the
-  # canvas (ADR-0029).
+  # is painted on purpose, but with the theme's surface colour rather than a
+  # literal. `:black` is a black slab on a light terminal, and the terminal
+  # owns the canvas.
   @default_surface "#1E1E1E"
 
   defp surface_color do

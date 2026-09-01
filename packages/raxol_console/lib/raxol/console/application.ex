@@ -81,7 +81,7 @@ defmodule Raxol.Console.Application do
   through `:agent_opts`, the `:channels` adapter configs, and the payments
   config, not through this module directly. Their exact injection contract
   (env var names, mount points, ports, health/log conventions) is the one
-  undocumented Console-integration seam (ADR-0031, open); confirming it maps to
+  Console-integration seam the partner has not published; confirming it maps to
   setting these keys, not to a rewrite here. Health-endpoint and port wiring is
   deferred with it (`raxol_console` bundles no web server).
 

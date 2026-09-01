@@ -61,8 +61,10 @@ defmodule Raxol.Symphony.Runner do
 
   Optional. Implementing it documents the runner's pause vocabulary
   and lets `Raxol.Symphony.PauseReason.awaiting?/1` mechanically
-  enforce the ADR-0018 `:awaiting_<subject>` convention via the
-  shared convention test.
+  enforce the `:awaiting_<subject>` naming convention via the shared
+  convention test. Every pause names what the run is waiting FOR, so an
+  operator surface can render the reason without a per-runner lookup
+  table.
 
   Runners whose reasons are entirely user-supplied (e.g.
   `Raxol.Symphony.Runners.Noop`, `Raxol.Symphony.Runners.RaxolAgent`

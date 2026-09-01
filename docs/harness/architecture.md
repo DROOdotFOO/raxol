@@ -320,10 +320,13 @@ editor should point at, because `mix` prints compile output to stdout on first
 run and that would corrupt the wire. `Raxol.Agent.ClientProtocol.StdioAgent`
 is the handler: each `session/new` starts a `Raxol.AgentClientProtocol.Session`
 whose `:turn_runner` is `Raxol.Agent.ClientProtocol.TurnRunner`, and each
-session's file tools scope to the `cwd` the editor sent. Turns run the
-read-only toolset (read, grep, glob, and no write_file/edit_file/bash),
-because ACP's permission flow is not bridged to the authorization engine and
-an unattended surface fails closed until it is. The protocol package is a
+session's file tools scope to the `cwd` the editor sent. Turns run the full
+toolset: `Raxol.Agent.ClientProtocol.Permission.authorizer/2` gates every
+sensitive Action on a `session/request_permission` round trip, injected per
+turn as the context's `:tool_authorizer`. Reads are not gated. The gate is
+fail-closed on the DECISION rather than on the toolset, so a client that
+refuses, times out, disconnects, or answers method-not-found denies the write
+and leaves reads working. The protocol package is a
 dev/test path dependency, so `StdioAgent` compiles only when raxol_agent is
 built from source with it present; a Hex install exits 1 with an explanation.
 

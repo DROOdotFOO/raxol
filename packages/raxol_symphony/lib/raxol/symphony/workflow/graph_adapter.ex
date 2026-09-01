@@ -145,7 +145,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapter do
   Build and compile a parallel-candidate variant of the Symphony graph.
 
   Each slot 0..N-1 runs its own dispatch + evidence sub-graph concurrently
-  via ADR-0019 fan-out. After every branch completes, an aggregate node
+  via the workflow engine's fan-out. After every branch completes, an aggregate node
   merges per-slot `run_result` / `evidence` into `:run_results` /
   `:evidences` lists keyed by candidate id.
 

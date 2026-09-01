@@ -147,9 +147,10 @@ a highlight group.
 The Raxol coding agent reaches editors over the
 [Agent Client Protocol](https://agentclientprotocol.com), which Zed and its
 ecosystem speak. Point an ACP client at the `bin/raxol-acp` shim in a raxol
-checkout; `mix help raxol.acp` has the Zed `agent_servers` snippet. Turns on
-that surface run a read-only toolset: `list_dir`, `read_file`, `file_stat`,
-`grep`, `glob`.
+checkout; `mix help raxol.acp` has the Zed `agent_servers` snippet. Turns on that
+surface run the full toolset; every write costs one
+`session/request_permission` round trip, so a client that does not implement
+permissions gets a working read-only agent instead of a broken one.
 
 Without an ACP client, run the full agent TUI in a terminal split:
 

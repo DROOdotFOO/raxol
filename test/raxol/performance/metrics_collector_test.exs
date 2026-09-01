@@ -117,8 +117,8 @@ defmodule Raxol.Performance.MetricsCollectorTest do
       # Calculate trend
       _trend = MetricsCollector.get_memory_trend(collector)
 
-      # Memory should be growing (or at least not decreasing significantly)
-      # The trend might be small or even negative due to GC, so we'll be more lenient
+      # The trend can be small or negative because of GC, so only the
+      # non-zero memory reading is asserted.
       assert collector.memory_usage > 0
 
       # Clean up

@@ -115,9 +115,8 @@ defmodule Raxol.Terminal.Config.Validation do
   `:ok` or `{:error, reason}`
   """
   def validate_update(_config, updates) when is_map(updates) do
-    # For now, just validate that the updates are valid configuration keys
-    # This is a simplified validation - in a real implementation, you'd want
-    # to validate the actual values against the schema
+    # Key-level validation only: the update's keys must be valid
+    # configuration keys. Values are not checked against the schema.
     case validate_config(updates) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}

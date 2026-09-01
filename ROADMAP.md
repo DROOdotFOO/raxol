@@ -72,7 +72,7 @@ Distilled from a fast-follow gap analysis vs [NousResearch/hermes-agent](https:/
 - **FLAME** elastic exec on Fly Machines (BEAM-native idle hibernation, replaces Modal/Daytona).
 - More gateway adapters: Slack (Socket Mode), then WhatsApp / Signal on demand.
 - i18n: wire the present `gettext` through surface rendering, extract locale files.
-- Agent Client Protocol adapter: shipped. `bin/raxol-acp` / `mix raxol.acp` / `raxol acp` serve the coding agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`, read-only toolset) for editors that spawn an agent. Distinct from `raxol_earn`.
+- Agent Client Protocol adapter: shipped. `bin/raxol-acp` / `mix raxol.acp` / `raxol acp` serve the coding agent over ACP on stdio (`Raxol.Agent.ClientProtocol.Serve` + `StdioAgent`, the full toolset with every sensitive Action gated on a `session/request_permission` round trip) for editors that spawn an agent. Distinct from `raxol_earn`.
 - Expose the sandboxed REPL as an agent action for scripted single-turn tool pipelines.
 
 **Do not build:** trajectory/training tooling, Singularity HPC backend, a 300-model subscription portal (that is Hermes's business; ours is settlement), or a `SOUL.md` personality system beyond what the import tool needs.
@@ -110,6 +110,23 @@ Make Raxol a selectable runtime in the Virtuals ACP Console (`app.virtuals.io/ac
 | TEA app_module handler | Optional `Handler.Lifecycle` runtime mode for a stateful per-chat UI (issue #763) | M | Deferred |
 
 The load-bearing unknown is external: the Console's third-party runtime-registration and container contract is undocumented, escalated to Virtuals (`~/Desktop/virtuals-console-runtime-questions.md`).
+
+### Web3 data surface (`raxol_web3`)
+
+One free, indexer-agnostic read layer over the chains we settle on, served as MCP tools and as agent Actions. Design in ADR-0033. Blockscout declined to index anything non-EVM without a funded per-chain agreement, and relicensed their MCP server and explorer in April and May 2026 (revocable, no redistribution, SaaS included), so forking is closed. Their hosted MCP is closing too: probing it on 2026-08-31 returned a free budget of 10 tool calls per session and notice that all requests require a PRO key from 2026-10-08. Consuming the public REST API carries no licence obligation and stays open today, which is the path taken, but the per-chain fallbacks are load-bearing rather than defensive. The package sits *below* `raxol_payments` because reads are more fundamental than payments, and that move dissolves the existing wart where `ChainReader` hand-rolls a second `Req` client purely to dodge a cycle. Three consumers: raxol's own settlement agents, a public free MCP server with the non-EVM coverage nobody else offers, and consolidation of the five competing RPC env conventions.
+
+| Item | What | Effort | Status |
+| ---- | ---- | ------ | ------ |
+| `Raxol.MCP.Aggregator` | The one missing conversion direction: upstream MCP server -> `Raxol.MCP.Registry` tool defs, over the existing `MCP.Client`. Janitor lifecycle and `admit/1` bounds copied from `Code.McpLoader` | S | Planned |
+| Package skeleton | `raxol_web3` at 0.1.0, standalone on `raxol_core` + `raxol_mcp` + `req`; `Backend` behaviour (6 required + 8 optional callbacks, CAIP-2/10/19 refs, opaque cursors) + `Stub` in `lib/`; move `ChainReader`, `Tron.Address`, `Pxe.Client`, `Payments.Poll` down with shims; rate limiting reuses `Raxol.Core.TokenBucket`, and a `Cache` behaviour + ETS adapter is built here since `Raxol.Agent.Cache` is not reachable from this graph | L | Planned |
+| EVM backend | Blockscout REST v2 + Chainscout resolution (746 chains, keyless, includes 4663) + RPC fallback. Identifies honestly and treats a Cloudflare challenge as backend-unhealthy so the router fails over, rather than sending a browser User-Agent; per-chain health checks (base and polygon were 500ing) | M | Planned |
+| Tron backend | TronGrid MCP (149 tools, keyless, verified live) and SQD Portal via `mcp_proxy`; TronScan secondary, pinned to a serialized policy since parallel calls on one session fail | S | Planned |
+| Solana backend | SQD Portal `solana-mainnet` + public RPC fallback. Requests per second binds long before monthly volume does | S | Planned |
+| Aztec backend | aztecscan keyless API, reusing `Pxe.Client`. Public state only; private state is architecturally unavailable | S | Planned |
+| Canton backend | ccscan MCP (13 tools, stateless) or Noves (MIT); Splice Scan client generated from the Apache-2.0 OpenAPI spec. Exercises party IDs and rounds, so it validates the optional half of the contract | M | Planned |
+| RPC config consolidation | Collapse `RPC_<NAME>` / `DERIVE_RPC_` / `ORDER_RPC_` / `XOCHI_ORDER_RPC_` / `GATE_RPC_` onto one resolver; repoint `derive_caps`, capacity gating, checkpoints | M | Planned |
+
+A second survey pass (`docs/proposals/web3-upstream-survey.md`) moved Canton from blocked to ordinary adapter work and shrank Tron, because both Tron explorers run keyless MCP servers that were verified live. The real design constraint turned out to be at the wire level: of three upstream servers probed, one is stateful and concurrency-safe, one is stateful and fails every parallel call on a shared session, and one is stateless, and two frame SSE incompatibly. Concurrency policy is therefore declared per backend rather than assumed. The remaining risk is concentration, since SQD backs several chains at once and its parent was acquired in October 2025, so per-chain fallbacks must stay exercised rather than merely present.
 
 ### RATE: Cross-Platform Test Bench
 

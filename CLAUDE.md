@@ -69,7 +69,7 @@ Sensor examples: `sensor_hud_demo.exs` (3 mock sensors with gauge, sparkline, th
 
 Adaptive examples: `adaptive_ui_demo.exs` (behavior tracking, layout recommendations, feedback loop).
 
-Playground: `mix raxol.playground` is an interactive Component catalog with 41 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). Production SSH enabled via `RAXOL_SSH_PLAYGROUND=true` env var in fly.toml.
+Playground: `mix raxol.playground` is an interactive Component catalog with 41 demos across 8 categories (input, display, feedback, navigation, overlay, layout, visualization, effects). Demos are self-contained TEA apps in `lib/raxol/playground/demos/`. Chart demos use View DSL functions directly. SSH mode: `mix raxol.playground --ssh` serves the playground over SSH (port 2222 by default). That surface is local-only in practice: production SSH was suspended on 2026-08-26 after review found it reachable unauthenticated on the app's dedicated IPv6, and `fly.toml` carries no `RAXOL_SSH_PLAYGROUND` entry. Re-enabling it is a separate, explicit decision.
 
 ### Coding agent
 
@@ -124,7 +124,7 @@ mix docs                      # Generate documentation
 ./scripts/dev.sh check           # Pre-commit quality checks
 ./scripts/dev.sh dialyzer        # Static analysis with PLT caching
 ./scripts/dev.sh setup           # Environment setup
-./scripts/check_toolchain.sh     # Verify the active Elixir/OTP matches .tool-versions
+./scripts/check_toolchain.sh     # Verify the active Elixir/OTP matches mise.toml
 ./scripts/acp_probe.py CMD ARGS  # Drive an ACP agent over stdio, record the wire
 ```
 
@@ -153,8 +153,15 @@ also shims), so a fresh npm install can connect a provider without Mix.
 
 ### Toolchain
 
-`.tool-versions` is authoritative (currently elixir 1.20.2-otp-29, erlang
-29.0.3, via mise). Running a different Elixir than `$MIX_HOME` was populated
+`mise.toml` is authoritative and is the ONLY place the reference pin appears
+(currently elixir 1.20.2-otp-29, erlang 29.0.3, node latest). mise reads it
+natively; CI reads the same file through `erlef/setup-beam`'s `version-file`
+input with `version-type: strict`, and `scripts/check_toolchain.sh` plus the
+pre-commit hook parse its `[tools]` table. Nightly and the older-toolchain jobs
+in `security.yml` and `web-deploy-check.yml` keep their own literals on purpose:
+they exist to test something other than the reference toolchain.
+
+Running a different Elixir than `$MIX_HOME` was populated
 for does not report a version conflict; it fails inside Hex on any
 `mix deps.get` with:
 
@@ -307,7 +314,6 @@ lib/raxol/
 ├── ssh/             # SSH serving
 ├── repl/            # Interactive REPL
 ├── performance/     # Performance monitoring, profiling, caching
-├── live_view/       # README only (code moved to packages/raxol_liveview)
 └── effects/         # Visual effects (CursorTrail, HoverHighlight)
 ```
 
@@ -444,6 +450,7 @@ These namespaces are settled; don't create new top-level alternatives:
 - `Raxol.Earn.*` - Virtuals Agent Commerce Protocol (job sessions, offerings, hooks) in raxol_earn package
 - `Raxol.Plugin` - Plugin SDK macro (`use Raxol.Plugin`), API, testing in raxol_plugin package
 - `Raxol.Animation.*` - Animation hints (`Helpers`, `Hint`) in main raxol; CSS mapping in `Raxol.Core.Animation.Hint` (raxol_core package)
+- `Raxol.Core.TokenBucket` - Shared ETS token-bucket rate limiter in raxol_core; replaced the deleted `Raxol.RateLimit`, which was a fixed-window counter behind a global Agent
 
 ## Environment variables
 
@@ -478,7 +485,7 @@ flyctl status --app raxol  # Status
 flyctl logs --app raxol    # Logs
 ```
 
-Configuration: `fly.toml`, Dockerfile: `docker/Dockerfile.web`. The playground SSH surface is on (port 2222); the multi-tenant coding agent (`RAXOL_SSH_CODE`, port 2223) is present in the build but its env block stays commented out in `fly.toml` until a tenants volume exists.
+Configuration: `fly.toml`, Dockerfile: `docker/Dockerfile.web`. Neither SSH surface is served in production: the anonymous playground (port 2222) was suspended on 2026-08-26 after review found it reachable unauthenticated on the app's dedicated IPv6, and the multi-tenant coding agent (`RAXOL_SSH_CODE`, port 2223) is present in the build but its env block stays commented out until a tenants volume exists.
 
 ## Hex Publishing
 

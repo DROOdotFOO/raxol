@@ -1,87 +1,44 @@
 # Benchmark Suite
 
-Benchmarking files for Raxol.
-
-## Directory structure
-
-```
-bench/
-├── README.md           # This file
-├── suites/             # Organized benchmark suites
-│   ├── parser/         # ANSI parser and sequence benchmarks
-│   ├── terminal/       # Buffer, cursor, and emulator benchmarks
-│   ├── rendering/      # UI rendering performance benchmarks
-│   ├── core/           # System-wide performance benchmarks
-│   └── validation/     # Optimization validation benchmarks
-├── archived/           # Historical and deprecated benchmarks
-├── baselines/          # Baseline benchmark data for comparison
-├── output/             # HTML reports and visualization outputs
-│   └── assets/         # Static assets for HTML reports
-├── results/            # Benchmark run results
-│   ├── Test Suite/     # Benchee result files (.benchee, _summary.json)
-│   └── visualization/  # Visualization benchmark results
-├── scripts/            # Benchmark utilities and scripts
-└── snapshots/          # Performance snapshots for regression testing
-```
+Benchmark scripts for Raxol. For measured numbers and how they are produced,
+see [docs/bench/README.md](../docs/bench/README.md).
 
 ## Quick start
 
 ```bash
-# Run parser benchmarks
-mix run bench/suites/parser/parser_benchmark.exs
-
-# Run terminal benchmarks
-mix run bench/suites/terminal/buffer_benchmark.exs
-
-# Run rendering benchmarks
-mix run bench/suites/rendering/render_performance_simple.exs
-
-# Run validation benchmarks
-mix run bench/suites/validation/validate_optimizations.exs
-
-# Run system-wide benchmarks
-mix run bench/suites/core/performance_summary.exs
+mix run bench/suites/parser/parser_benchmark.exs               # ANSI parser
+mix run bench/suites/terminal/buffer_benchmark.exs             # screen buffer
+mix run bench/suites/rendering/render_performance_simple.exs   # rendering
+mix run bench/suites/validation/validate_optimizations.exs     # validation
+mix run bench/suites/core/performance_summary.exs              # system-wide
+mix run bench/suites/comparison/framework_comparison.exs       # the README table
 ```
 
-## Benchmark Suites
+## Suites
 
-### Parser Suite (`suites/parser/`)
-- `parser_benchmark.exs`: ANSI parser performance
-- `ansi_profile.exs`: ANSI sequence processing
-- `parser_chain_profile.exs`: Parser state chain
-- `sgr_comparison.exs`: SGR sequence benchmarks
+| Directory | Contents |
+| --- | --- |
+| `suites/parser/` | `parser_benchmark.exs`, `ansi_profile.exs`, `parser_chain_profile.exs`, `sgr_comparison.exs` |
+| `suites/terminal/` | `buffer_benchmark.exs`, `cursor_benchmark.exs`, `emulator_profiling.exs`, `lite_emulator_test.exs` |
+| `suites/rendering/` | `render_performance_simple.exs` |
+| `suites/core/` | `performance_summary.exs`, `performance_improvements_benchmark.exs` |
+| `suites/validation/` | `validate_optimizations.exs`, `verify_optimization.exs` |
+| `suites/comparison/` | `framework_comparison.exs`, the source of the root README's frame-time table |
+| `suites/enhanced/` | `performance_dashboard.exs` |
+| `suites/performance/` | Reusable modules: animation, event handling, memory, rendering, reporting |
+| `suites/visualization/` | Chart and visualization benchmarks |
 
-### Terminal Suite (`suites/terminal/`)
-- `buffer_benchmark.exs`: Screen buffer performance
-- `cursor_benchmark.exs`: Cursor movement benchmarks
-- `emulator_profiling.exs`: Terminal emulator profiling
-- `lite_emulator_test.exs`: Lightweight emulator tests
+Two standalone scripts sit directly in `suites/`:
+`kitty_graphics_benchmark.exs` and `protocol_performance_benchmark.exs`, plus
+`example_dsl_benchmark.exs` as a template for a new one.
 
-### Rendering Suite (`suites/rendering/`)
-- `render_performance_simple.exs`: Basic rendering benchmarks
-- `render_pipeline_profiling.exs`: Advanced rendering analysis
+## Other directories
 
-### Core Suite (`suites/core/`)
-- `performance_summary.exs`: System-wide overview
-- `performance_improvements_benchmark.exs`: Optimization tests
-
-### Validation Suite (`suites/validation/`)
-- `validate_optimizations.exs`: Optimization validation
-- `verify_optimization.exs`: Performance verification
-
-## Documentation
-
-See [docs/bench/README.md](../docs/bench/README.md) for comprehensive documentation.
-
-## Output Files
-
-- HTML reports: `output/` directory
-- Results: `results/` directory (.benchee, JSON files)
-- Baselines: `baselines/` directory
-
-## Best practices
-
-1. Run benchmarks before performance changes
-2. Use descriptive timestamped names
-3. Update baselines after improvements
-4. Document regressions in PRs
+| Directory | What it holds |
+| --- | --- |
+| `baselines/` | Baseline data for regression comparison |
+| `snapshots/` | Performance snapshots |
+| `results/` | Benchee run output (`.benchee`, JSON) |
+| `output/` | HTML reports and their static assets |
+| `scripts/` | Benchmark utilities |
+| `core/`, `features/`, `memory/`, `live_view/`, `liveview/` | Older per-area scripts kept for reference |

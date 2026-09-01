@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
   @moduledoc """
-  Phase 13: verifies the `agent.sandboxes` opt-in walks the
+  Verifies the `agent.sandboxes` opt-in walks the
   `Raxol.Agent.Sandbox.Chain` for each turn and short-circuits on
   the first deny.
 

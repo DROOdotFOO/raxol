@@ -187,9 +187,8 @@ defmodule Raxol.Search.FuzzyTest do
       search = Fuzzy.new(buffer)
       search = Fuzzy.update_query(search, "Hello")
 
-      # Note: get_current_match has a bug in the implementation
-      # It checks matches == [] but uses matches variable that doesn't exist
-      # For now, we'll test the nil case
+      # get_current_match is buggy: it checks `matches == []` against a
+      # variable that is not bound. Only the empty-matches case is asserted.
       search_empty = %{search | matches: []}
       assert Fuzzy.get_current_match(search_empty) == nil
     end

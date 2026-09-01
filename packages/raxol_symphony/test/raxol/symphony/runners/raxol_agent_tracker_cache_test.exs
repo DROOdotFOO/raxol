@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
   @moduledoc """
-  Phase 10: verifies the `agent.tracker_cache` opt-in caches
+  Verifies the `agent.tracker_cache` opt-in caches
   `still_active?` results between turn boundaries so a multi-turn run
   doesn't re-query the tracker every turn.
 

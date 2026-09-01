@@ -4,67 +4,53 @@ Handles terminal I/O, buffer management, parsing, cursor, and command execution.
 
 ## Modules
 
-- `Buffer.Manager`: screen buffer (double buffering, damage tracking)
-- `Cursor.Manager`: cursor state and movement
-- `State.Manager`: terminal state/configuration
-- `Command.Manager`: command processing and execution
-- `Style.Manager`: text styling and formatting
-- `Emulator`: terminal emulation core
-- `Integration`: connects and synchronizes components
-- `ANSI`: escape sequence parsing
+- `Raxol.Terminal.ScreenBuffer.Manager`: screen buffer (double buffering, damage tracking)
+- `Raxol.Terminal.Cursor.Manager`: cursor state and movement
+- `Raxol.Terminal.State.Manager`: terminal state and configuration
+- `Raxol.Terminal.Commands.Manager`: command history
+- `Raxol.Terminal.Commands.Executor`: command processing and execution
+- `Raxol.Terminal.Style.Manager`: text styling and formatting
+- `Raxol.Terminal.Emulator`: terminal emulation core
+- `Raxol.Terminal.Integration`: connects and synchronizes components
+- `Raxol.Terminal.ANSI`: escape sequence parsing
 
 ## Extension points
 
-- Behaviours: `Driver.Behaviour`, `ScreenBuffer.Behaviour`, `Emulator.Behaviour`
-- Public APIs: `Integration`, `Emulator`, `Buffer.Manager`
+- Behaviours: `Raxol.Terminal.Driver.Behaviour`, `Raxol.Terminal.EmulatorBehaviour`,
+  `Raxol.Terminal.OperationsBehaviour`, `Raxol.Terminal.ClipboardBehaviour`
+- Public APIs: `Raxol.Terminal.Integration`, `Raxol.Terminal.Emulator`,
+  `Raxol.Terminal.ScreenBuffer`
 
 ## Usage
 
-```elixir
-terminal = Raxol.Terminal.Integration.new(80, 24)
-terminal = Raxol.Terminal.Integration.write(terminal, "Hello, World!")
-terminal = Raxol.Terminal.Integration.move_cursor(terminal, 10, 5)
-terminal = Raxol.Terminal.Integration.clear_screen(terminal)
-```
-
-Cursor management:
+`Raxol.Terminal.Integration` threads a `Raxol.Terminal.Integration.State`
+struct through pure functions:
 
 ```elixir
-terminal = Raxol.Terminal.Integration.set_cursor_style(terminal, :underline)
-terminal = Raxol.Terminal.Integration.save_cursor(terminal)
-terminal = Raxol.Terminal.Integration.restore_cursor(terminal)
+state = Raxol.Terminal.Integration.init()
+state = Raxol.Terminal.Integration.write(state, "Hello, World!")
+state = Raxol.Terminal.Integration.move_cursor(state, 10, 5)
+state = Raxol.Terminal.Integration.clear(state)
 ```
 
-Buffer operations:
+Queries:
 
 ```elixir
-regions = Raxol.Terminal.Integration.get_damage_regions(terminal)
-terminal = Raxol.Terminal.Integration.switch_buffers(terminal)
+Raxol.Terminal.Integration.get_cursor_position(state)
+Raxol.Terminal.Integration.get_visible_content(state)
+state = Raxol.Terminal.Integration.resize(state, 120, 40)
 ```
 
-## Refactoring status
-
-Ongoing restructuring to break large monolithic files into focused modules:
-
-**Done:**
-- `ansi.ex` (1257 lines) -> `ansi/parser.ex`, `ansi/emitter.ex`, `ansi/sequences/*.ex`, `ansi_facade.ex`
-- `command_executor.ex` (1243 lines) -> `commands/executor.ex`, `commands/parser.ex`, `commands/modes.ex`, `commands/screen.ex`
-
-**In progress:**
-- `configuration.ex` (2394 lines) -> `config/` directory
-
-**Planned:**
-- `screen_buffer.ex` (1129 lines)
-- `emulator.ex` (911 lines)
-- `parser.ex` (1013 lines)
-
-Facade modules maintain backward compatibility during the transition.
+The same module also runs as a manager process, in which case `write/2`,
+`resize/3`, `clear/1`, and `handle_input/2` take a pid instead of a state.
 
 ## Known issues
 
 ### Credo stdin parsing warning
 
-Credo may report `lib/raxol/terminal/input_handler.ex` as unparseable. This is a Credo limitation with stdin-related code, not a code problem. Safe to ignore or exclude via `.credo.exs`:
+Credo may report `input_handler.ex` as unparseable. This is a Credo
+limitation with stdin-related code, not a code problem. Safe to ignore or
+exclude via `.credo.exs`:
 
 ```elixir
 files: %{

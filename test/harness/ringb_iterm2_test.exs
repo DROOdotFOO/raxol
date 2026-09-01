@@ -4,7 +4,7 @@ T0.RingB.Boot.require_all!(t0_root)
 
 defmodule Raxol.Harness.RingBIterm2Test do
   @moduledoc """
-  Unit RB (`docs/proposals/in-flight/t0-runbook.md`'s Ring B, automated):
+  Unit RB (`docs/proposals/t0-runbook.md`'s Ring B, automated):
   drives a real iTerm2 window via `T0.RingB.Drivers.Iterm2` and asserts
   the same claim shapes `scripts/harness/t0/tmux/run_cell.sh` already
   validated against the tmux proxy cell, now against a real tier-1
