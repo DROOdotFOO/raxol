@@ -6,7 +6,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
   alias Raxol.Agent.Backend.Resolver
-  alias Raxol.Payments.{Assets, FeeSchedule}
+  alias Raxol.Payments.Assets
   alias RaxolPlayground.BrandMarks
   alias RaxolPlayground.Capabilities
   alias RaxolPlayground.RecordedFrames
@@ -428,55 +428,40 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
-  # The one that matters most, because the page has already got it wrong once:
-  # raxol.io rendered a hand-written fee table until 2026-08-30 whose numbers no
-  # tier ever charged (see the note in `Raxol.Payments.PrivacyTier`). Every rate
-  # the settle pane shows is held against the schedule pinned to the solver's
-  # own, so a landing page cannot quote a fee the product does not charge.
-  test "the settle pane quotes the pinned fee schedule, not a typed-in table" do
-    text = settle_pane()
+  # The page has got fees wrong once already: raxol.io rendered a hand-written
+  # fee table until 2026-08-30 whose numbers no tier ever charged (see the note
+  # in `Raxol.Payments.PrivacyTier`). The hero no longer prices anything at all
+  # -- the ladder lives on /payments, held against the pinned schedule by
+  # "payments section renders the ladder ..." below -- so what this guards now
+  # is that no rate creeps back into a pane that has no schedule behind it.
+  test "the settle pane quotes no fee at all" do
+    quoted = ~r/\d+ bps/ |> Regex.scan(settle_pane()) |> List.flatten()
 
-    for %{tier: tier, stable_bps: bps} <- FeeSchedule.all() do
-      assert text =~ to_string(tier), "the settle pane omits the #{tier} tier"
-
-      assert text =~ "#{bps} bps",
-             "the settle pane does not show #{tier} at its scheduled #{bps} bps"
-    end
-
-    # A rate that is not in the schedule is a rate nobody charges.
-    scheduled = Enum.map(FeeSchedule.all(), &"#{&1.stable_bps} bps")
-
-    for quoted <- ~r/\d+ bps/ |> Regex.scan(text) |> List.flatten() do
-      assert quoted in scheduled, "the settle pane quotes #{quoted}, which no tier charges"
-    end
+    assert quoted == [],
+           "the settle pane quotes #{Enum.join(quoted, ", ")}; the hero does not price transfers"
   end
 
-  # "N networks" is a number a reader cannot check, and the count across the
-  # whole token table is not the one a USDC corridor cares about. Both the
-  # sub-line and the pane name the chains USDC is actually deployed on.
-  test "the networks named are the chains USDC is deployed on" do
-    expected =
-      Assets.evm_tokens()["USDC"]
-      |> Map.keys()
-      |> Enum.sort()
-      |> Enum.map(&Assets.chain_name/1)
-
-    pane = settle_pane()
-
+  # The sub-line used to name every chain USDC is deployed on. It does not any
+  # more: the reach table on /payments carries them, derived from the solver's
+  # own capability matrix, and a subset typed into the hero dates the sentence
+  # every time a corridor is added. This holds the hero to the shorter claim.
+  test "the hero sub-line names no chain and no asset" do
     hero =
       render_component(&LandingComponents.screen_hero/1,
         example: List.first(LandingComponents.hero_example_names())
       )
 
-    for chain <- expected do
-      assert pane =~ chain, "the settle pane omits #{chain}, a USDC network"
-      assert hero =~ chain, "the sub-line omits #{chain}, a USDC network"
+    named = Enum.map(Map.keys(Assets.evm_tokens()), & &1)
+
+    for chain <- ["Ethereum", "Optimism", "Polygon", "Arbitrum One", "Robinhood Chain"] do
+      refute hero =~ chain,
+             "the sub-line names #{chain}; the reach table on /payments is where chains belong"
     end
 
-    # Robinhood Chain carries USDG rather than USDC, and WETH is not what an
-    # agent settles in. Counting the whole table would have claimed it.
-    refute hero =~ "Robinhood Chain"
-    refute pane =~ "Robinhood Chain"
+    for asset <- named do
+      refute hero =~ "settlement on #{asset}",
+             "the sub-line pins settlement to #{asset}; it settles more than one"
+    end
   end
 
   defp settle_pane do

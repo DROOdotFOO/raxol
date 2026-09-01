@@ -25,11 +25,11 @@
           },
           {
             "id": null,
-            "label": "    sign",
+            "label": "ok  sign    EIP-712 intent",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "    sign"
+            "content": "ok  sign    EIP-712 intent"
           },
           {
             "id": null,

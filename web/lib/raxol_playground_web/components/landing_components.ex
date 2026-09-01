@@ -112,6 +112,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # product's. What is authored is the turn (which tools, in what state), the
   # way `pulse` authors a wave.
   #
+  # The job line above the turn is the other half of the story raxol_earn
+  # tells: agents do not only spend, they sell services on the Virtuals Agent
+  # Commerce Protocol and get paid for them, and the harness is how the work
+  # a job was funded for actually gets done. It stays authored text rather
+  # than a call into `Raxol.Earn`, because the web app does not depend on
+  # raxol_earn and `RaxolEarn.Application` self-starts outside `:test` -- a
+  # dependency edge added for one line of a hero pane would start a seller
+  # supervision tree in the deployed site.
+  #
   # The statuses are fixed rather than advancing. A turn that progressed them
   # needs the ladder as state, and the pane holds thirty lines: this is the
   # version that fits, and the spinner on the running row is the animation.
@@ -120,7 +129,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     use Raxol.Core.Runtime.Application
 
     alias Raxol.UI.Components.Harness.ToolCallBlock, as: Tool
-
     @calls [
       {"read", "router.ex", :done},
       {"edit", "router.ex:42", :running},
@@ -136,6 +144,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       column style: %{gap: 1} do
         [
           text("raxol code", style: [:bold]),
+          text("virtuals acp  job 4812  usdc_transfer", fg: :cyan),
           column(do: Enum.map(@calls, &call(&1, m.t)))
         ]
       end
@@ -157,21 +166,19 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @settle_source ~S"""
   defmodule Settle do
     use Raxol.Core.Runtime.Application
-
     alias Raxol.Payments.{Assets, Router}
     @route Router.select(cross_chain: true)
-    @stables Assets.evm_tokens() |> Map.keys() |> Enum.sort() |> List.delete("WETH")
+    @tokens Assets.evm_tokens() |> Map.keys() |> Enum.sort()
+    @stables Enum.reject(@tokens, &(&1 == "WETH"))
     @steps [
       {"quote", "Base -> Arbitrum One"},
       {"sign", "EIP-712 intent"},
       {"settle", "0x7f3a9c.. stealth"}
     ]
-
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def update(_, m), do: {m, []}
-    def subscribe(_), do: [subscribe_interval(400, :tick)]
-
+    def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
       at = rem(m.t, length(@steps) + 1)
       column style: %{gap: 1} do
@@ -183,10 +190,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       end
     end
 
-    defp step({name, note}, i, at) when i < at,
-      do: text("ok  #{String.pad_trailing(name, 8)}#{note}", fg: :cyan)
-
-    defp step({name, _note}, _i, _at), do: text("    #{name}")
+    defp step({n, note}, i, at) when i < at,
+      do: text("ok  #{String.pad_trailing(n, 8)}#{note}", fg: :cyan)
+    defp step({n, _note}, _i, _at), do: text("    #{n}")
   end
   """
 
@@ -210,7 +216,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                         {"halo", "halo.ex", "the mark, as a program",
                          @halo_source},
                         {"harness", "harness.ex",
-                         "the raxol code agent, in its own components",
+                         "a Virtuals ACP job, worked by the coding agent",
                          @harness_source},
                         {"settle", "settle.ex",
                          "a cross-chain transfer, through Xochi",
@@ -229,26 +235,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                   end)
 
   @agent_code Makeup.highlight_inner_html(@agent_source)
-  # Named, not counted. "N networks" is a number a reader cannot check, and the
-  # count over the whole token table (six) is not the number that matters to
-  # someone reading a USDC corridor: USDG carries Robinhood Chain, and WETH is
-  # not what an agent settles in. So the sub-line names the chains USDC itself
-  # is deployed on, straight from the registry `Xochi.Capabilities.fallback/0`
-  # derives from, and cannot claim a corridor the solver does not have. Tron is
-  # reached over the relay rail rather than this table and is not listed.
-  @usdc_networks Raxol.Payments.Assets.evm_tokens()
-                 |> Map.fetch!("USDC")
-                 |> Map.keys()
-                 |> Enum.sort()
-                 |> Enum.map(&Raxol.Payments.Assets.chain_name/1)
-
-  @usdc_network_sentence (case Enum.split(@usdc_networks, -1) do
-                            {[], [only]} ->
-                              only
-
-                            {front, [last]} ->
-                              Enum.join(front, ", ") <> ", and " <> last
-                          end)
 
   # Named once: the footer reaches for it as a mark, as a link to the package
   # directory behind the count beside it, and it used to be a nav entry too.
@@ -327,7 +313,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns =
       assign(assigns,
         halo_faces: @halo_faces,
-        usdc_networks: @usdc_network_sentence,
         install_command: @install_command
       )
 
@@ -356,14 +341,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
         <%!-- Each noun in the h1 is a tab away in the demo below, and this
              line says which is which: "harness" means nothing to a reader who
-             has not met `raxol code`, and "N networks" is a number nobody can
-             check. Both are spelled out, and the networks are derived rather
-             than typed. --%>
+             has not met `raxol code`. The chains and the assets used to be
+             spelled out here and are not any more -- the reach table on
+             /payments carries them, derived from the solver, and naming a
+             subset in the hero dates the sentence every time one is added. --%>
         <p class="screen-sub">
           Each is its own Hex package: the TEA runtime, the AI agent, the
           <span class="text-axol-coral">raxol code</span> coding harness, and
-          USDC settlement on <%= @usdc_networks %>. The demo below runs them;
-          its title bar names which.
+          cross-chain settlement. The demo below runs them.
         </p>
 
         <div class="screen-install">

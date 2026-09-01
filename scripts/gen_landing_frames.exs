@@ -96,7 +96,6 @@ defmodule Harness do
   use Raxol.Core.Runtime.Application
 
   alias Raxol.UI.Components.Harness.ToolCallBlock, as: Tool
-
   @calls [
     {"read", "router.ex", :done},
     {"edit", "router.ex:42", :running},
@@ -112,6 +111,7 @@ defmodule Harness do
     column style: %{gap: 1} do
       [
         text("raxol code", style: [:bold]),
+        text("virtuals acp  job 4812  usdc_transfer", fg: :cyan),
         column(do: Enum.map(@calls, &call(&1, m.t)))
       ]
     end
@@ -125,21 +125,19 @@ end
 
 defmodule Settle do
   use Raxol.Core.Runtime.Application
-
   alias Raxol.Payments.{Assets, Router}
   @route Router.select(cross_chain: true)
-  @stables Assets.evm_tokens() |> Map.keys() |> Enum.sort() |> List.delete("WETH")
+  @tokens Assets.evm_tokens() |> Map.keys() |> Enum.sort()
+  @stables Enum.reject(@tokens, &(&1 == "WETH"))
   @steps [
     {"quote", "Base -> Arbitrum One"},
     {"sign", "EIP-712 intent"},
     {"settle", "0x7f3a9c.. stealth"}
   ]
-
   def init(_), do: %{t: 0}
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
   def update(_, m), do: {m, []}
-  def subscribe(_), do: [subscribe_interval(400, :tick)]
-
+  def subscribe(_), do: [subscribe_interval(200, :tick)]
   def view(m) do
     at = rem(m.t, length(@steps) + 1)
 
@@ -152,10 +150,9 @@ defmodule Settle do
     end
   end
 
-  defp step({name, note}, i, at) when i < at,
-    do: text("ok  #{String.pad_trailing(name, 8)}#{note}", fg: :cyan)
-
-  defp step({name, _note}, _i, _at), do: text("    #{name}")
+  defp step({n, note}, i, at) when i < at,
+    do: text("ok  #{String.pad_trailing(n, 8)}#{note}", fg: :cyan)
+  defp step({n, _note}, _i, _at), do: text("    #{n}")
 end
 
 defmodule GenLandingFrames do
@@ -207,15 +204,16 @@ defmodule GenLandingFrames do
   #          frames is exactly one revolution. The statuses are fixed: a turn
   #          that also advanced them would need the status ladder as state, and
   #          the source pane holds thirty lines.
-  #   settle three steps of one transfer, one arriving per tick, plus the
-  #          empty state they start from: four frames closes the loop exactly.
-  #          400ms because a settlement that lands in under a second reads as
-  #          a progress bar rather than as three distinct things happening.
+  #   settle three steps of one transfer plus the empty state they start
+  #          from: four states, one per tick, so four frames closes the loop
+  #          and no two repeat. A step every OTHER tick reads better but
+  #          records each frame twice, and identical frames are what
+  #          "recorded identical frames" refuses.
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63},
     {"halo", Halo, {70, 14}, 110, 48},
-    {"harness", Harness, {24, 5}, 120, 10},
-    {"settle", Settle, {56, 7}, 400, 4}
+    {"harness", Harness, {40, 7}, 120, 10},
+    {"settle", Settle, {56, 7}, 200, 4}
   ]
 
   defp hero do
