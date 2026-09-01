@@ -14,13 +14,19 @@ defmodule Raxol.Payments.Pxe.Client do
       }
 
       {:ok, result} = Pxe.Client.create_note(config, %CreateNoteParams{...})
+
+  `:req_options` is merged into the request last and is the seam a test or an
+  example drives the bridge through without one running:
+
+      config = %{url: "http://pxe.sim", req_options: [plug: fn conn -> ... end]}
   """
 
   alias Raxol.Payments.Pxe.Schemas.{CreateNoteParams, CreateNoteResult, HealthStatus}
 
   @type config :: %{
           url: String.t(),
-          api_key: String.t() | nil
+          api_key: String.t() | nil,
+          req_options: keyword()
         }
 
   @type error ::
@@ -124,7 +130,12 @@ defmodule Raxol.Payments.Pxe.Client do
         _ -> opts
       end
 
-    Req.new(opts)
+    # The transport seam, named the same as `Xochi.Client`'s so a caller that
+    # already sims one bridge does not have to learn a second key. Merged last
+    # and on top, so a test or an example can override `base_url` too; without
+    # it this client could only ever be exercised against a dead port, which is
+    # why nothing here had a success-path test.
+    Req.new(Keyword.merge(opts, Map.get(config, :req_options, [])))
   end
 
   defp auth_headers(%{api_key: key}) when is_binary(key) and key != "" do
