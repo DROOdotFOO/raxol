@@ -13,6 +13,76 @@ defmodule Raxol.Payments.Pxe.ClientTest do
     chain_id: 1
   }
 
+  # Everything below the seam used to be untested: with no way to inject a
+  # transport, the suite could only prove the client fails against a dead port.
+  # The decode path, the RPC error path and the auth header had never run.
+  describe "against a bridge" do
+    test "create_note decodes the result into a struct" do
+      config = sim(ok(note_result()))
+
+      assert {:ok, result} = Client.create_note(config, @valid_params)
+      assert result.note_commitment == "0x" <> String.duplicate("7c", 32)
+      assert result.nullifier_hash == "0x" <> String.duplicate("3e", 32)
+      assert result.l2_tx_hash == "0x" <> String.duplicate("9a", 32)
+    end
+
+    test "get_version returns the version string" do
+      assert {:ok, "0.87.4"} = Client.get_version(sim(ok("0.87.4")))
+    end
+
+    test "health decodes the status endpoint" do
+      config = sim(fn conn -> Req.Test.json(conn, %{"status" => "ok", "version" => "0.1.0"}) end)
+
+      assert {:ok, health} = Client.health(config)
+      assert health.status == :ok
+    end
+
+    # A JSON-RPC error arrives with HTTP 200, so this is only distinguishable
+    # from success by the body -- the case a dead port can never reach.
+    test "an RPC error is an error, not a decoded result" do
+      config =
+        sim(fn conn ->
+          Req.Test.json(conn, %{
+            "jsonrpc" => "2.0",
+            "id" => 1,
+            "error" => %{"code" => -32_000, "message" => "pxe not synced"}
+          })
+        end)
+
+      assert {:error, {:rpc, -32_000, "pxe not synced"}} =
+               Client.create_note(config, @valid_params)
+    end
+
+    test "the api key is sent as a bearer token" do
+      parent = self()
+
+      config =
+        sim(fn conn ->
+          send(parent, {:auth, Plug.Conn.get_req_header(conn, "authorization")})
+          ok("0.87.4").(conn)
+        end)
+
+      assert {:ok, _} = Client.get_version(config)
+      assert_receive {:auth, ["Bearer test-key"]}
+    end
+  end
+
+  defp sim(fun) do
+    %{url: "https://pxe.sim", api_key: "test-key", retry: false, req_options: [plug: fun]}
+  end
+
+  defp ok(result) do
+    fn conn -> Req.Test.json(conn, %{"jsonrpc" => "2.0", "id" => 1, "result" => result}) end
+  end
+
+  defp note_result do
+    %{
+      "noteCommitment" => "0x" <> String.duplicate("7c", 32),
+      "nullifierHash" => "0x" <> String.duplicate("3e", 32),
+      "l2TxHash" => "0x" <> String.duplicate("9a", 32)
+    }
+  end
+
   describe "create_note/2" do
     test "validates params before making RPC call" do
       bad_params = %{@valid_params | recipient: "0xshort"}

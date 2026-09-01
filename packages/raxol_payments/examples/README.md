@@ -22,6 +22,25 @@ so unlike step 1 it needs no second terminal.
 MIX_ENV=test mix run examples/agent_payment_tour.exs
 ```
 
+## 0b. Understand the two privacy modes (no funds, no network)
+
+**`privacy_modes.exs`** takes the pair the fee page names in one line and
+shows what separates them. Stealth is real secp256k1 here, not a description:
+a recipient publishes one meta-address, a sender derives a fresh one-time
+address per payment offline, and the recipient finds theirs by scanning the
+announcer feed while a stranger scanning the same feed finds nothing. Shielded
+runs against an in-process pxe-bridge sim and produces a note commitment and a
+nullifier.
+
+The point is the third section. Stealth breaks the link on a public ledger and
+leaves the amount public; shielded moves the transfer off the public ledger
+entirely. An agent that must not reveal an amount cannot use stealth, however
+unlinkable the address is.
+
+```bash
+MIX_ENV=test mix run examples/privacy_modes.exs
+```
+
 ## 1. Rehearse the pay-stack (no funds, no network)
 
 **`preflight.exs`** drives a single request through the whole stack: wallet ->
@@ -84,6 +103,7 @@ is in the script header.
 | Stage            | Entrypoint                             | Funds | Target                     |
 | ---------------- | -------------------------------------- | ----- | -------------------------- |
 | Survey           | `agent_payment_tour.exs`               | none  | in-process echo server     |
+| Privacy          | `privacy_modes.exs`                    | none  | local crypto + bridge sim  |
 | Rehearse         | `preflight.exs`                        | none  | local echo server          |
 | Launch path      | `crosschain_stealth_payment.exs`       | none  | in-process Xochi sim       |
 | Live (all rails) | `scripts/run_live_gates.sh` (repo root) | real | Xochi worker + Riddler Relay |

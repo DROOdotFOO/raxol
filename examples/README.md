@@ -63,6 +63,9 @@ are offline and spend nothing.
   which move funds, the `Router.select/1` matrix that picks x402 vs Xochi vs
   Relay, then a real x402 challenge paid end to end and the same call refused by
   the spend gate.
+- `privacy_modes.exs`: stealth versus shielded, and why they are not two
+  strengths of one thing. Real ERC-5564 derivation and scanning on one side,
+  an Aztec note on the other, with what each actually hides side by side.
 - `preflight.exs`: one request through the whole stack (wallet -> policy ->
   ledger -> AutoPay -> Req) against the echo server, over a socket.
 - `crosschain_stealth_payment.exs`: the private cross-chain path, from
