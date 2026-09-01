@@ -2396,6 +2396,38 @@ input[type="range"]::-moz-range-thumb {
 }
 
 
+/* The network row sits under the sub-line it replaced. The marks carry their
+   own brand fills rather than currentColor: a chain is recognised by its
+   colour, and the integrations row below already carries the monochrome
+   treatment, so keeping both flat would make the two rows read as one. They
+   are held back to 80% opacity instead, which settles them into the page
+   without draining them. */
+.screen-networks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
+  margin: 1.1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.screen-networks__item { display: flex; }
+
+.screen-networks__mark {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+  opacity: 0.8;
+  transition: opacity 120ms ease;
+}
+
+.screen-networks__item:hover .screen-networks__mark { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-networks__mark { transition: none; }
+}
+
 /* In the intro column beside the mark, not a band of its own -- the column
    had slack the mark's height was already paying for, and the band it used to
    occupy is what an integrations row will take. */
