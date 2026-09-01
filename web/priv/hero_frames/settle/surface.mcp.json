@@ -5,11 +5,11 @@
     "children": [
       {
         "id": null,
-        "label": "USDC 25.00  Base -> Arbitrum One",
+        "label": "USDC 25.00  via xochi",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "USDC 25.00  Base -> Arbitrum One"
+        "content": "USDC 25.00  via xochi"
       },
       {
         "id": null,
@@ -17,54 +17,38 @@
         "children": [
           {
             "id": null,
-            "label": "   standard        22 bps",
+            "label": "ok  quote   Base -> Arbitrum One",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "   standard        22 bps"
+            "content": "ok  quote   Base -> Arbitrum One"
           },
           {
             "id": null,
-            "label": "   trusted         19 bps",
+            "label": "    sign",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "   trusted         19 bps"
+            "content": "    sign"
           },
           {
             "id": null,
-            "label": "-> verified        15 bps",
+            "label": "    settle",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "-> verified        15 bps"
-          },
-          {
-            "id": null,
-            "label": "   premium         12 bps",
-            "type": "text",
-            "children": [],
-            "role": "text",
-            "content": "   premium         12 bps"
-          },
-          {
-            "id": null,
-            "label": "   institutional   10 bps",
-            "type": "text",
-            "children": [],
-            "role": "text",
-            "content": "   institutional   10 bps"
+            "content": "    settle"
           }
         ],
         "role": "group"
       },
       {
         "id": null,
-        "label": "USDC on Ethereum, Optimism, Polygon, Base, Arbitrum One",
+        "label": "stables  USDC  USDG  USDT",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "USDC on Ethereum, Optimism, Polygon, Base, Arbitrum One"
+        "content": "stables  USDC  USDG  USDT"
       }
     ],
     "role": "group"

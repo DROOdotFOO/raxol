@@ -158,32 +158,35 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   defmodule Settle do
     use Raxol.Core.Runtime.Application
 
-    alias Raxol.Payments.{Assets, FeeSchedule}
-    @tiers FeeSchedule.all()
-    @usdc Assets.evm_tokens()["USDC"] |> Map.keys() |> Enum.sort()
-    @on Enum.map_join(@usdc, ", ", &Assets.chain_name/1)
+    alias Raxol.Payments.{Assets, Router}
+    @route Router.select(cross_chain: true)
+    @stables Assets.evm_tokens() |> Map.keys() |> Enum.sort() |> List.delete("WETH")
+    @steps [
+      {"quote", "Base -> Arbitrum One"},
+      {"sign", "EIP-712 intent"},
+      {"settle", "0x7f3a9c.. stealth"}
+    ]
 
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def update(_, m), do: {m, []}
-    def subscribe(_), do: [subscribe_interval(200, :tick)]
+    def subscribe(_), do: [subscribe_interval(400, :tick)]
 
     def view(m) do
-      at = rem(m.t, length(@tiers))
+      at = rem(m.t, length(@steps) + 1)
       column style: %{gap: 1} do
         [
-          text("USDC 25.00  Base -> Arbitrum One", style: [:bold]),
-          column(do: Enum.with_index(@tiers, &tier(&1, &2, at))),
-          text("USDC on " <> @on)
+          text("USDC 25.00  via #{@route}", style: [:bold]),
+          column(do: Enum.with_index(@steps, &step(&1, &2, at))),
+          text("stables  " <> Enum.join(@stables, "  "))
         ]
       end
     end
 
-    defp tier(row, i, i), do: text(fmt("->", row), fg: :cyan)
-    defp tier(row, _i, _at), do: text(fmt("  ", row))
+    defp step({name, note}, i, at) when i < at,
+      do: text("ok  #{String.pad_trailing(name, 8)}#{note}", fg: :cyan)
 
-    defp fmt(cur, %{tier: n, stable_bps: b}),
-      do: "#{cur} #{String.pad_trailing(to_string(n), 16)}#{b} bps"
+    defp step({name, _note}, _i, _at), do: text("    #{name}")
   end
   """
 
@@ -210,7 +213,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                          "the raxol code agent, in its own components",
                          @harness_source},
                         {"settle", "settle.ex",
-                         "USDC fees, off the pinned schedule", @settle_source}
+                         "a cross-chain transfer, through Xochi",
+                         @settle_source}
                       ] do
                     lines = source |> String.trim() |> String.split("\n")
 
