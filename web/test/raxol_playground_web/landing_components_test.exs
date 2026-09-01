@@ -9,6 +9,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   alias Raxol.Payments.Assets
   alias RaxolPlayground.BrandMarks
   alias RaxolPlayground.Capabilities
+  alias RaxolPlayground.NetworkMarks
   alias RaxolPlayground.RecordedFrames
   alias RaxolPlayground.SurfaceSource
   alias RaxolPlaygroundWeb.LandingComponents
@@ -441,26 +442,58 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
            "the settle pane quotes #{Enum.join(quoted, ", ")}; the hero does not price transfers"
   end
 
+  # The row replaced the sentence, so it inherits the sentence's obligation:
+  # every chain the asset registry carries a token on has a mark. Tron is the
+  # seventh and is not in that table -- it is reached over the relay rail --
+  # so it is asserted by name rather than derived.
+  test "every chain the registry carries has a mark in the network row" do
+    registry =
+      Assets.evm_tokens()
+      |> Enum.flat_map(fn {_symbol, chains} -> Map.keys(chains) end)
+      |> Enum.uniq()
+
+    marked = NetworkMarks.ids()
+
+    for id <- registry do
+      assert id in marked,
+             "chain #{id} (#{Assets.chain_name(id)}) settles a token and has no mark"
+    end
+
+    assert 728_126_428 in marked, "the relay rail reaches Tron and the row omits it"
+
+    hero =
+      render_component(&LandingComponents.screen_hero/1,
+        example: List.first(LandingComponents.hero_example_names())
+      )
+
+    for %{name: name} <- NetworkMarks.all() do
+      assert hero =~ name, "the network row drops #{name}"
+    end
+  end
+
   # The sub-line used to name every chain USDC is deployed on. It does not any
   # more: the reach table on /payments carries them, derived from the solver's
   # own capability matrix, and a subset typed into the hero dates the sentence
   # every time a corridor is added. This holds the hero to the shorter claim.
+  # Scoped to the paragraph, not the whole hero: the network row beneath it
+  # names every chain in a `<title>` and an aria-label, which is how a mark is
+  # reachable at all. It is the PROSE that stopped listing them.
   test "the hero sub-line names no chain and no asset" do
     hero =
       render_component(&LandingComponents.screen_hero/1,
         example: List.first(LandingComponents.hero_example_names())
       )
 
-    named = Enum.map(Map.keys(Assets.evm_tokens()), & &1)
+    [sub] = Regex.run(~r/<p class="screen-sub">(.*?)<\/p>/s, hero, capture: :all_but_first)
 
     for chain <- ["Ethereum", "Optimism", "Polygon", "Arbitrum One", "Robinhood Chain"] do
-      refute hero =~ chain,
-             "the sub-line names #{chain}; the reach table on /payments is where chains belong"
+      refute sub =~ chain,
+             "the sub-line names #{chain}; the network row and /payments carry chains"
     end
 
-    for asset <- named do
-      refute hero =~ "settlement on #{asset}",
-             "the sub-line pins settlement to #{asset}; it settles more than one"
+    for asset <- Map.keys(Assets.evm_tokens()) do
+      refute sub =~ asset,
+             "the sub-line names #{asset}; it settles more than one asset"
     end
   end
 
