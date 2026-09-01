@@ -410,9 +410,22 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   def integration_groups do
     editors = Enum.map(Capabilities.acp_editors(), &%{name: &1, label: &1})
 
+    # Labelled "agent commerce" rather than by its protocol's name, which is
+    # also ACP: the group beside it is Agent CLIENT Protocol editors and this
+    # one is the Agent COMMERCE Protocol, so putting the abbreviation on both
+    # would have the row name two unrelated things with one word. Hardcoded
+    # rather than derived because raxol_earn is not a dependency of the web
+    # app and `RaxolEarn.Application` self-starts outside `:test`.
+    #
+    # "Virtuals Protocol" in full, never "Virtuals" or "$VIRTUAL": their
+    # editorial guide names the short forms specifically, and a partner's own
+    # style guide is the one place to take the long name over the short one.
+    commerce = [%{name: "Virtuals Protocol", label: "Virtuals Protocol"}]
+
     [
       {"models", Capabilities.connectable_providers()},
-      {"acp editors", editors}
+      {"acp editors", editors},
+      {"agent commerce", commerce}
     ]
     |> Enum.reject(fn {_label, entries} -> entries == [] end)
     |> Enum.map(fn {group, entries} ->
@@ -459,7 +472,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                 aria-hidden="true"
                 focusable="false"
               >
-                <path d={entry.mark} fill="currentColor" />
+                <path
+                  d={entry.mark}
+                  fill="currentColor"
+                  fill-rule={BrandMarks.fill_rule(entry.name)}
+                />
               </svg>
               <%!-- The reveal has room the row does not, so it shows the
                    registry's own label. The short head is what fits in the
