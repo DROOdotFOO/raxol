@@ -27,8 +27,37 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       |> assign(:search_query, "")
       |> assign(:view_mode, "grid")
       |> assign(:complexity_filter, nil)
+      |> assign_structure()
 
     {:ok, socket}
+  end
+
+  # The unfiltered grid gets structure: a small hand-picked featured row,
+  # then the catalog grouped under its own eight categories, so a first
+  # visit reads as a table of contents rather than 41 interchangeable
+  # cards. A filter or a search IS a grouping, so those render flat; the
+  # featured entries sit only in the featured row, because the same card
+  # twice on one page reads as a rendering bug.
+  defp assign_structure(socket) do
+    a = socket.assigns
+
+    filtered? =
+      a.active_category != nil or a.complexity_filter != nil or
+        a.search_query != ""
+
+    if filtered? do
+      assign(socket, featured: [], grouped: nil)
+    else
+      {featured, rest} = Enum.split_with(a.components, & &1.featured)
+
+      grouped =
+        for cat <- Catalog.list_categories(),
+            comps = Enum.filter(rest, &(&1.category == cat)),
+            comps != [],
+            do: {cat, comps}
+
+      assign(socket, featured: featured, grouped: grouped)
+    end
   end
 
   @impl true
@@ -77,7 +106,9 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
         search: search
       )
 
-    assign(socket, :components, components)
+    socket
+    |> assign(:components, components)
+    |> assign_structure()
   end
 
   @impl true
@@ -196,7 +227,32 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
 
       <%!-- Component Grid/List --%>
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <%= if @view_mode == "grid" do %>
+        <%= if @view_mode == "grid" && @grouped do %>
+          <section :if={@featured != []} class="mb-10" aria-labelledby="featured-heading">
+            <h2 id="featured-heading" class="font-mono font-semibold text-pearl mb-1">Start here</h2>
+            <p class="font-mono detail-text mb-3">
+              Five that show the range: a stateful component, a rich text surface, a live chart, an overlay, and the agent harness.
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+              <%= for comp <- @featured do %>
+                <.component_card component={comp} />
+              <% end %>
+            </div>
+          </section>
+
+          <section :for={{cat, comps} <- @grouped} class="mb-10">
+            <h2 class="font-mono font-semibold text-pearl mb-3">
+              <%= Helpers.category_label(cat) %>
+              <span class="detail-text font-normal"><%= length(comps) %></span>
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              <%= for comp <- comps do %>
+                <.component_card component={comp} />
+              <% end %>
+            </div>
+          </section>
+        <% else %>
+          <%= if @view_mode == "grid" do %>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             <%= for comp <- @components do %>
               <.component_card component={comp} />
@@ -208,6 +264,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
               <.component_list_item component={comp} />
             <% end %>
           </div>
+          <% end %>
         <% end %>
 
         <%= if @components == [] do %>
