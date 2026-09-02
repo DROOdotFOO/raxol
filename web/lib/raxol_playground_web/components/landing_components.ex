@@ -825,8 +825,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix phx.server</span></pre>
 
             <div class="hero-browser">
-              <%!-- The URL is the whole point of this bar: it is what says the
-                   frame below is being served rather than printed. The disc
+              <%!-- The URL is the whole point of this bar: it says this frame
+                   is being served rather than printed. The disc
                    beside it was not a favicon and not a status light, so it
                    said nothing and only made the row look like a screenshot of
                    a browser instead of a page with an address. --%>
@@ -1094,8 +1094,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            authored output. --%>
       <div class="surface-snapshots">
         <p class="body-text-dim max-w-2xl mb-4">
-          Static: the <code class="text-axol-coral">pulse.exs</code> frame below
-          renders as terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
+          Static: <code class="text-axol-coral">pulse.exs</code> as terminal
+          cells, LiveView DOM, SSH ANSI, and MCP JSON.
         </p>
 
         <div class="surface-snapshot-grid">
@@ -1194,8 +1194,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </ul>
 
         <p class="body-text-dim">
-          Hosted SSH is offline while the host is rebuilt. Run it locally with
-          the command above.
+          Hosted SSH is offline while the host is rebuilt. Run
+          <code class="text-axol-coral">mix raxol.playground --ssh</code>
+          locally.
         </p>
 
         <%!-- The posture facts below are `Raxol.SSH.Server`'s documented
@@ -1404,9 +1405,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:matrix, :map, required: true)
 
   def payments_deep_dive(assigns) do
-    # Fees come from `Raxol.Payments.FeeSchedule`, the mirror of Riddler's
-    # FeePolicy that is pinned to the same generated schedule the Riddler SDK
-    # checks itself against. They used to come from `PrivacyTier`, which prices
+    # Fees come from `Raxol.Payments.FeeSchedule`, the local mirror of the
+    # external fee policy the SDK checks itself against.
+    # It used to come from `PrivacyTier`, which prices
     # a different (retired) model: it put a table on this page that no tier has
     # ever charged, including a `0 bps -- no fee` row that the never-discounted
     # solver floor makes impossible.
@@ -1471,8 +1472,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <h2 class="name-coral mb-2">xochi.fi reach</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Capabilities use a five-minute cache. Fetch failure uses the static
-        registry and labels it cached.
+        Capabilities use a five-minute cache. Fetch failure falls back to the
+        cached registry.
       </p>
 
       <div class="reach">
@@ -1517,7 +1518,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <h2 class="name-coral mt-12 mb-2">xochi.fi routing</h2>
       <p class="body-text-dim max-w-2xl mb-4">
         <code>Raxol.Payments.Router.select/1</code> picks x402, private
-        settlement, or relay. Tables are code-derived.
+        settlement, or relay.
       </p>
 
       <div class="ladder ladder--pair mb-4" role="table" aria-label="Protocol routing">
@@ -1533,7 +1534,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <p class="body-text-dim max-w-2xl mb-10">
         Tron forces relay, which is public-only; stealth-to-Tron fails at the
-        Action. Riddler stays manual: B2B, cash-negative for agents.
+        Action.
       </p>
 
       <h2 class="name-coral mb-2">
