@@ -59,7 +59,7 @@ defmodule Raxol do
   alias Raxol.Core.Runtime.Application
 
   @doc """
-  Runs a Raxol application.
+  Starts a Raxol application and returns immediately.
 
   This function starts the Raxol runtime with the provided application module
   and options. The application module must implement the `Raxol.Core.Runtime.Application` behaviour.
@@ -83,12 +83,21 @@ defmodule Raxol do
 
   ## Returns
 
-  The return value of the application when it exits.
+  `{:ok, pid}` or `{:error, reason}` (`GenServer.on_start/0`). The
+  application runs in that process; this call does not block until it
+  exits. To wait for it, monitor the pid; to stop it, use one of the
+  configured `:quit_keys` or call
+  `Raxol.Core.Runtime.Lifecycle.stop_application/1`.
 
   ## Example
 
   ```elixir
-  Raxol.run(MyApp, %{initial: "state"}, title: "My Application", fps: 30)
+  {:ok, pid} = Raxol.run(MyApp, title: "My Application", fps: 30)
+  ref = Process.monitor(pid)
+
+  receive do
+    {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+  end
   ```
   """
   def run(app, opts \\ []) do
