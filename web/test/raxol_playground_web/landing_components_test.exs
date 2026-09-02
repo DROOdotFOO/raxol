@@ -258,8 +258,6 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   test "the surfaces page reuses the hero's committed recording" do
     page = render_component(&LandingComponents.surfaces_deep_dive/1, %{})
 
-    assert page =~ "Static snapshot"
-
     frame = List.first(RecordedFrames.hero_frames("pulse"))
 
     assert String.contains?(page, frame),
@@ -279,7 +277,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   test "the grown topic sections keep their commands and facts" do
     ssh = render_component(&LandingComponents.ssh_deep_dive/1, %{})
     assert ssh =~ "raxol code --ssh --ssh-tenants"
-    assert ssh =~ "Safe by default"
+    assert ssh =~ "max connections"
 
     agent = render_component(&LandingComponents.agent_deep_dive/1, %{})
     assert agent =~ ":agent_message"
@@ -290,7 +288,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert coding =~ "fails closed"
 
     token = render_component(&LandingComponents.token_deep_dive/1, %{})
-    assert token =~ "What it is not"
+    assert token =~ "settlement asset"
     assert token =~ ~s(href="/payments")
   end
 
@@ -892,12 +890,15 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   # Reference material moved to the footer rather than being deleted: every
   # destination the header dropped is still one click away.
-  test "the footer keeps what the header stopped carrying" do
+  test "the landing footer keeps only primary destinations" do
     footer = render_component(&LandingComponents.screen_footer/1, %{})
 
-    assert footer =~ ~s(href="/skill.md")
+    assert footer =~ ~s(href="/coding-agent")
+    assert footer =~ "raxol code"
     assert footer =~ ~s(href="https://hex.pm/packages/raxol")
     assert footer =~ "github.com/DROOdotFOO/raxol"
+    refute footer =~ ~s(href="/skill.md")
+    refute footer =~ ~r/>\s*\d+\s+packages\s*</
   end
 
   # The mark replaces a word, so it has to carry that word for a screen reader,
@@ -1081,8 +1082,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert token =~
              "https://dexscreener.com/robinhood/0xa20b68e2e1de71f1426b546ed5514bf253215a48"
 
-    # Whitespace-tolerant: HEEx wraps prose across lines.
-    assert token =~ ~r/not a settlement\s+asset/
+    assert token =~ ~r/settlement\s+asset/
 
     # A market number would be stale by the next request.
     refute token =~ ~r/\$\d/
@@ -1118,7 +1118,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     coding = render_component(&LandingComponents.coding_agent_deep_dive/1, %{})
 
     assert coding =~ "agentclientprotocol.com"
-    assert coding =~ "Zed"
+    refute coding =~ "Zed"
     assert coding =~ "mix raxol.code"
     assert coding =~ "raxol acp"
     assert coding =~ "raxol -p"

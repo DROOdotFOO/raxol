@@ -348,9 +348,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              36 to spare, and the sub-line under this already says each one is
              its own Hex package, which is the same promise made once. --%>
         <h1 class="screen-title">
-          One module, every surface.
+          Build once.
           <span class="screen-title__claim text-axol-coral">
-            Agent, harness, and payments.
+            Ship terminal, web, agents, and payments.
           </span>
         </h1>
 
@@ -511,19 +511,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <footer class="screen-footer" role="contentinfo">
       <div class="screen-bar">
         <nav class="screen-topics" aria-label="Deep dives">
-          <a :for={{path, label} <- topic_links()} href={path} class="topic-link">{label}</a>
+          <a :for={{path, label} <- primary_topic_links()} href={path} class="topic-link">{label}</a>
         </nav>
 
-        <%!-- Keep footer destinations separate. The package count is the only
-             quantified claim here, and it links to the public directory behind
-             the number; release version belongs on Hex/docs, not the landing
-             footer. --%>
         <span class="screen-meta">
-          <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
-            {Capabilities.repo_package_count()} packages
-          </a>
           <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
-          <a href="/skill.md" class="subtle-link">Skill</a>
           <.github_mark />
         </span>
       </div>
@@ -557,6 +549,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # The deep-dive pages, in one place so the header and footer cannot list
   # different ones. `TopicLive` owns the paths; this only borrows them.
   defp topic_links, do: RaxolPlaygroundWeb.TopicLive.links()
+
+  @primary_topic_paths ["/surfaces", "/coding-agent", "/payments", "/token"]
+  defp primary_topic_links do
+    Enum.filter(topic_links(), fn {path, _label} ->
+      path in @primary_topic_paths
+    end)
+  end
 
   # One list for both site headers. The landing carried four links and the
   # topic pages six, so the navigation changed shape when a reader crossed
@@ -840,10 +839,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                 <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@frame_grid.rows}; --frame-cols: #{@frame_grid.cols}"}>
                   <div :for={{frame, i} <- Enum.with_index(@frames)} class="hero-frame" data-frame={i} hidden={i != 0}>{raw(frame)}</div>
                 </div>
-                <p class="hero-browser__caption">
-                  A TerminalComponent on a Phoenix page. Keydown returns to
-                  update/2.
-                </p>
               </div>
             </div>
           </div>
@@ -1038,10 +1033,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-10 md:py-16 measure" aria-labelledby="surfaces-title">
       <div class="mb-6">
-        <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h1>
+        <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> targets.</h1>
         <p class="body-text max-w-2xl">
-          One TEA module renders everywhere: terminal, browser, SSH, MCP,
-          Telegram, Watch, Speech.
+          Same TEA model. Terminal, browser, SSH, MCP, Telegram, Watch, Speech.
         </p>
       </div>
 
@@ -1099,10 +1093,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            landing's tests hold the hero to -- nothing on this page is
            authored output. --%>
       <div class="surface-snapshots">
-        <h2 class="heading-xl mb-2">Static snapshot</h2>
+        <h2 class="heading-xl mb-2">Four static panes</h2>
         <p class="body-text-dim max-w-2xl mb-4">
-          One <code class="text-axol-coral">pulse.exs</code> frame rendered as
-          terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
+          The <code class="text-axol-coral">pulse.exs</code> frame below renders
+          as terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
         </p>
 
         <div class="surface-snapshot-grid">
@@ -1279,7 +1273,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <p class="body-text-dim max-w-2xl">
         Stream LLM output with <code class="text-axol-coral">:async</code>.
         Route peer messages through <code class="text-axol-coral">Registry</code>.
-        Bring an Anthropic, OpenAI, OpenRouter, Ollama, Lumo, or Kimi key.
+        Bring a provider key.
       </p>
 
       <div class="max-w-2xl">
@@ -1313,18 +1307,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="coding-agent-title">
       <div class="mb-8">
-        <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol speaks ACP.</h1>
+        <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol code speaks ACP.</h1>
         <p class="body-text max-w-2xl">
-          Open raxol from Zed, JetBrains, neovim, Emacs, or VS Code.
+          Open it from any ACP editor.
           <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>
-          lists it beside Claude Agent, Codex CLI, Cursor, Gemini CLI, and
-          GitHub Copilot. One loop serves four surfaces:
+          lists raxol code. One loop serves four surfaces:
         </p>
       </div>
 
       <div class="space-y-3 mb-6 ch-snap">
         <.copyable_command id="copy-agent-code" command="mix raxol.code" comment="interactive coding-agent TUI" tone={:coral} />
-        <.copyable_command id="copy-agent-acp" command="raxol acp" comment="serve to Zed, JetBrains, neovim" tone={:sky} />
+        <.copyable_command id="copy-agent-acp" command="raxol acp" comment="serve ACP editors" tone={:sky} />
         <.copyable_command id="copy-agent-p" command={~S(raxol -p "fix the failing test")} comment="headless, JSON events on stderr" tone={:sky} />
         <.copyable_command id="copy-agent-mcp" command="mix mcp.server" comment="expose the UI itself as agent tools" tone={:sky} />
       </div>
@@ -1545,12 +1538,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </p>
 
       <h2 class="name-coral mb-2">
-        <%= length(@payment_actions) %> Actions
+        <%= length(@payment_actions) %> gated Actions
       </h2>
-      <p class="body-text-dim max-w-2xl mb-4">
-        Fund-moving Actions require <code>:tool_authorizer</code>. Reads stay
-        open.
-      </p>
 
       <%!-- Two clusters rather than thirteen hairline rows with the same word
            repeated down a column. The split is the `sensitive` flag itself, so
@@ -1661,10 +1650,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="max-w-2xl">
-        <h2 class="heading-xl mt-10 mb-3">What it is not</h2>
+        <h2 class="heading-xl mt-10 mb-3">Boundary</h2>
         <p class="body-text mb-4">
-          It is not a settlement asset, package key, fee switch, or price
-          oracle. Payment rails live on
+          Not a settlement asset, package key, fee switch, or price oracle.
+          Payment rails live on
           <a href="/payments" class="link-subtle">/payments</a>.
         </p>
       </div>

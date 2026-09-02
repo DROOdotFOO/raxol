@@ -2190,13 +2190,6 @@ html {
   margin: 0 0 0.5rem;
 }
 
-.hero-browser__caption {
-  font-family: var(--font-body);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  color: var(--text-dim);
-  margin: 0.5rem 0 0;
-}
 
 /* =============================================================================
    Gallery card previews
@@ -2858,8 +2851,8 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* The gap does the separating the middle dots used to. Wider between the
-   groups than inside the build pair, so "v2.6 . 17 packages" still reads as
-   one item rather than two. */
+   destinations than inside the Hex/GitHub pair, so the row reads as grouped
+   navigation rather than a run-on sentence. */
 .screen-meta {
   color: var(--text-dim);
   display: inline-flex;
