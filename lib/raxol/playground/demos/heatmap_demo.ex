@@ -13,6 +13,10 @@ defmodule Raxol.Playground.Demos.HeatmapDemo do
 
   @impl true
   def init(_context) do
+    # Seeded, so every boot opens on the same grid and the recorded preview
+    # is reproducible. [r] keeps drawing from the stream, so randomize still
+    # randomizes; only the opening frame is pinned.
+    :rand.seed(:exsss, {42, 7, 19})
     %{grid: random_grid(), color_scale: :warm}
   end
 
