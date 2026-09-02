@@ -998,9 +998,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
         matrix: @live_matrix
       )
 
-    # Dated proof leads; maturity is labeled.
-    assert payments =~ "2026-06-28"
-    assert payments =~ "2026-07-20"
+    # Maturity is labeled; dated launch proof belongs off this tight page.
     assert payments =~ "0.2"
     assert payments =~ "xochi.fi"
     assert payments =~ ~s(href="https://xochi.fi")
