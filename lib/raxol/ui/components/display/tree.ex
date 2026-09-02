@@ -50,8 +50,7 @@ defmodule Raxol.UI.Components.Display.Tree do
     nodes = Keyword.get(props, :nodes, [])
 
     state = %{
-      id:
-        Keyword.get(props, :id, "tree-#{:erlang.unique_integer([:positive])}"),
+      id: Keyword.get_lazy(props, :id, fn -> Raxol.Core.ID.next("tree") end),
       nodes: nodes,
       expanded: Keyword.get(props, :expanded, MapSet.new()),
       cursor: Keyword.get(props, :cursor, first_node_id(nodes)),

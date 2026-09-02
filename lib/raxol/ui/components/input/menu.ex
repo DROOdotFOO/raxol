@@ -55,8 +55,7 @@ defmodule Raxol.UI.Components.Input.Menu do
     items = Keyword.get(props, :items, [])
 
     state = %{
-      id:
-        Keyword.get(props, :id, "menu-#{:erlang.unique_integer([:positive])}"),
+      id: Keyword.get_lazy(props, :id, fn -> Raxol.Core.ID.next("menu") end),
       items: items,
       cursor: Keyword.get(props, :cursor, first_enabled_id(items)),
       open_path: Keyword.get(props, :open_path, []),
