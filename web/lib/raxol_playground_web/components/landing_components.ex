@@ -323,7 +323,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns =
       assign(assigns,
         halo_faces: @halo_faces,
-        network_marks: NetworkMarks.all(),
         install_command: @install_command
       )
 
@@ -367,25 +366,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           cross-chain settlement.
         </p>
 
-        <%!-- The chains, as marks rather than as a sentence. This is the row
-             the sub-line used to spell out; a logo does not date the way a
-             list of five names did, and it survives a corridor being added
-             without anyone rewriting a paragraph. Six EVM chains carry a
-             token in the asset registry and Tron is reached over the relay
-             rail, which is the seventh. --%>
-        <ul class="screen-networks" aria-label="Networks raxol settles on">
-          <li :for={mark <- @network_marks} class="screen-networks__item">
-            <svg
-              class="screen-networks__mark"
-              viewBox={mark.view_box}
-              role="img"
-              aria-label={mark.name}
-            >
-              <title>{mark.name}</title>
-              {Phoenix.HTML.raw(mark.body)}
-            </svg>
-          </li>
-        </ul>
 
         <div class="screen-install">
           <.copyable_command id="screen-install-cmd" command={@install_command} tone={:coral} />
@@ -427,10 +407,21 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     # style guide is the one place to take the long name over the short one.
     commerce = [%{name: "Virtuals Protocol", label: "Virtuals Protocol"}]
 
+    # The chains sit here rather than in the hero. They were a logo strip
+    # inside it, between the sub-line and the install command, which is the
+    # one place a logo wall does not belong: it pushes the command down and
+    # dresses the claim in other people's marks. This row is what the page
+    # already has for naming what raxol connects to.
+    networks =
+      Enum.map(NetworkMarks.all(), fn mark ->
+        %{name: mark.name, label: mark.name, chain: mark}
+      end)
+
     [
       {"models", Capabilities.connectable_providers()},
       {"acp editors", editors},
-      {"agent commerce", commerce}
+      {"agent commerce", commerce},
+      {"networks", networks}
     ]
     |> Enum.reject(fn {_label, entries} -> entries == [] end)
     |> Enum.map(fn {group, entries} ->
@@ -468,7 +459,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             <span class="integrations-label">{label}</span>
             <span
               :for={entry <- entries}
-              class={["integrations-item", entry.mark && "integrations-item--marked"]}
+              class={[
+                "integrations-item",
+                (entry.mark || entry[:chain]) && "integrations-item--marked"
+              ]}
             >
               <svg
                 :if={entry.mark}
@@ -482,6 +476,21 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                   fill="currentColor"
                   fill-rule={BrandMarks.fill_rule(entry.name)}
                 />
+              </svg>
+              <%!-- Chains keep their own fills where every other mark in this
+                   row is currentColor. Not a preference: four of the seven
+                   knock a white shape out of a coloured field, so one colour
+                   collapses figure into ground and Base becomes a plain disc
+                   with Optimism's "OP" gone. Held back on opacity instead, so
+                   they sit at the row's weight without being redrawn. --%>
+              <svg
+                :if={entry[:chain]}
+                class="integrations-mark integrations-mark--chain"
+                viewBox={entry.chain.view_box}
+                aria-hidden="true"
+                focusable="false"
+              >
+                {raw(entry.chain.body)}
               </svg>
               <%!-- The reveal has room the row does not, so it shows the
                    registry's own label. The short head is what fits in the
