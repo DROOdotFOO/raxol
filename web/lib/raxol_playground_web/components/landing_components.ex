@@ -345,9 +345,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="screen-intro__text">
+        <%!-- "included" is gone from the claim. It cost 233px on a line with
+             36 to spare, and the sub-line under this already says each one is
+             its own Hex package, which is the same promise made once. --%>
         <h1 class="screen-title">
           One module, every surface.
-          <span class="text-axol-coral">Agent, harness, and payments included.</span>
+          <span class="screen-title__claim text-axol-coral">
+            Agent, harness, and payments.
+          </span>
         </h1>
 
         <%!-- Each noun in the h1 is a tab away in the demo below, and this
