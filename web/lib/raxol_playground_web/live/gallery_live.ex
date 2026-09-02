@@ -299,12 +299,11 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
         tabindex="-1"
         phx-hook={if length(@preview.frames) > 1, do: "CardLoop"}
         data-frame-ms={@preview.interval_ms}
-      ><%= if length(@preview.frames) > 1 do %><span
+      ><%= if length(@preview.frames) > 1 do %><div
           :for={{frame, i} <- Enum.with_index(@preview.frames)}
-          class="block"
           data-frame={i}
           hidden={i != 0}
-        ><%= raw(frame) %></span><% else %><%= raw(hd(@preview.frames)) %><% end %></a>
+        ><%= raw(frame) %></div><% else %><%= raw(hd(@preview.frames)) %><% end %></a>
       <div class="p-3 flex flex-col flex-1">
         <div class="flex items-baseline justify-between gap-2 mb-1">
           <h2 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h2>
@@ -315,7 +314,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
              (Catalog's :shows), and absent when it would only repeat the
              name, so ten cards answer "which module is this?" and the
              other thirty-one stay quiet. --%>
-        <p :if={@component.shows} class="font-mono label-text mb-1"><%= @component.shows %></p>
+        <p :if={@component.shows} class="detail-text mb-1"><%= @component.shows %></p>
         <p class="font-mono detail-text gallery-desc mb-2"><%= @component.description %></p>
         <%!-- Tags and links on separate rows. They shared one line, with the
              tags clipped by `overflow-hidden` to whatever the links left over
@@ -356,7 +355,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
             <h2 class="font-mono font-semibold name-sky"><%= @component.name %></h2>
             <.complexity_badge level={@component.complexity} />
           </div>
-          <p :if={@component.shows} class="font-mono label-text mb-2"><%= @component.shows %></p>
+          <p :if={@component.shows} class="detail-text mb-2"><%= @component.shows %></p>
           <p class="font-mono mb-3 detail-text"><%= @component.description %></p>
           <div class="flex items-center gap-4 font-mono mb-3 label-text">
             <span><%= Helpers.category_label(@component.category) %></span>

@@ -149,6 +149,9 @@ defmodule Raxol.Playground.Snippet do
     |> Enum.map(&String.slice(&1, indent..-1//1))
     |> Enum.join("\n")
     |> String.trim_trailing()
+    # A region cut from inside a list keeps its element comma; the excerpt
+    # is code on its own terms, so the dangling comma goes.
+    |> String.replace(~r/,\z/, "")
     |> Kernel.<>("\n")
   end
 end
