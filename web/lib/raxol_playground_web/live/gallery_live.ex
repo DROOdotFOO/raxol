@@ -226,18 +226,28 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
 
     ~H"""
     <div class="panel panel--glow transition-all duration-200 overflow-hidden flex flex-col">
-      <%!-- A real rendered frame of the demo (committed under
-           priv/demo_previews/), not a screenshot or a GIF. The link is a
-           pointer shortcut duplicating "try live" below, so it stays out
-           of the tab order and the accessibility tree. --%>
+      <%!-- Real rendered frames of the demo (committed under
+           priv/demo_previews/), not a screenshot or a GIF. An animated
+           demo's card plays its recording back at the demo's own tick via
+           the CardLoop hook; a static demo is one frame and no hook. The
+           link is a pointer shortcut duplicating "try live" below, so it
+           stays out of the tab order and the accessibility tree. --%>
       <a
         :if={@preview}
+        id={"preview-#{RecordedFrames.slug(@component.name)}"}
         href={"/demos/#{@component.name}"}
         class="gallery-preview bg-synthwave-bg"
         data-theme="synthwave84"
         aria-hidden="true"
         tabindex="-1"
-      ><%= raw(@preview) %></a>
+        phx-hook={if length(@preview.frames) > 1, do: "CardLoop"}
+        data-frame-ms={@preview.interval_ms}
+      ><%= if length(@preview.frames) > 1 do %><span
+          :for={{frame, i} <- Enum.with_index(@preview.frames)}
+          class="block"
+          data-frame={i}
+          hidden={i != 0}
+        ><%= raw(frame) %></span><% else %><%= raw(hd(@preview.frames)) %><% end %></a>
       <div class="p-3 flex flex-col flex-1">
         <div class="flex items-baseline justify-between gap-2 mb-1">
           <h2 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h2>

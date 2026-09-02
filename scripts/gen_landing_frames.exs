@@ -181,15 +181,15 @@ defmodule GenLandingFrames do
   @hero_start_tick 4
 
   # The previews boot with subscriptions unarmed and are DRIVEN: each demo's
-  # declared interval message is delivered this many times through the same
-  # path its timer would use, so which tick the card shows is a property of
-  # this script rather than of scheduler timing. Static demos declare no
+  # declared interval message is delivered explicitly through the same path
+  # its timer would use, so which ticks the card's frames show is a property
+  # of this script rather than of scheduler timing. Static demos declare no
   # interval and keep their initial render, costing no waiting at all. (The
   # old sampled path advanced "8 distinct frames from whatever tick boot
   # reached", which is why easing and linechart re-recorded differently on
   # every run, and why StatusBar's 1000ms tick recorded as static: it never
-  # beat the step timeout.)
-  @preview_ticks 8
+  # beat the step timeout.) Animated demos record this many frames.
+  @preview_frames 8
 
   # What cannot be reproduced, named rather than quietly tolerated, so that
   # "the artifacts drifted" stays a real signal for everything else. Two
@@ -239,21 +239,25 @@ defmodule GenLandingFrames do
     previews(preview_scratch)
     hero(hero_scratch)
 
-    {drifted, skipped} =
-      Path.wildcard(Path.join(preview_scratch, "*.html"))
-      |> Enum.reduce({[], []}, fn fresh, {drift, skip} ->
-        slug = Path.basename(fresh, ".html")
-        committed = Path.join(@preview_dir, "#{slug}.html")
+    # A preview path's slug is its first segment: "heatmap.html" for a
+    # still, "sparkline/frame_03.html" for a recording.
+    exempt? = fn rel ->
+      (rel |> Path.split() |> hd() |> Path.basename(".html")) in @nondeterministic
+    end
 
-        cond do
-          slug in @nondeterministic -> {drift, [slug | skip]}
-          not File.exists?(committed) -> {[slug <> " (missing)" | drift], skip}
-          File.read!(fresh) == File.read!(committed) -> {drift, skip}
-          true -> {[slug | drift], skip}
-        end
-      end)
+    {skipped_paths, preview_drift} =
+      preview_scratch
+      |> tree_drift(@preview_dir)
+      |> Enum.split_with(exempt?)
 
-    drifted = drifted ++ hero_drift(hero_scratch)
+    drifted =
+      preview_drift ++
+        Enum.map(tree_drift(hero_scratch, @hero_dir), &("hero/" <> &1))
+
+    skipped =
+      skipped_paths
+      |> Enum.map(&(&1 |> Path.split() |> hd() |> Path.basename(".html")))
+      |> Enum.uniq()
 
     File.rm_rf!(scratch)
 
@@ -372,27 +376,28 @@ defmodule GenLandingFrames do
     end
   end
 
-  # Every file either side has, byte-compared. The union matters: a shorter
-  # fresh run than the committed one means committed frames are stale
-  # leftovers, which a fresh-side-only walk would read as up to date.
-  defp hero_drift(scratch) do
-    Enum.flat_map(@examples, fn {name, _m, _wh, _tick, _frames} ->
-      fresh_dir = Path.join(scratch, name)
-      committed_dir = Path.join(@hero_dir, name)
+  # Every file either side has, byte-compared, as paths relative to the
+  # bases. The union matters: a shorter fresh run than the committed one
+  # means committed frames are stale leftovers, which a fresh-side-only
+  # walk would read as up to date.
+  defp tree_drift(fresh_base, committed_base) do
+    rel_files = fn base ->
+      base
+      |> Path.join("**")
+      |> Path.wildcard()
+      |> Enum.reject(&File.dir?/1)
+      |> Enum.map(&Path.relative_to(&1, base))
+    end
 
-      files =
-        (Path.wildcard(Path.join(fresh_dir, "*")) ++
-           Path.wildcard(Path.join(committed_dir, "*")))
-        |> Enum.map(&Path.basename/1)
-        |> Enum.uniq()
-        |> Enum.sort()
+    (rel_files.(fresh_base) ++ rel_files.(committed_base))
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.filter(fn rel ->
+      fresh = Path.join(fresh_base, rel)
+      committed = Path.join(committed_base, rel)
 
-      for file <- files,
-          fresh = Path.join(fresh_dir, file),
-          committed = Path.join(committed_dir, file),
-          not (File.exists?(fresh) and File.exists?(committed) and
-                 File.read!(fresh) == File.read!(committed)),
-          do: "hero/#{name}/#{file}"
+      not (File.exists?(fresh) and File.exists?(committed) and
+             File.read!(fresh) == File.read!(committed))
     end)
   end
 
@@ -446,26 +451,24 @@ defmodule GenLandingFrames do
     end
   end
 
-  # Advance a driven session by exactly @preview_ticks ticks. The messages
-  # come from the demo's OWN `subscribe/1`, read off the model it booted
-  # with, so this delivers what the timer would have and nothing else: a
-  # demo with no interval subscription is static and gets no messages, and
-  # one whose subscription is conditional (osc_ambient subscribes only while
-  # running) is driven exactly as far as its initial state would have been.
-  # `send_message/2` returns after the fold, so the ticks arrive in order.
-  defp drive!(id, module) do
+  # The demo's declared interval subscriptions, read off the model it booted
+  # with, as `{interval_ms, [msg]}` sorted fastest first. This is what the
+  # timers would have delivered and nothing else: a demo with no interval
+  # subscription is static, and one whose subscription is conditional
+  # (osc_ambient subscribes only while running) is exactly as animated as
+  # its initial state says. `send_message/2` returns after the fold, so
+  # delivered ticks arrive in order.
+  defp interval_messages(id, module) do
     {:ok, model} = Raxol.Headless.get_model(id)
 
-    msgs =
-      for %Raxol.Core.Runtime.Subscription{type: :interval, data: %{message: msg}} <-
-            List.wrap(module.subscribe(model)),
-          do: msg
-
-    for _tick <- 1..@preview_ticks, msg <- msgs do
-      :ok = Raxol.Headless.send_message(id, msg)
+    for %Raxol.Core.Runtime.Subscription{
+          type: :interval,
+          data: %{interval: interval_ms, message: msg}
+        } <-
+          List.wrap(module.subscribe(model)) do
+      {interval_ms, [msg]}
     end
-
-    :ok
+    |> Enum.sort()
   end
 
   defp poll_changed(id, previous, deadline) do
@@ -536,30 +539,56 @@ defmodule GenLandingFrames do
 
       case safe_start(comp.module, id, w, h) do
         {:ok, id} ->
-          # Driven, not sampled: the app boots with its timers unarmed, so
-          # the model advances exactly @preview_ticks times and the card is
-          # not an empty axis. See the constant for the history.
-          drive!(id, comp.module)
-
-          case Raxol.Headless.get_buffer(id) do
-            {:ok, buffer} ->
-              html =
-                TerminalBridge.buffer_to_html(buffer, aria_mode: :application)
-
-              path = Path.join(dir, "#{slug}.html")
-              File.write!(path, html)
-              IO.puts("card  #{path}")
-
-            {:error, reason} ->
-              IO.puts("SKIP  #{comp.name}: get_buffer #{inspect(reason)}")
-          end
-
+          record_preview(dir, slug, id, comp)
           Raxol.Headless.stop(id)
 
         {:error, reason} ->
           IO.puts("SKIP  #{comp.name}: #{inspect(reason)}")
       end
     end
+  end
+
+  # A static demo writes one still (<slug>.html); an animated one writes a
+  # recording (<slug>/frame_NN.html + interval_ms) the card plays back at
+  # the demo's own tick. Driven, not sampled: the app boots with its timers
+  # unarmed and each declared interval message is delivered explicitly, so
+  # which ticks the frames show is a property of this script. Whichever
+  # shape a demo has, the other is deleted, so a demo that gains or loses
+  # its subscription cannot leave a stale twin behind.
+  #
+  # Frames are ticks 1..@preview_frames, no loop-closure math: the hero
+  # curates a per-example frame count so its loop closes where the
+  # animation does, but a card is a thumbnail, and the seam at this size is
+  # not worth hand-tuning twelve counts.
+  defp record_preview(dir, slug, id, comp) do
+    still = Path.join(dir, "#{slug}.html")
+    frames_dir = Path.join(dir, slug)
+
+    case interval_messages(id, comp.module) do
+      [] ->
+        File.rm_rf!(frames_dir)
+        File.write!(still, preview_html(id))
+        IO.puts("card  #{still}")
+
+      [{interval_ms, msgs} | _] ->
+        File.rm(still)
+        File.rm_rf!(frames_dir)
+        File.mkdir_p!(frames_dir)
+
+        for tick <- 1..@preview_frames do
+          for msg <- msgs, do: :ok = Raxol.Headless.send_message(id, msg)
+          seq = String.pad_leading(to_string(tick - 1), 2, "0")
+          File.write!(Path.join(frames_dir, "frame_#{seq}.html"), preview_html(id))
+        end
+
+        File.write!(Path.join(frames_dir, "interval_ms"), to_string(interval_ms))
+        IO.puts("card  #{frames_dir} (#{@preview_frames} frames @ #{interval_ms}ms)")
+    end
+  end
+
+  defp preview_html(id) do
+    {:ok, buffer} = Raxol.Headless.get_buffer(id)
+    TerminalBridge.buffer_to_html(buffer, aria_mode: :application)
   end
 
   defp safe_start(module, id, w, h) do

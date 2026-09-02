@@ -172,19 +172,55 @@ defmodule RaxolPlayground.RecordedFrames do
                    {name, panes}
                  end)
 
-  preview_paths =
-    preview_dir
-    |> File.ls!()
-    |> Enum.sort()
-    |> Enum.map(&Path.join(preview_dir, &1))
+  # Previews come in two recorded shapes: a still (`<slug>.html`) and an
+  # animated recording (`<slug>/frame_NN.html` + `interval_ms`, same layout
+  # as the hero frames). One vocabulary out: every entry is a frame list
+  # plus an interval, stills as a one-frame list with no interval.
+  preview_entries = preview_dir |> File.ls!() |> Enum.sort()
 
-  for path <- preview_paths do
+  preview_stills =
+    for entry <- preview_entries,
+        String.ends_with?(entry, ".html"),
+        do: Path.join(preview_dir, entry)
+
+  preview_recordings =
+    for entry <- preview_entries,
+        dir = Path.join(preview_dir, entry),
+        File.dir?(dir),
+        do: {entry, dir}
+
+  for path <- preview_stills do
     @external_resource path
   end
 
-  @previews Map.new(preview_paths, fn path ->
-              {Path.basename(path, ".html"), File.read!(path)}
-            end)
+  for {_slug, dir} <- preview_recordings,
+      path <- Path.wildcard(Path.join(dir, "*")) do
+    @external_resource path
+  end
+
+  @previews Map.merge(
+              Map.new(preview_stills, fn path ->
+                {Path.basename(path, ".html"),
+                 %{frames: [File.read!(path)], interval_ms: nil}}
+              end),
+              Map.new(preview_recordings, fn {slug, dir} ->
+                frames =
+                  dir
+                  |> Path.join("frame_*.html")
+                  |> Path.wildcard()
+                  |> Enum.sort()
+                  |> Enum.map(&File.read!/1)
+
+                interval =
+                  dir
+                  |> Path.join("interval_ms")
+                  |> File.read!()
+                  |> String.trim()
+                  |> String.to_integer()
+
+                {slug, %{frames: frames, interval_ms: interval}}
+              end)
+            )
 
   @doc "Recorded frames for one hero example, in playback order."
   @spec hero_frames(String.t()) :: [String.t()]
@@ -310,8 +346,15 @@ defmodule RaxolPlayground.RecordedFrames do
   """
   @type surface :: :ssh | :mcp
 
-  @doc "Rendered preview frame for a catalog demo name, or nil."
-  @spec preview(String.t()) :: String.t() | nil
+  @doc """
+  Recorded preview for a catalog demo name, or nil.
+
+  `%{frames: [html], interval_ms: nil}` for a still, `%{frames: [...],
+  interval_ms: ms}` for an animated demo's recording, played back at the
+  demo's own tick.
+  """
+  @spec preview(String.t()) ::
+          %{frames: [String.t()], interval_ms: pos_integer() | nil} | nil
   def preview(name), do: Map.get(@previews, slug(name))
 
   @doc "The slug a demo name is stored under (mirrors the generator)."
