@@ -52,8 +52,7 @@ defmodule Raxol.UI.Components.Display.Viewport do
       end
 
     state = %{
-      id:
-        Map.get(props, :id, "viewport-#{:erlang.unique_integer([:positive])}"),
+      id: Map.get_lazy(props, :id, fn -> Raxol.Core.ID.next("viewport") end),
       children: children,
       content_source: content_source,
       scroll_top: Map.get(props, :scroll_top, 0),

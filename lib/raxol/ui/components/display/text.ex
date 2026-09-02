@@ -57,8 +57,7 @@ defmodule Raxol.UI.Components.Display.Text do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(props, :id, "text-#{:erlang.unique_integer([:positive])}"),
+      id: Keyword.get_lazy(props, :id, fn -> Raxol.Core.ID.next("text") end),
       content: Keyword.get(props, :content, ""),
       wrap: Keyword.get(props, :wrap, :none),
       white_space: Keyword.get(props, :white_space, :normal),
