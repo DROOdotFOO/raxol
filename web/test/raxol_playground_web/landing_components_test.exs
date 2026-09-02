@@ -523,6 +523,18 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
            "the settle pane quotes #{Enum.join(quoted, ", ")}; the hero does not price transfers"
   end
 
+  test "the settle pane is a Blockscout-verifiable Arc testnet receipt" do
+    pane = settle_pane()
+
+    assert pane =~ "USDC 1.10"
+    assert pane =~ "Base Sepolia"
+    assert pane =~ "Arc Testnet"
+    assert pane =~ "5042002"
+    assert pane =~ "Blockscout"
+    assert pane =~ "receipts after run"
+    assert pane =~ "approve before signature"
+  end
+
   # The row replaced the sentence, so it inherits the sentence's obligation:
   # every chain the asset registry carries a token on has a mark. Tron is the
   # seventh and is not in that table -- it is reached over the relay rail --
