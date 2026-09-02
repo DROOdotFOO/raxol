@@ -27,7 +27,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # recordings (pulse from frame 2, halo from 11), so the duplication stays and
   # this covers all four of it.
   test "each hero program matches the one the frames record" do
-    script = File.read!(Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__))
+    script =
+      File.read!(
+        Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__)
+      )
 
     for name <- LandingComponents.hero_example_names() do
       shown = String.trim(LandingComponents.example_source(name))
@@ -45,7 +48,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       # bytes made this test fail on formatting alone, which is how it would
       # have been switched off. Everything that changes behaviour still differs.
       squash = fn text ->
-        text |> String.split("\n") |> Enum.reject(&(String.trim(&1) == "")) |> Enum.join("\n")
+        text
+        |> String.split("\n")
+        |> Enum.reject(&(String.trim(&1) == ""))
+        |> Enum.join("\n")
       end
 
       assert squash.(shown) == squash.(recorded),
@@ -245,6 +251,49 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # The SSH pane animates in lockstep with the terminal pane: same buffer, two
   # surfaces, same moment. Equal counts is the property that keeps them in step,
   # because the player indexes both by the same frame number.
+  # The topic pages carry real sections now. Each new claim surface is held
+  # to its source: the surfaces page must show the hero's committed
+  # recording rather than authored output, and the grown sections must keep
+  # the commands and facts they exist to state.
+  test "the surfaces page reuses the hero's committed recording" do
+    page = render_component(&LandingComponents.surfaces_deep_dive/1, %{})
+
+    assert page =~ "Four encodings of one frame"
+
+    frame = List.first(RecordedFrames.hero_frames("pulse"))
+
+    assert String.contains?(page, frame),
+           "the surfaces page does not show the hero's terminal frame"
+
+    ssh = List.first(RecordedFrames.hero_ssh_frames("pulse"))
+
+    assert String.contains?(page, ssh),
+           "the surfaces page does not paint the hero's SSH frame"
+
+    mcp = RecordedFrames.hero_surface("pulse", :mcp)
+
+    assert mcp != "" and String.contains?(page, mcp),
+           "the surfaces page does not list the hero's MCP pane"
+  end
+
+  test "the grown topic sections keep their commands and facts" do
+    ssh = render_component(&LandingComponents.ssh_deep_dive/1, %{})
+    assert ssh =~ "raxol code --ssh --ssh-tenants"
+    assert ssh =~ "Safe by default"
+
+    agent = render_component(&LandingComponents.agent_deep_dive/1, %{})
+    assert agent =~ ":agent_message"
+    assert agent =~ "cronjob"
+
+    coding = render_component(&LandingComponents.coding_agent_deep_dive/1, %{})
+    assert coding =~ "--replay"
+    assert coding =~ "fails closed"
+
+    token = render_component(&LandingComponents.token_deep_dive/1, %{})
+    assert token =~ "What it is not"
+    assert token =~ ~s(href="/payments")
+  end
+
   test "the SSH pane has one painted frame per terminal frame" do
     for name <- LandingComponents.hero_example_names() do
       terminal = RecordedFrames.hero_frames(name)
@@ -447,8 +496,11 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   test "every noun in the headline has an example that runs it" do
     names = LandingComponents.hero_example_names()
 
-    assert "harness" in names, "the h1 promises a harness and nothing demonstrates one"
-    assert "settle" in names, "the h1 promises payments and nothing demonstrates them"
+    assert "harness" in names,
+           "the h1 promises a harness and nothing demonstrates one"
+
+    assert "settle" in names,
+           "the h1 promises payments and nothing demonstrates them"
 
     for name <- names do
       blurb = LandingComponents.example_blurb(name)
@@ -490,7 +542,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
              "chain #{id} (#{Assets.chain_name(id)}) settles a token and has no mark"
     end
 
-    assert 728_126_428 in marked, "the relay rail reaches Tron and the row omits it"
+    assert 728_126_428 in marked,
+           "the relay rail reaches Tron and the row omits it"
 
     row = render_component(&LandingComponents.screen_integrations/1, %{})
 
@@ -524,9 +577,18 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
         example: List.first(LandingComponents.hero_example_names())
       )
 
-    [sub] = Regex.run(~r/<p class="screen-sub">(.*?)<\/p>/s, hero, capture: :all_but_first)
+    [sub] =
+      Regex.run(~r/<p class="screen-sub">(.*?)<\/p>/s, hero,
+        capture: :all_but_first
+      )
 
-    for chain <- ["Ethereum", "Optimism", "Polygon", "Arbitrum One", "Robinhood Chain"] do
+    for chain <- [
+          "Ethereum",
+          "Optimism",
+          "Polygon",
+          "Arbitrum One",
+          "Robinhood Chain"
+        ] do
       refute sub =~ chain,
              "the sub-line names #{chain}; the network row and /payments carry chains"
     end
@@ -918,10 +980,11 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     for %{name: name, sensitive: sensitive} <- actions do
       assert payments =~ name, "the Action table omits #{name}"
 
-      assert sensitive == Module.concat([
-               "Raxol.Payments.Actions.Payments",
-               Macro.camelize(String.replace(name, "payment_", ""))
-             ]).__action_meta__().sensitive
+      assert sensitive ==
+               Module.concat([
+                 "Raxol.Payments.Actions.Payments",
+                 Macro.camelize(String.replace(name, "payment_", ""))
+               ]).__action_meta__().sensitive
     end
 
     assert payments =~ "moves funds"
