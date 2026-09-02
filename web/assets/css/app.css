@@ -982,6 +982,14 @@ html {
   flex-direction: column;
   gap: 1.75rem;
 }
+.surface-buckets--compact {
+  gap: 1rem;
+}
+
+.surface-buckets--compact .surface-bucket__label {
+  margin-bottom: 0.45rem;
+}
+
 
 .surface-bucket__label {
   font-family: var(--font-mono);
@@ -1007,7 +1015,7 @@ html {
   background: rgba(10, 10, 12, 0.5);
   border: 1px solid var(--panel-border);
   border-radius: 8px;
-  padding: 1.1rem 1.1rem 1rem;
+  padding: 0.85rem 0.9rem 0.8rem;
   font-family: var(--font-mono);
   transition:
     transform var(--duration-normal) var(--ease-smooth),
@@ -1038,6 +1046,52 @@ html {
   word-break: break-word;
   line-height: 1.5;
 }
+.surface-snapshots {
+  margin-top: 2.5rem;
+}
+
+.surface-snapshot-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+@media (min-width: 1024px) {
+  .surface-snapshot-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.surface-snapshot-grid .terminal-chrome-body {
+  padding: 0.75rem;
+  line-height: 1.45;
+}
+
+.surface-snapshot-grid .hero-cmd {
+  margin-bottom: 0.45rem;
+}
+
+.surface-snapshot-grid .hero-frames {
+  padding: 0.35rem 0.45rem;
+}
+
+.surface-snapshot-grid .hero-frame,
+.surface-snapshot-grid .hero-ansi {
+  font-size: 0.55rem;
+  line-height: 1.35;
+}
+
+.surface-snapshot-grid .hero-src {
+  max-height: 12rem;
+  overflow: auto;
+  scrollbar-width: none;
+  font-size: 0.55rem;
+  line-height: 1.45;
+}
+
+.surface-snapshot-grid .hero-src::-webkit-scrollbar {
+  display: none;
+}
+
 
 /* =============================================================================
    Hero halo (the axol face dithered into character cells, HaloField hook)
@@ -1172,6 +1226,10 @@ html {
   border-radius: 8px;
   overflow: hidden;
 }
+.reach--compact {
+  max-width: 42rem;
+}
+
 
 .reach-bar {
   display: flex;
@@ -1916,21 +1974,23 @@ html {
   border-color: var(--text-dim);
 }
 
-/* Bordered, because it is the one thing in the bar a reader is meant to press
-   and it used to be four coral words sitting flush against a caption. */
+/* Filled, because this control is how the visitor learns there are more examples. */
 .hd-control--next {
-  color: var(--axol-coral);
-  gap: 0.35rem;
-  padding: 0 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--axol-coral) 35%, transparent);
-  border-radius: 3px;
+  color: var(--obsidian);
+  gap: 0.4rem;
+  min-height: 1.8rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--axol-coral);
+  border-radius: 4px;
+  background: var(--axol-coral);
+  font-weight: 700;
 }
 
 .hd-control--next:hover,
 .hd-control--next:focus-visible {
-  color: var(--axol-coral);
-  border-color: var(--axol-coral);
-  background: color-mix(in srgb, var(--axol-coral) 10%, transparent);
+  color: var(--obsidian);
+  border-color: var(--pearl-cream);
+  background: var(--pearl-cream);
 }
 
 .hero-tabs {

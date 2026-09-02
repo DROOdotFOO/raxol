@@ -258,7 +258,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   test "the surfaces page reuses the hero's committed recording" do
     page = render_component(&LandingComponents.surfaces_deep_dive/1, %{})
 
-    assert page =~ "Four encodings of one frame"
+    assert page =~ "One snapshot, four surfaces"
 
     frame = List.first(RecordedFrames.hero_frames("pulse"))
 
@@ -1036,7 +1036,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     # Privacy is still described, as the settlement mode it is.
     assert payments =~ "shielded"
-    assert payments =~ "Privacy is a settlement mode"
+    assert payments =~ "Privacy changes delivery"
 
     # Matrix rows from the data, stables before WETH, authored rail notes.
     assert payments =~ "source: live"
