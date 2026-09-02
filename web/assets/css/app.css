@@ -2475,14 +2475,31 @@ input[type="range"]::-moz-range-thumb {
   text-align: center;
 }
 
+/* The cap is 2.4rem rather than 2.6rem because of the column, not taste. The
+   hero is two columns inside a 62rem measure, so the headline gets 712px at
+   EVERY desktop width -- widening the viewport does not help it. At 2.6rem the
+   second sentence measured 748px and wrapped, which put the h1 on three lines
+   at every size. 2.4rem brings it to 690px with room to spare.
+
+   The 0.85rem floor term is the same fix one breakpoint down: at 1024 the old
+   0.9rem left the claim three pixels wider than the column it had, so the
+   headline went back to three lines exactly where the layout stops being
+   roomy. The cap now engages around 1180. */
 .screen-title {
   font-family: var(--font-mono);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
   color: var(--text-pearl);
-  font-size: clamp(1.35rem, 0.9rem + 2.1vw, 2.6rem);
+  font-size: clamp(1.35rem, 0.85rem + 2.1vw, 2.4rem);
   margin: 0;
+}
+
+/* One sentence per line, declared rather than left to the wrap. Fitting the
+   text to the column is what keeps it at two lines, but a block element is
+   what stops a future word landing the break mid-clause. */
+.screen-title__claim {
+  display: block;
 }
 
 .screen-sub {
