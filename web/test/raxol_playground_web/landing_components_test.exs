@@ -1002,6 +1002,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert payments =~ "2026-06-28"
     assert payments =~ "2026-07-20"
     assert payments =~ "0.2"
+    assert payments =~ "xochi.fi"
+    assert payments =~ ~s(href="https://xochi.fi")
 
     # Fees come from FeeSchedule, the pinned mirror of the solver's published
     # schedule -- every tier, both asset classes, at the rates it actually
