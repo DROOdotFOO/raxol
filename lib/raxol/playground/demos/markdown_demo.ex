@@ -22,7 +22,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
       content: """
       # Markdown feature catalog
 
-      Full surface of **MarkdownRenderer** — cycle docs with n / p.
+      Full surface of **MarkdownRenderer**. Cycle docs with n / p.
 
       | Feature | Status |
       | --- | --- |
@@ -218,7 +218,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
 
     column style: %{gap: 1} do
       [
-        text("Markdown — Raxol.UI.Components.MarkdownRenderer", style: [:bold]),
+        text("Markdown: Raxol.UI.Components.MarkdownRenderer", style: [:bold]),
         text(
           " fenced code → CodeBlock/SyntaxHighlighter · [r] raw source",
           style: [:dim]

@@ -119,7 +119,7 @@ defmodule Raxol.Playground.Demos.CodeBlockDemo do
 
     column style: %{gap: 1} do
       [
-        text("CodeBlock — Raxol.UI.Components.CodeBlock", style: [:bold]),
+        text("CodeBlock: Raxol.UI.Components.CodeBlock", style: [:bold]),
         text(
           " structured tokens via SyntaxHighlighter (not HTML→strip)",
           style: [:dim]

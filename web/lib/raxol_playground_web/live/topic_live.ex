@@ -78,10 +78,15 @@ defmodule RaxolPlaygroundWeb.TopicLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <%!-- A column at least a viewport tall, with `main` taking the slack, so
+         the footer's rule lands at the bottom of the screen instead of wherever
+         the content happens to end. The short topics (/ssh, /token) run about
+         830px, so on a laptop the rule sat 300px up the page with nothing under
+         it and read as an enormous empty footer rather than as the end. --%>
     <.atmosphere />
-    <div class="relative z-10">
+    <div class="relative z-10 flex min-h-[100dvh] flex-col">
       <.nav_bar mobile_menu_open={@mobile_menu_open} />
-      <main id="main-content" tabindex="-1">
+      <main id="main-content" tabindex="-1" class="flex-1">
         <nav class="topic-crumb measure pt-8" aria-label="Breadcrumb">
           <a href="/" class="subtle-link">raxol</a>
           <span aria-hidden="true">/</span>

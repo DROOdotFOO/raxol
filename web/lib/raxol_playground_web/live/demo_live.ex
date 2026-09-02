@@ -36,7 +36,6 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       |> assign(:topic, nil)
       |> assign(:terminal_theme, :synthwave84)
       |> assign(:themes, Helpers.themes())
-      |> assign(:show_code, false)
       |> assign(:demo_error, nil)
       |> assign(:demo_timer, nil)
       |> assign(:auto_focus, true)
@@ -91,10 +90,6 @@ defmodule RaxolPlaygroundWeb.DemoLive do
     {:noreply, assign(socket, :terminal_theme, String.to_existing_atom(theme))}
   rescue
     ArgumentError -> {:noreply, socket}
-  end
-
-  def handle_event("toggle_code", _params, socket) do
-    {:noreply, assign(socket, :show_code, !socket.assigns.show_code)}
   end
 
   # j/k from the PlaygroundKeys hook: patch to the adjacent demo, same as
@@ -195,8 +190,8 @@ defmodule RaxolPlaygroundWeb.DemoLive do
       tabindex="-1"
       phx-hook="PlaygroundKeys"
       data-terminal="demo-terminal"
-      data-keys="jk,c"
-      class="h-screen flex flex-col bg-obsidian"
+      data-keys="jk"
+      class="h-[100dvh] flex flex-col bg-obsidian"
     >
       <!-- Header -->
       <header class="px-8 py-5 surface-bar">
@@ -239,12 +234,6 @@ defmodule RaxolPlaygroundWeb.DemoLive do
               themes={@themes}
               form_id="theme-select"
             />
-            <button
-              phx-click="toggle_code"
-              class={["toggle-btn", @show_code && "toggle-btn--active"]}
-            >
-              Code
-            </button>
           </div>
         </div>
       </header>
@@ -285,9 +274,9 @@ defmodule RaxolPlaygroundWeb.DemoLive do
                 <%!-- Initial state; hook overwrites on first terminal_html event.
                      Press '/' anywhere to refocus this terminal. --%>
                 <%= if @lifecycle_pid do %>
-                  <div class="py-8 text-center font-mono text-pearl-40" role="status">
+                  <div class="py-8 text-center font-mono text-pearl-60" role="status">
                     <div class="loading-spinner mb-3 mx-auto"></div>
-                    <p>Starting demo... <span class="text-pearl-25">(press / to focus)</span></p>
+                    <p>Starting demo... <span class="text-pearl-60">(press / to focus)</span></p>
                   </div>
                 <% else %>
                   <.terminal_fallback description={@component.description} />
@@ -296,25 +285,27 @@ defmodule RaxolPlaygroundWeb.DemoLive do
             <% end %>
           </div>
 
-          <%!-- Inline code panel, below the demo like the TUI's 'c'
-               toggle (not a side column). --%>
-          <%= if @show_code do %>
-            <div class="pg-code">
-              <div class="pg-code-head">
-                <span>Code</span>
-                <button
-                  id="demo-code-copy"
-                  phx-hook="CopyToClipboard"
-                  data-copy={String.trim(@component.code_snippet)}
-                  class="copy-chip"
-                  aria-label="Copy code snippet"
-                >
-                  copy
-                </button>
-              </div>
-              <pre class="pg-code-snippet"><%= String.trim(@component.code_snippet) %></pre>
+          <%!-- Always shown, below the demo. It used to be behind a toggle,
+               and the gallery offered "try live" and "code" as two links into
+               the same closed panel -- so neither label was true and the
+               difference between them was nothing. Seeing it run and being
+               able to lift the code are not two things a reader chooses
+               between; they are what a component page is for. --%>
+          <div class="pg-code">
+            <div class="pg-code-head">
+              <span>Code</span>
+              <button
+                id="demo-code-copy"
+                phx-hook="CopyToClipboard"
+                data-copy={String.trim(@component.code_snippet)}
+                class="copy-chip"
+                aria-label="Copy code snippet"
+              >
+                copy
+              </button>
             </div>
-          <% end %>
+            <pre class="pg-code-snippet"><%= String.trim(@component.code_snippet) %></pre>
+          </div>
         </div>
       </div>
 
@@ -322,7 +313,11 @@ defmodule RaxolPlaygroundWeb.DemoLive do
            listed is wired. --%>
       <div class="pg-statusbar font-mono">
         <span class="pg-statusbar-chip">demo</span>
-        <span class="pg-statusbar-keys">j/k prev/next &middot; / focus demo &middot; esc back &middot; c code</span>
+        <span class="pg-statusbar-keys">
+          <span :for={{key, action} <- statusbar_keys()} class="pg-key">
+            <b><%= key %></b> <%= action %>
+          </span>
+        </span>
         <span :if={@demo_position && @demo_total} class="pg-statusbar-count">
           <%= @demo_position %>/<%= @demo_total %> demos
         </span>
@@ -332,6 +327,12 @@ defmodule RaxolPlaygroundWeb.DemoLive do
   end
 
   # -- Helpers --
+
+  # The status bar's key hints, as `{key, what it does}`. `c` is gone with the
+  # panel it used to toggle: the code is always on this page now.
+  defp statusbar_keys do
+    [{"j/k", "prev/next"}, {"/", "focus demo"}, {"esc", "back"}]
+  end
 
   defp catalog_position(name) do
     all = Catalog.list_components()

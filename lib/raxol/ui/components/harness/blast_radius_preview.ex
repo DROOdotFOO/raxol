@@ -116,7 +116,7 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
     [
       Components.text(
         id: "#{id}-not-declared",
-        content: "⚠ blast radius not declared — treat as unsafe",
+        content: "⚠ blast radius not declared: treat as unsafe",
         fg: :red,
         style: %{bold: true}
       )
@@ -183,7 +183,7 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreview do
     [
       Components.text(
         id: "#{id}-irreversible",
-        content: "⚠ IRREVERSIBLE — this action cannot be undone",
+        content: "⚠ IRREVERSIBLE: this action cannot be undone",
         fg: :red,
         style: %{bold: true}
       )

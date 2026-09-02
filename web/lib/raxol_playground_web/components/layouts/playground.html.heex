@@ -1,3 +1,6 @@
-<main class="h-screen overflow-hidden">
+<%!-- 100dvh, not 100vh: the iOS Safari address bar is inside `vh`, so a
+     `h-screen` box paired with `overflow-hidden` puts its last rows behind
+     the browser chrome with no way to scroll to them. --%>
+<main class="h-[100dvh] overflow-hidden">
   <%= @inner_content %>
 </main>

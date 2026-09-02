@@ -237,6 +237,11 @@ Hooks.HeroDemo = {
     }
     this.el.addEventListener('click', this.onClick)
 
+    // Delegated for the same reason the clicks are: LiveView patches the tabs
+    // out from under a listener bound to them.
+    this.onKeydown = (e) => this.onTabKey(e)
+    this.el.addEventListener('keydown', this.onKeydown)
+
     this.syncPauseLabel()
     this.sync()
   },
@@ -256,6 +261,7 @@ Hooks.HeroDemo = {
     this.stopLoop()
     this.mql.removeEventListener('change', this.onMql)
     this.el.removeEventListener('click', this.onClick)
+    this.el.removeEventListener('keydown', this.onKeydown)
   },
 
   live() { return this.el.dataset.live === 'true' },
@@ -349,7 +355,12 @@ Hooks.HeroDemo = {
     this.tab = n
     const tabs = this.el.querySelectorAll('.hero-tab')
     tabs.forEach((t) => {
-      t.setAttribute('aria-selected', String(parseInt(t.dataset.i, 10) === n))
+      const on = parseInt(t.dataset.i, 10) === n
+      t.setAttribute('aria-selected', String(on))
+      // Roving tabindex: the group is one Tab stop and the arrows walk it.
+      // Without this all four sit in the tab order, which is the shape the
+      // tablist role promises a keyboard reader it does not have.
+      t.tabIndex = on ? 0 : -1
     })
     this.el.querySelectorAll('.hero-out').forEach((o) => {
       o.hidden = parseInt(o.dataset.surface, 10) !== n
@@ -357,6 +368,34 @@ Hooks.HeroDemo = {
     const active = tabs[n]
     const title = this.el.querySelector('[data-role="title"]')
     if (active && title) title.textContent = active.dataset.title
+  },
+
+  // Arrow/Home/End over the tablist, per the ARIA tabs pattern. Selection
+  // follows focus, which is the right variant here: showing a panel is a
+  // local DOM toggle with no fetch behind it, so there is nothing to make
+  // arrowing past a tab expensive.
+  //
+  // Moving by arrow stops the auto-advance for the same reason clicking does:
+  // the reader has taken the wheel, and a rotation that resumed underneath
+  // them would move the selection they just chose.
+  onTabKey(e) {
+    const tab = e.target.closest('.hero-tab')
+    if (!tab || !this.el.contains(tab)) return
+    const last = this.tabCount() - 1
+    const i = parseInt(tab.dataset.i, 10)
+    const to = {
+      ArrowRight: i >= last ? 0 : i + 1,
+      ArrowDown: i >= last ? 0 : i + 1,
+      ArrowLeft: i <= 0 ? last : i - 1,
+      ArrowUp: i <= 0 ? last : i - 1,
+      Home: 0,
+      End: last
+    }[e.key]
+    if (to === undefined) return
+    e.preventDefault()
+    this.autoTabs = false
+    this.showTab(to)
+    this.el.querySelectorAll('.hero-tab')[to].focus()
   }
 }
 
