@@ -2945,37 +2945,41 @@ input[type="range"]::-moz-range-thumb {
   .screen-halo { width: 100%; max-width: 20rem; height: clamp(104px, 13vh, 148px); }
 }
 
-/* The module has to fit without an inner scrollbar -- a pane clipped mid-`end`
-   reads as broken, and the point of the pane is that you can read the whole
-   program. */
+/* The module sits at the site's type floor, and what no longer fits scrolls.
+   This pane used to fit-to-box instead, shrinking type toward 8px so the
+   whole program stayed visible -- but the program is the one thing on the
+   page the reader is asked to actually read, and "whole" is worthless below
+   reading size. The floor everywhere else is 11.2px, so it is here too. */
 .screen-main .hero-code {
-  /* Fitted on both axes against the pane's own box rather than a fixed guess
-     at it. Height alone clipped the tail of a longer example on a short
-     viewport; width alone was missing entirely, so a narrow pane ran the
-     longest line off the right edge behind the hidden scrollbar. Either way
-     the module stops being readable whole, which is the pane's only claim.
-     0.63 is the font's character advance. */
-  font-size: clamp(
-    0.5rem,
-    min(
-      calc((100cqw - 0.4rem) / var(--hero-cols, 66) / 0.63),
-      calc((100cqh - 0.2rem) / var(--hero-lines, 24) / 1.34)
-    ),
-    0.7rem
-  );
+  font-size: 0.7rem;
   line-height: 1.34;
+}
+
+/* Vertical overflow exists only where the screen is height-locked; below the
+   threshold the page itself scrolls and the pane takes its natural height.
+   The scrollbar is hidden, so the fade is the more-content signal, same as
+   the install command and the narrow-viewport listing. The bottom padding
+   keeps the module's last `end` above the fade at scroll-end -- a pane that
+   fades out mid-`end` reads as broken. */
+@media (min-height: 950px) and (min-width: 768px) {
+  .screen-main .hero-code {
+    max-height: 100%;
+    overflow-y: auto;
+    padding-bottom: 1.4rem;
+    -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 1.2rem), transparent);
+    mask-image: linear-gradient(180deg, #000 calc(100% - 1.2rem), transparent);
+  }
 }
 
 /* Tighter than the scrolling page's padding: the pane has to hold the longest
    example whole, and a clipped module contradicts the label above it. */
 .screen-main .hero-pane { padding: 0.7rem 0.9rem; }
 
-/* Below 640px the fit above hits its 0.5rem floor and the listing still runs
-   long: sixty-odd columns of code want ~440px at anything readable, and the
-   pane has ~300px. Shrinking further would trade one unreadable outcome for
-   another, so it scrolls -- and says so. Same fade as the install command and
-   the integrations row, for the same reason: a hard cut reads as a broken
-   render, a fade reads as more to the right. */
+/* Below 640px the listing runs long at the floor: sixty-odd columns of code
+   want ~440px at reading size, and the pane has ~300px. Shrinking would trade
+   one unreadable outcome for another, so it scrolls -- and says so. Same fade
+   as the install command and the integrations row, for the same reason: a
+   hard cut reads as a broken render, a fade reads as more to the right. */
 @media (max-width: 640px) {
   .screen-main .hero-code {
     -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 1.5rem), transparent);
