@@ -58,7 +58,7 @@ defmodule RaxolPlaygroundWeb.CoreComponents do
         <%= @title %>
       </p>
       <p class="mt-2 text-sm leading-5"><%= msg %></p>
-      <button type="button" class="absolute top-1 right-1 p-2 text-pearl-50 hover:text-pearl" aria-label="close">
+      <button type="button" class="absolute top-1 right-1 p-2 text-pearl-60 hover:text-pearl" aria-label="close">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
         </svg>

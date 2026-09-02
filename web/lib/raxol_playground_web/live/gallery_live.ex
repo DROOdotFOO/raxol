@@ -85,22 +85,33 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
     ~H"""
     <.atmosphere />
 
-    <main id="main-content" tabindex="-1" class="relative min-h-screen z-10">
-      <%!-- Header --%>
+    <main id="main-content" tabindex="-1" class="relative min-h-[100dvh] z-10">
+      <%!-- One line, like every other bar on the site. It used to stack a
+           display-size h1 over a subtitle and let the toolbar wrap under both,
+           which measured 107px against the landing's 58 -- over the 80px a
+           desktop bar gets, and visible as the brand mark jumping two rows when
+           a reader crossed from `/`.
+
+           The title is "Components", which is what the navigation calls this
+           page. It read "Raxol Component Gallery" while the link that reaches
+           it said "Components", so the label a reader clicked and the heading
+           they landed on were different words for the same place. --%>
       <header class="surface-bar">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-              <h1 class="font-mono font-bold tracking-wide heading-xl">
-                <a href="/" class="brand-link">Raxol</a> Component Gallery
-              </h1>
-              <p class="font-mono mt-1 detail-text">
-                <%= @total_count %> interactive terminal UI components --
-                <a href="/playground" class="text-sky">open playground</a>
-              </p>
+            <div class="flex items-baseline gap-2 font-mono">
+              <a href="/" class="brand-link">raxol</a>
+              <span class="text-pearl-60" aria-hidden="true">/</span>
+              <h1 class="heading-xl">Components</h1>
+              <span class="detail-text"><%= @total_count %></span>
             </div>
 
-            <div class="flex items-center gap-3">
+            <%!-- Wraps, and the search field shrinks with it. Fixed at
+                 `w-48` the group measured 406px inside a 390px phone and
+                 pushed the page sideways. --%>
+            <div class="flex flex-wrap items-center justify-end gap-3 min-w-0">
+              <a href="/playground" class="nav-link">Playground</a>
+
               <div class="view-toggle">
                 <button
                   phx-click="toggle_view"
@@ -126,7 +137,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
                   value={@search_query}
                   phx-debounce="300"
                   aria-label="Search components"
-                  class="w-48 md:w-64 font-mono px-4 py-2 rounded input-dark"
+                  class="w-40 sm:w-48 md:w-64 min-w-0 font-mono px-4 py-2 rounded input-dark"
                 />
               </form>
             </div>
@@ -233,15 +244,29 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
           <span class="gallery-badge"><%= Helpers.complexity_label(@component.complexity) %></span>
         </div>
         <p class="font-mono detail-text gallery-desc mb-2"><%= @component.description %></p>
-        <div class="flex items-center justify-between gap-2 mt-auto">
-          <div class="flex gap-1 overflow-hidden">
+        <%!-- Tags and links on separate rows. They shared one line, with the
+             tags clipped by `overflow-hidden` to whatever the links left over
+             -- which was fine only while the tags were 8.8px. Above the
+             legibility floor they no longer fit, and cards rendered "PROGRES"
+             and "SELEC" cut mid-word butted against "TRY LIVE".
+
+             Trimming to two tags did not fix it either: a dozen cards still
+             clipped at desktop, because "visualization" and "keyboard" are
+             just wide words. Wrapping is the answer that holds for any tag
+             set, at the cost of about 18px per card. --%>
+        <div class="mt-auto">
+          <div class="flex flex-wrap gap-1 mb-2">
             <%= for tag <- Enum.take(@component.tags, 3) do %>
               <span class="category-tag category-tag--sm"><%= tag %></span>
             <% end %>
           </div>
-          <div class="flex gap-2.5 shrink-0">
-            <a href={"/demos/#{@component.name}"} class="gallery-link">try live</a>
-            <a href={"/playground?component=#{@component.name}&code=1"} class="gallery-link gallery-link--dim">code</a>
+          <div class="flex gap-2.5 justify-end">
+            <%!-- One link. "try live" and "code" were two labels for the same
+                 destination, and splitting them implied a choice that should
+                 not exist: seeing a component run and being able to lift its
+                 code are both what the page is for, so it shows both and this
+                 says so once. --%>
+            <a href={"/demos/#{@component.name}"} class="gallery-link">open &rarr;</a>
           </div>
         </div>
       </div>

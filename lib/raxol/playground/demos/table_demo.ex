@@ -187,7 +187,7 @@ defmodule Raxol.Playground.Demos.TableDemo do
 
     column style: %{gap: 0} do
       [
-        text("Table — Raxol.UI.Components.Table", style: [:bold]),
+        text("Table: Raxol.UI.Components.Table", style: [:bold]),
         text(
           " border=#{border}  header_sep=#{sep}  (fixed-width grid, no button chrome)",
           style: [:dim]

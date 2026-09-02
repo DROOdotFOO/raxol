@@ -63,9 +63,9 @@ end
 
 defmodule Halo do
   use Raxol.Core.Runtime.Application
+  alias Raxol.UI.Components.Harness.AxolFace
 
   @ramp ["·", ":", "-", "=", "+", "*", "#", "%"]
-  @faces ["≡··≡", "≡''≡", "≡oo≡", "≡^^≡"]
   @a 374_761_393
   @b 668_265_263
 
@@ -81,7 +81,7 @@ defmodule Halo do
   defp scan(t, y), do: for(x <- 0..67, into: "", do: cell(t, x, y))
 
   defp cell(t, x, 6) when x in 32..35,
-    do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 32)
+    do: String.at(AxolFace.glyph(:thinking, div(t, 6)), x - 32)
 
   defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38, do: " "
 
@@ -94,7 +94,6 @@ end
 
 defmodule Harness do
   use Raxol.Core.Runtime.Application
-
   alias Raxol.UI.Components.Harness.ToolCallBlock, as: T
   @calls [
     {"read", "spend_gate.ex"},
@@ -161,10 +160,55 @@ defmodule GenLandingFrames do
   @preview_dir Path.expand("../web/priv/demo_previews", __DIR__)
 
   @preview_size {60, 14}
-  @hero_settle_ms 400
   @hero_poll_ms 10
   @hero_frame_timeout_ms 1500
-  @preview_settle_ms 1600
+
+  # Sampling is pinned to demo state, never to a wall clock.
+  #
+  # Both settles used to be `Process.sleep/1` -- 400ms for the hero, 1600ms per
+  # card -- which records whichever tick happened to land inside that window.
+  # Rerunning the script then rewrote animated artifacts with a different frame
+  # and produced a diff that had nothing to do with any source change, so the
+  # artifacts could not be checked for drift: a real staleness was
+  # indistinguishable from scheduler noise.
+  #
+  # The hero pins frame zero to the demo's own tick (see `baseline!/2`), then
+  # chains later frames off the engine's own render order.
+  
+  #
+  # The tick frame zero is taken at. Not zero: the first couple of renders of a
+  # chart are a half-drawn axis, and the hero should open on a real picture.
+  @hero_start_tick 4
+
+  # The catalog previews have no tick counter to pin to -- they are arbitrary
+  # demos -- so they advance a fixed number of distinct frames instead. Static
+  # demos stop on the first step and keep their initial render.
+  @preview_settle_frames 8
+
+  # Per STEP, not per demo. The slowest demo tick in the catalog is 500ms, so
+  # 700ms is a generous "it did not move"; the first step to hit it stops the
+  # advance, so a static card costs one timeout rather than eight.
+  @preview_step_timeout_ms 700
+
+  # What cannot be reproduced, named rather than quietly tolerated, so that
+  # "the artifacts drifted" stays a real signal for everything else. Two
+  # consecutive runs of this script differ in exactly these and nothing else:
+  #
+  #   beam_dashboard        renders the LIVE VM -- process and atom counts,
+  #                         memory, uptime. Reproducing it would mean not
+  #                         showing the thing it exists to show.
+  #   heatmap               fills its grid from `:rand.uniform/0` in `init/1`.
+  #                         The demo runs in its own process, so seeding from
+  #                         here does nothing, and seeding it properly means
+  #                         changing the demo to suit the recorder.
+  #   harness/surface.mcp   `Harness.Ids.generate/1` builds element ids from
+  #                         `:erlang.unique_integer/1`, which is VM-global, so
+  #                         the committed tree carries ids ("tool-call-3657")
+  #                         that no agent will ever see again. Worth fixing at
+  #                         the component rather than papering over here.
+  #
+  # `--check` skips exactly this list.
+  @nondeterministic ~w(beam_dashboard heatmap)
 
   def run do
     ensure_headless()
@@ -172,6 +216,56 @@ defmodule GenLandingFrames do
     File.mkdir_p!(@preview_dir)
     hero()
     previews()
+  end
+
+  @doc """
+  Re-record into a scratch directory and diff against what is committed.
+
+  This is the reason the settles are counted rather than slept: a generator
+  whose output moves on its own can never answer "are these artifacts stale?",
+  because every run reports drift. Now a difference means a source change that
+  was not re-recorded, which is a real thing to fail a build on.
+
+  The demos in `@nondeterministic` are skipped by name and reported, so the
+  exemption is visible in the output rather than buried here.
+  """
+  def check do
+    ensure_headless()
+    scratch = Path.join(System.tmp_dir!(), "raxol_frames_check")
+    File.rm_rf!(scratch)
+    File.mkdir_p!(scratch)
+
+    previews(scratch)
+
+    {drifted, skipped} =
+      Path.wildcard(Path.join(scratch, "*.html"))
+      |> Enum.reduce({[], []}, fn fresh, {drift, skip} ->
+        slug = Path.basename(fresh, ".html")
+        committed = Path.join(@preview_dir, "#{slug}.html")
+
+        cond do
+          slug in @nondeterministic -> {drift, [slug | skip]}
+          not File.exists?(committed) -> {[slug <> " (missing)" | drift], skip}
+          File.read!(fresh) == File.read!(committed) -> {drift, skip}
+          true -> {[slug | drift], skip}
+        end
+      end)
+
+    File.rm_rf!(scratch)
+
+    if skipped != [],
+      do: IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
+
+    case drifted do
+      [] ->
+        IO.puts("previews up to date")
+        :ok
+
+      names ->
+        IO.puts("STALE, re-record with `mix run ../scripts/gen_landing_frames.exs`:")
+        Enum.each(names, &IO.puts("  #{&1}"))
+        System.halt(1)
+    end
   end
 
   defp ensure_headless do
@@ -236,11 +330,19 @@ defmodule GenLandingFrames do
       {:ok, id} =
         Raxol.Headless.start(module, id: :"hero_#{name}", width: w, height: h)
 
-      Process.sleep(@hero_settle_ms)
-
+      # Frame zero waits for the demo's own tick rather than for a wall clock,
+      # then every later frame chains off the previous DISTINCT render. The
+      # chain is what makes the sequence reproducible: it follows the engine's
+      # render order instead of asking the dispatcher what tick it is on, and
+      # those two disagree -- `get_buffer` renders the engine's model, which
+      # trails the dispatcher's by up to a tick, so pinning each frame to a
+      # dispatcher tick paired tick N's number with tick N-1's picture and the
+      # back half of the pulse recording churned.
       Enum.reduce(0..(frame_count - 1), nil, fn n, previous ->
         buffer =
-          if n == 0, do: buffer!(id), else: next_distinct!(id, previous, name)
+          if n == 0,
+            do: baseline!(id, @hero_start_tick),
+            else: next_distinct!(id, previous, name)
 
         # Zero-padded: `RecordedFrames` sorts these lexically, so frame_10
         # would otherwise play before frame_2.
@@ -271,31 +373,82 @@ defmodule GenLandingFrames do
     buffer
   end
 
-  # Waits for the frame to actually change rather than sleeping a guessed
-  # multiple of the tick. Sleeping exactly one tick races the scheduler and
-  # records the same buffer twice; sleeping several skips motion the page then
-  # has to play back slowly. Polling gives the tightest sampling that is still
-  # guaranteed to advance, which is what the "no identical frames" test in
-  # `landing_components_test.exs` asserts from the other side.
-  defp next_distinct!(id, previous, name) do
+  # Frame zero: wait for the demo to reach its own tick `t`, then take the
+  # engine's next render. The wait pins the phase (a `Process.sleep(400)` here
+  # was the original churn: it recorded whichever tick the scheduler reached),
+  # and taking the following distinct render lets the engine catch up to the
+  # model before the sequence starts.
+  defp baseline!(id, t) do
     deadline = System.monotonic_time(:millisecond) + @hero_frame_timeout_ms
-    poll_until_changed!(id, previous, deadline, name)
+    wait_for_tick!(id, t, deadline)
+    buffer = buffer!(id)
+    next_distinct!(id, buffer, "baseline")
   end
 
-  defp poll_until_changed!(id, previous, deadline, name) do
+  defp wait_for_tick!(id, t, deadline) do
+    {:ok, model} = Raxol.Headless.get_model(id)
+
+    cond do
+      model.t >= t ->
+        :ok
+
+      System.monotonic_time(:millisecond) < deadline ->
+        Process.sleep(@hero_poll_ms)
+        wait_for_tick!(id, t, deadline)
+
+      true ->
+        raise "demo never reached tick #{t}"
+    end
+  end
+
+  # Waits for the render to actually change rather than sleeping a guessed
+  # multiple of the tick. Sleeping exactly one tick races the scheduler and
+  # records the same buffer twice; sleeping several skips motion the page then
+  # has to play back slowly.
+  defp next_distinct!(id, previous, name) do
+    deadline = System.monotonic_time(:millisecond) + @hero_frame_timeout_ms
+
+    case poll_changed(id, previous, deadline) do
+      {:ok, buffer} ->
+        buffer
+
+      :static ->
+        raise "#{name} stopped changing within #{@hero_frame_timeout_ms}ms; " <>
+                "the hero would play a still image"
+    end
+  end
+
+  # Step forward exactly `n` DISTINCT frames, or stop early if the demo is
+  # static. Used for the catalog previews, which are arbitrary demos with no
+  # tick counter to pin to. Most of them are static and stop on the first step;
+  # the ones that animate land on the nth change, which is stable for anything
+  # driven by its own state.
+  #
+  # Unlike `wait_for_tick!/3` this does not raise on a demo that stops moving:
+  # a card that never animates is a correct recording, not a failure.
+  # Halts on the first step that times out. Most of the catalog is static, and
+  # continuing to wait out the full timeout seven more times for a demo that
+  # has already proved it does not move turned a 41-card pass into eight
+  # minutes of sleeping.
+  defp advance!(id, n) do
+    Enum.reduce_while(1..n, buffer!(id), fn _step, previous ->
+      deadline = System.monotonic_time(:millisecond) + @preview_step_timeout_ms
+
+      case poll_changed(id, previous, deadline) do
+        {:ok, buffer} -> {:cont, buffer}
+        :static -> {:halt, previous}
+      end
+    end)
+  end
+
+  defp poll_changed(id, previous, deadline) do
     Process.sleep(@hero_poll_ms)
     buffer = buffer!(id)
 
     cond do
-      buffer != previous ->
-        buffer
-
-      System.monotonic_time(:millisecond) < deadline ->
-        poll_until_changed!(id, previous, deadline, name)
-
-      true ->
-        raise "#{name} stopped changing within #{@hero_frame_timeout_ms}ms; " <>
-                "the hero would play a still image"
+      buffer != previous -> {:ok, buffer}
+      System.monotonic_time(:millisecond) < deadline -> poll_changed(id, previous, deadline)
+      true -> :static
     end
   end
 
@@ -324,8 +477,17 @@ defmodule GenLandingFrames do
 
   # What the MCP surface serves: the structured content behind
   # `raxol_screenshot`, taken from the view tree, which is that tool's input.
-  defp mcp(module, id) do
-    {:ok, model} = Raxol.Headless.get_model(id)
+  # Folded from `init/1` rather than read off the running session. The MCP
+  # artifact is the one thing here that does NOT come from a buffer, so it was
+  # reading the dispatcher's model -- which is a moving target, and churned on
+  # every run even while the frames beside it were stable. These modules are
+  # pure, so the model at tick `t` is a fold and nothing has to be sampled.
+  defp mcp(module, _id) do
+    model =
+      Enum.reduce(1..@hero_start_tick, module.init(nil), fn _tick, m ->
+        {m, _cmds} = module.update(:tick, m)
+        m
+      end)
 
     model
     |> module.view()
@@ -333,7 +495,7 @@ defmodule GenLandingFrames do
     |> Raxol.MCP.StructuredScreenshot.to_json()
   end
 
-  defp previews do
+  defp previews(dir \\ @preview_dir) do
     {w, h} = @preview_size
 
     for comp <- Raxol.Playground.Catalog.list_components() do
@@ -342,16 +504,19 @@ defmodule GenLandingFrames do
 
       case safe_start(comp.module, id, w, h) do
         {:ok, id} ->
-          # Give subscription-driven demos (charts, dashboards) a tick or
-          # two so the preview is not an empty axis.
-          Process.sleep(@preview_settle_ms)
+          # Counted, not slept: subscription-driven demos (charts, dashboards)
+          # still get several ticks so the preview is not an empty axis, but
+          # WHICH tick is now a property of the script rather than of how busy
+          # the machine was. Static demos time out on the first step and keep
+          # their initial frame.
+          advance!(id, @preview_settle_frames)
 
           case Raxol.Headless.get_buffer(id) do
             {:ok, buffer} ->
               html =
                 TerminalBridge.buffer_to_html(buffer, aria_mode: :application)
 
-              path = Path.join(@preview_dir, "#{slug}.html")
+              path = Path.join(dir, "#{slug}.html")
               File.write!(path, html)
               IO.puts("card  #{path}")
 
@@ -386,4 +551,8 @@ defmodule GenLandingFrames do
   end
 end
 
-GenLandingFrames.run()
+# `--check` re-records to a scratch dir and diffs; anything else records.
+case System.argv() do
+  ["--check"] -> GenLandingFrames.check()
+  _ -> GenLandingFrames.run()
+end

@@ -20,7 +20,7 @@
             "type": "row",
             "children": [
               {
-                "id": "tool-call-2628-glyph",
+                "id": "tool-call-293-glyph",
                 "label": "✓",
                 "type": "text",
                 "children": [],
@@ -28,7 +28,7 @@
                 "content": "✓"
               },
               {
-                "id": "tool-call-2628-name",
+                "id": "tool-call-293-name",
                 "label": "read",
                 "type": "text",
                 "children": [],
@@ -36,7 +36,7 @@
                 "content": "read"
               },
               {
-                "id": "tool-call-2628-args",
+                "id": "tool-call-293-args",
                 "label": "spend_gate.ex",
                 "type": "text",
                 "children": [],
@@ -51,15 +51,15 @@
             "type": "row",
             "children": [
               {
-                "id": "tool-call-2660-glyph",
-                "label": "⠹",
+                "id": "tool-call-325-glyph",
+                "label": "⠼",
                 "type": "text",
                 "children": [],
                 "role": "text",
-                "content": "⠹"
+                "content": "⠼"
               },
               {
-                "id": "tool-call-2660-name",
+                "id": "tool-call-325-name",
                 "label": "edit",
                 "type": "text",
                 "children": [],
@@ -67,7 +67,7 @@
                 "content": "edit"
               },
               {
-                "id": "tool-call-2660-args",
+                "id": "tool-call-325-args",
                 "label": "spend_gate.ex:42",
                 "type": "text",
                 "children": [],
@@ -82,7 +82,7 @@
             "type": "row",
             "children": [
               {
-                "id": "tool-call-2692-glyph",
+                "id": "tool-call-357-glyph",
                 "label": "○",
                 "type": "text",
                 "children": [],
@@ -90,7 +90,7 @@
                 "content": "○"
               },
               {
-                "id": "tool-call-2692-name",
+                "id": "tool-call-357-name",
                 "label": "shell",
                 "type": "text",
                 "children": [],
@@ -98,7 +98,7 @@
                 "content": "shell"
               },
               {
-                "id": "tool-call-2692-args",
+                "id": "tool-call-357-args",
                 "label": "mix test",
                 "type": "text",
                 "children": [],

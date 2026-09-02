@@ -17,19 +17,19 @@
         "children": [
           {
             "id": null,
-            "label": "ok  quote   Base -> Arbitrum One",
+            "label": "    quote",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "ok  quote   Base -> Arbitrum One"
+            "content": "    quote"
           },
           {
             "id": null,
-            "label": "ok  sign    EIP-712 intent",
+            "label": "    sign",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "ok  sign    EIP-712 intent"
+            "content": "    sign"
           },
           {
             "id": null,

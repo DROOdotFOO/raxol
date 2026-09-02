@@ -37,12 +37,12 @@ defmodule Raxol.Playground.DemoHelpers do
   newest first. Returns `[element]` for splicing into a column's children.
 
   Options: `:title` (default `"events"`), `:empty` (text shown when no
-  entries yet, default `"(no events yet — interact above)"`).
+  entries yet, default `"(no events yet, interact above)"`).
   """
   @spec event_log_lines(map(), keyword()) :: [map()]
   def event_log_lines(model, opts \\ []) do
     title = Keyword.get(opts, :title, "events")
-    empty = Keyword.get(opts, :empty, "(no events yet — interact above)")
+    empty = Keyword.get(opts, :empty, "(no events yet, interact above)")
     log = Map.get(model, :event_log, [])
 
     entries =
