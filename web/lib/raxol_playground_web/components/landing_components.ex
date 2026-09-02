@@ -726,8 +726,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              survive, and .hd-title already drops itself on the same grounds. --%>
         <%!-- The filename is the link to the file. The pane tells you to
              `mix run pulse.exs`; this is where pulse.exs comes from, and
-             hanging it on the name costs the bar no width. --%>
-        <span class="hd-name"><a href={"/examples/#{@title}"} class="hd-file">{@title}</a><span class="hd-blurb"> &middot; {@blurb}</span></span>
+             hanging it on the name costs the bar no width. `download` because
+             the click's job is to put that file on disk, not to open a page
+             of source; the arrow says so at rest, where an underline only
+             appears on hover. A line of its own below the demo would say it
+             better, but the one-screen budget has no row to give and this
+             box's overflow clips anything appended to it. --%>
+        <span class="hd-name"><a
+            href={"/examples/#{@title}"}
+            class="hd-file"
+            download={@title}
+            title={"Download #{@title}, then: mix run #{@title}"}
+          >{@title} <span aria-hidden="true">&darr;</span></a><span class="hd-blurb"> &middot; {@blurb}</span></span>
         <span class="hd-title" data-role="title">rendering to the terminal</span>
 
         <%!-- Ruled off from the captions beside them. The bar reads left to
