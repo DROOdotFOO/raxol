@@ -240,14 +240,20 @@ defmodule RaxolPlaygroundWeb.DemoLive do
 
       <!-- Terminal + Code -->
       <div class="flex-1 flex overflow-hidden">
-        <div class="flex-1 flex flex-col">
+        <div class="flex-1 flex flex-col min-h-0">
           <.terminal_chrome title={"#{@component.name} Demo"} />
           <%!-- Outer themeable shell: morphdom owns its attributes so theme
                changes can re-paint the background. Inner element is the
                hook-controlled terminal whose innerHTML we mark as ignored
-               so demo frames survive across re-renders. --%>
+               so demo frames survive across re-renders.
+
+               Content-sized, not flex-1: a demo using 15 of its rows used to
+               stretch this shell over the leftover height and leave a band of
+               themed nothing between output and code. The leftover belongs to
+               the code panel below; the cap keeps a tall demo from pushing
+               that panel off entirely (it scrolls inside instead). --%>
           <div
-            class="flex-1 overflow-auto"
+            class="flex-none overflow-auto max-h-[70%]"
             style={"background: #{@theme_bg};"}
             data-theme={@terminal_theme}
           >
@@ -290,8 +296,9 @@ defmodule RaxolPlaygroundWeb.DemoLive do
                the same closed panel -- so neither label was true and the
                difference between them was nothing. Seeing it run and being
                able to lift the code are not two things a reader chooses
-               between; they are what a component page is for. --%>
-          <div class="pg-code">
+               between; they are what a component page is for. Flexes to take
+               whatever height the demo above does not use. --%>
+          <div class="pg-code flex-1 min-h-0 flex flex-col">
             <div class="pg-code-head">
               <span>Code</span>
               <button
@@ -304,7 +311,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
                 copy
               </button>
             </div>
-            <pre class="pg-code-snippet"><%= String.trim(@component.code_snippet) %></pre>
+            <pre class="pg-code-snippet flex-1 min-h-0 overflow-auto"><%= String.trim(@component.code_snippet) %></pre>
           </div>
         </div>
       </div>
