@@ -1433,8 +1433,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a href="https://xochi.fi" rel="noopener" class="text-sky">xochi.fi</a>.
         </h1>
         <p class="body-text max-w-2xl">
-          First funded settlement: 2026-06-28. Base USDC offering: live since
-          2026-07-20. Fees: trust score + asset type, pinned to
+          Fees: trust score + asset type, pinned to
           <code>Raxol.Payments.FeeSchedule</code>. Payments:
           <%= @payments_version %>; core: 2.6.
         </p>
