@@ -131,18 +131,17 @@ end
 defmodule Settle do
   use Raxol.Core.Runtime.Application
 
-  @title "XOCHI RECEIPT  USDC 1.10"
-  @route "Base Sepolia 84532 -> Arc Testnet 5042002"
+  @title "XOCHI RECEIPT  amount USDC 1.10"
+  @route "source Base Sepolia 84532  dest Arc Testnet 5042002"
   @receipt [
-    "gate   spend cap before signature",
-    "intent EIP-712 quote signed",
-    "execute submit settlement",
-    "src tx base-sepolia.blockscout.com/tx",
-    "dst tx testnet.arcscan.app/tx"
+    "spend gate   before signature",
+    "intent       EIP-712 quote signed",
+    "execution    submitted to solver",
+    "source      base-sepolia.blockscout.com/tx",
+    "dest        testnet.arcscan.app/tx"
   ]
   def init(_), do: %{t: 0}
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
-  def update(_, m), do: {m, []}
   def subscribe(_), do: [subscribe_interval(200, :tick)]
 
   def view(m) do
@@ -157,9 +156,8 @@ defmodule Settle do
     end
   end
 
-  defp row(l, i, at), do: text(m(i, at) <> " " <> l, fg: :cyan)
-  defp m(i, at) when i < at, do: "ok"
-  defp m(_, _), do: "  "
+  defp row(l, i, a), do: text("#{m(i, a)} #{l}", fg: :cyan)
+  defp m(i, a), do: if(i < a, do: "[OK]", else: "[  ]")
 end
 
 defmodule GenLandingFrames do
