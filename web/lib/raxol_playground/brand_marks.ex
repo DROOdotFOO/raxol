@@ -5,7 +5,7 @@ defmodule RaxolPlayground.BrandMarks do
   The SVGs in `priv/brand_marks/` are read here once, reduced to the single
   path each carries, and baked into the module, so a render costs a map lookup
   and the page makes no external request for a logo. `priv/brand_marks/README.md`
-  records where they came from, their licence, and why five entries have none.
+  records where they came from, their licence, and why one entry has none.
 
   The map is keyed by the DISPLAY NAME the row derives, not by file name, so
   the marks answer to the row rather than the other way round: most keys come
@@ -19,10 +19,13 @@ defmodule RaxolPlayground.BrandMarks do
 
   @dir Path.expand("../../priv/brand_marks", __DIR__)
 
-  # Display name => file. The mark for "Proton Lumo" is Proton's own: Lumo has
-  # no separate mark, and the vendor's is the honest stand-in. OpenAI, VS Code,
-  # Grok, LongCat and LLM7 are absent from the source set on purpose and are
-  # deliberately not mapped to a near-miss.
+  # Display name => file. Two entries wear their vendor's mark rather than
+  # their own: "Proton Lumo" carries Proton's, and "Grok" carries xAI's,
+  # because neither product has a separate mark and the vendor's is the honest
+  # stand-in. OpenAI, VS Code, Grok and LongCat come from vendor-published
+  # assets normalized to this directory's shape (the README records each
+  # source); LLM7 has no mark anywhere and is deliberately not mapped to a
+  # near-miss.
   #
   # "Virtuals" is the one entry here that is not a model provider or an editor.
   # It is the commerce protocol agents sell services on, so it answers to the
@@ -31,8 +34,11 @@ defmodule RaxolPlayground.BrandMarks do
   @sources %{
     "Claude" => "claude.svg",
     "Anthropic" => "anthropic.svg",
+    "OpenAI" => "openai.svg",
+    "Grok" => "xai.svg",
     "Kimi" => "kimi.svg",
     "OpenRouter" => "openrouter.svg",
+    "LongCat" => "longcat.svg",
     "Proton Lumo" => "proton.svg",
     "Ollama" => "ollama.svg",
     "LM Studio" => "lmstudio.svg",
@@ -40,6 +46,7 @@ defmodule RaxolPlayground.BrandMarks do
     "JetBrains" => "jetbrains.svg",
     "neovim" => "neovim.svg",
     "Emacs" => "gnuemacs.svg",
+    "VS Code" => "vscode.svg",
     "Virtuals Protocol" => "virtuals.svg"
   }
 
@@ -81,7 +88,7 @@ defmodule RaxolPlayground.BrandMarks do
   # to keep it: rendering the Virtuals Protocol mark without it fills the loop
   # in, which alters a logo their brand guide says not to alter. Most marks
   # declare nothing and get the nonzero default, hence `nil` rather than a
-  # blanket rule the other eleven never asked for.
+  # blanket rule the rest never asked for.
   @fill_rules Map.new(Map.merge(@sources, @site_sources), fn {name, file} ->
                 svg = File.read!(Path.join(@dir, file))
 
