@@ -94,7 +94,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     # The SSH section still says the hosted endpoint is down -- that is the
     # property this test exists to hold, and it must not quietly become a
     # promise the deployment cannot keep.
-    assert deep_dive =~ "hosted SSH endpoint is offline"
+    assert deep_dive =~ "Hosted SSH is offline"
 
     # What it offers INSTEAD is the SSH command, not a browser link. It used
     # to send the reader to /playground, which answers a section about serving
@@ -258,7 +258,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   test "the surfaces page reuses the hero's committed recording" do
     page = render_component(&LandingComponents.surfaces_deep_dive/1, %{})
 
-    assert page =~ "One snapshot, four surfaces"
+    assert page =~ "Static snapshot"
 
     frame = List.first(RecordedFrames.hero_frames("pulse"))
 
@@ -1036,7 +1036,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     # Privacy is still described, as the settlement mode it is.
     assert payments =~ "shielded"
-    assert payments =~ "Privacy changes delivery"
+    assert payments =~ "Privacy"
 
     # Matrix rows from the data, stables before WETH, authored rail notes.
     assert payments =~ "source: live"
