@@ -358,8 +358,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              subset in the hero dates the sentence every time one is added. --%>
         <p class="screen-sub">
           Each is its own Hex package: the TEA runtime, the AI agent, the
-          <span class="text-axol-coral">raxol code</span> coding harness, and
-          cross-chain settlement. The demo below runs them.
+          <span class="text-axol-coral">raxol code</span> harness, and
+          cross-chain settlement.
         </p>
 
         <%!-- The chains, as marks rather than as a sentence. This is the row
@@ -504,12 +504,20 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <%!-- The package count was the one claim in this line a reader could
              not check. It is the number the capability endpoints serve, and
              the directory it counts is public, so it links there. --%>
+        <%!-- One dot, and it joins the two halves of a single fact: this
+             version, that many packages. The links after it are separate
+             destinations rather than more of the same sentence, so they are
+             spaced apart instead of strung on more dots. Four items chained on
+             three middle dots read as one run-on line and made the separator
+             the loudest thing in the footer. --%>
         <span class="screen-meta">
-          v{Capabilities.version_minor()} &middot;
-          <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
-            {Capabilities.repo_package_count()} packages
-          </a>
-          &middot; <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a> &middot;
+          <span class="screen-meta__build">
+            v{Capabilities.version_minor()} &middot;
+            <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
+              {Capabilities.repo_package_count()} packages
+            </a>
+          </span>
+          <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
           <a href="/skill.md" class="subtle-link">Skill</a>
           <.github_mark />
         </span>
@@ -850,7 +858,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="surfaces-title">
       <div class="mb-10">
-        <span class="section-numeral" aria-hidden="true">01</span>
         <span class="section-eyebrow">Surfaces</span>
         <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h1>
         <p class="body-text max-w-2xl">
@@ -920,7 +927,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="ssh-deep-title">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 items-center">
         <div>
-          <span class="section-numeral" aria-hidden="true">02</span>
           <span class="section-eyebrow">SSH surface</span>
           <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h1>
           <p class="body-text mb-6">
@@ -953,7 +959,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="agent-deep-title">
       <div class="mb-8">
-        <span class="section-numeral" aria-hidden="true">03</span>
         <span class="section-eyebrow">Agent runtime</span>
         <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA apps.</h1>
         <p class="body-text max-w-2xl">
@@ -989,7 +994,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="coding-agent-title">
       <div class="mb-8">
-        <span class="section-numeral" aria-hidden="true">04</span>
         <span class="section-eyebrow">Coding agent</span>
         <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol speaks ACP.</h1>
         <p class="body-text max-w-2xl">
@@ -1086,6 +1090,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         rows: reach_rows(assigns.matrix),
         routes: routes(),
         payment_actions: payment_actions(),
+        action_groups: action_groups(),
         show_future_svm:
           not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
@@ -1094,13 +1099,12 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
-        <span class="section-numeral" aria-hidden="true">05</span>
         <span class="section-eyebrow">Agent payments</span>
         <h1 id="payments-title" class="heading-2xl mb-3">Agents that settle, privately.</h1>
         <p class="body-text max-w-2xl">
           First funded cross-chain settlement on 2026-06-28; the USDC transfer
           offering has been live on Base since 2026-07-20. What a transfer costs
-          is set by the agent's trust score and by what it is moving -- the rates
+          is set by the agent's trust score and by what it is moving. The rates
           below are the solver's own published schedule, mirrored in
           <code>Raxol.Payments.FeeSchedule</code> and pinned to it in CI.
         </p>
@@ -1129,8 +1133,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <p class="caption-text max-w-2xl mb-10">
         Three additive layers: the solver spread, the Xochi venue cut, and the
-        raxol routing cut. A tier discounts the venue and routing layers only --
-        the solver spread (<%= @solver_floor.stable %> bps stable,
+        raxol routing cut. A tier discounts the venue and routing layers only.
+        The solver spread (<%= @solver_floor.stable %> bps stable,
         <%= @solver_floor.volatile %> bps volatile) is never discounted, because
         it is the floor that keeps a fill cash-positive. There is no zero-fee
         tier. An intent that originates from an ACP job pays no routing layer:
@@ -1192,7 +1196,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <div class="reach-foot">
           every corridor settles public,
           <span class="set-stealth">stealth</span> (ERC-5564 one-time address), or
-          <span class="set-shielded">shielded</span> (Aztec) -- chosen per payment
+          <span class="set-shielded">shielded</span> (Aztec), chosen per payment
         </div>
       </div>
 
@@ -1201,7 +1205,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         The page above prices a transfer and says where it can go. This is the
         part an agent actually touches: which rail a request takes, and what it
         can call. Both are read out of the code at render rather than written
-        here -- the rails from <code>Raxol.Payments.Router.select/1</code>, the
+        here: the rails from <code>Raxol.Payments.Router.select/1</code>, the
         tools from the Actions themselves.
       </p>
 
@@ -1234,16 +1238,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         cannot execute one. Reads are not gated.
       </p>
 
-      <div class="ladder ladder--pair" role="table" aria-label="Payment Actions">
-        <div :for={action <- @payment_actions} class="rung" role="row">
-          <span class="rung__tier" role="cell"><%= action.name %></span>
-          <span
-            class={["rung__note", action.sensitive && "rung__note--gated"]}
-            role="cell"
-          >
-            <%= if action.sensitive, do: "moves funds", else: "read only" %>
-          </span>
-        </div>
+      <%!-- Two clusters rather than thirteen hairline rows with the same word
+           repeated down a column. The split is the `sensitive` flag itself, so
+           the distinction the section exists to draw is the structure instead
+           of a value a reader has to scan for, and the four that move money
+           are read at a glance rather than counted. --%>
+      <div :for={{label, actions} <- @action_groups} class="action-group">
+        <h3 class="action-group__label"><%= label %></h3>
+        <ul class="action-group__list">
+          <li :for={action <- actions} class="action-group__item">
+            <%= action.name %>
+          </li>
+        </ul>
       </div>
     </section>
     """
@@ -1270,6 +1276,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     Enum.map(@routes, fn {label, opts} ->
       %{label: label, protocol: Raxol.Payments.Router.select(opts)}
     end)
+  end
+
+  @doc false
+  @spec action_groups() :: [{String.t(), [map()]}]
+  def action_groups do
+    {gated, reads} = Enum.split_with(payment_actions(), & &1.sensitive)
+
+    [{"moves funds", gated}, {"read only", reads}]
+    |> Enum.reject(fn {_label, actions} -> actions == [] end)
   end
 
   @doc false
@@ -1300,14 +1315,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="token-title">
       <div class="mb-8">
-        <span class="section-numeral" aria-hidden="true">06</span>
         <span class="section-eyebrow">Token</span>
         <h1 id="token-title" class="heading-2xl mb-3">${@token.symbol}</h1>
       </div>
 
       <p class="body-text-dim max-w-2xl mb-4">
         The project token, on <%= @token.chain_name %>. It is not a settlement
-        asset -- the corridors quote, route and settle in stablecoins.
+        asset: the corridors quote, route and settle in stablecoins.
       </p>
 
       <div class="reach">

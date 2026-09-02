@@ -481,9 +481,19 @@ html {
   66% { transform: translate(-20px, 20px) scale(0.95); }
 }
 
+/* Opacity, not filter. This used to hue-rotate and brighten, which repaints a
+   fixed full-viewport layer every frame for the whole time anyone has the page
+   open; opacity is composited. Reduced motion already froze it, so the cost
+   only ever fell on people who had not asked for less.
+
+   The hue drift is gone with it. What is left is the slow brightness pulse,
+   which is the part that read at 20s -- a 15deg rotation across four low-alpha
+   radial gradients was not visible enough to buy a repaint. The 0% and 100%
+   stops are full strength so the frozen frame under reduced motion matches the
+   static background rather than a dimmed one. */
 @keyframes pearlShift {
-  0%, 100% { filter: hue-rotate(0deg) brightness(1); }
-  50% { filter: hue-rotate(15deg) brightness(1.1); }
+  0%, 100% { opacity: var(--atmosphere-opacity); }
+  50% { opacity: calc(var(--atmosphere-opacity) * 0.86); }
 }
 
 /* =============================================================================
@@ -556,7 +566,11 @@ html {
   border: 1px solid var(--coral-40);
   border-radius: 4px;
   cursor: pointer;
-  transition: all var(--duration-normal) var(--ease-smooth);
+  transition:
+    transform var(--duration-normal) var(--ease-smooth),
+    box-shadow var(--duration-normal) var(--ease-smooth),
+    border-color var(--duration-normal) var(--ease-smooth),
+    background-color var(--duration-normal) var(--ease-smooth);
   text-decoration: none;
 }
 
@@ -582,7 +596,11 @@ html {
   border: 1px solid var(--panel-border);
   border-radius: 4px;
   cursor: pointer;
-  transition: all var(--duration-normal) var(--ease-smooth);
+  transition:
+    transform var(--duration-normal) var(--ease-smooth),
+    box-shadow var(--duration-normal) var(--ease-smooth),
+    border-color var(--duration-normal) var(--ease-smooth),
+    background-color var(--duration-normal) var(--ease-smooth);
   text-decoration: none;
 }
 
@@ -607,7 +625,11 @@ html {
   border: 1px solid rgba(88, 161, 198, 0.4);
   border-radius: 4px;
   cursor: pointer;
-  transition: all var(--duration-normal) var(--ease-smooth);
+  transition:
+    transform var(--duration-normal) var(--ease-smooth),
+    box-shadow var(--duration-normal) var(--ease-smooth),
+    border-color var(--duration-normal) var(--ease-smooth),
+    background-color var(--duration-normal) var(--ease-smooth);
   text-decoration: none;
 }
 
@@ -739,7 +761,11 @@ html {
   border-radius: 8px;
   letter-spacing: 0.01em;
   cursor: pointer;
-  transition: all var(--duration-normal) var(--ease-smooth);
+  transition:
+    transform var(--duration-normal) var(--ease-smooth),
+    box-shadow var(--duration-normal) var(--ease-smooth),
+    border-color var(--duration-normal) var(--ease-smooth),
+    background-color var(--duration-normal) var(--ease-smooth);
 }
 
 .ssh-hero:hover {
@@ -908,19 +934,6 @@ html {
    Section numeral + eyebrow (deep-dive section header)
    ============================================================================= */
 
-.section-numeral {
-  font-family: var(--font-mono);
-  font-size: clamp(2.5rem, 2rem + 2.2vw, 3.75rem);
-  font-weight: 300;
-  /* 0.16 measured 1.39:1, under the 3:1 large text needs. It is a section
-     marker, not decoration -- it numbers the deep dives in order. */
-  color: rgba(255, 205, 156, 0.45);
-  letter-spacing: -0.02em;
-  line-height: 1;
-  display: block;
-  margin-bottom: 0.5rem;
-}
-
 .section-eyebrow {
   font-family: var(--font-mono);
   font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
@@ -968,7 +981,11 @@ html {
   border-radius: 8px;
   padding: 1.1rem 1.1rem 1rem;
   font-family: var(--font-mono);
-  transition: all var(--duration-normal) var(--ease-smooth);
+  transition:
+    transform var(--duration-normal) var(--ease-smooth),
+    box-shadow var(--duration-normal) var(--ease-smooth),
+    border-color var(--duration-normal) var(--ease-smooth),
+    background-color var(--duration-normal) var(--ease-smooth);
 }
 
 .surface-chip:hover {
@@ -1071,6 +1088,46 @@ html {
    have made the one distinction the table exists to draw invisible; it needs
    more specificity than `.rung__note` to win the colour. */
 .rung .rung__note--gated { color: var(--axol-coral); }
+
+/* Two labelled clusters instead of a thirteen-row ladder. The label carries
+   what a repeated column used to, so the names sit in a wrapping list and the
+   group is read as a set rather than counted a row at a time. */
+.action-group { margin-bottom: 1.5rem; }
+
+.action-group__label {
+  font-family: var(--font-mono);
+  font-size: clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--text-dim);
+  margin-bottom: 0.6rem;
+}
+
+/* The four that move money are the ones worth stopping on. */
+.action-group:first-of-type .action-group__label { color: var(--axol-coral); }
+
+.action-group__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.action-group__item {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: rgba(10, 10, 12, 0.55);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 0.28rem 0.5rem;
+}
+
+.action-group:first-of-type .action-group__item {
+  border-color: color-mix(in srgb, var(--axol-coral) 30%, transparent);
+}
 
 .set-public { color: var(--text-dim); }
 .set-stealth { color: var(--axol-coral); }
@@ -2678,8 +2735,17 @@ input[type="range"]::-moz-range-thumb {
   border-bottom-color: currentColor;
 }
 
+/* The gap does the separating the middle dots used to. Wider between the
+   groups than inside the build pair, so "v2.6 . 17 packages" still reads as
+   one item rather than two. */
 .screen-meta {
   color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.screen-meta__build {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
