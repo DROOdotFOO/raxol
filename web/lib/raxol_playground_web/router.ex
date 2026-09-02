@@ -43,7 +43,7 @@ defmodule RaxolPlaygroundWeb.Router do
     # reaching a LiveView, and so the real URLs are visible here.
     live("/surfaces", TopicLive, :surfaces)
     live("/ssh", TopicLive, :ssh)
-    live("/agent", TopicLive, :agent)
+    live("/agents", TopicLive, :agent)
     live("/coding-agent", TopicLive, :coding_agent)
     live("/payments", TopicLive, :payments)
     live("/token", TopicLive, :token)
