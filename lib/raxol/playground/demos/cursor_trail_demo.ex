@@ -130,6 +130,7 @@ defmodule Raxol.Playground.Demos.CursorTrailDemo do
     %{model | preset: preset, trail: trail}
   end
 
+  # snippet:start
   defp move_cursor(model, dx, dy) do
     {cx, cy} = model.cursor
     nx = Raxol.Core.Utils.Math.clamp(cx + dx, 0, @width - 1)
@@ -137,6 +138,8 @@ defmodule Raxol.Playground.Demos.CursorTrailDemo do
     trail = CursorTrail.update(model.trail, {nx, ny})
     %{model | cursor: {nx, ny}, trail: trail}
   end
+
+  # snippet:end
 
   defp tick_model(%{mode: :auto} = model) do
     {cx, cy} = model.cursor

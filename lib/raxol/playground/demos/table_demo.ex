@@ -39,6 +39,7 @@ defmodule Raxol.Playground.Demos.TableDemo do
 
   @impl true
   def init(_context) do
+    # snippet:start
     {:ok, table} =
       Table.init(%{
         id: :playground_table,
@@ -53,6 +54,8 @@ defmodule Raxol.Playground.Demos.TableDemo do
           header_separator: true
         }
       })
+
+    # snippet:end
 
     table = %{table | selected_row: 0}
     %{table: table, event_log: []}

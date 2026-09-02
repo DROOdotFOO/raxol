@@ -40,6 +40,7 @@ defmodule Raxol.Playground.Demos.BeamDashboardDemo do
       :tick when model.paused ->
         {model, []}
 
+      # snippet:start
       :tick ->
         curr = :erlang.statistics(:scheduler_wall_time) |> Enum.sort()
 
@@ -49,6 +50,8 @@ defmodule Raxol.Playground.Demos.BeamDashboardDemo do
             dt = t2 - t1
             if dt > 0, do: round((a2 - a1) / dt * 100), else: 0
           end)
+
+        # snippet:end
 
         history =
           (model.mem_history ++ [mem_total_mb()])

@@ -160,6 +160,7 @@ defmodule Raxol.Playground.Demos.HarnessStatusDemo do
     StatusBar.render(state, %{})
   end
 
+  # snippet:start
   defp context_meter(model) do
     {:ok, state} =
       ContextMeter.init(
@@ -183,6 +184,8 @@ defmodule Raxol.Playground.Demos.HarnessStatusDemo do
 
     SpendMeter.render(state, %{})
   end
+
+  # snippet:end
 
   defp activity_row(model) do
     {:ok, state} =

@@ -243,6 +243,12 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
           <h2 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h2>
           <span class="gallery-badge"><%= Helpers.complexity_label(@component.complexity) %></span>
         </div>
+        <%!-- What the snippet demonstrates, where the card name is
+             plain-language rather than a module. Derived from the snippet
+             (Catalog's :shows), and absent when it would only repeat the
+             name, so ten cards answer "which module is this?" and the
+             other thirty-one stay quiet. --%>
+        <p :if={@component.shows} class="font-mono label-text mb-1"><%= @component.shows %></p>
         <p class="font-mono detail-text gallery-desc mb-2"><%= @component.description %></p>
         <%!-- Tags and links on separate rows. They shared one line, with the
              tags clipped by `overflow-hidden` to whatever the links left over
@@ -283,6 +289,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
             <h2 class="font-mono font-semibold name-sky"><%= @component.name %></h2>
             <.complexity_badge level={@component.complexity} />
           </div>
+          <p :if={@component.shows} class="font-mono label-text mb-2"><%= @component.shows %></p>
           <p class="font-mono mb-3 detail-text"><%= @component.description %></p>
           <div class="flex items-center gap-4 font-mono mb-3 label-text">
             <span><%= Helpers.category_label(@component.category) %></span>

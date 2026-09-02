@@ -48,6 +48,7 @@ defmodule Raxol.Playground.Demos.ModalDemo do
   # Flow child is laid out the same open or closed; dialog is overlay-only.
   @impl true
   def view(model) do
+    # snippet:start
     overlays =
       if model.show do
         width = effective_width(model, @modal_width)
@@ -64,6 +65,7 @@ defmodule Raxol.Playground.Demos.ModalDemo do
       end
 
     AbsoluteLayer.absolute_layer(background_view(model), overlays)
+    # snippet:end
   end
 
   defp background_view(model) do

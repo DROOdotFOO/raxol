@@ -98,6 +98,7 @@ defmodule Raxol.Playground.Demos.SalienceDemo do
   @impl true
   def subscribe(_model), do: []
 
+  # snippet:start
   defp tier_row(seed, tier, ground_l, selected?) do
     hex = Salience.solve(tier, seed.c, seed.h, ground: ground_l)
     prefix = if selected?, do: "> ", else: "  "
@@ -109,6 +110,8 @@ defmodule Raxol.Playground.Demos.SalienceDemo do
       ]
     end
   end
+
+  # snippet:end
 
   defp ground_swatch(seed, tier, ground_name, ground_l, selected?) do
     hex = Salience.solve(tier, seed.c, seed.h, ground: ground_l)

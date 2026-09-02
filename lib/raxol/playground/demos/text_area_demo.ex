@@ -101,6 +101,7 @@ defmodule Raxol.Playground.Demos.TextAreaDemo do
   def view(model) do
     mode_str = if model.mode == :normal, do: "NORMAL", else: "INSERT"
 
+    # snippet:start
     line_rows =
       model.lines
       |> Enum.with_index()
@@ -109,6 +110,8 @@ defmodule Raxol.Playground.Demos.TextAreaDemo do
         num = String.pad_leading("#{i + 1}", @line_number_pad)
         text("#{prefix} #{num} | #{line}")
       end)
+
+    # snippet:end
 
     column style: %{gap: 1} do
       [

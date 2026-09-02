@@ -49,6 +49,7 @@ defmodule Raxol.Playground.Demos.FlexLayoutDemo do
 
   @impl true
   def view(model) do
+    # snippet:start
     wrap = Enum.at(@wraps, model.wrap_index)
     align = Enum.at(@aligns, model.align_index)
     gap = Enum.at(@gaps, model.gap_index)
@@ -65,6 +66,8 @@ defmodule Raxol.Playground.Demos.FlexLayoutDemo do
           items
         end
       end
+
+    # snippet:end
 
     column style: %{gap: 1} do
       [

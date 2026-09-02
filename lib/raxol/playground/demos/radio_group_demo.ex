@@ -67,6 +67,7 @@ defmodule Raxol.Playground.Demos.RadioGroupDemo do
     end
   end
 
+  # snippet:start
   defp render_group({group, gi}, active_group) do
     active? = gi == active_group
     title_style = if active?, do: [:bold], else: [:dim]
@@ -86,6 +87,8 @@ defmodule Raxol.Playground.Demos.RadioGroupDemo do
     prefix = if active? and oi == selected, do: "> ", else: "  "
     text("#{prefix}#{mark} #{opt}")
   end
+
+  # snippet:end
 
   @impl true
   def subscribe(_model), do: []

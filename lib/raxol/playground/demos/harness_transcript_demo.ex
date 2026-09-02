@@ -65,6 +65,7 @@ defmodule Raxol.Playground.Demos.HarnessTranscriptDemo do
       [
         text("Harness Transcript Demo", style: [:bold]),
         divider(),
+        # snippet:start
         box style: %{border: :single, padding: 1, width: box_width} do
           column style: %{gap: 1} do
             [
@@ -74,6 +75,7 @@ defmodule Raxol.Playground.Demos.HarnessTranscriptDemo do
             ]
           end
         end,
+        # snippet:end
         text("[Enter] or [Space] toggles the reasoning block", style: [:dim])
       ]
     end

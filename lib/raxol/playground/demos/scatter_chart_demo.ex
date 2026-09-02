@@ -53,6 +53,7 @@ defmodule Raxol.Playground.Demos.ScatterChartDemo do
     series = build_series(model.tick)
     point_count = series |> Enum.map(fn s -> length(s.data) end) |> Enum.sum()
 
+    # snippet:start
     chart_element =
       scatter_chart(
         series: series,
@@ -60,6 +61,8 @@ defmodule Raxol.Playground.Demos.ScatterChartDemo do
         height: @chart_height,
         show_legend: model.show_legend
       )
+
+    # snippet:end
 
     legend_label = if model.show_legend, do: "ON", else: "OFF"
 
