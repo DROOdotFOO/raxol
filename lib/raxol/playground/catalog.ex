@@ -17,7 +17,8 @@ defmodule Raxol.Playground.Catalog do
           complexity: :basic | :intermediate | :advanced,
           tags: [String.t()],
           code_snippet: String.t(),
-          shows: String.t() | nil
+          shows: String.t() | nil,
+          featured: boolean()
         }
 
   # No `code_snippet` here on purpose. Every entry's snippet is EXTRACTED
@@ -44,6 +45,7 @@ defmodule Raxol.Playground.Catalog do
     },
     %{
       name: "Table",
+      featured: true,
       module: Demos.TableDemo,
       category: :display,
       description:
@@ -70,6 +72,7 @@ defmodule Raxol.Playground.Catalog do
     },
     %{
       name: "Modal",
+      featured: true,
       module: Demos.ModalDemo,
       category: :overlay,
       description: "Modal dialog with title and content",
@@ -163,6 +166,7 @@ defmodule Raxol.Playground.Catalog do
     },
     %{
       name: "Markdown",
+      featured: true,
       module: Demos.MarkdownDemo,
       category: :display,
       description:
@@ -235,6 +239,7 @@ defmodule Raxol.Playground.Catalog do
     },
     %{
       name: "LineChart",
+      featured: true,
       module: Demos.LineChartDemo,
       category: :visualization,
       description: "Streaming braille-resolution line chart",
@@ -391,6 +396,7 @@ defmodule Raxol.Playground.Catalog do
     },
     %{
       name: "Harness Tool Blocks",
+      featured: true,
       module: Demos.HarnessToolBlocksDemo,
       category: :display,
       description:
@@ -434,6 +440,9 @@ defmodule Raxol.Playground.Catalog do
                 spec
                 |> Map.put(:code_snippet, snippet)
                 |> Map.put(:shows, shows)
+                # The gallery's small hand-picked opening row; everything
+                # else is not "unfeatured", just filed under its category.
+                |> Map.put_new(:featured, false)
               end)
 
   @doc "Returns all playground components."
