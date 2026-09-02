@@ -360,15 +360,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              spelled out here and are not any more -- the reach table on
              /payments carries them, derived from the solver, and naming a
              subset in the hero dates the sentence every time one is added. --%>
-        <%!-- Eleven words, down from nineteen. It still does both of its jobs
-             and says each one once: the packaging claim, and a gloss for the
-             h1's nouns in the h1's order, so "harness" resolves to `raxol
-             code` by position rather than by being named twice. The articles
-             went because a list of four things does not need them, and
-             "harness" went because the line above already said it. --%>
         <p class="screen-sub">
-          Separate Hex packages: TEA runtime, AI agent,
-          <span class="text-axol-coral">raxol code</span>, cross-chain settlement.
+          TEA runtime, agents, <span class="text-axol-coral">raxol code</span>,
+          settlement. Separate Hex packages.
         </p>
 
 
@@ -847,8 +841,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                   <div :for={{frame, i} <- Enum.with_index(@frames)} class="hero-frame" data-frame={i} hidden={i != 0}>{raw(frame)}</div>
                 </div>
                 <p class="hero-browser__caption">
-                  One TerminalComponent on an ordinary page. Keydown goes back
-                  through InputAdapter into update/2.
+                  A TerminalComponent on a Phoenix page. Keydown returns to
+                  update/2.
                 </p>
               </div>
             </div>
@@ -1046,8 +1040,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="mb-6">
         <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h1>
         <p class="body-text max-w-2xl">
-          Write one TEA module. Render it in the terminal, browser, SSH, MCP,
-          Telegram, Watch, and Speech.
+          One TEA module renders everywhere: terminal, browser, SSH, MCP,
+          Telegram, Watch, Speech.
         </p>
       </div>
 
@@ -1105,10 +1099,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            landing's tests hold the hero to -- nothing on this page is
            authored output. --%>
       <div class="surface-snapshots">
-        <h2 class="heading-xl mb-2">One snapshot, four surfaces</h2>
+        <h2 class="heading-xl mb-2">Static snapshot</h2>
         <p class="body-text-dim max-w-2xl mb-4">
-          These panes are static. They show the same <code class="text-axol-coral">pulse.exs</code>
-          frame as terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
+          One <code class="text-axol-coral">pulse.exs</code> frame rendered as
+          terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
         </p>
 
         <div class="surface-snapshot-grid">
@@ -1186,8 +1180,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="max-w-[65ch]">
         <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h1>
         <p class="body-text mb-6">
-          Every Raxol app is one SSH connection away. Each session is a
-          supervised BEAM process: crash-isolated, hot-reloadable, observable.
+          Every app can be an SSH surface. Each session is a supervised BEAM
+          process.
         </p>
 
         <div class="mb-6">
@@ -1207,8 +1201,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </ul>
 
         <p class="body-text-dim">
-          The hosted SSH endpoint is offline while its host is rebuilt. The
-          command above serves the same surface from your own machine.
+          Hosted SSH is offline while the host is rebuilt. Run it locally with
+          the command above.
         </p>
 
         <%!-- The posture facts below are `Raxol.SSH.Server`'s documented
@@ -1216,8 +1210,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              line the module ships with. --%>
         <h2 class="heading-xl mt-14 mb-3">Safe by default</h2>
         <p class="body-text mb-4">
-          An anonymous surface has to be hard to expose by accident, so the
-          server refuses the accident:
+          Anonymous surfaces should be hard to expose. Raxol refuses the
+          accident:
         </p>
         <ul class="detail-text space-y-2 leading-relaxed list-disc list-inside mb-6">
           <li>
@@ -1237,13 +1231,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
         <h2 class="heading-xl mt-14 mb-3">Multi-tenant, keys in a directory</h2>
         <p class="body-text mb-4">
-          The hosted coding agent serves many users from one daemon. A tenant
-          is a directory: their public keys under
-          <code class="text-axol-coral">&lt;dir&gt;/&lt;user&gt;/ssh/authorized_keys</code>,
-          their workspace jailed under
-          <code class="text-axol-coral">work/</code>, their spend metered as
-          their own identity. The username that authenticated is the workspace
-          that opens; the two cannot diverge.
+          A tenant is a directory:
+          <code class="text-axol-coral">&lt;dir&gt;/&lt;user&gt;/ssh/authorized_keys</code>
+          for access, <code class="text-axol-coral">work/</code> for files,
+          ledger for spend. The authenticated username picks that directory.
         </p>
         <div class="mb-6">
           <.copyable_command
@@ -1270,11 +1261,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="mb-8">
         <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA apps.</h1>
         <p class="body-text max-w-2xl">
-          Same <span class="text-axol-coral">init</span> /
+          Agents use the same <span class="text-axol-coral">init</span> /
           <span class="text-axol-coral">update</span> /
-          <span class="text-axol-coral">view</span> shape as a UI. The view is
-          optional; headless agents skip rendering. Supervision, messaging,
-          hot reload, and swarm discovery come free from OTP.
+          <span class="text-axol-coral">view</span> shape as UIs. Headless
+          agents skip view. OTP supplies supervision, messaging, hot reload,
+          swarm discovery.
         </p>
       </div>
 
@@ -1286,39 +1277,28 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl">
-        Streaming LLM output via <code class="text-axol-coral">:async</code> commands.
-        Inter-agent messages routed through a unique <code class="text-axol-coral">Registry</code>.
-        Bring your own key for Anthropic, OpenAI, OpenRouter, Ollama, Lumo, or Kimi, or run mock.
+        Stream LLM output with <code class="text-axol-coral">:async</code>.
+        Route peer messages through <code class="text-axol-coral">Registry</code>.
+        Bring an Anthropic, OpenAI, OpenRouter, Ollama, Lumo, or Kimi key.
       </p>
 
       <div class="max-w-2xl">
         <h2 class="heading-xl mt-14 mb-3">Teams are supervisors</h2>
         <p class="body-text mb-4">
           <code class="text-axol-coral">Raxol.Agent.Team</code> is an OTP
-          supervisor over a coordinator and its workers, which means agent
-          fault tolerance is not a feature bolted on: a crashed worker
-          restarts under the same rules any BEAM process does. Agents find
-          each other by name through the registry and message each other with
-          a <code class="text-axol-coral">:send_agent</code> command; the
-          message arrives in the peer's
-          <code class="text-axol-coral">update/2</code> as
-          <code class="text-axol-coral"><%= "{:agent_message, from, payload}" %></code>,
-          the same way every other event does.
+          supervisor. A crashed worker restarts by BEAM rules. Peers send
+          <code class="text-axol-coral">:send_agent</code>; receivers get
+          <code class="text-axol-coral"><%= "{:agent_message, from, payload}" %></code>
+          in <code class="text-axol-coral">update/2</code>.
         </p>
 
         <h2 class="heading-xl mt-14 mb-3">On a schedule</h2>
         <p class="body-text mb-4">
-          The scheduler takes a relative delay, an interval, five-field cron,
-          or an ISO timestamp, parsed once when the job is created and never
-          by an LLM per tick. Jobs persist to disk and replay on boot; each
-          fire runs a fresh, history-free agent and delivers its result to a
-          chat platform or a local callback. Agents manage their own jobs
-          through the <code class="text-axol-coral">cronjob</code> tool:
-          create, list, pause, resume, run, remove.
-        </p>
-        <p class="body-text-dim">
-          A fire never runs inline with the scheduler, so one slow job cannot
-          hold the clock hostage for every other.
+          Schedules accept delay, interval, cron, or ISO time. Jobs persist,
+          replay on boot, fire history-free agents, and deliver to chat or
+          callback. The <code class="text-axol-coral">cronjob</code> tool
+          creates, lists, pauses, resumes, runs, and removes; fires never block
+          the scheduler.
         </p>
       </div>
     </section>
@@ -1335,10 +1315,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="mb-8">
         <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol speaks ACP.</h1>
         <p class="body-text max-w-2xl">
-          Open it in Zed, JetBrains, neovim, Emacs, or VS Code: raxol is listed
-          on <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>
-          beside Claude Agent, Codex CLI, Cursor, Gemini CLI, and GitHub
-          Copilot. The same agent loop serves four surfaces:
+          Open raxol from Zed, JetBrains, neovim, Emacs, or VS Code.
+          <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>
+          lists it beside Claude Agent, Codex CLI, Cursor, Gemini CLI, and
+          GitHub Copilot. One loop serves four surfaces:
         </p>
       </div>
 
@@ -1350,36 +1330,27 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl">
-        The last line is one no competitor can print: deriving MCP tools from a
-        widget tree requires the UI framework and the agent runtime to be the
-        same system.
+        Competitors cannot print the last line: MCP tools come from the widget
+        tree because UI runtime and agent runtime are one system.
       </p>
 
       <div class="max-w-2xl">
         <h2 class="heading-xl mt-14 mb-3">Every session is a journal</h2>
         <p class="body-text mb-4">
-          Each session appends to a durable journal on disk, one directory per
-          session. That one decision buys the rest: resume the latest with
-          <code class="text-axol-coral">--continue</code>, list them with
-          <code class="text-axol-coral">--sessions</code>, replay any
-          transcript with <code class="text-axol-coral">--replay ID</code>,
-          rewind a live one with <code class="text-axol-coral">/rewind</code>.
-          An editor that reconnects over ACP hands back its session id and
-          picks up where it left off, because the id is the journal directory.
+          Each session is a disk journal. Resume with
+          <code class="text-axol-coral">--continue</code>, list with
+          <code class="text-axol-coral">--sessions</code>, replay with
+          <code class="text-axol-coral">--replay ID</code>, rewind with
+          <code class="text-axol-coral">/rewind</code>. ACP reconnects by
+          session id because the id is the directory.
         </p>
 
-        <h2 class="heading-xl mt-14 mb-3">Spend is metered, not hoped about</h2>
+        <h2 class="heading-xl mt-14 mb-3">Metered spend</h2>
         <p class="body-text mb-4">
-          Every LLM call is priced into a ledger as it happens. An exhausted
-          budget halts the running turn rather than finishing it on credit,
-          and a model with no known price fails closed once a ledger is wired,
-          because an unpriced call is an unbounded one. Hosted multi-tenant
-          serving hangs per-user budgets on the same ledger.
-        </p>
-        <p class="body-text-dim">
-          Sharing is read-only by construction: a share link is an expiring
-          signed token with the session and tenant inside the signed bytes, so
-          a leaked link cannot be edited into someone else's session.
+          Every LLM call is priced into a ledger. Exhausted budgets halt the
+          turn. Unknown model price fails closed once a ledger is wired. Share
+          links are expiring, signed, read-only tokens scoped to session and
+          tenant.
         </p>
       </div>
     </section>
@@ -1468,12 +1439,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <h1 id="payments-title" class="heading-2xl mb-3">Agents that settle privately.</h1>
         <p class="body-text max-w-2xl">
           First funded settlement: 2026-06-28. Base USDC offering: live since
-          2026-07-20. Fees follow trust score and asset type; CI pins this
-          table to <code>Raxol.Payments.FeeSchedule</code>.
-        </p>
-        <p class="body-text-dim mt-3">
-          Payments packages are <%= @payments_version %>; core is 2.6.
-          Different maturity.
+          2026-07-20. Fees: trust score + asset type, pinned to
+          <code>Raxol.Payments.FeeSchedule</code>. Payments:
+          <%= @payments_version %>; core: 2.6.
         </p>
       </div>
 
@@ -1495,25 +1463,24 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-10">
-        Fees have three layers: solver spread, Xochi venue cut, and raxol
-        routing cut. Tiers discount Xochi and routing only; solver spread is
-        never discounted (<%= @solver_floor.stable %> bps stable,
+        Fees have three layers: solver spread, Xochi venue cut, raxol routing
+        cut. Tiers discount the last two; solver spread is never discounted
+        (<%= @solver_floor.stable %> bps stable,
         <%= @solver_floor.volatile %> bps volatile), so there is no zero-fee
-        tier. ACP jobs skip the routing cut; it is already in the job budget.
+        tier. ACP jobs skip routing cut; it is already budgeted.
       </p>
 
-      <h2 class="name-coral mb-2">Privacy changes delivery, not price</h2>
+      <h2 class="name-coral mb-2">Privacy</h2>
       <p class="body-text-dim max-w-2xl mb-10">
-        Each corridor settles public, stealth (ERC-5564 one-time address), or
-        shielded (Aztec note). ZK attestations prove trust tier without
-        disclosing the underlying score.
+        Corridors settle public, stealth (ERC-5564 one-time address), or
+        shielded (Aztec note). ZK attestations prove trust tier without exposing
+        the score.
       </p>
 
-      <h2 class="name-coral mb-2">Reach, pulled from Xochi</h2>
+      <h2 class="name-coral mb-2">Reach</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Pulled from <code>Raxol.Payments.Xochi.Capabilities.get/1</code> with a
-        five-minute cache. If live fetch fails, the page uses the static
-        registry and labels it cached.
+        Capabilities come from Xochi with a five-minute cache. Fetch failure
+        uses the static registry and labels it cached.
       </p>
 
       <div class="reach">
@@ -1555,10 +1522,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <h2 class="name-coral mt-12 mb-2">How an agent pays</h2>
+      <h2 class="name-coral mt-12 mb-2">Payment path</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Agents pick rails through <code>Raxol.Payments.Router.select/1</code>.
-        Actions expose the calls. Both tables are code-derived.
+        <code>Raxol.Payments.Router.select/1</code> picks rails. Actions expose
+        calls. Tables are code-derived.
       </p>
 
       <div class="ladder ladder--pair mb-4" role="table" aria-label="Protocol routing">
@@ -1573,17 +1540,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-10">
-        Tron forces the relay rail, which is public-only. A stealth transfer to
-        Tron routes to relay, then the Action refuses it. Riddler stays manual:
-        B2B path, cash-negative for agents.
+        Tron forces relay, which is public-only; stealth-to-Tron fails at the
+        Action. Riddler stays manual: B2B, cash-negative for agents.
       </p>
 
       <h2 class="name-coral mb-2">
-        <%= length(@payment_actions) %> Actions on the agent
+        <%= length(@payment_actions) %> Actions
       </h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Fund-moving Actions are blocked from LLM tool calls unless
-        <code>:tool_authorizer</code> is set. Reads stay open.
+        Fund-moving Actions require <code>:tool_authorizer</code>. Reads stay
+        open.
       </p>
 
       <%!-- Two clusters rather than thirteen hairline rows with the same word
@@ -1667,8 +1633,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-4">
-        Project token on <%= @token.chain_name %>. Corridors quote, route, and
-        settle in stablecoins, not $<%= @token.symbol %>.
+        Project token on <%= @token.chain_name %>. Payments settle in
+        stablecoins, not $<%= @token.symbol %>.
       </p>
 
       <div class="reach reach--compact">
@@ -1697,14 +1663,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       <div class="max-w-2xl">
         <h2 class="heading-xl mt-10 mb-3">What it is not</h2>
         <p class="body-text mb-4">
-          It is not a settlement asset. It does not unlock the framework; every
-          package is open source. It does not set fees; payments use attestation
-          tiers. It is not priced here; use the live pair.
-        </p>
-        <p class="body-text-dim">
-          The addresses above are the durable facts. Payment rails live on
-          <a href="/payments" class="link-subtle">/payments</a>. Verify this
-          token on chain <%= @token.chain_id %>.
+          It is not a settlement asset, package key, fee switch, or price
+          oracle. Payment rails live on
+          <a href="/payments" class="link-subtle">/payments</a>.
         </p>
       </div>
     </section>
