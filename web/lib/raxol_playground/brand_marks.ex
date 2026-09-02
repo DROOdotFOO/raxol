@@ -88,7 +88,7 @@ defmodule RaxolPlayground.BrandMarks do
   # to keep it: rendering the Virtuals Protocol mark without it fills the loop
   # in, which alters a logo their brand guide says not to alter. Most marks
   # declare nothing and get the nonzero default, hence `nil` rather than a
-  # blanket rule the other eleven never asked for.
+  # blanket rule the rest never asked for.
   @fill_rules Map.new(Map.merge(@sources, @site_sources), fn {name, file} ->
                 svg = File.read!(Path.join(@dir, file))
 
