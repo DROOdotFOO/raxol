@@ -5,7 +5,7 @@ defmodule RaxolPlayground.BrandMarks do
   The SVGs in `priv/brand_marks/` are read here once, reduced to the single
   path each carries, and baked into the module, so a render costs a map lookup
   and the page makes no external request for a logo. `priv/brand_marks/README.md`
-  records where they came from, their licence, and why five entries have none.
+  records where they came from, their licence, and why one entry has none.
 
   The map is keyed by the DISPLAY NAME the row derives, not by file name, so
   the marks answer to the provider registry rather than the other way round.
@@ -17,22 +17,29 @@ defmodule RaxolPlayground.BrandMarks do
 
   @dir Path.expand("../../priv/brand_marks", __DIR__)
 
-  # Display name => file. The mark for "Proton Lumo" is Proton's own: Lumo has
-  # no separate mark, and the vendor's is the honest stand-in. OpenAI, VS Code,
-  # Grok, LongCat and LLM7 are absent from the source set on purpose and are
-  # deliberately not mapped to a near-miss.
+  # Display name => file. Two entries wear their vendor's mark rather than
+  # their own: "Proton Lumo" carries Proton's, and "Grok" carries xAI's,
+  # because neither product has a separate mark and the vendor's is the honest
+  # stand-in. OpenAI, VS Code, Grok and LongCat come from vendor-published
+  # assets normalized to this directory's shape (the README records each
+  # source); LLM7 has no mark anywhere and is deliberately not mapped to a
+  # near-miss.
   @sources %{
     "Claude" => "claude.svg",
     "Anthropic" => "anthropic.svg",
+    "OpenAI" => "openai.svg",
+    "Grok" => "xai.svg",
     "Kimi" => "kimi.svg",
     "OpenRouter" => "openrouter.svg",
+    "LongCat" => "longcat.svg",
     "Proton Lumo" => "proton.svg",
     "Ollama" => "ollama.svg",
     "LM Studio" => "lmstudio.svg",
     "Zed" => "zedindustries.svg",
     "JetBrains" => "jetbrains.svg",
     "neovim" => "neovim.svg",
-    "Emacs" => "gnuemacs.svg"
+    "Emacs" => "gnuemacs.svg",
+    "VS Code" => "vscode.svg"
   }
 
   # Marks the SITE wears, as opposed to the ones it points at. Kept apart from
