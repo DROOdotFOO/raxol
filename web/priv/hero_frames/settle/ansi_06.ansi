@@ -3,5 +3,5 @@
 [36mok gate      approve before signature[0m                   
 [36mok intent    quote -> sign -> execute[0m                   
 [36mok source    Base Sepolia  84532[0m                        
-[36mok dest      Arc Testnet  5042002[0m                       
+[36m   dest      Arc Testnet  5042002[0m                       
 [36m   explorer  Blockscout  receipts after run[0m             

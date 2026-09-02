@@ -95,6 +95,7 @@ end
 defmodule Harness do
   use Raxol.Core.Runtime.Application
   alias Raxol.UI.Components.Harness.ToolCallBlock, as: T
+
   @calls [
     {"read", "spend_gate.ex"},
     {"edit", "spend_gate.ex:42"},
@@ -105,8 +106,10 @@ defmodule Harness do
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
   def update(_, m), do: {m, []}
   def subscribe(_), do: [subscribe_interval(200, :tick)]
+
   def view(m) do
     at = Enum.at(@ladder, rem(m.t, length(@ladder)))
+
     column style: %{gap: 1} do
       [
         text("virtuals acp  bugfix  40.00 USDC", fg: :cyan),
@@ -114,10 +117,12 @@ defmodule Harness do
       ]
     end
   end
+
   defp call({n, a}, i, x, t) do
     {:ok, s} = T.init(name: n, args: a, status: st(i, x), frame: t)
     T.render(s, %{})
   end
+
   defp st(i, x) when i < x, do: :done
   defp st(i, i), do: :running
   defp st(_, _), do: :pending
@@ -125,34 +130,35 @@ end
 
 defmodule Settle do
   use Raxol.Core.Runtime.Application
-  alias Raxol.Payments.{Assets, Router}
-  @route Router.select(cross_chain: true)
-  @tokens Assets.evm_tokens() |> Map.keys() |> Enum.sort()
-  @stables Enum.reject(@tokens, &(&1 == "WETH"))
-  @steps [
-    {"quote", "Base -> Arbitrum One"},
-    {"sign", "EIP-712 intent"},
-    {"settle", "0x7f3a9c.. stealth"}
+
+  @title "USDC 1.10  Base Sepolia -> Arc  via xochi"
+  @receipt [
+    "agent     funded signer",
+    "gate      approve before signature",
+    "intent    quote -> sign -> execute",
+    "source    Base Sepolia  84532",
+    "dest      Arc Testnet  5042002",
+    "explorer  Blockscout  receipts after run"
   ]
   def init(_), do: %{t: 0}
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
   def update(_, m), do: {m, []}
   def subscribe(_), do: [subscribe_interval(200, :tick)]
-  def view(m) do
-    at = rem(m.t, length(@steps) + 1)
 
-    column style: %{gap: 1} do
+  def view(m) do
+    at = rem(m.t, length(@receipt) + 1)
+
+    column style: %{gap: 0} do
       [
-        text("USDC 25.00  via #{@route}", style: [:bold]),
-        column(do: Enum.with_index(@steps, &step(&1, &2, at))),
-        text("stables  " <> Enum.join(@stables, "  "))
+        text(@title, style: [:bold]),
+        column(do: Enum.with_index(@receipt, &row(&1, &2, at)))
       ]
     end
   end
 
-  defp step({n, note}, i, at) when i < at,
-    do: text("ok  #{String.pad_trailing(n, 8)}#{note}", fg: :cyan)
-  defp step({n, _note}, _i, _at), do: text("    #{n}")
+  defp row(l, i, at), do: text(m(i, at) <> " " <> l, fg: :cyan)
+  defp m(i, at) when i < at, do: "ok"
+  defp m(_, _), do: "  "
 end
 
 defmodule GenLandingFrames do
@@ -174,7 +180,7 @@ defmodule GenLandingFrames do
   #
   # The hero pins frame zero to the demo's own tick (see `baseline!/2`), then
   # chains later frames off the engine's own render order.
-  
+
   #
   # The tick frame zero is taken at. Not zero: the first couple of renders of a
   # chart are a half-drawn axis, and the hero should open on a real picture.
@@ -262,7 +268,8 @@ defmodule GenLandingFrames do
     File.rm_rf!(scratch)
 
     if skipped != [],
-      do: IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
+      do:
+        IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
 
     case drifted do
       [] ->
@@ -270,7 +277,10 @@ defmodule GenLandingFrames do
         :ok
 
       names ->
-        IO.puts("STALE, re-record with `mix run ../scripts/gen_landing_frames.exs`:")
+        IO.puts(
+          "STALE, re-record with `mix run ../scripts/gen_landing_frames.exs`:"
+        )
+
         Enum.each(names, &IO.puts("  #{&1}"))
         System.halt(1)
     end
@@ -308,16 +318,14 @@ defmodule GenLandingFrames do
   #          and one call per tick went by too fast to follow. All-done gets a
   #          single frame -- it is the one state with no spinner, so a second
   #          frame of it would be identical to the first.
-  #   settle three steps of one transfer plus the empty state they start
-  #          from: four states, one per tick, so four frames closes the loop
-  #          and no two repeat. A step every OTHER tick reads better but
-  #          records each frame twice, and identical frames are what
-  #          "recorded identical frames" refuses.
+  #   settle six receipt rows plus the empty state close the loop. Labels stay
+  #          visible while the ok marker advances, so every frame reads as the
+  #          same operator receipt rather than a task list.
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63},
     {"halo", Halo, {70, 14}, 110, 48},
     {"harness", Harness, {36, 5}, 200, 10},
-    {"settle", Settle, {56, 7}, 200, 4}
+    {"settle", Settle, {56, 7}, 200, 7}
   ]
 
   defp hero(base \\ @hero_dir) do
@@ -476,9 +484,14 @@ defmodule GenLandingFrames do
     buffer = buffer!(id)
 
     cond do
-      buffer != previous -> {:ok, buffer}
-      System.monotonic_time(:millisecond) < deadline -> poll_changed(id, previous, deadline)
-      true -> :static
+      buffer != previous ->
+        {:ok, buffer}
+
+      System.monotonic_time(:millisecond) < deadline ->
+        poll_changed(id, previous, deadline)
+
+      true ->
+        :static
     end
   end
 
@@ -578,11 +591,21 @@ defmodule GenLandingFrames do
         for tick <- 1..@preview_frames do
           for msg <- msgs, do: :ok = Raxol.Headless.send_message(id, msg)
           seq = String.pad_leading(to_string(tick - 1), 2, "0")
-          File.write!(Path.join(frames_dir, "frame_#{seq}.html"), preview_html(id))
+
+          File.write!(
+            Path.join(frames_dir, "frame_#{seq}.html"),
+            preview_html(id)
+          )
         end
 
-        File.write!(Path.join(frames_dir, "interval_ms"), to_string(interval_ms))
-        IO.puts("card  #{frames_dir} (#{@preview_frames} frames @ #{interval_ms}ms)")
+        File.write!(
+          Path.join(frames_dir, "interval_ms"),
+          to_string(interval_ms)
+        )
+
+        IO.puts(
+          "card  #{frames_dir} (#{@preview_frames} frames @ #{interval_ms}ms)"
+        )
     end
   end
 

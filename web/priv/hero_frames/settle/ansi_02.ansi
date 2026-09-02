@@ -1,7 +1,7 @@
-[37m[1mUSDC 25.00  via xochi[0m                                   
-                                                        
-[36mok  quote   Base -> Arbitrum One[0m                        
-[36mok  sign    EIP-712 intent[0m                              
-[36mok  settle  0x7f3a9c.. stealth[0m                          
-                                                        
-[37mstables  USDC  USDG  USDT[0m                               
+[37m[1mUSDC 1.10  Base Sepolia -> Arc  via xochi[0m               
+[36m   agent     funded signer[0m                              
+[36m   gate      approve before signature[0m                   
+[36m   intent    quote -> sign -> execute[0m                   
+[36m   source    Base Sepolia  84532[0m                        
+[36m   dest      Arc Testnet  5042002[0m                       
+[36m   explorer  Blockscout  receipts after run[0m             
