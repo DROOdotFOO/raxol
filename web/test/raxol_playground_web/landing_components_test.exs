@@ -462,13 +462,22 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     assert 728_126_428 in marked, "the relay rail reaches Tron and the row omits it"
 
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    for %{name: name} <- NetworkMarks.all() do
+      assert row =~ name, "the integrations row drops #{name}"
+    end
+
+    # They belong in the row under the demo, not in the hero: a logo strip
+    # between the sub-line and the install command pushes the command down and
+    # dresses the claim in other people's marks.
     hero =
       render_component(&LandingComponents.screen_hero/1,
         example: List.first(LandingComponents.hero_example_names())
       )
 
     for %{name: name} <- NetworkMarks.all() do
-      assert hero =~ name, "the network row drops #{name}"
+      refute hero =~ name, "#{name} is back in the hero"
     end
   end
 
@@ -629,8 +638,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
 
     # Two runs are rendered: the visible one and the aria-hidden copy the loop
-    # needs, so every marked entry appears twice.
-    marked = Enum.filter(entries, & &1.mark)
+    # needs, so every marked entry appears twice. Two kinds of mark count: a
+    # currentColor path from BrandMarks, and a chain that brings its own fills.
+    marked = Enum.filter(entries, &(&1.mark || &1[:chain]))
 
     assert length(String.split(row, "integrations-item--marked")) - 1 ==
              length(marked) * 2
@@ -638,7 +648,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     # The no-mark path has to be live, not theoretical. Were every entry to
     # gain a mark this test would still pass while the fallback rotted, so the
     # fallback is asserted to be exercised by something.
-    assert Enum.any?(entries, &is_nil(&1.mark)),
+    assert Enum.any?(entries, &(is_nil(&1.mark) and is_nil(&1[:chain]))),
            "no entry exercises the no-mark fallback"
   end
 
