@@ -1093,10 +1093,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            landing's tests hold the hero to -- nothing on this page is
            authored output. --%>
       <div class="surface-snapshots">
-        <h2 class="heading-xl mb-2">Static pulse.exs frame</h2>
         <p class="body-text-dim max-w-2xl mb-4">
-          The <code class="text-axol-coral">pulse.exs</code> frame below renders
-          as terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
+          Static: the <code class="text-axol-coral">pulse.exs</code> frame below
+          renders as terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
         </p>
 
         <div class="surface-snapshot-grid">
@@ -1473,10 +1472,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         the score.
       </p>
 
-      <h2 class="name-coral mb-2">Reach</h2>
+      <h2 class="name-coral mb-2">xochi.fi reach</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Capabilities come from xochi.fi with a five-minute cache. Fetch failure
-        uses the static registry and labels it cached.
+        xochi.fi capabilities use a five-minute cache. Fetch failure uses the
+        static registry and labels it cached.
       </p>
 
       <div class="reach">
@@ -1518,10 +1517,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <h2 class="name-coral mt-12 mb-2">Payment path</h2>
+      <h2 class="name-coral mt-12 mb-2">xochi.fi routing</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        <code>Raxol.Payments.Router.select/1</code> picks rails. Actions expose
-        calls. Tables are code-derived.
+        <code>Raxol.Payments.Router.select/1</code> picks x402, xochi.fi, or
+        relay. Tables are code-derived.
       </p>
 
       <div class="ladder ladder--pair mb-4" role="table" aria-label="Protocol routing">
