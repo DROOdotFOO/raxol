@@ -753,7 +753,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             class="hd-control hd-control--next"
             aria-label={"Next example: #{example_title(@next)}"}
           >
-            {example_title(@next)} <span aria-hidden="true">&rarr;</span>
+            Next: {example_title(@next)} <span aria-hidden="true">&rarr;</span>
           </button>
         </div>
       </div>
@@ -1042,17 +1042,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       )
 
     ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="surfaces-title">
-      <div class="mb-10">
+    <section class="landing-section py-10 md:py-16 measure" aria-labelledby="surfaces-title">
+      <div class="mb-6">
         <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h1>
         <p class="body-text max-w-2xl">
-          Write the TEA module once. It meets you in three places you already
-          are: your terminal, your browser, and wherever your agents work.
-          Same model. Same view.
+          Write one TEA module. Render it in the terminal, browser, SSH, MCP,
+          Telegram, Watch, and Speech.
         </p>
       </div>
 
-      <div class="surface-buckets">
+      <div class="surface-buckets surface-buckets--compact">
         <div class="surface-bucket">
           <h2 class="surface-bucket__label">In your terminal</h2>
           <div class="surface-bucket__chips">
@@ -1105,16 +1104,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            once, from one recording. Every pane is the committed artifact the
            landing's tests hold the hero to -- nothing on this page is
            authored output. --%>
-      <div class="mt-16">
-        <h2 class="heading-xl mb-3">Four encodings of one frame</h2>
-        <p class="body-text-dim max-w-2xl mb-6">
-          One recorded render of <code class="text-axol-coral">pulse.exs</code>,
-          encoded per surface: cells for the terminal, a component in a page
-          for the browser, ANSI down a channel for SSH, and a structure for an
-          agent, because what an agent reads is a tree rather than a picture.
+      <div class="surface-snapshots">
+        <h2 class="heading-xl mb-2">One snapshot, four surfaces</h2>
+        <p class="body-text-dim max-w-2xl mb-4">
+          These panes are static. They show the same <code class="text-axol-coral">pulse.exs</code>
+          frame as terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
         </p>
 
-        <div class="grid gap-4 lg:grid-cols-2">
+        <div class="surface-snapshot-grid">
           <div class="terminal-chrome">
             <.terminal_chrome title="terminal" />
             <div class="terminal-chrome-body">
@@ -1468,22 +1465,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
-        <h1 id="payments-title" class="heading-2xl mb-3">Agents that settle, privately.</h1>
+        <h1 id="payments-title" class="heading-2xl mb-3">Agents that settle privately.</h1>
         <p class="body-text max-w-2xl">
-          First funded cross-chain settlement on 2026-06-28; the USDC transfer
-          offering has been live on Base since 2026-07-20. What a transfer costs
-          is set by the agent's trust score and by what it is moving. The rates
-          below are the solver's own published schedule, mirrored in
-          <code>Raxol.Payments.FeeSchedule</code> and pinned to it in CI.
+          First funded settlement: 2026-06-28. Base USDC offering: live since
+          2026-07-20. Fees follow trust score and asset type; CI pins this
+          table to <code>Raxol.Payments.FeeSchedule</code>.
         </p>
-        <%!-- Body copy, not a caption. `.caption-text` tops out at 10.4px,
-             the floor of the type scale, and these three paragraphs carry the
-             pricing rules the section exists to state -- the fee layers, the
-             never-discounted solver floor, why a Tron leg beats privacy. They
-             sat 5px under the table they explain. --%>
         <p class="body-text-dim mt-3">
-          Early, and labeled: the payments packages are at <%= @payments_version %> beside a 2.6
-          core. Dated on-chain events over claims.
+          Payments packages are <%= @payments_version %>; core is 2.6.
+          Different maturity.
         </p>
       </div>
 
@@ -1505,32 +1495,25 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-10">
-        Three additive layers: the solver spread, the Xochi venue cut, and the
-        raxol routing cut. A tier discounts the venue and routing layers only.
-        The solver spread (<%= @solver_floor.stable %> bps stable,
-        <%= @solver_floor.volatile %> bps volatile) is never discounted, because
-        it is the floor that keeps a fill cash-positive. There is no zero-fee
-        tier. An intent that originates from an ACP job pays no routing layer:
-        that cut is already in the job budget.
+        Fees have three layers: solver spread, Xochi venue cut, and raxol
+        routing cut. Tiers discount Xochi and routing only; solver spread is
+        never discounted (<%= @solver_floor.stable %> bps stable,
+        <%= @solver_floor.volatile %> bps volatile), so there is no zero-fee
+        tier. ACP jobs skip the routing cut; it is already in the job budget.
       </p>
 
-      <h2 class="name-coral mb-2">Privacy is a settlement mode, not a price</h2>
+      <h2 class="name-coral mb-2">Privacy changes delivery, not price</h2>
       <p class="body-text-dim max-w-2xl mb-10">
-        Every corridor settles one of three ways, and the choice is independent
-        of the fee tier: <strong>public</strong> on the destination chain,
-        <strong>stealth</strong> to a one-time address derived per payment
-        (ERC-5564), or <strong>shielded</strong> as a note posted into an Aztec
-        execution environment. Trust is proven with zero-knowledge attestations
-        rather than disclosed, so reaching a lower-fee tier reveals less about
-        the agent, not more.
+        Each corridor settles public, stealth (ERC-5564 one-time address), or
+        shielded (Aztec note). ZK attestations prove trust tier without
+        disclosing the underlying score.
       </p>
 
-      <h2 class="name-coral mb-2">Reach, from the solver's own matrix</h2>
+      <h2 class="name-coral mb-2">Reach, pulled from Xochi</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Rendered server-side from the Xochi solver's capability matrix
-        (<code>Raxol.Payments.Xochi.Capabilities.get/1</code>, five-minute
-        cache). When the endpoint is unreachable it degrades to the static
-        registry and says so. New solver chains light up with zero redeploy.
+        Pulled from <code>Raxol.Payments.Xochi.Capabilities.get/1</code> with a
+        five-minute cache. If live fetch fails, the page uses the static
+        registry and labels it cached.
       </p>
 
       <div class="reach">
@@ -1567,19 +1550,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           </div>
         </div>
         <div class="reach-foot">
-          every corridor settles public,
-          <span class="set-stealth">stealth</span> (ERC-5564 one-time address), or
-          <span class="set-shielded">shielded</span> (Aztec), chosen per payment
+          settles public, <span class="set-stealth">stealth</span>, or
+          <span class="set-shielded">shielded</span> per payment
         </div>
       </div>
 
-      <h2 class="name-coral mt-14 mb-2">How an agent pays</h2>
+      <h2 class="name-coral mt-12 mb-2">How an agent pays</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        The page above prices a transfer and says where it can go. This is the
-        part an agent actually touches: which rail a request takes, and what it
-        can call. Both are read out of the code at render rather than written
-        here: the rails from <code>Raxol.Payments.Router.select/1</code>, the
-        tools from the Actions themselves.
+        Agents pick rails through <code>Raxol.Payments.Router.select/1</code>.
+        Actions expose the calls. Both tables are code-derived.
       </p>
 
       <div class="ladder ladder--pair mb-4" role="table" aria-label="Protocol routing">
@@ -1594,21 +1573,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-10">
-        Read the last two together. A Tron leg wins over privacy because the
-        relay rail is public-only, so a stealth request bound for Tron routes
-        there and is then refused at the Action rather than quietly settling in
-        public. Riddler is reachable but never auto-selected: it is the B2B
-        path and it is cash-negative for an agent.
+        Tron forces the relay rail, which is public-only. A stealth transfer to
+        Tron routes to relay, then the Action refuses it. Riddler stays manual:
+        B2B path, cash-negative for agents.
       </p>
 
       <h2 class="name-coral mb-2">
         <%= length(@payment_actions) %> Actions on the agent
       </h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        An Action marked <strong>moves funds</strong> is denied on the LLM
-        tool-call path unless the agent opts in with a
-        <code>:tool_authorizer</code>, so a model that hallucinates a transfer
-        cannot execute one. Reads are not gated.
+        Fund-moving Actions are blocked from LLM tool calls unless
+        <code>:tool_authorizer</code> is set. Reads stay open.
       </p>
 
       <%!-- Two clusters rather than thirteen hairline rows with the same word
@@ -1686,17 +1661,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     assigns = assign(assigns, token: @token, token_pair_url: @token_pair_url)
 
     ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="token-title">
-      <div class="mb-8">
+    <section class="landing-section py-10 md:py-16 measure" aria-labelledby="token-title">
+      <div class="mb-6">
         <h1 id="token-title" class="heading-2xl mb-3">${@token.symbol}</h1>
       </div>
 
       <p class="body-text-dim max-w-2xl mb-4">
-        The project token, on <%= @token.chain_name %>. It is not a settlement
-        asset: the corridors quote, route and settle in stablecoins.
+        Project token on <%= @token.chain_name %>. Corridors quote, route, and
+        settle in stablecoins, not $<%= @token.symbol %>.
       </p>
 
-      <div class="reach">
+      <div class="reach reach--compact">
         <div class="reach-bar">
           <span><span class="reach-verb">ERC-20</span> <%= @token.chain_name %> (<%= @token.chain_id %>)</span>
           <a href={@token_pair_url} rel="noopener" class="src-badge">live pair &rarr;</a>
@@ -1720,20 +1695,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="max-w-2xl">
-        <h2 class="heading-xl mt-14 mb-3">What it is not</h2>
+        <h2 class="heading-xl mt-10 mb-3">What it is not</h2>
         <p class="body-text mb-4">
-          Not a key to the framework: every package is open source and runs
-          the same without it. Not a fee lever: corridor fees follow the
-          attestation tiers on the
-          <a href="/payments" class="text-sky">payments page</a>, not token
-          balances. Not priced here: a market number would be stale by the
-          next request, which is why the pair link above goes to a live venue
-          instead of quoting one.
+          It is not a settlement asset. It does not unlock the framework; every
+          package is open source. It does not set fees; payments use attestation
+          tiers. It is not priced here; use the live pair.
         </p>
         <p class="body-text-dim">
-          The two addresses above are the durable facts. Verify them on
-          chain <%= @token.chain_id %> before trusting anything a third party
-          says about this token, this page included.
+          The addresses above are the durable facts. Payment rails live on
+          <a href="/payments" class="link-subtle">/payments</a>. Verify this
+          token on chain <%= @token.chain_id %>.
         </p>
       </div>
     </section>
