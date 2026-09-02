@@ -72,9 +72,9 @@ Prove the seller stack end-to-end against the in-memory backend + mock adapter
 before going live:
 
 ```
-MIX_ENV=test mix test test/raxol/acp/console/ \
-  test/raxol/acp/job_session/provider_checkpoint_test.exs \
-  test/raxol/acp/seller/resync_recovery_test.exs
+MIX_ENV=test mix test test/raxol/earn/console/ \
+  test/raxol/earn/job_session/provider_checkpoint_test.exs \
+  test/raxol/earn/seller/resync_recovery_test.exs
 mix raxol_earn.bench      # drives synthetic jobs through the seller stack
 ```
 
@@ -132,7 +132,7 @@ with `buyer_provider_adapter` = `ProviderAdapter.Mock` and
 `buyer_job_id_resolver` = `JobIdResolver.Mock`. The buyer reserves, writes
 `createJob`, resolves the job_id, and tracks the job; dispatching a `:budget_set`
 then a `:submitted` event drives `fund` -> evaluate -> `complete`. This is what
-`test/raxol/acp/buyer/queue_test.exs` exercises.
+`test/raxol/earn/buyer/queue_test.exs` exercises.
 
 ### 6c. Live dry-run on Sepolia (operator)
 

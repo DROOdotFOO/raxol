@@ -94,8 +94,8 @@ jobs:
       - name: Set up Erlang/Elixir
         uses: erlef/setup-beam@v1
         with:
-          otp-version: '29.0.3'
-          elixir-version: '1.20.2'
+          version-file: mise.toml
+          version-type: strict
 
       - name: Install pinned Zig
         run: |
@@ -132,8 +132,8 @@ jobs:
       - name: Set up Erlang/Elixir
         uses: erlef/setup-beam@v1
         with:
-          otp-version: '29.0.3'
-          elixir-version: '1.20.2'
+          version-file: mise.toml
+          version-type: strict
 
       - name: Install pinned Zig
         shell: pwsh

@@ -646,7 +646,7 @@ alias Raxol.UI.Components.Modal
 
 ---
 
-## Progress Indicators
+## Progress indicators
 
 Show how far along something is, or that work is happening.
 
@@ -803,7 +803,7 @@ Options: `color`, `width`, `offset`, `style` (`:solid`), `components` (list of c
 
 ---
 
-## Using Components Directly
+## Using components directly
 
 The View DSL functions cover most needs. When you need full control (handling events, managing component state, accessing all options) use the component modules directly:
 
@@ -830,7 +830,7 @@ All component modules follow the same pattern: `init/1` -> `handle_event/3` -> `
 
 ---
 
-## Quick Reference
+## Quick reference
 
 | Component     | DSL function      | Module path            | Interactive? |
 | ------------- | ----------------- | ---------------------- | ------------ |
@@ -872,7 +872,7 @@ All component module paths are under `Raxol.UI.Components.*`.
 
 ---
 
-## Running Examples
+## Running examples
 
 ```bash
 # Interactive playground with all demos
@@ -893,8 +893,6 @@ mix run examples/apps/showcase_app.exs
 
 # Core Concepts
 
-The fundamentals of Raxol's architecture.
-
 ## The Elm Architecture (TEA)
 
 Most Raxol apps use TEA, four callbacks that form a loop:
@@ -912,13 +910,13 @@ See the [Quickstart](QUICKSTART.md) for a full walkthrough, or browse the [Examp
 
 ---
 
-## Buffers: The Canvas Underneath
+## Buffers: The canvas underneath
 
 Most Raxol apps never touch buffers directly. The View DSL and layout engine handle all of this for you. But understanding the layer underneath helps when debugging, optimizing, or building custom renderers.
 
 A buffer is a 2D grid of cells representing terminal content, a canvas for text.
 
-### Buffer Structure
+### Buffer structure
 
 ```elixir
 %{
@@ -938,7 +936,7 @@ A buffer is a 2D grid of cells representing terminal content, a canvas for text.
 
 Each buffer has width x height dimensions in characters. Lines are rows top to bottom. Each cell contains a `char` (single grapheme) and a `style` map (colors, bold, etc.).
 
-### Immutable & Functional
+### Immutable and functional
 
 ```elixir
 # Each operation returns a NEW buffer
@@ -946,9 +944,10 @@ new_buffer = Buffer.write_at(old_buffer, 5, 3, "Text")
 # old_buffer is unchanged
 ```
 
-No server processes required. Pure data structure operations. Optimal for diffing and caching.
+These are pure data structure operations, with no server process behind them,
+which is what makes diffing and caching cheap.
 
-### Cell Coordinates
+### Cell coordinates
 
 Buffers use **(x, y)** coordinates, both 0-indexed:
 
@@ -968,9 +967,9 @@ buffer = Buffer.write_at(buffer, 10, 5, "Hello")
 
 ---
 
-## The Rendering Pipeline
+## The rendering pipeline
 
-### Stage 1: Buffer Construction
+### Stage 1: Buffer construction
 
 Build the buffer by combining operations:
 
@@ -997,7 +996,7 @@ diff = Renderer.render_diff(old_buffer, new_buffer)
 
 Without diffing you'd clear and redraw everything. With diffing, only changed cells are written, bringing typical updates to ~2ms.
 
-### Stage 3: Output Generation
+### Stage 3: Output generation
 
 ```elixir
 # Full output (for debugging)
@@ -1010,7 +1009,7 @@ IO.write(Renderer.apply_diff(diff))
 html = TerminalBridge.buffer_to_html(buffer)
 ```
 
-### The Complete Pipeline
+### The complete pipeline
 
 ```
 [User Code]
@@ -1033,7 +1032,7 @@ html = TerminalBridge.buffer_to_html(buffer)
 
 ---
 
-## State Management
+## State management
 
 **TEA is the canonical app model.** A Raxol application is a single module with `init/1`, `update/2`, and `view/1`, started via `Raxol.start_link/2`. One model, one update function, one view. Don't reach for alternatives unless TEA genuinely doesn't fit.
 
@@ -1079,7 +1078,7 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 ---
 
-## Performance Model
+## Performance model
 
 ### Targets
 
@@ -1093,7 +1092,7 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 60 FPS = 16ms frame budget.
 
-### Optimization Tips
+### Optimization tips
 
 **Pipeline operations** instead of intermediate variables. Elixir optimizes pipelines better.
 
@@ -1101,7 +1100,7 @@ Avoid hand-rolling your own `loop(state)` recursive function. That was a pre-Rax
 
 **Reuse style references.** Avoid allocating duplicate style maps.
 
-**Use `fill_area`** instead of looping `set_cell`. Significantly faster for area fills.
+**Use `fill_area`** instead of looping `set_cell`. Much faster for area fills.
 
 ### Memory
 
@@ -1113,11 +1112,10 @@ Keep buffers reasonably sized. Don't hold references to old buffers you no longe
 
 ---
 
-## Design Philosophy
+## Design principles
 
-**Functional first.** All buffer operations return new buffers, never mutate. Easier to reason about, no hidden side effects, safe for concurrent access.
-
-**Composable.** Complex UIs are compositions of simple operations:
+Buffer operations return new buffers and never mutate, so they compose by
+piping:
 
 ```elixir
 def create_dashboard(buffer, data) do
@@ -1129,34 +1127,34 @@ def create_dashboard(buffer, data) do
 end
 ```
 
-**Minimal dependencies (core).** Raxol.Core depends only on telemetry at runtime. Minimal install size, no conflicts, works everywhere Elixir runs.
+`Raxol.Core` depends only on telemetry at runtime, so it runs anywhere Elixir
+does. Adoption is incremental: buffers and rendering for scripts, the View DSL
+for interactive apps, the full framework when you want LiveView and SSH.
 
-**Incremental adoption.** Use what you need. Buffers and rendering for scripts, the View DSL for interactive apps, or the full framework with LiveView and SSH.
+The design law behind all of this is in [Philosophy](../PHILOSOPHY.md).
 
 ---
 
-## Common Questions
+## Common questions
 
 ### Why not just write ANSI codes directly?
 
-Buffers enable diffing. By maintaining the full state, we can calculate minimal updates instead of redrawing everything.
+Buffers enable diffing. Holding the full state lets the renderer calculate
+minimal updates instead of redrawing everything.
 
 ### Can I skip buffers entirely?
 
-You can! Buffers are optional. But they give you automatic diffing, state inspection, HTML rendering, and testing utilities.
+Yes, they are optional. You give up automatic diffing, state inspection, HTML
+rendering, and the testing utilities that read cells.
 
-### How does Raxol compare to ncurses, Bubble Tea, etc.?
+### How does Raxol compare to ncurses, Bubble Tea, and Ratatui?
 
-| Feature      | Raxol          | ncurses     | blessed    |
-| ------------ | -------------- | ----------- | ---------- |
-| Language     | Elixir         | C           | Node.js    |
-| Paradigm     | Functional     | Imperative  | Imperative |
-| Web Support  | Yes (LiveView) | No          | No         |
-| Dependencies | telemetry      | System libs | Many       |
+See [Why OTP](../WHY_OTP.md) for the TUI framework comparison, and
+[Why Raxol](../WHY_RAXOL.md) for the agent runtime one.
 
 ### Can I use Raxol alongside other libraries?
 
-Yes. Raxol.Core is just data structures:
+Yes. `Raxol.Core` is just data structures:
 
 ```elixir
 buffer = Buffer.create_blank_buffer(80, 24)
@@ -1168,27 +1166,22 @@ MyCustomRenderer.render(output)
 
 ---
 
-## Next Steps
+## Next steps
 
-- [Quickstart](QUICKSTART.md) - Build your first app
-- [Cookbook](../cookbook/README.md) - Practical patterns and recipes
-- [API Reference](../core/BUFFER_API.md) - Complete function documentation
-- [Architecture](../core/ARCHITECTURE.md) - Implementation details
+- [Quickstart](QUICKSTART.md): build your first app
+- [Cookbook](../cookbook/README.md): practical patterns and recipes
+- [Buffer API](../core/BUFFER_API.md): complete function documentation
+- [Architecture](../core/ARCHITECTURE.md): implementation details
 
-For a full working example showing dashboard layout, live stats, and OTP differentiators, see `examples/demo.exs`.
+`examples/demo.exs` is a full working app with dashboard layout and live stats.
 
 
 <!-- docs/getting-started/QUICKSTART.md -->
 
-# Quickstart Guide
+# Quickstart
 
-Let's build a raxol app. By the end of this page you'll have a working counter running in your terminal.
-
-What you'll learn:
-
-- The four callbacks every Raxol app implements
-- How to handle keyboard input and button clicks
-- How the View DSL builds layouts
+A counter app, running in your terminal, using the four callbacks every Raxol
+app implements.
 
 ## Install
 
@@ -1209,7 +1202,29 @@ def deps do
 end
 ```
 
-## Your First App
+## Headless / CI setup
+
+The tutorial app below needs a real terminal, but building and testing Raxol
+does not. Prerequisites: Elixir/OTP (versions in the repo's `mise.toml`)
+and a C toolchain for the termbox2 NIF (`make` + `cc`; on Debian/Ubuntu,
+`apt-get install build-essential`). From a fresh clone:
+
+```bash
+mix local.hex --force        # fresh machines and CI: install Hex without a prompt
+mix deps.get
+mix compile                  # builds the termbox2 NIF
+SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test --exclude slow --exclude integration --exclude docker
+MIX_ENV=test mix raxol.rate  # RATE: render-determinism golden suite
+```
+
+`SKIP_TERMBOX2_TESTS=true` excludes the tests that need a real local terminal;
+CI sets the same variable. Plain `mix test` without the exclude flags also
+runs integration suites that need external services (PostgreSQL for the
+workflow checkpoint tests), so stick to the command above. If `HOME` is
+read-only in your sandbox, point `MIX_HOME` and `HEX_HOME` at a writable
+directory first.
+
+## Your first app
 
 Every Raxol app follows The Elm Architecture (TEA) with four callbacks:
 
@@ -1281,8 +1296,6 @@ receive do
 end
 ```
 
-**What's happening here?**
-
 - `init/1` returns a plain map, which is your entire app state
 - `update/2` pattern-matches on messages and returns `{new_state, commands}`. The empty list `[]` means "no side effects"
 - `view/1` builds the UI from state using the View DSL macros (`column`, `row`, `box`)
@@ -1294,7 +1307,7 @@ Save as `lib/my_app.ex` and run:
 mix run lib/my_app.ex
 ```
 
-## How It Works
+## How it works
 
 ```
                 +---> view(model) ---> Terminal
@@ -1337,7 +1350,7 @@ divider()                              # Horizontal line
 spacer()                               # Flexible space
 ```
 
-## Adding Live Updates
+## Adding live updates
 
 Use `subscribe/1` to get periodic messages:
 
@@ -1367,37 +1380,56 @@ This generates an Application module with a supervision tree. Run with:
 mix run --no-halt
 ```
 
-## What You Just Built
+## If the terminal is left in a bad state
 
-That counter is a complete Raxol app: `init/update/view` is the whole API. Everything else builds on this loop.
+A Raxol app puts your terminal into raw mode, and full-screen apps also switch to
+the alternate screen. Both get restored on the way out. But if the app dies hard,
+a `kill -9` or a VM crash, nothing runs that restore and you land back in a shell
+with no echo and no line editing.
 
-Try `mix raxol.playground` for an interactive catalog of 30 Component demos you can browse, search, and filter. It's the fastest way to see what's available.
+Nothing is broken. Reset it:
 
-**Next steps:**
+```bash
+reset
+```
 
-- [Component Gallery](COMPONENT_GALLERY.md): All Components with examples
-- [Core Concepts](CORE_CONCEPTS.md): Buffers, rendering pipeline, and how it all fits together
-- [Building Apps](../cookbook/BUILDING_APPS.md): Patterns for real apps (state machines, scrollable lists, keyboard shortcuts)
+If you cannot see what you are typing, that still works blind. Type it and hit
+Enter. `stty sane` is the lighter version, and it fixes echo without clearing the
+screen.
 
-### Explore Further
+vim and tmux leave the same mess when you SIGKILL them. It comes with the
+territory for full-screen terminal programs. [Why OTP](../WHY_OTP.md#crash-isolation)
+covers what can take the VM down that way in the first place.
 
-Features worth exploring:
+## Where to go next
 
-**SSH App Serving**: Serve your app over SSH. Each connection gets its own process:
+That counter is a complete Raxol app. `init/update/view` is the whole API, and
+everything else builds on this loop.
+
+- [Component Gallery](COMPONENT_GALLERY.md): all Components with examples
+- [Core Concepts](CORE_CONCEPTS.md): buffers, the rendering pipeline, and how they fit together
+- [Building Apps](../cookbook/BUILDING_APPS.md): state machines, scrollable lists, keyboard shortcuts
+
+`mix raxol.playground` browses 40 Component demos interactively, with search and
+filtering.
+
+### Things to try
+
+**SSH serving.** Serve your app over SSH. Each connection gets its own process:
 
 ```bash
 mix run examples/ssh/ssh_counter.exs
 # Then: ssh localhost -p 2222
 ```
 
-**Hot Code Reload**: Edit your view function while the app is running:
+**Hot code reload.** Edit your view function while the app is running:
 
 ```bash
 iex -S mix run examples/dev/hot_reload_demo.exs
 # Edit the view/1 function and save; UI updates automatically
 ```
 
-**Crash Isolation**: Components run in separate processes. One crash doesn't take down the app:
+**Crash isolation.** Components run in separate processes. One crash doesn't take down the app:
 
 ```bash
 mix run examples/components/process_component_demo.exs
@@ -1416,7 +1448,7 @@ Working examples to study:
 
 Most UI frameworks implement crash recovery with try/catch, state management with global stores, concurrency with goroutines or async/await, distribution with gRPC. Raxol gets all of that from OTP.
 
-## The Natural Mapping
+## The natural mapping
 
 | OTP concept   | TUI equivalent            | What you get                                                     |
 | ------------- | ------------------------- | ---------------------------------------------------------------- |
@@ -1431,7 +1463,7 @@ Most UI frameworks implement crash recovery with try/catch, state management wit
 
 These aren't analogies. They're the actual implementations.
 
-## What This Means in Practice
+## What this means in practice
 
 ### Crash isolation
 
@@ -1442,6 +1474,21 @@ process_component(UnstableWidget, %{path: "/dev/random"})
 ```
 
 The supervisor restarts the component and renders the next frame. OTP was built for this.
+
+There is one place this stops. On Unix and macOS the terminal backend is a
+[termbox2](../packages/raxol_terminal/lib/termbox2_nif/) NIF, and a NIF runs
+inside the VM's own address space. Segfault there and the whole node goes down,
+supervisor or not.
+
+The blast radius is small, though. That NIF only draws: cell writes, cursor
+moves, present. Input never touches it. Keystrokes arrive over OTP's own
+`prim_tty`, and a [canary in CI](../.github/workflows/ci-unified.yml) watches
+that path in case OTP moves it. Windows skips the NIF entirely and falls back to
+the pure Elixir `IOTerminal`, so nothing native is loaded there at all.
+
+When the VM does die that way it dies without putting your terminal back. Run
+`reset`; there is [a note in the
+quickstart](getting-started/QUICKSTART.md#if-the-terminal-is-left-in-a-bad-state).
 
 ### Hot reload
 
@@ -1491,13 +1538,15 @@ An agent is a TEA module where input comes from LLMs. Same `init/update/view`, s
 
 Agents are processes. Teams are supervision trees.
 
-## The Tradeoff
+## The tradeoff
 
-Raxol is slower per-operation than Rust (Ratatui) or Go (Bubble Tea). Buffer creation is 25us vs 0.5us. But a full frame still completes in 2.1ms, leaving 87% of the 60fps budget for your code.
+Raxol is slower per operation than Rust (Ratatui) or Go (Bubble Tea), but a
+full frame remains within a 60fps budget. Current numbers and methodology live
+in [Benchmarks](bench/README.md); keeping them there avoids stale copies.
 
 You give up raw microbenchmark speed. You get process isolation, hot reload, distribution, SSH, and multi-target rendering. For anything that has to keep running while you change it, that's a good trade.
 
-## Further Reading
+## Further reading
 
 - [Architecture](core/ARCHITECTURE.md): how the render pipeline works
 - [Agent Framework](features/AGENT_FRAMEWORK.md): AI agents as TEA apps
@@ -1593,10 +1642,9 @@ Raxol has one law, applied at every scale:
 > thing must be unrepresentable.**
 
 Everything else in this repository is that law showing up at a different
-altitude. This document names the law once, shows where it recurs, and states
-what it implies for anything visual built on the framework. It is the "why"
-behind the rules that other documents state as "what" (ADR-0029,
-`docs/WHY_OTP.md`, `docs/core/RENDERING.md`, the design-science material).
+altitude. It is the "why" behind the rules other documents state as "what"
+(ADR-0029, `docs/WHY_OTP.md`, `docs/core/RENDERING.md`, the design-science
+material).
 
 ## The law at each scale
 
@@ -1709,7 +1757,7 @@ product. Concretely:
 
 # Packages
 
-Raxol ships as a main package plus 15 focused subsystems. Use the main `raxol` package for the full framework, or grab individual packages for narrower needs.
+Raxol ships as a main package plus 17 focused subsystems. Use the main `raxol` package for the full framework, or take individual packages for narrower needs.
 
 ## Main
 
@@ -1738,6 +1786,10 @@ Raxol ships as a main package plus 15 focused subsystems. Use the main `raxol` p
 | `raxol_agent_client_protocol` (pre-alpha)                  | `path: "packages/raxol_agent_client_protocol"` | Editor<->agent Agent Client Protocol (agentclientprotocol.com) |
 | `raxol_symphony` (0.2.0, pre-alpha)                        | `path: "packages/raxol_symphony"` | Tracker-driven coding-agent orchestrator |
 | `raxol_gateway` (pre-alpha)                                | `path: "packages/raxol_gateway"`  | Unified messaging gateway (multi-platform) |
+| `raxol_cli` (pre-alpha)                                    | `path: "packages/raxol_cli"`      | The `raxol` command (`code`, `p`, `acp`, `agent`, `playground`, `new`), packaged as a self-contained Burrito binary |
+| `raxol_console` (pre-alpha)                                | `path: "packages/raxol_console"`  | Boots a Virtuals ACP Console agent package onto the gateway stack |
+
+The **coding agent** layers as: `Backend.Selector` (LLM backend adapter) -> the **Harness** engine (the event/command contract `Raxol.Agent.Contract` and the durable journal `Raxol.Agent.Journal` in `raxol_agent`, the projections and surface widgets `Raxol.Harness.*` in main `raxol`) -> the product surfaces `mix raxol.code` (interactive TUI, also over SSH), `mix raxol.p` (headless one-shot), and `mix raxol.acp` (ACP on stdio, for editors), all three in `raxol_agent` -> `raxol_symphony`, which orchestrates many agent runs above them. The Harness is the engine; the `mix raxol.harness.*.bless` tasks only regenerate its golden/fixture test snapshots.
 
 ## Surfaces
 
@@ -1763,9 +1815,11 @@ raxol_payments --> raxol_agent (compile-time only)
 raxol_earn      --> raxol_payments (runtime), raxol_mcp + raxol_agent (compile-time only)
 raxol_agent_client_protocol --> (none; jason only, zero raxol deps)
 raxol_symphony --> raxol_core, raxol_agent, raxol_mcp (all optional)
+raxol_cli      --> raxol, raxol_agent (+ raxol_agent_client_protocol for `raxol acp`)
+raxol_console  --> raxol_agent, raxol_gateway, raxol_earn
 
 raxol_speech   --> raxol_core (+ bumblebee/nx/exla optional for STT)
-raxol_telegram --> raxol_core (+ raxol/telegex optional)
+raxol_telegram --> raxol_core (+ raxol/telegex/raxol_gateway optional)
 raxol_watch    --> raxol_core (+ pigeon optional for APNS/FCM)
 raxol_gateway  --> raxol_core (+ raxol_agent optional)
 
@@ -1782,105 +1836,36 @@ See [Hex Publishing](https://github.com/DROOdotFOO/raxol/blob/master/CLAUDE.md#h
 
 <!-- docs/features/README.md -->
 
-# Features
+# Feature catalog
 
-## Framework
+Use this page to find a feature; each linked page owns its details.
 
-### [Agent Framework](AGENT_FRAMEWORK.md)
+| Area | Feature | Purpose |
+| --- | --- | --- |
+| Agents | [Agent framework](AGENT_FRAMEWORK.md) | TEA agents, backends, tools, and teams |
+| Agents | [Coding agent](CODING_AGENT.md) | Interactive, headless, SSH, ACP, and MCP sessions |
+| Agents | [Memory](MEMORY.md) | Recall providers and the user model |
+| Agents | [Self-improvement](SELF_IMPROVEMENT.md) | After-turn review and skill curation |
+| Agents | [Symphony](SYMPHONY.md) | Tracker-driven coding-agent orchestration (pre-alpha) |
+| Protocols | [MCP](MCP.md) | Component trees projected as agent tools |
+| Protocols | [Editor ACP](EDITOR_ACP.md) | Editor-to-agent JSON-RPC (pre-alpha) |
+| Commerce | [Agentic commerce](AGENTIC_COMMERCE.md) | Wallets, spending controls, and HTTP 402 payment |
+| Commerce | [Agent Commerce Protocol](ACP.md) | Seller-side services and settlement (pre-alpha) |
+| Extensibility | [Plugin SDK](PLUGIN_SDK.md) | Plugin manifests, helpers, and generator |
+| Runtime | [Sensor fusion](SENSOR_FUSION.md) | Polling, fusion, gauges, and sparklines |
+| Runtime | [Distributed swarm](DISTRIBUTED_SWARM.md) | CRDT state, discovery, and topology |
+| Runtime | [Adaptive UI](ADAPTIVE_UI.md) | Behavior-driven layout recommendations |
+| Developer tools | [Recording and replay](RECORDING_REPLAY.md) | Asciinema capture and playback |
+| Developer tools | [Time-travel debugging](TIME_TRAVEL_DEBUGGING.md) | Snapshot, step, and restore |
+| Developer tools | [REPL](REPL.md) | Sandboxed Elixir evaluation |
+| Developer tools | [Virtual filesystem](FILESYSTEM.md) | Pure in-memory filesystem and agent actions |
+| Surfaces | [Gateway](GATEWAY.md) | Shared adapter for messaging platforms (pre-alpha) |
+| Surfaces | [Telegram](TELEGRAM.md) | TEA apps as Telegram bots |
+| Surfaces | [Speech](SPEECH.md) | TTS, Whisper STT, and voice commands |
+| Surfaces | [Watch](WATCH.md) | APNS/FCM notifications and actions |
+| Terminal | [Cursor effects](CURSOR_EFFECTS.md) | Trails, glow, and interpolation |
 
-AI agents as TEA apps. OTP supervision, crash isolation, inter-agent messaging, LLM streaming to Anthropic/OpenAI/Ollama/Kimi/Lumo. Turn driver, native multi-vendor harness, ALLOW/ASK/DENY authorization, conversation item-log, reverse co-drive tunnel.
-
-### [Coding Agent](CODING_AGENT.md)
-
-`mix raxol.code`: an interactive terminal coding assistant wearing the axol face. Gated tools, plan mode, persistent sessions, slash commands.
-
-### [Self-Improvement](SELF_IMPROVEMENT.md)
-
-An agent that gets more capable the longer it runs. After-turn reviewer, agent-authored skills, and a Curator that ages them, all OTP-supervised and reversible.
-
-### [Memory](MEMORY.md)
-
-Provider stack, full-text session recall, and a dialectic user model. Pure-Elixir BM25-lite, no SQLite or NIF.
-
-### [Agentic Commerce](AGENTIC_COMMERCE.md)
-
-Autonomous payments for agents. Wallet management, spending controls, x402/MPP auto-pay, Xochi cross-chain settlement.
-
-### [Agent Commerce Protocol](ACP.md)
-
-The seller side. Sell agent services on Base with on-chain settlement and a per-job state machine (the v2 hook/event model). Pre-alpha.
-
-### [Editor Agent Client Protocol](EDITOR_ACP.md)
-
-The JSON-RPC protocol between a code editor (Zed and others) and an AI coding agent. Both roles, durable resumable sessions, zero raxol deps. Distinct from the commerce ACP above. Pre-alpha.
-
-### [Symphony](SYMPHONY.md)
-
-Coding-agent orchestrator. Polls a tracker (Linear, GitHub, Memory), claims eligible issues, isolates each in a workspace, runs a coding agent to completion. Pre-alpha.
-
-### [MCP](MCP.md)
-
-MCP as a first-class rendering target. Component tree -> auto-derived tools, focus lens, structured screenshots, pipe-friendly test harness.
-
-### [Plugin SDK](PLUGIN_SDK.md)
-
-`use Raxol.Plugin` macro, manifest, testing helpers, and the `mix raxol.gen.plugin` generator.
-
-### [Sensor Fusion](SENSOR_FUSION.md)
-
-Poll sensors, fuse readings with weighted averaging and thresholds, render gauges and sparklines.
-
-### [Distributed Swarm](DISTRIBUTED_SWARM.md)
-
-CRDTs, node monitoring, topology election, tactical overlay. Discovery via libcluster with gossip, epmd, DNS, or Tailscale.
-
-### [Adaptive UI](ADAPTIVE_UI.md)
-
-Track usage patterns, recommend layout changes, animate transitions with a feedback loop.
-
-### [Recording & Replay](RECORDING_REPLAY.md)
-
-Capture terminal sessions as asciinema v2 `.cast` files. Replay with interactive controls.
-
-### [REPL](REPL.md)
-
-Sandboxed Elixir REPL with three safety levels, persistent bindings, and virtual filesystem.
-
-### [Time-Travel Debugging](TIME_TRAVEL_DEBUGGING.md)
-
-Snapshot every `update/2` cycle. Step back, forward, jump to any point, restore historical state.
-
-### [Virtual File System](FILESYSTEM.md)
-
-Pure functional in-memory VFS with REPL helpers and 7 LLM-callable agent actions.
-
-## Surfaces
-
-### [Unified Messaging Gateway](GATEWAY.md)
-
-One daemon connecting many chat platforms through a shared adapter contract. Per-chat OTP sessions, DM pairing, cross-platform handoff. Pre-alpha.
-
-### [Speech](SPEECH.md)
-
-TTS for accessibility announcements, Whisper STT, 20 default voice commands.
-
-### [Telegram](TELEGRAM.md)
-
-Run a TEA app as a Telegram bot. Per-chat sessions, inline keyboards, HTML `<pre>` output.
-
-### [Watch](WATCH.md)
-
-APNS/FCM push from accessibility events. Debounced, prioritized, tap-to-event actions.
-
-## Terminal
-
-### [Cursor Effects](CURSOR_EFFECTS.md)
-
-Visual trails and glow with configurable colors, presets, and smooth interpolation.
-
-## Performance
-
-Full frame in 2.1ms on M1 Pro, 13% of the 60fps budget. See [benchmarks](../bench/README.md) for methodology.
+For measured performance, see [Benchmarks](../bench/README.md).
 
 
 <!-- docs/features/ACP.md -->
@@ -1897,7 +1882,7 @@ Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_earn/`.
 > protocol between a code editor and an AI coding agent). Different acronym expansion,
 > different domain.
 
-## Job Lifecycle
+## Job lifecycle
 
 Every job is a state machine. One supervised `Raxol.Earn.JobSession` runs per active job, registered by `{chain_id, job_id}`:
 
@@ -1923,7 +1908,7 @@ Every job is a state machine. One supervised `Raxol.Earn.JobSession` runs per ac
 {:ok, :submitted} = Raxol.Earn.JobSession.submit({8453, "job-42"}, deliverable)
 ```
 
-The seller-side glue is `Raxol.Earn.JobSession.Provider`: for each lifecycle step it invokes the offering `Handler` (via `JobSession.HandlerSeam`), writes the hook call on-chain through `HookClient` + `ProviderAdapter` (the commit point -- a failed write leaves the session untouched), then mirrors the resulting status with `apply_event/3`.
+The seller-side glue is `Raxol.Earn.JobSession.Provider`: for each lifecycle step it invokes the offering `Handler` (via `JobSession.HandlerSeam`), writes the hook call on-chain through `HookClient` + `ProviderAdapter` (the commit point: a failed write leaves the session untouched), then mirrors the resulting status with `apply_event/3`.
 
 ## Offerings
 
@@ -1954,13 +1939,13 @@ end
 
 The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed `Registry`. `JobSession.Provider` invokes the handler at each lifecycle step and writes the matching hook call on-chain with the configured wallet.
 
-## Xochi Cross-Chain Transfer (the first offering)
+## Xochi cross-chain transfer (the first offering)
 
 `Raxol.Earn.Xochi.TransferOffering` is the first offering: a **pure storefront** for cross-chain stablecoin transfers. raxol never signs or holds the buyer's funds.
 
 - The buyer quotes and signs a Xochi intent themselves (`Raxol.Payments.Protocols.Xochi.quote_and_sign/3`) and puts the signed bundle in the job requirement's `signed_intent`.
 - On delivery, `Raxol.Earn.Xochi.Settler` relays that bundle to Xochi via `execute_signed/2` (no re-signing) and polls it to settlement; the deliverable is the on-chain settlement tx hashes.
-- The transfer settles through Xochi off-escrow, so the ACP core's take never bites it. The job is a **plain job** (`hook = address(0)`); the ACP budget is only raxol's storefront fee -- **8 bps of the transfer**, set via `:fee_bps`. On completion the provider nets `budget * 0.90`.
+- The transfer settles through Xochi off-escrow, so the ACP core's take never bites it. The job is a **plain job** (`hook = address(0)`); the ACP budget is only raxol's storefront fee: **8 bps of the transfer**, set via `:fee_bps`. On completion the provider nets `budget * 0.90`.
 
 `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow and the requirement/deliverable schemas to register on the marketplace.
 
@@ -1975,9 +1960,9 @@ The DSL injects the `Handler` behaviour and registers metadata in the ETS-backed
 
 `mix raxol_earn.derive_caps` reads the solver's live `balanceOf` per corridor and emits both maps (`--order-frac`/`--aggregate-frac`/`--min-usd`, per-chain RPC via `DERIVE_RPC_<chain>`). The `CapacityRefresher` runs the same reads on an interval, so aggregate capacity tracks the chain as fills drain inventory. Starting point in `packages/raxol_earn/config/destination_caps.example.exs`.
 
-## On-Chain Writes
+## On-chain writes
 
-The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.Earn.ContractClient` write surface and the `:acp_version` switch were retired -- see `MIGRATION_V2.md`). `Raxol.Earn.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.Earn.ProviderAdapter`:
+The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there is no separate memo model (the v1 `createMemo` / `Raxol.Earn.ContractClient` write surface and the `:acp_version` switch were retired: see `MIGRATION_V2.md`). `Raxol.Earn.HookClient` exposes `set_budget` / `submit` / `complete` / `reject`, each dispatched through an injected `Raxol.Earn.ProviderAdapter`:
 
 - `SCA`: sponsored ERC-4337 v0.7 UserOps via `Raxol.Earn.Wallet.SCA` (Alchemy Modular Account v2 + paymaster). Self-deploys the account on the first write.
 - `JSONRPC`: a plain EOA signing EIP-1559 typed transactions (`Raxol.Earn.Onchain.{RPC, Transaction, RLP}`), with nonce assignment serialized through `Raxol.Earn.Wallet.NonceServer`.
@@ -1987,13 +1972,13 @@ The v2 model writes **hook calls** to the active `AgenticCommerceV3` core; there
 
 ## Expiry
 
-`JobSession` reaches the terminal `:expired` status via `expire/2` from any non-terminal status, so a job whose counterparty abandoned it can be closed rather than left wedged. `:expired`, `:completed`, and `:rejected` are terminal -- the session process stops with `:normal` once it reaches one. On-chain escrow handling on expiry is the `AgenticCommerceV3` core's responsibility.
+`JobSession` reaches the terminal `:expired` status via `expire/2` from any non-terminal status, so a job whose counterparty abandoned it can be closed rather than left wedged. `:expired`, `:completed`, and `:rejected` are terminal: the session process stops with `:normal` once it reaches one. On-chain escrow handling on expiry is the `AgenticCommerceV3` core's responsibility.
 
-## Nonce Serialization
+## Nonce serialization
 
 The `Raxol.Earn.Wallet.NonceServer` GenServer serializes EVM nonce assignment through its mailbox, so two concurrent EOA writes from one wallet can never sign the same nonce. `ProviderAdapter.JSONRPC` routes every send through it. A send that fails before broadcast resyncs the counter, so the next send re-fetches the pending nonce from chain and re-fills the gap rather than leaving a hole that would strand every later transaction. The SCA/UserOp path uses ERC-4337 EntryPoint nonces and is unaffected.
 
-## Seller Stack
+## Seller stack
 
 Opt-in via `:seller_enabled` in config:
 
@@ -2008,7 +1993,7 @@ Opt-in via `:seller_enabled` in config:
 
 Pre-alpha, not yet on Hex. The `Wallet.SCA` ERC-4337 stack, the real vendored ABIs (`priv/abi/`), and the `Backend.WebSocket` Socket.IO client are implemented; the on-chain paths are fork-validated against the real deployed core on Base. `mix raxol_earn.bench` runs end-to-end against the InMemory backend.
 
-## See Also
+## See also
 
 - [Agentic Commerce](AGENTIC_COMMERCE.md): the buyer side (raxol_payments)
 - [Agent Framework](AGENT_FRAMEWORK.md): the runtime hosting the seller
@@ -2034,7 +2019,7 @@ FeedbackLoop (tracks accept/reject, optional Nx retraining)
 
 Three GenServers under `Raxol.Adaptive.Supervisor` (`:one_for_one`). BehaviorTracker feeds windowed aggregates to LayoutRecommender, which emits suggestions. FeedbackLoop records whether you accepted or rejected them, and can retrain an Nx model if available.
 
-## Quick Start
+## Quick start
 
 ```elixir
 {:ok, _} = Raxol.Adaptive.Supervisor.start_link()
@@ -2052,7 +2037,7 @@ Raxol.Adaptive.FeedbackLoop.accept(recommendation_id)
 Raxol.Adaptive.FeedbackLoop.reject(recommendation_id)
 ```
 
-## Behavior Tracking
+## Behavior tracking
 
 `Raxol.Adaptive.BehaviorTracker` logs timestamped events and computes windowed aggregates: pane dwell times, command frequency, that sort of thing.
 
@@ -2075,7 +2060,7 @@ BehaviorTracker.subscribe()
 
 Event types: `:pane_focus`, `:pane_dwell`, `:command_issued`, `:alert_response`, `:scroll_pattern`, `:takeover_start`, `:takeover_end`, `:layout_override`.
 
-## Layout Recommendations
+## Layout recommendations
 
 `Raxol.Adaptive.LayoutRecommender` looks at behavior aggregates and suggests layout changes. Uses rule-based logic by default, with optional Nx model support for learned recommendations.
 
@@ -2093,7 +2078,7 @@ LayoutRecommender.set_model_params(trained_params)
 
 Actions it can recommend: `:hide`, `:show`, `:expand`, `:shrink`.
 
-## Feedback Loop
+## Feedback loop
 
 `Raxol.Adaptive.FeedbackLoop` keeps a sliding window of accept/reject decisions so you can track how well the recommendations are doing.
 
@@ -2112,7 +2097,7 @@ history = FeedbackLoop.get_history(20)
 {:ok, :rule_based_mode} = FeedbackLoop.force_retrain()
 ```
 
-## Layout Transitions
+## Layout transitions
 
 `Raxol.Adaptive.LayoutTransition` animates between layouts with easing. Pure functions, no GenServer. Call `tick/2` each frame.
 
@@ -2151,7 +2136,7 @@ mix run examples/subsystems/adaptive_ui_demo.exs
 
 Agents that can pay for things. `raxol_payments` gives any Raxol agent autonomous payment capabilities (wallet identity, quotes, transfers, spending limits) across chains and protocols.
 
-## How It Works
+## How it works
 
 An agent returns payment commands from `update/2` the same way it returns shell or async commands. The `SpendingHook` intercepts commands before execution, checks them against the `SpendingPolicy`, and the `Ledger` tracks what's been spent.
 
@@ -2174,7 +2159,7 @@ Wallet signs the transaction (EIP-712)
 Ledger records the spend
 ```
 
-## Wallet Backends
+## Wallet backends
 
 Two wallet implementations behind the `Raxol.Payments.Wallet` behaviour:
 
@@ -2209,11 +2194,11 @@ Flow: `get_quote/2` -> `execute/3` (wallet signs EIP-712 intent) -> `poll_status
 
 For a storefront that settles on a buyer's behalf, the signing and the submission split into a buyer-side half and a relay-side half:
 
-- `sign_intent/2,3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting** -- the buyer hands this to the storefront.
+- `sign_intent/2,3` and `quote_and_sign/3` (buyer side) quote and sign the intent and return the opaque bundle `{intent_id, quote_id, signature, nonce, pull_signature}` **without submitting**: the buyer hands this to the storefront.
 - `execute_signed/2` (relay side) posts a pre-signed bundle to Xochi **without re-signing**, so the relay never holds the buyer's key.
 - `execute/4` is the two composed: `sign_intent` then `execute_signed`.
 
-The Xochi Cross-Chain Transfer ACP offering (in `raxol_earn`, see [ACP](ACP.md)) is built on this split -- the buyer signs, raxol relays. `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow.
+The Xochi Cross-Chain Transfer ACP offering (in `raxol_earn`, see [ACP](ACP.md)) is built on this split: the buyer signs, raxol relays. `packages/raxol_earn/examples/buyer_signed_intent.exs` shows the buyer flow.
 
 Xochi is the default for cross-chain and privacy (stealth addresses, shielded transfers). It's cash-positive by design: the protocol takes a fee, the agent pays it, done.
 
@@ -2221,7 +2206,7 @@ Xochi is the default for cross-chain and privacy (stealth addresses, shielded tr
 
 Direct access to Riddler's Commerce API for bulk/institutional flows. Cash-negative for the protocol (solver subsidizes execution), so don't use it for agent payments. It exists for B2B integrations where the business relationship justifies the economics. The `Protocols.Riddler` module itself is deprecated and now delegates to Xochi internally; prefer `Protocols.Xochi` directly.
 
-## Trust and Compliance (ZKSAR)
+## Trust and compliance (ZKSAR)
 
 ZKSAR (Zero-Knowledge Sanctions/AML Reporting) lets an agent prove compliance facts without
 revealing the underlying data, and turns those proofs into a trust score that unlocks lower
@@ -2272,7 +2257,7 @@ Signature verification is implemented and on by default, but the digest scheme i
 byte-for-byte with the live Xochi oracle signer, so it fails closed on mismatch (rejecting
 real attestations rather than accepting forged ones) until a production vector is pinned.
 
-## Spending Controls
+## Spending controls
 
 Three layers of limits in `SpendingPolicy`:
 
@@ -2284,7 +2269,7 @@ The `Ledger` is an ETS-backed GenServer that tracks cumulative spend. `SpendingH
 
 Both spend paths reserve atomically before signing: the `SpendGate` choke point (payment Actions) and `SpendingHook` (Pay directives) call `Ledger.try_spend`, which checks the caps and records in one step, and refund via `Ledger.release` when execution then fails, so two commands cannot both pass a check before either records. A non-positive or non-finite amount is rejected up front (it can never lower the running total). A missing policy leaves the gate permissive in development, but a deployed release fails closed: `require_policy` defaults to true in production (a deployed OTP release, detected by `Raxol.Payments.Deployment` via `RELEASE_NAME`) and false in development and tests, so a production `SpendGate` with no `SpendingPolicy` rejects the spend rather than allowing unlimited spend. Set the context flag or `config :raxol_payments, :require_policy` to override.
 
-## Crash Recovery
+## Crash recovery
 
 Cross-chain settlement is asynchronous: there is a window between dispatching an intent (sign + submit) and confirming it landed. A crash in that window, on a runtime with no fault isolation, makes the restarted agent re-quote and sign a second time, paying twice.
 
@@ -2300,7 +2285,7 @@ Without a checkpoint, `ExecuteXochiIntent` in development still proceeds but emi
 
 The relay rail keys on the logical payment rather than its client-minted `transfer_id`, so a resume reuses the same `transfer_id` and an idempotent broadcaster dedupes a retried deposit. A definite execution failure (nothing dispatched) drops the checkpoint so a later retry starts clean. Set `context[:idempotency_key]` to force two otherwise-identical payments apart.
 
-## Production Safety
+## Production safety
 
 A process that holds a signing key is the crown jewel, so the fund-moving defaults are paranoid in a deployed release and permissive in development and tests. `Raxol.Payments.Deployment.production?/0` decides which: it is true for a deployed OTP release (detected by the `RELEASE_NAME` the release boot script sets, which survives into the running node where `Mix.env/0` does not), and can be forced either way with `config :raxol_payments, :deployment` or `RAXOL_PAYMENTS_DEPLOYMENT`.
 
@@ -2324,7 +2309,7 @@ Raxol.Payments.Deployment.assert_signing_isolated!()
 # capability-escape surface: keep the REPL on a node that cannot sign.
 ```
 
-## Agent Actions
+## Agent actions
 
 Thirteen actions registered via the `Raxol.Agent.Action` behaviour, callable by LLMs:
 
@@ -2344,7 +2329,7 @@ Thirteen actions registered via the `Raxol.Agent.Action` behaviour, callable by 
 | `payment_execute_relay_transfer` | Initiate a Tron transfer via Riddler Relay (checkpointed); Tron is public-only |
 | `payment_poll_relay_status` | Poll a dispatched relay (Tron) transfer to a terminal status |
 
-## Mandate (Xochi Delegation Envelope)
+## Mandate (Xochi delegation envelope)
 
 `Raxol.Payments.Mandate` is a per-request EIP-712 envelope that lets an AI agent transact on Xochi under a human Member's identity, inheriting that Member's Trust Tier and Privacy Level. The Member signs an envelope binding a specific agent wallet to a scoped budget; the agent presents `X-Xochi-Delegation: base64url(envelope)` on every protected Xochi call. Xochi verifies the signature server-side and decrements the budget in KV per call. No persistent session.
 
@@ -2386,7 +2371,7 @@ A deployed agent may carry two capability-delegation credentials, and they gover
 
 The two are independent: revoking one does not revoke the other. An agent that must be fully de-authorized needs both its Mandate revoked or expired **and** its SCA session key uninstalled. The Mandate is a Xochi-side credential scoped to Xochi endpoints; the session key is a Base-side signer scoped to the modular account. A leaked key revoked on Xochi but still holding a valid session key can still act through the ACP path, and vice versa.
 
-## AutoPay (Req Plugin)
+## AutoPay (Req plugin)
 
 `Raxol.Payments.Req.AutoPay` is a Req response step. Add it to any Req client and HTTP 402 responses get handled transparently:
 
@@ -2398,11 +2383,11 @@ client = Req.new(base_url: "https://api.example.com")
 {:ok, response} = Req.get(client, url: "/expensive-endpoint")
 ```
 
-## Package Details
+## Package details
 
 Standalone package at `packages/raxol_payments/`. Depends on `raxol_agent` at compile time only (`runtime: false`) for the Action macro and CommandHook behaviour. Runtime deps: `req`, `ex_secp256k1`, `ex_keccak`, `jason`, `decimal`.
 
-## See Also
+## See also
 
 - [Agent Framework](AGENT_FRAMEWORK.md): how agents work (TEA, sessions, teams, commands)
 - [Distributed Swarm](DISTRIBUTED_SWARM.md): multi-node agent coordination
@@ -2416,7 +2401,7 @@ An agent is a TEA module where input comes from LLMs and tools instead of a keyb
 
 For agent payment capabilities (wallets, spending controls, cross-chain transfers), see [Agentic Commerce](AGENTIC_COMMERCE.md). For the interactive coding agent built on this framework, see [Coding Agent](CODING_AGENT.md). For the learning and recall layers an agent can opt into, see [Self-Improvement](SELF_IMPROVEMENT.md) and [Memory](MEMORY.md).
 
-## Quick Start
+## Quick start
 
 ```elixir
 defmodule MyAgent do
@@ -2437,7 +2422,7 @@ end
 Raxol.Agent.Session.send_message(:my_agent, {:analyze, "lib/raxol.ex"})
 ```
 
-## How It Works
+## How it works
 
 ```elixir
 use Raxol.Agent
@@ -2463,7 +2448,7 @@ Commands: async/1, shell/1, send_agent/2
 
 All callbacks are overridable. `view/1` defaults to `nil`, which means no rendering. Useful for headless agents that only process messages.
 
-## Agent Session
+## Agent session
 
 `Raxol.Agent.Session` is the GenServer hosting a single agent. It wraps `Lifecycle` with `environment: :agent`, which skips the terminal driver and plugin manager.
 
@@ -2474,7 +2459,9 @@ All callbacks are overridable. `view/1` defaults to `nil`, which means no render
   app_module: CodeReviewAgent
 )
 
-# Send a message (async, arrives as {:agent_message, from, payload} in update/2)
+# Send a message (async, arrives as {:agent_message, from, payload} in
+# update/2; from is the sender's id when attributed with the :from option,
+# nil otherwise -- the framework never guesses a sender)
 :ok = Raxol.Agent.Session.send_message(:code_reviewer, {:review, "lib/app.ex"})
 
 # Read the agent's current model
@@ -2493,18 +2480,24 @@ Agents auto-register in `Raxol.Agent.Registry` by their `:id`. If the agent is d
 ```elixir
 alias Raxol.Agent.Comm
 
-# Fire and forget
-:ok = Comm.send(:target_agent, {:task, data})
-# Arrives in target's update/2 as {:agent_message, from_id, {:task, data}}
+# Fire and forget. Pass from: to identify yourself; without it the
+# target sees from = nil (attribution is caller-asserted, not verified).
+:ok = Comm.send(:target_agent, {:task, data}, from: :my_agent)
+# Arrives in target's update/2 as {:agent_message, :my_agent, {:task, data}}
 
-# Synchronous call with timeout
+# Synchronous call with timeout. The target must answer with
+# Comm.reply(caller, ref, response) from its update/2:
+#   def update({:agent_message, _from, {:call, caller, ref, q}}, model) do
+#     Comm.reply(caller, ref, answer(q, model))
+#     {model, []}
+#   end
 {:ok, reply} = Comm.call(:target_agent, {:query, params}, 5_000)
-# Caller blocks until {:agent_reply, ref, reply}
 
-# Broadcast to every agent in a team
+# Broadcast to every agent in a team (delivery filtered by the receiving
+# session's team_id)
 :ok = Comm.broadcast_team(:my_team, {:status_update, status})
 # Arrives in each teammate's update/2 as
-# {:agent_message, from_id, {:team_broadcast, :my_team, {:status_update, status}}}
+# {:agent_message, nil, {:team_broadcast, :my_team, {:status_update, status}}}
 ```
 
 ## Teams
@@ -2525,7 +2518,7 @@ alias Raxol.Agent.Comm
 
 Coordinator starts first. With `:rest_for_one`, a coordinator crash restarts all workers. Workers crash independently.
 
-## Command Types
+## Command types
 
 Commands returned from `update/2` are processed by Lifecycle:
 
@@ -2535,11 +2528,11 @@ Commands returned from `update/2` are processed by Lifecycle:
 | Shell      | `shell("ls -la")`             | `{:command_result, {:shell_result, %{output: ..., exit_status: ...}}}` |
 | Send Agent | `send_agent(:target, msg)`    | Delivered to target as `{:agent_message, from, msg}`                 |
 
-## Headless Agents
+## Headless agents
 
 When `view/1` returns `nil` (the default), no rendering happens. The agent is a pure message-processing loop, good for background workers, data pipelines, or agents that only talk to other agents.
 
-## AI Backend Streaming
+## AI backend streaming
 
 `Raxol.Agent.Backend.HTTP` does real SSE streaming to LLM providers:
 
@@ -2566,7 +2559,7 @@ The `:openrouter` harness (via `Backend.Selector`) targets OpenRouter, an OpenAI
 
 The `:longcat` harness targets Meituan's LongCat (`https://api.longcat.chat/openai`, model `LongCat-2.0`), also OpenAI-compatible. It rides the `:openai` request/SSE path, which already handles LongCat's non-standard frames (a full `message` chunk instead of `delta`, the `reasoning_content` channel, and the underscore-less `finishreason` key). Pass the key via `ExecutorConfig` `auth: %{api_key: ...}`.
 
-## Turn Driver
+## Turn driver
 
 `Raxol.Agent.Backend.HTTP` streams one model call. `Raxol.Agent.Turn` drives a whole
 self-improving turn: it assembles tool context from the agent module's callbacks, runs the
@@ -2598,7 +2591,7 @@ The agent *module* declares which providers it wants through zero-arity callback
 *caller* supplies the running server instances through opts. Turn is the canonical driver
 other runtimes can adopt.
 
-## Native Multi-Vendor Harness
+## Native multi-vendor harness
 
 An agent can run its own reasoning loop, or hand the loop to a vendor CLI (Claude Code,
 Cursor) and expose Raxol's tools to it over MCP. `Raxol.Agent.ExecutorConfig`
@@ -2635,7 +2628,7 @@ injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-confi
   composes the engine into the `CommandHook` chain at the `:tool_call` phase, resolving an
   ASK through a synchronous prompter.
 
-## Conversation Item-Log
+## Conversation item-log
 
 `Raxol.Agent.Conversation` is a durable, append-only record of what an agent did, separate
 from its compacted working memory.
@@ -2652,7 +2645,7 @@ from its compacted working memory.
 - `Recorder` bridges `Stream` events into items (tool_use to tool_call, done to message, and
   so on). [Session search](MEMORY.md#session-search) indexes this log.
 
-## Tunnel (Reverse Co-Drive)
+## Tunnel (reverse co-drive)
 
 `Raxol.Agent.Tunnel` lets a teammate attach to an agent running on your machine over a single
 outbound link, without your files or credentials leaving it. The host dials out to a server;
@@ -2713,27 +2706,111 @@ The `bin/raxol-code` shim runs the task from the package while keeping the calle
 directory as the agent's workspace (the file and shell tools are scoped to it via
 `RAXOL_CLI_CWD`). It `exec`s `mix` so the full-screen UI inherits the real terminal.
 
+The Burrito-packaged `raxol` binary (`packages/raxol_cli`, unpublished until this
+subcommand ships in a release) carries the same TUI as `raxol code`: every entry
+point shares one launch path, `Raxol.Agent.Code.Launcher`, so flags, provider
+resolution, and the session store cannot drift between them.
+
+Not sure what to try first? These all work on this repo from a cold start:
+
+```
+summarize mix.exs
+what are the three largest files under lib?
+find every module that starts a GenServer
+```
+
+## Connecting a provider
+
+With no `--backend`, the agent auto-detects a provider through the shared
+`Raxol.Agent.Backend.Resolver`, in this precedence order:
+
+1. an explicit `--api-key` (or an `:api_key` opt),
+2. a 1Password reference stored by `/login` (resolved through the `op` CLI),
+3. a provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `KIMI_API_KEY`, `OPENROUTER_API_KEY`, `LONGCAT_API_KEY`, ...),
+4. the generic `AI_API_KEY` (plus optional `AI_BASE_URL` / `AI_MODEL`) for any OpenAI-compatible endpoint.
+
+If nothing resolves, the TUI opens on an interactive setup wizard instead of
+failing against a placeholder endpoint:
+
+- a selectable provider list (`↑`/`↓` to move, `Enter` to connect, `Esc` to
+  dismiss), each row marked connected (`●`) or not (`○`) with an actionable
+  note when detection has a problem (a stored reference that needs
+  `op signin`, or an env var that is set but empty);
+- picking a keyed provider opens a masked credential entry: paste an `op://`
+  reference (shown in the clear, stored) or an API key (masked). After a raw
+  key connects, the wizard offers to save it to 1Password so no plaintext
+  persists;
+- picking a local provider (`lm_studio`, `ollama`) connects with no key.
+
+The `/login` text command remains for scripted/power use (it works alongside
+the wizard):
+
+```
+/login                                          # open the wizard
+/login anthropic op://Vault/Anthropic/key       # store a 1Password reference (persisted)
+/login openai sk-...                             # a session-only key (never written)
+/login lm_studio                                 # a local server, no key
+```
+
+On connect (and once at launch for an auto-detected provider), the agent fires
+a cheap, async validation ping and reports the outcome in the status line:
+`validated`, `key rejected (HTTP 401)`, or `endpoint unreachable`. It prefers
+the provider's token-free model-list endpoint (`GET /v1/models`), falling back
+to a single-token completion only when that is unavailable. The check runs off
+the UI process, so a slow or offline endpoint never blocks the TUI, and the
+connection is usable immediately regardless.
+
+Stored references live in `~/.raxol/providers.json` (override with
+`$RAXOL_PROVIDERS`), owner-readable only. That file holds `op://` references,
+models, and base URLs, never raw keys. Zero-config env usage still works: set
+`ANTHROPIC_API_KEY` (or another provider var) and launch.
+
+Supported providers: `anthropic`, `openai`, `kimi`, `openrouter`, `longcat`,
+`lumo`, `ollama`, `lm_studio`, `llm7`, `mock`.
+
+A repo can also pin its default provider and model in `.raxol/config.json`
+(read from the working directory, references only, raw keys deliberately
+ignored):
+
+```json
+{ "provider": "anthropic", "model": "claude-sonnet-5" }
+```
+
+Precedence is explicit flag, then the repo pin, then environment
+auto-detection. `mix raxol.inspect` (or `/inspect` in the TUI) shows exactly
+what would resolve in the current directory and why.
+
 ## Flags
 
 | Flag | Effect |
 |------|--------|
-| `--harness NAME` | Backend harness, default `lm_studio`. Validated against `Backend.Selector.supported_harnesses/0`. |
+| `--backend NAME` | Pin an LLM backend (auto-detected if omitted). Validated against `Backend.Selector.supported_backends/0`. `--harness` is a deprecated alias. |
 | `--model NAME` | Model override. |
+| `--api-key KEY` | API key for the selected backend (else resolved from op/env). |
 | `--base-url URL` | Override the backend base URL. |
 | `--system TEXT` | System-prompt override. |
 | `--continue` | Resume the most recently updated session. |
 | `--resume ID` | Resume a specific session by id. |
 | `--sessions` | Print saved sessions and exit (no TUI). |
+| `--replay ID` | Print a session's transcript from its durable journal and exit (no TUI). |
+| `--to-offset N` | With `--replay`: stop at journal offset N. Alone it is a usage error. |
 | `--ascii` | ASCII-only face for terminals without a UTF-8 font. |
+| `-h`, `--help` | Print usage and exit. |
+
+The SSH flags (`--ssh`, `--ssh-port`, `--authorized-keys`, `--ssh-tenants`) are
+described under [Serving over SSH](#serving-over-ssh).
 
 ```bash
-mix raxol.code --harness anthropic --model claude-sonnet-5
+mix raxol.code --backend anthropic --model claude-sonnet-5
 mix raxol.code --continue
 mix raxol.code --resume sess-1234-5
 mix raxol.code --sessions
+mix raxol.code --replay sess-1234-5
 ```
 
 `--resume` wins over `--continue`; with neither, a fresh session is minted.
+`--replay` refuses to combine with `--ssh`, `--sessions`, `--continue`, or
+`--resume`.
 
 ## Keys
 
@@ -2755,14 +2832,32 @@ Typing, Enter, plan-mode toggles, and backspace are accepted only when the agent
 | Command | What it does |
 |---------|--------------|
 | `/help` | Show help |
+| `/login [provider]` | Connect an LLM provider (1Password reference, session key, or local server) |
 | `/clear` | Start a new session (the old file stays on disk) |
-| `/model <name>` | Switch model for the next turns (bare `/model` shows current) |
+| `/model <name>` | Switch model for the next turns (bare `/model` on a connected provider opens a live model picker) |
 | `/plan` | Toggle plan mode |
 | `/compact` | Shrink history: keep the last 6 messages, replace older ones with a compaction marker, then persist |
-| `/context` | Session stats (message and event counts, plan on/off, model, session key) |
+| `/rewind` | Drop the last turn from the transcript and the conversation (and write a rewind marker to the journal, so a replay drops it too) |
+| `/context` | Session stats (message, event, and token counts, plan on/off, model, session key) |
+| `/usage` | Session token totals per direction, an estimated cost (env rates, else the `Raxol.Agent.LlmPrices` table), and the shared-ledger totals when a ledger is wired |
 | `/sessions` | List up to 10 saved sessions |
+| `/resume [id]` | Switch session in place; bare `/resume` opens a picker over the 20 most recent |
+| `/fork [title]` | Branch a copy of this session under a new id and continue there |
+| `/rename <title>` | Title this session (shown by `/sessions`) |
+| `/export [path]` | Write the transcript to a file (default `<session>.txt` in the cwd) |
+| `/transcript` | Write the transcript to a fresh 0600 file (a temp file, or the workspace in a jailed session) and print a pager hint |
+| `/copy` | Copy the last assistant reply to the clipboard |
+| `/find <text>` | Case-insensitive search over the transcript blocks (first 8 matches) |
+| `/logout [provider]` | Disconnect the session's provider; with a name, also forget its stored credential reference |
+| `/share` | Mint a read-only share link for this session |
 | `/mcp` | List MCP servers configured in `.mcp.json` |
 | `/hooks` | Show pre/post/stop hook counts |
+| `/inspect` | Show every config source in use: provider resolution and why, the repo pin, hook rules, MCP servers, skills roots, session store (same output as `mix raxol.inspect`) |
+
+A jailed session (multi-tenant SSH, see below) refuses `/login`, `/logout`, and
+`/copy`: the keyboard principal there is a tenant, and all three reach host-global
+state (the credential store, the host clipboard). `/rewind`, `/resume`, and `/fork`
+refuse while a turn is running.
 
 ## Tools
 
@@ -2777,10 +2872,111 @@ sub-agent. Read-only tools run without a prompt; sensitive tools gate through ap
 | `edit_file` | Yes | `old_string` must match once unless `replace_all` |
 | `bash` | Yes | `/bin/sh -c`, combined stdout+stderr, output truncated past 64KB |
 | `task` | (delegating) | Delegates to a fresh read-only sub-agent that cannot write, run bash, or recurse |
+| `lsp` | No | Language-server queries: diagnostics, symbols, definition, references, hover |
+| `lsp_rename` | Yes | Renames a symbol through the language server and writes the edits |
 
-Every path expands relative to the working directory (`RAXOL_CLI_CWD` or the BEAM cwd) and
-must stay under it. A `../` escape or an outside-cwd absolute path is rejected with
-`:outside_cwd`.
+Skills tools (`skills_list`, `skill_view`, `skill_manage`) join the toolset when a
+skills provider is configured.
+
+## Language server
+
+The agent asks a language server about code rather than inferring it from text. `lsp`
+answers what the IDE would: `diagnostics` (whether an edit actually compiles), `symbols`
+(a file's outline), `definition`, `references` (before changing a signature), and `hover`.
+`lsp_rename` renames a symbol everywhere it appears using the server's own understanding
+of scope, and writes the result.
+
+That last one is the difference between a rename and a find-and-replace: it will not touch
+a same-named symbol in another scope, and it follows re-exports.
+
+Positions crossing the tool boundary are **1-based** `line` and `column`, matching the line
+numbers `read_file` prints. LSP itself is 0-based and counts columns in UTF-16 code units;
+both conversions happen inside the tool, so a rename on a line containing an emoji or CJK
+text lands on the right characters instead of one column early.
+
+### Which server
+
+Built-in defaults cover elixir (`elixir-ls`), rust (`rust-analyzer`), typescript
+(`typescript-language-server`), python (`pyright-langserver`), and go (`gopls`), matched on
+file extension. A repo overrides or extends them in `.raxol/lsp.json`:
+
+```json
+{
+  "servers": {
+    "elixir": { "command": "lexical" },
+    "zig": { "command": "zls", "extensions": [".zig"] }
+  }
+}
+```
+
+Overriding a built-in by name keeps its extensions, so pointing `elixir` at a different
+binary does not mean restating the file list. A server whose command is not on `PATH` is
+reported as such rather than silently doing nothing, and a malformed file falls back to the
+defaults rather than blocking boot. `mix raxol.inspect` (or `/inspect`) lists every server
+that would serve the directory and whether it is installed.
+
+### Lifecycle
+
+Servers start on first use, not at boot, and one per language is kept for the session:
+starting `rust-analyzer` per turn would mean indexing the crate per turn. Each is owned by
+a `Raxol.Agent.Lsp.Pool` that monitors the session process, so when the session ends by any
+path (a clean quit, an SSH disconnect, a crash) the pool stops every server it owns before
+going down. No teardown path has to remember them. A server that crashes is dropped; the
+next request for that language starts a fresh one.
+
+The pool stops them explicitly rather than relying on the process link. A pool that exits
+`:normal` does not take a linked, non-trapping process with it, so the clients, and the OS
+subprocesses behind them, would otherwise outlive the session. Waiting for a cold server
+to finish `initialize` also happens off the pool's own process, so a session that ends
+during a start is noticed immediately instead of after the start timeout.
+
+### Containment
+
+Paths in go through the same cwd resolution as every other file tool. Results coming back
+are the server's, and a language server indexes whatever it likes: a definition can land in
+a dependency or the standard library. Those are reported as absolute paths in a normal
+session and dropped in a jailed one. A rename's edits are each re-checked against the
+workspace root before anything is written, so a server cannot direct a write outside it.
+
+A rename is also bounded in width. Approval is asked before the server has answered, so
+the approver sees a position and a new name and cannot see how many files the rename
+reaches; a rename touching more than `max_files` (default 50) is refused with the count
+instead of performed. Retrying with an explicit `max_files` is a fresh call, and therefore
+a fresh approval that does carry the number. All the edits are composed before any of them
+is written, so an edit that cannot apply fails with nothing changed rather than partway
+through; if a write itself fails, the error names the files that already landed.
+
+**A jailed (multi-tenant) session gets no language server at all.** A server is arbitrary
+code execution on the workspace twice over: `.raxol/lsp.json` names the binary, and the
+binary runs project code to answer anything. `rust-analyzer` executes `build.rs`, and
+`elixir-ls` compiles the project. In a jail the workspace is tenant-written, which makes
+this the same refusal hooks and MCP servers already get.
+
+### Not yet
+
+Diagnostics are surfaced when the model asks for them, not automatically after every write.
+Post-write diagnostics are tracked in the parity epic.
+
+Every path expands relative to the working directory: the tool context's `:cwd`
+when the surface sets one (an ACP session root, a tenant jail), else
+`RAXOL_CLI_CWD`, else the BEAM cwd. The result must stay under that root, and
+containment is decided on the REAL path: `Raxol.Agent.Actions.Fs.resolve/2`
+canonicalizes both sides component by component (`realpath`), so a symlink cannot
+lexically hide an escape. A `../` escape, an outside-cwd absolute path, or a
+symlink cycle is rejected with `:outside_cwd`.
+
+`grep` and `glob` run that check on every path they WALK, entry by entry through
+the recursive scan. `File.regular?/1` and `File.dir?/1` follow symlinks, so the
+native grep walk tests each symlinked entry for containment, skips the ones that
+escape, and re-tests at the read itself; `glob` rejects every wildcard match whose
+realpath lands outside the root, so an out-of-workspace name stays undisclosed.
+
+In a jailed session the `bash` tool is refused entirely
+(`Raxol.Agent.Actions.Code.shell_jail_allow/1` returns
+`{:error, :shell_disabled_in_jail}`) unless the context carries a
+`Raxol.Agent.Sandbox.Shell`. A `/bin/sh -c` command line is not a path, so
+`{:cd, cwd}` is a starting directory rather than a boundary and the fs
+containment above does not apply to it.
 
 ## Approval UX
 
@@ -2802,14 +2998,67 @@ Plan mode appends a read-only directive to the system prompt and has the Authori
 engine deny every mutating tool, with a `PLAN` chip in the status strip. Toggle it off to
 execute.
 
+## Spending limits
+
+LLM spend is metered into the same `Raxol.Payments.Ledger` agent payments draw on,
+through `Raxol.Agent.Code.CostLedger`. Wire it with the app options `:ledger`
+(a Ledger server ref), `:spending_policy` (a `Raxol.Payments.SpendingPolicy`), and
+optionally `:agent_id` (the ledger scope key, default `"raxol-code"` so a `/clear`
+cannot mint its way out of a cap). Without raxol_payments in the host, or without
+both a ledger and a policy, every call here degrades to a no-op and nothing changes.
+
+Each provider call's cost is recorded as its `turn_completed` event folds, priced
+from `RAXOL_COST_PER_MTOK_IN`/`RAXOL_COST_PER_MTOK_OUT` when both are set, else from
+the `Raxol.Agent.LlmPrices` table. Sub-agent rounds from the `task` tool run in a
+nested stream whose usage never reaches the parent fold, so they report through a
+`:usage_sink` and are metered the same way. The gate then runs twice:
+
+- at submit, so an exhausted budget refuses the NEXT prompt with a notice naming
+  what clears it (`frozen`, `ledger_unreachable`, or the limit that tripped);
+- inside the running turn, so a turn that blows the cap mid-loop is interrupted
+  rather than allowed to keep looping through more provider calls.
+
+A wired-but-dead ledger fails closed: an unanswerable `check_budget` reads as
+`{:over, :ledger_unreachable}`.
+
+With a ledger AND a policy wired, a model with no price fails closed too. An
+unpriced model bills real tokens while the ledger records $0.00, so the first
+response that reports billed tokens at $0.00 halts the running turn and blocks
+the next prompt. The notice names the two fixes: set
+`RAXOL_COST_PER_MTOK_IN`/`RAXOL_COST_PER_MTOK_OUT`, or `/model` a priced one.
+Naming a model with `/model` clears the halt. The first round of a session
+cannot be prevented (the billed model is only knowable from a response), so
+this stops the second.
+
 ## Sessions
 
 Conversation memory persists across turns and across runs, one JSON file per session.
 `--continue` resumes the most recent; `--resume ID` a specific one. The default directory is
 `$RAXOL_CODE_SESSIONS` if set, otherwise `~/.raxol/code_sessions`. A saved session stores the
 messages and the durable transcript events, so a resume rebuilds both the model context and
-the visual scrollback. The session id is passed through `Path.basename`, so a crafted id
-cannot escape the sessions directory.
+the visual scrollback. Session ids are validated where they enter (`--resume`, `/resume`,
+`--replay`) against the charset `[A-Za-z0-9._-]+`, excluding `.` and `..`, and the store
+additionally passes the id through `Path.basename`, so a crafted id cannot escape the
+sessions directory.
+
+Alongside the JSON store, each session appends its durable-tier events to an
+offset-addressed journal (`Raxol.Agent.Journal.FileStore`, one directory per session
+under `$RAXOL_SESSIONS_DIR` or `~/.raxol/sessions`), through a single owning Writer, as
+they fold. The JSON store only persists on turn boundaries, so the journal is what
+survives a process death mid-turn; it opens lazily on the first durable event, and an
+append failure lands on the status line without blocking the fold.
+
+That journal is what `--replay ID` reads: it folds the records through
+`Raxol.Harness.Projection` and prints the transcript without starting a TUI, with
+`--to-offset N` replaying only the prefix at or below offset N. A session recorded
+before the journal existed (or whose journal is gone) falls back to the JSON store.
+Replay is read-only: a crash-torn tail is tolerated on read and healed only by the
+owning Writer (`Reader.resume_scan/1`), so replaying a live session cannot disturb it.
+
+`/rewind` drops the last turn from the transcript and the conversation and writes a
+rewind marker into the journal, so `--replay` and the shared viewer drop it too. Turn
+ids are only unique within one VM run, so a rewind removes the contiguous trailing run
+of the last turn's events rather than every event with that id.
 
 ## The axol face
 
@@ -2833,13 +3082,169 @@ Contract events drive the face: a started turn is `:thinking`, a running tool is
 
 Two optional per-project files, both read from `<cwd>/`:
 
-- `.raxol/hooks.json` declares `pre_tool_use` / `post_tool_use` matchers (each `[match, command]`,
-  `match` is an exact tool name or `"*"`) plus `stop` commands. A pre-hook that exits non-zero
-  vetoes the tool (30-second timeout, `RAXOL_TOOL_NAME` in the environment); post-hooks are
-  advisory; stop commands run at turn end.
-- `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format. Today
-  this is discovery only (surfaced by `/mcp`); bridging those servers' tools into the live
-  toolset is a follow-up.
+- `.raxol/hooks.json` declares `pre_tool_use` / `post_tool_use` matchers (each
+  `{"match": ..., "command": ...}`, `match` is an exact tool name or `"*"` and defaults to
+  `"*"`) plus `stop` commands. A pre-hook that exits non-zero vetoes the tool (30-second
+  timeout, `RAXOL_TOOL_NAME` in the environment); post-hooks are advisory; stop commands
+  run at turn end.
+- `.mcp.json` uses the standard `{"mcpServers": {name: {command, args, env}}}` format.
+  Configured servers are started (supervised, off the boot path) and their tools join the
+  live toolset as `mcp__<server>__<tool>`, sensitive by default: each call is
+  approval-gated like any mutating tool, and plan mode denies them outright since an
+  external tool's effects are unknown. `/mcp` shows per-server connection state
+  (`●` connected, `✗` failed, `…` loading); a server that fails to start is skipped with
+  a note, never fatal. At most 16 servers load per config, and server names are held to
+  `[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}` (each one interns an atom and spawns a subprocess);
+  refusals show up in `/mcp` alongside connection failures.
+
+Both files name a command to execute, so both are read only when the session owns its
+workspace. A jailed session (multi-tenant SSH, see below) loads NEITHER: its workspace is
+writable by a tenant whose own `write_file` can author these files, and running them would
+be arbitrary execution as the server uid: around the cwd jail, the `:jail` shell gate,
+and the approval chain alike. `/mcp` and the status line say so rather than reporting an
+empty config.
+
+## Editors over ACP
+
+`mix raxol.acp` serves the agent loop over the
+[Agent Client Protocol](https://agentclientprotocol.com) on stdio, so an
+ACP-speaking editor (Zed and its ecosystem) can spawn and drive it: each
+`session/new` gets a real `Raxol.AgentClientProtocol.Session` running
+`Raxol.Agent.ClientProtocol.TurnRunner` over the same provider resolution
+as every other entrypoint. Turns are read-only on this surface until ACP's
+permission flow is bridged to the authorization engine. Each session's file
+tools scope to the `cwd` the editor names in `session/new`, so one server
+handles projects in different directories and every tool call is contained
+under its own session root. Point
+the editor at the `bin/raxol-acp` shim rather than `mix` directly, so Mix
+compile output never reaches the NDJSON wire; `mix help raxol.acp` has the
+Zed `agent_servers` snippet. This is a repo-checkout feature: the protocol
+package is a dev/test path dependency, so a Hex install of raxol_agent is
+built without it and the task exits 1 with an explanation.
+
+`Raxol.Agent.ClientProtocol.Serve` owns every exit code, so `mix raxol.acp`,
+the packaged `raxol acp`, and the shim agree. A clean peer disconnect exits 0:
+the transport reports the close, the connection stops, and the process answers
+with a code instead of dying of the linked exit. The non-zero paths are a usage
+error (64), a build with no ACP support (1), an unresolved provider (1), and a
+connection that ended abnormally (1).
+
+## Serving over SSH
+
+`mix raxol.code --ssh --authorized-keys ~/.ssh/agent_keys` serves the same
+TUI over SSH (default port 2222, `--ssh-port` to change): each connection
+gets its own app instance and a fresh session, with the provider resolved
+once, server-side, at launch. Auth is publickey only; this surface reaches
+write and shell tools, so anonymous serving is not offered at all, and
+`--continue`/`--resume` are rejected in this mode. Single-tenant by design:
+every connection shares the server's filesystem, credentials, and session
+store, so serve it only to keys you would hand a shell.
+
+### Multi-tenant hosting
+
+`mix raxol.code --ssh --ssh-tenants /srv/tenants` hosts many users from one
+daemon. Each tenant is a directory under the root:
+
+    /srv/tenants/<user>/
+    ├── ssh/authorized_keys   # that user's keys: a key only authenticates
+    │                         # the username it is filed under
+    ├── work/                 # the cwd jail: every fs tool, /export, and
+    │                         # /transcript confine here (bash is refused)
+    ├── code_sessions/        # that user's session store (/sessions, /resume)
+    └── sessions/             # that user's durable journal (/share, --replay)
+
+The AUTHENTICATED username decides everything: usernames are restricted to
+a conservative charset (anything else fails auth outright), the same
+normalization maps the key lookup and the workspace so they can never
+disagree, and a connection whose tenant options cannot be derived is
+refused rather than started unjailed. A jailed session also loads no
+`.raxol/hooks.json` and no `.mcp.json`: both name a command to run and both
+live in the tenant's own writable workspace.
+
+Spending identity is `ssh:<user>` (the tenant's `:agent_id`), so a shared
+`Raxol.Payments.Ledger` + policy on the server-level app options gives each
+tenant their own budget, enforced as described in
+[Spending limits](#spending-limits): the running turn halts and the next
+prompt is refused.
+
+What the jail is NOT: separate OS uids. This is one BEAM under one uid, so
+the confinement is the fs tools' path resolution, the refusal of the `bash`
+tool, and the refusal to load workspace-configured commands. Untrusted
+tenants want separate uids or containers on top.
+
+Hosted deployment: set `RAXOL_SSH_CODE=true` with
+`RAXOL_SSH_CODE_TENANTS=/data/tenants` and
+`RAXOL_SSH_CODE_BUDGET_USD=<cap>` (and optionally `RAXOL_SSH_CODE_PORT`,
+default 2223) and the main application serves the coding agent beside the
+SSH playground. It refuses to start without BOTH: there is no anonymous or
+single-tenant hosted mode, and no unmetered one either. A hosted tenant
+spends the host's provider credential, so an unset or unparseable cap
+refuses to serve rather than serving unbounded. The cap is per tenant
+(lifetime and session), enforced through a `Raxol.SSH.CodeLedger` the
+supervisor starts alongside the server, so the build needs raxol_payments.
+
+Three dependencies have to be on the release code path, and boot refuses
+without any of them: raxol_agent for the agent itself, raxol_payments for
+the ledger, and `req` for the HTTP client every remote provider resolves
+to. `req` is easy to miss because raxol_agent declares it optional and
+optional dependencies do not propagate: a release could pass every other
+check and still answer `{:error, :req_not_available}` on every turn. The
+deploy app (`web/mix.exs`) declares all three.
+
+Onboarding a user is `mkdir -p /data/tenants/<user>/ssh` plus writing
+their `authorized_keys`; then `ssh <user>@host -p 2223` is the whole
+client.
+
+## Sharing a session read-only
+
+`/share` mints a signed, expiring token (24h) for the current session and
+ensures its journal exists for a viewer to replay. Configuration is one
+secret: set `RAXOL_SHARE_SECRET` (or the `:share_secret` app option), at
+least 32 bytes, on both the TUI host and the web host, and mount the viewer
+in any Phoenix app:
+
+    live "/share/:token", Raxol.Agent.Code.ShareLive
+
+The view verifies the token offline (`Raxol.Agent.Code.ShareToken`, HMAC,
+no server state), replays the session's durable journal with the same
+rewind-marker-aware fold `--replay` uses, and follows new records live
+from the journal high-watermark. Transcript only: the surface has no
+input path.
+
+A token grants read access to exactly one session until it expires, and
+it FOLLOWS that session: the viewer keeps receiving new records for the
+full 24h, so sharing is "watch me work", not "here is a snapshot". There
+is no revocation short of rotating the secret.
+
+The token also carries the scope its session id is meaningful in, because
+ids are unique per journal base rather than per host. An unjailed session
+signs the empty scope (the host's own base); a tenant session signs its
+tenant name, and the viewer resolves
+`<tenants_root>/<scope>/sessions` from `:share_tenants_root` or
+`RAXOL_SSH_CODE_TENANTS`. A scoped token on a host with no tenants root
+configured is refused rather than resolved against the host's own tree.
+
+A blank or under-length secret reads as unconfigured, so `/share` says so
+rather than minting a forgeable token, and a session whose id is not of the
+shareable shape is refused with a message pointing at `/fork` or `/resume`
+under a plain id.
+
+`RAXOL_SHARE_BASE_URL` turns the `/share` notice into a pasteable link.
+`phoenix_live_view` is an optional dependency; without it the viewer
+module simply is not compiled and `/share` still mints tokens.
+Multiplayer (shared input) is not scheduled.
+
+## Driving the harness over MCP
+
+`Raxol.Agent.Harness.McpTools` exposes the harness itself as MCP tools:
+`harness_start_session`, `harness_send_prompt`, `harness_read_transcript`,
+and `harness_list_sessions`. They share the TUI's session store, so a
+session driven by an MCP client resumes in the TUI with `--resume` and vice
+versa. Turns are read-only on the workspace (read/grep/glob; no
+`write_file`, `edit_file`, or `bash` on this surface): there is no human
+here to answer an approval prompt, so write capability waits on the MCP
+authorizer wiring rather than shipping behind an allow-all flag. Run
+`mix mcp.server` from `packages/raxol_agent` to serve them.
 
 ## See also
 
@@ -2938,7 +3343,7 @@ See [benchmarks](../bench/README.md) for current numbers.
 
 Cluster BEAM nodes with automatic discovery, track their health, elect a commander, and sync shared state with CRDTs. Works with libcluster's gossip, epmd, and DNS strategies, plus a custom Tailscale strategy for zero-config encrypted mesh.
 
-## Quick Start
+## Quick start
 
 ```elixir
 # Gossip: LAN multicast, no config needed
@@ -2952,7 +3357,7 @@ Cluster BEAM nodes with automatic discovery, track their health, elect a command
 )
 ```
 
-## Discovery Strategies
+## Discovery strategies
 
 `Raxol.Swarm.Discovery` wraps libcluster with preset strategies:
 
@@ -2977,7 +3382,7 @@ Raxol.Swarm.Discovery.start_link(
 )
 ```
 
-### Tailscale Strategy
+### Tailscale strategy
 
 `Raxol.Swarm.Strategy.Tailscale` shells out to `tailscale status --json`, grabs online peers, filters by tag if configured, and builds BEAM node names from the results.
 
@@ -2991,7 +3396,7 @@ Raxol.Swarm.Discovery.start_link(
 )
 ```
 
-## Node Monitoring
+## Node monitoring
 
 `Raxol.Swarm.NodeMonitor` watches cluster nodes via `:net_kernel.monitor_nodes/1`, pings them on a timer, and tracks RTT history.
 
@@ -3068,7 +3473,7 @@ ORSet.size(set)                # => 1
 merged = ORSet.merge(local_set, remote_set)
 ```
 
-## Tactical Overlay
+## Tactical overlay
 
 `Raxol.Swarm.TacticalOverlay` is the shared state layer. Entities are LWW registers, waypoints are OR-sets. It syncs deltas between nodes periodically and does full anti-entropy exchanges to catch anything missed.
 
@@ -3202,6 +3607,85 @@ A client spawns the agent with `Transport.Stdio.start_spawn("elixir", ["--no-hal
 resolves the connection pid, and calls `initialize` before any other request. For BEAM-local
 wiring with no subprocess, swap in `Transport.Paired.create_pair/0`.
 
+## Running raxol as your agent
+
+The sections above are about writing an agent with the package. This one is for
+a host that wants to drive Raxol's own coding agent over ACP: an editor, or any
+tool that spawns agent CLIs.
+
+Install the CLI, then point the host at `raxol acp`:
+
+```bash
+curl -fsSL https://raxol.io/install | bash   # or: brew install droodotfoo/tap/raxol
+raxol doctor                                 # confirms "acp surface: available"
+```
+
+Zed, and anything sharing its `agent_servers` shape:
+
+```json
+{
+  "agent_servers": {
+    "Raxol": {
+      "command": "/usr/local/bin/raxol",
+      "args": ["acp"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+What the handshake tells you: `agentInfo` names `raxol` and its version,
+`agentCapabilities` advertises `loadSession`, and `authMethods` offers both of
+the registry's accepted kinds (browser sign-in per provider, plus Terminal Auth
+via `raxol login`). Nothing on the ACP wire carries a model, so the provider is
+resolved from the host's own configuration.
+
+Three behaviours worth knowing before wiring up:
+
+- **`session/new`'s `cwd` scopes the session.** The fs, grep, and glob tools
+  resolve every path under it, so one server can drive several projects at once
+  and each session is contained under its own root. A blank `cwd` falls back to
+  the process working directory.
+- **Turns run the full toolset, and writes are gated.** Every sensitive call
+  costs one `session/request_permission` round trip offering allow-once and
+  reject-once. Reads are not gated, so a read-heavy turn adds no protocol
+  traffic. The gate is fail-closed on the DECISION: a client that refuses,
+  times out, disconnects, or does not implement the method at all denies the
+  write and keeps reading. A host that implements nothing still gets a working
+  read-only agent.
+- **Sessions are durable.** Ids are stable across restarts and name a journal on
+  disk, so a host can store one and hand it back to `session/load` later. The
+  replay re-sends the same `session/update` frames the original turn delivered.
+
+### Verifying an integration
+
+`scripts/acp_probe.py` is a dependency-free ACP client that runs the full
+handshake, answers `session/request_permission`, and records every frame. Point
+it at the same command your host will spawn:
+
+```bash
+scripts/acp_probe.py raxol acp --backend mock
+```
+
+A `__NON_JSON_STDOUT__` entry in the transcript means something wrote non-JSON
+to the wire before a frame, which a strict NDJSON client would reject.
+
+### Two caveats
+
+**The ACP surface is a source-build feature.** `raxol_agent_client_protocol` is
+a path dependency of `raxol_agent`, so a Hex install of `raxol_agent` is
+compiled without `Raxol.Agent.ClientProtocol.StdioAgent` and has no ACP surface
+at all; adding the dependency downstream does not retroactively enable it. The
+packaged CLI (npm, Homebrew, the install script) is built from source and does
+have it. `raxol doctor` reports which you have.
+
+**Native-CLI backends bypass all of the above.** With `--backend claude_native`
+or another passthrough, the turn runs the other CLI's tool loop: raxol's
+Actions, the `cwd` scoping, and `session/request_permission` never execute. The
+tools carry the other agent's names, and its refusals look identical on the wire
+to our gate denying something. `raxol acp` warns about this on stderr at boot.
+Use an API-key backend when testing these paths.
+
 ## Durable resumable sessions
 
 `Ext.*` is a vendor extension (carried on the standard `_meta["raxol.io"]` rider plus new
@@ -3236,6 +3720,7 @@ package `NOTICE.md`.
 
 - [Agent Commerce Protocol](ACP.md): the unrelated on-chain payments ACP.
 - [Coding Agent](CODING_AGENT.md): Raxol's own terminal coding agent.
+- `scripts/acp_probe.py`: a minimal ACP client for verifying an integration.
 
 
 <!-- docs/features/FILESYSTEM.md -->
@@ -3300,9 +3785,9 @@ Helpers print their output via IO (captured by the evaluator) and return the VFS
 | `tree(vfs)` / `tree(vfs, path, depth)` | Print directory tree | No |
 | `stat(vfs, path)` | Print node metadata | No |
 
-Under the hood, the `Evaluator.prelude` field runs an import of VfsHelpers before every eval. That's why bare function names like `ls` and `mkdir` just work without any aliasing.
+The `Evaluator.prelude` field imports VfsHelpers before every eval, which is why bare names like `ls` and `mkdir` work without any aliasing.
 
-## Agent Actions
+## Agent actions
 
 The VFS is also wired up as `Raxol.Agent.Action` modules, so LLMs can call them as tools:
 
@@ -3332,7 +3817,7 @@ new_vfs = result.vfs  # mutating actions return the updated VFS
 
 VFS resolution checks `params[:vfs]` first (so Pipeline composition works), then `context[:vfs]`, and falls back to a fresh filesystem if neither exists.
 
-### Pipeline Composition
+### Pipeline composition
 
 ```elixir
 alias Raxol.Agent.Action.Pipeline
@@ -3355,7 +3840,7 @@ Internally it's a flat map keyed by absolute path (`%{"/" => node, "/docs" => no
 
 There are also formatting helpers: `format_ls/3` for styled directory listings and `format_cat/3` for line-numbered file output.
 
-## Playground Demo
+## Playground demo
 
 `mix raxol.playground` has a VFS demo with a shell-like interface: `ls`, `cd`, `cat`, `pwd`, `mkdir`, `rm`, `tree`, and `help` all work.
 
@@ -3385,8 +3870,185 @@ tree: you wire the supervisor yourself.
 | `normalize_event/1` | Translate a raw platform event to `{:ok, Route.t(), event}` or `:ignore` |
 | `send_message/3` | Send a rendered reply to a route |
 
-`Raxol.Gateway.Adapter.InMemory` is a reference adapter (platform `:in_memory`) that forwards
-outbound messages to a sink pid; it drives the full inbound to outbound path in tests.
+The contract is frozen (ADR-0023): additions must be optional callbacks, and existing
+callbacks do not change shape.
+
+Shipping adapters:
+
+| Adapter | Platform | Package |
+|---------|----------|---------|
+| `Raxol.Gateway.Adapter.InMemory` | `:in_memory` (reference; sink pid) | raxol_gateway |
+| `Raxol.Telegram.GatewayAdapter` | `:telegram` (text messages, chunked plain-text sends) | raxol_telegram |
+| `Raxol.Gateway.Adapter.Discord` | `:discord` (MESSAGE_CREATE text, chunked plain-text sends) | raxol_gateway |
+| `Raxol.Gateway.Adapter.Email` | `:email` (bidirectional: SMTP send + RFC822 inbound; transport injected) | raxol_gateway |
+
+A full Telegram wiring pairs the adapter with `Raxol.Telegram.UpdatePoller` (getUpdates
+long polling) feeding `normalize_event/1` into the router:
+
+```elixir
+{:ok, conn} = Raxol.Telegram.GatewayAdapter.connect(bot_token: token)
+
+Raxol.Gateway.Supervisor.start_link(
+  handler: {Raxol.Gateway.Handler.Agent, [system_prompt: "..."]},
+  adapter: {Raxol.Telegram.GatewayAdapter, conn}
+)
+
+Raxol.Telegram.UpdatePoller.start_link(
+  conn: conn,
+  on_update: fn raw ->
+    # Authorize BEFORE routing: the adapter is a pure translator and checks
+    # nothing, and Handler.Agent runs a paid backend call per text event.
+    with {:ok, route, event} <- Raxol.Telegram.GatewayAdapter.normalize_event(raw),
+         :allow <- Raxol.Gateway.Pairing.authorize(Raxol.Gateway.Pairing, route) do
+      case Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event) do
+        :ok -> :ok
+        # Log rejects (rate limit, max sessions): the poller advances its
+        # offset regardless, so a silent drop is permanent loss.
+        {:error, reason} -> Logger.warning("update rejected: #{inspect(reason)}")
+      end
+    else
+      :ignore -> :ok
+      :deny -> :ok
+    end
+  end
+)
+```
+
+The Discord wiring is the same shape with the roles renamed: the feed is
+`Raxol.Gateway.Adapter.Discord.GatewaySocket` (one Gateway v10 WebSocket with
+client heartbeats, identify/resume, and exponential reconnect; requires the
+optional `mint_web_socket` dependency), whose `:on_event` passes raw dispatch
+frames through `Raxol.Gateway.Adapter.Discord.normalize_event/1`. Replies go
+out over REST (`POST /channels/:id/messages`, optional `req` dependency),
+chunked at Discord's 2000 code points. Guild messages route as
+`chat_type: :guild`, DMs as `:dm`; bot-authored messages never normalize, so
+two agents cannot loop each other. Note the MESSAGE_CONTENT intent is
+privileged: enable it in the Discord developer portal or guild message
+content arrives empty.
+
+```elixir
+{:ok, conn} = Raxol.Gateway.Adapter.Discord.connect(bot_token: token)
+
+Raxol.Gateway.Supervisor.start_link(
+  handler: {Raxol.Gateway.Handler.Agent, [system_prompt: "..."]},
+  adapter: {Raxol.Gateway.Adapter.Discord, conn}
+)
+
+Raxol.Gateway.Adapter.Discord.GatewaySocket.start_link(
+  token: token,
+  on_event: fn frame ->
+    with {:ok, route, event} <- Raxol.Gateway.Adapter.Discord.normalize_event(frame),
+         :allow <- Raxol.Gateway.Pairing.authorize(Raxol.Gateway.Pairing, route) do
+      case Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event) do
+        :ok -> :ok
+        {:error, reason} -> Logger.warning("dispatch rejected: #{inspect(reason)}")
+      end
+    else
+      :ignore -> :ok
+      :deny -> :ok
+    end
+  end
+)
+```
+
+## Agent-backed handler
+
+`Raxol.Gateway.Handler.Agent` turns any chat into an agent conversation: each inbound
+`%{text: text}` event runs one synchronous turn through `Raxol.Agent.Stream` and replies
+with the collected answer. It requires the optional `raxol_agent` dependency.
+
+```elixir
+Raxol.Gateway.Supervisor.start_link(
+  handler:
+    {Raxol.Gateway.Handler.Agent,
+     [
+       system_prompt: "You are a helpful assistant.",
+       # No backend pinned: auto_provider resolves credentials from the
+       # environment (1Password ref -> provider env vars -> AI_API_KEY).
+       agent_opts: []
+     ]},
+  adapter: {MyAdapter, conn}
+)
+```
+
+Per-chat history is kept in the handler state (capped by `:max_history`, default 40
+messages) and, when the session has a `:log`, also recorded to the conversation log. A
+failed turn logs the full reason and replies with a short error message. Turns run
+synchronously inside the per-chat session process, so set `:idle_timeout` comfortably
+above the longest expected turn.
+
+## TEA app handler
+
+`Raxol.Gateway.Handler.Lifecycle` runs a full TEA app per chat under
+`environment: :gateway` (a registered Lifecycle environment: no terminal driver, no
+plugin manager, unnamed processes, so any number of chats can run the same app module
+concurrently). Each inbound `%{text: t}` event becomes a Raxol event (char key or paste,
+mirroring the Telegram input adapter), and the reply is the app's next rendered frame as
+plain text. Requires the optional `raxol` dependency.
+
+```elixir
+Raxol.Gateway.Supervisor.start_link(
+  handler: {Raxol.Gateway.Handler.Lifecycle, [app_module: MyTeaApp, width: 60, height: 16]},
+  adapter: {MyAdapter, conn}
+)
+```
+
+Turns are collected deterministically (event fold barrier, then a synchronous engine
+render), and `:event_fn` / `:format_fn` are injectable for custom event mapping or frame
+formatting. Frames the app renders between turns are discarded: a chat surface replies
+to messages; spontaneous pushes are `Raxol.Gateway.Delivery`'s job. The handler's
+`terminate/2` (a new optional `Handler` callback the session invokes on clean stops)
+stops the per-chat Lifecycle so it cannot outlive its chat.
+
+## Voice notes
+
+`Raxol.Gateway.Pipeline.Transcribe` is a feed-loop stage that turns a voice media event
+(`%{media: %{kind: :voice, ref: ..., ...}}`, what `Raxol.Telegram.GatewayAdapter` emits
+for `message.voice` updates) into the ordinary `%{text: transcript}` event before it is
+routed. It runs in the feed loop rather than the session so the conversation log records
+the transcript (a session logs each inbound event before its handler runs) and so STT
+never blocks a per-chat mailbox. Non-voice events pass through untouched.
+
+```elixir
+{:ok, conn} = Raxol.Telegram.GatewayAdapter.connect(bot_token: token)
+
+Raxol.Telegram.UpdatePoller.start_link(
+  conn: conn,
+  on_update: fn raw ->
+    with {:ok, route, event} <- Raxol.Telegram.GatewayAdapter.normalize_event(raw),
+         :allow <- Raxol.Gateway.Pairing.authorize(Raxol.Gateway.Pairing, route),
+         {:ok, event} <-
+           Raxol.Gateway.Pipeline.Transcribe.run(event,
+             fetch_fn: fn media -> Raxol.Telegram.GatewayAdapter.fetch_media(conn, media) end
+           ) do
+      case Raxol.Gateway.SessionRouter.route(Raxol.Gateway.SessionRouter, route, event) do
+        :ok -> :ok
+        # Log rejects: the poller advances its offset regardless, so a
+        # silent drop is permanent loss.
+        {:error, reason} -> Logger.warning("update rejected: #{inspect(reason)}")
+      end
+    else
+      :ignore -> :ok
+      :deny -> :ok
+    end
+  end
+)
+```
+
+The three stages are injectable functions: `:fetch_fn` (platform download, here
+`fetch_media/2` = Bot API `getFile` + file GET), `:convert_fn` (default: ffmpeg via a
+temporary file, `-f f32le -ac 1 -ar 16000`, executable allowlisted), and `:recognize_fn`
+(default: `Raxol.Speech.Recognizer.recognize/1` from the optional `raxol_speech`
+dependency). The stage fails open per event: any failure (STT missing, download or
+conversion error, empty transcript) drops that one voice note with a warning and
+`[:raxol_gateway, :transcribe, :error]` telemetry; text traffic is never affected. Audio
+bytes and transcripts stay out of the logs, as does the download URL (it embeds the bot
+token).
+
+Mind the cold start: the first recognition after boot pays the XLA graph compile, which
+can take minutes on CPU. Give the Recognizer a generous `:recognize_timeout_ms` (via
+`Raxol.Speech.Supervisor`'s `:recognizer_opts`) or warm it up front, otherwise every
+cold call times out, aborts the compile, and the next call starts over.
 
 ## Routing and sessions
 
@@ -3400,8 +4062,9 @@ agent:main:{platform}:{chat_type}:{chat_id}
 `Raxol.Gateway.SessionRouter` (a `BaseManager` GenServer) starts one `Raxol.Gateway.Session`
 process per chat under a `DynamicSupervisor`, keyed by that string, with an idle timeout
 (default 10 minutes), a per-key start cooldown (default 5 seconds), and a max-session bound
-(default 1000). Sessions run a `Raxol.Gateway.Handler` (a two-callback behaviour: `init/2`
-and `handle_event/2`). Each inbound event and each reply can be recorded to an optional log
+(default 1000). Sessions run a `Raxol.Gateway.Handler` (`init/2` and `handle_event/2`,
+plus an optional `terminate/2` invoked on clean session stops for handlers that own
+linked processes). Each inbound event and each reply can be recorded to an optional log
 keyed by a stable `conversation_id`.
 
 ## Pairing and authorization
@@ -3425,6 +4088,79 @@ decides `authorize/2` in this order:
 - `{:cross_platform, route}`: a different platform's chat.
 - `{:target, "platform:chat_id"}`: an explicit target string. The platform is matched against
   connected adapters by string comparison, never turned into an atom from input.
+
+### Email as a delivery target
+
+`Raxol.Gateway.Adapter.Email` handles both directions. Outbound is what the
+`{:home, route}` mode wants: cron and background results land in a mailbox with no
+platform approval process. It needs the optional `gen_smtp` dependency, and
+a route addresses a mailbox directly:
+
+```elixir
+{:ok, conn} =
+  Raxol.Gateway.Adapter.Email.connect(
+    relay: "smtp.example.com",
+    port: 587,
+    tls: :always,
+    username: "bot@example.com",
+    password: System.fetch_env!("SMTP_PASSWORD"),
+    from: "bot@example.com",
+    subject: "Nightly digest"
+  )
+
+route = Raxol.Gateway.Route.new(%{platform: :email, chat_type: :dm, chat_id: "ops@example.com"})
+:ok = Raxol.Gateway.Adapter.Email.send_message(conn, route, rendered_report)
+```
+
+The rendered reply becomes a text/plain MIME message (utf-8, quoted-printable); nothing
+is chunked, since email has no chat-style length limit.
+
+### Email as a conversational surface
+
+Inbound email makes an email thread a per-chat session like any other platform.
+`normalize_event/1` parses a raw RFC822 message (`:mimemail.decode`, never raising) into
+`{:ok, route, %{text: body}}`: it routes on the normalized sender address
+(`chat_type: :dm`, `chat_id` lower-cased with the display name stripped), takes the first
+`text/plain` part with quoted history trimmed, and surfaces `Message-ID`/`In-Reply-To`/
+`References`/`Subject` under the event's `:email` key. Non-mail, unparseable, or
+sender-less input returns `:ignore`.
+
+The transport that pulls mail off a mailbox is injected, not bundled, because `gen_smtp`
+only speaks SMTP and the mailbox a deployment reads (IMAP, POP3, the Gmail API, or an SMTP
+listener) is its choice. `Raxol.Gateway.Adapter.Email.Inbox` is the sink-agnostic poll
+feed (mirroring `Raxol.Telegram.UpdatePoller`): an injectable `:fetch_fn` cursor loop with
+exponential backoff and credential-redacted status. `Raxol.Gateway.Adapter.Email.ThreadStore`
+is a capped per-conversation store the wiring records inbound `Message-ID`s into and the
+adapter reads back through `conn`'s `:thread_lookup`, so outbound replies set
+`In-Reply-To`/`References`/`Re:` headers and mail clients keep the conversation together
+(the frozen `send_message/3` has no per-send channel for the reply id).
+
+```elixir
+{:ok, store} = Raxol.Gateway.Adapter.Email.ThreadStore.start_link(name: MyThreads)
+
+{:ok, conn} =
+  Raxol.Gateway.Adapter.Email.connect(
+    relay: "smtp.example.com",
+    from: "bot@example.com",
+    thread_lookup: Raxol.Gateway.Adapter.Email.ThreadStore.thread_lookup_fn(store)
+  )
+
+Raxol.Gateway.Adapter.Email.Inbox.start_link(
+  fetch_fn: fn cursor -> MyMailbox.fetch_since(cursor) end,
+  on_message: fn raw ->
+    case Raxol.Gateway.Adapter.Email.normalize_event(raw) do
+      {:ok, route, event} ->
+        with :allow <- Raxol.Gateway.Pairing.authorize(MyPairing, route) do
+          Raxol.Gateway.Adapter.Email.ThreadStore.record_event(store, route, event)
+          Raxol.Gateway.SessionRouter.route(MyRouter, route, event)
+        end
+
+      :ignore ->
+        :ok
+    end
+  end
+)
+```
 
 ## Handoff
 
@@ -3462,10 +4198,18 @@ route = Raxol.Gateway.Route.new(%{platform: :in_memory, chat_type: :dm, chat_id:
 ## Status
 
 The gateway core (adapter contract, routing, sessions, pairing, delivery, handoff) is
-complete. Two pieces are deferred: concrete platform adapters (Telegram, Discord, and so on;
-only `Adapter.InMemory` ships today), and a `Lifecycle`-backed handler that runs a full TEA
-app under `environment: :gateway`. Any module satisfying the two `Handler` callbacks works in
-the meantime. See `docs/adr/0023-unified-messaging-gateway.md`.
+complete, the adapter contract is frozen, `Handler.Agent` (agent-backed conversations)
+and `Handler.Lifecycle` (a full TEA app per chat under `environment: :gateway`) ship,
+and three platforms sit behind the frozen contract: Telegram
+(`Raxol.Telegram.GatewayAdapter` + `Raxol.Telegram.UpdatePoller`; text and voice notes -
+keyboards, callbacks, and other media are still the TEA surface's domain), Discord
+(`Raxol.Gateway.Adapter.Discord` + its `GatewaySocket`; text-only this slice), and
+Email (`Raxol.Gateway.Adapter.Email`; bidirectional SMTP send + RFC822 inbound via
+`Email.Inbox` + `Email.ThreadStore`, with the mailbox transport injected). Voice notes
+transcribe through `Raxol.Gateway.Pipeline.Transcribe`. Still deployment-supplied: the
+concrete inbound-email transport (IMAP/POP/Gmail).
+Any module satisfying the `Handler` callbacks works alongside the shipped handlers. See
+`docs/adr/0023-unified-messaging-gateway.md`.
 
 ## See also
 
@@ -3478,9 +4222,9 @@ the meantime. See `docs/adr/0023-unified-messaging-gateway.md`.
 
 # MCP as a Rendering Target
 
-Most frameworks bolt MCP on as a side channel. Raxol treats it as a first-class rendering target alongside terminal, browser, and SSH. The Component tree is the source of truth; MCP tools and resources are projections of it. See [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md) for the design rationale.
+MCP is a rendering target alongside terminal, browser, and SSH. The Component tree is the source of truth, and MCP tools and resources are projections of it, so the same running module serves a human and an agent without either seeing a different truth. See [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md) for the design rationale.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix mcp.server
@@ -3505,7 +4249,7 @@ session
 
 The agent sees a structured Component tree, not a flat screenshot. It picks the action it wants from a typed schema.
 
-## Tool Derivation
+## Tool derivation
 
 Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exposes semantic actions per Component:
 
@@ -3521,7 +4265,7 @@ Each interactive Component implements `Raxol.MCP.ToolProvider`. The protocol exp
 
 Add `@mcp_exclude true` to a Component's attrs to suppress tool derivation, useful for internal scaffolding Components that shouldn't show up in the agent's action menu.
 
-## Focus Lens
+## Focus lens
 
 A Component tree with 50 Components generates 100+ tools. That's too many for an LLM to reason about. The focus lens filters to ~15 tools per interaction based on:
 
@@ -3558,7 +4302,7 @@ end
 
 The MCP client can read `myapp://state/cart` to inspect what the agent is working with. Updates stream as diffs through `Raxol.MCP.Diff`, so the agent doesn't need to re-fetch the full state every turn.
 
-## Test Harness
+## Test harness
 
 `Raxol.MCP.Test` is a pipe-friendly test harness:
 
@@ -3580,7 +4324,7 @@ end
 
 The harness goes through the same MCP transport as a real client, so what your tests exercise is what an agent will hit.
 
-## Context Tree
+## Context tree
 
 `Raxol.MCP.ContextTree` assembles a unified view of state from:
 
@@ -3592,15 +4336,11 @@ The harness goes through the same MCP transport as a real client, so what your t
 
 The tree is streamed as diffs over the MCP connection, so agents track changes incrementally rather than polling.
 
-## Property Tests
+## Property tests
 
 `Raxol.MCP.ToolProvider` is functor-law-tested: tool derivation commutes with Component composition. If you compose two Components, the derived tools are the same as the tools you'd get by deriving them separately and merging. This catches bugs where a wrapping Component would accidentally hide tools from a child.
 
-## What This Enables
-
-The same TEA module the human uses, the agent uses too. Same source of truth, different projections. That's the pitch a framework can only make if MCP is a first-class rendering target rather than an afterthought.
-
-## See Also
+## See also
 
 - [ADR-0012](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0012-mcp-as-rendering-target.md): design rationale
 - [Agent Framework](AGENT_FRAMEWORK.md): agents that consume MCP
@@ -3752,7 +4492,7 @@ past messages. They are different questions with different answers.
 
 `raxol_plugin` is the developer-facing SDK over the 40-module plugin system in `raxol_core`. If you're writing a plugin, this is the package you depend on. If you're consuming plugins from your app, you don't need it; the runtime is in `raxol_core`.
 
-## Quick Start
+## Quick start
 
 ```elixir
 defmodule MyPlugin do
@@ -3852,7 +4592,7 @@ The 40-module runtime (plugin manager, dependency resolver, lifecycle, capabilit
 
 The split exists so apps that *use* plugins don't need to depend on the SDK that *creates* them.
 
-## See Also
+## See also
 
 - [GUIDE](https://github.com/DROOdotFOO/raxol/blob/master/docs/plugins/GUIDE.md): step-by-step plugin authoring
 - [PLUGIN_TEMPLATES](https://github.com/DROOdotFOO/raxol/blob/master/docs/plugins/PLUGIN_TEMPLATES.md): ready-made starters
@@ -3865,7 +4605,7 @@ The split exists so apps that *use* plugins don't need to depend on the SDK that
 
 Record terminal sessions to asciinema v2 `.cast` files. Play them back with pause, seek, and speed controls. If your app crashes mid-recording, the session auto-saves so you can see what happened.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix raxol.record my_session.cast
@@ -3939,7 +4679,7 @@ The format is a JSON header followed by newline-delimited event arrays:
 
 Upload `.cast` files to [asciinema.org](https://asciinema.org) to share them.
 
-## Programmatic Usage
+## Programmatic usage
 
 ```elixir
 {:ok, _} = Raxol.Recording.Recorder.start_link()
@@ -3961,7 +4701,7 @@ On crash, the current session is saved automatically. No explicit stop needed fo
 
 Interactive Elixir REPL with AST-based sandboxing. Three safety levels: wide open for local use, locked down for SSH. Bindings persist between evaluations, IO gets captured, and runaway code hits a timeout.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix raxol.repl
@@ -4003,7 +4743,7 @@ evaluator = Evaluator.reset_bindings(evaluator)  # clears bindings, keeps histor
 evaluator = Evaluator.clear_history(evaluator)    # clears history, keeps bindings
 ```
 
-## Sandbox Levels
+## Sandbox levels
 
 `Raxol.REPL.Sandbox` walks the AST with `Macro.prewalk` and rejects code that calls blocked modules or functions, before it ever runs.
 
@@ -4034,7 +4774,7 @@ mix raxol.playground --ssh
 
 Use `:strict` sandbox for anything exposed to the network.
 
-## Playground Demo
+## Playground demo
 
 The REPL is one of the playground demos (`mix raxol.playground` -> REPL). It has input history (up/down), formatted output, a bindings panel, and shows the active sandbox level.
 
@@ -4153,10 +4893,9 @@ curation.
 Consolidation (model-driven merge of near-duplicate skills) is opt-in and not yet
 implemented.
 
-## Why OTP makes this stronger
+## What supervision buys
 
-Hermes markets itself as "the only agent with a built-in learning loop," backed by a
-single-process SQLite store. Raxol's loop is built on supervision instead:
+Three properties fall out of running the loop on OTP rather than in-process:
 
 - The reviewer is an isolated, unlinked `Task`. A model error or parse failure is logged and
   the turn is unaffected.
@@ -4165,14 +4904,12 @@ single-process SQLite store. Raxol's loop is built on supervision instead:
   and the supervisor restarts the manager.
 - Every Curator mutation is preceded by a backup and is reversible.
 
-A learning loop that cannot lose state because it is backed by OTP supervision is a
-concrete, defensible position, not a slogan.
-
 ## See also
 
 - [Memory](MEMORY.md): the recall layer the reviewer writes facts into.
 - [Agent Framework](AGENT_FRAMEWORK.md): the Turn driver that wires self-improvement into a
   turn, and auxiliary-model routing.
+- [Why Raxol](../WHY_RAXOL.md): how this loop compares to the Python agent stacks.
 
 
 <!-- docs/features/SENSOR_FUSION.md -->
@@ -4181,7 +4918,7 @@ concrete, defensible position, not a slogan.
 
 Poll hardware sensors, batch their readings, fuse them with weighted averaging, and render the results as gauges and sparklines. The whole pipeline is supervised, so feeds crash and reconnect independently.
 
-## Quick Start
+## Quick start
 
 ```elixir
 # 1. Implement a sensor
@@ -4212,7 +4949,7 @@ Raxol.Sensor.Fusion.subscribe()
 # Receive: {:fused_update, %{sensors: %{temp: %{values: ..., alerts: ...}}, ...}}
 ```
 
-## Implementing a Sensor
+## Implementing a sensor
 
 Sensors implement `Raxol.Sensor.Behaviour`:
 
@@ -4331,7 +5068,7 @@ cells = Raxol.Sensor.HUD.render_sparkline(
 )
 ```
 
-### Threat Indicator
+### Threat indicator
 
 ```elixir
 cells = Raxol.Sensor.HUD.render_threat(
@@ -4357,7 +5094,7 @@ cells = Raxol.Sensor.HUD.render_minimap(
 )
 ```
 
-## Supervision Tree
+## Supervision tree
 
 `:rest_for_one` strategy:
 
@@ -4420,9 +5157,9 @@ Push-to-talk: `start_recording/0` opens the mic, `stop_recording/0` closes it an
 
 Optional deps: `bumblebee`, `nx`, `exla`. Without them, `Recognizer.recognize/1` returns `{:error, :bumblebee_not_available}`.
 
-## Voice Commands
+## Voice commands
 
-`InputAdapter` maps transcribed phrases to Raxol events. 20 default phrases ship out of the box (see `InputAdapter.default_commands/0` for the full list):
+`InputAdapter` maps transcribed phrases to Raxol events. 20 phrases ship by default (`InputAdapter.default_commands/0` has the full list):
 
 | Phrase                         | Event                                |
 | ------------------------------ | ------------------------------------ |
@@ -4455,10 +5192,10 @@ Raxol.Speech.InputAdapter.translate(text,
 
 `Listener` validates `record_command` against an allowlist before spawning the Port. Don't expose this surface to untrusted networks; the threat model assumes a trusted local user holding a microphone.
 
-## See Also
+## See also
 
 - [Watch](WATCH.md): the other accessibility-aware surface (push notifications)
-- [Accessibility](#): announcements that Speaker subscribes to
+- `Raxol.Core.Accessibility`: the announcement source Speaker subscribes to
 
 
 <!-- docs/features/SYMPHONY.md -->
@@ -4469,7 +5206,7 @@ Raxol.Speech.InputAdapter.translate(text,
 
 Status: pre-alpha. Not yet on Hex; use the path dep at `packages/raxol_symphony/`.
 
-## Quick Start
+## Quick start
 
 ```bash
 mix raxol.symphony --workflow ./WORKFLOW.md
@@ -4505,6 +5242,31 @@ Coding agent run                    Six surfaces
 
 Pick a runner per workflow. Mix-and-match isn't supported in a single run.
 
+### Codex authentication
+
+The Codex runner spawns the externally-authenticated `codex` CLI and does not
+drive its interactive/OAuth sign-in (that stays out-of-band via `codex login`).
+It only *selects and verifies* the credential the CLI already holds, via an
+optional `codex.auth` block:
+
+```
+codex:
+  command: "codex app-server"
+  auth:
+    mode: inherit        # inherit (default) | api_key | codex_home
+    api_key_env: OPENAI_API_KEY   # env var *name* to read the key from (api_key mode)
+    codex_home: ~/.codex          # CODEX_HOME to inject (codex_home mode)
+    require_login: false          # hard-fail preflight when unauthenticated
+```
+
+Config stores only references (an env var name, a path), never the secret; the
+key value is read from the environment at spawn and injected into the child
+process. `mode: inherit` (the default) injects nothing and preserves the
+ambient-env behavior. `require_login: true` makes an unauthenticated spawn fail
+preflight with `{:error, :codex_unauthenticated}` instead of stalling mid-turn.
+Each spawn emits `[:raxol, :symphony, :codex, :auth]` telemetry
+(`%{mode, authenticated?, source}`, never the secret).
+
 ## Surfaces
 
 Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, so they stay consistent without per-surface state:
@@ -4516,7 +5278,7 @@ Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, s
 - **Watch**: debounced push to APNS/FCM, tap-to-approve actions.
 - **JSON API**: `GET /api/v1/state`, `GET /api/v1/runs/:issue_id`, `POST /api/v1/refresh`, `POST /api/v1/runs/:issue_id/stop`.
 
-## Evidence Collection
+## Evidence collection
 
 `Raxol.Symphony.Evidence.collect/3` runs per dispatch. It pulls:
 
@@ -4526,7 +5288,7 @@ Every surface subscribes to the same orchestrator snapshot via Phoenix.PubSub, s
 
 Set `recording.enabled: true` in the workflow to capture casts. The `Evidence.Capture` GenServer writes one `.cast` per run under `evidence.dir`.
 
-## Retry Behaviour
+## Retry behaviour
 
 Three retry classes, configured per workflow:
 
@@ -4567,7 +5329,7 @@ retry:
 ---
 ```
 
-## See Also
+## See also
 
 - [Agent Framework](AGENT_FRAMEWORK.md): the runtime each agent runs in
 - [MCP](MCP.md): how the orchestrator's MCP surface is derived
@@ -4579,7 +5341,7 @@ retry:
 
 `raxol_telegram` runs a TEA app as a Telegram bot. Each chat gets a session with its own TEA model; inline keyboards become Button Components; HTML `<pre>` blocks render the buffer.
 
-## Quick Start
+## Quick start
 
 ```elixir
 # Add the supervisor with your TEA app module
@@ -4605,11 +5367,11 @@ The Telegex polling handler uses Telegex's own config (`config :telegex, token: 
 
 Send a message to the bot from an allowed chat and the router spawns a `Session` for that chat. The session hosts a Lifecycle with `environment: :telegram`.
 
-## Access Control
+## Access control
 
 `allowed_chat_ids` is optional. If set, the `Bot` update handler drops messages from other chats before they reach the router. Leave it out to accept all chats, not recommended unless the bot is public-facing.
 
-## Session Lifecycle
+## Session lifecycle
 
 `SessionRouter` keeps a per-chat session map, capped at 1000 entries. New chats get a new session; existing chats route to the running one. Sessions idle out after 10 minutes of no traffic. A 5s cooldown between session creations rate-limits accidental floods.
 
@@ -4638,13 +5400,13 @@ Message edit dedup prevents redundant API calls when the rendered output doesn't
 
 The bot token is the only secret. Don't commit it; load via `System.fetch_env!/1` at runtime.
 
-## Bot API 10.x Surface (2026-06)
+## Bot API 10.x surface (2026-06)
 
 Telegram's June 2026 release added rich-text messages, admin bots for `chat_join_request` updates, and poll hyperlinks. `raxol_telegram` 0.2 covers all three plus an MCP export path for the Guardian decisions.
 
 These features ride on top of the per-chat Session model above. They use `Raxol.Telegram.HTTP` (shared raw `Req` transport with `post_fn` injection for tests) because Telegex 1.8 predates Bot API 10.1 and does not expose the new endpoints. The package adds `req ~> 0.5` as an optional dep; without it, the HTTP-bound modules return `{:error, :req_not_available}` and consumers can call `to_payload/3` themselves to get the JSON body.
 
-### Rich Messages (`Raxol.Telegram.RichMessage`)
+### Rich messages (`Raxol.Telegram.RichMessage`)
 
 Builders for Bot API 10.1's `sendRichMessage` family. Paragraph, heading (1-6), table + cell, list + list_item (ordered / unordered), details (collapsible "Show More"), math (block + inline), thinking. Inline formatting: bold, italic, underline, strikethrough, code, spoiler, subscript, superscript.
 
@@ -4710,7 +5472,7 @@ Guardian telemetry: `[:raxol_telegram, :guardian, :received | :approved | :decli
 
 Registration is opt-in and requires `raxol_mcp` at runtime; without it, `register/0` returns `{:error, :raxol_mcp_not_available}` and the rest of the package keeps working. No compile-time dep on `raxol_mcp`.
 
-### Polls with Hyperlinks (`Raxol.Telegram.Poll`)
+### Polls with hyperlinks (`Raxol.Telegram.Poll`)
 
 `send_poll/4` accepts options as plain `String.t()`, `{:link, label, url}` tuples (entire text is one hyperlink), or `%{text: ..., entities: [...]}` maps for arbitrary entity layouts. `link_entity/3` builds a `text_link` entity at a specific UTF-16 offset.
 
@@ -4731,7 +5493,7 @@ send_poll(chat_id, "Which doc?",
 
 Option count is validated client-side (2-10); other constraints (text length, entity bounds) are left to the API.
 
-### Self-Hosted Bot API Server
+### Self-hosted bot API server
 
 For groups expecting >30 req/s during join floods (Telegram's public API rate cap), point `:api_base` at a [gramiojs/telegram-bot-api](https://github.com/gramiojs/telegram-bot-api) Docker image:
 
@@ -4744,8 +5506,22 @@ Raxol.Telegram.RichMessage.Sender.send(chat_id, msg,
 
 The same `:api_base` option works on `Raxol.Telegram.Poll.send_poll/4` and `Raxol.Telegram.Guardian.apply_decision/3` (shared `HTTP` transport).
 
-## See Also
+## As a gateway adapter
 
+`Raxol.Telegram.GatewayAdapter` puts Telegram behind the frozen
+`Raxol.Gateway.Adapter` contract (requires the optional `raxol_gateway`
+dependency): text messages normalize to the gateway's `%{text: binary}` event
+shape, replies go out as plain-text `sendMessage` calls chunked at Telegram's
+4096 UTF-16-code-unit limit. `Raxol.Telegram.UpdatePoller` is the matching
+update feed: a supervised `getUpdates` long-poll loop with exponential backoff
+and a sink-agnostic `:on_update` function, so it drives either the gateway
+router or `Bot.handle_update/2`. Callbacks, keyboards, and media stay on the
+TEA surface (this package's `Session`); the gateway path is text-first. See
+[Gateway](GATEWAY.md) for the full wiring example.
+
+## See also
+
+- [Gateway](GATEWAY.md): multi-platform gateway; Telegram is the first adapter behind the frozen contract
 - [Watch](WATCH.md): another push surface for mobile
 - [Agent Framework](AGENT_FRAMEWORK.md): if your bot is an agent, use this stack
 - [ADR-0014](https://github.com/DROOdotFOO/raxol/blob/master/docs/adr/0014-telegram-ai-guardian.md): full Guardian design rationale
@@ -4840,7 +5616,7 @@ Save a debugging session to disk and load it later:
 
 Uses Erlang's binary term format.
 
-## Manual Recording
+## Manual recording
 
 `TimeTravel.record/4` is called by the Dispatcher automatically, but you can also record snapshots yourself:
 
@@ -4857,7 +5633,7 @@ Snapshots live in a CircularBuffer. Old ones get evicted when it's full, so memo
 
 `raxol_watch` pushes glanceable summaries from a Raxol app to iOS or Android devices. Accessibility announcements become notifications; taps come back as Raxol events. It's a low-bandwidth surface for status updates rather than full UI.
 
-## Quick Start
+## Quick start
 
 ```elixir
 children = [
@@ -4879,7 +5655,7 @@ Supported opts: `muted: false`, `high_priority_only: false`.
 
 When the app announces something via Accessibility, registered devices get a push.
 
-## Push Backends
+## Push backends
 
 | Backend  | Notes                                |
 | -------- | ------------------------------------ |
@@ -4897,7 +5673,7 @@ High-priority announcements (errors, alerts) bypass the debounce and push immedi
 
 Parallel send across devices via `Task.async_stream`. Failures log per-device but don't block the others.
 
-## Tap Actions
+## Tap actions
 
 When a user taps a notification, `ActionHandler.handle_action/2` translates the action ID into a `Raxol.Core.Events.Event`. Default mapping:
 
@@ -4929,7 +5705,7 @@ Custom event types beyond `:key` work too: any `{type, data}` where `type` is an
 chat tap-back set (`reply` + `mute` + `pin` + `delete` + `dismiss`) to
 chat-style notifications.
 
-## Quick-Reply (Text Input)
+## Quick reply (text input)
 
 iOS `UNTextInputNotificationAction` and Android `RemoteInput` prompt the user for text before the action arrives back at the app. `handle_reply_action/3` translates the action ID + typed text into a `:reply` event:
 
@@ -4944,7 +5720,7 @@ Raxol.Watch.ActionHandler.dispatch_reply("reply", "Sounds good!", to: MyApp.TEA)
 
 Replies use the same `{:watch_action, event}` channel as other tap-backs, so consumers pattern-match on `event.type == :reply` rather than a separate message tag.
 
-## Notification Categories
+## Notification categories
 
 `Raxol.Watch.Categories` returns pure data for the host iOS / Android apps to register at launch:
 
@@ -4972,7 +5748,7 @@ Pure data, no platform calls. The host app translates to `UNNotificationCategory
 
 The full untruncated text is preserved under `:body_long` on every constructor, for the watch detail view that fetches when the user taps "expand".
 
-### Rich Notification Constructors (W1)
+### Rich notification constructors (W1)
 
 | Constructor             | Carries                                    |
 | ----------------------- | ------------------------------------------ |
@@ -4987,7 +5763,7 @@ The full untruncated text is preserved under `:body_long` on every constructor, 
 
 Notification fields exposed: `body_long`, `audio_url`, `image_url`, `media_type` (`:sticker | :photo | :video_thumb`), `location`. Existing constructors stay backward-compatible (new fields nil-defaulted).
 
-## APNS Payload Encoding (W2)
+## APNS payload encoding (W2)
 
 `Raxol.Watch.Push.APNS.build_payload/1` emits the JSON payload with:
 
@@ -4997,7 +5773,7 @@ Notification fields exposed: `body_long`, `audio_url`, `image_url`, `media_type`
 
 `build_payload/1` is `@doc`-public so consumers can introspect or test the payload shape without Pigeon mocking.
 
-## FCM Payload Encoding (W3)
+## FCM payload encoding (W3)
 
 `Raxol.Watch.Push.FCM.build_notification_object/1` and `build_data_payload/1` emit the FCM body:
 
@@ -5010,13 +5786,13 @@ Notification fields exposed: `body_long`, `audio_url`, `image_url`, `media_type`
 
 The host iOS / Wear OS app downloads the media and renders the notification: `UNNotificationServiceExtension` on iOS, `NotificationCompat` + `BigPictureStyle` / `MessagingStyle` on Android.
 
-## Device Registry
+## Device registry
 
 `DeviceRegistry` is ETS-backed with `read_concurrency: true`. Crash-safe init means the registry recovers cleanly if the GenServer restarts.
 
 Devices don't expire automatically. Hook `unregister/1` into your auth layer when sessions end.
 
-## See Also
+## See also
 
 - [Telegram](TELEGRAM.md): interactive messaging surface
 - [Speech](SPEECH.md): the other accessibility-driven surface
@@ -5169,11 +5945,10 @@ adapter contract.
 
 ## One fan-out, not N adapters
 
-The reason this holds together is architectural. A Raxol app is one OTP process publishing
-its state; each surface is a subscriber that projects that state its own way. Adding a
-surface adds a subscriber, not a rewrite. The terminal, the LiveView, and the SSH session
-can render the same running module at the same time, each staying in sync through
-Phoenix.PubSub.
+A Raxol app is one OTP process publishing its state, and each surface is a subscriber that
+projects that state its own way. Adding a surface adds a subscriber, not a rewrite. The
+terminal, the LiveView, and the SSH session can render the same running module at the same
+time, each staying in sync through Phoenix.PubSub.
 
 That is a different model from a chat bot framework, where each platform is a separate
 integration that reimplements the conversation. Here the conversation, the state, and the
@@ -5189,13 +5964,13 @@ surfaces that cannot compute frames server-side (the terminal). The same declara
 differently per surface, with `prefers-reduced-motion` respected. Hints are declarative
 metadata, never imperative commands.
 
-## The agent surface is first-class
+## The agent surface
 
-The MCP surface is not a bolt-on. Component types implement a `ToolProvider` behaviour, so
-the framework derives an agent's toolset from the same component tree it renders for a human,
-and a focus lens narrows it to the roughly 15 relevant tools per interaction. An LLM
-`type_into` a field and `click` a button through the exact structure a person sees. See
-[MCP as a Rendering Target](../features/MCP.md).
+MCP is built the same way as the others. Component types implement a `ToolProvider`
+behaviour, so the framework derives an agent's toolset from the same component tree it
+renders for a human, and a focus lens narrows it to the roughly 15 relevant tools per
+interaction. An LLM `type_into` a field and `click` a button through the exact structure a
+person sees. See [MCP as a Rendering Target](../features/MCP.md).
 
 ## See also
 
@@ -5209,9 +5984,9 @@ and a focus lens narrows it to the roughly 15 relevant tools per interaction. An
 # Tool / Action Catalog
 
 Every LLM-callable Agent Action, with its parameters and authorization tier.
-This catalog is generated by `mix raxol.docs.tools` (run from
-`packages/raxol_payments`), introspected from each action's
-`__action_meta__/0`, so it cannot drift from the actual dispatchable surface.
+Generated by `mix raxol.docs.tools` (run from `packages/raxol_payments`),
+introspected from each action's `__action_meta__/0`. Do not edit by hand.
+`mix raxol.docs.tools --check` fails when this file is stale.
 
 Total: 36 tools, 8 sensitive.
 
@@ -5242,7 +6017,7 @@ The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval U
 | `skill_manage` | no | Create, patch, or delete a skill (procedural memory). action create: write a new skill; patch/edit: update an existing one; delete: remove it. | `action` (string, required), `name` (string, required), `description` (string), `category` (string), `version` (string), `body` (string), `metadata` (map) |
 | `skill_view` | no | Read a skill's contents by name. Omit `path` to read the SKILL.md body; pass a relative `path` to read one supporting file inside the skill directory. | `name` (string, required), `path` (string) |
 | `skills_list` | no | List available skills as metadata only (name, category, description, state). Call skill_view with a name to read a skill's contents. | (none) |
-| `task` | no | Delegate a self-contained subtask to a fresh read-only sub-agent and return its final answer. Use for focused investigation (searching, reading, summarizing across many files) that would otherwise clutter the main conversation. The sub-agent has no prior context and cannot write files or run commands — give it everything it needs in `prompt`. | `prompt` (string, required), `max_iterations` (integer) |
+| `task` | no | Delegate a self-contained subtask to a fresh read-only sub-agent and return its final answer. Use for focused investigation (searching, reading, summarizing across many files) that would otherwise clutter the main conversation. The sub-agent has no prior context and cannot write files or run commands: give it everything it needs in `prompt`. | `prompt` (string, required), `max_iterations` (integer) |
 | `vfs_change_dir` | no | Change the current working directory in the virtual filesystem | `path` (string, required) |
 | `vfs_get_tree` | no | Get a directory tree representation from the virtual filesystem | `path` (string), `depth` (integer) |
 | `vfs_list_dir` | no | List files and directories at a path in the virtual filesystem | `path` (string) |
@@ -5250,7 +6025,7 @@ The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval U
 | `vfs_read_file` | no | Read the contents of a file in the virtual filesystem | `path` (string, required) |
 | `vfs_remove` | no | Remove a file or empty directory from the virtual filesystem | `path` (string, required) |
 | `vfs_write_file` | no | Create a file with content in the virtual filesystem | `path` (string, required), `content` (string, required) |
-| `write_file` | yes | Create a file (relative to the current working directory) with the given content. Refuses to clobber an existing file unless `overwrite` is true — use `edit_file` for targeted changes. Parent directories are created as needed. | `path` (string, required), `content` (string, required), `overwrite` (boolean) |
+| `write_file` | yes | Create a file (relative to the current working directory) with the given content. Refuses to clobber an existing file unless `overwrite` is true: use `edit_file` for targeted changes. Parent directories are created as needed. | `path` (string, required), `content` (string, required), `overwrite` (boolean) |
 
 ## Payment tools (`raxol_payments`)
 
@@ -5266,7 +6041,7 @@ The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval U
 | `payment_list_mandates` | no | List Xochi Mandate envelopes stored locally. role="member" lists envelopes the local wallet issued; role="agent" lists envelopes addressed to the local wallet. | `role` (string, required) |
 | `payment_poll_relay_status` | no | Poll a Relay (Tron) transfer by id until it reaches a terminal status (completed, failed, or refunded). Returns the final status and tx hash. | `transfer_id` (string, required), `timeout_ms` (integer), `interval_ms` (integer) |
 | `payment_poll_xochi_status` | no | Poll a Xochi intent by id until it reaches a terminal status (completed, failed, expired, refunded). Returns the final status and settlement details. | `intent_id` (string, required), `timeout_ms` (integer), `interval_ms` (integer) |
-| `payment_revoke_mandate` | no | Locally delete a stored Xochi Mandate envelope so it can no longer be selected for outbound requests. Note: Xochi's server-side budget counter for this envelope remains until expires_at -- per agent-auth.md (2026-04-27), no server revoke endpoint exists in v1. | `envelope_hash` (string, required) |
+| `payment_revoke_mandate` | no | Locally delete a stored Xochi Mandate envelope so it can no longer be selected for outbound requests. Note: Xochi's server-side budget counter for this envelope remains until expires_at, per agent-auth.md (2026-04-27), no server revoke endpoint exists in v1. | `envelope_hash` (string, required) |
 | `payment_spending_status` | no | Check current spending against budget limits | (none) |
 | `payment_transfer` | yes | Authorize an explicit same-chain transfer to an address: runs the spend gate and reserves budget, but does NOT broadcast. Use payment_execute_xochi_intent to actually move funds cross-chain or with privacy. | `to` (string, required), `amount` (string, required), `currency` (string) |
 
@@ -5277,7 +6052,7 @@ The [Coding Agent](../features/CODING_AGENT.md) shows the interactive approval U
 
 How Raxol works, from application model to terminal output.
 
-## The Big Picture
+## The big picture
 
 ```elixir
 Your App (TEA)          Raxol (Framework)           Rendering Targets
@@ -5292,7 +6067,7 @@ Your App (TEA)          Raxol (Framework)           Rendering Targets
 
 Your app provides pure functions. Raxol manages the runtime loop, layout, rendering, and I/O. You never write ANSI escape codes.
 
-## Application Model: TEA
+## Application model: TEA
 
 Every Raxol app implements The Elm Architecture:
 
@@ -5307,9 +6082,9 @@ def subscribe(model) -> [subscription]        # External events
 
 The runtime calls `view(model)` after every `update`, diffs the resulting Element tree against the previous one, and renders only what changed. Same diffing idea as React's virtual DOM, but the Element tree describes terminal cells, not HTML nodes.
 
-## Layer Stack
+## Layer stack
 
-### 1. View DSL -> Element Tree
+### 1. View DSL -> element tree
 
 The `view/1` callback uses macros to build a tree of plain maps:
 
@@ -5326,7 +6101,7 @@ end
 
 Produces: `%{type: :column, children: [%{type: :text, ...}, %{type: :row, ...}], ...}`
 
-### 2. Preparer -> Measured Element Tree
+### 2. Preparer -> measured element tree
 
 `Raxol.UI.Layout.Preparer` walks the element tree and pre-measures all text nodes via `Raxol.UI.TextMeasure`, producing a `PreparedElement` tree with cached display widths. This is the "prepare" phase of a two-phase prepare/layout architecture (inspired by [Pretext](https://github.com/nicklockwood/Pretext)):
 
@@ -5335,7 +6110,7 @@ Produces: `%{type: :column, children: [%{type: :text, ...}, %{type: :row, ...}],
 - `prepare_incremental/2` compares content hashes to skip re-measurement of unchanged nodes
 - `PreparedElement` also carries `animation_hints`, declarative metadata attached via `Raxol.Animation.Helpers.animate/2` in `view/1`. These hints flow through to backends untouched; the Preparer just preserves them alongside measurements
 
-### 3. Layout Engine -> Positioned Elements
+### 3. Layout engine -> positioned elements
 
 `Raxol.UI.Layout.Engine` takes the element tree and computes `{x, y, width, height}` for every node. Uses cached measurements from the Preparer when available. Supports:
 
@@ -5351,7 +6126,7 @@ automatic minimum-size floor derived from min-content measurement. See
 [LAYOUT.md](./LAYOUT.md) for the full supported-property reference,
 divergence table, and the text-wrapping API (`Raxol.UI.TextLayout`).
 
-### 4. Composer -> Cell Grid
+### 4. Composer -> cell grid
 
 `Raxol.UI.Rendering.Composer` walks the positioned tree and produces cell tuples:
 
@@ -5361,11 +6136,11 @@ divergence table, and the text-wrapping API (`Raxol.UI.TextLayout`).
 
 Each cell is one character at one position with its styling. Cell x-positions account for character display width: CJK characters advance x by 2, not 1.
 
-### 5. Screen Buffer -> Diff
+### 5. Screen buffer -> diff
 
 `Raxol.Terminal.ScreenBuffer` holds the current and previous frame. Only changed cells produce output.
 
-### 6. Terminal Backend -> Output
+### 6. Terminal backend -> output
 
 Platform-detected backend writes ANSI escape sequences:
 
@@ -5376,9 +6151,9 @@ Platform-detected backend writes ANSI escape sequences:
 - **Telegram**: Buffer-to-plaintext via an `io_writer` callback (`Raxol.Core.Runtime.Rendering.Backends.render_to_telegram/2`)
 - **MCP**: Tool/resource derivation from Component tree (`Raxol.MCP.Server`, see ADR-0012). `StructuredScreenshot` includes animation hints in JSON Component summaries so agents can reason about animated state.
 
-### MCP as Rendering Target (ADR-0012)
+### MCP as rendering target (ADR-0012)
 
-MCP is a first-class rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the Component tree.
+MCP is a rendering target alongside terminal, LiveView, and SSH. Instead of rendering pixels, it renders capabilities: tools and resources derived from the Component tree.
 
 ```
 view(model) -> Component tree -> ToolProvider per Component -> MCP tool set
@@ -5389,7 +6164,7 @@ Each Component type implements `Raxol.MCP.ToolProvider`, mapping its state to MC
 
 This means every Raxol app is AI-controllable with zero glue code. Package: `raxol_mcp` (depends on `raxol_core`). See `docs/adr/0012-mcp-as-rendering-target.md` for full details.
 
-## Event Flow
+## Event flow
 
 ```
 Terminal Input
@@ -5404,7 +6179,7 @@ Terminal Input
 
 Events bubble through the view tree. Any handler can return `:stop` to halt propagation or `:passthrough` to continue. Unhandled events reach `update/2`.
 
-## OTP Architecture
+## OTP architecture
 
 Every Raxol app runs as a supervision tree:
 
@@ -5429,11 +6204,11 @@ process_component(ExpensiveChart, data: sensor_feed)
 
 The component gets its own GenServer under a DynamicSupervisor. If it crashes, it restarts without affecting the rest of the UI. State is preserved in ETS across restarts.
 
-### Hot Code Reload (Dev Only)
+### Hot code reload (dev only)
 
 `Raxol.Dev.CodeReloader` watches `.ex` files via FileSystem, debounces changes, recompiles, and sends `:render_needed` to the Lifecycle. Your app updates in-place without restart.
 
-## Performance Design
+## Performance design
 
 - **Two-phase rendering**: Text measurement (expensive, Unicode-aware) is cached separately from layout (cheap arithmetic). On resize, only layout re-runs.
 - **Buffer diff**: Only changed cells are written. ~2ms for 80x24.
@@ -5443,13 +6218,13 @@ The component gets its own GenServer under a DynamicSupervisor. If it crashes, i
 - **Color downsampling**: `Raxol.Style.Colors.Adaptive` detects terminal capabilities and maps 24-bit colors to 256 or 16 colors automatically.
 - **Lazy scroll content**: `ScrollContent` behaviour enables cursor-based streaming for large datasets in `Viewport`; only the visible slice is materialized.
 
-## Terminal Compatibility
+## Terminal compatibility
 
 - **Unicode width**: `TextMeasure` delegates to `CharacterHandling` for correct CJK double-width, combining characters, fullwidth symbols, and emoji width calculation across layout, rendering, and text wrapping
 - **Border fallback**: Box drawing uses ASCII (`+-|`) when Unicode isn't supported
 - **Color detection**: `COLORTERM`, `TERM`, capability queries for truecolor/256/16/mono
 
-## Key Modules
+## Key modules
 
 | Module                                 | Role                                |
 | -------------------------------------- | ----------------------------------- |
@@ -5616,14 +6391,14 @@ Calculates minimal updates between two buffers. Returns a list of operation tupl
 
 - `{:move, x, y}` - Move cursor to position
 - `{:write, text, style}` - Write text with style
-- `{:clear_line, y}` - Clear line at y
+- `{:clear_line, y}` - Clear line at y, emitted when a changed row becomes entirely blank (spaces with no visible style and no hyperlink). Rendered as `ESC[2K`, which erases the entire physical terminal row - buffers narrower than the terminal should not rely on the diff staying inside the buffer's width when a row goes blank.
 
 ```elixir
 diff = Renderer.render_diff(old_buffer, new_buffer)
 IO.write(Renderer.apply_diff(diff))
 ```
 
-Only generates updates for changed cells. Batches consecutive changes into single writes. < 2ms for 80x24 buffer.
+Only generates updates for changed cells. Batches consecutive changes into single writes; a row that goes fully blank collapses to a single `{:clear_line, y}`. < 2ms for 80x24 buffer.
 
 ### apply_diff/1
 
@@ -5654,7 +6429,7 @@ result = Style.merge(base, override)
 # Second map wins on conflicts
 ```
 
-### Color Types
+### Color types
 
 - Named: `:black`, `:red`, `:green`, `:yellow`, `:blue`, `:magenta`, `:cyan`, `:white`
 - RGB: `Style.rgb(255, 100, 50)` returns `{255, 100, 50}`
@@ -5701,7 +6476,7 @@ Performance: ~44us for 10x10, ~1.3ms for full 80x24.
 
 ---
 
-## Performance Targets
+## Performance targets
 
 All operations designed for < 1ms on standard 80x24 buffers:
 
@@ -5717,7 +6492,7 @@ All operations designed for < 1ms on standard 80x24 buffers:
 
 See `bench/core/` for detailed benchmarks.
 
-## Error Handling
+## Error handling
 
 All functions use defensive programming. Out-of-bounds coordinates are silently ignored. No exceptions for normal usage. Pattern matching validates input types at compile time.
 
@@ -5756,12 +6531,12 @@ present, falling back to legacy top-level/`attrs` forms. Item properties
 
 | Property           | Values                                                                 | Where                                                                                     | Notes |
 |---------------------|-------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|-------|
-| `direction`         | `:row`, `:column` (`:row_reverse`/`:column_reverse` accepted, see divergences) | `attrs.flex_direction`; the `row`/`column` do-block macros set this for you | Default `:row`. NOT read from `style:` -- `Engine.enrich_flex_attrs/1` only translates `style.justify_content`/`align_items`/`gap`/`padding`, not direction. |
-| `justify_content`   | `:flex_start`, `:flex_end`, `:center`, `:space_between`, `:space_around`, `:space_evenly` | `style: %{justify_content: ...}` or `attrs.justify_content` | Default `:flex_start`. All variants distribute leftover space via exact integer splits (largest-remainder / Bresenham) -- spacing always sums exactly to the free space, no cells lost to `div/2` truncation. |
+| `direction`         | `:row`, `:column` (`:row_reverse`/`:column_reverse` accepted, see divergences) | `attrs.flex_direction`; the `row`/`column` do-block macros set this for you | Default `:row`. NOT read from `style:`: `Engine.enrich_flex_attrs/1` only translates `style.justify_content`/`align_items`/`gap`/`padding`, not direction. |
+| `justify_content`   | `:flex_start`, `:flex_end`, `:center`, `:space_between`, `:space_around`, `:space_evenly` | `style: %{justify_content: ...}` or `attrs.justify_content` | Default `:flex_start`. All variants distribute leftover space via exact integer splits (largest-remainder / Bresenham), spacing always sums exactly to the free space, no cells lost to `div/2` truncation. |
 | `align_items`       | `:flex_start`, `:flex_end`, `:center`, `:stretch`                       | `style: %{align_items: ...}` or `attrs.align_items`                                        | Default `:stretch`. No `:baseline` (see divergences). |
 | `align_self`        | same values as `align_items`, or `nil` (inherit)                        | child's `style: %{align_self: ...}`, or legacy `child.attrs.align_self`                     | Overrides the container's `align_items` for one child. |
 | `align_content`     | `:flex_start`, `:flex_end`, `:center`, `:space_between`, `:space_around` | `attrs.align_content` only                                                                  | No `style:` translation exists for this key; set it directly in `attrs` if you're not going through the `row`/`column`/`flex` builders. Only matters when wrapping (`flex_wrap: :wrap`). |
-| `flex_wrap`         | `:nowrap`, `:wrap` (anything non-`:nowrap` multi-lines)                 | `attrs.flex_wrap` only                                                                      | Default `:nowrap`. `:wrap_reverse` is accepted as a value but is not distinguished from `:wrap` -- lines are not reversed. |
+| `flex_wrap`         | `:nowrap`, `:wrap` (anything non-`:nowrap` multi-lines)                 | `attrs.flex_wrap` only                                                                      | Default `:nowrap`. `:wrap_reverse` is accepted as a value but is not distinguished from `:wrap`: lines are not reversed. |
 | `gap`                | integer, or `%{row: r, column: c}`                                      | `style: %{gap: ...}` or `attrs.gap`                                                         | Default `0`. Subtracted from the container's main-axis size before flexible-length resolution runs, and included in `MinContent` row aggregation (`sum(child min) + gap * (n - 1)`). |
 | `padding`            | integer, `{v, h}`, `{t, r, b, l}`, or `%{top:, right:, bottom:, left:}` | `style: %{padding: ...}` or `attrs.padding`                                                 | Parsed by `Raxol.UI.Layout.LayoutUtils.parse_padding/1`. Applied to the container's space before children are measured or laid out; `:prepared_cache` and other extra space keys are preserved through the padding step, so flex children always measure with cache intact. |
 
@@ -5769,10 +6544,10 @@ present, falling back to legacy top-level/`attrs` forms. Item properties
 
 | Property                      | Values                                                                 | Where (child's `style:` map)          | Notes |
 |--------------------------------|---------------------------------------------------------------------------|------------------------------------------|-------|
-| `flex`                        | integer `n`; `{grow, shrink, basis}`; `%{grow:, shrink:, basis:}`         | `style: %{flex: ...}`                    | Integer shorthand `flex: n` expands to `grow: n, shrink: 1, basis: 0` **and** `min_main: 0` (terminal-pragmatic sugar -- see divergences). Tuple/map forms set grow/shrink/basis only, no min override. Legacy `child.attrs.flex` (map form) is honored at lowest precedence for back-compat. |
+| `flex`                        | integer `n`; `{grow, shrink, basis}`; `%{grow:, shrink:, basis:}`         | `style: %{flex: ...}`                    | Integer shorthand `flex: n` expands to `grow: n, shrink: 1, basis: 0` **and** `min_main: 0` (terminal-pragmatic sugar: see divergences). Tuple/map forms set grow/shrink/basis only, no min override. Legacy `child.attrs.flex` (map form) is honored at lowest precedence for back-compat. |
 | `flex_grow`                   | non-negative integer                                                     | `style: %{flex_grow: ...}`               | Default `0`. Ignored if `flex:` shorthand is also set. |
 | `flex_shrink`                 | non-negative integer                                                     | `style: %{flex_shrink: ...}`             | Default `1`. |
-| `flex_basis`                  | non-negative integer, `{:pct, n}`, or `:auto`                            | `style: %{flex_basis: ...}`              | Default `:auto` -- resolves to the content main size (measured), or the explicit `width`/`height` when set. |
+| `flex_basis`                  | non-negative integer, `{:pct, n}`, or `:auto`                            | `style: %{flex_basis: ...}`              | Default `:auto`: resolves to the content main size (measured), or the explicit `width`/`height` when set. |
 | `width` / `height`            | non-negative integer, `{:pct, n}`, or `:auto`/unset                      | `style: %{width: ...}` (or top-level `child.width`) | Explicit main-axis size wins over an `:auto` basis. On the cross axis it sets `cross_size` and disables the stretch guard (see below). |
 | `min_width` / `min_height`    | non-negative integer, `{:pct, n}`, or `:auto`/unset                      | `style: %{min_width: ...}`               | Explicit value always wins over the `flex: n` sugar's `min_main: 0` override. Unset (`:auto`) falls back to the automatic minimum size (Section 3). |
 | `max_width` / `max_height`    | non-negative integer, `{:pct, n}`, or `:auto`/unset                      | `style: %{max_width: ...}`               | `:auto`/unset means unbounded (`:infinity`). |
@@ -5782,19 +6557,19 @@ present, falling back to legacy top-level/`attrs` forms. Item properties
 
 ## 2. Intentional CSS divergences
 
-These are deliberate, not bugs -- Raxol targets a monospace cell grid, not
+These are deliberate, not bugs: Raxol targets a monospace cell grid, not
 a pixel box model, and some CSS corners aren't worth the complexity on a
 terminal. Source: `Raxol.UI.Layout.FlexItem` moduledoc.
 
 | CSS behavior | Raxol behavior | Why |
 |---|---|---|
-| `flex: 1` keeps each item's own `min-width`/`min-height: auto` (min-content) floor, so equal-`flex:1` columns don't always equalize if content differs. | `flex: n` sugar also sets `min_main: 0`, so equal-`flex` items *always* equalize -- an explicit `min_width`/`min_height` in `style:` still overrides the sugar. | Terminal-pragmatic: equal columns that actually equalize is the common case terminal UIs want; the CSS min-content floor is opt-in via an explicit min. |
-| `row-reverse` / `column-reverse` reverse visual order and flip the start/end edges for `justify-content`. | `:row_reverse`/`:column_reverse` are accepted as `flex_direction` values but map to the *same* axis pair as `:row`/`:column` (`get_axes/1`) -- no actual reversal of child order or edges happens. | Not implemented. Documented divergence -- do not rely on reverse directions; they silently behave like the non-reversed direction. |
+| `flex: 1` keeps each item's own `min-width`/`min-height: auto` (min-content) floor, so equal-`flex:1` columns don't always equalize if content differs. | `flex: n` sugar also sets `min_main: 0`, so equal-`flex` items *always* equalize: an explicit `min_width`/`min_height` in `style:` still overrides the sugar. | Terminal-pragmatic: equal columns that actually equalize is the common case terminal UIs want; the CSS min-content floor is opt-in via an explicit min. |
+| `row-reverse` / `column-reverse` reverse visual order and flip the start/end edges for `justify-content`. | `:row_reverse`/`:column_reverse` are accepted as `flex_direction` values but map to the *same* axis pair as `:row`/`:column` (`get_axes/1`), no actual reversal of child order or edges happens. | Not implemented. Documented divergence: do not rely on reverse directions; they silently behave like the non-reversed direction. |
 | `align-items: baseline` aligns items along their text baseline. | Not implemented. `Positioner.align_cross/4` has no `:baseline` clause; passing it falls through to a no-op catch-all (the child keeps whatever cross position it already had, effectively broken, not "close enough"). | No font metrics/baseline concept on a monospace cell grid worth the complexity. Use `:center` or `:flex_start` instead. |
-| The fractional-flex-factor rule: if `sum(flex-grow) < 1`, only that fraction of free space is distributed, the rest stays unfilled. | Not implemented -- grow/shrink factors are non-negative integers, so a fractional sum can't occur; all free space is always distributed among items with non-zero factors. | Documented as N/A rather than a gap: the precondition (fractional factors) can't arise given the integer-only factor type. |
+| The fractional-flex-factor rule: if `sum(flex-grow) < 1`, only that fraction of free space is distributed, the rest stays unfilled. | Not implemented: grow/shrink factors are non-negative integers, so a fractional sum can't occur; all free space is always distributed among items with non-zero factors. | Documented as N/A rather than a gap: the precondition (fractional factors) can't arise given the integer-only factor type. |
 | Percentages parse from CSS-like strings (`"50%"`) or numbers with a unit. | Only the `{:pct, n}` tuple is accepted; no string parsing. | One unambiguous representation, no parser/locale edge cases. |
-| Margin percentages resolve against the *containing block's inline-axis size* per side semantics some engines special-case. | Margin percentages always resolve against the container's **width**, for all four sides, matching the CSS spec's actual (if surprising) rule. | Explicitly called out in `FlexItem` moduledoc because it trips people up even in browsers -- Raxol matches spec here rather than "fixing" it. |
-| Pixel box model: fractional/subpixel sizes, box-sizing modes. | Everything is whole cells; sizes are non-negative integers (or `{:pct, n}` rounded to a whole cell). No box-sizing switch -- padding/border/margin math is always "content-box"-shaped in cells. | No subpixel concept on a terminal grid. |
+| Margin percentages resolve against the *containing block's inline-axis size* per side semantics some engines special-case. | Margin percentages always resolve against the container's **width**, for all four sides, matching the CSS spec's actual (if surprising) rule. | Explicitly called out in `FlexItem` moduledoc because it trips people up even in browsers: Raxol matches spec here rather than "fixing" it. |
+| Pixel box model: fractional/subpixel sizes, box-sizing modes. | Everything is whole cells; sizes are non-negative integers (or `{:pct, n}` rounded to a whole cell). No box-sizing switch, padding/border/margin math is always "content-box"-shaped in cells. | No subpixel concept on a terminal grid. |
 | Invalid CSS values are ignored (the property falls back to its previous/initial value, per CSS's error-handling rule). | Invalid values (negative sizes, negative flex factors, malformed percentages/margins) are clamped to the nearest valid value (usually `0`) and reported via the `[:raxol, :layout, :invalid_style]` telemetry event. Layout never raises on style input. | Fail-soft with observability instead of silent CSS-style ignoring; a clamp is easier to spot in a telemetry dashboard than a silently-dropped property. |
 | Overflow (`sum(min-size) > container`) is handled per `overflow` property (default `visible`, content spills out / overlaps). | Content clips at the container's main-end edge; siblings never overlap. Pairs with the text-overflow affordances in Section 4 so clipping degrades gracefully instead of silently truncating mid-glyph. | |
 
@@ -5806,17 +6581,17 @@ shrinks below its own minimum content size) is implemented via
 `auto_min_fun` callback (`Flexbox.calculate_single_line_layout/5`):
 
 - **Inline axis** (main axis is `:horizontal`, i.e. `flex_direction: :row`):
-  the automatic minimum is `MinContent.width/1` -- the width of the
+  the automatic minimum is `MinContent.width/1`: the width of the
   *longest unbreakable segment*, not the full content width. Text and
   labels break at spaces, after hyphens, and between CJK ideographs (each
   CJK grapheme is its own break opportunity), so a long sentence's
   min-content is just its longest word, not the whole sentence. A
-  `:divider` has min-content `1` (not the available width -- a full-width
+  `:divider` has min-content `1` (not the available width: a full-width
   divider would otherwise inflate the measured container width and rob
   fixed-width siblings during shrink). A `:spacer` has min-content `0`.
 - **Block axis** (main axis is `:vertical`, i.e. `flex_direction: :column`):
   the automatic minimum is the item's already-measured content size on
-  that axis (no separate min-content pass -- vertical wrapping isn't
+  that axis (no separate min-content pass: vertical wrapping isn't
   modeled, so "min content height" and "content height" coincide).
 - Items **never shrink below** their automatic minimum; if the sum of
   minimums exceeds the container, the excess overflows per the clip
@@ -5826,7 +6601,7 @@ shrinks below its own minimum content size) is implemented via
   per `FlexItem.resolve/5`'s `{explicit_min, flex.min_main_override}`
   precedence).
 - **`flex: n`** (the integer shorthand) opts out of the automatic minimum
-  entirely by setting `min_main: 0` directly -- use `flex: {n, s, b}`
+  entirely by setting `min_main: 0` directly: use `flex: {n, s, b}`
   or explicit `flex_grow`/`flex_shrink`/`flex_basis` keys if you want the
   automatic-minimum floor to still apply.
 
@@ -5866,7 +6641,7 @@ Text.init(content: "  def foo do\n\n  end", white_space: :pre_wrap, width: 20)
 
 Only takes effect when `white_space` is `:nowrap` or `:pre` (the two
 non-wrapping cases); at any other combination it's a no-op. Never splits
-a double-width grapheme -- the cut lands one column early instead.
+a double-width grapheme: the cut lands one column early instead.
 
 ```elixir
 Text.init(
@@ -5900,7 +6675,7 @@ Text.init(
 `:auto` (default) is the existing greedy wrapper. `:pretty` runs a
 Knuth-Plass-style dynamic program that minimizes total raggedness
 (`sum(abs(width - line_width) ** 2)`) plus an orphan penalty for a
-paragraph's last line containing a single word -- avoiding the ugly
+paragraph's last line containing a single word, avoiding the ugly
 "one long word alone on the last line" greedy artifact. Break
 opportunities: whitespace runs, after a hyphen, and between CJK
 ideographs. Only applies when `white_space: :normal` (the only mode with
@@ -5927,12 +6702,12 @@ These guarantees hold across the current `:flex` layout path:
   instead of being overridden by content measurement.
 - **Padding tuples are honored end-to-end**, including through the
   `apply_padding` step, which preserves `:prepared_cache` (and any other
-  extra space keys) -- flex children measure with cache intact instead of
+  extra space keys): flex children measure with cache intact instead of
   falling back to an uncached path.
 - **`gap` is included in main-axis measurement**: the container's usable
   main size is `container_main - total_gaps` before flexible-length
   resolution runs, and `MinContent`'s row aggregation adds
-  `gap * (n - 1)` to the summed child minimums -- gap doesn't cause
+  `gap * (n - 1)` to the summed child minimums: gap doesn't cause
   under- or over-fitting against the container.
 
 ## 6. The `:row`/`:column` compatibility dialect
@@ -5961,7 +6736,7 @@ New code should use `:flex` (the View DSL macros) directly.
   boxes and flex containers. Anything but `:visible` (the default) stamps
   every descendant with the container's content rectangle as clip bounds;
   the renderer drops cells outside it. Nested clips intersect.
-  `:auto`/`:scroll` clip identically -- scrolling itself is the Viewport
+  `:auto`/`:scroll` clip identically, scrolling itself is the Viewport
   component's job; the property only guarantees containment.
 - `Raxol.UI.Components.Display.Viewport` takes
   `overflow_anchor: :auto | :none`. `:auto` (default) is the terminal-log
@@ -5969,7 +6744,7 @@ New code should use `:flex` (the View DSL macros) directly.
   content grows; scrolling up releases the pin. `:none` never moves
   `scroll_top` on content changes.
 - Chart wrapper boxes (`Raxol.UI.Charts.ViewBridge`) size themselves to
-  the chart's render region and default to `overflow: :hidden` -- chart
+  the chart's render region and default to `overflow: :hidden`: chart
   cells can never paint outside the declared region.
 
 ## Future work
@@ -6005,7 +6780,7 @@ a gap to be filled in later; it is the split between "paints and is addressable"
 and "positions its children and vanishes".
 
 This has bitten us twice. `Viewport` rendered as a `:row`, so it could neither
-bound nor clip its own content -- its windowed rows painted straight through the
+bound nor clip its own content: its windowed rows painted straight through the
 enclosing border and over whatever followed. The same `:row` had no id, so the
 LiveView surface had nothing to key `overflow-anchor` CSS to, and the feature
 shipped inert.
@@ -6016,7 +6791,7 @@ layout.
 
 ## See also
 
-- `docs/core/ARCHITECTURE.md` -- where layout sits in the render pipeline.
+- `docs/core/ARCHITECTURE.md`: where layout sits in the render pipeline.
 - Module docs: `Raxol.UI.Layout.FlexItem` (resolved-item semantics),
   `Raxol.UI.Layout.Flexbox.Solver` (flexible-length algorithm),
   `Raxol.UI.Layout.MinContent` (automatic minimum measurement).
@@ -6027,14 +6802,14 @@ layout.
 # Rendering: how paint works, and the rules that keep it honest
 
 The *why* lives in [ADR-0029: The Terminal Cell Model](../adr/0029-the-terminal-cell-model.md).
-This is the working reference: what to do, what not to do, and the traps that
-have actually bitten us.
+What follows is the working reference, including the traps that have actually
+bitten us.
 
 ---
 
 ## The model in one paragraph
 
-A terminal is a grid of cells. A cell is `{x, y, grapheme, fg, bg, attrs}` — one
+A terminal is a grid of cells. A cell is `{x, y, grapheme, fg, bg, attrs}`: one
 grapheme, one foreground, one background. No alpha. No sub-cell positioning. No
 layers. The renderer turns positioned elements into cells, composes them into a
 `ScreenBuffer`, and emits one SGR-styled run per contiguous same-style span,
@@ -6055,7 +6830,7 @@ box(border: :single)              # fully transparent, border included
 box(border: :single, bg: :blue)   # a blue panel
 ```
 
-### 2. Unpainted (`nil`) means *show what is beneath* — never "black", never "erase"
+### 2. Unpainted (`nil`) means *show what is beneath*: never "black", never "erase"
 
 ```elixir
 bg: nil      # transparent: the parent's fill, or the terminal
@@ -6066,14 +6841,14 @@ Over a filled parent, an unpainted cell inherits the parent's fill. At the top o
 the tree there is nothing beneath, so the terminal shows through. Both come from
 the same rule; you do not need to special-case "transparent" widgets.
 
-> **Never** default an unpainted background to `:black`. It renders `\e[40m` — an
+> **Never** default an unpainted background to `:black`. It renders `\e[40m`: an
 > opaque black cell. It looks correct on a black terminal and punches a hole
 > through a transparent one.
 
 ### 3. Never paint a background equal to the terminal's own
 
 A cell is transparent *precisely because* we emitted no background for it. So
-painting the terminal's own colour is not a no-op — it is the destruction of
+painting the terminal's own colour is not a no-op. It is the destruction of
 transparency, disguised as a no-op.
 
 This includes the theme's `background`, which is only an *assumption* about the
@@ -6082,15 +6857,15 @@ the canvas. If an app genuinely wants a different canvas, it sets a background
 explicitly.
 
 To adapt to the real background rather than assume it, use
-`Raxol.UI.CellDim` — it detects the ground via OSC 11 and solves colours against
+`Raxol.UI.CellDim`: it detects the ground via OSC 11 and solves colours against
 it.
 
 **If you want an opaque panel, ask for `:surface`, not `:background`.** They are
 different colours doing different jobs:
 
 ```elixir
-Theme.get_color(theme, :background)  # what we ASSUME the terminal is -- never paint this
-Theme.get_color(theme, :surface)     # a raised opaque thing -- painted on purpose
+Theme.get_color(theme, :background)  # what we ASSUME the terminal is, never paint this
+Theme.get_color(theme, :surface)     # a raised opaque thing, painted on purpose
 ```
 
 A modal is opaque by design: it sits over dimmed content that must not read
@@ -6109,10 +6884,10 @@ box(border: :single, bg: :blue,
 A cell cannot be half-painted, so the border glyph's cell is either inside the
 background or outside it. `:border_box` (the default) puts it inside: **a frame
 is the panel's edge, not a thing floating beside it.** Leaving it unpainted cuts
-a one-cell channel around the box through which the backdrop shows — a seam no
+a one-cell channel around the box through which the backdrop shows: a seam no
 choice of colours can fix.
 
-### 5. The frame owns its geometry — don't hand-roll escape codes
+### 5. The frame owns its geometry: don't hand-roll escape codes
 
 Row joins are `\r\n` (raw output does not cook a bare `\n`), autowrap is disabled
 (`\e[?7l`), and every run is `\e[0m`-terminated. If you are writing escape codes
@@ -6133,13 +6908,13 @@ by hand in a component, you are almost certainly in the wrong layer.
 | a differently-coloured frame | `border_bg:` |
 | the frame to *not* be part of the fill | `background_clip: :padding_box` |
 | a colour that adapts to the user's terminal | `Raxol.UI.CellDim` / the H-K palette |
-| the terminal's canvas to change | nothing — it isn't yours (`:background` is an assumption, not a paint) |
+| the terminal's canvas to change | nothing: it isn't yours (`:background` is an assumption, not a paint) |
 
 ---
 
 ## How a frame reaches the terminal
 
-The renderer diffs the grid and emits every frame — keyframe or diff — in one
+The renderer diffs the grid and emits every frame (keyframe or diff) in one
 absolute-CUP vocabulary. `Raxol.Core.Runtime.Rendering.Backends.build_terminal_frame/4`
 holds the whole decision:
 
@@ -6148,15 +6923,15 @@ holds the whole decision:
   (resume, resize), or when the dimensions change; otherwise the frame is a
   diff.
 - A keyframe is a leading `\e[2J` followed by every row. A diff is only the rows
-  whose cells changed — `changed_rows/2` compares `prev.cells` against
+  whose cells changed: `changed_rows/2` compares `prev.cells` against
   `next.cells` row by row.
 - Either kind emits each row at its absolute position: `\e[y;1H\e[0m\e[2K` then
   the row's bytes. There are no `\r\n` row-joins and no full-screen clear on the
   common path.
 
 This is only safe because a row is a pure function of its own cells.
-`Raxol.Terminal.Renderer.render_row/2` carries no pen state from the row above —
-every run is `\e[0m`-terminated — so a row re-emitted in isolation is
+`Raxol.Terminal.Renderer.render_row/2` carries no pen state from the row above (
+every run is `\e[0m`-terminated) so a row re-emitted in isolation is
 byte-identical to its slice of the full frame, and a diff never has to reason
 about what the row above left on the pen.
 
@@ -6164,8 +6939,8 @@ Two consequences worth knowing:
 
 - A control byte or a standalone zero-width character in a cell is blanked at
   the write boundary (`Backends.sanitize_char/1`). Under incremental rendering
-  nothing repaints a corrupted row, so an in-cell `\e`/`\n`/`\t` — which would
-  bleed onto the next row — must be made unrepresentable downstream. (A ZWJ
+  nothing repaints a corrupted row, so an in-cell `\e`/`\n`/`\t` (which would
+  bleed onto the next row) must be made unrepresentable downstream. (A ZWJ
   *inside* an emoji cluster is load-bearing and never reaches here alone, since
   cells hold whole grapheme clusters.)
 - Style batching is on for this path (`Raxol.Terminal.Renderer.new/4` with
@@ -6175,8 +6950,8 @@ Two consequences worth knowing:
 
 > **Proposed (not yet implemented).** A view could declare a cursor park at
 > the root of its element tree (a `Backends.declared_cursor/1` seam) so that
-> every frame kind ends with a park tail — DECTCEM show/hide plus an absolute
-> CUP — because the emitted rows moved the physical cursor and nothing else
+> every frame kind ends with a park tail (DECTCEM show/hide plus an absolute
+> CUP) because the emitted rows moved the physical cursor and nothing else
 > puts it back. `build_terminal_frame/4` does not emit a park tail today; this
 > paragraph describes the intended design, not shipped behavior.
 
@@ -6199,7 +6974,7 @@ writer as this codebase gets". Focus-driven region dimming rides that same pass.
 - **The policy is pure.** `Raxol.UI.RegionPolicy.region_prominence/4` takes the
   region paths present this frame, the focused path, and any mounted dimming
   overlays, and returns `%{region_path => float}`. The focused region's whole
-  lineage — itself, its ancestors, and its descendants — stays at `1.0`, so a
+  lineage (itself, its ancestors, and its descendants) stays at `1.0`, so a
   focused input never dims its own panel; a peer region drops one ladder step
   (`0.8`); each overlay multiplies everything outside its own subtree by `0.45`;
   the product is floored at `0.4`, below which a region reads as a broken
@@ -6207,13 +6982,13 @@ writer as this codebase gets". Focus-driven region dimming rides that same pass.
   an app that never focuses a region and never opens an overlay renders
   byte-identically to pre-region code.
 - **The engine wires it in.** `Raxol.UI.Layout.Engine.stamp_region_prominence/2`
-  stamps the resolved float on every positioned element — threading
-  `:focused_region` from the render context — as a transient marker the
+  stamps the resolved float on every positioned element (threading
+  `:focused_region` from the render context) as a transient marker the
   `ColorResolver` reads and then strips. It is never a real cell attribute.
 - **The fade is closed-form.** Both foreground and background fade apparent
   lightness toward the terminal ground and scale chroma by `p ** @region_gamma`,
   where `@region_gamma = ln(0.65) / ln(0.45)`. That exponent is the exact solve
-  that reproduces the existing modal-dim look through the unified formula — the
+  that reproduces the existing modal-dim look through the unified formula: the
   modal dialog dim is just the `focus: nil`, single-overlay case of the general
   policy.
 
@@ -6228,8 +7003,8 @@ Each of these shipped. Each was invisible on an opaque black terminal with the
 default theme.
 
 **`gap` is not read from `style`.** A literal `:row`/`:column` runs through the
-Containers compat map, which reads `gap` from `:attrs` or the **top level** —
-never from `:style` — and otherwise defaults it to **1** in layout mode.
+Containers compat map, which reads `gap` from `:attrs` or the **top level** (
+never from `:style`) and otherwise defaults it to **1** in layout mode.
 
 ```elixir
 %{type: :column, style: %{gap: 0}, children: ...}   # ignored -> gap 1, double-spaced
@@ -6242,7 +7017,7 @@ maps anything unrecognised to `:none`, whose horizontal run is `" "`. So
 rather than failing. Resolve unknown variants to a visible default.
 
 **Only `:box` is addressable.** `:flex`/`:row`/`:column` dissolve into their
-children's positions and never become positioned elements — they cannot carry an
+children's positions and never become positioned elements: they cannot carry an
 id, bound their own height, or clip their content. A component that must be
 addressable (identity, bounds, clipping, CSS keying, an a11y role) has to render
 as a `:box`. See [LAYOUT.md](LAYOUT.md).
@@ -6263,7 +7038,7 @@ something.
 
 ## The question to ask
 
-Every bug above passed review, passed tests, and looked right — because it was
+Every bug above passed review, passed tests, and looked right, because it was
 tested on the configuration that hides it.
 
 So the review question is not *"does this look right?"* It is:
@@ -6271,7 +7046,7 @@ So the review question is not *"does this look right?"* It is:
 > **What is this value's one job, and what happens when the user's terminal is
 > not mine?**
 
-Every one of these bugs was **one name doing two jobs** — `:black` meaning both
+Every one of these bugs was **one name doing two jobs**: `:black` meaning both
 *unpainted* and *black*; `nil` meaning both *transparent* and *erase*; a box's
 `bg` meaning both *fill* and *border paint*. The fix was always to split the
 meanings apart and make the wrong one unrepresentable.
@@ -6281,13 +7056,12 @@ meanings apart and make the wrong one unrepresentable.
 
 # VM-Singleton GenServer Audit
 
-This document catalogs every named-singleton (`name: __MODULE__`) process in
-the Raxol codebase, classifies each as **intentional** or **questionable**,
-and records the reasoning. Issues #228 and #229 surfaced because the runtime
-had *latent* singletons: modules registered as VM-wide names that were
-actually meant to support multiple concurrent instances. This audit makes
-the contract explicit so the same class of bug can't repeat without a
-deliberate decision.
+Every named-singleton (`name: __MODULE__`) process in the Raxol codebase,
+classified **intentional** or **questionable**, with the reasoning. Issues
+#228 and #229 surfaced because the runtime had *latent* singletons: modules
+registered as VM-wide names that were actually meant to support multiple
+concurrent instances. Making the contract explicit means the same class of
+bug cannot repeat without a deliberate decision.
 
 ## Why this matters
 
@@ -6342,7 +7116,6 @@ allowlist below.
 | Module | Why one-per-VM |
 |--------|----------------|
 | `Raxol.RBAC` | One role/permission set per node |
-| `Raxol.RateLimit` | VM-wide rate limiting Agent |
 | `Raxol.Dev.CodeReloader` | One reloader watches the VM in dev |
 | `Raxol.Core.Runtime.ProcessStore` | Explicit Process-dictionary replacement; VM-wide by design |
 | `Raxol.Core.Config.ConfigStore` | VM-wide config |
@@ -6422,13 +7195,14 @@ Complete applications are in the [`examples/`](../../examples/README.md) directo
 
 # Building Apps
 
-You've built a counter. Now let's look at patterns you'll reach for in real apps.
+Patterns you reach for once the counter from the
+[Quickstart](../getting-started/QUICKSTART.md) grows into a real app.
 
 > All code below assumes `use Raxol.Core.Runtime.Application`, which aliases
 > `Raxol.Core.Events.Event` as `Event`. You can write `%Event{...}` instead of
 > the full module path.
 
-## State Design
+## State design
 
 ### Flat state with derived values
 
@@ -6483,7 +7257,7 @@ def view(%{mode: :searching} = model), do: render_search(model)
 def view(%{mode: :editing} = model), do: render_editor(model)
 ```
 
-## Common Recipes
+## Common recipes
 
 Use **state machines** when your app has distinct modes (browsing vs editing vs searching). Use **scrollable lists** when you have more items than fit on screen. Use **keychord sequences** for Vim-style multi-key commands.
 
@@ -6598,7 +7372,7 @@ def view(%{confirm: msg} = model) when is_binary(msg) do
 end
 ```
 
-### Multi-panel layout with Tab switching
+### Multi-panel layout with tab switching
 
 ```elixir
 @panels [:files, :preview, :log]
@@ -6674,7 +7448,7 @@ end
 text("[#{progress_bar(75, 100, 30)}] 75%", fg: :cyan)
 ```
 
-## Keyboard Patterns
+## Keyboard patterns
 
 ### Vim-style keybindings
 
@@ -6717,7 +7491,7 @@ def update(%Raxol.Core.Events.Event{type: :key, data: %{key: :char, char: c}}, m
 end
 ```
 
-## Styling Patterns
+## Styling patterns
 
 ### Color by value
 
@@ -6822,21 +7596,19 @@ test "search mode filters items" do
 end
 ```
 
-## Next Steps
+## Next steps
 
-- [SSH Deployment](./SSH_DEPLOYMENT.md): Serve apps over SSH
-- [Theming](./THEMING.md): Custom color schemes
-- [Performance](./PERFORMANCE_OPTIMIZATION.md): 60fps techniques
-- [Component Gallery](../getting-started/COMPONENT_GALLERY.md): All Components with examples
+- [Component Gallery](../getting-started/COMPONENT_GALLERY.md): every Component with examples
+- [Cookbook index](./README.md): the other recipes
 
 
 <!-- docs/cookbook/CONFIG.md -->
 
 # TOML Configuration
 
-Raxol uses TOML files for configuration, managed by `Raxol.Config` (backed by UnifiedConfigManager with BaseManager pattern). It supports environment-specific overrides, runtime updates, validation, hot-reload, and sensible defaults.
+Raxol reads TOML configuration through `Raxol.Config` (backed by UnifiedConfigManager on the BaseManager pattern), with environment-specific overrides, runtime updates, validation, and hot reload.
 
-## File Structure
+## File structure
 
 ```bash
 config/
@@ -6849,7 +7621,7 @@ config/
 
 Test settings live in `config/test.exs`, not a TOML file.
 
-### Loading Order
+### Loading order
 
 1. `config/raxol.toml`: base
 2. `config/environments/{env}.toml`: environment overrides
@@ -6857,7 +7629,7 @@ Test settings live in `config/test.exs`, not a TOML file.
 
 Later values win.
 
-## Full Schema
+## Full schema
 
 ```toml
 # Terminal
@@ -6974,7 +7746,7 @@ children = [
 ]
 ```
 
-### Reading Values
+### Reading values
 
 ```elixir
 width = Raxol.Config.get([:terminal, :width])
@@ -6988,7 +7760,7 @@ terminal_config = Raxol.Config.get([:terminal])
 all_config = Raxol.Config.all()
 ```
 
-### Writing Values at Runtime
+### Writing values at runtime
 
 ```elixir
 Raxol.Config.set([:terminal, :width], 120)
@@ -6999,7 +7771,7 @@ Raxol.Config.set([:rendering], %{
 })
 ```
 
-### Loading and Reloading
+### Loading and reloading
 
 ```elixir
 {:ok, config} = Raxol.Config.load_file("config/custom.toml")
@@ -7024,7 +7796,7 @@ end
 :ok = Raxol.Config.export("config/current.toml")
 ```
 
-## Environment Overrides
+## Environment overrides
 
 ### Development
 
@@ -7080,7 +7852,7 @@ enable_audit = true
 enable_2fa = true
 ```
 
-## Integration Examples
+## Integration examples
 
 ```elixir
 # Terminal emulator
@@ -7113,7 +7885,7 @@ defmodule PluginLoader do
 end
 ```
 
-## Watching for Changes
+## Watching for changes
 
 ```elixir
 defmodule ConfigWatcher do
@@ -7140,7 +7912,7 @@ defmodule ConfigWatcher do
 end
 ```
 
-## Validation Rules
+## Validation rules
 
 Built-in validation covers:
 
@@ -7150,7 +7922,7 @@ Built-in validation covers:
 
 Extend validation by modifying `validate_config/1` in `Raxol.Config`.
 
-## Best Practices
+## Best practices
 
 **Keep env-specific values out of the main config.** Put them in `environments/*.toml`.
 
@@ -7243,7 +8015,7 @@ Most apps only need view helpers. Use the Component behaviour when you need inte
 
 ---
 
-## View Helpers (Recommended Start)
+## View helpers (start here)
 
 Extract parts of your `view/1` into private functions. These are plain Elixir, with no special framework support needed.
 
@@ -7318,11 +8090,11 @@ View helpers are composable, testable (call them and inspect the return value), 
 
 ---
 
-## Component Behaviour
+## Component behaviour
 
 For Components that need their own state and event handling, use the Component behaviour. Built-in Components like `Button`, `TextInput`, `Checkbox`, `Table`, `SelectList`, and `Modal` all use this pattern.
 
-### The Behaviour
+### The behaviour
 
 `Raxol.UI.Components.Base.Component` defines these callbacks:
 
@@ -7335,7 +8107,7 @@ For Components that need their own state and event handling, use the Component b
 | `mount/1` | No | Setup after init (subscriptions, etc). Default: `{state, []}` |
 | `unmount/1` | No | Cleanup on removal. Default: `state` |
 
-### Minimal Example
+### Minimal example
 
 ```elixir
 defmodule MyApp.Components.Counter do
@@ -7409,7 +8181,7 @@ counter = MyApp.Components.Counter.update(:increment, model.counter)
 MyApp.Components.Counter.render(model.counter, %{})
 ```
 
-### Real-World Pattern: Checkbox
+### Real-world pattern: Checkbox
 
 Here's how the built-in Checkbox is structured (simplified):
 
@@ -7473,7 +8245,7 @@ Key patterns:
 
 ## Guidelines
 
-### State Shape
+### State shape
 
 All components should include these standard keys:
 
@@ -7489,7 +8261,7 @@ All components should include these standard keys:
 
 Add component-specific keys alongside these.
 
-### Event Handling
+### Event handling
 
 Events arrive as `%Raxol.Core.Events.Event{}` structs:
 
@@ -7531,7 +8303,7 @@ test "disabled checkbox ignores events" do
 end
 ```
 
-### When to Use What
+### When to use what
 
 | Need | Approach |
 |------|----------|
@@ -7544,7 +8316,7 @@ Start with view helpers. Graduate to the Component behaviour when you find yours
 
 ---
 
-## Further Reading
+## Further reading
 
 - [Component Gallery](../getting-started/COMPONENT_GALLERY.md): All built-in Components with examples
 - [Building Apps](../cookbook/BUILDING_APPS.md): TEA patterns and recipes
@@ -7560,9 +8332,9 @@ Two approaches: the **TEA bridge** (`Raxol.LiveView.TEALive`) runs a full TEA ap
 
 > **Note:** Direct buffer manipulation via `Raxol.Core.{Buffer, Box}` is an advanced, low-level approach. The canonical Raxol API is TEA-based: your `view/1` callback returns an element tree and the framework handles rendering. Prefer the TEA bridge for new integrations.
 
-## Basic Terminal Embedding
+## Basic terminal embedding
 
-### Static Terminal
+### Static terminal
 
 ```elixir
 defmodule MyAppWeb.SimpleTerminalLive do
@@ -7594,7 +8366,7 @@ defmodule MyAppWeb.SimpleTerminalLive do
 end
 ```
 
-### Periodic Updates
+### Periodic updates
 
 ```elixir
 defmodule MyAppWeb.ClockLive do
@@ -7625,9 +8397,9 @@ end
 
 ---
 
-## Event Handling
+## Event handling
 
-### Keyboard Input
+### Keyboard input
 
 ```elixir
 def render(assigns) do
@@ -7653,7 +8425,7 @@ def handle_event("handle_keypress", %{"key" => key}, socket) do
 end
 ```
 
-### Mouse Clicks
+### Mouse clicks
 
 ```elixir
 def render(assigns) do
@@ -7674,7 +8446,7 @@ def handle_event("handle_click", %{"x" => x, "y" => y}, socket) do
 end
 ```
 
-### Paste Support
+### Paste support
 
 ```elixir
 <.live_component
@@ -7688,9 +8460,9 @@ end
 
 ---
 
-## State Synchronization
+## State synchronization
 
-### Two-Way Data Binding
+### Two-way data binding
 
 Keep socket state in sync with terminal display:
 
@@ -7723,7 +8495,7 @@ defmodule MyAppWeb.CounterLive do
 end
 ```
 
-### External State Changes
+### External state changes
 
 Subscribe to PubSub for external updates:
 
@@ -7752,9 +8524,9 @@ defp cpu_color(_), do: %{fg_color: :green}
 
 ---
 
-## Multiple Terminals
+## Multiple terminals
 
-### Split Screen
+### Split screen
 
 ```elixir
 def render(assigns) do
@@ -7786,7 +8558,7 @@ end
 
 ---
 
-## Error Boundaries
+## Error boundaries
 
 Catch rendering errors without crashing:
 
@@ -7813,7 +8585,7 @@ end
 
 ---
 
-## Performance: Diff Rendering
+## Performance: Diff rendering
 
 `TerminalComponent` diffs buffers automatically on each render, so you do not need to track `previous_buffer` yourself. Simply assign the new buffer and the component handles the rest:
 
@@ -7824,7 +8596,7 @@ def handle_info(:tick, socket) do
 end
 ```
 
-### Debounced Updates
+### Debounced updates
 
 Avoid excessive re-renders:
 
@@ -7849,7 +8621,7 @@ end
 
 ---
 
-## Animation Hints
+## Animation hints
 
 When a TEA app uses `Raxol.Animation.Helpers.animate/2` in its `view/1`, the rendering engine passes those hints through to `TerminalBridge`, which emits CSS `transition` rules targeting `data-raxol-id` selectors. The browser handles interpolation, with no per-frame server re-renders needed.
 
@@ -7906,11 +8678,10 @@ The terminal backend ignores hints entirely and relies on server-computed frames
 
 (These need a Phoenix host: they are reference modules, not `mix run` scripts.)
 
-## Next Steps
+## Next steps
 
-- [Performance Cookbook](./PERFORMANCE_OPTIMIZATION.md)
-- [Theming Cookbook](./THEMING.md)
-- [API Reference](../core/BUFFER_API.md)
+- [Buffer API](../core/BUFFER_API.md): the primitives behind `buffer_to_html/2`
+- [Cookbook index](./README.md): the other recipes
 
 
 <!-- docs/cookbook/PERFORMANCE_OPTIMIZATION.md -->
@@ -7919,7 +8690,7 @@ The terminal backend ignores hints entirely and relies on server-computed frames
 
 Techniques for achieving 60fps terminal rendering.
 
-## Performance Targets
+## Performance targets
 
 | Operation         | Budget  | Typical | Excellent |
 | ----------------- | ------- | ------- | --------- |
@@ -7934,7 +8705,7 @@ Techniques for achieving 60fps terminal rendering.
 
 ---
 
-## Buffer Diffing
+## Buffer diffing
 
 Only update what changed.
 
@@ -7955,7 +8726,7 @@ end
 
 Without diffing: ~15ms for 80x24 buffer (clear + full redraw). Diff rendering brings typical updates to ~2ms.
 
-### Smart Diffing
+### Smart diffing
 
 Full render every N frames or when buffer dimensions change:
 
@@ -7969,9 +8740,9 @@ end
 
 ---
 
-## Caching Strategies
+## Caching strategies
 
-### Style Caching
+### Style caching
 
 Reuse style maps via module attributes (compile-time):
 
@@ -7992,7 +8763,7 @@ defp message_style(_), do: %{}
 
 10-20% faster by avoiding style allocation.
 
-### Buffer Caching
+### Buffer caching
 
 Cache static parts of the UI:
 
@@ -8008,11 +8779,11 @@ Cache static parts of the UI:
 
 ---
 
-## Lazy Rendering
+## Lazy rendering
 
 Only render visible content.
 
-### Viewport Rendering
+### Viewport rendering
 
 ```elixir
 defmodule ViewportRenderer do
@@ -8032,7 +8803,7 @@ end
 
 100x faster for large datasets (render 24 rows instead of 1000+).
 
-### Virtual Scrolling
+### Virtual scrolling
 
 Only render visible rows in scrollable lists:
 
@@ -8051,7 +8822,7 @@ end
 
 ---
 
-## 60fps Checklist
+## 60fps checklist
 
 - [ ] Use diff rendering. Don't redraw everything
 - [ ] Cache static content. Reuse unchanged buffers
@@ -8062,7 +8833,7 @@ end
 - [ ] Set frame budget. Warn if > 16ms
 - [ ] Test on slow hardware
 
-### Frame Budget Monitor
+### Frame budget monitor
 
 ```elixir
 defmodule FrameBudget do
@@ -8082,7 +8853,7 @@ end
 
 ---
 
-## Common Pitfalls
+## Common pitfalls
 
 ### Creating styles repeatedly
 
@@ -8149,7 +8920,7 @@ Benchee.run(%{
 }, time: 5, memory_time: 2)
 ```
 
-### Performance Tests
+### Performance tests
 
 ```elixir
 test "full frame render meets 60fps budget" do
@@ -8165,11 +8936,10 @@ end
 
 See `docs/bench/README.md` for the full benchmark suite comparing Raxol against Ratatui, Bubble Tea, and Textual.
 
-## Next Steps
+## Next steps
 
-- [LiveView Cookbook](./LIVEVIEW_INTEGRATION.md)
-- [Theming Cookbook](./THEMING.md)
-- [API Reference](../core/BUFFER_API.md)
+- [Buffer API](../core/BUFFER_API.md): the primitives these techniques operate on
+- [Cookbook index](./README.md): the other recipes
 
 
 <!-- docs/cookbook/SSH_DEPLOYMENT.md -->
@@ -8177,21 +8947,30 @@ See `docs/bench/README.md` for the full benchmark suite comparing Raxol against 
 # SSH Deployment
 
 Serve Raxol apps over SSH. Each connection gets its own process: one app, many users.
-This is one of the things that falls out naturally from running on the BEAM, where Erlang's SSH server does the heavy lifting.
+Erlang ships `:ssh` in the standard library, so this is a wrapper rather than a server: no extra dependency, no separate daemon.
 
-## Quick Start
+## Quick start
 
 Any TEA app can be served over SSH. Authentication is required unless anonymous access is explicitly requested, so a fund-bearing surface is never silently anonymous:
 
 ```elixir
-# Public, read-only app (a dashboard, a component catalog): anonymous is fine.
-Raxol.SSH.serve(MyApp, port: 2222, allow_anonymous: true)
+# Public, read-only app (a dashboard, a component catalog): anonymous is fine,
+# but an anonymous surface must state every resource cap or it refuses to start,
+# and it binds loopback only until the exposure is separately acknowledged.
+Raxol.SSH.serve(MyApp,
+  port: 2222,
+  allow_anonymous: true,
+  max_connections: 50,
+  max_per_ip: 10,
+  idle_timeout: :timer.minutes(5),
+  max_session_duration: :timer.hours(1)
+)
 
 # A surface that can reach payment Actions: require a public key.
 Raxol.SSH.serve(MyApp, port: 2222, authorized_keys_dir: "/etc/raxol/authorized")
 ```
 
-With neither option the server refuses to start. See [Authentication](#authentication) below.
+With neither option the server refuses to start. See [Authentication](#authentication) and [Anonymous surface defaults](#anonymous-surface-defaults) below.
 
 Connect from any machine:
 
@@ -8201,7 +8980,7 @@ ssh localhost -p 2222
 
 No client-side dependencies. Any SSH client works: PuTTY, OpenSSH, even `ssh` from a phone.
 
-## Full Example
+## Full example
 
 ```elixir
 # lib/my_ssh_app.exs
@@ -8241,8 +9020,17 @@ defmodule MySshApp do
   def subscribe(_model), do: []
 end
 
-# Start SSH server (a public counter demo, so anonymous access is intended)
-{:ok, _} = Raxol.SSH.serve(MySshApp, port: 2222, allow_anonymous: true)
+# Start SSH server (a public counter demo, so anonymous access is intended;
+# anonymous surfaces state their caps and stay on loopback by default)
+{:ok, _} =
+  Raxol.SSH.serve(MySshApp,
+    port: 2222,
+    allow_anonymous: true,
+    max_connections: 10,
+    max_per_ip: 2,
+    idle_timeout: :timer.minutes(5),
+    max_session_duration: :timer.hours(1)
+  )
 
 # Keep alive
 Process.sleep(:infinity)
@@ -8256,7 +9044,7 @@ mix run lib/my_ssh_app.exs
 
 This is a simplified version of `examples/ssh/ssh_counter.exs`.
 
-## How It Works
+## How it works
 
 ```
 SSH Client  --->  :ssh.daemon (Erlang)
@@ -8288,6 +9076,22 @@ A surface that can reach payment Actions must not be silently anonymous, so auth
 
 For any surface that can move funds, use `authorized_keys_dir` and bind the connection to that identity before it reaches a payment Action. Do not rely on an in-app login screen inside an otherwise-anonymous SSH session, which would put credential handling inside your `update/2` instead of the transport.
 
+### Anonymous surface defaults
+
+An anonymous surface once reached the public internet on the strength of one env var, so `allow_anonymous: true` now carries three defaults of its own:
+
+- **Loopback bind.** An anonymous server binds `127.0.0.1` unless the exposure is separately acknowledged with `anonymous_public: true` (or `RAXOL_SSH_ANONYMOUS_PUBLIC=1`). One flag cannot carry a surface from laptop demo to public internet; the dangerous combination requires stating the danger.
+- **Stated resource caps.** `max_connections`, `max_per_ip`, `idle_timeout`, and `max_session_duration` are required (positive integers, timeouts in milliseconds) or the server refuses to start. Fifty concurrent anonymous shells must be a decision, not an omission.
+- **A boot posture line.** Every start logs one greppable line naming the resulting exposure:
+
+  ```
+  [SSH] listening 127.0.0.1:2222 auth=none max_conn=50 per_ip=10 idle=300s session_max=3600s host_keys=ed25519(/etc/raxol/ssh_keys)
+  ```
+
+  The posture is the thing that goes wrong silently; this puts it where people already look. Every accept and close is also logged with the peer address, authenticated user, duration, and outcome, so whether the surface is worth running is answerable from the logs.
+
+When probing an exposure from outside, remember that "I could not connect" is not "it is closed": test every address family the host actually has, not just the one in DNS.
+
 ### Port and host keys
 
 ```elixir
@@ -8298,7 +9102,9 @@ Raxol.SSH.serve(MyApp,
 )
 ```
 
-Host keys are auto-generated on first run under a persistent per-user directory (`~/.raxol/ssh_keys`), so clients do not get host-key-changed warnings on restart. Point `host_keys_dir` at a directory your service account owns to keep the key stable across deploys.
+Host keys are auto-generated (ed25519, mode `0600`) on first run under a persistent per-user directory (`~/.raxol/ssh_keys`), so clients do not get host-key-changed warnings on restart. Point `host_keys_dir` at a directory your service account owns to keep the key stable across deploys. The server refuses to start if any host key in the directory is group- or world-readable: a readable private host key makes every client's host-key trust forgeable.
+
+Never bake a host key into a container image: the same key ships on every deploy and every replica, readable by anyone who can pull the image. Generate at first boot into persistent storage (a volume) instead, and if no volume exists, leave the SSH surface off rather than shipping a static key.
 
 ### Running alongside a Phoenix app
 
@@ -8325,13 +9131,15 @@ Now the same app runs in the browser (via LiveView) and over SSH simultaneously.
 
 ### Persistent host keys
 
-Generate keys once and store them:
+The server generates an ed25519 key on first boot; all it needs is a persistent, owner-only directory. To pre-generate instead:
 
 ```bash
 mkdir -p /etc/raxol/ssh_keys
-ssh-keygen -t rsa -f /etc/raxol/ssh_keys/ssh_host_rsa_key -N ""
-ssh-keygen -t ecdsa -f /etc/raxol/ssh_keys/ssh_host_ecdsa_key -N ""
+ssh-keygen -t ed25519 -f /etc/raxol/ssh_keys/ssh_host_ed25519_key -N ""
+chmod 600 /etc/raxol/ssh_keys/ssh_host_ed25519_key
 ```
+
+RSA is optional (`ssh-keygen -t rsa`) for very old clients; note current OpenSSH refuses SHA-1 RSA host keys, so an RSA-only server can be unreachable from modern clients.
 
 ### Isolation from signing
 
@@ -8375,6 +9183,26 @@ Then connect:
 ssh your-app.fly.dev -p 2222
 ```
 
+Two things this block does that are easy to miss. First, for an anonymous server it needs `anonymous_public: true` (or `RAXOL_SSH_ANONYMOUS_PUBLIC=1`) or the daemon sits on loopback and the proxied port connects to nothing. That is the point: exposing an anonymous surface is a two-step, stated decision. Second, verify the exposure from outside the app on EVERY address the app holds. Fly's shared IPv4 proxies 80/443 only, so a TCP probe against it can look closed while a dedicated IPv6 (`fly ips list`) serves the port to anyone who scans for it. "I could not connect" is not "it is closed."
+
+### Erlang distribution and epmd
+
+This is a BEAM default, not a Raxol one, but it ships with every deployment: `epmd` binds `0.0.0.0:4369` (and `[::]`) by default, and the distribution listener binds every interface too. A cloud provider that only routes declared services will not expose these, but any extra interface on the machine (a Tailscale/WireGuard mesh, a second NIC) is bound as well, and anything that can reach the distribution port and knows the cookie has full remote code execution on the node.
+
+For the common case of not clustering at all, pin both to loopback:
+
+```bash
+# epmd: loopback only (set before the VM starts)
+export ERL_EPMD_ADDRESS=127.0.0.1
+```
+
+```elixir
+# releases: rel/vm.args.eex -- distribution listener on loopback only
+-kernel inet_dist_use_interface {127,0,0,1}
+```
+
+If you do cluster, treat the distribution port like a root shell: private network only, TLS distribution (`-proto_dist inet_tls`) across anything shared, and never a guessable cookie. See [Isolation from signing](#isolation-from-signing) above for the payment-node rules.
+
 ## Use Cases
 
 SSH beats web dashboards when you want zero client setup: no HTTPS certs, no browser, works over slow networks, instant startup. Same `init/update/view` whether local, over SSH, or in a browser.
@@ -8385,11 +9213,10 @@ SSH beats web dashboards when you want zero client setup: no HTTPS certs, no bro
 - **IoT/embedded**: Run on a Raspberry Pi. SSH in from anywhere to check sensor readings.
 - **Bastion host UIs**: Replace clunky web admin panels with fast terminal interfaces.
 
-## Next Steps
+## Next steps
 
-- [Building Apps](./BUILDING_APPS.md): TEA patterns and recipes
-- [Theming](./THEMING.md): Custom color schemes
-- [Architecture](../core/ARCHITECTURE.md): How the render pipeline works
+- [Architecture](../core/ARCHITECTURE.md): how the render pipeline works
+- [Cookbook index](./README.md): the other recipes
 
 
 <!-- docs/cookbook/THEMING.md -->
@@ -8398,7 +9225,7 @@ SSH beats web dashboards when you want zero client setup: no HTTPS certs, no bro
 
 Color schemes and styling for terminal and LiveView apps.
 
-## Terminal Theming
+## Terminal theming
 
 ### Inline colors
 
@@ -8477,7 +9304,7 @@ end
 
 ---
 
-## Theme System
+## Theme system
 
 ### ThemeManager
 
@@ -8533,7 +9360,7 @@ ls priv/themes/
 
 ---
 
-## LiveView Theming
+## LiveView theming
 
 When using the LiveView bridge, theming is applied via CSS classes on the terminal container div. Set a `data-theme` attribute (or a theme CSS class) on the container element, then define per-theme CSS rules targeting that class:
 
@@ -8586,7 +9413,7 @@ end
 
 ---
 
-## Color Palettes
+## Color palettes
 
 Popular palettes mapped to ANSI for quick reference:
 
@@ -8643,11 +9470,10 @@ text("...", fg: :black, bg: :yellow)   # ~10.2:1
 - `examples/demo.exs`: Flagship demo using Synthwave '84 mapped to ANSI
 - `examples/advanced/color_system_demo.ex`: Color system with adaptive downsampling
 
-## Next Steps
+## Next steps
 
 - [Building Apps](./BUILDING_APPS.md): TEA patterns and recipes
-- [SSH Deployment](./SSH_DEPLOYMENT.md): Serve apps over SSH
-- [Performance](./PERFORMANCE_OPTIMIZATION.md): 60fps techniques
+- [Cookbook index](./README.md): the other recipes
 
 
 <!-- docs/adr/README.md -->
@@ -8675,20 +9501,24 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0013](0013-event-dispatch-backpressure.md) | Event-dispatch Backpressure | Implemented | 2026-06-03 |
 | [0014](0014-telegram-ai-guardian.md) | Telegram AI Guardian admin behaviour | Accepted | 2026-06-13 |
 | [0015](0015-workflow-graph.md) | Workflow Graph (`Raxol.Workflow.*`) | Accepted | 2026-06-15 |
-| [0016](0016-acp-job-workflow.md) | raxol_earn Job migration to `Raxol.Workflow` | Implemented (Phase A + B) | 2026-06-16 |
-| [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Implemented | 2026-06-16 |
+| [0016](0016-acp-job-workflow.md) | raxol_earn Job migration to `Raxol.Workflow` | Superseded (v1->v2) | 2026-06-16 |
+| [0017](0017-acp-workflow-paused-jobs.md) | Workflow paused-run query and pause-checkpoint contract | Superseded (v1->v2) | 2026-06-16 |
 | [0018](0018-operator-flow-contract.md) | Operator-flow contract for paused runs | Proposed | 2026-06-16 |
-| [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/4`) | Proposed | 2026-06-16 |
-| [0020](0020-agent-sandbox-thread-policies.md) | Phase 26: Agent Sandbox, Thread log, declarative Policies | Proposed | 2026-06-16 |
-| [0021](0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Proposed | 2026-06-17 |
-| [0022](0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Proposed | 2026-06-17 |
-| [0023](0023-unified-messaging-gateway.md) | Unified messaging gateway (`raxol_gateway`) | Proposed | 2026-06-17 |
-| [0024](0024-execution-backends-hibernation.md) | Pluggable execution backends and serverless hibernation | Proposed | 2026-06-18 |
-| [0025](0025-cronjob-scheduled-tasks.md) | Cronjob scheduled-task tool | Proposed | 2026-06-18 |
+| [0019](0019-workflow-concurrency.md) | Workflow concurrency (`add_join/4` + `add_channel/3`) | Accepted | 2026-06-16 |
+| [0020](0020-agent-sandbox-thread-policies.md) | Phase 26: Agent Sandbox, Thread log, declarative Policies | Accepted | 2026-06-16 |
+| [0021](0021-self-improving-agents-skills-curation.md) | Self-improving agents: runtime skills + background curation | Accepted | 2026-06-17 |
+| [0022](0022-memory-providers-fulltext-dialectic.md) | Memory provider stack, full-text recall, dialectic user modeling | Accepted | 2026-06-17 |
+| [0023](0023-unified-messaging-gateway.md) | Unified messaging gateway (`raxol_gateway`) | Accepted | 2026-06-17 |
+| [0024](0024-execution-backends-hibernation.md) | Pluggable execution backends and serverless hibernation | Accepted | 2026-06-18 |
+| [0025](0025-cronjob-scheduled-tasks.md) | Cronjob scheduled-task tool | Accepted | 2026-06-18 |
 | [0026](0026-execute-code-pipeline-collapse.md) | `execute_code` programmatic tool-calling | Proposed | 2026-06-18 |
-| [0027](0027-delegate-task-subagents.md) | `delegate_task` summary-only subagents | Proposed | 2026-06-18 |
-| [0028](0028-auxiliary-model-routing.md) | Auxiliary-model routing | Proposed | 2026-06-18 |
-| [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Proposed | 2026-07-18 |
+| [0027](0027-delegate-task-subagents.md) | `delegate_task` summary-only subagents | Accepted | 2026-06-18 |
+| [0028](0028-auxiliary-model-routing.md) | Auxiliary-model routing | Accepted | 2026-06-21 |
+| [0029](0029-the-terminal-cell-model.md) | The Terminal Cell Model | Accepted | 2026-07-14 |
+| [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Accepted | 2026-07-18 |
+| [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
+| [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed | 2026-08-26 |
+| [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
 
 ## Template
 
@@ -8739,11 +9569,12 @@ They preserve context for why decisions were made, help new contributors underst
 
 ## By Category
 
-### Core Architecture
+### Core architecture
 - [0001: Component-Based Architecture](0001-component-based-architecture.md)
 - [0003: Terminal Emulation Strategy](0003-terminal-emulation-strategy.md)
 - [0007: State Management Strategy](0007-state-management-strategy.md)
 - [0011: Terminal Module Consolidation](0011-terminal-module-consolidation.md)
+- [0029: The Terminal Cell Model](0029-the-terminal-cell-model.md)
 
 ### Performance
 - [0002: Parser Performance Optimization](0002-parser-performance-optimization.md)
@@ -8762,6 +9593,7 @@ They preserve context for why decisions were made, help new contributors underst
 ### AI & MCP
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
 - [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
+- [0033: Indexer-agnostic web3 data surface (raxol_web3)](0033-web3-data-surface.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
@@ -8781,8 +9613,10 @@ They preserve context for why decisions were made, help new contributors underst
 - [0026: execute_code programmatic tool-calling](0026-execute-code-pipeline-collapse.md)
 - [0027: delegate_task summary-only subagents](0027-delegate-task-subagents.md)
 - [0028: Auxiliary-model routing](0028-auxiliary-model-routing.md)
+- [0031: Raxol as a Virtuals ACP Console runtime](0031-console-runtime-integration.md)
+- [0032: Multi-root filesystem grants for agent sessions](0032-agent-filesystem-grants.md)
 
 ## Coverage
 
-26 active ADRs covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, and the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing). (Numbers 0004 and 0006 are withdrawn placeholders.)
+31 authored ADRs (29 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, and the indexer-agnostic web3 data surface. (Numbers 0004 and 0006 are withdrawn placeholders.)
 

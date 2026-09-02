@@ -203,7 +203,7 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
       # Sixel data string: "#1@" means color 1, sixel '@' (pattern 1 - top pixel)
       # This should place one Sixel pixel using color index 1.
       # The SixelGraphics module defines how this string translates to pixel_buffer and palette.
-      # Let's assume SixelGraphics.process_sequence with '#1@' results in:
+      # SixelGraphics.process_sequence with '#1@' is expected to produce:
       # - pixel_buffer: %{{0,0} => 1} (color index 1 at sixel coord 0,0)
       # - palette: %{1 => {205, 0, 0}} (red for color 1 in default palette)
       # - and other fields like sixel_cursor_pos, etc. are updated.
@@ -219,12 +219,9 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
       intermediates = "\""
       final_byte = ?q
 
-      # Mock SixelGraphics.process_sequence to return a predictable state
-      # This makes the test more robust to changes in SixelGraphics internal parsing
-      # and focuses on the integration logic of DCSHandler.
-      # However, direct mocking isn't straightforward without a mocking library here.
-      # So, we'll test the integration, assuming SixelGraphics produces
-      # expected output for simple input.
+      # SixelGraphics is exercised for real rather than stubbed, so this test
+      # covers the DCSHandler integration on the assumption that SixelGraphics
+      # produces the expected output for this simple input.
       # If SixelGraphics.new() initializes palette with color 1 as blue {0,0,255}:
       # And if SixelGraphics.process_sequence("#1?") creates pixel_buffer %{{0,0} => 1}
 

@@ -36,7 +36,7 @@ defmodule Raxol.Agent.CuratorTest do
     Store.create(%{name: name, body: "# #{name}", created_by: created_by}, opts)
   end
 
-  describe "Phase A lifecycle" do
+  describe "skill ageing lifecycle" do
     test "ages an unused agent skill active -> stale -> archived", %{store: sk} = ctx do
       create(ctx, "old", :agent)
 

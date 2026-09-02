@@ -2,8 +2,8 @@ defmodule Githooks.PreCommitTest do
   @moduledoc """
   The pre-commit hook puts a directory on `PATH` and then runs `mix` and
   `elixir` from it, and it picks that directory using a value read out of
-  `.tool-versions` -- a file the repository controls, and therefore a file any
-  branch controls.
+  `mise.toml`, a file the repository controls, and therefore a file any branch
+  controls.
 
   That makes the version string untrusted input to a path that becomes
   executable search order, so it gets a test. Checking out someone else's branch
@@ -72,8 +72,15 @@ defmodule Githooks.PreCommitTest do
     out
   end
 
-  defp write_tool_versions(dir, elixir_version) do
-    File.write!(dir, "erlang 29.0.3\nelixir #{elixir_version}\nnodejs latest\n")
+  # The pin file the hook reads. Written in mise's native `[tools]` form, with
+  # the untrusted value in the position the hook takes it from.
+  defp write_mise_toml(repo, elixir_version) do
+    File.write!(Path.join(repo, "mise.toml"), """
+    [tools]
+    erlang = "29.0.3"
+    elixir = "#{elixir_version}"
+    node = "latest"
+    """)
   end
 
   describe "the toolchain block" do
@@ -104,7 +111,7 @@ defmodule Githooks.PreCommitTest do
       assert File.dir?(Path.join([base, traversal, "bin"])),
              "test premise broken: the traversal must reach a real directory"
 
-      write_tool_versions(Path.join(repo, ".tool-versions"), traversal)
+      write_mise_toml(repo, traversal)
 
       path = resulting_path(repo, mise)
 
@@ -125,7 +132,7 @@ defmodule Githooks.PreCommitTest do
 
       File.mkdir_p!(installed)
 
-      write_tool_versions(Path.join(repo, ".tool-versions"), "1.20.2-otp-29")
+      write_mise_toml(repo, "1.20.2-otp-29")
 
       assert resulting_path(repo, mise) =~ installed
     end
@@ -144,7 +151,7 @@ defmodule Githooks.PreCommitTest do
         Path.join([mise, "installs", "elixir", "1.20.2-otp-29", "bin"])
 
       File.mkdir_p!(installed)
-      write_tool_versions(Path.join(repo, ".tool-versions"), "1.20.2-otp-29")
+      write_mise_toml(repo, "1.20.2-otp-29")
 
       # Same fixture as the test above, which DOES prepend -- so this pins the
       # override and not merely a version that was never going to resolve.
@@ -161,9 +168,34 @@ defmodule Githooks.PreCommitTest do
       mise = Path.join(dir, "mise")
       File.mkdir_p!(repo)
 
-      write_tool_versions(Path.join(repo, ".tool-versions"), "9.9.9-otp-99")
+      write_mise_toml(repo, "9.9.9-otp-99")
 
       assert resulting_path(repo, mise) == "/usr/bin:/bin"
+    end
+
+    # TOML brought a failure mode the flat asdf format did not have: `elixir` is
+    # an ordinary key name and may appear under any table. Only the pin under
+    # `[tools]` may reach PATH, or a branch adds an `[env]` entry and chooses
+    # the toolchain without touching the pin anyone reviews.
+    test "reads only the [tools] table", %{dir: dir} do
+      repo = Path.join(dir, "repo")
+      mise = Path.join(dir, "mise")
+      File.mkdir_p!(repo)
+
+      decoy = Path.join([mise, "installs", "elixir", "1.18.3-otp-27", "bin"])
+      File.mkdir_p!(decoy)
+
+      File.write!(Path.join(repo, "mise.toml"), """
+      [env]
+      elixir = "1.18.3-otp-27"
+
+      [tools]
+      erlang = "29.0.3"
+      elixir = "9.9.9-otp-99"
+      """)
+
+      assert resulting_path(repo, mise) == "/usr/bin:/bin",
+             "a version outside [tools] reached PATH"
     end
 
     # `set -u` is on, so an unbound variable would abort the hook before any
@@ -179,7 +211,7 @@ defmodule Githooks.PreCommitTest do
             "../..",
             "; touch #{dir}/pwned"
           ] do
-        write_tool_versions(Path.join(repo, ".tool-versions"), version)
+        write_mise_toml(repo, version)
 
         assert resulting_path(repo, mise) == "/usr/bin:/bin",
                "#{inspect(version)} should leave PATH untouched"

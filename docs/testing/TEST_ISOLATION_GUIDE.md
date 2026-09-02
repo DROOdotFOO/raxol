@@ -84,15 +84,14 @@ end
 
 ```elixir
 # Before
-test "defines handle_in/3 callback" do
-  assert function_exported?(RaxolWeb.TerminalChannel, :handle_in, 3)
+test "defines handle_event/3 callback" do
+  assert function_exported?(MyModule, :handle_event, 3)
 end
 
 # After
-test "defines handle_in/3 callback" do
-  Code.ensure_loaded!(RaxolWeb.TerminalChannel)
-  Process.sleep(10)
-  assert function_exported?(RaxolWeb.TerminalChannel, :handle_in, 3)
+test "defines handle_event/3 callback" do
+  Code.ensure_loaded!(MyModule)
+  assert function_exported?(MyModule, :handle_event, 3)
 end
 ```
 
@@ -139,60 +138,17 @@ setup do
 end
 ```
 
-## Priority
+## Where to start
 
-### High (do first)
-
-1. **TerminalChannel and Presence tests** - Add `Code.ensure_loaded!` before `function_exported?` checks. Use unique process names in setup.
-
-2. **Plugin tests** - Use `start_supervised!` for PluginServer. Generate unique module names per test.
-
-### Medium
-
-3. **Refactor test_helper.exs** - Move global process starts to helper functions. Let individual tests opt in to needed services.
-
-4. **Add test utilities** - Extend `Raxol.Test.IsolationHelper` with `start_test_registry/0` and `start_test_event_manager/0`.
-
-### Low
-
-5. **Enable more async tests** - Audit tests for async safety and convert where possible.
-
-## Full example: TerminalChannelTest
-
-```elixir
-defmodule RaxolWeb.TerminalChannelTest do
-  use ExUnit.Case, async: false
-
-  setup do
-    test_id = :erlang.unique_integer([:positive])
-
-    session_bridge = start_supervised!(
-      {Raxol.Web.SessionBridge, name: :"SessionBridge#{test_id}"}
-    )
-
-    persistent_store = start_supervised!(
-      {Raxol.Web.PersistentStore, name: :"PersistentStore#{test_id}"}
-    )
-
-    Code.ensure_loaded!(RaxolWeb.TerminalChannel)
-
-    %{
-      session_bridge: session_bridge,
-      persistent_store: persistent_store
-    }
-  end
-
-  describe "module structure" do
-    test "module exists" do
-      assert Code.ensure_loaded?(RaxolWeb.TerminalChannel)
-    end
-
-    test "defines handle_in/3 callback" do
-      assert function_exported?(RaxolWeb.TerminalChannel, :handle_in, 3)
-    end
-  end
-end
-```
+1. **Plugin tests.** Use `start_supervised!` for `PluginServer` and generate
+   unique module names per test. This is the largest concentration of the
+   dynamic-module and named-process problems above.
+2. **`test_helper.exs` globals.** It still starts `ProcessStore`, the
+   `:raxol_event_subscriptions` registry, and `EventManager` for the whole
+   suite. Moving those into helper functions that individual tests opt into
+   is fix 3, and it is not done.
+3. **Async audit.** Convert tests to `async: true` where fix 5 says it is
+   safe.
 
 ## Verifying the fixes
 
@@ -204,10 +160,9 @@ for i in {1..5}; do
   env TMPDIR=/tmp SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test --seed $RANDOM
 done
 
-# Or target the previously flaky tests specifically
+# Or hammer one suspected file until it fails
 env TMPDIR=/tmp SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test \
-  test/raxol_web/channels/terminal_channel_test.exs \
-  test/raxol_web/presence_test.exs \
+  test/path/to/suspect_test.exs \
   --seed $RANDOM \
   --repeat-until-failure 10
 ```

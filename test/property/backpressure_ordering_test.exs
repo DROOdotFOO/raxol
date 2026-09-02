@@ -1,6 +1,6 @@
 defmodule Raxol.Property.BackpressureOrderingTest do
   @moduledoc """
-  Pins the ordering invariant from ADR-0013: messages routed through
+  Pins the event-dispatch ordering invariant: messages routed through
   `Raxol.Core.Runtime.Backpressure.cast/3` arrive at the target in send
   order, regardless of whether the helper chose a cast or a call.
 

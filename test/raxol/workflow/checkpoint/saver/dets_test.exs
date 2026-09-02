@@ -79,7 +79,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.DetsTest do
     end
   end
 
-  describe "list_paused (ADR-0017)" do
+  describe "list_paused" do
     defp make_paused(thread_id, step, reason, paused_at, state \\ %{}) do
       Checkpoint.new(
         thread_id: thread_id,

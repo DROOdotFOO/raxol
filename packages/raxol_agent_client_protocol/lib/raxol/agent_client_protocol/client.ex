@@ -447,9 +447,10 @@ defmodule Raxol.AgentClientProtocol.Client do
     end
   end
 
-  # ADR-0030 clause 3's fail-the-turn default: emit exactly one `:fail`
-  # telemetry event (D9) and return the error tuple -- never a silent
-  # partial list, never a timer/retry.
+  # Failing the turn is the only lossless resolution of a gap, so it is the
+  # default: emit exactly one `:fail` telemetry event (D9) and return the
+  # error tuple. Never a silent partial list, and never a timer/retry, since
+  # a hole in streamed content is corruption rather than late arrival.
   @spec fail_turn(atom(), map()) :: {:error, {atom(), map()}}
   defp fail_turn(reason, meta) do
     Delivery.emit(Map.merge(%{decision: :fail}, meta))

@@ -2,7 +2,7 @@ defmodule Raxol.Symphony.IntegrationTest do
   @moduledoc """
   End-to-end: Orchestrator + Memory tracker + RaxolAgent runner with Mock LLM.
 
-  Validates that the full Phase 4 stack drives an issue through dispatch ->
+  Validates that the full stack drives an issue through dispatch ->
   agent run -> continuation -> reconciliation when the tracker state moves
   terminal.
   """

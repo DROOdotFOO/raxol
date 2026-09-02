@@ -123,7 +123,7 @@ defmodule Raxol.Core.Renderer.Views.Table do
     rows =
       Enum.with_index(state.data)
       |> Enum.map(fn {row, index} ->
-        # You can adjust the style logic as needed
+        # No per-row styling: every data row renders with the default style.
         style = []
         create_data_row(row, %{columns: state.columns}, index, style)
       end)

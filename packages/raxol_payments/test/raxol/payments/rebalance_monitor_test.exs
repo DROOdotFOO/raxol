@@ -43,8 +43,8 @@ defmodule Raxol.Payments.RebalanceMonitorTest do
         price_fn: eth_price()
       )
 
-    # Phase 1 gathers native balances only, so USDC funding is unknown
-    # (:insufficient_usdc) -- the refuel is still recommended and correctly sized.
+    # The monitor gathers native balances only, so USDC funding is unknown
+    # (:insufficient_usdc). The refuel is still recommended and correctly sized.
     assert [{:refuel_gas, r}] = recs
     assert r.chain_id == 8453
     assert Decimal.equal?(r.native_to_buy, Decimal.new("0.045"))

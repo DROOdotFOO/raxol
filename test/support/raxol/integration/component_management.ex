@@ -84,8 +84,8 @@ defmodule Raxol.Test.Integration.ComponentManagement do
   Finds a child component by its ID from the parent's state.
   """
   def find_child_component_by_id(parent, child_id) do
-    # This is a simplified implementation - in a real system, you'd have proper child references
-    # For now, we'll create a mock child component with the expected state
+    # A simplified stand-in: real child references do not exist here, so a
+    # child component struct is synthesized from the parent's child_states.
     case Map.has_key?(parent.state.child_states, child_id) do
       true ->
         child_state = parent.state.child_states[child_id]

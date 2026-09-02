@@ -617,7 +617,7 @@ defmodule Raxol.UI.Components.ModalTest do
       assert surface.height > 0
       assert overlay.y == {:center_of, surface.height}
       # one box: it carries the border AND the fill, since a box's background
-      # now covers its interior as well as its border ring (ADR-0029).
+      # covers its interior as well as its border ring.
       assert surface.border == :double
       # opaque on purpose -- it sits over dimmed content that must not read
       # through it. The colour comes from the theme's :surface, never :black.

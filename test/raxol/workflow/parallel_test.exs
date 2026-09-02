@@ -1,6 +1,6 @@
 defmodule Raxol.Workflow.ParallelTest do
   @moduledoc """
-  Reference tests for ADR-0019 parallel branches.
+  Reference tests for workflow parallel branches.
 
   Covers the happy paths the runtime must support:
 
@@ -516,7 +516,8 @@ defmodule Raxol.Workflow.ParallelTest do
       {:ok, compiled} = Graph.compile(graph)
 
       # scout_a's traverse hits an interior conditional_edge that returns
-      # a list -- not supported in Phase A.
+      # a list, which the runtime does not support: nested fan-out is refused
+      # rather than silently flattened.
       assert {:error, {:nested_fan_out_unsupported, :inner_fan}, _state} =
                Compiled.invoke(compiled, %{})
     end

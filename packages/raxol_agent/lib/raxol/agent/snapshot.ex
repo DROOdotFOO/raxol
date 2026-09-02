@@ -133,14 +133,12 @@ defmodule Raxol.Agent.Snapshot do
   # crypto seed should be declared via an explicit `redact:`. Keep
   # `seed_phrase`/`mnemonic` — those never name benign data.
   #
-  # TODO(deferred — Finding 3, resolved by quorum): candidate additional
-  # spellings — creds/cred, privkey, pwd, apisecret, ssn — stay out of the
-  # heuristic. Widening this list needs an escape hatch for a field whose NAME
-  # matches but isn't secret; the heuristic winning over persist: (Finding 4,
-  # settled) means plain `persist:` is NOT that hatch. The intended hatch is a
-  # future, deliberately-ugly `allow_secret_names:` derive opt-out (warns on
-  # every dump) — not implemented yet. Until then, widening this list has no
-  # cheap rescue for a false positive.
+  # Deliberately excluded: creds/cred, privkey, pwd, apisecret, ssn. Widening
+  # this list needs an escape hatch for a field whose NAME matches but isn't
+  # secret, and plain `persist:` is NOT that hatch, because the heuristic wins
+  # over it. The intended hatch is a deliberately-ugly `allow_secret_names:`
+  # derive opt-out that warns on every dump, which does not exist yet. Until it
+  # does, widening this list leaves a false positive with no cheap rescue.
   @redact_segment ~r/(?:^|[_-])(?:password|passwd|secret|credentials?|mnemonic|seed[_-]?phrase)(?:$|[_-])/i
   @redact_suffix ~r/(?:^|[_-])(?:token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|secret[_-]?key)$/i
 

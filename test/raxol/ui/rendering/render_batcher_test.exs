@@ -604,7 +604,7 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     end
   end
 
-  describe "backpressure telemetry (ADR-0013)" do
+  describe "backpressure telemetry" do
     setup do
       batcher_name = :"bp_batcher_#{System.unique_integer([:positive])}"
 

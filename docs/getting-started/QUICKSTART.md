@@ -25,7 +25,7 @@ end
 ## Headless / CI setup
 
 The tutorial app below needs a real terminal, but building and testing Raxol
-does not. Prerequisites: Elixir/OTP (versions in the repo's `.tool-versions`)
+does not. Prerequisites: Elixir/OTP (versions in the repo's `mise.toml`)
 and a C toolchain for the termbox2 NIF (`make` + `cc`; on Debian/Ubuntu,
 `apt-get install build-essential`). From a fresh clone:
 

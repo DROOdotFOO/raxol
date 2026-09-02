@@ -1,5 +1,12 @@
 # Development Guide
 
+Also in this directory:
+
+- [Naming Conventions](NAMING_CONVENTIONS.md): filename standards and the duplicate-filename checker
+- [ASCII Standards](ASCII_STANDARDS.md): bracketed tags instead of emoji in output
+- [Debug Mode](DEBUG_MODE.md): `Raxol.Debug` verbosity levels and structured logging
+- [Type Spec Generator](TYPE_SPEC_GENERATOR.md): `mix raxol.gen.specs`
+
 ## Setup
 
 ### Quick start (Nix)
@@ -13,7 +20,8 @@ mix setup
 
 ### Manual setup
 ```bash
-# Requirements: Elixir 1.19+, Erlang/OTP 27+
+# Requirements: Elixir 1.17+, Erlang/OTP 27+
+# Reference toolchain: mise.toml (mise install)
 # Optional: Node.js 20+ and PostgreSQL 15+ (only needed for Phoenix/asset builds)
 mix deps.get
 mix compile
@@ -40,7 +48,7 @@ CI still runs `mix raxol.check_docs`, which additionally checks catalog counts.
 If a gate reports something like `function Enum.__in__/2 is undefined`, the
 `mix` on `PATH` and the one `MIX_HOME` points at are different installs, and a
 Hex archive built for one is being loaded by the other. The hook prepends the
-toolchain `.tool-versions` names when it finds it installed under mise; for a
+toolchain `mise.toml` names when it finds it installed under mise; for a
 manual command, put that toolchain's `bin` first on `PATH`.
 
 Set `RAXOL_HOOK_NO_TOOLCHAIN=1` to skip that and use `PATH` as-is, which is what

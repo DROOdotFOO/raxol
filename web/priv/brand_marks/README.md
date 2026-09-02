@@ -4,15 +4,15 @@ Single-path SVG marks for the integrations row on the landing page. Read at
 compile time by `RaxolPlayground.BrandMarks`, which extracts the `d` attribute
 and inlines it, so the page makes no external request for them.
 
+Every file is a 24 by 24 viewBox with exactly one `path`. A test holds that
+shape, because the renderer inlines the path and nothing else. The trademarks
+remain the property of their owners; they appear here as nominative use, to
+say what raxol works with, and imply no endorsement.
+
 ## Source: Simple Icons
 
 Most marks come from [Simple Icons](https://simpleicons.org) version 16.29.0,
-fetched unmodified. The collection is licensed CC0-1.0. The trademarks
-themselves remain the property of their owners; they appear here as nominative
-use, to say what raxol works with, and imply no endorsement.
-
-Every file is a 24 by 24 viewBox with exactly one `path`. A test holds that
-shape, because the renderer inlines the path and nothing else.
+fetched unmodified. The collection is licensed CC0-1.0.
 
 ## Source: vendor-published assets
 
@@ -36,7 +36,7 @@ viewBox with the shorter axis centred, the same convention Simple Icons uses.
 reached through `BrandMarks.site_path/1` rather than `path/1` and absent from
 `known/0`, because that list answers to the provider registry and a mark for
 something that is not a provider would read there as one that outlived its
-entry. Same source, same version, same licence as the rest.
+entry. Simple Icons source, same version, same licence as the rest.
 
 ## Which entry each mark serves
 

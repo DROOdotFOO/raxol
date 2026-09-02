@@ -2093,7 +2093,7 @@ defmodule Raxol.Agent.Code.AppTest do
     end
   end
 
-  describe "delegation + config (Phase 5)" do
+  describe "delegation + config" do
     test "init loads .raxol/hooks.json and .mcp.json from cwd" do
       dir =
         config_cwd(%{

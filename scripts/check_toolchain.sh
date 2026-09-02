@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check_toolchain.sh -- fail loudly when the active Elixir/Erlang is not the one
-# .tool-versions declares.
+# mise.toml declares.
 #
 # Why this exists: running a different Elixir than $MIX_HOME was populated for
 # does not produce a version complaint. It produces this, from deep inside Hex,
@@ -19,20 +19,34 @@ set -euo pipefail
 
 # shellcheck disable=SC1007  # CDPATH= is an intentional env prefix for a safe cd
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-TOOL_VERSIONS="$REPO_ROOT/.tool-versions"
+MISE_TOML="$REPO_ROOT/mise.toml"
 QUIET=false
 [[ ${1:-} == "--quiet" ]] && QUIET=true
 
 say() { [[ "$QUIET" == true ]] || printf '%s\n' "$1"; }
 
-if [[ ! -f "$TOOL_VERSIONS" ]]; then
-  say "check_toolchain: no .tool-versions at $TOOL_VERSIONS; nothing to check"
+if [[ ! -f "$MISE_TOML" ]]; then
+  say "check_toolchain: no mise.toml at $MISE_TOML; nothing to check"
   exit 0
 fi
 
-# "elixir 1.20.2-otp-29" -> "1.20.2"; "erlang 29.0.3" -> "29.0.3"
-want_elixir=$(awk '/^elixir /{print $2}' "$TOOL_VERSIONS" | sed 's/-otp-.*//')
-want_otp=$(awk '/^erlang /{print $2}' "$TOOL_VERSIONS" | cut -d. -f1)
+# Reads one `<tool> = "<version>"` entry out of the `[tools]` table. Scoped to
+# that table so a version living under some other table is not mistaken for the
+# pin, and it takes the first quoted value on the line, so a trailing comment is
+# not part of the version.
+pinned() {
+  awk -v tool="$1" '
+    /^[[:space:]]*\[/ { in_tools = ($0 ~ /^[[:space:]]*\[tools\][[:space:]]*$/); next }
+    in_tools && $1 == tool && match($0, /"[^"]*"/) {
+      print substr($0, RSTART + 1, RLENGTH - 2)
+      exit
+    }
+  ' "$MISE_TOML"
+}
+
+# elixir = "1.20.2-otp-29" -> "1.20.2"; erlang = "29.0.3" -> "29"
+want_elixir=$(pinned elixir | sed 's/-otp-.*//')
+want_otp=$(pinned erlang | cut -d. -f1)
 
 if ! command -v elixir >/dev/null 2>&1; then
   say "check_toolchain: no elixir on PATH"
@@ -63,7 +77,7 @@ if [[ "$ok" == true ]]; then
 fi
 
 say "check_toolchain: TOOLCHAIN MISMATCH"
-say "  .tool-versions wants : elixir ${want_elixir:-?}, OTP ${want_otp:-?}"
+say "  mise.toml wants      : elixir ${want_elixir:-?}, OTP ${want_otp:-?}"
 say "  on PATH              : elixir ${have_elixir:-?}, OTP ${have_otp:-?} ($(command -v elixir))"
 say "  MIX_HOME             : ${MIX_HOME:-<unset>}"
 say ""

@@ -8,7 +8,7 @@
 # This cell is recorded as terminal="tmux" — it measures tmux's OWN vte,
 # not a host GUI terminal (see tmux/session.sh header + t0-runbook.md).
 # Every result here was produced by actually running the probes (not
-# guessed): see docs/proposals/in-flight/t0-runbook.md for the exact
+# guessed): see docs/proposals/t0-runbook.md for the exact
 # reproduction commands.
 #
 # Usage: run_cell.sh CLAIM

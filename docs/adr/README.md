@@ -38,6 +38,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0030](0030-acp-session-update-delivery-ordering.md) | ACP session/update delivery ordering contract | Accepted | 2026-07-18 |
 | [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
 | [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed | 2026-08-26 |
+| [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
 
 ## Template
 
@@ -112,6 +113,7 @@ They preserve context for why decisions were made, help new contributors underst
 ### AI & MCP
 - [0012: MCP as Rendering Target](0012-mcp-as-rendering-target.md)
 - [0014: Telegram AI Guardian admin behaviour](0014-telegram-ai-guardian.md)
+- [0033: Indexer-agnostic web3 data surface (raxol_web3)](0033-web3-data-surface.md)
 
 ### Orchestration
 - [0015: Workflow Graph](0015-workflow-graph.md)
@@ -136,4 +138,4 @@ They preserve context for why decisions were made, help new contributors underst
 
 ## Coverage
 
-30 authored ADRs (28 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, and multi-root filesystem grants for agent sessions. (Numbers 0004 and 0006 are withdrawn placeholders.)
+31 authored ADRs (29 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, and the indexer-agnostic web3 data surface. (Numbers 0004 and 0006 are withdrawn placeholders.)

@@ -36,6 +36,7 @@ if config_env() == :prod do
   # provider-env -> AI_API_KEY); unresolved falls through to Mock, so a boot with
   # no credentials is safe. Channels and their bot-token credentials are
   # deployment-supplied and injected by the Console's acp-cli; wiring them maps to
-  # the `:channels` key here (ADR-0031, open injection seam).
+  # the `:channels` key here. That injection contract is not yet published by the
+  # Console, so the key stays an open seam rather than a fixed env var list.
   config :raxol_console, agent_opts: [auto_provider: true]
 end

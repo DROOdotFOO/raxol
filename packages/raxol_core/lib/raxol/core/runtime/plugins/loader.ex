@@ -298,8 +298,8 @@ defmodule Raxol.Core.Runtime.Plugins.Loader do
         true
 
       false ->
-        # Fallback: check if the module has the required callbacks
-        # This is a simplified check - in a real implementation you'd check all callbacks
+        # Fallback: presence of plugin_info/0 stands in for the full
+        # callback set, which is not checked here.
         function_exported?(module, :plugin_info, 0)
     end
   end

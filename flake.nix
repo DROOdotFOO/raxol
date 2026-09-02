@@ -20,7 +20,7 @@
         system:
         let
           pkgs = pkgsFor system;
-          # Match .tool-versions: OTP 29 / Elixir 1.20 (also the memory-regression
+          # Match mise.toml: OTP 29 / Elixir 1.20 (also the memory-regression
           # CI toolchain). Use the beam package set; the bare elixir_1_20/erlang_29
           # top-level attrs are deprecated.
           beam = pkgs.beam.packages.erlang_29;

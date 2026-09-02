@@ -63,8 +63,10 @@ packages/raxol_symphony/tmp/
 .secrets
 # Use .secrets.example as a template instead
 
-# Tool versions (local only, use .tool-versions.example as reference)
-.tool-versions.local
+# Toolchain overrides. The committed pin is mise.toml; these are the local-only
+# files mise layers on top of it.
+mise.local.toml
+.mise.local.toml
 
 # Security: Never commit encryption keys or sensitive data
 priv/data/keys/

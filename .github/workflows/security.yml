@@ -36,22 +36,20 @@ env:
   MIX_ENV: test
   SKIP_TERMBOX2_TESTS: true
   TMPDIR: /tmp
-  ELIXIR_VERSION: "1.17.3"
-  OTP_VERSION: "27.0"
 
 jobs:
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v7
 
       - name: Setup Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: mise.toml
+          version-type: strict
 
       - name: Install Hex and Rebar
         run: |
@@ -81,15 +79,15 @@ jobs:
   static-analysis:
     name: Static Security Analysis
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v7
 
       - name: Setup Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          version-file: mise.toml
+          version-type: strict
 
       - name: Install Hex and Rebar
         run: |

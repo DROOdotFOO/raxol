@@ -1,6 +1,6 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
   @moduledoc """
-  Phase 14: verifies per-turn error propagation.
+  Verifies per-turn error propagation.
 
   Policy failures (retries exhausted, timeout) surface as
   `{:error, {:policy_failed, reason}}` from `RaxolAgent.run/3`, so

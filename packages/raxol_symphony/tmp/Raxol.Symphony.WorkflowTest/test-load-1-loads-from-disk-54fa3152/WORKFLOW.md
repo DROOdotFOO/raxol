@@ -1,5 +1,0 @@
----
-tracker:
-  kind: linear
----
-hello
