@@ -192,6 +192,47 @@ Hooks.RaxolTerminal = {
   }
 }
 
+// Gallery card playback: the lean sibling of HeroDemo below. A card's
+// frames are server-rendered hidden siblings; this hook only toggles
+// `hidden` on a fixed-timestep rAF accumulator at the demo's own tick
+// (data-frame-ms, written beside the frames by the generator). Reduced
+// motion holds frame zero, with a live change listener, same as the hero.
+Hooks.CardLoop = {
+  mounted() {
+    this.frames = Array.from(this.el.querySelectorAll("[data-frame]"))
+    if (this.frames.length < 2) return
+    this.ms = parseInt(this.el.dataset.frameMs, 10) || 200
+    this.i = 0
+    this.acc = 0
+    this.last = null
+    this.reduced = window.matchMedia("(prefers-reduced-motion: reduce)")
+
+    const step = (t) => {
+      this.raf = requestAnimationFrame(step)
+      if (this.reduced.matches) {
+        this.last = t
+        return
+      }
+      if (this.last == null) this.last = t
+      this.acc += Math.min(t - this.last, 1000)
+      this.last = t
+      let moved = false
+      while (this.acc >= this.ms) {
+        this.acc -= this.ms
+        this.i = (this.i + 1) % this.frames.length
+        moved = true
+      }
+      if (moved) this.frames.forEach((f, j) => (f.hidden = j !== this.i))
+    }
+
+    this.raf = requestAnimationFrame(step)
+  },
+
+  destroyed() {
+    if (this.raf) cancelAnimationFrame(this.raf)
+  },
+}
+
 // Hero surface-tabbed demo. All content is server-rendered; this hook only
 // toggles hidden/aria-selected: it auto-advances the surface tabs and steps
 // the recorded terminal frames on a fixed-timestep rAF accumulator
