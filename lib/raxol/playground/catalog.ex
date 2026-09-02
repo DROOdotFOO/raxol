@@ -7,6 +7,7 @@ defmodule Raxol.Playground.Catalog do
   """
 
   alias Raxol.Playground.Demos
+  alias Raxol.Playground.Snippet
 
   @type component :: %{
           name: String.t(),
@@ -18,7 +19,14 @@ defmodule Raxol.Playground.Catalog do
           code_snippet: String.t()
         }
 
-  @components [
+  # The `code_snippet` written here is a FALLBACK. A demo that brackets its
+  # illustrative region in `# snippet:start` / `# snippet:end` markers has
+  # its snippet extracted from that source at compile time instead (see
+  # `Raxol.Playground.Snippet`), so the code beside a demo is code the demo
+  # actually contains and runs. Entries still on their literal are counted
+  # by `underived/0`, and a ratchet test holds that count on its way to
+  # zero, at which point the literals and this fallback go.
+  @component_specs [
     %{
       name: "Button",
       module: Demos.ButtonDemo,
@@ -576,9 +584,34 @@ defmodule Raxol.Playground.Catalog do
     }
   ]
 
+  # Editing a demo recompiles the catalog, so a moved marker region cannot
+  # serve a stale snippet.
+  for spec <- @component_specs do
+    @external_resource Snippet.path_for(spec.module)
+  end
+
+  @derived Enum.map(@component_specs, fn spec ->
+             case Snippet.extract(Snippet.path_for(spec.module)) do
+               {:ok, snippet} -> {%{spec | code_snippet: snippet}, :derived}
+               :no_markers -> {spec, :fallback}
+             end
+           end)
+
+  @components Enum.map(@derived, &elem(&1, 0))
+
+  @underived for {spec, :fallback} <- @derived, do: spec.name
+
   @doc "Returns all playground components."
   @spec list_components() :: [component()]
   def list_components, do: @components
+
+  @doc """
+  The entries whose snippet is still the hand-written literal rather than a
+  region extracted from their demo. Exists for the ratchet test that holds
+  this list on its way to empty; every name here is a demo without markers.
+  """
+  @spec underived() :: [String.t()]
+  def underived, do: @underived
 
   @doc "Returns a component by name."
   @spec get_component(String.t()) :: component() | nil
