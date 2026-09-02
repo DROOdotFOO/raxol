@@ -173,14 +173,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @settle_source ~S"""
   defmodule Settle do
     use Raxol.Core.Runtime.Application
-    @title "USDC 1.10  Base Sepolia -> Arc  via xochi"
+    @title "XOCHI RECEIPT  USDC 1.10"
+    @route "Base Sepolia 84532 -> Arc Testnet 5042002"
     @receipt [
-      "agent     funded signer",
-      "gate      approve before signature",
-      "intent    quote -> sign -> execute",
-      "source    Base Sepolia  84532",
-      "dest      Arc Testnet  5042002",
-      "explorer  Blockscout  receipts after run"
+      "gate   spend cap before signature",
+      "intent EIP-712 quote signed",
+      "execute submit settlement",
+      "src tx base-sepolia.blockscout.com/tx",
+      "dst tx testnet.arcscan.app/tx"
     ]
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
@@ -191,6 +191,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       column style: %{gap: 0} do
         [
           text(@title, style: [:bold]),
+          text(@route, fg: :magenta),
           column(do: Enum.with_index(@receipt, &row(&1, &2, at)))
         ]
       end
@@ -216,16 +217,16 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # `settle.ex` cannot be expected to infer which noun it is answering, so each
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
+                        {"settle", "settle.ex",
+                         "a cross-chain transfer, through Xochi",
+                         @settle_source},
                         {"pulse", "pulse.exs", "one module, four surfaces",
                          @pulse_source},
                         {"halo", "halo.exs", "the mark, as a program",
                          @halo_source},
                         {"harness", "harness.ex",
                          "a Virtuals ACP job, worked by the coding agent",
-                         @harness_source},
-                        {"settle", "settle.ex",
-                         "a cross-chain transfer, through Xochi",
-                         @settle_source}
+                         @harness_source}
                       ] do
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
 

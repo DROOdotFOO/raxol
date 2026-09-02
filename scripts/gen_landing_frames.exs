@@ -131,14 +131,14 @@ end
 defmodule Settle do
   use Raxol.Core.Runtime.Application
 
-  @title "USDC 1.10  Base Sepolia -> Arc  via xochi"
+  @title "XOCHI RECEIPT  USDC 1.10"
+  @route "Base Sepolia 84532 -> Arc Testnet 5042002"
   @receipt [
-    "agent     funded signer",
-    "gate      approve before signature",
-    "intent    quote -> sign -> execute",
-    "source    Base Sepolia  84532",
-    "dest      Arc Testnet  5042002",
-    "explorer  Blockscout  receipts after run"
+    "gate   spend cap before signature",
+    "intent EIP-712 quote signed",
+    "execute submit settlement",
+    "src tx base-sepolia.blockscout.com/tx",
+    "dst tx testnet.arcscan.app/tx"
   ]
   def init(_), do: %{t: 0}
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
@@ -151,6 +151,7 @@ defmodule Settle do
     column style: %{gap: 0} do
       [
         text(@title, style: [:bold]),
+        text(@route, fg: :magenta),
         column(do: Enum.with_index(@receipt, &row(&1, &2, at)))
       ]
     end
@@ -318,14 +319,14 @@ defmodule GenLandingFrames do
   #          and one call per tick went by too fast to follow. All-done gets a
   #          single frame -- it is the one state with no spinner, so a second
   #          frame of it would be identical to the first.
-  #   settle six receipt rows plus the empty state close the loop. Labels stay
-  #          visible while the ok marker advances, so every frame reads as the
-  #          same operator receipt rather than a task list.
+  #   settle five receipt rows plus the empty state close the loop. The route is
+  #          fixed, while the ok marker advances through the payment operator
+  #          receipt.
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63},
     {"halo", Halo, {70, 14}, 110, 48},
     {"harness", Harness, {36, 5}, 200, 10},
-    {"settle", Settle, {56, 7}, 200, 7}
+    {"settle", Settle, {56, 7}, 200, 6}
   ]
 
   defp hero(base \\ @hero_dir) do

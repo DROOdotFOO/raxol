@@ -510,6 +510,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
+  test "settle is the first hero example" do
+    assert List.first(LandingComponents.hero_example_names()) == "settle"
+  end
+
   # The page has got fees wrong once already: raxol.io rendered a hand-written
   # fee table until 2026-08-30 whose numbers no tier ever charged (see the note
   # in `Raxol.Payments.PrivacyTier`). The hero no longer prices anything at all
@@ -530,9 +534,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert pane =~ "Base Sepolia"
     assert pane =~ "Arc Testnet"
     assert pane =~ "5042002"
-    assert pane =~ "Blockscout"
-    assert pane =~ "receipts after run"
-    assert pane =~ "approve before signature"
+    assert pane =~ "base-sepolia.blockscout.com/tx"
+    assert pane =~ "testnet.arcscan.app/tx"
+    assert pane =~ "spend cap before signature"
   end
 
   # The row replaced the sentence, so it inherits the sentence's obligation:
@@ -561,13 +565,10 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       assert row =~ name, "the integrations row drops #{name}"
     end
 
-    # They belong in the row under the demo, not in the hero: a logo strip
-    # between the sub-line and the install command pushes the command down and
-    # dresses the claim in other people's marks.
-    hero =
-      render_component(&LandingComponents.screen_hero/1,
-        example: List.first(LandingComponents.hero_example_names())
-      )
+    # Non-settlement examples should not carry a logo strip in the hero: that
+    # would push the command down and dress the claim in other people's marks.
+    # The default settle receipt names chains because chains are the content.
+    hero = render_component(&LandingComponents.screen_hero/1, example: "pulse")
 
     for %{name: name} <- NetworkMarks.all() do
       refute hero =~ name, "#{name} is back in the hero"
