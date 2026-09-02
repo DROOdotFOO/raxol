@@ -36,7 +36,7 @@ defmodule RaxolPlaygroundWeb.Router do
     # they stay. The old index URL redirects rather than 404s.
     get("/demos", RedirectController, :demos)
     live("/demos/:demo", DemoLive, :show)
-    live("/repl", ReplLive, :index)
+    get("/repl", RedirectController, :repl)
 
     # The deep dives the landing used to stack. Listed one per line rather
     # than as `/:topic` so an unknown path 404s in the router instead of
