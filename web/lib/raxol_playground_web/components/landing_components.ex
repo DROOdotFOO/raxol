@@ -362,7 +362,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              subset in the hero dates the sentence every time one is added. --%>
         <p class="screen-sub">
           TEA runtime, agents, <span class="text-axol-coral">raxol code</span>,
-          settlement. Separate Hex packages.
+          and settlement as separate Hex packages.
         </p>
 
 
