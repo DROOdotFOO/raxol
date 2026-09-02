@@ -46,7 +46,7 @@ defmodule Raxol.UI.Components.Input.Checkbox do
   @spec init(map() | keyword()) :: {:ok, t()}
   def init(props) do
     id =
-      Keyword.get(props, :id, "checkbox-#{:erlang.unique_integer([:positive])}")
+      Keyword.get_lazy(props, :id, fn -> Raxol.Core.ID.next("checkbox") end)
 
     state = %{
       id: id,

@@ -24,11 +24,9 @@ defmodule Raxol.UI.Components.Display.StatusBar do
   def init(props) do
     state = %{
       id:
-        Keyword.get(
-          props,
-          :id,
-          "status-bar-#{:erlang.unique_integer([:positive])}"
-        ),
+        Keyword.get_lazy(props, :id, fn ->
+          Raxol.Core.ID.next("status-bar")
+        end),
       items: Keyword.get(props, :items, []),
       separator: Keyword.get(props, :separator, " | "),
       style: Keyword.get(props, :style, %{}),

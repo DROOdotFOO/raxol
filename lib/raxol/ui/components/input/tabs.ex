@@ -33,8 +33,7 @@ defmodule Raxol.UI.Components.Input.Tabs do
   @spec init(keyword()) :: {:ok, t()}
   def init(props) do
     state = %{
-      id:
-        Keyword.get(props, :id, "tabs-#{:erlang.unique_integer([:positive])}"),
+      id: Keyword.get_lazy(props, :id, fn -> Raxol.Core.ID.next("tabs") end),
       tabs: Keyword.get(props, :tabs, []),
       active_index: Keyword.get(props, :active_index, 0),
       focused: Keyword.get(props, :focused, false),
