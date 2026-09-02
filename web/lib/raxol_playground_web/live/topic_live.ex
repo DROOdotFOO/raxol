@@ -25,7 +25,7 @@ defmodule RaxolPlaygroundWeb.TopicLive do
   @topics %{
     surfaces: {"/surfaces", "Surfaces", "Surfaces"},
     ssh: {"/ssh", "SSH", "SSH"},
-    agent: {"/agent", "Agents", "Agents"},
+    agent: {"/agents", "Agents", "Agents"},
     coding_agent: {"/coding-agent", "raxol code", "raxol code"},
     payments: {"/payments", "Agent payments", "Payments"},
     token: {"/token", "$RAXOL", "$RAXOL"}

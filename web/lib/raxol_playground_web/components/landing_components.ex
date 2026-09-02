@@ -1041,7 +1041,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="surface-buckets surface-buckets--compact">
         <div class="surface-bucket">
-          <h2 class="surface-bucket__label">In your terminal</h2>
+          <h2 class="surface-bucket__label">Terminal</h2>
           <div class="surface-bucket__chips">
             <div class="surface-chip">
               <span class="surface-chip__name">Terminal</span>
@@ -1055,7 +1055,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
 
         <div class="surface-bucket">
-          <h2 class="surface-bucket__label">In your browser</h2>
+          <h2 class="surface-bucket__label">Browser</h2>
           <div class="surface-bucket__chips">
             <div class="surface-chip">
               <span class="surface-chip__name">Browser</span>
@@ -1065,7 +1065,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
 
         <div class="surface-bucket">
-          <h2 class="surface-bucket__label">Where your agents are</h2>
+          <h2 class="surface-bucket__label">Agent surfaces</h2>
           <div class="surface-bucket__chips">
             <div class="surface-chip">
               <span class="surface-chip__name">MCP</span>
@@ -1171,7 +1171,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
          about this deployment, so it is stated as one, in body text. --%>
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="ssh-deep-title">
       <div class="max-w-[65ch]">
-        <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h1>
+        <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve over SSH.</h1>
         <p class="body-text mb-6">
           Every app can be an SSH surface. Each session is a supervised BEAM
           process.
@@ -1322,8 +1322,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl">
-        Competitors cannot print the last line: MCP tools come from the widget
-        tree because UI runtime and agent runtime are one system.
+        MCP tools come from the widget tree because UI runtime and agent runtime
+        are one system.
       </p>
 
       <div class="max-w-2xl">
@@ -1433,7 +1433,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a href="https://xochi.fi" rel="noopener" class="text-sky">xochi.fi</a>.
         </h1>
         <p class="body-text max-w-2xl">
-          Fees: trust score + asset type, pinned to
+          Fees follow trust score and asset type. CI pins them to
           <code>Raxol.Payments.FeeSchedule</code>. Payments:
           <%= @payments_version %>; core: 2.6.
         </p>
@@ -1457,24 +1457,22 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-10">
-        Fees have three layers: solver spread, xochi.fi venue cut, raxol routing
-        cut. Tiers discount the last two; solver spread is never discounted
+        Fees have three layers: solver spread, venue cut, raxol routing cut.
+        Tiers discount the last two; solver spread is never discounted
         (<%= @solver_floor.stable %> bps stable,
         <%= @solver_floor.volatile %> bps volatile), so there is no zero-fee
         tier. ACP jobs skip routing cut; it is already budgeted.
       </p>
 
-      <h2 class="name-coral mb-2">Privacy</h2>
+      <h2 class="name-coral mb-2">Public, stealth, or shielded</h2>
       <p class="body-text-dim max-w-2xl mb-10">
-        Corridors settle public, stealth (ERC-5564 one-time address), or
-        shielded (Aztec note). ZK attestations prove trust tier without exposing
-        the score.
+        ZK attestations prove trust tier without exposing the score.
       </p>
 
       <h2 class="name-coral mb-2">xochi.fi reach</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        xochi.fi capabilities use a five-minute cache. Fetch failure uses the
-        static registry and labels it cached.
+        Capabilities use a five-minute cache. Fetch failure uses the static
+        registry and labels it cached.
       </p>
 
       <div class="reach">
@@ -1518,8 +1516,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <h2 class="name-coral mt-12 mb-2">xochi.fi routing</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        <code>Raxol.Payments.Router.select/1</code> picks x402, xochi.fi, or
-        relay. Tables are code-derived.
+        <code>Raxol.Payments.Router.select/1</code> picks x402, private
+        settlement, or relay. Tables are code-derived.
       </p>
 
       <div class="ladder ladder--pair mb-4" role="table" aria-label="Protocol routing">
@@ -1539,7 +1537,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </p>
 
       <h2 class="name-coral mb-2">
-        <%= length(@payment_actions) %> gated Actions
+        <%= length(@payment_actions) %> Actions
       </h2>
 
       <%!-- Two clusters rather than thirteen hairline rows with the same word
@@ -1652,8 +1650,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <div class="max-w-2xl">
         <h2 class="heading-xl mt-10 mb-3">Boundary</h2>
-        <p class="body-text mb-4">
-          Not a settlement asset, package key, fee switch, or price oracle.
+        <div class="reach-toks mb-4">
+          <span class="tok">not settlement</span>
+          <span class="tok">not package access</span>
+          <span class="tok">not fee switch</span>
+          <span class="tok">not oracle</span>
+        </div>
+        <p class="body-text-dim">
           Payment rails live on
           <a href="/payments" class="link-subtle">/payments</a>.
         </p>

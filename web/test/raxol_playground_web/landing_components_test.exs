@@ -288,7 +288,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert coding =~ "fails closed"
 
     token = render_component(&LandingComponents.token_deep_dive/1, %{})
-    assert token =~ "settlement asset"
+    assert token =~ "not settlement"
     assert token =~ ~s(href="/payments")
   end
 
@@ -855,12 +855,12 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert hero =~ "done"
   end
 
-  test "surface chips group into the three places you already are" do
+  test "surface chips group into terminal, browser, and agent surfaces" do
     surfaces = render_component(&LandingComponents.surfaces_deep_dive/1, %{})
 
-    assert surfaces =~ "In your terminal"
-    assert surfaces =~ "In your browser"
-    assert surfaces =~ "Where your agents are"
+    assert surfaces =~ "Terminal"
+    assert surfaces =~ "Browser"
+    assert surfaces =~ "Agent surfaces"
     assert surfaces =~ "termbox2 NIF"
     assert surfaces =~ "Phoenix LiveView"
     assert surfaces =~ "JSON-RPC over stdio"
@@ -1037,7 +1037,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     # Privacy is still described, as the settlement mode it is.
     assert payments =~ "shielded"
-    assert payments =~ "Privacy"
+    assert payments =~ "Public, stealth, or shielded"
 
     # Matrix rows from the data, stables before WETH, authored rail notes.
     assert payments =~ "source: live"
@@ -1082,7 +1082,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert token =~
              "https://dexscreener.com/robinhood/0xa20b68e2e1de71f1426b546ed5514bf253215a48"
 
-    assert token =~ ~r/settlement\s+asset/
+    assert token =~ ~r/not\s+settlement/
 
     # A market number would be stale by the next request.
     refute token =~ ~r/\$\d/
