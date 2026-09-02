@@ -12,20 +12,24 @@ module.exports = {
         'deep-night': '#12121a',
         'synthwave-bg': '#241b2f',
 
-        // Text
+        // Text.
+        //
+        // The scale stops at 60 because that is where WCAG AA stops. Composited
+        // over --obsidian these measure 5.96:1 at 0.6 and 4.43:1 at 0.5, so
+        // every rung below 60 was a text colour that could not be read, and the
+        // playground was the one surface that reached for them: a help button
+        // at 3.26:1, a `role="status"` message at 2.78:1, a separator at 2.1:1.
+        // Deleting the rungs is the fix that holds -- a value that does not
+        // exist cannot be typed by accident, where a convention can.
+        //
+        // The dimmest legible tier is --text-dim (0.52, 4.71:1), in app.css.
+        // Anything that wants to sit below AA is not text: borders and
+        // hairlines come from --border-subtle and --panel-border.
         pearl: {
           DEFAULT: '#e8e4dc',
           80: 'rgba(232, 228, 220, 0.8)',
           70: 'rgba(232, 228, 220, 0.7)',
           60: 'rgba(232, 228, 220, 0.6)',
-          50: 'rgba(232, 228, 220, 0.5)',
-          45: 'rgba(232, 228, 220, 0.45)',
-          40: 'rgba(232, 228, 220, 0.4)',
-          35: 'rgba(232, 228, 220, 0.35)',
-          30: 'rgba(232, 228, 220, 0.3)',
-          25: 'rgba(232, 228, 220, 0.25)',
-          20: 'rgba(232, 228, 220, 0.2)',
-          15: 'rgba(232, 228, 220, 0.15)',
         },
         frost: '#fdfff9',
 
@@ -76,7 +80,9 @@ module.exports = {
         body: ['"Monaspace Neon"', '"Monaspace Argon"', '"Fira Code"', 'Monaco', 'monospace'],
       },
       fontSize: {
-        'xs': 'clamp(0.55rem, 0.5rem + 0.25vw, 0.65rem)',
+        // Mirrors --text-xs in app.css, which is the authority. The old value
+        // bottomed out at 8.8px; nothing in the UI is set below 11.2px now.
+        'xs': 'clamp(0.7rem, 0.67rem + 0.15vw, 0.76rem)',
         'sm': 'clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem)',
         'base': 'clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem)',
         'lg': 'clamp(1rem, 0.9rem + 0.5vw, 1.15rem)',
@@ -112,9 +118,6 @@ module.exports = {
         'elevated': '0 8px 24px rgba(0, 0, 0, 0.25)',
       },
       animation: {
-        'float-1': 'floatOrb 20s ease-in-out infinite',
-        'float-2': 'floatOrb 25s ease-in-out infinite -5s',
-        'float-3': 'floatOrb 22s ease-in-out infinite -10s',
         'pearl-shift': 'pearlShift 20s ease-in-out infinite',
         'fade-in': 'fadeIn 0.3s ease-out',
         'fade-in-up': 'fadeInUp 0.5s ease-out',
@@ -123,11 +126,6 @@ module.exports = {
         'glow-pulse': 'glowPulse 3s ease-in-out infinite',
       },
       keyframes: {
-        floatOrb: {
-          '0%, 100%': { transform: 'translate(0, 0) scale(1)' },
-          '33%': { transform: 'translate(30px, -30px) scale(1.05)' },
-          '66%': { transform: 'translate(-20px, 20px) scale(0.95)' },
-        },
         pearlShift: {
           '0%, 100%': { filter: 'hue-rotate(0deg) brightness(1)' },
           '50%': { filter: 'hue-rotate(15deg) brightness(1.1)' },

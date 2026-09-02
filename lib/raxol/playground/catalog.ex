@@ -47,7 +47,7 @@ defmodule Raxol.Playground.Catalog do
       module: Demos.TableDemo,
       category: :display,
       description:
-        "Stateful Table — fixed-width grid with border modes (:grid|:inner|:none), " <>
+        "Stateful Table: fixed-width grid with border modes (:grid|:inner|:none), " <>
           "sort, selection, pagination; keys route through Table.handle_event",
       complexity: :intermediate,
       tags: [
@@ -211,7 +211,7 @@ defmodule Raxol.Playground.Catalog do
       module: Demos.CodeBlockDemo,
       category: :display,
       description:
-        "CodeBlock — structured syntax tokens via Raxol.UI.SyntaxHighlighter " <>
+        "CodeBlock: structured syntax tokens via Raxol.UI.SyntaxHighlighter " <>
           "(same path as DiffViewer); theme :one_dark by default",
       complexity: :basic,
       tags: ["display", "code", "syntax", "makeup", "highlighter"],
@@ -233,7 +233,7 @@ defmodule Raxol.Playground.Catalog do
       category: :display,
       description:
         "Full Markdown surface (headings, emphasis, lists, quotes, links, " <>
-          "GFM tables, HR) — fenced code via CodeBlock/SyntaxHighlighter; raw toggle",
+          "GFM tables, HR). Fenced code via CodeBlock/SyntaxHighlighter, raw toggle",
       complexity: :intermediate,
       tags: ["display", "markdown", "text", "rendering", "code", "highlight"],
       code_snippet: """

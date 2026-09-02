@@ -90,7 +90,7 @@ defmodule Raxol.UI.Components.Harness.ApprovalPromptTest do
       marker =
         Enum.find(
           blast_radius_view.children,
-          &(&1[:content] == "⚠ IRREVERSIBLE — this action cannot be undone")
+          &(&1[:content] == "⚠ IRREVERSIBLE: this action cannot be undone")
         )
 
       assert marker != nil

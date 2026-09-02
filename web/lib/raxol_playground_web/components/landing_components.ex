@@ -77,9 +77,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @halo_source ~S"""
   defmodule Halo do
     use Raxol.Core.Runtime.Application
+    alias Raxol.UI.Components.Harness.AxolFace
 
     @ramp ["·", ":", "-", "=", "+", "*", "#", "%"]
-    @faces ["≡··≡", "≡''≡", "≡oo≡", "≡^^≡"]
     @a 374_761_393
     @b 668_265_263
 
@@ -95,7 +95,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     defp scan(t, y), do: for(x <- 0..67, into: "", do: cell(t, x, y))
 
     defp cell(t, x, 6) when x in 32..35,
-      do: String.at(Enum.at(@faces, rem(div(t, 6), 4)), x - 32)
+      do: String.at(AxolFace.glyph(:thinking, div(t, 6)), x - 32)
 
     defp cell(_t, x, y) when abs(y - 6) <= 1 and x in 29..38, do: " "
 
@@ -221,9 +221,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # `settle.ex` cannot be expected to infer which noun it is answering, so each
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
-                        {"pulse", "pulse.ex", "one module, four surfaces",
+                        {"pulse", "pulse.exs", "one module, four surfaces",
                          @pulse_source},
-                        {"halo", "halo.ex", "the mark, as a program",
+                        {"halo", "halo.exs", "the mark, as a program",
                          @halo_source},
                         {"harness", "harness.ex",
                          "a Virtuals ACP job, worked by the coding agent",
@@ -232,9 +232,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                          "a cross-chain transfer, through Xochi",
                          @settle_source}
                       ] do
-                    lines = source |> String.trim() |> String.split("\n")
-
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
+
+                    lines = source |> String.trim() |> String.split("\n")
 
                     {name, file, module, blurb,
                      Makeup.highlight_inner_html(source),
@@ -360,10 +360,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              spelled out here and are not any more -- the reach table on
              /payments carries them, derived from the solver, and naming a
              subset in the hero dates the sentence every time one is added. --%>
+        <%!-- Eleven words, down from nineteen. It still does both of its jobs
+             and says each one once: the packaging claim, and a gloss for the
+             h1's nouns in the h1's order, so "harness" resolves to `raxol
+             code` by position rather than by being named twice. The articles
+             went because a list of four things does not need them, and
+             "harness" went because the line above already said it. --%>
         <p class="screen-sub">
-          Each is its own Hex package: the TEA runtime, the AI agent, the
-          <span class="text-axol-coral">raxol code</span> harness, and
-          cross-chain settlement.
+          Separate Hex packages: TEA runtime, AI agent,
+          <span class="text-axol-coral">raxol code</span>, cross-chain settlement.
         </p>
 
 
@@ -703,13 +708,26 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            and `overflow: hidden` swallowed the footer whole -- the pause button
            and the example switcher were unreachable, and scrolling did not help
            because they were clipped in place rather than below the fold. --%>
+      <%!-- No window dots. `terminal_chrome/1` in PlaygroundComponents already
+           made this call for the rest of the site -- its docstring says it
+           drops the fake mac-style red/yellow/green dots for a shell prompt
+           that earns its place -- and this bar had put them back. The frames
+           below are real recorded output; three grey discs above them are the
+           one thing here pretending to be a window. --%>
       <div class="hero-demo-bar">
-        <span class="hd-dot"></span><span class="hd-dot"></span><span class="hd-dot"></span>
+        <span class="hd-prompt" aria-hidden="true">$</span>
         <%!-- Two spans, because they answer different questions and only one
              of them changes: which program this is (static, and the thing a
              reader loses track of while clicking through surfaces) and which
              surface it is rendering to (rewritten by the tab). --%>
-        <span class="hd-name"><b>{@title}</b> &middot; {@blurb}</span>
+        <%!-- The blurb is its own span so a narrow bar can drop it whole. As
+             one string it ellipsed at ~12 characters, spending a row of the
+             bar to render "one ..." -- the filename is the part that has to
+             survive, and .hd-title already drops itself on the same grounds. --%>
+        <%!-- The filename is the link to the file. The pane tells you to
+             `mix run pulse.exs`; this is where pulse.exs comes from, and
+             hanging it on the name costs the bar no width. --%>
+        <span class="hd-name"><a href={"/examples/#{@title}"} class="hd-file">{@title}</a><span class="hd-blurb"> &middot; {@blurb}</span></span>
         <span class="hd-title" data-role="title">rendering to the terminal</span>
 
         <%!-- Ruled off from the captions beside them. The bar reads left to
@@ -738,11 +756,28 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
+      <%!-- A real tablist, not four buttons wearing the role. Each tab names
+           the panel it controls and only the selected one is in the tab order,
+           which is what makes the arrow keys the hook binds the way you move
+           between them: the pattern promises a reader that Tab leaves the group
+           and the arrows walk it, and half of it announces a selection with
+           nothing to step into. The ids carry the example name because the
+           whole demo remounts when the example switches, and two mounts sharing
+           an id would cross-wire the aria-controls. --%>
       <div class="hero-tabs" role="tablist" aria-label="Render surface">
-        <button type="button" class="hero-tab" role="tab" aria-selected="true" data-i="0" data-title="rendering to the terminal" data-label="Rendered to the terminal">Terminal</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="1" data-title="rendering to Phoenix LiveView" data-label="Embedded in a page">Browser</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="2" data-title="served over SSH" data-label="The same frame, painted down a channel">SSH</button>
-        <button type="button" class="hero-tab" role="tab" aria-selected="false" data-i="3" data-title="exposed as MCP tools" data-label="The tree an agent reads">Agent / MCP</button>
+        <button
+          :for={tab <- surface_tabs()}
+          type="button"
+          class="hero-tab"
+          role="tab"
+          id={tab_id(@example, tab.i)}
+          aria-controls={panel_id(@example, tab.i)}
+          aria-selected={to_string(tab.i == 0)}
+          tabindex={if tab.i == 0, do: "0", else: "-1"}
+          data-i={tab.i}
+          data-title={tab.title}
+          data-label={tab.label}
+        >{tab.name}</button>
       </div>
 
       <div class="hero-panes">
@@ -754,7 +789,19 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
 
         <div class="hero-pane">
-          <div class="hero-out" data-surface="0">
+          <%!-- `tabindex=0` on each panel is what gives the keyboard somewhere
+               to land after the arrows pick a tab. The frames inside are
+               aria-hidden decoration, so without it the group would be a
+               control whose entire effect is invisible to the reader working
+               it; the accessible name comes off the tab that owns the panel. --%>
+          <div
+            class="hero-out"
+            data-surface="0"
+            role="tabpanel"
+            tabindex="0"
+            id={panel_id(@example, 0)}
+            aria-labelledby={tab_id(@example, 0)}
+          >
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run {@example}.exs</span></pre>
             <%!-- Recorded frames: real Headless output of the module beside
                  them, committed under priv/hero_frames/<example>/. Frame one
@@ -771,12 +818,24 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                `raxol_liveview` actually hands you is a component: the frame
                below is the same recording the terminal pane steps, in a page
                that has a URL and a heading around it. --%>
-          <div class="hero-out" data-surface="1" hidden>
+          <div
+            class="hero-out"
+            data-surface="1"
+            role="tabpanel"
+            tabindex="0"
+            id={panel_id(@example, 1)}
+            aria-labelledby={tab_id(@example, 1)}
+            hidden
+          >
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix phx.server</span></pre>
 
             <div class="hero-browser">
+              <%!-- The URL is the whole point of this bar: it is what says the
+                   frame below is being served rather than printed. The disc
+                   beside it was not a favicon and not a status light, so it
+                   said nothing and only made the row look like a screenshot of
+                   a browser instead of a page with an address. --%>
               <div class="hero-browser__bar" aria-hidden="true">
-                <span class="hero-browser__dot"></span>
                 <span class="hero-browser__url">localhost:4000/{@example}</span>
               </div>
 
@@ -798,7 +857,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                listed: same frame, same colours, same two-axis fit as the
                terminal pane, reached over a channel instead of a local tty.
                That IS the claim the tab makes. --%>
-          <div class="hero-out" data-surface="2" hidden>
+          <div
+            class="hero-out"
+            data-surface="2"
+            role="tabpanel"
+            tabindex="0"
+            id={panel_id(@example, 2)}
+            aria-labelledby={tab_id(@example, 2)}
+            hidden
+          >
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh demo@localhost -p 2222</span></pre>
             <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" aria-hidden="true" style={"--frame-rows: #{@ssh_grid.rows}; --frame-cols: #{@ssh_grid.cols}"}>
               <div :for={{frame, i} <- Enum.with_index(@ssh_frames)} class="hero-frame" data-frame={i} hidden={i != 0}>
@@ -810,7 +877,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <%!-- The one pane that is listed rather than painted, because what
                an agent reads is a structure and not a picture: the head of a
                committed artifact, clamped with a marker naming what was cut. --%>
-          <div class="hero-out" data-surface="3" hidden>
+          <div
+            class="hero-out"
+            data-surface="3"
+            role="tabpanel"
+            tabindex="0"
+            id={panel_id(@example, 3)}
+            aria-labelledby={tab_id(@example, 3)}
+            hidden
+          >
             <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix mcp.server</span></pre>
             <pre class="hero-pre hero-src" style={"--src-lines: #{@mcp_lines}"}>{raw(@out_mcp)}</pre>
           </div>
@@ -820,6 +895,88 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     </div>
     """
   end
+
+  # The four render surfaces, in tab order. One list rather than four literal
+  # buttons: the ids the tabs and the panels agree on are derived from `i`, and
+  # a hand-written pair is free to drift apart, which is how `aria-controls`
+  # pointed at nothing in the first place.
+  #
+  # `title` rewrites the caption in the demo's title bar; `label` is the
+  # surface's longer description.
+  @surface_tabs [
+    %{
+      i: 0,
+      name: "Terminal",
+      title: "rendering to the terminal",
+      label: "Rendered to the terminal"
+    },
+    %{
+      i: 1,
+      name: "Browser",
+      title: "rendering to Phoenix LiveView",
+      label: "Embedded in a page"
+    },
+    %{
+      i: 2,
+      name: "SSH",
+      title: "served over SSH",
+      label: "The same frame, painted down a channel"
+    },
+    %{
+      i: 3,
+      name: "Agent / MCP",
+      title: "exposed as MCP tools",
+      label: "The tree an agent reads"
+    }
+  ]
+
+  @doc "The hero's render surfaces, in tab order."
+  @spec surface_tabs() :: [map()]
+  def surface_tabs, do: @surface_tabs
+
+  # Scoped to the example because the whole demo remounts when the example
+  # switches; two mounts sharing an id would cross-wire tab and panel.
+  defp tab_id(example, i), do: "hero-tab-#{example}-#{i}"
+  defp panel_id(example, i), do: "hero-panel-#{example}-#{i}"
+
+  @doc """
+  One hero example as a file that actually runs.
+
+  The pane heads itself `$ mix run pulse.exs` and shows the program running,
+  but what it lists is a bare `defmodule`: `mix run` defines it and exits
+  without drawing anything. A reader who copied what was on screen got silence,
+  which made the command line above it the one claim in this hero that was not
+  true.
+
+  The two lines that fix it are not in the listing. The pane is already
+  type-starved -- the one-screen layout fits a 30-line module at about 9px, and
+  three more lines take it to the 8px floor -- so the boot is served with the
+  file instead of spent on the reader's ability to read the program.
+
+  It is GENERATED from the module the source declares, so the line that starts
+  the app cannot come to name a different module than the one above it.
+  `Raxol.run/2` is not a shorter spelling: it delegates to `start_link/2` and
+  returns immediately, whatever its docs say.
+  """
+  @spec example_script(String.t()) :: {:ok, String.t()} | :error
+  def example_script(name) do
+    Enum.find_value(@hero_examples, :error, fn {n, _t, module, _b, _c, _g} ->
+      n == name and
+        {:ok,
+         """
+         #{example_source(name)}
+         Raxol.start_link(#{module})
+         Process.sleep(:infinity)
+         """}
+    end)
+  end
+
+  @doc "The raw (unhighlighted) source of one example."
+  @spec example_source(String.t()) :: String.t()
+  def example_source("pulse"), do: @pulse_source
+  def example_source("halo"), do: @halo_source
+  def example_source("harness"), do: @harness_source
+  def example_source("settle"), do: @settle_source
 
   @doc "Hero examples in switch order."
   def hero_example_names, do: Enum.map(@hero_examples, &elem(&1, 0))
@@ -872,7 +1029,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="surfaces-title">
       <div class="mb-10">
-        <span class="section-eyebrow">Surfaces</span>
         <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> surfaces.</h1>
         <p class="body-text max-w-2xl">
           Write the TEA module once. It meets you in three places you already
@@ -938,26 +1094,46 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def ssh_deep_dive(assigns) do
     ~H"""
+    <%!-- One column. It was a two-column grid whose right half held a single
+         button, vertically centred against nothing, and the button went to the
+         browser playground: a section that spends four bullets selling the SSH
+         surface and then hands the reader a browser link argues against itself.
+         The button also had the offline notice underneath it as a subtitle, set
+         in the smallest uppercase type on the page, which is where a page puts
+         something it hopes will not be read.
+
+         What the section is actually offering is a command, so it offers the
+         command. The hosted endpoint being down does not make the claim untrue
+         and is not a reason to send the reader somewhere else -- it is a fact
+         about this deployment, so it is stated as one, in body text. --%>
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="ssh-deep-title">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 items-center">
-        <div>
-          <span class="section-eyebrow">SSH surface</span>
-          <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h1>
-          <p class="body-text mb-6">
-            Every Raxol app is one SSH connection away. Each session is a
-            supervised BEAM process: crash-isolated, hot-reloadable, observable.
-          </p>
-          <ul class="detail-text space-y-2 leading-relaxed list-disc list-inside">
-            <li>Auto-generated host keys, no setup</li>
-            <li>Supervised channel per connection</li>
-            <li>Survives client disconnects</li>
-            <li>One line to enable in your app</li>
-          </ul>
+      <div class="max-w-[65ch]">
+        <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve the same app over SSH.</h1>
+        <p class="body-text mb-6">
+          Every Raxol app is one SSH connection away. Each session is a
+          supervised BEAM process: crash-isolated, hot-reloadable, observable.
+        </p>
+
+        <div class="mb-6">
+          <.copyable_command
+            id="copy-ssh-serve"
+            command="mix raxol.playground --ssh"
+            comment="port 2222"
+            tone={:coral}
+          />
         </div>
-        <div class="text-center space-y-4">
-          <a href="/playground" class="btn-primary">Open Browser Playground</a>
-          <p class="label-text">Hosted SSH is temporarily offline.</p>
-        </div>
+
+        <ul class="detail-text space-y-2 leading-relaxed list-disc list-inside mb-6">
+          <li>Auto-generated host keys, no setup</li>
+          <li>Supervised channel per connection</li>
+          <li>Survives client disconnects</li>
+          <li>One line to enable in your app</li>
+        </ul>
+
+        <p class="body-text-dim">
+          The hosted SSH endpoint is offline while its host is rebuilt. The
+          command above serves the same surface from your own machine.
+        </p>
       </div>
     </section>
     """
@@ -973,7 +1149,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="agent-deep-title">
       <div class="mb-8">
-        <span class="section-eyebrow">Agent runtime</span>
         <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA apps.</h1>
         <p class="body-text max-w-2xl">
           Same <span class="text-axol-coral">init</span> /
@@ -1008,7 +1183,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="coding-agent-title">
       <div class="mb-8">
-        <span class="section-eyebrow">Coding agent</span>
         <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol speaks ACP.</h1>
         <p class="body-text max-w-2xl">
           Open it in Zed, JetBrains, neovim, Emacs, or VS Code: raxol is listed
@@ -1113,7 +1287,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
-        <span class="section-eyebrow">Agent payments</span>
         <h1 id="payments-title" class="heading-2xl mb-3">Agents that settle, privately.</h1>
         <p class="body-text max-w-2xl">
           First funded cross-chain settlement on 2026-06-28; the USDC transfer
@@ -1122,7 +1295,12 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           below are the solver's own published schedule, mirrored in
           <code>Raxol.Payments.FeeSchedule</code> and pinned to it in CI.
         </p>
-        <p class="caption-text mt-3">
+        <%!-- Body copy, not a caption. `.caption-text` tops out at 10.4px,
+             the floor of the type scale, and these three paragraphs carry the
+             pricing rules the section exists to state -- the fee layers, the
+             never-discounted solver floor, why a Tron leg beats privacy. They
+             sat 5px under the table they explain. --%>
+        <p class="body-text-dim mt-3">
           Early, and labeled: the payments packages are at <%= @payments_version %> beside a 2.6
           core. Dated on-chain events over claims.
         </p>
@@ -1145,7 +1323,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <p class="caption-text max-w-2xl mb-10">
+      <p class="body-text-dim max-w-2xl mb-10">
         Three additive layers: the solver spread, the Xochi venue cut, and the
         raxol routing cut. A tier discounts the venue and routing layers only.
         The solver spread (<%= @solver_floor.stable %> bps stable,
@@ -1234,7 +1412,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
-      <p class="caption-text max-w-2xl mb-10">
+      <p class="body-text-dim max-w-2xl mb-10">
         Read the last two together. A Tron leg wins over privacy because the
         relay rail is public-only, so a stealth request bound for Tron routes
         there and is then refused at the Action rather than quietly settling in
@@ -1329,7 +1507,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="token-title">
       <div class="mb-8">
-        <span class="section-eyebrow">Token</span>
         <h1 id="token-title" class="heading-2xl mb-3">${@token.symbol}</h1>
       </div>
 

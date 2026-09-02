@@ -272,7 +272,7 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
           ]
         ),
         Components.text(
-          content: "Not yet applied — review before confirming",
+          content: "Not yet applied: review before confirming",
           style: %{fg: :dim}
         )
       ]

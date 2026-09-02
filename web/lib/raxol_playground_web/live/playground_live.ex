@@ -59,9 +59,12 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
       |> assign(:terminal_html, false)
       |> assign(:lifecycle_pid, nil)
       |> assign(:topic, nil)
-      # ?code=1 opens the code panel on arrival -- the gallery's "code"
-      # link is a broken promise otherwise.
-      |> assign(:show_code, params["code"] in ["1", "true"])
+      # Open by default. Being able to copy the code is not a mode a reader
+      # should have to find; the demo page shows it outright, and this is the
+      # same catalog with a sidebar around it. The toggle stays because this
+      # tool is denser and collapsing the panel buys real room, which is also
+      # why `?code=0` is honoured.
+      |> assign(:show_code, params["code"] not in ["0", "false"])
       |> assign(:show_shortcuts, false)
       |> assign(:show_users_panel, false)
       |> assign(:sync_enabled, false)
@@ -255,15 +258,15 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     <%!-- PlaygroundKeys mirrors the TUI's keymap (j/k nav, c code,
          ? help), guarded so the demo terminal and form fields keep
          their own keystrokes. --%>
-    <main id="main-content" tabindex="-1" phx-hook="PlaygroundKeys" class="playground-container h-screen flex flex-col bg-obsidian">
+    <main id="main-content" tabindex="-1" phx-hook="PlaygroundKeys" class="playground-container h-[100dvh] flex flex-col bg-obsidian">
       <%!-- Header --%>
       <header class="px-6 py-3 surface-bar">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-4">
-            <h1 class="name-coral">
-              Raxol Playground
-            </h1>
-            <span class="hidden sm:flex items-center gap-2 font-mono text-pearl-35 tracking-wide" style="font-size: 0.65rem;">
+            <%!-- Sentence case and the site's own word for this page, the
+                 way every other heading here is set. --%>
+            <h1 class="name-coral">Playground</h1>
+            <span class="hidden sm:flex items-center gap-2 font-mono text-pearl-60 tracking-wide" style="font-size: var(--text-xs);">
               <a href="/" class="subtle-link">Home</a>
               <span>|</span>
               <a href="/gallery" class="subtle-link">Components</a>
@@ -289,7 +292,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
             <button
               phx-click="toggle_shortcuts"
-              class="font-mono px-3 py-1.5 rounded border border-subtle text-pearl-40 transition-colors"
+              class="font-mono px-3 py-1.5 rounded border border-subtle text-pearl-60 transition-colors"
               style="font-size: 0.7rem;"
               aria-label="Keyboard shortcuts"
             >
@@ -344,9 +347,9 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
                     <%!-- Initial state; hook overwrites on first terminal_html event.
                          Press '/' anywhere to refocus this terminal. --%>
                     <%= if @lifecycle_pid do %>
-                      <div class="py-8 text-center font-mono text-pearl-40" role="status">
+                      <div class="py-8 text-center font-mono text-pearl-60" role="status">
                         <div class="loading-spinner mb-3 mx-auto"></div>
-                        <p>Starting demo... <span class="text-pearl-25">(press / to focus)</span></p>
+                        <p>Starting demo... <span class="text-pearl-60">(press / to focus)</span></p>
                       </div>
                     <% else %>
                       <.terminal_fallback description={if @selected, do: @selected.description} />
@@ -385,7 +388,16 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
            handler). --%>
       <div class="pg-statusbar font-mono">
         <span class="pg-statusbar-chip">playground</span>
-        <span class="pg-statusbar-keys">j/k nav &middot; / focus demo &middot; esc back &middot; c code &middot; ? help</span>
+        <%!-- Spaced, not chained on dots. Five bindings strung on four middle
+             dots read as one run-on line and made the separator the loudest
+             thing in the bar; the landing footer already stopped doing this for
+             the same reason. The key is the bright half of each pair because
+             the key is what you press. --%>
+        <span class="pg-statusbar-keys">
+          <span :for={{key, action} <- statusbar_keys()} class="pg-key">
+            <b><%= key %></b> <%= action %>
+          </span>
+        </span>
         <span class="pg-statusbar-count"><%= length(@components) %>/<%= @total_count %> widgets</span>
       </div>
 
@@ -431,7 +443,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
           <% end %>
           <button
             phx-click="toggle_sidebar"
-            class="font-mono p-2 rounded transition-colors text-pearl-40"
+            class="font-mono p-2 rounded transition-colors text-pearl-60"
             style="font-size: 0.75rem;"
             title={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
             aria-label={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
@@ -512,6 +524,19 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
   defp selected?(nil, _comp), do: false
   defp selected?(selected, comp), do: selected.name == comp.name
 
+  # The status bar's key hints, as `{key, what it does}`. Every one is wired:
+  # j/k, c and ? through the PlaygroundKeys hook, `/` and esc in the global
+  # handler. A hint for a binding that does nothing is worse than no hint.
+  defp statusbar_keys do
+    [
+      {"j/k", "nav"},
+      {"/", "focus demo"},
+      {"esc", "back"},
+      {"c", "code"},
+      {"?", "help"}
+    ]
+  end
+
   defp toolbar(assigns) do
     ~H"""
     <div class="px-4 py-2 surface-toolbar">
@@ -590,7 +615,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
     <div class="fixed right-4 top-16 w-72 panel panel--elevated z-50">
       <div class="p-4 flex justify-between items-center border-b border-subtle">
         <h3 class="font-mono font-semibold text-pearl" style="font-size: 0.8rem;">Online (<%= length(@online_users) %>)</h3>
-        <button phx-click="toggle_users_panel" class="font-mono text-pearl-40 text-base">
+        <button phx-click="toggle_users_panel" class="font-mono text-pearl-60 text-base">
           &times;
         </button>
       </div>
@@ -612,7 +637,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
 
       <div class="max-h-64 overflow-y-auto">
         <%= if @online_users == [] do %>
-          <div class="p-4 text-center font-mono text-pearl-35" style="font-size: 0.75rem;">No other users online</div>
+          <div class="p-4 text-center font-mono text-pearl-60" style="font-size: 0.75rem;">No other users online</div>
         <% else %>
           <ul>
             <%= for user <- @online_users do %>
@@ -629,7 +654,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundLive do
                     <%= if user.user_id == @user_id, do: "(you)" %>
                   </span>
                   <%= if user.current_component do %>
-                    <div class="font-mono truncate text-pearl-35" style="font-size: 0.6rem;">
+                    <div class="font-mono truncate text-pearl-60" style="font-size: var(--text-xs);">
                       Viewing: <%= user.current_component %>
                     </div>
                   <% end %>

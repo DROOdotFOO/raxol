@@ -78,7 +78,7 @@ defmodule Raxol.UI.Components.Harness.BlastRadiusPreviewTest do
       rendered = BlastRadiusPreview.render(state, default_context())
 
       marker = find_by_id(rendered.children, "bp_irr-irreversible")
-      assert marker.content == "⚠ IRREVERSIBLE — this action cannot be undone"
+      assert marker.content == "⚠ IRREVERSIBLE: this action cannot be undone"
       assert marker.fg == :red
       assert marker.style == %{bold: true}
 

@@ -16,6 +16,62 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   alias RaxolPlaygroundWeb.LandingComponents
   alias RaxolPlaygroundWeb.PlaygroundComponents
 
+  # "The pane and the frames are the same program" is the whole claim of a
+  # recorded hero, and the two copies live in different files. The check this
+  # replaces covered pulse and halo only, which is why the recorder's `Harness`
+  # was free to pick up a blank line from `mix format` and stay that way.
+  #
+  # Compiling the shown source in the recorder would make drift impossible
+  # rather than merely caught, and that was tried: `Code.compile_string`
+  # competes with the frame sampler for the scheduler and shifted whole
+  # recordings (pulse from frame 2, halo from 11), so the duplication stays and
+  # this covers all four of it.
+  test "each hero program matches the one the frames record" do
+    script = File.read!(Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__))
+
+    for name <- LandingComponents.hero_example_names() do
+      shown = String.trim(LandingComponents.example_source(name))
+      [_, module] = Regex.run(~r/defmodule (\w+)/, shown)
+
+      recorded =
+        case Regex.run(~r/^defmodule #{module} do\n.*?\nend$/ms, script) do
+          [block] -> String.trim(block)
+          nil -> flunk("gen_landing_frames.exs defines no #{module}")
+        end
+
+      # Blank lines are not part of the program, and they cannot be held equal
+      # anyway: `mix format` owns the recorder's copy and puts blank lines into
+      # it, while the heredoc is a string the formatter never sees. Comparing
+      # bytes made this test fail on formatting alone, which is how it would
+      # have been switched off. Everything that changes behaviour still differs.
+      squash = fn text ->
+        text |> String.split("\n") |> Enum.reject(&(String.trim(&1) == "")) |> Enum.join("\n")
+      end
+
+      assert squash.(shown) == squash.(recorded),
+             "#{name}: the pane shows a different program than its frames were " <>
+               "recorded from. Edit landing_components.ex and " <>
+               "gen_landing_frames.exs together."
+    end
+  end
+
+  # `$ mix run pulse.exs` is printed above the output. The listing is the
+  # module alone, so the file the site hands out is what has to be runnable.
+  test "each example is served as a file that starts itself" do
+    for name <- LandingComponents.hero_example_names() do
+      {:ok, script} = LandingComponents.example_script(name)
+      [_, module] = Regex.run(~r/defmodule (\w+)/, script)
+
+      assert script =~ "Raxol.start_link(#{module})",
+             "#{name}.exs defines #{module} and never starts it"
+
+      assert script =~ "Process.sleep(:infinity)",
+             "#{name}.exs would start #{module} and exit before drawing"
+    end
+
+    assert LandingComponents.example_script("nope") == :error
+  end
+
   test "landing promotes live install and browser paths, not the suspended SSH host" do
     hero =
       render_component(&LandingComponents.screen_hero/1,
@@ -28,8 +84,18 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     # serves. The four-method install tabs are gone, along with every other
     # component that rendered on no route.
     assert hero =~ "curl -fsSL https://raxol.io/install | bash"
-    assert deep_dive =~ "Hosted SSH is temporarily offline"
-    assert deep_dive =~ ~s(href="/playground")
+
+    # The SSH section still says the hosted endpoint is down -- that is the
+    # property this test exists to hold, and it must not quietly become a
+    # promise the deployment cannot keep.
+    assert deep_dive =~ "hosted SSH endpoint is offline"
+
+    # What it offers INSTEAD is the SSH command, not a browser link. It used
+    # to send the reader to /playground, which answers a section about serving
+    # over SSH with a page that does not; the live path a reader can take
+    # right now is serving it themselves.
+    assert deep_dive =~ "mix raxol.playground --ssh"
+    refute deep_dive =~ ~s(href="/playground")
 
     refute Enum.join([hero, deep_dive]) =~ "playground@raxol.io"
   end
@@ -327,48 +393,12 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
-  # The hero shows a program's source; the frames beside it are that program's
-  # recorded output. They live in two files, and `gen_landing_frames.exs` asks
-  # in a comment that the pair be kept byte-identical -- which nothing checked,
-  # so the source could drift from the run that produced the frames and the
-  # pane would still pass every test above. It is a comment no longer.
-  @frames_script Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__)
-
-  test "each hero program is byte-identical to the one the frames were recorded from" do
-    script = File.read!(@frames_script)
-
-    landing =
-      File.read!(
-        Path.expand(
-          "../../lib/raxol_playground_web/components/landing_components.ex",
-          __DIR__
-        )
-      )
-
-    for {name, module} <- [{"pulse", "Pulse"}, {"halo", "Halo"}] do
-      assert [_, tail] =
-               String.split(landing, "@#{name}_source ~S\"\"\"\n", parts: 2)
-
-      assert [heredoc, _] = String.split(tail, "\n  \"\"\"", parts: 2)
-
-      shown =
-        heredoc
-        |> String.split("\n")
-        |> Enum.map_join("\n", &String.replace_prefix(&1, "  ", ""))
-        |> String.trim()
-
-      recorded =
-        Regex.run(~r/^defmodule #{module} do\n.*?\nend$/ms, script)
-        |> case do
-          [source] -> String.trim(source)
-          nil -> flunk("#{@frames_script} has no `defmodule #{module}`")
-        end
-
-      assert shown == recorded,
-             "the #{name} pane shows a different program than the one its frames were " <>
-               "recorded from; keep landing_components.ex and gen_landing_frames.exs in step"
-    end
-  end
+  # The byte-identical check that used to live here compared the heredoc to the
+  # recorder's own copy of each module. It covered pulse and halo only, which is
+  # why the recorder's `Harness` was free to pick up a blank line from
+  # `mix format` and stay that way. There is one copy now, and the test above
+  # ("the recorder compiles the shown source") holds that arrangement for all
+  # four instead of re-comparing two texts for two of them.
 
   # The pane's claim is that you can read the whole program, and the pane is a
   # fixed slice of one screen. A longer example does not scroll, it clips --

@@ -15,6 +15,10 @@ defmodule RaxolPlaygroundWeb.Router do
     get("/health", HealthController, :check)
     get("/install", InstallController, :show)
     get("/skill.md", SkillController, :show)
+    # The landing hero's four examples, as files that run. The whole segment
+    # is the param because Phoenix allows no suffix after one; the controller
+    # takes the extension off, so the URL is the filename you save it as.
+    get("/examples/:example", ExampleController, :show)
     get("/llms.txt", CapabilitiesController, :llms_txt)
     get("/llms-full.txt", CapabilitiesController, :llms_full)
     get("/.well-known/raxol.json", CapabilitiesController, :manifest)
