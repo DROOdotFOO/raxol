@@ -11,6 +11,8 @@ on:
     paths:
       - "web/**"
       - "lib/raxol/application.ex"
+      - "lib/raxol/playground/**"
+      - "scripts/gen_landing_frames.exs"
       - "mix.exs"
       - "mix.lock"
       - "docker/Dockerfile.web"
@@ -21,6 +23,8 @@ on:
     paths:
       - "web/**"
       - "lib/raxol/application.ex"
+      - "lib/raxol/playground/**"
+      - "scripts/gen_landing_frames.exs"
 
 concurrency:
   group: web-deploy-check-${{ github.ref }}
@@ -98,3 +102,50 @@ jobs:
             echo "::error::web release did not serve /health 200 in minimal mode"
             exit 1
           fi
+
+  # The 70 web tests and the recorded-artifact drift gate ran only on
+  # developer machines before this job: nothing in CI executed `mix test`
+  # inside web/, so the guard suites (house style, landing invariants) and
+  # `gen_landing_frames.exs --check` (are the committed previews and hero
+  # recordings what the current source records?) could rot unseen. The
+  # check runs under MIX_ENV=dev because the committed artifacts are
+  # recorded under dev; a different env is a different render config and
+  # would report false drift.
+  web-tests:
+    name: Web tests + recorded-artifact check
+    runs-on: ubuntu-latest
+    env:
+      # The reference toolchain (mirrors ci-unified.yml), unlike the
+      # release job above, which matches the Docker prod image.
+      ELIXIR_VERSION: "1.20.2"
+      OTP_VERSION: "29.0.3"
+      SKIP_TERMBOX2_TESTS: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache web deps + build
+        uses: actions/cache@v6
+        with:
+          path: |
+            web/deps
+            web/_build
+          key: web-tests-${{ runner.os }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('web/mix.lock', 'mix.lock', '**/mix.exs') }}
+
+      - name: Web tests
+        working-directory: web
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          MIX_ENV=test mix deps.get
+          MIX_ENV=test mix test
+
+      - name: Recorded-artifact drift check
+        working-directory: web
+        run: |
+          MIX_ENV=dev mix deps.get
+          MIX_ENV=dev mix run ../scripts/gen_landing_frames.exs --check
