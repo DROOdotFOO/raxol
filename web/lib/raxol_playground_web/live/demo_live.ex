@@ -203,7 +203,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
                 <h1 class="font-mono font-semibold text-pearl truncate" style="font-size: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);"><%= @component.name %></h1>
                 <%!-- The module behind a plain-language name, derived from
                      the snippet; absent when it would repeat the name. --%>
-                <span :if={@component.shows} class="font-mono label-text shrink-0"><%= @component.shows %></span>
+                <span :if={@component.shows} class="detail-text shrink-0"><%= @component.shows %></span>
                 <span class={["font-mono shrink-0", "pg-cx-#{@component.complexity}"]} style="font-size: 0.7rem;">[<%= @component.complexity %>]</span>
               </div>
               <p class="font-mono detail-text truncate"><%= @component.description %></p>
@@ -299,9 +299,10 @@ defmodule RaxolPlaygroundWeb.DemoLive do
                the same closed panel -- so neither label was true and the
                difference between them was nothing. Seeing it run and being
                able to lift the code are not two things a reader chooses
-               between; they are what a component page is for. Flexes to take
-               whatever height the demo above does not use. --%>
-          <div class="pg-code flex-1 min-h-0 flex flex-col">
+               between; they are what a component page is for. Natural
+               height: a short demo's leftover ends the content rather than
+               stretching an empty panel over it. --%>
+          <div class="pg-code">
             <div class="pg-code-head">
               <span>Code</span>
               <button
@@ -314,7 +315,7 @@ defmodule RaxolPlaygroundWeb.DemoLive do
                 copy
               </button>
             </div>
-            <pre class="pg-code-snippet flex-1 min-h-0 overflow-auto"><%= String.trim(@component.code_snippet) %></pre>
+            <pre class="pg-code-snippet"><%= String.trim(@component.code_snippet) %></pre>
           </div>
         </div>
       </div>
