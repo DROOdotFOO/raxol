@@ -22,4 +22,18 @@ defmodule RaxolPlaygroundWeb.RedirectController do
     |> redirect(to: "/gallery")
     |> halt()
   end
+
+  @doc """
+  `/repl` -> `/playground`.
+
+  The REPL page was a LiveView whose entire body was a `push_navigate` to
+  `/playground`, and nothing on the site linked to it. A controller redirect
+  says the same thing without booting a LiveView to say it.
+  """
+  def repl(conn, _params) do
+    conn
+    |> put_status(:moved_permanently)
+    |> redirect(to: "/playground")
+    |> halt()
+  end
 end
