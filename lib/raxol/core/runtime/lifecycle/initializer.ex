@@ -235,7 +235,12 @@ defmodule Raxol.Core.Runtime.Lifecycle.Initializer do
       command_interceptor: Keyword.get(options, :command_interceptor),
       # Harness keystone: a :session_id opt makes the Dispatcher publish typed
       # events to Raxol.Core.Runtime.EmitBus at both model-fold sites.
-      session_id: Keyword.get(options, :session_id)
+      session_id: Keyword.get(options, :session_id),
+      # `subscriptions: false` boots the app with its declared subscriptions
+      # (timers, event sources) unarmed, so only explicitly delivered messages
+      # advance the model. See the Dispatcher's State for why recorders need
+      # this.
+      subscriptions: Keyword.get(options, :subscriptions, true)
     }
 
     environment = Keyword.get(options, :environment, :terminal)

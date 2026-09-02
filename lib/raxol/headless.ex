@@ -115,6 +115,12 @@ defmodule Raxol.Headless do
     * `:id` - Session identifier (default: module name as atom)
     * `:width` - Screen width (default: 120)
     * `:height` - Screen height (default: 40)
+    * `:subscriptions` - `false` boots the app with its declared
+      subscriptions (timers, event sources) unarmed, so the model advances
+      only on messages delivered explicitly via `send_message/2` or
+      `send_key/3`. This is what makes a recording reproducible: with a
+      timer running, which tick a sampled frame shows is a property of
+      scheduler timing rather than of the caller. (default: `true`)
   """
   @spec start(module() | String.t(), keyword()) ::
           {:ok, atom()} | {:error, term()}
@@ -145,6 +151,21 @@ defmodule Raxol.Headless do
           :ok | {:error, term()}
   def send_key(id, key, opts \\ []) do
     GenServer.call(__MODULE__, {:send_key, id, key, opts}, 5_000)
+  end
+
+  @doc """
+  Delivers `msg` to the application's `update/2` and waits for it to fold.
+
+  The message takes the same path a subscription tick does, so
+  `send_message(id, :tick)` is indistinguishable from the app's own
+  `subscribe_interval` firing. Paired with `subscriptions: false` at start,
+  this is how a caller advances an app by an exact number of ticks: the
+  return means the model has folded the message, so a following
+  `get_buffer/1` renders its effect.
+  """
+  @spec send_message(atom(), term()) :: :ok | {:error, term()}
+  def send_message(id, msg) do
+    GenServer.call(__MODULE__, {:send_message, id, msg}, 5_000)
   end
 
   @doc """
@@ -254,6 +275,17 @@ defmodule Raxol.Headless do
   end
 
   @impl true
+  def handle_call({:send_message, id, msg}, _from, state) do
+    case get_session(state, id) do
+      {:ok, session} ->
+        {:reply, dispatch_message(session, msg), state}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  @impl true
   def handle_call({:send_resize, id, width, height}, _from, state) do
     case get_session(state, id) do
       {:ok, session} ->
@@ -343,13 +375,14 @@ defmodule Raxol.Headless do
       else
         width = Keyword.get(opts, :width, @default_width)
         height = Keyword.get(opts, :height, @default_height)
-        create_session(module, id, width, height, state)
+        subscriptions = Keyword.get(opts, :subscriptions, true)
+        create_session(module, id, width, height, subscriptions, state)
       end
     end
   end
 
-  defp create_session(module, id, width, height, state) do
-    case start_headless_app(module, width, height) do
+  defp create_session(module, id, width, height, subscriptions, state) do
+    case start_headless_app(module, width, height, subscriptions) do
       {:ok, lifecycle_pid} ->
         synchronizer_pid = start_tool_synchronizer(lifecycle_pid, id)
 
@@ -604,12 +637,13 @@ defmodule Raxol.Headless do
     |> String.to_atom()
   end
 
-  defp start_headless_app(module, width, height) do
+  defp start_headless_app(module, width, height, subscriptions) do
     case Raxol.start_link(module,
            environment: :agent,
            width: width,
            height: height,
-           name: nil
+           name: nil,
+           subscriptions: subscriptions
          ) do
       {:ok, pid} ->
         Process.unlink(pid)
@@ -666,6 +700,18 @@ defmodule Raxol.Headless do
           policy: :call_when_full
         )
 
+      :ok
+    end)
+  end
+
+  # Send, then fence with a synchronous call: the dispatcher's mailbox is
+  # FIFO, so by the time :get_model answers, the message before it has been
+  # folded into the model. That round trip is the "waits for it to fold" in
+  # send_message/2's contract.
+  defp dispatch_message(session, msg) do
+    with_dispatcher(session, fn dispatcher_pid ->
+      send(dispatcher_pid, {:subscription, msg})
+      _ = GenServer.call(dispatcher_pid, :get_model)
       :ok
     end)
   end
