@@ -2676,14 +2676,6 @@ input[type="range"]::-moz-range-thumb {
   justify-content: center;
 }
 
-/* Separators live in CSS, not markup, so they never land in a test assertion
-   or in what a screen reader reads out. */
-.integrations-item + .integrations-item::before {
-  content: "\00b7";
-  color: var(--text-dim);
-  margin-right: 0.85rem;
-}
-
 /* The mark sits in the flow, so a marked item is exactly as wide as its logo
    and the row reads as an even rank of them. Sizing the item by the NAME
    instead left every logo adrift in a box as wide as the word behind it,
