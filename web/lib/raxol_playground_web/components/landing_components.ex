@@ -1036,6 +1036,19 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # ---------------------------------------------------------------------------
 
   def surfaces_deep_dive(assigns) do
+    # The four-encodings grid below reuses the landing hero's committed
+    # recording of pulse: same artifacts, same pane idioms, so this page
+    # cannot drift from what the hero plays and nothing here is authored.
+    assigns =
+      assign(assigns,
+        frame: List.first(RecordedFrames.hero_frames("pulse")),
+        frame_grid: RecordedFrames.hero_frame_grid("pulse"),
+        ssh_frame: List.first(RecordedFrames.hero_ssh_frames("pulse")),
+        ssh_grid: RecordedFrames.hero_ssh_grid("pulse"),
+        mcp: RecordedFrames.hero_surface("pulse", :mcp),
+        mcp_lines: RecordedFrames.hero_surface_lines("pulse", :mcp)
+      )
+
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="surfaces-title">
       <div class="mb-10">
@@ -1094,6 +1107,70 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           </div>
         </div>
       </div>
+
+      <%!-- The landing hero plays these four as tabs; here they sit side by
+           side, which is the part a tabbed player cannot show: all four at
+           once, from one recording. Every pane is the committed artifact the
+           landing's tests hold the hero to -- nothing on this page is
+           authored output. --%>
+      <div class="mt-16">
+        <h2 class="heading-xl mb-3">Four encodings of one frame</h2>
+        <p class="body-text-dim max-w-2xl mb-6">
+          One recorded render of <code class="text-axol-coral">pulse.exs</code>,
+          encoded per surface: cells for the terminal, a component in a page
+          for the browser, ANSI down a channel for SSH, and a structure for an
+          agent, because what an agent reads is a tree rather than a picture.
+        </p>
+
+        <div class="grid gap-4 lg:grid-cols-2">
+          <div class="terminal-chrome">
+            <.terminal_chrome title="terminal" />
+            <div class="terminal-chrome-body">
+              <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run pulse.exs</span></pre>
+              <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" style={"--frame-rows: #{@frame_grid.rows}; --frame-cols: #{@frame_grid.cols}"}>
+                <div class="hero-frame"><%= raw(@frame) %></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="terminal-chrome">
+            <.terminal_chrome title="browser" />
+            <div class="terminal-chrome-body">
+              <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix phx.server</span></pre>
+              <div class="hero-browser">
+                <div class="hero-browser__bar" aria-hidden="true">
+                  <span class="hero-browser__url">localhost:4000/pulse</span>
+                </div>
+                <div class="hero-browser__page">
+                  <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" style={"--frame-rows: #{@frame_grid.rows}; --frame-cols: #{@frame_grid.cols}"}>
+                    <div class="hero-frame"><%= raw(@frame) %></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="terminal-chrome">
+            <.terminal_chrome title="ssh" />
+            <div class="terminal-chrome-body">
+              <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ ssh demo@localhost -p 2222</span></pre>
+              <div class="hero-frames raxol-terminal bg-synthwave-bg" data-theme="synthwave84" style={"--frame-rows: #{@ssh_grid.rows}; --frame-cols: #{@ssh_grid.cols}"}>
+                <div class="hero-frame">
+                  <pre class="hero-ansi"><%= raw(@ssh_frame) %></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="terminal-chrome">
+            <.terminal_chrome title="agent / mcp" />
+            <div class="terminal-chrome-body">
+              <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix mcp.server</span></pre>
+              <pre class="hero-pre hero-src" style={"--src-lines: #{@mcp_lines}"}><%= raw(@mcp) %></pre>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
     """
   end
@@ -1144,6 +1221,49 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           The hosted SSH endpoint is offline while its host is rebuilt. The
           command above serves the same surface from your own machine.
         </p>
+
+        <%!-- The posture facts below are `Raxol.SSH.Server`'s documented
+             boot contract, not aspirations: each one is a refusal or a log
+             line the module ships with. --%>
+        <h2 class="heading-xl mt-14 mb-3">Safe by default</h2>
+        <p class="body-text mb-4">
+          An anonymous surface has to be hard to expose by accident, so the
+          server refuses the accident:
+        </p>
+        <ul class="detail-text space-y-2 leading-relaxed list-disc list-inside mb-6">
+          <li>
+            Anonymous access binds loopback; serving it publicly takes a
+            second, separate acknowledgement
+          </li>
+          <li>
+            Boot refuses to start until all four resource caps are written
+            down: max connections, per-IP, idle timeout, session duration
+          </li>
+          <li>A group- or world-readable host key is refused, not warned about</li>
+          <li>
+            One posture line per boot, one accept/close line per connection:
+            peer, user, duration, outcome
+          </li>
+        </ul>
+
+        <h2 class="heading-xl mt-14 mb-3">Multi-tenant, keys in a directory</h2>
+        <p class="body-text mb-4">
+          The hosted coding agent serves many users from one daemon. A tenant
+          is a directory: their public keys under
+          <code class="text-axol-coral">&lt;dir&gt;/&lt;user&gt;/ssh/authorized_keys</code>,
+          their workspace jailed under
+          <code class="text-axol-coral">work/</code>, their spend metered as
+          their own identity. The username that authenticated is the workspace
+          that opens; the two cannot diverge.
+        </p>
+        <div class="mb-6">
+          <.copyable_command
+            id="copy-ssh-tenants"
+            command="raxol code --ssh --ssh-tenants ./tenants"
+            comment="port 2223"
+            tone={:sky}
+          />
+        </div>
       </div>
     </section>
     """
@@ -1181,6 +1301,37 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         Inter-agent messages routed through a unique <code class="text-axol-coral">Registry</code>.
         Bring your own key for Anthropic, OpenAI, OpenRouter, Ollama, Lumo, or Kimi, or run mock.
       </p>
+
+      <div class="max-w-2xl">
+        <h2 class="heading-xl mt-14 mb-3">Teams are supervisors</h2>
+        <p class="body-text mb-4">
+          <code class="text-axol-coral">Raxol.Agent.Team</code> is an OTP
+          supervisor over a coordinator and its workers, which means agent
+          fault tolerance is not a feature bolted on: a crashed worker
+          restarts under the same rules any BEAM process does. Agents find
+          each other by name through the registry and message each other with
+          a <code class="text-axol-coral">:send_agent</code> command; the
+          message arrives in the peer's
+          <code class="text-axol-coral">update/2</code> as
+          <code class="text-axol-coral"><%= "{:agent_message, from, payload}" %></code>,
+          the same way every other event does.
+        </p>
+
+        <h2 class="heading-xl mt-14 mb-3">On a schedule</h2>
+        <p class="body-text mb-4">
+          The scheduler takes a relative delay, an interval, five-field cron,
+          or an ISO timestamp, parsed once when the job is created and never
+          by an LLM per tick. Jobs persist to disk and replay on boot; each
+          fire runs a fresh, history-free agent and delivers its result to a
+          chat platform or a local callback. Agents manage their own jobs
+          through the <code class="text-axol-coral">cronjob</code> tool:
+          create, list, pause, resume, run, remove.
+        </p>
+        <p class="body-text-dim">
+          A fire never runs inline with the scheduler, so one slow job cannot
+          hold the clock hostage for every other.
+        </p>
+      </div>
     </section>
     """
   end
@@ -1214,6 +1365,34 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         widget tree requires the UI framework and the agent runtime to be the
         same system.
       </p>
+
+      <div class="max-w-2xl">
+        <h2 class="heading-xl mt-14 mb-3">Every session is a journal</h2>
+        <p class="body-text mb-4">
+          Each session appends to a durable journal on disk, one directory per
+          session. That one decision buys the rest: resume the latest with
+          <code class="text-axol-coral">--continue</code>, list them with
+          <code class="text-axol-coral">--sessions</code>, replay any
+          transcript with <code class="text-axol-coral">--replay ID</code>,
+          rewind a live one with <code class="text-axol-coral">/rewind</code>.
+          An editor that reconnects over ACP hands back its session id and
+          picks up where it left off, because the id is the journal directory.
+        </p>
+
+        <h2 class="heading-xl mt-14 mb-3">Spend is metered, not hoped about</h2>
+        <p class="body-text mb-4">
+          Every LLM call is priced into a ledger as it happens. An exhausted
+          budget halts the running turn rather than finishing it on credit,
+          and a model with no known price fails closed once a ledger is wired,
+          because an unpriced call is an unbounded one. Hosted multi-tenant
+          serving hangs per-user budgets on the same ledger.
+        </p>
+        <p class="body-text-dim">
+          Sharing is read-only by construction: a share link is an expiring
+          signed token with the session and tenant inside the signed bytes, so
+          a leaked link cannot be edited into someone else's session.
+        </p>
+      </div>
     </section>
     """
   end
@@ -1546,6 +1725,24 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             </span>
           </div>
         </div>
+      </div>
+
+      <div class="max-w-2xl">
+        <h2 class="heading-xl mt-14 mb-3">What it is not</h2>
+        <p class="body-text mb-4">
+          Not a key to the framework: every package is open source and runs
+          the same without it. Not a fee lever: corridor fees follow the
+          attestation tiers on the
+          <a href="/payments" class="text-sky">payments page</a>, not token
+          balances. Not priced here: a market number would be stale by the
+          next request, which is why the pair link above goes to a live venue
+          instead of quoting one.
+        </p>
+        <p class="body-text-dim">
+          The two addresses above are the durable facts. Verify them on
+          chain <%= @token.chain_id %> before trusting anything a third party
+          says about this token, this page included.
+        </p>
       </div>
     </section>
     """
