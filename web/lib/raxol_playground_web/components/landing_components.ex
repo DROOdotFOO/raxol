@@ -520,22 +520,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
           <a :for={{path, label} <- topic_links()} href={path} class="topic-link">{label}</a>
         </nav>
 
-        <%!-- The package count was the one claim in this line a reader could
-             not check. It is the number the capability endpoints serve, and
-             the directory it counts is public, so it links there. --%>
-        <%!-- One dot, and it joins the two halves of a single fact: this
-             version, that many packages. The links after it are separate
-             destinations rather than more of the same sentence, so they are
-             spaced apart instead of strung on more dots. Four items chained on
-             three middle dots read as one run-on line and made the separator
-             the loudest thing in the footer. --%>
+        <%!-- Keep footer destinations separate. The package count is the only
+             quantified claim here, and it links to the public directory behind
+             the number; release version belongs on Hex/docs, not the landing
+             footer. --%>
         <span class="screen-meta">
-          <span class="screen-meta__build">
-            v{Capabilities.version_minor()} &middot;
-            <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
-              {Capabilities.repo_package_count()} packages
-            </a>
-          </span>
+          <a href={@repo_url <> "/tree/master/packages"} class="subtle-link">
+            {Capabilities.repo_package_count()} packages
+          </a>
           <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
           <a href="/skill.md" class="subtle-link">Skill</a>
           <.github_mark />
