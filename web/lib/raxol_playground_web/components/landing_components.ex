@@ -167,42 +167,37 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
   """
 
-  # Payments, with nothing authored but the corridor and the amount. Every rate
-  # is `FeeSchedule.all/0` -- the schedule pinned to the solver's own published
-  # one -- and the networks are the chains USDC is actually deployed on, read
-  # off `Assets.evm_tokens/0`. That sourcing is the point rather than a detail:
-  # this page rendered a hand-written fee table until 2026-08-30, and the
-  # numbers in it were ones no tier ever charged.
+  # Payments as an operator receipt, not a toy progress list. The Arc corridor
+  # is testnet-only until Xochi publishes it in capabilities, so this pane names
+  # the funded-run shape and the Blockscout chains without inventing tx hashes.
   @settle_source ~S"""
   defmodule Settle do
     use Raxol.Core.Runtime.Application
-    alias Raxol.Payments.{Assets, Router}
-    @route Router.select(cross_chain: true)
-    @tokens Assets.evm_tokens() |> Map.keys() |> Enum.sort()
-    @stables Enum.reject(@tokens, &(&1 == "WETH"))
-    @steps [
-      {"quote", "Base -> Arbitrum One"},
-      {"sign", "EIP-712 intent"},
-      {"settle", "0x7f3a9c.. stealth"}
+    @title "USDC 1.10  Base Sepolia -> Arc  via xochi"
+    @receipt [
+      "agent     funded signer",
+      "gate      approve before signature",
+      "intent    quote -> sign -> execute",
+      "source    Base Sepolia  84532",
+      "dest      Arc Testnet  5042002",
+      "explorer  Blockscout  receipts after run"
     ]
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def update(_, m), do: {m, []}
     def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
-      at = rem(m.t, length(@steps) + 1)
-      column style: %{gap: 1} do
+      at = rem(m.t, length(@receipt) + 1)
+      column style: %{gap: 0} do
         [
-          text("USDC 25.00  via #{@route}", style: [:bold]),
-          column(do: Enum.with_index(@steps, &step(&1, &2, at))),
-          text("stables  " <> Enum.join(@stables, "  "))
+          text(@title, style: [:bold]),
+          column(do: Enum.with_index(@receipt, &row(&1, &2, at)))
         ]
       end
     end
-
-    defp step({n, note}, i, at) when i < at,
-      do: text("ok  #{String.pad_trailing(n, 8)}#{note}", fg: :cyan)
-    defp step({n, _note}, _i, _at), do: text("    #{n}")
+    defp row(l, i, at), do: text(m(i, at) <> " " <> l, fg: :cyan)
+    defp m(i, at) when i < at, do: "ok"
+    defp m(_, _), do: "  "
   end
   """
 

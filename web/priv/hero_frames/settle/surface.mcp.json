@@ -5,11 +5,11 @@
     "children": [
       {
         "id": null,
-        "label": "USDC 25.00  via xochi",
+        "label": "USDC 1.10  Base Sepolia -> Arc  via xochi",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "USDC 25.00  via xochi"
+        "content": "USDC 1.10  Base Sepolia -> Arc  via xochi"
       },
       {
         "id": null,
@@ -17,38 +17,54 @@
         "children": [
           {
             "id": null,
-            "label": "    quote",
+            "label": "ok agent     funded signer",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "    quote"
+            "content": "ok agent     funded signer"
           },
           {
             "id": null,
-            "label": "    sign",
+            "label": "ok gate      approve before signature",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "    sign"
+            "content": "ok gate      approve before signature"
           },
           {
             "id": null,
-            "label": "    settle",
+            "label": "ok intent    quote -> sign -> execute",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "    settle"
+            "content": "ok intent    quote -> sign -> execute"
+          },
+          {
+            "id": null,
+            "label": "ok source    Base Sepolia  84532",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "ok source    Base Sepolia  84532"
+          },
+          {
+            "id": null,
+            "label": "   dest      Arc Testnet  5042002",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "   dest      Arc Testnet  5042002"
+          },
+          {
+            "id": null,
+            "label": "   explorer  Blockscout  receipts after run",
+            "type": "text",
+            "children": [],
+            "role": "text",
+            "content": "   explorer  Blockscout  receipts after run"
           }
         ],
         "role": "group"
-      },
-      {
-        "id": null,
-        "label": "stables  USDC  USDG  USDT",
-        "type": "text",
-        "children": [],
-        "role": "text",
-        "content": "stables  USDC  USDG  USDT"
       }
     ],
     "role": "group"

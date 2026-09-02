@@ -1010,7 +1010,10 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
       10 => "https://optimistic.etherscan.io/tx/",
       137 => "https://polygonscan.com/tx/",
       8453 => "https://basescan.org/tx/",
-      42_161 => "https://arbiscan.io/tx/"
+      42_161 => "https://arbiscan.io/tx/",
+      84_532 => "https://base-sepolia.blockscout.com/tx/",
+      421_614 => "https://arbitrum-sepolia.blockscout.com/tx/",
+      5_042_002 => "https://testnet.arcscan.app/tx/"
     }
 
     defp report_settlement(label, intent, status, params, started_ms) do
@@ -1027,7 +1030,52 @@ defmodule Raxol.Payments.Xochi.LiveXochiTest do
         "[live_xochi:#{label}] settled #{elapsed}ms " <>
           "intent=#{intent.intent_id} status=#{status.status} fill=#{fill}" <> recv
       )
+
+      maybe_write_receipt(label, intent, status, params, elapsed)
     end
+
+    defp maybe_write_receipt(label, intent, status, params, elapsed_ms) do
+      case System.get_env("XOCHI_LIVE_RECEIPT_OUT") do
+        nil ->
+          :ok
+
+        out ->
+          path = Path.expand(out, File.cwd!())
+          File.mkdir_p!(Path.dirname(path))
+
+          File.write!(
+            path,
+            Jason.encode!(receipt(label, intent, status, params, elapsed_ms), pretty: true)
+          )
+
+          IO.puts("[live_xochi:#{label}] wrote receipt #{path}")
+      end
+    end
+
+    defp receipt(label, intent, status, params, elapsed_ms) do
+      tx_hash = Map.get(status, :tx_hash)
+      receiving_tx_hash = Map.get(status, :receiving_tx_hash)
+
+      %{
+        label: label,
+        intent_id: intent.intent_id,
+        status: status.status,
+        elapsed_ms: elapsed_ms,
+        amount: params.amount,
+        settlement: params.settlement,
+        from_chain_id: params.from_chain_id,
+        to_chain_id: params.to_chain_id,
+        from_token: params.from_token,
+        to_token: params.to_token,
+        tx_hash: tx_hash,
+        tx_url: tx_url(tx_hash, params.to_chain_id),
+        receiving_tx_hash: receiving_tx_hash,
+        receiving_tx_url: tx_url(receiving_tx_hash, params.to_chain_id)
+      }
+    end
+
+    defp tx_url(nil, _chain), do: nil
+    defp tx_url(hash, chain), do: Map.get(@explorers, chain, "") <> hash
 
     defp tx_line(nil, _chain), do: "(none)"
     defp tx_line(hash, chain), do: Map.get(@explorers, chain, "") <> hash
