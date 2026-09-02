@@ -49,7 +49,13 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
               # share a stable turn_id (U6's expected_turn_id CAS depends on it).
               # Cleared back to nil when the turn's closing bracket
               # (turn_completed / error) is emitted — see dispatch_agent_turn/2.
-              turn_id: nil
+              turn_id: nil,
+              # `subscriptions: false` at start skips arming the app's declared
+              # subscriptions (timers, event sources), so nothing advances the
+              # model but messages delivered explicitly. Recorders depend on
+              # it: with a timer running, which tick a sampled frame shows is
+              # a property of scheduler timing rather than of the script.
+              subscriptions_enabled: true
   end
 
   # BaseManager provides start_link/1 and start_link/2 automatically
@@ -86,7 +92,8 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
       time_travel: Map.get(initial_state, :time_travel),
       cycle_profiler: Map.get(initial_state, :cycle_profiler),
       command_interceptor: Map.get(initial_state, :command_interceptor),
-      session_id: Map.get(initial_state, :session_id)
+      session_id: Map.get(initial_state, :session_id),
+      subscriptions_enabled: Map.get(initial_state, :subscriptions, true)
     }
 
     send(runtime_pid, {:runtime_initialized, self()})
@@ -889,6 +896,9 @@ defmodule Raxol.Core.Runtime.Events.Dispatcher do
   # A `%Subscription{type: t, data: d}` is its own identity: two structurally
   # equal subscriptions are the same subscription, so an unchanged one is left
   # running untouched rather than being torn down and restarted each update.
+  defp sync_subscriptions(%State{subscriptions_enabled: false} = state),
+    do: state
+
   defp sync_subscriptions(state) do
     desired = declared_subscriptions(state)
     active = state.active_subscriptions
