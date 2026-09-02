@@ -45,7 +45,9 @@ defmodule Raxol.Playground.Demos.TextInputDemo do
             } do
           text(display <> "_")
         end,
+        # snippet:start
         text_input(value: model.value, placeholder: "Type here..."),
+        # snippet:end
         divider(),
         box style: %{
               border: :rounded,

@@ -57,11 +57,14 @@ defmodule Raxol.Playground.Demos.EasingDemo do
 
   @impl true
   def view(model) do
+    # snippet:start
     easing = current_easing(model)
     label = easing |> to_string() |> String.replace("_", " ")
     eased = Easing.calculate_value(easing, model.progress)
     marker_x = round(model.progress * @plot_width)
     marker_y = round(eased * @plot_height)
+
+    # snippet:end
 
     column style: %{gap: 0} do
       [

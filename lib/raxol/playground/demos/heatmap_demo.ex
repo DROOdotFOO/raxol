@@ -44,6 +44,7 @@ defmodule Raxol.Playground.Demos.HeatmapDemo do
         [] -> 0
       end
 
+    # snippet:start
     chart_element =
       heatmap(
         data: model.grid,
@@ -51,6 +52,8 @@ defmodule Raxol.Playground.Demos.HeatmapDemo do
         height: @chart_height,
         color_scale: model.color_scale
       )
+
+    # snippet:end
 
     column style: %{gap: 1} do
       [

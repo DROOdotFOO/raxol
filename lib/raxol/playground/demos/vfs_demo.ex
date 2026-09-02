@@ -272,6 +272,7 @@ defmodule Raxol.Playground.Demos.VfsDemo do
   # -- Seed data --
 
   defp seed_filesystem do
+    # snippet:start
     fs = FileSystem.new()
     {:ok, fs} = FileSystem.mkdir(fs, "/home")
     {:ok, fs} = FileSystem.mkdir(fs, "/home/user")
@@ -284,6 +285,8 @@ defmodule Raxol.Playground.Demos.VfsDemo do
         "/home/user/readme.txt",
         "Welcome to Raxol VFS!\n\nThis is a virtual file system demo.\nAll data lives in memory."
       )
+
+    # snippet:end
 
     {:ok, fs} =
       FileSystem.create_file(

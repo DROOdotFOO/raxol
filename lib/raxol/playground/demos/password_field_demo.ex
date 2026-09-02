@@ -1,40 +1,81 @@
 defmodule Raxol.Playground.Demos.PasswordFieldDemo do
-  @moduledoc "Playground demo: password input with visibility toggle and strength meter."
+  @moduledoc """
+  Playground demo: `Raxol.UI.Components.Input.PasswordField` — the real
+  component (a TextField pinned to `secret: true`), with a strength meter
+  driven off its value and a visibility toggle flipping the masking.
+  """
   use Raxol.Core.Runtime.Application
 
   import Raxol.Playground.DemoHelpers, only: [effective_width: 2]
 
-  @default_input_box_width 40
+  alias Raxol.UI.Components.Input.PasswordField
+
   @min_medium_length 4
   @min_strong_length 8
   @strength_bar_width 10
 
   @impl true
   def init(_context) do
-    %{value: "", visible: false, strength: :none}
+    # snippet:start
+    {:ok, field} =
+      PasswordField.init(%{
+        id: :pw_demo,
+        placeholder: "(enter password)",
+        width: 36
+      })
+
+    # Masked by default (secret: true); render with the component:
+    #   PasswordField.render(field, %{})
+    # snippet:end
+    %{field: field, strength: :none}
   end
 
   @impl true
   def update(message, model) do
     case message do
       key_match("v") ->
-        {%{model | visible: not model.visible}, []}
+        field =
+          PasswordField.update(
+            {:update_props, %{secret: not model.field.secret}},
+            model.field
+          )
+
+        {%{model | field: field}, []}
 
       key_match("r") ->
-        {%{model | value: "", strength: :none}, []}
+        {%{model | field: put_value(model.field, ""), strength: :none}, []}
 
       key_match(:backspace) ->
-        new_value = String.slice(model.value, 0..-2//1)
-        {%{model | value: new_value, strength: strength(new_value)}, []}
+        new_value = String.slice(model.field.value, 0..-2//1)
+
+        {%{
+           model
+           | field: put_value(model.field, new_value),
+             strength: strength(new_value)
+         }, []}
 
       key_match(:char, char: ch)
       when byte_size(ch) == 1 and ch not in ["v", "r"] ->
-        new_value = model.value <> ch
-        {%{model | value: new_value, strength: strength(new_value)}, []}
+        new_value = model.field.value <> ch
+
+        {%{
+           model
+           | field: put_value(model.field, new_value),
+             strength: strength(new_value)
+         }, []}
 
       _ ->
         {model, []}
     end
+  end
+
+  # Through the component's own prop path, so cursor and scroll follow the
+  # value instead of being poked directly.
+  defp put_value(field, value) do
+    PasswordField.update(
+      {:update_props, %{value: value, cursor_pos: String.length(value)}},
+      field
+    )
   end
 
   defp strength(""), do: :none
@@ -44,12 +85,7 @@ defmodule Raxol.Playground.Demos.PasswordFieldDemo do
 
   @impl true
   def view(model) do
-    len = String.length(model.value)
-
-    display =
-      if model.visible, do: model.value, else: String.duplicate("*", len)
-
-    display = if display == "", do: "(enter password)", else: display
+    len = String.length(model.field.value)
     {strength_label, strength_bar} = strength_display(model.strength)
 
     column style: %{gap: 1} do
@@ -60,15 +96,17 @@ defmodule Raxol.Playground.Demos.PasswordFieldDemo do
         box style: %{
               border: :single,
               padding: 1,
-              width: effective_width(model, @default_input_box_width)
+              width: effective_width(model, 40)
             } do
-          text(display <> "_")
+          PasswordField.render(model.field, %{})
         end,
         text("Strength: #{strength_label}"),
         text("[#{strength_bar}]"),
         text("Characters: #{len}", style: [:bold]),
         divider(),
-        text("Visibility: #{if model.visible, do: "shown", else: "hidden"}"),
+        text(
+          "Visibility: #{if model.field.secret, do: "hidden", else: "shown"}"
+        ),
         text(
           "[type] enter chars  [backspace] delete  [v] toggle visibility  [r] reset",
           style: [:dim]

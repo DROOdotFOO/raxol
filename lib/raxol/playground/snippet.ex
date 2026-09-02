@@ -77,6 +77,62 @@ defmodule Raxol.Playground.Snippet do
     for {line, i} <- Enum.with_index(lines), String.trim(line) == marker, do: i
   end
 
+  # Plumbing inside a snippet, never its subject: the stdlib, and the
+  # playground's own demo scaffolding.
+  @plumbing ~w(Enum String Map Keyword List MapSet Integer Float IO Kernel
+               Regex Path File System Process DateTime Calendar Tuple
+               DemoHelpers)
+
+  @doc """
+  The component call a snippet demonstrates ("Viewport.init"), or `nil`.
+
+  This is what the gallery card shows under a plain-language name, so a
+  reader hunting for the module is not left guessing: the card may say
+  "Scroll Anchor", the sub-line says `Viewport.init`. Only a qualified
+  non-stdlib call qualifies — a DSL one-liner's subject IS the card's name,
+  and a generic answer ("row", an assignment's left side) is worse than
+  none. Shallow module paths win over deep ones, so a utility import inside
+  the region cannot shadow the component the region is about. Derived from
+  the snippet rather than written beside it, so it cannot name something
+  the snippet stopped showing.
+  """
+  @spec subject(String.t()) :: String.t() | nil
+  def subject(snippet) do
+    snippet
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
+    |> Enum.flat_map(&qualified_calls/1)
+    |> Enum.min_by(&length(String.split(&1, ".")), fn -> nil end)
+  end
+
+  defp qualified_calls(line) do
+    for [_, mod, fun] <-
+          Regex.scan(~r/([A-Z][\w.]*)\.([a-z_]\w*[?!]?)\(/, line),
+        hd(String.split(mod, ".")) not in @plumbing,
+        do: "#{mod}.#{fun}"
+  end
+
+  @doc """
+  Whether `subject` says no more than `name` already does.
+
+  "button" under a card named "Button", or "Table.init" under "Table", is
+  noise; "Viewport.init" under "Scroll Anchor" is the answer to a real
+  question. Compared with case and separators dropped, against each dotted
+  part of the subject, so both the module and the function form of a name
+  count as already said.
+  """
+  @spec redundant?(String.t(), String.t() | nil) :: boolean()
+  def redundant?(_name, nil), do: true
+
+  def redundant?(name, subject) do
+    n = normalize(name)
+    subject |> String.split(".") |> Enum.any?(&(normalize(&1) == n))
+  end
+
+  defp normalize(s),
+    do: s |> String.downcase() |> String.replace(~r/[^a-z0-9]/, "")
+
   defp region(lines, path) do
     if length(lines) > @max_lines do
       raise "#{path} marks #{length(lines)} lines; a snippet is an excerpt, " <>

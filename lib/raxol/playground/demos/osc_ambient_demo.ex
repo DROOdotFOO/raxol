@@ -140,6 +140,7 @@ defmodule Raxol.Playground.Demos.OscAmbientDemo do
     end
   end
 
+  # snippet:start
   defp progress_command(model) do
     state = progress_state(model.status)
 
@@ -148,6 +149,8 @@ defmodule Raxol.Playground.Demos.OscAmbientDemo do
       :ok
     end)
   end
+
+  # snippet:end
 
   defp clear_progress_command do
     Directive.spawn_task(fn ->

@@ -62,6 +62,7 @@ defmodule Raxol.Playground.Demos.SplitPaneDemo do
     pct = round(model.ratio * @percent)
     right_pct = @percent - pct
 
+    # snippet:start
     size_key = if model.direction == :horizontal, do: :width, else: :height
 
     left_pane =
@@ -73,6 +74,8 @@ defmodule Raxol.Playground.Demos.SplitPaneDemo do
           ]
         end
       end
+
+    # snippet:end
 
     right_pane =
       box style: %{

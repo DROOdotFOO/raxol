@@ -52,6 +52,7 @@ defmodule Raxol.Playground.Demos.SelectListDemo do
     arrow = if model.open, do: "v", else: ">"
     display = model.confirmed || "Select a language..."
 
+    # snippet:start
     dropdown_items =
       if model.open do
         model.options
@@ -63,6 +64,8 @@ defmodule Raxol.Playground.Demos.SelectListDemo do
       else
         []
       end
+
+    # snippet:end
 
     column style: %{gap: 1} do
       [

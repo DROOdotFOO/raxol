@@ -42,6 +42,7 @@ defmodule Raxol.Playground.Demos.LineChartDemo do
 
   @impl true
   def view(model) do
+    # snippet:start
     series = build_series(model.tick)
 
     chart_element =
@@ -52,6 +53,8 @@ defmodule Raxol.Playground.Demos.LineChartDemo do
         show_legend: model.show_legend,
         show_axes: model.show_axes
       )
+
+    # snippet:end
 
     legend_label = if model.show_legend, do: "ON", else: "OFF"
     axes_label = if model.show_axes, do: "ON", else: "OFF"

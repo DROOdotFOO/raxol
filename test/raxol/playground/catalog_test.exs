@@ -43,68 +43,25 @@ defmodule Raxol.Playground.CatalogTest do
       end
     end
 
-    # The ratchet: entries whose snippet is still a hand-written literal
-    # rather than a region extracted from their demo. It only shrinks. A
-    # name reappearing here means someone removed a demo's markers, which
-    # un-derives its snippet and reopens the drift this list exists to
-    # close; a new demo joins derived or joins this list consciously. When
-    # it empties, delete the fallback in Catalog and this list with it.
-    test "no entry falls back to a literal snippet without being named here" do
-      still_literal = [
-        "BEAM Dashboard",
-        "BarChart",
-        "Button",
-        "Checkbox",
-        "CodeBlock",
-        "Container",
-        "Cursor Trail",
-        "Easing Functions",
-        "Flex Layout",
-        "Focus Ring",
-        "Harness Approval",
-        "Harness Diff Viewer",
-        "Harness Panels",
-        "Harness Status",
-        "Harness Tool Blocks",
-        "Harness Transcript",
-        "Heatmap",
-        "LineChart",
-        "Markdown",
-        "Menu",
-        "Modal",
-        "OSC Ambient",
-        "Panel Highlights",
-        "PasswordField",
-        "Progress",
-        "REPL",
-        "RadioGroup",
-        "Salience Palette",
-        "ScatterChart",
-        "Scroll Anchor",
-        "SelectList",
-        "Sparkline",
-        "SplitPane",
-        "StatusBar",
-        "Table",
-        "Tabs",
-        "Text",
-        "TextArea",
-        "TextInput",
-        "Tree",
-        "Virtual FS"
-      ]
-
-      assert Enum.sort(Catalog.underived()) == Enum.sort(still_literal)
-    end
-
+    # Every snippet is extracted from its demo's marked region at compile
+    # time (a missing marker pair fails the build, so no test is needed for
+    # that); what a test can still hold is that the extraction yields a
+    # real excerpt and that the derived sub-line never merely repeats the
+    # card's name.
     test "derived snippets are real excerpts, never empty" do
-      derived =
-        Catalog.list_components()
-        |> Enum.reject(&(&1.name in Catalog.underived()))
-
-      for comp <- derived do
+      for comp <- Catalog.list_components() do
         assert String.trim(comp.code_snippet) != "",
                "#{comp.name} derived an empty snippet"
+      end
+    end
+
+    test "a shows sub-line adds a name, never repeats one" do
+      for comp <- Catalog.list_components(), comp.shows != nil do
+        refute Raxol.Playground.Snippet.redundant?(comp.name, comp.shows),
+               "#{comp.name} shows #{comp.shows}, which only repeats the name"
+
+        assert comp.code_snippet =~ comp.shows,
+               "#{comp.name} shows #{comp.shows}, which its snippet never calls"
       end
     end
   end

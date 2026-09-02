@@ -97,6 +97,7 @@ defmodule Raxol.Playground.Demos.HarnessToolBlocksDemo do
   def view(model) do
     context = render_context()
 
+    # snippet:start
     column style: %{gap: 1} do
       [
         text("Harness Tool Blocks Demo", style: [:bold]),
@@ -116,6 +117,8 @@ defmodule Raxol.Playground.Demos.HarnessToolBlocksDemo do
         )
       ]
     end
+
+    # snippet:end
   end
 
   @impl true

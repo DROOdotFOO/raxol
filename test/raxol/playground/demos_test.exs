@@ -308,51 +308,41 @@ defmodule Raxol.Playground.DemosTest do
     end
   end
 
+  # The demo embeds the real Raxol.UI.Components.Input.Menu and forwards key
+  # events into Menu.handle_event/3, so these tests hold the forwarding and
+  # the component state it lands in, not a demo-private cursor.
   describe "MenuDemo" do
-    test "init starts at first item" do
+    test "init starts on the first item with nothing open" do
       model = MenuDemo.init(nil)
-      assert model.selected == 0
-      assert model.expanded == false
+      assert model.menu.cursor == :file
+      assert model.menu.open_path == []
     end
 
-    test "l moves to next menu" do
+    test "down and up walk the top-level items" do
       model = MenuDemo.init(nil)
-      {model, []} = MenuDemo.update(key_event("l"), model)
-      assert model.selected == 1
+      {model, []} = MenuDemo.update(special_key(:down), model)
+      assert model.menu.cursor == :edit
+      {model, []} = MenuDemo.update(special_key(:up), model)
+      assert model.menu.cursor == :file
     end
 
-    test "h moves to previous menu" do
-      model = %{selected: 2, sub_selected: 0, expanded: false}
-      {model, []} = MenuDemo.update(key_event("h"), model)
-      assert model.selected == 1
-    end
-
-    test "menu wraps around" do
-      model = %{selected: 4, sub_selected: 0, expanded: false}
-      {model, []} = MenuDemo.update(key_event("l"), model)
-      assert model.selected == 0
-    end
-
-    test "enter toggles expansion" do
+    test "right opens the submenu under the cursor" do
       model = MenuDemo.init(nil)
-      {model, []} = MenuDemo.update(special_key(:enter), model)
-      assert model.expanded == true
-      {model, []} = MenuDemo.update(special_key(:enter), model)
-      assert model.expanded == false
+      {model, []} = MenuDemo.update(special_key(:right), model)
+      assert model.menu.open_path == [:file]
     end
 
-    test "j/k navigate sub-items when expanded" do
-      model = %{selected: 0, sub_selected: 0, expanded: true}
-      {model, []} = MenuDemo.update(key_event("j"), model)
-      assert model.sub_selected == 1
-      {model, []} = MenuDemo.update(key_event("k"), model)
-      assert model.sub_selected == 0
-    end
-
-    test "escape closes menu" do
-      model = %{selected: 0, sub_selected: 0, expanded: true}
+    test "escape closes the open submenu" do
+      model = MenuDemo.init(nil)
+      {model, []} = MenuDemo.update(special_key(:right), model)
       {model, []} = MenuDemo.update(special_key(:escape), model)
-      assert model.expanded == false
+      assert model.menu.open_path == []
+    end
+
+    test "keys the component does not bind change nothing" do
+      model = MenuDemo.init(nil)
+      {unchanged, []} = MenuDemo.update(key_event("z"), model)
+      assert unchanged == model
     end
 
     test "view returns element tree" do
@@ -531,11 +521,14 @@ defmodule Raxol.Playground.DemosTest do
     end
   end
 
+  # The demo embeds the real Raxol.UI.Components.Input.PasswordField (a
+  # TextField pinned to secret: true), so value and masking live in the
+  # component's state.
   describe "PasswordFieldDemo" do
-    test "init starts empty and hidden" do
+    test "init starts empty and masked" do
       model = PasswordFieldDemo.init(nil)
-      assert model.value == ""
-      assert model.visible == false
+      assert model.field.value == ""
+      assert model.field.secret == true
       assert model.strength == :none
     end
 
@@ -548,26 +541,34 @@ defmodule Raxol.Playground.DemosTest do
           m
         end)
 
-      assert model.value == "abcd"
+      assert model.field.value == "abcd"
       assert model.strength == :medium
     end
 
     test "backspace removes character" do
-      model = %{value: "abc", visible: false, strength: :weak}
+      model = PasswordFieldDemo.init(nil)
+
+      model =
+        Enum.reduce(String.graphemes("abc"), model, fn ch, m ->
+          {m, []} = PasswordFieldDemo.update(key_event(ch), m)
+          m
+        end)
+
       {model, []} = PasswordFieldDemo.update(special_key(:backspace), model)
-      assert model.value == "ab"
+      assert model.field.value == "ab"
     end
 
-    test "v toggles visibility" do
+    test "v toggles masking" do
       model = PasswordFieldDemo.init(nil)
       {model, []} = PasswordFieldDemo.update(key_event("v"), model)
-      assert model.visible == true
+      assert model.field.secret == false
     end
 
     test "r resets" do
-      model = %{value: "secret", visible: true, strength: :medium}
+      model = PasswordFieldDemo.init(nil)
+      {model, []} = PasswordFieldDemo.update(key_event("a"), model)
       {model, []} = PasswordFieldDemo.update(key_event("r"), model)
-      assert model.value == ""
+      assert model.field.value == ""
       assert model.strength == :none
     end
 
@@ -609,40 +610,44 @@ defmodule Raxol.Playground.DemosTest do
     end
   end
 
+  # The demo embeds the real Raxol.UI.Components.Display.Tree; arrows and
+  # Enter forward into Tree.handle_event/3, and only the expand-all /
+  # collapse-all conveniences stay demo-level, applied to the component's
+  # own expanded set.
   describe "TreeDemo" do
-    test "init starts with empty expanded set" do
+    test "init starts collapsed on the first node" do
       model = TreeDemo.init(nil)
-      assert MapSet.size(model.expanded) == 0
-      assert model.cursor == 0
+      assert MapSet.size(model.tree.expanded) == 0
+      assert model.tree.cursor == :src
     end
 
-    test "j/k navigate visible nodes" do
+    test "down and up walk visible nodes" do
       model = TreeDemo.init(nil)
-      {model, []} = TreeDemo.update(key_event("j"), model)
-      assert model.cursor == 1
-      {model, []} = TreeDemo.update(key_event("k"), model)
-      assert model.cursor == 0
+      {model, []} = TreeDemo.update(special_key(:down), model)
+      assert model.tree.cursor == :test
+      {model, []} = TreeDemo.update(special_key(:up), model)
+      assert model.tree.cursor == :src
     end
 
-    test "l expands a directory node" do
+    test "right expands the directory under the cursor" do
       model = TreeDemo.init(nil)
-      {model, []} = TreeDemo.update(key_event("l"), model)
-      assert MapSet.size(model.expanded) == 1
+      {model, []} = TreeDemo.update(special_key(:right), model)
+      assert MapSet.member?(model.tree.expanded, :src)
     end
 
-    test "h collapses a directory node" do
+    test "left collapses it again" do
       model = TreeDemo.init(nil)
-      {model, []} = TreeDemo.update(key_event("l"), model)
-      {model, []} = TreeDemo.update(key_event("h"), model)
-      assert MapSet.size(model.expanded) == 0
+      {model, []} = TreeDemo.update(special_key(:right), model)
+      {model, []} = TreeDemo.update(special_key(:left), model)
+      assert MapSet.size(model.tree.expanded) == 0
     end
 
     test "e expands all, c collapses all" do
       model = TreeDemo.init(nil)
       {model, []} = TreeDemo.update(key_event("e"), model)
-      assert MapSet.size(model.expanded) > 0
+      assert MapSet.size(model.tree.expanded) > 0
       {model, []} = TreeDemo.update(key_event("c"), model)
-      assert MapSet.size(model.expanded) == 0
+      assert MapSet.size(model.tree.expanded) == 0
     end
 
     test "view returns element tree" do

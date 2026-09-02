@@ -52,7 +52,9 @@ defmodule Raxol.Playground.Demos.ProgressDemo do
       [
         text("Progress Demo", style: [:bold]),
         divider(),
+        # snippet:start
         progress(value: model.value, max: @max_progress),
+        # snippet:end
         text("[#{bar}] #{model.value}%"),
         divider(),
         box style: %{border: :single, padding: 1, width: @info_box_width} do

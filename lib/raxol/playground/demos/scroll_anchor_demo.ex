@@ -20,6 +20,7 @@ defmodule Raxol.Playground.Demos.ScrollAnchorDemo do
 
   @impl true
   def init(_context) do
+    # snippet:start
     seed = Enum.map(1..@seed_count, &log_line/1)
 
     {:ok, vp} =
@@ -31,6 +32,8 @@ defmodule Raxol.Playground.Demos.ScrollAnchorDemo do
         show_scrollbar: true,
         overflow_anchor: :auto
       )
+
+    # snippet:end
 
     %{viewport: vp, seq: @seed_count, paused: false}
   end

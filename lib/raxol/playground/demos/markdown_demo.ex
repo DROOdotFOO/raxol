@@ -207,6 +207,7 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
     box_width = effective_width(model, @default_content_box_width)
     prose_width = max(box_width - @border_and_padding_overhead, 1)
 
+    # snippet:start
     body =
       if model.raw do
         doc.content
@@ -215,6 +216,8 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
       else
         [markdown(doc.content, prose_width)]
       end
+
+    # snippet:end
 
     column style: %{gap: 1} do
       [

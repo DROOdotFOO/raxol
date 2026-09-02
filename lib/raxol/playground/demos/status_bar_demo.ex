@@ -1,13 +1,35 @@
 defmodule Raxol.Playground.Demos.StatusBarDemo do
-  @moduledoc "Playground demo: status bar with live-updating fields."
+  @moduledoc """
+  Playground demo: `Raxol.UI.Components.Display.StatusBar` — the real
+  component. The demo owns the editor-ish state (mode, position, uptime) and
+  feeds it to the bar as items; the bar owns the rendering: bold keys,
+  labels, separators.
+  """
   use Raxol.Core.Runtime.Application
+
+  alias Raxol.UI.Components.Display.StatusBar
 
   @tick_interval_ms 1000
   @info_box_width 35
 
   @impl true
   def init(_context) do
-    %{mode: "NORMAL", file: "demo.ex", line: 1, col: 1, tick: 0}
+    # snippet:start
+    {:ok, bar} =
+      StatusBar.init(
+        id: :playground_status_bar,
+        separator: " | ",
+        items: [
+          %{key: "MODE", label: "NORMAL"},
+          %{key: "File", label: "demo.ex"},
+          %{key: "Pos", label: "1:1"}
+        ]
+      )
+
+    # Items are plain data: swap them on state changes, then draw with
+    # StatusBar.render/2.
+    # snippet:end
+    %{bar: bar, mode: "NORMAL", file: "demo.ex", line: 1, col: 1, tick: 0}
   end
 
   @impl true
@@ -41,24 +63,13 @@ defmodule Raxol.Playground.Demos.StatusBarDemo do
 
   @impl true
   def view(model) do
-    mode_style =
-      if model.mode == "INSERT", do: [:bold, :underline], else: [:bold]
+    bar = %{model.bar | items: items(model)}
 
     column style: %{gap: 1} do
       [
         text("StatusBar Demo", style: [:bold]),
         divider(),
-        row style: %{gap: 1} do
-          [
-            text(" #{model.mode} ", style: mode_style),
-            text("|"),
-            text(model.file),
-            text("|"),
-            text("Ln #{model.line}, Col #{model.col}"),
-            text("|"),
-            text("T:#{model.tick}")
-          ]
-        end,
+        StatusBar.render(bar, %{}),
         divider(),
         box style: %{border: :single, padding: 1, width: @info_box_width} do
           column style: %{gap: 0} do
@@ -73,6 +84,15 @@ defmodule Raxol.Playground.Demos.StatusBarDemo do
         text("[i] insert  [Esc] normal  [hjkl] move", style: [:dim])
       ]
     end
+  end
+
+  defp items(model) do
+    [
+      %{key: "MODE", label: model.mode},
+      %{key: "File", label: model.file},
+      %{key: "Pos", label: "#{model.line}:#{model.col}"},
+      %{key: "Up", label: "#{model.tick}s"}
+    ]
   end
 
   @impl true

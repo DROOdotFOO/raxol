@@ -152,6 +152,7 @@ defmodule Raxol.Playground.Demos.ReplDemo do
     end
   end
 
+  # snippet:start
   defp do_eval(model, code) do
     case Evaluator.eval(model.evaluator, code,
            timeout: @eval_timeout,
@@ -174,6 +175,8 @@ defmodule Raxol.Playground.Demos.ReplDemo do
         append_output(model, code, reason, :error)
     end
   end
+
+  # snippet:end
 
   defp append_output(model, code, message, kind) do
     lines = [{"> #{code}", :input}, {message, kind}]

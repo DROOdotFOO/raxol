@@ -243,6 +243,7 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
   def view(model) do
     sample = sample_at(model.sample)
 
+    # snippet:start
     {:ok, diff_state} =
       DiffViewer.init(
         path: sample.path,
@@ -255,6 +256,7 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
       )
 
     effective = DiffViewer.effective_mode(diff_state, %{})
+    # snippet:end
 
     column style: %{gap: 1} do
       [

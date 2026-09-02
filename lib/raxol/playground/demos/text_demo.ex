@@ -83,6 +83,7 @@ defmodule Raxol.Playground.Demos.TextDemo do
 
   # -- Sample rendering per variant kind --
 
+  # snippet:start
   defp sample_for(%{kind: :style, style: style}) do
     text(@sample, style: style)
   end
@@ -102,6 +103,8 @@ defmodule Raxol.Playground.Demos.TextDemo do
       ]
     end
   end
+
+  # snippet:end
 
   defp sample_for(%{kind: :line_clamp}) do
     column style: %{gap: 0} do

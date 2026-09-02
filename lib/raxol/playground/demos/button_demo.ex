@@ -41,6 +41,7 @@ defmodule Raxol.Playground.Demos.ButtonDemo do
       [
         text("Button Demo", style: [:bold]),
         divider(),
+        # snippet:start
         row style: %{gap: 2} do
           [
             button("Primary [1]", on_click: :primary),
@@ -48,6 +49,7 @@ defmodule Raxol.Playground.Demos.ButtonDemo do
             button("Reset [r]", on_click: :danger)
           ]
         end,
+        # snippet:end
         divider(),
         box style: %{border: :single, padding: 1, width: @info_box_width} do
           column style: %{gap: 0} do

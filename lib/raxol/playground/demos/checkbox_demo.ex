@@ -54,6 +54,7 @@ defmodule Raxol.Playground.Demos.CheckboxDemo do
   def view(model) do
     checked_count = Enum.count(model.items, & &1.checked)
 
+    # snippet:start
     item_rows =
       model.items
       |> Enum.with_index()
@@ -62,6 +63,8 @@ defmodule Raxol.Playground.Demos.CheckboxDemo do
         mark = if item.checked, do: "[x]", else: "[ ]"
         text("#{prefix}#{mark} #{item.label}")
       end)
+
+    # snippet:end
 
     column style: %{gap: 1} do
       [
