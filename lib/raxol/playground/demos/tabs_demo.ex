@@ -46,6 +46,7 @@ defmodule Raxol.Playground.Demos.TabsDemo do
 
   @impl true
   def view(model) do
+    # snippet:start
     tabs =
       @tab_labels
       |> Enum.with_index()
@@ -56,6 +57,8 @@ defmodule Raxol.Playground.Demos.TabsDemo do
           text("  #{label}  ")
         end
       end)
+
+    # snippet:end
 
     content_lines =
       @tab_content

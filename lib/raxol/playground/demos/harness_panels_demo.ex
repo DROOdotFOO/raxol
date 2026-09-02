@@ -86,6 +86,7 @@ defmodule Raxol.Playground.Demos.HarnessPanelsDemo do
 
   @impl true
   def view(model) do
+    # snippet:start
     column style: %{gap: 1} do
       [
         text("Harness Panels Demo", style: [:bold]),
@@ -104,6 +105,8 @@ defmodule Raxol.Playground.Demos.HarnessPanelsDemo do
         text("[r] toggle residual", style: [:dim])
       ]
     end
+
+    # snippet:end
   end
 
   @impl true

@@ -46,6 +46,7 @@ defmodule Raxol.Playground.Demos.BarChartDemo do
 
   @impl true
   def view(model) do
+    # snippet:start
     series = [%{name: "Weekly", data: model.data, color: :cyan}]
 
     chart_element =
@@ -56,6 +57,8 @@ defmodule Raxol.Playground.Demos.BarChartDemo do
         orientation: model.orientation,
         show_values: model.show_values
       )
+
+    # snippet:end
 
     values_label = if model.show_values, do: "ON", else: "OFF"
 

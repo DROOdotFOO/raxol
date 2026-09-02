@@ -58,6 +58,7 @@ defmodule Raxol.Playground.Demos.CodeBlockDemo do
 
   @impl true
   def init(_context) do
+    # snippet:start
     blocks =
       Enum.with_index(@samples)
       |> Map.new(fn {sample, idx} ->
@@ -70,6 +71,8 @@ defmodule Raxol.Playground.Demos.CodeBlockDemo do
 
         {idx, state}
       end)
+
+    # snippet:end
 
     %{current: 0, blocks: blocks, event_log: []}
   end

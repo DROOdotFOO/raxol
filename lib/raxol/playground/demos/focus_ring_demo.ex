@@ -64,6 +64,7 @@ defmodule Raxol.Playground.Demos.FocusRingDemo do
   def subscribe(_model), do: []
 
   defp render_items(model) do
+    # snippet:start
     items =
       @items
       |> Enum.with_index()
@@ -75,6 +76,8 @@ defmodule Raxol.Playground.Demos.FocusRingDemo do
           text("  #{label}  ", style: [:dim])
         end
       end)
+
+    # snippet:end
 
     column style: %{gap: 0} do
       items

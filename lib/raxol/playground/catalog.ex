@@ -16,16 +16,15 @@ defmodule Raxol.Playground.Catalog do
           description: String.t(),
           complexity: :basic | :intermediate | :advanced,
           tags: [String.t()],
-          code_snippet: String.t()
+          code_snippet: String.t(),
+          shows: String.t() | nil
         }
 
-  # The `code_snippet` written here is a FALLBACK. A demo that brackets its
-  # illustrative region in `# snippet:start` / `# snippet:end` markers has
-  # its snippet extracted from that source at compile time instead (see
-  # `Raxol.Playground.Snippet`), so the code beside a demo is code the demo
-  # actually contains and runs. Entries still on their literal are counted
-  # by `underived/0`, and a ratchet test holds that count on its way to
-  # zero, at which point the literals and this fallback go.
+  # No `code_snippet` here on purpose. Every entry's snippet is EXTRACTED
+  # from its demo module's `# snippet:start` / `# snippet:end` region at
+  # compile time (see `Raxol.Playground.Snippet`), so the code beside a demo
+  # is code the demo actually contains and runs, and a missing marker pair
+  # is a compile error rather than a card quietly showing prose.
   @component_specs [
     %{
       name: "Button",
@@ -33,11 +32,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Interactive button with click handling",
       complexity: :basic,
-      tags: ["input", "interactive", "click"],
-      code_snippet: """
-      button("Click Me", on_click: :clicked)
-      button("Submit", on_click: :submit, style: [:bold])
-      """
+      tags: ["input", "interactive", "click"]
     },
     %{
       name: "TextInput",
@@ -45,10 +40,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Single-line text input with placeholder",
       complexity: :basic,
-      tags: ["input", "form", "text"],
-      code_snippet: """
-      text_input(value: model.name, placeholder: "Enter name...")
-      """
+      tags: ["input", "form", "text"]
     },
     %{
       name: "Table",
@@ -66,31 +58,7 @@ defmodule Raxol.Playground.Catalog do
         "pagination",
         "border",
         "controlled"
-      ],
-      code_snippet: """
-      {:ok, table} =
-        Table.init(%{
-          id: :langs,
-          columns: [
-            %{id: :name, label: "Name", width: 12, align: :left},
-            %{id: :language, label: "Language", width: 10, align: :left},
-            %{id: :stars, label: "Stars", width: 6, align: :right}
-          ],
-          data: [%{name: "Raxol", language: "Elixir", stars: "500"}],
-          options: %{
-            border: :grid,            # :grid | :inner | :none
-            header_separator: true,   # only for :none
-            sortable: true,
-            paginate: true,
-            page_size: 4
-          }
-        })
-
-      Table.render(table, %{})
-      # :grid  -> full frame + rules
-      # :inner -> column/row rules, no outer frame
-      # :none  -> padded columns (+ optional header rule)
-      """
+      ]
     },
     %{
       name: "Progress",
@@ -98,10 +66,7 @@ defmodule Raxol.Playground.Catalog do
       category: :feedback,
       description: "Progress bar with value tracking",
       complexity: :basic,
-      tags: ["feedback", "loading", "progress"],
-      code_snippet: """
-      progress(value: 65, max: 100)
-      """
+      tags: ["feedback", "loading", "progress"]
     },
     %{
       name: "Modal",
@@ -109,13 +74,7 @@ defmodule Raxol.Playground.Catalog do
       category: :overlay,
       description: "Modal dialog with title and content",
       complexity: :intermediate,
-      tags: ["overlay", "dialog", "focus"],
-      code_snippet: """
-      overlays =
-        if model.show, do: [AbsoluteLayer.dialog_overlay(40, 17, dialog_box)], else: []
-
-      AbsoluteLayer.absolute_layer(background_view(model), overlays)
-      """
+      tags: ["overlay", "dialog", "focus"]
     },
     %{
       name: "Menu",
@@ -123,13 +82,7 @@ defmodule Raxol.Playground.Catalog do
       category: :navigation,
       description: "Selectable menu with keyboard navigation",
       complexity: :intermediate,
-      tags: ["navigation", "keyboard", "selection"],
-      code_snippet: """
-      list(
-        items: ["File", "Edit", "View", "Help"],
-        selected: model.selected
-      )
-      """
+      tags: ["navigation", "keyboard", "selection"]
     },
     # --- Input widgets ---
     %{
@@ -138,8 +91,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Toggle checkboxes with keyboard navigation",
       complexity: :basic,
-      tags: ["input", "form", "toggle"],
-      code_snippet: ~s'checkbox("Enable Feature", checked: true)'
+      tags: ["input", "form", "toggle"]
     },
     %{
       name: "TextArea",
@@ -147,8 +99,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Multi-line text editor with insert/normal modes",
       complexity: :intermediate,
-      tags: ["input", "form", "text", "multiline"],
-      code_snippet: ~s'textarea(value: model.text, rows: 5)'
+      tags: ["input", "form", "text", "multiline"]
     },
     %{
       name: "SelectList",
@@ -156,8 +107,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Dropdown select list with keyboard navigation",
       complexity: :intermediate,
-      tags: ["input", "form", "dropdown", "select"],
-      code_snippet: ~s'select(options: ["Elixir", "Rust", "Go"], selected: 0)'
+      tags: ["input", "form", "dropdown", "select"]
     },
     %{
       name: "RadioGroup",
@@ -165,9 +115,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Grouped radio buttons with tab switching",
       complexity: :intermediate,
-      tags: ["input", "form", "radio", "group"],
-      code_snippet:
-        ~s'radio_group(options: ["Light", "Dark", "Auto"], selected: 0)'
+      tags: ["input", "form", "radio", "group"]
     },
     %{
       name: "PasswordField",
@@ -175,8 +123,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Password input with visibility toggle and strength meter",
       complexity: :basic,
-      tags: ["input", "form", "password", "security"],
-      code_snippet: ~s'text_input(value: model.password, type: :password)'
+      tags: ["input", "form", "password", "security"]
     },
     # --- Display widgets ---
     %{
@@ -186,14 +133,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Text rendering with style variations, ellipsis truncation, line clamping, and pretty wrapping",
       complexity: :basic,
-      tags: ["display", "text", "style", "wrap", "truncate", "ellipsis"],
-      code_snippet: """
-      text("Hello", style: [:bold, :italic])
-
-      # CSS-style truncation/wrapping via Raxol.UI.Components.Display.Text:
-      {:ok, state} = Text.init(content: line, width: 20, white_space: :nowrap, text_overflow: :ellipsis)
-      Text.render(state, %{})
-      """
+      tags: ["display", "text", "style", "wrap", "truncate", "ellipsis"]
     },
     %{
       name: "Tree",
@@ -201,8 +141,7 @@ defmodule Raxol.Playground.Catalog do
       category: :display,
       description: "Expandable tree view with keyboard navigation",
       complexity: :intermediate,
-      tags: ["display", "tree", "hierarchy", "navigation"],
-      code_snippet: ~s'list(items: tree_nodes, style: %{indent: 2})'
+      tags: ["display", "tree", "hierarchy", "navigation"]
     },
     %{
       name: "StatusBar",
@@ -210,9 +149,7 @@ defmodule Raxol.Playground.Catalog do
       category: :display,
       description: "Status bar with live-updating fields",
       complexity: :basic,
-      tags: ["display", "status", "bar", "info"],
-      code_snippet:
-        ~s'row do [text(mode), spacer(), text(file), text(line)] end'
+      tags: ["display", "status", "bar", "info"]
     },
     %{
       name: "CodeBlock",
@@ -222,18 +159,7 @@ defmodule Raxol.Playground.Catalog do
         "CodeBlock: structured syntax tokens via Raxol.UI.SyntaxHighlighter " <>
           "(same path as DiffViewer); theme :one_dark by default",
       complexity: :basic,
-      tags: ["display", "code", "syntax", "makeup", "highlighter"],
-      code_snippet: """
-      {:ok, block} =
-        CodeBlock.init(%{
-          content: ~s[def greet(name), do: "Hello, \#{name}!"],
-          language: "elixir",
-          theme: :one_dark   # shared with DiffViewer
-        })
-
-      # column of rows of text spans with hex fg from Makeup tokens
-      CodeBlock.render(block, %{})
-      """
+      tags: ["display", "code", "syntax", "makeup", "highlighter"]
     },
     %{
       name: "Markdown",
@@ -243,22 +169,7 @@ defmodule Raxol.Playground.Catalog do
         "Full Markdown surface (headings, emphasis, lists, quotes, links, " <>
           "GFM tables, HR). Fenced code via CodeBlock/SyntaxHighlighter, raw toggle",
       complexity: :intermediate,
-      tags: ["display", "markdown", "text", "rendering", "code", "highlight"],
-      code_snippet: """
-      {:ok, state} =
-        MarkdownRenderer.init(%{
-          markdown_text: \"\"\"
-          # Title
-          ```elixir
-          def hello, do: :world
-          ```
-          \"\"\",
-          width: 48,
-          syntax_theme: :one_dark
-        })
-
-      MarkdownRenderer.render(state, %{})
-      """
+      tags: ["display", "markdown", "text", "rendering", "code", "highlight"]
     },
     %{
       name: "Harness Diff Viewer",
@@ -267,11 +178,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Pre-apply file diff: line-based unified/split view with +/- markers and line numbers",
       complexity: :intermediate,
-      tags: ["harness", "diff", "display", "review", "agent"],
-      code_snippet: """
-      {:ok, state} = DiffViewer.init(path: "lib/foo.ex", old: old_text, new: new_text)
-      DiffViewer.render(state, %{})
-      """
+      tags: ["harness", "diff", "display", "review", "agent"]
     },
     %{
       name: "Harness Transcript",
@@ -280,12 +187,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Agent-harness transcript blocks: completed message, collapsible reasoning, error",
       complexity: :intermediate,
-      tags: ["harness", "display", "transcript", "agent", "collapsible"],
-      code_snippet: """
-      MessageBlock.render(message_state, %{})
-      ReasoningBlock.render(reasoning_state, %{})  # collapsible, Enter/Space toggles
-      ErrorBlock.render(error_state, %{})
-      """
+      tags: ["harness", "display", "transcript", "agent", "collapsible"]
     },
     # --- Navigation/Layout widgets ---
     %{
@@ -294,8 +196,7 @@ defmodule Raxol.Playground.Catalog do
       category: :navigation,
       description: "Tab bar with keyboard switching and content panels",
       complexity: :basic,
-      tags: ["navigation", "tabs", "panels"],
-      code_snippet: ~s'tabs(labels: ["Tab 1", "Tab 2"], active: model.tab)'
+      tags: ["navigation", "tabs", "panels"]
     },
     %{
       name: "SplitPane",
@@ -304,15 +205,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Resizable split pane with direction toggle, proportionally sized via {:pct, n}",
       complexity: :intermediate,
-      tags: ["layout", "split", "pane", "resize", "pct"],
-      code_snippet: """
-      row style: %{gap: 1, width: 60} do
-        [
-          box(style: %{width: {:pct, 30}, border: :single}, do: left_content),
-          box(style: %{width: {:pct, 70}, border: :single}, do: right_content)
-        ]
-      end
-      """
+      tags: ["layout", "split", "pane", "resize", "pct"]
     },
     %{
       name: "Container",
@@ -320,8 +213,7 @@ defmodule Raxol.Playground.Catalog do
       category: :layout,
       description: "Scrollable container with viewport controls",
       complexity: :basic,
-      tags: ["layout", "container", "scroll", "viewport"],
-      code_snippet: ~s'container(children: items, scroll_offset: model.offset)'
+      tags: ["layout", "container", "scroll", "viewport"]
     },
     # --- Chart/Visualization widgets ---
     %{
@@ -331,9 +223,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Live dashboard of the VM rendering it: schedulers, memory, events",
       complexity: :intermediate,
-      tags: ["dashboard", "beam", "introspection", "streaming"],
-      code_snippet:
-        ~s':erlang.statistics(:scheduler_wall_time) # sampled each tick'
+      tags: ["dashboard", "beam", "introspection", "streaming"]
     },
     %{
       name: "Sparkline",
@@ -341,9 +231,7 @@ defmodule Raxol.Playground.Catalog do
       category: :visualization,
       description: "Compact sparkline for inline data trends",
       complexity: :basic,
-      tags: ["chart", "sparkline", "inline", "streaming"],
-      code_snippet:
-        ~s'sparkline(data: [10, 30, 50, 40, 60], width: 40, height: 5, color: :cyan)'
+      tags: ["chart", "sparkline", "inline", "streaming"]
     },
     %{
       name: "LineChart",
@@ -351,9 +239,7 @@ defmodule Raxol.Playground.Catalog do
       category: :visualization,
       description: "Streaming braille-resolution line chart",
       complexity: :intermediate,
-      tags: ["chart", "line", "braille", "streaming"],
-      code_snippet:
-        ~s'line_chart(series: series, width: 60, height: 15, show_legend: true)'
+      tags: ["chart", "line", "braille", "streaming"]
     },
     %{
       name: "BarChart",
@@ -361,9 +247,7 @@ defmodule Raxol.Playground.Catalog do
       category: :visualization,
       description: "Block-character bar chart with orientation toggle",
       complexity: :basic,
-      tags: ["chart", "bar", "vertical", "horizontal"],
-      code_snippet:
-        ~s'bar_chart(series: series, width: 50, height: 12, orientation: :vertical)'
+      tags: ["chart", "bar", "vertical", "horizontal"]
     },
     %{
       name: "ScatterChart",
@@ -371,9 +255,7 @@ defmodule Raxol.Playground.Catalog do
       category: :visualization,
       description: "Braille scatter plot with animated clusters",
       complexity: :intermediate,
-      tags: ["chart", "scatter", "braille", "animation"],
-      code_snippet:
-        ~s'scatter_chart(series: series, width: 60, height: 15, show_legend: true)'
+      tags: ["chart", "scatter", "braille", "animation"]
     },
     %{
       name: "Heatmap",
@@ -381,9 +263,7 @@ defmodule Raxol.Playground.Catalog do
       category: :visualization,
       description: "2D heatmap with color scale cycling",
       complexity: :basic,
-      tags: ["chart", "heatmap", "color", "grid"],
-      code_snippet:
-        ~s'heatmap(data: grid, width: 48, height: 16, color_scale: :warm)'
+      tags: ["chart", "heatmap", "color", "grid"]
     },
     # --- Effects widgets ---
     %{
@@ -392,9 +272,7 @@ defmodule Raxol.Playground.Catalog do
       category: :effects,
       description: "Animated cursor trail with presets",
       complexity: :intermediate,
-      tags: ["effects", "cursor", "trail", "animation"],
-      code_snippet:
-        ~s'trail = CursorTrail.rainbow() |> CursorTrail.update({x, y})'
+      tags: ["effects", "cursor", "trail", "animation"]
     },
     %{
       name: "Panel Highlights",
@@ -402,9 +280,7 @@ defmodule Raxol.Playground.Catalog do
       category: :effects,
       description: "Panel focus highlighting with border styles",
       complexity: :basic,
-      tags: ["effects", "panel", "focus", "border"],
-      code_snippet:
-        ~s'box style: %{border: :rounded, fg: :cyan} do text(content) end'
+      tags: ["effects", "panel", "focus", "border"]
     },
     %{
       name: "Easing Functions",
@@ -412,8 +288,7 @@ defmodule Raxol.Playground.Catalog do
       category: :effects,
       description: "Animated easing function showcase",
       complexity: :intermediate,
-      tags: ["effects", "easing", "animation", "curve"],
-      code_snippet: ~s'Easing.calculate_value(:ease_out_bounce, progress)'
+      tags: ["effects", "easing", "animation", "curve"]
     },
     %{
       name: "Focus Ring",
@@ -421,8 +296,7 @@ defmodule Raxol.Playground.Catalog do
       category: :effects,
       description: "Accessibility focus ring indicators",
       complexity: :basic,
-      tags: ["effects", "focus", "ring", "accessibility"],
-      code_snippet: ~s'FocusRing.render(content, FocusRing.init(style: :solid))'
+      tags: ["effects", "focus", "ring", "accessibility"]
     },
     %{
       name: "OSC Ambient",
@@ -431,8 +305,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Host-terminal desktop notification, taskbar progress, and pointer shape",
       complexity: :intermediate,
-      tags: ["effects", "osc", "notification", "progress", "pointer"],
-      code_snippet: ~s'IO.write(AdvancedFeatures.report_progress(:set, 42))'
+      tags: ["effects", "osc", "notification", "progress", "pointer"]
     },
     # --- REPL & VFS ---
     %{
@@ -441,13 +314,7 @@ defmodule Raxol.Playground.Catalog do
       category: :navigation,
       description: "In-memory virtual file system with shell-like commands",
       complexity: :intermediate,
-      tags: ["navigation", "filesystem", "shell", "commands", "interactive"],
-      code_snippet: """
-      fs = FileSystem.new()
-      {:ok, fs} = FileSystem.mkdir(fs, "/docs")
-      {:ok, fs} = FileSystem.create_file(fs, "/docs/readme.txt", "Hello")
-      {:ok, entries, fs} = FileSystem.ls(fs, "/docs")
-      """
+      tags: ["navigation", "filesystem", "shell", "commands", "interactive"]
     },
     %{
       name: "REPL",
@@ -455,12 +322,7 @@ defmodule Raxol.Playground.Catalog do
       category: :input,
       description: "Interactive Elixir REPL with sandboxed evaluation",
       complexity: :advanced,
-      tags: ["input", "repl", "eval", "elixir", "interactive"],
-      code_snippet: """
-      evaluator = Evaluator.new()
-      {:ok, result, evaluator} = Evaluator.eval(evaluator, "1 + 2")
-      result.value  #=> 3
-      """
+      tags: ["input", "repl", "eval", "elixir", "interactive"]
     },
     # --- Theming/color ---
     %{
@@ -470,11 +332,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "H-K salience colour solver: lightness solved per tier against the detected ground",
       complexity: :intermediate,
-      tags: ["display", "color", "theme", "oklch", "perceptual"],
-      code_snippet: """
-      Salience.solve(:differentiate, 0.074, 242, ground: 0.1)
-      SalienceTheme.build(ground: 0.92)
-      """
+      tags: ["display", "color", "theme", "oklch", "perceptual"]
     },
     # --- Layout internals ---
     %{
@@ -484,15 +342,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "flex_wrap, align_content, gap, and flex: 1 growth, with min-content flooring",
       complexity: :intermediate,
-      tags: ["layout", "flex", "wrap", "align_content", "gap", "min-content"],
-      code_snippet: """
-      row style: %{flex_wrap: :wrap, align_content: :stretch, gap: 1} do
-        [
-          box(style: %{flex: 1, border: :single}, do: text("A")),
-          box(style: %{border: :single}, do: text("Unbreakableword"))
-        ]
-      end
-      """
+      tags: ["layout", "flex", "wrap", "align_content", "gap", "min-content"]
     },
     %{
       name: "Scroll Anchor",
@@ -501,10 +351,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Viewport overflow_anchor: follow-tail pinning that releases when you scroll up",
       complexity: :intermediate,
-      tags: ["layout", "scroll", "viewport", "overflow", "anchor"],
-      code_snippet: """
-      Viewport.init(children: lines, visible_height: 12, overflow_anchor: :auto)
-      """
+      tags: ["layout", "scroll", "viewport", "overflow", "anchor"]
     },
     # --- Harness widgets ---
     %{
@@ -522,14 +369,7 @@ defmodule Raxol.Playground.Catalog do
         "advisory",
         "drift",
         "toast"
-      ],
-      code_snippet: """
-      {:ok, s} = ContextMeter.init(used: 13_000, total: 16_000)
-      ContextMeter.render(s, %{})
-
-      {:ok, s} = ActivityIndicator.init(state: :working, since_ms: 0, frame: 0)
-      ActivityIndicator.render(s, %{})
-      """
+      ]
     },
     %{
       name: "Harness Panels",
@@ -538,13 +378,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Read-only harness projection panels: worktracks kanban, rules (hard vs soft), memory, residual",
       complexity: :intermediate,
-      tags: ["harness", "display", "kanban", "rules", "memory", "projection"],
-      code_snippet: """
-      {:ok, state} = WorktracksPanel.init(lanes: [
-        %{name: "doing", items: [%{title: "Fold extract into board", status: "doing"}]}
-      ])
-      WorktracksPanel.render(state, %{})
-      """
+      tags: ["harness", "display", "kanban", "rules", "memory", "projection"]
     },
     %{
       name: "Harness Approval",
@@ -553,21 +387,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Agent-harness approval gate: blast-radius preview and keyboard-driven allow/deny scope choice",
       complexity: :intermediate,
-      tags: ["harness", "approval", "overlay", "blast-radius"],
-      code_snippet: """
-      {:ok, approval} =
-        ApprovalPrompt.init(
-          id: "harness-approval",
-          action: %{description: "Clear stale build cache", tool: "shell.exec"},
-          blast_radius: %{deletes: ["/tmp/build/artifact.tar"], reversible: false}
-        )
-
-      AbsoluteLayer.dialog_overlay(
-        approval.width,
-        ApprovalPrompt.estimate_height(approval),
-        ApprovalPrompt.render(approval, %{})
-      )
-      """
+      tags: ["harness", "approval", "overlay", "blast-radius"]
     },
     %{
       name: "Harness Tool Blocks",
@@ -576,11 +396,7 @@ defmodule Raxol.Playground.Catalog do
       description:
         "Agent tool-call/tool-result blocks with a status glyph and an untrusted-output taint badge",
       complexity: :intermediate,
-      tags: ["harness", "display", "agent", "tool", "taint", "provenance"],
-      code_snippet: """
-      ToolCallBlock.init(name: "Bash", args: %{command: "ls"}, status: :running)
-      ToolResultBlock.init(output: fetched_page, taint: true)  # composes TaintBadge
-      """
+      tags: ["harness", "display", "agent", "tool", "taint", "provenance"]
     }
   ]
 
@@ -590,28 +406,39 @@ defmodule Raxol.Playground.Catalog do
     @external_resource Snippet.path_for(spec.module)
   end
 
-  @derived Enum.map(@component_specs, fn spec ->
-             case Snippet.extract(Snippet.path_for(spec.module)) do
-               {:ok, snippet} -> {%{spec | code_snippet: snippet}, :derived}
-               :no_markers -> {spec, :fallback}
-             end
-           end)
+  # `shows` is the snippet's leading component call ("Viewport.init"): the
+  # card sub-line that answers "which module is this?" under a
+  # plain-language name. Derived from the snippet, so it cannot outlive
+  # what it names, and nil where it would only repeat the name.
+  @components Enum.map(@component_specs, fn spec ->
+                path = Snippet.path_for(spec.module)
 
-  @components Enum.map(@derived, &elem(&1, 0))
+                snippet =
+                  case Snippet.extract(path) do
+                    {:ok, snippet} ->
+                      snippet
 
-  @underived for {spec, :fallback} <- @derived, do: spec.name
+                    :no_markers ->
+                      raise "#{path} has no snippet markers; every demo " <>
+                              "brackets its illustrative region in " <>
+                              "'# snippet:start' / '# snippet:end'"
+                  end
+
+                subject = Snippet.subject(snippet)
+
+                shows =
+                  if Snippet.redundant?(spec.name, subject),
+                    do: nil,
+                    else: subject
+
+                spec
+                |> Map.put(:code_snippet, snippet)
+                |> Map.put(:shows, shows)
+              end)
 
   @doc "Returns all playground components."
   @spec list_components() :: [component()]
   def list_components, do: @components
-
-  @doc """
-  The entries whose snippet is still the hand-written literal rather than a
-  region extracted from their demo. Exists for the ratchet test that holds
-  this list on its way to empty; every name here is a demo without markers.
-  """
-  @spec underived() :: [String.t()]
-  def underived, do: @underived
 
   @doc "Returns a component by name."
   @spec get_component(String.t()) :: component() | nil

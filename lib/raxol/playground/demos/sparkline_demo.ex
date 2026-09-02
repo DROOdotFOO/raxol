@@ -58,12 +58,14 @@ defmodule Raxol.Playground.Demos.SparklineDemo do
         text("Sparkline Demo", style: [:bold]),
         divider(),
         text("CPU Usage:", style: [:dim]),
+        # snippet:start
         sparkline(
           data: cpu_data,
           width: effective_width(model, @default_spark_width),
           height: @spark_height,
           color: model.color
         ),
+        # snippet:end
         text("Memory:", style: [:dim]),
         sparkline(
           data: mem_data,

@@ -45,6 +45,7 @@ defmodule Raxol.Playground.Demos.HarnessApprovalDemo do
   end
 
   defp open_prompt(model) do
+    # snippet:start
     {:ok, approval} =
       ApprovalPrompt.init(
         id: "harness-approval-demo",
@@ -53,6 +54,7 @@ defmodule Raxol.Playground.Demos.HarnessApprovalDemo do
       )
 
     %{model | show: true, approval: approval, last_decision: nil}
+    # snippet:end
   end
 
   # While the prompt is open, every message (arrow keys, digit keys, Enter,

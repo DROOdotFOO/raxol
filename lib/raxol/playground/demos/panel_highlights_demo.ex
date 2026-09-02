@@ -94,6 +94,7 @@ defmodule Raxol.Playground.Demos.PanelHighlightsDemo do
     fallback = if border != panel.border, do: " (=> #{border})", else: ""
     title = "[*] #{panel.title} :#{panel.border}#{fallback}"
 
+    # snippet:start
     box style: %{border: border, fg: :cyan, width: @panel_width} do
       column style: %{gap: 0} do
         [
@@ -102,6 +103,8 @@ defmodule Raxol.Playground.Demos.PanelHighlightsDemo do
         ]
       end
     end
+
+    # snippet:end
   end
 
   defp render_panel(panel, _idx, false) do

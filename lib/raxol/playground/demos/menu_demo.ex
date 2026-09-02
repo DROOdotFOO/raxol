@@ -1,73 +1,55 @@
 defmodule Raxol.Playground.Demos.MenuDemo do
-  @moduledoc "Playground demo: selectable menu with keyboard navigation."
+  @moduledoc """
+  Playground demo: `Raxol.UI.Components.Input.Menu` — the real component,
+  nested submenus and all. The demo holds no cursor state of its own: every
+  key event forwards into `Menu.handle_event/3` and the view draws whatever
+  `Menu.render/2` returns.
+  """
   use Raxol.Core.Runtime.Application
-  alias Raxol.Playground.DemoHelpers
 
-  @items ["File", "Edit", "View", "Tools", "Help"]
+  alias Raxol.Core.Events.Event
+  alias Raxol.UI.Components.Input.Menu
+
   @info_box_width 35
-  @submenu_width 20
-
-  @sub_menus %{
-    "File" => ["New", "Open", "Save", "Save As", "Exit"],
-    "Edit" => ["Undo", "Redo", "Cut", "Copy", "Paste"],
-    "View" => ["Sidebar", "Terminal", "Minimap", "Fullscreen"],
-    "Tools" => ["Extensions", "Settings", "Keybindings"],
-    "Help" => ["About", "Docs", "Report Issue"]
-  }
 
   @impl true
   def init(_context) do
-    %{selected: 0, sub_selected: 0, expanded: false}
+    # snippet:start
+    {:ok, menu} =
+      Menu.init(
+        id: :playground_menu,
+        items: [
+          item(:file, "File", [
+            item(:new, "New"),
+            item(:open, "Open"),
+            item(:save, "Save"),
+            item(:exit, "Exit")
+          ]),
+          item(:edit, "Edit", [item(:undo, "Undo"), item(:redo, "Redo")]),
+          item(:view, "View", [item(:sidebar, "Sidebar")]),
+          item(:help, "Help", [item(:about, "About"), item(:docs, "Docs")])
+        ]
+      )
+
+    # Keys route through Menu.handle_event/3; Menu.render/2 draws it.
+    # snippet:end
+    %{menu: menu}
+  end
+
+  defp item(id, label, children \\ []) do
+    %{id: id, label: label, children: children, disabled: false, shortcut: nil}
   end
 
   @impl true
   def update(message, model) do
     case message do
-      key_match("h") ->
-        {move_menu(model, -1), []}
-
-      key_match(:left) ->
-        {move_menu(model, -1), []}
-
-      key_match("l") ->
-        {move_menu(model, 1), []}
-
-      key_match(:right) ->
-        {move_menu(model, 1), []}
-
-      key_match(:enter) ->
-        {%{model | expanded: not model.expanded, sub_selected: 0}, []}
+      %Event{type: :key} = event ->
+        {menu, _commands} = Menu.handle_event(event, model.menu, %{})
+        {%{model | menu: menu}, []}
 
       _ ->
-        handle_sub_or_passthrough(message, model)
+        {model, []}
     end
-  end
-
-  defp handle_sub_or_passthrough(message, %{expanded: true} = model) do
-    case message do
-      key_match("j") -> {sub_menu_down(model), []}
-      key_match(:down) -> {sub_menu_down(model), []}
-      key_match("k") -> {sub_menu_up(model), []}
-      key_match(:up) -> {sub_menu_up(model), []}
-      key_match(:escape) -> {%{model | expanded: false}, []}
-      _ -> {model, []}
-    end
-  end
-
-  defp handle_sub_or_passthrough(_message, model), do: {model, []}
-
-  defp sub_menu_down(model) do
-    items = current_sub_items(model)
-
-    %{
-      model
-      | sub_selected:
-          DemoHelpers.cursor_down(model.sub_selected, length(items) - 1)
-    }
-  end
-
-  defp sub_menu_up(model) do
-    %{model | sub_selected: DemoHelpers.cursor_up(model.sub_selected)}
   end
 
   @impl true
@@ -76,85 +58,28 @@ defmodule Raxol.Playground.Demos.MenuDemo do
       [
         text("Menu Demo", style: [:bold]),
         divider(),
-        menu_bar(model),
-        if model.expanded do
-          sub_menu(model)
-        else
-          text("")
-        end,
+        Menu.render(model.menu, %{}),
         divider(),
         box style: %{border: :single, padding: 1, width: @info_box_width} do
           column style: %{gap: 0} do
             [
-              text("Menu: #{current_item(model)}", style: [:bold]),
-              if model.expanded do
-                text("Item: #{current_sub_item(model)}")
-              else
-                text("(press Enter to expand)")
-              end
+              text("Cursor: #{model.menu.cursor}", style: [:bold]),
+              open_line(model.menu)
             ]
           end
         end,
-        text("[h/l] menu  [j/k] items  [Enter] expand  [Esc] close",
+        text("[up/down] move  [right/Enter] open  [left/Esc] close",
           style: [:dim]
         )
       ]
     end
   end
 
+  defp open_line(%{open_path: []}), do: text("(press Enter to expand)")
+
+  defp open_line(%{open_path: path}),
+    do: text("Open: #{Enum.join(path, " > ")}")
+
   @impl true
   def subscribe(_model), do: []
-
-  defp menu_bar(model) do
-    items =
-      @items
-      |> Enum.with_index()
-      |> Enum.map(fn {item, idx} ->
-        label = " #{item} "
-
-        if idx == model.selected do
-          text(label, style: [:bold, :underline])
-        else
-          text(label)
-        end
-      end)
-
-    row style: %{gap: 0} do
-      items
-    end
-  end
-
-  defp sub_menu(model) do
-    items = current_sub_items(model)
-
-    rendered =
-      items
-      |> Enum.with_index()
-      |> Enum.map(fn {item, idx} ->
-        prefix = DemoHelpers.cursor_prefix(idx, model.sub_selected)
-        style = if idx == model.sub_selected, do: [:bold], else: []
-        text(prefix <> item, style: style)
-      end)
-
-    box style: %{border: :single, padding: 1, width: @submenu_width} do
-      column style: %{gap: 0} do
-        rendered
-      end
-    end
-  end
-
-  defp current_item(model), do: Enum.at(@items, model.selected)
-
-  defp current_sub_items(model) do
-    Map.get(@sub_menus, current_item(model), [])
-  end
-
-  defp current_sub_item(model) do
-    Enum.at(current_sub_items(model), model.sub_selected, "")
-  end
-
-  defp move_menu(model, delta) do
-    new_idx = rem(model.selected + delta + length(@items), length(@items))
-    %{model | selected: new_idx, sub_selected: 0}
-  end
 end

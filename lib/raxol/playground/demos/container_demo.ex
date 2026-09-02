@@ -80,10 +80,13 @@ defmodule Raxol.Playground.Demos.ContainerDemo do
     first = model.scroll_offset + 1
     last = min(model.scroll_offset + model.visible_count, total)
 
+    # snippet:start
     visible =
       model.items
       |> Enum.slice(model.scroll_offset, model.visible_count)
       |> Enum.map(&text("  #{&1}"))
+
+    # snippet:end
 
     scrollbar = build_scrollbar(model.scroll_offset, model.visible_count, total)
 
