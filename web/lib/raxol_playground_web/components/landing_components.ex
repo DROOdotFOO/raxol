@@ -1093,7 +1093,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            landing's tests hold the hero to -- nothing on this page is
            authored output. --%>
       <div class="surface-snapshots">
-        <h2 class="heading-xl mb-2">Four static panes</h2>
+        <h2 class="heading-xl mb-2">Static pulse.exs frame</h2>
         <p class="body-text-dim max-w-2xl mb-4">
           The <code class="text-axol-coral">pulse.exs</code> frame below renders
           as terminal cells, LiveView DOM, SSH ANSI, and MCP JSON.
@@ -1429,7 +1429,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
-        <h1 id="payments-title" class="heading-2xl mb-3">Agents that settle privately.</h1>
+        <h1 id="payments-title" class="heading-2xl mb-3">
+          Agents settle privately through
+          <a href="https://xochi.fi" rel="noopener" class="text-sky">xochi.fi</a>.
+        </h1>
         <p class="body-text max-w-2xl">
           First funded settlement: 2026-06-28. Base USDC offering: live since
           2026-07-20. Fees: trust score + asset type, pinned to
@@ -1456,7 +1459,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-10">
-        Fees have three layers: solver spread, Xochi venue cut, raxol routing
+        Fees have three layers: solver spread, xochi.fi venue cut, raxol routing
         cut. Tiers discount the last two; solver spread is never discounted
         (<%= @solver_floor.stable %> bps stable,
         <%= @solver_floor.volatile %> bps volatile), so there is no zero-fee
@@ -1472,7 +1475,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <h2 class="name-coral mb-2">Reach</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Capabilities come from Xochi with a five-minute cache. Fetch failure
+        Capabilities come from xochi.fi with a five-minute cache. Fetch failure
         uses the static registry and labels it cached.
       </p>
 
