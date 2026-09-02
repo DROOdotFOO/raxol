@@ -32,7 +32,8 @@ defmodule RaxolPlaygroundWeb.HouseStyleTest do
             {line, n} <- Enum.with_index(File.stream!(path), 1),
             String.match?(line, ~r/\x{2014}|\x{2013}/u),
             not comment_line?(line),
-            do: "#{Path.relative_to(path, @web_root)}:#{n}: #{String.trim(line)}"
+            do:
+              "#{Path.relative_to(path, @web_root)}:#{n}: #{String.trim(line)}"
 
       assert offenders == [],
              "em/en dashes belong to no visible string on this site.\n" <>
@@ -47,7 +48,12 @@ defmodule RaxolPlaygroundWeb.HouseStyleTest do
     # reach past it for a help button at 3.26:1 and a status message at 2.78:1.
     test "no text colour below the AA rung exists to be typed" do
       config = File.read!(@tailwind)
-      rungs = Regex.scan(~r/^\s{10}(\d+): 'rgba\(232/m, config, capture: :all_but_first)
+
+      rungs =
+        Regex.scan(~r/^\s{10}(\d+): 'rgba\(232/m, config,
+          capture: :all_but_first
+        )
+
       below = for [n] <- rungs, String.to_integer(n) < 60, do: n
 
       assert below == [],
@@ -96,7 +102,8 @@ defmodule RaxolPlaygroundWeb.HouseStyleTest do
       offenders =
         for path <- web_sources(),
             {line, n} <- Enum.with_index(File.stream!(path), 1),
-            [_, value, unit] <- Regex.scan(~r/font-size:\s*([0-9.]+)(rem|px)/, line),
+            [_, value, unit] <-
+              Regex.scan(~r/font-size:\s*([0-9.]+)(rem|px)/, line),
             px = if(unit == "rem", do: to_f(value) * 16, else: to_f(value)),
             px < 11,
             do: "#{Path.relative_to(path, @web_root)}:#{n} (#{px}px)"
@@ -138,7 +145,10 @@ defmodule RaxolPlaygroundWeb.HouseStyleTest do
       offenders =
         for path <- web_sources(),
             {line, n} <- Enum.with_index(File.stream!(path), 1),
-            String.match?(line, ~r/class="[^"]*\b(min-)?h-screen\b|:\s*100vh\b/),
+            String.match?(
+              line,
+              ~r/class="[^"]*\b(min-)?h-screen\b|:\s*100vh\b/
+            ),
             do: "#{Path.relative_to(path, @web_root)}:#{n}"
 
       assert offenders == [], "use 100dvh:\n" <> Enum.join(offenders, "\n")
@@ -160,11 +170,12 @@ defmodule RaxolPlaygroundWeb.HouseStyleTest do
   # The documented exemptions, identified by the selector a declaration sits
   # under rather than by its value, so changing a value cannot silently widen
   # the exemption. All of them render a character GRID -- a terminal recording,
-  # a code listing, an agent's tree -- sized so a fixed column count fits its
-  # box. They are pictures of a terminal, not copy, and each says so in place.
+  # an agent's tree -- sized so a fixed column count fits its box. They are
+  # pictures of a terminal, not copy, and each says so in place. `.hero-code`
+  # is deliberately NOT here: the hero's module listing is copy the reader is
+  # asked to read, so it sits at the floor and scrolls instead of shrinking.
   @grid_selectors [
     ".gallery-preview .raxol-terminal",
-    ".hero-code",
     ".hero-src",
     ".hero-frames",
     ".hero-ansi"
