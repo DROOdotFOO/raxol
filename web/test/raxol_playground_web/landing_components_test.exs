@@ -536,7 +536,13 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert pane =~ "5042002"
     assert pane =~ "base-sepolia.blockscout.com/tx"
     assert pane =~ "testnet.arcscan.app/tx"
-    assert pane =~ "spend cap before signature"
+    assert pane =~ "source"
+    assert pane =~ "dest"
+    refute pane =~ "src"
+    refute pane =~ "dst"
+    assert pane =~ "spend gate"
+    assert pane =~ "before signature"
+    assert pane =~ "intent       EIP-712 quote signed"
   end
 
   # The row replaced the sentence, so it inherits the sentence's obligation:

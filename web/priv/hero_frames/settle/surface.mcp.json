@@ -5,19 +5,19 @@
     "children": [
       {
         "id": null,
-        "label": "XOCHI RECEIPT  USDC 1.10",
+        "label": "XOCHI RECEIPT  amount USDC 1.10",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "XOCHI RECEIPT  USDC 1.10"
+        "content": "XOCHI RECEIPT  amount USDC 1.10"
       },
       {
         "id": null,
-        "label": "Base Sepolia 84532 -> Arc Testnet 5042002",
+        "label": "source Base Sepolia 84532  dest Arc Testnet 5042002",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "Base Sepolia 84532 -> Arc Testnet 5042002"
+        "content": "source Base Sepolia 84532  dest Arc Testnet 5042002"
       },
       {
         "id": null,
@@ -25,43 +25,43 @@
         "children": [
           {
             "id": null,
-            "label": "ok gate   spend cap before signature",
+            "label": "[OK] spend gate   before signature",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "ok gate   spend cap before signature"
+            "content": "[OK] spend gate   before signature"
           },
           {
             "id": null,
-            "label": "ok intent EIP-712 quote signed",
+            "label": "[OK] intent       EIP-712 quote signed",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "ok intent EIP-712 quote signed"
+            "content": "[OK] intent       EIP-712 quote signed"
           },
           {
             "id": null,
-            "label": "ok execute submit settlement",
+            "label": "[OK] execution    submitted to solver",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "ok execute submit settlement"
+            "content": "[OK] execution    submitted to solver"
           },
           {
             "id": null,
-            "label": "ok src tx base-sepolia.blockscout.com/tx",
+            "label": "[OK] source      base-sepolia.blockscout.com/tx",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "ok src tx base-sepolia.blockscout.com/tx"
+            "content": "[OK] source      base-sepolia.blockscout.com/tx"
           },
           {
             "id": null,
-            "label": "   dst tx testnet.arcscan.app/tx",
+            "label": "[  ] dest        testnet.arcscan.app/tx",
             "type": "text",
             "children": [],
             "role": "text",
-            "content": "   dst tx testnet.arcscan.app/tx"
+            "content": "[  ] dest        testnet.arcscan.app/tx"
           }
         ],
         "role": "group"

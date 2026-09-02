@@ -173,18 +173,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @settle_source ~S"""
   defmodule Settle do
     use Raxol.Core.Runtime.Application
-    @title "XOCHI RECEIPT  USDC 1.10"
-    @route "Base Sepolia 84532 -> Arc Testnet 5042002"
+    @title "XOCHI RECEIPT  amount USDC 1.10"
+    @route "source Base Sepolia 84532  dest Arc Testnet 5042002"
     @receipt [
-      "gate   spend cap before signature",
-      "intent EIP-712 quote signed",
-      "execute submit settlement",
-      "src tx base-sepolia.blockscout.com/tx",
-      "dst tx testnet.arcscan.app/tx"
+      "spend gate   before signature",
+      "intent       EIP-712 quote signed",
+      "execution    submitted to solver",
+      "source      base-sepolia.blockscout.com/tx",
+      "dest        testnet.arcscan.app/tx"
     ]
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
-    def update(_, m), do: {m, []}
     def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
       at = rem(m.t, length(@receipt) + 1)
@@ -196,9 +195,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         ]
       end
     end
-    defp row(l, i, at), do: text(m(i, at) <> " " <> l, fg: :cyan)
-    defp m(i, at) when i < at, do: "ok"
-    defp m(_, _), do: "  "
+    defp row(l, i, a), do: text("#{m(i, a)} #{l}", fg: :cyan)
+    defp m(i, a), do: if(i < a, do: "[OK]", else: "[  ]")
   end
   """
 
@@ -218,7 +216,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
                         {"settle", "settle.ex",
-                         "a cross-chain transfer, through Xochi",
+                         "spend-gated Xochi settlement",
                          @settle_source},
                         {"pulse", "pulse.exs", "one module, four surfaces",
                          @pulse_source},
@@ -340,25 +338,19 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="screen-intro__text">
-        <%!-- "included" is gone from the claim. It cost 233px on a line with
-             36 to spare, and the sub-line under this already says each one is
-             its own Hex package, which is the same promise made once. --%>
+        <%!-- Names the concrete projection set without making the h1 carry a
+             comma train. The receipt demo below is payments; this line keeps
+             the first read on the core surface claim. --%>
         <h1 class="screen-title">
-          Build once.
+          One TEA module.
           <span class="screen-title__claim text-axol-coral">
-            Ship terminal, web, agents, and payments.
+            Seven surfaces, one runtime.
           </span>
         </h1>
 
-        <%!-- Each noun in the h1 is a tab away in the demo below, and this
-             line says which is which: "harness" means nothing to a reader who
-             has not met `raxol code`. The chains and the assets used to be
-             spelled out here and are not any more -- the reach table on
-             /payments carries them, derived from the solver, and naming a
-             subset in the hero dates the sentence every time one is added. --%>
         <p class="screen-sub">
-          TEA runtime, agents, <span class="text-axol-coral">raxol code</span>,
-          and settlement as separate Hex packages.
+          Terminal, LiveView, SSH, MCP, Telegram, Watch, Speech; settlement in
+          <span class="text-axol-coral">raxol_payments</span>.
         </p>
 
 
@@ -1029,9 +1021,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-10 md:py-16 measure" aria-labelledby="surfaces-title">
       <div class="mb-6">
-        <h1 id="surfaces-title" class="heading-2xl mb-3">One module, <%= Capabilities.surface_count() %> targets.</h1>
+        <h1 id="surfaces-title" class="heading-2xl mb-3">Seven projections of one TEA model.</h1>
         <p class="body-text max-w-2xl">
-          Same TEA model. Terminal, browser, SSH, MCP, Telegram, Watch, Speech.
+          Terminal cells, LiveView DOM, SSH ANSI, MCP JSON, Telegram, Watch, Speech.
         </p>
       </div>
 
@@ -1167,10 +1159,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
          about this deployment, so it is stated as one, in body text. --%>
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="ssh-deep-title">
       <div class="max-w-[65ch]">
-        <h1 id="ssh-deep-title" class="heading-2xl mb-3">Serve over SSH.</h1>
+        <h1 id="ssh-deep-title" class="heading-2xl mb-3">SSH is a surface.</h1>
         <p class="body-text mb-6">
-          Every app can be an SSH surface. Each session is a supervised BEAM
-          process.
+          The same app runs behind an Erlang <code class="text-axol-coral">:ssh</code>
+          daemon. Each channel is a supervised BEAM process.
         </p>
 
         <div class="mb-6">
@@ -1183,10 +1175,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
 
         <ul class="detail-text space-y-2 leading-relaxed list-disc list-inside mb-6">
-          <li>Auto-generated host keys, no setup</li>
-          <li>Supervised channel per connection</li>
-          <li>Survives client disconnects</li>
-          <li>One line to enable in your app</li>
+          <li>Host keys generated on first boot</li>
+          <li>Channel process per connection</li>
+          <li>Disconnects tear down session state</li>
+          <li>Enable with <code class="text-axol-coral">Raxol.SSH.Server</code></li>
         </ul>
 
         <p class="body-text-dim">
@@ -1249,12 +1241,12 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="agent-deep-title">
       <div class="mb-8">
-        <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA apps.</h1>
+        <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA processes.</h1>
         <p class="body-text max-w-2xl">
-          Agents use the same <span class="text-axol-coral">init</span> /
+          <span class="text-axol-coral">init</span> /
           <span class="text-axol-coral">update</span> /
-          <span class="text-axol-coral">view</span> shape as UIs. Headless
-          agents skip view. OTP supplies supervision, messaging, hot reload,
+          <span class="text-axol-coral">view</span> is the contract. Headless
+          agents return no view. OTP supplies supervision, messaging, hot reload,
           swarm discovery.
         </p>
       </div>
@@ -1303,11 +1295,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="coding-agent-title">
       <div class="mb-8">
-        <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol code speaks ACP.</h1>
+        <h1 id="coding-agent-title" class="heading-2xl mb-3">raxol code is an ACP server.</h1>
         <p class="body-text max-w-2xl">
-          Open it from any ACP editor.
+          TUI, headless mode, MCP, and ACP editor sessions share one journal.
           <a href="https://agentclientprotocol.com" class="text-sky">agentclientprotocol.com</a>
-          lists raxol code. One loop serves four surfaces:
+          lists raxol code.
         </p>
       </div>
 
@@ -1417,8 +1409,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         routes: routes(),
         payment_actions: payment_actions(),
         action_groups: action_groups(),
-        show_future_svm:
-          not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
+        show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
       )
 
@@ -1426,13 +1417,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
         <h1 id="payments-title" class="heading-2xl mb-3">
-          Agents settle privately through
-          <a href="https://xochi.fi" rel="noopener" class="text-sky">xochi.fi</a>.
+          Spend gate, signed intent, solver receipt.
         </h1>
         <p class="body-text max-w-2xl">
-          Fees follow trust score and asset type. CI pins them to
-          <code>Raxol.Payments.FeeSchedule</code>. Payments:
-          <%= @payments_version %>; core: 2.6.
+          <code>Raxol.Payments.Router.select/1</code> picks x402,
+          <a href="https://xochi.fi" rel="noopener" class="text-sky">Xochi</a>,
+          or relay. Fees come from <code>Raxol.Payments.FeeSchedule</code>.
+          Payments: <%= @payments_version %>; core: 2.6.
         </p>
       </div>
 
