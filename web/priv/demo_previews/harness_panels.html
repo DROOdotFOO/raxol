@@ -11,4 +11,18 @@
 <span style="color: #ffffff">││Wire MemoryPanel to state_change stream</span>  <span style="color: #ffffff">todo</span>       <span style="color: #ffffff">││Fold</span>
 <span style="color: #ffffff">││Add reattach replay indicator</span>            <span style="color: #ffffff">todo</span>       <span style="color: #ffffff">│└────</span>
 <span style="color: #ffffff">│└────────────────────────────────────────────────────┘</span>    <span style="color: #ffffff">│</span>
-<span style="color: #ffffff">└──────────────────────────────────────────────────────────┘</span></pre>
+<span style="color: #ffffff">└──────────────────────────────────────────────────────────┘</span>
+                                                            
+<span style="color: #ffffff">┌──────────────────────────────────────────┐</span>  <span style="color: #ffffff">┌────────────┐</span>
+<span style="color: #ffffff">│</span><span style="font-weight: bold; color: #ffffff">Rules</span>                                     <span style="color: #ffffff">│</span>  <span style="color: #ffffff">│</span><span style="font-weight: bold; color: #ffffff">Memory</span>      <span style="color: #ffffff">│</span>
+<span style="color: #ffffff">│</span><span style="font-weight: bold; color: #ffff00">● HARD  when approval_requested is pending → </span><span style="color: #ffffff">│Key</span><span style="font-weight: bold; color: #ffff00"> block fu</span><span style="color: #ffffff">│</span>
+<span style="color: #ffffff">│</span><span style="font-weight: bold; color: #ffff00">● HARD  when steer command received mid-turn </span><span style="color: #ffffff">│</span><span style="font-weight: bold; color: #ffff00"> then inject</span><span style="color: #ffffff">│</span>
+<span style="color: #ffffff">│○ soft  when turn_completed carries usage → t│session_id t│</span>
+<span style="color: #ffffff">│</span>                                          <span style="color: #ffffff">│</span>  <span style="color: #ffffff">│active_gate</span> <span style="color: #ffffff">│</span>
+<span style="color: #ffffff">│</span>                                          <span style="color: #ffffff">│</span>  <span style="color: #ffffff">│turns_complet</span>
+<span style="color: #ffffff">│</span>                                          <span style="color: #ffffff">│</span>  <span style="color: #ffffff">│trust</span>       <span style="color: #ffffff">│</span>
+<span style="color: #ffffff">└──────────────────────────────────────────┘</span>  <span style="color: #ffffff">└────────────┘</span>
+                                                            
+<span style="color: #ffffff">⚠ unresolved: which retry class covers a stalled probe_c2 ex</span>
+                                                            
+<span style="color: #ffffff">[r] toggle residual</span>                                         </pre>

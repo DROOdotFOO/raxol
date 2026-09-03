@@ -165,7 +165,39 @@ defmodule GenLandingFrames do
   @hero_dir Path.expand("../web/priv/hero_frames", __DIR__)
   @preview_dir Path.expand("../web/priv/demo_previews", __DIR__)
 
-  @preview_size {60, 14}
+  @preview_width 60
+
+  # A card records at its own demo's content height rather than at one global
+  # size. Every demo but two overflowed the old 60x14, so 39 of the 41 cards
+  # shipped cut through a box border or a glyph row -- Button stopped after
+  # "Last: none" with no bottom edge, Virtual FS ended on a bare column rule.
+  # A catalog selling a component library cannot have its thumbnails look like
+  # rendering faults.
+  #
+  # The height is MEASURED, not listed. A listed map is what this replaced,
+  # and it covered twelve of the thirty-nine demos that needed it: a demo
+  # whose content grows silently goes back to shipping a cut card. Here each
+  # demo boots once at @preview_probe_height, the last row holding any
+  # non-blank cell is taken, and the demo is re-booted at that height to
+  # record. Re-booting rather than trimming the tall render matters: a demo
+  # that lays out against the terminal height (Viewport, REPL, Scroll Anchor)
+  # renders differently at 40 rows than at its own, so the recorded frame has
+  # to come from a terminal that is already the right size.
+  @preview_probe_height 48
+
+  # 34 is the tallest demo whose content is a FIXED size (Markdown and Harness
+  # Tool Blocks, both exactly 34), so every demo that can close its boxes gets
+  # the rows to close them.
+  #
+  # The cap exists for the one demo that cannot: CodeBlock is a viewport onto a
+  # document, and it fills whatever height it is handed -- 37 rows measured in a
+  # 40-row terminal, 43 in a 60-row one. There is no height at which its frame
+  # closes, so it is cut wherever this lands, and a cut edge on a code viewport
+  # reads as "the document continues" rather than as a broken box. Without a cap
+  # it would instead track the probe height, which is an arbitrary number that
+  # would then set the height of its whole grid row.
+  @preview_max_height 34
+
   @hero_poll_ms 10
   @hero_frame_timeout_ms 1500
 
@@ -543,21 +575,66 @@ defmodule GenLandingFrames do
   end
 
   defp previews(dir \\ @preview_dir) do
-    {w, h} = @preview_size
-
     for comp <- Raxol.Playground.Catalog.list_components() do
       slug = slug(comp.name)
-      id = String.to_atom("preview_#{slug}")
 
-      case safe_start(comp.module, id, w, h) do
-        {:ok, id} ->
-          record_preview(dir, slug, id, comp)
-          Raxol.Headless.stop(id)
-
-        {:error, reason} ->
-          IO.puts("SKIP  #{comp.name}: #{inspect(reason)}")
+      with {:ok, height} <- preview_height(comp.module, slug),
+           id = String.to_atom("preview_#{slug}"),
+           {:ok, id} <- safe_start(comp.module, id, @preview_width, height) do
+        record_preview(dir, slug, id, comp)
+        Raxol.Headless.stop(id)
+      else
+        {:error, reason} -> IO.puts("SKIP  #{comp.name}: #{inspect(reason)}")
       end
     end
+  end
+
+  # The rows this demo needs, capped. An animated demo is measured across the
+  # same ticks it records, and the tallest wins: measuring frame one alone
+  # would let a later frame's content fall off the bottom, and sizing each
+  # frame to itself would make the card jump as it plays.
+  defp preview_height(module, slug) do
+    id = String.to_atom("probe_#{slug}")
+
+    case safe_start(module, id, @preview_width, @preview_probe_height) do
+      {:ok, id} ->
+        rows = content_rows(id, module)
+        Raxol.Headless.stop(id)
+        {:ok, rows |> max(1) |> min(@preview_max_height)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp content_rows(id, module) do
+    case interval_messages(id, module) do
+      [] ->
+        last_content_row(id)
+
+      [{_interval_ms, msgs} | _] ->
+        for _tick <- 1..@preview_frames do
+          for msg <- msgs, do: :ok = Raxol.Headless.send_message(id, msg)
+          last_content_row(id)
+        end
+        |> Enum.max()
+    end
+  end
+
+  # One-based, so the result is the number of rows that must be kept for the
+  # last non-blank one to survive.
+  defp last_content_row(id) do
+    {:ok, %Raxol.Terminal.ScreenBuffer{cells: rows}} = Raxol.Headless.get_buffer(id)
+
+    rows
+    |> Enum.with_index(1)
+    |> Enum.reduce(0, fn {row, index}, last ->
+      if blank_row?(row), do: last, else: index
+    end)
+  end
+
+  defp blank_row?(row) do
+    Enum.all?(row, &(&1.char in [nil, "", " "]))
   end
 
   # A static demo writes one still (<slug>.html); an animated one writes a

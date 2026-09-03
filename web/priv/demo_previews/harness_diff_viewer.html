@@ -11,4 +11,23 @@
 ─────────────────────── ⋯ 8 unchanged lines ⋯ ──────────────
 <span style="color: #ffffff"> </span>12<span style="color: #ffffff">   </span>def<span style="color: #ffffff"> </span><span style="font-weight: bold">currency_symbol</span>(:gbp),<span style="color: #ffffff"> </span>do:<span style="color: #ffffff"> </span>&quot;£&quot;                    
 <span style="color: #ffffff"> </span>13<span style="color: #ffffff"> </span>                                                        
-<span style="color: #ffffff"> </span>14<span style="color: #ffffff">   </span>def<span style="color: #ffffff"> </span><span style="font-weight: bold">calculate</span>(items)<span style="color: #ffffff"> </span>do                               </pre>
+<span style="color: #ffffff"> </span>14<span style="color: #ffffff">   </span>def<span style="color: #ffffff"> </span><span style="font-weight: bold">calculate</span>(items)<span style="color: #ffffff"> </span>do                               
+▌15<span style="color: #ffffff"> </span>    IO.inspect(items, label: &quot;items&quot;)<span style="color: #ffffff">                   </span>
+▌16<span style="color: #ffffff">                                                         </span>
+<span style="color: #ffffff"> </span>17<span style="color: #ffffff">     </span>items                                               
+<span style="color: #ffffff"> </span>                                                           
+<span style="color: #ffffff"> </span>18<span style="color: #ffffff">     </span>|&gt;<span style="color: #ffffff"> </span>Enum.map(&amp;<span style="color: #ffffff"> </span>&amp;1.price)                             
+<span style="color: #ffffff"> </span>                                                           
+<span style="color: #ffffff"> </span>19<span style="color: #ffffff">     </span>|&gt;<span style="color: #ffffff"> </span>Enum.sum()                                       
+<span style="color: #ffffff"> </span>20<span style="color: #ffffff">   </span>end                                                   
+<span style="color: #ffffff"> </span>21<span style="color: #ffffff"> </span>                                                        
+─────────────────────── ⋯ 2 unchanged lines ⋯ ──────────────
+<span style="color: #ffffff"> </span>24<span style="color: #ffffff">   </span>end                                                   
+<span style="color: #ffffff"> </span>25<span style="color: #ffffff"> </span>end                                                     
+<span style="color: #ffffff"> </span>26<span style="color: #ffffff"> </span>                                                        
+                                                            
+<span style="color: #ffffff">────────────────────────────────────────────────────────────</span>
+                                                            
+<span style="color: #ffffff">Sample: refactor + folding (1/8)  |  Mode: auto (rendering: </span>
+                                                            
+<span style="color: #ffffff">[s] next sample  [m] cycle mode  [w] toggle width  [f] toggl</span></pre>
