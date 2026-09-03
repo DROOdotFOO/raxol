@@ -23,7 +23,7 @@ defmodule Raxol.CLI.New do
     end
   end
 
-  def run(_), do: err("usage: raxol new <app_name>")
+  def run(_), do: err("usage: raxol new <app_name> (requires local Elixir/Mix)")
 
   defp generate(name) do
     mod = Macro.camelize(name)
@@ -36,7 +36,7 @@ defmodule Raxol.CLI.New do
     IO.puts("""
     Created #{name}/
 
-    Next:
+    Next (requires local Elixir/Mix):
       cd #{name}
       mix deps.get
       mix run -e "#{mod}.start()"
@@ -121,7 +121,7 @@ defmodule Raxol.CLI.New do
     """
     # #{mod}
 
-    A Raxol terminal app.
+    A Raxol terminal app. Requires local Elixir/Mix.
 
     ## Run
 

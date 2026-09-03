@@ -51,10 +51,16 @@ defmodule Raxol.CLI do
     mode = if credentials?(), do: :live, else: :mock
 
     if mode == :mock do
-      IO.puts(
-        "No AI credentials found (set AI_API_KEY or a provider key). " <>
-          "Running with mock responses."
-      )
+      IO.puts("""
+      No provider connected. Mock mode is active.
+
+      Connect:
+        raxol login
+        raxol setup --provider anthropic --op op://Vault/Item/api_key
+
+      Try anyway:
+        type a prompt, or /exit
+      """)
     end
 
     loop([], mode)
@@ -244,7 +250,7 @@ defmodule Raxol.CLI do
       setup         Connect/inspect a provider headlessly (CI, remote boxes)
       doctor        Report this install: build, runtime, providers, config
       playground    Browse the interactive component catalog
-      new [name]    Scaffold a new Raxol application
+      new [name]    Scaffold an Elixir/Mix Raxol application
       help          Show this help
 
     Run `raxol` with no command to start the agent.

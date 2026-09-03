@@ -210,6 +210,41 @@ defmodule Raxol.Agent.Setup.CLI do
       note = if p[:note], do: "  — #{p.note}", else: ""
       IO.puts("  #{mark} #{p.label}#{src}#{note}")
     end)
+
+    IO.puts("")
+    IO.puts(next_steps(providers))
+  end
+
+  defp next_steps(providers) do
+    ready? = Enum.any?(providers, & &1.available?)
+
+    if ready? do
+      """
+      next:
+        start the agent:
+          raxol
+
+        coding TUI:
+          raxol code
+
+        inspect install:
+          raxol doctor
+      """
+    else
+      """
+      next:
+        connect a provider:
+          raxol login
+          raxol setup --provider anthropic --op op://Vault/Item/api_key
+
+        try offline:
+          raxol
+
+        inspect install:
+          raxol doctor
+      """
+    end
+    |> String.trim_trailing()
   end
 
   # -- errors -----------------------------------------------------------------
