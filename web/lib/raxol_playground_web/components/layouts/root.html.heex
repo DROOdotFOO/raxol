@@ -5,26 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0a0a0c" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <meta name="description" content="Write one app. Render it to a terminal, a browser, or an agent. Multi-surface runtime for Elixir on OTP." />
-    <meta property="og:title" content="Raxol: multi-surface application runtime for Elixir" />
-    <meta property="og:description" content="One TEA module renders to terminal, browser (LiveView), SSH, and MCP (agents). Crash isolation, hot reload, agentic commerce, distributed swarm." />
+    <% page_description = assigns[:page_description] || "Write one app. Render it to a terminal, a browser, or an agent. Multi-surface runtime for Elixir on OTP." %>
+    <% og_title = assigns[:og_title] || "Raxol: multi-surface application runtime for Elixir" %>
+    <% canonical_url = assigns[:canonical_url] || "https://raxol.io/" %>
+    <meta name="description" content={page_description} />
+    <meta property="og:title" content={og_title} />
+    <meta property="og:description" content={page_description} />
     <meta property="og:image" content="https://raxol.io/images/social-preview.png" />
-    <meta property="og:url" content="https://raxol.io" />
+    <meta property="og:url" content={canonical_url} />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Raxol: multi-surface application runtime for Elixir" />
-    <meta name="twitter:description" content="One TEA module renders to terminal, browser (LiveView), SSH, and MCP (agents). Crash isolation, hot reload, agentic commerce, distributed swarm." />
+    <meta name="twitter:title" content={og_title} />
+    <meta name="twitter:description" content={page_description} />
     <meta name="twitter:image" content="https://raxol.io/images/social-preview.png" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="canonical" href="https://raxol.io" />
+    <link rel="canonical" href={canonical_url} />
     <%!-- Self-hosted Monaspace variable fonts. Preload the mono cut (used everywhere)
          so first-paint doesn't fall back to Fira Code. Neon/Xenon load lazily on use. --%>
     <link rel="preload" href={~p"/fonts/MonaspaceArgon-Var.woff2"} as="font" type="font/woff2" crossorigin="anonymous" />
-    <link rel="preload" href={~p"/fonts/MonaspaceNeon-Var.woff2"} as="font" type="font/woff2" crossorigin="anonymous" />
-    <link rel="preload" href={~p"/fonts/MonaspaceXenon-Var.woff2"} as="font" type="font/woff2" crossorigin="anonymous" />
     <.live_title suffix=" · Raxol">
       <%= assigns[:page_title] || "Raxol Playground" %>
     </.live_title>

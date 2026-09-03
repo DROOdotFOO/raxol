@@ -215,22 +215,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # `settle.ex` cannot be expected to infer which noun it is answering, so each
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
-                        {"settle", "settle.ex",
-                         "gate, EIP-712, solver, explorers", @settle_source},
-                        {"pulse", "pulse.exs", "one module, four surfaces",
-                         @pulse_source},
-                        {"halo", "halo.exs", "the mark, as a program",
-                         @halo_source},
+                        {"settle", "settle.ex", "gate, EIP-712, solver, explorers",
+                         @settle_source},
+                        {"pulse", "pulse.exs", "one module, four surfaces", @pulse_source},
+                        {"halo", "halo.exs", "the mark, as a program", @halo_source},
                         {"harness", "harness.ex",
-                         "a Virtuals ACP job, worked by the coding agent",
-                         @harness_source}
+                         "a Virtuals ACP job, worked by the coding agent", @harness_source}
                       ] do
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
 
                     lines = source |> String.trim() |> String.split("\n")
 
-                    {name, file, module, blurb,
-                     Makeup.highlight_inner_html(source),
+                    {name, file, module, blurb, Makeup.highlight_inner_html(source),
                      %{
                        lines: length(lines),
                        cols: lines |> Enum.map(&String.length/1) |> Enum.max()
@@ -304,7 +300,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         aria-label="Main navigation"
       >
         <a :for={{href, label} <- nav_links()} href={href} class="nav-link">{label}</a>
-        <a :for={{path, label} <- topic_links()} href={path} class="nav-link">{label}</a>
       </nav>
     </header>
     """
@@ -314,10 +309,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def screen_hero(assigns) do
     assigns =
-      assign(assigns,
-        halo_faces: @halo_faces,
-        install_command: @install_command
-      )
+      assign(assigns, halo_faces: @halo_faces, install_command: @install_command)
 
     ~H"""
     <%!-- The brand mark beside the claim rather than above it: an upright box
@@ -343,15 +335,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <h1 class="screen-title">
           One Elixir module.
           <span class="screen-title__claim text-axol-coral">
-            Seven surfaces, one runtime.
+            Every surface, one runtime.
           </span>
         </h1>
 
         <p class="screen-sub">
-          Write the app once. Raxol projects it to terminal, LiveView, SSH, MCP,
-          Telegram, Watch, and Speech. <span class="text-axol-coral">raxol_payments</span>
-          gates the signature path.
+          Runtime, agent harness, and payment rails run on OTP. Render to terminal,
+          LiveView, SSH, MCP, Telegram, Watch, and Speech.
         </p>
+
 
 
         <div class="screen-install">
@@ -498,12 +490,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <footer class="screen-footer" role="contentinfo">
       <div class="screen-bar">
-        <nav class="screen-topics" aria-label="Deep dives">
-          <a :for={{path, label} <- primary_topic_links()} href={path} class="topic-link">{label}</a>
-        </nav>
-
         <span class="screen-meta">
           <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
+          <a href="/token" class="subtle-link">$RAXOL</a>
           <.github_mark />
         </span>
       </div>
@@ -534,31 +523,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     """
   end
 
-  # The deep-dive pages, in one place so the header and footer cannot list
-  # different ones. `TopicLive` owns the paths; this only borrows them.
-  defp topic_links, do: RaxolPlaygroundWeb.TopicLive.links()
-
-  @primary_topic_paths ["/surfaces", "/coding-agent", "/payments", "/token"]
-  defp primary_topic_links do
-    Enum.filter(topic_links(), fn {path, _label} ->
-      path in @primary_topic_paths
-    end)
-  end
-
-  # One list for both site headers. The landing carried four links and the
-  # topic pages six, so the navigation changed shape when a reader crossed
-  # between them and neither list knew the other existed.
-  # Two, because two is what the site actually has to offer a first-time
-  # reader: somewhere to watch it run, and somewhere to read the API.
-  #
-  # It carried six. Playground, Gallery and Demos were three labels for one
-  # job, and no visitor could tell them apart from the words -- Demos was a
-  # strictly smaller copy of Gallery over the same catalog, and is gone;
-  # Playground is one link inside Components, where someone who wants the
-  # fuller tool is already standing. Skill and GitHub are reference material
-  # for a reader who has already decided, so they moved to the footer, GitHub
-  # as its mark. Nothing here was padded back to a round number: a third item
-  # added to reach one would be the same defect in a smaller font.
+  # One list for both site headers: run it, or read the API. Product pages live
+  # in the hero/demo path and in the docs, not as a second table of contents.
   @nav_links [
     {"/gallery", "Components"},
     {"https://hexdocs.pm/raxol", "Docs"}
@@ -982,8 +948,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @doc "Line and column counts of one example's source, as the pane sizes from."
   def example_grid(name) do
-    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _b, _c,
-                                                              grid} ->
+    Enum.find_value(@hero_examples, %{lines: 1, cols: 1}, fn {n, _t, _m, _b, _c, grid} ->
       n == name && grid
     end)
   end
@@ -1432,8 +1397,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         routes: routes(),
         payment_actions: payment_actions(),
         action_groups: action_groups(),
-        show_future_svm:
-          not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
+        show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
       )
 
@@ -1441,13 +1405,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <section class="landing-section payments-deep py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
         <h1 id="payments-title" class="heading-2xl mb-3">
-          Spend gate, signed intent, solver receipt.
+          Agents that pay invoices.
         </h1>
         <p class="body-text max-w-2xl">
-          <code>Raxol.Payments.Router.select/1</code> picks x402,
-          <a href="https://xochi.fi" rel="noopener" class="text-sky">Xochi</a>,
-          or relay. Fees come from <code>Raxol.Payments.FeeSchedule</code>.
-          Payments: <%= @payments_version %>; core: 2.6.
+          Agents can pay HTTP 402 invoices under ledger-enforced spend gates.
+          Raxol chooses the rail, signs the intent, and records the receipt.
+        </p>
+        <p class="caption-text mt-3">
+          Payments package: <%= @payments_version %>; core: 2.6.
+          Stablecoin fees run 10-22 bps by trust tier; volatile assets run 22-40 bps.
         </p>
       </div>
 
@@ -1632,8 +1598,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl mb-4">
-        Project token on <%= @token.chain_name %>. Payments settle in
-        stablecoins, not $<%= @token.symbol %>.
+        ${@token.symbol} is the project token, not the payment rail. Agents pay
+        invoices in stablecoins; payment corridors quote, route, and settle in
+        those assets.
       </p>
 
       <div class="reach reach--compact">

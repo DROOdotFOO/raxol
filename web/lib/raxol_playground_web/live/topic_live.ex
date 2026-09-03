@@ -21,14 +21,26 @@ defmodule RaxolPlaygroundWeb.TopicLive do
 
   # The router names each topic as a `live_action`, so the URL and the atom
   # this module matches on are declared in one place (the router) and cannot
-  # drift apart. `{path, page title, nav label}`.
+  # drift apart. `{path, page title, nav label, description}`.
   @topics %{
-    surfaces: {"/surfaces", "Surfaces", "Surfaces"},
-    ssh: {"/ssh", "SSH", "SSH"},
-    agent: {"/agents", "Agents", "Agents"},
-    coding_agent: {"/coding-agent", "raxol code", "raxol code"},
-    payments: {"/payments", "Agent payments", "Payments"},
-    token: {"/token", "$RAXOL", "$RAXOL"}
+    surfaces:
+      {"/surfaces", "Surfaces", "Surfaces",
+       "See how one Raxol app projects to terminal, LiveView, SSH, MCP, Telegram, Watch, and Speech from one Elixir module."},
+    ssh:
+      {"/ssh", "SSH", "SSH",
+       "Run a Raxol app over SSH with an Erlang daemon, supervised channels, tenant directories, and explicit resource caps."},
+    agent:
+      {"/agents", "Agents", "Agents",
+       "Build Raxol agents with a terminal UI, tool calls, MCP projection, and OTP process isolation."},
+    coding_agent:
+      {"/coding-agent", "raxol code", "raxol code",
+       "Use raxol code as an interactive coding-agent TUI or headless command with JSON events and MCP tools."},
+    payments:
+      {"/payments", "Agent payments", "Payments",
+       "See how Raxol agents pay HTTP 402 invoices with ledger-enforced spend gates, signed intents, solver receipts, and stablecoin settlement."},
+    token:
+      {"/token", "$RAXOL", "$RAXOL",
+       "Read the project-token facts for Raxol and how the token differs from the stablecoin payment rails agents use."}
   }
 
   @order [:surfaces, :ssh, :agent, :coding_agent, :payments, :token]
@@ -36,20 +48,23 @@ defmodule RaxolPlaygroundWeb.TopicLive do
   @doc "Every topic as `{path, label}`, in nav order."
   def links do
     Enum.map(@order, fn topic ->
-      {path, _title, label} = @topics[topic]
+      {path, _title, label, _description} = @topics[topic]
       {path, label}
     end)
   end
 
   @impl true
   def mount(_params, _session, socket) do
-    {_path, title, _label} = Map.fetch!(@topics, socket.assigns.live_action)
+    {path, title, _label, description} = Map.fetch!(@topics, socket.assigns.live_action)
 
     {:ok,
      assign(socket,
        # The layout already appends " · Raxol", so naming the brand here put it
        # in the tab twice.
        page_title: title,
+       page_description: description,
+       og_title: "Raxol #{String.downcase(title)}",
+       canonical_url: "https://raxol.io#{path}",
        title: title,
        mobile_menu_open: false,
        xochi_matrix: xochi_matrix(socket.assigns.live_action)
@@ -61,9 +76,7 @@ defmodule RaxolPlaygroundWeb.TopicLive do
   # mount total put four unrelated pages behind a third-party endpoint's
   # availability; the branch is cheaper than that coupling.
   defp xochi_matrix(:payments) do
-    XochiCapabilities.get(
-      Application.get_env(:raxol_playground, :xochi_capabilities)
-    )
+    XochiCapabilities.get(Application.get_env(:raxol_playground, :xochi_capabilities))
   end
 
   defp xochi_matrix(_topic), do: nil

@@ -1137,6 +1137,7 @@ html {
 
 @media (max-width: 700px) {
   .rung { grid-template-columns: 1fr 1fr; gap: 0.15rem 1rem; }
+  .rung--head span:nth-child(n + 3) { display: none; }
 }
 
 /* Two columns, for the ladders that are a label and one value: the routing
@@ -1286,7 +1287,7 @@ html {
 
 .reach-scroll::-webkit-scrollbar { display: none; }
 
-.reach-grid { min-width: 500px; }
+.reach-grid { min-width: 0; }
 
 .reach-row {
   display: grid;
@@ -1315,6 +1316,15 @@ html {
 .reach-row--future .reach-row__note { color: var(--text-muted); font-size: 0.72rem; }
 
 .reach-toks { display: flex; gap: 0.28rem; flex-wrap: wrap; }
+
+@media (max-width: 700px) {
+  .reach-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .reach-toks { margin-top: 0.25rem; }
+}
 
 .tok {
   padding: 0.06em 0.38em;
@@ -2633,6 +2643,7 @@ input[type="range"]::-moz-range-thumb {
   text-wrap: pretty;
 }
 
+
 /* The demo is the centerpiece, but it no longer takes ALL the height the text
    does not: capped, so the room freed by folding the install command into the
    intro reads as whitespace under the demo rather than as empty panes. That
@@ -2833,26 +2844,11 @@ input[type="range"]::-moz-range-thumb {
 
 .screen-footer .screen-bar {
   flex-wrap: wrap;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 0.75rem 1.5rem;
 }
 
-.screen-topics { display: flex; flex-wrap: wrap; gap: 1.1rem; }
 
-.topic-link {
-  color: var(--text-muted);
-  text-decoration: none;
-  border-bottom: 1px solid transparent;
-}
-
-.topic-link:hover, .topic-link:focus-visible {
-  color: var(--axol-coral);
-  border-bottom-color: currentColor;
-}
-
-/* The gap does the separating the middle dots used to. Wider between the
-   destinations than inside the Hex/GitHub pair, so the row reads as grouped
-   navigation rather than a run-on sentence. */
 .screen-meta {
   color: var(--text-dim);
   display: inline-flex;

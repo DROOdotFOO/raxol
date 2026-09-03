@@ -20,6 +20,12 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
     socket =
       socket
       |> assign(:page_title, "Gallery")
+      |> assign(
+        :page_description,
+        "Browse 41 terminal-first Raxol UI components for Elixir apps: inputs, overlays, layouts, charts, agent harness views, and effects."
+      )
+      |> assign(:og_title, "Raxol component gallery")
+      |> assign(:canonical_url, "https://raxol.io/gallery")
       |> assign(:components, components)
       |> assign(:total_count, length(components))
       |> assign(:categories, Catalog.list_categories())
@@ -66,10 +72,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   def handle_event("filter_category", %{"category" => category}, socket) do
-    {:noreply,
-     refilter(
-       assign(socket, :active_category, String.to_existing_atom(category))
-     )}
+    {:noreply, refilter(assign(socket, :active_category, String.to_existing_atom(category)))}
   rescue
     ArgumentError -> {:noreply, socket}
   end
@@ -87,10 +90,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   def handle_event("filter_complexity", %{"level" => level}, socket) do
-    {:noreply,
-     refilter(
-       assign(socket, :complexity_filter, String.to_existing_atom(level))
-     )}
+    {:noreply, refilter(assign(socket, :complexity_filter, String.to_existing_atom(level)))}
   rescue
     ArgumentError -> {:noreply, socket}
   end
@@ -229,9 +229,9 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <%= if @view_mode == "grid" && @grouped do %>
           <section :if={@featured != []} class="mb-10" aria-labelledby="featured-heading">
-            <h2 id="featured-heading" class="font-mono font-semibold text-pearl mb-1">Start here</h2>
+            <h2 id="featured-heading" class="font-mono font-semibold text-pearl mb-1">Core demos</h2>
             <p class="font-mono detail-text mb-3">
-              Five that show the range: a stateful component, a rich text surface, a live chart, an overlay, and the agent harness.
+              Table, modal, markdown, chart, and harness components.
             </p>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
               <%= for comp <- @featured do %>
@@ -297,6 +297,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
         data-theme="synthwave84"
         aria-hidden="true"
         tabindex="-1"
+        inert
         phx-hook={if length(@preview.frames) > 1, do: "CardLoop"}
         data-frame-ms={@preview.interval_ms}
       ><%= if length(@preview.frames) > 1 do %><div

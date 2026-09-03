@@ -138,9 +138,15 @@ Unix/macOS backend uses a termbox2 NIF; Windows uses a pure Elixir driver (usabl
 
 ## Documentation
 
-Start with the [documentation index](docs/README.md), or jump to the
-[Quickstart](docs/getting-started/QUICKSTART.md), [feature catalog](docs/features/README.md),
-[package map](docs/PACKAGES.md), or [API docs](https://hexdocs.pm/raxol).
+Start with the [documentation index](docs/README.md), or jump to:
+
+- [Quickstart](docs/getting-started/QUICKSTART.md)
+- [Components](docs/getting-started/COMPONENT_GALLERY.md)
+- [Surfaces](docs/guides/SURFACES.md)
+- [Coding Agent](docs/features/CODING_AGENT.md)
+- [Payments](docs/features/AGENTIC_COMMERCE.md)
+- [$RAXOL token facts](https://raxol.io/token)
+- [API docs](https://hexdocs.pm/raxol)
 
 ## Development
 
