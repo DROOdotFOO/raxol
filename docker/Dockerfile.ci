@@ -1,4 +1,4 @@
-FROM elixir:1.20.2-otp-29
+FROM elixir:1.20.2-otp-29@sha256:c915d900894e1d664cd8ed72fd2c38fce72b612cc1757d57f86a0cc62e62dd79
 
 # Install basic dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
