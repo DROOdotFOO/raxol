@@ -13,8 +13,10 @@ defmodule RaxolPlayground.NetworkMarks do
   a logo either way.
 
   Order is the order the row renders, which is chain id ascending with Tron
-  last: the six EVM chains are corridors in `Raxol.Payments.Assets`, and Tron
-  is reached over the relay rail rather than that table.
+  last. Six of the EVM chains are corridors in `Raxol.Payments.Assets`. Two
+  entries are not, and are here for different reasons: Tron is reached over
+  the relay rail rather than that table, and Arc is a chain raxol builds on
+  without settling a corridor across yet.
 
   `priv/network_marks/README.md` records where the files came from.
   """
@@ -24,12 +26,22 @@ defmodule RaxolPlayground.NetworkMarks do
   # `{chain id, display name, file}`. The id is what ties a row to the asset
   # registry: a test holds every EVM chain that carries a token against this
   # list, so a corridor added without a mark fails rather than rendering a
-  # network row that quietly omits a chain the product settles on.
+  # network row that quietly omits a chain the product settles on. The
+  # converse does not hold -- a mark may lead its corridor, which is what
+  # Tron and Arc do.
+  #
+  # Arc's id is the TESTNET one, which is what the venue integrates against
+  # today. Circle's public mainnet is 2026-09-16 and mints a new id, so this
+  # line re-sorts when it changes: 5042002 happens to sit between Robinhood
+  # Chain and Base, and the mainnet id is not known to land there. Named
+  # "Arc", not "Arc Testnet", because the row names chains and every other
+  # entry names one the same way, deployment aside.
   @sources [
     {1, "Ethereum", "ethereum.svg"},
     {10, "Optimism", "optimism.svg"},
     {137, "Polygon", "polygon.svg"},
     {4663, "Robinhood Chain", "robinhood.svg"},
+    {5_042_002, "Arc", "arc.svg"},
     {8453, "Base", "base.svg"},
     {42_161, "Arbitrum One", "arbitrum.svg"},
     {728_126_428, "Tron", "tron.svg"}
