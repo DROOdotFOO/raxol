@@ -1060,8 +1060,12 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     # Matrix rows from the data, stables before WETH, authored rail notes.
     assert payments =~ "source: live"
+    assert payments =~ "Five-minute cache; cached registry on fetch failure."
     assert payments =~ "Base"
     assert payments =~ "8453"
+    assert payments =~ "Arc (testnet)"
+    assert payments =~ "5042002"
+    assert payments =~ "Tron"
     assert payments =~ "TVM"
     assert payments =~ "relay rail"
     assert payments =~ ~r/USDC.*USDT.*WETH/s
@@ -1083,6 +1087,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute payments =~ "source: live"
     assert payments =~ "Robinhood Chain"
     assert payments =~ "Permit2 pull"
+
+    assert payments =~ "Arc (testnet)"
+    assert payments =~ "Tron"
   end
 
   # Pinned: these are the only strings on the site meant to be pasted into a
