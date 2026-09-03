@@ -25,7 +25,7 @@ defmodule Raxol.CLITest do
     # `login` shipped in the help text but not in `commands/0`, so anything
     # driving the declared list (completions, docs) could not see it.
     test "every command in the help text is also a declared command" do
-      for command <- ~w(agent code p acp login setup doctor playground new help) do
+      for command <- ~w(agent code p acp login setup doctor update playground new help) do
         assert command in CLI.commands(), "#{command} missing from commands/0"
       end
     end

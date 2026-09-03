@@ -7,6 +7,7 @@ binary. No Erlang, Elixir, or Node runtime needed at run time.
 npm install -g raxol
 raxol            # interactive AI agent
 raxol doctor     # what this install resolves: build, providers, config
+raxol update     # replace this binary with the latest verified release
 raxol playground # component catalog
 raxol new my_app # scaffold an app
 raxol help
@@ -35,6 +36,12 @@ disk, never a raw key.
 
 If something looks wrong, `raxol doctor` reports the build commit, the runtime,
 every provider it can see, and the config it resolved.
+
+`raxol` checks for a newer `raxol-cli-v*` GitHub Release once per day when
+started interactively and prompts before installing. `raxol update` runs the
+same path on demand: it downloads the matching platform binary, verifies
+`SHA256SUMS`, and replaces the installed binary in place. Restart `raxol` after
+it reports success. Set `RAXOL_NO_UPDATE_CHECK=1` to disable the entry prompt.
 
 ## How this package is put together
 
