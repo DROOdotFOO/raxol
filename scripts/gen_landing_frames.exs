@@ -131,33 +131,31 @@ end
 defmodule Settle do
   use Raxol.Core.Runtime.Application
 
-  @title "XOCHI RECEIPT  amount USDC 1.10"
-  @route "source Base Sepolia 84532  dest Arc Testnet 5042002"
-  @receipt [
-    "spend gate   before signature",
-    "intent       EIP-712 quote signed",
-    "execution    submitted to solver",
-    "source      base-sepolia.blockscout.com/tx",
-    "dest        testnet.arcscan.app/tx"
+  @rows [
+    {"amount", "USDC 1.10"},
+    {"source", "Base Sepolia 84532"},
+    {"dest", "Arc Testnet 5042002"},
+    {"spend gate", "before signature"},
+    {"intent", "EIP-712 quote signed"},
+    {"execution", "submitted to solver"},
+    {"source tx", "base-sepolia.blockscout.com/tx"},
+    {"dest tx", "testnet.arcscan.app/tx"}
   ]
   def init(_), do: %{t: 0}
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
   def subscribe(_), do: [subscribe_interval(200, :tick)]
 
   def view(m) do
-    at = rem(m.t, length(@receipt) + 1)
-
-    column style: %{gap: 0} do
-      [
-        text(@title, style: [:bold]),
-        text(@route, fg: :magenta),
-        column(do: Enum.with_index(@receipt, &row(&1, &2, at)))
-      ]
-    end
+    active = rem(m.t, length(@rows))
+    rows = Enum.with_index(@rows, &row(&1, &2, active))
+    column(do: [text("XOCHI RECEIPT", style: [:bold]) | rows])
   end
 
-  defp row(l, i, a), do: text("#{m(i, a)} #{l}", fg: :cyan)
-  defp m(i, a), do: if(i < a, do: "[OK]", else: "[  ]")
+  defp row({k, v}, i, active) do
+    cursor = if(i == active, do: ">", else: " ")
+    key = String.pad_trailing(k, 10)
+    text("#{cursor} [OK] #{key} #{v}", fg: :cyan)
+  end
 end
 
 defmodule GenLandingFrames do
@@ -317,14 +315,14 @@ defmodule GenLandingFrames do
   #          and one call per tick went by too fast to follow. All-done gets a
   #          single frame -- it is the one state with no spinner, so a second
   #          frame of it would be identical to the first.
-  #   settle five receipt rows plus the empty state close the loop. The route is
-  #          fixed, while the ok marker advances through the payment operator
-  #          receipt.
+  #   settle eight receipt rows; all are complete, and the cursor moves through
+  #          amount, route, spend gate, signature, solver submission, and
+  #          explorer receipt paths without inventing transaction hashes.
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63},
     {"halo", Halo, {70, 14}, 110, 48},
     {"harness", Harness, {36, 5}, 200, 10},
-    {"settle", Settle, {56, 7}, 200, 6}
+    {"settle", Settle, {56, 9}, 200, 8}
   ]
 
   defp hero(base \\ @hero_dir) do
