@@ -8,7 +8,7 @@ defmodule Raxol.CLI do
   which returns the process exit code.
   """
 
-  @commands ~w(agent code p acp login setup doctor playground new help)
+  @commands ~w(agent code p acp login setup doctor update playground new help)
 
   @doc "Dispatch `argv`, returning an exit code."
   @spec main([String.t()]) :: non_neg_integer()
@@ -35,6 +35,7 @@ defmodule Raxol.CLI do
   def main(["doctor" | rest]),
     do: with_app(fn -> Raxol.CLI.Doctor.run(rest) end)
 
+  def main(["update" | rest]), do: Raxol.CLI.Update.run(rest)
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
   def main([help]) when help in ~w(help --help -h), do: help()
@@ -51,15 +52,21 @@ defmodule Raxol.CLI do
   # Line-based stdio (not the full-screen terminal), so it works over a pipe and
   # needs no tty. `/exit` or EOF ends the session.
   defp run_agent(_args) do
-    IO.puts(banner())
-    mode = agent_mode()
+    case auto_update_prompt() do
+      :updated ->
+        0
 
-    if mode == :mock do
-      IO.puts(mock_mode_message())
+      :ok ->
+        IO.puts(banner())
+        mode = agent_mode()
+
+        if mode == :mock do
+          IO.puts(mock_mode_message())
+        end
+
+        loop([], mode)
+        0
     end
-
-    loop([], mode)
-    0
   end
 
   defp loop(history, mode) do
@@ -121,8 +128,7 @@ defmodule Raxol.CLI do
     [
       backend: Raxol.Agent.Backend.Mock,
       backend_opts: [
-        response:
-          "(mock) Connect a provider for real replies. You said: #{input}"
+        response: "(mock) Connect a provider for real replies. You said: #{input}"
       ]
     ]
   end
@@ -220,8 +226,12 @@ defmodule Raxol.CLI do
   # remote client, so it boots without that check. `--help`/`--sessions` are
   # answered by the launcher before either boot runs.
   defp run_code(args) do
-    boot = if "--ssh" in args, do: &serve_boot/0, else: &code_boot/0
-    Raxol.Agent.Code.Launcher.main(args, boot: boot)
+    if local_code_session?(args) and auto_update_prompt() == :updated do
+      0
+    else
+      boot = if "--ssh" in args, do: &serve_boot/0, else: &code_boot/0
+      Raxol.Agent.Code.Launcher.main(args, boot: boot)
+    end
   end
 
   defp code_boot do
@@ -250,18 +260,31 @@ defmodule Raxol.CLI do
   # Start the interactive component-catalog TUI. Needs a real terminal; over a
   # pipe it exits with a clear message rather than a crash.
   defp run_playground do
-    if interactive?() do
-      {:ok, _pid} = Raxol.start_link(Raxol.Playground.App, mouse: false)
+    cond do
+      !interactive?() ->
+        IO.puts(:stderr, "raxol playground requires an interactive terminal.")
+        1
 
-      receive do
-        :playground_done -> :ok
-      end
+      auto_update_prompt() == :updated ->
+        0
 
-      0
-    else
-      IO.puts(:stderr, "raxol playground requires an interactive terminal.")
-      1
+      true ->
+        {:ok, _pid} = Raxol.start_link(Raxol.Playground.App, mouse: false)
+
+        receive do
+          :playground_done -> :ok
+        end
+
+        0
     end
+  end
+
+  defp local_code_session?(args) do
+    "--ssh" not in args and Enum.all?(args, &(&1 not in ~w(--help -h --sessions)))
+  end
+
+  defp auto_update_prompt do
+    Raxol.CLI.Update.auto_prompt(prompt?: interactive?(false))
   end
 
   # Is there a terminal for a full-screen TUI to draw on?
@@ -326,6 +349,7 @@ defmodule Raxol.CLI do
       login         Connect an LLM provider (browser sign-in, or a key)
       setup         Connect/inspect a provider headlessly (CI, remote boxes)
       doctor        Report this install: build, runtime, providers, config
+      update        Update the installed binary from GitHub Releases
       playground    Browse the interactive component catalog
       new [name]    Scaffold an Elixir/Mix Raxol application
       help          Show this help
@@ -351,9 +375,7 @@ defmodule Raxol.CLI do
   @git_head Path.join([__DIR__, "..", "..", "..", "..", ".git", "HEAD"])
   if File.exists?(@git_head), do: @external_resource(@git_head)
 
-  @build_sha (case System.cmd("git", ["rev-parse", "--short", "HEAD"],
-                     stderr_to_stdout: true
-                   ) do
+  @build_sha (case System.cmd("git", ["rev-parse", "--short", "HEAD"], stderr_to_stdout: true) do
                 {sha, 0} -> String.trim(sha)
                 _ -> nil
               end)
