@@ -3,8 +3,10 @@ defmodule Raxol.Agent.Actions.CodeTest do
 
   alias Raxol.Agent.Action.ToolConverter
   alias Raxol.Agent.Actions.Code
+  alias Raxol.Agent.Lsp.Pool
   alias Raxol.Agent.Sandbox
 
+  @server Path.expand("../../../support/fake_lsp_server.py", __DIR__)
   setup do
     dir =
       Path.join(
@@ -76,6 +78,17 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert {:error, :outside_cwd} =
                Code.Write.run(%{path: "../escape", content: "x"}, %{})
     end
+
+    test "includes post-write diagnostics when LSP is available", %{dir: dir} do
+      assert {:ok, result} =
+               Code.Write.run(
+                 %{path: "new.toy", content: "def alpha\n  BROKEN thing\n"},
+                 %{lsp_pool: pool(dir)}
+               )
+
+      assert [%{severity: "error", line: 2, message: "this line is broken"}] =
+               result.diagnostics
+    end
   end
 
   describe "Edit" do
@@ -117,6 +130,23 @@ defmodule Raxol.Agent.Actions.CodeTest do
                  %{path: "dup.txt", old_string: "a", new_string: "b"},
                  %{}
                )
+    end
+
+    test "includes post-edit diagnostics when LSP is available", %{dir: dir} do
+      File.write!(Path.join(dir, "edit.toy"), "def alpha\n  fine\n")
+
+      assert {:ok, result} =
+               Code.Edit.run(
+                 %{
+                   path: "edit.toy",
+                   old_string: "fine",
+                   new_string: "BROKEN now"
+                 },
+                 %{lsp_pool: pool(dir)}
+               )
+
+      assert [%{severity: "error", line: 2, message: "this line is broken"}] =
+               result.diagnostics
     end
 
     test "replace_all replaces every occurrence", %{dir: dir} do
@@ -557,6 +587,24 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert result.truncated == true
       assert result.new_bytes == 40_000
     end
+  end
+
+  defp pool(dir) do
+    {:ok, pool} = Pool.start_link(root: dir, servers: servers())
+    on_exit(fn -> Pool.stop(pool) end)
+    pool
+  end
+
+  defp servers do
+    [
+      %{
+        name: "toy",
+        command: @server,
+        args: [],
+        extensions: [".toy"],
+        language_id: "toy"
+      }
+    ]
   end
 
   # Pins the pure-Elixir scanner, which is what runs wherever ripgrep is not

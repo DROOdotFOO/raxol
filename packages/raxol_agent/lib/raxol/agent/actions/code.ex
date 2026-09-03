@@ -47,7 +47,7 @@ defmodule Raxol.Agent.Actions.Code do
   write must not blow up the transcript or the model's context.
   """
 
-  alias Raxol.Agent.Actions.Fs
+  alias Raxol.Agent.Actions.{Fs, Lsp}
 
   # Before/after images larger than this drop the diff for a summary, so a
   # large-file write never bloats the transcript or the LLM tool-result echo.
@@ -87,7 +87,9 @@ defmodule Raxol.Agent.Actions.Code do
           old: [type: :string],
           new: [type: :string],
           language: [type: :string],
-          created: [type: :boolean]
+          created: [type: :boolean],
+          diagnostics: [type: :list],
+          diagnostics_error: [type: :string]
         ]
       ]
 
@@ -96,7 +98,7 @@ defmodule Raxol.Agent.Actions.Code do
       overwrite = Map.get(params, :overwrite, false)
 
       with {:ok, abs} <- Fs.resolve(path, context) do
-        Raxol.Agent.Actions.Code.write_file(abs, path, content, overwrite)
+        Raxol.Agent.Actions.Code.write_file(abs, path, content, overwrite, context)
       end
     end
   end
@@ -150,7 +152,9 @@ defmodule Raxol.Agent.Actions.Code do
           old: [type: :string],
           new: [type: :string],
           language: [type: :string],
-          replacements: [type: :integer]
+          replacements: [type: :integer],
+          diagnostics: [type: :list],
+          diagnostics_error: [type: :string]
         ]
       ]
 
@@ -161,7 +165,7 @@ defmodule Raxol.Agent.Actions.Code do
       with {:ok, mode} <- addressing(params),
            {:ok, abs} <- Fs.resolve(path, context),
            {:ok, content} <- File.read(abs) do
-        edit(mode, abs, path, content, new_string, params)
+        edit(mode, abs, path, content, new_string, params, context)
       end
     end
 
@@ -181,7 +185,7 @@ defmodule Raxol.Agent.Actions.Code do
 
     defp present?(value), do: is_binary(value) and value != ""
 
-    defp edit(:anchored, abs, path, content, new_string, params) do
+    defp edit(:anchored, abs, path, content, new_string, params, context) do
       {lines, trailing_newline?} = Anchor.split(content)
 
       with {:ok, from} <- Anchor.parse(Map.get(params, :from)),
@@ -189,11 +193,11 @@ defmodule Raxol.Agent.Actions.Code do
            :ok <- ordered(from, to),
            :ok <- Anchor.verify(lines, from),
            :ok <- Anchor.verify(lines, to) do
-        replace_range(abs, path, content, lines, trailing_newline?, from, to, new_string)
+        replace_range(abs, path, content, lines, trailing_newline?, from, to, new_string, context)
       end
     end
 
-    defp edit(:string, abs, path, content, new_string, params) do
+    defp edit(:string, abs, path, content, new_string, params, context) do
       old_string = Map.get(params, :old_string)
       replace_all = Map.get(params, :replace_all, false)
 
@@ -204,7 +208,8 @@ defmodule Raxol.Agent.Actions.Code do
           path,
           content,
           {old_string, new_string, replace_all},
-          count
+          count,
+          context
         )
       end
     end
@@ -219,7 +224,17 @@ defmodule Raxol.Agent.Actions.Code do
     defp ordered({from, _}, {to, _}) when from <= to, do: :ok
     defp ordered({from, _}, {to, _}), do: {:error, {:range_inverted, from, to}}
 
-    defp replace_range(abs, path, content, lines, trailing?, {from, _}, {to, _}, new_string) do
+    defp replace_range(
+           abs,
+           path,
+           content,
+           lines,
+           trailing?,
+           {from, _},
+           {to, _},
+           new_string,
+           context
+         ) do
       replaced = Enum.slice(lines, (from - 1)..(to - 1))
       {new_lines, _trailing?} = Anchor.split(new_string)
 
@@ -235,7 +250,8 @@ defmodule Raxol.Agent.Actions.Code do
           path,
           content,
           Anchor.join(updated, trailing?),
-          to - from + 1
+          to - from + 1,
+          context
         )
       end
     end
@@ -437,23 +453,27 @@ defmodule Raxol.Agent.Actions.Code do
   @doc false
   @spec write_file(String.t(), String.t(), String.t(), boolean()) ::
           {:ok, map()} | {:error, term()}
-  def write_file(abs, path, content, overwrite) do
+  def write_file(abs, path, content, overwrite, context \\ %{}) do
     exists = File.regular?(abs)
 
     if exists and not overwrite do
       {:error, :file_exists}
     else
-      persist_file(abs, path, content, exists)
+      persist_file(abs, path, content, exists, context)
     end
   end
 
-  defp persist_file(abs, path, content, exists) do
+  defp persist_file(abs, path, content, exists, context) do
     old = if exists, do: File.read!(abs), else: ""
     :ok = File.mkdir_p(Path.dirname(abs))
 
     case File.write(abs, content) do
-      :ok -> {:ok, diff_result(path, old, content, %{created: not exists})}
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        {:ok,
+         path |> diff_result(old, content, %{created: not exists}) |> add_diagnostics(context)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -463,7 +483,8 @@ defmodule Raxol.Agent.Actions.Code do
           String.t(),
           String.t(),
           {String.t(), String.t(), boolean()},
-          integer()
+          integer(),
+          map()
         ) ::
           {:ok, map()} | {:error, term()}
   def write_edit(
@@ -471,14 +492,19 @@ defmodule Raxol.Agent.Actions.Code do
         path,
         content,
         {old_string, new_string, replace_all},
-        count
+        count,
+        context \\ %{}
       ) do
     updated =
       String.replace(content, old_string, new_string, global: replace_all)
 
     case File.write(abs, updated) do
-      :ok -> {:ok, diff_result(path, content, updated, %{replacements: count})}
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        {:ok,
+         path |> diff_result(content, updated, %{replacements: count}) |> add_diagnostics(context)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -493,12 +519,19 @@ defmodule Raxol.Agent.Actions.Code do
           String.t(),
           String.t(),
           String.t(),
-          non_neg_integer()
+          non_neg_integer(),
+          map()
         ) :: {:ok, map()} | {:error, term()}
-  def write_content(abs, path, content, updated, replacements) do
+  def write_content(abs, path, content, updated, replacements, context \\ %{}) do
     case File.write(abs, updated) do
-      :ok -> {:ok, diff_result(path, content, updated, %{replacements: replacements})}
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        {:ok,
+         path
+         |> diff_result(content, updated, %{replacements: replacements})
+         |> add_diagnostics(context)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -532,6 +565,22 @@ defmodule Raxol.Agent.Actions.Code do
       })
     end
   end
+
+  defp add_diagnostics(result, context) do
+    case Lsp.query(%{op: "diagnostics", path: result.path}, context) do
+      {:ok, %{diagnostics: diagnostics}} ->
+        Map.put(result, :diagnostics, diagnostics)
+
+      {:error, :lsp_not_available} ->
+        result
+
+      {:error, reason} ->
+        Map.put(result, :diagnostics_error, format_diagnostics_error(reason))
+    end
+  end
+
+  defp format_diagnostics_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_diagnostics_error(reason), do: inspect(reason)
 
   @doc """
   The single gate every shell surface passes through: the jail rule, then the
