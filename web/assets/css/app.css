@@ -1319,7 +1319,7 @@ html {
 .tok {
   padding: 0.06em 0.38em;
   border-radius: 3px;
-  font-size: 0.66rem;
+  font-size: var(--text-xs);
   border: 1px solid var(--coral-25);
   color: var(--axol-coral);
 }
