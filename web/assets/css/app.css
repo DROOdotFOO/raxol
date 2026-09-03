@@ -1127,12 +1127,12 @@ html {
   background: rgba(10, 10, 12, 0.55);
   display: grid;
   /* tier | trust score | stable | volatile | proof */
-  grid-template-columns: 7.5rem 6rem 5rem 5rem 1fr;
-  gap: 0 1rem;
-  padding: 0.7rem 1.1rem;
+  grid-template-columns: 6.8rem 5.4rem 4.35rem 4.8rem 1fr;
+  gap: 0 0.7rem;
+  padding: 0.48rem 0.75rem;
   align-items: baseline;
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
 }
 
 @media (max-width: 700px) {
@@ -1144,7 +1144,7 @@ html {
    ladder's, and reusing it here wrapped "same-chain API call" onto two lines
    inside a 7.5rem cell with the rest of the row empty. */
 .ladder--pair .rung {
-  grid-template-columns: minmax(0, 22rem) 1fr;
+  grid-template-columns: minmax(0, 19rem) 1fr;
 }
 
 @media (max-width: 700px) {
@@ -1157,14 +1157,14 @@ html {
 
 .rung--head span {
   font-size: var(--text-xs);
-  letter-spacing: 0.13em;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
   color: var(--text-dim);
 }
 
 .rung__tier { font-weight: 600; color: var(--pearl-cream); }
 .rung__fee { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-.rung__note { color: var(--text-dim); font-size: 0.8rem; }
+.rung__note { color: var(--text-dim); font-size: 0.74rem; }
 
 /* The Actions that move money. Same weight as the rest of the column would
    have made the one distinction the table exists to draw invisible; it needs
@@ -1236,7 +1236,7 @@ html {
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
-  padding: 0.6rem 1rem;
+  padding: 0.48rem 0.75rem;
   border-bottom: 1px solid var(--panel-border);
   background: rgba(18, 18, 26, 0.85);
   font-family: var(--font-mono);
@@ -1258,7 +1258,7 @@ html {
 
 .src-badge {
   margin-left: auto;
-  padding: 0.14em 0.55em;
+  padding: 0.1em 0.45em;
   border-radius: 3px;
   border: 1px solid var(--sky);
   color: var(--sky);
@@ -1286,17 +1286,17 @@ html {
 
 .reach-scroll::-webkit-scrollbar { display: none; }
 
-.reach-grid { min-width: 560px; }
+.reach-grid { min-width: 500px; }
 
 .reach-row {
   display: grid;
-  grid-template-columns: 11rem 7rem 3.5rem 1fr;
-  gap: 0 1rem;
+  grid-template-columns: 9.4rem 6.1rem 3rem 1fr;
+  gap: 0 0.7rem;
   align-items: baseline;
-  padding: 0.55rem 1rem;
+  padding: 0.42rem 0.75rem;
   border-bottom: 1px solid var(--panel-border);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
 }
 
 .reach-row:last-child { border-bottom: none; }
@@ -1314,12 +1314,12 @@ html {
 .reach-row--future .reach-row__vm { color: var(--text-dim); }
 .reach-row--future .reach-row__note { color: var(--text-muted); font-size: 0.72rem; }
 
-.reach-toks { display: flex; gap: 0.45rem; flex-wrap: wrap; }
+.reach-toks { display: flex; gap: 0.28rem; flex-wrap: wrap; }
 
 .tok {
-  padding: 0.1em 0.5em;
+  padding: 0.06em 0.38em;
   border-radius: 3px;
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   border: 1px solid var(--coral-25);
   color: var(--axol-coral);
 }
@@ -1341,7 +1341,7 @@ html {
 }
 
 .reach-foot {
-  padding: 0.6rem 1rem;
+  padding: 0.48rem 0.75rem;
   border-top: 1px solid var(--panel-border);
   font-family: var(--font-mono);
   font-size: 0.72rem;

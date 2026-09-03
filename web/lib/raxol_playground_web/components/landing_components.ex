@@ -1360,7 +1360,30 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   }
 
   # Authored commentary on solver rails the matrix data does not carry.
-  @chain_notes %{4663 => "Permit2 pull", 728_126_428 => "relay rail"}
+  @chain_notes %{
+    4663 => "Permit2 pull",
+    5_042_002 => "testnet",
+    728_126_428 => "relay rail"
+  }
+
+  # Static rows for rails that must stay visible when the solver endpoint is
+  # down or has not published the chain yet. Live rows win; these only fill gaps.
+  @authored_reach_rows [
+    %{
+      chain_name: "Arc (testnet)",
+      chain_id: 5_042_002,
+      vm: "EVM",
+      tokens: ["USDC"],
+      note: "testnet"
+    },
+    %{
+      chain_name: "Tron",
+      chain_id: 728_126_428,
+      vm: "TVM",
+      tokens: ["USDC", "USDT"],
+      note: "relay rail"
+    }
+  ]
 
   # Checked against Robinhood Chain's RPC, not an aggregator: eth_chainId
   # 0x1237 (4663), symbol() "RAXOL", decimals() 18, and the pool's
@@ -1415,7 +1438,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       )
 
     ~H"""
-    <section class="landing-section py-14 md:py-24 measure" aria-labelledby="payments-title">
+    <section class="landing-section payments-deep py-14 md:py-24 measure" aria-labelledby="payments-title">
       <div class="mb-8">
         <h1 id="payments-title" class="heading-2xl mb-3">
           Spend gate, signed intent, solver receipt.
@@ -1460,8 +1483,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
       <h2 class="name-coral mb-2">xochi.fi reach</h2>
       <p class="body-text-dim max-w-2xl mb-4">
-        Capabilities use a five-minute cache. Fetch failure falls back to the
-        cached registry.
+        Five-minute cache; cached registry on fetch failure.
       </p>
 
       <div class="reach">
@@ -1655,23 +1677,46 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   defp reach_rows(%{chains: chains, tokens: tokens}) do
-    Enum.map(chains, fn chain ->
-      symbols =
-        tokens
-        |> Enum.filter(&Map.has_key?(&1.addresses, chain.chain_id))
-        |> Enum.map(& &1.symbol)
-        |> Enum.uniq()
-        |> Enum.sort_by(&{Map.get(@token_order, &1, 99), &1})
-
-      %{
-        chain_name: chain.chain_name,
-        chain_id: chain.chain_id,
-        vm: chain.vm_type |> Atom.to_string() |> String.upcase(),
-        tokens: symbols,
-        note: @chain_notes[chain.chain_id]
-      }
+    chains
+    |> Enum.map(&matrix_row(&1, tokens))
+    |> Enum.concat(@authored_reach_rows)
+    |> Enum.reduce(%{}, fn row, acc ->
+      Map.update(acc, row.chain_id, row, fn existing ->
+        %{existing | tokens: merge_tokens(existing.tokens, row.tokens)}
+      end)
     end)
+    |> Map.values()
+    |> Enum.sort_by(& &1.chain_id)
   end
+
+  defp matrix_row(chain, tokens) do
+    symbols =
+      tokens
+      |> Enum.filter(&Map.has_key?(&1.addresses, chain.chain_id))
+      |> Enum.map(& &1.symbol)
+      |> Enum.uniq()
+      |> sort_tokens()
+
+    %{
+      chain_name: display_chain_name(chain.chain_id, chain.chain_name),
+      chain_id: chain.chain_id,
+      vm: chain.vm_type |> Atom.to_string() |> String.upcase(),
+      tokens: symbols,
+      note: @chain_notes[chain.chain_id]
+    }
+  end
+
+  defp display_chain_name(5_042_002, _name), do: "Arc (testnet)"
+  defp display_chain_name(_chain_id, name), do: name
+
+  defp merge_tokens(left, right) do
+    (left ++ right)
+    |> Enum.uniq()
+    |> sort_tokens()
+  end
+
+  defp sort_tokens(tokens),
+    do: Enum.sort_by(tokens, &{Map.get(@token_order, &1, 99), &1})
 
   # The top tier is open-ended, so it reads as a threshold rather than a band.
   defp score_band(%{min_score: min, max_score: nil}), do: "#{min} and above"
