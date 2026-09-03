@@ -111,10 +111,7 @@ defmodule Raxol.Playground.Demos.HarnessToolBlocksDemo do
         text("Tool result (tainted, collapsible):", style: [:dim]),
         ToolResultBlock.render(model.tainted, context),
         divider(),
-        text(
-          "[space] expand/collapse tainted result   [r] replay tool call",
-          style: [:dim]
-        )
+        text("[space] tainted result   [r] replay call", style: [:dim])
       ]
     end
 

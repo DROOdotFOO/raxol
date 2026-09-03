@@ -238,33 +238,27 @@ defmodule Raxol.Playground.Demos.BeamDashboardDemo do
     rows ++ List.duplicate(text(""), max(@max_events - length(rows), 0))
   end
 
-  # A real sampled stat per tick, so the feed shows the same VM the
-  # bars do.
-  defp sampled_event(tick, utils) do
+  # A real sampled stat per tick drives the dashboard, but the committed
+  # thumbnail should not publish local VM counts from whoever recorded it.
+  defp sampled_event(tick, _utils) do
     case rem(tick, 6) do
       0 ->
-        "Memory total: #{mem_total_mb()} MB"
+        "Memory total sampled"
 
       1 ->
-        "Processes: #{:erlang.system_info(:process_count)}"
+        "Process count sampled"
 
       2 ->
-        {gcs, _reclaimed, _} = :erlang.statistics(:garbage_collection)
-        "GC runs: #{fmt_num(gcs)}"
+        "GC activity sampled"
 
       3 ->
-        {_total, since_last} = :erlang.statistics(:reductions)
-        "Reductions: +#{fmt_num(since_last)}"
+        "Reduction activity sampled"
 
       4 ->
-        avg =
-          if utils == [], do: 0, else: round(Enum.sum(utils) / length(utils))
-
-        "Scheduler avg: #{avg}%"
+        "Scheduler average sampled"
 
       5 ->
-        {{:input, i}, {:output, o}} = :erlang.statistics(:io)
-        "IO: #{fmt_bytes(i)} in / #{fmt_bytes(o)} out"
+        "IO activity sampled"
     end
   end
 
@@ -310,10 +304,4 @@ defmodule Raxol.Playground.Demos.BeamDashboardDemo do
   defp fmt_num(n) when n >= 1_000_000, do: "#{Float.round(n / 1_000_000, 1)}M"
   defp fmt_num(n) when n >= 1_000, do: "#{Float.round(n / 1_000, 1)}K"
   defp fmt_num(n), do: "#{n}"
-
-  defp fmt_bytes(b) when b >= 1_048_576,
-    do: "#{Float.round(b / 1_048_576, 1)} MB"
-
-  defp fmt_bytes(b) when b >= 1024, do: "#{Float.round(b / 1024, 1)} KB"
-  defp fmt_bytes(b), do: "#{b} B"
 end
