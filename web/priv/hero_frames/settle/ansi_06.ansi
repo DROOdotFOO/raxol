@@ -1,9 +1,0 @@
-[37m[1mXOCHI RECEIPT[0m                                           
-[36m  [OK] amount     USDC 1.10[0m                             
-[36m  [OK] source     Base Sepolia 84532[0m                    
-[36m  [OK] dest       Arc Testnet 5042002[0m                   
-[36m> [OK] spend gate before signature[0m                      
-[36m  [OK] intent     EIP-712 quote signed[0m                  
-[36m  [OK] execution  submitted to solver[0m                   
-[36m  [OK] source tx  base-sepolia.blockscout.com/tx[0m        
-[36m  [OK] dest tx    testnet.arcscan.app/tx[0m                
