@@ -17,6 +17,21 @@ defmodule RaxolPlaygroundWeb.DemoLiveTest do
     assert redirected_to(conn, 301) == "/gallery"
   end
 
+  test "major pages render route-specific metadata" do
+    for {path, title, canonical} <- [
+          {"/", "Raxol: one Elixir module, every surface", "https://raxol.io/"},
+          {"/gallery", "Raxol component gallery", "https://raxol.io/gallery"},
+          {"/surfaces", "Raxol surfaces", "https://raxol.io/surfaces"},
+          {"/payments", "Raxol agent payments", "https://raxol.io/payments"}
+        ] do
+      html = get_page(path) |> html_response(200)
+
+      assert html =~ ~s(<meta property="og:title" content="#{title}")
+      assert html =~ ~s(<link rel="canonical" href="#{canonical}")
+      assert html =~ ~s(<meta property="og:url" content="#{canonical}")
+    end
+  end
+
   test "GET /demos/:demo serves a known demo" do
     [component | _] = Raxol.Playground.Catalog.list_components()
 

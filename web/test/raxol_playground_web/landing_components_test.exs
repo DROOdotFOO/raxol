@@ -28,9 +28,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # this covers all four of it.
   test "each hero program matches the one the frames record" do
     script =
-      File.read!(
-        Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__)
-      )
+      File.read!(Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__))
 
     for name <- LandingComponents.hero_example_names() do
       shown = String.trim(LandingComponents.example_source(name))
@@ -86,9 +84,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     deep_dive = render_component(&LandingComponents.ssh_deep_dive/1, %{})
 
-    # The one-screen hero carries ONE install path: the curl script this site
-    # serves. The four-method install tabs are gone, along with every other
-    # component that rendered on no route.
+    # The one-screen hero carries one install path: the curl script this site
+    # serves.
     assert hero =~ "curl -fsSL https://raxol.io/install | bash"
 
     # The SSH section still says the hosted endpoint is down -- that is the
@@ -595,9 +592,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       )
 
     [sub] =
-      Regex.run(~r/<p class="screen-sub">(.*?)<\/p>/s, hero,
-        capture: :all_but_first
-      )
+      Regex.run(~r/<p class="screen-sub">(.*?)<\/p>/s, hero, capture: :all_but_first)
 
     for chain <- [
           "Ethereum",
@@ -896,26 +891,22 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert open =~ ~s(href="/gallery")
   end
 
-  # The navigation is the thing this page kept getting wrong: six labels for
-  # four destinations, three of them ("Playground", "Gallery", "Demos") naming
-  # one job. The count is the property worth holding, because the failure mode
-  # is adding "just one more" link until it is six again.
-  test "the header offers two destinations and no more" do
+  test "the header offers only components and docs" do
     assert LandingComponents.nav_links() == [
              {"/gallery", "Components"},
              {"https://hexdocs.pm/raxol", "Docs"}
            ]
   end
 
-  # Reference material moved to the footer rather than being deleted: every
-  # destination the header dropped is still one click away.
-  test "the landing footer keeps only primary destinations" do
+  test "the landing footer keeps package, token, and source links" do
     footer = render_component(&LandingComponents.screen_footer/1, %{})
 
-    assert footer =~ ~s(href="/coding-agent")
-    assert footer =~ "raxol code"
     assert footer =~ ~s(href="https://hex.pm/packages/raxol")
+    assert footer =~ ~s(href="/token")
+    assert footer =~ "$RAXOL"
+    refute footer =~ "$RAXOL verified"
     assert footer =~ "github.com/DROOdotFOO/raxol"
+    refute footer =~ ~s(href="/coding-agent")
     refute footer =~ ~s(href="/skill.md")
     refute footer =~ ~r/>\s*\d+\s+packages\s*</
   end
@@ -1017,10 +1008,13 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
         matrix: @live_matrix
       )
 
-    # Maturity is labeled; dated launch proof belongs off this tight page.
     assert payments =~ "0.2"
-    assert payments =~ "xochi.fi"
-    assert payments =~ ~s(href="https://xochi.fi")
+    assert payments =~ "HTTP 402 invoices"
+    assert payments =~ "Stablecoin fees run 10-22 bps"
+    refute payments =~ "2026-06-28"
+    refute payments =~ "2026-07-20"
+    refute payments =~ "fee table below"
+    refute payments =~ "over claims"
 
     # Fees come from FeeSchedule, the pinned mirror of the solver's published
     # schedule -- every tier, both asset classes, at the rates it actually
@@ -1132,12 +1126,13 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   # `$RAXOL` reaches the footer through `TopicLive.links/0` like every other
   # deep dive, so the page and the link to it cannot drift apart.
-  test "the token page is a topic the footer lists" do
+  test "the token page remains available from the footer link" do
     assert {"/token", "$RAXOL"} in RaxolPlaygroundWeb.TopicLive.links()
 
     footer = render_component(&LandingComponents.screen_footer/1, %{})
     assert footer =~ ~s(href="/token")
     assert footer =~ "$RAXOL"
+    refute footer =~ "$RAXOL verified"
   end
 
   test "coding agent section claims ACP membership and prints the four surfaces" do
