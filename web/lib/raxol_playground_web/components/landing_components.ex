@@ -173,30 +173,29 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @settle_source ~S"""
   defmodule Settle do
     use Raxol.Core.Runtime.Application
-    @title "XOCHI RECEIPT  amount USDC 1.10"
-    @route "source Base Sepolia 84532  dest Arc Testnet 5042002"
-    @receipt [
-      "spend gate   before signature",
-      "intent       EIP-712 quote signed",
-      "execution    submitted to solver",
-      "source      base-sepolia.blockscout.com/tx",
-      "dest        testnet.arcscan.app/tx"
+    @rows [
+      {"amount", "USDC 1.10"},
+      {"source", "Base Sepolia 84532"},
+      {"dest", "Arc Testnet 5042002"},
+      {"spend gate", "before signature"},
+      {"intent", "EIP-712 quote signed"},
+      {"execution", "submitted to solver"},
+      {"source tx", "base-sepolia.blockscout.com/tx"},
+      {"dest tx", "testnet.arcscan.app/tx"}
     ]
     def init(_), do: %{t: 0}
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
-      at = rem(m.t, length(@receipt) + 1)
-      column style: %{gap: 0} do
-        [
-          text(@title, style: [:bold]),
-          text(@route, fg: :magenta),
-          column(do: Enum.with_index(@receipt, &row(&1, &2, at)))
-        ]
-      end
+      active = rem(m.t, length(@rows))
+      rows = Enum.with_index(@rows, &row(&1, &2, active))
+      column(do: [text("XOCHI RECEIPT", style: [:bold]) | rows])
     end
-    defp row(l, i, a), do: text("#{m(i, a)} #{l}", fg: :cyan)
-    defp m(i, a), do: if(i < a, do: "[OK]", else: "[  ]")
+    defp row({k, v}, i, active) do
+      cursor = if(i == active, do: ">", else: " ")
+      key = String.pad_trailing(k, 10)
+      text("#{cursor} [OK] #{key} #{v}", fg: :cyan)
+    end
   end
   """
 
@@ -216,8 +215,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
                         {"settle", "settle.ex",
-                         "spend-gated Xochi settlement",
-                         @settle_source},
+                         "Xochi USDC receipt, no fake tx hash", @settle_source},
                         {"pulse", "pulse.exs", "one module, four surfaces",
                          @pulse_source},
                         {"halo", "halo.exs", "the mark, as a program",
@@ -342,15 +340,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              comma train. The receipt demo below is payments; this line keeps
              the first read on the core surface claim. --%>
         <h1 class="screen-title">
-          One TEA module.
+          One Elixir module.
           <span class="screen-title__claim text-axol-coral">
             Seven surfaces, one runtime.
           </span>
         </h1>
 
         <p class="screen-sub">
-          Terminal, LiveView, SSH, MCP, Telegram, Watch, Speech; settlement in
-          <span class="text-axol-coral">raxol_payments</span>.
+          The same app renders terminal, LiveView, SSH, MCP, Telegram, Watch, Speech.
+          <span class="text-axol-coral">raxol_payments</span> gates spend before signing.
         </p>
 
 
@@ -785,7 +783,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             id={panel_id(@example, 0)}
             aria-labelledby={tab_id(@example, 0)}
           >
-            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run {@example}.exs</span></pre>
+            <pre class="hero-pre hero-cmd" aria-hidden="true"><span class="hc">$ mix run {@title}</span></pre>
             <%!-- Recorded frames: real Headless output of the module beside
                  them, committed under priv/hero_frames/<example>/. Frame one
                  ships visible in the dead render; the hook steps the rest. --%>
@@ -1021,7 +1019,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-10 md:py-16 measure" aria-labelledby="surfaces-title">
       <div class="mb-6">
-        <h1 id="surfaces-title" class="heading-2xl mb-3">Seven projections of one TEA model.</h1>
+        <h1 id="surfaces-title" class="heading-2xl mb-3">Seven projections of one app model.</h1>
         <p class="body-text max-w-2xl">
           Terminal cells, LiveView DOM, SSH ANSI, MCP JSON, Telegram, Watch, Speech.
         </p>
@@ -1082,8 +1080,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
            authored output. --%>
       <div class="surface-snapshots">
         <p class="body-text-dim max-w-2xl mb-4">
-          Static: <code class="text-axol-coral">pulse.exs</code> as terminal
-          cells, LiveView DOM, SSH ANSI, and MCP JSON.
+          <code class="text-axol-coral">pulse.exs</code> rendered four ways:
+          terminal cells, LiveView DOM, SSH ANSI, MCP JSON.
         </p>
 
         <div class="surface-snapshot-grid">
@@ -1192,8 +1190,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              line the module ships with. --%>
         <h2 class="heading-xl mt-14 mb-3">Safe by default</h2>
         <p class="body-text mb-4">
-          Anonymous surfaces should be hard to expose. Raxol refuses the
-          accident:
+          Anonymous access binds loopback by default. Public serving needs
+          separate acknowledgement.
         </p>
         <ul class="detail-text space-y-2 leading-relaxed list-disc list-inside mb-6">
           <li>
@@ -1241,7 +1239,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     ~H"""
     <section class="landing-section py-14 md:py-24 measure" aria-labelledby="agent-deep-title">
       <div class="mb-8">
-        <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are TEA processes.</h1>
+        <h1 id="agent-deep-title" class="heading-2xl mb-3">Agents are supervised processes.</h1>
         <p class="body-text max-w-2xl">
           <span class="text-axol-coral">init</span> /
           <span class="text-axol-coral">update</span> /
@@ -1311,8 +1309,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <p class="body-text-dim max-w-2xl">
-        MCP tools come from the widget tree because UI runtime and agent runtime
-        are one system.
+        The MCP schema is derived from the widget tree; no second tool
+        manifest.
       </p>
 
       <div class="max-w-2xl">
@@ -1409,7 +1407,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         routes: routes(),
         payment_actions: payment_actions(),
         action_groups: action_groups(),
-        show_future_svm: not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
+        show_future_svm:
+          not Enum.any?(assigns.matrix.chains, &(&1.vm_type == :svm)),
         live?: assigns.matrix.source == :live
       )
 
@@ -1490,8 +1489,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
               <span class="reach-row__id">--</span>
               <span class="reach-row__vm">SVM</span>
               <span class="reach-row__note">
-                <span class="tok tok--soon">not yet</span>
-                lights up when the solver ships it, zero redeploy
+                <span class="tok tok--soon">absent</span>
+                appears when the capabilities API returns an SVM chain
               </span>
             </div>
           </div>

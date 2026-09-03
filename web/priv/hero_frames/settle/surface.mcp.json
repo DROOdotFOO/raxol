@@ -5,66 +5,75 @@
     "children": [
       {
         "id": null,
-        "label": "XOCHI RECEIPT  amount USDC 1.10",
+        "label": "XOCHI RECEIPT",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "XOCHI RECEIPT  amount USDC 1.10"
+        "content": "XOCHI RECEIPT"
       },
       {
         "id": null,
-        "label": "source Base Sepolia 84532  dest Arc Testnet 5042002",
+        "label": "  [OK] amount     USDC 1.10",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "source Base Sepolia 84532  dest Arc Testnet 5042002"
+        "content": "  [OK] amount     USDC 1.10"
       },
       {
         "id": null,
-        "type": "flex",
-        "children": [
-          {
-            "id": null,
-            "label": "[OK] spend gate   before signature",
-            "type": "text",
-            "children": [],
-            "role": "text",
-            "content": "[OK] spend gate   before signature"
-          },
-          {
-            "id": null,
-            "label": "[OK] intent       EIP-712 quote signed",
-            "type": "text",
-            "children": [],
-            "role": "text",
-            "content": "[OK] intent       EIP-712 quote signed"
-          },
-          {
-            "id": null,
-            "label": "[OK] execution    submitted to solver",
-            "type": "text",
-            "children": [],
-            "role": "text",
-            "content": "[OK] execution    submitted to solver"
-          },
-          {
-            "id": null,
-            "label": "[OK] source      base-sepolia.blockscout.com/tx",
-            "type": "text",
-            "children": [],
-            "role": "text",
-            "content": "[OK] source      base-sepolia.blockscout.com/tx"
-          },
-          {
-            "id": null,
-            "label": "[  ] dest        testnet.arcscan.app/tx",
-            "type": "text",
-            "children": [],
-            "role": "text",
-            "content": "[  ] dest        testnet.arcscan.app/tx"
-          }
-        ],
-        "role": "group"
+        "label": "  [OK] source     Base Sepolia 84532",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "  [OK] source     Base Sepolia 84532"
+      },
+      {
+        "id": null,
+        "label": "  [OK] dest       Arc Testnet 5042002",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "  [OK] dest       Arc Testnet 5042002"
+      },
+      {
+        "id": null,
+        "label": "  [OK] spend gate before signature",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "  [OK] spend gate before signature"
+      },
+      {
+        "id": null,
+        "label": "> [OK] intent     EIP-712 quote signed",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "> [OK] intent     EIP-712 quote signed"
+      },
+      {
+        "id": null,
+        "label": "  [OK] execution  submitted to solver",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "  [OK] execution  submitted to solver"
+      },
+      {
+        "id": null,
+        "label": "  [OK] source tx  base-sepolia.blockscout.com/tx",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "  [OK] source tx  base-sepolia.blockscout.com/tx"
+      },
+      {
+        "id": null,
+        "label": "  [OK] dest tx    testnet.arcscan.app/tx",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "  [OK] dest tx    testnet.arcscan.app/tx"
       }
     ],
     "role": "group"
