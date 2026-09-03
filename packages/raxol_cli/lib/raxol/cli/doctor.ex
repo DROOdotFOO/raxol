@@ -30,6 +30,8 @@ defmodule Raxol.CLI.Doctor do
     IO.puts(header(cwd))
     IO.puts("")
     IO.puts(Inspection.render(Inspection.gather(cwd)))
+    IO.puts("")
+    IO.puts(next_steps())
 
     0
   end
@@ -68,5 +70,26 @@ defmodule Raxol.CLI.Doctor do
       "NOT built in -- needs a source build of raxol_agent with " <>
         ":raxol_agent_client_protocol"
     end
+  end
+
+  defp next_steps do
+    """
+    next:
+      connect or inspect providers:
+        raxol setup
+
+      start the agent:
+        raxol
+
+      coding TUI:
+        raxol code
+
+      component catalog:
+        raxol playground
+
+      scaffold an Elixir/Mix app:
+        raxol new counter
+    """
+    |> String.trim_trailing()
   end
 end

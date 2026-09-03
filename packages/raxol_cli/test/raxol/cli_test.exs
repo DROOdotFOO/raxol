@@ -38,6 +38,13 @@ defmodule Raxol.CLITest do
       assert out =~ ~r/raxol \d+\.\d+\.\d+/
       assert CLI.version() =~ ~r/^\d+\.\d+\.\d+|^dev/
     end
+
+    test "help labels new apps as Elixir/Mix projects" do
+      out = capture_io(fn -> assert CLI.main(["help"]) == 0 end)
+
+      assert out =~ "new [name]"
+      assert out =~ "Elixir/Mix"
+    end
   end
 
   describe "setup subcommand" do
@@ -48,12 +55,41 @@ defmodule Raxol.CLITest do
       assert out =~ "--provider"
     end
 
+    test "setup status prints next actions" do
+      out = capture_io(fn -> assert CLI.main(["setup"]) == 0 end)
+
+      assert out =~ "providers:"
+      assert out =~ "next:"
+      assert out =~ "raxol doctor"
+    end
+
+    test "doctor prints an onboarding next block" do
+      out = capture_io(fn -> assert CLI.main(["doctor"]) == 0 end)
+
+      assert out =~ "packaging"
+      assert out =~ "next:"
+      assert out =~ "raxol setup"
+      assert out =~ "raxol new counter"
+    end
+
     # 64 is the usage-error code the Mix task already used; the shared front
     # end has to keep returning it now that two shims depend on the value.
     test "an unknown setup option is a usage error, not a crash" do
       capture_io(:stderr, fn ->
         assert CLI.main(["setup", "--definitely-not-a-flag"]) == 64
       end)
+    end
+
+    test "providerless default explains mock mode and connection commands" do
+      out =
+        capture_io([input: "/exit\n"], fn ->
+          assert CLI.main([]) == 0
+        end)
+
+      assert out =~ "No provider connected. Mock mode is active."
+      assert out =~ "raxol login"
+      assert out =~ "raxol setup --provider anthropic --op op://Vault/Item/api_key"
+      assert out =~ "type a prompt, or /exit"
     end
   end
 
