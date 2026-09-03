@@ -274,8 +274,15 @@ defmodule GenLandingFrames do
     File.mkdir_p!(preview_scratch)
     File.mkdir_p!(hero_scratch)
 
-    previews(preview_scratch)
+    # Same order as `run/0`, and that is load-bearing rather than tidiness.
+    # A hero frame is captured by polling for the engine's next render
+    # (`poll_changed/3`), so what it catches depends on how busy the VM is,
+    # and recording the previews first leaves it busier here than it is
+    # there. Reversed, this reported 62 hero files stale against artifacts
+    # `run/0` had just written -- a drift gate accusing the recording it was
+    # meant to verify.
     hero(hero_scratch)
+    previews(preview_scratch)
 
     # A preview path's slug is its first segment: "heatmap.html" for a
     # still, "sparkline/frame_03.html" for a recording.
