@@ -51,7 +51,7 @@ defmodule Raxol.UI.Components.Harness.ReasoningBlockTest do
 
       [summary] = rendered.children
       assert summary.style == %{dim: true}
-      assert String.starts_with?(summary.content, "▸ 3 lines — ")
+      assert String.starts_with?(summary.content, "▸ 3 lines: ")
       assert summary.content =~ "Considering the tradeoffs."
     end
 
@@ -59,14 +59,14 @@ defmodule Raxol.UI.Components.Harness.ReasoningBlockTest do
       {:ok, state} = ReasoningBlock.init(id: :r_one, content: "Just one line.")
       rendered = ReasoningBlock.render(state, default_context())
       [summary] = rendered.children
-      assert String.starts_with?(summary.content, "▸ 1 line — ")
+      assert String.starts_with?(summary.content, "▸ 1 line: ")
     end
 
     test "handles empty content without crashing" do
       {:ok, state} = ReasoningBlock.init(id: :r_empty, content: "")
       rendered = ReasoningBlock.render(state, default_context())
       [summary] = rendered.children
-      assert summary.content == "▸ 0 lines — (empty)"
+      assert summary.content == "▸ 0 lines: (empty)"
     end
 
     test "truncates a long summary to fit width, with an ellipsis" do
