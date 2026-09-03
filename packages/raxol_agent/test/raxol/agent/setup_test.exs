@@ -1,8 +1,11 @@
 defmodule Raxol.Agent.SetupTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureIO
+
   alias Raxol.Agent.Backend.Credentials
   alias Raxol.Agent.Setup
+  alias Raxol.Agent.Setup.CLI
 
   # Provider env keys the resolver reads; cleared so the store is the only
   # source of truth for these tests (mirrors app_login_test's isolation).
@@ -146,6 +149,25 @@ defmodule Raxol.Agent.SetupTest do
       assert Map.has_key?(status, :op)
       assert is_list(status.providers)
       assert Enum.all?(status.providers, &Map.has_key?(&1, :harness))
+    end
+  end
+
+  describe "CLI.run/1" do
+    test "successful connects print connected next steps" do
+      output =
+        capture_io(fn ->
+          assert CLI.run([
+                   "--provider",
+                   "mock",
+                   "--op",
+                   "op://Vault/Mock/api_key"
+                 ]) == 0
+        end)
+
+      assert output =~ "stored reference for mock"
+      assert output =~ "next:"
+      assert output =~ "raxol code"
+      assert output =~ "raxol doctor"
     end
   end
 end

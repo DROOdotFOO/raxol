@@ -83,7 +83,9 @@ defmodule Raxol.Agent.Setup.CLI do
         do_connect_browser(provider)
 
       true ->
-        usage_error("give one of --op, --api-key, --browser, or --remove for #{provider}")
+        usage_error(
+          "give one of --op, --api-key, --browser, or --remove for #{provider}"
+        )
     end
   end
 
@@ -138,9 +140,13 @@ defmodule Raxol.Agent.Setup.CLI do
     end
   end
 
-  defp report_browser({:ok, %{provider: provider, validation: validation}}, _harness) do
+  defp report_browser(
+         {:ok, %{provider: provider, validation: validation}},
+         _harness
+       ) do
     IO.puts("stored reference for #{provider}")
     report_validation(provider, validation)
+    print_next_steps(:connected)
   end
 
   defp report_browser({:error, reason}, harness) do
@@ -151,6 +157,7 @@ defmodule Raxol.Agent.Setup.CLI do
     case Setup.remove(provider) do
       {:ok, harness} ->
         IO.puts("removed stored reference for #{harness}")
+        print_current_next_steps()
 
       {:error, reason} ->
         fail("could not remove #{provider}: #{inspect(reason)}")
@@ -162,6 +169,7 @@ defmodule Raxol.Agent.Setup.CLI do
   defp report_connect({:ok, harness, validation}) do
     IO.puts("stored reference for #{harness}")
     report_validation(harness, validation)
+    print_next_steps(:connected)
   end
 
   defp report_connect({:error, reason}), do: fail(connect_error(reason))
@@ -169,6 +177,7 @@ defmodule Raxol.Agent.Setup.CLI do
   defp report_connect_key({:ok, harness, ref, validation}) do
     IO.puts("stored reference for #{harness}: #{ref}")
     report_validation(harness, validation)
+    print_next_steps(:connected)
   end
 
   defp report_connect_key({:error, reason}), do: fail(connect_error(reason))
@@ -179,7 +188,10 @@ defmodule Raxol.Agent.Setup.CLI do
     do: IO.puts("#{harness} credential validated ✓")
 
   defp report_validation(harness, {:rejected, status}),
-    do: fail("#{harness} credential rejected (HTTP #{status}) — check the key/reference")
+    do:
+      fail(
+        "#{harness} credential rejected (HTTP #{status}) — check the key/reference"
+      )
 
   defp report_validation(harness, {:reachable_error, status}),
     do: fail("#{harness} endpoint returned HTTP #{status}")
@@ -191,7 +203,10 @@ defmodule Raxol.Agent.Setup.CLI do
     do: IO.puts("#{harness} stored (no validation endpoint for this provider)")
 
   defp report_validation(harness, {:no_key, _}),
-    do: fail("#{harness} reference stored but no key resolved — is `op` signed in?")
+    do:
+      fail(
+        "#{harness} reference stored but no key resolved — is `op` signed in?"
+      )
 
   defp report_validation(harness, :no_provider),
     do: fail("could not resolve a provider for #{harness}")
@@ -215,35 +230,50 @@ defmodule Raxol.Agent.Setup.CLI do
     IO.puts(next_steps(providers))
   end
 
-  defp next_steps(providers) do
-    ready? = Enum.any?(providers, & &1.available?)
+  defp print_current_next_steps do
+    %{providers: providers} = Setup.status()
+    print_next_steps(providers)
+  end
 
-    if ready? do
-      """
-      next:
-        start the agent:
-          raxol
+  defp print_next_steps(state) do
+    IO.puts("")
+    IO.puts(next_steps(state))
+  end
 
-        coding TUI:
-          raxol code
+  defp next_steps(providers) when is_list(providers) do
+    if Enum.any?(providers, & &1.available?),
+      do: next_steps(:connected),
+      else: next_steps(:disconnected)
+  end
 
-        inspect install:
-          raxol doctor
-      """
-    else
-      """
-      next:
-        connect a provider:
-          raxol login
-          raxol setup --provider anthropic --op op://Vault/Item/api_key
+  defp next_steps(:connected) do
+    """
+    next:
+      start the agent:
+        raxol
 
-        try offline:
-          raxol
+      coding TUI:
+        raxol code
 
-        inspect install:
-          raxol doctor
-      """
-    end
+      inspect install:
+        raxol doctor
+    """
+    |> String.trim_trailing()
+  end
+
+  defp next_steps(:disconnected) do
+    """
+    next:
+      connect a provider:
+        raxol login openrouter
+        raxol setup --provider anthropic --op op://Vault/Item/api_key
+
+      try offline:
+        raxol
+
+      inspect install:
+        raxol doctor
+    """
     |> String.trim_trailing()
   end
 
