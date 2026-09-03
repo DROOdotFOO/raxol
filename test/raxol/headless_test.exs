@@ -295,6 +295,26 @@ defmodule Raxol.HeadlessTest do
       path
     end
 
+    # The tight budget belongs to the wedged call and to nothing else. Left in
+    # force afterwards it also governs the recovery compile these tests do to
+    # prove the manager survived -- and that compile is real work racing a
+    # 150ms clock, which is the repo's most reliable macOS flake shape. It came
+    # true on 2026-09-02: the 1.17.3/macOS nightly cell timed out compiling
+    # `def noop, do: :ok`, and reported the budget error for it. Recovery is
+    # asserted against the production budget, which is what recovery means.
+    defp with_compile_budget(ms, fun) do
+      prev = Application.get_env(:raxol, :headless_compile_timeout_ms)
+      Application.put_env(:raxol, :headless_compile_timeout_ms, ms)
+
+      try do
+        fun.()
+      after
+        if prev,
+          do: Application.put_env(:raxol, :headless_compile_timeout_ms, prev),
+          else: Application.delete_env(:raxol, :headless_compile_timeout_ms)
+      end
+    end
+
     test "a body that raises is answered, not propagated", %{dir: dir} do
       path = script(dir, ~s|raise "boom at module scope"|)
       manager = Process.whereis(Headless)
@@ -339,15 +359,6 @@ defmodule Raxol.HeadlessTest do
     end
 
     test "a body that never returns is answered on a budget", %{dir: dir} do
-      prev = Application.get_env(:raxol, :headless_compile_timeout_ms)
-      Application.put_env(:raxol, :headless_compile_timeout_ms, 150)
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:raxol, :headless_compile_timeout_ms, prev),
-          else: Application.delete_env(:raxol, :headless_compile_timeout_ms)
-      end)
-
       path = script(dir, ~s|:timer.sleep(:infinity)|)
       manager = Process.whereis(Headless)
 
@@ -356,7 +367,9 @@ defmodule Raxol.HeadlessTest do
       # macOS flakes -- what makes this case a wedge is that no answer ever comes,
       # so the answer coming at all is the whole proof.
       assert {:error, {:compile_timed_out, ^path, 150}} =
-               Headless.start(path, id: :wedge)
+               with_compile_budget(150, fn ->
+                 Headless.start(path, id: :wedge)
+               end)
 
       # Not just alive: still able to compile, after a compile was killed out
       # from under the code server.
@@ -366,6 +379,26 @@ defmodule Raxol.HeadlessTest do
 
       assert {:error, :no_tea_module_found} =
                Headless.start(good, id: :after_wedge)
+    end
+
+    # The regression guard for the case above, which is the one the budget
+    # leaked into. A leak only ever shows up as a slow-runner flake -- the
+    # 2026-09-02 macOS nightly cell lost a 150ms race to compile
+    # `def noop, do: :ok` -- so this reproduces it deterministically with a
+    # budget nothing could meet, rather than waiting for a loaded machine.
+    test "the wedge's budget does not govern the compile after it", %{dir: dir} do
+      wedge = script(dir, ~s|:timer.sleep(:infinity)|)
+
+      assert {:error, {:compile_timed_out, ^wedge, 1}} =
+               with_compile_budget(1, fn ->
+                 Headless.start(wedge, id: :budget_scope_wedge)
+               end)
+
+      # A leaked budget answers `{:compile_timed_out, _, 1}` here instead.
+      good = script(dir, ~s|def noop, do: :ok|)
+
+      assert {:error, :no_tea_module_found} =
+               Headless.start(good, id: :budget_scope_after)
     end
 
     # The case above passes even when the kill does not land, because a
@@ -379,15 +412,6 @@ defmodule Raxol.HeadlessTest do
     test "a body that traps exits is killed anyway, freeing its module name", %{
       dir: dir
     } do
-      prev = Application.get_env(:raxol, :headless_compile_timeout_ms)
-      Application.put_env(:raxol, :headless_compile_timeout_ms, 150)
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:raxol, :headless_compile_timeout_ms, prev),
-          else: Application.delete_env(:raxol, :headless_compile_timeout_ms)
-      end)
-
       # The compiling process IS the module body's process, so the body can hand
       # its own pid back here. Nothing else can: the compile runs in a child the
       # manager spawns and never names.
@@ -405,7 +429,9 @@ defmodule Raxol.HeadlessTest do
       """)
 
       assert {:error, {:compile_timed_out, ^wedge, 150}} =
-               Headless.start(wedge, id: :trap_wedge)
+               with_compile_budget(150, fn ->
+                 Headless.start(wedge, id: :trap_wedge)
+               end)
 
       assert_received {:compiling, compiler}
 
