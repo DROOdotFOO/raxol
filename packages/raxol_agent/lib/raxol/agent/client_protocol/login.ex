@@ -33,11 +33,13 @@ defmodule Raxol.Agent.ClientProtocol.Login do
 
   Connect an LLM provider for the coding agent and every ACP session.
 
-  With no provider, prints what is currently connected.
+  With no provider, prints what is currently connected and concrete connection
+  examples.
 
   Providers with a browser sign-in use it by default; the rest prompt for a
-  key. Pass --paste to type a key either way (use it over SSH: the sign-in
-  redirect lands on a loopback port and needs a browser on this machine).
+  key without terminal echo. Pass --paste to type a key either way (use it over
+  SSH: the sign-in redirect lands on a loopback port and needs a browser on
+  this machine).
 
   Options:
     --paste      prompt for an API key instead of opening a browser
@@ -90,7 +92,11 @@ defmodule Raxol.Agent.ClientProtocol.Login do
     connected = Enum.filter(providers, & &1[:available?])
 
     if connected == [] do
-      print(io, "No provider connected. Run `raxol login <provider>`.")
+      print(
+        io,
+        "No provider connected. Run `raxol login openrouter` or " <>
+          "`raxol login <provider> --paste`."
+      )
     else
       Enum.each(connected, fn p ->
         print(io, "  #{p[:harness]} (#{p[:source]})")
@@ -124,8 +130,8 @@ defmodule Raxol.Agent.ClientProtocol.Login do
     64
   end
 
-  # A key typed at a prompt, never echoed back and never written to disk as
-  # itself -- Setup.connect_key/3 exchanges it for an `op://` reference.
+  # A key typed at a prompt is read without terminal echo and never written to
+  # disk as itself -- Setup.connect_key/3 exchanges it for an `op://` reference.
   defp connect_key(io, provider) do
     case read_key(io, provider) do
       "" ->
@@ -204,15 +210,24 @@ defmodule Raxol.Agent.ClientProtocol.Login do
   defp read_key(io, provider) do
     case Keyword.get(io, :read_fn) do
       nil ->
-        "Paste the API key for #{provider} (it is exchanged for a 1Password reference): "
-        |> IO.gets()
-        |> to_string()
+        prompt =
+          "Paste the API key for #{provider} " <>
+            "(it is exchanged for a 1Password reference): "
+
+        prompt
+        |> String.to_charlist()
+        |> :io.get_password()
+        |> normalize_password()
         |> String.trim()
 
       fun ->
         fun.(provider)
     end
   end
+
+  defp normalize_password(:eof), do: ""
+  defp normalize_password({:error, _reason}), do: ""
+  defp normalize_password(chars), do: to_string(chars)
 
   defp print(io, message) do
     case Keyword.get(io, :print_fn) do

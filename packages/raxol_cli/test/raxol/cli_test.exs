@@ -81,15 +81,37 @@ defmodule Raxol.CLITest do
     end
 
     test "providerless default explains mock mode and connection commands" do
-      out =
-        capture_io([input: "/exit\n"], fn ->
-          assert CLI.main([]) == 0
-        end)
+      with_agent_resolver(:error, fn ->
+        out =
+          capture_io([input: "/exit\n"], fn ->
+            assert CLI.main([]) == 0
+          end)
 
-      assert out =~ "No provider connected. Mock mode is active."
-      assert out =~ "raxol login"
-      assert out =~ "raxol setup --provider anthropic --op op://Vault/Item/api_key"
-      assert out =~ "type a prompt, or /exit"
+        assert out =~ "No provider connected. Mock mode is active."
+        assert out =~ "raxol login openrouter"
+
+        assert out =~
+                 "raxol setup --provider anthropic --op op://Vault/Item/api_key"
+
+        assert out =~ "type a prompt, or /exit"
+      end)
+    end
+
+    test "configured providers skip mock mode" do
+      executor =
+        Raxol.Agent.ExecutorConfig.new(
+          harness: :openai,
+          auth: %{api_key: "sk-test"}
+        )
+
+      with_agent_resolver({:ok, executor}, fn ->
+        out =
+          capture_io([input: "/exit\n"], fn ->
+            assert CLI.main([]) == 0
+          end)
+
+        refute out =~ "Mock mode is active"
+      end)
     end
   end
 
@@ -195,6 +217,21 @@ defmodule Raxol.CLITest do
 
       assert stderr =~ "authorized-keys"
       refute stderr =~ "interactive terminal"
+    end
+  end
+
+  defp with_agent_resolver(result, fun) do
+    previous = Application.get_env(:raxol_cli, :agent_executor_resolver)
+    Application.put_env(:raxol_cli, :agent_executor_resolver, fn -> result end)
+
+    try do
+      fun.()
+    after
+      if previous do
+        Application.put_env(:raxol_cli, :agent_executor_resolver, previous)
+      else
+        Application.delete_env(:raxol_cli, :agent_executor_resolver)
+      end
     end
   end
 end

@@ -29,8 +29,12 @@ defmodule Raxol.CLI do
   # The headless twin of `login`, and the same code `mix raxol.setup` runs.
   # Reachable from the packaged binary because connecting a provider is the
   # first thing a fresh install needs, and an npm install has no Mix tasks.
-  def main(["setup" | rest]), do: with_app(fn -> Raxol.Agent.Setup.CLI.run(rest) end)
-  def main(["doctor" | rest]), do: with_app(fn -> Raxol.CLI.Doctor.run(rest) end)
+  def main(["setup" | rest]),
+    do: with_app(fn -> Raxol.Agent.Setup.CLI.run(rest) end)
+
+  def main(["doctor" | rest]),
+    do: with_app(fn -> Raxol.CLI.Doctor.run(rest) end)
+
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
   def main([help]) when help in ~w(help --help -h), do: help()
@@ -48,19 +52,10 @@ defmodule Raxol.CLI do
   # needs no tty. `/exit` or EOF ends the session.
   defp run_agent(_args) do
     IO.puts(banner())
-    mode = if credentials?(), do: :live, else: :mock
+    mode = agent_mode()
 
     if mode == :mock do
-      IO.puts("""
-      No provider connected. Mock mode is active.
-
-      Connect:
-        raxol login
-        raxol setup --provider anthropic --op op://Vault/Item/api_key
-
-      Try anyway:
-        type a prompt, or /exit
-      """)
+      IO.puts(mock_mode_message())
     end
 
     loop([], mode)
@@ -117,22 +112,104 @@ defmodule Raxol.CLI do
       ""
   end
 
-  # With credentials, resolve a real provider (op-ref -> provider-env ->
-  # AI_API_KEY). Without, a Mock backend echoes so the session is still usable.
-  defp turn_opts(_input, :live), do: [auto_provider: true]
+  # With credentials, resolve the same provider surface that setup/doctor report:
+  # stored op refs, provider env vars, native subscriptions, then AI_API_KEY.
+  # Without one, a Mock backend echoes so the session is still usable.
+  defp turn_opts(_input, {:live, executor}), do: [executor: executor]
 
   defp turn_opts(input, :mock) do
     [
       backend: Raxol.Agent.Backend.Mock,
       backend_opts: [
-        response: "(mock) Set AI_API_KEY for real replies. You said: #{input}"
+        response:
+          "(mock) Connect a provider for real replies. You said: #{input}"
       ]
     ]
   end
 
-  defp credentials? do
-    ~w(AI_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY)
-    |> Enum.any?(&(System.get_env(&1) not in [nil, ""]))
+  defp agent_mode do
+    resolver =
+      Application.get_env(
+        :raxol_cli,
+        :agent_executor_resolver,
+        &resolve_agent_executor/0
+      )
+
+    case resolver.() do
+      {:ok, %Raxol.Agent.ExecutorConfig{} = executor} -> {:live, executor}
+      _ -> :mock
+    end
+  end
+
+  defp resolve_agent_executor do
+    executor =
+      [
+        &auto_executor/0,
+        &connected_provider_executor/0,
+        &generic_executor/0
+      ]
+      |> Enum.find_value(& &1.())
+
+    case executor do
+      nil -> :error
+      executor -> {:ok, executor}
+    end
+  end
+
+  defp auto_executor do
+    case Raxol.Agent.Backend.Resolver.resolve() do
+      {:ok, executor, _source} -> executor
+      _ -> nil
+    end
+  end
+
+  defp connected_provider_executor do
+    Raxol.Agent.Setup.status().providers
+    |> Enum.find_value(fn
+      %{available?: true, harness: harness} -> explicit_executor(harness)
+      _ -> nil
+    end)
+  end
+
+  defp explicit_executor(harness) do
+    case Raxol.Agent.Backend.Resolver.resolve(harness: harness) do
+      {:ok, executor, _source} -> executor
+      _ -> nil
+    end
+  end
+
+  defp generic_executor do
+    case System.get_env("AI_API_KEY") do
+      key when is_binary(key) and key != "" ->
+        [
+          harness: :openai,
+          api_key: key,
+          base_url: System.get_env("AI_BASE_URL"),
+          model: System.get_env("AI_MODEL")
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Raxol.Agent.Backend.Resolver.resolve()
+        |> case do
+          {:ok, executor, _source} -> executor
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp mock_mode_message do
+    """
+    No provider connected. Mock mode is active.
+
+    Connect:
+      raxol login openrouter
+      raxol setup --provider anthropic --op op://Vault/Item/api_key
+
+    Try anyway:
+      type a prompt, or /exit
+    """
   end
 
   # -- code -------------------------------------------------------------------
@@ -274,7 +351,9 @@ defmodule Raxol.CLI do
   @git_head Path.join([__DIR__, "..", "..", "..", "..", ".git", "HEAD"])
   if File.exists?(@git_head), do: @external_resource(@git_head)
 
-  @build_sha (case System.cmd("git", ["rev-parse", "--short", "HEAD"], stderr_to_stdout: true) do
+  @build_sha (case System.cmd("git", ["rev-parse", "--short", "HEAD"],
+                     stderr_to_stdout: true
+                   ) do
                 {sha, 0} -> String.trim(sha)
                 _ -> nil
               end)
