@@ -198,6 +198,11 @@ defmodule GenLandingFrames do
   # would then set the height of its whole grid row.
   @preview_max_height 34
 
+  # Only a demo that is intentionally a document viewport may be cropped by
+  # the grid-row cap. Every fixed-size demo must fit under @preview_max_height,
+  # or the generator fails instead of silently committing a cut card.
+  @preview_height_cap_exemptions ~w(codeblock)
+
   @hero_poll_ms 10
   @hero_frame_timeout_ms 1500
 
@@ -588,8 +593,11 @@ defmodule GenLandingFrames do
       with {:ok, height} <- preview_height(comp.module, slug),
            id = String.to_atom("preview_#{slug}"),
            {:ok, id} <- safe_start(comp.module, id, @preview_width, height) do
-        record_preview(dir, slug, id, comp)
-        Raxol.Headless.stop(id)
+        try do
+          record_preview(dir, slug, id, comp)
+        after
+          Raxol.Headless.stop(id)
+        end
       else
         {:error, reason} -> IO.puts("SKIP  #{comp.name}: #{inspect(reason)}")
       end
@@ -605,12 +613,32 @@ defmodule GenLandingFrames do
 
     case safe_start(module, id, @preview_width, @preview_probe_height) do
       {:ok, id} ->
-        rows = content_rows(id, module)
-        Raxol.Headless.stop(id)
-        {:ok, rows |> max(1) |> min(@preview_max_height)}
+        try do
+          id
+          |> content_rows(module)
+          |> cap_preview_height(slug)
+        after
+          Raxol.Headless.stop(id)
+        end
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp cap_preview_height(rows, slug) do
+    rows = max(rows, 1)
+
+    cond do
+      rows <= @preview_max_height ->
+        {:ok, rows}
+
+      slug in @preview_height_cap_exemptions ->
+        {:ok, @preview_max_height}
+
+      true ->
+        raise "#{slug} measured #{rows} preview rows, over the #{@preview_max_height}-row " <>
+                "cap. Shorten the demo or explicitly mark it as a viewport preview."
     end
   end
 
@@ -631,7 +659,8 @@ defmodule GenLandingFrames do
   # One-based, so the result is the number of rows that must be kept for the
   # last non-blank one to survive.
   defp last_content_row(id) do
-    {:ok, %Raxol.Terminal.ScreenBuffer{cells: rows}} = Raxol.Headless.get_buffer(id)
+    {:ok, %Raxol.Terminal.ScreenBuffer{cells: rows}} =
+      Raxol.Headless.get_buffer(id)
 
     rows
     |> Enum.with_index(1)

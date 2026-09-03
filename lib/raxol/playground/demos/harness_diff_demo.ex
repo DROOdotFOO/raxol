@@ -265,15 +265,11 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
         DiffViewer.render(diff_state, %{}),
         divider(),
         text(
-          "Sample: #{sample.name} (#{model.sample + 1}/#{length(@samples)})  |  " <>
-            "Mode: #{model.mode} (rendering: #{effective})  |  " <>
-            "Width: #{model.width}  |  Fold: #{model.context}",
+          "#{model.sample + 1}/#{length(@samples)} #{sample.name} | " <>
+            "#{model.mode}->#{effective} | w#{model.width} fold #{model.context}",
           style: [:dim]
         ),
-        text(
-          "[s] next sample  [m] cycle mode  [w] toggle width  [f] toggle fold",
-          style: [:dim]
-        )
+        text("[s] sample  [m] mode  [w] width  [f] fold", style: [:dim])
       ]
     end
   end
