@@ -88,7 +88,7 @@ defmodule Raxol.UI.Components.Harness.ReasoningBlock do
   end
 
   defp collapsed_summary(%{id: id, width: width}, lines) do
-    prefix = "#{@collapsed_icon} #{line_label(length(lines))} — "
+    prefix = "#{@collapsed_icon} #{line_label(length(lines))}: "
     budget = max(width - TextMeasure.display_width(prefix), 1)
 
     dim_text(id, "summary", prefix <> summary_text(lines, budget))
