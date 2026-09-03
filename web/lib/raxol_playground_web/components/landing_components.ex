@@ -173,10 +173,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   @settle_source ~S"""
   defmodule Settle do
     use Raxol.Core.Runtime.Application
-    @rows [
-      {"amount", "USDC 1.10"},
-      {"source", "Base Sepolia 84532"},
-      {"dest", "Arc Testnet 5042002"},
+    @route "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002"
+    @steps [
       {"spend gate", "before signature"},
       {"intent", "EIP-712 quote signed"},
       {"execution", "submitted to solver"},
@@ -187,14 +185,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
-      active = rem(m.t, length(@rows))
-      rows = Enum.with_index(@rows, &row(&1, &2, active))
-      column(do: [text("XOCHI RECEIPT", style: [:bold]) | rows])
+      at = rem(m.t, length(@steps))
+      head = [
+        text("XOCHI RECEIPT", style: [:bold]),
+        text(@route, fg: :magenta)
+      ]
+      column(do: head ++ Enum.with_index(@steps, &step(&1, &2, at)))
     end
-    defp row({k, v}, i, active) do
-      cursor = if(i == active, do: ">", else: " ")
+    defp step({k, v}, i, at) do
+      mark = if(i == at, do: ">", else: " ")
       key = String.pad_trailing(k, 10)
-      text("#{cursor} [OK] #{key} #{v}", fg: :cyan)
+      text("#{mark} [OK] #{key} #{v}", fg: :cyan)
     end
   end
   """
@@ -215,7 +216,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
                         {"settle", "settle.ex",
-                         "Xochi USDC receipt, no fake tx hash", @settle_source},
+                         "gate, EIP-712, solver, explorers", @settle_source},
                         {"pulse", "pulse.exs", "one module, four surfaces",
                          @pulse_source},
                         {"halo", "halo.exs", "the mark, as a program",
@@ -347,8 +348,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </h1>
 
         <p class="screen-sub">
-          The same app renders terminal, LiveView, SSH, MCP, Telegram, Watch, Speech.
-          <span class="text-axol-coral">raxol_payments</span> gates spend before signing.
+          Write the app once. Raxol projects it to terminal, LiveView, SSH, MCP,
+          Telegram, Watch, and Speech. <span class="text-axol-coral">raxol_payments</span>
+          gates the signature path.
         </p>
 
 

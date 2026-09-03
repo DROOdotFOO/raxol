@@ -131,10 +131,8 @@ end
 defmodule Settle do
   use Raxol.Core.Runtime.Application
 
-  @rows [
-    {"amount", "USDC 1.10"},
-    {"source", "Base Sepolia 84532"},
-    {"dest", "Arc Testnet 5042002"},
+  @route "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002"
+  @steps [
     {"spend gate", "before signature"},
     {"intent", "EIP-712 quote signed"},
     {"execution", "submitted to solver"},
@@ -146,15 +144,20 @@ defmodule Settle do
   def subscribe(_), do: [subscribe_interval(200, :tick)]
 
   def view(m) do
-    active = rem(m.t, length(@rows))
-    rows = Enum.with_index(@rows, &row(&1, &2, active))
-    column(do: [text("XOCHI RECEIPT", style: [:bold]) | rows])
+    at = rem(m.t, length(@steps))
+
+    head = [
+      text("XOCHI RECEIPT", style: [:bold]),
+      text(@route, fg: :magenta)
+    ]
+
+    column(do: head ++ Enum.with_index(@steps, &step(&1, &2, at)))
   end
 
-  defp row({k, v}, i, active) do
-    cursor = if(i == active, do: ">", else: " ")
+  defp step({k, v}, i, at) do
+    mark = if(i == at, do: ">", else: " ")
     key = String.pad_trailing(k, 10)
-    text("#{cursor} [OK] #{key} #{v}", fg: :cyan)
+    text("#{mark} [OK] #{key} #{v}", fg: :cyan)
   end
 end
 
@@ -315,14 +318,13 @@ defmodule GenLandingFrames do
   #          and one call per tick went by too fast to follow. All-done gets a
   #          single frame -- it is the one state with no spinner, so a second
   #          frame of it would be identical to the first.
-  #   settle eight receipt rows; all are complete, and the cursor moves through
-  #          amount, route, spend gate, signature, solver submission, and
-  #          explorer receipt paths without inventing transaction hashes.
+  #   settle five receipt steps; route facts are fixed, while the cursor moves
+  #          through real receipt stages without inventing transaction hashes.
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63},
     {"halo", Halo, {70, 14}, 110, 48},
     {"harness", Harness, {36, 5}, 200, 10},
-    {"settle", Settle, {56, 9}, 200, 8}
+    {"settle", Settle, {56, 7}, 200, 5}
   ]
 
   defp hero(base \\ @hero_dir) do

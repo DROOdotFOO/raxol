@@ -13,27 +13,11 @@
       },
       {
         "id": null,
-        "label": "  [OK] amount     USDC 1.10",
+        "label": "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "  [OK] amount     USDC 1.10"
-      },
-      {
-        "id": null,
-        "label": "  [OK] source     Base Sepolia 84532",
-        "type": "text",
-        "children": [],
-        "role": "text",
-        "content": "  [OK] source     Base Sepolia 84532"
-      },
-      {
-        "id": null,
-        "label": "  [OK] dest       Arc Testnet 5042002",
-        "type": "text",
-        "children": [],
-        "role": "text",
-        "content": "  [OK] dest       Arc Testnet 5042002"
+        "content": "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002"
       },
       {
         "id": null,
@@ -45,11 +29,11 @@
       },
       {
         "id": null,
-        "label": "> [OK] intent     EIP-712 quote signed",
+        "label": "  [OK] intent     EIP-712 quote signed",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "> [OK] intent     EIP-712 quote signed"
+        "content": "  [OK] intent     EIP-712 quote signed"
       },
       {
         "id": null,
@@ -69,11 +53,11 @@
       },
       {
         "id": null,
-        "label": "  [OK] dest tx    testnet.arcscan.app/tx",
+        "label": "> [OK] dest tx    testnet.arcscan.app/tx",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "  [OK] dest tx    testnet.arcscan.app/tx"
+        "content": "> [OK] dest tx    testnet.arcscan.app/tx"
       }
     ],
     "role": "group"
