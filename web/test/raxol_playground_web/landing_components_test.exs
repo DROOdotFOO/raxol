@@ -542,7 +542,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute pane =~ "dst"
     assert pane =~ "spend gate"
     assert pane =~ "before signature"
-    assert pane =~ "intent       EIP-712 quote signed"
+    assert pane =~ ~r/intent\s+EIP-712 quote signed/
   end
 
   # The row replaced the sentence, so it inherits the sentence's obligation:
@@ -1068,7 +1068,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
     # No SVM chain in the data -> the greyed future row appears.
     assert payments =~ "Solana"
-    assert payments =~ "lights up when the solver ships it"
+    assert payments =~ "appears when the capabilities API returns an SVM chain"
   end
 
   test "an unreachable solver renders the cached badge, never fake liveness" do
