@@ -13,9 +13,11 @@ config :raxol_playground, RaxolPlaygroundWeb.Endpoint,
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
-  secret_key_base: "development-secret-key-base-at-least-64-characters-long-for-security-purposes",
+  secret_key_base:
+    "development-secret-key-base-at-least-64-characters-long-for-security-purposes",
   watchers: [
-    esbuild: {Esbuild, :install_and_run, [:default, ~w(--sourcemap=inline --watch)]},
+    esbuild:
+      {Esbuild, :install_and_run, [:default, ~w(--sourcemap=inline --watch)]},
     tailwind: {Tailwind, :install_and_run, [:default, ~w(--watch)]}
   ]
 
@@ -54,6 +56,8 @@ config :raxol_playground, RaxolPlaygroundWeb.Endpoint,
 
 # Enable dev routes for dashboard and mailbox
 config :raxol_playground, dev_routes: true
+
+config :raxol, :skip_endpoint, true
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :console, format: "[$level] $message\n"
