@@ -427,14 +427,21 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <%!-- Two identical runs, so translating the track by half its width loops
          seamlessly. The copy is aria-hidden -- it exists for the animation,
          and a screen reader reading the list twice would be a defect. --%>
-    <%!-- Keyed and pinned because the row is a SIBLING of the hero, and the
-         hero re-renders on every "next example". Without an id, morphdom has
-         nothing to match this div by and re-inserts it while realigning
-         `main`'s children; re-insertion restarts the CSS animation, so the
-         track jumped back to its first frame on every click. Nothing here
-         depends on an assign -- the groups come from the capability registries
-         and are identical on every render -- so there is no update to lose. --%>
-    <div id="screen-integrations" phx-update="ignore" class="screen-integrations">
+    <%!-- Deliberately unkeyed. The track used to jump back to its first frame
+         on every "next example", and the row looks like the thing to pin: it is
+         the sibling that follows the hero, so morphdom detaches and reattaches
+         it whenever the hero is rekeyed, and reattaching an element restarts its
+         CSS animation. But nothing done here can prevent that -- it is not this
+         element being rekeyed, and `phx-update="ignore"` governs a subtree's
+         contents, not whether the subtree is moved. Measured: with an id and
+         `phx-update="ignore"` on this div the row was still detached on every
+         click and the animation still reset.
+
+         The fix belongs where the rekeying happens, so it lives on the hero's
+         stable `.hero-demo-shell`. Left plain here on purpose: an id and an
+         ignore that did nothing would read as the thing holding the row still,
+         and the next person to touch the hero would trust it. --%>
+    <div class="screen-integrations">
       <div class="integrations-track">
         <div
           :for={dup? <- [false, true]}
@@ -646,15 +653,27 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       )
 
     ~H"""
-    <%!-- The id carries the example so switching remounts the hook: the frame
-         player caches its frame nodes, and patching them underneath it would
-         leave it stepping elements that no longer exist. --%>
-    <div
-      id={"hero-demo-#{@example}"}
-      phx-hook="HeroDemo"
-      class="hero-demo mx-auto text-left"
-      data-frame-ms={@frame_ms}
-    >
+    <%!-- A stable id for the child `main` actually holds, because the demo's own
+         id deliberately changes per example (below) and morphdom keys `main`'s
+         children by id. A rekeyed hero is an insert, and inserting it displaces
+         the sibling that follows -- the integrations row -- which detaches and
+         reattaches it. Reattaching an element restarts its CSS animation, so the
+         marquee jumped back to its first frame on every "next example".
+
+         The shell contains the churn: `main`'s three children now keep the same
+         identity across a switch, and only the hero's own subtree is rekeyed.
+         `.hero-demo-shell` is `display: contents`, so it generates no box and
+         `.hero-demo` remains a direct flex child of `.screen-main`. --%>
+    <div id="hero-demo-shell" class="hero-demo-shell">
+      <%!-- The id carries the example so switching remounts the hook: the frame
+           player caches its frame nodes, and patching them underneath it would
+           leave it stepping elements that no longer exist. --%>
+      <div
+        id={"hero-demo-#{@example}"}
+        phx-hook="HeroDemo"
+        class="hero-demo mx-auto text-left"
+        data-frame-ms={@frame_ms}
+      >
       <%!-- The player's controls live in the title bar, where a window's
            controls belong and where nothing can clip them. They used to sit in
            a footer below the panes: the demo box is height-capped, so on any
@@ -852,6 +871,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         </div>
       </div>
 
+      </div>
     </div>
     """
   end
