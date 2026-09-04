@@ -1,6 +1,8 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.Action.ToolConverter
+  alias Raxol.Agent.Actions.Code, as: CodeActions
   alias Raxol.Agent.Actions.Fs
   alias Raxol.Symphony.{Config, Issue, Tracker}
   alias Raxol.Symphony.Runners.RaxolAgent
@@ -184,20 +186,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
   def __test_always_pause__(_event), do: {:pause, :awaiting_delivery, :tok}
 
   describe "workspace confinement" do
-    test "agent_context/1 carries the workspace path as the tool cwd" do
+    test "agent_context/2 carries the workspace path as the tool cwd" do
       assert %{cwd: "/srv/symphony/MT-1"} =
-               RaxolAgent.agent_context(workspace_path: "/srv/symphony/MT-1")
+               RaxolAgent.agent_context([workspace_path: "/srv/symphony/MT-1"], config())
     end
 
     test "the workspace context reaches Stream.run under the :context key" do
-      state = %{
-        backend: Raxol.Agent.Backend.Mock,
-        backend_opts: [],
-        system_prompt: nil,
-        context: RaxolAgent.agent_context(workspace_path: "/srv/symphony/MT-1")
-      }
-
-      opts = RaxolAgent.__stream_opts__(state)
+      opts = RaxolAgent.__stream_opts__(stream_state())
 
       # `Stream.run/2` reads this with a default, so a wrong key name would
       # silently un-confine the run instead of raising.
@@ -220,7 +215,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
       File.write!(Path.join(workspace, "inside.txt"), "in")
       File.write!(Path.join(tmp_dir, "outside.txt"), "out")
 
-      context = RaxolAgent.agent_context(workspace_path: workspace)
+      context = RaxolAgent.agent_context([workspace_path: workspace], config())
 
       assert {:ok, resolved} = Fs.resolve("inside.txt", context)
       assert resolved == Path.join(workspace, "inside.txt")
@@ -234,7 +229,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
       workspace = Path.join(tmp_dir, "MT-1")
       File.mkdir_p!(workspace)
 
-      context = RaxolAgent.agent_context(workspace_path: workspace)
+      context = RaxolAgent.agent_context([workspace_path: workspace], config())
 
       # `mix.exs` exists in the BEAM's cwd (the package root) and not in the
       # workspace. Resolving it must not reach the file the orchestrator was
@@ -253,6 +248,123 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
       assert Code.ensure_loaded?(Raxol.Agent.Stream)
     end
   end
+
+  describe "agent.actions" do
+    test "no actions declared is the default: the run exposes no tools" do
+      opts = RaxolAgent.__stream_opts__(stream_state())
+
+      # `Stream.run/2` reads this with a default too, so a wrong key name would
+      # silently leave the model with no tools.
+      assert Keyword.fetch!(opts, :actions) == []
+    end
+
+    test "declared actions reach Stream.run" do
+      cfg = config(%{actions: [CodeActions.Grep, CodeActions.Write]})
+      opts = RaxolAgent.__stream_opts__(stream_state(cfg))
+
+      assert Keyword.fetch!(opts, :actions) == [CodeActions.Grep, CodeActions.Write]
+    end
+
+    test "validate_actions/1 accepts real Action modules" do
+      assert {:ok, [CodeActions.Grep]} =
+               RaxolAgent.validate_actions(config(%{actions: [CodeActions.Grep]}))
+    end
+
+    test "a module that is not an Action fails the run instead of being dropped" do
+      Memory.put_issue(%{issue() | state: "Done"})
+      cfg = config(%{actions: [CodeActions.Grep, NotAnActionModule, "grep"]})
+
+      assert {:error, {:invalid_actions, [NotAnActionModule, "grep"]}} =
+               RaxolAgent.validate_actions(cfg)
+
+      assert {:error, {:invalid_actions, _}} =
+               RaxolAgent.run(issue(), cfg, parent: self(), workspace_path: @workspace)
+    end
+  end
+
+  describe "agent.tool_policy" do
+    @tag :tmp_dir
+    test "unset leaves the framework default in force: reads allowed, writes denied",
+         %{tmp_dir: workspace} do
+      context = RaxolAgent.agent_context([workspace_path: workspace], config())
+
+      # No authorizer injected -- that IS the safe default, because
+      # ToolConverter falls back to ToolPolicy.deny_sensitive/0.
+      refute Map.has_key?(context, :tool_authorizer)
+
+      assert {:error, {:tool_denied, "write_file", :sensitive_tool}} =
+               write_call() |> dispatch(context)
+
+      refute File.exists?(Path.join(workspace, "written.txt"))
+
+      # A read-only tool in the same run is unaffected.
+      assert {:ok, %{paths: _}} = glob_call() |> dispatch(context)
+    end
+
+    @tag :tmp_dir
+    test "allow_all lets a write through, and it lands inside the workspace",
+         %{tmp_dir: workspace} do
+      cfg = config(%{tool_policy: :allow_all})
+      context = RaxolAgent.agent_context([workspace_path: workspace], cfg)
+
+      assert {:ok, _} = write_call() |> dispatch(context)
+      assert File.read!(Path.join(workspace, "written.txt")) == "hi"
+    end
+
+    @tag :tmp_dir
+    test "allow_all still cannot write outside the workspace", %{tmp_dir: tmp_dir} do
+      workspace = Path.join(tmp_dir, "MT-1")
+      File.mkdir_p!(workspace)
+
+      cfg = config(%{tool_policy: :allow_all})
+      context = RaxolAgent.agent_context([workspace_path: workspace], cfg)
+
+      assert {:error, :outside_cwd} =
+               write_call("../escaped.txt") |> dispatch(context)
+
+      refute File.exists?(Path.join(tmp_dir, "escaped.txt"))
+    end
+
+    @tag :tmp_dir
+    test "an unrecognized policy denies everything rather than widening the run",
+         %{tmp_dir: workspace} do
+      cfg = config(%{tool_policy: :allw_all})
+      context = RaxolAgent.agent_context([workspace_path: workspace], cfg)
+
+      # Not merely "sensitive denied" -- a typo must not land on the framework
+      # default, so even a read-only tool is refused.
+      assert {:error, {:tool_denied, "glob", :invalid_tool_policy}} =
+               glob_call() |> dispatch(context)
+    end
+
+    test "a shell sandbox reaches the context when configured" do
+      sandbox = Raxol.Agent.Sandbox.Shell.allowlist(["git"])
+      cfg = config(%{shell_sandbox: sandbox})
+
+      assert %{shell_sandbox: ^sandbox} =
+               RaxolAgent.agent_context([workspace_path: @workspace], cfg)
+    end
+  end
+
+  defp stream_state(cfg \\ nil) do
+    cfg = cfg || config()
+
+    %{
+      backend: Raxol.Agent.Backend.Mock,
+      backend_opts: [],
+      system_prompt: nil,
+      context: RaxolAgent.agent_context([workspace_path: "/srv/symphony/MT-1"], cfg),
+      actions: RaxolAgent.validate_actions(cfg) |> elem(1)
+    }
+  end
+
+  defp dispatch(call, context),
+    do: ToolConverter.dispatch_tool_call(call, CodeActions.all(), context)
+
+  defp write_call(path \\ "written.txt"),
+    do: %{"name" => "write_file", "arguments" => %{"path" => path, "content" => "hi"}}
+
+  defp glob_call, do: %{"name" => "glob", "arguments" => %{"pattern" => "*"}}
 
   describe "config dispatch" do
     test "runner.kind=raxol_agent resolves to RaxolAgent module" do
