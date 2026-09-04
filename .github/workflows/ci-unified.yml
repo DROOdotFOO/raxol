@@ -217,6 +217,41 @@ jobs:
       - name: Check documentation
         run: mix raxol.check_docs
 
+  release-check:
+    name: Package Release Check
+    needs: setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ needs.setup.outputs.elixir-version }}
+          otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
+
+      - name: Restore cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            .raxol_cache
+          key: ${{ needs.setup.outputs.cache-key }}
+
+      - name: Install hex and rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: Dry-run Hex package builds
+        run: mix raxol.release.check
+
   compile:
     name: Compilation Check
     needs: setup
@@ -913,7 +948,7 @@ jobs:
   # ========================================
   ci-status:
     name: CI Status
-    needs: [format, compile, test-unit, package-tests, input-canary, credo, security]
+    needs: [format, release-check, compile, test-unit, package-tests, input-canary, credo, security]
     runs-on: ubuntu-latest
     if: always()
 
@@ -923,6 +958,11 @@ jobs:
           # Required checks
           if [ "${{ needs.format.result }}" != "success" ]; then
             echo "❌ Format check failed"
+            exit 1
+          fi
+
+          if [ "${{ needs.release-check.result }}" != "success" ]; then
+            echo "Package release check failed"
             exit 1
           fi
 

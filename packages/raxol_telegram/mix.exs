@@ -50,9 +50,9 @@ defmodule RaxolTelegram.MixProject do
       {:telegex, "~> 1.8", optional: true, runtime: false},
 
       # Gateway behaviour (optional -- GatewayAdapter compiles only when present).
-      # raxol_gateway is pre-alpha and not yet on Hex: the next Hex publish of
-      # raxol_telegram requires publishing raxol_gateway first.
-      raxol_dep(:raxol_gateway, "~> 0.1", "../raxol_gateway", optional: true),
+      # Source builds include it locally; Hex builds drop it until raxol_gateway
+      # joins the public package train.
+      gateway_dep(),
 
       # JSON processing
       {:jason, "~> 1.4"},
@@ -67,6 +67,17 @@ defmodule RaxolTelegram.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.1", only: [:dev, :test]}
     ]
+    |> List.flatten()
+  end
+
+  defp gateway_dep do
+    path = "../raxol_gateway"
+
+    if System.get_env("HEX_BUILD") || !File.dir?(path) do
+      []
+    else
+      [raxol_dep(:raxol_gateway, "~> 0.1", path, optional: true)]
+    end
   end
 
   defp raxol_dep(name, version, path, opts \\ []) do

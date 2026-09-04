@@ -74,4 +74,4 @@ The main `raxol` package does not depend on `raxol_agent`, `raxol_earn`, `raxol_
 
 ## Publishing
 
-See [Hex Publishing](https://github.com/DROOdotFOO/raxol/blob/master/CLAUDE.md#hex-publishing) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.
+Run `mix raxol.release.check` before publishing. It validates the public Hex train in dependency order, strips local path deps with `HEX_BUILD=1`, and runs `mix hex.build --unpack` for each package without publishing.

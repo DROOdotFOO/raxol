@@ -395,11 +395,12 @@ defmodule Raxol.MixProject do
       "dev.check": ["cmd scripts/dev.sh check"],
       "dev.setup": ["cmd scripts/dev.sh setup"],
       # Release commands
-      "release.dev": ["run scripts/release.exs --env dev"],
-      "release.prod": ["run scripts/release.exs --env prod"],
-      "release.all": ["run scripts/release.exs --env prod --all"],
-      "release.clean": ["run scripts/release.exs --clean"],
-      "release.tag": ["run scripts/release.exs --tag"],
+      "release.check": ["raxol.release.check"],
+      "release.dev": ["run scripts/dev/release.exs --env dev"],
+      "release.prod": ["run scripts/dev/release.exs --env prod"],
+      "release.all": ["run scripts/dev/release.exs --env prod --all"],
+      "release.clean": ["run scripts/dev/release.exs --clean"],
+      "release.tag": ["run scripts/dev/release.exs --tag"],
       # AI development tools
       "usage_rules.update": ["usage_rules.sync"]
     ]
@@ -417,8 +418,19 @@ defmodule Raxol.MixProject do
   defp package do
     [
       name: "raxol",
-      files:
-        ~w(lib priv/themes .formatter.exs mix.exs README* LICENSE* CHANGELOG.md),
+      files: ~w(
+          lib
+          priv/themes
+          docs
+          examples/reference/core/README.md
+          .github/CONTRIBUTING.md
+          .formatter.exs
+          mix.exs
+          README*
+          LICENSE*
+          CHANGELOG.md
+          ROADMAP.md
+        ),
       exclude_patterns: [~r/\.so$/, ~r/\.o$/, ~r/\.dylib$/],
       maintainers: ["DROO AMOR"],
       licenses: ["MIT"],
