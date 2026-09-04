@@ -374,6 +374,17 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert status == 3
     end
 
+    test "a timed-out command reports :timeout instead of raising" do
+      # The process-group SIGKILL on the timeout path brings the port down as
+      # soon as the OS process dies, and `Port.close/1` raises on an already
+      # dead port. The tool crashed at the caller rather than returning the
+      # `:timeout` its own docs promise.
+      assert {:ok, result} =
+               Code.Bash.run(%{command: "sleep 5", timeout_ms: 200}, %{})
+
+      assert result.exit_status == :timeout
+    end
+
     test "a command that reads stdin sees EOF instead of an open pipe" do
       # `run_shell/4` never writes to the port, so an inherited write pipe only
       # signals "more input is coming". Without `:in`, `cat` blocks until the
