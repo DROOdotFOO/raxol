@@ -27,8 +27,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           base_url: https://api.anthropic.com
           max_tokens: 4096
           system_prompt: "You are a software engineer..."
-          # actions: list of fully-qualified action modules (currently ignored;
-          # tool use lands later together with hook integration)
+          actions: Raxol.Agent.Actions.Code.all()
+          tool_policy: :allow_all
+          shell_sandbox: Raxol.Agent.Sandbox.Shell.allowlist(["git", "mix"])
           pause_detector: {MyApp.PauseDetector, :detect}
           tracker_cache: {Raxol.Agent.Cache.Ets, %{table: :tracker_cache}}
           tracker_cache_ttl_ms: 30_000
@@ -151,6 +152,47 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   a no-op (and never raises) when unconfigured. Currently wired in the
   workflow-mode path; the simple path is a follow-up.
 
+  ## Tools
+
+  `agent.actions` is a list of `Raxol.Agent.Action` modules exposed to the
+  model as tools. Default `[]` -- no tools, which is the pre-existing
+  behaviour. Entries are module atoms, like `agent.module`, `agent.policies`
+  and `agent.sandboxes`; an entry that is not a loadable Action module fails
+  the run with `{:error, {:invalid_actions, offenders}}` rather than being
+  dropped, since an agent that quietly has no tools is indistinguishable from
+  a model that chose not to call any.
+
+  ### Declaring actions is not the same as enabling writes
+
+  With `actions` set and nothing else, a run gets READ-ONLY tools. The
+  framework's default tool policy
+  (`Raxol.Agent.ToolPolicy.deny_sensitive/0`, applied by
+  `Raxol.Agent.Action.ToolConverter` whenever the context sets no
+  `:tool_authorizer`) denies the Actions marked `sensitive: true` --
+  `write_file`, `edit_file` and `bash` -- and allows `grep`, `glob` and the
+  other read-only ones. A prompt-injected model therefore cannot write to
+  disk or spawn a shell just by emitting a tool call.
+
+  A Symphony run is unattended: there is no operator to approve a call the way
+  `Raxol.Agent.Code.App` prompts one interactively. Enabling writes is
+  therefore a deliberate configuration act, `agent.tool_policy`:
+
+    * unset (default) -- read-only, per above
+    * `:allow_all` -- every declared Action may run. This is what an
+      autonomous coding run needs, and it means the model can write anywhere
+      inside the workspace and run any shell command the sandbox permits
+    * `:deny_all` / `:deny_sensitive` -- explicit forms of the restrictive ends
+    * `{:allowlist, names}` / `{:denylist, names}` -- by tool name
+    * a `(module, params, context) -> :ok | {:deny, reason}` function
+
+  An unrecognized value denies everything rather than falling back to the
+  framework default, so a typo cannot silently widen a run.
+
+  `agent.shell_sandbox` takes a `Raxol.Agent.Sandbox.Shell` that `bash` checks
+  a command against before spawning. Worth setting whenever `tool_policy`
+  admits `bash`: the workspace cwd confines the *fs* tools, but a shell command
+  is not a path -- it can `cd` elsewhere or name an absolute one.
+
   ## Workspace confinement
 
   The orchestrator gives every issue its own workspace under
@@ -201,35 +243,60 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       not raxol_agent_loaded?() ->
         {:error, :raxol_agent_not_loaded}
 
-      workflow_mode?(config) ->
-        run_via_workflow(issue, config, opts)
-
       true ->
-        do_run(issue, config, opts)
+        # Bad `agent.actions` fails the run rather than silently dropping the
+        # tool: an agent that quietly has no tools looks like a model that
+        # chose not to use them.
+        case validate_actions(config) do
+          {:ok, _actions} -> dispatch(issue, config, opts)
+          {:error, _} = err -> err
+        end
     end
   end
 
-  @doc """
-  Build the agent tool context for a run from the runner `opts`.
+  defp dispatch(%Issue{} = issue, %Config{} = config, opts) do
+    if workflow_mode?(config),
+      do: run_via_workflow(issue, config, opts),
+      else: do_run(issue, config, opts)
+  end
 
-  The context carries `:cwd`, the per-issue workspace the orchestrator
-  allocated. `Raxol.Agent.Actions.Fs.resolve/2` expands every tool path
-  against it and rejects anything that resolves outside it.
+  @doc """
+  Build the agent tool context for a run.
+
+  The context carries:
+
+    * `:cwd` -- the per-issue workspace the orchestrator allocated.
+      `Raxol.Agent.Actions.Fs.resolve/2` expands every tool path against it and
+      rejects anything that resolves outside it.
+    * `:tool_authorizer` -- only when `agent.tool_policy` is set. LEAVING IT
+      UNSET IS THE SAFE DEFAULT: `Raxol.Agent.Action.ToolConverter` then falls
+      back to `Raxol.Agent.ToolPolicy.deny_sensitive/0`, which denies the
+      `sensitive: true` Actions (`write_file`, `edit_file`, `bash`) while
+      letting read-only ones through. Injecting nothing is what keeps an
+      unattended run read-only until an operator opts in.
+    * `:shell_sandbox` -- only when `agent.shell_sandbox` is set. `bash` checks
+      the command against it before any process spawns.
 
   Raises when `opts` carries no `:workspace_path`: there is no safe default
   here, and falling back to the BEAM's cwd would silently un-confine the run.
   """
-  @spec agent_context(keyword()) :: map()
-  def agent_context(opts) do
+  @spec agent_context(keyword(), Config.t()) :: map()
+  def agent_context(opts, %Config{} = config) do
     %{cwd: Keyword.fetch!(opts, :workspace_path)}
+    |> put_unless_nil(:tool_authorizer, agent_tool_authorizer(config))
+    |> put_unless_nil(:shell_sandbox, agent_shell_sandbox(config))
   end
+
+  defp put_unless_nil(map, _key, nil), do: map
+  defp put_unless_nil(map, key, value), do: Map.put(map, key, value)
 
   # The options both run paths hand to `Raxol.Agent.Stream.run/2`.
   #
   # Shared so the two paths cannot drift, and named so a test can pin the
-  # `:context` key: `Stream.run/2` reads it with `Keyword.get(opts, :context,
-  # %{})`, so a misspelled key would not raise -- it would silently fall back
-  # to an empty context and un-confine the run.
+  # `:context` and `:actions` keys: `Stream.run/2` reads both with
+  # `Keyword.get/3` defaults, so a misspelled key would not raise -- it would
+  # silently fall back to an empty context (un-confining the run) or to no
+  # tools at all.
   @doc false
   @spec __stream_opts__(map()) :: keyword()
   def __stream_opts__(state) do
@@ -237,7 +304,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       backend: Map.fetch!(state, :backend),
       backend_opts: Map.fetch!(state, :backend_opts),
       system_prompt: Map.fetch!(state, :system_prompt),
-      context: Map.fetch!(state, :context)
+      context: Map.fetch!(state, :context),
+      actions: Map.fetch!(state, :actions)
     ]
   end
 
@@ -304,7 +372,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       backend_opts: backend_opts,
       system_prompt: agent_string(config, :system_prompt),
       pause_detector: agent_pause_detector(config),
-      context: agent_context(opts),
+      context: agent_context(opts, config),
+      actions: raw_actions(config),
       turn: 1,
       max_turns: config.agent.max_turns,
       last_events: [],
@@ -541,7 +610,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           backend_opts: backend_opts,
           system_prompt: agent_string(config, :system_prompt),
           pause_detector: agent_pause_detector(config),
-          context: agent_context(opts),
+          context: agent_context(opts, config),
+          actions: raw_actions(config),
           turn: 1,
           max_turns: config.agent.max_turns
         }
@@ -883,6 +953,70 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   defp build_thread_id(%Issue{id: id}, attempt) when not is_nil(id) do
     "symphony-agent-" <> to_string(id) <> "-" <> to_string(attempt || 0)
+  end
+
+  # -- Tools ------------------------------------------------------------------
+
+  @doc """
+  The Action modules this run exposes to the model, from `agent.actions`.
+
+  Returns `{:error, {:invalid_actions, offenders}}` when an entry is not a
+  loadable module implementing `Raxol.Agent.Action`. Entries are module atoms,
+  not strings -- the same shape `agent.module`, `agent.policies` and
+  `agent.sandboxes` already take, since `runner.agent` is an Elixir term map.
+  """
+  @spec validate_actions(Config.t()) :: {:ok, [module()]} | {:error, term()}
+  def validate_actions(%Config{} = config) do
+    actions = raw_actions(config)
+
+    case Enum.reject(actions, &action_module?/1) do
+      [] -> {:ok, actions}
+      offenders -> {:error, {:invalid_actions, offenders}}
+    end
+  end
+
+  defp raw_actions(%Config{runner: runner}) do
+    case get_in(runner, [:agent, :actions]) do
+      list when is_list(list) -> list
+      _ -> []
+    end
+  end
+
+  # An Action is a module exporting the behaviour's `run/2` plus the
+  # `__action_meta__/0` that `use Raxol.Agent.Action` injects (the marker the
+  # tool converter reads name and sensitivity from). Checked rather than
+  # assumed: a typo'd module name is an atom like any other, and would
+  # otherwise surface as a crash mid-run.
+  defp action_module?(mod) when is_atom(mod) do
+    Code.ensure_loaded?(mod) and function_exported?(mod, :run, 2) and
+      function_exported?(mod, :__action_meta__, 0)
+  end
+
+  defp action_module?(_), do: false
+
+  # `agent.tool_policy` -> a `:tool_authorizer`, or nil to leave the framework
+  # default (`ToolPolicy.deny_sensitive/0`) in force. See `agent_context/2`.
+  defp agent_tool_authorizer(%Config{runner: runner}) do
+    case get_in(runner, [:agent, :tool_policy]) do
+      nil -> nil
+      fun when is_function(fun, 3) -> fun
+      :deny_sensitive -> Raxol.Agent.ToolPolicy.deny_sensitive()
+      :allow_all -> Raxol.Agent.ToolPolicy.allow_all()
+      :deny_all -> Raxol.Agent.ToolPolicy.deny_all()
+      {:allowlist, names} when is_list(names) -> Raxol.Agent.ToolPolicy.allowlist(names)
+      {:denylist, names} when is_list(names) -> Raxol.Agent.ToolPolicy.denylist(names)
+      # An unrecognized policy must not read as "no policy" -- that would
+      # silently widen the run to the framework default. Deny everything and
+      # let the operator see empty tool results rather than unintended writes.
+      _ -> Raxol.Agent.ToolPolicy.deny_all(:invalid_tool_policy)
+    end
+  end
+
+  defp agent_shell_sandbox(%Config{runner: runner}) do
+    case get_in(runner, [:agent, :shell_sandbox]) do
+      %Raxol.Agent.Sandbox.Shell{} = sandbox -> sandbox
+      _ -> nil
+    end
   end
 
   defp agent_policies(%Config{runner: runner}) do
