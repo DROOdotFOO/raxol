@@ -35,8 +35,32 @@ defmodule Raxol.Symphony.Config.Schema do
           | :reviewer_kind_must_differ
           | {:invalid_ssh_host, term()}
           | {:invalid_value, atom(), term()}
+          | {:workflow_section_not_a_map, [atom()]}
 
   @codex_auth_modes [:inherit, :api_key, :codex_home]
+
+  # Front-matter paths that are read as maps. A mis-indented edit leaves a
+  # scalar, a list, or (most often) nothing at all under one of these keys,
+  # and reading that as a map raises BadMapError. Most raise in the `Config`
+  # section builders, which escapes WorkflowStore's last-known-good fallback
+  # and takes the Symphony tree down. `runner.agent` is stored raw and read by
+  # the runner instead, so it raises later, once per dispatched run, with only
+  # a stacktrace in a worker task to go on. Checked against the raw front
+  # matter so either way the typo comes back as an error tuple at load.
+  @map_sections [
+    [:tracker],
+    [:polling],
+    [:workspace],
+    [:hooks],
+    [:agent],
+    [:codex],
+    [:codex, :auth],
+    [:runner],
+    [:runner, :agent],
+    [:review],
+    [:recording],
+    [:worker]
+  ]
 
   @doc """
   Validates a config struct. Returns `:ok` or `{:error, reason}`.
@@ -65,6 +89,41 @@ defmodule Raxol.Symphony.Config.Schema do
       end
     end
   end
+
+  @doc """
+  Validates the shape of the raw front-matter map before it is built into a
+  `Config.t()`.
+
+  Every section that is later read as a map must be a map (or absent).
+  Returns `:ok` or `{:error, {:workflow_section_not_a_map, path}}`.
+  """
+  @spec validate_sections(map()) :: :ok | {:error, error()}
+  def validate_sections(raw) when is_map(raw) do
+    Enum.reduce_while(@map_sections, :ok, fn path, :ok ->
+      case fetch_section(raw, path) do
+        :absent -> {:cont, :ok}
+        {:ok, value} when is_map(value) -> {:cont, :ok}
+        {:ok, _malformed} -> {:halt, {:error, {:workflow_section_not_a_map, path}}}
+      end
+    end)
+  end
+
+  defp fetch_section(map, [key]) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> :absent
+    end
+  end
+
+  defp fetch_section(map, [key | rest]) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> fetch_section(value, rest)
+      :error -> :absent
+    end
+  end
+
+  # A malformed parent is reported by its own entry, which comes first.
+  defp fetch_section(_not_a_map, _path), do: :absent
 
   # -- Tracker ----------------------------------------------------------------
 

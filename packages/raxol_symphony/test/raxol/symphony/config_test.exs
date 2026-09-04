@@ -313,6 +313,115 @@ defmodule Raxol.Symphony.ConfigTest do
     end
   end
 
+  describe "load_and_validate/1 -- malformed front-matter sections" do
+    @tag :tmp_dir
+    test "rejects a section written with no body", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "WORKFLOW.md")
+
+      File.write!(path, """
+      ---
+      tracker:
+        kind: memory
+      polling:
+        # interval_ms: 30000
+      ---
+      hello
+      """)
+
+      assert {:error, {:workflow_section_not_a_map, [:polling]}} =
+               Config.load_and_validate(path)
+    end
+
+    @tag :tmp_dir
+    test "rejects a section written as a scalar", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "WORKFLOW.md")
+
+      File.write!(path, """
+      ---
+      tracker: memory
+      ---
+      hello
+      """)
+
+      assert {:error, {:workflow_section_not_a_map, [:tracker]}} =
+               Config.load_and_validate(path)
+    end
+
+    @tag :tmp_dir
+    test "rejects a section written as a list", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "WORKFLOW.md")
+
+      File.write!(path, """
+      ---
+      tracker:
+        kind: memory
+      workspace:
+        - /tmp/symphony
+      ---
+      hello
+      """)
+
+      assert {:error, {:workflow_section_not_a_map, [:workspace]}} =
+               Config.load_and_validate(path)
+    end
+
+    @tag :tmp_dir
+    test "rejects a malformed nested codex.auth section", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "WORKFLOW.md")
+
+      File.write!(path, """
+      ---
+      tracker:
+        kind: memory
+      codex:
+        auth: api_key
+      ---
+      hello
+      """)
+
+      assert {:error, {:workflow_section_not_a_map, [:codex, :auth]}} =
+               Config.load_and_validate(path)
+    end
+
+    @tag :tmp_dir
+    test "rejects a runner.agent block that lost its body", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "WORKFLOW.md")
+
+      File.write!(path, """
+      ---
+      tracker:
+        kind: memory
+      runner:
+        kind: raxol_agent
+        agent:
+      ---
+      hello
+      """)
+
+      assert {:error, {:workflow_section_not_a_map, [:runner, :agent]}} =
+               Config.load_and_validate(path)
+    end
+
+    @tag :tmp_dir
+    test "rejects a scalar runner.agent", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "WORKFLOW.md")
+
+      File.write!(path, """
+      ---
+      tracker:
+        kind: memory
+      runner:
+        kind: raxol_agent
+        agent: workflow_mode
+      ---
+      hello
+      """)
+
+      assert {:error, {:workflow_section_not_a_map, [:runner, :agent]}} =
+               Config.load_and_validate(path)
+    end
+  end
+
   describe "worker.ssh_hosts (issue #742)" do
     alias Raxol.Symphony.Config.Schema
 

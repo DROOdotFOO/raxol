@@ -114,6 +114,7 @@ defmodule Raxol.Symphony.Config do
   @spec load_and_validate(Path.t()) :: {:ok, t()} | {:error, term()}
   def load_and_validate(path) do
     with {:ok, workflow} <- Raxol.Symphony.Workflow.load(path),
+         :ok <- Schema.validate_sections(workflow.config),
          config <- from_workflow(workflow, Path.expand(path)),
          :ok <- Schema.validate(config) do
       {:ok, config}
