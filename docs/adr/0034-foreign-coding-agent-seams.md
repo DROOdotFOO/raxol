@@ -274,12 +274,44 @@ gated by a round trip raxol answers. `Raxol.Agent.Authorization` decides whether
 agent gets to run a command, and the decision is honoured. That is exactly the governance the
 seam was claimed to provide, and it holds for the tool that matters most.
 
-Note what that sentence costs, though: the mode in which raxol got a say is `yolo`, the most
-permissive setting omp has. `bash` prompting at all under `yolo` contradicts "auto-approves all
-tiers", and with `tools.approval` and `bash.patterns` both empty, nothing configured explains
-it. The most likely reading is that omp gates shell over ACP regardless of mode, which is an
-inconsistency in the safe direction, but it is a reading rather than a measurement and it is
-listed under "Still open" rather than asserted here.
+### The gate is real, and exactly one setting delivers it
+
+The mode in which raxol got a say is `yolo`, the most permissive setting omp has, which is
+strange enough to be worth resolving rather than noting. Four settings were measured against
+the same bash prompt:
+
+| Setting | asks? | allow honoured? | side effect |
+| ------- | ----- | --------------- | ----------- |
+| `yolo` (unconfigured default) | yes | **yes** | lands |
+| `--approval-mode write` | yes | **no** | denied |
+| `--approval-mode always-ask` | yes | **no** | denied |
+| `--auto-approve` | **no** | n/a | lands |
+
+Both explicit modes reproduce the same defect: they raise
+`session/request_permission`, receive `{"outcome": {"outcome": "selected", "optionId":
+"allow_once"}}`, and record `"Tool call denied by user: bash"`. It is not an `always-ask`
+quirk, it is every mode that is not `yolo`. And `--auto-approve` removes the round trip
+altogether, so the tool runs with raxol never consulted.
+
+So the shell gate is deterministic rather than flaky, and it is delivered by exactly one
+configuration: the unconfigured default, with no approval flags passed. Every setting an
+operator might reach for either discards raxol's answer or stops asking for it. `bash`
+prompting under `yolo` still contradicts "auto-approves all tiers" and nothing in
+`tools.approval` or `bash.patterns` explains it, but the behaviour is stable enough to depend
+on if it is pinned.
+
+**This turns into a hard requirement on the ACP driver.** Raxol spawns the peer itself through
+`Transport.Stdio.start_spawn/3` with explicit argv, so raxol controls the invocation and must:
+
+- pass **no** `--approval-mode` and **no** `--auto-approve`;
+- treat any caller-supplied omp arguments as untrusted for these two flags specifically,
+  because either one silently converts a governed session into an ungoverned one;
+- carry a test asserting that a bash prompt over ACP produces exactly one
+  `session/request_permission` and that answering `allow_once` lets the side effect land.
+
+That test is the real deliverable here. Without it the seam's governance story depends on an
+upstream default nobody promised to keep, and the failure mode is silent: the agent keeps
+working, and only the gate disappears.
 
 **The bad one: file writes are not gated at all**, so an ACP-hosted omp can create and modify
 files without raxol seeing a decision point. Containment for the filesystem has to come from
@@ -704,10 +736,11 @@ trusted local workspace**, which the seam ranking does not by itself imply.
 
 There is also a configuration trap to carry into any deployment, and it runs the wrong way
 round. `tools.approvalMode` resolves to `yolo` on an unconfigured install, and `yolo` is the
-mode in which raxol's authorizer gets a say over shell execution. `always-ask`, the setting an
-operator reaches for to harden, is the one that asks and then discards the answer. So hardening
-by instinct removes governance rather than adding it, and a deployment should pin the mode
-explicitly with a test rather than inherit whatever the install resolves to.
+only setting under which raxol's authorizer gets a say over shell execution: `write` and
+`always-ask` both ask and then discard the answer, and `--auto-approve` does not ask. So
+hardening by instinct removes governance rather than adding it, and the correct posture is
+counterintuitive enough that it has to be enforced in code rather than documented: the ACP
+driver passes no approval flags at all, and a test proves the round trip still happens.
 
 The two agents are held to different standards of evidence, and the ADR has to keep saying
 which is which. Every omp claim here was measured against `omp` 18.1.6 on one machine. Every
@@ -774,6 +807,7 @@ answered rather than deferred.
 | Does omp raise `session/request_permission`? | **For `bash`, yes**, with the full option set, and it honours the answer. Not for `write` |
 | Does `--approval-mode` reach `omp acp`? | **Yes**, and `always-ask` breaks the round trip: it asks, then ignores an allow |
 | What does `tools.approvalMode` resolve to unconfigured? | **`yolo`**, auto-approve all tiers. Not written to `config.yml`; it is what omp resolves to |
+| Is the shell gate reliable or incidental? | **Deterministic, and delivered by exactly one setting.** `yolo` honours an allow; `write` and `always-ask` discard it; `--auto-approve` skips asking |
 | What does `session/cancel` do to a running tool? | **Kills the subprocess.** Side effect never landed, no orphan, `stopReason: cancelled` in ~10ms |
 | Which ACP methods does omp implement? | 10 of 13 usable; `fork` unreachable from raxol, `delete`/`logout` absent |
 | Can raxol lend omp its MCP tools? | **Not as packaged.** omp is http/sse, raxol's server is stdio |
@@ -790,12 +824,10 @@ seam choice, which the permission measurement settled.
    untested, and `computer` (native desktop capture and input, disabled by default) is the one
    whose answer matters most. The gating rule appears to be per-tool rather than
    per-risk-class, so it has to be measured tool by tool rather than inferred.
-2. **Why does `bash` prompt under `yolo` at all?** `yolo` is documented as auto-approving all
-   tiers, and `tools.approval` and `bash.patterns` are both empty, so no configured override
-   explains the prompt. Either shell is gated over ACP regardless of mode, or something
-   undocumented is in play. The answer decides whether the shell gate is a property raxol can
-   rely on or an accident that a future release removes, which makes it the highest-value
-   remaining question on this list.
+2. Whether the shell gate survives an omp upgrade. It is deterministic today (see "The gate
+   is real, and exactly one setting delivers it") but rests on a mode combination upstream
+   does not appear to have designed for, so it should be pinned by a test rather than
+   assumed.
 3. `session/load` returns a session's config, but whether the **model** sees restored
    conversational context is untested: that needs a two-turn probe referencing turn one.
 4. Does omp honour `--add-dir` and `--cwd` as a containment boundary over ACP, or only as a
@@ -836,15 +868,19 @@ recorded only in prose is one nobody is assigned.
 One upstream defect, recorded here because a deployment decision depends on it rather than
 because this repo can fix it:
 
-6. **omp ignores an ACP allow under `--approval-mode always-ask`.** It raises
+6. **omp ignores an ACP allow in every approval mode except `yolo`.** It raises
    `session/request_permission` with the full option set, receives
    `{"outcome": {"outcome": "selected", "optionId": "allow_once"}}`, and answers
    `status: failed` with `"Tool call denied by user: bash"`. Reproduced on omp 18.1.6 with
-   `scripts/acp_probe.py`, which selects the first `allow*` option. The consequence is that the
-   flag an operator would reach for to harden a deployment is the one that makes the agent
-   inoperable, while `yolo` (what an unconfigured install resolves to) is the mode in which
-   delegation works. Report upstream; pin ours with a test, because a future omp that "fixes"
-   `always-ask` by not asking at all would be a silent downgrade from a gate to no gate.
+   `scripts/acp_probe.py` (which selects the first `allow*` option) under both
+   `--approval-mode always-ask` and `--approval-mode write`. Only the unconfigured default,
+   `yolo`, honours the answer, and `--auto-approve` skips asking entirely.
+
+   So an operator has three ways to configure this and only one of them, the one that sounds
+   least safe, produces a working gate. Report upstream. Pin ours with a test, because both
+   failure directions are silent: a future omp that "fixes" the explicit modes by not asking
+   would downgrade a gate to no gate, and a raxol change that adds `--auto-approve` for
+   convenience would do the same.
 
 ## References
 
