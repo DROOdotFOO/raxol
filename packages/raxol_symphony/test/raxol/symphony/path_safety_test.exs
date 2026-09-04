@@ -1,5 +1,5 @@
 defmodule Raxol.Symphony.PathSafetyTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Raxol.Symphony.PathSafety
 
