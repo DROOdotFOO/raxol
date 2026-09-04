@@ -124,3 +124,49 @@ defmodule Raxol.Symphony.TestSupport.SessionAgentPausesResumes do
 
   def view(_model), do: %{type: :text, content: "pause"}
 end
+
+defmodule Raxol.Symphony.TestSupport.SessionAgentWorkspaceEcho do
+  @moduledoc """
+  TEA agent that reports the workspace it was handed, on both the seed and
+  the resume message. Proves the runner passes the per-issue workspace to
+  the agent module, which is what owns tool-context construction on the
+  Session path.
+
+  Pauses on `:symphony_start` so one run exercises both payloads.
+  """
+
+  def init(_args), do: {%{}, []}
+
+  def update({:agent_message, _, {:symphony_start, payload}}, model) do
+    if Code.ensure_loaded?(Raxol.Agent.SessionStreamer) do
+      Raxol.Agent.SessionStreamer.emit(
+        payload.session_id,
+        {:turn_complete, %{seed_workspace: Map.get(payload, :workspace_path)}}
+      )
+
+      Raxol.Agent.SessionStreamer.emit(
+        payload.session_id,
+        {:paused, %{reason: :awaiting_review, token: %{}}}
+      )
+    end
+
+    {model, []}
+  end
+
+  def update({:agent_message, _, {:symphony_resume, payload}}, model) do
+    if Code.ensure_loaded?(Raxol.Agent.SessionStreamer) do
+      Raxol.Agent.SessionStreamer.emit(
+        payload.session_id,
+        {:turn_complete, %{resume_workspace: Map.get(payload, :workspace_path)}}
+      )
+
+      Raxol.Agent.SessionStreamer.emit(payload.session_id, {:done, %{result: :ok}})
+    end
+
+    {model, []}
+  end
+
+  def update(_msg, model), do: {model, []}
+
+  def view(_model), do: %{type: :text, content: "workspace"}
+end

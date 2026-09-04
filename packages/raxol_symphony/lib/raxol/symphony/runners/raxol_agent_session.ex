@@ -27,7 +27,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
       {:symphony_start, %{
         issue: %Raxol.Symphony.Issue{},
         prompt: rendered_template_string,
-        attempt: integer_or_nil
+        attempt: integer_or_nil,
+        workspace_path: per_issue_workspace_dir
       }}
 
   The agent's `update/2` handles this however it wants. To complete,
@@ -42,6 +43,33 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
   `{:tool_result, _}`, `{:turn_complete, _}` are forwarded to the
   parent as `{:run_event, issue.id, payload}` so the orchestrator
   surfaces them like the Stream-based runner does.
+
+  ## Workspace confinement is the agent module's job here
+
+  `opts[:workspace_path]` is required, as it is for every runner, and it
+  reaches the agent in the seed and resume payloads. Unlike
+  `Raxol.Symphony.Runners.RaxolAgent`, this runner cannot *enforce* it.
+
+  That runner owns the call into `Raxol.Agent.Stream.run/2`, so it builds the
+  tool context and the fs tools are confined whatever the agent does. Here the
+  agent module owns its own tool-execution path: it decides what to invoke on
+  `:symphony_start` and it constructs the context those Actions receive.
+  `Raxol.Agent.Session` builds its Lifecycle options internally and accepts
+  nothing from the caller, so Symphony has no seam to inject a boundary into.
+
+  An agent module used with this runner is therefore responsible for scoping
+  its own tools to the workspace it is handed:
+
+      def update({:agent_message, _, {:symphony_start, payload}}, model) do
+        context = %{cwd: payload.workspace_path}
+        Raxol.Agent.Stream.run(payload.prompt, actions: actions(), context: context)
+        ...
+      end
+
+  Without that, the module's fs Actions resolve against the BEAM's cwd -- the
+  repo the orchestrator was started in -- exactly as if no workspace had been
+  allocated. Enforcing it from Symphony's side would need
+  `Raxol.Agent.Session` to accept caller-supplied lifecycle options.
 
   ## Timeout
 
@@ -68,7 +96,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   On resume the runner sends:
 
-      {:symphony_resume, %{resume_value: rv, session_id: id}}
+      {:symphony_resume, %{resume_value: rv, session_id: id, workspace_path: dir}}
 
   into the same Session's mailbox and loops for events as before.
   If the Session is no longer in the Registry (e.g. the BEAM
@@ -199,6 +227,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
 
   defp fresh_run(%Issue{} = issue, %Config{} = config, opts) do
     parent = Keyword.fetch!(opts, :parent)
+    # Required, not optional: a run with no workspace is a run against the
+    # orchestrator's own cwd. Raise rather than seed the agent without one.
+    workspace = Keyword.fetch!(opts, :workspace_path)
     attempt = Keyword.get(opts, :attempt)
     module = agent_module(config)
     timeout_ms = session_timeout_ms(config)
@@ -209,7 +240,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     with :ok <- ensure_session_streamer(),
          :ok <- subscribe(session_id),
          {:ok, _pid} <- start_session(session_id, module) do
-      seed_agent(session_id, issue, config, attempt)
+      seed_agent(session_id, issue, config, attempt, workspace)
 
       case loop(session_id, issue.id, parent, timeout_ms) do
         :ok ->
@@ -239,6 +270,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
          resume_value
        ) do
     parent = Keyword.fetch!(opts, :parent)
+    workspace = Keyword.fetch!(opts, :workspace_path)
     timeout_ms = session_timeout_ms(config)
     %{session_id: session_id} = resume_token
 
@@ -249,7 +281,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
       [{_pid, _}] ->
         with :ok <- ensure_session_streamer(),
              :ok <- subscribe(session_id) do
-          send_resume(session_id, resume_value)
+          send_resume(session_id, resume_value, workspace)
 
           case loop(session_id, issue.id, parent, timeout_ms) do
             :ok ->
@@ -363,10 +395,14 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     :exit, reason -> {:error, {:start_child, reason}}
   end
 
-  defp send_resume(session_id, resume_value) do
+  defp send_resume(session_id, resume_value, workspace) do
     Raxol.Agent.Session.send_message(session_id, {
       :symphony_resume,
-      %{session_id: session_id, resume_value: resume_value}
+      %{
+        session_id: session_id,
+        resume_value: resume_value,
+        workspace_path: workspace
+      }
     })
 
     :ok
@@ -382,12 +418,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSession do
     :exit, _ -> :ok
   end
 
-  defp seed_agent(session_id, issue, config, attempt) do
+  defp seed_agent(session_id, issue, config, attempt, workspace) do
     payload = %{
       issue: issue,
       prompt: build_prompt(issue, config, attempt),
       attempt: attempt,
-      session_id: session_id
+      session_id: session_id,
+      workspace_path: workspace
     }
 
     Raxol.Agent.Session.send_message(session_id, {:symphony_start, payload})
