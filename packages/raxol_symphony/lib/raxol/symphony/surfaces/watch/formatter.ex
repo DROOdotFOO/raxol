@@ -106,7 +106,7 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   end
 
   def event_notification(:worker_paused, snapshot) do
-    head = snapshot |> Map.get(:paused, []) |> List.first()
+    head = snapshot |> Map.get(:paused, []) |> newest_pause()
     paused_count = counts(snapshot)[:paused] || 0
 
     {body, actions} = paused_event_body(head, paused_count)
@@ -122,6 +122,12 @@ defmodule Raxol.Symphony.Surfaces.Watch.Formatter do
   end
 
   def event_notification(_other, _snapshot), do: :skip
+
+  # The snapshot lists paused runs in issue-id order, not pause recency, so
+  # the event that triggered this push is the shortest-parked entry rather
+  # than the head of the list.
+  defp newest_pause([]), do: nil
+  defp newest_pause(paused), do: Enum.min_by(paused, &Map.get(&1, :paused_ms_ago, 0))
 
   defp paused_event_body(nil, _count) do
     {"A run is paused. Tap Refresh to see details.", [refresh_action(), dismiss_action()]}
