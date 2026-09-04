@@ -530,10 +530,18 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     """
   end
 
-  # One list for both site headers: run it, or read the API. Product pages live
-  # in the hero/demo path and in the docs, not as a second table of contents.
+  # One list for both site headers: run it, read the rail, or read the API.
+  #
+  # The other topic pages sit on the hero and demo path, so listing them here
+  # would restate that path rather than add to it. /payments is the exception.
+  # Its only inbound link was the line at the foot of /token, and /token is
+  # itself only reachable from the landing footer's $RAXOL mark, which left the
+  # payment rails two hops deep behind the token page -- the one adjacency the
+  # copy on both pages exists to deny. The header slot is the fix; /token keeps
+  # pointing here, now as a cross-reference rather than the only way in.
   @nav_links [
     {"/gallery", "Components"},
+    {"/payments", "Payments"},
     {"https://hexdocs.pm/raxol", "Docs"}
   ]
 

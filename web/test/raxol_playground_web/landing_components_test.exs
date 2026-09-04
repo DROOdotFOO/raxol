@@ -904,9 +904,15 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     assert open =~ ~s(href="/gallery")
   end
 
-  test "the header offers only components and docs" do
+  # Pinned as an exact list on purpose. The header is a short, argued-for set,
+  # and the point of holding it here is that a fourth entry has to be justified
+  # rather than appended. Payments earned its slot because /payments was
+  # otherwise reachable only from the foot of /token, which is itself only
+  # reachable from the landing footer's $RAXOL mark.
+  test "the header offers components, payments, and docs" do
     assert LandingComponents.nav_links() == [
              {"/gallery", "Components"},
+             {"/payments", "Payments"},
              {"https://hexdocs.pm/raxol", "Docs"}
            ]
   end
