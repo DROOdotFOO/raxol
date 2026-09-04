@@ -6,10 +6,17 @@ Proposed, 2026-09-04. Nothing is implemented; this records which seam a foreign 
 should be handed to, and settles that question before a fourth native driver lands.
 
 Revised the same day, after the forcing case turned out to be installed locally and every
-claim below could be measured instead of read. Two findings inverted, and both are called out
-where they land: the ACP seam is not prospective for this agent, and the security analysis
-that applies to upstream pi does not apply to the agent actually in use. The seam ranking
-survives; the recommendation for this particular agent changes.
+claim below could be measured instead of read. Four findings inverted, each corrected where it
+lands rather than quietly amended: the ACP seam is not prospective for this agent but shipped;
+the security posture documented for upstream pi does not describe the agent actually in use;
+permission delegation is per-tool rather than absent; and the mode those permission results
+were measured under is `yolo`, not a conservative default. The seam ranking survives all four.
+The recommendation for this particular agent, and the reason for it, changed twice.
+
+The pattern is worth naming for anyone extending this: every one of those four came from
+generalizing a single observation, and each was caught only by probing a second case. An ADR
+about a foreign agent should assume its own claims are one experiment deep until they say
+otherwise.
 
 Written against **Oh My Pi** (`omp` 18.1.6), a derivative of `earendil-works/pi`, verified
 directly. The distinction matters throughout: upstream pi and omp share a CLI surface, env
@@ -234,21 +241,45 @@ A later probe asked omp to run a bash command, and omp asked:
 That is the full ACP option set, correctly formed. Answering `allow_once` runs the command and
 the side effect lands. So omp does implement the client round trip, and honours the answer.
 
-The measured rule, across four runs:
+Before the results, the baseline they were measured against, because it is not what "default"
+suggests. `--approval-mode` overrides the `tools.approvalMode` setting, whose three values omp
+documents as: `always-ask` auto-approves read-only tools only, `write` auto-approves read and
+workspace-write tools, and `yolo` auto-approves all tiers. On the probing machine:
 
-| Tool | `--approval-mode` | asks? | allow honoured? | side effect |
-| ---- | ----------------- | ----- | --------------- | ----------- |
-| `write` | default | **no** | n/a | lands |
+```
+$ omp config get tools.approvalMode
+yolo
+```
+
+and `~/.omp/agent/config.yml` is nine lines carrying model role, theme, composer shape and
+`setupVersion: 2`, with **no approval key at all**. So `yolo` is what omp resolves to
+unconfigured, not an override someone chose. The two related knobs are also empty:
+`tools.approval` (a per-tool `allow`/`prompt`/`deny` record, documented as honoured in every
+mode) is `{}`, and `bash.patterns` is `[]`.
+
+The measured rule, across four runs. The unflagged runs are `yolo`, since that is what an
+unconfigured install resolves to:
+
+| Tool | `tools.approvalMode` | asks? | allow honoured? | side effect |
+| ---- | -------------------- | ----- | --------------- | ----------- |
+| `write` | `yolo` (unconfigured default) | **no** | n/a | lands |
 | `write` | `always-ask` | no | n/a | denied |
-| `bash` | default | **yes** | **yes** | lands |
+| `bash` | `yolo` (unconfigured default) | **yes** | **yes** | lands |
 | `bash` | `always-ask` | yes | **no** | denied |
 
 Two findings, of opposite sign.
 
-**The good one: raxol's authorizer is real on the highest-risk tool.** Shell execution, in
-omp's default mode, is gated by a round trip raxol answers. `Raxol.Agent.Authorization` decides
-whether a foreign agent gets to run a command, and the decision is honoured. That is exactly
-the governance the seam was claimed to provide, and it holds for the tool that matters most.
+**The good one: raxol's authorizer is real on the highest-risk tool.** Shell execution is
+gated by a round trip raxol answers. `Raxol.Agent.Authorization` decides whether a foreign
+agent gets to run a command, and the decision is honoured. That is exactly the governance the
+seam was claimed to provide, and it holds for the tool that matters most.
+
+Note what that sentence costs, though: the mode in which raxol got a say is `yolo`, the most
+permissive setting omp has. `bash` prompting at all under `yolo` contradicts "auto-approves all
+tiers", and with `tools.approval` and `bash.patterns` both empty, nothing configured explains
+it. The most likely reading is that omp gates shell over ACP regardless of mode, which is an
+inconsistency in the safe direction, but it is a reading rather than a measurement and it is
+listed under "Still open" rather than asserted here.
 
 **The bad one: file writes are not gated at all**, so an ACP-hosted omp can create and modify
 files without raxol seeing a decision point. Containment for the filesystem has to come from
@@ -265,10 +296,18 @@ and then records:
 ```
 
 with the model reporting "Command was denied by the shell permission prompt." A valid allow is
-read as a denial. So the flag that sounds like the safe choice is the one that makes the agent
-unusable, and the default is the configuration in which delegation actually works. That is
-worth reporting upstream, and worth pinning with a test on our side, because a future omp that
-"fixes" `always-ask` by not asking at all would be a silent downgrade.
+read as a denial.
+
+Stated against the real baseline, this is worse than "the safe flag is broken". Delegation to
+raxol works under `yolo`, the setting that auto-approves everything, and breaks under
+`always-ask`, the setting an operator would deliberately reach for to harden a deployment. The
+configuration that sounds safe is the one that produces an agent which asks, discards the
+answer, and refuses all work; the configuration that sounds reckless is the one under which
+raxol's authorizer actually decides. An operator hardening by instinct gets strictly less
+governance, not more.
+
+Worth reporting upstream, and worth pinning with a test on our side, because a future omp that
+"fixes" `always-ask` by not asking at all would be a silent downgrade from a gate to no gate.
 
 Raxol's own agent surface gates every `sensitive: true` Action through
 `ClientProtocol.Permission.authorizer/2`, so raxol-as-agent is stricter than omp-as-agent here:
@@ -663,14 +702,20 @@ An agent whose writes are unmediated inside a grant set is a defensible posture;
 inside nothing is not. **That makes ADR-0032 a prerequisite for hosting omp anywhere but a
 trusted local workspace**, which the seam ranking does not by itself imply.
 
-There is also a configuration trap to carry into any deployment: the safe-sounding
-`--approval-mode always-ask` is the broken one, and omp's default is the mode in which
-delegation works. A deployment that hardens by setting `always-ask` gets an agent that asks,
-ignores the answer, and denies everything.
+There is also a configuration trap to carry into any deployment, and it runs the wrong way
+round. `tools.approvalMode` resolves to `yolo` on an unconfigured install, and `yolo` is the
+mode in which raxol's authorizer gets a say over shell execution. `always-ask`, the setting an
+operator reaches for to harden, is the one that asks and then discards the answer. So hardening
+by instinct removes governance rather than adding it, and a deployment should pin the mode
+explicitly with a test rather than inherit whatever the install resolves to.
 
-An unverified protocol is being designed against. Pi is not installed on the machine this ADR
-was written on, so every pi wire fact here is documentation-derived. The prototype list under
-"Validation" is the mitigation, and the design deliberately keeps defensive fallbacks (a settle
+The two agents are held to different standards of evidence, and the ADR has to keep saying
+which is which. Every omp claim here was measured against `omp` 18.1.6 on one machine. Every
+**upstream pi** claim is documentation-derived, because upstream pi is not installed, and the
+two diverge on exactly the points the seam choice turns on. A reader who treats a measured omp
+result as a pi result will get the permission story backwards. The prototype list under
+"Validation" covers the pi-specific gaps, and the design deliberately keeps defensive fallbacks
+(a settle
 grace window, cancellation-on-unknown) where a wrong assumption would otherwise hang or
 miscount.
 
@@ -728,6 +773,7 @@ answered rather than deferred.
 | Does the agent expose session resume? | **Yes.** `loadSession: true` plus list/fork/resume/close |
 | Does omp raise `session/request_permission`? | **For `bash`, yes**, with the full option set, and it honours the answer. Not for `write` |
 | Does `--approval-mode` reach `omp acp`? | **Yes**, and `always-ask` breaks the round trip: it asks, then ignores an allow |
+| What does `tools.approvalMode` resolve to unconfigured? | **`yolo`**, auto-approve all tiers. Not written to `config.yml`; it is what omp resolves to |
 | What does `session/cancel` do to a running tool? | **Kills the subprocess.** Side effect never landed, no orphan, `stopReason: cancelled` in ~10ms |
 | Which ACP methods does omp implement? | 10 of 13 usable; `fork` unreachable from raxol, `delete`/`logout` absent |
 | Can raxol lend omp its MCP tools? | **Not as packaged.** omp is http/sse, raxol's server is stdio |
@@ -739,20 +785,26 @@ answered rather than deferred.
 Each of these is now scoped to a seam rather than to the agent, and none of them gates the
 seam choice, which the permission measurement settled.
 
-1. **Which tools besides `bash` does omp gate?** Four were characterized (`bash` and `write`,
-   across two approval modes). `edit`, `python`, `browser`, `computer` and `task` are
+1. **Which tools besides `bash` does omp gate?** Four cells were characterized (`bash` and
+   `write`, across two approval modes). `edit`, `python`, `browser`, `computer` and `task` are
    untested, and `computer` (native desktop capture and input, disabled by default) is the one
-   whose answer matters most. The gating rule appears to be per-tool rather than per-risk-class,
-   so it has to be measured tool by tool rather than inferred.
-2. `session/load` returns a session's config, but whether the **model** sees restored
+   whose answer matters most. The gating rule appears to be per-tool rather than
+   per-risk-class, so it has to be measured tool by tool rather than inferred.
+2. **Why does `bash` prompt under `yolo` at all?** `yolo` is documented as auto-approving all
+   tiers, and `tools.approval` and `bash.patterns` are both empty, so no configured override
+   explains the prompt. Either shell is gated over ACP regardless of mode, or something
+   undocumented is in play. The answer decides whether the shell gate is a property raxol can
+   rely on or an accident that a future release removes, which makes it the highest-value
+   remaining question on this list.
+3. `session/load` returns a session's config, but whether the **model** sees restored
    conversational context is untested: that needs a two-turn probe referencing turn one.
-3. Does omp honour `--add-dir` and `--cwd` as a containment boundary over ACP, or only as a
+4. Does omp honour `--add-dir` and `--cwd` as a containment boundary over ACP, or only as a
    convenience? This rose in importance once writes turned out to be ungated: it is the
    difference between omp confining itself and needing ADR-0032's OS wrapper to confine it.
-4. Would omp accept raxol's tools over `Raxol.MCP.Transport.SSE`, and would its own approval
+5. Would omp accept raxol's tools over `Raxol.MCP.Transport.SSE`, and would its own approval
    policy then gate them? This is the one route to a real tool gate on the ACP path, so it is
    worth a probe even though it needs the SSE endpoint wired first.
-5. Native-seam only, and unnecessary if ACP is taken: `agent_settled` emission count across an
+6. Native-seam only, and unnecessary if ACP is taken: `agent_settled` emission count across an
    auto-retry, and whether a prompt beginning with `-` survives as a positional argument.
 
 One measured fact deserves its own line because it is a cost input, not an unknown: the probe's
@@ -790,9 +842,9 @@ because this repo can fix it:
    `status: failed` with `"Tool call denied by user: bash"`. Reproduced on omp 18.1.6 with
    `scripts/acp_probe.py`, which selects the first `allow*` option. The consequence is that the
    flag an operator would reach for to harden a deployment is the one that makes the agent
-   inoperable, and omp's default is the mode in which delegation works. Report upstream; pin
-   ours with a test, because a future omp that "fixes" `always-ask` by not asking at all would
-   be a silent downgrade from a gate to no gate.
+   inoperable, while `yolo` (what an unconfigured install resolves to) is the mode in which
+   delegation works. Report upstream; pin ours with a test, because a future omp that "fixes"
+   `always-ask` by not asking at all would be a silent downgrade from a gate to no gate.
 
 ## References
 
