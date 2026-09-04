@@ -718,9 +718,22 @@ defmodule Raxol.Agent.Actions.Code do
         # `sleep 600` (and every child it spawned) is actually dead, not
         # orphaned; `Port.close/1` alone leaves the OS process alive.
         Raxol.Agent.Interrupt.kill_os_pid(os_pid)
-        Port.close(port)
+        close_port(port)
         {acc |> Enum.reverse() |> IO.iodata_to_binary(), :timeout}
     end
+  end
+
+  # The SIGKILL above usually brings the port down before this runs -- a port
+  # terminates as soon as its OS process dies -- and `Port.close/1` raises on a
+  # port that is already gone. Unguarded, every genuinely timed-out command
+  # crashed at the caller instead of returning the `:timeout` this function
+  # documents. `Port.info/1` narrows the window but cannot close it, since the
+  # port can die between the check and the close, so the rescue is what makes
+  # this correct. Mirrors `Actions.Shell` and `Backend.Native`.
+  defp close_port(port) do
+    if Port.info(port), do: Port.close(port)
+  rescue
+    ArgumentError -> :ok
   end
 
   defp port_os_pid(port) do
