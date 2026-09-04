@@ -707,17 +707,57 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
-  # Being a sibling of the hero is what made the marquee fragile: the hero
-  # re-renders on every "next example", and an id-less div gives morphdom
-  # nothing to match on, so it re-inserted this one while realigning main's
-  # children and the CSS animation restarted from its first frame. The id and
-  # phx-update="ignore" are the fix, and neither is visible in the rendered
-  # output's appearance, so nothing else would catch their removal.
-  test "the integrations row is pinned so a hero re-render cannot restart it" do
+  describe "the hero's outer id is stable across examples" do
+    # What kept the marquee still. morphdom keys main's children by id, so a
+    # hero whose own id changes per example is an insert, and inserting it
+    # displaces the sibling after it: the integrations row is detached and
+    # reattached, and reattaching an element restarts its CSS animation. The
+    # shell holds the outer id constant so main's children keep their identity.
+    #
+    # Measured in a browser against a live LiveView, since none of it is visible
+    # in rendered markup: before, a MutationObserver on main recorded the row
+    # removed and re-added on every click and the track's animation currentTime
+    # fell from 24637ms to 1180ms. After, no mutations and a monotonic timeline.
+    test "every example renders the same outer element id" do
+      ids =
+        Enum.map(LandingComponents.hero_example_names(), fn name ->
+          hero =
+            render_component(&LandingComponents.screen_hero/1, example: name)
+
+          outer_hero_shell_id(hero)
+        end)
+
+      assert length(ids) > 1, "needs at least two examples to be meaningful"
+      assert Enum.uniq(ids) == ["hero-demo-shell"]
+    end
+
+    # The other half, and the reason the shell exists rather than the outer id
+    # simply being made stable. The hook element's id has to keep carrying the
+    # example: the frame player caches its frame nodes, and it is the id change
+    # that remounts it. Holding both means neither can be "fixed" into the other.
+    test "the hook element's id still changes per example" do
+      ids =
+        Enum.map(LandingComponents.hero_example_names(), fn name ->
+          hero =
+            render_component(&LandingComponents.screen_hero/1, example: name)
+
+          hook_element_id(hero)
+        end)
+
+      assert Enum.uniq(ids) == ids
+      assert Enum.all?(ids, &String.starts_with?(&1, "hero-demo-"))
+      refute "hero-demo-shell" in ids
+    end
+  end
+
+  # The row is deliberately not pinned: an id and phx-update="ignore" on it were
+  # measured to change nothing, because it is not the element being rekeyed.
+  # Pinned here so the ineffective fix does not come back looking like one.
+  test "the integrations row carries no id or ignore of its own" do
     row = render_component(&LandingComponents.screen_integrations/1, %{})
 
-    assert row =~ ~s(id="screen-integrations")
-    assert row =~ ~s(phx-update="ignore")
+    refute row =~ ~s(id="screen-integrations")
+    refute row =~ ~s(phx-update="ignore")
   end
 
   # A mark decorates a derived entry, it never replaces one. The row still
@@ -1237,6 +1277,26 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       after
         System.delete_env("RAXOL_SSH_PLAYGROUND")
       end
+    end
+  end
+
+  # --- helpers ---------------------------------------------------------------
+
+  # Matched on the tag rather than on an exact attribute order, so reordering
+  # the shell's attributes is not a test failure. There is no HTML parser in
+  # this app's test deps and one dependency is not worth two selectors.
+  defp outer_hero_shell_id(html) do
+    capture(html, ~r/<div[^>]*\bid="([^"]*)"[^>]*class="[^"]*hero-demo-shell/)
+  end
+
+  defp hook_element_id(html) do
+    capture(html, ~r/<div[^>]*\bid="([^"]*)"[^>]*phx-hook="HeroDemo"/)
+  end
+
+  defp capture(html, regex) do
+    case Regex.run(regex, html) do
+      [_, value] -> value
+      _no_match -> nil
     end
   end
 end

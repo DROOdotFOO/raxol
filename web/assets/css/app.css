@@ -1852,6 +1852,15 @@ html {
    Hero surface-tabbed demo (one module, four surfaces)
    ============================================================================= */
 
+/* No box of its own. The shell exists only to give `main`'s middle child a
+   stable id, so the demo's per-example id cannot displace the integrations row
+   that follows it and restart its marquee. `display: contents` keeps
+   `.hero-demo` a direct flex child of `.screen-main`, so the demo's own layout
+   is unchanged. */
+.hero-demo-shell {
+  display: contents;
+}
+
 .hero-demo {
   background: rgba(10, 10, 12, 0.75);
   border: 1px solid var(--panel-border);
