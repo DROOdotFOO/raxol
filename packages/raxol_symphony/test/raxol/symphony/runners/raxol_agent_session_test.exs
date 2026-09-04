@@ -8,8 +8,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
     SessionAgentErrors,
     SessionAgentPausesResumes,
     SessionAgentSilent,
-    SessionAgentSucceed
+    SessionAgentSucceed,
+    SessionAgentWorkspaceEcho
   }
+
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
 
   setup do
     # The Registry is part of the raxol_agent application supervision
@@ -53,7 +58,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
       cfg = config(%{})
 
       assert {:error, :agent_module_required} =
-               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
@@ -62,7 +71,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
       cfg = config(%{module: SessionAgentSucceed})
 
       assert :ok =
-               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # The :turn_complete event was forwarded to parent.
       assert_received {:run_event, "issue-1", %{event: :turn_complete}}
@@ -74,7 +87,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
       cfg = config(%{module: SessionAgentErrors})
 
       assert {:error, :backend_unavailable} =
-               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
@@ -87,7 +104,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
         })
 
       assert {:error, :session_timeout} =
-               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
@@ -96,7 +117,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
       cfg = config(%{module: SessionAgentPausesResumes})
 
       assert {:pause, :awaiting_review, token} =
-               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: 1)
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 1
+               )
 
       assert is_binary(token.session_id)
       assert token.step == "first-half"
@@ -116,12 +141,17 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
       cfg = config(%{module: SessionAgentPausesResumes})
 
       assert {:pause, :awaiting_review, token} =
-               RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: 7)
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 7
+               )
 
       # Resume.
       assert :ok =
                RaxolAgentSession.run(issue(), cfg,
                  parent: self(),
+                 workspace_path: @workspace,
                  attempt: 7,
                  resume_token: token,
                  resume_value: :approved
@@ -139,10 +169,59 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
       assert {:error, :session_not_found} =
                RaxolAgentSession.run(issue(), cfg,
                  parent: self(),
+                 workspace_path: @workspace,
                  attempt: nil,
                  resume_token: ghost_token,
                  resume_value: :approved
                )
+    end
+  end
+
+  describe "workspace" do
+    test "run/3 refuses to run without a workspace rather than running unconfined" do
+      cfg = config(%{module: SessionAgentSucceed})
+
+      assert_raise KeyError, fn ->
+        RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: nil)
+      end
+    end
+
+    test "resume refuses without a workspace too" do
+      cfg = config(%{module: SessionAgentSucceed})
+
+      assert_raise KeyError, fn ->
+        RaxolAgentSession.run(issue(), cfg,
+          parent: self(),
+          attempt: nil,
+          resume_token: %{session_id: "some-session"},
+          resume_value: :approved
+        )
+      end
+    end
+
+    test "the agent is handed its workspace on both the seed and resume messages" do
+      cfg = config(%{module: SessionAgentWorkspaceEcho})
+      workspace = "/srv/symphony/MT-1"
+
+      assert {:pause, :awaiting_review, token} =
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: workspace,
+                 attempt: nil
+               )
+
+      assert_received {:run_event, "issue-1", %{seed_workspace: ^workspace}}
+
+      assert :ok =
+               RaxolAgentSession.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: workspace,
+                 attempt: nil,
+                 resume_token: token,
+                 resume_value: :approved
+               )
+
+      assert_received {:run_event, "issue-1", %{resume_workspace: ^workspace}}
     end
   end
 
@@ -167,7 +246,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
 
     defp run_issue(cfg, id) do
       issue = %Issue{id: id, identifier: id, title: "T", state: "Todo"}
-      assert :ok = RaxolAgentSession.run(issue, cfg, parent: self(), attempt: nil)
+
+      assert :ok =
+               RaxolAgentSession.run(issue, cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
 
     test "the continuation re-dispatch read flushes its entry", %{

@@ -31,6 +31,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
     SessionAgentSucceed
   }
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     case Process.whereis(Raxol.Agent.Registry) do
       nil -> start_supervised!(Raxol.Agent.Supervisor)
@@ -75,7 +79,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
     do: %Issue{id: "issue-1", identifier: "MT-1", title: "T", state: "Todo"}
 
   defp run(cfg, attempt \\ nil) do
-    RaxolAgentSession.run(issue(), cfg, parent: self(), attempt: attempt)
+    RaxolAgentSession.run(issue(), cfg,
+      parent: self(),
+      workspace_path: @workspace,
+      attempt: attempt
+    )
   end
 
   defp table_of({_module, %{table: table}}), do: table
@@ -170,12 +178,18 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
       # The second run is a freshness miss that overwrites -- one row, never
       # a stale serve -- proving the fingerprint tracks all determinants.
       assert :ok =
-               RaxolAgentSession.run(%{issue() | description: "A"}, cfg, parent: self())
+               RaxolAgentSession.run(%{issue() | description: "A"}, cfg,
+                 parent: self(),
+                 workspace_path: @workspace
+               )
 
       assert [{_key, {fp_a, "MT-1"}, _}] = entries(adapter)
 
       assert :ok =
-               RaxolAgentSession.run(%{issue() | description: "B"}, cfg, parent: self())
+               RaxolAgentSession.run(%{issue() | description: "B"}, cfg,
+                 parent: self(),
+                 workspace_path: @workspace
+               )
 
       assert [{_key, {fp_b, "MT-1"}, _}] = entries(adapter)
       assert :ets.info(table_of(adapter), :size) == 1
@@ -207,7 +221,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
         id = "one-shot-#{n}"
         iss = %Issue{id: id, identifier: id, title: "T", state: "Todo"}
 
-        assert :ok = RaxolAgentSession.run(iss, cfg, parent: self(), attempt: nil)
+        assert :ok =
+                 RaxolAgentSession.run(iss, cfg,
+                   parent: self(),
+                   workspace_path: @workspace,
+                   attempt: nil
+                 )
+
         assert :ets.info(table, :size) == 1
 
         assert :ok = RaxolAgentSession.flush_prompt_cache(cfg, id)
