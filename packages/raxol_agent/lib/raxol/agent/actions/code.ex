@@ -682,8 +682,13 @@ defmodule Raxol.Agent.Actions.Code do
         {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
       end)
 
+    # `:in` closes the command's stdin instead of handing it a write pipe
+    # `collect_port/4` never writes to. An open pipe carries nothing and only
+    # ever signals "more input is coming", so a command that reads stdin blocks
+    # until the deadline and comes back `:timeout` having done nothing.
     base = [
       :binary,
+      :in,
       :exit_status,
       :use_stdio,
       :stderr_to_stdout,

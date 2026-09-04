@@ -27,6 +27,17 @@ defmodule Raxol.Agent.Actions.ShellTest do
       assert result.exit_code == 7
       assert result.timed_out == false
     end
+
+    test "a command that reads stdin sees EOF instead of an open pipe" do
+      # Nothing ever writes to this port, so an inherited write pipe carries
+      # nothing and only signals "more input is coming". Without `:in`, `cat`
+      # blocks until the deadline and the tool reports a timeout it never
+      # earned. The short timeout keeps the regression cheap to observe.
+      assert {:ok, result} = Shell.run(%{command: "cat", timeout_ms: 2_000}, %{})
+
+      assert result.exit_code == 0
+      assert result.timed_out == false
+    end
   end
 
   describe "wall-clock timeout kills the OS process group" do
