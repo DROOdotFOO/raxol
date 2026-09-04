@@ -374,6 +374,17 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert status == 3
     end
 
+    test "a command that reads stdin sees EOF instead of an open pipe" do
+      # `run_shell/4` never writes to the port, so an inherited write pipe only
+      # signals "more input is coming". Without `:in`, `cat` blocks until the
+      # deadline and `exit_status` comes back `:timeout`.
+      assert {:ok, result} =
+               Code.Bash.run(%{command: "cat", timeout_ms: 2_000}, %{})
+
+      assert result.exit_status == 0
+      assert result.truncated == false
+    end
+
     test "runs in the working directory by default", %{dir: dir} do
       # `/bin/sh pwd` reports the physical path (macOS resolves /var ->
       # /private/var), so match on the unique dir basename rather than the

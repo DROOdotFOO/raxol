@@ -88,9 +88,14 @@ defmodule Raxol.Agent.Actions.Shell do
     timeout = Map.get(params, :timeout_ms) || @default_timeout_ms
     cwd = Raxol.Agent.Actions.Fs.working_dir(context)
 
+    # `:in` closes the command's stdin instead of handing it a write pipe this
+    # loop never writes to. An open pipe carries nothing and only ever signals
+    # "more input is coming", so a command that reads stdin blocks until the
+    # deadline and gets reported as a timeout it never earned.
     port =
       Port.open({:spawn_executable, shell_path()}, [
         :binary,
+        :in,
         :exit_status,
         :stderr_to_stdout,
         {:args, ["-c", command]},
