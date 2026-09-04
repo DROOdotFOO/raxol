@@ -12,6 +12,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentModuleMetadataTest do
   alias Raxol.Symphony.TestSupport.AgentWithMetadata
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -63,7 +67,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentModuleMetadataTest do
 
       cfg = config(%{module: AgentWithMetadata})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # AgentWithMetadata's sandbox/0 includes a DenyTurnSandbox with
       # reason :module_deny -- the runner picked it up.
@@ -85,7 +94,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentModuleMetadataTest do
           sandboxes: [direct_sandbox]
         })
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # First-deny-wins: the direct config sandbox fired, not the
       # module-declared one.
@@ -106,7 +120,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentModuleMetadataTest do
 
       cfg = config(%{module: AgentWithMetadata})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: 0)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 0
+               )
 
       # The module-declared thread_log captured the run's snapshot
       # despite agent.thread_log being unset.
@@ -132,7 +151,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentModuleMetadataTest do
 
       cfg = config(%{module: AgentWithMetadata, thread_log: direct})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: 7)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 7
+               )
 
       # Direct config got the events.
       {:ok, direct_events} =

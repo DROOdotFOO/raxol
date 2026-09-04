@@ -27,6 +27,16 @@ defmodule Raxol.Symphony.Runner do
   - `Raxol.Symphony.Runners.Codex` -- Port-based Codex app-server (JSON-RPC
     2.0 over stdio, mirrors upstream Symphony Elixir).
 
+  ## Workspace
+
+  `opts[:workspace_path]` is the per-issue directory the orchestrator allocated
+  under `config.workspace.root`, and it is REQUIRED rather than advisory: a
+  runner that ignores it runs against whatever cwd the orchestrator process
+  happens to have. `Raxol.Symphony.Runners.RaxolAgent` threads it into the
+  agent's tool context as `:cwd`; `Raxol.Symphony.Runners.Codex` passes it as
+  the Codex session root. Both raise when it is absent, so a run is never
+  silently unconfined.
+
   ## Sending updates back
 
   The runner SHOULD forward agent events to the orchestrator via the `:parent`

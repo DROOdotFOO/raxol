@@ -17,6 +17,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
   alias Raxol.Symphony.Runners.RaxolAgent
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -92,7 +96,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
 
       # Pause on turn 1.
       assert {:pause, :awaiting_review, pause_token} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Resume. after_turn_1 re-runs, calls Workflow.interrupt
       # which now returns the resume_value, clears pause_request,
@@ -102,6 +110,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
       assert :ok =
                RaxolAgent.run(issue(), cfg,
                  parent: self(),
+                 workspace_path: @workspace,
                  attempt: nil,
                  resume_token: pause_token,
                  resume_value: :approved
@@ -117,7 +126,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
 
       cfg = config(%{}, 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # 3 turns -> 3 turn_completed events.
       assert count_turn_completed("issue-1", 400) == 3
@@ -135,7 +149,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
       cfg = config(%{pause_detector: detector})
 
       assert {:pause, :awaiting_review, _token} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # The mock backend's events still arrived even though the very
       # first event triggered pause. Specifically: turn_completed

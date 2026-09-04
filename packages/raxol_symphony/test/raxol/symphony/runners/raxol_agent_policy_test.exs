@@ -16,6 +16,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
   alias Raxol.Symphony.Runners.RaxolAgent
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -87,7 +91,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
       attach_applied_counter(self(), :no_policies)
 
       cfg = config(%{})
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # An empty policies list still calls PolicyApplier.apply/3 with [],
       # which DOES emit the :applied event. So count >= 1. The contract
@@ -110,7 +120,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
 
       cfg = config(%{policies: policies}, 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # 3 turns wrapped -> 3 :applied events.
       assert count_applied(:multi, 400) == 3
@@ -134,7 +149,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
       policies = [Policy.Timeout.new(5_000)]
       cfg = config(%{policies: policies})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # PolicyApplier metadata exposes the params the runner threaded in.
       assert_receive {:metadata, metadata}, 200
@@ -149,7 +169,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
 
       cfg = config(%{policies: "not-a-list"})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 end

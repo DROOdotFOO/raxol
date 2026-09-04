@@ -22,6 +22,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
   alias Raxol.Symphony.Runners.RaxolAgent
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -65,7 +69,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
       cfg = config(%{})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
@@ -77,7 +86,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
       cfg = config(%{thread_log: adapter}, 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: 1)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 1
+               )
 
       thread_id = "symphony-agent-issue-1-1"
 
@@ -113,7 +127,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
       # Pause.
       assert {:pause, :awaiting_review, pause_token} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: 2)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 2
+               )
 
       thread_id = "symphony-agent-issue-1-2"
 
@@ -121,6 +139,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
       assert :ok =
                RaxolAgent.run(issue(), cfg,
                  parent: self(),
+                 workspace_path: @workspace,
                  attempt: 2,
                  resume_token: pause_token,
                  resume_value: :approved
@@ -147,7 +166,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
       cfg = config(%{thread_log: adapter})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: 7)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 7
+               )
 
       # No collision with the default "0" attempt -- write happens at
       # symphony-agent-issue-1-7.
@@ -167,7 +191,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
       cfg = config(%{thread_log: adapter}, 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: 3)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 3
+               )
 
       thread_id = "symphony-agent-issue-1-3"
 
@@ -183,7 +212,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
       cfg = config(%{thread_log: Raxol.Agent.ThreadLog.Ets})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: 4)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 4
+               )
 
       # Default Ets table is used.
       {:ok, events} =
