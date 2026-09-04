@@ -31,6 +31,16 @@ defmodule Raxol.Symphony.WorkflowStoreTest do
   No api key, no project slug -- schema validation must reject.
   """
 
+  @workflow_malformed_section """
+  ---
+  tracker:
+    kind: memory
+  agent:
+  max_concurrent_agents: 4
+  ---
+  The agent section lost its body to a mis-indented edit.
+  """
+
   setup do
     dir =
       Path.join(
@@ -136,6 +146,23 @@ defmodule Raxol.Symphony.WorkflowStoreTest do
       # Cached config is unchanged
       assert WorkflowStore.get(pid) == good_cfg
       assert WorkflowStore.last_error(pid) != nil
+    end
+
+    test "keeps last-known-good when a section is mis-indented", %{dir: dir} do
+      path = write_workflow(dir, @workflow)
+
+      pid =
+        start_supervised!(
+          {WorkflowStore, path: path, watch?: false, name: :"#{__MODULE__}_reload3"}
+        )
+
+      good_cfg = WorkflowStore.get(pid)
+
+      File.write!(path, @workflow_malformed_section)
+      assert {:error, {:workflow_section_not_a_map, [:agent]}} = WorkflowStore.reload(pid)
+
+      assert Process.alive?(pid)
+      assert WorkflowStore.get(pid) == good_cfg
     end
 
     test "keeps last-known-good when the file disappears", %{dir: dir} do
