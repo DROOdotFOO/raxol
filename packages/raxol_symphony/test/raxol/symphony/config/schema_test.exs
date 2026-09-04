@@ -148,4 +148,32 @@ defmodule Raxol.Symphony.Config.SchemaTest do
                Schema.validate(build_config(%{hooks: %{timeout_ms: 0}}))
     end
   end
+
+  describe "validate/1 -- tracker state lists" do
+    defp memory_config(tracker) do
+      Config.from_workflow(%{
+        config: %{tracker: Map.merge(%{kind: "memory"}, tracker)},
+        prompt_template: ""
+      })
+    end
+
+    test "an empty active_states key is rejected" do
+      assert {:error, {:invalid_value, :tracker_active_states, nil}} =
+               Schema.validate(memory_config(%{active_states: nil}))
+    end
+
+    test "a scalar active_states is rejected" do
+      assert {:error, {:invalid_value, :tracker_active_states, "Todo"}} =
+               Schema.validate(memory_config(%{active_states: "Todo"}))
+    end
+
+    test "a non-binary state name is rejected" do
+      assert {:error, {:invalid_value, :tracker_terminal_states, [1]}} =
+               Schema.validate(memory_config(%{terminal_states: [1]}))
+    end
+
+    test "an empty list is accepted -- it matches nothing, it does not crash" do
+      assert :ok = Schema.validate(memory_config(%{terminal_states: []}))
+    end
+  end
 end

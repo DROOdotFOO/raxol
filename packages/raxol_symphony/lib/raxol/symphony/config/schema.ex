@@ -71,21 +71,34 @@ defmodule Raxol.Symphony.Config.Schema do
   defp validate_tracker(%{kind: nil}), do: {:error, :missing_tracker_kind}
 
   defp validate_tracker(%{kind: kind} = tracker) do
-    cond do
-      kind not in @supported_tracker_kinds ->
-        {:error, {:unsupported_tracker_kind, kind}}
+    with :ok <- state_list(tracker.active_states, :tracker_active_states),
+         :ok <- state_list(tracker.terminal_states, :tracker_terminal_states) do
+      cond do
+        kind not in @supported_tracker_kinds ->
+          {:error, {:unsupported_tracker_kind, kind}}
 
-      tracker.kind == "memory" ->
-        :ok
+        tracker.kind == "memory" ->
+          :ok
 
-      blank?(tracker.api_key) ->
-        {:error, :missing_tracker_api_key}
+        blank?(tracker.api_key) ->
+          {:error, :missing_tracker_api_key}
 
-      tracker.kind == "linear" and blank?(tracker.project_slug) ->
-        {:error, :missing_tracker_project_slug}
+        tracker.kind == "linear" and blank?(tracker.project_slug) ->
+          {:error, :missing_tracker_project_slug}
 
-      true ->
-        :ok
+        true ->
+          :ok
+      end
+    end
+  end
+
+  # `Issue.active?/2` guards on a list and downcases each entry, so anything
+  # else reaches the poll tick as a raise rather than a preflight error.
+  defp state_list(states, name) do
+    if is_list(states) and Enum.all?(states, &is_binary/1) do
+      :ok
+    else
+      {:error, {:invalid_value, name, states}}
     end
   end
 
