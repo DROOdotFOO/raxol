@@ -141,6 +141,8 @@ known-but-unmapped bucket rather than its catch-all.
 
 ### Gap 4: five registries disagree about which backends exist
 
+> Filed as [#965](https://github.com/DROOdotFOO/raxol/issues/965).
+
 | Name | `Resolver.@providers` | `Selector.@backend_table` | `ExecutorConfig.@type backend` |
 | ---- | --------------------- | ------------------------- | ------------------------------ |
 | `grok_native` | yes | yes | missing |
@@ -438,9 +440,11 @@ and tool calls while dropping its command list, its session metadata, and its co
 
 ### Ports that are never written to are declared input-only
 
+> Filed as [#964](https://github.com/DROOdotFOO/raxol/issues/964). This section is the record of the defect, not its queue.
+
 `Raxol.Agent.Backend.Native` opens its port with
 `[:binary, :exit_status, :stderr_to_stdout, :hide, {:line, 1_048_576}]` (`native.ex:129-134`)
-and never calls `Port.command/2` anywhere in its 289 lines. The child therefore inherits a
+and never calls `Port.command/2` anywhere in its 299 lines. The child therefore inherits a
 stdin pipe that is held open for the port's lifetime and never closed.
 
 Any CLI that reads stdin before doing its work blocks forever, and the run dies at
@@ -751,6 +755,22 @@ result as a pi result will get the permission story backwards. The prototype lis
 (a settle
 grace window, cancellation-on-unknown) where a wrong assumption would otherwise hang or
 miscount.
+
+### Operator constraint: do not harden omp's approval mode
+
+Load-bearing enough to sit in the decision rather than only in the defect list below.
+
+An omp launched behind raxol's ACP permission gate must be launched with **no**
+`--approval-mode` and **no** `--auto-approve`. The safe-sounding flags are the ones that break
+the gate: under `always-ask` and `write`, omp raises `session/request_permission`, receives a
+valid `allow_once`, and answers `status: failed` with `"Tool call denied by user"`. Only the
+unconfigured default, `yolo`, honours the answer, and `--auto-approve` skips asking entirely.
+
+The reading that matters for a deployment: `yolo` names omp's own internal policy, not the
+gate. With raxol interposed, the decision is raxol's and omp is being told not to ask twice.
+Setting `always-ask` does not add a second gate, it removes the first one.
+
+Detail, reproduction, and both silent failure directions are in defect 6 below.
 
 ### What this ADR does not decide
 
