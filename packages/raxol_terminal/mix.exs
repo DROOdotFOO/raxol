@@ -81,6 +81,10 @@ defmodule RaxolTerminal.MixProject do
     [
       name: "raxol_terminal",
       files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md),
+      # The termbox2 NIF sources live under lib/, so a local build leaves its
+      # object files and shared library inside the packaged tree. Ship the
+      # sources and let elixir_make rebuild them on the consumer's platform.
+      exclude_patterns: [~r/\.so$/, ~r/\.o$/, ~r/\.dylib$/],
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

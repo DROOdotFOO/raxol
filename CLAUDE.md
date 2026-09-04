@@ -495,6 +495,16 @@ subsystems); `raxol_earn`, `raxol_symphony`, `raxol_gateway`, and
 `raxol_cli` and `raxol_console` are npm packages wrapping Burrito
 binaries (`packages/raxol_cli/npm/`, `packages/raxol_console/npm/`, built
 by `.github/workflows/release-raxol-{cli,console}.yml`).
+
+`mix raxol.release.check` gates the whole train and runs in CI. It validates
+package metadata, proves every file each tarball would carry is tracked by git
+(`mix hex.build` packages the working tree, not the commit), builds each
+package with `HEX_BUILD=1 mix hex.build --unpack`, and diffs the resulting
+`hex_metadata.config` against the *source* mix.exs, so a dependency removed by
+a `HEX_BUILD` conditional is reported instead of silently vanishing from both
+sides. `Raxol.Release.PackageCheck` holds the train order; a new package under
+`packages/` fails the catalog check until it is classified there.
+
 Publish order matters (dependency chain):
 
 ```bash

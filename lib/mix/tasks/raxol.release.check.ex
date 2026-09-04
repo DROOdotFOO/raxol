@@ -9,6 +9,17 @@ defmodule Mix.Tasks.Raxol.Release.Check do
 
   By default this checks the public Hex train only. `--all` includes pre-alpha
   projects that carry package metadata but are not part of the public train yet.
+
+  ## Options
+
+    * `--all` -- include pre-alpha packages in the train
+    * `--metadata-only` -- skip `mix hex.build`, validate metadata only
+    * `--only NAMES` -- comma-separated package names
+    * `--keep-output` -- leave the unpacked tarballs on disk
+    * `--allow-untracked` -- report packaged-but-untracked files as warnings
+      instead of errors. For local work with uncommitted files under a packaged
+      directory; never pass it in CI, where an untracked packaged file means the
+      tarball would carry content that is not in the repository.
   """
 
   use Mix.Task
@@ -20,7 +31,8 @@ defmodule Mix.Tasks.Raxol.Release.Check do
     all: :boolean,
     metadata_only: :boolean,
     only: :string,
-    keep_output: :boolean
+    keep_output: :boolean,
+    allow_untracked: :boolean
   ]
 
   @impl Mix.Task
@@ -41,7 +53,8 @@ defmodule Mix.Tasks.Raxol.Release.Check do
       include_pre_alpha: Keyword.get(opts, :all, false),
       metadata_only: Keyword.get(opts, :metadata_only, false),
       only: parse_only(opts[:only]),
-      keep_output: Keyword.get(opts, :keep_output, false)
+      keep_output: Keyword.get(opts, :keep_output, false),
+      allow_untracked: Keyword.get(opts, :allow_untracked, false)
     ]
   end
 
@@ -71,37 +84,31 @@ defmodule Mix.Tasks.Raxol.Release.Check do
       "package release check: #{length(report.packages)} package(s)"
     )
 
-    Enum.each(report.packages, fn package ->
-      if package.errors == [] do
-        suffix =
-          if package.hex_build?, do: "metadata + hex.build", else: "metadata"
+    Enum.each(report.packages, &print_package/1)
 
-        Mix.shell().info("[ok] #{package.app} #{package.version} #{suffix}")
-      else
-        Mix.shell().error(
-          "[fail] #{package.app} #{package.version || "unknown"}"
-        )
-      end
-
-      Enum.each(
-        package.warnings,
-        &Mix.shell().info("[warn] #{package.app}: #{&1}")
-      )
-
-      Enum.each(
-        package.errors,
-        &Mix.shell().error("[error] #{package.app}: #{&1}")
-      )
-    end)
-
-    Enum.each(report.errors -- package_errors(report), fn error ->
+    Enum.each(report.global_errors, fn error ->
       Mix.shell().error("[error] #{error}")
     end)
   end
 
-  defp package_errors(report) do
-    Enum.flat_map(report.packages, fn package ->
-      Enum.map(package.errors, &"#{package.app}: #{&1}")
-    end)
+  defp print_package(package) do
+    if package.errors == [] do
+      suffix =
+        if package.hex_build?, do: "metadata + hex.build", else: "metadata"
+
+      Mix.shell().info("[ok] #{package.app} #{package.version} #{suffix}")
+    else
+      Mix.shell().error("[fail] #{package.app} #{package.version || "unknown"}")
+    end
+
+    Enum.each(
+      package.warnings,
+      &Mix.shell().info("[warn] #{package.app}: #{&1}")
+    )
+
+    Enum.each(
+      package.errors,
+      &Mix.shell().error("[error] #{package.app}: #{&1}")
+    )
   end
 end

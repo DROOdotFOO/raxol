@@ -221,6 +221,10 @@ jobs:
     name: Package Release Check
     needs: setup
     runs-on: ubuntu-latest
+    # The check shells out to `mix hex.build` once per package. System.cmd/3
+    # cannot impose a timeout, so a build that hangs would otherwise sit here
+    # until the six-hour default job limit.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v7
