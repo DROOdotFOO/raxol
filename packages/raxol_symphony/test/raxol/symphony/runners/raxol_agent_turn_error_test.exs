@@ -19,6 +19,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
   alias Raxol.Symphony.TestSupport.DenyTurnSandbox
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -70,7 +74,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
       cfg = config(%{policies: policies, latency_ms: 200})
 
       assert {:error, {:policy_failed, :timeout}} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
@@ -97,7 +105,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
 
       # Deny IS surfaced as :ok -- the orchestrator's retry layer
       # would do nothing useful here (every retry would deny again).
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # The telemetry handler caught the deny -- this is the
       # operator-visible signal.
@@ -111,14 +124,26 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
       Memory.put_issue(%{issue() | state: "Done"})
 
       cfg = config(%{})
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
 
     test "all-pass policies: :ok" do
       Memory.put_issue(%{issue() | state: "Done"})
 
       cfg = config(%{policies: [Policy.Timeout.new(5_000)]})
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
@@ -144,7 +169,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
         })
 
       assert {:error, {:policy_failed, :timeout}} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: 9)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: 9
+               )
 
       {:ok, events} =
         Raxol.Agent.ThreadLog.list(

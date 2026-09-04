@@ -6,6 +6,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.SelfImproveTest do
   alias Raxol.Agent.Skills.Store, as: Skills
   alias Raxol.Symphony.Runners.RaxolAgent.SelfImprove
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   defmodule DemoAgent do
     use Raxol.Agent
     def skills_provider, do: Raxol.Agent.Skills.Store
@@ -156,7 +160,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.SelfImproveTest do
           prompt_template: "Work on {{ issue.identifier }}"
         })
 
-      assert :ok = RaxolAgent.run(issue, config, parent: self())
+      assert :ok = RaxolAgent.run(issue, config, parent: self(), workspace_path: @workspace)
       assert [%{conversation_id: "issue-9"}] = SessionSearch.search(ss, "flyctl")
     end
   end

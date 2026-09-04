@@ -24,6 +24,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
   alias Raxol.Symphony.Runners.RaxolAgent
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -67,7 +71,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
 
       cfg = config(%{})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
@@ -83,7 +92,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
           tracker_cache_ttl_ms: 60_000
         })
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Cache MUST contain the tracker result keyed by {:tracker, issue.id}.
       assert {:ok, result} = Raxol.Agent.Cache.get(adapter, {:tracker, "issue-1"})
@@ -106,7 +120,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
           3
         )
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # After a multi-turn run, the cache holds the latest tracker
       # result. Memory tracker returns {:active, refreshed} for an
@@ -126,7 +145,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
 
       cfg = config(%{tracker_cache: adapter})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # The entry should still be live (we just wrote it; TTL=30s).
       assert {:ok, _} = Raxol.Agent.Cache.get(adapter, {:tracker, "issue-1"})
@@ -139,7 +163,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
 
       cfg = config(%{tracker_cache: Raxol.Agent.Cache.Ets})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Default table is used.
       assert {:ok, _} =

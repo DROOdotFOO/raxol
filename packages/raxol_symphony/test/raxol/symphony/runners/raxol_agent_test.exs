@@ -1,9 +1,14 @@
 defmodule Raxol.Symphony.Runners.RaxolAgentTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.Actions.Fs
   alias Raxol.Symphony.{Config, Issue, Tracker}
   alias Raxol.Symphony.Runners.RaxolAgent
   alias Raxol.Symphony.Trackers.Memory
+
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
 
   setup do
     start_supervised!({Memory, []})
@@ -41,7 +46,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
     test "returns :ok and emits stream events to parent" do
       Memory.put_issue(%{issue() | state: "Done"})
 
-      :ok = RaxolAgent.run(issue(), config(), parent: self(), attempt: nil)
+      :ok =
+        RaxolAgent.run(issue(), config(),
+          parent: self(),
+          workspace_path: @workspace,
+          attempt: nil
+        )
 
       assert_received {:run_event, "issue-1", %{event: :text_delta}}
       assert_received {:run_event, "issue-1", %{event: :turn_completed}}
@@ -53,7 +63,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
       # received text_delta with the configured response.
       Memory.put_issue(%{issue() | state: "Done"})
 
-      :ok = RaxolAgent.run(issue(), config(%{response: "got it"}), parent: self())
+      :ok =
+        RaxolAgent.run(issue(), config(%{response: "got it"}),
+          parent: self(),
+          workspace_path: @workspace
+        )
 
       assert_received {:run_event, "issue-1", %{event: :text_delta, message: "got it"}}
     end
@@ -63,7 +77,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
     test "loops while issue stays active and stops at max_turns" do
       Memory.put_issue(%{issue() | state: "In Progress"})
 
-      :ok = RaxolAgent.run(issue(), config(%{}, _max_turns = 3), parent: self())
+      :ok =
+        RaxolAgent.run(issue(), config(%{}, _max_turns = 3),
+          parent: self(),
+          workspace_path: @workspace
+        )
 
       # We cannot rely on the order of receive between turns, but we should
       # have at least 3 turn_completed events.
@@ -75,7 +93,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
     test "stops when tracker reports terminal state" do
       Memory.put_issue(%{issue() | state: "Done"})
 
-      :ok = RaxolAgent.run(issue("Todo"), config(%{}, _max_turns = 5), parent: self())
+      :ok =
+        RaxolAgent.run(issue("Todo"), config(%{}, _max_turns = 5),
+          parent: self(),
+          workspace_path: @workspace
+        )
 
       events = collect_events("issue-1", 200)
       assert Enum.count(events, &(&1.event == :turn_completed)) == 1
@@ -83,7 +105,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
 
     test "stops when tracker tracker is unavailable" do
       # Memory is started but transition to non-existent ID -> empty result
-      :ok = RaxolAgent.run(issue("Todo"), config(%{}, _max_turns = 5), parent: self())
+      :ok =
+        RaxolAgent.run(issue("Todo"), config(%{}, _max_turns = 5),
+          parent: self(),
+          workspace_path: @workspace
+        )
 
       events = collect_events("issue-1", 200)
       # Single turn since Memory has no record of "issue-1" -> :done branch
@@ -102,7 +128,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
       cfg = config(%{pause_detector: detector})
 
       assert {:pause, :awaiting_buyer_payment, %{seq: 1}} =
-               RaxolAgent.run(issue(), cfg, parent: self())
+               RaxolAgent.run(issue(), cfg, parent: self(), workspace_path: @workspace)
     end
 
     test ":continue from detector falls through to normal completion" do
@@ -111,7 +137,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
       detector = fn _event -> :continue end
       cfg = config(%{pause_detector: detector})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self())
+      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), workspace_path: @workspace)
       assert_received {:run_event, "issue-1", %{event: :turn_completed}}
     end
 
@@ -122,7 +148,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
         config(%{pause_detector: {__MODULE__, :__test_always_pause__}})
 
       assert {:pause, :awaiting_delivery, :tok} =
-               RaxolAgent.run(issue(), cfg, parent: self())
+               RaxolAgent.run(issue(), cfg, parent: self(), workspace_path: @workspace)
     end
 
     test "detector only fires on a matching event tag" do
@@ -137,7 +163,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
 
       cfg = config(%{pause_detector: detector})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self())
+      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), workspace_path: @workspace)
     end
 
     test "events fire before the detector decides to pause" do
@@ -146,7 +172,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
       detector = fn _event -> {:pause, :awaiting_evaluator_approval, :tok} end
       cfg = config(%{pause_detector: detector})
 
-      _ = RaxolAgent.run(issue(), cfg, parent: self())
+      _ = RaxolAgent.run(issue(), cfg, parent: self(), workspace_path: @workspace)
 
       # At least one event should have been forwarded to parent before the
       # detector halted stream consumption.
@@ -156,6 +182,67 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTest do
 
   @doc false
   def __test_always_pause__(_event), do: {:pause, :awaiting_delivery, :tok}
+
+  describe "workspace confinement" do
+    test "agent_context/1 carries the workspace path as the tool cwd" do
+      assert %{cwd: "/srv/symphony/MT-1"} =
+               RaxolAgent.agent_context(workspace_path: "/srv/symphony/MT-1")
+    end
+
+    test "the workspace context reaches Stream.run under the :context key" do
+      state = %{
+        backend: Raxol.Agent.Backend.Mock,
+        backend_opts: [],
+        system_prompt: nil,
+        context: RaxolAgent.agent_context(workspace_path: "/srv/symphony/MT-1")
+      }
+
+      opts = RaxolAgent.__stream_opts__(state)
+
+      # `Stream.run/2` reads this with a default, so a wrong key name would
+      # silently un-confine the run instead of raising.
+      assert Keyword.fetch!(opts, :context) == %{cwd: "/srv/symphony/MT-1"}
+    end
+
+    test "run/3 refuses to run without a workspace rather than running unconfined" do
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      assert_raise KeyError, fn ->
+        RaxolAgent.run(issue(), config(), parent: self(), attempt: nil)
+      end
+    end
+
+    @tag :tmp_dir
+    test "the context the runner builds confines the fs tools to the workspace",
+         %{tmp_dir: tmp_dir} do
+      workspace = Path.join(tmp_dir, "MT-1")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "inside.txt"), "in")
+      File.write!(Path.join(tmp_dir, "outside.txt"), "out")
+
+      context = RaxolAgent.agent_context(workspace_path: workspace)
+
+      assert {:ok, resolved} = Fs.resolve("inside.txt", context)
+      assert resolved == Path.join(workspace, "inside.txt")
+
+      assert {:error, :outside_cwd} = Fs.resolve("../outside.txt", context)
+    end
+
+    @tag :tmp_dir
+    test "a run resolves against its own workspace, not the orchestrator's cwd",
+         %{tmp_dir: tmp_dir} do
+      workspace = Path.join(tmp_dir, "MT-1")
+      File.mkdir_p!(workspace)
+
+      context = RaxolAgent.agent_context(workspace_path: workspace)
+
+      # `mix.exs` exists in the BEAM's cwd (the package root) and not in the
+      # workspace. Resolving it must not reach the file the orchestrator was
+      # started next to.
+      assert File.regular?("mix.exs")
+      assert {:error, :outside_cwd} = Fs.resolve(Path.expand("mix.exs"), context)
+    end
+  end
 
   describe "compile-time absence" do
     test "returns :raxol_agent_not_loaded when stream module missing" do

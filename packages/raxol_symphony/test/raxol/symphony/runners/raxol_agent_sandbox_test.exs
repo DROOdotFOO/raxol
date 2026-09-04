@@ -17,6 +17,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
   alias Raxol.Symphony.TestSupport.{AbstainSandbox, AllowSandbox, DenyTurnSandbox}
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -69,7 +73,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
 
       cfg = config(%{})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # No denied telemetry should fire on the empty chain.
       refute_receive {:denied, :default, _}, 50
@@ -84,7 +93,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
 
       cfg = config(%{sandboxes: [%AllowSandbox{}]})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       refute_receive {:denied, :allow, _}, 50
 
@@ -104,7 +118,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
           sandboxes: [%DenyTurnSandbox{reason: :budget_exhausted}]
         })
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       assert_receive {:denied, :deny, metadata}, 200
       assert metadata.action == :turn
@@ -124,7 +143,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
 
       cfg = config(%{sandboxes: [%DenyTurnSandbox{reason: :rate_limit}]}, 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Three turns, three denies (since each turn re-walks the chain).
       assert_receive {:denied, :deny_multi, _}, 200
@@ -151,7 +175,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
           ]
         })
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       assert_receive {:denied, :compose, metadata}, 200
       assert metadata.reason == :downstream_block
@@ -170,7 +199,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
           ]
         })
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       assert_receive {:denied, :compose_short, %{reason: :first_block}}, 200
     end
@@ -182,7 +216,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSandboxTest do
 
       cfg = config(%{sandboxes: "not-a-list"})
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 end

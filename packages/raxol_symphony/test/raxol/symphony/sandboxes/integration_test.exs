@@ -13,6 +13,10 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
   alias Raxol.Symphony.Sandboxes.{BudgetCap, TimeOfDayWindow, TurnRateLimit}
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -71,7 +75,12 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
       cfg = config([sandbox], 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Turn 1 is allowed -- mock backend's :turn_completed arrives.
       assert_received {:run_event, "issue-1", %{event: :turn_completed}}
@@ -106,7 +115,12 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
       cfg = config([sandbox], 2)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Both turns are denied with :outside_window.
       assert_receive {:denied, %{reason: :outside_window}}, 200
@@ -130,7 +144,12 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
       cfg = config([sandbox], 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # First turn allowed; budget hits the cap mid-second-turn.
       assert_received {:run_event, "issue-1", %{event: :turn_completed}}
@@ -155,7 +174,12 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
       cfg = config([sandbox], 2)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Mock backend emits {input_tokens, output_tokens}. Two turns ran
       # (max_turns = 2), so spend = sum of both turns' (input + output).
@@ -182,7 +206,12 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
       cfg = config([sandbox], 3)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Three turns charged at cost_per_turn=1 = 3.
       assert BudgetCap.spend(table, "issue-1") == 3
@@ -204,7 +233,12 @@ defmodule Raxol.Symphony.Sandboxes.IntegrationTest do
 
       cfg = config([rate_limit, time_window], 1)
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Rate limit (first in chain) fires before the time window check
       # is reached.

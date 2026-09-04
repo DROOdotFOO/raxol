@@ -151,6 +151,31 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   a no-op (and never raises) when unconfigured. Currently wired in the
   workflow-mode path; the simple path is a follow-up.
 
+  ## Workspace confinement
+
+  The orchestrator gives every issue its own workspace under
+  `config.workspace.root` and passes it as `opts[:workspace_path]`. This runner
+  threads that path into the agent's tool context as `:cwd`, which is what
+  `Raxol.Agent.Actions.Fs.resolve/2` resolves paths against and confines them
+  to. Without it the fs tools resolve against the BEAM's cwd -- the repo the
+  orchestrator was started in -- so the per-issue workspace would be a
+  directory that gets created and then not enforced.
+
+  `:workspace_path` is therefore REQUIRED, the same way
+  `Raxol.Symphony.Runners.Codex` requires it. A missing one raises rather than
+  running unconfined, so the two runners cannot disagree about whether a
+  Symphony run is contained.
+
+  Confinement is pre-wired rather than load-bearing today: this runner passes
+  no `:actions`, so a run currently has no fs tools to confine. Threading the
+  cwd now means tool use lands into an already-enforced workspace instead of
+  needing to remember the boundary later.
+
+  Runs do NOT carry `jail: true`. The jail marker disables the shell tool
+  outright (`Raxol.Agent.Actions.Code.shell_jail_allow/1`), which an autonomous
+  coding run needs; revisit once ADR-0032's `Spawn` backends give a jailed
+  session a working shell.
+
   ## Compile-time optionality
 
   `raxol_agent` is an optional dep. If the consumer app does not include it,
@@ -182,6 +207,38 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       true ->
         do_run(issue, config, opts)
     end
+  end
+
+  @doc """
+  Build the agent tool context for a run from the runner `opts`.
+
+  The context carries `:cwd`, the per-issue workspace the orchestrator
+  allocated. `Raxol.Agent.Actions.Fs.resolve/2` expands every tool path
+  against it and rejects anything that resolves outside it.
+
+  Raises when `opts` carries no `:workspace_path`: there is no safe default
+  here, and falling back to the BEAM's cwd would silently un-confine the run.
+  """
+  @spec agent_context(keyword()) :: map()
+  def agent_context(opts) do
+    %{cwd: Keyword.fetch!(opts, :workspace_path)}
+  end
+
+  # The options both run paths hand to `Raxol.Agent.Stream.run/2`.
+  #
+  # Shared so the two paths cannot drift, and named so a test can pin the
+  # `:context` key: `Stream.run/2` reads it with `Keyword.get(opts, :context,
+  # %{})`, so a misspelled key would not raise -- it would silently fall back
+  # to an empty context and un-confine the run.
+  @doc false
+  @spec __stream_opts__(map()) :: keyword()
+  def __stream_opts__(state) do
+    [
+      backend: Map.fetch!(state, :backend),
+      backend_opts: Map.fetch!(state, :backend_opts),
+      system_prompt: Map.fetch!(state, :system_prompt),
+      context: Map.fetch!(state, :context)
+    ]
   end
 
   # --- Workflow-envelope path ---
@@ -247,6 +304,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       backend_opts: backend_opts,
       system_prompt: agent_string(config, :system_prompt),
       pause_detector: agent_pause_detector(config),
+      context: agent_context(opts),
       turn: 1,
       max_turns: config.agent.max_turns,
       last_events: [],
@@ -396,12 +454,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
 
   defp run_authorized_turn(state, prompt, policies, turn_payload) do
     op = fn _params ->
-      stream =
-        stream_module().run(prompt,
-          backend: state.backend,
-          backend_opts: state.backend_opts,
-          system_prompt: state.system_prompt
-        )
+      stream = stream_module().run(prompt, __stream_opts__(state))
 
       {:ok,
        collect_with_detector(
@@ -488,6 +541,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
           backend_opts: backend_opts,
           system_prompt: agent_string(config, :system_prompt),
           pause_detector: agent_pause_detector(config),
+          context: agent_context(opts),
           turn: 1,
           max_turns: config.agent.max_turns
         }
@@ -534,12 +588,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   end
 
   defp run_one_turn(%Issue{} = issue, %Config{} = config, prompt, ctx) do
-    stream =
-      stream_module().run(prompt,
-        backend: ctx.backend,
-        backend_opts: ctx.backend_opts,
-        system_prompt: ctx.system_prompt
-      )
+    stream = stream_module().run(prompt, __stream_opts__(ctx))
 
     if SelfImprove.configured?(config) do
       {result, events} =

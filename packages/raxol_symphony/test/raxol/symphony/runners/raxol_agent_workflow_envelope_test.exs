@@ -18,6 +18,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
   alias Raxol.Symphony.Runners.RaxolAgent
   alias Raxol.Symphony.Trackers.Memory
 
+  # The orchestrator allocates a per-issue workspace and the runner requires
+  # it; these cases assert other behaviour, so any path will do.
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -66,7 +70,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
       Memory.put_issue(%{issue() | state: "Done"})
 
       assert :ok =
-               RaxolAgent.run(issue(), config(%{}, 3), parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), config(%{}, 3),
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # Events were still forwarded from the mock backend.
       assert_received {:run_event, "issue-1", %{event: :text_delta}}
@@ -77,7 +85,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
       Memory.put_issue(%{issue() | state: "In Progress"})
 
       assert :ok =
-               RaxolAgent.run(issue(), config(%{}, 2), parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), config(%{}, 2),
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       events = collect_events("issue-1", 200)
       # Two full turns under workflow_mode.
@@ -98,7 +110,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
       cfg = config(%{pause_detector: detector})
 
       assert {:pause, :awaiting_buyer_payment, token} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       # The runner-level token carries workflow_run_id so the orchestrator
       # can route a later resume_run/3 back through Compiled.resume.
@@ -126,7 +142,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
 
       # First pass pauses.
       assert {:pause, :awaiting_external, pause_token} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
 
       assert is_binary(pause_token.workflow_run_id)
 
@@ -137,6 +157,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
       assert :ok =
                RaxolAgent.run(issue(), cfg,
                  parent: self(),
+                 workspace_path: @workspace,
                  attempt: nil,
                  resume_token: pause_token,
                  resume_value: :approved
@@ -165,7 +186,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
           prompt_template: ""
         })
 
-      assert :ok = RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
