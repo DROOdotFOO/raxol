@@ -27,6 +27,12 @@ case "$mode" in
   no_done)
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}'
     ;;
+  stdin_read)
+    # Reads stdin to EOF before doing its work, the way a CLI that accepts a
+    # piped prompt does. Hangs forever if the port leaves a write pipe open.
+    cat >/dev/null
+    printf '%s\n' '{"type":"result","subtype":"success","result":"read stdin","usage":{}}'
+    ;;
   *)
     printf '%s\n' '{"type":"result","subtype":"success","result":"","usage":{}}'
     ;;
