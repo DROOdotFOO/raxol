@@ -418,10 +418,18 @@ defmodule Raxol.MixProject do
   defp package do
     [
       name: "raxol",
-      # Only the doc trees `docs/1` actually renders. A bare `docs` entry would
-      # publish every future note dropped anywhere under docs/ -- ADRs,
-      # proposals, internal design work -- to a public registry, and a Hex
+      # The four doc trees `docs/0` draws its extras from, whole. A bare `docs`
+      # entry would publish every future note dropped anywhere under docs/ --
+      # ADRs, proposals, internal design work -- to a public registry, and a Hex
       # publish cannot be taken back.
+      #
+      # Whole trees rather than the extras list file by file, because extras
+      # link to their siblings: seven of the nine files under these trees that
+      # `docs/0` does not itself render are link targets of ones it does, and a
+      # missing target is a broken link in published hexdocs. The cost is that
+      # a new file under one of these four trees publishes automatically, so
+      # `mix raxol.release.check` is what keeps them honest -- it fails on any
+      # packaged file git does not track.
       files: ~w(
           lib
           priv/themes
