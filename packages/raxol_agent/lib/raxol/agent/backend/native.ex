@@ -125,14 +125,8 @@ defmodule Raxol.Agent.Backend.Native do
     end
   end
 
-  # `:in` makes the port input-only, so the CLI's stdin is closed instead of
-  # inheriting a write pipe this module never writes to. Nothing here calls
-  # `Port.command/2` -- the prompt goes over argv, built by `driver.args/1` --
-  # so an open pipe carries nothing and only ever signals "more input is
-  # coming". A CLI that reads stdin before doing its work then blocks until the
-  # run times out, having produced nothing. The one case `:in` would break is a
-  # child whose parent-death signal is EOF on stdin, which needs a pipe held
-  # open; no driver here works that way.
+  # `:in` closes the CLI's stdin; the prompt goes over argv via `driver.args/1`.
+  # See `Raxol.Agent.SpawnedPort` for why.
   defp run_port(exe, args, cwd, driver, timeout, caller, ref) do
     port =
       Port.open(
@@ -208,11 +202,7 @@ defmodule Raxol.Agent.Backend.Native do
     send(caller, {ref, {:error, {:exit, status}}})
   end
 
-  defp close(port) do
-    if Port.info(port), do: Port.close(port)
-  rescue
-    ArgumentError -> :ok
-  end
+  defp close(port), do: Raxol.Agent.SpawnedPort.close(port)
 
   defp response(content, usage) do
     %{content: content, usage: usage, metadata: %{backend: :native}}

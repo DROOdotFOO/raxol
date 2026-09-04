@@ -304,7 +304,8 @@ defmodule Raxol.Agent.Actions.Code do
           command: [type: :string],
           stdout: [type: :string],
           exit_status: [type: :integer],
-          truncated: [type: :boolean]
+          truncated: [type: :boolean],
+          timed_out: [type: :boolean]
         ]
       ]
 
@@ -318,16 +319,29 @@ defmodule Raxol.Agent.Actions.Code do
           Raxol.Agent.Actions.Code.run_shell(command, cd, timeout)
 
         {truncated, output} = Raxol.Agent.Actions.Code.truncate_output(output)
+        {exit_status, timed_out} = exit_status(status)
 
         {:ok,
          %{
            command: command,
            stdout: output,
-           exit_status: status,
-           truncated: truncated
+           exit_status: exit_status,
+           truncated: truncated,
+           timed_out: timed_out
          }}
       end
     end
+
+    # `run_shell/4` reports a timeout as the atom `:timeout`, but this action
+    # declares `exit_status` an integer, so returning the atom failed output
+    # validation in `Action.__call__/3`: a timed-out command reached the agent
+    # as `{:error, [exit_status: "must be of type :integer"]}`, naming the wrong
+    # problem and dropping the partial output with it. 124 is what a timeout is
+    # conventionally reported as, and what the sibling `shell` tool already
+    # returns, with `timed_out` carrying the distinction from a command that
+    # genuinely exited 124.
+    defp exit_status(:timeout), do: {124, true}
+    defp exit_status(status) when is_integer(status), do: {status, false}
 
     # No `cd` given → run in the working dir. A `cd` must stay under cwd.
     defp resolve_cd(nil, context), do: {:ok, Fs.working_dir(context)}
@@ -682,10 +696,7 @@ defmodule Raxol.Agent.Actions.Code do
         {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
       end)
 
-    # `:in` closes the command's stdin instead of handing it a write pipe
-    # `collect_port/4` never writes to. An open pipe carries nothing and only
-    # ever signals "more input is coming", so a command that reads stdin blocks
-    # until the deadline and comes back `:timeout` having done nothing.
+    # `:in` closes the command's stdin; see `Raxol.Agent.SpawnedPort` for why.
     base = [
       :binary,
       :in,
@@ -723,18 +734,7 @@ defmodule Raxol.Agent.Actions.Code do
     end
   end
 
-  # The SIGKILL above usually brings the port down before this runs -- a port
-  # terminates as soon as its OS process dies -- and `Port.close/1` raises on a
-  # port that is already gone. Unguarded, every genuinely timed-out command
-  # crashed at the caller instead of returning the `:timeout` this function
-  # documents. `Port.info/1` narrows the window but cannot close it, since the
-  # port can die between the check and the close, so the rescue is what makes
-  # this correct. Mirrors `Actions.Shell` and `Backend.Native`.
-  defp close_port(port) do
-    if Port.info(port), do: Port.close(port)
-  rescue
-    ArgumentError -> :ok
-  end
+  defp close_port(port), do: Raxol.Agent.SpawnedPort.close(port)
 
   defp port_os_pid(port) do
     case Port.info(port, :os_pid) do
