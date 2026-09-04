@@ -7,7 +7,9 @@ defmodule Raxol.Symphony.Trackers.GitHub do
   e.g. `state/todo`, `state/in-progress`, `state/human-review`,
   `state/done`. The configured `active_states` and `terminal_states` are
   matched against label slugs case-insensitively, with spaces normalized
-  to dashes (`"In Progress" <-> "state/in-progress"`).
+  to dashes (`"In Progress" <-> "state/in-progress"`). The `state/` prefix
+  is matched case-insensitively too, so `STATE/todo` and `State/Todo` are
+  the same label; `stateful` and `state-todo` are not state labels at all.
 
   ## Configuration
 
@@ -26,7 +28,12 @@ defmodule Raxol.Symphony.Trackers.GitHub do
   - `fetch_issues_by_states/2` -- fetches with `state=all` so closed issues
     in terminal states are reachable, then filters by label.
   - `fetch_issue_states_by_ids/2` -- fetches each ID via the per-issue
-    endpoint in parallel (concurrency 5).
+    endpoint in parallel (concurrency 5). An ID that answers 404/410 is
+    omitted from the result, because that is knowledge: the issue is deleted,
+    transferred, or invisible to this token. Any OTHER per-ID failure fails
+    the whole call, because callers read a short list as "this issue is gone"
+    and act on it destructively -- `Orchestrator.retry_with_fresh_state/3`
+    releases the issue, and the runners' `still_active?/2` ends the run.
 
   ## Pagination
 
@@ -64,7 +71,8 @@ defmodule Raxol.Symphony.Trackers.GitHub do
   @page_size 100
   @default_endpoint "https://api.github.com"
   @max_id_concurrency 5
-  @id_fetch_timeout 10_000
+  @default_receive_timeout 15_000
+  @id_fetch_grace 5_000
 
   @impl true
   def fetch_candidate_issues(%Config{tracker: tracker} = _config) do
@@ -90,23 +98,42 @@ defmodule Raxol.Symphony.Trackers.GitHub do
   @impl true
   def fetch_issue_states_by_ids(%Config{tracker: tracker} = _config, ids) when is_list(ids) do
     with :ok <- validate(tracker) do
-      issues =
-        ids
-        |> Task.async_stream(
-          fn id -> fetch_one(tracker, id) end,
-          max_concurrency: @max_id_concurrency,
-          timeout: @id_fetch_timeout,
-          on_timeout: :kill_task,
-          ordered: true
-        )
-        |> Enum.flat_map(fn
-          {:ok, {:ok, issue}} -> [assign_state_name(issue, tracker)]
-          _ -> []
-        end)
+      ids
+      |> Task.async_stream(
+        fn id -> fetch_one(tracker, id) end,
+        max_concurrency: @max_id_concurrency,
+        timeout: id_fetch_timeout(),
+        on_timeout: :kill_task,
+        ordered: true
+      )
+      |> Enum.reduce_while({:ok, []}, &collect_one/2)
+      |> case do
+        {:ok, acc} ->
+          {:ok, acc |> Enum.reverse() |> Enum.map(&assign_state_name(&1, tracker))}
 
-      {:ok, issues}
+        {:error, _reason} = err ->
+          err
+      end
     end
   end
+
+  # An absent issue and an unreachable API must not reach the caller looking
+  # the same. `Orchestrator.retry_with_fresh_state/3` releases the issue on
+  # `{:ok, []}` and requeues the retry on `{:error, _}`; the runners'
+  # `still_active?/2` ends the run on `{:ok, []}`. Folding a 500 into an empty
+  # list therefore picked the destructive branch of both on a transient blip,
+  # and left those `{:error, _}` clauses unreachable on this tracker.
+  # `Trackers.Linear` already propagates transport failures, so this is also
+  # what stops the two disagreeing about what silence means.
+  defp collect_one({:ok, {:ok, issue}}, {:ok, acc}),
+    do: {:cont, {:ok, [issue | acc]}}
+
+  defp collect_one({:ok, :gone}, {:ok, acc}), do: {:cont, {:ok, acc}}
+
+  defp collect_one({:ok, {:error, reason}}, _acc), do: {:halt, {:error, reason}}
+
+  defp collect_one({:exit, reason}, _acc),
+    do: {:halt, {:error, {:github_api_request, reason}}}
 
   # -- Validation -------------------------------------------------------------
 
@@ -195,21 +222,45 @@ defmodule Raxol.Symphony.Trackers.GitHub do
   end
 
   defp fetch_one(tracker, id) do
-    path = "/repos/#{tracker.project_slug}/issues/#{id}"
+    tracker
+    |> client()
+    |> Req.get(url: "/repos/#{tracker.project_slug}/issues/#{id}")
+    |> classify_one()
+  end
 
-    case Req.get(client(tracker), url: path) do
-      {:ok, %Req.Response{status: 200, body: body}} when is_map(body) ->
-        case normalize_or_skip(body) do
-          [issue] -> {:ok, issue}
-          _ -> {:error, :github_unknown_payload}
-        end
-
-      {:ok, %Req.Response{status: status}} ->
-        {:error, {:github_api_status, status}}
-
-      {:error, reason} ->
-        {:error, {:github_api_request, reason}}
+  defp classify_one({:ok, %Req.Response{status: 200, body: body}}) when is_map(body) do
+    # A 200 that normalizes away is a pull request, which is not an issue this
+    # tracker owns: absent rather than broken.
+    case normalize_or_skip(body) do
+      [issue] -> {:ok, issue}
+      _ -> :gone
     end
+  end
+
+  defp classify_one({:ok, %Req.Response{status: 200}}),
+    do: {:error, :github_unknown_payload}
+
+  # The only two statuses that are knowledge rather than a failure to acquire
+  # it: 404 covers deleted, transferred, and not-visible-to-this-token; 410 is
+  # GitHub's answer for an issue deleted outright.
+  defp classify_one({:ok, %Req.Response{status: status}}) when status in [404, 410],
+    do: :gone
+
+  defp classify_one({:ok, %Req.Response{status: status}}),
+    do: {:error, {:github_api_status, status}}
+
+  defp classify_one({:error, reason}), do: {:error, {:github_api_request, reason}}
+
+  # The stream timeout has to sit ABOVE the HTTP receive timeout. At a fixed
+  # 10s against a 15s default it was the stream that killed a merely-slow
+  # request, so the configured `receive_timeout` never applied on this path and
+  # raising it did nothing.
+  defp id_fetch_timeout, do: receive_timeout() + @id_fetch_grace
+
+  defp receive_timeout do
+    :raxol_symphony
+    |> Application.get_env(:github, [])
+    |> Keyword.get(:receive_timeout, @default_receive_timeout)
   end
 
   # -- Header parsing ---------------------------------------------------------
@@ -317,18 +368,27 @@ defmodule Raxol.Symphony.Trackers.GitHub do
 
   defp extract_label_names(_), do: []
 
-  defp extract_state(labels) do
-    labels
-    |> Enum.find_value(fn
-      "state/" <> rest -> rest
-      "State/" <> rest -> rest
-      _ -> nil
-    end)
-    |> case do
-      nil -> ""
-      slug -> slug
+  defp extract_state(labels), do: Enum.find_value(labels, "", &state_slug/1)
+
+  # `state/<slug>`, with the prefix matched case-insensitively. The suffix
+  # already was (`slugify_state/1` downcases it), but the prefix was two
+  # hand-written spellings, so a repo labelling its issues `STATE/todo` had
+  # every issue read as stateless: the orchestrator polled a correctly
+  # labelled repo forever, claimed nothing, and raised no error saying why.
+  #
+  # Split rather than prefix-matched so `stateful` and `state-todo` stay what
+  # they are -- ordinary labels, not a state named `ful`.
+  defp state_slug(label) when is_binary(label) do
+    case String.split(label, "/", parts: 2) do
+      [prefix, rest] when rest != "" ->
+        if String.downcase(prefix) == "state", do: rest
+
+      _ ->
+        nil
     end
   end
+
+  defp state_slug(_), do: nil
 
   defp priority_from_labels(labels) do
     labels
@@ -360,7 +420,7 @@ defmodule Raxol.Symphony.Trackers.GitHub do
     extra = Application.get_env(:raxol_symphony, :github, [])
     plug = Keyword.get(extra, :plug)
     adapter = Keyword.get(extra, :adapter)
-    receive_timeout = Keyword.get(extra, :receive_timeout, 15_000)
+    receive_timeout = Keyword.get(extra, :receive_timeout, @default_receive_timeout)
     base_url = tracker.endpoint || @default_endpoint
 
     Raxol.Symphony.GitHub.Client.build(

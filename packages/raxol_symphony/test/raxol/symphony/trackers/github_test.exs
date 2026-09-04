@@ -201,6 +201,39 @@ defmodule Raxol.Symphony.Trackers.GitHubTest do
                Tracker.fetch_issues_by_states(config(), ["Done"])
     end
 
+    # The moduledoc promises label slugs are matched case-insensitively, and
+    # the suffix is (`slugify_state/1` downcases it). The PREFIX was matched
+    # against two hand-written spellings, so a repo that labels its issues
+    # `STATE/todo` had every issue read as stateless and silently skipped --
+    # the orchestrator would poll a correctly-labelled repo forever and claim
+    # nothing, with no error to explain why.
+    test "the state/ label prefix is matched case-insensitively" do
+      install_handler(fn _conn ->
+        {:list,
+         [
+           issue_node(%{"number" => 1, "labels" => [%{"name" => "STATE/todo"}]}),
+           issue_node(%{"number" => 2, "labels" => [%{"name" => "State/Todo"}]}),
+           issue_node(%{"number" => 3, "labels" => [%{"name" => "sTaTe/TODO"}]})
+         ]}
+      end)
+
+      assert {:ok, issues} = Tracker.fetch_candidate_issues(config())
+      assert issues |> Enum.map(& &1.identifier) |> Enum.sort() == ["#1", "#2", "#3"]
+      assert Enum.map(issues, & &1.state) == ["Todo", "Todo", "Todo"]
+    end
+
+    test "a label that merely starts with the word state is not a state label" do
+      install_handler(fn _conn ->
+        {:list,
+         [
+           issue_node(%{"number" => 1, "labels" => [%{"name" => "stateful"}]}),
+           issue_node(%{"number" => 2, "labels" => [%{"name" => "state-todo"}]})
+         ]}
+      end)
+
+      assert {:ok, []} = Tracker.fetch_candidate_issues(config())
+    end
+
     test "skips pull requests (issues with pull_request key)" do
       install_handler(fn _conn ->
         {:list,
@@ -368,6 +401,49 @@ defmodule Raxol.Symphony.Trackers.GitHubTest do
 
       assert {:ok, [%Issue{identifier: "#1"}]} =
                Tracker.fetch_issue_states_by_ids(config(), ["1", "999"])
+    end
+
+    # A 404 means the issue is gone, which is knowledge. Every other failure
+    # means we do not know, and the two must not arrive at the caller looking
+    # the same: `Orchestrator.retry_with_fresh_state/3` releases the issue on
+    # `{:ok, []}` and requeues the retry on `{:error, _}`, and the runners'
+    # `still_active?/2` ends the run on `{:ok, []}`. Collapsing a 500 into an
+    # empty list picks the destructive branch of both on a transient blip.
+    #
+    # `Trackers.Linear` already propagates transport failures, so this is also
+    # what stops the two trackers disagreeing about what silence means.
+    test "a 5xx on one ID fails the batch instead of dropping that issue" do
+      install_handler(fn conn ->
+        case conn.request_path do
+          "/repos/owner/repo/issues/1" -> {:list, issue_node(%{"number" => 1})}
+          _ -> {:status, 500, %{"message" => "Server Error"}}
+        end
+      end)
+
+      assert {:error, {:github_api_status, 500}} =
+               Tracker.fetch_issue_states_by_ids(config(), ["1", "2"])
+    end
+
+    test "a rate-limit response fails the batch" do
+      install_handler(fn _conn -> {:status, 429, %{"message" => "rate limited"}} end)
+
+      assert {:error, {:github_api_status, 429}} =
+               Tracker.fetch_issue_states_by_ids(config(), ["1"])
+    end
+
+    test "an auth failure fails the batch rather than reading as no issues" do
+      install_handler(fn _conn -> {:status, 401, %{"message" => "Bad credentials"}} end)
+
+      assert {:error, {:github_api_status, 401}} =
+               Tracker.fetch_issue_states_by_ids(config(), ["1", "2"])
+    end
+
+    test "a transport error on one ID fails the batch" do
+      adapter = fn req -> {req, %Req.TransportError{reason: :econnrefused}} end
+      Application.put_env(:raxol_symphony, :github, adapter: adapter)
+
+      assert {:error, {:github_api_request, %Req.TransportError{reason: :econnrefused}}} =
+               Tracker.fetch_issue_states_by_ids(config(), ["1"])
     end
   end
 
