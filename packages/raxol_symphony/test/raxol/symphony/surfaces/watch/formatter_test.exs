@@ -151,6 +151,26 @@ defmodule Raxol.Symphony.Surfaces.Watch.FormatterTest do
       assert "sym:dismiss" in action_ids
     end
 
+    test "announces the run that just paused, not the first by issue-id order" do
+      snap =
+        snapshot(%{
+          counts: %{running: 0, retrying: 0, paused: 2},
+          paused: [
+            paused(issue_id: "iss_1", issue_identifier: "MT-1", paused_ms_ago: 600_000),
+            paused(issue_id: "iss_2", issue_identifier: "MT-2", paused_ms_ago: 500)
+          ]
+        })
+
+      n = Formatter.event_notification(:worker_paused, snap)
+
+      assert n.body =~ "MT-2"
+      refute n.body =~ "MT-1"
+
+      action_ids = Enum.map(n.actions, & &1.id)
+      assert "sym:resume:iss_2:approved" in action_ids
+      assert "sym:resume:iss_2:rejected" in action_ids
+    end
+
     test "falls back to refresh + dismiss when paused list is empty" do
       snap = snapshot(%{counts: %{running: 0, retrying: 0, paused: 0}})
       n = Formatter.event_notification(:worker_paused, snap)

@@ -219,7 +219,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.FormatterTest do
       assert :skip = Formatter.event_message(:something_weird, empty_snapshot())
     end
 
-    test ":worker_paused surfaces Approve/Reject buttons for the head paused" do
+    test ":worker_paused surfaces Approve/Reject buttons for the paused run" do
       snap =
         empty_snapshot(%{
           counts: %{running: 0, retrying: 0, paused: 1},
@@ -234,6 +234,25 @@ defmodule Raxol.Symphony.Surfaces.Telegram.FormatterTest do
       assert approve.callback_data == "sym:resume:iss_p:approved"
       assert reject.callback_data == "sym:resume:iss_p:rejected"
       assert refresh.callback_data == "sym:refresh"
+    end
+
+    test ":worker_paused announces the run that just paused" do
+      snap =
+        empty_snapshot(%{
+          counts: %{running: 0, retrying: 0, paused: 2},
+          paused: [
+            paused(issue_id: "iss_1", issue_identifier: "MT-1", paused_ms_ago: 600_000),
+            paused(issue_id: "iss_2", issue_identifier: "MT-2", paused_ms_ago: 500)
+          ]
+        })
+
+      assert {text, [[approve, reject], [_refresh]]} =
+               Formatter.event_message(:worker_paused, snap)
+
+      assert text =~ "MT-2"
+      refute text =~ "MT-1"
+      assert approve.callback_data == "sym:resume:iss_2:approved"
+      assert reject.callback_data == "sym:resume:iss_2:rejected"
     end
   end
 

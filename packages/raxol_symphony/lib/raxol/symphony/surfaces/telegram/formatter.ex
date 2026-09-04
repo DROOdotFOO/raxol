@@ -179,7 +179,7 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
 
   def event_message(:worker_paused, snapshot) do
     paused = Map.get(snapshot, :paused, [])
-    head = List.first(paused)
+    head = newest_pause(paused)
 
     body =
       if head do
@@ -220,6 +220,12 @@ defmodule Raxol.Symphony.Surfaces.Telegram.Formatter do
   end
 
   def event_message(_other, _snapshot), do: :skip
+
+  # The snapshot lists paused runs in issue-id order, not pause recency, so
+  # the run that triggered this message is the shortest-parked entry rather
+  # than the head of the list.
+  defp newest_pause([]), do: nil
+  defp newest_pause(paused), do: Enum.min_by(paused, &Map.get(&1, :paused_ms_ago, 0))
 
   # -- Sections ---------------------------------------------------------------
 
