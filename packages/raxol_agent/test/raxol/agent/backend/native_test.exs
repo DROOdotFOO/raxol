@@ -64,6 +64,16 @@ defmodule Raxol.Agent.Backend.NativeTest do
       assert [{:chunk, "partial"}, {:done, %{content: "partial"}}] = events
     end
 
+    test "a CLI that reads stdin sees EOF instead of an open pipe" do
+      # The port is never written to, so a child that reads stdin before doing
+      # its work blocks until the run times out. The short timeout keeps the
+      # regression cheap to observe: without `:in` this is `{:error, :timeout}`.
+      {:ok, stream} =
+        Native.stream(FakeDriver, messages(), extra_args: ["stdin_read"], timeout: 2_000)
+
+      assert [{:done, %{content: "read stdin"}}] = Enum.to_list(stream)
+    end
+
     test "returns an error when the executable is not found" do
       defmodule MissingDriver do
         @behaviour Raxol.Agent.NativeHarness
