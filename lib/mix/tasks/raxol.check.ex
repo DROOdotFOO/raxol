@@ -8,7 +8,8 @@ defmodule Mix.Tasks.Raxol.Check do
   3. Credo analysis
   4. Dialyzer (if available)
   5. Security audit
-  6. Test suite
+  6. Package release metadata
+  7. Test suite
 
   ## Usage
 
@@ -52,9 +53,19 @@ defmodule Mix.Tasks.Raxol.Check do
     :security,
     :docs,
     :rate,
+    :release,
     :test
   ]
-  @quick_checks [:lockfile, :compile, :format, :credo, :docs, :rate, :test]
+  @quick_checks [
+    :lockfile,
+    :compile,
+    :format,
+    :credo,
+    :docs,
+    :rate,
+    :release,
+    :test
+  ]
 
   @impl Mix.Task
   def run(args) do
@@ -334,6 +345,33 @@ defmodule Mix.Tasks.Raxol.Check do
         )
 
         {:rate, :error}
+    end
+  end
+
+  # Metadata only: the full check shells out to `mix hex.build` for every
+  # package, which is a CI-shaped cost. The metadata half is the part that
+  # catches drift while you are editing a mix.exs.
+  defp run_check(:release) do
+    Mix.shell().info(Colors.subsection_header("Package release metadata"))
+
+    case Mix.shell().cmd("mix raxol.release.check --metadata-only") do
+      0 ->
+        Mix.shell().info(
+          "    " <> Colors.format_success("Release train metadata is valid")
+        )
+
+        {:release, :ok}
+
+      _ ->
+        Mix.shell().error(
+          "    " <>
+            Colors.format_error(
+              "Release train metadata is invalid",
+              "run `mix raxol.release.check` for the full report"
+            )
+        )
+
+        {:release, :error}
     end
   end
 

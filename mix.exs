@@ -418,10 +418,20 @@ defmodule Raxol.MixProject do
   defp package do
     [
       name: "raxol",
+      # Only the doc trees `docs/1` actually renders. A bare `docs` entry would
+      # publish every future note dropped anywhere under docs/ -- ADRs,
+      # proposals, internal design work -- to a public registry, and a Hex
+      # publish cannot be taken back.
       files: ~w(
           lib
           priv/themes
-          docs
+          docs/getting-started
+          docs/core
+          docs/cookbook
+          docs/features
+          docs/bench/README.md
+          docs/PACKAGES.md
+          docs/WHY_OTP.md
           examples/reference/core/README.md
           .github/CONTRIBUTING.md
           .formatter.exs

@@ -74,4 +74,11 @@ The main `raxol` package does not depend on `raxol_agent`, `raxol_earn`, `raxol_
 
 ## Publishing
 
-Run `mix raxol.release.check` before publishing. It validates the public Hex train in dependency order, strips local path deps with `HEX_BUILD=1`, and runs `mix hex.build --unpack` for each package without publishing.
+See [Hex Publishing](https://github.com/DROOdotFOO/raxol/blob/master/CLAUDE.md#hex-publishing) for the publish order. `HEX_BUILD=1` strips local path deps so `mix hex.build` sees only Hex packages.
+
+Run `mix raxol.release.check` before publishing anything. It walks the public train in dependency order and, per package, validates the metadata, confirms every file the tarball would carry is tracked by git, and runs `mix hex.build --unpack` without publishing. `--metadata-only` skips the builds; `mix raxol.check` runs that faster half for you.
+
+Two failures are worth recognising on sight:
+
+- `packaged file X is not tracked by git`: `mix hex.build` packages the working tree, not the commit, so an untracked file under a packaged directory really would ship. Commit it, ignore it via `:exclude_patterns`, or narrow the `:files` entry. `--allow-untracked` downgrades this to a warning for local work only.
+- `release dependency X is dropped from the published tarball`: a `HEX_BUILD` conditional in that package's `mix.exs` removed a dependency. Intended for pre-alpha packages that are not on the train yet, and reported as a warning so the choice stays visible rather than silent.

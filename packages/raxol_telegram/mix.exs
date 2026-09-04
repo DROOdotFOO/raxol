@@ -50,8 +50,16 @@ defmodule RaxolTelegram.MixProject do
       {:telegex, "~> 1.8", optional: true, runtime: false},
 
       # Gateway behaviour (optional -- GatewayAdapter compiles only when present).
-      # Source builds include it locally; Hex builds drop it until raxol_gateway
-      # joins the public package train.
+      # Source builds include it locally; Hex builds drop it entirely, because
+      # raxol_gateway is pre-alpha and not on Hex, so declaring it would make
+      # the tarball unpublishable.
+      #
+      # The cost of dropping it rather than declaring it optional: a Hex
+      # consumer who adds raxol_gateway themselves gives Mix no ordering hint,
+      # so GatewayAdapter's `Code.ensure_loaded?` gate may run before
+      # raxol_gateway compiles. That is the `mix deps.compile raxol_telegram
+      # --force` case documented on the module itself. `mix raxol.release.check`
+      # reports this drop as a warning so it stays visible.
       gateway_dep(),
 
       # JSON processing

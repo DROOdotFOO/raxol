@@ -5,7 +5,26 @@ defmodule Raxol.Release.PackageCheck do
   The check is deliberately release-train aware. The repo has package metadata
   on pre-alpha projects for local builds, but the public Hex train is smaller
   and ordered by inter-package dependencies.
+
+  Three layers run per package:
+
+    * **metadata** -- project/package/docs keys, link sets, file globs that
+      match something, docs extras that are actually packaged, and dependency
+      requirements that agree with the version each dependency publishes.
+
+    * **provenance** -- every file the package would ship is tracked by git, so
+      publishing from a dirty tree cannot leak untracked content into a public
+      registry. `mix hex.build` packages the working tree, not the commit, so a
+      green run on a dirty tree otherwise says nothing about what ships.
+
+    * **tarball** -- `HEX_BUILD=1 mix hex.build --unpack`, then the generated
+      `hex_metadata.config` is compared against the *source* project config.
+      Comparing against the publish config would be circular: a dependency
+      dropped by an env conditional in `mix.exs` is absent from both sides and
+      produces no finding at all.
   """
+
+  alias Raxol.Core.Boundary.Path, as: Boundary
 
   @required_link_sets [
     MapSet.new(["GitHub", "Changelog", "Docs"]),
@@ -41,8 +60,13 @@ defmodule Raxol.Release.PackageCheck do
   ]
 
   @all_packages @public_packages ++ @pre_alpha_packages
-  @package_by_app Map.new(@all_packages, &{&1.app, &1})
-  @package_apps MapSet.new(Map.keys(@package_by_app))
+  @package_apps MapSet.new(@all_packages, & &1.app)
+  @public_apps MapSet.new(@public_packages, & &1.app)
+  @pre_alpha_names MapSet.new(@pre_alpha_packages, &Atom.to_string(&1.app))
+
+  @default_build_dir "tmp/package_release_check"
+  @build_marker ".raxol-release-check"
+  @max_reported_untracked 10
 
   @type package_spec :: %{
           required(:app) => atom(),
@@ -55,6 +79,7 @@ defmodule Raxol.Release.PackageCheck do
           required(:path) => String.t(),
           required(:class) => :public | :pre_alpha,
           required(:version) => String.t() | nil,
+          required(:deps) => [{atom(), String.t() | nil, keyword()}],
           required(:hex_build?) => boolean(),
           required(:errors) => [String.t()],
           required(:warnings) => [String.t()]
@@ -63,6 +88,7 @@ defmodule Raxol.Release.PackageCheck do
   @type report :: %{
           required(:root) => String.t(),
           required(:packages) => [package_report()],
+          required(:global_errors) => [String.t()],
           required(:errors) => [String.t()]
         }
 
@@ -74,53 +100,39 @@ defmodule Raxol.Release.PackageCheck do
   @spec all_packages() :: [package_spec()]
   def all_packages, do: @all_packages
 
-  @doc "Selects packages according to the release checker options."
+  @doc """
+  Selects packages according to the release checker options.
+
+  `:only` accepts atoms or strings. Strings are matched against known package
+  names rather than converted, so a typo cannot mint an atom from argv.
+  """
   @spec select_packages(keyword()) ::
           {:ok, [package_spec()]} | {:error, [String.t()]}
   def select_packages(opts \\ []) do
-    available =
-      if Keyword.get(opts, :include_pre_alpha, false),
-        do: @all_packages,
-        else: @public_packages
+    available = available_packages(opts)
 
-    only = normalize_only(Keyword.get(opts, :only, []))
-
-    if only == [] do
-      {:ok, available}
-    else
-      by_app = Map.new(available, &{&1.app, &1})
-      missing = Enum.reject(only, &Map.has_key?(by_app, &1))
-
-      if missing == [] do
-        {:ok, Enum.map(only, &Map.fetch!(by_app, &1))}
-      else
-        known =
-          available |> Enum.map(&Atom.to_string(&1.app)) |> Enum.join(", ")
-
-        {:error,
-         [
-           "unknown package(s): #{Enum.map_join(missing, ", ", &Atom.to_string/1)}",
-           "available packages: #{known}"
-         ]}
-      end
+    case normalize_only(Keyword.get(opts, :only, [])) do
+      [] -> {:ok, available}
+      only -> resolve_only(only, available)
     end
   end
 
-  @doc "Runs the metadata and Hex build checks."
+  @doc "Runs the metadata, provenance, and Hex build checks."
   @spec run(keyword()) :: {:ok, report()} | {:error, report()}
   def run(opts \\ []) do
     root = opts |> Keyword.get(:root, File.cwd!()) |> Path.expand()
 
-    case select_packages(opts) do
-      {:ok, packages} ->
-        report = do_run(root, packages, opts)
+    with {:ok, packages} <- select_packages(opts),
+         {:ok, build_root} <- resolve_build_root(root, opts) do
+      report = do_run(root, packages, build_root, opts)
 
-        if report.errors == [],
-          do: {:ok, report},
-          else: {:error, report}
-
+      if report.errors == [],
+        do: {:ok, report},
+        else: {:error, report}
+    else
       {:error, errors} ->
-        {:error, %{root: root, packages: [], errors: errors}}
+        {:error,
+         %{root: root, packages: [], global_errors: errors, errors: errors}}
     end
   end
 
@@ -135,42 +147,13 @@ defmodule Raxol.Release.PackageCheck do
         package_path,
         release_train \\ @public_packages
       ) do
-    package = Keyword.get(config, :package, [])
-    docs = Keyword.get(config, :docs, [])
-    selected_apps = MapSet.new(Enum.map(release_train, & &1.app))
+    versions = version_index(release_train, %{})
 
-    errors =
-      []
-      |> require_equal(
-        config[:app],
-        spec.app,
-        "project app must be #{inspect(spec.app)}"
-      )
-      |> require_present(config[:version], "project version is missing")
-      |> require_version(config[:version])
-      |> require_present(config[:description], "project description is missing")
-      |> require_keyword(package, "package metadata is missing")
-      |> require_package_name(package, spec.app)
-      |> require_nonempty_list(package[:files], "package files are missing")
-      |> require_nonempty_list(
-        package[:maintainers],
-        "package maintainers are missing"
-      )
-      |> require_nonempty_list(
-        package[:licenses],
-        "package licenses are missing"
-      )
-      |> require_links(package[:links], spec.class)
-      |> require_docs_source_ref(docs, config[:version])
-      |> require_package_files(package_path, package[:files])
-      |> require_readme(package_path, package[:files])
-      |> require_license(package_path, package[:files])
-      |> require_docs_extras(package_path, docs, package[:files])
-
-    {dep_errors, dep_warnings} =
-      validate_dependency_constraints(spec, config, selected_apps)
-
-    {Enum.reverse(errors) ++ dep_errors, dep_warnings}
+    validate_metadata(spec, config, package_path, %{
+      release_train: release_train,
+      versions: versions,
+      reloadable?: true
+    })
   end
 
   @doc "Returns the Raxol package dependencies relevant to a Hex publish."
@@ -189,38 +172,141 @@ defmodule Raxol.Release.PackageCheck do
     end)
   end
 
-  defp do_run(root, packages, opts) do
-    metadata_only? = Keyword.get(opts, :metadata_only, false)
+  # --- selection -------------------------------------------------------------
 
-    release_train =
-      if Keyword.get(opts, :include_pre_alpha, false),
-        do: @all_packages,
-        else: @public_packages
+  defp available_packages(opts) do
+    if Keyword.get(opts, :include_pre_alpha, false),
+      do: @all_packages,
+      else: @public_packages
+  end
 
-    build_root =
-      Keyword.get(
-        opts,
-        :build_root,
-        Path.join(root, "tmp/package_release_check")
-      )
+  defp resolve_only(only, available) do
+    by_name = Map.new(available, &{Atom.to_string(&1.app), &1})
+    missing = Enum.reject(only, &Map.has_key?(by_name, &1))
 
-    File.rm_rf!(build_root)
-    File.mkdir_p!(build_root)
+    if missing == [] do
+      {:ok, Enum.map(only, &Map.fetch!(by_name, &1))}
+    else
+      {:error, unknown_package_errors(missing, available)}
+    end
+  end
+
+  defp unknown_package_errors(missing, available) do
+    known = Enum.map_join(available, ", ", &Atom.to_string(&1.app))
+
+    hint =
+      case Enum.filter(missing, &MapSet.member?(@pre_alpha_names, &1)) do
+        [] ->
+          []
+
+        pre_alpha ->
+          [
+            "#{Enum.join(pre_alpha, ", ")} is pre-alpha; pass --all to include it"
+          ]
+      end
+
+    [
+      "unknown package(s): #{Enum.join(missing, ", ")}",
+      "available packages: #{known}"
+    ] ++ hint
+  end
+
+  defp normalize_only(nil), do: []
+  defp normalize_only([]), do: []
+
+  defp normalize_only(apps) when is_list(apps),
+    do: Enum.map(apps, &to_package_name/1)
+
+  defp normalize_only(app), do: [to_package_name(app)]
+
+  defp to_package_name(app) when is_atom(app), do: Atom.to_string(app)
+  defp to_package_name(app) when is_binary(app), do: String.trim(app)
+
+  # --- build root ------------------------------------------------------------
+
+  @doc """
+  Resolves the scratch directory the Hex builds unpack into.
+
+  `build_root` is deleted recursively, so it is confined under the project root
+  and may be neither the root itself nor an existing directory this checker did
+  not create. Without those gates `run(build_root: ".")` deletes the working
+  tree. The path is always interpreted relative to `root`; an absolute request
+  is jailed under it rather than honoured.
+  """
+  @spec resolve_build_root(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, [String.t()]}
+  def resolve_build_root(root, opts \\ []) do
+    requested = Keyword.get(opts, :build_root, @default_build_dir)
+
+    with true <- is_binary(requested),
+         {:ok, path} <- Boundary.confine(root, requested),
+         :ok <- refuse_project_root(path, root),
+         :ok <- refuse_foreign_directory(path) do
+      {:ok, path}
+    else
+      false ->
+        {:error, ["build_root must be a string, got #{inspect(requested)}"]}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error,
+         [
+           "build_root #{inspect(requested)} is not confined to the project " <>
+             "root (#{reason})"
+         ]}
+
+      {:error, errors} when is_list(errors) ->
+        {:error, errors}
+    end
+  end
+
+  defp refuse_project_root(path, root) do
+    if path == root do
+      {:error, ["build_root must not be the project root itself"]}
+    else
+      :ok
+    end
+  end
+
+  defp refuse_foreign_directory(path) do
+    cond do
+      not File.exists?(path) -> :ok
+      File.exists?(Path.join(path, @build_marker)) -> :ok
+      File.dir?(path) and File.ls!(path) == [] -> :ok
+      true -> {:error, ["refusing to delete existing directory #{path}"]}
+    end
+  end
+
+  # --- run -------------------------------------------------------------------
+
+  defp do_run(root, packages, build_root, opts) do
+    release_train = available_packages(opts)
+    configs = load_configs(root, release_train)
+
+    ctx = %{
+      root: root,
+      build_root: build_root,
+      release_train: release_train,
+      configs: configs,
+      versions: version_index(release_train, configs),
+      tracked: tracked_index(root),
+      metadata_only?: Keyword.get(opts, :metadata_only, false),
+      allow_untracked?: Keyword.get(opts, :allow_untracked, false)
+    }
+
+    prepare_build_root!(build_root)
 
     try do
-      package_reports =
-        Enum.map(packages, fn spec ->
-          check_package(root, spec, release_train, metadata_only?, build_root)
-        end)
+      package_reports = Enum.map(packages, &check_package(ctx, &1))
 
-      report_errors =
-        validate_catalog(root) ++
-          validate_order(package_reports, release_train) ++
-          Enum.flat_map(package_reports, fn package ->
-            Enum.map(package.errors, &"#{package.app}: #{&1}")
-          end)
+      global_errors =
+        validate_catalog(root) ++ validate_order(package_reports, release_train)
 
-      %{root: root, packages: package_reports, errors: report_errors}
+      %{
+        root: root,
+        packages: package_reports,
+        global_errors: global_errors,
+        errors: global_errors ++ flatten_package_errors(package_reports)
+      }
     after
       unless Keyword.get(opts, :keep_output, false) do
         File.rm_rf(build_root)
@@ -228,60 +314,116 @@ defmodule Raxol.Release.PackageCheck do
     end
   end
 
-  defp check_package(root, spec, release_train, metadata_only?, build_root) do
-    package_path = Path.expand(spec.path, root)
+  defp prepare_build_root!(build_root) do
+    File.rm_rf!(build_root)
+    File.mkdir_p!(build_root)
+    File.write!(Path.join(build_root, @build_marker), "")
+  end
 
-    case load_project_config(root, spec) do
+  defp flatten_package_errors(package_reports) do
+    Enum.flat_map(package_reports, fn package ->
+      Enum.map(package.errors, &"#{package.app}: #{&1}")
+    end)
+  end
+
+  defp check_package(ctx, spec) do
+    package_path = Path.expand(spec.path, ctx.root)
+    entry = Map.fetch!(ctx.configs, spec.app)
+
+    case entry.publish do
       {:ok, config} ->
-        {errors, warnings} =
-          validate_project_config(spec, config, package_path, release_train)
-
-        {hex_errors, hex_warnings} =
-          if metadata_only? do
-            {[], []}
-          else
-            run_hex_build(spec, package_path, config, build_root)
-          end
-
-        %{
-          app: spec.app,
-          path: spec.path,
-          class: spec.class,
-          version: config[:version],
-          deps: release_deps(config),
-          hex_build?: not metadata_only?,
-          errors: errors ++ hex_errors,
-          warnings: warnings ++ hex_warnings
-        }
+        report_for(ctx, spec, entry, config, package_path)
 
       {:error, reason} ->
-        %{
-          app: spec.app,
-          path: spec.path,
-          class: spec.class,
-          version: nil,
-          deps: [],
-          hex_build?: not metadata_only?,
-          errors: ["could not load mix project: #{reason}"],
-          warnings: []
-        }
+        base_report(spec, ctx, nil, [], [
+          "could not load mix project: #{reason}"
+        ])
     end
   end
 
-  defp load_project_config(root, %{app: :raxol, path: "."}) do
+  defp report_for(ctx, spec, entry, config, package_path) do
+    {errors, warnings} =
+      validate_metadata(spec, config, package_path, %{
+        release_train: ctx.release_train,
+        versions: ctx.versions,
+        reloadable?: entry.reloadable?
+      })
+
+    {track_errors, track_warnings} =
+      validate_tracked_files(ctx, config, package_path)
+
+    {hex_errors, hex_warnings} =
+      if ctx.metadata_only? do
+        {[], []}
+      else
+        run_hex_build(ctx, spec, package_path, entry, config)
+      end
+
+    base_report(
+      spec,
+      ctx,
+      config[:version],
+      release_deps(config),
+      errors ++ track_errors ++ hex_errors,
+      warnings ++ track_warnings ++ hex_warnings
+    )
+  end
+
+  defp base_report(spec, ctx, version, deps, errors, warnings \\ []) do
+    %{
+      app: spec.app,
+      path: spec.path,
+      class: spec.class,
+      version: version,
+      deps: deps,
+      hex_build?: not ctx.metadata_only?,
+      errors: errors,
+      warnings: warnings
+    }
+  end
+
+  # --- project loading -------------------------------------------------------
+
+  # Each release-train project is loaded exactly once per environment and cached
+  # for the whole run. Resolving a dependency's expected requirement used to
+  # reload the dependency's project per dependent, which is quadratic in the
+  # size of the train.
+  defp load_configs(root, release_train) do
+    Map.new(release_train, fn spec ->
+      {spec.app, load_config_pair(root, spec)}
+    end)
+  end
+
+  defp load_config_pair(root, %{app: :raxol, path: "."}) do
     if Path.expand(File.cwd!()) == root do
-      {:ok, Mix.Project.config()}
+      # `:raxol` is already on the Mix project stack, so it cannot be reloaded
+      # under HEX_BUILD. `reloadable?: false` records that, and the checks that
+      # depend on a publish-shaped config skip rather than reporting a finding
+      # they cannot substantiate. The tarball is still covered:
+      # `require_hexpm_requirements/2` asserts every requirement in the built
+      # `hex_metadata.config` resolves from hexpm, which a leaked path dep
+      # cannot do.
+      config = Mix.Project.config()
+      %{source: {:ok, config}, publish: {:ok, config}, reloadable?: false}
     else
-      load_child_project(:raxol, root)
+      load_reloadable(:raxol, root)
     end
   end
 
-  defp load_project_config(root, %{app: app, path: path}) do
-    load_child_project(app, Path.expand(path, root))
+  defp load_config_pair(root, %{app: app, path: path}) do
+    load_reloadable(app, Path.expand(path, root))
   end
 
-  defp load_child_project(app, path) do
-    with_hex_build_env(fn ->
+  defp load_reloadable(app, path) do
+    %{
+      source: load_child_project(app, path, false),
+      publish: load_child_project(app, path, true),
+      reloadable?: true
+    }
+  end
+
+  defp load_child_project(app, path, hex_build?) do
+    with_hex_build_env(hex_build?, fn ->
       {:ok,
        Mix.Project.in_project(app, path, [], fn _module ->
          Mix.Project.config()
@@ -293,7 +435,18 @@ defmodule Raxol.Release.PackageCheck do
     :exit, reason -> {:error, Exception.format_exit(reason)}
   end
 
-  defp with_hex_build_env(fun) do
+  defp with_hex_build_env(false, fun) do
+    old = System.get_env("HEX_BUILD")
+    System.delete_env("HEX_BUILD")
+
+    try do
+      fun.()
+    after
+      if old, do: System.put_env("HEX_BUILD", old)
+    end
+  end
+
+  defp with_hex_build_env(true, fun) do
     old = System.get_env("HEX_BUILD")
     System.put_env("HEX_BUILD", "1")
 
@@ -306,127 +459,335 @@ defmodule Raxol.Release.PackageCheck do
     end
   end
 
-  defp validate_catalog(root) do
-    expected =
-      @all_packages
-      |> Enum.reject(&(&1.app == :raxol))
-      |> Enum.map(& &1.app)
-      |> MapSet.new()
-
-    discovered =
-      root
-      |> Path.join("packages/*/mix.exs")
-      |> Path.wildcard()
-      |> Enum.map(&read_app!/1)
-      |> MapSet.new()
-
-    cond do
-      MapSet.equal?(expected, discovered) ->
-        []
-
-      true ->
-        missing = MapSet.difference(discovered, expected)
-        stale = MapSet.difference(expected, discovered)
-
-        [
-          "package catalog mismatch: unclassified=#{format_app_set(missing)} " <>
-            "missing=#{format_app_set(stale)}"
-        ]
-    end
-  end
-
-  defp read_app!(mix_exs) do
-    {:ok, source} = File.read(mix_exs)
-    [_, app] = Regex.run(~r/app:\s*:(\w+)/, source)
-    String.to_atom(app)
-  end
-
-  defp validate_order(package_reports, release_train) do
-    index =
-      release_train
-      |> Enum.with_index()
-      |> Map.new(fn {spec, idx} -> {spec.app, idx} end)
-
-    package_reports
-    |> Enum.flat_map(fn report ->
-      deps = Map.get(report, :deps, [])
-      current = Map.fetch!(index, report.app)
-
-      deps
-      |> Enum.map(&elem(&1, 0))
-      |> Enum.filter(&Map.has_key?(index, &1))
-      |> Enum.filter(&(Map.fetch!(index, &1) > current))
-      |> Enum.map(fn dep ->
-        "#{report.app}: release order places dependency #{dep} after dependent"
-      end)
+  defp version_index(release_train, configs) do
+    Map.new(release_train, fn spec ->
+      {spec.app, config_version(Map.get(configs, spec.app))}
     end)
   end
 
-  defp validate_dependency_constraints(spec, config, selected_apps) do
-    release_deps(config)
-    |> Enum.reduce({[], []}, fn {dep, requirement, opts}, {errors, warnings} ->
-      target = Map.fetch!(@package_by_app, dep)
+  defp config_version(%{publish: {:ok, config}}), do: config[:version]
+  defp config_version(_entry), do: nil
 
-      cond do
-        Keyword.has_key?(opts, :path) and spec.app != :raxol ->
-          {[
-             "dependency #{dep} still has a path option under HEX_BUILD"
-             | errors
-           ], warnings}
+  # --- metadata --------------------------------------------------------------
 
-        not MapSet.member?(selected_apps, dep) ->
-          {["dependency #{dep} is outside the selected release train" | errors],
-           warnings}
+  defp validate_metadata(spec, config, package_path, opts) do
+    package = Keyword.get(config, :package, [])
+    docs = Keyword.get(config, :docs, [])
+    file_set = package_file_set(package_path, package)
 
-        requirement != expected_requirement(target) ->
-          expected = expected_requirement(target)
+    errors =
+      []
+      |> project_errors(spec, config)
+      |> package_errors(spec, package)
+      |> content_errors(package_path, package, docs, config[:version], file_set)
 
-          {[
-             "dependency #{dep} uses #{inspect(requirement)}; expected #{inspect(expected)}"
-             | errors
-           ], warnings}
+    {dep_errors, dep_warnings} = validate_dependency_constraints(config, opts)
 
-        true ->
-          {errors, warnings}
-      end
+    {Enum.reverse(errors) ++ dep_errors, dep_warnings}
+  end
+
+  defp project_errors(errors, spec, config) do
+    errors
+    |> require_equal(
+      config[:app],
+      spec.app,
+      "project app must be #{inspect(spec.app)}"
+    )
+    |> require_present(config[:version], "project version is missing")
+    |> require_version(config[:version])
+    |> require_present(config[:description], "project description is missing")
+  end
+
+  defp package_errors(errors, spec, package) do
+    errors
+    |> require_keyword(package, "package metadata is missing")
+    |> require_package_name(package, spec.app)
+    |> require_nonempty_list(package[:files], "package files are missing")
+    |> require_nonempty_list(
+      package[:maintainers],
+      "package maintainers are missing"
+    )
+    |> require_nonempty_list(package[:licenses], "package licenses are missing")
+    |> require_links(package[:links], spec.class)
+  end
+
+  defp content_errors(errors, package_path, package, docs, version, file_set) do
+    errors
+    |> require_docs_source_ref(docs, version)
+    |> require_package_files(package_path, package[:files])
+    |> require_readme(file_set)
+    |> require_license(file_set)
+    |> require_docs_extras(package_path, docs, file_set)
+  end
+
+  defp validate_dependency_constraints(config, opts) do
+    selected_apps = MapSet.new(opts.release_train, & &1.app)
+
+    config
+    |> release_deps()
+    |> Enum.reduce({[], []}, fn dep, acc ->
+      check_dependency(dep, selected_apps, opts, acc)
     end)
     |> then(fn {errors, warnings} ->
       {Enum.reverse(errors), Enum.reverse(warnings)}
     end)
   end
 
-  defp expected_requirement(%{app: app}) do
-    app
-    |> package_version!()
-    |> expected_requirement()
+  defp check_dependency(dep_entry, selected_apps, opts, {errors, warnings}) do
+    case dependency_issue(dep_entry, selected_apps, opts) do
+      :ok -> {errors, warnings}
+      {:error, message} -> {[message | errors], warnings}
+    end
   end
 
-  defp expected_requirement(version) when is_binary(version) do
+  defp dependency_issue({dep, requirement, dep_opts}, selected_apps, opts) do
+    cond do
+      Keyword.has_key?(dep_opts, :path) ->
+        path_dep_issue(dep, opts)
+
+      not MapSet.member?(selected_apps, dep) ->
+        {:error, "dependency #{dep} is outside the selected release train"}
+
+      true ->
+        requirement_issue(dep, requirement, opts.versions)
+    end
+  end
+
+  # A path dep survives only when the project could not be reloaded under
+  # HEX_BUILD, which is exactly the `:raxol` root case. Reporting it there would
+  # be a false positive about a config that was never meant to be publish-shaped.
+  defp path_dep_issue(dep, %{reloadable?: true}),
+    do: {:error, "dependency #{dep} still has a path option under HEX_BUILD"}
+
+  defp path_dep_issue(_dep, _opts), do: :ok
+
+  defp requirement_issue(dep, requirement, versions) do
+    # No version index (the metadata-only public entry point) means the
+    # requirement cannot be checked against anything. Skip rather than
+    # inventing a finding.
+    if Map.has_key?(versions, dep) do
+      compare_requirement(dep, requirement, expected_requirement(dep, versions))
+    else
+      :ok
+    end
+  end
+
+  defp compare_requirement(dep, _requirement, nil),
+    do: {:error, "could not resolve the published version of #{dep}"}
+
+  defp compare_requirement(_dep, requirement, requirement), do: :ok
+
+  defp compare_requirement(dep, requirement, expected) do
+    {:error,
+     "dependency #{dep} uses #{inspect(requirement)}; expected #{inspect(expected)}"}
+  end
+
+  defp expected_requirement(app, versions) do
+    versions
+    |> Map.get(app)
+    |> requirement_for_version()
+  end
+
+  defp requirement_for_version(version) when is_binary(version) do
     case Version.parse(version) do
       {:ok, %Version{major: major, minor: minor}} -> "~> #{major}.#{minor}"
       :error -> nil
     end
   end
 
-  defp package_version!(app) when is_atom(app),
-    do: package_version!(Map.fetch!(@package_by_app, app))
+  defp requirement_for_version(_version), do: nil
 
-  defp package_version!(%{path: "."}) do
-    Mix.Project.config()[:version]
+  # --- provenance ------------------------------------------------------------
+
+  defp tracked_index(root) do
+    if System.find_executable("git") do
+      read_tracked_index(root)
+    else
+      :unavailable
+    end
   end
 
-  defp package_version!(%{path: path, app: app}) do
-    path = Path.expand(path, File.cwd!())
+  defp read_tracked_index(root) do
+    case System.cmd("git", ["ls-files", "-z"], cd: root, stderr_to_stdout: true) do
+      {output, 0} ->
+        {:ok,
+         output
+         |> String.split(<<0>>, trim: true)
+         |> MapSet.new(&Path.expand(&1, root))}
 
-    with_hex_build_env(fn ->
-      Mix.Project.in_project(app, path, [], fn _module ->
-        Mix.Project.config()[:version]
-      end)
+      _other ->
+        :unavailable
+    end
+  rescue
+    _exception -> :unavailable
+  end
+
+  defp validate_tracked_files(%{tracked: :unavailable}, _config, _package_path) do
+    {[],
+     ["git is unavailable, so packaged files were not checked for provenance"]}
+  end
+
+  defp validate_tracked_files(
+         %{tracked: {:ok, tracked}} = ctx,
+         config,
+         package_path
+       ) do
+    package = Keyword.get(config, :package, [])
+    untracked = untracked_in(ctx.root, package_path, package, tracked)
+    messages = untracked_messages(untracked)
+
+    if ctx.allow_untracked?,
+      do: {[], messages},
+      else: {messages, []}
+  end
+
+  @doc """
+  Lists the files a package would ship that git does not track, relative to
+  `root`.
+
+  `mix hex.build` packages the working tree, not the commit, so a green check
+  on a dirty tree says nothing about what a publish actually ships. Returns
+  `:unavailable` when git cannot answer, which the run reports as a warning
+  rather than treating as a clean result.
+  """
+  @spec untracked_package_files(String.t(), String.t(), keyword()) ::
+          {:ok, [String.t()]} | :unavailable
+  def untracked_package_files(root, package_path, package) do
+    case tracked_index(root) do
+      :unavailable ->
+        :unavailable
+
+      {:ok, tracked} ->
+        {:ok, untracked_in(root, package_path, package, tracked)}
+    end
+  end
+
+  defp untracked_in(root, package_path, package, tracked) do
+    package_path
+    |> package_file_set(package)
+    |> Enum.reject(&MapSet.member?(tracked, &1))
+    |> Enum.map(&Path.relative_to(&1, root))
+    |> Enum.sort()
+  end
+
+  defp untracked_messages([]), do: []
+
+  defp untracked_messages(untracked) do
+    {shown, rest} = Enum.split(untracked, @max_reported_untracked)
+
+    messages =
+      Enum.map(shown, &"packaged file #{&1} is not tracked by git")
+
+    case rest do
+      [] ->
+        messages
+
+      more ->
+        messages ++ ["and #{length(more)} more untracked packaged file(s)"]
+    end
+  end
+
+  # --- catalog and order -----------------------------------------------------
+
+  @doc """
+  Checks that every project under `packages/` is classified in this module.
+
+  A package that exists on disk but appears in neither train is `unclassified`;
+  a classified package with no project on disk is `missing`. Either one means
+  the release train no longer describes the repo.
+  """
+  @spec validate_catalog(String.t()) :: [String.t()]
+  def validate_catalog(root) do
+    expected =
+      @all_packages
+      |> Enum.reject(&(&1.app == :raxol))
+      |> MapSet.new(&Atom.to_string(&1.app))
+
+    {discovered, unreadable} = discover_package_names(root)
+
+    cond do
+      unreadable != [] ->
+        [
+          "could not read the app name from: #{Enum.join(Enum.sort(unreadable), ", ")}"
+        ]
+
+      MapSet.equal?(expected, discovered) ->
+        []
+
+      true ->
+        unclassified = MapSet.difference(discovered, expected)
+        missing = MapSet.difference(expected, discovered)
+
+        [
+          "package catalog mismatch: unclassified=#{format_name_set(unclassified)} " <>
+            "missing=#{format_name_set(missing)}"
+        ]
+    end
+  end
+
+  # Names stay strings on purpose: a newly added package under `packages/` is
+  # exactly the case this check exists to catch, and its app atom need not
+  # exist in this VM yet.
+  defp discover_package_names(root) do
+    root
+    |> Path.join("packages/*/mix.exs")
+    |> Path.wildcard()
+    |> Enum.reduce({MapSet.new(), []}, fn mix_exs, {names, unreadable} ->
+      case read_app_name(mix_exs) do
+        {:ok, name} ->
+          {MapSet.put(names, name), unreadable}
+
+        :error ->
+          {names, [Path.relative_to(mix_exs, root) | unreadable]}
+      end
     end)
   end
 
-  defp run_hex_build(spec, package_path, config, build_root) do
-    output_dir = Path.join(build_root, Atom.to_string(spec.app))
+  defp read_app_name(mix_exs) do
+    with {:ok, source} <- File.read(mix_exs),
+         [_, name] <- Regex.run(~r/^\s*app:\s*:(\w+)/m, source) do
+      {:ok, name}
+    else
+      _other -> :error
+    end
+  end
+
+  @doc """
+  Checks that no package is published before a dependency it needs.
+
+  `package_reports` need only carry `:app` and `:deps`; the publish order is
+  the position of each package in `release_train`.
+  """
+  @spec validate_order([map()], [package_spec()]) :: [String.t()]
+  def validate_order(package_reports, release_train) do
+    index =
+      release_train
+      |> Enum.with_index()
+      |> Map.new(fn {spec, idx} -> {spec.app, idx} end)
+
+    Enum.flat_map(package_reports, &order_errors(&1, index))
+  end
+
+  defp order_errors(report, index) do
+    case Map.fetch(index, report.app) do
+      {:ok, current} ->
+        report
+        |> Map.get(:deps, [])
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.filter(&(Map.get(index, &1, current) > current))
+        |> Enum.map(fn dep ->
+          "#{report.app}: release order places dependency #{dep} after dependent"
+        end)
+
+      :error ->
+        []
+    end
+  end
+
+  # --- hex build -------------------------------------------------------------
+
+  defp run_hex_build(ctx, spec, package_path, entry, config) do
+    output_dir = Path.join(ctx.build_root, Atom.to_string(spec.app))
     File.rm_rf!(output_dir)
 
     case System.find_executable("mix") do
@@ -434,25 +795,28 @@ defmodule Raxol.Release.PackageCheck do
         {["mix executable was not found"], []}
 
       mix ->
-        {output, status} =
-          System.cmd(mix, ["hex.build", "--unpack", "--output", output_dir],
-            cd: package_path,
-            env: [{"HEX_BUILD", "1"}, {"MIX_ENV", "prod"}],
-            stderr_to_stdout: true
-          )
+        build_and_validate(mix, output_dir, package_path, spec, entry, config)
+    end
+  end
 
-        try do
-          if status == 0 do
-            output_dir
-            |> read_hex_metadata()
-            |> validate_hex_metadata(spec, config)
-          else
-            {["hex.build failed with exit #{status}: #{trim_output(output)}"],
-             []}
-          end
-        after
-          File.rm_rf(output_dir)
-        end
+  defp build_and_validate(mix, output_dir, package_path, spec, entry, config) do
+    {output, status} =
+      System.cmd(mix, ["hex.build", "--unpack", "--output", output_dir],
+        cd: package_path,
+        env: [{"HEX_BUILD", "1"}, {"MIX_ENV", "prod"}],
+        stderr_to_stdout: true
+      )
+
+    try do
+      if status == 0 do
+        output_dir
+        |> read_hex_metadata()
+        |> validate_hex_metadata(spec, entry, config)
+      else
+        {["hex.build failed with exit #{status}: #{trim_output(output)}"], []}
+      end
+    after
+      File.rm_rf(output_dir)
     end
   end
 
@@ -465,38 +829,88 @@ defmodule Raxol.Release.PackageCheck do
     end
   end
 
-  defp validate_hex_metadata({:error, reason}, _spec, _config) do
+  defp validate_hex_metadata({:error, reason}, _spec, _entry, _config) do
     {["could not read hex_metadata.config: #{inspect(reason)}"], []}
   end
 
-  defp validate_hex_metadata({:ok, metadata}, spec, config) do
-    app = metadata_string(metadata, "app")
-    name = metadata_string(metadata, "name")
-    version = metadata_string(metadata, "version")
+  defp validate_hex_metadata({:ok, metadata}, spec, entry, config) do
     requirements = metadata_requirements(metadata)
-    requirement_names = MapSet.new(Enum.map(requirements, & &1.name))
+    requirement_names = MapSet.new(requirements, & &1.name)
 
     errors =
       []
       |> require_equal(
-        app,
+        metadata_string(metadata, "app"),
         Atom.to_string(spec.app),
         "hex metadata app must match"
       )
       |> require_equal(
-        name,
+        metadata_string(metadata, "name"),
         Atom.to_string(spec.app),
         "hex metadata name must match"
       )
       |> require_equal(
-        version,
+        metadata_string(metadata, "version"),
         config[:version],
         "hex metadata version must match"
       )
       |> require_hexpm_requirements(requirements)
-      |> require_packaged_release_deps(config, requirement_names)
 
-    {Enum.reverse(errors), []}
+    {dep_errors, dep_warnings} = source_dep_audit(entry, requirement_names)
+
+    {Enum.reverse(errors) ++ dep_errors, dep_warnings}
+  end
+
+  defp source_dep_audit(%{source: {:ok, config}}, requirement_names),
+    do: audit_release_deps(config, requirement_names)
+
+  defp source_dep_audit(%{source: {:error, reason}}, _requirement_names),
+    do:
+      {[],
+       ["source config unavailable, dependency drop not audited: #{reason}"]}
+
+  @doc """
+  Compares the dependencies a project declares against the ones it publishes.
+
+  Audit the *source* config, never the publish config. Auditing the publish
+  config is circular: a dependency dropped by an env conditional in `mix.exs`
+  is missing from the publish config and from the tarball, so the two agree and
+  nothing is reported.
+
+  A public-train dependency that fails to reach the tarball is an error. A
+  pre-alpha one is an intentional drop, but it still changes what Hex consumers
+  get, so it is surfaced as a warning rather than as silence.
+  """
+  @spec audit_release_deps(keyword(), MapSet.t(String.t())) ::
+          {[String.t()], [String.t()]}
+  def audit_release_deps(source_config, requirement_names) do
+    source_config
+    |> release_deps()
+    |> Enum.reduce({[], []}, fn {dep, _requirement, _opts}, acc ->
+      collect_dep_audit(dep, requirement_names, acc)
+    end)
+    |> then(fn {errors, warnings} ->
+      {Enum.reverse(errors), Enum.reverse(warnings)}
+    end)
+  end
+
+  defp collect_dep_audit(dep, requirement_names, {errors, warnings}) do
+    cond do
+      MapSet.member?(requirement_names, Atom.to_string(dep)) ->
+        {errors, warnings}
+
+      MapSet.member?(@public_apps, dep) ->
+        {["published tarball omits release dependency #{dep}" | errors],
+         warnings}
+
+      true ->
+        {errors, [dropped_dep_warning(dep) | warnings]}
+    end
+  end
+
+  defp dropped_dep_warning(dep) do
+    "release dependency #{dep} is dropped from the published tarball; " <>
+      "it is not on the public Hex train"
   end
 
   defp metadata_string(metadata, key) do
@@ -505,13 +919,15 @@ defmodule Raxol.Release.PackageCheck do
     |> to_string_value()
   end
 
+  # Requirement names stay strings: they come out of a generated file and are
+  # only ever compared, never used as atoms.
   defp metadata_requirements(metadata) do
     metadata
     |> metadata_value("requirements")
     |> List.wrap()
     |> Enum.map(fn requirement ->
       %{
-        name: metadata_string(requirement, "name") |> String.to_atom(),
+        name: metadata_string(requirement, "name"),
         repository: metadata_string(requirement, "repository")
       }
     end)
@@ -532,24 +948,6 @@ defmodule Raxol.Release.PackageCheck do
   defp to_string_value(value) when is_atom(value), do: Atom.to_string(value)
   defp to_string_value(value), do: to_string(value)
 
-  defp require_packaged_release_deps(errors, config, requirement_names) do
-    config
-    |> release_deps()
-    |> Enum.reduce(errors, fn {dep, _requirement, opts}, acc ->
-      cond do
-        not Keyword.has_key?(opts, :path) and
-            MapSet.member?(requirement_names, dep) ->
-          acc
-
-        Keyword.has_key?(opts, :path) and MapSet.member?(requirement_names, dep) ->
-          acc
-
-        true ->
-          ["hex metadata omits release dependency #{dep}" | acc]
-      end
-    end)
-  end
-
   defp require_hexpm_requirements(errors, requirements) do
     Enum.reduce(requirements, errors, fn requirement, acc ->
       if requirement.repository == "hexpm" do
@@ -562,6 +960,8 @@ defmodule Raxol.Release.PackageCheck do
       end
     end)
   end
+
+  # --- metadata predicates ---------------------------------------------------
 
   defp require_equal(errors, actual, expected, message) do
     if actual == expected,
@@ -642,31 +1042,23 @@ defmodule Raxol.Release.PackageCheck do
 
   defp require_package_files(errors, _package_path, _files), do: errors
 
-  defp require_readme(errors, package_path, files) do
-    if package_contains?(
-         package_path,
-         files,
-         &String.starts_with?(&1, "README")
-       ),
-       do: errors,
-       else: ["package files do not include a README" | errors]
+  defp require_readme(errors, file_set) do
+    if basename_present?(file_set, "README"),
+      do: errors,
+      else: ["package files do not include a README" | errors]
   end
 
-  defp require_license(errors, package_path, files) do
-    if package_contains?(
-         package_path,
-         files,
-         &String.starts_with?(&1, "LICENSE")
-       ),
-       do: errors,
-       else: ["package files do not include a LICENSE" | errors]
+  defp require_license(errors, file_set) do
+    if basename_present?(file_set, "LICENSE"),
+      do: errors,
+      else: ["package files do not include a LICENSE" | errors]
   end
 
-  defp require_docs_extras(errors, _package_path, docs, _files)
+  defp require_docs_extras(errors, _package_path, docs, _file_set)
        when docs in [nil, []],
        do: errors
 
-  defp require_docs_extras(errors, package_path, docs, files) do
+  defp require_docs_extras(errors, package_path, docs, file_set) do
     docs
     |> Keyword.get(:extras, [])
     |> Enum.map(&doc_extra_path/1)
@@ -677,7 +1069,7 @@ defmodule Raxol.Release.PackageCheck do
         not File.exists?(abs) ->
           ["docs extra #{inspect(extra)} does not exist" | acc]
 
-        not package_includes?(package_path, files, abs) ->
+        not MapSet.member?(file_set, abs) ->
           [
             "docs extra #{inspect(extra)} is not included in package files"
             | acc
@@ -692,23 +1084,32 @@ defmodule Raxol.Release.PackageCheck do
   defp doc_extra_path({path, _opts}), do: path
   defp doc_extra_path(path), do: path
 
-  defp package_contains?(package_path, files, predicate) do
-    package_path
-    |> package_file_set(files)
-    |> Enum.any?(fn path -> path |> Path.basename() |> predicate.() end)
+  defp basename_present?(file_set, prefix) do
+    Enum.any?(file_set, fn path ->
+      path |> Path.basename() |> String.starts_with?(prefix)
+    end)
   end
 
-  defp package_includes?(package_path, files, abs_path) do
-    package_path
-    |> package_file_set(files)
-    |> MapSet.member?(abs_path)
-  end
+  # --- file globbing ---------------------------------------------------------
 
-  defp package_file_set(package_path, files) do
-    files
+  # The regular files a `mix hex.build` of this package would ship: every
+  # `:files` entry expanded, directories walked, then `:exclude_patterns`
+  # applied to the package-relative path exactly as Hex applies them.
+  defp package_file_set(package_path, package) do
+    excludes = Keyword.get(package, :exclude_patterns, [])
+
+    package
+    |> Keyword.get(:files, [])
     |> List.wrap()
     |> Enum.flat_map(&package_file_matches(package_path, &1))
+    |> Enum.filter(&File.regular?/1)
+    |> Enum.reject(&excluded?(&1, package_path, excludes))
     |> MapSet.new()
+  end
+
+  defp excluded?(path, package_path, excludes) do
+    relative = Path.relative_to(path, package_path)
+    Enum.any?(excludes, &Regex.match?(&1, relative))
   end
 
   defp package_file_matches(package_path, file) do
@@ -732,6 +1133,8 @@ defmodule Raxol.Release.PackageCheck do
 
   defp wildcard?(file), do: String.contains?(file, ["*", "?", "["])
 
+  # --- misc ------------------------------------------------------------------
+
   defp normalize_dep({name, requirement}) when is_atom(name),
     do: {name, requirement, []}
 
@@ -749,22 +1152,6 @@ defmodule Raxol.Release.PackageCheck do
     end
   end
 
-  defp normalize_only(nil), do: []
-  defp normalize_only([]), do: []
-
-  defp normalize_only(apps) when is_list(apps) do
-    Enum.map(apps, &normalize_app!/1)
-  end
-
-  defp normalize_only(app) do
-    [normalize_app!(app)]
-  end
-
-  defp normalize_app!(app) when is_atom(app), do: app
-
-  defp normalize_app!(app) when is_binary(app),
-    do: app |> String.trim() |> String.to_atom()
-
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)
 
@@ -776,9 +1163,8 @@ defmodule Raxol.Release.PackageCheck do
     |> Enum.join("\n")
   end
 
-  defp format_app_set(apps) do
-    apps
-    |> Enum.map(&Atom.to_string/1)
+  defp format_name_set(names) do
+    names
     |> Enum.sort()
     |> Enum.join(", ")
     |> case do

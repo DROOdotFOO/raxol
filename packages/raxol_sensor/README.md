@@ -61,4 +61,10 @@ HUD.threat(:network, level: :warning, label: "High latency")
 - `Sensor.HUD`: Gauge, sparkline, threat, minimap widgets
 - `Sensor.Supervisor`: rest_for_one supervision tree
 
-See [main docs](../../README.md) for full examples and the sensor fusion guide.
+## Further reading
+
+The sensor fusion guide lives in the umbrella repo rather than in this package,
+because a Hex tarball cannot carry files from outside its own directory:
+
+- [Sensor fusion guide](https://github.com/DROOdotFOO/raxol/blob/master/docs/features/SENSOR_FUSION.md)
+- [Raxol overview](https://github.com/DROOdotFOO/raxol#readme)
