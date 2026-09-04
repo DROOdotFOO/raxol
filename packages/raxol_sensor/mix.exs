@@ -67,8 +67,7 @@ defmodule RaxolSensor.MixProject do
       source_url: @source_url,
       source_ref: "v#{@version}",
       extras: [
-        "README.md",
-        "../../docs/features/SENSOR_FUSION.md"
+        "README.md"
       ]
     ]
   end
