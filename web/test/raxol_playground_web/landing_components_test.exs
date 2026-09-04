@@ -707,6 +707,19 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
+  # Being a sibling of the hero is what made the marquee fragile: the hero
+  # re-renders on every "next example", and an id-less div gives morphdom
+  # nothing to match on, so it re-inserted this one while realigning main's
+  # children and the CSS animation restarted from its first frame. The id and
+  # phx-update="ignore" are the fix, and neither is visible in the rendered
+  # output's appearance, so nothing else would catch their removal.
+  test "the integrations row is pinned so a hero re-render cannot restart it" do
+    row = render_component(&LandingComponents.screen_integrations/1, %{})
+
+    assert row =~ ~s(id="screen-integrations")
+    assert row =~ ~s(phx-update="ignore")
+  end
+
   # A mark decorates a derived entry, it never replaces one. The row still
   # lists what the registry lists, and an entry whose brand has no mark shows
   # its name. Both directions are held: a mark left behind for something no

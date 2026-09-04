@@ -427,7 +427,14 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     <%!-- Two identical runs, so translating the track by half its width loops
          seamlessly. The copy is aria-hidden -- it exists for the animation,
          and a screen reader reading the list twice would be a defect. --%>
-    <div class="screen-integrations">
+    <%!-- Keyed and pinned because the row is a SIBLING of the hero, and the
+         hero re-renders on every "next example". Without an id, morphdom has
+         nothing to match this div by and re-inserts it while realigning
+         `main`'s children; re-insertion restarts the CSS animation, so the
+         track jumped back to its first frame on every click. Nothing here
+         depends on an assign -- the groups come from the capability registries
+         and are identical on every render -- so there is no update to lose. --%>
+    <div id="screen-integrations" phx-update="ignore" class="screen-integrations">
       <div class="integrations-track">
         <div
           :for={dup? <- [false, true]}
