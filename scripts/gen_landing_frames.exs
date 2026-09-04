@@ -219,6 +219,7 @@ defmodule GenLandingFrames do
   # The tick frame zero is taken at. Not zero: the first couple of renders of a
   # chart are a half-drawn axis, and the hero should open on a real picture.
   @hero_start_tick 4
+  @hero_distinct_tick_limit 64
 
   # The previews boot with subscriptions unarmed and are DRIVEN: each demo's
   # declared interval message is delivered explicitly through the same path
@@ -395,8 +396,11 @@ defmodule GenLandingFrames do
         messages = hero_messages!(id, module, name)
         drive_ticks!(id, messages, @hero_start_tick)
 
-        for n <- 0..(frame_count - 1) do
-          buffer = buffer!(id)
+        Enum.reduce(0..(frame_count - 1), nil, fn n, previous ->
+          buffer =
+            if n == 0,
+              do: buffer!(id),
+              else: next_driven_distinct!(id, messages, previous, name)
 
           # Zero-padded: `RecordedFrames` sorts these lexically, so frame_10
           # would otherwise play before frame_2.
@@ -411,8 +415,9 @@ defmodule GenLandingFrames do
           File.write!(Path.join(dir, "ansi_#{seq}.ansi"), ansi(buffer))
 
           if n == 0, do: surfaces(dir, module, id)
-          if n < frame_count - 1, do: drive_ticks!(id, messages, 1)
-        end
+
+          buffer
+        end)
 
         IO.puts("hero  #{dir} (#{frame_count} frames @ #{tick_ms}ms)")
 
@@ -461,6 +466,18 @@ defmodule GenLandingFrames do
     end
 
     :ok
+  end
+
+  defp next_driven_distinct!(id, messages, previous, name) do
+    Enum.reduce_while(1..@hero_distinct_tick_limit, nil, fn _tick, _acc ->
+      drive_ticks!(id, messages, 1)
+      buffer = buffer!(id)
+
+      if buffer == previous,
+        do: {:cont, nil},
+        else: {:halt, buffer}
+    end) ||
+      raise "#{name} stopped changing for #{@hero_distinct_tick_limit} driven ticks"
   end
 
   defp hero_messages!(id, module, name) do
