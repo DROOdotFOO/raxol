@@ -374,25 +374,50 @@ defmodule Raxol.Agent.Actions.CodeTest do
       assert status == 3
     end
 
-    test "a timed-out command reports :timeout instead of raising" do
-      # The process-group SIGKILL on the timeout path brings the port down as
-      # soon as the OS process dies, and `Port.close/1` raises on an already
-      # dead port. The tool crashed at the caller rather than returning the
-      # `:timeout` its own docs promise.
+    # These two go through `call/2` rather than `run/2` deliberately. `run/2`
+    # skips output-schema validation, so a test written against it passes while
+    # the path the tool loop actually takes fails.
+    test "a timed-out command reports 124 and survives output validation" do
+      # Two defects met here. The port was closed unguarded, so the SIGKILL on
+      # the line above left `Port.close/1` raising on an already dead port; and
+      # `run_shell/4` reports a timeout as the atom `:timeout` against an
+      # `exit_status` field declared as an integer, so the agent got
+      # `{:error, [exit_status: "must be of type :integer"]}` and no output.
       assert {:ok, result} =
-               Code.Bash.run(%{command: "sleep 5", timeout_ms: 200}, %{})
+               Code.Bash.call(%{command: "sleep 5", timeout_ms: 200}, %{})
 
-      assert result.exit_status == :timeout
+      assert result.exit_status == 124
+      assert result.timed_out == true
+    end
+
+    test "a timed-out command leaves no port message in the caller's mailbox" do
+      # The SIGKILL brings the port down before the close, so its exit status is
+      # already queued and closing does not retract it. Nothing matches it
+      # afterwards -- every collect loop matches its own `^port` -- so an
+      # undrained message accumulates for the life of the session process.
+      assert {_out, :timeout} =
+               Code.run_shell("sleep 5", System.tmp_dir!(), 200)
+
+      {:messages, messages} = Process.info(self(), :messages)
+
+      port_messages =
+        Enum.filter(messages, fn
+          {port, {:exit_status, _}} when is_port(port) -> true
+          _ -> false
+        end)
+
+      assert port_messages == []
     end
 
     test "a command that reads stdin sees EOF instead of an open pipe" do
       # `run_shell/4` never writes to the port, so an inherited write pipe only
       # signals "more input is coming". Without `:in`, `cat` blocks until the
-      # deadline and `exit_status` comes back `:timeout`.
+      # deadline and comes back timed out.
       assert {:ok, result} =
-               Code.Bash.run(%{command: "cat", timeout_ms: 2_000}, %{})
+               Code.Bash.call(%{command: "cat", timeout_ms: 2_000}, %{})
 
       assert result.exit_status == 0
+      assert result.timed_out == false
       assert result.truncated == false
     end
 
