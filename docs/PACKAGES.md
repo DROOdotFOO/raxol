@@ -80,5 +80,5 @@ Run `mix raxol.release.check` before publishing anything. It walks the public tr
 
 Two failures are worth recognising on sight:
 
-- `packaged file X is not tracked by git`: `mix hex.build` packages the working tree, not the commit, so an untracked file under a packaged directory really would ship. Commit it, ignore it via `:exclude_patterns`, or narrow the `:files` entry. `--allow-untracked` downgrades this to a warning for local work only.
+- `packaged file X is not tracked by git`: `mix hex.build` packages the working tree, not the commit, so an untracked file under a packaged directory really would ship. Dotfiles count: `.env`, `.env.*` and `.secrets` are gitignored, which makes them untracked by construction and exactly what this catches. Commit it, ignore it via `:exclude_patterns`, or narrow the `:files` entry. `--allow-untracked` downgrades this to a warning, which is what `mix raxol.check` passes so an unstaged new module does not fail the interactive gate; CI runs without it.
 - `release dependency X is dropped from the published tarball`: a `HEX_BUILD` conditional in that package's `mix.exs` removed a dependency. Intended for pre-alpha packages that are not on the train yet, and reported as a warning so the choice stays visible rather than silent.

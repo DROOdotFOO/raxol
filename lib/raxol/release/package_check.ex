@@ -64,6 +64,10 @@ defmodule Raxol.Release.PackageCheck do
   @public_apps MapSet.new(@public_packages, & &1.app)
   @pre_alpha_names MapSet.new(@pre_alpha_packages, &Atom.to_string(&1.app))
 
+  # Per-process, because the directory is deleted recursively at both ends of a
+  # run. Two concurrent runs -- a manual one and the `mix raxol.check` that
+  # shells out to this task -- otherwise share one scratch directory and delete
+  # each other's tarballs mid-build.
   @default_build_dir "tmp/package_release_check"
   @build_marker ".raxol-release-check"
   @max_reported_untracked 10
@@ -117,7 +121,15 @@ defmodule Raxol.Release.PackageCheck do
     end
   end
 
-  @doc "Runs the metadata, provenance, and Hex build checks."
+  @doc """
+  Runs the metadata, provenance, and Hex build checks.
+
+  Not safe to run concurrently with anything else in the same VM. Loading a
+  child project goes through `Mix.Project.in_project/4`, which changes the
+  working directory of the whole OS process, and the HEX_BUILD toggling around
+  it mutates the process environment. Both are global. Tests covering this
+  module are `async: false` for that reason.
+  """
   @spec run(keyword()) :: {:ok, report()} | {:error, report()}
   def run(opts \\ []) do
     root = opts |> Keyword.get(:root, File.cwd!()) |> Path.expand()
@@ -236,7 +248,7 @@ defmodule Raxol.Release.PackageCheck do
   @spec resolve_build_root(String.t(), keyword()) ::
           {:ok, String.t()} | {:error, [String.t()]}
   def resolve_build_root(root, opts \\ []) do
-    requested = Keyword.get(opts, :build_root, @default_build_dir)
+    requested = Keyword.get(opts, :build_root, default_build_dir())
 
     with true <- is_binary(requested),
          {:ok, path} <- Boundary.confine(root, requested),
@@ -258,6 +270,8 @@ defmodule Raxol.Release.PackageCheck do
         {:error, errors}
     end
   end
+
+  defp default_build_dir, do: Path.join(@default_build_dir, System.pid())
 
   defp refuse_project_root(path, root) do
     if path == root do
@@ -342,15 +356,22 @@ defmodule Raxol.Release.PackageCheck do
   end
 
   defp report_for(ctx, spec, entry, config, package_path) do
+    # Walked once and shared. Expanding `:files` means walking every packaged
+    # directory, which for the root package is the whole of `lib`, and the
+    # metadata and provenance layers both need the same answer.
+    file_set =
+      package_file_set(package_path, Keyword.get(config, :package, []))
+
     {errors, warnings} =
       validate_metadata(spec, config, package_path, %{
         release_train: ctx.release_train,
         versions: ctx.versions,
-        reloadable?: entry.reloadable?
+        reloadable?: entry.reloadable?,
+        file_set: file_set
       })
 
     {track_errors, track_warnings} =
-      validate_tracked_files(ctx, config, package_path)
+      validate_tracked_files(ctx, package_path, file_set)
 
     {hex_errors, hex_warnings} =
       if ctx.metadata_only? do
@@ -404,7 +425,7 @@ defmodule Raxol.Release.PackageCheck do
       # `hex_metadata.config` resolves from hexpm, which a leaked path dep
       # cannot do.
       config = Mix.Project.config()
-      %{source: {:ok, config}, publish: {:ok, config}, reloadable?: false}
+      %{source: root_source(config), publish: {:ok, config}, reloadable?: false}
     else
       load_reloadable(:raxol, root)
     end
@@ -412,6 +433,26 @@ defmodule Raxol.Release.PackageCheck do
 
   defp load_config_pair(root, %{app: app, path: path}) do
     load_reloadable(app, Path.expand(path, root))
+  end
+
+  # The one config on the stack is whatever the ambient environment made it. If
+  # HEX_BUILD is already set -- and the documented publish workflow is literally
+  # `HEX_BUILD=1 mix hex.publish` -- then it is the publish config, and handing
+  # it to the dependency-drop audit as the source side reintroduces exactly the
+  # circularity the moduledoc says this design avoids: a dependency dropped by
+  # an env conditional is absent from both sides, the two agree, and nothing is
+  # reported. Refuse to be the source in that case so the audit degrades to a
+  # visible warning instead of to silence.
+  defp root_source(config) do
+    case System.get_env("HEX_BUILD") do
+      nil ->
+        {:ok, config}
+
+      _set ->
+        {:error,
+         "HEX_BUILD is set in the environment, so the root project config is " <>
+           "already publish-shaped; rerun without it to audit dropped deps"}
+    end
   end
 
   defp load_reloadable(app, path) do
@@ -473,7 +514,11 @@ defmodule Raxol.Release.PackageCheck do
   defp validate_metadata(spec, config, package_path, opts) do
     package = Keyword.get(config, :package, [])
     docs = Keyword.get(config, :docs, [])
-    file_set = package_file_set(package_path, package)
+
+    file_set =
+      Map.get_lazy(opts, :file_set, fn ->
+        package_file_set(package_path, package)
+      end)
 
     errors =
       []
@@ -622,18 +667,21 @@ defmodule Raxol.Release.PackageCheck do
     _exception -> :unavailable
   end
 
-  defp validate_tracked_files(%{tracked: :unavailable}, _config, _package_path) do
+  defp validate_tracked_files(
+         %{tracked: :unavailable},
+         _package_path,
+         _file_set
+       ) do
     {[],
      ["git is unavailable, so packaged files were not checked for provenance"]}
   end
 
   defp validate_tracked_files(
          %{tracked: {:ok, tracked}} = ctx,
-         config,
-         package_path
+         _package_path,
+         file_set
        ) do
-    package = Keyword.get(config, :package, [])
-    untracked = untracked_in(ctx.root, package_path, package, tracked)
+    untracked = reject_tracked(file_set, ctx.root, tracked)
     messages = untracked_messages(untracked)
 
     if ctx.allow_untracked?,
@@ -665,6 +713,11 @@ defmodule Raxol.Release.PackageCheck do
   defp untracked_in(root, package_path, package, tracked) do
     package_path
     |> package_file_set(package)
+    |> reject_tracked(root, tracked)
+  end
+
+  defp reject_tracked(file_set, root, tracked) do
+    file_set
     |> Enum.reject(&MapSet.member?(tracked, &1))
     |> Enum.map(&Path.relative_to(&1, root))
     |> Enum.sort()
@@ -743,9 +796,14 @@ defmodule Raxol.Release.PackageCheck do
     end)
   end
 
+  # Anchored on `def project` rather than on the first `app:` in the file. A
+  # `releases:` block, an `application/0` entry or an `app:` inside a
+  # `@moduledoc` example all match the bare pattern, and the resulting mismatch
+  # surfaces as a confusing catalog error about a package name nobody wrote.
   defp read_app_name(mix_exs) do
     with {:ok, source} <- File.read(mix_exs),
-         [_, name] <- Regex.run(~r/^\s*app:\s*:(\w+)/m, source) do
+         [_, body] <- Regex.run(~r/def\s+project(?:\(\))?\s+do(.*)/s, source),
+         [_, name] <- Regex.run(~r/^\s*app:\s*:(\w+)/m, body) do
       {:ok, name}
     else
       _other -> :error
@@ -1081,7 +1139,12 @@ defmodule Raxol.Release.PackageCheck do
     end)
   end
 
-  defp doc_extra_path({path, _opts}), do: path
+  # ex_doc accepts three spellings, and the keyword-literal one
+  # (`extras: ["README.md": [title: "x"]]`) yields an atom key. `Path.expand/2`
+  # raises on an atom, which would take the whole run down rather than report a
+  # finding, so normalise to a string here.
+  defp doc_extra_path({path, _opts}), do: doc_extra_path(path)
+  defp doc_extra_path(path) when is_atom(path), do: Atom.to_string(path)
   defp doc_extra_path(path), do: path
 
   defp basename_present?(file_set, prefix) do
@@ -1112,15 +1175,21 @@ defmodule Raxol.Release.PackageCheck do
     Enum.any?(excludes, &Regex.match?(&1, relative))
   end
 
+  # `match_dot: true` on both walks, because that is what `mix hex.build` does.
+  # Without it the walk cannot see a dotfile under a packaged directory, and a
+  # dotfile is the single likeliest thing to be untracked and unpublishable:
+  # `.env`, `.env.*` and `.secrets` are all gitignored here, so they are
+  # untracked by construction. A provenance layer blind to exactly the files it
+  # exists to catch reports a clean tree while the tarball carries the secret.
   defp package_file_matches(package_path, file) do
     path = Path.expand(file, package_path)
 
     cond do
       wildcard?(file) ->
-        Path.wildcard(path)
+        Path.wildcard(path, match_dot: true)
 
       File.dir?(path) ->
-        [path | Path.wildcard(Path.join(path, "**/*"))]
+        [path | Path.wildcard(Path.join(path, "**/*"), match_dot: true)]
 
       File.exists?(path) ->
         [path]

@@ -351,10 +351,19 @@ defmodule Mix.Tasks.Raxol.Check do
   # Metadata only: the full check shells out to `mix hex.build` for every
   # package, which is a CI-shaped cost. The metadata half is the part that
   # catches drift while you are editing a mix.exs.
+  #
+  # `--allow-untracked` because this is the interactive gate. A new module under
+  # `lib/` that you have not staged yet is the normal state of the tree while
+  # writing one, and failing the whole check for it trains people to skip the
+  # check. It stays an error in CI, where the release job runs
+  # `mix raxol.release.check` with no flags and an untracked packaged file
+  # really does mean the tarball would carry content that is not in the repo.
   defp run_check(:release) do
     Mix.shell().info(Colors.subsection_header("Package release metadata"))
 
-    case Mix.shell().cmd("mix raxol.release.check --metadata-only") do
+    case Mix.shell().cmd(
+           "mix raxol.release.check --metadata-only --allow-untracked"
+         ) do
       0 ->
         Mix.shell().info(
           "    " <> Colors.format_success("Release train metadata is valid")

@@ -61,4 +61,23 @@ defmodule Mix.Tasks.Raxol.Release.CheckTest do
       Mix.Tasks.Raxol.Release.Check.run(["--publish"])
     end
   end
+
+  # The documented publish workflow is `HEX_BUILD=1 mix hex.publish`, so reaching
+  # for `HEX_BUILD=1 mix raxol.release.check` is the natural mistake. Left alone
+  # it takes raxol_core off the code path and dies inside Boundary.Path with an
+  # error that names nothing relevant.
+  test "refuses to run under an ambient HEX_BUILD" do
+    previous = System.get_env("HEX_BUILD")
+    System.put_env("HEX_BUILD", "1")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("HEX_BUILD", previous),
+        else: System.delete_env("HEX_BUILD")
+    end)
+
+    assert_raise Mix.Error, ~r/HEX_BUILD is set in this environment/, fn ->
+      Mix.Tasks.Raxol.Release.Check.run(["--metadata-only"])
+    end
+  end
 end

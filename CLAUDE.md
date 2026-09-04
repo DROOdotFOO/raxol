@@ -503,7 +503,14 @@ package with `HEX_BUILD=1 mix hex.build --unpack`, and diffs the resulting
 `hex_metadata.config` against the *source* mix.exs, so a dependency removed by
 a `HEX_BUILD` conditional is reported instead of silently vanishing from both
 sides. `Raxol.Release.PackageCheck` holds the train order; a new package under
-`packages/` fails the catalog check until it is classified there.
+`packages/` fails the catalog check until it is classified there. Do not set
+`HEX_BUILD` when running it: the task sets it per subprocess, and an ambient one
+both strips raxol_core off the code path and makes the root config
+publish-shaped on both sides of the dependency audit. The task refuses rather
+than degrading. `mix raxol.check` runs the metadata half with
+`--allow-untracked`, so an unstaged new module does not fail the interactive
+gate; CI runs without that flag, where an untracked packaged file means the
+tarball would carry content that is not in the repo.
 
 Publish order matters (dependency chain):
 

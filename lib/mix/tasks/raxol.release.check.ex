@@ -19,7 +19,9 @@ defmodule Mix.Tasks.Raxol.Release.Check do
     * `--allow-untracked` -- report packaged-but-untracked files as warnings
       instead of errors. For local work with uncommitted files under a packaged
       directory; never pass it in CI, where an untracked packaged file means the
-      tarball would carry content that is not in the repository.
+      tarball would carry content that is not in the repository. `mix raxol.check`
+      passes it, because a new module you have not staged yet is the normal state
+      of the tree while writing one. The CI job does not.
   """
 
   use Mix.Task
@@ -37,6 +39,8 @@ defmodule Mix.Tasks.Raxol.Release.Check do
 
   @impl Mix.Task
   def run(argv) do
+    refuse_ambient_hex_build!()
+
     case OptionParser.parse(argv, strict: @switches) do
       {opts, [], []} ->
         opts
@@ -45,6 +49,27 @@ defmodule Mix.Tasks.Raxol.Release.Check do
 
       {_opts, _args, invalid} ->
         Mix.raise("invalid option(s): #{inspect(invalid)}")
+    end
+  end
+
+  # HEX_BUILD strips the path deps out of the root project, which takes
+  # raxol_core off the code path and leaves this task calling a
+  # `Raxol.Core.Boundary.Path` that is not loaded. That surfaces as an
+  # UndefinedFunctionError with nothing in it pointing at the cause. The
+  # variable is also load-bearing for the check itself: the task sets it per
+  # `hex.build` subprocess, and an ambient one makes the root project config
+  # publish-shaped on both sides of the dependency-drop audit, so the audit
+  # compares the tarball against itself and reports nothing.
+  defp refuse_ambient_hex_build! do
+    if System.get_env("HEX_BUILD") do
+      Mix.raise("""
+      HEX_BUILD is set in this environment. Run the release check without it.
+
+      This task sets HEX_BUILD itself, once per package, around each
+      `mix hex.build`. Setting it globally strips the root project's path deps
+      before the task starts, and it makes the root config publish-shaped on
+      both sides of the dependency-drop audit, which silently disables it.
+      """)
     end
   end
 

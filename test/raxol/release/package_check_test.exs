@@ -203,6 +203,38 @@ defmodule Raxol.Release.PackageCheckTest do
       assert message =~ "unclassified=raxol_commented"
       refute message =~ "raxol_old_name"
     end
+
+    # The decoy is at the start of its own line, so it matches the bare `app:`
+    # pattern the same way the real key does. Only anchoring on `def project`
+    # tells them apart, and getting it wrong reports a catalog mismatch about a
+    # package name that appears nowhere in the tree.
+    test "reads the project app, not an earlier app: at line start", %{
+      tmp_dir: root
+    } do
+      path = Path.join(root, "packages/raxol_decoy")
+      File.mkdir_p!(path)
+
+      File.write!(Path.join(path, "mix.exs"), """
+      defmodule RaxolDecoy.MixProject do
+        @moduledoc \"\"\"
+        Configure it like this:
+
+            app: :raxol_wrong_name
+        \"\"\"
+
+        def project do
+          [
+            app: :raxol_decoy,
+            version: "0.1.0"
+          ]
+        end
+      end
+      """)
+
+      assert [message] = PackageCheck.validate_catalog(root)
+      assert message =~ "unclassified=raxol_decoy"
+      refute message =~ "raxol_wrong_name"
+    end
   end
 
   describe "audit_release_deps/2" do
@@ -273,6 +305,45 @@ defmodule Raxol.Release.PackageCheckTest do
                )
     end
 
+    # The file class this whole layer exists for. `.env`, `.env.*` and
+    # `.secrets` are gitignored at the repo root, so they are untracked by
+    # construction, and `mix hex.build` walks packaged directories with
+    # dot-matching on and ships them. A walk without `match_dot: true` reports
+    # a clean tree while the tarball carries the secret.
+    test "flags an untracked dotfile under a packaged directory", %{
+      tmp_dir: root
+    } do
+      init_git_repo!(root)
+      fixture_package!(root)
+
+      File.write!(Path.join(root, "lib/.env"), "SECRET=leak\n")
+      File.write!(Path.join(root, "docs/.hidden.md"), "# Not for Hex\n")
+      stage!(root, ["README.md", "lib/fixture.ex", "docs/guide.md"])
+
+      assert {:ok, untracked} =
+               PackageCheck.untracked_package_files(root, root,
+                 files: ~w(lib docs README.md)
+               )
+
+      assert "lib/.env" in untracked
+      assert "docs/.hidden.md" in untracked
+    end
+
+    test "counts a tracked dotfile as tracked", %{tmp_dir: root} do
+      init_git_repo!(root)
+      fixture_package!(root)
+
+      File.write!(Path.join(root, "lib/.credo.exs"), "[]\n")
+      stage!(root, ["README.md", "lib/fixture.ex", "lib/.credo.exs"])
+
+      assert {:ok, untracked} =
+               PackageCheck.untracked_package_files(root, root,
+                 files: ~w(lib README.md)
+               )
+
+      assert untracked == []
+    end
+
     test "reports :unavailable outside a git repository" do
       root =
         Path.join(
@@ -339,6 +410,39 @@ defmodule Raxol.Release.PackageCheckTest do
         PackageCheck.validate_project_config(spec(), config, root, [])
 
       assert Enum.any?(errors, &(&1 =~ "docs source_ref must match version"))
+    end
+
+    # ex_doc's keyword-literal spelling puts an atom where the other two
+    # spellings put a string. `Path.expand/2` raises on an atom, which would
+    # abort the whole run rather than report a finding.
+    test "handles the keyword-literal docs extras spelling", %{tmp_dir: root} do
+      fixture_package!(root)
+
+      config =
+        Keyword.put(valid_config(), :docs,
+          source_ref: "v1.2.3",
+          extras: ["README.md": [title: "Overview"]]
+        )
+
+      assert {[], []} =
+               PackageCheck.validate_project_config(spec(), config, root, [])
+    end
+
+    test "rejects a keyword-literal extra that is not packaged", %{
+      tmp_dir: root
+    } do
+      fixture_package!(root)
+
+      config =
+        Keyword.put(valid_config(), :docs,
+          source_ref: "v1.2.3",
+          extras: ["docs/guide.md": [title: "Guide"]]
+        )
+
+      assert {[message], []} =
+               PackageCheck.validate_project_config(spec(), config, root, [])
+
+      assert message =~ "is not included in package files"
     end
 
     test "rejects a package file entry that matches nothing", %{tmp_dir: root} do
@@ -455,7 +559,11 @@ defmodule Raxol.Release.PackageCheckTest do
     File.mkdir_p!(Path.join(root, "lib"))
     File.mkdir_p!(Path.join(root, "docs"))
     File.write!(Path.join(root, ".formatter.exs"), "[]\n")
-    File.write!(Path.join(root, "lib/fixture.ex"), "defmodule Fixture do\nend\n")
+
+    File.write!(
+      Path.join(root, "lib/fixture.ex"),
+      "defmodule Fixture do\nend\n"
+    )
 
     File.write!(
       Path.join(root, "mix.exs"),
