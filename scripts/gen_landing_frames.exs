@@ -203,9 +203,6 @@ defmodule GenLandingFrames do
   # or the generator fails instead of silently committing a cut card.
   @preview_height_cap_exemptions ~w(codeblock)
 
-  @hero_poll_ms 10
-  @hero_frame_timeout_ms 1500
-
   # Sampling is pinned to demo state, never to a wall clock.
   #
   # Both settles used to be `Process.sleep/1` -- 400ms for the hero, 1600ms per
@@ -215,9 +212,9 @@ defmodule GenLandingFrames do
   # artifacts could not be checked for drift: a real staleness was
   # indistinguishable from scheduler noise.
   #
-  # The hero pins frame zero to the demo's own tick (see `baseline!/2`), then
-  # chains later frames off the engine's own render order.
-
+  # The hero and previews both boot with subscriptions unarmed and deliver the
+  # app's own interval message explicitly, so a recording is a fold of demo
+  # state rather than a sample of scheduler timing.
   #
   # The tick frame zero is taken at. Not zero: the first couple of renders of a
   # chart are a half-drawn axis, and the hero should open on a real picture.
@@ -387,43 +384,42 @@ defmodule GenLandingFrames do
       File.rm(Path.join(dir, "surface.ansi"))
 
       {:ok, id} =
-        Raxol.Headless.start(module, id: :"hero_#{name}", width: w, height: h)
+        Raxol.Headless.start(module,
+          id: :"hero_#{name}",
+          width: w,
+          height: h,
+          subscriptions: false
+        )
 
-      # Frame zero waits for the demo's own tick rather than for a wall clock,
-      # then every later frame chains off the previous DISTINCT render. The
-      # chain is what makes the sequence reproducible: it follows the engine's
-      # render order instead of asking the dispatcher what tick it is on, and
-      # those two disagree -- `get_buffer` renders the engine's model, which
-      # trails the dispatcher's by up to a tick, so pinning each frame to a
-      # dispatcher tick paired tick N's number with tick N-1's picture and the
-      # back half of the pulse recording churned.
-      Enum.reduce(0..(frame_count - 1), nil, fn n, previous ->
-        buffer =
-          if n == 0,
-            do: baseline!(id, @hero_start_tick),
-            else: next_distinct!(id, previous, name)
+      try do
+        messages = hero_messages!(id, module, name)
+        drive_ticks!(id, messages, @hero_start_tick)
 
-        # Zero-padded: `RecordedFrames` sorts these lexically, so frame_10
-        # would otherwise play before frame_2.
-        seq = String.pad_leading(to_string(n), 2, "0")
+        for n <- 0..(frame_count - 1) do
+          buffer = buffer!(id)
 
-        html = TerminalBridge.buffer_to_html(buffer, aria_mode: :application)
-        File.write!(Path.join(dir, "frame_#{seq}.html"), html)
+          # Zero-padded: `RecordedFrames` sorts these lexically, so frame_10
+          # would otherwise play before frame_2.
+          seq = String.pad_leading(to_string(n), 2, "0")
 
-        # The SSH pane paints this same buffer, so it gets the same number of
-        # frames and plays in lockstep. It used to be one still projected from
-        # frame zero, which read as a broken terminal beside a moving one.
-        File.write!(Path.join(dir, "ansi_#{seq}.ansi"), ansi(buffer))
+          html = TerminalBridge.buffer_to_html(buffer, aria_mode: :application)
+          File.write!(Path.join(dir, "frame_#{seq}.html"), html)
 
-        if n == 0, do: surfaces(dir, module, id)
-        buffer
-      end)
+          # The SSH pane paints this same buffer, so it gets the same number of
+          # frames and plays in lockstep. It used to be one still projected from
+          # frame zero, which read as a broken terminal beside a moving one.
+          File.write!(Path.join(dir, "ansi_#{seq}.ansi"), ansi(buffer))
 
-      IO.puts("hero  #{dir} (#{frame_count} frames @ #{tick_ms}ms)")
+          if n == 0, do: surfaces(dir, module, id)
+          if n < frame_count - 1, do: drive_ticks!(id, messages, 1)
+        end
 
-      File.write!(Path.join(dir, "interval_ms"), to_string(tick_ms))
+        IO.puts("hero  #{dir} (#{frame_count} frames @ #{tick_ms}ms)")
 
-      Raxol.Headless.stop(id)
+        File.write!(Path.join(dir, "interval_ms"), to_string(tick_ms))
+      after
+        Raxol.Headless.stop(id)
+      end
     end
   end
 
@@ -457,61 +453,32 @@ defmodule GenLandingFrames do
     buffer
   end
 
-  # Frame zero: wait for the demo to reach its own tick `t`, then take the
-  # engine's next render. The wait pins the phase (a `Process.sleep(400)` here
-  # was the original churn: it recorded whichever tick the scheduler reached),
-  # and taking the following distinct render lets the engine catch up to the
-  # model before the sequence starts.
-  defp baseline!(id, t) do
-    deadline = System.monotonic_time(:millisecond) + @hero_frame_timeout_ms
-    wait_for_tick!(id, t, deadline)
-    buffer = buffer!(id)
-    next_distinct!(id, buffer, "baseline")
+  defp drive_ticks!(_id, _messages, ticks) when ticks <= 0, do: :ok
+
+  defp drive_ticks!(id, messages, ticks) do
+    for _tick <- 1..ticks, msg <- messages do
+      :ok = Raxol.Headless.send_message(id, msg)
+    end
+
+    :ok
   end
 
-  defp wait_for_tick!(id, t, deadline) do
-    {:ok, model} = Raxol.Headless.get_model(id)
+  defp hero_messages!(id, module, name) do
+    case interval_messages(id, module) do
+      [{_interval_ms, msgs} | _] ->
+        msgs
 
-    cond do
-      model.t >= t ->
-        :ok
-
-      System.monotonic_time(:millisecond) < deadline ->
-        Process.sleep(@hero_poll_ms)
-        wait_for_tick!(id, t, deadline)
-
-      true ->
-        raise "demo never reached tick #{t}"
+      [] ->
+        raise "#{name} has no interval subscription; hero would play a still image"
     end
   end
 
-  # Waits for the render to actually change rather than sleeping a guessed
-  # multiple of the tick. Sleeping exactly one tick races the scheduler and
-  # records the same buffer twice; sleeping several skips motion the page then
-  # has to play back slowly.
-  defp next_distinct!(id, previous, name) do
-    deadline = System.monotonic_time(:millisecond) + @hero_frame_timeout_ms
-
-    case poll_changed(id, previous, deadline) do
-      {:ok, buffer} ->
-        buffer
-
-      :static ->
-        raise "#{name} stopped changing within #{@hero_frame_timeout_ms}ms; " <>
-                "the hero would play a still image"
-    end
+  defp interval_messages(id, module) when is_atom(id) do
+    {:ok, model} = Raxol.Headless.get_model(id)
+    interval_messages(model, module)
   end
 
-  # The demo's declared interval subscriptions, read off the model it booted
-  # with, as `{interval_ms, [msg]}` sorted fastest first. This is what the
-  # timers would have delivered and nothing else: a demo with no interval
-  # subscription is static, and one whose subscription is conditional
-  # (osc_ambient subscribes only while running) is exactly as animated as
-  # its initial state says. `send_message/2` returns after the fold, so
-  # delivered ticks arrive in order.
-  defp interval_messages(id, module) do
-    {:ok, model} = Raxol.Headless.get_model(id)
-
+  defp interval_messages(model, module) when is_map(model) do
     for %Raxol.Core.Runtime.Subscription{
           type: :interval,
           data: %{interval: interval_ms, message: msg}
@@ -520,22 +487,6 @@ defmodule GenLandingFrames do
       {interval_ms, [msg]}
     end
     |> Enum.sort()
-  end
-
-  defp poll_changed(id, previous, deadline) do
-    Process.sleep(@hero_poll_ms)
-    buffer = buffer!(id)
-
-    cond do
-      buffer != previous ->
-        {:ok, buffer}
-
-      System.monotonic_time(:millisecond) < deadline ->
-        poll_changed(id, previous, deadline)
-
-      true ->
-        :static
-    end
   end
 
   # The hero's non-terminal panes, all projected from the frame-zero buffer the
@@ -574,16 +525,31 @@ defmodule GenLandingFrames do
     # without this, the harness tree's ids depend on recording order.
     Raxol.Core.ID.reset()
 
-    model =
-      Enum.reduce(1..@hero_start_tick, module.init(nil), fn _tick, m ->
-        {m, _cmds} = module.update(:tick, m)
-        m
-      end)
+    model = drive_model(module, @hero_start_tick)
 
     model
     |> module.view()
     |> Raxol.MCP.StructuredScreenshot.from_view_tree()
     |> Raxol.MCP.StructuredScreenshot.to_json()
+  end
+
+  defp drive_model(module, ticks) when ticks <= 0, do: module.init(nil)
+
+  defp drive_model(module, ticks) do
+    model = module.init(nil)
+
+    messages =
+      case interval_messages(model, module) do
+        [{_interval_ms, msgs} | _] -> msgs
+        [] -> []
+      end
+
+    Enum.reduce(1..ticks, model, fn _tick, acc ->
+      Enum.reduce(messages, acc, fn msg, m ->
+        {m, _cmds} = module.update(msg, m)
+        m
+      end)
+    end)
   end
 
   defp previews(dir \\ @preview_dir) do
