@@ -41,7 +41,8 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
           required(:read_timeout_ms) => pos_integer(),
           required(:turn_timeout_ms) => pos_integer(),
           required(:auto_approve?) => boolean(),
-          required(:dynamic_tools) => list()
+          required(:dynamic_tools) => list(),
+          optional(:granted_approvals) => non_neg_integer()
         }
 
   @port_line_bytes 1_048_576
@@ -439,6 +440,17 @@ defmodule Raxol.Symphony.Runners.Codex.Session do
   defp handle_approval(%{policy: %{auto_approve?: true}} = session, on_event, id, decision) do
     send_payload(session.port, Protocol.approval_result(id, decision))
     receive_turn(session, on_event, "")
+  end
+
+  # `granted_approvals` is how many approval requests an operator has already
+  # cleared for this run (see `Runners.Codex`). A resumed run replays from the
+  # top, so the first that many are answered from the standing grant and the
+  # next one still reaches a human -- which is what lets each resume advance
+  # one approval point further instead of re-asking the same one forever.
+  defp handle_approval(%{policy: %{granted_approvals: n}} = session, on_event, id, decision)
+       when is_integer(n) and n > 0 do
+    send_payload(session.port, Protocol.approval_result(id, decision))
+    receive_turn(put_in(session.policy.granted_approvals, n - 1), on_event, "")
   end
 
   defp handle_approval(_session, _on_event, _id, decision),

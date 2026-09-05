@@ -7,6 +7,7 @@
 #   multi     -- emits two turn/completed events (for continuation tests)
 #   tool      -- emits an item/tool/call mid-turn
 #   approval  -- emits item/commandExecution/requestApproval mid-turn
+#   approval2 -- emits two approval requests in the same turn
 #   fail      -- emits turn/failed instead of turn/completed
 #   hang      -- never responds after thread/start (timeout tests)
 #
@@ -64,6 +65,13 @@ while true; do
     approval)
       printf '%s\n' '{"method":"item/commandExecution/requestApproval","id":555}'
       IFS= read -r _approval_reply
+      printf '%s\n' '{"method":"turn/completed"}'
+      ;;
+    approval2)
+      printf '%s\n' '{"method":"item/commandExecution/requestApproval","id":555}'
+      IFS= read -r _approval_reply
+      printf '%s\n' '{"method":"item/fileChange/requestApproval","id":556}'
+      IFS= read -r _approval_reply2
       printf '%s\n' '{"method":"turn/completed"}'
       ;;
     fail)

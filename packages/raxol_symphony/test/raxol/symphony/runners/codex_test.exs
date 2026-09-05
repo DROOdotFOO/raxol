@@ -235,6 +235,161 @@ defmodule Raxol.Symphony.Runners.CodexTest do
     end
 
     @tag :unix_only
+    test "an :approved resume answers the approval Codex re-requests", %{
+      workspace: workspace
+    } do
+      System.put_env("FAKE_CODEX_MODE", "approval")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = put_in(config().codex.approval_policy, "request")
+
+      assert :ok =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: :approved,
+                 resume_token: %{decision: "acceptForSession", turn: 1}
+               )
+
+      events = collect_events("issue-1", 100)
+      assert Enum.any?(events, &(&1.event == :turn_completed))
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    @tag :unix_only
+    test "each approval clears one more approval point", %{workspace: workspace} do
+      System.put_env("FAKE_CODEX_MODE", "approval2")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = put_in(config().codex.approval_policy, "request")
+
+      # The first approval is spent on the request the fresh session replays;
+      # the second request is what we pause on.
+      assert {:pause, :awaiting_approval, token} =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: :approved,
+                 resume_token: %{decision: "acceptForSession", turn: 1, approvals_granted: 0}
+               )
+
+      assert token.approvals_granted == 1
+
+      events = collect_events("issue-1", 100)
+      assert Enum.count(events, &(&1.event == :blocked)) == 2
+
+      # Approving again carries that count forward, so the resumed run answers
+      # both and finishes. Without it the run would park on the same second
+      # request no matter how many times an operator said yes.
+      assert :ok =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: :approved,
+                 resume_token: token
+               )
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    @tag :unix_only
+    test "an unreadable approval count is not a blanket grant", %{workspace: workspace} do
+      System.put_env("FAKE_CODEX_MODE", "approval2")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = put_in(config().codex.approval_policy, "request")
+
+      # A token whose count we cannot read counts as zero cleared, so this
+      # approval grants one request and the second still stops for a human.
+      assert {:pause, :awaiting_approval, token} =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: :approved,
+                 resume_token: %{decision: "acceptForSession", approvals_granted: "lots"}
+               )
+
+      assert token.approvals_granted == 1
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    @tag :unix_only
+    test "a :rejected resume ends the attempt without starting Codex", %{
+      workspace: workspace
+    } do
+      System.put_env("FAKE_CODEX_MODE", "approval")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = put_in(config().codex.approval_policy, "request")
+
+      assert {:error, :approval_rejected} =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: :rejected,
+                 resume_token: %{decision: "acceptForSession", turn: 1}
+               )
+
+      events = collect_events("issue-1", 100)
+      assert Enum.any?(events, &(&1.event == :resumed))
+      refute Enum.any?(events, &(&1.event == :session_started))
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    @tag :unix_only
+    test "an MCP resume carries the decision as a string", %{workspace: workspace} do
+      System.put_env("FAKE_CODEX_MODE", "approval")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = put_in(config().codex.approval_policy, "request")
+
+      assert {:error, :approval_rejected} =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: "rejected",
+                 resume_token: %{decision: "acceptForSession", turn: 1}
+               )
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    # The string is the spelling every operator surface actually sends, and
+    # "approved" is the direction that answers a live approval request.
+    @tag :unix_only
+    test "a string \"approved\" from an operator surface answers the request", %{
+      workspace: workspace
+    } do
+      System.put_env("FAKE_CODEX_MODE", "approval")
+      Memory.put_issue(%{issue() | state: "Done"})
+
+      cfg = put_in(config().codex.approval_policy, "request")
+
+      assert :ok =
+               Codex.run(issue(), cfg,
+                 parent: self(),
+                 attempt: nil,
+                 workspace_path: workspace,
+                 resume_value: "approved",
+                 resume_token: %{decision: "acceptForSession", turn: 1}
+               )
+
+      events = collect_events("issue-1", 100)
+      assert Enum.any?(events, &(&1.event == :turn_completed))
+    after
+      System.delete_env("FAKE_CODEX_MODE")
+    end
+
+    @tag :unix_only
     test "resume_value triggers a :resumed event with the operator's decision",
          %{workspace: workspace} do
       System.put_env("FAKE_CODEX_MODE", "happy")
