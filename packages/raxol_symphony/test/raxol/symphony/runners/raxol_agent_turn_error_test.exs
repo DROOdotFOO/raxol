@@ -271,6 +271,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
       backend: Raxol.Agent.Backend.Mock,
       backend_opts: [response: "ok"],
       system_prompt: nil,
+      # `__stream_opts__/1` fetches both, so a turn state without them raises
+      # before the failure under test is ever reached.
+      context: %{cwd: "/tmp/raxol-symphony-test-workspace"},
+      actions: [],
       pause_detector: nil,
       turn: 1,
       max_turns: 1,

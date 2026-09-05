@@ -12,6 +12,8 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowSaverTest do
   alias Raxol.Symphony.Trackers.Memory
   alias Raxol.Workflow.Checkpoint.Saver
 
+  @workspace "/tmp/raxol-symphony-test-workspace"
+
   setup do
     start_supervised!({Memory, []})
     :ok
@@ -58,7 +60,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowSaverTest do
     parent = self()
 
     Task.async(fn ->
-      RaxolAgent.run(issue(), cfg, Keyword.merge([parent: parent, attempt: nil], opts))
+      RaxolAgent.run(
+        issue(),
+        cfg,
+        Keyword.merge([parent: parent, workspace_path: @workspace, attempt: nil], opts)
+      )
     end)
     |> Task.await(5_000)
   end
@@ -70,13 +76,22 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowSaverTest do
       cfg = config(%{pause_detector: pause_once_detector()})
 
       assert {:error, :no_durable_workflow_saver} =
-               RaxolAgent.run(issue(), cfg, parent: self(), attempt: nil)
+               RaxolAgent.run(issue(), cfg,
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
 
     test "a run that cannot pause keeps the default saver" do
       Memory.put_issue(%{issue() | state: "Done"})
 
-      assert :ok = RaxolAgent.run(issue(), config(%{}), parent: self(), attempt: nil)
+      assert :ok =
+               RaxolAgent.run(issue(), config(%{}),
+                 parent: self(),
+                 workspace_path: @workspace,
+                 attempt: nil
+               )
     end
   end
 
