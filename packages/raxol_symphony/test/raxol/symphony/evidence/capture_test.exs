@@ -76,6 +76,29 @@ defmodule Raxol.Symphony.Evidence.CaptureTest do
       assert byte_size(result) <= 16_400
       assert String.ends_with?(result, "...[truncated]")
     end
+
+    test "truncation cuts on a codepoint boundary" do
+      # An em dash (3 bytes) straddling the byte offset truncation lands on.
+      long_message =
+        String.duplicate("a", 16_369) <> "\u2014" <> String.duplicate("a", 5_000)
+
+      result = Capture.format_event(%{event: :text_delta, message: long_message})
+
+      assert String.valid?(result)
+      assert byte_size(result) <= 16_384
+      assert String.ends_with?(result, "...[truncated]")
+    end
+
+    test "a wholly invalid message stops trimming instead of eating the head" do
+      # Raw binary out of a tool result: no cut makes it valid, so the
+      # trim gives up after a codepoint's worth and the encoder drops it.
+      message = :binary.copy(<<0xFF>>, 20_000)
+
+      result = Capture.format_event(%{event: :tool_result, message: message})
+
+      refute String.valid?(result)
+      assert byte_size(result) > 16_000
+    end
   end
 
   describe "GenServer flow" do
