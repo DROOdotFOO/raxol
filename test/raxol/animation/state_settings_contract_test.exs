@@ -4,11 +4,9 @@ defmodule Raxol.Animation.StateSettingsContractTest do
   on every path, including the one where the server was started by
   `ensure_started/0` rather than by `Framework.init/2`.
 
-  That path is not hypothetical. `ensure_started/0` uses `start_link/1`, so the
-  server is linked to whichever process happened to start it. An ExUnit test
-  process exits with a non-normal reason, which kills the linked server, so the
-  next `StateManager` call anywhere -- including one inside a `Task` in the
-  middle of a later test -- starts a fresh server carrying no settings.
+  `ensure_started/0` starts the singleton unlinked. A rendering engine or
+  ExUnit process that happens to be the first caller can still exit; the
+  server, and any in-flight animations, must outlive that.
   """
 
   use ExUnit.Case, async: false
@@ -69,7 +67,8 @@ defmodule Raxol.Animation.StateSettingsContractTest do
       Framework.init(%{default_duration: 111}, prefs)
       assert StateManager.get_settings().default_duration == 111
 
-      # Mimic the linked server dying with the process that started it.
+      # Explicit stop, not a linked-caller exit: the server can still die
+      # (supervisor restart, test cleanup) and the next call must recreate it.
       stop_state_server()
 
       animation =
@@ -81,6 +80,61 @@ defmodule Raxol.Animation.StateSettingsContractTest do
         })
 
       assert animation.duration == Raxol.Core.Defaults.animation_duration_ms()
+    end
+
+    test "killing the process that called ensure_started does not drop the server" do
+      parent = self()
+
+      starter =
+        spawn(fn ->
+          StateManager.ensure_started()
+          send(parent, {:started, Process.whereis(StateServer)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:started, pid}, 500
+      assert is_pid(pid)
+      ref = Process.monitor(pid)
+
+      Process.exit(starter, :kill)
+
+      refute_receive {:DOWN, ^ref, :process, ^pid, _}, 100
+      assert Process.alive?(pid)
+      assert Process.whereis(StateServer) == pid
+    end
+
+    test "an unrelated process exit does not drop in-flight animations", %{
+      prefs: prefs
+    } do
+      Framework.init(%{}, prefs)
+
+      Framework.create_animation(:keep_alive, %{
+        type: :fade,
+        from: 0.0,
+        to: 1.0,
+        duration: 50,
+        easing: :linear,
+        target_path: [:opacity]
+      })
+
+      assert :ok = Framework.start_animation(:keep_alive, "box", %{}, prefs)
+
+      starter =
+        spawn(fn ->
+          StateManager.ensure_started()
+          Process.sleep(:infinity)
+        end)
+
+      Process.exit(starter, :kill)
+      Process.sleep(10)
+
+      assert StateManager.get_active_animation("box", :keep_alive)
+
+      Process.sleep(60)
+
+      model = %{elements: %{"box" => %{opacity: 0.0}}}
+      animated = Framework.apply_animations_to_state(model, prefs)
+      assert_in_delta get_in(animated, [:elements, "box", :opacity]), 1.0, 0.01
     end
 
     test "start_animation/2 reads accessibility flags off a self-started server" do

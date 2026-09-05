@@ -24,11 +24,21 @@ defmodule Raxol.Animation.StateManager do
   @doc """
   Ensures the Animation StateServer is started.
   Called automatically when using any function.
+
+  The singleton is started unlinked. The first caller is often a rendering
+  engine or an ExUnit process; `start_link` made their exit take every
+  in-flight animation in the VM with them.
   """
   def ensure_started do
-    case StateServer.start_link(name: StateServer) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
+    case Process.whereis(StateServer) do
+      pid when is_pid(pid) ->
+        :ok
+
+      nil ->
+        case GenServer.start(StateServer, [], name: StateServer) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+        end
     end
   end
 

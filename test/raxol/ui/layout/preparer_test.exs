@@ -78,6 +78,11 @@ defmodule Raxol.UI.Layout.PreparerTest do
     test "prepares nil as nil" do
       assert Preparer.prepare(nil) == nil
     end
+
+    test "non-map views do not crash prepare" do
+      assert Preparer.prepare(:ok) == nil
+      assert Preparer.prepare("nope") == nil
+    end
   end
 
   describe "prepare_incremental/2" do
@@ -117,7 +122,9 @@ defmodule Raxol.UI.Layout.PreparerTest do
 
     test "prepares fresh when type changes" do
       old = Preparer.prepare(%{type: :text, content: "hello"})
-      result = Preparer.prepare_incremental(%{type: :button, text: "hello"}, old)
+
+      result =
+        Preparer.prepare_incremental(%{type: :button, text: "hello"}, old)
 
       assert result.type == :button
     end
