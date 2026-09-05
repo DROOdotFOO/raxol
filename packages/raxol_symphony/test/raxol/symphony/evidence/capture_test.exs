@@ -27,9 +27,13 @@ defmodule Raxol.Symphony.Evidence.CaptureTest do
   end
 
   describe "path_for/2" do
-    test "uses attempt suffix when given an integer" do
-      assert Capture.path_for("/ws", 0) == "/ws/.raxol_symphony/run-0.cast"
-      assert Capture.path_for("/ws", 3) == "/ws/.raxol_symphony/run-3.cast"
+    test "carries the attempt in the name when given an integer" do
+      assert Capture.path_for("/ws", 0) =~ ~r{^/ws/\.raxol_symphony/run-0-\d+-\d+\.cast$}
+      assert Capture.path_for("/ws", 3) =~ ~r{^/ws/\.raxol_symphony/run-3-\d+-\d+\.cast$}
+    end
+
+    test "is unique per call for the same attempt" do
+      assert Capture.path_for("/ws", 1) != Capture.path_for("/ws", 1)
     end
 
     test "falls back to a unique suffix for nil attempt" do
@@ -167,6 +171,23 @@ defmodule Raxol.Symphony.Evidence.CaptureTest do
       :ok = Capture.stop(pid)
 
       refute File.exists?(bad_path)
+    end
+
+    test "a second dispatch at the same attempt keeps the earlier recording", %{
+      workspace: workspace
+    } do
+      first = Capture.path_for(workspace, 1)
+      {:ok, a} = Capture.start_link(path: first)
+      Capture.record(a, %{event: :text_delta, message: "first stretch"})
+      :ok = Capture.stop(a)
+
+      second = Capture.path_for(workspace, 1)
+      {:ok, b} = Capture.start_link(path: second)
+      Capture.record(b, %{event: :text_delta, message: "second stretch"})
+      :ok = Capture.stop(b)
+
+      assert Enum.any?(read_cast(first).frames, &(Enum.at(&1, 2) =~ "first stretch"))
+      assert Enum.any?(read_cast(second).frames, &(Enum.at(&1, 2) =~ "second stretch"))
     end
   end
 end
