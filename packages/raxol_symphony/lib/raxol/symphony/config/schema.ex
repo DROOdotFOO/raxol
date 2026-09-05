@@ -184,8 +184,9 @@ defmodule Raxol.Symphony.Config.Schema do
 
   defp validate_agent(agent) do
     with :ok <- positive_integer(agent.max_concurrent_agents, :max_concurrent_agents),
-         :ok <- positive_integer(agent.max_turns, :max_turns) do
-      positive_integer(agent.max_retry_backoff_ms, :max_retry_backoff_ms)
+         :ok <- positive_integer(agent.max_turns, :max_turns),
+         :ok <- positive_integer(agent.max_retry_backoff_ms, :max_retry_backoff_ms) do
+      positive_integer(agent.max_tracker_requeues, :max_tracker_requeues)
     end
   end
 
