@@ -1,3 +1,27 @@
+defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest.TruncatedBackend do
+  @moduledoc """
+  Backend whose stream ends without a `{:done, _}` event, the shape a
+  provider connection dropped mid-turn produces.
+  """
+
+  @behaviour Raxol.Agent.AIBackend
+
+  @impl true
+  def complete(_messages, _opts), do: {:error, :truncated}
+
+  @impl true
+  def stream(_messages, _opts), do: {:ok, [{:chunk, "half an ans"}]}
+
+  @impl true
+  def available?, do: true
+
+  @impl true
+  def name, do: "Truncated Backend"
+
+  @impl true
+  def capabilities, do: [:streaming]
+end
+
 defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
   @moduledoc """
   Verifies per-turn error propagation.
@@ -145,6 +169,117 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
                  attempt: nil
                )
     end
+  end
+
+  describe "a turn whose stream never completes" do
+    test "a backend error surfaces as {:error, reason}, not a clean turn" do
+      state = turn_state(backend_opts: [error: {:http_status, 401}])
+
+      assert {:error, {:http_status, 401}} =
+               RaxolAgent.__workflow_collect_turn__(state)
+
+      # The failure is still forwarded, so the run feed shows what happened.
+      assert_received {:run_event, "issue-1", %{event: :turn_failed}}
+    end
+
+    test "a stream that ends without :done surfaces as {:error, :no_done}" do
+      state =
+        turn_state(
+          backend: Raxol.Symphony.Runners.RaxolAgentTurnErrorTest.TruncatedBackend,
+          backend_opts: []
+        )
+
+      assert {:error, :no_done} = RaxolAgent.__workflow_collect_turn__(state)
+    end
+
+    test "a queued pause still wins over a stream error" do
+      state =
+        turn_state(
+          backend_opts: [error: :boom],
+          pause_detector: fn _event -> {:pause, :awaiting_review, :tok} end
+        )
+
+      assert {:ok, _events, {:pause, :awaiting_review, :tok}} =
+               RaxolAgent.__workflow_collect_turn__(state)
+    end
+  end
+
+  describe "policies see a failed turn as a failure" do
+    test "Retry re-attempts a stream error" do
+      state =
+        turn_state(
+          backend_opts: [error: {:http_status, 429}],
+          policies: [Policy.Retry.exponential(max_attempts: 3, base_ms: 0)]
+        )
+
+      assert {:error, {:http_status, 429}} =
+               RaxolAgent.__workflow_collect_turn__(state)
+
+      # One forwarded failure per attempt: the provider was called three
+      # times, not once with two silent successes.
+      assert length(forwarded_turn_failures()) == 3
+    end
+
+    test "Cache does not memoize a failed turn" do
+      table = :"sym_test_policy_cache_#{:erlang.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      end)
+
+      policy =
+        Policy.Cache.ets(ttl_ms: 60_000, key_fn: fn _params -> :turn end, table: table)
+
+      state =
+        turn_state(
+          backend_opts: [error: {:http_status, 429}],
+          policies: [policy]
+        )
+
+      assert {:error, {:http_status, 429}} =
+               RaxolAgent.__workflow_collect_turn__(state)
+
+      assert :miss = Raxol.Agent.Cache.get(policy.storage, :turn)
+
+      # A memoized failure would short-circuit the second turn without
+      # reaching the provider, so the retry could never recover.
+      assert {:error, {:http_status, 429}} =
+               RaxolAgent.__workflow_collect_turn__(state)
+
+      assert length(forwarded_turn_failures()) == 2
+    end
+  end
+
+  defp forwarded_turn_failures do
+    receive do
+      {:run_event, "issue-1", %{event: :turn_failed}} ->
+        [:turn_failed | forwarded_turn_failures()]
+    after
+      0 -> []
+    end
+  end
+
+  # The turn body reads its backend straight off the workflow state, so a
+  # failing provider is expressible without one. Mirrors the map
+  # `build_workflow_state/5` hands to `AgentWorkflow.run_turn/1`.
+  defp turn_state(overrides) do
+    %{
+      issue: issue(),
+      config: config(%{}),
+      parent: self(),
+      attempt: nil,
+      backend: Raxol.Agent.Backend.Mock,
+      backend_opts: [response: "ok"],
+      system_prompt: nil,
+      pause_detector: nil,
+      turn: 1,
+      max_turns: 1,
+      policies: [],
+      sandboxes: [],
+      thread_log: nil,
+      thread_id: "symphony-agent-issue-1-0"
+    }
+    |> Map.merge(Map.new(overrides))
   end
 
   describe "ThreadLog audit on error" do
