@@ -87,8 +87,12 @@ Watch / JSON API). All six consume the same snapshot over `Phoenix.PubSub`.
 
 ## 5. Capture evidence
 
-Per-run asciicasts land under `<workspace>/.raxol_symphony/run-<attempt>.cast`
-when `recording.enabled: true`. Aggregate CI + PR evidence for a run:
+Asciicasts land under `<workspace>/.raxol_symphony/run-<attempt>-<stamp>.cast`
+when `recording.enabled: true`. One file per dispatch, not per run: a run that
+continues or resumes writes a further fragment each time rather than truncating
+the one before it, so replay a long run fragment by fragment in dispatch order.
+Fragments live until the workspace is removed. Aggregate CI + PR evidence for a
+run:
 
 ```elixir
 Raxol.Symphony.Evidence.collect(config, %{

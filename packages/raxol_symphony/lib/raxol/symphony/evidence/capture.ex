@@ -12,9 +12,10 @@ defmodule Raxol.Symphony.Evidence.Capture do
       header     -- {"version":2, "width":80, "height":24, "timestamp":<unix>, ...}
       frame...   -- [<elapsed_seconds>, "o", "<text>\\r\\n"]
 
-  The file is opened in `:append` mode and synced on every frame, so a
-  partial cast survives a BEAM crash mid-run -- asciinema happily replays
-  whatever frames the file contains.
+  Each dispatch gets its own file (`path_for/2` mints a fresh name), so a
+  run that takes several dispatches to finish leaves several fragments
+  rather than one cast. asciinema happily replays whatever frames a
+  fragment contains, including a partial one.
 
   ## Failure mode
 
@@ -80,20 +81,31 @@ defmodule Raxol.Symphony.Evidence.Capture do
   end
 
   @doc """
-  Path constructor: `<workspace>/.raxol_symphony/run-<attempt>.cast`.
+  Path constructor: `<workspace>/.raxol_symphony/run-<attempt>-<stamp>.cast`.
 
-  When `attempt` is nil, a single timestamp is used so concurrent
-  retries land on distinct files.
+  The stamp makes the name unique per dispatch, not per attempt. The
+  orchestrator re-enters the same workspace with the same attempt on
+  every continuation retry and on every resume, and a name stable across
+  those would have the next capture truncate the stretch the previous
+  one recorded. `Evidence.Recording` advertises every `*.cast` in the
+  directory, so the extra files stay visible.
   """
   @spec path_for(Path.t(), non_neg_integer() | nil) :: Path.t()
   def path_for(workspace, attempt) when is_binary(workspace) do
-    suffix =
+    prefix =
       case attempt do
-        n when is_integer(n) and n >= 0 -> Integer.to_string(n)
-        _ -> Integer.to_string(System.unique_integer([:positive, :monotonic]))
+        n when is_integer(n) and n >= 0 -> "run-#{n}-"
+        _ -> "run-"
       end
 
-    Path.join([workspace, ".raxol_symphony", "run-#{suffix}.cast"])
+    Path.join([workspace, ".raxol_symphony", prefix <> dispatch_stamp() <> ".cast"])
+  end
+
+  # Wall clock disambiguates across BEAM restarts (the unique integer
+  # restarts with the VM and would collide with a prior boot's files);
+  # the unique integer disambiguates within one millisecond.
+  defp dispatch_stamp do
+    "#{System.os_time(:millisecond)}-#{System.unique_integer([:positive, :monotonic])}"
   end
 
   # ---------------------------------------------------------------------------
