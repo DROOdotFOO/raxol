@@ -124,6 +124,37 @@ defmodule Raxol.Symphony.OrchestratorWorkflowModeTest do
       end)
     end
 
+    test "a runner pause under :graph mode parks the run instead of retrying it" do
+      # The graph reports a runner pause as an interrupt. Classifying that as an
+      # abnormal exit re-runs the whole agent on a backoff and leaves `paused`
+      # empty, so no surface can ever approve it.
+      config = build_config(:graph)
+      Memory.put_issue(issue("g3", "GT-3", "Todo"))
+      Noop.Director.set("GT-3", {:pause_then, :awaiting_review, "tok", {:succeed_after, 0}})
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+
+      wait_until(2_000, fn ->
+        snap = Orchestrator.snapshot(pid)
+        snap.counts.paused == 1 or snap.counts.retrying == 1
+      end)
+
+      snap = Orchestrator.snapshot(pid)
+
+      assert snap.counts.paused == 1,
+             "the graph interrupt was retried instead of parked: #{inspect(snap.retrying)}"
+
+      assert [%{interrupt_reason: :awaiting_review}] = snap.paused
+
+      :ok = Orchestrator.resume_run(pid, "g3", :approved)
+
+      wait_until(2_000, fn ->
+        Orchestrator.snapshot(pid).counts.paused == 0 and
+          MapSet.member?(:sys.get_state(pid).completed, "g3")
+      end)
+    end
+
     test ":default mode still dispatches without invoking the graph runtime" do
       # Sanity: the default path is unaffected. Distinguishing path is
       # implicit (same outcome shape); this just guards the regression.
