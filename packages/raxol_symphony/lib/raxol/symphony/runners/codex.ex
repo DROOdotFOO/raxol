@@ -47,9 +47,14 @@ defmodule Raxol.Symphony.Runners.Codex do
   or `:rejected` (the MCP surface sends them as strings; both spellings
   are accepted).
 
-  A rejection ends the attempt with `{:error, :approval_rejected}`. Nothing
-  can carry the "no" to Codex -- the paused session died with the pause --
-  so re-running would only re-request the same approval.
+  A rejection ends THIS ATTEMPT with `{:error, :approval_rejected}`. Nothing
+  can carry the "no" to Codex -- the paused session died with the pause -- so
+  the agent cannot be talked out of asking. It does not end the run: the
+  orchestrator treats a runner error as a failure, so it re-dispatches the
+  issue after the usual backoff, uncapped, and the agent asks again. The
+  re-dispatch also increments `attempt`, which the prompt reports, so the
+  agent is told it is retrying a failed attempt when nothing failed.
+  "Reject" is not a stop button; `Orchestrator.stop_run/2` is.
 
   An approval starts a FRESH Codex session, and the grant has to survive that
   respawn or the run cannot move: the new session replays from the top and
