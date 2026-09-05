@@ -39,6 +39,47 @@ defmodule Raxol.Symphony.Runners.ReviewTest do
     end
   end
 
+  # Pauses on its own behalf the first time (as Codex does on an approval
+  # request) and finishes once the operator's decision reaches it.
+  defmodule PausingImplementer do
+    @behaviour Raxol.Symphony.Runner
+    @impl true
+    def run(_issue, _config, opts) do
+      case Keyword.get(opts, :resume_value) do
+        nil ->
+          {:pause, :awaiting_approval, %{decision: "acceptForSession", turn: 1}}
+
+        decision ->
+          send(Keyword.fetch!(opts, :parent), {:implementer_resumed, decision})
+          :ok
+      end
+    end
+  end
+
+  # Reports every dispatch so a test can prove the implementer did NOT re-run.
+  defmodule ReportingImplementer do
+    @behaviour Raxol.Symphony.Runner
+    @impl true
+    def run(_issue, _config, opts) do
+      send(Keyword.fetch!(opts, :parent), {:implementer_ran, opts})
+      :ok
+    end
+  end
+
+  # The same, on the reviewer side of the pause.
+  defmodule PausingReviewer do
+    @behaviour Raxol.Symphony.Runner
+    @impl true
+    def run(_issue, _config, opts) do
+      send(Keyword.fetch!(opts, :parent), {:reviewer_opts, opts})
+
+      case Keyword.get(opts, :resume_value) do
+        nil -> {:pause, :awaiting_approval, %{decision: "acceptForSession", turn: 1}}
+        _ -> :ok
+      end
+    end
+  end
+
   # -- Fixtures ---------------------------------------------------------------
 
   defp issue, do: %Issue{id: "i-1", identifier: "MT-1", title: "Do thing", state: "Todo"}
@@ -215,7 +256,11 @@ defmodule Raxol.Symphony.Runners.ReviewTest do
     defp human_opts(decision) do
       [
         parent: self(),
-        resume_token: %{implementer_kind: "impl", reason: :insufficient_vendors},
+        resume_token: %{
+          contract: %Contract{issue_identifier: "MT-1"},
+          implementer_kind: "impl",
+          reason: :insufficient_vendors
+        },
         resume_value: decision
       ]
     end
@@ -227,6 +272,100 @@ defmodule Raxol.Symphony.Runners.ReviewTest do
     test "a :rejected decision requests changes" do
       assert {:error, {:changes_requested, :rejected_by_human}} =
                ReviewRunner.run(issue(), config(%{}), human_opts(:rejected))
+    end
+
+    test "a decision arriving as a string from the MCP surface is honoured" do
+      assert :ok = ReviewRunner.run(issue(), config(%{}), human_opts("approved"))
+
+      assert {:error, {:changes_requested, :rejected_by_human}} =
+               ReviewRunner.run(issue(), config(%{}), human_opts("rejected"))
+    end
+
+    test "an unrecognised decision is reported, not guessed at" do
+      assert {:error, {:unexpected_human_decision, :maybe}} =
+               ReviewRunner.run(issue(), config(%{}), human_opts(:maybe))
+    end
+  end
+
+  # -- Pauses raised by the inner agents, not by this module -------------------
+
+  describe "delegated pause" do
+    test "an implementer pause resumes back into the implementer" do
+      res = resolver(%{"impl" => PausingImplementer, "rev" => ApproveReviewer})
+
+      opts = [
+        parent: self(),
+        workspace_path: "/tmp/ws",
+        review_runner_resolver: res,
+        review_vendor_availability: fn _ -> true end,
+        review_git_runner: fn _args, _cwd -> {:ok, "DIFF"} end
+      ]
+
+      assert {:pause, :awaiting_approval, token} =
+               ReviewRunner.run(issue(), config(%{}), opts)
+
+      assert token.review_delegate == :implementer
+
+      resume = [resume_token: token, resume_value: :approved] ++ opts
+
+      assert {:pause, :awaiting_review, review_token} =
+               ReviewRunner.run(issue(), config(%{}), resume)
+
+      assert_receive {:implementer_resumed, :approved}
+      assert review_token.reviewer_kind == "rev"
+    end
+
+    # The dangerous misroute: a decision the operator gave about the REVIEWER's
+    # request must not start a fresh implementer run against the real worktree.
+    test "a reviewer pause resumes back into the reviewer, never the implementer" do
+      res = resolver(%{"impl" => ReportingImplementer, "rev" => PausingReviewer})
+
+      opts = [
+        parent: self(),
+        workspace_path: "/tmp/ws",
+        review_runner_resolver: res,
+        review_vendor_availability: fn _ -> true end,
+        review_git_runner: fn _args, _cwd -> {:ok, "DIFF"} end
+      ]
+
+      assert {:pause, :awaiting_review, review_token} =
+               ReviewRunner.run(issue(), config(%{}), opts)
+
+      assert_receive {:implementer_ran, _}
+
+      resume = [resume_token: review_token, resume_value: :proceed] ++ opts
+      assert {:pause, :awaiting_approval, token} = ReviewRunner.run(issue(), config(%{}), resume)
+      assert token.review_delegate == :reviewer
+
+      assert :ok =
+               ReviewRunner.run(
+                 issue(),
+                 config(%{}),
+                 [resume_token: token, resume_value: :approved] ++ opts
+               )
+
+      # Both reviewer dispatches got the Contract in their own isolated
+      # workspace, and the implementer never ran a second time.
+      for _ <- 1..2 do
+        assert_receive {:reviewer_opts, ropts}
+        assert %Contract{} = ropts[:review_contract]
+        assert ropts[:workspace_path] != "/tmp/ws"
+      end
+
+      refute_received {:implementer_ran, _}
+    end
+
+    test "a token from neither phase is reported, not run as an implement" do
+      opts = [
+        parent: self(),
+        workspace_path: "/tmp/ws",
+        review_runner_resolver: resolver(%{"impl" => OkRunner}),
+        resume_token: %{who_knows: true},
+        resume_value: :approved
+      ]
+
+      assert {:error, {:unroutable_resume_token, %{who_knows: true}}} =
+               ReviewRunner.run(issue(), config(%{}), opts)
     end
   end
 end

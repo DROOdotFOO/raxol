@@ -21,6 +21,10 @@ defmodule Raxol.Symphony.Runners.Review do
      `{:error, {:changes_requested, reason}}` so the orchestrator's failure retry
      re-dispatches the implementer with the feedback. A human escalation
      (`:awaiting_human`) resumes with an operator decision in `:resume_value`.
+     Both the implementer and the reviewer can pause on their own behalf (a
+     Codex approval request, say). Those pauses are forwarded wrapped in a
+     `:review_delegate` envelope naming which phase minted them, so the resume
+     goes back to the agent that asked and nowhere else.
 
   ## Test seams
 
@@ -37,14 +41,31 @@ defmodule Raxol.Symphony.Runners.Review do
   alias Raxol.Symphony.{Config, Issue, Review, Runner}
   alias Raxol.Symphony.Review.Contract
 
+  # Every pause that leaves this module is routed back by the shape of its
+  # own token, never by a fallthrough: an operator's decision is consent
+  # about one agent's proposed action, and delivering it to a different agent
+  # in a different workspace is worse than refusing it. A token we do not
+  # recognise is reported rather than guessed at, since guessing means
+  # running the implementer -- write access to the real worktree -- on a
+  # decision that was never about it.
   @impl true
   def run(%Issue{} = issue, %Config{} = config, opts) do
-    if Keyword.has_key?(opts, :resume_value) do
-      review_phase(issue, config, opts)
-    else
-      implement_phase(issue, config, opts)
-    end
+    opts |> Keyword.get(:resume_token) |> route(issue, config, opts)
   end
+
+  defp route(nil, issue, config, opts), do: implement_phase(issue, config, opts)
+
+  defp route(%{review_delegate: :implementer, inner: inner}, issue, config, opts),
+    do: implement_phase(issue, config, Keyword.put(opts, :resume_token, inner))
+
+  defp route(%{review_delegate: :reviewer, inner: inner} = token, issue, config, opts) do
+    resume = [resume_token: inner, resume_value: Keyword.get(opts, :resume_value)]
+    dispatch_reviewer(issue, config, opts, token, Map.fetch!(token, :reviewer_kind), resume)
+  end
+
+  defp route(%{contract: _}, issue, config, opts), do: review_phase(issue, config, opts)
+
+  defp route(other, _issue, _config, _opts), do: {:error, {:unroutable_resume_token, other}}
 
   # -- Phase 1: implement -----------------------------------------------------
 
@@ -56,10 +77,19 @@ defmodule Raxol.Symphony.Runners.Review do
          :ok <- impl_mod.run(issue, config, opts) do
       maybe_request_review(issue, config, opts, implementer_kind)
     else
-      # Implementer paused, errored, returned a non-:ok result, or could not be
+      # Implementer errored, returned a non-:ok result, or could not be
       # resolved -- pass it through. Review only triggers on a clean :ok.
-      {:error, {:unsupported_runner_kind, _}} = err -> err
-      other -> other
+      {:error, {:unsupported_runner_kind, _}} = err ->
+        err
+
+      # A pause the implementer raised for itself. Envelope it so the resume
+      # comes back here labelled, instead of arriving as a bare token the
+      # review phase would mistake for one of its own.
+      {:pause, reason, token} ->
+        {:pause, reason, %{review_delegate: :implementer, inner: token}}
+
+      other ->
+        other
     end
   end
 
@@ -98,25 +128,32 @@ defmodule Raxol.Symphony.Runners.Review do
     token = Keyword.get(opts, :resume_token, %{})
 
     case Map.get(token, :reviewer_kind) do
-      kind when is_binary(kind) -> dispatch_reviewer(issue, config, opts, token, kind)
+      kind when is_binary(kind) -> dispatch_reviewer(issue, config, opts, token, kind, [])
       _ -> human_decision(opts)
     end
   end
 
-  defp dispatch_reviewer(issue, config, opts, token, reviewer_kind) do
+  # `resume` is the reviewer's own parked pause coming back to it, empty on a
+  # first dispatch. The workspace is freshly isolated either way -- the old one
+  # was deleted when the reviewer paused -- so the reviewer restarts from the
+  # Contract, which is all it ever had.
+  defp dispatch_reviewer(issue, config, opts, token, reviewer_kind, resume) do
     contract = Map.fetch!(token, :contract)
 
     case resolve(config, reviewer_kind, opts) do
       {:ok, reviewer_mod} ->
         with_isolated_workspace(fn isolated ->
-          reviewer_opts = [
-            parent: Keyword.fetch!(opts, :parent),
-            workspace_path: isolated,
-            review_contract: contract,
-            review_prompt: Review.review_prompt(contract)
-          ]
+          reviewer_opts =
+            [
+              parent: Keyword.fetch!(opts, :parent),
+              workspace_path: isolated,
+              review_contract: contract,
+              review_prompt: Review.review_prompt(contract)
+            ] ++ resume
 
-          map_review_result(reviewer_mod.run(issue, config, reviewer_opts))
+          issue
+          |> reviewer_mod.run(config, reviewer_opts)
+          |> map_review_result(contract, reviewer_kind)
         end)
 
       {:error, reason} ->
@@ -124,17 +161,34 @@ defmodule Raxol.Symphony.Runners.Review do
     end
   end
 
-  defp map_review_result(:ok), do: :ok
-  defp map_review_result({:error, reason}), do: {:error, {:changes_requested, reason}}
-  defp map_review_result({:pause, _, _} = pause), do: pause
-  defp map_review_result(other), do: other
+  defp map_review_result(:ok, _contract, _kind), do: :ok
+
+  defp map_review_result({:error, reason}, _contract, _kind),
+    do: {:error, {:changes_requested, reason}}
+
+  # Carry the Contract and the vendor with a forwarded reviewer pause: the
+  # resume has to reach the same reviewer, and nothing else in the token says
+  # which one asked.
+  defp map_review_result({:pause, reason, token}, contract, kind) do
+    {:pause, reason,
+     %{review_delegate: :reviewer, inner: token, contract: contract, reviewer_kind: kind}}
+  end
+
+  defp map_review_result(other, _contract, _kind), do: other
 
   # A human escalation resumes with the operator's decision in :resume_value.
+  # The MCP surface passes the raw JSON value through, so the same decision
+  # arrives as a string there and as an atom from the TUI.
   defp human_decision(opts) do
     case Keyword.get(opts, :resume_value) do
-      :approved -> :ok
-      :rejected -> {:error, {:changes_requested, :rejected_by_human}}
-      other -> {:error, {:unexpected_human_decision, other}}
+      decision when decision in [:approved, "approved"] ->
+        :ok
+
+      decision when decision in [:rejected, "rejected"] ->
+        {:error, {:changes_requested, :rejected_by_human}}
+
+      other ->
+        {:error, {:unexpected_human_decision, other}}
     end
   end
 
