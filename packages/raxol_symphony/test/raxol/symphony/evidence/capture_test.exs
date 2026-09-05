@@ -108,7 +108,7 @@ defmodule Raxol.Symphony.Evidence.CaptureTest do
   describe "GenServer flow" do
     test "writes a valid asciicast v2 header on init", %{workspace: workspace} do
       path = Capture.path_for(workspace, 0)
-      {:ok, pid} = Capture.start_link(path: path, width: 132, height: 50, title: "MT-1")
+      {:ok, pid} = Capture.start(path: path, width: 132, height: 50, title: "MT-1")
       :ok = Capture.stop(pid)
 
       cast = read_cast(path)
@@ -124,7 +124,7 @@ defmodule Raxol.Symphony.Evidence.CaptureTest do
       workspace: workspace
     } do
       path = Capture.path_for(workspace, 1)
-      {:ok, pid} = Capture.start_link(path: path)
+      {:ok, pid} = Capture.start(path: path)
 
       Capture.record(pid, %{event: :session_started, message: "session abc"})
       Capture.record(pid, %{event: :text_delta, message: "hello"})
@@ -148,7 +148,7 @@ defmodule Raxol.Symphony.Evidence.CaptureTest do
       path = Capture.path_for(workspace, 0)
       refute File.dir?(Path.dirname(path))
 
-      {:ok, pid} = Capture.start_link(path: path)
+      {:ok, pid} = Capture.start(path: path)
       :ok = Capture.stop(pid)
 
       assert File.regular?(path)
@@ -166,28 +166,115 @@ defmodule Raxol.Symphony.Evidence.CaptureTest do
       File.write!(blocking, "not a dir")
       bad_path = Path.join(blocking, "run.cast")
 
-      {:ok, pid} = Capture.start_link(path: bad_path)
+      {:ok, pid} = Capture.start(path: bad_path)
       assert :ok = Capture.record(pid, %{event: :text_delta, message: "x"})
       :ok = Capture.stop(pid)
 
       refute File.exists?(bad_path)
     end
 
+    test "fails soft when the header can't be written", %{workspace: workspace} do
+      path = Capture.path_for(workspace, 0)
+
+      {:ok, pid} = Capture.start(path: path, title: <<0xFF>>)
+      assert :ok = Capture.record(pid, %{event: :text_delta, message: "x"})
+      :ok = Capture.stop(pid)
+
+      # A headerless cast is not a cast, so nothing is written at all.
+      assert File.read!(path) == ""
+    end
+
+    test "refuses a linked start", %{workspace: workspace} do
+      assert_raise ArgumentError, ~r/unlinked/, fn ->
+        Capture.start_link(path: Capture.path_for(workspace, 0))
+      end
+    end
+
     test "a second dispatch at the same attempt keeps the earlier recording", %{
       workspace: workspace
     } do
       first = Capture.path_for(workspace, 1)
-      {:ok, a} = Capture.start_link(path: first)
+      {:ok, a} = Capture.start(path: first)
       Capture.record(a, %{event: :text_delta, message: "first stretch"})
       :ok = Capture.stop(a)
 
       second = Capture.path_for(workspace, 1)
-      {:ok, b} = Capture.start_link(path: second)
+      {:ok, b} = Capture.start(path: second)
       Capture.record(b, %{event: :text_delta, message: "second stretch"})
       :ok = Capture.stop(b)
 
       assert Enum.any?(read_cast(first).frames, &(Enum.at(&1, 2) =~ "first stretch"))
       assert Enum.any?(read_cast(second).frames, &(Enum.at(&1, 2) =~ "second stretch"))
+    end
+
+    test "an unencodable frame costs that frame, not the process", %{workspace: workspace} do
+      path = Capture.path_for(workspace, 0)
+      {:ok, pid} = Capture.start(path: path)
+
+      Capture.record(pid, %{event: :text_delta, message: <<0xFF, 0xFE>>})
+      Capture.record(pid, %{event: :text_delta, message: "still here"})
+
+      :ok = Capture.stop(pid)
+
+      texts = Enum.map(read_cast(path).frames, &Enum.at(&1, 2))
+      assert texts == ["still here\r\n"]
+    end
+
+    test "a dead cast device retires the recording instead of the process", %{
+      workspace: workspace
+    } do
+      path = Capture.path_for(workspace, 0)
+      {:ok, pid} = Capture.start(path: path)
+
+      # Stands in for the disk going away mid-run.
+      :ok = pid |> :sys.get_state() |> Map.fetch!(:io) |> File.close()
+
+      Capture.record(pid, %{event: :text_delta, message: "into the void"})
+
+      assert Process.alive?(pid)
+      assert %{io: nil} = :sys.get_state(pid)
+
+      :ok = Capture.stop(pid)
+    end
+
+    test "an abnormal capture exit does not take its starter down", %{workspace: workspace} do
+      test_pid = self()
+
+      owner =
+        spawn(fn ->
+          {:ok, capture} = Capture.start(path: Capture.path_for(workspace, 0))
+          send(test_pid, {:capture, capture})
+          Process.sleep(:infinity)
+        end)
+
+      owner_ref = Process.monitor(owner)
+      assert_receive {:capture, capture}
+      capture_ref = Process.monitor(capture)
+
+      :ok = GenServer.stop(capture, :kaboom)
+
+      assert_receive {:DOWN, ^capture_ref, :process, ^capture, :kaboom}
+      refute_receive {:DOWN, ^owner_ref, :process, ^owner, _}, 200
+
+      Process.exit(owner, :kill)
+    end
+
+    test "a capture stops when the run that started it ends", %{workspace: workspace} do
+      test_pid = self()
+
+      owner =
+        spawn(fn ->
+          {:ok, capture} = Capture.start(path: Capture.path_for(workspace, 0))
+          send(test_pid, {:capture, capture})
+          receive do: (:finish -> :ok)
+        end)
+
+      assert_receive {:capture, capture}
+      capture_ref = Process.monitor(capture)
+
+      send(owner, :finish)
+
+      assert_receive {:DOWN, ^capture_ref, :process, ^capture, _}, 1_000
     end
   end
 end
