@@ -75,8 +75,9 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflow do
   `max_turns` (>= 1).
 
   `opts` forwards to `Graph.compile/2`. The most load-bearing one is
-  `:saver`; the runner defaults to an in-memory ETS saver if the
-  consumer hasn't set `agent.workflow_saver`.
+  `:saver`; the runner defaults to an in-memory ETS saver when the
+  consumer hasn't set `agent.workflow_saver` and the run cannot pause,
+  and refuses to compile otherwise.
   """
   @spec compile(pos_integer(), keyword()) :: {:ok, Compiled.t()} | {:error, term()}
   def compile(max_turns, opts \\ []) when is_integer(max_turns) and max_turns >= 1 do
