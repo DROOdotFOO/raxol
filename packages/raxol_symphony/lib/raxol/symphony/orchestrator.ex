@@ -491,7 +491,7 @@ defmodule Raxol.Symphony.Orchestrator do
 
         state
         |> release_host(host)
-        |> schedule_failure_retry(issue, attempt || 0, reason)
+        |> schedule_failure_retry(issue, (attempt || 0) + 1, reason)
     end
   end
 
@@ -1512,8 +1512,8 @@ defmodule Raxol.Symphony.Orchestrator do
       {:ok, []} ->
         release_issue(state, issue_id)
 
-      {:error, _reason} ->
-        requeue_retry(state, issue_id, retry_entry)
+      {:error, reason} ->
+        requeue_retry(state, issue_id, retry_entry, reason)
     end
   end
 
@@ -1555,7 +1555,15 @@ defmodule Raxol.Symphony.Orchestrator do
     state
   end
 
-  defp requeue_retry(%State{} = state, issue_id, retry_entry) do
+  # The tracker could not say whether the issue is still active, so the retry
+  # has to be re-armed. Treat that as a failure rather than a continuation:
+  # the flat 1s continuation delay re-reads the tracker once a second for the
+  # whole outage -- against an API that may be rate-limiting us precisely
+  # because of it -- and freezes `attempt`, so the dashboard shows one attempt
+  # forever. Record the CURRENT reason too: wrapping the entry's own error
+  # nests one level per requeue, and `snapshot_retry/2` inspects that term into
+  # every broadcast.
+  defp requeue_retry(%State{} = state, issue_id, retry_entry, reason) do
     placeholder = %Issue{
       id: issue_id,
       identifier: retry_entry.identifier,
@@ -1563,12 +1571,11 @@ defmodule Raxol.Symphony.Orchestrator do
       state: ""
     }
 
-    schedule_retry(
+    schedule_failure_retry(
       state,
       placeholder,
-      retry_entry.attempt,
-      Retry.continuation_delay_ms(),
-      {:tracker_unavailable_during_retry, retry_entry.error}
+      (retry_entry.attempt || 0) + 1,
+      {:tracker_unavailable_during_retry, reason}
     )
   end
 

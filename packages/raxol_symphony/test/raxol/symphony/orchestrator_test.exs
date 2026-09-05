@@ -98,6 +98,47 @@ defmodule Raxol.Symphony.OrchestratorTest do
     if :ets.whereis(table) == :undefined, do: 0, else: :ets.info(table, :size)
   end
 
+  # The setup config with the agent caps (and optionally the workspace root)
+  # overridden, for the tests that turn one of those into the thing under test.
+  defp capped_config(overrides) do
+    agent =
+      %{
+        max_concurrent_agents: Keyword.get(overrides, :max_concurrent_agents, 3),
+        max_retry_backoff_ms: Keyword.get(overrides, :max_retry_backoff_ms, 60_000)
+      }
+
+    raw = %{
+      tracker: %{
+        kind: "memory",
+        active_states: ["Todo", "In Progress"],
+        terminal_states: ["Done", "Cancelled"]
+      },
+      polling: %{interval_ms: 60_000},
+      agent: agent,
+      codex: %{stall_timeout_ms: 0},
+      runner: %{kind: "noop"}
+    }
+
+    raw =
+      case Keyword.get(overrides, :workspace_root) do
+        nil -> raw
+        root -> Map.put(raw, :workspace, %{root: root})
+      end
+
+    Config.from_workflow(%{config: raw, prompt_template: ""})
+  end
+
+  defp retry_entry(pid, issue_id),
+    do: Map.get(:sys.get_state(pid).retry_attempts, issue_id)
+
+  # -1 when the issue has no retry entry, so a `>=` wait cannot pass on a nil.
+  defp retry_attempt(pid, issue_id) do
+    case retry_entry(pid, issue_id) do
+      %{attempt: attempt} when is_integer(attempt) -> attempt
+      _ -> -1
+    end
+  end
+
   defp wait_until(timeout_ms \\ 1_000, fun) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(deadline, fun)
@@ -241,6 +282,37 @@ defmodule Raxol.Symphony.OrchestratorTest do
       # in entry.issue, not the snapshot's :state. Both behaviours are acceptable
       # per SPEC s8.5; we just assert the run is still active.
       assert running.issue_id == "a"
+    end
+  end
+
+  describe "workspace failure retries" do
+    test "a workspace that cannot be created escalates the retry attempt" do
+      # A regular file where the workspace root should be: every `mkdir_p`
+      # under it fails with :enotdir, on this attempt and on every retry.
+      root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony_ws_not_a_dir_#{System.unique_integer([:positive])}"
+        )
+
+      File.write!(root, "not a directory")
+      on_exit(fn -> File.rm(root) end)
+
+      config = capped_config(max_retry_backoff_ms: 50, workspace_root: root)
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.retrying == 1 end)
+      [retry] = Orchestrator.snapshot(pid).retrying
+
+      assert retry.attempt == 1,
+             "the first workspace failure recorded attempt #{inspect(retry.attempt)}"
+
+      # And every subsequent failure carries the count forward, so the backoff
+      # can actually grow rather than pinning at one delay forever.
+      wait_until(fn -> retry_attempt(pid, "a") >= 3 end)
     end
   end
 
