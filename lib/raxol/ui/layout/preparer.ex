@@ -149,6 +149,8 @@ defmodule Raxol.UI.Layout.Preparer do
     }
   end
 
+  def prepare(_other), do: nil
+
   @doc """
   Re-prepares only elements whose content has changed.
 

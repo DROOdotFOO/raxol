@@ -354,7 +354,7 @@ defmodule Raxol.Headless.McpToolsTest do
       defmodule #{name} do
         def init(_), do: %{}
         def update(_msg, model), do: model
-        def view(_), do: :ok
+        def view(_), do: nil
       end
       """)
 

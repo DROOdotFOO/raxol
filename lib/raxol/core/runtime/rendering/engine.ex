@@ -426,7 +426,7 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
   defp resolve_view_result(nil), do: {:ok, nil}
 
-  defp resolve_view_result(view) do
+  defp resolve_view_result(view) when is_map(view) do
     resolved = resolve_process_components(view)
 
     Raxol.Core.Runtime.Log.debug(
@@ -435,6 +435,8 @@ defmodule Raxol.Core.Runtime.Rendering.Engine do
 
     {:ok, resolved}
   end
+
+  defp resolve_view_result(_other), do: {:error, :invalid_view}
 
   # Safe layout application using functional error handling
   defp safe_apply_layout(view, state, prepared_tree) do
