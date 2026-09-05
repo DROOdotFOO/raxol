@@ -19,10 +19,13 @@ defmodule Raxol.Symphony.Evidence.Capture do
 
   ## Failure mode
 
-  If the cast file can't be opened (e.g., directory creation fails),
-  `start_link/1` returns `{:ok, pid}` for a no-op process and logs a
-  warning. `record/2` and `stop/1` then become no-ops. The run itself
-  is never blocked by recording failures.
+  If the cast file can't be opened or its header can't be written (e.g.,
+  directory creation fails, the disk is full), `start/1` returns
+  `{:ok, pid}` for a no-op process and logs a warning. `record/2` and
+  `stop/1` then become no-ops. A frame the JSON encoder rejects is
+  dropped; a write the device rejects retires the recording. The run
+  itself is never blocked by recording failures, and the process is
+  unlinked so a fault here cannot reach the orchestrator.
   """
 
   use Raxol.Core.Behaviours.BaseManager
@@ -46,10 +49,29 @@ defmodule Raxol.Symphony.Evidence.Capture do
   # Client API
   # ---------------------------------------------------------------------------
 
-  @doc "Starts a capture process. Always returns `{:ok, pid}` (fail-soft)."
-  @spec start_link(opts()) :: GenServer.on_start()
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
+  @doc """
+  Starts a capture process. Always returns `{:ok, pid}` (fail-soft).
+
+  The process is deliberately NOT linked to its caller: recording is
+  best-effort evidence, and the orchestrator does not trap exits, so a
+  link makes every capture fault fatal to the run loop. The caller is
+  monitored instead, which also cleans up better than a link did -- a
+  caller exiting `:normal` leaves a linked child running.
+  """
+  @spec start(opts()) :: GenServer.on_start()
+  def start(opts) do
+    GenServer.start(__MODULE__, Keyword.put(opts, :owner, self()))
+  end
+
+  # BaseManager hands every manager a linked start and a `child_spec/1`
+  # pointing at it. Both are wrong here for the reason above, so refuse
+  # rather than let a supervisor quietly wire recording into the run's
+  # fate.
+  @doc false
+  def start_link(_opts) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)} must be started unlinked via start/1: " <>
+            "a linked capture makes a recording fault fatal to the run it observes"
   end
 
   @doc "Records a Symphony run event. Returns `:ok`. Safe with `nil` pid."
@@ -119,14 +141,15 @@ defmodule Raxol.Symphony.Evidence.Capture do
     height = Keyword.get(opts, :height, @default_height)
     title = Keyword.get(opts, :title)
 
-    case open_file(path) do
-      {:ok, io} ->
-        :ok = write_header(io, width, height, title)
+    owner_ref = monitor_owner(Keyword.get(opts, :owner))
 
+    case start_cast(path, width, height, title) do
+      {:ok, io} ->
         {:ok,
          %{
            io: io,
            path: path,
+           owner_ref: owner_ref,
            start_us: System.monotonic_time(:microsecond)
          }}
 
@@ -135,18 +158,48 @@ defmodule Raxol.Symphony.Evidence.Capture do
           "symphony.evidence.capture.open_failed path=#{path} reason=#{inspect(reason)}"
         )
 
-        {:ok, %{io: nil, path: path, start_us: 0}}
+        {:ok, %{io: nil, path: path, owner_ref: owner_ref, start_us: 0}}
     end
   end
+
+  defp monitor_owner(owner) when is_pid(owner), do: Process.monitor(owner)
+  defp monitor_owner(_owner), do: nil
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_cast({:record, _event, _at_us}, %{io: nil} = state), do: {:noreply, state}
 
   def handle_manager_cast({:record, event, at_us}, %{io: io, start_us: start_us} = state) do
     elapsed_seconds = (at_us - start_us) / 1_000_000.0
-    text = format_event(event)
 
-    :ok = write_frame(io, elapsed_seconds, text)
+    case write_frame(io, elapsed_seconds, format_event(event)) do
+      :ok ->
+        {:noreply, state}
+
+      {:error, {:encode, reason}} ->
+        Logger.warning(
+          "symphony.evidence.capture.frame_dropped path=#{state.path} reason=#{inspect(reason)}"
+        )
+
+        {:noreply, state}
+
+      {:error, reason} ->
+        # The device is gone (full disk, closed fd): retire the recording
+        # rather than raising on every subsequent frame.
+        Logger.warning(
+          "symphony.evidence.capture.write_failed path=#{state.path} reason=#{inspect(reason)}"
+        )
+
+        {:noreply, %{state | io: nil}}
+    end
+  end
+
+  @impl Raxol.Core.Behaviours.BaseManager
+  def handle_manager_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
+    {:stop, :normal, state}
+  end
+
+  def handle_manager_info(message, state) do
+    Logger.debug("symphony.evidence.capture.unhandled_info message=#{inspect(message)}")
     {:noreply, state}
   end
 
@@ -167,9 +220,19 @@ defmodule Raxol.Symphony.Evidence.Capture do
   # Internals
   # ---------------------------------------------------------------------------
 
-  defp open_file(path) do
-    with :ok <- File.mkdir_p(Path.dirname(path)) do
-      File.open(path, [:write, :binary])
+  # A cast without its header is not a cast, so a failed header is a
+  # failed open: close the handle and let the caller go no-op.
+  defp start_cast(path, width, height, title) do
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         {:ok, io} <- File.open(path, [:write, :binary]) do
+      case write_header(io, width, height, title) do
+        :ok ->
+          {:ok, io}
+
+        {:error, reason} ->
+          File.close(io)
+          {:error, reason}
+      end
     end
   end
 
@@ -183,12 +246,26 @@ defmodule Raxol.Symphony.Evidence.Capture do
     }
 
     header = if is_binary(title), do: Map.put(header, "title", title), else: header
-    IO.binwrite(io, Jason.encode!(header) <> "\n")
+
+    case Jason.encode(header) do
+      {:ok, encoded} -> binwrite(io, encoded <> "\n")
+      {:error, reason} -> {:error, {:encode, reason}}
+    end
   end
 
   defp write_frame(io, elapsed_seconds, text) do
-    frame = [Float.round(elapsed_seconds, 6), "o", text]
-    IO.binwrite(io, Jason.encode!(frame) <> "\n")
+    case Jason.encode([Float.round(elapsed_seconds, 6), "o", text]) do
+      {:ok, frame} -> binwrite(io, frame <> "\n")
+      {:error, reason} -> {:error, {:encode, reason}}
+    end
+  end
+
+  # IO.binwrite/2 is specced `:ok` but exits when the device is gone (a
+  # closed fd, a full disk). A best-effort recorder should not die of that.
+  defp binwrite(io, data) do
+    IO.binwrite(io, data)
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   @doc false

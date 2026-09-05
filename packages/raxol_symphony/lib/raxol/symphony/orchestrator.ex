@@ -617,7 +617,7 @@ defmodule Raxol.Symphony.Orchestrator do
          attempt,
          workspace_path
        ) do
-    case Capture.start_link(
+    case Capture.start(
            path: Capture.path_for(workspace_path, attempt),
            width: rec.width,
            height: rec.height,
