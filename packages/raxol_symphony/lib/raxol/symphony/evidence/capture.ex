@@ -31,6 +31,7 @@ defmodule Raxol.Symphony.Evidence.Capture do
   @default_width 80
   @default_height 24
   @max_text_bytes 16_384
+  @truncation_marker "...[truncated]"
 
   @type opts :: [
           path: Path.t(),
@@ -214,8 +215,25 @@ defmodule Raxol.Symphony.Evidence.Capture do
   defp truncate(text, limit) when byte_size(text) <= limit, do: text
 
   defp truncate(text, limit) do
-    head_size = limit - 13
-    <<head::binary-size(^head_size), _::binary>> = text
-    head <> "...[truncated]"
+    text
+    |> binary_part(0, limit - byte_size(@truncation_marker))
+    |> valid_prefix()
+    |> Kernel.<>(@truncation_marker)
+  end
+
+  # The budget is bytes, so the cut can land inside a multi-byte
+  # codepoint; Jason rejects the invalid binary that would leave behind.
+  # A codepoint is at most four bytes, so three trims settle any cut. A
+  # head still invalid after that was invalid before the cut (a tool
+  # result carrying raw binary), and scanning the whole 16 KB head byte
+  # by byte would not rescue it -- leave it for the encoder to drop.
+  defp valid_prefix(head, trims_left \\ 3)
+  defp valid_prefix(head, 0), do: head
+
+  defp valid_prefix(head, trims_left) do
+    case String.valid?(head) do
+      true -> head
+      false -> head |> binary_part(0, byte_size(head) - 1) |> valid_prefix(trims_left - 1)
+    end
   end
 end
