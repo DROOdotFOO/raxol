@@ -62,9 +62,10 @@ references the issue. Stop when the PR is open.
 ```
 
 `workflow_mode: graph_parallel` fans up to `workflow_parallelism` eligible
-issues through one graph run per tick (no pause support). Use `default` for
-the simplest inline path, or `graph` for the per-node checkpointed pipeline
-with runner pause/resume.
+issues through one graph run per tick. A branch that pauses is parked as
+resumable, the same way a sequential run is; compensating the sibling branches
+that already completed is still open (#517). Use `default` for the simplest
+inline path, or `graph` for the per-node checkpointed pipeline.
 
 ## 4. start the orchestrator
 
