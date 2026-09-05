@@ -62,6 +62,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
     }
   end
 
+  # A detector under workflow_mode needs a saver whose store outlives
+  # the process that writes the checkpoint. Creating the table here
+  # makes the test process its owner.
+  defp workflow_saver do
+    table = :sym_test_envelope_saver
+    Raxol.Workflow.Checkpoint.Saver.Ets.ensure_table(%{table: table})
+    {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+  end
+
   describe "workflow_mode: true happy path" do
     test ":ok when the tracker reports terminal mid-loop" do
       # State Done at start -> after turn 1 the tracker check returns :done,
@@ -107,7 +116,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
         {:pause, :awaiting_buyer_payment, pause_token}
       end
 
-      cfg = config(%{pause_detector: detector})
+      cfg = config(%{pause_detector: detector, workflow_saver: workflow_saver()})
 
       assert {:pause, :awaiting_buyer_payment, token} =
                RaxolAgent.run(issue(), cfg,
@@ -138,7 +147,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentWorkflowEnvelopeTest do
         end
       end
 
-      cfg = config(%{pause_detector: detector})
+      cfg = config(%{pause_detector: detector, workflow_saver: workflow_saver()})
 
       # First pass pauses.
       assert {:pause, :awaiting_external, pause_token} =

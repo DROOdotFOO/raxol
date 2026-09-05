@@ -139,6 +139,13 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   Detection is bypassed when `agent.pause_detector` is `nil`, falling
   back to the legacy `EventForwarder.to_parent/3` path with no overhead.
 
+  Under `agent.workflow_mode`, a detector also requires an explicit
+  `agent.workflow_saver`: the run pauses in one worker task and resumes
+  in another, so a saver whose store dies with the writing process
+  loses the checkpoint. `run/3` returns
+  `{:error, :no_durable_workflow_saver}` rather than start a run it
+  cannot resume.
+
   ## Self-improvement (opt-in)
 
   Optional: set `agent.module` to a `use Raxol.Agent` module whose
@@ -323,8 +330,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     max_turns = config.agent.max_turns
 
     with {:ok, backend, backend_opts} <- resolve_backend(config),
-         {:ok, compiled} <-
-           AgentWorkflow.compile(max_turns, workflow_compile_opts(config)) do
+         {:ok, compiled} <- compile_workflow(config, max_turns) do
       case resume_token do
         %{workflow_run_id: run_id}
         when not is_nil(run_id) and not is_nil(resume_value) ->
@@ -345,18 +351,44 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
     end
   end
 
-  defp workflow_compile_opts(%Config{runner: %{agent: agent}}) do
-    # The workflow runtime's Compiled.resume/4 requires a Saver
-    # (otherwise it returns {:error, :no_saver_configured, _}). Default
-    # to a shared in-memory ETS table; consumers wanting BEAM-restart
-    # durability override via agent.workflow_saver, typically to
-    # `{Raxol.Workflow.Checkpoint.Saver.Dets, %{name: ...}}` or the
-    # Postgrex equivalent.
-    saver =
-      Map.get(agent, :workflow_saver) ||
-        {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: :raxol_symphony_agent_workflow}}
+  defp compile_workflow(%Config{} = config, max_turns) do
+    with {:ok, compile_opts} <- workflow_compile_opts(config) do
+      AgentWorkflow.compile(max_turns, compile_opts)
+    end
+  end
 
-    [saver: saver]
+  # The workflow runtime's Compiled.resume/4 requires a Saver (otherwise
+  # it returns {:error, :no_saver_configured, _}).
+  defp workflow_compile_opts(%Config{runner: %{agent: agent}}) do
+    case Map.get(agent, :workflow_saver) do
+      nil -> default_saver_opts(agent)
+      saver -> {:ok, [saver: saver]}
+    end
+  end
+
+  # Checkpoints are only ever read back on resume, and a resume only
+  # follows a pause, which only a pause_detector can raise. The default
+  # ETS saver creates its table in whichever process writes first --
+  # the orchestrator's worker task -- and an ETS table dies with its
+  # owner, so a pause's checkpoint is gone before an operator can act on
+  # it. Refuse that combination instead of handing back a saver whose
+  # checkpoints cannot outlive the run that wrote them; consumers point
+  # agent.workflow_saver at a store with a longer-lived owner
+  # (`{Raxol.Workflow.Checkpoint.Saver.Dets, %{name: ...}}`, the
+  # Postgrex equivalent, or an ETS table a supervised process created).
+  # A run that cannot pause never reads a checkpoint back, so it keeps
+  # the convenient default.
+  defp default_saver_opts(agent) do
+    case Map.get(agent, :pause_detector) do
+      nil ->
+        {:ok,
+         [
+           saver: {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: :raxol_symphony_agent_workflow}}
+         ]}
+
+      _detector ->
+        {:error, :no_durable_workflow_saver}
+    end
   end
 
   defp build_workflow_state(issue, config, opts, backend, backend_opts) do

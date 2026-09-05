@@ -46,6 +46,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
     })
   end
 
+  # A detector under workflow_mode needs a saver whose store outlives
+  # the process that writes the checkpoint. Creating the table here
+  # makes the test process its owner.
+  defp workflow_saver do
+    table = :sym_agent_workflow_test_saver
+    Raxol.Workflow.Checkpoint.Saver.Ets.ensure_table(%{table: table})
+    {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+  end
+
   defp issue(state \\ "Todo") do
     %Issue{
       id: "issue-1",
@@ -92,7 +101,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
         end
       end
 
-      cfg = config(%{pause_detector: detector})
+      cfg = config(%{pause_detector: detector, workflow_saver: workflow_saver()})
 
       # Pause on turn 1.
       assert {:pause, :awaiting_review, pause_token} =
@@ -146,7 +155,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgent.AgentWorkflowTest do
 
       detector = fn _event -> {:pause, :awaiting_review, :tok} end
 
-      cfg = config(%{pause_detector: detector})
+      cfg = config(%{pause_detector: detector, workflow_saver: workflow_saver()})
 
       assert {:pause, :awaiting_review, _token} =
                RaxolAgent.run(issue(), cfg,

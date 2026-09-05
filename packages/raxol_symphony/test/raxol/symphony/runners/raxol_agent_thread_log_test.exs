@@ -37,6 +37,15 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
     {Raxol.Agent.ThreadLog.Ets, %{table: table}}
   end
 
+  # A detector under workflow_mode needs a saver whose store outlives
+  # the process that writes the checkpoint. Creating the table here
+  # makes the test process its owner.
+  defp workflow_saver do
+    table = :sym_runner_thread_log_saver
+    Raxol.Workflow.Checkpoint.Saver.Ets.ensure_table(%{table: table})
+    {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
+  end
+
   defp config(agent_overrides, max_turns \\ 1)
 
   defp config(agent_overrides, max_turns) do
@@ -123,7 +132,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
         end
       end
 
-      cfg = config(%{thread_log: adapter, pause_detector: detector})
+      cfg =
+        config(%{
+          thread_log: adapter,
+          pause_detector: detector,
+          workflow_saver: workflow_saver()
+        })
 
       # Pause.
       assert {:pause, :awaiting_review, pause_token} =
