@@ -77,11 +77,11 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   `:retry_exhausted`, `:timeout`, `:cache_hit`, `:cache_miss` fire
   on the corresponding decisions.
 
-  Policy failures (retries exhausted, timeout) currently advance
-  the turn with empty events + no pause_request rather than
-  failing the run -- the orchestrator's retry layer handles
-  whole-run failure. Surfacing per-turn errors into a hard
-  `{:error, _}` return is a follow-up.
+  A turn the policies could not rescue fails the run: `run/3`
+  returns `{:error, reason}` and the orchestrator's retry ladder
+  takes over. `reason` is the turn's own failure verbatim (the
+  provider error a Retry exhausted on), or `{:policy_failed, _}`
+  when the applier itself gave up on wall-clock or a crashed task.
 
   Default `[]` (empty list) skips the wrap entirely.
 
@@ -554,58 +554,80 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
   end
 
   defp run_authorized_turn(state, prompt, policies, turn_payload) do
+    # The verdict is decided INSIDE the wrapped op, not after the
+    # applier returns: a failed turn handed back as `{:ok, _}` is a
+    # success to every policy, so Retry never retries the class of
+    # failure it was configured for and Cache memoizes the failure for
+    # its whole TTL, turning one transient provider error into a run
+    # that fails instantly on a stale reason until the entry expires.
     op = fn _params ->
-      stream = stream_module().run(prompt, __stream_opts__(state))
-
-      {:ok,
-       collect_with_detector(
-         stream,
-         state.parent,
-         state.issue.id,
-         state.pause_detector
-       )}
+      stream_module().run(prompt, __stream_opts__(state))
+      |> collect_with_detector(state.parent, state.issue.id, state.pause_detector)
+      |> turn_result()
     end
 
     case Raxol.Agent.PolicyApplier.apply(policies, op, turn_payload) do
       {:ok, {events, pause_request}} ->
         {:ok, events, pause_request}
 
-      {:error, reason} ->
-        # Policies could not recover (retries exhausted / wall-clock
-        # timeout). Unlike a sandbox deny, this IS a hard failure --
-        # surface it as `{:error, _}` so AgentWorkflow.run_turn sets
-        # state.run_result and the runner's translate_workflow_result
-        # propagates {:error, ...} back to the orchestrator (which
-        # then schedules a failure retry with exponential backoff).
+      # Either failure IS a hard one, unlike a sandbox deny: surfacing
+      # `{:error, _}` makes AgentWorkflow.run_turn set state.run_result
+      # so translate_workflow_result propagates it back to the
+      # orchestrator, which schedules a failure retry with backoff.
+      # The applier synthesises exactly these two reasons, so they are
+      # the only ones the policy machinery itself is answerable for;
+      # anything else is the turn's own reason and is reported verbatim
+      # (a Retry that exhausts reports the provider's last error, which
+      # is what an operator needs to read).
+      {:error, :timeout} ->
+        {:error, {:policy_failed, :timeout}}
+
+      {:error, {:exit, _} = reason} ->
         {:error, {:policy_failed, reason}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
+  # A queued pause outranks a stream error: the pause fires at the turn
+  # boundary, so the operator's decision is what the run is waiting on.
+  defp turn_result({events, {:pause, _reason, _token} = pause_request, _outcome}),
+    do: {:ok, {events, pause_request}}
+
+  defp turn_result({events, nil, :ok}), do: {:ok, {events, nil}}
+  defp turn_result({_events, nil, {:error, reason}}), do: {:error, reason}
+
   defp collect_with_detector(stream, parent, issue_id, detector) do
-    Enum.reduce(stream, {[], nil}, fn event, {events, pause_acc} ->
+    Enum.reduce(stream, {[], nil, {:error, :no_done}}, fn event, {events, pause_acc, outcome} ->
       send(parent, {:run_event, issue_id, legacy_payload(event)})
       payload = legacy_payload(event)
       events = [payload | events]
 
-      pause_acc =
-        case pause_acc do
-          nil ->
-            case apply_detector(detector, event) do
-              {:pause, reason, token} when is_atom(reason) ->
-                {:pause, reason, token}
-
-              _ ->
-                nil
-            end
-
-          existing ->
-            existing
-        end
-
-      {events, pause_acc}
+      {events, queue_pause(pause_acc, detector, event), stream_outcome(outcome, event)}
     end)
-    |> then(fn {events, pause_acc} -> {Enum.reverse(events), pause_acc} end)
+    |> then(fn {events, pause_acc, outcome} ->
+      {Enum.reverse(events), pause_acc, outcome}
+    end)
   end
+
+  defp queue_pause(nil, detector, event) do
+    case apply_detector(detector, event) do
+      {:pause, reason, token} when is_atom(reason) -> {:pause, reason, token}
+      _ -> nil
+    end
+  end
+
+  defp queue_pause(queued, _detector, _event), do: queued
+
+  # Same terminal-outcome verdict as `legacy_forward/3` and
+  # `forward_with_detector/4`: the first terminal event decides, and a
+  # stream that reaches neither is a failed turn rather than a clean one.
+  # Those two halt on it; this one keeps folding so a queued pause still
+  # sees the whole turn.
+  defp stream_outcome({:error, :no_done}, {:done, _info}), do: :ok
+  defp stream_outcome({:error, :no_done}, {:error, reason}), do: {:error, reason}
+  defp stream_outcome(outcome, _event), do: outcome
 
   @doc false
   def __workflow_still_active__(%{tracker_cache: nil} = state) do
