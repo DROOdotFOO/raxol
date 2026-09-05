@@ -286,7 +286,7 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
-  def handle_manager_info(:tick, %State{} = state) do
+  def handle_manager_info({:timeout, ref, :tick}, %State{tick_timer_ref: ref} = state) do
     new_state =
       state
       |> Map.put(:tick_timer_ref, nil)
@@ -294,6 +294,15 @@ defmodule Raxol.Symphony.Orchestrator do
       |> schedule_next_tick()
 
     {:noreply, new_state}
+  end
+
+  # A tick from a superseded timer. `Process.cancel_timer/1` does not unsend an
+  # already-delivered message, so a `run_tick` that outlives the poll interval
+  # leaves one queued behind the reschedule that follows it. Running it would
+  # arm a SECOND timer and orphan the live one, and every recurrence adds
+  # another chain -- permanently multiplying tracker polling.
+  def handle_manager_info({:timeout, _superseded_ref, :tick}, %State{} = state) do
+    {:noreply, state}
   end
 
   def handle_manager_info({:retry_fire, issue_id}, %State{} = state) do
@@ -1911,7 +1920,9 @@ defmodule Raxol.Symphony.Orchestrator do
       Process.cancel_timer(state.tick_timer_ref)
     end
 
-    ref = Process.send_after(self(), :tick, delay_ms)
+    # `start_timer/3` puts the timer's own ref inside the message it delivers,
+    # which is what lets the handler tell a live tick from a superseded one.
+    ref = :erlang.start_timer(delay_ms, self(), :tick)
     %State{state | tick_timer_ref: ref}
   end
 
