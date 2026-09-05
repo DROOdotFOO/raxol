@@ -38,7 +38,10 @@ defmodule Raxol.Symphony.Orchestrator.State do
           error: term() | nil
         }
 
+  # `pending_resume` is present only while a resume is queued behind the
+  # concurrency caps; it carries the value the caller asked to resume with.
   @type paused_entry :: %{
+          optional(:pending_resume) => {:queued, term()},
           issue: Issue.t(),
           attempt: non_neg_integer() | nil,
           workspace_path: Path.t(),
