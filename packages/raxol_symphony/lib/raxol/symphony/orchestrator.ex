@@ -98,6 +98,11 @@ defmodule Raxol.Symphony.Orchestrator do
   payload describing the external event the run was waiting on) in `opts`.
 
   Returns `{:error, :not_paused}` if no paused entry exists for `issue_id`.
+
+  `:ok` means the resume was accepted, not that a runner started: with the
+  concurrency caps full the run stays parked holding `resume_value` and the
+  next tick starts it once a slot frees. `snapshot/1` reports those as
+  `resume_pending?`.
   """
   @spec resume_run(GenServer.server(), binary(), term()) ::
           :ok | {:error, :not_paused}
@@ -254,15 +259,7 @@ defmodule Raxol.Symphony.Orchestrator do
         {:reply, {:error, :not_paused}, state}
 
       paused_entry ->
-        forget_paused(state.paused_saver, issue_id)
-
-        new_state =
-          state
-          |> Map.put(:paused, Map.delete(state.paused, issue_id))
-          |> dispatch_resumption(paused_entry, resume_value)
-          |> notify_listeners(:run_resumed)
-
-        {:reply, :ok, new_state}
+        {:reply, :ok, resume_paused(state, issue_id, paused_entry, resume_value)}
     end
   end
 
@@ -356,6 +353,7 @@ defmodule Raxol.Symphony.Orchestrator do
         state
         |> reconcile_host_pool()
         |> reconcile()
+        |> drain_deferred_resumes()
         |> dispatch_candidates()
         |> notify_listeners(:tick_completed)
 
@@ -1297,6 +1295,69 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
+  # A resume starts an agent, so it spends a concurrency slot like any other
+  # dispatch. Parking took the run out of `running`, so every parked issue reads
+  # the global and per-state budgets as free at the same instant, and
+  # `Resumer.fan_out_matches/2` calls `resume_run/3` for EVERY paused entry a
+  # single telemetry event matches -- ungated, one event starts one agent per
+  # parked issue whatever `max_concurrent_agents` says, with no operator in the
+  # loop. Over the cap, keep the run parked holding the value it was handed.
+  defp resume_paused(%State{} = state, issue_id, paused_entry, resume_value) do
+    case Candidate.apply_concurrency_slots(
+           [paused_entry.issue],
+           state.config,
+           running_for_slots(state)
+         ) do
+      [%Issue{}] ->
+        forget_paused(state.paused_saver, issue_id)
+
+        state
+        |> Map.put(:paused, Map.delete(state.paused, issue_id))
+        |> dispatch_resumption(paused_entry, resume_value)
+        |> notify_listeners(:run_resumed)
+
+      [] ->
+        defer_resumption(state, issue_id, paused_entry, resume_value)
+    end
+  end
+
+  defp defer_resumption(%State{} = state, issue_id, paused_entry, resume_value) do
+    queued = Map.put(paused_entry, :pending_resume, {:queued, resume_value})
+
+    state
+    |> Map.put(:paused, Map.put(state.paused, issue_id, queued))
+    |> announce_first_deferral(paused_entry)
+  end
+
+  # Only entering the queue is worth a line and a broadcast: every tick
+  # re-offers a queued resume, and a run waiting out a long backlog would
+  # otherwise repeat both for as long as the caps stay full.
+  defp announce_first_deferral(%State{} = state, %{pending_resume: {:queued, _}}), do: state
+
+  defp announce_first_deferral(%State{} = state, paused_entry) do
+    Logger.info(
+      "symphony.orchestrator.resume_deferred issue=#{paused_entry.issue.identifier} " <>
+        "reason=awaiting_concurrency_slot"
+    )
+
+    notify_listeners(state, :run_resume_deferred)
+  end
+
+  # A slot only frees while the orchestrator is doing something else, so a
+  # queued resume needs re-offering. Do it ahead of `dispatch_candidates/1`:
+  # a parked run already owns a workspace and a reserved host, so giving the
+  # freed slot to fresh work instead would strand it behind every future poll.
+  defp drain_deferred_resumes(%State{} = state) do
+    state.paused
+    |> Enum.flat_map(fn
+      {issue_id, %{pending_resume: {:queued, value}} = entry} -> [{issue_id, entry, value}]
+      _ -> []
+    end)
+    |> Enum.reduce(state, fn {issue_id, entry, value}, acc ->
+      resume_paused(acc, issue_id, entry, value)
+    end)
+  end
+
   defp dispatch_resumption(%State{} = state, paused_entry, resume_value) do
     issue = paused_entry.issue
 
@@ -1527,10 +1588,34 @@ defmodule Raxol.Symphony.Orchestrator do
         release_issue(state, issue.id)
 
       Issue.active?(issue, state.config.tracker.active_states) ->
-        dispatch_issue(state, issue, retry_entry.attempt)
+        dispatch_within_slots(state, issue, retry_entry)
 
       true ->
         release_issue(state, issue.id)
+    end
+  end
+
+  # A retry timer fires outside the poll path, where nothing has applied the
+  # concurrency caps. Parking the issue took it out of `running`, so both the
+  # global and the per-state budget read as free and the re-dispatch registers
+  # an extra worker over `max_concurrent_agents`. Re-check against the same
+  # accounting `dispatch_candidates/1` uses and wait for a slot instead.
+  defp dispatch_within_slots(%State{} = state, %Issue{} = issue, retry_entry) do
+    case Candidate.apply_concurrency_slots([issue], state.config, running_for_slots(state)) do
+      [%Issue{}] ->
+        dispatch_issue(state, issue, retry_entry.attempt)
+
+      [] ->
+        # Not a failure of this run: the wait ends when another worker exits, so
+        # hold the attempt count rather than inflating the failure backoff, and
+        # re-check on the cadence dispatch is already evaluated on.
+        schedule_retry(
+          state,
+          issue,
+          retry_entry.attempt,
+          state.config.polling.interval_ms,
+          :awaiting_concurrency_slot
+        )
     end
   end
 
@@ -1878,6 +1963,9 @@ defmodule Raxol.Symphony.Orchestrator do
       interrupt_reason: entry.interrupt_reason,
       paused_ms_ago: max(now_system_ms - Map.get(entry, :paused_at_system, now_system_ms), 0),
       durable?: Map.get(entry, :durable?, false),
+      # A resume was asked for and is waiting on a concurrency slot. Without it
+      # a capped-out resume is indistinguishable from a run nobody has resumed.
+      resume_pending?: match?({:queued, _}, Map.get(entry, :pending_resume)),
       attempt: entry.attempt,
       turn_count: entry.turn_count,
       last_event: entry.last_event,

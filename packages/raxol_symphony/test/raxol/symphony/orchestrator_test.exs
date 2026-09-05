@@ -131,6 +131,13 @@ defmodule Raxol.Symphony.OrchestratorTest do
   defp retry_entry(pid, issue_id),
     do: Map.get(:sys.get_state(pid).retry_attempts, issue_id)
 
+  defp retry_error(pid, issue_id) do
+    case retry_entry(pid, issue_id) do
+      nil -> nil
+      entry -> entry.error
+    end
+  end
+
   # -1 when the issue has no retry entry, so a `>=` wait cannot pass on a nil.
   defp retry_attempt(pid, issue_id) do
     case retry_entry(pid, issue_id) do
@@ -285,6 +292,44 @@ defmodule Raxol.Symphony.OrchestratorTest do
     end
   end
 
+  describe "concurrency caps on the retry path" do
+    test "a retry that fires while the cap is full waits for a slot" do
+      # One agent slot. MT-1 fails immediately and is parked on a backoff;
+      # while it waits, MT-2 takes the freed slot. The retry timer then fires
+      # with the cap already full.
+      config = capped_config(max_concurrent_agents: 1, max_retry_backoff_ms: 400)
+
+      Memory.put_issues([issue("a", "MT-1", "Todo"), issue("b", "MT-2", "Todo")])
+      Noop.Director.set("MT-1", {:fail_after, 0, :boom})
+      Noop.Director.set("MT-2", :stall)
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+
+      wait_until(fn -> Orchestrator.snapshot(pid).counts.retrying == 1 end)
+
+      # A re-dispatched MT-1 now sticks in `running` instead of failing again,
+      # so the over-subscription is observable rather than instantaneous.
+      Noop.Director.set("MT-1", :stall)
+
+      :ok = Orchestrator.tick_now(pid)
+      assert Orchestrator.snapshot(pid).counts.running == 1
+
+      # Either the retry re-dispatched MT-1 (over the cap) or it re-armed.
+      wait_until(fn ->
+        Map.has_key?(:sys.get_state(pid).running, "a") or
+          retry_error(pid, "a") == :awaiting_concurrency_slot
+      end)
+
+      snap = Orchestrator.snapshot(pid)
+
+      assert snap.counts.running == 1,
+             "the retry dispatched past max_concurrent_agents: running=#{snap.counts.running}"
+
+      assert Enum.map(snap.running, & &1.issue_id) == ["b"]
+    end
+  end
+
   describe "workspace failure retries" do
     test "a workspace that cannot be created escalates the retry attempt" do
       # A regular file where the workspace root should be: every `mkdir_p`
@@ -436,6 +481,66 @@ defmodule Raxol.Symphony.OrchestratorTest do
       [paused] = Orchestrator.snapshot(pid).paused
       assert paused.turn_count == 1
       assert paused.tokens.total_tokens == 30
+    end
+  end
+
+  # One agent allowed: MT-1 parks on the first tick, MT-2 takes the only slot on
+  # the second (MT-1 is claimed, so it is not re-dispatched).
+  defp park_one_and_fill_the_slot do
+    Memory.put_issue(issue("a", "MT-1", "Todo"))
+    Memory.put_issue(issue("b", "MT-2", "Todo"))
+    Noop.Director.set("MT-1", {:pause_then, :awaiting_review, "rt", :stall})
+    Noop.Director.set("MT-2", :stall)
+
+    pid = start_orchestrator(capped_config(max_concurrent_agents: 1))
+
+    :ok = Orchestrator.tick_now(pid)
+    wait_until(fn -> Orchestrator.snapshot(pid).counts.paused == 1 end)
+
+    :ok = Orchestrator.tick_now(pid)
+    assert Orchestrator.snapshot(pid).counts.running == 1
+
+    pid
+  end
+
+  # A paused run holds no `running` entry, so every parked issue sees the caps
+  # as free at once. `Resumer.fan_out_matches/2` resumes EVERY paused entry one
+  # telemetry event matches, which without a cap check starts one agent per
+  # parked issue with no human in the loop.
+  describe "resume under the concurrency cap" do
+    test "resume_run/3 with no free slot leaves the run parked" do
+      pid = park_one_and_fill_the_slot()
+      :ok = Orchestrator.subscribe(pid)
+
+      assert :ok = Orchestrator.resume_run(pid, "a", :approved)
+
+      snap = Orchestrator.snapshot(pid)
+      assert snap.counts.running == 1
+      assert [%{issue_id: "a", resume_pending?: true}] = snap.paused
+      assert_receive {:symphony_event, :run_resume_deferred, _}, 500
+    end
+
+    test "a resume queued behind the cap dispatches once a slot frees" do
+      pid = park_one_and_fill_the_slot()
+
+      assert :ok = Orchestrator.resume_run(pid, "a", :approved)
+      assert Orchestrator.snapshot(pid).counts.paused == 1
+
+      # Free the only slot: the tracker takes MT-2 terminal, so reconcile tears
+      # its run down earlier in the same tick that drains the queued resume.
+      Memory.transition("b", "Done")
+      :ok = Orchestrator.tick_now(pid)
+
+      # `last_event: :resumed` is sent by the runner itself, so it proves the
+      # resumed worker ran rather than that the entry merely left `paused`.
+      wait_until(fn ->
+        match?(
+          [%{issue_id: "a", last_event: :resumed}],
+          Orchestrator.snapshot(pid).running
+        )
+      end)
+
+      assert Orchestrator.snapshot(pid).counts.paused == 0
     end
   end
 
