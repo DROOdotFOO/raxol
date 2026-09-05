@@ -284,11 +284,51 @@ defmodule Raxol.Symphony.OrchestratorTest do
       :ok = Orchestrator.tick_now(pid)
 
       [running] = Orchestrator.snapshot(pid).running
-      assert running.state == "Todo"
-      # state field is what was at dispatch; the update happens to issue snapshot
-      # in entry.issue, not the snapshot's :state. Both behaviours are acceptable
-      # per SPEC s8.5; we just assert the run is still active.
       assert running.issue_id == "a"
+
+      assert running.state == "In Progress",
+             "the snapshot reports a state the tracker no longer holds; got #{inspect(running.state)}"
+    end
+
+    test "a reconciled state change is counted against the per-state cap" do
+      # One "In Progress" slot. MT-1 is dispatched from Todo and then advanced
+      # to In Progress by its agent -- the ordinary Symphony workflow. Once
+      # reconcile has seen that, MT-2 (already In Progress) must not be
+      # dispatched, or two agents run in a state capped at one.
+      config =
+        Config.from_workflow(%{
+          config: %{
+            tracker: %{
+              kind: "memory",
+              active_states: ["Todo", "In Progress"],
+              terminal_states: ["Done", "Cancelled"]
+            },
+            polling: %{interval_ms: 60_000},
+            agent: %{
+              max_concurrent_agents: 3,
+              max_retry_backoff_ms: 60_000,
+              max_concurrent_agents_by_state: %{"In Progress" => 1}
+            },
+            codex: %{stall_timeout_ms: 0},
+            runner: %{kind: "noop"}
+          },
+          prompt_template: ""
+        })
+
+      Memory.put_issue(issue("a", "MT-1", "Todo"))
+      Noop.Director.set("MT-1", :stall)
+      Noop.Director.set("MT-2", :stall)
+
+      pid = start_orchestrator(config)
+      :ok = Orchestrator.tick_now(pid)
+      assert Orchestrator.snapshot(pid).counts.running == 1
+
+      Memory.transition("a", "In Progress")
+      Memory.put_issue(issue("b", "MT-2", "In Progress"))
+      :ok = Orchestrator.tick_now(pid)
+
+      assert Orchestrator.snapshot(pid).counts.running == 1,
+             "MT-2 was dispatched because the running entry still counts under its dispatch-time state"
     end
   end
 

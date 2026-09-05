@@ -1843,7 +1843,11 @@ defmodule Raxol.Symphony.Orchestrator do
         terminate_running(acc, id, entry, true)
 
       Issue.active?(issue, acc.config.tracker.active_states) ->
-        %{acc | running: Map.put(acc.running, id, %{entry | issue: issue})}
+        # The denormalized `:state` copy is what per-state slot accounting
+        # counts and what every surface renders, so it has to move with the
+        # issue -- an agent advancing its own issue between two active states
+        # is the ordinary workflow, not an edge case.
+        %{acc | running: Map.put(acc.running, id, %{entry | issue: issue, state: issue.state})}
 
       true ->
         terminate_running(acc, id, entry, false)
