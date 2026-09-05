@@ -677,7 +677,9 @@ defmodule Raxol.Symphony.Orchestrator do
             ssh: dispatch.ssh
           )
 
-        graph_outcome(WorkflowCompiled.invoke(compiled, state))
+        compiled
+        |> WorkflowCompiled.invoke(state)
+        |> graph_outcome(issue, dispatch.parent)
 
       {:error, reason} ->
         exit({:graph_compile_failed, reason})
@@ -736,17 +738,32 @@ defmodule Raxol.Symphony.Orchestrator do
     end
   end
 
-  defp graph_outcome({:ok, %{run_result: :ok}, _meta}), do: :ok
+  defp graph_outcome({:ok, %{run_result: :ok}, _meta}, _issue, _parent), do: :ok
 
-  defp graph_outcome({:ok, %{run_result: {:error, reason}}, _meta}),
+  defp graph_outcome({:ok, %{run_result: {:error, reason}}, _meta}, _issue, _parent),
     do: exit({:runner_error, reason})
 
-  defp graph_outcome({:ok, _final, _meta}), do: :ok
+  defp graph_outcome({:ok, _final, _meta}, _issue, _parent), do: :ok
 
-  defp graph_outcome({:error, reason, _state}),
+  defp graph_outcome({:error, reason, _state}, _issue, _parent),
     do: exit({:graph_runtime_error, reason})
 
-  defp graph_outcome({:interrupted, _run_id, _state, value}),
+  # A runner pause reaches the worker as a graph interrupt. Speak the same
+  # protocol `interpret_runner_result/3` does so the orchestrator parks the run
+  # (and keeps its reserved host) instead of reading the interrupt as a crash:
+  # a run that never enters `paused` cannot be resumed by any surface, and the
+  # retry re-runs the whole agent only to pause again, forever.
+  defp graph_outcome(
+         {:interrupted, _run_id, _state, {reason, token}},
+         %Issue{} = issue,
+         parent
+       )
+       when is_atom(reason) and is_pid(parent) do
+    send(parent, {:run_paused, issue.id, reason, token})
+    :ok
+  end
+
+  defp graph_outcome({:interrupted, _run_id, _state, value}, _issue, _parent),
     do: exit({:graph_interrupted, value})
 
   # -- Parallel batch dispatch (:graph_parallel) ------------------------------
