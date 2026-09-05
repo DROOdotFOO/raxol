@@ -64,6 +64,10 @@ defmodule Raxol.Symphony.Config do
   @default_max_concurrent_agents 10
   @default_max_turns 20
   @default_max_retry_backoff_ms 300_000
+  # Consecutive tracker outages a single retry waits out before the claim is
+  # released back to the poll path. At the default backoff this is roughly half
+  # an hour of an unreachable tracker (10s doubling to the 300s ceiling).
+  @default_max_tracker_requeues 10
   @default_codex_command "codex app-server"
   @default_codex_api_key_env "OPENAI_API_KEY"
   @default_turn_timeout_ms 3_600_000
@@ -189,6 +193,8 @@ defmodule Raxol.Symphony.Config do
       max_turns: Map.get(section, :max_turns, @default_max_turns),
       max_retry_backoff_ms:
         Map.get(section, :max_retry_backoff_ms, @default_max_retry_backoff_ms),
+      max_tracker_requeues:
+        Map.get(section, :max_tracker_requeues, @default_max_tracker_requeues),
       max_concurrent_agents_by_state:
         normalize_state_map(Map.get(section, :max_concurrent_agents_by_state, %{}))
     }

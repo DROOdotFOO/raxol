@@ -1541,12 +1541,15 @@ defmodule Raxol.Symphony.Orchestrator do
     schedule_retry(state, issue, attempt, delay, error)
   end
 
+  # `requeues` defaults to 0 so that every caller reached through a SUCCESSFUL
+  # tracker read clears the outage counter; only `rearm_retry/5` carries it.
   defp schedule_retry(
          %State{} = state,
          %Issue{} = issue,
          attempt,
          delay_ms,
-         error
+         error,
+         requeues \\ 0
        ) do
     state = cancel_retry(state, issue.id)
     timer_ref = Process.send_after(self(), {:retry_fire, issue.id}, delay_ms)
@@ -1556,6 +1559,7 @@ defmodule Raxol.Symphony.Orchestrator do
       issue_id: issue.id,
       identifier: issue.identifier,
       attempt: attempt,
+      requeues: requeues,
       due_at_ms: due_at_ms,
       timer_ref: timer_ref,
       error: error
@@ -1603,14 +1607,39 @@ defmodule Raxol.Symphony.Orchestrator do
     }
 
     case Tracker.fetch_issue_states_by_ids(state.config, [issue_id]) do
-      {:ok, [%Issue{} = issue]} ->
-        retry_with_refreshed_issue(state, issue, retry_entry)
-
-      {:ok, []} ->
-        release_issue(state, issue_id)
+      {:ok, issues} when is_list(issues) ->
+        resolve_retry_answer(state, issue_id, issues, retry_entry)
 
       {:error, reason} ->
         requeue_retry(state, issue_id, retry_entry, reason)
+    end
+  end
+
+  # A per-ID refresh is evidence about the ID it asked for and nothing else.
+  # An empty answer is the tracker saying the issue is gone; any other answer
+  # has to CONTAIN our row to mean anything, because acting on a row we did not
+  # ask for dispatches the wrong issue and releases the wrong claim -- leaving
+  # ours claimed with no timer, which no release site can reach.
+  #
+  # This used to match `{:ok, [issue]}` positionally, so a tracker answering a
+  # single-ID query with two rows raised CaseClauseError inside the callback,
+  # and a single row for a DIFFERENT issue was acted on as if it were ours.
+  defp resolve_retry_answer(%State{} = state, issue_id, [], _retry_entry) do
+    release_issue(state, issue_id)
+  end
+
+  defp resolve_retry_answer(%State{} = state, issue_id, issues, retry_entry) do
+    case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
+      %Issue{} = issue ->
+        retry_with_refreshed_issue(state, issue, retry_entry)
+
+      nil ->
+        requeue_retry(
+          state,
+          issue_id,
+          retry_entry,
+          {:tracker_answered_other_issues, length(issues)}
+        )
     end
   end
 
@@ -1677,14 +1706,31 @@ defmodule Raxol.Symphony.Orchestrator do
   end
 
   # The tracker could not say whether the issue is still active, so the retry
-  # has to be re-armed. Treat that as a failure rather than a continuation:
-  # the flat 1s continuation delay re-reads the tracker once a second for the
-  # whole outage -- against an API that may be rate-limiting us precisely
-  # because of it -- and freezes `attempt`, so the dashboard shows one attempt
-  # forever. Record the CURRENT reason too: wrapping the entry's own error
-  # nests one level per requeue, and `snapshot_retry/2` inspects that term into
-  # every broadcast.
+  # has to be re-armed. Treat that as a failure rather than a continuation: the
+  # flat 1s continuation delay re-reads the tracker once a second for the whole
+  # outage, against an API that may be rate-limiting us precisely because of it.
+  #
+  # The backoff escalates on `requeues`, NOT on `attempt`. They are different
+  # numbers: `attempt` counts executions and reaches the prompt template and the
+  # cast filename, so escalating it tells an agent it is on attempt 47 of a run
+  # that never executed once. `requeues` counts consecutive outages and resets
+  # the moment a refresh succeeds, because every other `schedule_retry/6` caller
+  # takes the default.
+  #
+  # Record the CURRENT reason too: wrapping the entry's own error nests one
+  # level per requeue, and `snapshot_retry/2` inspects that term into every
+  # broadcast.
   defp requeue_retry(%State{} = state, issue_id, retry_entry, reason) do
+    requeues = retry_entry.requeues + 1
+
+    if requeues > state.config.agent.max_tracker_requeues do
+      give_up_on_retry(state, issue_id, retry_entry, reason, requeues)
+    else
+      rearm_retry(state, issue_id, retry_entry, reason, requeues)
+    end
+  end
+
+  defp rearm_retry(%State{} = state, issue_id, retry_entry, reason, requeues) do
     placeholder = %Issue{
       id: issue_id,
       identifier: retry_entry.identifier,
@@ -1692,12 +1738,31 @@ defmodule Raxol.Symphony.Orchestrator do
       state: ""
     }
 
-    schedule_failure_retry(
+    delay =
+      Retry.failure_delay_ms(requeues, state.config.agent.max_retry_backoff_ms)
+
+    schedule_retry(
       state,
       placeholder,
-      (retry_entry.attempt || 0) + 1,
-      {:tracker_unavailable_during_retry, reason}
+      retry_entry.attempt,
+      delay,
+      {:tracker_unavailable_during_retry, reason},
+      requeues
     )
+  end
+
+  # The requeue loop is bounded, because an unbounded one is its own strand: a
+  # tracker that never comes back holds the claim forever, with the issue in no
+  # running, batch or paused map and no timer left to fire. Releasing hands it
+  # back to the poll path, which re-claims it from scratch once the tracker
+  # answers again -- the same recovery a fresh issue gets, rather than none.
+  defp give_up_on_retry(%State{} = state, issue_id, retry_entry, reason, requeues) do
+    Logger.warning(
+      "symphony.orchestrator.retry_gave_up issue=#{retry_entry.identifier} " <>
+        "requeues=#{requeues} reason=#{inspect(reason)}"
+    )
+
+    release_issue(state, issue_id)
   end
 
   # -- Reconciliation ---------------------------------------------------------
@@ -1991,6 +2056,10 @@ defmodule Raxol.Symphony.Orchestrator do
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
       attempt: entry.attempt,
+      # Distinct from `attempt`: consecutive tracker outages this retry has
+      # waited out, which is what the backoff escalates on. Surfacing it is
+      # what lets `attempt` stay honest about executions.
+      requeues: entry.requeues,
       due_in_ms: max(entry.due_at_ms - now_ms, 0),
       error: inspect_error(entry.error)
     }
