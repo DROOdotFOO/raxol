@@ -39,16 +39,34 @@ defmodule Raxol.Symphony.Runners.Codex do
   When `approval_policy == "never"`, command-execution / file-change /
   exec-command / apply-patch approvals are auto-approved. Any other policy
   surfaces the approval to the orchestrator as
-  `{:pause, :awaiting_approval, %{decision: ..., issue_id: ..., turn: ..., paused_at: ...}}`,
+  `{:pause, :awaiting_approval, %{decision: ..., issue_id: ..., turn: ...,
+  approvals_granted: ..., paused_at: ...}}`,
   which `Raxol.Symphony.Orchestrator` parks via `park_paused/4`. An
   operator drives the resolution with
-  `Orchestrator.resume_run(pid, issue_id, decision)`; on resume the runner
-  starts a fresh Codex session and re-enters the turn loop (the prior
-  stdio session is gone, so conversational context is not preserved
-  across the pause -- the agent re-decides what to do given the
-  operator's `:approved | :rejected` choice). An `:awaiting_approval`
-  run event is emitted at the moment of the pause and a `:resumed`
-  event when the orchestrator dispatches the resumption.
+  `Orchestrator.resume_run(pid, issue_id, decision)`, passing `:approved`
+  or `:rejected` (the MCP surface sends them as strings; both spellings
+  are accepted).
+
+  A rejection ends the attempt with `{:error, :approval_rejected}`. Nothing
+  can carry the "no" to Codex -- the paused session died with the pause --
+  so re-running would only re-request the same approval.
+
+  An approval starts a FRESH Codex session, and the grant has to survive that
+  respawn or the run cannot move: the new session replays from the top and
+  hits the same approval point, so a grant covering only the dead session
+  would leave the run asking the same question forever. The pause token
+  carries `approvals_granted`, the number of approval points an operator has
+  already cleared for this run. On an approval that count goes up by one and
+  the fresh session answers that many requests before pausing on the next, so
+  each resume clears exactly one more approval point and the run advances.
+
+  The grant is positional, not bound to the action the operator read. A
+  fresh session is free to propose different work, so request #n after the
+  respawn is only usually the request #n that was approved. Closing that
+  gap means holding the paused session open rather than respawning it.
+
+  An `:awaiting_approval` run event is emitted at the moment of the pause
+  and a `:resumed` event when the orchestrator dispatches the resumption.
 
   Tool calls (`item/tool/call`) currently respond with an "unsupported"
   result; dynamic-tool registration lands in a follow-up.
@@ -79,17 +97,42 @@ defmodule Raxol.Symphony.Runners.Codex do
          :ok <- Auth.gate(config.codex, auth) do
       maybe_emit_resumed(parent, issue, resume_value, resume_token)
 
-      do_run(issue, config, %{
+      resume_or_run(issue, config, approval_decision(resume_value), %{
         parent: parent,
         attempt: attempt,
         workspace_path: workspace_path,
         host: host,
         turn: 1,
         max_turns: config.agent.max_turns,
-        auth_env: auth.env
+        auth_env: auth.env,
+        granted_approvals: granted_approvals(resume_token)
       })
     end
   end
+
+  # The MCP surface resumes with the raw JSON value, so the same decision
+  # arrives as a string there and as an atom from the TUI. Anything else
+  # carries no approval: the run starts over and pauses again, which is the
+  # fail-closed answer for a decision we cannot read.
+  defp approval_decision(decision) when decision in [:approved, "approved"], do: :approved
+  defp approval_decision(decision) when decision in [:rejected, "rejected"], do: :rejected
+  defp approval_decision(_), do: :none
+
+  # How many approval points this run has already cleared. A token from
+  # anywhere but our own `pause_for_approval/3` counts as none cleared, so a
+  # malformed one costs a re-ask rather than a blanket grant.
+  defp granted_approvals(%{approvals_granted: n}) when is_integer(n) and n >= 0, do: n
+  defp granted_approvals(_), do: 0
+
+  defp resume_or_run(_issue, _config, :rejected, _ctx), do: {:error, :approval_rejected}
+
+  # The approval the operator just gave is the (n+1)th this run has cleared,
+  # so the fresh session answers that many before it pauses again. Without
+  # the increment every resume would stop at the same request.
+  defp resume_or_run(issue, config, :approved, ctx),
+    do: do_run(issue, config, %{ctx | granted_approvals: ctx.granted_approvals + 1})
+
+  defp resume_or_run(issue, config, :none, ctx), do: do_run(issue, config, ctx)
 
   # Operator-driven resume: announce that the run is starting over with
   # the supplied decision. The orchestrator parks paused runs with the
@@ -114,7 +157,7 @@ defmodule Raxol.Symphony.Runners.Codex do
   end
 
   defp do_run(%Issue{} = issue, %Config{} = config, ctx) do
-    policy = build_policy(config)
+    policy = build_policy(config, ctx.granted_approvals)
     env = Map.get(ctx, :auth_env, [])
 
     case Session.start(ctx.workspace_path, config.codex.command, policy, env, Map.get(ctx, :host)) do
@@ -161,7 +204,10 @@ defmodule Raxol.Symphony.Runners.Codex do
   # Convert a non-auto-approve approval request from `Session.run_turn`
   # into an orchestrator-level pause. The token captures the decision
   # payload so an operator inspecting the snapshot sees exactly what
-  # they are approving (e.g. the proposed shell command or file edit).
+  # they are approving (e.g. the proposed shell command or file edit),
+  # plus `approvals_granted`: the session spends its whole standing grant
+  # before it pauses, so that count is exactly how many approval points
+  # this run has cleared, and the next resume can carry it forward.
   defp pause_for_approval(decision, %Issue{} = issue, ctx) do
     Logger.info(
       "symphony.runners.codex.awaiting_approval issue=#{issue.identifier} " <>
@@ -184,6 +230,7 @@ defmodule Raxol.Symphony.Runners.Codex do
        decision: decision,
        issue_id: issue.id,
        turn: ctx.turn,
+       approvals_granted: ctx.granted_approvals,
        paused_at: DateTime.utc_now()
      }}
   end
@@ -263,7 +310,7 @@ defmodule Raxol.Symphony.Runners.Codex do
     end
   end
 
-  defp build_policy(%Config{codex: codex}) do
+  defp build_policy(%Config{codex: codex}, granted_approvals) do
     approval_policy = codex.approval_policy || "never"
 
     %{
@@ -273,6 +320,7 @@ defmodule Raxol.Symphony.Runners.Codex do
       read_timeout_ms: codex.read_timeout_ms,
       turn_timeout_ms: codex.turn_timeout_ms,
       auto_approve?: approval_policy == "never",
+      granted_approvals: granted_approvals,
       dynamic_tools: []
     }
   end
