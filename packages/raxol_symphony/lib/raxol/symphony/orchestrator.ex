@@ -469,10 +469,29 @@ defmodule Raxol.Symphony.Orchestrator do
         dispatch_issue_on_host(state, issue, attempt, host)
 
       # Every configured SSH host is busy (one-worker-lifetime-per-host).
-      # Leave the issue unclaimed; the next tick re-dispatches it once a
-      # host frees. Nothing was reserved, so there is nothing to release.
+      # Nothing was reserved, so there is nothing to release.
       :none_free ->
-        state
+        defer_on_host_exhaustion(state, issue, attempt)
+    end
+  end
+
+  # A fresh dispatch out of `dispatch_candidates/1` holds no claim, so dropping
+  # it is safe: the next tick re-dispatches it once a host frees. A retry
+  # arrives here already in `claimed` and with its `retry_attempts` entry
+  # deleted, so dropping it strands the issue -- claimed, but in no running,
+  # batch or paused map and with no timer, which `Candidate.eligible/4` then
+  # skips forever and no release site can reach.
+  defp defer_on_host_exhaustion(%State{} = state, %Issue{} = issue, attempt) do
+    if MapSet.member?(state.claimed, issue.id) do
+      schedule_retry(
+        state,
+        issue,
+        attempt,
+        state.config.polling.interval_ms,
+        :host_pool_exhausted
+      )
+    else
+      state
     end
   end
 

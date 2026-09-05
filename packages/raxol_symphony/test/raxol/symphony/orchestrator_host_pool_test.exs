@@ -24,7 +24,7 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
     :ok
   end
 
-  defp config(ssh_hosts) do
+  defp config(ssh_hosts, max_retry_backoff_ms \\ 60_000) do
     Config.from_workflow(%{
       config: %{
         tracker: %{
@@ -33,7 +33,7 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
           terminal_states: ["Done", "Cancelled"]
         },
         polling: %{interval_ms: 60_000},
-        agent: %{max_concurrent_agents: 10, max_retry_backoff_ms: 60_000},
+        agent: %{max_concurrent_agents: 10, max_retry_backoff_ms: max_retry_backoff_ms},
         codex: %{stall_timeout_ms: 0},
         runner: %{kind: "noop"},
         worker: %{ssh_hosts: ssh_hosts}
@@ -169,6 +169,36 @@ defmodule Raxol.Symphony.OrchestratorHostPoolTest do
 
     :ok = Orchestrator.stop_run(pid, "a")
     assert Orchestrator.snapshot(pid).hosts == %{total: 1, free: 1, busy: 0}
+  end
+
+  test "a retry that fires with every host busy keeps its timer instead of stranding the claim" do
+    Memory.put_issues([issue("a", "HP-1"), issue("b", "HP-2")])
+    Noop.Director.set("HP-1", {:fail_after, 0, :boom})
+    Noop.Director.set("HP-2", :stall)
+
+    pid = start_orchestrator(config(["ci@build-1"], 400))
+    :ok = Orchestrator.tick_now(pid)
+
+    # HP-1's worker fails and frees the only host. Its failure retry holds the
+    # claim while it waits out the backoff.
+    wait_until(pid, fn s -> s.counts.retrying == 1 end)
+
+    # HP-2 takes the freed host, so HP-1's retry fires with the pool exhausted.
+    :ok = Orchestrator.tick_now(pid)
+    assert Orchestrator.snapshot(pid).hosts == %{total: 1, free: 0, busy: 1}
+
+    wait_until(pid, fn _snap ->
+      state = :sys.get_state(pid)
+
+      not Map.has_key?(state.retry_attempts, "a") or
+        get_in(state.retry_attempts, ["a", :error]) == :host_pool_exhausted
+    end)
+
+    state = :sys.get_state(pid)
+    assert MapSet.member?(state.claimed, "a")
+
+    assert Map.has_key?(state.retry_attempts, "a"),
+           "HP-1 is claimed with no run, no pause and no retry timer: nothing can re-dispatch it"
   end
 
   defp wait_until(pid, fun, timeout_ms \\ 1_000) do
