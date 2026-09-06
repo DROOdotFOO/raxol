@@ -81,33 +81,56 @@ defmodule Raxol.Agent.LlmPrices do
 
   def rates(_backend, _model), do: :unknown
 
+  @typedoc """
+  Which step of the resolution order produced a cost. Surfacing it is what
+  makes the order observable: a provider that silently stops reporting cost
+  degrades from `:reported` to a table, and that degradation is how a 20x
+  mispricing hides.
+  """
+  @type source :: :reported | :scoped_table | :flat_table
+
   @doc """
-  The USD cost of one turn, `{:ok, cost}` or `:unknown`.
+  The USD cost of one turn and the source that priced it,
+  `{:ok, cost, source}` or `:unknown`.
 
   Takes the provider-raw usage map, before `BenchmarkProfile.add_usage/2`
   collapses it to two fields, and an injectable clock so the module stays
-  pure. Resolution order, highest first: a cost the provider reported in USD,
-  the backend-scoped table, then `rates/2` with the cache-hit rate equal to
-  the cache-miss rate. `RAXOL_COST_PER_MTOK_IN/OUT` outrank all three and are
-  applied by the caller, which is the only party that reads the environment.
+  pure. Resolution order, highest first: a cost the provider reported in USD
+  (`:reported`), the backend-scoped table (`:scoped_table`), then `rates/2`
+  with the cache-hit rate equal to the cache-miss rate (`:flat_table`).
+  `RAXOL_COST_PER_MTOK_IN/OUT` outrank all three and are applied by the
+  caller, which is the only party that reads the environment.
 
   A usage map carrying a cache split is priced exactly: hit tokens at the hit
   rate, miss tokens at the miss rate, never a blend. One without a split is
   priced at the conservative worst case -- peak rates, every input token a
   cache miss -- because a spend gate that guesses must only ever err upward.
   """
-  @spec turn_cost_usd(atom() | nil, String.t() | nil, map(), DateTime.t()) ::
-          {:ok, float()} | :unknown
-  def turn_cost_usd(backend, model, usage, now \\ DateTime.utc_now())
+  @spec turn_cost(atom() | nil, String.t() | nil, map(), DateTime.t()) ::
+          {:ok, float(), source()} | :unknown
+  def turn_cost(backend, model, usage, now \\ DateTime.utc_now())
 
-  def turn_cost_usd(backend, model, usage, now) when is_map(usage) do
+  def turn_cost(backend, model, usage, now) when is_map(usage) do
     case reported_cost_usd(usage) do
-      {:ok, cost} -> {:ok, cost}
-      :unknown -> table_cost_usd(backend, model, usage, now)
+      {:ok, cost} -> {:ok, cost, :reported}
+      :unknown -> table_cost(backend, model, usage, now)
     end
   end
 
-  def turn_cost_usd(_backend, _model, _usage, _now), do: :unknown
+  def turn_cost(_backend, _model, _usage, _now), do: :unknown
+
+  @doc """
+  `turn_cost/4` without the source: `{:ok, cost}` or `:unknown`. Kept for
+  callers that only need a number.
+  """
+  @spec turn_cost_usd(atom() | nil, String.t() | nil, map(), DateTime.t()) ::
+          {:ok, float()} | :unknown
+  def turn_cost_usd(backend, model, usage, now \\ DateTime.utc_now()) do
+    case turn_cost(backend, model, usage, now) do
+      {:ok, cost, _source} -> {:ok, cost}
+      :unknown -> :unknown
+    end
+  end
 
   defp match_prefix(nil), do: :unknown
 
@@ -173,24 +196,24 @@ defmodule Raxol.Agent.LlmPrices do
     end
   end
 
-  defp table_cost_usd(backend, model, usage, now) do
+  defp table_cost(backend, model, usage, now) do
     case scoped_row(backend, model) do
       {_backend, _prefix, hit, miss, out} ->
         tokens = split_tokens(usage)
         tier = tier(tokens, now)
 
-        {:ok, price(tokens, {at(hit, tier), at(miss, tier), at(out, tier)})}
+        {:ok, price(tokens, {at(hit, tier), at(miss, tier), at(out, tier)}), :scoped_table}
 
       nil ->
-        flat_cost_usd(backend, model, usage)
+        flat_cost(backend, model, usage)
     end
   end
 
   # The flat table carries neither dimension, so a hit costs what a miss
   # costs and the clock is irrelevant. Every existing caller keeps its number.
-  defp flat_cost_usd(backend, model, usage) do
+  defp flat_cost(backend, model, usage) do
     case rates(backend, model) do
-      {:ok, {rin, rout}} -> {:ok, price(split_tokens(usage), {rin, rin, rout})}
+      {:ok, {rin, rout}} -> {:ok, price(split_tokens(usage), {rin, rin, rout}), :flat_table}
       :unknown -> :unknown
     end
   end

@@ -285,6 +285,117 @@ defmodule Raxol.Agent.PolicyApplierTest do
       assert_receive {:tel, [:raxol, :agent, :policy, :cache_hit], _, %{key: :only_key}}
     end
 
+    test "the wrapped argument never reaches metadata; a digest joins the events",
+         %{table: table} do
+      # At the one production call site the argument is the LLM turn payload,
+      # i.e. the prompt, and ThreadLogRouter persists every metadata key. The
+      # marker below must not appear anywhere in what is emitted.
+      params = %{messages: [%{role: :user, content: "SECRET-PROMPT-7f3a"}]}
+      policy = Cache.ets(ttl_ms: 60_000, key_fn: fn _ -> :k end, table: table)
+
+      PolicyApplier.apply([policy], fn _ -> {:ok, :v} end, params)
+
+      assert_receive {:tel, [:raxol, :agent, :policy, :cache_miss], _, miss}
+      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _, applied}
+
+      for metadata <- [miss, applied] do
+        refute Map.has_key?(metadata, :params)
+        refute inspect(metadata) =~ "SECRET-PROMPT"
+        assert metadata.params_digest =~ ~r/\A[0-9a-f]{16}\z/
+      end
+
+      assert miss.params_digest == applied.params_digest
+
+      # A different argument is a different digest, or the join is useless.
+      PolicyApplier.apply([], fn _ -> {:ok, :v} end, %{messages: []})
+      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _, other}
+      refute other.params_digest == applied.params_digest
+    end
+
+    test "key and reason are bounded; the digest rides on every event of one call",
+         %{table: table} do
+      # `key_fn` is user code and may return the argument itself; `reason` is
+      # whatever the wrapped operation returned. Neither may carry content.
+      content = "SECRET-PROMPT-7f3a " <> String.duplicate("x", 64)
+      cache = Cache.ets(ttl_ms: 60_000, key_fn: fn p -> p end, table: table)
+      retry = Retry.exponential(max_attempts: 2, base_ms: 0, on: :any)
+
+      PolicyApplier.apply(
+        [cache, retry],
+        fn _ -> {:error, {:http_error, 500, content}} end,
+        content
+      )
+
+      assert_receive {:tel, [:raxol, :agent, :policy, :cache_miss], _, miss}
+      assert_receive {:tel, [:raxol, :agent, :policy, :retry_attempt], _, attempt}
+      assert_receive {:tel, [:raxol, :agent, :policy, :retry_exhausted], _, exhausted}
+      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _, applied}
+
+      assert miss.key == {:redacted, :binary, byte_size(content)}
+      assert attempt.reason == {:http_error, 500, {:redacted, :binary, byte_size(content)}}
+      assert exhausted.reason == attempt.reason
+
+      digests = Enum.map([miss, attempt, exhausted, applied], & &1.params_digest)
+      assert [_] = Enum.uniq(digests)
+
+      for metadata <- [miss, attempt, exhausted, applied] do
+        refute inspect(metadata) =~ "SECRET-PROMPT"
+      end
+    end
+
+    test "caller metadata: rides on every event and cannot relabel the event's own keys",
+         %{table: table} do
+      policy = Cache.ets(ttl_ms: 60_000, key_fn: fn _ -> :k end, table: table)
+      context = %{turn: 3, issue_id: "issue-9", policy_kind: :spoofed}
+
+      PolicyApplier.apply([policy], fn _ -> {:ok, :v} end, nil, metadata: context)
+
+      assert_receive {:tel, [:raxol, :agent, :policy, :cache_miss], _, miss}
+      assert_receive {:tel, [:raxol, :agent, :policy, :applied], _, applied}
+
+      assert %{turn: 3, issue_id: "issue-9", policy_kind: :cache} = miss
+      assert %{turn: 3, issue_id: "issue-9", policy_kinds: ["Cache"]} = applied
+
+      assert_raise ArgumentError, ~r/must be a map/, fn ->
+        PolicyApplier.apply([], fn _ -> {:ok, :v} end, nil, metadata: [turn: 3])
+      end
+    end
+
+    test "caller metadata: refuses anything that is not an identifier, without echoing it" do
+      never = fn _ -> flunk("the operation must not run when metadata is refused") end
+      secret = "SECRET-PROMPT-7f3a " <> String.duplicate("x", 64)
+
+      for {label, context} <- [
+            {"a long binary", %{prompt: secret}},
+            {"a map", %{payload: %{content: secret}}},
+            {"a list", %{messages: [secret]}},
+            {"a struct", %{policy: Timeout.new(1)}},
+            {"a non-atom key", %{"turn" => 1}}
+          ] do
+        error =
+          assert_raise ArgumentError, fn ->
+            PolicyApplier.apply([], never, nil, metadata: context)
+          end
+
+        message = Exception.message(error)
+        refute message =~ "SECRET-PROMPT", "#{label}: the refusal echoed the content"
+        assert message =~ "correlation identifiers" or message =~ "keys must be atoms"
+      end
+
+      # Every shape this repo mints as an identifier is accepted, including a
+      # binary of exactly the cap.
+      accepted = %{
+        session_id: "sess-1725580800-1",
+        trace_id: String.duplicate("a", 64),
+        turn: 3,
+        ratio: 0.5,
+        flag: true,
+        none: nil
+      }
+
+      assert {:ok, :v} = PolicyApplier.apply([], fn _ -> {:ok, :v} end, nil, metadata: accepted)
+    end
+
     test "timeout fires when fun overruns" do
       policy = Timeout.new(20)
 

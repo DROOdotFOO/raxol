@@ -142,6 +142,20 @@ defmodule Raxol.Agent.SandboxHookTest do
                       }}
     end
 
+    test "the emitted reason names the program, never the arguments" do
+      # The command line is a tool argument. The caller still receives it in
+      # `{:deny, reason}`; the wire carries the program and a digest.
+      command = "curl -H 'Authorization: Bearer SECRET-TOKEN-7f3a' https://x.test"
+
+      assert {:deny, {:shell_denied, _, ^command}} =
+               SandboxHook.pre_execute(Directive.shell(command), ctx(MixedAgent))
+
+      assert_receive {:tel, [:raxol, :agent, :sandbox, :denied], metadata}
+      assert {:shell_denied, _mode, "curl"} = metadata.reason
+      assert metadata.command_digest =~ ~r/\A[0-9a-f]{16}\z/
+      refute inspect(metadata) =~ "SECRET-TOKEN"
+    end
+
     test "does not fire on allow" do
       SandboxHook.pre_execute(Directive.shell("ls"), ctx(MixedAgent))
       refute_received {:tel, [:raxol, :agent, :sandbox, :denied], _}

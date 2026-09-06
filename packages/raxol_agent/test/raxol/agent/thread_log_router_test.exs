@@ -115,6 +115,38 @@ defmodule Raxol.Agent.ThreadLogRouterTest do
       assert {:policy_result, :cache, :hit} in kinds
     end
 
+    test "nothing persisted carries the wrapped argument", %{
+      handler_id: handler_id,
+      adapter: adapter,
+      cache_table: cache_table
+    } do
+      # The router mirrors the whole telemetry metadata into the durable
+      # entry, so the only defence is at the emitter. This holds the sink to
+      # it: a prompt-shaped argument must not be findable in any persisted
+      # payload or metadata, while the digest that replaces it is.
+      :ok = ThreadLogRouter.attach(handler_id, adapter, "thr-1")
+
+      policy =
+        Cache.ets(ttl_ms: 60_000, key_fn: fn _ -> :prompt_key end, table: cache_table)
+
+      params = %{messages: [%{role: :user, content: "SECRET-PROMPT-7f3a"}]}
+      PolicyApplier.apply([policy], fn _ -> {:ok, :value} end, params)
+
+      {:ok, events} =
+        ThreadLog.list(
+          {EtsLog, %{table: adapter |> elem(1) |> Map.get(:table)}},
+          "thr-1"
+        )
+
+      policy_events = Enum.filter(events, &(&1.kind == :policy_result))
+      assert length(policy_events) == 2
+
+      for event <- policy_events do
+        refute inspect(event) =~ "SECRET-PROMPT"
+        assert event.payload.params_digest =~ ~r/\A[0-9a-f]{16}\z/
+      end
+    end
+
     test "Timeout event is captured", %{
       handler_id: handler_id,
       adapter: adapter
@@ -203,6 +235,119 @@ defmodule Raxol.Agent.ThreadLogRouterTest do
       assert event.kind == :sandbox_deny
       assert event.payload.action == :shell
       assert event.payload.reason == {:shell_denied, :deny_all, "rm"}
+    end
+
+    test "a payload from an emitter that forgot to bound is bounded here", %{
+      handler_id: handler_id,
+      adapter: adapter
+    } do
+      :ok = ThreadLogRouter.attach(handler_id, adapter, "thr-1")
+      command = "curl -H 'Authorization: Bearer SECRET-TOKEN-7f3a' " <> String.duplicate("x", 64)
+
+      :telemetry.execute(
+        [:raxol, :agent, :sandbox, :denied],
+        %{},
+        %{action: :shell, reason: {:shell_denied, :deny_all, command}, command_digest: "abcd"}
+      )
+
+      assert [event] = persisted(adapter, "thr-1")
+
+      assert event.payload.reason ==
+               {:shell_denied, :deny_all, {:redacted, :binary, byte_size(command)}}
+
+      assert event.payload.command_digest == "abcd"
+      refute inspect(event) =~ "SECRET-TOKEN"
+    end
+  end
+
+  defp persisted(adapter, thread_id) do
+    {:ok, events} =
+      ThreadLog.list({EtsLog, %{table: adapter |> elem(1) |> Map.get(:table)}}, thread_id)
+
+    events
+  end
+
+  describe "persisted metadata" do
+    test "carries the core and host-named correlation keys, and nothing else", %{
+      handler_id: handler_id,
+      adapter: adapter,
+      cache_table: cache_table
+    } do
+      :ok =
+        ThreadLogRouter.attach(handler_id, adapter, "thr-1", metadata_keys: [:turn, :issue_id])
+
+      policy = Cache.ets(ttl_ms: 60_000, key_fn: fn _ -> :k end, table: cache_table)
+
+      PolicyApplier.apply([policy], fn _ -> {:ok, :v} end, %{prompt: "SECRET-PROMPT-7f3a"},
+        metadata: %{session_id: "sess-1", turn: 3, issue_id: "issue-9", trace_id: "abc"}
+      )
+
+      events = persisted(adapter, "thr-1")
+      assert length(events) == 2
+
+      for event <- events do
+        # The event's own fields (policy_kind, key, params_digest) live in the
+        # payload; the metadata is identifiers only.
+        assert event.metadata == %{
+                 session_id: "sess-1",
+                 turn: 3,
+                 issue_id: "issue-9",
+                 trace_id: "abc"
+               }
+
+        refute inspect(event) =~ "SECRET-PROMPT"
+      end
+    end
+
+    test "a key the host did not name is dropped even when the emitter sends it", %{
+      handler_id: handler_id,
+      adapter: adapter
+    } do
+      :ok = ThreadLogRouter.attach(handler_id, adapter, "thr-1")
+
+      PolicyApplier.apply([], fn _ -> {:ok, :v} end, nil,
+        metadata: %{session_id: "sess-1", turn: 3, issue_id: "issue-9"}
+      )
+
+      assert [event] = persisted(adapter, "thr-1")
+      assert event.metadata == %{session_id: "sess-1"}
+    end
+
+    test "a listed key with a non-identifier value is dropped and the handler survives", %{
+      handler_id: handler_id,
+      adapter: adapter
+    } do
+      # An emitter that violates the contract (here a raw execute, since
+      # PolicyApplier refuses such values at the call site) must not be able
+      # to write content through a listed key -- and must not be able to
+      # detach the audit handler by making it raise.
+      :ok = ThreadLogRouter.attach(handler_id, adapter, "thr-1")
+
+      violating = %{
+        session_id: %{nested: "SECRET-PROMPT-7f3a"},
+        turn_id: String.duplicate("x", 65),
+        trace_id: "abc",
+        policy_kinds: [],
+        outcome: :ok,
+        params_digest: "0000000000000000"
+      }
+
+      :telemetry.execute([:raxol, :agent, :policy, :applied], %{}, violating)
+      :telemetry.execute([:raxol, :agent, :policy, :applied], %{}, %{turn_id: "t2", outcome: :ok})
+
+      assert [first, second] = persisted(adapter, "thr-1")
+      assert first.metadata == %{trace_id: "abc"}
+      assert second.metadata == %{turn_id: "t2"}
+      refute inspect(first) =~ "SECRET-PROMPT"
+    end
+
+    test "attach/4 refuses metadata_keys that are not atoms", %{
+      handler_id: handler_id,
+      adapter: adapter
+    } do
+      assert_raise ArgumentError, ~r/must be a list of atoms/, fn ->
+        ThreadLogRouter.attach(handler_id, adapter, "thr-1", metadata_keys: ["turn"])
+      end
     end
   end
 

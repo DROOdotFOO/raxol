@@ -69,6 +69,35 @@ defmodule Raxol.Agent.Telemetry do
     # the criterion puts outside our control.
     [:raxol, :agent, :acp_turn_runner, :journal_failed] => :operational,
 
+    # OPERATIONAL. `Code.App` stopped a running turn because the wired ledger
+    # could not answer: the process is down or hung. A host dependency being
+    # down, not a defect; split from `:over_limit` because the remedy is
+    # infrastructure, not a policy decision (ADR-0036, rule 1).
+    [:raxol, :agent, :budget, :halt, :ledger_unreachable] => :operational,
+
+    # OPERATIONAL. `Code.App` stopped a running turn because the ledger and
+    # policy refused further spend: `:per_request`, `:session`, `:lifetime`,
+    # or the operator's `:frozen` kill switch. Every reason is a user's policy
+    # decision; the gate firing is the gate working (ADR-0036).
+    [:raxol, :agent, :budget, :halt, :over_limit] => :operational,
+
+    # OPERATIONAL. The fail-closed halt of ADR-0035: a model the tables cannot
+    # price burned tokens under a wired ledger and policy. The model name is
+    # the user's choice and the missing price is a table gap, not a defect.
+    # `app_metering_test.exs` drives it on purpose.
+    [:raxol, :agent, :budget, :halt, :unpriced] => :operational,
+
+    # OPERATIONAL. One per metered provider call whose cost resolved. The
+    # happy path of the money path; `source:` says which resolution step
+    # priced it, which is the whole point (ADR-0036).
+    [:raxol, :agent, :cost, :priced] => :operational,
+
+    # OPERATIONAL. A provider call burned tokens and no step could price it:
+    # a user-chosen model absent from every table, a peer that reported no
+    # cost, or a backend that reports no usage. Fires whether or not the halt
+    # is armed, so the single-user configuration can see the hole too.
+    [:raxol, :agent, :cost, :unpriced] => :operational,
+
     # OPERATIONAL, despite looking like a violation. `DoneGate` runs in
     # observe-only mode and is fully fail-closed on v0 producer journals (no
     # tool result can green-light a done yet), so EVERY tool-less turn fires
@@ -149,4 +178,145 @@ defmodule Raxol.Agent.Telemetry do
   """
   @spec invariant_events() :: [[atom()]]
   def invariant_events, do: @invariant_events
+
+  # Long enough for every identifier this repo mints -- a session key is
+  # `sess-<epoch>-<int>`, a trace id is 16 hex characters, a UUID is 36 and a
+  # SHA-256 hex digest is exactly 64 -- and short enough that no prompt, tool
+  # argument or file body fits.
+  @max_identifier_bytes 64
+
+  @doc """
+  The largest binary `identifier?/1` accepts, in bytes.
+  """
+  @spec max_identifier_bytes() :: pos_integer()
+  def max_identifier_bytes, do: @max_identifier_bytes
+
+  @doc """
+  Whether `value` is shaped like a correlation identifier: an atom, a number,
+  or a binary of at most `max_identifier_bytes/0` bytes.
+
+  This is the metadata contract's one enforceable rule (ADR-0036). Metadata
+  is context, and two consumers persist it verbatim -- `Raxol.Agent.ThreadLogRouter`
+  into a durable audit log, and any host's log or metrics pipeline -- so a
+  value that is not an identifier is a value that must not be there. Maps,
+  lists, tuples and structs are how content arrives; a binary longer than an
+  identifier is content. `Raxol.Agent.PolicyApplier.apply/4` refuses caller
+  metadata that fails this, and the router drops any mirrored key whose value
+  fails it, so the audit log does not rest on every emitter being careful.
+  """
+  @spec identifier?(term()) :: boolean()
+  def identifier?(value) when is_atom(value) or is_number(value), do: true
+  def identifier?(value) when is_binary(value), do: byte_size(value) <= @max_identifier_bytes
+  def identifier?(_value), do: false
+
+  # The digest key lives for one VM run and is never persisted, so a digest
+  # is a correlation token inside a run and nothing more: two runs digest the
+  # same argument differently, on purpose. Generated lazily; two processes
+  # racing the first call may briefly hold different keys, which costs one
+  # missed join in the first microseconds of a VM and leaks nothing.
+  @digest_key {__MODULE__, :digest_key}
+
+  @doc """
+  A 16-hex-character correlation token for `term`: the first 8 bytes of an
+  HMAC-SHA256 over the term's external format, keyed with a random key that
+  is generated once per VM run and never leaves memory.
+
+  Same term, same run: same token, so the events of one operation can be
+  joined. The key is what makes it safe to persist: an unkeyed hash of a
+  low-entropy argument (a known prompt template with a short secret in it)
+  can be confirmed offline by anyone holding the audit log and a guess, and
+  a keyed one cannot. The cost of that property is that tokens do not join
+  across runs or across nodes, and a term holding a pid, a reference or a
+  fun encodes differently each time it is built; both are accepted.
+
+  The whole term is serialized, so this is O(size) with one copy. Measured
+  on Apple M1 (ADR-0036): about 3 us for a 1 KB term, 90 us at 100 KB and
+  1.1 ms at 1 MB, of which the key costs roughly 40% over an unkeyed hash.
+  Call it once per operation, not once per event.
+  """
+  @spec digest(term()) :: String.t()
+  def digest(term) do
+    :hmac
+    |> :crypto.mac(:sha256, digest_key(), :erlang.term_to_binary(term))
+    |> binary_part(0, 8)
+    |> Base.encode16(case: :lower)
+  end
+
+  defp digest_key do
+    case :persistent_term.get(@digest_key, nil) do
+      nil ->
+        :persistent_term.put(@digest_key, :crypto.strong_rand_bytes(32))
+        :persistent_term.get(@digest_key)
+
+      key ->
+        key
+    end
+  end
+
+  # Wide enough to keep the shape of any error reason this repo builds
+  # (`{:shell_denied, mode, program}`, `{:http_error, status, _}`), narrow
+  # enough that a payload map or a message list cannot ride through.
+  @max_bound_depth 3
+  @max_bound_elements 8
+
+  @doc """
+  A copy of `term` that is safe to put in event metadata.
+
+  Identifiers (`identifier?/1`) pass through. Tuples, lists and maps are
+  walked to a depth of #{@max_bound_depth} and a width of
+  #{@max_bound_elements}, so the shape of an error reason survives:
+  `{:http_error, 500, body}` still begins `{:http_error, 500, ...}`. Every
+  other leaf is replaced by a tag that names its shape and nothing else --
+  `{:redacted, :binary, 4096}`, `{:redacted, Req.TransportError}`,
+  `{:redacted, :pid}` -- because a long binary is content, a struct is a
+  container for content, and a pid or fun is meaningless once persisted.
+
+  Emitters call this on any value they did not build themselves (an error
+  reason from a wrapped operation, a cache key from a user's `key_fn`), and
+  `Raxol.Agent.ThreadLogRouter` calls it on every payload it persists, so a
+  new emitter that forgets is still bounded at the audit log.
+  """
+  @spec bound(term()) :: term()
+  def bound(term), do: bound(term, @max_bound_depth)
+
+  defp bound(term, _depth) when is_atom(term) or is_number(term), do: term
+
+  defp bound(term, _depth) when is_binary(term) do
+    if byte_size(term) <= @max_identifier_bytes,
+      do: term,
+      else: {:redacted, :binary, byte_size(term)}
+  end
+
+  defp bound(_term, 0), do: {:redacted, :nested}
+  defp bound(%struct{}, _depth), do: {:redacted, struct}
+
+  defp bound(term, depth) when is_map(term) do
+    if map_size(term) > @max_bound_elements do
+      {:redacted, :map, map_size(term)}
+    else
+      Map.new(term, fn {key, value} -> {bound(key, depth - 1), bound(value, depth - 1)} end)
+    end
+  end
+
+  defp bound(term, depth) when is_list(term) do
+    cond do
+      List.improper?(term) -> {:redacted, :improper_list}
+      length(term) > @max_bound_elements -> {:redacted, :list, length(term)}
+      true -> Enum.map(term, &bound(&1, depth - 1))
+    end
+  end
+
+  defp bound(term, depth) when is_tuple(term) do
+    if tuple_size(term) > @max_bound_elements do
+      {:redacted, :tuple, tuple_size(term)}
+    else
+      term |> Tuple.to_list() |> Enum.map(&bound(&1, depth - 1)) |> List.to_tuple()
+    end
+  end
+
+  defp bound(term, _depth) when is_pid(term), do: {:redacted, :pid}
+  defp bound(term, _depth) when is_reference(term), do: {:redacted, :reference}
+  defp bound(term, _depth) when is_function(term), do: {:redacted, :function}
+  defp bound(term, _depth) when is_port(term), do: {:redacted, :port}
+  defp bound(_term, _depth), do: {:redacted, :other}
 end

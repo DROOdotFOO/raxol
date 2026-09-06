@@ -45,8 +45,9 @@ defmodule Raxol.Agent.Policy do
   - `:timeout`
   - `:applied` (final outcome of the composed pipeline)
 
-  Metadata: `policy_kind`, `params`, `attempt` (where applicable),
-  plus any trace context attached upstream.
+  Metadata: `policy_kind`, `params_digest` (a truncated hash of the
+  operation's argument -- the argument itself is never emitted),
+  `attempt` (where applicable), plus any trace context attached upstream.
   """
 
   alias __MODULE__.{Cache, Retry, Timeout}

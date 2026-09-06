@@ -563,7 +563,8 @@ defmodule Raxol.Agent.Code.App do
        model,
        Map.get(info, :usage) || %{},
        Map.get(info, :model) || current_model(model),
-       :llm_subagent
+       :llm_subagent,
+       current_turn_id(model)
      ), []}
   end
 
@@ -1035,32 +1036,90 @@ defmodule Raxol.Agent.Code.App do
   # price table) is recorded against the shared ledger as it happens, so
   # LLM spend and payment spend draw on one budget. Fire-and-forget: a
   # ledger problem never blocks the fold.
-  defp record_turn_cost(model, %{type: :turn_completed, payload: payload}) do
+  defp record_turn_cost(model, %{type: :turn_completed, payload: payload} = event) do
     usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
-    meter_usage(model, usage, billed_model(model, payload), :llm_turn)
+    meter_usage(model, usage, billed_model(model, payload), :llm_turn, event.turn_id)
   end
 
   defp record_turn_cost(model, _event), do: model
 
-  defp meter_usage(model, usage, billed, type) do
-    cost = turn_cost_usd(model, usage, billed)
+  defp meter_usage(model, usage, billed, kind, turn_id) do
+    {cost, source} = turn_cost(model, usage, billed)
+    tokens = token_counts(usage)
 
     Raxol.Agent.Code.CostLedger.record(
       model.ledger,
       model.ledger_agent_id,
       cost,
       %{
-        type: type,
+        type: kind,
         currency: "USD",
         session: model.session_key,
         model: billed
       }
     )
 
+    turn = %{kind: kind, turn_id: turn_id, model: billed, source: source}
+    emit_cost(model, tokens, cost, turn)
+
     model
-    |> flag_unpriced(usage, billed, cost)
-    |> enforce_budget()
+    |> flag_unpriced(tokens, billed, cost)
+    |> enforce_budget(turn)
   end
+
+  # One event per metered provider call, and one per condition: `:priced`
+  # carries the resolution source (ADR-0035 order), which is what makes a
+  # provider silently degrading from a reported cost to a flat table visible;
+  # `:unpriced` is exactly flag_unpriced/4's predicate, fired whether or not a
+  # ledger and policy are wired, so the hole is observable in the single-user
+  # configuration where the halt is not. A call with no billed tokens and no
+  # price (a local backend reporting `usage: %{}`) says nothing and emits
+  # nothing. Identifiers are correlation attributes, not metric labels: only
+  # `backend`, `source` and `kind` are bounded.
+  defp emit_cost(model, tokens, cost, turn) do
+    metadata = cost_metadata(model, turn)
+
+    cond do
+      cost == 0.0 and billed?(tokens) ->
+        :telemetry.execute(
+          [:raxol, :agent, :cost, :unpriced],
+          tokens,
+          Map.put(metadata, :armed?, gate_armed?(model))
+        )
+
+      turn.source != :unknown ->
+        :telemetry.execute(
+          [:raxol, :agent, :cost, :priced],
+          Map.put(tokens, :cost_usd, cost),
+          Map.put(metadata, :ledger?, model.ledger != nil)
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp cost_metadata(model, turn) do
+    %{
+      session_id: model.session_key,
+      turn_id: turn.turn_id,
+      kind: turn.kind,
+      backend: model.executor && model.executor.backend,
+      model: turn.model,
+      source: turn.source
+    }
+  end
+
+  defp gate_armed?(model), do: model.ledger != nil and model.spending_policy != nil
+
+  # A nested round is metered while its parent turn runs, and it belongs to
+  # that turn: a consumer summing cost by turn_id must see it. The running
+  # turn's id is on the last folded event, because Contract.pump emits
+  # turn_started before any tool -- and so any sub-agent -- can start.
+  defp current_turn_id(%{running?: true, events: [_ | _] = events}),
+    do: List.last(events).turn_id
+
+  defp current_turn_id(_model), do: nil
 
   # Fail closed. A budget is only a budget if every paid round can be priced:
   # an unpriced model bills real tokens while the ledger records $0.00, so the
@@ -1069,42 +1128,68 @@ defmodule Raxol.Agent.Code.App do
   # -- so this halts the NEXT one rather than pretending to prevent the first.
   # With no ledger AND policy wired nothing changes: local single-user sessions
   # keep today's best-effort estimate.
-  defp flag_unpriced(%{ledger: nil} = model, _usage, _billed, _cost), do: model
+  defp flag_unpriced(%{ledger: nil} = model, _tokens, _billed, _cost), do: model
 
-  defp flag_unpriced(%{spending_policy: nil} = model, _usage, _billed, _cost),
+  defp flag_unpriced(%{spending_policy: nil} = model, _tokens, _billed, _cost),
     do: model
 
-  defp flag_unpriced(model, usage, billed, cost) do
-    if cost == 0.0 and billed_tokens?(usage) do
+  defp flag_unpriced(model, tokens, billed, cost) do
+    if cost == 0.0 and billed?(tokens) do
       %{model | unpriced_model: billed || "(unnamed)"}
     else
       model
     end
   end
 
-  defp billed_tokens?(usage) do
-    acc =
-      Raxol.Agent.BenchmarkProfile.add_usage(
-        %{input_tokens: 0, output_tokens: 0},
-        usage
-      )
-
-    acc.input_tokens > 0 or acc.output_tokens > 0
+  defp token_counts(usage) do
+    Raxol.Agent.BenchmarkProfile.add_usage(
+      %{input_tokens: 0, output_tokens: 0},
+      usage
+    )
   end
+
+  defp billed?(tokens), do: tokens.input_tokens > 0 or tokens.output_tokens > 0
 
   # The gate at submit refuses the NEXT prompt; this one stops the turn already
   # running, which can otherwise make up to max_iterations more provider calls
-  # after the ledger already knows the cap is blown.
-  defp enforce_budget(%{running?: false} = model), do: model
+  # after the ledger already knows the cap is blown. Each halt is its own
+  # event because the remedies differ: an unpriced halt wants a price, an
+  # over-limit halt wants a policy decision, and an unreachable ledger wants
+  # someone to look at a process, which is nothing like a policy decision.
+  defp enforce_budget(%{running?: false} = model, _turn), do: model
 
-  defp enforce_budget(%{unpriced_model: name} = model) when is_binary(name) do
+  defp enforce_budget(%{unpriced_model: name} = model, turn) when is_binary(name) do
+    :telemetry.execute(
+      [:raxol, :agent, :budget, :halt, :unpriced],
+      %{count: 1},
+      cost_metadata(model, %{turn | model: name})
+    )
+
     halt_turn(model, unpriced_notice(name))
   end
 
-  defp enforce_budget(model) do
+  defp enforce_budget(model, turn) do
     case budget_exhausted(model) do
-      :ok -> model
-      {:over, limit} -> halt_turn(model, budget_notice(limit))
+      :ok ->
+        model
+
+      {:over, :ledger_unreachable} ->
+        :telemetry.execute(
+          [:raxol, :agent, :budget, :halt, :ledger_unreachable],
+          %{count: 1},
+          cost_metadata(model, turn)
+        )
+
+        halt_turn(model, budget_notice(:ledger_unreachable))
+
+      {:over, limit} ->
+        :telemetry.execute(
+          [:raxol, :agent, :budget, :halt, :over_limit],
+          %{count: 1},
+          model |> cost_metadata(turn) |> Map.put(:limit, limit)
+        )
+
+        halt_turn(model, budget_notice(limit))
     end
   end
 
@@ -1132,24 +1217,19 @@ defmodule Raxol.Agent.Code.App do
   # outright: an operator who states a rate is not second-guessed by a table,
   # and they are flat by construction, so a cache model has no business being
   # imposed on them. :unknown must keep returning 0.0, because that zero is
-  # the signal flag_unpriced/4 reads to arm the fail-closed halt above.
-  defp turn_cost_usd(model, usage, billed) do
+  # the signal flag_unpriced/4 reads to arm the fail-closed halt above. The
+  # source rides along so the cost event can say which step priced the turn.
+  defp turn_cost(model, usage, billed) do
     case env_profile() do
       %Raxol.Agent.BenchmarkProfile{} = profile ->
-        acc =
-          Raxol.Agent.BenchmarkProfile.add_usage(
-            %{input_tokens: 0, output_tokens: 0},
-            usage
-          )
-
-        Raxol.Agent.BenchmarkProfile.cost_usd(profile, acc)
+        {Raxol.Agent.BenchmarkProfile.cost_usd(profile, token_counts(usage)), :env}
 
       nil ->
         backend = model.executor && model.executor.backend
 
-        case Raxol.Agent.LlmPrices.turn_cost_usd(backend, billed, usage) do
-          {:ok, cost} -> cost
-          :unknown -> 0.0
+        case Raxol.Agent.LlmPrices.turn_cost(backend, billed, usage) do
+          {:ok, cost, source} -> {cost, source}
+          :unknown -> {0.0, :unknown}
         end
     end
   end

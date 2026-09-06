@@ -260,6 +260,106 @@ defmodule Raxol.Payments.CodeLlmLedgerTest do
     assert_receive {:DOWN, ^ref, :process, ^worker, _}, 2_000
   end
 
+  # The over-limit halt's telemetry can only be proven here: in raxol_agent's
+  # own suite the Ledger module is absent, so `CostLedger.check/3` never
+  # returns `{:over, _}` and the event site is unreachable (ADR-0036). The
+  # handler is a real `:telemetry.attach_many/4`; it runs in the emitting
+  # process, which is this test process, so the pid travels as config.
+  @doc false
+  def forward(event, measurements, metadata, pid),
+    do: send(pid, {:telemetry, event, measurements, metadata})
+
+  test "an over-limit halt emits its event with the ledger's limit" do
+    id = {__MODULE__, :over_limit}
+
+    :ok =
+      :telemetry.attach_many(
+        id,
+        [[:raxol, :agent, :cost, :priced], [:raxol, :agent, :budget, :halt, :over_limit]],
+        &__MODULE__.forward/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    ledger = start_ledger()
+    model = model_with(ledger, policy_capped("1.0"), backend: :openai, model: "gpt-4o")
+    {model, _cmds} = submit(model, "go")
+
+    model =
+      fold(
+        model,
+        turn_completed(%{input_tokens: 1_000_000, output_tokens: 0}, %{
+          final: false,
+          model: "gpt-4o"
+        })
+      )
+
+    refute model.running?
+
+    # The call was priced and recorded against a wired ledger...
+    assert_received {:telemetry, [:raxol, :agent, :cost, :priced], %{cost_usd: cost},
+                     %{source: :flat_table, ledger?: true, turn_id: "t1"}}
+
+    assert_in_delta cost, 2.5, 1.0e-9
+
+    # ...and the ledger's own limit type rides on the halt.
+    assert_received {:telemetry, [:raxol, :agent, :budget, :halt, :over_limit], %{count: 1},
+                     metadata}
+
+    assert metadata.limit == :session
+    assert metadata.session_id == model.session_key
+    assert metadata.turn_id == "t1"
+    assert metadata.backend == :openai
+    assert metadata.model == "gpt-4o"
+  end
+
+  test "a ledger that dies mid-turn halts with its own event, not an over-limit one" do
+    # The remedy is a process, not a policy, so it is not folded into
+    # :over_limit under a `limit` discriminator (ADR-0036, rule 1).
+    id = {__MODULE__, :ledger_unreachable}
+
+    :ok =
+      :telemetry.attach_many(
+        id,
+        [
+          [:raxol, :agent, :budget, :halt, :over_limit],
+          [:raxol, :agent, :budget, :halt, :ledger_unreachable]
+        ],
+        &__MODULE__.forward/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    ledger = start_ledger()
+    model = model_with(ledger, policy_capped("1000"), backend: :openai, model: "gpt-4o")
+    {model, _cmds} = submit(model, "go")
+    assert model.running?
+
+    GenServer.stop(ledger)
+
+    model =
+      fold(
+        model,
+        turn_completed(%{input_tokens: 1_000, output_tokens: 0}, %{
+          final: false,
+          model: "gpt-4o"
+        })
+      )
+
+    refute model.running?
+    assert model.status_line =~ "unreachable"
+
+    assert_received {:telemetry, [:raxol, :agent, :budget, :halt, :ledger_unreachable],
+                     %{count: 1}, metadata}
+
+    assert metadata.session_id == model.session_key
+    assert metadata.turn_id == "t1"
+    refute Map.has_key?(metadata, :limit)
+    refute_received {:telemetry, [:raxol, :agent, :budget, :halt, :over_limit], _, _}
+  end
+
   test "a model with no price halts a wired budget rather than billing $0" do
     # Fail closed: an unpriced model bills real tokens while the ledger records
     # nothing, so the cap would read untouched no matter how much was spent.
