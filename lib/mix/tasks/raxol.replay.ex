@@ -8,6 +8,8 @@ defmodule Mix.Tasks.Raxol.Replay do
       mix raxol.replay demo.cast --speed 2.0
       mix raxol.replay demo.cast --speed 0.5
       mix raxol.replay demo.cast --no-interactive
+      mix raxol.replay demo.cast --index
+      mix raxol.replay demo.cast --info --index
 
   ## Options
 
@@ -17,6 +19,10 @@ defmodule Mix.Tasks.Raxol.Replay do
       Prevents long idle gaps from stalling replay.
     * `--no-interactive` - Disable keyboard controls (simple playback).
     * `--info` - Print recording info without playing.
+    * `--index` - Build a `Raxol.Recording.Index` (keyframes every 15s) so
+      seeking repaints from the nearest keyframe instead of replaying the
+      recording's prefix. Costs time and memory up front, which is why it is
+      opt-in: with `--info` it reports that cost instead of playing.
 
   ## Controls (interactive mode)
 
@@ -31,7 +37,7 @@ defmodule Mix.Tasks.Raxol.Replay do
 
   use Mix.Task
 
-  alias Raxol.Recording.{Asciicast, Player, Session}
+  alias Raxol.Recording.{Asciicast, Index, Player, Session}
 
   @shortdoc "Replay a recorded .cast session"
 
@@ -39,7 +45,8 @@ defmodule Mix.Tasks.Raxol.Replay do
     speed: :float,
     max_delay: :float,
     info: :boolean,
-    interactive: :boolean
+    interactive: :boolean,
+    index: :boolean
   ]
 
   @aliases [s: :speed]
@@ -53,7 +60,7 @@ defmodule Mix.Tasks.Raxol.Replay do
         end
 
         if Keyword.get(opts, :info, false) do
-          print_info(path)
+          print_info(path, opts)
         else
           replay(path, opts)
         end
@@ -79,7 +86,9 @@ defmodule Mix.Tasks.Raxol.Replay do
 
     Process.sleep(500)
 
-    case Player.play(path,
+    case play(
+           path,
+           Keyword.get(opts, :index, false),
            speed: speed,
            max_delay: max_delay,
            interactive: interactive
@@ -91,14 +100,47 @@ defmodule Mix.Tasks.Raxol.Replay do
     Mix.shell().info([:green, "\nReplay complete.", :reset])
   end
 
-  defp print_info(path) do
+  defp play(path, false, play_opts), do: Player.play(path, play_opts)
+
+  defp play(path, true, play_opts) do
+    case Asciicast.read(path) do
+      {:ok, session} ->
+        Mix.shell().info("Building keyframe index...")
+        Player.play(session, [index: Index.build(session)] ++ play_opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp print_info(path, opts) do
     case Asciicast.read(path) do
       {:ok, session} ->
         do_print_info(path, session)
+        if Keyword.get(opts, :index, false), do: print_index_info(session)
 
       {:error, reason} ->
         Mix.raise("Failed to read #{path}: #{inspect(reason)}")
     end
+  end
+
+  # An index pins a full screen buffer per keyframe, so the cost is worth
+  # seeing before building one for a long recording.
+  defp print_index_info(session) do
+    {build_us, index} = :timer.tc(fn -> Index.build(session) end)
+
+    Mix.shell().info([:bright, "Index:", :reset])
+
+    keyframes = length(index.keyframes)
+    interval_s = div(index.interval_us, 1_000_000)
+    Mix.shell().info("  Keyframes: #{keyframes} (every #{interval_s}s)")
+
+    Mix.shell().info(
+      "  Memory:    #{Float.round(Index.memory_bytes(index) / 1_048_576, 2)} MB"
+    )
+
+    Mix.shell().info("  Marks:     #{length(index.marks)} input events")
+    Mix.shell().info("  Built in:  #{div(build_us, 1000)}ms")
   end
 
   defp do_print_info(path, session) do
@@ -141,6 +183,10 @@ defmodule Mix.Tasks.Raxol.Replay do
 
     Mix.shell().error(
       "  --info             Print recording info without playing"
+    )
+
+    Mix.shell().error(
+      "  --index            Build a keyframe index for fast seeking"
     )
 
     Mix.shell().error("")
