@@ -105,8 +105,19 @@ defmodule Raxol.Agent.PolicyApplier do
     result
   end
 
+  # Every refusal names the offender by shape, never by content: an error that
+  # echoed a rejected prompt into a crash report would be the leak this check
+  # exists to prevent. A struct is matched before the map clause because
+  # `%{}` matches structs too, and `Enum.each/2` on one raises
+  # `Protocol.UndefinedError` with the whole value inspected into the
+  # message -- a request struct's Authorization header included.
   defp context!(opts) do
     case Keyword.get(opts, :metadata, %{}) do
+      %_{} = struct ->
+        raise ArgumentError,
+              "PolicyApplier.apply/4 `:metadata` must be a plain map of correlation " <>
+                "identifiers; got #{shape(struct)}"
+
       %{} = context ->
         Enum.each(context, fn {key, value} -> identifier!(key, value) end)
         context
@@ -114,13 +125,10 @@ defmodule Raxol.Agent.PolicyApplier do
       other ->
         raise ArgumentError,
               "PolicyApplier.apply/4 `:metadata` must be a map of correlation " <>
-                "identifiers; got #{inspect(other)}"
+                "identifiers; got #{shape(other)}"
     end
   end
 
-  # The message names the offending value by shape, never by content: an
-  # error that echoed a rejected prompt into a crash report would be the leak
-  # this check exists to prevent.
   defp identifier!(key, value) when is_atom(key) do
     if Telemetry.identifier?(value) do
       :ok
@@ -136,7 +144,7 @@ defmodule Raxol.Agent.PolicyApplier do
 
   defp identifier!(key, _value) do
     raise ArgumentError,
-          "PolicyApplier.apply/4 `:metadata` keys must be atoms; got #{inspect(key)}"
+          "PolicyApplier.apply/4 `:metadata` keys must be atoms; got #{shape(key)}"
   end
 
   defp shape(value) when is_binary(value), do: "a binary of #{byte_size(value)} bytes"

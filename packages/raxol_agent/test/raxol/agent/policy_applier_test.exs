@@ -365,12 +365,20 @@ defmodule Raxol.Agent.PolicyApplierTest do
       never = fn _ -> flunk("the operation must not run when metadata is refused") end
       secret = "SECRET-PROMPT-7f3a " <> String.duplicate("x", 64)
 
+      # `%URI{}` stands in for any request/turn struct a caller might hand
+      # over whole: `%{}` matches a struct, and enumerating one raises with
+      # the entire value in the message.
+      leaky_struct = %URI{scheme: "https", userinfo: secret, host: "x.test"}
+
       for {label, context} <- [
             {"a long binary", %{prompt: secret}},
             {"a map", %{payload: %{content: secret}}},
             {"a list", %{messages: [secret]}},
             {"a struct", %{policy: Timeout.new(1)}},
-            {"a non-atom key", %{"turn" => 1}}
+            {"a non-atom key", %{"turn" => 1}},
+            {"a secret-bearing key", %{secret => 1}},
+            {"a struct as the map", leaky_struct},
+            {"a keyword list with content", [prompt: secret]}
           ] do
         error =
           assert_raise ArgumentError, fn ->
