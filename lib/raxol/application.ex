@@ -296,9 +296,10 @@ defmodule Raxol.Application do
   # rather than a disclosure of what is already public.
   #
   # This is therefore a denylist by omission of a vocabulary raxol_mcp owns: a
-  # read method added there is denied here until it is named. That is the safe
-  # direction, and `mcp_read_methods_known/0` in the test suite fails when the
-  # two drift so the omission stays deliberate.
+  # read method added there is denied here until it is named. Denial is the safe
+  # direction, but it should stay deliberate rather than accidental, so
+  # `Raxol.ApplicationTest` reads the gated methods back out of `server.ex` and
+  # fails when one appears that this list has never classified either way.
   @default_production_read_methods [
     "tools/list",
     "resources/list",
@@ -381,17 +382,19 @@ defmodule Raxol.Application do
   # list.
   defp default_mcp_authorizer(_key, false), do: Raxol.MCP.Authorizer.allow_all()
 
-  # In production: a real authorizer, and specifically NOT `allow_all/0`.
-  # `Raxol.MCP.Server.authorization_configured?/1` is literally `authorizer !=
-  # nil`, and the SSE transport's boot gate
-  # (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads exactly that value, so
-  # a blanket allow here would satisfy the gate and let a NETWORK transport serve
-  # every tool unguarded -- the one outcome that gate exists to prevent.
+  # In production: a real authorizer, and specifically NOT `allow_all/0`, which
+  # would serve every tool to whatever transport reached the server.
   #
-  # An empty allowlist is strictly TIGHTER than the nil this replaced, not merely
-  # more explicit: `Authorizer.decide/4` treats nil as allow, so a production
-  # server previously ran any tool nobody had annotated sensitive. Now nothing
-  # runs until a deployment names it.
+  # An empty allowlist is TIGHTER than the nil this replaced, not merely more
+  # explicit: `Authorizer.decide/4` treats nil as allow, so a production server
+  # previously ran any tool nobody had annotated sensitive. Now nothing runs
+  # until a deployment names it.
+  #
+  # Tightening tool execution must not loosen transport exposure, and it nearly
+  # did. This value is non-nil, and `authorization_configured?/1` used to be
+  # `authorizer != nil`, so this fallback would have satisfied the SSE boot gate
+  # and let a network transport start because raxol chose a default. The server
+  # now reports `:authorizer_source` instead; see `mcp_authorizer_source/0`.
   defp default_mcp_authorizer(:mcp_authorizer, true) do
     Raxol.MCP.Authorizer.allowlist(
       Application.get_env(:raxol, :mcp_allowed_tools, [])

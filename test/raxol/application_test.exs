@@ -184,8 +184,17 @@ defmodule Raxol.ApplicationTest do
     # DELIBERATE: a read method added there must be classified here rather than
     # silently denied by nobody noticing.
     test "every read method the server gates is classified by the default" do
+      source = "packages/raxol_mcp/lib/raxol/mcp/server.ex"
+
+      # Read relative to the repo root rather than the runner's cwd, and say so
+      # when it is missing: a raw File.Error here reads as a broken test rather
+      # than as "the file this guard watches has moved".
+      assert File.exists?(source),
+             "#{source} is missing, so the read-method drift guard cannot run " <>
+               "(cwd: #{File.cwd!()})"
+
       gated =
-        "packages/raxol_mcp/lib/raxol/mcp/server.ex"
+        source
         |> File.read!()
         |> then(&Regex.scan(~r/authorize_read\(\s*"([^"]+)"/, &1))
         |> Enum.map(fn [_, method] -> method end)
