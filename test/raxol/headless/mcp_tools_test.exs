@@ -404,6 +404,169 @@ defmodule Raxol.Headless.McpToolsTest do
     end
   end
 
+  # The annotation is what `Raxol.MCP.Server` reads to decide a tool must not run
+  # unguarded. Without one, all six of these were `sensitive?/1 == false`, so
+  # both the boot refusal and the `tools/call` gate were dead code on this
+  # surface no matter what authorizer a deployment configured.
+  describe "tools/0 sensitivity annotations" do
+    setup do
+      %{by_name: Map.new(McpTools.tools(), &{&1.name, &1})}
+    end
+
+    test "the three tools that change something are sensitive", %{
+      by_name: by_name
+    } do
+      for name <- ["raxol_start", "raxol_send_key", "raxol_stop"] do
+        assert Raxol.MCP.ToolDef.sensitive?(by_name[name]),
+               "#{name} changes state and must be gated once an authorizer exists"
+      end
+    end
+
+    test "the three read tools are not gated", %{by_name: by_name} do
+      for name <- ["raxol_screenshot", "raxol_get_model", "raxol_list"] do
+        refute Raxol.MCP.ToolDef.sensitive?(by_name[name]),
+               "#{name} is a read; gating it would deny reads for no gain"
+      end
+    end
+
+    # `Raxol.MCP.Registry` stores a `Map.take/2` projection of the tool map, so
+    # an annotation that survives `tools/0` but is dropped on the way into ETS
+    # would leave the server reading `sensitive?/1 == false` back off the
+    # registry, which is the only copy it ever consults.
+    test "annotations survive registration into the registry" do
+      registry = registry!()
+      :ok = McpTools.register(registry)
+
+      sensitive =
+        registry
+        |> Raxol.MCP.Registry.list_tools()
+        |> Enum.filter(&Raxol.MCP.ToolDef.sensitive?/1)
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
+
+      assert sensitive == ["raxol_send_key", "raxol_start", "raxol_stop"]
+    end
+  end
+
+  # What the annotations buy, over the ordering `Raxol.Application` actually
+  # uses: the MCP supervisor starts registry-then-server, and
+  # `maybe_register_mcp_tools/0` runs afterwards. So the registry is EMPTY at
+  # server init, the boot refusal cannot see these tools, and the `tools/call`
+  # gate is the only thing holding the line -- which is precisely the case the
+  # runtime gate was written for.
+  describe "server enforcement, tools registered after boot" do
+    setup do
+      registry = registry!()
+
+      {:ok, unguarded} =
+        Raxol.MCP.Server.start_link(
+          name: :"srv_#{System.unique_integer([:positive])}",
+          registry: registry,
+          authorizer: nil
+        )
+
+      :ok = McpTools.register(registry)
+
+      %{server: unguarded, registry: registry}
+    end
+
+    test "a sensitive tool is refused when no authorizer is configured", %{
+      server: server
+    } do
+      assert {:reply, response} =
+               call_tool(server, "raxol_start", %{"module" => "Kernel"})
+
+      assert %{result: %{content: [%{text: text} | _], isError: true}} =
+               response
+
+      payload = Jason.decode!(text)
+      assert payload["error"] == "authorization_required"
+      assert payload["detail"] =~ "sensitive_tool_unguarded"
+    end
+
+    test "a read tool still runs when no authorizer is configured", %{
+      server: server
+    } do
+      assert {:reply, %{result: result}} = call_tool(server, "raxol_list", %{})
+      refute Map.get(result, :isError) == true
+    end
+
+    test "an explicit authorizer is what lets the sensitive tools through", %{
+      registry: registry
+    } do
+      {:ok, guarded} =
+        Raxol.MCP.Server.start_link(
+          name: :"srv_#{System.unique_integer([:positive])}",
+          registry: registry,
+          authorizer: Raxol.MCP.Authorizer.allow_all()
+        )
+
+      assert {:reply, %{result: %{content: [%{text: text} | _]}}} =
+               call_tool(guarded, "raxol_stop", %{"id" => "no_such_session"})
+
+      # Past the gate: this is the tool's own refusal, not the authorizer's.
+      refute text =~ "authorization_required"
+    end
+  end
+
+  # The other ordering, which a host that registers before starting the server
+  # would hit. Pinned because it is the reason the annotation could not simply be
+  # added on its own: without the explicit authorizer `Raxol.Application` now
+  # passes, annotating these tools would have made the MCP server unbootable.
+  describe "server enforcement, tools registered before boot" do
+    test "an unguarded server refuses to boot once the tools are annotated" do
+      registry = registry!()
+      :ok = McpTools.register(registry)
+
+      # The raise happens in init/1 of a LINKED process, so it comes back as a
+      # start_link error rather than propagating into this process.
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _stack}} =
+               Raxol.MCP.Server.start_link(
+                 name: :"srv_#{System.unique_integer([:positive])}",
+                 registry: registry,
+                 authorizer: nil
+               )
+
+      assert message =~ "refuses to boot"
+
+      for name <- ["raxol_start", "raxol_send_key", "raxol_stop"] do
+        assert message =~ name
+      end
+    end
+
+    test "the same tree boots when an authorizer is supplied" do
+      registry = registry!()
+      :ok = McpTools.register(registry)
+
+      assert {:ok, server} =
+               Raxol.MCP.Server.start_link(
+                 name: :"srv_#{System.unique_integer([:positive])}",
+                 registry: registry,
+                 authorizer: Raxol.MCP.Authorizer.allow_all()
+               )
+
+      assert Raxol.MCP.Server.authorization_configured?(server)
+    end
+  end
+
+  defp registry! do
+    start_supervised!(
+      {Raxol.MCP.Registry, name: :"reg_#{System.unique_integer([:positive])}"},
+      id: {:reg, System.unique_integer([:positive])}
+    )
+  end
+
+  defp call_tool(server, name, arguments) do
+    Raxol.MCP.Server.handle_message(server, %{
+      jsonrpc: "2.0",
+      id: System.unique_integer([:positive]),
+      method: "tools/call",
+      params: %{"name" => name, "arguments" => arguments}
+    })
+  end
+
   describe "inject_into_tidewave/0" do
     test "returns error when tidewave not started" do
       # In test env, Tidewave ETS table won't exist

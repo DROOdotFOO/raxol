@@ -95,4 +95,80 @@ defmodule Raxol.ApplicationTest do
                info[:message_queue_data] == nil
     end
   end
+
+  # The MCP supervisor used to be started with `[]`, which means
+  # `authorizer: nil`, which means ALLOW. The seam was fully built and simply
+  # never engaged. These pin the decision to the call site so a future edit that
+  # drops the opts fails here rather than silently shipping allow-all again.
+  describe "MCP authorizer resolution" do
+    setup do
+      previous = Application.get_env(:raxol, :mcp_authorizer)
+
+      on_exit(fn ->
+        case previous do
+          nil -> Application.delete_env(:raxol, :mcp_authorizer)
+          value -> Application.put_env(:raxol, :mcp_authorizer, value)
+        end
+      end)
+
+      Application.delete_env(:raxol, :mcp_authorizer)
+      :ok
+    end
+
+    test "unconfigured outside production resolves to an explicit allow_all" do
+      authorizer =
+        Raxol.Application.resolve_mcp_authorizer(:mcp_authorizer, false)
+
+      assert is_function(authorizer, 3)
+      assert authorizer.("raxol_start", %{}, %{}) == :allow
+    end
+
+    # The load-bearing half. `Server.authorization_configured?/1` is literally
+    # `authorizer != nil`, and the SSE transport's boot gate reads exactly that,
+    # so defaulting production to `allow_all/0` would SATISFY the gate and let a
+    # network transport serve every tool unguarded. Staying nil keeps SSE
+    # refusing to boot and keeps the sensitive tools denied.
+    test "unconfigured in production stays nil so the SSE boot gate still fires" do
+      assert Raxol.Application.resolve_mcp_authorizer(:mcp_authorizer, true) ==
+               nil
+    end
+
+    test "a configured authorizer wins in both environments" do
+      configured = fn _tool, _args, _ctx -> {:deny, :nope} end
+      Application.put_env(:raxol, :mcp_authorizer, configured)
+
+      for production? <- [true, false] do
+        assert Raxol.Application.resolve_mcp_authorizer(
+                 :mcp_authorizer,
+                 production?
+               ) == configured
+      end
+    end
+
+    # Silently ignoring a malformed value would reinstate the original bug in a
+    # worse form: a deployment that believes it configured a policy, running
+    # without one.
+    test "a malformed configured value raises rather than falling back" do
+      Application.put_env(:raxol, :mcp_authorizer, :allow_all)
+
+      assert_raise ArgumentError, ~r/must be a 3-arity fun/, fn ->
+        Raxol.Application.resolve_mcp_authorizer(:mcp_authorizer, false)
+      end
+    end
+
+    # The end-to-end assertion the unit cases above cannot make: the booted
+    # application actually handed the server an authorizer.
+    test "the running MCP server has an authorizer configured" do
+      case Process.whereis(Raxol.MCP.Server) do
+        nil ->
+          # The MCP supervisor is not part of every startup mode.
+          :ok
+
+        _pid ->
+          assert Raxol.MCP.Server.authorization_configured?(Raxol.MCP.Server),
+                 "Raxol.Application started the MCP supervisor without an " <>
+                   "authorizer; every tool would run unguarded"
+      end
+    end
+  end
 end

@@ -281,9 +281,67 @@ defmodule Raxol.Application do
     end
   end
 
+  # Empty opts meant `authorizer: nil`, and a nil authorizer is ALLOW -- see
+  # `Raxol.MCP.Authorizer`, which documents that default as safe because a stdio
+  # transport already inherits the OS process boundary. That reasoning holds for
+  # stdio and holds for nothing else, so the decision is made HERE rather than
+  # inherited from an empty list.
+  #
+  # `config :raxol, :mcp_authorizer` / `:mcp_read_authorizer` take a 3-arity
+  # `(tool_name, arguments, context) -> decision` fun and win when set.
   defp maybe_add_mcp_supervisor do
     if module_available?(Raxol.MCP.Supervisor) do
-      {Raxol.MCP.Supervisor, []}
+      production? = mcp_production?()
+
+      {Raxol.MCP.Supervisor,
+       [
+         authorizer: resolve_mcp_authorizer(:mcp_authorizer, production?),
+         read_authorizer:
+           resolve_mcp_authorizer(:mcp_read_authorizer, production?)
+       ]}
+    end
+  end
+
+  @doc false
+  # Unset in dev/test: `allow_all/0`. Behaviourally what nil already did, but
+  # said out loud, so `mix mcp.server` and the Tidewave dev endpoint keep working
+  # and the opt-out is visible in the code rather than implied by an empty list.
+  #
+  # Unset in production: `nil`, deliberately, because `allow_all/0` here would be
+  # a REGRESSION rather than a wash.
+  # `Raxol.MCP.Server.authorization_configured?/1` is literally `authorizer !=
+  # nil`, and the SSE transport's boot gate
+  # (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads exactly that. Handing
+  # it a blanket allow_all would satisfy that gate and let a NETWORK transport
+  # serve every tool unguarded -- the one outcome the gate exists to prevent. So
+  # an unconfigured production deployment keeps failing closed: SSE still refuses
+  # to boot, and the tools annotated sensitive in `Raxol.Headless.McpTools` are
+  # denied at `tools/call` rather than served.
+  @spec resolve_mcp_authorizer(atom(), boolean()) ::
+          (String.t(), map(), map() -> term()) | nil
+  def resolve_mcp_authorizer(key, production?) do
+    case Application.get_env(:raxol, key) do
+      nil ->
+        if production?, do: nil, else: Raxol.MCP.Authorizer.allow_all()
+
+      fun when is_function(fun, 3) ->
+        fun
+
+      other ->
+        # Ignoring this would reinstate the exact bug the explicit opts fix: a
+        # deployment that believes it configured a policy, running without one.
+        raise ArgumentError,
+              "config :raxol, #{inspect(key)} must be a 3-arity fun " <>
+                "(tool_name, arguments, context) -> :allow | {:ask, prompt} | " <>
+                "{:deny, reason}, got: #{inspect(other)}"
+    end
+  end
+
+  defp mcp_production? do
+    if Code.ensure_loaded?(Raxol.MCP.Deployment) do
+      Raxol.MCP.Deployment.production?()
+    else
+      mix_env() not in [:dev, :test]
     end
   end
 

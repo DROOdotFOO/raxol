@@ -5,6 +5,19 @@ defmodule Raxol.Headless.McpTools do
   Registers `raxol_start`, `raxol_screenshot`, `raxol_send_key`,
   `raxol_get_model`, `raxol_stop`, and `raxol_list` as MCP tools
   via `Raxol.MCP.Registry`.
+
+  ## Authorization
+
+  The three tools that change something -- `raxol_start`, `raxol_send_key`,
+  `raxol_stop` -- are annotated sensitive, so `Raxol.MCP.Server` refuses to run
+  them when no authorizer is configured. The other three are reads and are not
+  gated.
+
+  The annotation is only half of it: it does nothing until an authorizer exists
+  at the call site, and denies permanently if one never does. `Raxol.Application`
+  supplies one (`config :raxol, :mcp_authorizer`, defaulting to `allow_all/0`
+  outside production), which is what makes these annotations meaningful rather
+  than merely restrictive.
   """
 
   @doc """
@@ -62,6 +75,13 @@ defmodule Raxol.Headless.McpTools do
             }
           }
         },
+        # Starting a session spawns a supervised process, and where a deployment
+        # has set a headless path root the "path" argument reaches the compiler,
+        # where compiling a `defmodule` executes its body. `destructiveHint` is
+        # the wrong word for that -- nothing is destroyed -- so this uses
+        # `sensitive`, raxol_mcp's own flag for a tool that must not run
+        # unattended. `Raxol.MCP.ToolDef.sensitive?/1` honours either.
+        annotations: %{sensitive: true},
         callback: &start_session/1
       },
       %{
@@ -127,6 +147,10 @@ defmodule Raxol.Headless.McpTools do
             }
           }
         },
+        # A keystroke is the session's whole input surface: whatever the running
+        # app does on a key, this tool can cause. It is not destructive on its
+        # own, so `sensitive` rather than `destructiveHint`.
+        annotations: %{sensitive: true},
         callback: &send_key/1
       },
       %{
@@ -162,6 +186,9 @@ defmodule Raxol.Headless.McpTools do
             }
           }
         },
+        # Tears down a running session and its state. Destructive in the plain
+        # MCP sense, so it carries the spec's own hint.
+        annotations: %{destructiveHint: true},
         callback: &stop_session/1
       },
       %{
@@ -198,6 +225,15 @@ defmodule Raxol.Headless.McpTools do
 
   Call after Tidewave.MCP has initialized (typically from Application.start).
   Safe to call multiple times -- tools are merged, not duplicated.
+
+  > #### Unauthorized by construction {: .warning}
+  >
+  > This writes callbacks straight into Tidewave's dispatch map, so a call
+  > arriving this way never reaches `Raxol.MCP.Server` and no authorizer,
+  > annotation, or elicitation applies to it. Tidewave is an `only: :dev`
+  > dependency and nothing in this repo calls this function, so the exposure is
+  > a dev machine that opts in deliberately. Do not wire it into a shipped
+  > startup path: route through `register/1` instead, where the seam exists.
 
   The Tidewave ETS table is `:protected`, so the insert must run in the
   owning process. We spawn a task linked to that process to do the write.

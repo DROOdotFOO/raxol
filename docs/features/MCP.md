@@ -114,6 +114,28 @@ The harness goes through the same MCP transport as a real client, so what your t
 
 The tree is streamed as diffs over the MCP connection, so agents track changes incrementally rather than polling.
 
+## Authorization
+
+`Raxol.MCP.Server` evaluates an authorizer before running a tool. It is a 3-arity fun returning `:allow`, `{:ask, prompt}`, or `{:deny, reason}`, and `Raxol.Application` supplies it explicitly:
+
+```elixir
+config :raxol,
+  mcp_authorizer: fn tool, _args, _ctx ->
+    if String.starts_with?(tool, "raxol_"), do: :allow, else: {:deny, :not_mine}
+  end,
+  # Guards resources/read, tools/list, prompts/get and the other read surfaces.
+  # Receives the METHOD name in the tool-name position.
+  mcp_read_authorizer: fn _method, _args, _ctx -> :allow end
+```
+
+A value that is not a 3-arity fun raises at boot rather than being ignored, so a deployment cannot believe it configured a policy while running without one.
+
+Unconfigured, the default is `Raxol.MCP.Authorizer.allow_all/0` outside production and `nil` in production. The asymmetry is deliberate. `Raxol.MCP.Server.authorization_configured?/1` is `authorizer != nil`, and the SSE transport's boot gate (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads exactly that value, so a blanket `allow_all` in production would satisfy the gate and let a network transport serve every tool unguarded. Leaving it `nil` keeps SSE refusing to boot.
+
+A tool annotated `destructiveHint: true` or `sensitive: true` never runs without an authorizer, enforced twice: the server refuses to boot when such a tool is already registered, and refuses the call itself for one registered afterwards. Of the headless tools, `raxol_start`, `raxol_send_key`, and `raxol_stop` carry the annotation; the three read tools do not.
+
+stdio is exempt by design, since it already inherits the OS process boundary. `Raxol.Headless.McpTools.inject_into_tidewave/0` is exempt by accident: it writes callbacks into Tidewave's own dispatch map, so calls arriving that way never reach `Raxol.MCP.Server` and no authorizer applies. Tidewave is an `only: :dev` dependency and nothing calls that function; do not wire it into a shipped startup path.
+
 ## Property tests
 
 `Raxol.MCP.ToolProvider` is functor-law-tested: tool derivation commutes with Component composition. If you compose two Components, the derived tools are the same as the tools you'd get by deriving them separately and merging. This catches bugs where a wrapping Component would accidentally hide tools from a child.
