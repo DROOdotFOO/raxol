@@ -31,6 +31,10 @@ defmodule RaxolPlaygroundWeb.Router do
     live("/", LandingLive, :index)
     live("/playground", PlaygroundLive, :index)
     live("/gallery", GalleryLive, :index)
+    # The one page that reads a real recorded session rather than prerecorded
+    # frames. No path parameter: it serves the single committed .cast, so
+    # there is nothing here to point at an arbitrary file.
+    live("/replay", ReplayLive, :index)
     # /demos was a smaller copy of /gallery over the same catalog. The index
     # is gone; the per-demo pages it linked to are what /gallery links to, so
     # they stay. The old index URL redirects rather than 404s.
