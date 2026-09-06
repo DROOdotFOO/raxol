@@ -98,12 +98,19 @@ defmodule Raxol.Agent.Harness.GrokBuild do
   # `total_cost_usd` is stamped for API-key traffic and omitted on the
   # subscription/OAuth path, so a free run reports tokens with no `:cost` and
   # the spend plumbing sees nothing to meter -- which is the honest answer.
+  # The field name asserts the currency, and the pricing seam reads a cost
+  # only in `%{amount, currency}` form (a bare number is a unit bug waiting
+  # to under-bill), so the assertion is made explicit here, where the name
+  # is known, rather than assumed downstream.
   defp usage(obj) do
     usage = Map.get(obj, "usage") || %{}
 
     case Map.get(obj, "total_cost_usd") do
-      cost when is_number(cost) -> Map.put(usage, "cost", cost)
-      _absent -> usage
+      cost when is_number(cost) ->
+        Map.put(usage, "cost", %{"amount" => cost, "currency" => "USD"})
+
+      _absent ->
+        usage
     end
   end
 

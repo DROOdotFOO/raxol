@@ -109,6 +109,48 @@ defmodule Raxol.Agent.Code.AppMeteringTest do
     assert model.unpriced_model == "mystery-model-9"
   end
 
+  # The measured omp frame carries used/size/cost and no token split. When
+  # the adapter drops the per-turn cost (cumulative went down, currency
+  # changed) the map still says money was spent: `session_cost` is there.
+  test "a token-less turn carrying a session_cost but no cost is unpriced, not free" do
+    usage = %{context_tokens: 22_974, session_cost: %{amount: 9.0, currency: "USD"}}
+
+    model =
+      metered_model(ledger: :test_ledger, spending_policy: %{cap_usd: 10.0})
+      |> meter(usage, "gpt-4o")
+
+    # gpt-4o has a flat row, so the table would price zero tokens at $0.00;
+    # the gate must not read that as a free turn.
+    assert model.unpriced_model == "gpt-4o"
+    assert model.running? == false
+  end
+
+  test "a token-less turn with no cost figure at all says nothing" do
+    model =
+      metered_model(ledger: :test_ledger, spending_policy: %{cap_usd: 10.0})
+      |> meter(%{}, "gpt-4o")
+
+    assert model.unpriced_model == nil
+    assert model.running? == true
+  end
+
+  # A 400-digit token count is a bignum; `/ 1_000_000` on it raises, and a
+  # raise inside the fold used to abort metering for the turn entirely --
+  # no ledger record, no event, no halt -- while the dispatcher logged and
+  # carried on. The figure now reads as absent at every reader.
+  test "a token count a float cannot carry does not abort metering" do
+    huge = Integer.pow(10, 400)
+    usage = %{input_tokens: huge, output_tokens: 100}
+
+    model =
+      metered_model(ledger: :test_ledger, spending_policy: %{cap_usd: 10.0})
+      |> meter(usage, "gpt-4o")
+
+    # The 100 output tokens still price through the flat row.
+    assert model.unpriced_model == nil
+    assert model.running? == true
+  end
+
   test "the env rates still win outright over any table" do
     System.put_env("RAXOL_COST_PER_MTOK_IN", "1.0")
     System.put_env("RAXOL_COST_PER_MTOK_OUT", "2.0")

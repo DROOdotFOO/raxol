@@ -45,6 +45,26 @@ defmodule Raxol.Agent.BenchmarkProfile do
           trajectory_path: String.t() | nil
         }
 
+  # The largest integer a float carries exactly. A usage figure arrives from
+  # a provider's JSON, a CLI's stdout or an ACP peer's frame, all of which can
+  # spell any integer at all, and Jason decodes a 400-digit literal into a
+  # bignum that `/ 1_000_000` cannot convert (ArithmeticError). No provider
+  # bills nine quadrillion tokens in one call, so past this a figure is
+  # garbage and reads as absent, the same tolerant rule that already applies
+  # to a negative count. Shared by every usage reader through `is_count/1`.
+  @max_count 9_007_199_254_740_992
+
+  @doc "The largest usage figure any reader accepts; see `is_count/1`."
+  @spec max_count() :: pos_integer()
+  def max_count, do: @max_count
+
+  @doc """
+  Whether `n` is a usable token count: a non-negative integer no larger than
+  `max_count/0`. Every reader of a provider-raw usage map guards with this so
+  a garbage figure is absent everywhere rather than a crash somewhere.
+  """
+  defguard is_count(n) when is_integer(n) and n >= 0 and n <= @max_count
+
   @doc """
   Build a profile from an env map (defaults to `System.get_env/0`).
 
@@ -127,7 +147,7 @@ defmodule Raxol.Agent.BenchmarkProfile do
   defp read_tokens(usage, keys) do
     Enum.find_value(keys, 0, fn key ->
       case Map.get(usage, key) || Map.get(usage, Atom.to_string(key)) do
-        n when is_integer(n) and n >= 0 -> n
+        n when is_count(n) -> n
         _ -> nil
       end
     end)
