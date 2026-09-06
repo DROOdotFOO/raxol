@@ -39,8 +39,8 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0031](0031-console-runtime-integration.md) | Raxol as a Virtuals ACP Console runtime | Proposed | 2026-07-29 |
 | [0032](0032-agent-filesystem-grants.md) | Multi-root filesystem grants for agent sessions | Proposed | 2026-08-26 |
 | [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
-| [0034](0034-foreign-coding-agent-seams.md) | Foreign coding-agent integration seams | Proposed | 2026-09-04 |
-| [0035](0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Proposed | 2026-09-04 |
+| [0034](0034-foreign-coding-agent-seams.md) | Foreign coding-agent integration seams | Implemented (driver pending) | 2026-09-04 |
+| [0035](0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Implemented | 2026-09-04 |
 
 ## Template
 

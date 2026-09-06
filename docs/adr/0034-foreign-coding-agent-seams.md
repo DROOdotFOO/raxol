@@ -2,8 +2,14 @@
 
 ## Status
 
-Proposed, 2026-09-04. Nothing is implemented; this records which seam a foreign coding agent
-should be handed to, and settles that question before a fourth native driver lands.
+Proposed, 2026-09-04; implemented 2026-09-05 in PR #971 for everything this ADR asks of the
+tree except the driver itself. The seam question was settled before a fourth native driver
+landed, and the implementation is: `Raxol.Agent.Backend.Catalog` as the single backend
+declaration with the three registries derived from it and `Runner.@kinds` as Symphony's
+(Gap 4); vendor-distinct review with per-vendor availability probes (Gap 5); the adapter
+mapping `usage_update` (Gap 3's hole); the `NativeHarness` usage contract; and the ACP
+loopback test. Defect 1 was already fixed on master. Not implemented: the `ExternalAgent`
+driver, the `Stdio.*` extraction from `Runners.Codex`, and Gap 1 (still not decided).
 
 Revised the same day, after the forcing case turned out to be installed locally and every
 claim below could be measured instead of read. Four findings inverted, each corrected where it
@@ -38,7 +44,7 @@ chosen against a stated policy.
 | ---- | -------------------- | ------------------------ |
 | Native CLI backend | `claude_native`, `cursor`, `grok_native` | streaming and memory enrichment only |
 | Symphony runner | `codex` | orchestration, evidence, pause and resume |
-| ACP client role | none | permission gate, fs sandbox, journal, rendering |
+| ACP client role | none | permission gate on shell, journal, rendering; no filesystem gate until ADR-0032 ships |
 | MCP server | any `.mcp.json` entry | the full Action hook chain |
 
 The fourth is not a seam for an agent at all, for reasons in "Alternatives considered". The
@@ -89,7 +95,7 @@ Three pieces exist and pass their suites:
 
 | Module | Lines | State |
 | ------ | ----- | ----- |
-| `Raxol.AgentClientProtocol.Client` | 896 | complete; `prompt_stream/4`, `fs_sandbox:` |
+| `Raxol.AgentClientProtocol.Client` | 896 | complete; `prompt_stream/4`, `fs_sandbox:` (confines only the `fs/read_text_file` / `fs/write_text_file` requests an agent routes through the client; omp's `write` tool never does, see "The gate is real, and exactly one setting delivers it") |
 | `Raxol.AgentClientProtocol.Connection` | 1564 | complete; correlation, cancellation, delivery |
 | `Transport.Stdio.start_spawn/3` | 333 | complete; spawns a peer with `:cd` and `:env` |
 | `Raxol.Agent.AcpStreamAdapter` | 751 | complete; the inbound `session/update` direction |
@@ -135,9 +141,22 @@ Zero `__NON_JSON_STDOUT__` entries and an empty stderr log, so the peer's wire i
 
 which is `Schema.UsageUpdate`'s `%{used, size, cost: %{amount, currency}}` exactly. So the
 first real foreign agent raxol talks to emits the one frame the adapter drops, and it carries
-authoritative cost in USD. Two further frames, `available_commands_update` and
+cost in USD. One caution ADR-0035 carries: `UsageUpdate`'s own moduledoc documents `cost` as
+the CUMULATIVE session figure, not this turn's, so it is a per-turn cost only as a delta
+against the last billed cumulative. Two further frames, `available_commands_update` and
 `session_info_update`, are not in the adapter's mapping table either and should land in its
 known-but-unmapped bucket rather than its catch-all.
+
+The gap was larger than "unwired". The first ACP loopback (PR #971, `acp_loopback_test.exs`,
+the test the Validation section below asks for) found that raxol's own serve half emitted
+zero `session/update` frames for a non-empty prompt, for every backend: `Serve.turn_opts/1`
+attaches the full toolset, so the turn runs `Raxol.Agent.Stream.react/2`, which reports the
+whole answer once as `{:done, %{content: ...}}` and never as a text delta, and `TurnRunner`'s
+`{:done, _}` clause mapped that straight to a stop without posting an `agent_message_chunk`.
+`Session` warned about exactly this condition (`session.ex:845`) and nothing acted on it. So
+the client role was not merely unwired; until that fix the serve half could not have carried
+an answer to any client. Fixed in `TurnRunner` in the same change, guarded so a genuinely
+streaming turn does not repeat its own deltas.
 
 ### Gap 4: five registries disagree about which backends exist
 
@@ -180,13 +199,19 @@ adversarial premise the whole runner rests on is not met, and nothing reports th
 
 | Seam | New Elixir | Retained | Surrendered |
 | ---- | ---------- | -------- | ----------- |
-| ACP client | ~640 | permission gate, fs sandbox, journal, rendering, usage | nothing structural |
+| ACP client | ~640 | permission gate on shell, journal, rendering, usage | the filesystem, until ADR-0032's OS wrapper exists |
 | Native backend | ~95 | streaming, memory enrichment | tools, authz, hooks, ReAct, cwd scoping |
 | Symphony runner | ~800 | orchestration, evidence, pause and resume | agent framework, tools |
 
 **ACP is the strategic target.** It is also, counter to the intuition that a protocol layer is
 expensive, the cheapest of the three, because Gap 3's inventory is already paid for. It is the
-only seam where a foreign agent executes inside raxol's governance rather than beside it.
+only seam where a foreign agent executes inside raxol's governance rather than beside it, with
+one qualification the measurements below force: that governance covers the shell and not the
+filesystem. omp raises `session/request_permission` for `bash` and never for `write`, and
+`Client`'s `fs_sandbox:` confines only requests the agent chooses to route through the client.
+Filesystem containment for an ACP-hosted agent is ADR-0032's OS wrapper, which is Proposed
+with no code, so until it lands this seam is for a trusted local workspace only. The
+"Consequences" section carries the full posture.
 
 **The native backend is the tactical seam**, appropriate when a vendor CLI does not speak ACP
 and the operator accepts the surrender in the security section below.
@@ -440,12 +465,15 @@ and tool calls while dropping its command list, its session metadata, and its co
 
 ### Ports that are never written to are declared input-only
 
-> Filed as [#964](https://github.com/DROOdotFOO/raxol/issues/964). This section is the record of the defect, not its queue.
+> Filed as [#964](https://github.com/DROOdotFOO/raxol/issues/964), and fixed on master by
+> `c150d4df3` "Close stdin on native CLI ports" (the port now opens with `:in`, with a
+> regression test) after this section was written. The analysis is kept as measured because
+> the seam argument rests on it; the code it describes is the pre-fix code.
 
-`Raxol.Agent.Backend.Native` opens its port with
-`[:binary, :exit_status, :stderr_to_stdout, :hide, {:line, 1_048_576}]` (`native.ex:129-134`)
-and never calls `Port.command/2` anywhere in its 299 lines. The child therefore inherits a
-stdin pipe that is held open for the port's lifetime and never closed.
+`Raxol.Agent.Backend.Native` opened its port with
+`[:binary, :exit_status, :stderr_to_stdout, :hide, {:line, 1_048_576}]` (`native.ex:129-134`
+at the time) and never called `Port.command/2` anywhere in the module. The child therefore
+inherited a stdin pipe that was held open for the port's lifetime and never closed.
 
 Any CLI that reads stdin before doing its work blocks forever, and the run dies at
 `{:error, :timeout}` after the 120s default (`native.ex:30`, `:152-155`) having produced
@@ -699,8 +727,9 @@ that becomes a pattern rather than an accident.
 ### What becomes possible
 
 A foreign agent can run inside raxol's governance rather than beside it, once the ACP driver
-exists: permission gate, confined filesystem, journal, and every surface already subscribed to
-`SessionStreamer`.
+exists: permission gate on shell, journal, and every surface already subscribed to
+`SessionStreamer`. Not a confined filesystem: that is ADR-0032's, and ADR-0032 is Proposed with
+nothing implemented, so the posture below is what ships.
 
 Cross-vendor review stops being a fiction on machines without `codex`, taking the ordered
 implementer and reviewer pairs from two to six and dropping the escalation probability from
@@ -869,10 +898,10 @@ ACP-hosted omp should be sized against a five-figure per-turn floor.
 Context for the decision rather than part of it, and each needs a tracker entry: a defect
 recorded only in prose is one nobody is assigned.
 
-1. **`Backend.Native` hangs any CLI that reads stdin.** `native.ex:129-134`. Confirmed against
-   a real binary, not inferred: BLOCKED at 9.9s without `:in`, exit 1 at 1.6s with it. Latent
-   for the
-   three existing drivers, immediate for a fourth. Fix is one atom.
+1. **`Backend.Native` hangs any CLI that reads stdin.** `native.ex:129-134` as measured.
+   Confirmed against a real binary, not inferred: BLOCKED at 9.9s without `:in`, exit 1 at
+   1.6s with it. Latent for the three existing drivers, immediate for a fourth. Fixed on
+   master by `c150d4df3` before this ADR merged: the fix was one atom, and it is in.
 2. **Five registries disagree** (Gap 4). `grok_native` invisible to Dialyzer; `cursor`
    unreachable by name; two Symphony runner kinds resolve and then fail preflight.
 3. **Cross-vendor review does not verify vendor distinctness** (Gap 5). `default_available?/1`
