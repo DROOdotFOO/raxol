@@ -206,6 +206,19 @@ defmodule Raxol.ApplicationTest do
       end
     end
 
+    # This assertion only means anything from HERE. raxol_mcp is a path
+    # dependency of this application, and a path dependency compiles under :prod
+    # whatever the umbrella's env is, so a compile-time capture of `Mix.env()`
+    # read `:prod` and this returned true under `MIX_ENV=test`. The package's own
+    # suite cannot reproduce that: there raxol_mcp is the root project, compiles
+    # as :test, and the same predicate was already correct. The disagreement is
+    # only visible across the dependency edge.
+    test "Deployment.production?/0 answers for this app, not raxol_mcp's build" do
+      refute Raxol.MCP.Deployment.production?(),
+             "raxol_mcp read its own compile env instead of this session's, so " <>
+               "a dev or test run is treated as production"
+    end
+
     # Configured-and-usable are different claims, and only this one catches the
     # environment being misread. Selecting the default from
     # `Raxol.MCP.Deployment.production?/0` looked right and passed every unit
