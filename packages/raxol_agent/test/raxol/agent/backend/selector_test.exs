@@ -42,6 +42,22 @@ defmodule Raxol.Agent.Backend.SelectorTest do
       assert opts[:model] == "LongCat-2.0"
     end
 
+    test "resolves deepseek to the HTTP backend with a base_url and model default" do
+      cfg = ExecutorConfig.new(harness: :deepseek)
+      assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
+      assert opts[:provider] == :openai
+      assert opts[:base_url] == "https://api.deepseek.com"
+      assert opts[:model] == "deepseek-v4-flash"
+
+      # The backend-scoped price table is keyed to this id (ADR-0035), so
+      # registering it is what makes the cache-tier pricing reachable.
+      assert {:ok, _cost, :scoped_table} =
+               Raxol.Agent.LlmPrices.turn_cost(:deepseek, "deepseek-v4-flash", %{
+                 prompt_cache_hit_tokens: 1,
+                 prompt_cache_miss_tokens: 1
+               })
+    end
+
     test "resolves openrouter to the HTTP backend with attribution headers" do
       cfg = ExecutorConfig.new(harness: :openrouter)
       assert {:ok, Raxol.Agent.Backend.HTTP, opts} = Selector.select(cfg)
