@@ -83,6 +83,12 @@ defmodule Raxol.LiveView.TerminalBridge do
           a11y_map: %{optional(String.t()) => map()}
         ]
 
+  @type row :: %{
+          id: String.t(),
+          y: non_neg_integer(),
+          html: String.t()
+        }
+
   @doc """
   Converts a buffer to HTML string.
 
@@ -119,12 +125,6 @@ defmodule Raxol.LiveView.TerminalBridge do
   def buffer_to_html(buffer, opts \\ []) do
     theme = Keyword.get(opts, :theme, :default)
     css_prefix = Keyword.get(opts, :css_prefix, "raxol")
-    use_inline = Keyword.get(opts, :use_inline_styles, false)
-    show_cursor = Keyword.get(opts, :show_cursor, false)
-    cursor_pos = Keyword.get(opts, :cursor_position)
-    cursor_style = Keyword.get(opts, :cursor_style, :block)
-    element_id_map = Keyword.get(opts, :element_id_map, %{})
-    a11y_map = Keyword.get(opts, :a11y_map, %{})
     aria_mode = Keyword.get(opts, :aria_mode, :log)
 
     terminal_class = "#{css_prefix}-terminal"
@@ -132,34 +132,138 @@ defmodule Raxol.LiveView.TerminalBridge do
     theme_class =
       if theme != :default, do: " #{css_prefix}-theme-#{theme}", else: ""
 
-    # Run-length encode: group consecutive cells with same style into
-    # single <span> elements. Monospace + white-space:pre handles layout.
-    # Typical 80x24 buffer goes from ~1920 spans to ~20-50.
-    lines_html =
-      extract_rows(buffer)
-      |> Enum.with_index()
-      |> Enum.map_join("\n", fn {row, y} ->
-        render_line_rle(extract_cells(row), y, %{
-          css_prefix: css_prefix,
-          use_inline: use_inline,
-          show_cursor: show_cursor,
-          cursor_pos: cursor_pos,
-          cursor_style: cursor_style,
-          element_id_map: element_id_map,
-          a11y_map: a11y_map
-        })
-      end)
+    lines_html = buffer |> row_htmls(line_opts(opts)) |> Enum.join("\n")
 
-    ~s(<pre class="#{terminal_class}#{theme_class}" #{container_aria(aria_mode)}>#{lines_html}</pre>\n)
+    ~s(<pre class="#{terminal_class}#{theme_class}" #{container_attrs_string(aria_mode)}>#{lines_html}</pre>\n)
   end
+
+  @doc """
+  Converts a buffer to a list of addressable rows.
+
+  Takes the same options as `buffer_to_html/2` and produces the same per-row
+  markup: joining the `:html` values with `"\\n"` inside that function's
+  `<pre>` wrapper reproduces its output byte for byte.
+
+  Rows exist so a caller can give each one its own DOM node. With the screen
+  as a single string, a LiveView sees one changed dynamic and resends every
+  row on every frame, even when one cell moved.
+
+  Ids are `"<css_prefix>-row-<y>"`: stable for a given row across frames, so a
+  DOM patch strategy can key on them, and prefixed so two terminals on one
+  page do not collide.
+
+  ## Examples
+
+      buffer = Raxol.Core.Buffer.create_blank_buffer(3, 2)
+      buffer_to_rows(buffer)
+      # => [
+      #      %{id: "raxol-row-0", y: 0, html: "   "},
+      #      %{id: "raxol-row-1", y: 1, html: "   "}
+      #    ]
+
+  """
+  @spec buffer_to_rows(Buffer.t(), html_opts()) :: [row()]
+  def buffer_to_rows(buffer, opts \\ []) do
+    css_prefix = Keyword.get(opts, :css_prefix, "raxol")
+
+    buffer
+    |> row_htmls(line_opts(opts))
+    |> Enum.with_index()
+    |> Enum.map(fn {html, y} ->
+      %{id: "#{css_prefix}-row-#{y}", y: y, html: html}
+    end)
+  end
+
+  @doc """
+  Splits a screen rendered by `buffer_to_html/2` back into `buffer_to_rows/2`
+  rows.
+
+  The LiveView render backend broadcasts the screen as one already-rendered
+  string, so a LiveView that wants per-row DOM nodes has no buffer to call
+  `buffer_to_rows/2` on. This is the exact inverse of the `"\\n"` join, and it
+  leans on the same property that join already leans on: a row's html never
+  contains a newline, because cells hold single graphemes.
+
+  Pass the same `:css_prefix` used to render, or the ids will not match.
+  """
+  @spec html_to_rows(String.t(), html_opts()) :: [row()]
+  def html_to_rows(html, opts \\ [])
+
+  def html_to_rows("", _opts), do: []
+
+  def html_to_rows(html, opts) do
+    css_prefix = Keyword.get(opts, :css_prefix, "raxol")
+
+    html
+    |> pre_body()
+    |> String.split("\n")
+    |> Enum.with_index()
+    |> Enum.map(fn {row_html, y} ->
+      %{id: "#{css_prefix}-row-#{y}", y: y, html: row_html}
+    end)
+  end
+
+  # Strips the `<pre ...>` open tag and the trailing `</pre>\n`. The open tag
+  # carries no `>` inside its attribute values, so the first `>` ends it.
+  defp pre_body(html) do
+    case String.split(html, ">", parts: 2) do
+      [_open_tag, rest] ->
+        rest |> String.trim_trailing() |> String.trim_trailing("</pre>")
+
+      _ ->
+        html
+    end
+  end
+
+  @doc """
+  Container ARIA attributes for an `:aria_mode`, as a keyword list.
+
+  Public because a caller that renders rows itself owns the `<pre>` wrapper
+  (see `buffer_to_rows/2`) and has to emit the same container semantics. Two
+  hand-written copies drift, and the failure mode is a nested or duplicated
+  live region that re-reads the whole screen.
+  """
+  @spec container_attrs(aria_mode()) :: keyword()
+  def container_attrs(:application), do: [role: "application"]
 
   # Coarse container semantics. `:log` is a whole-screen live region (screen
   # readers re-read on change); `:application` opts out so per-element ARIA and
   # the dedicated announcement region drive announcements instead.
-  defp container_aria(:application), do: ~s(role="application")
+  def container_attrs(_log),
+    do: [role: "log", "aria-live": "polite", "aria-atomic": "false"]
 
-  defp container_aria(_log),
-    do: ~s(role="log" aria-live="polite" aria-atomic="false")
+  defp container_attrs_string(aria_mode) do
+    aria_mode
+    |> container_attrs()
+    |> Enum.map_join(" ", fn {name, value} -> ~s(#{name}="#{value}") end)
+  end
+
+  # Shared by buffer_to_html/2 and buffer_to_rows/2 so the two cannot drift:
+  # the screen is the rows joined by "\n".
+  #
+  # Run-length encode: group consecutive cells with same style into
+  # single <span> elements. Monospace + white-space:pre handles layout.
+  # Typical 80x24 buffer goes from ~1920 spans to ~20-50.
+  defp row_htmls(buffer, line_opts) do
+    buffer
+    |> extract_rows()
+    |> Enum.with_index()
+    |> Enum.map(fn {row, y} ->
+      render_line_rle(extract_cells(row), y, line_opts)
+    end)
+  end
+
+  defp line_opts(opts) do
+    %{
+      css_prefix: Keyword.get(opts, :css_prefix, "raxol"),
+      use_inline: Keyword.get(opts, :use_inline_styles, false),
+      show_cursor: Keyword.get(opts, :show_cursor, false),
+      cursor_pos: Keyword.get(opts, :cursor_position),
+      cursor_style: Keyword.get(opts, :cursor_style, :block),
+      element_id_map: Keyword.get(opts, :element_id_map, %{}),
+      a11y_map: Keyword.get(opts, :a11y_map, %{})
+    }
+  end
 
   @doc """
   Converts a buffer to HTML with diff highlighting (for debugging).
