@@ -88,6 +88,7 @@ defmodule Raxol.MCP.Server do
     :registry,
     :authorizer,
     :read_authorizer,
+    authorizer_source: :configured,
     initialized: false,
     log_level: :info,
     subscribers: %{},
@@ -97,10 +98,21 @@ defmodule Raxol.MCP.Server do
     elicitation_timeout_ms: @default_elicitation_timeout_ms
   ]
 
+  @typedoc """
+  Where this server's `:authorizer` came from.
+
+  `:configured` -- a caller chose it. `:default` -- a framework fallback stood in
+  because nobody chose one. The distinction exists for
+  `authorization_configured?/1`; see that function for why the two cannot be told
+  apart by the authorizer's value.
+  """
+  @type authorizer_source :: :configured | :default
+
   @type t :: %__MODULE__{
           registry: GenServer.server(),
           authorizer: Authorizer.t() | nil,
           read_authorizer: Authorizer.t() | nil,
+          authorizer_source: authorizer_source(),
           initialized: boolean(),
           log_level:
             :debug
@@ -221,9 +233,20 @@ defmodule Raxol.MCP.Server do
   end
 
   @doc """
-  Whether an authorizer is configured on this server. Network transport boot
-  guards use this to fail closed (see `Raxol.MCP.Deployment`). Returns `false` if
-  the server is unreachable.
+  Whether authorization on this server was CHOSEN by a caller. Network transport
+  boot guards use this to fail closed (see `Raxol.MCP.Deployment`). Returns
+  `false` if the server is unreachable.
+
+  Deliberately not `authorizer != nil`. A framework may supply a restrictive
+  fallback -- a deny-everything allowlist is a sensible default for an
+  unconfigured production server -- and the value alone cannot be told apart from
+  a policy an operator wrote. Treating the fallback as configured would satisfy
+  this gate with a default, which removes exactly the forcing function the gate
+  exists to be: nobody had to decide that a network transport should serve.
+
+  So a server started with `authorizer_source: :default` answers `false` however
+  strict its authorizer is. The default source is `:configured`, so a caller that
+  passes an authorizer without saying otherwise is taken at its word.
   """
   @spec authorization_configured?(GenServer.server()) :: boolean()
   def authorization_configured?(server \\ __MODULE__) do
@@ -239,12 +262,14 @@ defmodule Raxol.MCP.Server do
     registry = Keyword.get(opts, :registry, Registry)
     authorizer = Keyword.get(opts, :authorizer)
     read_authorizer = Keyword.get(opts, :read_authorizer)
+    authorizer_source = authorizer_source!(Keyword.get(opts, :authorizer_source, :configured))
 
     refuse_unguarded_sensitive_tools!(registry, authorizer)
 
     {:ok,
      %__MODULE__{
        registry: registry,
+       authorizer_source: authorizer_source,
        authorizer: authorizer,
        read_authorizer: read_authorizer,
        elicitation_timeout_ms:
@@ -264,7 +289,7 @@ defmodule Raxol.MCP.Server do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call(:authorization_configured?, _from, state) do
-    {:reply, state.authorizer != nil, state}
+    {:reply, state.authorizer != nil and state.authorizer_source == :configured, state}
   end
 
   @impl Raxol.Core.Behaviours.BaseManager
@@ -863,6 +888,16 @@ defmodule Raxol.MCP.Server do
       {:deny, reason} ->
         {authorization_required(id, name, :deny, reason), state}
     end
+  end
+
+  # A typo here would silently answer `false` forever and keep a network
+  # transport from ever booting, which reads as "the gate is broken" rather than
+  # "the option is wrong". Refuse instead.
+  defp authorizer_source!(source) when source in [:configured, :default], do: source
+
+  defp authorizer_source!(other) do
+    raise ArgumentError,
+          "Raxol.MCP.Server :authorizer_source must be :configured or :default, got: #{inspect(other)}"
   end
 
   # Registering a tool that declares itself destructive/sensitive while no
