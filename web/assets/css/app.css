@@ -2474,6 +2474,131 @@ input[type="range"]::-moz-range-thumb {
   border: none;
 }
 
+/* The scrub bar on the two prerecorded frame players. Extends the base above
+   rather than replacing it, and carries the `input[type="range"]` qualifier to
+   do so: the base is a type-plus-attribute selector, so a bare class beside it
+   loses on specificity no matter which comes last.
+
+   What it trims is size. The 20px thumb that suits a settings slider is taller
+   than the whole hero title-bar row the transport sits in, and the gallery
+   card's row is thinner still. Trimmed here rather than by shrinking the base,
+   because the base is what every other slider on the site uses.
+
+   The input is 20px tall with a transparent background and the TRACK is drawn
+   by the pseudo-elements, so the grab area is a WCAG-sized target while the
+   line the reader sees stays 4px. Painting the track as the input's own
+   background, which is how the base does it, cannot do both. */
+input[type="range"].player-seek {
+  flex: 0 0 auto;
+  width: 5.5rem;
+  height: 20px;
+  background: transparent;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+/* Fills its row. The card is wider than the slot in the hero's title bar, and
+   a scrub bar shorter than the recording it addresses puts several frames
+   under one pixel of travel. */
+input[type="range"].player-seek--card {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+input[type="range"].player-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--panel-border);
+  border-radius: 2px;
+}
+
+input[type="range"].player-seek::-moz-range-track {
+  height: 4px;
+  background: var(--panel-border);
+  border-radius: 2px;
+}
+
+/* The negative margin centres the thumb on the track it overhangs: without it
+   WebKit hangs a 12px thumb off the top edge of a 4px track. */
+input[type="range"].player-seek::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+}
+
+input[type="range"].player-seek::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+}
+
+/* The thumb is the only part of a range that shows focus and it is 12px of a
+   20px box, so the ring goes on the control. The base sets `outline: none`,
+   which on its own leaves this control with no visible focus at all. */
+input[type="range"].player-seek:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+}
+
+/* Which frame of how many. Tabular figures because the number changes every
+   tick, and proportional digits would jiggle the row beside it. */
+.player-clock {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The hero's title bar has a fixed width budget, and the clock is the one
+   thing in the transport that repeats what the slider already announces, so it
+   is what goes when the bar runs out of room. Same threshold as .hd-title. */
+@media (max-width: 40rem) {
+  .hd-controls .player-clock {
+    display: none;
+  }
+
+  input[type="range"].player-seek {
+    width: 3.5rem;
+  }
+}
+
+/* The card's transport gets its own row under the thumbnail rather than an
+   overlay on it: the preview is a 60 column terminal shrunk to card width, and
+   a control floating over it would cover the output the card exists to show. */
+.card-transport {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+}
+
+/* 24px minimum box, per WCAG 2.2 target size, for the same reason
+   .hd-control--icon carries one: `||` alone is a few pixels wide. */
+.card-transport__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  cursor: pointer;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.card-transport__btn:hover,
+.card-transport__btn:focus-visible {
+  color: var(--pearl-cream);
+  border-color: var(--text-dim);
+}
+
 /* Demo area */
 .demo-area { display: flex; }
 

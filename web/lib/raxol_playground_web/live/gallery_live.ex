@@ -22,7 +22,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       |> assign(:page_title, "Gallery")
       |> assign(
         :page_description,
-        "Browse 41 terminal-first Raxol UI components for Elixir apps: inputs, overlays, layouts, charts, agent harness views, and effects."
+        "Browse 42 terminal-first Raxol UI components for Elixir apps: inputs, overlays, layouts, charts, agent harness views, and effects."
       )
       |> assign(:og_title, "Raxol component gallery")
       |> assign(:canonical_url, "https://raxol.io/gallery")
@@ -40,7 +40,7 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
 
   # The unfiltered grid gets structure: a small hand-picked featured row,
   # then the catalog grouped under its own eight categories, so a first
-  # visit reads as a table of contents rather than 41 interchangeable
+  # visit reads as a table of contents rather than 42 interchangeable
   # cards. A filter or a search IS a grouping, so those render flat; the
   # featured entries sit only in the featured row, because the same card
   # twice on one page reads as a rendering bug.
@@ -278,33 +278,85 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   defp component_card(assigns) do
+    preview = RecordedFrames.preview(assigns.component.name)
+
     assigns =
-      assign(assigns, :preview, RecordedFrames.preview(assigns.component.name))
+      assign(assigns,
+        preview: preview,
+        # A recording with one frame is a still (the generator writes no
+        # `interval_ms` for those), and a transport over a still is a dead
+        # control, so the frame count decides whether the card gets one.
+        frame_count: if(preview, do: length(preview.frames), else: 0)
+      )
 
     ~H"""
     <div class="panel panel--glow transition-all duration-200 overflow-hidden flex flex-col">
       <%!-- Real rendered frames of the demo (committed under
            priv/demo_previews/), not a screenshot or a GIF. An animated
            demo's card plays its recording back at the demo's own tick via
-           the CardLoop hook; a static demo is one frame and no hook. The
-           link is a pointer shortcut duplicating "try live" below, so it
-           stays out of the tab order and the accessibility tree. --%>
-      <a
+           the CardLoop hook and gets a transport row under the picture; a
+           static demo is one frame, no hook and no controls.
+
+           The hook sits on this wrapper rather than on the link, because the
+           transport is a sibling of the picture and not part of it: the link
+           is `inert` so that a pointer cannot fall through the thumbnail into
+           a control, and an inert scrub bar would not move at all. --%>
+      <div
         :if={@preview}
         id={"preview-#{RecordedFrames.slug(@component.name)}"}
-        href={"/demos/#{@component.name}"}
-        class="gallery-preview bg-synthwave-bg"
-        data-theme="synthwave84"
-        aria-hidden="true"
-        tabindex="-1"
-        inert
-        phx-hook={if length(@preview.frames) > 1, do: "CardLoop"}
+        phx-hook={if @frame_count > 1, do: "CardLoop"}
         data-frame-ms={@preview.interval_ms}
-      ><%= if length(@preview.frames) > 1 do %><div
-          :for={{frame, i} <- Enum.with_index(@preview.frames)}
-          data-frame={i}
-          hidden={i != 0}
-        ><%= raw(frame) %></div><% else %><%= raw(hd(@preview.frames)) %><% end %></a>
+      >
+        <%!-- The link is a pointer shortcut duplicating "try live" below, so
+             it stays out of the tab order and the accessibility tree. --%>
+        <a
+          href={"/demos/#{@component.name}"}
+          class="gallery-preview bg-synthwave-bg"
+          data-theme="synthwave84"
+          aria-hidden="true"
+          tabindex="-1"
+          inert
+        ><%= if @frame_count > 1 do %><div
+            :for={{frame, i} <- Enum.with_index(@preview.frames)}
+            data-frame={i}
+            hidden={i != 0}
+          ><%= raw(frame) %></div><% else %><%= raw(hd(@preview.frames)) %><% end %></a>
+        <%!-- A native range rather than a div wearing the role: the arrows,
+             Home, End and PageUp already move it and it announces as a
+             slider with a value. `aria-valuetext` carries the readable frame,
+             because the raw value is an array offset.
+
+             Seeking is client-only and stays that way. Every frame is already
+             above as a hidden sibling of the visible one, so revealing one is
+             a `hidden` toggle; a phx-change would spend a round trip, a diff
+             and a patch per drag step to show markup the browser is holding,
+             and there are up to forty of these players on the page. --%>
+        <div :if={@frame_count > 1} class="card-transport">
+          <button
+            type="button"
+            data-role="player-toggle"
+            data-name={@component.name}
+            class="card-transport__btn"
+            aria-label={"Pause the #{@component.name} recording"}
+            title={"Pause the #{@component.name} recording"}
+          >||</button>
+          <input
+            type="range"
+            class="player-seek player-seek--card"
+            data-role="player-seek"
+            min="0"
+            max={@frame_count - 1}
+            step="1"
+            value="0"
+            aria-label={"Scrub the #{@component.name} recording"}
+            aria-valuetext={"frame 1 of #{@frame_count}"}
+            title="Space plays and pauses. Left and right step one frame. Home and End jump to the ends. 0 to 9 jump by tenths."
+          />
+          <%!-- Decoration: the slider beside it already announces the frame it
+               is on, and a second live number would be read out twice. --%>
+          <span class="player-clock" data-role="player-clock" aria-hidden="true">1/<%= @frame_count %></span>
+        </div>
+      </div>
       <div class="p-3 flex flex-col flex-1">
         <div class="flex items-baseline justify-between gap-2 mb-1">
           <h2 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h2>
