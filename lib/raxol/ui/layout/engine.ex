@@ -484,6 +484,13 @@ defmodule Raxol.UI.Layout.Engine do
     process_element(%{element | type: :box}, space, acc)
   end
 
+  # `Components.scrubber/1` does the same trick over a :row: the discovery
+  # type is what MCP and the accessibility projection dispatch on, and the
+  # layout is an ordinary row of text segments.
+  def process_element(%{type: :scrubber} = element, space, acc) do
+    process_element(%{element | type: :row}, space, acc)
+  end
+
   # Process button elements in new View DSL format (no :attrs key)
   def process_element(%{type: :button, text: text} = button, space, acc)
       when is_binary(text) do
@@ -836,6 +843,11 @@ defmodule Raxol.UI.Layout.Engine do
   def measure_element(%{type: type} = element, available_space)
       when type in [:line_chart, :bar_chart, :scatter_chart, :heatmap] do
     measure_element(Map.put(element, :type, :box), available_space)
+  end
+
+  # Same mirror for the scrubber's :row alias.
+  def measure_element(%{type: :scrubber} = element, available_space) do
+    measure_element(Map.put(element, :type, :row), available_space)
   end
 
   # Box with single map child (View DSL produces map, not list, for single child)
