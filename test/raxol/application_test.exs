@@ -349,6 +349,24 @@ defmodule Raxol.ApplicationTest do
       assert Raxol.Application.mcp_authorizer_source() == :default
     end
 
+    # `:minimal` omits the MCP supervisor, but the injection is not mode-gated.
+    # Injecting there advertised six tools to a Tidewave client that then refused
+    # all six, since every injected callback re-enters through that server.
+    test "no injection when the MCP server this startup mode did not build" do
+      assert Raxol.Application.tidewave_injection_decision(true, nil) ==
+               {:skip, :no_mcp_server}
+    end
+
+    test "injection proceeds when the server is there" do
+      assert Raxol.Application.tidewave_injection_decision(true, self()) ==
+               :inject
+    end
+
+    test "opting out wins even with a server running" do
+      assert Raxol.Application.tidewave_injection_decision(false, self()) ==
+               {:skip, :disabled}
+    end
+
     # This assertion only means anything from HERE. raxol_mcp is a path
     # dependency of this application, and a path dependency compiles under :prod
     # whatever the umbrella's env is, so a compile-time capture of `Mix.env()`

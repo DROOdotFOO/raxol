@@ -1046,10 +1046,48 @@ defmodule Raxol.Application do
   # Set `config :raxol, inject_tidewave_tools: false` to opt out.
   defp maybe_inject_tidewave_tools do
     if Code.ensure_loaded?(Tidewave) and
-         Code.ensure_loaded?(Raxol.Headless.McpTools) and
-         Application.get_env(:raxol, :inject_tidewave_tools, true) do
-      inject_tidewave_tools()
+         Code.ensure_loaded?(Raxol.Headless.McpTools) do
+      apply_tidewave_decision(
+        tidewave_injection_decision(
+          Application.get_env(:raxol, :inject_tidewave_tools, true),
+          Process.whereis(Raxol.MCP.Server)
+        )
+      )
     end
+
+    :ok
+  end
+
+  @doc false
+  # Whether to put the raxol tools in Tidewave's dispatch map.
+  #
+  # Split out and pure because the interesting case cannot be reached from a test
+  # otherwise: `:tidewave` is an `only: :dev` dependency, so the caller above is
+  # unreachable under `mix test` and any check living inside it would be
+  # unverifiable.
+  @spec tidewave_injection_decision(boolean(), pid() | nil) ::
+          :inject | {:skip, :disabled | :no_mcp_server}
+  def tidewave_injection_decision(enabled?, mcp_server)
+
+  def tidewave_injection_decision(false, _mcp_server), do: {:skip, :disabled}
+
+  # Not every startup mode builds the MCP supervisor -- `:minimal` does not --
+  # and every injected callback re-enters through that server. Injecting anyway
+  # would advertise six tools to a Tidewave client and then refuse all six.
+  # Absent is a better answer than present-and-permanently-broken.
+  def tidewave_injection_decision(true, nil), do: {:skip, :no_mcp_server}
+
+  def tidewave_injection_decision(true, server) when is_pid(server), do: :inject
+
+  defp apply_tidewave_decision(:inject), do: inject_tidewave_tools()
+
+  defp apply_tidewave_decision({:skip, :disabled}), do: :ok
+
+  defp apply_tidewave_decision({:skip, :no_mcp_server}) do
+    Log.debug(
+      "Raxol tools were not injected into Tidewave: Raxol.MCP.Server is not " <>
+        "running in this startup mode, so every call would have been refused."
+    )
 
     :ok
   end
