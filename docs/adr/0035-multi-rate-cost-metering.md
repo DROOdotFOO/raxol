@@ -2,8 +2,15 @@
 
 ## Status
 
-Proposed, 2026-09-04. Nothing is implemented; this records the metering model before a provider
-whose prices do not fit the current one is added.
+Proposed, 2026-09-04; implemented 2026-09-05 in PR #971 (`LlmPrices.turn_cost/4` with the
+backend-scoped table, exact cache-split pricing, the UTC peak clock, and provider-reported
+cost read as a per-turn delta by `AcpStreamAdapter`). The one sequencing rule below that the
+implementation did not follow as written is "ship the provider unpriced first": the scoped
+rows landed keyed to `:deepseek` before any catalog entry carried that id, so they were
+unreachable rather than unpriced, and the provider was registered afterwards against rows
+already verified upstream. The halt was never disarmed by a guess, which is what the rule
+exists for. This records the metering model for a provider whose prices do not fit the
+flat-table one.
 
 Written against DeepSeek as the forcing case, but the model it breaks was already straining:
 two of the three collision hazards below are live today on OpenRouter and LLM7, and Anthropic's
@@ -223,19 +230,46 @@ This is not a hypothetical second source. Driving Oh My Pi's ACP surface with
 
 That is `Schema.UsageUpdate`'s shape exactly (`schema/session_update.ex:491-561`), and
 `Schema.Cost` already models `%{amount, currency}`. So a foreign agent hosted over ACP reports
-authoritative per-turn dollars for a model raxol may know nothing about, priced by whoever is
-actually billing. No table can compete with that, and no table needs to.
+dollars for a model raxol may know nothing about, priced by whoever is actually billing. No
+table can compete with that, and no table needs to.
 
 A provider-reported cost should therefore be preferred over any table, ranking below the env
 rates and above the scoped table. This is what turns an unpriced-model halt into a real charge
 for exactly the cases a table cannot cover, and it retroactively activates a value grok has
 been reporting all along.
 
-Two cautions to carry into the implementation. Currency must never be coerced: map to
-`cost_usd` only when `currency == "USD"` and keep the pair verbatim otherwise, because a
-silently-converted figure in a spend gate is the failure this ADR exists to prevent. And a
-reported cost is the counterparty's claim, not an invoice; it is right to prefer it over a
-guess and wrong to treat it as audited.
+**Correction, found in implementation: the ACP figure is not per-turn.** `Schema.UsageUpdate`'s
+own moduledoc documents `cost` as the cumulative session cost, so mapping it straight onto a
+turn re-bills the whole session every turn, structurally the same trap ADR-0034 records for
+Symphony's `merge_tokens/2` ("usage must be a delta"). The adapter therefore holds the last
+cumulative it billed as an anchor and emits `:cost` as the delta against it, carrying the
+cumulative through as `:session_cost`, which pricing is forbidden to read. Four rules follow
+and each is pinned by a test:
+
+- The anchor advances only when a bracket bills (a completed turn). A cancelled, errored or
+  superseded turn emits no usage, so its spend rides the next completed turn's delta instead
+  of vanishing behind an advanced anchor.
+- A turn the peer sent no `usage_update` for reports no cost, never `0.0`: "no report" is not
+  the claim "it cost zero", and a `0.0` would price a real turn through this path.
+- A cumulative that went down is a broken counterparty figure, not a credit. No cost is
+  emitted; the map still carries `session_cost`, and `Code.App` reads that as evidence the
+  turn was not free, so with no tokens to price it is unpriced rather than $0.00.
+- Attaching to a session with history (a restart, `session/load`) needs the anchor seeded
+  (`:cost_anchor`, or a `usage_update` before the first turn), or the peer's next cumulative
+  bills the whole history to one turn.
+
+Two cautions to carry into the implementation, both now enforced. Currency must never be
+coerced: map to `cost_usd` only when `currency == "USD"` and keep the pair verbatim otherwise,
+because a silently-converted figure in a spend gate is the failure this ADR exists to prevent;
+a bare number with no currency is not read at all, so `Harness.GrokBuild` stamps its
+`total_cost_usd` as `%{amount, currency: "USD"}`. And a reported cost is the counterparty's
+claim, not an invoice; it is right to prefer it over a guess and wrong to treat it as audited.
+The claim is trusted for enforcement in the same way a provider's token counts are, which
+arrive over the same wire and are equally unauthenticated; a floor at the table price was
+considered and not taken, because it would restore the over-metering this section exists to
+remove without closing that class. Every amount and count is bounded on read
+(`BenchmarkProfile.max_count/0`): a figure a float cannot carry reads as absent, never as an
+`ArithmeticError` that aborts the fold before the ledger record and the halt.
 
 ### Ship a new provider unpriced first, deliberately
 
