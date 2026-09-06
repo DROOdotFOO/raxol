@@ -83,6 +83,16 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
     turn_id
   end
 
+  # begin_turn while a turn is open closes it as superseded first.
+  defp begin_over_open_turn!(ctx, prompt) do
+    {:ok, turn_id} = AcpStreamAdapter.begin_turn(ctx.adapter, prompt)
+    assert %{type: :turn_canceled, payload: %{reason: :superseded}} = next_event(ctx.session_id)
+    assert %{type: :turn_started} = next_event(ctx.session_id)
+    assert %{type: :item_started} = next_event(ctx.session_id)
+    assert %{type: :item_completed, payload: %{role: :user}} = next_event(ctx.session_id)
+    turn_id
+  end
+
   describe "mapping table" do
     test "begin_turn emits a durable turn_started, then the user echo item",
          ctx do
@@ -666,6 +676,126 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
       forged = ctx.session_id |> next_event() |> assert_boundary_clean()
       assert %{stop_reason: :unknown} = forged.payload
       assert_in_delta forged.payload.usage.cost.amount, 0.4, 1.0e-9
+    end
+
+    # The peer's JSON can spell any integer; Jason hands it over as a bignum
+    # and `* 1.0` on one raises. The tolerant-reading rule covers money too.
+    test "a cost or count a float cannot carry reads as absent, never a crash",
+         ctx do
+      _t1 = begin!(ctx, "one")
+
+      update!(
+        ctx.adapter,
+        {:usage_update,
+         %{
+           used: Integer.pow(10, 400),
+           size: 100,
+           cost: %{amount: Integer.pow(10, 400), currency: "USD"},
+           _meta: %{"inputTokens" => Integer.pow(10, 400), "outputTokens" => 3}
+         }}
+      )
+
+      usage = complete_turn(ctx)
+      assert Process.alive?(ctx.adapter)
+      refute Map.has_key?(usage, :cost)
+      refute Map.has_key?(usage, :session_cost)
+      refute Map.has_key?(usage, :context_tokens)
+      refute Map.has_key?(usage, :input_tokens)
+      assert usage.output_tokens == 3
+      assert usage.max_context_tokens == 100
+    end
+
+    test "a negative cumulative is a broken figure, not a credit on the first turn",
+         ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: -2.5, currency: "USD"}))
+
+      usage = complete_turn(ctx)
+      refute Map.has_key?(usage, :cost)
+      refute Map.has_key?(usage, :session_cost)
+    end
+
+    # A cancelled turn emits no usage, so if the anchor moved past its
+    # cumulative the money between would never be billed by anyone.
+    test "a cancelled turn's spend rides the next completed turn's delta", ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: 1.0, currency: "USD"}))
+      assert %{cost: %{amount: 1.0}} = complete_turn(ctx)
+
+      _t2 = begin!(ctx, "two")
+      update!(ctx.adapter, probe_frame(%{amount: 6.0, currency: "USD"}))
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :cancelled})
+      assert %{type: :turn_canceled} = next_event(ctx.session_id)
+
+      _t3 = begin!(ctx, "three")
+      update!(ctx.adapter, probe_frame(%{amount: 8.0, currency: "USD"}))
+      third = complete_turn(ctx)
+
+      # $5.00 spent under the cancelled turn plus $2.00 under this one.
+      assert_in_delta third.cost.amount, 7.0, 1.0e-9
+      assert_in_delta third.session_cost.amount, 8.0, 1.0e-9
+    end
+
+    test "an errored turn's spend rides the next completed turn's delta too", ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: 2.0, currency: "USD"}))
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, {:error, :boom})
+      assert %{type: :error} = next_event(ctx.session_id)
+
+      _t2 = begin!(ctx, "two")
+      update!(ctx.adapter, probe_frame(%{amount: 2.5, currency: "USD"}))
+      assert_in_delta complete_turn(ctx).cost.amount, 2.5, 1.0e-9
+    end
+
+    test "a superseded turn's spend rides the next completed turn's delta", ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: 3.0, currency: "USD"}))
+
+      # begin_turn with a turn open closes it as superseded (no usage).
+      _t2 = begin_over_open_turn!(ctx, "two")
+      update!(ctx.adapter, probe_frame(%{amount: 4.0, currency: "USD"}))
+      assert_in_delta complete_turn(ctx).cost.amount, 4.0, 1.0e-9
+    end
+
+    # Attaching to a session with history: the peer's next cumulative covers
+    # everything already billed, and an unseeded adapter would bill all of it
+    # to one turn.
+    test "a :cost_anchor start option seeds the delta for a resumed session" do
+      session_id = "acp-adapter-seeded-#{System.unique_integer([:positive])}"
+      :ok = SessionStreamer.subscribe(session_id)
+
+      {:ok, adapter} =
+        AcpStreamAdapter.start_link(
+          session_id: session_id,
+          cost_anchor: %{amount: 9.0, currency: "USD"}
+        )
+
+      ctx = %{adapter: adapter, session_id: session_id}
+      _t1 = begin!(ctx, "resumed")
+      update!(adapter, probe_frame(%{amount: 9.25, currency: "USD"}))
+
+      usage = complete_turn(ctx)
+      assert_in_delta usage.cost.amount, 0.25, 1.0e-9
+      assert_in_delta usage.session_cost.amount, 9.25, 1.0e-9
+    end
+
+    test "a malformed :cost_anchor fails the start" do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {:invalid_cost_anchor, "9 USD"}} =
+               AcpStreamAdapter.start_link(session_id: "x", cost_anchor: "9 USD")
+    end
+
+    test "a usage_update before the first turn seeds the anchor instead of billing",
+         ctx do
+      # A `session/load` replay delivers history before any prompt is sent.
+      update!(ctx.adapter, probe_frame(%{amount: 9.0, currency: "USD"}))
+
+      _t1 = begin!(ctx, "after load")
+      update!(ctx.adapter, probe_frame(%{amount: 9.5, currency: "USD"}))
+
+      usage = complete_turn(ctx)
+      assert_in_delta usage.cost.amount, 0.5, 1.0e-9
     end
   end
 
