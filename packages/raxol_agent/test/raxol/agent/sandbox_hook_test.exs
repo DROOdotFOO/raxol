@@ -23,6 +23,10 @@ defmodule Raxol.Agent.SandboxHookTest do
     end
   end
 
+  defmodule PredicateAgent do
+    def sandbox, do: [Shell.denylist(fn cmd -> String.contains?(cmd, "sudo") end)]
+  end
+
   defmodule NoSandboxAgent do
     # No sandbox/0 callback defined.
   end
@@ -143,17 +147,68 @@ defmodule Raxol.Agent.SandboxHookTest do
     end
 
     test "the emitted reason names the program, never the arguments" do
-      # The command line is a tool argument. The caller still receives it in
-      # `{:deny, reason}`; the wire carries the program and a digest.
-      command = "curl -H 'Authorization: Bearer SECRET-TOKEN-7f3a' https://x.test"
+      # A simple command: the first token is what `sh` would exec. The caller
+      # still receives the whole line in `{:deny, reason}`; the wire carries
+      # the program and a digest.
+      command = "curl -H Authorization:Bearer-SECRET-TOKEN-7f3a https://x.test"
+
+      assert {:deny, {:shell_denied, _, ^command}} =
+               SandboxHook.pre_execute(Directive.shell(command), ctx(ShellAllowlistAgent))
+
+      assert_receive {:tel, [:raxol, :agent, :sandbox, :denied], metadata}
+      assert {:shell_denied, {:allowlist, ["ls", "cat"]}, "curl"} = metadata.reason
+      assert metadata.command_digest =~ ~r/\A[0-9a-f]{16}\z/
+      refute inspect(metadata) =~ "SECRET-TOKEN"
+    end
+
+    test "an env-assignment prefix is never emitted as the program" do
+      # List modes deny every assignment-prefixed command, so this emit always
+      # fires for exactly the shape a credential rides in. The first token IS
+      # the secret; only a shape tag may leave the process.
+      command = "PGPASSWORD=hunter2-SECRET psql -c 'select 1'"
 
       assert {:deny, {:shell_denied, _, ^command}} =
                SandboxHook.pre_execute(Directive.shell(command), ctx(MixedAgent))
 
       assert_receive {:tel, [:raxol, :agent, :sandbox, :denied], metadata}
-      assert {:shell_denied, _mode, "curl"} = metadata.reason
+      assert {:shell_denied, {:denylist, ["rm"]}, :non_simple} = metadata.reason
       assert metadata.command_digest =~ ~r/\A[0-9a-f]{16}\z/
-      refute inspect(metadata) =~ "SECRET-TOKEN"
+      refute inspect(metadata) =~ "hunter2"
+    end
+
+    test "a simple command whose program token carries `=` is emitted as a tag" do
+      command = "./deploy?token=SECRET-7f3a --now"
+
+      assert {:deny, _} =
+               SandboxHook.pre_execute(Directive.shell(command), ctx(ShellAllowlistAgent))
+
+      assert_receive {:tel, [:raxol, :agent, :sandbox, :denied], metadata}
+      assert {:shell_denied, _mode, :non_simple} = metadata.reason
+      refute inspect(metadata) =~ "SECRET"
+    end
+
+    test "the program name is bounded in bytes, not graphemes" do
+      # 40 two-byte graphemes: under a grapheme cap of 64, over the 64-byte
+      # identifier bound `ThreadLogRouter` enforces on the persisted payload.
+      program = String.duplicate("\u00e9", 40)
+      assert byte_size(program) == 80
+
+      assert {:deny, _} =
+               SandboxHook.pre_execute(
+                 Directive.shell(program <> " arg"),
+                 ctx(ShellAllowlistAgent)
+               )
+
+      assert_receive {:tel, [:raxol, :agent, :sandbox, :denied], metadata}
+      assert {:shell_denied, _mode, {:redacted, :binary, 80}} = metadata.reason
+    end
+
+    test "a predicate mode is redacted to its shape on the wire" do
+      assert {:deny, _} =
+               SandboxHook.pre_execute(Directive.shell("sudo ls"), ctx(PredicateAgent))
+
+      assert_receive {:tel, [:raxol, :agent, :sandbox, :denied], metadata}
+      assert {:shell_denied, {:denylist, {:redacted, :function}}, "sudo"} = metadata.reason
     end
 
     test "does not fire on allow" do
