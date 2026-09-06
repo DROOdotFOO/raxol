@@ -566,7 +566,10 @@ defmodule Raxol.Symphony.Runners.RaxolAgent do
       |> turn_result()
     end
 
-    case Raxol.Agent.PolicyApplier.apply(policies, op, turn_payload) do
+    # `turn_payload` is two identifiers, which is exactly what event metadata
+    # may carry; passing it as `metadata:` keeps the policy events joinable to
+    # this turn and issue now that the applier no longer emits its argument.
+    case Raxol.Agent.PolicyApplier.apply(policies, op, turn_payload, metadata: turn_payload) do
       {:ok, {events, pause_request}} ->
         {:ok, events, pause_request}
 

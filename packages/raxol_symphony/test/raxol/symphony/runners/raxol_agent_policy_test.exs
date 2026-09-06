@@ -131,7 +131,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
       assert count_applied(:multi, 400) == 3
     end
 
-    test "metadata carries the turn + issue_id params" do
+    test "metadata carries the turn and issue id, never the argument" do
       Memory.put_issue(%{issue() | state: "Done"})
 
       handler_id = "metadata_test_#{:erlang.unique_integer([:positive])}"
@@ -156,10 +156,12 @@ defmodule Raxol.Symphony.Runners.RaxolAgentPolicyTest do
                  attempt: nil
                )
 
-      # PolicyApplier metadata exposes the params the runner threaded in.
+      # The runner threads its two identifiers in as `metadata:`; the applier
+      # no longer emits its argument, so `params` must be gone from the event.
       assert_receive {:metadata, metadata}, 200
-      assert metadata.params.turn == 1
-      assert metadata.params.issue_id == "issue-1"
+      assert metadata.turn == 1
+      assert metadata.issue_id == "issue-1"
+      refute Map.has_key?(metadata, :params)
     end
   end
 

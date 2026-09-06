@@ -35,17 +35,27 @@ defmodule Raxol.Agent.ThreadLogRouter do
 
   | Telemetry event | ThreadLog kind | Payload |
   | --- | --- | --- |
-  | `[:raxol, :agent, :policy, :cache_hit]` | `:policy_result` | `%{policy: :cache, decision: :hit, key, params}` |
-  | `[:raxol, :agent, :policy, :cache_miss]` | `:policy_result` | `%{policy: :cache, decision: :miss, key, params}` |
+  | `[:raxol, :agent, :policy, :cache_hit]` | `:policy_result` | `%{policy: :cache, decision: :hit, key, params_digest}` |
+  | `[:raxol, :agent, :policy, :cache_miss]` | `:policy_result` | `%{policy: :cache, decision: :miss, key, params_digest}` |
   | `[:raxol, :agent, :policy, :retry_attempt]` | `:policy_result` | `%{policy: :retry, decision: :attempt, attempt, reason, backoff_ms}` |
   | `[:raxol, :agent, :policy, :retry_exhausted]` | `:policy_result` | `%{policy: :retry, decision: :exhausted, attempt, reason}` |
   | `[:raxol, :agent, :policy, :timeout]` | `:policy_result` | `%{policy: :timeout, decision: :fired, wall_ms}` |
-  | `[:raxol, :agent, :policy, :applied]` | `:policy_result` | `%{policy: :applied, policy_kinds, outcome}` |
-  | `[:raxol, :agent, :sandbox, :denied]` | `:sandbox_deny` | `%{action, reason}` |
+  | `[:raxol, :agent, :policy, :applied]` | `:policy_result` | `%{policy: :applied, policy_kinds, outcome, params_digest}` |
+  | `[:raxol, :agent, :sandbox, :denied]` | `:sandbox_deny` | `%{action, reason, command_digest}` |
 
-  All payloads include a `metadata` map mirroring the telemetry
-  event's metadata (minus `agent_id`/`agent_module` which are
-  redundant with the thread_id).
+  Every payload is accompanied by a `metadata` map, but it is not a mirror of
+  the event's metadata: it carries correlation identifiers only. The keys are
+  the tier-4 core (`session_id`, `turn_id`), the trace context
+  `Raxol.Core.Telemetry.TraceContext` attaches upstream (`trace_id`,
+  `span_id`, `parent_span_id`, `causation_id`), and whatever the attaching
+  host names in `attach/4`'s `:metadata_keys`; and a listed key is persisted
+  only when its value satisfies `Raxol.Agent.Telemetry.identifier?/1`. Every
+  other key is dropped. The payload builders above already pick each event's
+  own fields, so nothing informative is lost, and the audit log no longer
+  depends on every emitter keeping content out of metadata (ADR-0036). A
+  value that fails the check is dropped rather than raised on, because
+  `:telemetry` detaches a handler that raises, and a lost audit trail is the
+  worse failure.
   """
 
   alias Raxol.Agent.ThreadLog
@@ -65,6 +75,11 @@ defmodule Raxol.Agent.ThreadLogRouter do
 
   @all_events @policy_events ++ @sandbox_events
 
+  # Keys the persisted `metadata` may carry without the host naming them.
+  # `agent_id` and `agent_module` are deliberately absent: both are redundant
+  # with the `thread_id` every entry is filed under.
+  @correlation_keys [:session_id, :turn_id, :trace_id, :span_id, :parent_span_id, :causation_id]
+
   @doc """
   Attach a telemetry handler that routes agent-side events to the
   given ThreadLog adapter under `thread_id`.
@@ -73,30 +88,57 @@ defmodule Raxol.Agent.ThreadLogRouter do
   returned by `Raxol.Agent.ThreadLog.normalize/1`. Pass `nil` to
   no-op (useful when the agent declares no `thread_log/0`).
 
+  Options:
+
+    * `:metadata_keys` -- additional metadata keys (atoms) to persist beside
+      the built-in correlation keys, for a host whose events carry its own
+      identifiers (a Symphony runner's `turn` and `issue_id`, say). Values
+      are still subject to `Raxol.Agent.Telemetry.identifier?/1`.
+
   Returns `:ok` on success or when adapter is `nil`. Returns
   `{:error, :already_exists}` if `handler_id` is already attached.
   """
   @spec attach(
           binary(),
           ThreadLog.config() | {module(), ThreadLog.config()} | nil,
-          binary()
+          binary(),
+          keyword()
         ) ::
           :ok | {:error, term()}
-  def attach(_handler_id, nil, _thread_id), do: :ok
+  def attach(handler_id, adapter, thread_id, opts \\ [])
 
-  def attach(handler_id, adapter, thread_id)
-      when is_binary(handler_id) and is_binary(thread_id) do
+  def attach(_handler_id, nil, _thread_id, _opts), do: :ok
+
+  def attach(handler_id, adapter, thread_id, opts)
+      when is_binary(handler_id) and is_binary(thread_id) and is_list(opts) do
     normalized = ThreadLog.normalize(adapter)
+    keys = metadata_keys!(Keyword.get(opts, :metadata_keys, []))
 
     case :telemetry.attach_many(
            handler_id,
            @all_events,
            &__MODULE__.handle/4,
-           %{adapter: normalized, thread_id: thread_id}
+           %{adapter: normalized, thread_id: thread_id, metadata_keys: keys}
          ) do
       :ok -> :ok
       {:error, _reason} = err -> err
     end
+  end
+
+  defp metadata_keys!(keys) when is_list(keys) do
+    if Enum.all?(keys, &is_atom/1) do
+      @correlation_keys ++ keys
+    else
+      raise ArgumentError,
+            "ThreadLogRouter.attach/4 `:metadata_keys` must be a list of atoms; " <>
+              "got #{inspect(keys)}"
+    end
+  end
+
+  defp metadata_keys!(other) do
+    raise ArgumentError,
+          "ThreadLogRouter.attach/4 `:metadata_keys` must be a list of atoms; " <>
+            "got #{inspect(other)}"
   end
 
   @doc "Detach a previously-attached handler. Idempotent."
@@ -109,15 +151,26 @@ defmodule Raxol.Agent.ThreadLogRouter do
   @doc false
   def handle(event, _measurements, metadata, %{
         adapter: adapter,
-        thread_id: thread_id
+        thread_id: thread_id,
+        metadata_keys: keys
       }) do
     {kind, payload} = translate(event, metadata)
-    audit_metadata = Map.drop(metadata, [:agent_id, :agent_module])
 
+    # The builders below pick each event's fields, and the emitters bound the
+    # values they did not build themselves; this is the backstop for an
+    # emitter that forgets, so the audit log never holds an unbounded term.
     _ =
-      ThreadLog.append(adapter, thread_id, kind, payload, metadata: audit_metadata)
+      ThreadLog.append(adapter, thread_id, kind, Raxol.Agent.Telemetry.bound(payload),
+        metadata: correlation_metadata(metadata, keys)
+      )
 
     :ok
+  end
+
+  defp correlation_metadata(metadata, keys) do
+    metadata
+    |> Map.take(keys)
+    |> Map.filter(fn {_key, value} -> Raxol.Agent.Telemetry.identifier?(value) end)
   end
 
   # --- Per-event translation -----------------------------------------------
@@ -129,7 +182,8 @@ defmodule Raxol.Agent.ThreadLogRouter do
   defp translate([:raxol, :agent, :sandbox, :denied], metadata) do
     payload = %{
       action: Map.get(metadata, :action),
-      reason: Map.get(metadata, :reason)
+      reason: Map.get(metadata, :reason),
+      command_digest: Map.get(metadata, :command_digest)
     }
 
     {:sandbox_deny, payload}
@@ -140,7 +194,7 @@ defmodule Raxol.Agent.ThreadLogRouter do
       policy: :cache,
       decision: :hit,
       key: metadata[:key],
-      params: metadata[:params]
+      params_digest: metadata[:params_digest]
     }
 
   defp build_policy_payload(:cache_miss, metadata),
@@ -148,7 +202,7 @@ defmodule Raxol.Agent.ThreadLogRouter do
       policy: :cache,
       decision: :miss,
       key: metadata[:key],
-      params: metadata[:params]
+      params_digest: metadata[:params_digest]
     }
 
   defp build_policy_payload(:retry_attempt, metadata),
@@ -175,7 +229,8 @@ defmodule Raxol.Agent.ThreadLogRouter do
     do: %{
       policy: :applied,
       policy_kinds: metadata[:policy_kinds],
-      outcome: metadata[:outcome]
+      outcome: metadata[:outcome],
+      params_digest: metadata[:params_digest]
     }
 
   defp build_policy_payload(other, metadata),

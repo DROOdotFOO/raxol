@@ -46,10 +46,10 @@ defmodule Raxol.Agent.NativeHarness do
      accumulates as zero, so the turn prices at $0.00.
   2. `Raxol.Agent.Code.CostLedger.record/4` guards on `cost_usd > 0.0`
      (`code/cost_ledger.ex:33-34`), so that $0.00 turn is never recorded.
-  3. `flag_unpriced/4` (`code/app.ex:1077-1083`) exists to catch exactly a
-     $0.00 turn that burned tokens, but it asks `billed_tokens?/1`
-     (`code/app.ex:1085-1093`), which calls that same `add_usage/2` and
-     therefore also sees zero tokens. The fail-closed halt never arms.
+  3. `flag_unpriced/4` (`code/app.ex`) exists to catch exactly a $0.00 turn
+     that burned tokens, but it asks `billed?/1` over `token_counts/1`, which
+     calls that same `add_usage/2` and therefore also sees zero tokens. The
+     fail-closed halt never arms.
 
   Net effect: a ledger reading $0.00 forever and a `RAXOL_MAX_COST_USD` that
   never trips. A budget that looks enforced and is not is worse than no budget,

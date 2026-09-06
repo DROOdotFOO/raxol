@@ -41,6 +41,7 @@ ADRs for the Raxol project. Each one captures a single architectural decision: w
 | [0033](0033-web3-data-surface.md) | Indexer-agnostic web3 data surface (raxol_web3) | Proposed | 2026-08-31 |
 | [0034](0034-foreign-coding-agent-seams.md) | Foreign coding-agent integration seams | Implemented (driver pending) | 2026-09-04 |
 | [0035](0035-multi-rate-cost-metering.md) | Cost metering for multi-rate providers | Implemented | 2026-09-04 |
+| [0036](0036-agent-telemetry-coverage-and-shape.md) | Agent telemetry coverage and shape | Proposed | 2026-09-05 |
 
 ## Template
 
@@ -139,7 +140,8 @@ They preserve context for why decisions were made, help new contributors underst
 - [0032: Multi-root filesystem grants for agent sessions](0032-agent-filesystem-grants.md)
 - [0034: Foreign coding-agent integration seams](0034-foreign-coding-agent-seams.md)
 - [0035: Cost metering for multi-rate providers](0035-multi-rate-cost-metering.md)
+- [0036: Agent telemetry coverage and shape](0036-agent-telemetry-coverage-and-shape.md)
 
 ## Coverage
 
-33 authored ADRs (31 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, the indexer-agnostic web3 data surface, foreign coding-agent integration seams, and cost metering for multi-rate providers. (Numbers 0004 and 0006 are withdrawn placeholders.)
+34 authored ADRs (32 active; 0016 and 0017 are superseded by the raxol_earn v1->v2 seller-stack migration) covering core framework, performance, web integration, extensibility, state management, code quality, AI/MCP architecture, surface-specific admin patterns, orchestration, the cross-layer operator-flow contract, Workflow concurrency, the agent-stack sandbox + audit + policies primitive, self-improving agents (runtime skills + curation), the memory provider stack with full-text recall and dialectic user modeling, the unified messaging gateway, the Hermes-extraction Tier 2 agent capabilities (execution backends + hibernation, cronjob scheduling, execute_code pipeline collapse, delegate_task subagents, and auxiliary-model routing), the terminal cell model, the ACP session/update delivery-ordering contract, the Virtuals ACP Console runtime integration, multi-root filesystem grants for agent sessions, the indexer-agnostic web3 data surface, foreign coding-agent integration seams, cost metering for multi-rate providers, and agent telemetry coverage and shape. (Numbers 0004 and 0006 are withdrawn placeholders.)
