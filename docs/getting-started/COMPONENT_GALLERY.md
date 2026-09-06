@@ -428,6 +428,44 @@ Options: `wrap` (`:none`, `:char`, `:word`), `on_change`, `on_submit`.
 
 Features: cursor movement, shift-select, undo/redo history, line wrapping.
 
+### scrubber
+
+Transport control for anything with an ordered position: a track, a playhead, optional tick marks, a clock, and play/pause. Raxol's recordings, time-travel snapshots, and prerecorded web frames all project onto it.
+
+```elixir
+scrubber(
+  id: "replay",
+  min: 0,
+  max: 47,
+  position: 12,
+  marks: [0, 18, 33],
+  playing?: true,
+  elapsed_ms: 1_100,
+  duration_ms: 4_300
+)
+```
+
+Renders `>   00:01 / 00:04  ┃━━━━━●──┃──────┃───────`. The clock reads `mm:ss / mm:ss` when `duration_ms` is given and `position/max` otherwise.
+
+Options: `min`, `max`, `position`, `playing?`, `speed`, `marks`, `width`, `elapsed_ms`, `duration_ms`, `label`, `on_seek`, `on_play`, `on_pause`, `disabled`, `aria_label`, `tooltip`.
+
+`min`/`max` is the inclusive addressable range and need not start at zero: a wrapped time-travel ring addresses `first..last`. `position` is always clamped into it, and a step already at an end fires no callback.
+
+`on_seek`, `on_play`, and `on_pause` fire from `Scrubber.handle_event/3`, so they apply when you hold the component state yourself. A node emitted from `view/1` is driven instead by the `{:scrubber_seek, id, position}`, `{:scrubber_play, id}`, and `{:scrubber_pause, id}` messages the MCP tools dispatch to your `update/2`.
+
+Keyboard: Space (play/pause), Left/`h`/`,`/`<` (back one), Right/`l`/`.`/`>` (forward one), Home/End, `[`/`]` (previous/next mark), 0-9 (jump to 0%-90%), `+`/`=` and `-` (speed ladder `0.25` to `8.0`).
+
+The renderers are pure functions on a plain keyword list, so a caller writing straight to a TTY gets the same output with no component tree:
+
+```elixir
+alias Raxol.UI.Components.Input.Scrubber
+
+Scrubber.track(width: 8, min: 0, max: 7, position: 3)     # "━━━●────"
+Scrubber.clock(position: 12, min: 0, max: 47)             # "12/47"
+Scrubber.transport(playing?: true)                        # "> "
+Scrubber.line(min: 0, max: 47, position: 12, speed: 2.0)  # "||  12/47  ━━━━━━●─────────────────  2x"
+```
+
 ---
 
 ## Overlay
@@ -693,6 +731,7 @@ All component modules follow the same pattern: `init/1` -> `handle_event/3` -> `
 | select        | `select/1`        | `Input.SelectList`     | Yes          |
 | tabs          | `tabs/1`          | `Input.Tabs`           | Yes          |
 | menu          | --                | `Input.Menu`           | Yes          |
+| scrubber      | `scrubber/1`      | `Input.Scrubber`       | Yes          |
 | modal         | `modal/1`         | `Modal`                | Yes          |
 | sparkline     | `sparkline/1`     | --                     | No           |
 | line_chart    | `line_chart/1`    | --                     | No           |

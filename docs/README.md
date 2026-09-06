@@ -52,7 +52,7 @@ distributed systems, developer tools, and alternate surfaces.
 ## Examples
 
 - [Examples Learning Path](../examples/README.md): runnable examples, beginner to advanced
-- `mix raxol.playground`: interactive Component catalog with 41 demos
+- `mix raxol.playground`: interactive Component catalog with 42 demos
 
 ## Documentation ownership
 

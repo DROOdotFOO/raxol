@@ -8,13 +8,13 @@ Multi-surface application runtime for Elixir. One TEA module, four render target
 
 ## What's Done
 
-**Framework core (Phases 1-6):** TEA architecture, full render pipeline, 23 widgets, focus + W3C-style event capture/bubble, terminal compat (color downsampling, Unicode width, synchronized output), playground (41 demos / 8 categories), 7 braille-resolution charts, Hex packaging, `mix raxol.new`, session recording.
+**Framework core (Phases 1-6):** TEA architecture, full render pipeline, 23 widgets, focus + W3C-style event capture/bubble, terminal compat (color downsampling, Unicode width, synchronized output), playground (42 demos / 8 categories), 7 braille-resolution charts, Hex packaging, `mix raxol.new`, session recording.
 
 **OTP differentiators:** process-per-component crash isolation, hot code reload, LiveView bridge, SSH app serving, time-travel debugging (snapshot every `update/2`), distributed swarm (CRDTs, topology election, libcluster + Tailscale).
 
 **Adaptive UI + effects:** 8-rule LayoutRecommender, TrendDetector, Nx auto-retrain, Lifecycle integration, 5 MCP tools. Animation hints (Phase 15): declarative `view/1` metadata to every surface (`animate`/`stagger`/`sequence`), terminal frames server-side, LiveView CSS with `prefers-reduced-motion`, MCP JSON hints. BorderBeam effect (three-layer glow, 4 variants, terminal + LiveView + MCP).
 
-**MCP surface (Phases 8-13):** extracted `raxol_mcp` (server/client/registry, stdio + SSE). Auto-derives tools from the widget tree (15 widgets) with a focus/hover lens; `@mcp_exclude` opt-out. Full spec coverage (prompts, logging, completion, notifications, circuit breaker). Resources + ContextTree + StructuredScreenshot + model-projection diffs. Pipe-friendly test harness with functor-law property tests.
+**MCP surface (Phases 8-13):** extracted `raxol_mcp` (server/client/registry, stdio + SSE). Auto-derives tools from the widget tree (16 Component modules implement `ToolProvider`) with a focus/hover lens; `@mcp_exclude` opt-out. Full spec coverage (prompts, logging, completion, notifications, circuit breaker). Resources + ContextTree + StructuredScreenshot + model-projection diffs. Pipe-friendly test harness with functor-law property tests.
 
 **Agent framework:** TEA-based agents, coordinator/worker teams, 7 harness gaps closed (compaction, hooks, permissions, MCP client, streams, LSP, SSE). AI cockpit with SSE streaming for 9 backends. Virtual File System (pure-functional in-memory VFS, REPL helpers, 7 agent actions).
 

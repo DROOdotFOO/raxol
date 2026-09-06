@@ -1,7 +1,7 @@
 defmodule Raxol.UI.Accessibility.ComponentA11yTest do
   @moduledoc """
   Exercises the real Component `a11y_node/1` Providers through
-  `Raxol.Core.Accessibility.Projection` (default 15-Component type_map). This
+  `Raxol.Core.Accessibility.Projection` (default 16-Component type_map). This
   runs in the main app where the Component modules are loaded, so it covers the
   provider-dispatch path the raxol_core suite cannot.
   """
