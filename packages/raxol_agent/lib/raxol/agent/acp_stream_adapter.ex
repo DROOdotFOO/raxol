@@ -104,13 +104,20 @@ defmodule Raxol.Agent.AcpStreamAdapter do
       carried verbatim for display. Pricing must not read it.
 
   `UsageUpdate.cost` is the CUMULATIVE session cost, so `:cost` is
-  computed as a delta against the cumulative anchored at the turn's
-  start; see `put_cost/2` for the double-count reasoning, the
-  currency-comparison rule, and why a negative delta reports no cost
+  computed as a delta against the cumulative anchored at the last turn
+  this adapter billed; see `put_cost/2` for the double-count reasoning,
+  the currency-comparison rule, and why a negative delta reports no cost
   rather than a credit. Usage is turn-scoped (a turn the peer sent no
-  `usage_update` for reports `%{}`, never the previous turn's figures);
-  the cumulative-cost anchor is session-scoped and advances at every turn
-  boundary. Recorded by ADR-0034 (the `usage: %{}` hole) and ADR-0035
+  `usage_update` for reports `%{}`, never the previous turn's figures).
+  The anchor advances only when a bracket carries usage (`bill/1`): a
+  cancelled, errored or superseded turn emits none, so its spend rides
+  the next completed turn's delta rather than vanishing. On a new session
+  the first cumulative is the first turn's cost; attaching to a session
+  with history needs the `:cost_anchor` start option (or a `usage_update`
+  before the first turn, which seeds it), or that history is billed to
+  one turn. Every figure the peer sends is bounded on read: a negative,
+  non-integer, or float-unrepresentable count or amount is absent, never
+  a crash. Recorded by ADR-0034 (the `usage: %{}` hole) and ADR-0035
   (prefer a provider's own reported cost).
 
   ## Unknown-variant honesty (skip, count, disclose once)
@@ -152,6 +159,8 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   """
 
   use Raxol.Core.Behaviours.BaseManager
+
+  import Raxol.Agent.BenchmarkProfile, only: [is_count: 1]
 
   alias Raxol.Agent.Contract.Event
   alias Raxol.Agent.SessionStreamer
@@ -215,11 +224,16 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     :streamer,
     :turn_id,
     :reasoning_item,
-    # cost_anchor: the cumulative session cost as of the previous turn
-    # boundary (session-scoped). cost_reported: the cumulative figure this
-    # turn's own usage_update carried, nil when the peer reported none --
-    # turn-scoped, so a turn nobody reported on claims nothing rather than
-    # claiming zero dollars.
+    # cost_anchor: the peer's cumulative session cost as of the last turn
+    # this adapter BILLED, i.e. the last bracket that carried a usage map.
+    # It advances only there, so a cancelled, errored or superseded turn --
+    # which emits no usage -- leaves its spend to ride the next completed
+    # turn's delta instead of vanishing. Seeded from `:cost_anchor` at start
+    # (a restart or `session/load` mid-session) or from a `usage_update` the
+    # peer sends before the first turn. cost_reported: the cumulative figure
+    # this turn's own usage_update carried, nil when the peer reported none
+    # -- turn-scoped, so a turn nobody reported on claims nothing rather
+    # than claiming zero dollars.
     :cost_anchor,
     :cost_reported,
     seq: 0,
@@ -271,6 +285,14 @@ defmodule Raxol.Agent.AcpStreamAdapter do
       Omit it to feed the adapter yourself (the embedder passes this pid
       as the subscriber, or tests send the messages directly).
     * `:name` — process name (default anonymous).
+    * `:cost_anchor` — `%{amount, currency}`: the peer's cumulative session
+      cost already billed before this adapter started. Required to attach
+      to a session with history (a restart, `session/load`), because the
+      peer's next `usage_update` carries the cumulative for everything so
+      far and an unseeded adapter would bill all of it to one turn. The
+      figure is on the last durable `:turn_completed` as `session_cost`.
+      Omit for a new session, where the first cumulative IS the first
+      turn's cost.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -319,14 +341,21 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     session_id = Keyword.fetch!(opts, :session_id)
     streamer = Keyword.get(opts, :streamer, SessionStreamer)
 
-    case maybe_subscribe(Keyword.get(opts, :subscribe)) do
-      :ok ->
-        {:ok, %__MODULE__{session_id: session_id, streamer: streamer}}
-
-      {:error, reason} ->
-        {:stop, reason}
+    with {:ok, anchor} <- seed_anchor(Keyword.get(opts, :cost_anchor)),
+         :ok <- maybe_subscribe(Keyword.get(opts, :subscribe)) do
+      {:ok, %__MODULE__{session_id: session_id, streamer: streamer, cost_anchor: anchor}}
+    else
+      {:error, reason} -> {:stop, reason}
     end
   end
+
+  defp seed_anchor(nil), do: {:ok, nil}
+
+  defp seed_anchor(%{amount: amount, currency: currency} = anchor)
+       when is_number(amount) and amount >= 0 and is_binary(currency),
+       do: {:ok, %{anchor | amount: amount * 1.0}}
+
+  defp seed_anchor(other), do: {:error, {:invalid_cost_anchor, other}}
 
   defp maybe_subscribe(nil), do: :ok
 
@@ -343,6 +372,15 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   @impl Raxol.Core.Behaviours.BaseManager
   def handle_manager_call({:begin_turn, prompt}, _from, state) do
+    # A cumulative the peer reported before any turn (a `session/load`
+    # replay, or a frame from before this adapter attached) is history, not
+    # this turn's spend: it seeds the anchor. A report left over from an
+    # abandoned turn is unbilled spend, so it does not.
+    anchor =
+      if state.turn_id == nil,
+        do: state.cost_reported || state.cost_anchor,
+        else: state.cost_anchor
+
     state = close_abandoned_turn(state)
     turn_id = "turn-#{System.unique_integer([:positive])}"
 
@@ -360,7 +398,7 @@ defmodule Raxol.Agent.AcpStreamAdapter do
         reasoning_buf: [],
         reasoning_seq: 0,
         usage: %{},
-        cost_anchor: state.cost_reported || state.cost_anchor,
+        cost_anchor: anchor,
         cost_reported: nil
     }
 
@@ -380,9 +418,9 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     # error). Normally a no-op: the first answer chunk already sealed it.
     state = state |> seal_reasoning() |> close_turn(outcome)
 
-    # The anchor advances on BOTH turn boundaries, so a closed turn's
-    # dollars can never be billed again even if the embedder skips
-    # begin_turn/2 on the next prompt.
+    # The anchor is not touched here: a bracket that carried usage already
+    # advanced it (`bill/1`), and one that did not -- cancelled, errored --
+    # must leave it where it was so the spend rides the next delta.
     {:reply, :ok,
      %{
        state
@@ -393,7 +431,6 @@ defmodule Raxol.Agent.AcpStreamAdapter do
          reasoning_buf: [],
          reasoning_seq: 0,
          usage: %{},
-         cost_anchor: state.cost_reported || state.cost_anchor,
          cost_reported: nil
      }}
   end
@@ -670,7 +707,7 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   end
 
   defp close_turn(state, %{stop_reason: :refusal} = response) do
-    usage = turn_usage(state)
+    {usage, state} = bill(state)
 
     state
     |> seal_assistant_message()
@@ -692,7 +729,7 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   defp close_turn(state, %{stop_reason: reason} = response)
        when reason in @known_stop_reasons do
-    usage = turn_usage(state)
+    {usage, state} = bill(state)
 
     state
     |> seal_assistant_message()
@@ -712,7 +749,7 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   # the completion claim is suspect. The usage still rides: the tokens were
   # spent and the money was owed whatever the peer claims about the ending.
   defp close_turn(state, %{stop_reason: other}) do
-    usage = turn_usage(state)
+    {usage, state} = bill(state)
 
     state
     |> seal_assistant_message()
@@ -753,7 +790,15 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   # -- usage and cost mapping ---------------------------------------------------
 
-  defp turn_usage(state), do: put_cost(state.usage, state)
+  # The one place the anchor moves. A bracket that carries a usage map has
+  # billed everything up to the peer's latest cumulative, so the next delta
+  # starts there. Closes that carry no usage (cancelled, errored, superseded)
+  # never call this, which is what lets their spend ride the next completed
+  # turn instead of vanishing behind an advanced anchor.
+  defp bill(state) do
+    {put_cost(state.usage, state),
+     %{state | cost_anchor: state.cost_reported || state.cost_anchor}}
+  end
 
   # `Schema.UsageUpdate`'s known wire keys are exactly used/size/cost, so a
   # peer's token split arrives in `_meta` verbatim and is read from there.
@@ -779,16 +824,19 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   end
 
   # Tolerant reading applies to a token count as much as to a stop reason:
-  # a non-integer or negative figure reads as absent, because an absent
-  # count is safer at a spend gate than a fabricated one.
-  defp maybe_put_count(acc, key, count)
-       when is_integer(count) and count >= 0,
-       do: Map.put(acc, key, count)
-
+  # a non-integer, negative, or float-unrepresentable figure reads as
+  # absent, because an absent count is safer at a spend gate than a
+  # fabricated one -- and a 400-digit integer the peer's JSON is free to
+  # spell would otherwise crash the first arithmetic downstream.
+  defp maybe_put_count(acc, key, count) when is_count(count), do: Map.put(acc, key, count)
   defp maybe_put_count(acc, _key, _other), do: acc
 
+  # Same rule for money: a cumulative that is negative, or an integer a
+  # float cannot carry, is a broken figure and reads as no report at all.
+  # `amount * 1.0` on a bignum raises, so the bound comes first.
   defp reported_cost(%{cost: %{amount: amount, currency: currency}})
-       when is_number(amount) and is_binary(currency),
+       when is_binary(currency) and
+              ((is_float(amount) and amount >= 0.0) or is_count(amount)),
        do: %{amount: amount * 1.0, currency: currency}
 
   defp reported_cost(_usage), do: nil
@@ -833,8 +881,10 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     delta = amount - anchored
 
     # A cumulative that went DOWN is a broken counterparty figure, not a
-    # refund: reporting no cost falls the turn through to the pricing table
-    # instead of crediting a spend gate with money nobody returned.
+    # refund: reporting no cost leaves the turn to the pricing table -- or,
+    # with no tokens to price, to `Code.App`'s unpriced halt, which reads
+    # `:session_cost` as evidence the turn was not free -- instead of
+    # crediting a spend gate with money nobody returned.
     if delta < 0.0 do
       nil
     else
