@@ -34,6 +34,18 @@ defmodule Raxol.Symphony.RunnerKindConventionTest do
     })
   end
 
+  defp review_config_for(implementer, reviewer) do
+    Config.from_workflow(%{
+      config: %{
+        tracker: %{kind: "memory"},
+        runner: %{kind: "review"},
+        codex: %{command: "codex app-server"},
+        review: %{enabled: true, implementer_kind: implementer, reviewer_kind: reviewer}
+      },
+      prompt_template: ""
+    })
+  end
+
   describe "resolver domain vs schema" do
     test "every kind the resolver handles resolves to a loaded runner module" do
       for kind <- Runner.kinds() do
@@ -98,6 +110,32 @@ defmodule Raxol.Symphony.RunnerKindConventionTest do
 
         refute is_nil(Runner.vendor(kind)),
                "#{inspect(kind)} is offered as a review participant but declares no vendor"
+      end
+    end
+
+    test "preflight accepts a review pair exactly when dispatch can pair it" do
+      # `Runners.Review` hands `[implementer, reviewer]` to `select_reviewer/3`
+      # with both available; a pair that validates here and fails there parks
+      # every issue as :awaiting_human after the implementer has already run.
+      kinds = Schema.reviewable_kinds()
+
+      for implementer <- kinds, reviewer <- kinds do
+        preflight = Schema.validate(review_config_for(implementer, reviewer))
+
+        dispatch =
+          Raxol.Symphony.Review.select_reviewer(implementer, [implementer, reviewer], fn _ ->
+            true
+          end)
+
+        case dispatch do
+          {:ok, ^reviewer} ->
+            assert :ok = preflight,
+                   "#{implementer} -> #{reviewer} is a valid pair at dispatch but fails preflight"
+
+          {:error, {:insufficient_vendors, _}} ->
+            assert {:error, {:reviewer_vendor_must_differ, _}} = preflight,
+                   "#{implementer} -> #{reviewer} passes preflight but cannot be paired at dispatch"
+        end
       end
     end
   end
