@@ -93,6 +93,10 @@ nix develop github:DROOdotFOO/raxol   # dev shell with elixir, erlang, NIF + spe
 
 ## Try it
 
+Nothing to install: [raxol.io](https://raxol.io) runs the same catalog in a
+browser, one LiveView per demo. That surface is this repo's `web/` app; see
+[web/README.md](web/README.md) to run it yourself. In a terminal:
+
 ```bash
 git clone https://github.com/DROOdotFOO/raxol.git
 cd raxol && mix deps.get
