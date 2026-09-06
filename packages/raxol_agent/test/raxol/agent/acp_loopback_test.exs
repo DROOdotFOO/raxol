@@ -17,15 +17,18 @@ defmodule Raxol.Agent.AcpLoopbackTest do
 
   ## What the peer needs in its environment, and why
 
-    * `ELIXIR_ERL_OPTIONS=-noinput` is REQUIRED, not tuning. Without it the
-      peer never reads a single frame: erts' own `prim_tty` resource holds
-      fd 0, so `Transport.Stdio.start_self/1`'s `Port.open({:fd, 0, 1})` logs
+    * `-noinput` is REQUIRED, not tuning, and `bin/raxol-acp` sets it itself
+      (`ELIXIR_ERL_OPTIONS`). Without it the peer never reads a single frame:
+      erts' own `prim_tty` resource holds fd 0, so
+      `Transport.Stdio.start_self/1`'s `Port.open({:fd, 0, 1})` logs
       `driver_select(...) stealing control of fd=0 from resource
       prim_tty:tty` and inbound stdin never reaches the transport. Measured on
       both OTP 26/Elixir 1.18.3 and OTP 29/Elixir 1.20.2: zero replies until
       the client's timeout, versus a full turn in under three seconds with
-      `-noinput`. `bin/raxol-acp` does not set it, which is a peer-side defect
-      this test works around rather than hides.
+      `-noinput`. This test deliberately does NOT set it: an editor spawning
+      the shim sets no `ELIXIR_ERL_OPTIONS`, and a harness that supplied the
+      flag would stay green after the shim lost it. The handshake here is
+      what keeps the shim honest.
     * `MIX_ENV=dev` pins the peer to the same build the `setup_all` pre-warm
       compiles. `bin/raxol-acp` sets no `MIX_ENV`, so dev is what a human
       launching the shim gets; inheriting `test` from the runner would send
@@ -466,7 +469,6 @@ defmodule Raxol.Agent.AcpLoopbackTest do
   # Charlists, not binaries: `:env` goes straight to `Port.open/2`.
   defp peer_env(tmp) do
     [
-      {~c"ELIXIR_ERL_OPTIONS", ~c"-noinput"},
       {~c"MIX_ENV", ~c"dev"},
       {~c"MAKEFLAGS", ~c"-s"},
       {~c"RAXOL_SESSIONS_DIR", String.to_charlist(Path.join(tmp, "sessions"))}
