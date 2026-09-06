@@ -404,6 +404,97 @@ defmodule Raxol.Agent.Action.ToolConverter do
       "[Tool error for #{name}]: that path is outside the working directory " <>
         "this session is scoped to."
 
+  # Network failures are the model's to route around, so each says what to do
+  # instead. The host and the status are the model's own argument echoed back
+  # and a protocol number — never response content, which is untrusted.
+  def public_error(name, {:web_search_not_configured, hint}) when is_binary(hint),
+    do:
+      "[Tool error for #{name}]: web search is not configured, so no search " <>
+        "ran (this is not an empty result). To enable it, #{hint}."
+
+  def public_error(name, {:blocked_address, host}) when is_binary(host),
+    do:
+      "[Tool error for #{name}]: #{host} resolves to a private, loopback or " <>
+        "link-local address, which this tool refuses to reach. Only public " <>
+        "internet hosts can be fetched."
+
+  def public_error(name, {:blocked_redirect, host}) when is_binary(host),
+    do:
+      "[Tool error for #{name}]: that URL redirected to #{host}, a private " <>
+        "or link-local address, so nothing was read. Do not try to reach it " <>
+        "another way."
+
+  def public_error(name, {:dns_failed, host}) when is_binary(host),
+    do:
+      "[Tool error for #{name}]: #{host} does not resolve. Check the " <>
+        "hostname, or search for the page instead of guessing its URL."
+
+  def public_error(name, :invalid_url),
+    do:
+      "[Tool error for #{name}]: that is not an absolute http:// or https:// " <>
+        "URL."
+
+  def public_error(name, :too_many_redirects),
+    do:
+      "[Tool error for #{name}]: that URL redirected too many times. Try the " <>
+        "final address directly if you know it."
+
+  def public_error(name, :redirect_without_location),
+    do:
+      "[Tool error for #{name}]: the server sent a redirect with no target, " <>
+        "so there was nothing to follow."
+
+  def public_error(name, {:http_status, status}) when is_integer(status),
+    do:
+      "[Tool error for #{name}]: the server answered #{status}. The page was " <>
+        "not read; do not treat this as an empty page."
+
+  def public_error(name, {:unsupported_content_type, type}) when is_binary(type),
+    do:
+      "[Tool error for #{name}]: that URL serves #{type}, which has no text " <>
+        "to read. Fetch an HTML, plain-text or JSON URL instead."
+
+  def public_error(name, :fetch_timeout),
+    do:
+      "[Tool error for #{name}]: the fetch ran out of time. Nothing was " <>
+        "read — try a more specific URL, or move on."
+
+  def public_error(name, {:search_provider_error, status}) when is_integer(status),
+    do:
+      "[Tool error for #{name}]: the search provider answered #{status}. No " <>
+        "results were returned; this is a provider problem, not an empty web."
+
+  def public_error(name, :search_response_unparsable),
+    do:
+      "[Tool error for #{name}]: the search provider's response could not be " <>
+        "read, so there are no results to report."
+
+  def public_error(name, :req_not_available),
+    do:
+      "[Tool error for #{name}]: this build has no HTTP client, so network " <>
+        "tools cannot run. Use the local tools instead."
+
+  def public_error(name, {:transport_failed, _reason}),
+    do:
+      "[Tool error for #{name}]: the request could not be completed. Nothing " <>
+        "was read."
+
+  # Background-shell reasons, wording supplied by the action's author.
+  def public_error(name, :job_not_found),
+    do:
+      "[Tool error for #{name}]: no background job with that id (it may have " <>
+        "been reaped); call shell_jobs to list live jobs."
+
+  def public_error(name, :job_limit_reached),
+    do:
+      "[Tool error for #{name}]: too many background jobs are running; wait " <>
+        "for one or shell_kill it before starting another."
+
+  def public_error(name, :pty_unavailable),
+    do:
+      "[Tool error for #{name}]: this host has no usable script(1), so " <>
+        "pty: true cannot be honoured; retry without pty."
+
   def public_error(name, _other), do: "[Tool error for #{name}]: tool error"
 
   @doc """
