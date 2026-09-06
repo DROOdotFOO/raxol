@@ -121,13 +121,20 @@ HEX_BUILD=1 mix hex.publish
 `HEX_BUILD=1` strips the local `path:` deps so the build sees only Hex
 packages. `raxol_symphony` publishes **independently of `raxol_earn`**: the
 `raxol_earn` dependency is `only: :test` (`mix.exs`), so it is not a published
-requirement. All published requirements (`raxol_core`, `raxol`, `raxol_agent`,
-`raxol_mcp`) are already on Hex at `~> 2.6`.
+requirement. `raxol_core`, `raxol`, `raxol_agent` and `raxol_mcp` are already
+on Hex at `~> 2.6`.
+
+Two optional requirements are **not** yet satisfiable on Hex:
+`raxol_telegram` and `raxol_watch` are declared `~> 0.2` here but published at
+0.1.0. Both must be published at 0.2.0 (they are already at 0.2.0 in the tree)
+before `HEX_BUILD=1 mix deps.get` can resolve. See
+`docs/development/RELEASE_CHECKLIST.md` for the full publish order.
 
 ## 7. Safety notes
 
 - The default `raxol_agent` runner denies shell operations outside the
-  per-issue workspace (`CommandHook` + `PermissionHook`). See `SPEC.md` s15.
+  per-issue workspace (`CommandHook` + `PermissionHook`). The confinement seam
+  is documented on `Raxol.Symphony.Runners.RaxolAgentSession`.
 - Start with `workflow_parallelism: 1` or `2` and a single labelled issue;
   widen only after the first clean PR.
 - `stop_run/2` kills a single running issue; killing the orchestrator process

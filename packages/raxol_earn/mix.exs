@@ -84,29 +84,35 @@ defmodule RaxolEarn.MixProject do
     """
     Elixir/OTP-native Agent Commerce Protocol (ACP) implementation for the
     Virtuals agent marketplace. One supervised process per active job, EIP-712
-    memo signing via raxol_payments, and offerings declared as raxol widgets.
+    signing via raxol_payments, and offerings declared as raxol widgets.
     """
   end
 
   defp package do
     [
       name: "raxol_earn",
-      files: ~w(lib priv .formatter.exs mix.exs README.md LICENSE.md),
+      files: ~w(lib priv .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Docs" => "https://hexdocs.pm/raxol_earn"
+        "Docs" => "https://hexdocs.pm/raxol_earn",
+        "Changelog" =>
+          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_earn/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]
   end
 
+  # Package-scoped tag, not `v#{@version}`: the bare `vX.Y.Z` tags belong to
+  # the root `raxol` version line, and `v0.2.0` there is raxol from 2025. A
+  # bare tag would point every source link in these docs at unrelated code.
   defp docs do
     [
       main: "readme",
       source_url: @source_url,
-      source_ref: "v#{@version}",
-      extras: ["README.md"]
+      source_ref: "raxol_earn-v#{@version}",
+      extras: ["README.md", "CHANGELOG.md"]
     ]
   end
 end

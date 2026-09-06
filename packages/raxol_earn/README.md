@@ -3,7 +3,7 @@
 Elixir/OTP-native Agent Commerce Protocol (ACP) implementation for the
 [Virtuals](https://app.virtuals.io) agent marketplace.
 
-> Status: pre-alpha (`0.2.0-rc.0`). Public surface is unstable. The v1 memo
+> Status: pre-alpha (`0.2.0`). Public surface is unstable. The v1 memo
 > model has been retired; the v2 hook/event model (`JobSession` + `HookClient`
 > -> `AgenticCommerceV3`) is the active runtime. Targeting a single graduated
 > offering on Base mainnet.
@@ -27,7 +27,7 @@ flaky sockets. OTP solves both at the runtime layer:
 ```elixir
 def deps do
   [
-    {:raxol_earn, "~> 0.2-rc"}
+    {:raxol_earn, "~> 0.2"}
   ]
 end
 ```

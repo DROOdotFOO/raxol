@@ -60,13 +60,14 @@ defmodule RaxolAgentClientProtocol.MixProject do
     ]
   end
 
+  # Hex rejects a description over 300 characters. The resumable-session
+  # vendor extension is documented in the README rather than here.
   defp description do
     """
     Elixir/OTP implementation of ACP (Agent Client Protocol) — the JSON-RPC 2.0
     protocol between code editors and AI coding agents (agentclientprotocol.com).
     Bidirectional agent/client roles, pluggable transports (stdio, in-process),
-    supervised session processes, and durable resumable sessions
-    (offset-based reattach/replay) as a vendor extension.
+    supervised session processes, and durable resumable sessions.
     """
   end
 

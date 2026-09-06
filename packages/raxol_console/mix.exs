@@ -120,7 +120,7 @@ defmodule RaxolConsole.MixProject do
   defp package do
     [
       name: "raxol_console",
-      files: ~w(lib .formatter.exs mix.exs README.md),
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md),
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       maintainers: ["Raxol Team"]
