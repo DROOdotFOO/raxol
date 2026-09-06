@@ -53,6 +53,14 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessor do
       1000 -> :mouse_report_x10
       1002 -> :mouse_report_cell_motion
       1003 -> :mouse_any_event
+      # SGR mouse encoding. Implemented end to end -- ModeState (1006 =>
+      # :mouse_report_sgr), ModeTypes, and
+      # DECPrivateHandler.handle_mouse_report_sgr/2 -- and requested by
+      # Terminal.Driver itself, which emits `\e[?1000h\e[?1006h`. It was
+      # missing from this allow-list, so `CSI ? 1006 h` hit the `_ -> nil`
+      # clause below and was silently discarded, leaving mouse coordinates in
+      # X10 encoding (which cannot express a column past 95).
+      1006 -> :mouse_report_sgr
       1004 -> :focus_events
       1047 -> :dec_alt_screen_save
       1048 -> :decsc_deccara

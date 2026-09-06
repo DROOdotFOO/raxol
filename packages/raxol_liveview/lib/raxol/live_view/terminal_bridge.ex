@@ -801,20 +801,13 @@ defmodule Raxol.LiveView.TerminalBridge do
           {non_neg_integer(), non_neg_integer(), non_neg_integer()}
   defp color_256_to_rgb(n) when n < 16, do: Map.fetch!(@ansi_16, n)
 
-  defp color_256_to_rgb(n) when n >= 16 and n < 232 do
-    # 216 colors (6x6x6 cube)
-    n = n - 16
-    r = div(n, 36)
-    g = div(rem(n, 36), 6)
-    b = rem(n, 6)
-
-    {r * 51, g * 51, b * 51}
-  end
-
-  defp color_256_to_rgb(n) when n >= 232 and n <= 255 do
-    # Grayscale (24 shades)
-    gray = (n - 232) * 10 + 8
-    {gray, gray, gray}
+  # Cube and grayscale both come from the shared xterm table in raxol_core.
+  # The cube was computed here as `* 51`, giving levels
+  # 0/51/102/153/204/255 instead of xterm's 0/95/135/175/215/255, so the same
+  # buffer rendered different colors in LiveView than in the terminal
+  # renderer.
+  defp color_256_to_rgb(n) when n >= 16 and n <= 255 do
+    Raxol.Core.Colors.Ansi256.to_rgb(n)
   end
 
   defp color_256_to_rgb(_), do: {255, 255, 255}

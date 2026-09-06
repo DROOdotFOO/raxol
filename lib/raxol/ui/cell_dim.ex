@@ -24,6 +24,7 @@ defmodule Raxol.UI.CellDim do
   """
 
   alias Raxol.UI.Theming.Colors, as: ThemeColors
+  alias Raxol.UI.Theming.Palette
   alias Raxol.UI.Theming.Salience
 
   # Optional cross-package dep (same pattern as SalienceTheme).
@@ -37,30 +38,12 @@ defmodule Raxol.UI.CellDim do
   # Keep more chroma than contrast so ANSI hues stay legible (not flat gray).
   @chroma_keep 0.65
 
-  # ANSI-16 atom -> code, matching `Raxol.Core.Renderer.Color`'s private
-  # `@ansi_16_map` ordering. Only routes to `ThemeColors.ansi_to_rgb/1`'s
-  # canonical xterm RGB table below -- no hex values invented here.
-  @ansi_16_codes %{
-    black: 0,
-    red: 1,
-    green: 2,
-    yellow: 3,
-    blue: 4,
-    magenta: 5,
-    cyan: 6,
-    white: 7,
-    bright_black: 8,
-    bright_red: 9,
-    bright_green: 10,
-    bright_yellow: 11,
-    bright_blue: 12,
-    bright_magenta: 13,
-    bright_cyan: 14,
-    bright_white: 15
-  }
+  # ANSI-16 atom -> code. Resolved from `Palette` at compile time; this used
+  # to be a fourth private copy of the same 16-entry literal.
+  @ansi_16_codes Palette.ansi_16_codes()
 
   # Unknown atoms -> mid-gray so they still take the dim cue.
-  @unknown_atom_rgb {128, 128, 128}
+  @unknown_atom_rgb Palette.unknown_atom_rgb()
 
   @doc "Dims every cell's fg/bg in a list toward the detected terminal ground."
   @spec dim_cells([tuple()]) :: [tuple()]
@@ -194,16 +177,18 @@ defmodule Raxol.UI.CellDim do
     Salience.oklch_to_rgb(new_l, new_c, new_h)
   end
 
-  # Pull (l, c, h)'s apparent lightness toward `ground_al`, keeping
-  # `@contrast_keep` of the original contrast, and desaturate by the
-  # (larger) `@chroma_keep` factor so hue identity survives clearly rather
-  # than reading as flat gray. Solve back to a nominal `l` that lands on
-  # the new apparent lightness.
+  # Keeps `@contrast_keep` of the original ground-contrast and desaturates by
+  # the larger `@chroma_keep`, so hue identity survives rather than reading
+  # as flat gray. The math is shared with `ColorResolver`'s region fade via
+  # `Salience.dim_toward_ground/6`.
   defp dim_oklch(l, c, h, ground_al) do
-    apparent_l = Salience.apparent_lightness(l, c, h)
-    new_apparent_l = ground_al + (apparent_l - ground_al) * @contrast_keep
-    new_c = c * @chroma_keep
-    new_l = Salience.solve_lightness(new_apparent_l, new_c, h)
-    {new_l, new_c, h}
+    Salience.dim_toward_ground(
+      l,
+      c,
+      h,
+      ground_al,
+      @contrast_keep,
+      @chroma_keep
+    )
   end
 end

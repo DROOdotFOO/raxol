@@ -20,8 +20,19 @@ defmodule Raxol.UI.Theming.Palette do
   duplicate/conflict catalogue, file:line citations, and a ranked list of the
   call sites most worth migrating.
 
-  This module is additive only: nothing in the tree calls into it yet.
-  Existing modules keep their own copies until migrated one at a time.
+  Migration has started. Consuming this module today: `Raxol.UI.CellDim`,
+  `Raxol.UI.ColorResolver`, `Raxol.Core.Renderer.Color`,
+  `Raxol.Core.Renderer.View.Utils.ViewUtils`,
+  `Raxol.Effects.BorderBeam.Colors` and
+  `Raxol.UI.Components.Harness.DiffViewer`. The ANSI-16 name->slot map, the
+  unknown-atom fallback, the BorderBeam variant tables and the diff tiers no
+  longer exist as private copies anywhere. Remaining un-migrated conflicts
+  (hex/RGB conversion with contradictory error contracts, the semantic-token
+  sets) still keep their own copies, and each needs a behaviour decision
+  before it can be pointed here.
+
+  Note that box-drawing glyphs are deliberately NOT here: this module is
+  color values. They live in `Raxol.UI.Theming.BorderChars`.
 
   ## Sections
 
@@ -183,6 +194,40 @@ defmodule Raxol.UI.Theming.Palette do
   @spec ansi_16_names() :: [atom()]
   def ansi_16_names, do: @ansi_16_names
 
+  # Derived from @ansi_16_names rather than written out again: the name list
+  # already fixes the SGR order, so a second literal could only drift from it.
+  @ansi_16_codes @ansi_16_names |> Enum.with_index() |> Map.new()
+
+  @doc """
+  ANSI-16 color name -> SGR slot (0-15).
+
+  Replaces four private copies of this map, in
+  `Raxol.Core.Renderer.Color`, `Raxol.Core.Renderer.View.Utils.ViewUtils`,
+  `Raxol.UI.CellDim` and `Raxol.UI.ColorResolver`. Two of those carried a
+  comment arguing that "a small, stable, private lookup beats a cross-module
+  dependency on a private attribute" -- true while this module did not exist,
+  and the ViewUtils copy had decayed into a 16-entry map rebuilt on every
+  call from a render-path helper.
+  """
+  @spec ansi_16_codes() :: %{atom() => 0..15}
+  def ansi_16_codes, do: @ansi_16_codes
+
+  @doc """
+  Slot -> ANSI-16 color name, the inverse of `ansi_16_codes/0`.
+  """
+  @spec ansi_16_slots() :: %{0..15 => atom()}
+  def ansi_16_slots,
+    do: Map.new(@ansi_16_codes, fn {name, code} -> {code, name} end)
+
+  @doc """
+  Mid-gray, for a color atom outside the ANSI-16 set (`:default`,
+  theme-custom names). Shared by `CellDim` and `ColorResolver`, which each
+  held their own `@unknown_atom_rgb` with this value: an unknown atom still
+  has to take the dim/fade cue, so it needs *some* RGB rather than `nil`.
+  """
+  @spec unknown_atom_rgb() :: rgb()
+  def unknown_atom_rgb, do: {128, 128, 128}
+
   # xterm convention. Matches (byte-for-byte, as of this audit):
   #   Raxol.Style.Colors.Formats.basic_ansi_color/1
   #   Raxol.Style.Colors.Color.to_ansi_16/1 (inline list)
@@ -228,8 +273,7 @@ defmodule Raxol.UI.Theming.Palette do
     {255, 255, 255}
   ]
 
-  # GNOME/Ubuntu Terminal convention (the classic "Tango" palette). Matches
-  # Raxol.Terminal.Rendering.OptimizedStyleRenderer.@style_patterns.
+  # GNOME/Ubuntu Terminal convention (the classic "Tango" palette).
   @ansi_16_gnome_terminal [
     # black          #000000
     {0, 0, 0},
@@ -676,4 +720,37 @@ defmodule Raxol.UI.Theming.Palette do
 
   def effect_accent(:border_beam, :bloom, variant),
     do: Map.fetch!(@border_beam_bloom_colors, variant)
+
+  # ===========================================================================
+  # Diff visual language (harness DiffViewer / DiffExpansion)
+  # ===========================================================================
+  # Pre-flattened opaque bg/fg tiers approximating layered translucent diff
+  # backgrounds against a dark terminal ground: a row wash, a brighter
+  # intra-line-emphasis tier over it, and a weaker gutter tint. Terminal
+  # cells carry one bg and one fg, so the translucency is flattened to these
+  # discrete tiers rather than composited.
+  #
+  # Previously `@diff_palette` in
+  # `Raxol.UI.Components.Harness.DiffViewer`, behind a TODO to "consolidate
+  # with the project-wide palette inventory ... once it exists". The
+  # inventory doc exists at neither of the two paths the codebase cites, so
+  # that TODO would never have fired; consolidating here is what it asked
+  # for.
+  @diff_palette %{
+    add_base: "#5ECC71",
+    add_row_bg: "#12261B",
+    add_emphasis_bg: "#1D4428",
+    add_gutter_bg: "#0F1D16",
+    del_base: "#FF6762",
+    del_row_bg: "#291418",
+    del_emphasis_bg: "#552527",
+    del_gutter_bg: "#200F12"
+  }
+
+  @doc """
+  The diff visual language's hex tiers: `add_base`, `add_row_bg`,
+  `add_emphasis_bg`, `add_gutter_bg` and their `del_*` counterparts.
+  """
+  @spec diff_palette() :: %{atom() => hex()}
+  def diff_palette, do: @diff_palette
 end

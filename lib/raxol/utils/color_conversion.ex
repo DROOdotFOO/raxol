@@ -4,26 +4,46 @@ defmodule Raxol.Utils.ColorConversion do
   """
 
   @doc """
-  Convert hex color to RGB tuple.
+  Convert hex color to RGB tuple, falling back to black.
+
+  Lenient by design: an unparseable string yields `{0, 0, 0}` rather than
+  raising. `Raxol.Core.Renderer.Color.hex_to_rgb/1` is the strict counterpart
+  and raises `ArgumentError`.
+
+  Parsing itself is delegated to `Raxol.Style.Colors.Formats.from_hex/1`, the
+  one hex parser in the tree. The hand-rolled `Integer.parse/2` version this
+  replaces was wrong in three ways, all fixed by delegating:
+
+    * `"#FFF"` returned `{0, 0, 0}` -- black for a valid 3-digit shorthand,
+      which this codebase's style maps do ship. The other two `hex_to_rgb/1`
+      implementations both returned white.
+    * `"#FF000080"` returned `{0, 0, 0}` -- black for a valid 8-digit alpha
+      hex, instead of dropping the alpha channel.
+    * `"#zzzzzz"` raised `MatchError` from `{r, ""} = :error`, contradicting
+      this function's own spec and the `"invalid"` doctest below.
 
   ## Examples
 
       iex> Raxol.Utils.ColorConversion.hex_to_rgb("#FF0000")
       {255, 0, 0}
 
-      iex> Raxol.Utils.ColorConversion.hex_to_rgb("#00FF00")
+      iex> Raxol.Utils.ColorConversion.hex_to_rgb("#0F0")
       {0, 255, 0}
+
+      iex> Raxol.Utils.ColorConversion.hex_to_rgb("#FF000080")
+      {255, 0, 0}
 
       iex> Raxol.Utils.ColorConversion.hex_to_rgb("invalid")
       {0, 0, 0}
   """
   @spec hex_to_rgb(String.t()) ::
           {non_neg_integer(), non_neg_integer(), non_neg_integer()}
-  def hex_to_rgb("#" <> hex) when byte_size(hex) == 6 do
-    {r, ""} = Integer.parse(String.slice(hex, 0, 2), 16)
-    {g, ""} = Integer.parse(String.slice(hex, 2, 2), 16)
-    {b, ""} = Integer.parse(String.slice(hex, 4, 2), 16)
-    {r, g, b}
+  def hex_to_rgb(hex) when is_binary(hex) do
+    case Raxol.Style.Colors.Formats.from_hex(hex) do
+      {r, g, b} -> {r, g, b}
+      {r, g, b, _alpha} -> {r, g, b}
+      _error -> {0, 0, 0}
+    end
   end
 
   def hex_to_rgb(_), do: {0, 0, 0}
@@ -54,7 +74,13 @@ defmodule Raxol.Utils.ColorConversion do
   ## Examples
 
       iex> Raxol.Utils.ColorConversion.interpolate_color("#000000", "#FFFFFF", 0.5)
-      "#7f7f7f"
+      "#808080"
+
+      iex> Raxol.Utils.ColorConversion.interpolate_color("#000000", "#FFFFFF", 0.0)
+      "#000000"
+
+      iex> Raxol.Utils.ColorConversion.interpolate_color("#000000", "#FFFFFF", 1.0)
+      "#ffffff"
   """
   @spec interpolate_color(String.t(), String.t(), float()) :: String.t()
   def interpolate_color(from_color, to_color, progress)

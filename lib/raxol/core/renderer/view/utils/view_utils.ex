@@ -224,31 +224,17 @@ defmodule Raxol.Core.Renderer.View.Utils.ViewUtils do
     "\e[48;2;#{r};#{g};#{b}m#{text}\e[49m"
   end
 
+  # Resolved from `Palette` at compile time. This was a 16-entry map literal
+  # built inside the function body, so every call from this render-path
+  # helper allocated a fresh map before doing one lookup.
+  @ansi_16_codes Raxol.UI.Theming.Palette.ansi_16_codes()
+
   @doc """
-  Converts a color name to its ANSI color code.
+  Converts a color name to its ANSI color code. Unknown names default to
+  white (7).
   """
   def color_to_code(color) do
-    color_codes = %{
-      black: 0,
-      red: 1,
-      green: 2,
-      yellow: 3,
-      blue: 4,
-      magenta: 5,
-      cyan: 6,
-      white: 7,
-      bright_black: 8,
-      bright_red: 9,
-      bright_green: 10,
-      bright_yellow: 11,
-      bright_blue: 12,
-      bright_magenta: 13,
-      bright_cyan: 14,
-      bright_white: 15
-    }
-
-    # Default to white
-    Map.get(color_codes, color, 7)
+    Map.get(@ansi_16_codes, color, 7)
   end
 
   @doc """

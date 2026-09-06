@@ -10,52 +10,45 @@ defmodule Raxol.Effects.BorderBeam.Colors do
           :colorful | :mono | :ocean | :sunset | :electric | :neon | :matrix
   @type color :: atom()
 
-  @palettes %{
-    colorful: [
-      :bright_red,
-      :bright_yellow,
-      :bright_green,
-      :bright_cyan,
-      :bright_blue,
-      :bright_magenta
-    ],
-    mono: [:bright_white, :white, :bright_black],
-    ocean: [:bright_cyan, :cyan, :bright_blue, :blue],
-    sunset: [:bright_yellow, :yellow, :bright_red, :red],
-    electric: [:bright_yellow, :bright_cyan, :bright_white, :cyan],
-    neon: [:bright_magenta, :bright_cyan, :magenta, :bright_blue],
-    matrix: [:bright_green, :green, :bright_black]
-  }
+  @variants [:colorful, :mono, :ocean, :sunset, :electric, :neon, :matrix]
 
-  @css_palettes %{
-    colorful: ["#ff0040", "#ffaa00", "#00ff88", "#00ccff", "#4400ff", "#ff00cc"],
-    mono: ["#ffffff", "#cccccc", "#999999"],
-    ocean: ["#0044ff", "#00ccff", "#0077ff", "#00aaff"],
-    sunset: ["#ff4400", "#ffaa00", "#ff6600", "#ffcc00"],
-    electric: ["#fff700", "#00ffff", "#ffffff", "#00d4ff"],
-    neon: ["#ff00ff", "#00ffff", "#ff00cc", "#7700ff"],
-    matrix: ["#00ff66", "#00cc44", "#006622", "#003311"]
-  }
+  # All four tables come from `Raxol.UI.Theming.Palette` at compile time.
+  # They were duplicated there verbatim under `@border_beam_*`, which meant
+  # the effect's own colors and the project-wide palette inventory could
+  # drift apart silently.
+  @palettes Map.new(
+              @variants,
+              &{&1, Raxol.UI.Theming.Palette.effect_palette(:border_beam, &1)}
+            )
 
-  @glow_colors %{
-    colorful: :blue,
-    mono: :white,
-    ocean: :blue,
-    sunset: :red,
-    electric: :yellow,
-    neon: :magenta,
-    matrix: :green
-  }
+  @css_palettes Map.new(
+                  @variants,
+                  &{&1,
+                   Raxol.UI.Theming.Palette.effect_palette_css(
+                     :border_beam,
+                     &1
+                   )}
+                )
 
-  @bloom_colors %{
-    colorful: :magenta,
-    mono: :white,
-    ocean: :cyan,
-    sunset: :yellow,
-    electric: :cyan,
-    neon: :cyan,
-    matrix: :green
-  }
+  @glow_colors Map.new(
+                 @variants,
+                 &{&1,
+                  Raxol.UI.Theming.Palette.effect_accent(
+                    :border_beam,
+                    :glow,
+                    &1
+                  )}
+               )
+
+  @bloom_colors Map.new(
+                  @variants,
+                  &{&1,
+                   Raxol.UI.Theming.Palette.effect_accent(
+                     :border_beam,
+                     :bloom,
+                     &1
+                   )}
+                )
 
   @palette_tuples Map.new(@palettes, fn {k, list} ->
                     {k, List.to_tuple(list)}

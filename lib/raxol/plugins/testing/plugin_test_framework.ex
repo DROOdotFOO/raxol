@@ -1,6 +1,22 @@
-defmodule PluginRunner do
+# Two mock terminals exist in this file, deliberately, and they are NOT
+# interchangeable:
+#
+#   * `Raxol.Plugins.Testing.StubTerminal` (below) is map-based. `new/3`
+#     returns a plain map and every accessor is a map lookup.
+#   * `Raxol.Plugins.Testing.MockTerminal` (further down) is a BaseManager
+#     GenServer. `new/3` returns a pid and every accessor is a `GenServer.call`.
+#
+# `PluginTestFramework`'s own function bodies drive the StubTerminal, while the
+# `__using__` macro aliases the GenServer MockTerminal into the consuming test
+# module. Do not "consolidate" them without deciding which contract callers
+# get -- a pid and a map do not substitute for each other.
+#
+# Both were previously `defmodule StubRunner`/`defmodule MockTerminal` at the
+# top level, i.e. unnamespaced, which injected two generic names into the
+# global module namespace of every application depending on raxol.
+defmodule Raxol.Plugins.Testing.StubRunner do
   @moduledoc """
-  Mock plugin runner for testing
+  Map-based stub plugin runner. See the note above about the two runners.
   """
 
   def load_plugin(terminal, _plugin_module, _config) do
@@ -8,9 +24,9 @@ defmodule PluginRunner do
   end
 end
 
-defmodule MockTerminal do
+defmodule Raxol.Plugins.Testing.StubTerminal do
   @moduledoc """
-  Mock terminal for testing plugins
+  Map-based stub terminal. See the note above about the two terminals.
   """
 
   def new(width, height, _opts) do
@@ -68,6 +84,12 @@ defmodule Raxol.Plugins.Testing.PluginTestFramework do
   - Performance benchmarking
   """
 
+  # This module's own bodies drive the map-based stubs. The `__using__` macro
+  # below aliases the GenServer `MockTerminal`/`PluginRunner` into the
+  # CONSUMING test module instead; see the note at the top of this file.
+  alias Raxol.Plugins.Testing.StubRunner
+  alias Raxol.Plugins.Testing.StubTerminal
+
   defmacro __using__(opts) do
     quote do
       use ExUnit.Case, unquote(opts)
@@ -103,7 +125,7 @@ defmodule Raxol.Plugins.Testing.PluginTestFramework do
   def create_mock_terminal(opts \\ []) do
     width = Keyword.get(opts, :width, 80)
     height = Keyword.get(opts, :height, 24)
-    MockTerminal.new(width, height, opts)
+    StubTerminal.new(width, height, opts)
   end
 
   @doc """
@@ -112,7 +134,7 @@ defmodule Raxol.Plugins.Testing.PluginTestFramework do
   def load_plugin(terminal, plugin_module, config \\ %{}) do
     case validate_manifest(plugin_module) do
       {:ok, _manifest} ->
-        PluginRunner.load_plugin(terminal, plugin_module, config)
+        StubRunner.load_plugin(terminal, plugin_module, config)
 
       {:error, reason} ->
         {:error, {:invalid_manifest, reason}}
@@ -123,7 +145,7 @@ defmodule Raxol.Plugins.Testing.PluginTestFramework do
   Simulates a keypress event
   """
   def send_keypress(terminal, key) do
-    MockTerminal.send_keypress(terminal, key)
+    StubTerminal.send_keypress(terminal, key)
   end
 
   @doc """
@@ -141,7 +163,7 @@ defmodule Raxol.Plugins.Testing.PluginTestFramework do
   Gets the current terminal buffer content
   """
   def get_terminal_buffer(terminal) do
-    MockTerminal.get_buffer(terminal)
+    StubTerminal.get_buffer(terminal)
   end
 
   @doc """
@@ -318,22 +340,25 @@ defmodule Raxol.Plugins.Testing.FrameworkAssertions do
 
   import ExUnit.Assertions
 
+  # Map-based stub, not the GenServer MockTerminal; see the note at the top.
+  alias Raxol.Plugins.Testing.StubTerminal
+
   def assert_plugin_loaded(terminal, plugin_name) do
-    loaded_plugins = MockTerminal.get_loaded_plugins(terminal)
+    loaded_plugins = StubTerminal.get_loaded_plugins(terminal)
 
     assert plugin_name in loaded_plugins,
            "Expected plugin '#{plugin_name}' to be loaded, but got: #{inspect(loaded_plugins)}"
   end
 
   def assert_panel_visible(terminal, plugin_name) do
-    visible_panels = MockTerminal.get_visible_panels(terminal)
+    visible_panels = StubTerminal.get_visible_panels(terminal)
 
     assert plugin_name in visible_panels,
            "Expected panel for '#{plugin_name}' to be visible, but got: #{inspect(visible_panels)}"
   end
 
   def assert_panel_content(terminal, plugin_name, expected_content) do
-    actual_content = MockTerminal.get_panel_content(terminal, plugin_name)
+    actual_content = StubTerminal.get_panel_content(terminal, plugin_name)
 
     case expected_content do
       content when is_binary(content) ->
@@ -353,7 +378,7 @@ defmodule Raxol.Plugins.Testing.FrameworkAssertions do
   end
 
   def assert_status_line_contains(terminal, expected_text) do
-    status_line = MockTerminal.get_status_line(terminal)
+    status_line = StubTerminal.get_status_line(terminal)
 
     assert String.contains?(status_line, expected_text),
            "Expected status line to contain '#{expected_text}', but got: '#{status_line}'"
@@ -361,9 +386,9 @@ defmodule Raxol.Plugins.Testing.FrameworkAssertions do
 
   def assert_keypress_handled(terminal, key) do
     # Send keypress and check if it was handled
-    old_state = MockTerminal.get_state(terminal)
-    _ = MockTerminal.send_keypress(terminal, key)
-    new_state = MockTerminal.get_state(terminal)
+    old_state = StubTerminal.get_state(terminal)
+    _ = StubTerminal.send_keypress(terminal, key)
+    new_state = StubTerminal.get_state(terminal)
 
     refute old_state == new_state,
            "Expected keypress '#{key}' to change terminal state, but it was ignored"

@@ -141,14 +141,20 @@ defmodule Raxol.Bench.TestData do
   end
 
   defp terminal_sgr_jobs do
-    alias Raxol.Terminal.ANSI.SGRProcessor
+    alias Raxol.Terminal.ANSI.SGR.Processor, as: SGRProcessor
+    alias Raxol.Terminal.ANSI.TextFormatting
+
+    # A real `TextFormatting` struct, not `nil`. Benchmarking the nil path
+    # measured the default-style construction branch rather than the style
+    # mutation the emulator actually performs.
+    style = TextFormatting.new()
 
     %{
       "sgr_process_simple" => fn ->
-        SGRProcessor.handle_sgr("31", nil)
+        SGRProcessor.handle_sgr("31", style)
       end,
       "sgr_process_complex" => fn ->
-        SGRProcessor.handle_sgr("1;4;31;48;5;196", nil)
+        SGRProcessor.handle_sgr("1;4;31;48;5;196", style)
       end
     }
   end

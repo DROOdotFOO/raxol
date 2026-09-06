@@ -67,22 +67,22 @@ defmodule Raxol.Style.Colors.Formats do
       iex> Formats.ansi_to_rgb(1)
       {205, 0, 0}
   """
-  @spec ansi_to_rgb(byte()) :: {integer(), integer(), integer()}
+  # `0..255` rather than `integer()`: every channel is a byte. The looser
+  # spec was accurate only while the cube was computed inline from an
+  # unbounded multiplication; delegating to the shared table narrows the
+  # success typing, and dialyzer flags a spec broader than what the code can
+  # actually return.
+  @spec ansi_to_rgb(byte()) :: {0..255, 0..255, 0..255}
   def ansi_to_rgb(code) when code in 0..15//1, do: basic_ansi_color(code)
 
-  # 216 colors (6x6x6 cube)
-  def ansi_to_rgb(code) when code in 16..231//1 do
-    n = code - 16
-    r = div(n, 36) * 51
-    g = rem(div(n, 6), 6) * 51
-    b = rem(n, 6) * 51
-    {r, g, b}
-  end
-
-  # 24 grayscale colors
-  def ansi_to_rgb(code) when code in 232..255//1 do
-    value = (code - 232) * 10 + 8
-    {value, value, value}
+  # 216 colors (6x6x6 cube) + 24 grayscale, both from the shared xterm table
+  # in raxol_core. This used to compute the cube inline as `n * 51`, which
+  # gives levels 0/51/102/153/204/255 instead of xterm's
+  # 0/95/135/175/215/255 -- 208 of the 216 cube colors were wrong, and
+  # `Raxol.UI.Theming.Colors.ansi_to_rgb/1` (same function name, different
+  # module) disagreed with this one for every index but the 8 that coincide.
+  def ansi_to_rgb(code) when code in 16..255//1 do
+    Raxol.Core.Colors.Ansi256.to_rgb(code)
   end
 
   @doc """

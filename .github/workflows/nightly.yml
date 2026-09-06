@@ -305,10 +305,33 @@ jobs:
         timeout-minutes: 20
         continue-on-error: true
 
-      - name: Run Dialyzer
-        run: |
-          mix dialyzer --format github
-        continue-on-error: true
+      # Enforced against priv/quality_baseline.json. Counts may only go down.
+      - name: Dialyzer ratchet
+        run: ./scripts/check-quality-ratchet.sh --gate dialyzer
+
+  # Credo is enforced here rather than in ci-unified because one repo-wide
+  # pass takes ~62 min: `mix credo <path>` analyzes nothing against the root
+  # .credo.exs, so the scan cannot be sharded by path. ci-unified runs it
+  # advisory-only for fast feedback; this job is what actually fails.
+  credo-ratchet:
+    name: Credo Ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Credo ratchet
+        run: ./scripts/check-quality-ratchet.sh --gate credo
 
   integration-tests:
     name: Extended Integration Tests
@@ -377,7 +400,14 @@ jobs:
 
   report:
     name: Nightly Report
-    needs: [test-matrix, extended-scenarios, dialyzer-full, integration-tests]
+    needs:
+      [
+        test-matrix,
+        extended-scenarios,
+        dialyzer-full,
+        credo-ratchet,
+        integration-tests
+      ]
     runs-on: ubuntu-latest
     if: always()
 
@@ -396,6 +426,7 @@ jobs:
           echo "| Test Matrix | ${{ needs.test-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Extended Scenarios | ${{ needs.extended-scenarios.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Dialyzer | ${{ needs.dialyzer-full.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Credo Ratchet | ${{ needs.credo-ratchet.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
       
       - name: Create issue on failure

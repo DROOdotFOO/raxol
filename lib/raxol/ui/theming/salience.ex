@@ -87,6 +87,42 @@ defmodule Raxol.UI.Theming.Salience do
     do: target_al + @hk_k * c * hue_factor(h)
 
   @doc """
+  Pulls an OKLCH color toward `ground`'s apparent lightness and desaturates
+  it, returning `{l, c, h}`.
+
+  `lightness_keep` is the fraction of the original ground-contrast retained;
+  `chroma_keep` the fraction of chroma. They are separate parameters because
+  the two callers derive them differently and both need to keep more chroma
+  than contrast, so hues stay legible instead of reading as flat gray:
+
+    * `Raxol.UI.CellDim` dims a whole cell with two fixed constants
+      (`0.45` contrast, `0.65` chroma).
+    * `Raxol.UI.ColorResolver` fades a region by a caller-supplied `p`, with
+      chroma as `p` raised to a gamma anchored so that `p = 0.45` reproduces
+      CellDim's `0.65`.
+
+  This body previously existed twice, as `CellDim.dim_oklch/4` and
+  `ColorResolver.region_dim_oklch/5`; the latter's comment noted it worked
+  "exactly as `CellDim.dim_oklch/4` does". A change to the H-K model had to
+  land in both or the modal-dim and region-fade surfaces would visibly
+  disagree.
+  """
+  @spec dim_toward_ground(
+          number(),
+          number(),
+          number(),
+          number(),
+          number(),
+          number()
+        ) :: {float(), float(), number()}
+  def dim_toward_ground(l, c, h, ground, lightness_keep, chroma_keep) do
+    apparent_l = apparent_lightness(l, c, h)
+    new_apparent_l = ground + (apparent_l - ground) * lightness_keep
+    new_c = c * chroma_keep
+    {solve_lightness(new_apparent_l, new_c, h), new_c, h}
+  end
+
+  @doc """
   Solves a `(C, h)` seed on a salience tier against a ground lightness and
   returns a hex color.
 

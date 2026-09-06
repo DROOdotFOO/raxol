@@ -61,16 +61,22 @@ jobs:
           mix deps.clean --unused
           mix deps.get
 
+      # Blocking. Previously `continue-on-error: true`, which made the job
+      # conclude success even on a hit -- and the "Create issue for critical
+      # findings" step below is gated on `needs.dependency-audit.result ==
+      # 'failure'`, so it could never fire. A known-vulnerable dependency
+      # produced a green run and no issue.
       - name: Check for vulnerable dependencies
         run: |
           # Install mix_audit if not present
           if ! mix help deps.audit &>/dev/null; then
             mix archive.install hex mix_audit --force
           fi
-          
+
           mix deps.audit
-        continue-on-error: true
-      
+
+      # Advisory: being behind is not a vulnerability, and `mix hex.outdated`
+      # exits nonzero for any available upgrade.
       - name: Check for outdated dependencies
         run: |
           mix hex.outdated
@@ -123,6 +129,7 @@ jobs:
             p/security-audit
             p/owasp-top-ten
             p/elixir
+        # Advisory: SAST false-positive rate is too high to block a PR on.
         continue-on-error: true
 
   secrets-scan:
@@ -134,19 +141,21 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history for scanning
       
+      # Both blocking. A committed credential is not an advisory condition,
+      # and with `continue-on-error: true` this job concluded success on a
+      # hit, which also disabled the "Create issue for critical findings"
+      # step gated on `needs.secrets-scan.result == 'failure'`.
       - name: TruffleHog OSS
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
           head: HEAD
-        continue-on-error: true
-      
+
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
 
   npm-audit:
     name: NPM Security Audit

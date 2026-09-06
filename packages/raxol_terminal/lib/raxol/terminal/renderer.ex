@@ -622,11 +622,6 @@ defmodule Raxol.Terminal.Renderer do
     {:ok, content}
   end
 
-  # Handle buffer manager PIDs (legacy support - deprecated after buffer consolidation)
-  def get_content(manager_pid, _opts) when is_pid(manager_pid) do
-    {:error, :deprecated_buffer_manager}
-  end
-
   defp apply_cursor_option(content, cursor, true) do
     content |> maybe_add_cursor(cursor, true)
   end
