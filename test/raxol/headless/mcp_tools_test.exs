@@ -604,6 +604,52 @@ defmodule Raxol.Headless.McpToolsTest do
       assert Map.keys(browser_dispatch) == ["browser_eval"]
     end
 
+    # The route that used to bypass every gate: Tidewave dispatches out of its own
+    # map, so a raw callback written there never reaches `Raxol.MCP.Server`. What
+    # is injected is a closure that re-enters through `tools/call`, so the
+    # authorizer applies here exactly as it does over stdio or SSE.
+    test "an injected callback is gated by the server's authorizer" do
+      {:ok, owner} = start_supervised(TidewaveTableOwner)
+      GenServer.call(owner, :create_table)
+
+      registry = registry!()
+      :ok = McpTools.register(registry)
+
+      {:ok, server} =
+        Raxol.MCP.Server.start_link(
+          name: :"srv_#{System.unique_integer([:positive])}",
+          registry: registry,
+          authorizer: Raxol.MCP.Authorizer.deny_all(:policy_says_no)
+        )
+
+      assert :ok = McpTools.inject_into_tidewave(server: server)
+
+      [{:tools, {_tools, dispatch, _bt, _bd}}] =
+        :ets.lookup(:tidewave_tools, :tools)
+
+      # Even a read is refused, because the authorizer -- not the annotation --
+      # is what decides once one is configured.
+      assert {:error, message} = dispatch["raxol_list"].(%{})
+      assert message =~ "authorization_required"
+      assert message =~ "policy_says_no"
+    end
+
+    # The fallback that would undo the whole thing: if an unreachable server made
+    # the wrapper fall back to the raw callback, the ungated path would reappear
+    # exactly when the gate is unavailable.
+    test "an injected callback refuses when the MCP server is not running" do
+      {:ok, owner} = start_supervised(TidewaveTableOwner)
+      GenServer.call(owner, :create_table)
+
+      assert :ok = McpTools.inject_into_tidewave(server: :no_such_mcp_server)
+
+      [{:tools, {_tools, dispatch, _bt, _bd}}] =
+        :ets.lookup(:tidewave_tools, :tools)
+
+      assert {:error, message} = dispatch["raxol_list"].(%{})
+      assert message =~ "cannot be authorized"
+    end
+
     test "is idempotent: a second inject does not duplicate our tools" do
       {:ok, owner} = start_supervised(TidewaveTableOwner)
       GenServer.call(owner, :create_table)

@@ -126,11 +126,46 @@ defmodule Raxol.ApplicationTest do
     # The load-bearing half. `Server.authorization_configured?/1` is literally
     # `authorizer != nil`, and the SSE transport's boot gate reads exactly that,
     # so defaulting production to `allow_all/0` would SATISFY the gate and let a
-    # network transport serve every tool unguarded. Staying nil keeps SSE
-    # refusing to boot and keeps the sensitive tools denied.
-    test "unconfigured in production stays nil so the SSE boot gate still fires" do
-      assert Raxol.Application.resolve_mcp_authorizer(:mcp_authorizer, true) ==
-               nil
+    # network transport serve every tool unguarded.
+    test "production denies by default, including tools nobody annotated" do
+      authorizer =
+        Raxol.Application.resolve_mcp_authorizer(:mcp_authorizer, true)
+
+      assert is_function(authorizer, 3)
+
+      # `raxol_screenshot` is not sensitive. Under the nil this replaced,
+      # `Authorizer.decide/4` treated nil as allow and a production server ran it
+      # for anyone who reached the server. An empty allowlist is tighter, not
+      # merely more explicit.
+      for tool <- ["raxol_screenshot", "raxol_start", "anything_at_all"] do
+        assert authorizer.(tool, %{}, %{}) == {:deny, :not_allowlisted}
+      end
+    end
+
+    test "production serves exactly what :mcp_allowed_tools names" do
+      Application.put_env(:raxol, :mcp_allowed_tools, ["raxol_screenshot"])
+      on_exit(fn -> Application.delete_env(:raxol, :mcp_allowed_tools) end)
+
+      authorizer =
+        Raxol.Application.resolve_mcp_authorizer(:mcp_authorizer, true)
+
+      assert authorizer.("raxol_screenshot", %{}, %{}) == :allow
+      assert authorizer.("raxol_stop", %{}, %{}) == {:deny, :not_allowlisted}
+    end
+
+    # Reads cannot take the same empty default: `tools/list` is a read, so
+    # denying every read would leave an allowlisted tool undiscoverable and the
+    # server unusable rather than closed.
+    test "production allows listing reads but not the ones serving model state" do
+      read =
+        Raxol.Application.resolve_mcp_authorizer(:mcp_read_authorizer, true)
+
+      assert read.("tools/list", %{}, %{}) == :allow
+      assert read.("resources/list", %{}, %{}) == :allow
+
+      for method <- ["resources/read", "resources/subscribe"] do
+        assert read.(method, %{}, %{}) == {:deny, :not_allowlisted}
+      end
     end
 
     test "a configured authorizer wins in both environments" do

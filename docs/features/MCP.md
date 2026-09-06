@@ -130,11 +130,37 @@ config :raxol,
 
 A value that is not a 3-arity fun raises at boot rather than being ignored, so a deployment cannot believe it configured a policy while running without one.
 
-Unconfigured, the default is `Raxol.MCP.Authorizer.allow_all/0` outside production and `nil` in production. The asymmetry is deliberate. `Raxol.MCP.Server.authorization_configured?/1` is `authorizer != nil`, and the SSE transport's boot gate (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads exactly that value, so a blanket `allow_all` in production would satisfy the gate and let a network transport serve every tool unguarded. Leaving it `nil` keeps SSE refusing to boot.
+### Defaults
+
+Outside production, unconfigured resolves to `Raxol.MCP.Authorizer.allow_all/0`: what the implicit `nil` already did, now visible at the call site so `mix mcp.server` keeps working.
+
+In production it resolves to a deny-by-default allowlist:
+
+```elixir
+config :raxol,
+  mcp_allowed_tools: ["raxol_screenshot"],
+  # Defaults to the listing methods; resources/read and the subscribe pair are
+  # absent because they stream live model state.
+  mcp_allowed_read_methods: ~w(tools/list resources/list prompts/list prompts/get completion/complete)
+```
+
+Empty is the default for tools, so nothing runs until a deployment names it. That is tighter than the `nil` it replaced, not merely more explicit: `Authorizer.decide/4` treats `nil` as allow, so a production server previously ran any tool nobody had annotated sensitive.
+
+The default must not be `allow_all` in production. `Raxol.MCP.Server.authorization_configured?/1` is `authorizer != nil`, and the SSE transport's boot gate (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads exactly that value, so a blanket allow would satisfy the gate and let a network transport serve every tool unguarded.
+
+Reads cannot take the same empty default: `tools/list` is a read, so denying every read would leave an allowlisted tool undiscoverable and the server unusable rather than closed. The split is by what a method discloses. Listing methods reveal names the server already advertises, while `resources/read` streams state.
+
+### Annotations
 
 A tool annotated `destructiveHint: true` or `sensitive: true` never runs without an authorizer, enforced twice: the server refuses to boot when such a tool is already registered, and refuses the call itself for one registered afterwards. Of the headless tools, `raxol_start`, `raxol_send_key`, and `raxol_stop` carry the annotation; the three read tools do not.
 
-stdio is exempt by design, since it already inherits the OS process boundary. `Raxol.Headless.McpTools.inject_into_tidewave/0` is exempt by accident: it writes callbacks into Tidewave's own dispatch map, so calls arriving that way never reach `Raxol.MCP.Server` and no authorizer applies. Tidewave is an `only: :dev` dependency and nothing calls that function; do not wire it into a shipped startup path.
+### Transports
+
+stdio is exempt by design, since it already inherits the OS process boundary.
+
+`Raxol.Headless.McpTools.inject_into_tidewave/1` is not exempt. Tidewave dispatches out of its own ETS map, so a raw callback written there would never reach `Raxol.MCP.Server`; what gets injected is a closure that re-enters through `tools/call` on the server named by `:server`, so this surface inherits the same policy as every other. A server that is down denies rather than falling back to the raw callback.
+
+That gates Raxol's tools, not Tidewave's. Tidewave ships its own, and nothing here constrains them: `project_eval` evaluates Elixir in the running node. Whether that endpoint may be reached at all is an endpoint-level decision: authentication and bind address, not tool policy.
 
 ## Property tests
 

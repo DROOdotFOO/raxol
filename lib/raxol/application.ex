@@ -281,6 +281,17 @@ defmodule Raxol.Application do
     end
   end
 
+  # Listing methods only. They disclose the names the server already advertises;
+  # `resources/read` and the subscribe pair stream live model state and so are
+  # absent on purpose.
+  @default_production_read_methods [
+    "tools/list",
+    "resources/list",
+    "prompts/list",
+    "prompts/get",
+    "completion/complete"
+  ]
+
   # Empty opts meant `authorizer: nil`, and a nil authorizer is ALLOW -- see
   # `Raxol.MCP.Authorizer`, which documents that default as safe because a stdio
   # transport already inherits the OS process boundary. That reasoning holds for
@@ -288,7 +299,9 @@ defmodule Raxol.Application do
   # inherited from an empty list.
   #
   # `config :raxol, :mcp_authorizer` / `:mcp_read_authorizer` take a 3-arity
-  # `(tool_name, arguments, context) -> decision` fun and win when set.
+  # `(tool_name, arguments, context) -> decision` fun and win when set. Otherwise
+  # production resolves an allowlist driven by `:mcp_allowed_tools` /
+  # `:mcp_allowed_read_methods`.
   defp maybe_add_mcp_supervisor do
     if module_available?(Raxol.MCP.Supervisor) do
       production? = mcp_production?()
@@ -303,26 +316,12 @@ defmodule Raxol.Application do
   end
 
   @doc false
-  # Unset in dev/test: `allow_all/0`. Behaviourally what nil already did, but
-  # said out loud, so `mix mcp.server` and the Tidewave dev endpoint keep working
-  # and the opt-out is visible in the code rather than implied by an empty list.
-  #
-  # Unset in production: `nil`, deliberately, because `allow_all/0` here would be
-  # a REGRESSION rather than a wash.
-  # `Raxol.MCP.Server.authorization_configured?/1` is literally `authorizer !=
-  # nil`, and the SSE transport's boot gate
-  # (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads exactly that. Handing
-  # it a blanket allow_all would satisfy that gate and let a NETWORK transport
-  # serve every tool unguarded -- the one outcome the gate exists to prevent. So
-  # an unconfigured production deployment keeps failing closed: SSE still refuses
-  # to boot, and the tools annotated sensitive in `Raxol.Headless.McpTools` are
-  # denied at `tools/call` rather than served.
   @spec resolve_mcp_authorizer(atom(), boolean()) ::
-          (String.t(), map(), map() -> term()) | nil
+          (String.t(), map(), map() -> term())
   def resolve_mcp_authorizer(key, production?) do
     case Application.get_env(:raxol, key) do
       nil ->
-        if production?, do: nil, else: Raxol.MCP.Authorizer.allow_all()
+        default_mcp_authorizer(key, production?)
 
       fun when is_function(fun, 3) ->
         fun
@@ -335,6 +334,45 @@ defmodule Raxol.Application do
                 "(tool_name, arguments, context) -> :allow | {:ask, prompt} | " <>
                 "{:deny, reason}, got: #{inspect(other)}"
     end
+  end
+
+  # Outside production: `allow_all/0`. Behaviourally what the implicit nil already
+  # did, but said out loud, so `mix mcp.server` and the Tidewave dev endpoint keep
+  # working and the opt-out is visible in the code rather than implied by an empty
+  # list.
+  defp default_mcp_authorizer(_key, false), do: Raxol.MCP.Authorizer.allow_all()
+
+  # In production: a real authorizer, and specifically NOT `allow_all/0`.
+  # `Raxol.MCP.Server.authorization_configured?/1` is literally `authorizer !=
+  # nil`, and the SSE transport's boot gate
+  # (`Raxol.MCP.Deployment.enforce_authorization!/2`) reads exactly that value, so
+  # a blanket allow here would satisfy the gate and let a NETWORK transport serve
+  # every tool unguarded -- the one outcome that gate exists to prevent.
+  #
+  # An empty allowlist is strictly TIGHTER than the nil this replaced, not merely
+  # more explicit: `Authorizer.decide/4` treats nil as allow, so a production
+  # server previously ran any tool nobody had annotated sensitive. Now nothing
+  # runs until a deployment names it.
+  defp default_mcp_authorizer(:mcp_authorizer, true) do
+    Raxol.MCP.Authorizer.allowlist(
+      Application.get_env(:raxol, :mcp_allowed_tools, [])
+    )
+  end
+
+  # Reads cannot default to the same empty list: `tools/list` is a read, so
+  # denying everything would leave even an allowlisted tool undiscoverable and
+  # the server unusable rather than merely closed. The split is by what the
+  # method DISCLOSES -- listing methods reveal names, which are already the
+  # server's advertised surface, while `resources/read` and the subscribe pair
+  # stream live model state to whoever connects.
+  defp default_mcp_authorizer(:mcp_read_authorizer, true) do
+    Raxol.MCP.Authorizer.allowlist(
+      Application.get_env(
+        :raxol,
+        :mcp_allowed_read_methods,
+        @default_production_read_methods
+      )
+    )
   end
 
   defp mcp_production? do
