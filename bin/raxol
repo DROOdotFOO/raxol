@@ -1,8 +1,8 @@
 #!/bin/sh
-# raxol — one-shot headless agent CLI (v0).
+# raxol -- one-shot headless agent CLI (v0).
 #
 #   raxol -p "what's inside my cwd"
-#   raxol -p "summarize mix.exs" --harness lm_studio 2>events.jsonl
+#   raxol -p "summarize mix.exs" --backend lm_studio 2>events.jsonl
 #
 # stdout = the answer. stderr = harness contract events as JSON lines.
 # Runs the mix task from the raxol_agent package while keeping the
@@ -11,28 +11,43 @@
 
 set -e
 
+# shellcheck disable=SC1007  # CDPATH= is an intentional env prefix for a safe cd
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(dirname -- "$SCRIPT_DIR")
 CALLER_CWD=$(pwd)
 
+# Peel `-p PROMPT` out of the argument list and hand every other flag to the
+# task untouched, in order. The rotation idiom -- consume the head, re-append
+# a keeper to the tail, exactly $# times -- keeps each argument one word;
+# accumulating them into a string (what this replaced) split
+# `--system "two words"` into two arguments.
 PROMPT=""
-PASSTHRU=""
+argc=$#
+seen=0
 
-while [ $# -gt 0 ]; do
-  case "$1" in
+while [ "$seen" -lt "$argc" ]; do
+  arg="$1"
+  shift
+  seen=$((seen + 1))
+
+  case "$arg" in
     -p)
-      shift
+      if [ "$seen" -ge "$argc" ]; then
+        echo "raxol: -p needs a prompt" >&2
+        exit 64
+      fi
       PROMPT="$1"
+      shift
+      seen=$((seen + 1))
       ;;
     -h|--help)
-      echo "usage: raxol -p \"prompt\" [--harness NAME] [--model NAME] [--base-url URL] [--system TEXT] [--timeout SECONDS] [--no-tools]"
+      echo "usage: raxol -p \"prompt\" [--backend NAME] [--model NAME] [--base-url URL] [--system TEXT] [--timeout SECONDS] [--write] [--no-tools]"
       exit 0
       ;;
     *)
-      PASSTHRU="$PASSTHRU $1"
+      set -- "$@" "$arg"
       ;;
   esac
-  shift
 done
 
 if [ -z "$PROMPT" ]; then
@@ -42,25 +57,43 @@ fi
 
 cd "$REPO_ROOT/packages/raxol_agent"
 
-# Compile silently first so the actual run keeps stdout clean for the
-# answer (the task boots with --no-compile).
-mix compile >/dev/null 2>&1 || {
+# Compile silently first so the run keeps stdout for the answer and stderr for
+# the JSON event stream (the task boots with --no-compile). Both channels are
+# machine-readable here, so build chatter is dropped rather than rerouted; the
+# hint below is how a human gets it back.
+#
+# `< /dev/null` detaches the compile step from stdin: Mix boots a full VM whose
+# `prim_tty` owns fd 0 and reads ahead, so this step can consume and discard
+# input a caller meant for the task (the defect fixed in bin/raxol-acp).
+MAKEFLAGS=-s mix compile >/dev/null 2>&1 </dev/null || {
   echo "raxol: compile failed; run (cd packages/raxol_agent && mix compile) for details" >&2
   exit 70
 }
 
 # RAXOL_CLI_CWD tells the fs tools which directory the user meant.
-# MAKEFLAGS=-s keeps the termbox2 NIF's per-invocation make check from
-# printing "Nothing to be done" onto the answer channel. Mix's pre-task
-# dep check still prints a constant "==> raxol_terminal" header (the
-# elixir_make dep reads as always-stale — root fix is a manifest guard in
-# raxol_terminal, out of scope here), so filter that exact line while
-# preserving the task's exit code.
-STATUS_FILE=$(mktemp)
-{
-  MAKEFLAGS=-s RAXOL_CLI_CWD="$CALLER_CWD" mix raxol.p $PASSTHRU "$PROMPT"
-  echo $? > "$STATUS_FILE"
-} | grep --line-buffered -v '^==> raxol_terminal$'
-read CODE < "$STATUS_FILE"
-rm -f "$STATUS_FILE"
-exit "$CODE"
+# MAKEFLAGS=-s keeps the termbox2 NIF's per-invocation make check from printing
+# "Nothing to be done" onto the answer channel.
+#
+# Precompiling is not sufficient on its own. `mix <task>` must load the project
+# to find the task module, and that loadpaths pass announces dep work on STDOUT
+# ("==> raxol_terminal", "Compiling N files (.ex)") BEFORE `raxol.p` can install
+# a quiet shell -- elixir_make's NIF check re-announces on every invocation, so
+# it is not a first-run-only cost. `mix run` is built into Mix, so it parses
+# before any project loadpaths and honours --no-deps-check; the task still runs
+# `app.start` itself.
+#
+# This replaced a `grep -v '^==> raxol_terminal$'` filter over the task's
+# stdout, which matched that one exact line and let "Compiling N files (.ex)"
+# through onto the answer. exec also drops the temp file that filter needed to
+# carry the task's exit code back out of the pipeline.
+exec env \
+  MAKEFLAGS=-s \
+  RAXOL_CLI_CWD="$CALLER_CWD" \
+  mix run \
+    --no-start \
+    --no-compile \
+    --no-deps-check \
+    --no-archives-check \
+    --no-elixir-version-check \
+    -e 'Mix.Tasks.Raxol.P.run(System.argv())' \
+    -- "$@" "$PROMPT"

@@ -87,6 +87,7 @@ defmodule Raxol.AgentClientProtocol.ConnectionDeliveryTest do
   # drives real Connection/Paired processes, matching connection_test.exs's
   # own precedent.
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   @moduletag :capture_log
 
@@ -535,16 +536,33 @@ defmodule Raxol.AgentClientProtocol.ConnectionDeliveryTest do
   # [:raxol, :acp, :delivery] with %{session, turn, decision, buffered,
   # ordinal}, partitioning into :emit | :buffer | :gap | :fail (:gap is
   # unreachable in v1 -- nothing is coalescible; not asserted here, no
-  # such variant exists yet). This package does not depend on `:telemetry`
-  # (Connection's own moduledoc, deviation #5) -- a minimal literal
-  # `:telemetry` module is defined below purely so
-  # `Code.ensure_loaded?(:telemetry)` resolves true for this file's
-  # assertions, without adding a real dependency to the package.
+  # such variant exists yet). `:telemetry` is a dev/test-only dependency
+  # (mix.exs) so the `Code.ensure_loaded?(:telemetry)` guards in `Connection`
+  # and `Raxol.AgentClientProtocol.Delivery` resolve true here while the
+  # published package keeps no runtime telemetry requirement.
   # ===========================================================================
+
+  @doc false
+  # Named (not anonymous) so :telemetry does not log its local-handler
+  # performance warning on every attach.
+  def __collect__(event, measurements, metadata, collector) do
+    send(collector, {:telemetry_event, event, measurements, metadata})
+    :ok
+  end
 
   describe "D9 telemetry contract" do
     setup do
-      :telemetry.attach_collector(self())
+      handler_id = {__MODULE__, :d9, make_ref()}
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:raxol, :acp, :delivery],
+          &__MODULE__.__collect__/4,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
       :ok
     end
 
@@ -589,33 +607,5 @@ defmodule Raxol.AgentClientProtocol.ConnectionDeliveryTest do
 
       refute_receive {:telemetry_event, [:raxol, :acp, :delivery], _, %{decision: :fail}}, 100
     end
-  end
-end
-
-# A minimal, LITERAL `:telemetry` module (an Erlang-style atom module name)
-# -- defined at the bottom of this test file so
-# `Code.ensure_loaded?(:telemetry)` / `function_exported?(:telemetry,
-# :execute, 3)` (the exact guard both `Connection`'s and
-# `Raxol.AgentClientProtocol.Delivery`'s telemetry helpers use) resolve
-# true for the D9 describe block above, WITHOUT adding a real `:telemetry`
-# dependency to the package (deviation #5: "Telemetry events are emitted
-# only when :telemetry is loaded... otherwise Logger carries the signal").
-# `execute/3` forwards to whichever pid last called `attach_collector/1`
-# (this file runs `async: false`, so there is never more than one
-# collector live at a time).
-defmodule :telemetry do
-  @moduledoc false
-
-  @collector_key {__MODULE__, :collector}
-
-  def attach_collector(pid), do: :persistent_term.put(@collector_key, pid)
-
-  def execute(event, measurements, metadata) do
-    case :persistent_term.get(@collector_key, nil) do
-      nil -> :ok
-      pid -> send(pid, {:telemetry_event, event, measurements, metadata})
-    end
-
-    :ok
   end
 end

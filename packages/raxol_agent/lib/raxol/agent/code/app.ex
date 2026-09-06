@@ -1126,12 +1126,16 @@ defmodule Raxol.Agent.Code.App do
       current_model(model)
   end
 
+  # ADR-0035: price the provider-raw usage map FIRST -- the cache split and a
+  # provider-reported cost both live there, and add_usage/2 destroys both --
+  # and collapse to two fields only on the env-rate path. Env rates still win
+  # outright: an operator who states a rate is not second-guessed by a table,
+  # and they are flat by construction, so a cache model has no business being
+  # imposed on them. :unknown must keep returning 0.0, because that zero is
+  # the signal flag_unpriced/4 reads to arm the fail-closed halt above.
   defp turn_cost_usd(model, usage, billed) do
-    case cost_profile(model, billed) do
-      nil ->
-        0.0
-
-      profile ->
+    case env_profile() do
+      %Raxol.Agent.BenchmarkProfile{} = profile ->
         acc =
           Raxol.Agent.BenchmarkProfile.add_usage(
             %{input_tokens: 0, output_tokens: 0},
@@ -1139,19 +1143,31 @@ defmodule Raxol.Agent.Code.App do
           )
 
         Raxol.Agent.BenchmarkProfile.cost_usd(profile, acc)
+
+      nil ->
+        backend = model.executor && model.executor.backend
+
+        case Raxol.Agent.LlmPrices.turn_cost_usd(backend, billed, usage) do
+          {:ok, cost} -> cost
+          :unknown -> 0.0
+        end
     end
   end
 
   # Env rates (RAXOL_COST_PER_MTOK_IN/OUT) win; else the static price
   # table for the connected model. nil = no estimate possible.
   defp cost_profile(model, billed) do
+    env_profile() || table_profile(model, billed)
+  end
+
+  defp env_profile do
     case Raxol.Agent.BenchmarkProfile.from_env() do
       {:ok, %{cost_per_mtok_in: rin, cost_per_mtok_out: rout} = profile}
       when is_number(rin) and is_number(rout) ->
         profile
 
       _ ->
-        table_profile(model, billed)
+        nil
     end
   end
 

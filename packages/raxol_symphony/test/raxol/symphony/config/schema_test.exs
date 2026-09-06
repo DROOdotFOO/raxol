@@ -59,6 +59,26 @@ defmodule Raxol.Symphony.Config.SchemaTest do
                  build_config(%{codex: %{auth: %{mode: "api_key", api_key_env: "MY_KEY"}}})
                )
     end
+
+    # ADR-0034 Gap 4: this kind resolved but was absent from the supported
+    # set, so a workflow naming a real runner failed its own preflight.
+    test "raxol_agent_session runner passes" do
+      assert :ok = Schema.validate(build_config(%{runner: %{kind: "raxol_agent_session"}}))
+    end
+
+    test "review runner with two reviewable kinds passes" do
+      assert :ok =
+               Schema.validate(
+                 build_config(%{
+                   runner: %{kind: "review"},
+                   review: %{
+                     enabled: true,
+                     implementer_kind: "raxol_agent",
+                     reviewer_kind: "codex"
+                   }
+                 })
+               )
+    end
   end
 
   describe "validate/1 -- failures" do

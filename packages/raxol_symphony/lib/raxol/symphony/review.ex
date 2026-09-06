@@ -5,42 +5,74 @@ defmodule Raxol.Symphony.Review do
 
   Ported from omnigent's Polly orchestrator, where review is always performed by a
   different vendor than the implementer and requires at least two available
-  vendors -- otherwise the work escalates to a human. Here a "vendor" is a runner
-  kind (`"raxol_agent"`, `"codex"`, ...); two distinct kinds are two distinct
-  vendors.
+  vendors -- otherwise the work escalates to a human.
+
+  A "vendor" is NOT a runner kind. Vendor identity comes from
+  `Raxol.Symphony.Runner.vendor/1`, because `"raxol_agent"` and
+  `"raxol_agent_session"` are two kinds with one vendor (`:raxol`): pairing them
+  satisfies "two distinct kinds" while leaving the adversarial premise of review
+  unmet, which is exactly what ADR-0034 Gap 5 measured. Kinds whose vendor is
+  `nil` (`"review"`, `"noop"`) are not review-capable at all and are excluded
+  from candidacy: an inert reviewer would approve every diff.
 
   This module is pure: vendor availability is supplied by the caller as a
   predicate, so detection (a `command -v`-style probe) stays at the edge and the
   selection logic is trivially testable.
   """
 
-  alias Raxol.Symphony.Review.Contract
+  alias Raxol.Symphony.{Runner, Review.Contract}
 
   @escalation_reason :awaiting_human
 
-  @doc """
-  Pick a reviewer vendor distinct from `implementer`.
+  @typedoc """
+  Why the cross-vendor invariant could not be satisfied. Names the vendors that
+  ARE present so an operator reading the escalation knows which second vendor is
+  missing rather than only that one is.
+  """
+  @type insufficiency :: %{
+          implementer_kind: String.t(),
+          implementer_vendor: Runner.vendor(),
+          available_kinds: [String.t()],
+          available_vendors: [Runner.vendor()]
+        }
 
-  Requires at least two distinct AVAILABLE candidate vendors and at least one
-  available candidate that is not the implementer. Returns the first such
-  reviewer, or `{:error, :insufficient_vendors}` when the cross-vendor invariant
-  cannot be satisfied (the caller should escalate to a human).
+  @doc """
+  Pick a reviewer whose VENDOR differs from the implementer's.
+
+  Candidates whose vendor is `nil` are rejected outright. Of the rest, requires
+  at least two distinct available vendors and at least one available candidate
+  from a vendor other than the implementer's. Returns the first such reviewer, or
+  `{:error, {:insufficient_vendors, insufficiency()}}` when the cross-vendor
+  invariant cannot be satisfied (the caller should escalate to a human).
   """
   @spec select_reviewer(String.t(), [String.t()], (String.t() -> boolean())) ::
-          {:ok, String.t()} | {:error, :insufficient_vendors}
+          {:ok, String.t()} | {:error, {:insufficient_vendors, insufficiency()}}
   def select_reviewer(implementer, candidates, available?)
       when is_binary(implementer) and is_list(candidates) and is_function(available?, 1) do
     available =
       candidates
       |> Enum.uniq()
+      |> Enum.filter(&(Runner.vendor(&1) != nil))
       |> Enum.filter(available?)
 
-    reviewers = Enum.reject(available, &(&1 == implementer))
+    implementer_vendor = Runner.vendor(implementer)
+    vendors = available |> Enum.map(&Runner.vendor/1) |> Enum.uniq()
+    reviewers = Enum.reject(available, &(Runner.vendor(&1) == implementer_vendor))
 
-    if length(available) >= 2 and reviewers != [] do
+    # Two conditions, not one: two distinct available vendors AND one of them
+    # other than the implementer's. An implementer absent from `candidates`
+    # would otherwise let a single available vendor look like a valid pair.
+    if length(vendors) >= 2 and reviewers != [] do
       {:ok, hd(reviewers)}
     else
-      {:error, :insufficient_vendors}
+      {:error,
+       {:insufficient_vendors,
+        %{
+          implementer_kind: implementer,
+          implementer_vendor: implementer_vendor,
+          available_kinds: available,
+          available_vendors: vendors
+        }}}
     end
   end
 

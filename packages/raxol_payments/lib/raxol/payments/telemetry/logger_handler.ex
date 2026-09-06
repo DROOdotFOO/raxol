@@ -51,7 +51,7 @@ defmodule Raxol.Payments.Telemetry.LoggerHandler do
 
     :telemetry.attach_many(
       handler_id,
-      Telemetry.events(),
+      Map.keys(Telemetry.events()),
       &__MODULE__.handle_event/4,
       %{formatter: formatter}
     )

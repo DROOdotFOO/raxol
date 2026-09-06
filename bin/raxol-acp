@@ -30,9 +30,44 @@ cd "$REPO_ROOT/packages/raxol_agent"
 
 # Compile quietly (to stderr) so no build chatter reaches the stdout wire.
 # MAKEFLAGS=-s silences the termbox2 NIF make check.
-MAKEFLAGS=-s mix compile >&2 || {
+#
+# `< /dev/null` matters as much as the stderr redirect: a client writes its
+# `initialize` frame as soon as it spawns us, so that frame is already sitting
+# in the stdin pipe while this compile runs. Mix boots a full VM whose
+# `prim_tty` owns fd 0 and reads ahead, so without this redirect the compile
+# step CONSUMES the first frame and discards it on exit -- the client then
+# waits forever for a reply to a request the peer never saw. It reproduces as
+# a handshake that hangs only when compilation has work to do, which is why it
+# looks intermittent.
+MAKEFLAGS=-s mix compile >&2 </dev/null || {
   echo "raxol-acp: compile failed; run (cd packages/raxol_agent && mix compile) for details" >&2
   exit 70
 }
 
-exec env MAKEFLAGS=-s RAXOL_CLI_CWD="$CALLER_CWD" mix raxol.acp "$@"
+# Precompiling is not sufficient on its own. `mix <task>` must load the project
+# to find the task module, and that loadpaths pass announces dep work on STDOUT
+# ("==> earmark_parser", "Compiling 47 files") BEFORE `raxol.acp` can install a
+# quiet shell -- elixir_make's NIF check re-announces on every invocation, so it
+# is not a first-run-only cost. That chatter lands ahead of the first frame and
+# an ACP client that does not tolerate a non-JSON preamble drops the session.
+# `mix run` is built into Mix, so it parses before any project loadpaths and
+# honours --no-deps-check; the task still runs `app.start` itself.
+#
+# -noinput: the VM otherwise boots with `prim_tty` owning fd 0, and the ACP
+# transport's own port on fd 0 then steals it
+# ("driver_select ... stealing control of fd=0 from resource prim_tty:tty").
+# The handshake hangs: the peer never answers `initialize`. Verified with
+# scripts/acp_probe.py, which hangs without this flag and completes a clean
+# turn with it.
+exec env \
+  MAKEFLAGS=-s \
+  RAXOL_CLI_CWD="$CALLER_CWD" \
+  ELIXIR_ERL_OPTIONS="-noinput${ELIXIR_ERL_OPTIONS:+ $ELIXIR_ERL_OPTIONS}" \
+  mix run \
+    --no-start \
+    --no-compile \
+    --no-deps-check \
+    --no-archives-check \
+    --no-elixir-version-check \
+    -e 'Mix.Tasks.Raxol.Acp.run(System.argv())' \
+    -- "$@"

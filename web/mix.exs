@@ -9,7 +9,11 @@ defmodule RaxolPlayground.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: releases(),
-      aliases: aliases()
+      aliases: aliases(),
+      # Phoenix 1.8 drives dev code reloading through Mix's compiler-listener
+      # API instead of its own file watcher. Without this the reloader server
+      # raises on every request in dev (code_reloader: true in config/dev.exs).
+      listeners: [Phoenix.CodeReloader]
     ]
   end
 

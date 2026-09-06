@@ -30,6 +30,7 @@ defmodule Raxol.AgentClientProtocol.Integration.EndToEndTest do
   """
 
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   @moduletag :integration
   @moduletag :capture_log

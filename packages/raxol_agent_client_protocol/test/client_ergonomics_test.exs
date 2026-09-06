@@ -14,6 +14,7 @@ defmodule Raxol.AgentClientProtocol.ClientErgonomicsTest do
   # (module attribute, fixed at compile time -- `fs_sandbox:` is a `use`-time
   # option, not a runtime argument) across test cases in this file.
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   @moduletag :capture_log
 

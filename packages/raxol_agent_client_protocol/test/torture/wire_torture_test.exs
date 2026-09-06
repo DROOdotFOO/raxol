@@ -93,6 +93,7 @@ end
 
 defmodule Raxol.AgentClientProtocol.Torture.WireTortureTest do
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   @moduletag :capture_log
 

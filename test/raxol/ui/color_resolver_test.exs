@@ -15,7 +15,18 @@ defmodule Raxol.UI.ColorResolverTest do
   model this targets a subset of.
   """
 
-  use ExUnit.Case, async: true
+  # async: false is mandatory for the invariant sentinel: :telemetry handlers
+  # are global and run in the EMITTING process, so a handler cannot attribute
+  # an event to one of several concurrently-running async tests. This module
+  # is the only place in the root suite that can reach the RP-N-03 writer
+  # guard's telemetry branch (see below), so it is the only one instrumented.
+  use ExUnit.Case, async: false
+
+  # Arms [:raxol, :ui, :color_resolver, :unresolved_intent] -- the one event
+  # Raxol.Telemetry classifies :invariant. In dev/test the guard RAISES
+  # instead of emitting, so only the explicit prod-flag arity below reaches
+  # the emit; the tag on that test pins it in both directions.
+  use Raxol.Core.Telemetry.InvariantSentinel, registry: Raxol.Telemetry
 
   alias Raxol.UI.{ColorIntent, ColorResolver}
   alias Raxol.UI.Theming.{Ansi16Salience, Colors, Salience}
@@ -446,6 +457,10 @@ defmodule Raxol.UI.ColorResolverTest do
       assert ^resolved = ColorResolver.enforce_resolved!(resolved, true)
     end
 
+    # Drives the one :invariant event on purpose (via the explicit prod-flag
+    # arity), so it declares it: the sentinel then fails this test if the
+    # emit ever stops happening, not just if it happens elsewhere.
+    @tag expect_invariant: [[:raxol, :ui, :color_resolver, :unresolved_intent]]
     test "an unresolved intent maps to :default and emits telemetry in prod mode" do
       ref = make_ref()
       self_pid = self()

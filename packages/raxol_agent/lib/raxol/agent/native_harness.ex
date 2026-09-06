@@ -28,17 +28,65 @@ defmodule Raxol.Agent.NativeHarness do
   - `{:reasoning, binary}` -- chain-of-thought / thinking text.
   - `{:tool_call, map}` -- the CLI invoked a tool (observability only; the tool
     itself is served by the injected MCP server, not by the framework).
-  - `{:done, %{content: binary, usage: map}}` -- the run finished; `content` is
-    the final answer, `usage` is token accounting (may be empty).
+  - `{:done, %{content: binary, usage: usage()}}` -- the run finished;
+    `content` is the final answer, `usage` is token accounting (may be empty).
   - `{:error, term}` -- the CLI reported an error.
+
+  ## Usage must be translated, not passed through
+
+  A `{:done, _}` event's `usage` map is required to speak raxol's vocabulary
+  (`:input_tokens`, `:output_tokens`), never the vendor's. Nothing downstream
+  translates, and a driver that forwards a vendor's own keys -- pi's
+  `"input"`/`"output"`, say -- does not fail loudly. It disables three things
+  at once (ADR-0034, "Gap 2"), each of which looks healthy in isolation:
+
+  1. `Raxol.Agent.BenchmarkProfile.add_usage/2` (`benchmark_profile.ex:114-134`)
+     reads only `:input_tokens`/`:prompt_tokens` and
+     `:output_tokens`/`:completion_tokens`, atom or string. An unrecognized key
+     accumulates as zero, so the turn prices at $0.00.
+  2. `Raxol.Agent.Code.CostLedger.record/4` guards on `cost_usd > 0.0`
+     (`code/cost_ledger.ex:33-34`), so that $0.00 turn is never recorded.
+  3. `flag_unpriced/4` (`code/app.ex:1077-1083`) exists to catch exactly a
+     $0.00 turn that burned tokens, but it asks `billed_tokens?/1`
+     (`code/app.ex:1085-1093`), which calls that same `add_usage/2` and
+     therefore also sees zero tokens. The fail-closed halt never arms.
+
+  Net effect: a ledger reading $0.00 forever and a `RAXOL_MAX_COST_USD` that
+  never trips. A budget that looks enforced and is not is worse than no budget,
+  which is why this is a contract on every driver rather than a fix applied to
+  one.
+
+  ### Per-call usage is summed, not overwritten
+
+  Where the CLI reports usage per LLM call and re-sends the conversation on
+  each call, the driver reports the SUM across calls, not the last call's
+  figure: each call's input is separately billed, so the last figure
+  understates a tool loop by roughly its depth. The sum has to be in the single
+  `{:done, _}` payload, because `Raxol.Agent.Backend.Native` forwards that map
+  verbatim and never merges usage across events (`backend/native.ex:182-186`).
   """
 
   @type event ::
           {:text, binary()}
           | {:reasoning, binary()}
           | {:tool_call, map()}
-          | {:done, %{content: binary(), usage: map()}}
+          | {:done, %{content: binary(), usage: usage()}}
           | {:error, term()}
+
+  @typedoc """
+  Token accounting carried by a `{:done, _}` event, in raxol's vocabulary.
+
+  `:input_tokens` and `:output_tokens` are the keys every consumer reads (the
+  same names as strings are also accepted, since `BenchmarkProfile.add_usage/2`
+  takes either). Extra provider-raw keys may ride along; the pricing path
+  ignores what it does not recognize.
+
+  An empty map is legal and means "this CLI reports no usage". A map keyed in
+  the vendor's vocabulary is not: it is indistinguishable from the empty map to
+  every consumer, and silently so. See "Usage must be translated, not passed
+  through" above.
+  """
+  @type usage :: %{optional(atom() | binary()) => term()}
 
   @typedoc """
   Run configuration passed to `args/1`. Keys:
@@ -66,7 +114,14 @@ defmodule Raxol.Agent.NativeHarness do
   @doc "The argv (after the executable) for one non-interactive run."
   @callback args(run_config()) :: [String.t()]
 
-  @doc "Parse one stdout line into zero or more normalized events."
+  @doc """
+  Parse one stdout line into zero or more normalized events.
+
+  A `{:done, _}` event's `usage` must already be in raxol's vocabulary
+  (`t:usage/0`) when it leaves the driver, and must be the run's total rather
+  than the last LLM call's. Both requirements are load-bearing for cost
+  metering; see the moduledoc for what breaks when they are missed.
+  """
   @callback parse_line(line :: String.t()) :: [event()]
 
   @doc "Human-readable harness name."

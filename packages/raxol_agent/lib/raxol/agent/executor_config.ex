@@ -39,20 +39,19 @@ defmodule Raxol.Agent.ExecutorConfig do
   @enforce_keys [:backend]
   defstruct backend: nil, model: nil, auth: %{}, opts: []
 
+  # The union is unquoted from `Raxol.Agent.Backend.Catalog.ids/0` rather than
+  # written out, because the hand-maintained copy drifted: `:grok_native` was
+  # resolvable and selectable while absent from this type, so Dialyzer could not
+  # see it (ADR-0034, "Gap 4: five registries disagree about which backends
+  # exist"). A union is a compile-time construct and cannot be folded at
+  # runtime, hence the explicit `{:|, [], [...]}` AST rather than a reduce over
+  # the ids at call time.
   @type backend ::
-          :anthropic
-          | :openai
-          | :kimi
-          | :ollama
-          | :lm_studio
-          | :llm7
-          | :openrouter
-          | :longcat
-          | :lumo
-          | :mock
-          | :claude_native
-          | :codex
-          | :cursor
+          unquote(
+            Raxol.Agent.Backend.Catalog.ids()
+            |> Enum.reverse()
+            |> Enum.reduce(fn id, acc -> {:|, [], [id, acc]} end)
+          )
 
   @type t :: %__MODULE__{
           backend: backend(),

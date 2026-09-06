@@ -69,6 +69,23 @@ defmodule Mix.Tasks.Raxol.P do
 
   @impl Mix.Task
   def run(argv) do
+    # stdout is the answer channel, so nothing else may print there.
+    # `Raxol.Agent.P` lowers the log level itself, but only once its run
+    # starts -- the `app.start` below happens first and used to put the whole
+    # boot banner ("Starting in full mode", the Endpoint config warning,
+    # "Started in ...") on stdout, ahead of the answer. Measured through
+    # bin/raxol by cli_entrypoint_smoke_test.exs.
+    #
+    # Seed :logger's own env rather than calling Logger.configure/1: app.start
+    # reloads config and restarts :logger, which would undo a live change.
+    # Level :error matches what the runner installs; the handler binds to
+    # standard_error so what survives that level lands beside the JSONL event
+    # stream instead of corrupting the answer. Mix.Shell.Quiet covers
+    # app.start's own announcements.
+    Application.put_env(:logger, :level, :error)
+    Application.put_env(:logger, :default_handler, config: %{type: :standard_error})
+    Mix.shell(Mix.Shell.Quiet)
+
     # Boot without recompiling (bin/raxol precompiles silently) so stdout
     # stays clean for the answer, then hand off to the shared runner --
     # `Raxol.Agent.P` contains no Mix calls, so the same code path serves

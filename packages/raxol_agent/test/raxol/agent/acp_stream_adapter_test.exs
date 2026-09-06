@@ -16,6 +16,10 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
     5. Every emitted event passes `Raxol.Harness.EventBoundary.normalize/1`
        (the driver's security seam) — the adapter can never poison the
        live pipeline with a shape the boundary rejects.
+    6. Usage and cost: `usage_update` emits no event of its own; its figures
+       ride the closing `:turn_completed` `usage:` map in raxol's usage
+       vocabulary, with `:cost` as a PER-TURN delta of the peer's cumulative
+       session figure (the double-count guard) and currency never coerced.
 
   Hostile-frame coverage (the generator/oracle audit): unknown variants,
   `{:raw, map}` feeds, garbage terms, malformed `_meta`, forged stop
@@ -384,18 +388,18 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
   describe "unknown-variant honesty" do
     test "an unmapped variant is skipped, counted, and disclosed exactly once per kind",
          ctx do
-      update!(ctx.adapter, {:usage_update, %{used: 10, size: 100}})
+      update!(ctx.adapter, {:config_option_update, %{id: "model"}})
 
       marker = ctx.session_id |> next_event() |> assert_boundary_clean()
       assert %{type: :error, tier: :durable} = marker
 
       assert marker.payload == %{
                reason: :unmapped_acp_update,
-               kind: "usage_update"
+               kind: "config_option_update"
              }
 
       # Second occurrence: counted, but no second marker.
-      update!(ctx.adapter, {:usage_update, %{used: 20, size: 100}})
+      update!(ctx.adapter, {:config_option_update, %{id: "mode"}})
       refute_event(ctx.session_id)
 
       # A different kind gets its own first-occurrence marker.
@@ -410,8 +414,34 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
                next_event(ctx.session_id)
 
       assert AcpStreamAdapter.unmapped_counts(ctx.adapter) == %{
-               "usage_update" => 2,
+               "config_option_update" => 2,
                "current_mode_update" => 1
+             }
+    end
+
+    # The two frames real omp emitted that ADR-0034 records as falling
+    # outside the mapping table entirely: declared as counted-but-unmapped,
+    # so they degrade honestly instead of reaching the garbage catch-all.
+    test "available_commands_update and session_info_update are counted, one marker each",
+         ctx do
+      update!(ctx.adapter, {:available_commands_update, %{available_commands: []}})
+
+      assert %{payload: %{kind: "available_commands_update"}} =
+               ctx.session_id |> next_event() |> assert_boundary_clean()
+
+      update!(ctx.adapter, {:session_info_update, %{title: "t"}})
+
+      assert %{payload: %{kind: "session_info_update"}} =
+               ctx.session_id |> next_event() |> assert_boundary_clean()
+
+      # Repeats bump the counter and stay silent.
+      update!(ctx.adapter, {:available_commands_update, %{available_commands: []}})
+      update!(ctx.adapter, {:session_info_update, %{title: "t2"}})
+      refute_event(ctx.session_id)
+
+      assert AcpStreamAdapter.unmapped_counts(ctx.adapter) == %{
+               "available_commands_update" => 2,
+               "session_info_update" => 2
              }
     end
 
@@ -448,6 +478,194 @@ defmodule Raxol.Agent.AcpStreamAdapterTest do
                }
              } =
                next_event(ctx.session_id)
+    end
+  end
+
+  # -- usage and cost (ADR-0034's `usage: %{}` hole, ADR-0035's cost) --------
+
+  # The frame ADR-0034 measured against real `omp acp`, verbatim.
+  defp probe_frame(cost \\ %{amount: 0.11544, currency: "USD"}) do
+    {:usage_update, %{used: 22_974, size: 272_000, cost: cost}}
+  end
+
+  defp complete_turn(ctx) do
+    :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :end_turn})
+    event = ctx.session_id |> next_event() |> assert_boundary_clean()
+    assert %{type: :turn_completed} = event
+    event.payload.usage
+  end
+
+  describe "usage and cost" do
+    test "the measured omp frame lands its cost on turn_completed, not %{}",
+         ctx do
+      _turn_id = begin!(ctx, "hi")
+
+      update!(ctx.adapter, probe_frame())
+      # A context/cost update is a property of the turn, not a transcript
+      # entry: it emits nothing of its own.
+      refute_event(ctx.session_id)
+
+      usage = complete_turn(ctx)
+
+      assert usage.cost == %{amount: 0.11544, currency: "USD"}
+      assert usage.session_cost == %{amount: 0.11544, currency: "USD"}
+
+      # `used` is tokens in context, never billed input tokens.
+      assert usage.context_tokens == 22_974
+      assert usage.max_context_tokens == 272_000
+      refute Map.has_key?(usage, :input_tokens)
+    end
+
+    # The double-count guard. `UsageUpdate.cost` is a CUMULATIVE session
+    # figure, so emitting it verbatim would bill turn one's dollars again on
+    # turn two, and again on turn three.
+    test "a cumulative session cost is emitted as a per-turn delta", ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: 0.11544, currency: "USD"}))
+      first = complete_turn(ctx)
+
+      assert_in_delta first.cost.amount, 0.11544, 1.0e-9
+      assert_in_delta first.session_cost.amount, 0.11544, 1.0e-9
+
+      _t2 = begin!(ctx, "two")
+      update!(ctx.adapter, probe_frame(%{amount: 0.20000, currency: "USD"}))
+      second = complete_turn(ctx)
+
+      assert_in_delta second.cost.amount, 0.08456, 1.0e-9
+      assert_in_delta second.session_cost.amount, 0.20000, 1.0e-9
+    end
+
+    test "the token split rides _meta into raxol's usage vocabulary", ctx do
+      _turn_id = begin!(ctx, "p")
+
+      update!(
+        ctx.adapter,
+        {:usage_update,
+         %{
+           used: 22_974,
+           size: 272_000,
+           _meta: %{
+             "inputTokens" => 1997,
+             "outputTokens" => 52,
+             "totalTokens" => 46_081,
+             "cachedReadTokens" => 44_032
+           }
+         }}
+      )
+
+      usage = complete_turn(ctx)
+
+      assert usage.input_tokens == 1997
+      assert usage.output_tokens == 52
+      assert usage.total_tokens == 46_081
+      assert usage.cached_read_tokens == 44_032
+    end
+
+    test "garbage token counts in _meta read as absent, never as figures",
+         ctx do
+      _turn_id = begin!(ctx, "p")
+
+      update!(
+        ctx.adapter,
+        {:usage_update,
+         %{
+           used: 10,
+           size: 100,
+           _meta: %{
+             "inputTokens" => "1997",
+             "outputTokens" => -5,
+             "totalTokens" => nil,
+             "cachedReadTokens" => 1.5
+           }
+         }}
+      )
+
+      usage = complete_turn(ctx)
+
+      for key <- [
+            :input_tokens,
+            :output_tokens,
+            :total_tokens,
+            :cached_read_tokens
+          ] do
+        refute Map.has_key?(usage, key), "expected #{key} to read as absent"
+      end
+    end
+
+    test "a non-USD cost is carried verbatim, never converted to dollars",
+         ctx do
+      _turn_id = begin!(ctx, "p")
+
+      update!(ctx.adapter, probe_frame(%{amount: 4.2, currency: "EUR"}))
+      usage = complete_turn(ctx)
+
+      assert usage.cost == %{amount: 4.2, currency: "EUR"}
+      assert usage.session_cost == %{amount: 4.2, currency: "EUR"}
+    end
+
+    # A delta is only meaningful between two figures in the same currency.
+    test "a mid-session currency change reports no turn cost", ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: 1.0, currency: "USD"}))
+      assert %{cost: %{currency: "USD"}} = complete_turn(ctx)
+
+      _t2 = begin!(ctx, "two")
+      update!(ctx.adapter, probe_frame(%{amount: 3.0, currency: "EUR"}))
+      second = complete_turn(ctx)
+
+      refute Map.has_key?(second, :cost)
+      assert second.session_cost == %{amount: 3.0, currency: "EUR"}
+    end
+
+    # A cumulative that went DOWN is a broken counterparty figure, not a
+    # refund: crediting a spend gate with money nobody returned is worse
+    # than falling through to the pricing table.
+    test "a negative delta reports no cost rather than a credit", ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: 5.0, currency: "USD"}))
+      assert %{cost: %{amount: 5.0}} = complete_turn(ctx)
+
+      _t2 = begin!(ctx, "two")
+      update!(ctx.adapter, probe_frame(%{amount: 4.0, currency: "USD"}))
+      second = complete_turn(ctx)
+
+      refute Map.has_key?(second, :cost)
+      assert second.session_cost == %{amount: 4.0, currency: "USD"}
+    end
+
+    test "usage is turn-scoped: a turn the peer reported nothing for carries no figures",
+         ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame())
+      assert %{context_tokens: 22_974} = complete_turn(ctx)
+
+      _t2 = begin!(ctx, "two")
+      second = complete_turn(ctx)
+
+      # No usage_update this turn: no tokens, and no cost re-billed from the
+      # cumulative already charged to turn one.
+      assert second == %{}
+    end
+
+    test "usage rides the disclosed brackets too (refusal, forged stop reason)",
+         ctx do
+      _t1 = begin!(ctx, "one")
+      update!(ctx.adapter, probe_frame(%{amount: 0.5, currency: "USD"}))
+      :ok = AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :refusal})
+
+      refused = ctx.session_id |> next_event() |> assert_boundary_clean()
+      assert %{stop_reason: :refusal} = refused.payload
+      assert refused.payload.usage.cost == %{amount: 0.5, currency: "USD"}
+
+      _t2 = begin!(ctx, "two")
+      update!(ctx.adapter, probe_frame(%{amount: 0.9, currency: "USD"}))
+
+      :ok =
+        AcpStreamAdapter.finish_turn(ctx.adapter, %{stop_reason: :become_root})
+
+      forged = ctx.session_id |> next_event() |> assert_boundary_clean()
+      assert %{stop_reason: :unknown} = forged.payload
+      assert_in_delta forged.payload.usage.cost.amount, 0.4, 1.0e-9
     end
   end
 

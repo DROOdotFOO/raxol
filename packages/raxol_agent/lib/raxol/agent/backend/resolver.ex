@@ -33,23 +33,17 @@ defmodule Raxol.Agent.Backend.Resolver do
   an unattended run cannot quietly draw down a prepaid balance. Reaching one
   is explicit: name it (`--backend openrouter`, `harness: :openrouter`) or set
   `RAXOL_ALLOW_PAID_API=1` to restore the walk-everything order.
+
+  A backend the catalog marks `detectable?: false` is skipped by the walk
+  regardless of billing, and stays fully nameable. The registry itself is a
+  projection of `Raxol.Agent.Backend.Catalog` rather than a second list, which
+  is what makes every catalog entry reachable by name (ADR-0034).
   """
 
+  alias Raxol.Agent.Backend.Catalog
   alias Raxol.Agent.Backend.Credentials
   alias Raxol.Agent.ExecutorConfig
 
-  # Provider registry. `keyless: true` providers need no API key (local
-  # servers, the free LLM7 endpoint, Mock); `env_keys` are checked in order.
-  # Detection walks this list top-to-bottom, and a keyless local provider is
-  # only auto-selected when the user has explicitly stored a reference for it.
-  #
-  # `billing` is what auto-detection routes on. `:api_credits` means a request
-  # draws down a prepaid balance, so those are NEVER auto-selected -- reaching
-  # one takes an explicit `--backend`/`harness:` or `RAXOL_ALLOW_PAID_API=1`.
-  # Everything else is already paid for: a `:subscription` the user holds, a
-  # `:local` server, or a `:free` tier. Ordering still matters within the
-  # allowed set, and the subscription harness comes first because it is the
-  # one that costs nothing extra AND is a frontier model.
   # What one `op read` may cost inside `diagnostics/0`.
   #
   # Deliberately far below the 15s interactive default, which is sized so a
@@ -60,106 +54,48 @@ defmodule Raxol.Agent.Backend.Resolver do
   # diagnostic rather than the price of each provider.
   @diagnostic_op_timeout_ms 1_500
 
-  @providers [
-    %{
-      harness: :claude_native,
-      label: "Claude (subscription, via CLI)",
-      env_keys: [],
-      model_env: nil,
-      keyless: true,
-      billing: :subscription,
-      native_module: Raxol.Agent.Backend.ClaudeCode
-    },
-    %{
-      harness: :grok_native,
-      label: "Grok (subscription, via CLI)",
-      env_keys: [],
-      model_env: "GROK_MODEL",
-      keyless: true,
-      billing: :subscription,
-      native_module: Raxol.Agent.Backend.GrokBuild
-    },
-    %{
-      harness: :anthropic,
-      label: "Anthropic (Claude)",
-      env_keys: ["ANTHROPIC_API_KEY"],
-      model_env: "ANTHROPIC_MODEL",
-      keyless: false,
-      billing: :api_credits
-    },
-    %{
-      harness: :openai,
-      label: "OpenAI",
-      env_keys: ["OPENAI_API_KEY"],
-      model_env: "OPENAI_MODEL",
-      keyless: false,
-      billing: :api_credits
-    },
-    %{
-      harness: :kimi,
-      label: "Kimi (Moonshot)",
-      env_keys: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-      model_env: "KIMI_MODEL",
-      keyless: false,
-      billing: :api_credits
-    },
-    %{
-      harness: :openrouter,
-      label: "OpenRouter",
-      env_keys: ["OPENROUTER_API_KEY"],
-      model_env: "OPENROUTER_MODEL",
-      keyless: false,
-      billing: :api_credits
-    },
-    %{
-      harness: :longcat,
-      label: "LongCat (Meituan)",
-      env_keys: ["LONGCAT_API_KEY"],
-      model_env: "LONGCAT_MODEL",
-      keyless: false,
-      billing: :api_credits
-    },
-    %{
-      harness: :lumo,
-      label: "Proton Lumo",
-      env_keys: ["PROTON_ACCESS_TOKEN"],
-      model_env: nil,
-      keyless: false,
-      billing: :subscription
-    },
-    %{
-      harness: :ollama,
-      label: "Ollama (local)",
-      env_keys: [],
-      model_env: "OLLAMA_MODEL",
-      keyless: true,
-      billing: :local
-    },
-    %{
-      harness: :lm_studio,
-      label: "LM Studio (local)",
-      env_keys: [],
-      model_env: nil,
-      keyless: true,
-      billing: :local
-    },
-    %{
-      harness: :llm7,
-      label: "LLM7 (free, no key)",
-      env_keys: [],
-      model_env: nil,
-      keyless: true,
-      billing: :free
-    },
-    %{
-      harness: :mock,
-      label: "Mock (offline)",
-      env_keys: [],
-      model_env: nil,
-      keyless: true,
-      billing: :free
-    }
-  ]
+  # Provider registry, PROJECTED from `Raxol.Agent.Backend.Catalog` rather than
+  # declared here. ADR-0034 measured this list, the selector's module table and
+  # `ExecutorConfig.backend()` disagreeing about which backends exist: `:cursor`
+  # was selectable in code and unnameable through `@by_string` below, purely
+  # because the hand-written copy that used to live here had never gained it. A
+  # filter cannot fall out of date the way a copy did.
+  #
+  # `keyless: true` providers need no API key (local servers, the free LLM7
+  # endpoint, Mock), which is exactly "the catalog declares no env keys for it";
+  # `env_keys` are checked in order. `native_module` is set only for native
+  # harnesses, because its PRESENCE is what routes `detect_available/2` to the
+  # vendor-CLI probe instead of key resolution.
+  @providers Enum.map(Catalog.by_kind([:http, :native, :mock]), fn entry ->
+               spec = %{
+                 harness: entry.id,
+                 label: entry.label,
+                 env_keys: entry.env_keys,
+                 model_env: entry.model_env,
+                 keyless: entry.env_keys == [],
+                 billing: entry.billing,
+                 detectable?: entry.detectable?
+               }
+
+               if entry.kind == :native,
+                 do: Map.put(spec, :native_module, entry.module),
+                 else: spec
+             end)
+
+  # Detection walks this list top-to-bottom, and a keyless local provider is
+  # only auto-selected when the user has explicitly stored a reference for it.
+  # A backend the catalog marks undetectable is absent HERE and still present in
+  # `@providers`, so it stays nameable while never being chosen on the user's
+  # behalf by a PATH probe.
+  #
+  # `billing` is what auto-detection routes on. `:api_credits` means a request
+  # draws down a prepaid balance, so those are NEVER auto-selected -- reaching
+  # one takes an explicit `--backend`/`harness:` or `RAXOL_ALLOW_PAID_API=1`.
+  # Everything else is already paid for: a `:subscription` the user holds, a
+  # `:local` server, or a `:free` tier. Ordering still matters within the
+  # allowed set, and the subscription harness comes first because it is the
+  # one that costs nothing extra AND is a frontier model.
+  @detectable_providers Enum.filter(@providers, & &1.detectable?)
 
   @by_string Map.new(@providers, &{to_string(&1.harness), &1.harness})
 
@@ -420,8 +356,8 @@ defmodule Raxol.Agent.Backend.Resolver do
 
   defp auto_detect_providers do
     if paid_api_allowed?(),
-      do: @providers,
-      else: Enum.reject(@providers, &(&1.billing == :api_credits))
+      do: @detectable_providers,
+      else: Enum.reject(@detectable_providers, &(&1.billing == :api_credits))
   end
 
   defp auto_detect_generic(opts) do
