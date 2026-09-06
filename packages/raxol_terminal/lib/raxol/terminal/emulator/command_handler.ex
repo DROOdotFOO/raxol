@@ -207,9 +207,17 @@ defmodule Raxol.Terminal.Emulator.CommandHandler do
   end
 
   # handle_sgr/2
+  #
+  # Uses `ANSI.SGR.Processor`, which operates on the `TextFormatting` struct
+  # that `emulator.style` actually is. This previously called
+  # `ANSI.SGRProcessor`, a parallel implementation over a plain map with its
+  # own `default_style/0` carrying a `:dim` key that `TextFormatting` does not
+  # have -- so `ESC[2m` raised `KeyError key :dim not found` on this path.
+  # Its test suite never caught it because every case passed `nil` as the
+  # style, which took the `default_style/0` branch instead of a real struct.
   def handle_sgr(params, emulator) do
     updated_style =
-      Raxol.Terminal.ANSI.SGRProcessor.handle_sgr(params, emulator.style)
+      Raxol.Terminal.ANSI.SGR.Processor.handle_sgr(params, emulator.style)
 
     log_sgr_debug("DEBUG: handle_sgr - emulator.style before: #{inspect(emulator.style)}")
 

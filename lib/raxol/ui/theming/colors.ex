@@ -13,7 +13,7 @@ defmodule Raxol.UI.Theming.Colors do
   - Accessibility checks
   """
 
-  alias Raxol.Style.Colors.{Color, Utilities}
+  alias Raxol.Style.Colors.{Color, Formats, Utilities}
   # alias Raxol.UI.Theming.PaletteRegistry # Removed unused alias
 
   # Format: "#RRGGBB" or "#RRGGBBAA"
@@ -44,16 +44,35 @@ defmodule Raxol.UI.Theming.Colors do
   }
 
   @doc """
-  Converts a hex color string to RGB values.
+  Converts a hex color string to RGB values, dropping any alpha channel.
+
+  Raises `ArgumentError` on an unparseable string. This previously went
+  through `Color.from_hex/1` and then read `.r` off the result, so an invalid
+  string surfaced as a `BadMapError` on the `{:error, :invalid_hex}` tuple --
+  an incidental exception that named neither the function nor the input.
+  Parsing is now delegated straight to
+  `Raxol.Style.Colors.Formats.from_hex/1`, dropping the `%Color{}` struct
+  round-trip.
 
   ## Examples
 
       iex> hex_to_rgb("#FF0000")
       {255, 0, 0}
+
+      iex> hex_to_rgb("#F00")
+      {255, 0, 0}
   """
   def hex_to_rgb(hex) when is_binary(hex) do
-    color = Color.from_hex(hex)
-    {color.r, color.g, color.b}
+    case Formats.from_hex(hex) do
+      {r, g, b} ->
+        {r, g, b}
+
+      {r, g, b, _alpha} ->
+        {r, g, b}
+
+      _error ->
+        raise ArgumentError, "invalid hex color: #{inspect(hex)}"
+    end
   end
 
   @doc """

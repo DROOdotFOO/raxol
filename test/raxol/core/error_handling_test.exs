@@ -1,4 +1,4 @@
-defmodule Raxol.Core.ErrorHandlerTest do
+defmodule Raxol.Core.ErrorHandlingTest do
   use ExUnit.Case, async: true
 
   import Raxol.Core.ErrorHandling

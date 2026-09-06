@@ -7,49 +7,19 @@ defmodule Raxol.Core.Box do
 
   alias Raxol.Core.Buffer
 
-  # Box character sets for different styles
-  @box_chars %{
-    single: %{
-      top_left: "┌",
-      top_right: "┐",
-      bottom_left: "└",
-      bottom_right: "┘",
-      horizontal: "─",
-      vertical: "│"
-    },
-    double: %{
-      top_left: "╔",
-      top_right: "╗",
-      bottom_left: "╚",
-      bottom_right: "╝",
-      horizontal: "═",
-      vertical: "║"
-    },
-    rounded: %{
-      top_left: "╭",
-      top_right: "╮",
-      bottom_left: "╰",
-      bottom_right: "╯",
-      horizontal: "─",
-      vertical: "│"
-    },
-    heavy: %{
-      top_left: "┏",
-      top_right: "┓",
-      bottom_left: "┗",
-      bottom_right: "┛",
-      horizontal: "━",
-      vertical: "┃"
-    },
-    dashed: %{
-      top_left: "┌",
-      top_right: "┐",
-      bottom_left: "└",
-      bottom_right: "┘",
-      horizontal: "╌",
-      vertical: "╎"
-    }
-  }
+  # Glyph sets come from `Raxol.UI.Theming.BorderChars`. This module's five
+  # style names are preserved exactly: `single`/`double`/`rounded` were
+  # byte-identical to two other copies, `heavy` shares its glyphs with
+  # `ViewTypes`' `bold`, and this module's `dashed` (double-dash `╌`/`╎`) is
+  # kept distinct from `ViewTypes`' finer `┄`/`┆` variant rather than one
+  # being silently chosen.
+  @box_chars Raxol.UI.Theming.BorderChars.subset([
+               :single,
+               :double,
+               :rounded,
+               :heavy,
+               :dashed
+             ])
 
   @doc """
   Draw a box border on the buffer.

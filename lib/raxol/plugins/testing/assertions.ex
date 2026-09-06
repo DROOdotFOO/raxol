@@ -5,11 +5,16 @@ defmodule Raxol.Plugins.Testing.Assertions do
 
   import ExUnit.Assertions
 
+  # Map-based stub, not the GenServer `Raxol.Plugins.Testing.MockTerminal`; see
+  # the note at the top of plugin_test_framework.ex. Previously this resolved
+  # to an unnamespaced top-level `MockTerminal`.
+  alias Raxol.Plugins.Testing.StubTerminal
+
   @doc """
   Asserts that a plugin is loaded in the terminal
   """
   def assert_plugin_loaded(terminal, plugin_name) do
-    loaded_plugins = MockTerminal.get_loaded_plugins(terminal)
+    loaded_plugins = StubTerminal.get_loaded_plugins(terminal)
 
     unless plugin_name in loaded_plugins do
       flunk(
@@ -24,7 +29,7 @@ defmodule Raxol.Plugins.Testing.Assertions do
   Asserts that a panel is visible for a plugin
   """
   def assert_panel_visible(terminal, plugin_name) do
-    visible_panels = MockTerminal.get_visible_panels(terminal)
+    visible_panels = StubTerminal.get_visible_panels(terminal)
 
     unless plugin_name in visible_panels do
       flunk(
@@ -39,7 +44,7 @@ defmodule Raxol.Plugins.Testing.Assertions do
   Asserts the terminal buffer contains specific content
   """
   def assert_buffer_contains(terminal, expected_content) do
-    buffer = MockTerminal.get_buffer(terminal)
+    buffer = StubTerminal.get_buffer(terminal)
     buffer_text = buffer_to_text(buffer)
 
     unless String.contains?(buffer_text, expected_content) do
@@ -55,7 +60,7 @@ defmodule Raxol.Plugins.Testing.Assertions do
   Asserts status line contains specific content
   """
   def assert_status_line_contains(terminal, expected_content) do
-    status_line = MockTerminal.get_status_line(terminal)
+    status_line = StubTerminal.get_status_line(terminal)
 
     unless String.contains?(status_line, expected_content) do
       flunk(

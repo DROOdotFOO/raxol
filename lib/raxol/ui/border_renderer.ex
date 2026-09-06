@@ -28,63 +28,15 @@ defmodule Raxol.UI.BorderRenderer do
   Gets border characters for a given border style.
   """
   @spec get_border_chars(border_style()) :: border_chars()
-  def get_border_chars(:single) do
-    %{
-      top_left: "┌",
-      top_right: "┐",
-      bottom_left: "└",
-      bottom_right: "┘",
-      horizontal: "─",
-      vertical: "│"
-    }
+  # Glyph sets come from `Raxol.UI.Theming.BorderChars`. The five style names
+  # this module accepted are unchanged, as is the `:none` result for an
+  # unknown style. The fallback stays here rather than in `BorderChars`
+  # because `Raxol.Core.Box` falls back to `:single` instead, so there is no
+  # single right default to centralize.
+  def get_border_chars(style) do
+    Raxol.UI.Theming.BorderChars.get(style) ||
+      Raxol.UI.Theming.BorderChars.get(:none)
   end
-
-  def get_border_chars(:double) do
-    %{
-      top_left: "╔",
-      top_right: "╗",
-      bottom_left: "╚",
-      bottom_right: "╝",
-      horizontal: "═",
-      vertical: "║"
-    }
-  end
-
-  def get_border_chars(:rounded) do
-    %{
-      top_left: "╭",
-      top_right: "╮",
-      bottom_left: "╰",
-      bottom_right: "╯",
-      horizontal: "─",
-      vertical: "│"
-    }
-  end
-
-  def get_border_chars(:ascii) do
-    %{
-      top_left: "+",
-      top_right: "+",
-      bottom_left: "+",
-      bottom_right: "+",
-      horizontal: "-",
-      vertical: "|"
-    }
-  end
-
-  def get_border_chars(:none) do
-    %{
-      top_left: " ",
-      top_right: " ",
-      bottom_left: " ",
-      bottom_right: " ",
-      horizontal: " ",
-      vertical: " "
-    }
-  end
-
-  # Fallback for unknown styles
-  def get_border_chars(_), do: get_border_chars(:none)
 
   @doc """
   Returns border chars in the 8-key format used by FocusRing and wrap_with_border.

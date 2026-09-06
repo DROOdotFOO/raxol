@@ -14,7 +14,8 @@ defmodule Raxol.Core.Runtime.Plugins.LifecycleHelper do
     PluginLifecycleCallbacks,
     PluginReloader,
     PluginUnloader,
-    PluginValidator
+    PluginValidator,
+    StateManager
   }
 
   def init(opts) do

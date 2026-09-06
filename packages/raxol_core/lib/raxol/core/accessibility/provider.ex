@@ -28,6 +28,36 @@ defmodule Raxol.Core.Accessibility.Provider do
       end
   """
 
+  @typedoc """
+  What a Provider returns: a partial node. Every key is optional.
+
+  `Projection.finalize/3` reads each field with a default (`role` ->
+  `Roles.default_role/0`, `state` -> `%{}`, `live?` -> `Roles.live?/1`, `label`
+  and `value` -> `nil`) and supplies `:id` itself from the Element, so a
+  Provider supplies only what it knows.
+
+  This is deliberately NOT `Projection.accessibility_node()`. That type is the
+  *normalized* node -- all seven keys present -- and declaring it as the
+  callback's return made all 16 conforming Components a dialyzer
+  `callback_type_mismatch`, because none of them returns all seven.
+
+  `label`, `value`, `id` and the `state` values are `term()` rather than
+  narrower types on purpose: Providers read their fields out of a declaration
+  Element with `node[:key]` / `attrs[:key]`, which is `term()`, and pass the
+  result straight through (e.g. `label: node[:aria_label] || node[:label]`,
+  `state: %{variant: attrs[:role]}`). `Projection.normalize_label/1` and
+  `compact_state/1` are what actually constrain them downstream.
+  """
+  @type provided_node :: %{
+          optional(:role) => atom(),
+          optional(:label) => term(),
+          optional(:state) => %{optional(atom()) => term()},
+          optional(:value) => term(),
+          optional(:live?) => boolean(),
+          optional(:children) => [provided_node()],
+          optional(:id) => term()
+        }
+
   @doc """
   Builds an accessibility node from a Component's declaration Element.
 
@@ -35,8 +65,7 @@ defmodule Raxol.Core.Accessibility.Provider do
   missing keys are filled (`role` -> `:generic`, `state` -> `%{}`, `live?`
   derived from the role), so a Provider only needs to supply what it knows.
   """
-  @callback a11y_node(element :: map()) ::
-              Raxol.Core.Accessibility.Projection.accessibility_node()
+  @callback a11y_node(element :: map()) :: provided_node()
 
   @doc """
   Returns true when `module` implements this behaviour.

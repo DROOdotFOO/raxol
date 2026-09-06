@@ -37,51 +37,23 @@ defmodule Raxol.Core.Renderer.View.Types do
              non_neg_integer()}
   @type margin :: padding()
 
+  # Glyph sets come from `Raxol.UI.Theming.BorderChars`, resolved at compile
+  # time. This was a nested map literal built inside `border_chars/0`, so
+  # every call allocated five inner maps to hand back a constant.
+  #
+  # The key names this module exposed are preserved: `:bold` (whose glyphs
+  # are the same six as `Raxol.Core.Box`'s `:heavy`) and `:dashed` mapped to
+  # the finer `┄`/`┆` variant, which `BorderChars` keeps as `:dashed_fine`.
+  @border_chars %{
+    single: Raxol.UI.Theming.BorderChars.get(:single),
+    double: Raxol.UI.Theming.BorderChars.get(:double),
+    rounded: Raxol.UI.Theming.BorderChars.get(:rounded),
+    bold: Raxol.UI.Theming.BorderChars.get(:heavy),
+    dashed: Raxol.UI.Theming.BorderChars.get(:dashed_fine)
+  }
+
   @doc """
   Returns the border characters for different border styles.
   """
-  def border_chars do
-    %{
-      single: %{
-        top_left: "┌",
-        top_right: "┐",
-        bottom_left: "└",
-        bottom_right: "┘",
-        horizontal: "─",
-        vertical: "│"
-      },
-      double: %{
-        top_left: "╔",
-        top_right: "╗",
-        bottom_left: "╚",
-        bottom_right: "╝",
-        horizontal: "═",
-        vertical: "║"
-      },
-      rounded: %{
-        top_left: "╭",
-        top_right: "╮",
-        bottom_left: "╰",
-        bottom_right: "╯",
-        horizontal: "─",
-        vertical: "│"
-      },
-      bold: %{
-        top_left: "┏",
-        top_right: "┓",
-        bottom_left: "┗",
-        bottom_right: "┛",
-        horizontal: "━",
-        vertical: "┃"
-      },
-      dashed: %{
-        top_left: "┌",
-        top_right: "┐",
-        bottom_left: "└",
-        bottom_right: "┘",
-        horizontal: "┄",
-        vertical: "┆"
-      }
-    }
-  end
+  def border_chars, do: @border_chars
 end

@@ -158,7 +158,7 @@ defmodule Raxol.UI.ColorResolver do
 
   alias Raxol.UI.ColorIntent
   alias Raxol.UI.Harness.Prominence
-  alias Raxol.UI.Theming.{Ansi16Salience, Colors, Salience, SalienceTheme}
+  alias Raxol.UI.Theming.{Ansi16Salience, Colors, Palette, Salience, SalienceTheme}
 
   # Cross-package read of the terminal's classified color depth. The
   # DECISION of which color depth to render at lives here; byte emission
@@ -188,32 +188,16 @@ defmodule Raxol.UI.ColorResolver do
   # the most defensible choice there too.
   @region_gamma :math.log(0.65) / :math.log(0.45)
 
-  # ANSI-16 atom -> code, matching `Raxol.Core.Renderer.Color`'s
-  # `@ansi_16_map` ordering (same duplication pattern `Raxol.UI.CellDim`
-  # already uses for the same reason: a small, stable, private lookup beats
-  # a cross-module dependency on a private attribute).
-  @ansi16_codes %{
-    black: 0,
-    red: 1,
-    green: 2,
-    yellow: 3,
-    blue: 4,
-    magenta: 5,
-    cyan: 6,
-    white: 7,
-    bright_black: 8,
-    bright_red: 9,
-    bright_green: 10,
-    bright_yellow: 11,
-    bright_blue: 12,
-    bright_magenta: 13,
-    bright_cyan: 14,
-    bright_white: 15
-  }
+  # ANSI-16 atom -> code. Resolved from `Palette` at compile time. The comment
+  # this replaces argued that "a small, stable, private lookup beats a
+  # cross-module dependency on a private attribute" -- correct at the time,
+  # but `Palette.ansi_16_codes/0` is a public accessor, and the map had by
+  # then been copied into four modules.
+  @ansi16_codes Palette.ansi_16_codes()
 
   # Unknown atoms (`:default`, theme-custom names, ...) take the mid-gray
-  # fallback, mirroring `Raxol.UI.CellDim.atom_to_rgb/1`.
-  @unknown_atom_rgb {128, 128, 128}
+  # fallback, shared with `Raxol.UI.CellDim.atom_to_rgb/1`.
+  @unknown_atom_rgb Palette.unknown_atom_rgb()
 
   # --- capability-tier downgrade ---
 
@@ -228,7 +212,7 @@ defmodule Raxol.UI.ColorResolver do
   # by a true ANSI16-only terminal). This is the one representational
   # choice that keeps "the renderer only encodes, never chooses" true
   # without adding any color-depth awareness to the renderer at all.
-  @ansi16_atoms Map.new(@ansi16_codes, fn {atom, code} -> {code, atom} end)
+  @ansi16_atoms Palette.ansi_16_slots()
 
   # The 4 achromatic ANSI16 slots (black/gray/silver/white), precomputed
   # to their OKLab lightness at compile time -- the only legal landing
@@ -934,15 +918,12 @@ defmodule Raxol.UI.ColorResolver do
     Salience.oklch_to_rgb(new_l, new_c, new_h)
   end
 
-  # The region-dim formula: `faded_AL = g + (a - g) * p`, `faded_C = C * p
-  # ** γ`. Solves back to a nominal `l` landing on the new apparent
-  # lightness, exactly as `CellDim.dim_oklch/4` does.
+  # The region-dim formula: `faded_AL = g + (a - g) * p`, `faded_C = C * p**γ`.
+  # Shares `Salience.dim_toward_ground/6` with `CellDim`'s whole-cell dim,
+  # which the previous comment here described as doing this "exactly" -- as
+  # two copies of the body.
   defp region_dim_oklch(l, c, h, p, ground) do
-    apparent_l = Salience.apparent_lightness(l, c, h)
-    new_apparent_l = ground + (apparent_l - ground) * p
-    new_c = c * :math.pow(p, @region_gamma)
-    new_l = Salience.solve_lightness(new_apparent_l, new_c, h)
-    {new_l, new_c, h}
+    Salience.dim_toward_ground(l, c, h, ground, p, :math.pow(p, @region_gamma))
   end
 
   defp ansi16_rgb(atom) do

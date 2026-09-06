@@ -288,24 +288,15 @@ defmodule Raxol.UI.Components.Harness.DiffViewer do
   end
 
   # -- Diff palette ---------------------------------------------------------
-  # Pre-flattened opaque bg/fg tiers approximating Pierre's layered
-  # translucent backgrounds (pierre-diffs-analysis.md §2.2-2.3) against a
-  # dark terminal background: a row wash, a brighter intra-line-emphasis
-  # tier on top of it, and a weaker gutter tint. Terminal cells give one
-  # bg + one fg per cell, so the translucency is flattened to these
-  # discrete tiers rather than composited. TODO: consolidate with the
-  # project-wide palette inventory at
-  # docs/proposals/in-flight/palette-inventory.md once it exists.
-  @diff_palette %{
-    add_base: "#5ECC71",
-    add_row_bg: "#12261B",
-    add_emphasis_bg: "#1D4428",
-    add_gutter_bg: "#0F1D16",
-    del_base: "#FF6762",
-    del_row_bg: "#291418",
-    del_emphasis_bg: "#552527",
-    del_gutter_bg: "#200F12"
-  }
+  # The tiers now live in `Raxol.UI.Theming.Palette.diff_palette/0`, with the
+  # rationale for flattening the translucency documented there.
+  #
+  # The TODO this replaces asked to "consolidate with the project-wide
+  # palette inventory at docs/proposals/in-flight/palette-inventory.md once
+  # it exists". No such file exists at that path or at the
+  # docs/proposals/palette-inventory.md path `Palette` itself cites, so the
+  # TODO's precondition could never have been met.
+  @diff_palette Raxol.UI.Theming.Palette.diff_palette()
 
   defp add_base, do: @diff_palette.add_base
   defp add_row_bg, do: @diff_palette.add_row_bg

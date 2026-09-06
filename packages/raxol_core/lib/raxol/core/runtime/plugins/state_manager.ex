@@ -1,16 +1,30 @@
-defmodule StateManager do
+# Was `defmodule StateManager` at the top level -- an unnamespaced, generic
+# name injected into the global module namespace of every application that
+# depends on raxol_core. Renamed rather than merged into the namespaced module
+# below because the two have colliding arities (that module adds /2 and /3
+# compatibility wrappers over these /1 and /2 functions).
+defmodule Raxol.Core.Runtime.Plugins.StateManager.Impl do
   @moduledoc """
   Plugin state management utilities with full functionality.
 
   Provides state management for the plugin system, including initialization,
   updates, persistence, and cleanup. Integrates with the unified state manager
   for consistency and performance.
+
+  Callers should use `Raxol.Core.Runtime.Plugins.StateManager`, which delegates
+  here and carries the arity-compatibility wrappers.
   """
 
   alias Raxol.Core.Runtime.Log
+
+  # NOTE: this alias deliberately shadows this module's own last name segment.
+  # Every bare `StateManager.*` call in this module body targets
+  # `Raxol.Core.StateManager` (the unified store in main raxol), NOT recursion
+  # into this module.
   alias Raxol.Core.StateManager
 
-  # StateManager lives in main raxol; suppress warnings when compiling standalone
+  # Raxol.Core.StateManager lives in main raxol; suppress warnings when
+  # compiling raxol_core standalone.
   @compile {:no_warn_undefined, Raxol.Core.StateManager}
   @type plugin_id :: String.t()
   @type plugin_module :: module()
@@ -270,36 +284,38 @@ defmodule StateManager do
   end
 end
 
-# Also create the namespaced version for compatibility
+# The public face of plugin state management. Carries the arity-compatibility
+# wrappers that the implementation module cannot, because they collide.
 defmodule Raxol.Core.Runtime.Plugins.StateManager do
   @moduledoc """
-  Namespaced alias for StateManager.
+  Plugin state management.
 
-  Provides the same functionality as StateManager but under the proper namespace
-  for consistency with the existing codebase structure.
+  Delegates to `Raxol.Core.Runtime.Plugins.StateManager.Impl` and adds the
+  arity-2/3 compatibility wrappers used by older call sites.
   """
 
-  # Delegate all functions to the main StateManager
-  defdelegate initialize_plugin_state(plugin_module, config), to: StateManager
+  alias Raxol.Core.Runtime.Plugins.StateManager.Impl
+
+  defdelegate initialize_plugin_state(plugin_module, config), to: Impl
 
   defdelegate update_plugin_state_legacy(plugin_id, state, config),
-    to: StateManager
+    to: Impl
 
-  defdelegate get_plugin_state(plugin_id), to: StateManager
-  defdelegate set_plugin_state(plugin_id, state), to: StateManager
-  defdelegate update_plugin_state(plugin_id, update_fn), to: StateManager
-  defdelegate list_plugin_states(), to: StateManager
-  defdelegate get_plugin_metadata(plugin_id), to: StateManager
-  defdelegate remove_plugin(plugin_id), to: StateManager
-  defdelegate initialize(state), to: StateManager
-  defdelegate cleanup(), to: StateManager
+  defdelegate get_plugin_state(plugin_id), to: Impl
+  defdelegate set_plugin_state(plugin_id, state), to: Impl
+  defdelegate update_plugin_state(plugin_id, update_fn), to: Impl
+  defdelegate list_plugin_states(), to: Impl
+  defdelegate get_plugin_metadata(plugin_id), to: Impl
+  defdelegate remove_plugin(plugin_id), to: Impl
+  defdelegate initialize(state), to: Impl
+  defdelegate cleanup(), to: Impl
 
   @doc """
   Gets plugin state with both plugin_id and state parameters for compatibility.
   """
   @spec get_plugin_state(String.t(), term()) :: {:ok, term()}
   def get_plugin_state(plugin_id, _state) do
-    StateManager.get_plugin_state(plugin_id)
+    Impl.get_plugin_state(plugin_id)
   end
 
   @doc """
@@ -307,7 +323,7 @@ defmodule Raxol.Core.Runtime.Plugins.StateManager do
   """
   @spec set_plugin_state(String.t(), term(), term()) :: {:ok, term()}
   def set_plugin_state(plugin_id, state, _current_state) do
-    StateManager.set_plugin_state(plugin_id, state)
+    Impl.set_plugin_state(plugin_id, state)
     {:ok, state}
   end
 
@@ -317,6 +333,6 @@ defmodule Raxol.Core.Runtime.Plugins.StateManager do
   @spec update_plugin_state(String.t(), term(), (term() -> term())) ::
           {:ok, term()}
   def update_plugin_state(plugin_id, _state, update_fn) do
-    StateManager.update_plugin_state(plugin_id, update_fn)
+    Impl.update_plugin_state(plugin_id, update_fn)
   end
 end

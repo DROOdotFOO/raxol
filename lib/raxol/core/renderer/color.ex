@@ -31,43 +31,11 @@ defmodule Raxol.Core.Renderer.Color do
   @type ansi_256 :: 0..255
   @type true_color :: {0..255, 0..255, 0..255}
 
-  @ansi_16_atoms [
-    :black,
-    :red,
-    :green,
-    :yellow,
-    :blue,
-    :magenta,
-    :cyan,
-    :white,
-    :bright_black,
-    :bright_red,
-    :bright_green,
-    :bright_yellow,
-    :bright_blue,
-    :bright_magenta,
-    :bright_cyan,
-    :bright_white
-  ]
-
-  @ansi_16_map %{
-    black: 0,
-    red: 1,
-    green: 2,
-    yellow: 3,
-    blue: 4,
-    magenta: 5,
-    cyan: 6,
-    white: 7,
-    bright_black: 8,
-    bright_red: 9,
-    bright_green: 10,
-    bright_yellow: 11,
-    bright_blue: 12,
-    bright_magenta: 13,
-    bright_cyan: 14,
-    bright_white: 15
-  }
+  # Both resolved from `Palette` at compile time. The name list and the
+  # name->slot map were each written out here, and the map had been copied
+  # into three other modules.
+  @ansi_16_atoms Raxol.UI.Theming.Palette.ansi_16_names()
+  @ansi_16_map Raxol.UI.Theming.Palette.ansi_16_codes()
 
   @doc """
   Converts a color representation to its ANSI foreground escape code.

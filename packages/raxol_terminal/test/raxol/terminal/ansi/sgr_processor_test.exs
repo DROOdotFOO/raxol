@@ -1,7 +1,8 @@
-defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
+defmodule Raxol.Terminal.ANSI.SGR.ProcessorTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.Terminal.ANSI.SGRProcessor
+  alias Raxol.Terminal.ANSI.SGR.Processor, as: SGRProcessor
+  alias Raxol.Terminal.ANSI.TextFormatting
 
   describe "colon-form underline style (SGR 4:n)" do
     test "4:0 clears underline" do
@@ -49,7 +50,7 @@ defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
   describe "colon-form underline color (SGR 58)" do
     test "58:5:n sets an indexed underline color" do
       style = SGRProcessor.handle_sgr("58:5:196", nil)
-      assert style.underline_color == {:indexed, 196}
+      assert style.underline_color == {:index, 196}
     end
 
     test "58:2::r:g:b (empty colorspace slot) sets an RGB underline color" do
@@ -80,7 +81,7 @@ defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
 
     test "38:5:n sets indexed foreground" do
       style = SGRProcessor.handle_sgr("38:5:200", nil)
-      assert style.foreground == {:indexed, 200}
+      assert style.foreground == {:index, 200}
     end
 
     test "48:2::r:g:b sets RGB background" do
@@ -90,7 +91,7 @@ defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
 
     test "48:5:n sets indexed background" do
       style = SGRProcessor.handle_sgr("48:5:5", nil)
-      assert style.background == {:indexed, 5}
+      assert style.background == {:index, 5}
     end
   end
 
@@ -106,18 +107,22 @@ defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
     test "styled underline followed by extended color consumes its own params only" do
       style = SGRProcessor.handle_sgr("4:3;38;5;196;1", nil)
       assert style.underline_style == :curly
-      assert style.foreground == {:indexed, 196}
+      assert style.foreground == {:index, 196}
       assert style.bold == true
     end
   end
 
-  describe "round trip: parse -> process_sgr_codes with pre-split codes" do
-    test "process_sgr_codes still accepts a flat integer list (unaffected by colon support)" do
-      style = SGRProcessor.process_sgr_codes([1, 4, 31, 48, 5, 196], nil)
+  describe "pre-split integer codes" do
+    # `process_params/2` is the entry point `CSIHandler` uses for parsed
+    # params. The deleted `ANSI.SGRProcessor` exposed a third name for this,
+    # `process_sgr_codes/2`, whose only caller was the unreferenced
+    # `Emulator.AnsiHandler`.
+    test "accepts a flat integer list (unaffected by colon support)" do
+      style = SGRProcessor.process_params([1, 4, 31, 48, 5, 196], nil)
       assert style.bold == true
       assert style.underline == true
       assert style.foreground == :red
-      assert style.background == {:indexed, 196}
+      assert style.background == {:index, 196}
     end
   end
 
@@ -127,7 +132,7 @@ defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
       assert style.bold == true
       assert style.underline == true
       assert style.foreground == :red
-      assert style.background == {:indexed, 196}
+      assert style.background == {:index, 196}
       # Untouched by the plain semicolon underline (4), not a colon form
       assert style.underline_style == :single
       assert style.underline_color == nil
@@ -141,7 +146,7 @@ defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
 
     test "existing semicolon-form underline color (58;5;n / 58;2;r;g;b)" do
       style = SGRProcessor.handle_sgr("58;5;10", nil)
-      assert style.underline_color == {:indexed, 10}
+      assert style.underline_color == {:index, 10}
 
       style2 = SGRProcessor.handle_sgr("58;2;9;8;7", nil)
       assert style2.underline_color == {:rgb, 9, 8, 7}
@@ -162,6 +167,53 @@ defmodule Raxol.Terminal.ANSI.SGRProcessorTest do
     test "empty params string defaults to reset (0)" do
       style = SGRProcessor.handle_sgr("", nil)
       assert style.bold == false
+    end
+  end
+
+  # Every case above passes `nil` as the style. That is exactly how the
+  # duplicate `Raxol.Terminal.ANSI.SGRProcessor` kept a crash hidden: `nil`
+  # took its `default_style/0` branch, a plain map carrying a `:dim` key,
+  # while `emulator.style` is a `TextFormatting` struct that has no `:dim`.
+  # `ESC[2m` therefore raised `KeyError key :dim not found` on the two
+  # emulator entry points that used it, and no test could see it.
+  describe "real emulator style struct (not nil)" do
+    setup do
+      %{style: TextFormatting.new()}
+    end
+
+    test "SGR 2 sets faint on a TextFormatting struct", %{style: style} do
+      result = SGRProcessor.handle_sgr("2", style)
+
+      assert result.faint == true
+      assert result.__struct__ == TextFormatting
+    end
+
+    test "process_params/2 accepts a struct and returns one", %{style: style} do
+      result = SGRProcessor.process_params([1, 2, 4], style)
+
+      assert result.bold == true
+      assert result.faint == true
+      assert result.underline == true
+      assert result.__struct__ == TextFormatting
+    end
+
+    test "every attribute code 1..9 keeps the struct intact", %{style: style} do
+      # Any of these hitting a field the struct does not define is a
+      # KeyError, which is the defect class this block exists to prevent.
+      for code <- 1..9 do
+        result = SGRProcessor.process_params([code], style)
+        assert result.__struct__ == TextFormatting
+      end
+    end
+
+    test "the emulator's own style survives a full sequence", %{style: style} do
+      result = SGRProcessor.handle_sgr("1;2;4;31;48;5;196", style)
+
+      assert result.bold == true
+      assert result.faint == true
+      assert result.underline == true
+      assert result.foreground == :red
+      assert result.background == {:index, 196}
     end
   end
 end

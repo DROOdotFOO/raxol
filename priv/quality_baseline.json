@@ -1,0 +1,86 @@
+{
+  "_comment": [
+    "Machine-owned gate baseline. Read and written by",
+    "scripts/check-quality-ratchet.sh. Do NOT restate these numbers in",
+    "AGENTS.md, CLAUDE.md, README.md or ROADMAP.md -- prose has nothing",
+    "validating it, and the previous AGENTS.md claim of 'Credo strict: 0",
+    "issues, Dialyzer clean' was wrong by 1187 and 127 respectively.",
+    "Counts may only go down. Lower one, then run with --update."
+  ],
+  "gates": {
+    "credo": {
+      "count": 1187,
+      "command": "mix credo --strict --format flycheck",
+      "counts_lines_matching": ": [FRWDC]: ",
+      "measured_at": "2026-09-06T18:12:00Z",
+      "measured_at_sha": "bbfa5e64",
+      "runtime_seconds": 3744,
+      "scope": "lib/ src/ test/ web/ apps/ packages/ per .credo.exs",
+      "breakdown": {
+        "refactor": 876,
+        "readability": 157,
+        "duplicated_code": 137,
+        "warning": 17
+      },
+      "by_tree": {
+        "packages/raxol_agent": 277,
+        "packages/raxol_terminal": 260,
+        "lib": 132,
+        "test": 112,
+        "packages/raxol_payments": 87,
+        "packages/raxol_earn": 86,
+        "packages/raxol_agent_client_protocol": 60,
+        "packages/raxol_core": 50,
+        "packages/raxol_symphony": 41,
+        "packages/raxol_mcp": 26,
+        "packages/raxol_sensor": 12,
+        "web": 9,
+        "packages/raxol_console": 9,
+        "packages/raxol_plugin": 6,
+        "packages/raxol_speech": 5,
+        "packages/raxol_cli": 5,
+        "packages/raxol_telegram": 4,
+        "packages/raxol_liveview": 3,
+        "packages/raxol_gateway": 2,
+        "packages/raxol_watch": 1
+      },
+      "notes": [
+        "949 of these 1187 were invisible until packages/ was added to",
+        ".credo.exs; the previously reported 238 covered only lib/ test/ web/.",
+        "One pass takes ~62 min: mix credo <path> analyzes nothing against this",
+        "config, so the scan cannot be sharded by path from the root. Run",
+        "nightly. To shard per-PR, give each package its own .credo.exs and run",
+        "credo from inside the package.",
+        "STALE-HIGH: 1187 was measured before this session's deletions (4,040 lines",
+        "of dead code, the SGR and mode-handler forks) and before the palette",
+        "consolidation. The next full run should report IMPROVED, not a regression;",
+        "lock it in with --gate credo --update. Credo findings arrive on STDOUT",
+        "(unlike dialyzer's, which are on STDERR)."
+      ]
+    },
+    "dialyzer": {
+      "count": 97,
+      "command": "mix dialyzer --format short",
+      "counts_lines_matching": "emitted finding lines matching ^(lib|packages|web)/.*\\.ex:",
+      "measured_at": "2026-09-06T18:00:29Z",
+      "measured_at_sha": "3f9f3aa55",
+      "scope": "root app beams only; packages/ contribute zero findings",
+      "notes": [
+        "97 = the findings dialyzer actually emits, after .dialyzer_ignore.exs.",
+        "Do NOT baseline dialyxir's 'Total errors:' line: it is the count BEFORE",
+        "the ignore file is applied. Adding 11 documented palette.ex suppressions",
+        "moved 'Skipped: 5' to 'Skipped: 16' and left 'Total errors: 113'",
+        "unchanged, so a ratchet reading that line cannot see a suppression land.",
+        "History on this metric: 127 raw / 5 skipped = 122 emitted at scan start;",
+        "111 raw / 5 skipped = 106 emitted after the a11y_node callback fix removed",
+        "16 callback_type_mismatch; 97 emitted after 11 palette.ex contract_supertype",
+        "warnings were suppressed as documented intentionally-broad public specs.",
+        "MEASUREMENT TRAP: dialyxir keys its deps PLT off the deps hash, which a",
+        "path-dependency change does not move. Editing or adding a module under",
+        "packages/ leaves the PLT describing the old code, and a fix can read as a",
+        "no-op across full runs. check-quality-ratchet.sh refuses to report a count",
+        "when any packages/*/lib source is newer than the PLT."
+      ]
+    }
+  }
+}

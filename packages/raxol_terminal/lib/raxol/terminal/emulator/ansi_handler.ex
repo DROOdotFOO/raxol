@@ -11,7 +11,7 @@ defmodule Raxol.Terminal.Emulator.ANSIHandler do
 
   alias Raxol.Terminal.{
     ANSI.SequenceHandler,
-    ANSI.SGRProcessor,
+    ANSI.SGR,
     Commands.CursorHandler,
     ModeManager,
     Operations.ScreenOperations
@@ -281,8 +281,13 @@ defmodule Raxol.Terminal.Emulator.ANSIHandler do
   def handle_sgr(params, emulator) do
     parsed_params = parse_sgr_params(params)
 
-    updated_style =
-      SGRProcessor.process_sgr_codes(parsed_params, emulator.style)
+    # `SGR.Processor.process_params/2`, not the deleted `ANSI.SGRProcessor`.
+    # That module kept its own plain-map `default_style/0` with a `:dim` key
+    # absent from the `TextFormatting` struct `emulator.style` actually is, so
+    # `ESC[2m` raised `KeyError key :dim not found` here. `process_params/2`
+    # is the same entry point `CSIHandler` uses; the old
+    # `process_sgr_codes/2` name existed only for this call site.
+    updated_style = SGR.Processor.process_params(parsed_params, emulator.style)
 
     %{emulator | style: updated_style}
   end

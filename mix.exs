@@ -449,7 +449,28 @@ defmodule Raxol.MixProject do
           CHANGELOG.md
           ROADMAP.md
         ),
-      exclude_patterns: [~r/\.so$/, ~r/\.o$/, ~r/\.dylib$/],
+      exclude_patterns: [
+        ~r/\.so$/,
+        ~r/\.o$/,
+        ~r/\.dylib$/,
+        # Benchmark/memory tooling. Dev-only: every module under these trees
+        # drives `benchee`, which is `only: [:dev, :test]`, so shipping them
+        # gave consumers modules that raise UndefinedFunctionError on any
+        # entry point. Guarded at compile time by `@compile
+        # {:no_warn_undefined, Benchee}`, which silences the warning without
+        # making the call work.
+        #
+        # Verified excludable: zero inbound references from shipped code to
+        # `Raxol.Benchmark.*`, `Raxol.Bench.*` or `Raxol.Memory.*`.
+        # `lib/raxol/performance/` is deliberately NOT excluded -- it looks
+        # like the same category, but `Raxol.Performance.ETSCacheManager` is a
+        # live runtime cache used by `lib/raxol/ui/theme_resolver.ex`.
+        ~r{^lib/raxol/benchmark/},
+        ~r{^lib/raxol/bench/},
+        ~r{^lib/raxol/memory/},
+        ~r{^lib/mix/tasks/raxol\.bench.*\.ex$},
+        ~r{^lib/mix/tasks/raxol\.memory.*\.ex$}
+      ],
       maintainers: ["DROO AMOR"],
       licenses: ["MIT"],
       links: %{

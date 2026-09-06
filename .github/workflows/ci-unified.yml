@@ -682,11 +682,17 @@ jobs:
   # ========================================
   # Code Quality Checks
   # ========================================
+  # Advisory ONLY, and deliberately so: one repo-wide `mix credo --strict`
+  # pass takes ~62 min (measured), because `mix credo <path>` analyzes nothing
+  # against the root .credo.exs and the scan cannot be sharded by path. This
+  # job exists for fast PR feedback; nightly.yml's `credo-ratchet` job is what
+  # actually fails on a regression, against priv/quality_baseline.json.
   credo:
-    name: Credo Analysis
+    name: Credo Analysis (advisory)
     needs: [setup, compile]
     runs-on: ubuntu-latest
     continue-on-error: true
+    timeout-minutes: 90
     
     steps:
       - uses: actions/checkout@v7
@@ -712,15 +718,16 @@ jobs:
       - name: Fetch dependencies
         run: mix deps.get
 
+      # No `|| true`: `continue-on-error` above already makes this advisory,
+      # and stacking both hid the count from the job's own exit status too.
       - name: Run Credo
-        run: mix credo --strict || true
+        run: mix credo --strict
 
   dialyzer:
     name: Dialyzer
     needs: [setup, compile]
     runs-on: ubuntu-latest
     if: needs.setup.outputs.should-run-heavy == 'true'
-    continue-on-error: true
     
     steps:
       - uses: actions/checkout@v7
@@ -746,17 +753,25 @@ jobs:
       - name: Fetch dependencies
         run: mix deps.get
 
+      # The PLT key MUST include the packages/ sources, not just mix.lock.
+      # dialyxir keys its deps PLT off the deps hash, and raxol_* are path
+      # dependencies: editing a callback spec in packages/raxol_core does not
+      # move mix.lock, so a mix.lock-only key restores a PLT holding the OLD
+      # spec and dialyzer reports against stale types. This was observed
+      # locally -- a fix that removed 16 callback_type_mismatch errors read as
+      # a no-op across two full runs until the deps PLT was deleted.
       - name: Restore PLT cache
         uses: actions/cache@v6
         with:
           path: priv/plts
-          key: plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
+          key: plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}-${{ hashFiles('packages/*/lib/**/*.ex') }}
           restore-keys: |
+            plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}-
             plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-
-            plt-${{ runner.os }}-
-      
-      - name: Run Dialyzer
-        run: mix dialyzer || true
+
+      # Blocking, against priv/quality_baseline.json. Counts may only go down.
+      - name: Dialyzer ratchet
+        run: ./scripts/check-quality-ratchet.sh --gate dialyzer
 
   # ========================================
   # Security Scanning
@@ -992,7 +1007,21 @@ jobs:
   # ========================================
   ci-status:
     name: CI Status
-    needs: [format, release-check, compile, test-unit, package-tests, input-canary, credo, security]
+    # `credo` is intentionally NOT listed: it is advisory (see its job
+    # comment) and was previously declared here while no step ever read
+    # `needs.credo.result`, so it looked gated and was not. Credo is enforced
+    # by nightly.yml's `credo-ratchet`. `dialyzer` IS listed and IS read.
+    needs:
+      [
+        format,
+        release-check,
+        compile,
+        test-unit,
+        package-tests,
+        input-canary,
+        dialyzer,
+        security
+      ]
     runs-on: ubuntu-latest
     if: always()
 
@@ -1027,6 +1056,12 @@ jobs:
 
           if [ "${{ needs.input-canary.result }}" != "success" ]; then
             echo "❌ Input protocol canary failed"
+            exit 1
+          fi
+
+          # Skipped when should-run-heavy is false; only a real failure blocks.
+          if [ "${{ needs.dialyzer.result }}" = "failure" ]; then
+            echo "❌ Dialyzer ratchet failed: error count rose above priv/quality_baseline.json"
             exit 1
           fi
 

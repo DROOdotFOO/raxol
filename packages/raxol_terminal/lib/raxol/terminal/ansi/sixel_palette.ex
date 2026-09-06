@@ -45,18 +45,13 @@ defmodule Raxol.Terminal.ANSI.SixelPalette do
     end)
   end
 
-  defp calculate_rgb_cube_color(n) do
-    code = n - 16
-    r = div(code, 36) * 51
-    g = rem(div(code, 6), 6) * 51
-    b = rem(code, 6) * 51
-    {r, g, b}
-  end
+  # The 6x6x6 cube and the grayscale ramp both come from the shared xterm
+  # table in raxol_core. The cube used to be computed here as `* 51`, giving
+  # levels 0/51/102/153/204/255 rather than xterm's 0/95/135/175/215/255.
+  defp calculate_rgb_cube_color(n), do: Raxol.Core.Colors.Ansi256.cube_rgb(n)
 
-  defp calculate_grayscale_color(n) do
-    value = (n - 232) * 10 + 8
-    {value, value, value}
-  end
+  defp calculate_grayscale_color(n),
+    do: Raxol.Core.Colors.Ansi256.grayscale_rgb(n)
 
   @doc """
   Returns the maximum valid color index (typically 255 for a 256-color palette).
