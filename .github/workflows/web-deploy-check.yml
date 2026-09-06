@@ -112,7 +112,7 @@ jobs:
   # recorded under dev; a different env is a different render config and
   # would report false drift.
   web-tests:
-    name: Web tests + recorded-artifact check
+    name: Web tests + recorded-artifact check + dev boot
     runs-on: ubuntu-latest
     env:
       # The reference toolchain (mirrors ci-unified.yml), unlike the
@@ -149,3 +149,100 @@ jobs:
         run: |
           MIX_ENV=dev mix deps.get
           MIX_ENV=dev mix run ../scripts/gen_landing_frames.exs --check
+
+      # `mix phx.server` in :dev is the one entrypoint no automated check ever
+      # exercised, and it is where the last user-visible breakage lived:
+      # Phoenix 1.8 drives dev code reloading through Mix's compiler-listener
+      # API, `web/mix.exs` was missing `listeners: [Phoenix.CodeReloader]`, and
+      # every dev request came out of `Phoenix.CodeReloader.Server` broken.
+      # `mix test` runs in :test and the release-boot job above runs a prod
+      # release; `code_reloader` is false in both, so both were blind to it.
+      # web/test/raxol_playground/dev_reload_config_test.exs pins that one
+      # config pair statically; this step covers the general class by booting
+      # the real dev server and requiring a real page to render.
+      #
+      # A step in this job rather than a job of its own: the drift check above
+      # has already run `MIX_ENV=dev mix deps.get` and compiled the dev build
+      # into the cache this job restores, so the boot is warm (~15s). A
+      # separate job would repeat checkout, setup-beam and a cold dev compile
+      # of the raxol umbrella (~1 min) for no extra signal.
+      - name: Dev server boot smoke
+        working-directory: web
+        env:
+          MIX_ENV: dev
+          # Silences the esbuild/tailwind watchers and moves the port off the
+          # dev default; see the comment in web/config/dev.exs.
+          RAXOL_DEV_SMOKE: "1"
+          # Explicit and not 4000: nothing else in this job binds it, and a
+          # named port makes a bind conflict obvious rather than mysterious.
+          PORT: "4010"
+        run: |
+          set -uo pipefail
+          log=/tmp/web-dev-boot.log
+          : >"$log"
+
+          cleanup() {
+            if [ -n "${srv_pid:-}" ] && kill -0 "$srv_pid" 2>/dev/null; then
+              kill "$srv_pid" 2>/dev/null || true
+              wait "$srv_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # Compile before backgrounding, so the readiness budget below
+          # measures boot and not a cold build.
+          if ! mix compile >>"$log" 2>&1; then
+            echo "::error::MIX_ENV=dev mix compile failed"
+            tail -n 200 "$log"
+            exit 1
+          fi
+
+          mix phx.server >>"$log" 2>&1 &
+          srv_pid=$!
+
+          # Poll for readiness; do not sleep and hope. GET / renders through
+          # the endpoint's full plug pipeline (Phoenix.CodeReloader ->
+          # Plug.Session -> :browser -> LandingLive), which /health also
+          # reaches but with none of the router pipeline behind it.
+          code=""
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+              "http://127.0.0.1:${PORT}/" || true)"
+            if [ "$code" = "200" ]; then echo "GET / -> 200 after ${i} poll(s)"; break; fi
+            if ! kill -0 "$srv_pid" 2>/dev/null; then echo "dev server exited during boot"; break; fi
+            sleep 1
+          done
+
+          cleanup
+
+          fail=0
+          if [ "$code" != "200" ]; then
+            echo "::error::dev boot did not serve GET / with 200 (last status: ${code:-none})"
+            fail=1
+          fi
+          # Status alone is NOT enough: with the Mix listener missing,
+          # phoenix 1.8.9 warns from Phoenix.CodeReloader.Server and serves the
+          # request anyway (measured), so the 200 above stays green while dev
+          # reloading is dead. The log is where that failure is visible.
+          if grep -q "Mix listener expected by Phoenix.CodeReloader" "$log"; then
+            echo "::error::Phoenix.CodeReloader has no Mix listener: web/mix.exs lost listeners: [Phoenix.CodeReloader]"
+            fail=1
+          fi
+          # `CompileError` alone is too narrow, measured: a broken file that
+          # only the request-time reloader sees logs Mix's banner plus
+          # whichever exception fired -- TokenMissingError for a syntax slip,
+          # CompileError for a semantic one. The banner is common to both, so
+          # it is the pattern; the exception name is kept for the case where
+          # the banner format changes.
+          if grep -qE "== Compilation error in file|CompileError" "$log"; then
+            echo "::error::dev boot hit a compile error (see log below)"
+            fail=1
+          fi
+
+          if [ "$fail" != "0" ]; then
+            echo "----- dev server log (last 200 lines) -----"
+            tail -n 200 "$log"
+            exit 1
+          fi
+
+          echo "dev boot smoke ok: booted, GET / rendered 200, no reloader or compile errors"

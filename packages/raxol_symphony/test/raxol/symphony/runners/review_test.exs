@@ -153,7 +153,8 @@ defmodule Raxol.Symphony.Runners.ReviewTest do
       ]
 
       assert {:pause, :awaiting_human, token} = ReviewRunner.run(issue(), config(%{}), opts)
-      assert token.reason == :insufficient_vendors
+      assert {:insufficient_vendors, details} = token.reason
+      assert details.available_kinds == ["impl"]
     end
 
     test "passes an implementer error through unchanged" do
@@ -164,6 +165,59 @@ defmodule Raxol.Symphony.Runners.ReviewTest do
       ]
 
       assert {:error, :boom} = ReviewRunner.run(issue(), config(%{}), opts)
+    end
+  end
+
+  # ADR-0034 Gap 5: on a machine with no second vendor installed the only pair
+  # the selector could form was raxol_agent against raxol_agent_session, which
+  # is one vendor wearing two hats. These two tests use the REAL runner kinds
+  # rather than fake ones, because the defect lives in their vendor identity.
+  describe "implement phase -- vendor distinctness" do
+    defp vendor_config(implementer, candidates) do
+      config(%{
+        implementer_kind: implementer,
+        reviewer_kind: List.last(candidates),
+        candidate_kinds: candidates
+      })
+    end
+
+    test "escalates when only the raxol vendor is available" do
+      config = vendor_config("raxol_agent", ["raxol_agent", "raxol_agent_session"])
+
+      opts = [
+        parent: self(),
+        workspace_path: "/tmp/ws",
+        review_runner_resolver:
+          resolver(%{"raxol_agent" => OkRunner, "raxol_agent_session" => ApproveReviewer}),
+        # Both raxol kinds present, no codex: the machine the ADR measured.
+        review_vendor_availability: fn k -> k in ["raxol_agent", "raxol_agent_session"] end,
+        review_git_runner: fn _args, _cwd -> {:ok, "THE DIFF"} end
+      ]
+
+      assert {:pause, :awaiting_human, token} = ReviewRunner.run(issue(), config, opts)
+      assert {:insufficient_vendors, details} = token.reason
+      assert details.implementer_vendor == :raxol
+      assert details.available_vendors == [:raxol]
+      refute Map.has_key?(token, :reviewer_kind)
+    end
+
+    test "selects a reviewer when a genuine second vendor is available" do
+      config = vendor_config("raxol_agent", ["raxol_agent", "raxol_agent_session", "codex"])
+
+      opts = [
+        parent: self(),
+        workspace_path: "/tmp/ws",
+        review_runner_resolver:
+          resolver(%{"raxol_agent" => OkRunner, "codex" => ApproveReviewer}),
+        # The seam stands in for an installed codex binary, so the test does
+        # not depend on what is on the machine running it.
+        review_vendor_availability: fn _ -> true end,
+        review_git_runner: fn _args, _cwd -> {:ok, "THE DIFF"} end
+      ]
+
+      assert {:pause, :awaiting_review, token} = ReviewRunner.run(issue(), config, opts)
+      assert token.reviewer_kind == "codex"
+      assert token.implementer_kind == "raxol_agent"
     end
   end
 
@@ -259,7 +313,7 @@ defmodule Raxol.Symphony.Runners.ReviewTest do
         resume_token: %{
           contract: %Contract{issue_identifier: "MT-1"},
           implementer_kind: "impl",
-          reason: :insufficient_vendors
+          reason: {:insufficient_vendors, %{available_vendors: [:raxol]}}
         },
         resume_value: decision
       ]

@@ -51,6 +51,7 @@ defmodule Raxol.AgentClientProtocol.Ext.ReattachTest do
   """
 
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Ext.AttachPolicy.LocalNode

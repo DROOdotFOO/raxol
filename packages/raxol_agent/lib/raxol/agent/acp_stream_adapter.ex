@@ -23,6 +23,7 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   | `agent_thought_chunk` (`thought: true` payload)  | a durable `:reasoning` item lifecycle — `:item_started` (lazily, on the first non-blank thought) + ephemeral `:item_delta`s carrying the item_id, sealed as one durable `:item_completed` (`item_type: :reasoning, content`) at the reasoning→answer transition (first `agent_message_chunk`), a tool/plan boundary, or `finish_turn`. Whitespace-only thinking opens/seals nothing. | `:durable` + `:ephemeral` |
   | `tool_call` / `tool_call_update`, terminal status| `:item_completed` pair (`:tool_use` + `:tool_result`) | `:durable` |
   | `plan`                                           | `:item_completed` (`item_type: :plan`) | `:durable` |
+  | `usage_update`                                   | no event of its own: the mapped usage rides the turn's closing `:turn_completed` payload (`usage:`) -- see the usage section | (folded) |
   | `finish_turn/2` `stop_reason` ∈ end_turn / max_tokens / max_turn_requests | `:turn_completed` `final: true` | `:durable` |
   | `finish_turn/2` `stop_reason: :refusal`          | `:turn_completed` `final: true, stop_reason: :refusal` (disclosed, never painted as a normal end) | `:durable` |
   | `finish_turn/2` `stop_reason: :cancelled`        | `:turn_canceled` (the canceled bracket, NOT a completed one) | `:durable` |
@@ -77,13 +78,49 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   decode as **no refs** — a malformed evidence claim is never partially
   honored (`decode_refs/1`).
 
+  ## Usage and cost (`usage_update` -> the `:turn_completed` `usage:` map)
+
+  `usage_update` carries no event of its own: a context/cost update is
+  not a transcript fact, it is a property OF the turn, so the latest
+  frame's figures are held in adapter state and emitted on the turn's
+  closing `:turn_completed` payload (an empty map when the peer reported
+  nothing). The map speaks raxol's usage vocabulary
+  (`Raxol.Agent.BenchmarkProfile.add_usage/2`, `Raxol.Agent.LlmPrices`):
+
+    * `:input_tokens`, `:output_tokens`, `:total_tokens`,
+      `:cached_read_tokens` -- from `_meta`. `Schema.UsageUpdate`'s known
+      wire keys are exactly `used`/`size`/`cost`, so a peer's token split
+      (`inputTokens`, `outputTokens`, `totalTokens`, `cachedReadTokens`)
+      folds into `_meta` untouched and is read from there. Only
+      non-negative integers are taken; a garbage count reads as absent
+      (the tolerant-reading rule -- an absent figure is safer at a spend
+      gate than a fabricated one).
+    * `:context_tokens` / `:max_context_tokens` -- `used` and `size`.
+      `used` is tokens CURRENTLY IN CONTEXT, not cumulative billed input,
+      so it is context metadata and NEVER `:input_tokens`: billing it as
+      input would charge the whole prompt context on every turn.
+    * `:cost` -- this TURN's cost, `%{amount, currency}`.
+    * `:session_cost` -- the counterparty's cumulative session figure,
+      carried verbatim for display. Pricing must not read it.
+
+  `UsageUpdate.cost` is the CUMULATIVE session cost, so `:cost` is
+  computed as a delta against the cumulative anchored at the turn's
+  start; see `put_cost/2` for the double-count reasoning, the
+  currency-comparison rule, and why a negative delta reports no cost
+  rather than a credit. Usage is turn-scoped (a turn the peer sent no
+  `usage_update` for reports `%{}`, never the previous turn's figures);
+  the cumulative-cost anchor is session-scoped and advances at every turn
+  boundary. Recorded by ADR-0034 (the `usage: %{}` hole) and ADR-0035
+  (prefer a provider's own reported cost).
+
   ## Unknown-variant honesty (skip, count, disclose once)
 
   Any update this adapter has no mapping for — the known-but-unmapped
-  variants (`user_message_chunk`, `available_commands_update`,
-  `current_mode_update`, `config_option_update`, `session_info_update`,
-  `usage_update`), a `{:raw, map}` from a manual `decode_update/1` feed,
-  a future 12th variant, or outright garbage — is SKIPPED, never crashed
+  variants, DECLARED as `@counted_unmapped` (`user_message_chunk`,
+  `available_commands_update`, `current_mode_update`,
+  `config_option_update`, `session_info_update`) rather than left to fall
+  through the catch-all, a `{:raw, map}` from a manual `decode_update/1`
+  feed, a future variant, or outright garbage -- is SKIPPED, never crashed
   on (the tolerant-reading rule). But the skip is never silent: each kind
   is counted (`unmapped_counts/1`), and the FIRST occurrence of each kind
   emits one durable `:error` contract event with payload
@@ -91,6 +128,11 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   honest fidelity gap instead of a gapless lie. Subsequent occurrences of
   the same kind only bump the counter (bounded log emission — one marker
   per kind per adapter lifetime).
+
+  The declaration is what separates "we know this frame and chose not to
+  map it" from "we have never heard of this frame": the two degrade
+  identically for a reader of the transcript, and a coder adding the
+  mapping needs to know which list a kind is on.
 
   ## Wiring
 
@@ -119,31 +161,93 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   @known_stop_reasons [:end_turn, :max_tokens, :max_turn_requests]
 
+  # Known ACP update kinds this adapter deliberately does not map. See the
+  # moduledoc's unknown-variant section for why they are declared here
+  # instead of reaching the catch-all.
+  @counted_unmapped [
+    :user_message_chunk,
+    :available_commands_update,
+    :current_mode_update,
+    :config_option_update,
+    :session_info_update
+  ]
+
+  # The kinds this adapter DOES map, one per `apply_update/2` clause below.
+  # Together with @counted_unmapped this is the set of ACP update kinds this
+  # module has an opinion about; anything else reaches the catch-all and is
+  # reported as unknown.
+  #
+  # Declared so a test can hold it against the protocol schema's own variant
+  # list: `usage_update` sat in the schema, fully ported, while this adapter
+  # dropped it into the unknown bucket and hard-coded `usage: %{}` on every
+  # turn -- for months, silently, because nothing compared the two lists.
+  # See acp_stream_adapter_coverage_test.exs.
+  @mapped [
+    :agent_message_chunk,
+    :agent_thought_chunk,
+    :tool_call,
+    :tool_call_update,
+    :plan,
+    :usage_update
+  ]
+
+  @doc """
+  Every ACP `session/update` kind this adapter handles deliberately, whether
+  by mapping it to `Contract.Event`s or by counting it as known-but-unmapped.
+
+  A kind absent from this list reaches the catch-all, so it is reported as an
+  unknown variant rather than rendered.
+  """
+  @spec known_kinds() :: [atom()]
+  def known_kinds, do: @mapped ++ @counted_unmapped
+
+  # A peer's token split rides `_meta` (UsageUpdate's known wire keys are
+  # only used/size/cost) -> raxol's usage vocabulary.
+  @meta_token_keys %{
+    "inputTokens" => :input_tokens,
+    "outputTokens" => :output_tokens,
+    "totalTokens" => :total_tokens,
+    "cachedReadTokens" => :cached_read_tokens
+  }
+
   defstruct [
     :session_id,
     :streamer,
     :turn_id,
     :reasoning_item,
+    # cost_anchor: the cumulative session cost as of the previous turn
+    # boundary (session-scoped). cost_reported: the cumulative figure this
+    # turn's own usage_update carried, nil when the peer reported none --
+    # turn-scoped, so a turn nobody reported on claims nothing rather than
+    # claiming zero dollars.
+    :cost_anchor,
+    :cost_reported,
     seq: 0,
     reasoning_seq: 0,
     pending_tools: %{},
     unmapped: %{},
     message_buf: [],
     reasoning_buf: [],
+    usage: %{},
     turn_seen: false
   ]
+
+  @type cost :: %{amount: float(), currency: String.t()}
 
   @type t :: %__MODULE__{
           session_id: term(),
           streamer: GenServer.server(),
           turn_id: String.t() | nil,
           reasoning_item: String.t() | nil,
+          cost_anchor: cost() | nil,
+          cost_reported: cost() | nil,
           seq: non_neg_integer(),
           reasoning_seq: non_neg_integer(),
           pending_tools: %{optional(String.t()) => map()},
           unmapped: %{optional(String.t()) => pos_integer()},
           message_buf: [String.t()],
           reasoning_buf: [String.t()],
+          usage: map(),
           turn_seen: boolean()
         }
 
@@ -242,6 +346,10 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     state = close_abandoned_turn(state)
     turn_id = "turn-#{System.unique_integer([:positive])}"
 
+    # The turn boundary is also the usage boundary: figures are turn-scoped
+    # (a turn with no usage_update must report %{}, not the previous turn's
+    # numbers), while the cumulative-cost anchor carries forward so the next
+    # turn's cost is a delta against everything already billed.
     state = %{
       state
       | turn_id: turn_id,
@@ -250,7 +358,10 @@ defmodule Raxol.Agent.AcpStreamAdapter do
         message_buf: [],
         reasoning_item: nil,
         reasoning_buf: [],
-        reasoning_seq: 0
+        reasoning_seq: 0,
+        usage: %{},
+        cost_anchor: state.cost_reported || state.cost_anchor,
+        cost_reported: nil
     }
 
     state =
@@ -269,6 +380,9 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     # error). Normally a no-op: the first answer chunk already sealed it.
     state = state |> seal_reasoning() |> close_turn(outcome)
 
+    # The anchor advances on BOTH turn boundaries, so a closed turn's
+    # dollars can never be billed again even if the embedder skips
+    # begin_turn/2 on the next prompt.
     {:reply, :ok,
      %{
        state
@@ -277,7 +391,10 @@ defmodule Raxol.Agent.AcpStreamAdapter do
          message_buf: [],
          reasoning_item: nil,
          reasoning_buf: [],
-         reasoning_seq: 0
+         reasoning_seq: 0,
+         usage: %{},
+         cost_anchor: state.cost_reported || state.cost_anchor,
+         cost_reported: nil
      }}
   end
 
@@ -422,9 +539,29 @@ defmodule Raxol.Agent.AcpStreamAdapter do
     })
   end
 
-  # Everything else — known-but-unmapped variants, {:raw, map} from a manual
-  # decode_update/1 feed, future variants, garbage — is skipped, counted, and
-  # disclosed once per kind. See the moduledoc's unknown-variant section.
+  # A context/cost update is a property of the turn, not a transcript
+  # entry, so it emits nothing: the latest frame's figures are held and
+  # ride the closing :turn_completed payload. See the moduledoc's usage
+  # section and `put_cost/2` (ADR-0034's `usage: %{}` hole, ADR-0035's
+  # provider-reported cost).
+  defp apply_update(state, {:usage_update, usage}) when is_map(usage) do
+    %{
+      state
+      | usage: token_usage(usage),
+        cost_reported: reported_cost(usage) || state.cost_reported
+    }
+  end
+
+  # Declared known-but-unmapped variants (@counted_unmapped): counted and
+  # disclosed exactly like an unknown kind, but named in the module so the
+  # deliberate gap is not indistinguishable from an unheard-of frame.
+  defp apply_update(state, {tag, _payload}) when tag in @counted_unmapped do
+    record_unmapped(state, Atom.to_string(tag))
+  end
+
+  # Everything else -- a {:raw, map} from a manual decode_update/1 feed, a
+  # future variant, garbage -- is skipped, counted, and disclosed once per
+  # kind. See the moduledoc's unknown-variant section.
   defp apply_update(state, other) do
     record_unmapped(state, unmapped_kind(other))
   end
@@ -533,6 +670,8 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   end
 
   defp close_turn(state, %{stop_reason: :refusal} = response) do
+    usage = turn_usage(state)
+
     state
     |> seal_assistant_message()
     |> emit(
@@ -540,7 +679,7 @@ defmodule Raxol.Agent.AcpStreamAdapter do
       :durable,
       with_refs(
         %{
-          usage: %{},
+          usage: usage,
           iteration: 0,
           final: true,
           stop_reason: :refusal,
@@ -553,13 +692,15 @@ defmodule Raxol.Agent.AcpStreamAdapter do
 
   defp close_turn(state, %{stop_reason: reason} = response)
        when reason in @known_stop_reasons do
+    usage = turn_usage(state)
+
     state
     |> seal_assistant_message()
     |> emit(
       :turn_completed,
       :durable,
       with_refs(
-        %{usage: %{}, iteration: 0, final: true, stop_reason: reason},
+        %{usage: usage, iteration: 0, final: true, stop_reason: reason},
         response
       )
     )
@@ -568,12 +709,15 @@ defmodule Raxol.Agent.AcpStreamAdapter do
   # A stop reason outside the ACP enum (forged wire value, garbage term):
   # disclosed, never coerced to a normal completion, never granted refs.
   # The accumulated assistant text still seals — the words WERE said; only
-  # the completion claim is suspect.
+  # the completion claim is suspect. The usage still rides: the tokens were
+  # spent and the money was owed whatever the peer claims about the ending.
   defp close_turn(state, %{stop_reason: other}) do
+    usage = turn_usage(state)
+
     state
     |> seal_assistant_message()
     |> emit(:turn_completed, :durable, %{
-      usage: %{},
+      usage: usage,
       iteration: 0,
       final: true,
       stop_reason: :unknown,
@@ -606,6 +750,99 @@ defmodule Raxol.Agent.AcpStreamAdapter do
       }
     )
   end
+
+  # -- usage and cost mapping ---------------------------------------------------
+
+  defp turn_usage(state), do: put_cost(state.usage, state)
+
+  # `Schema.UsageUpdate`'s known wire keys are exactly used/size/cost, so a
+  # peer's token split arrives in `_meta` verbatim and is read from there.
+  # `used` is tokens CURRENTLY IN CONTEXT, so it is context metadata and
+  # never `:input_tokens`: billing a context window as input tokens would
+  # charge the whole conversation again on every turn.
+  defp token_usage(usage) do
+    meta = meta(usage)
+
+    @meta_token_keys
+    |> Enum.reduce(%{}, fn {wire, key}, acc ->
+      maybe_put_count(acc, key, Map.get(meta, wire))
+    end)
+    |> maybe_put_count(:context_tokens, Map.get(usage, :used))
+    |> maybe_put_count(:max_context_tokens, Map.get(usage, :size))
+  end
+
+  defp meta(usage) do
+    case Map.get(usage, :_meta) do
+      meta when is_map(meta) -> meta
+      _absent -> %{}
+    end
+  end
+
+  # Tolerant reading applies to a token count as much as to a stop reason:
+  # a non-integer or negative figure reads as absent, because an absent
+  # count is safer at a spend gate than a fabricated one.
+  defp maybe_put_count(acc, key, count)
+       when is_integer(count) and count >= 0,
+       do: Map.put(acc, key, count)
+
+  defp maybe_put_count(acc, _key, _other), do: acc
+
+  defp reported_cost(%{cost: %{amount: amount, currency: currency}})
+       when is_number(amount) and is_binary(currency),
+       do: %{amount: amount * 1.0, currency: currency}
+
+  defp reported_cost(_usage), do: nil
+
+  # `UsageUpdate.cost` is documented as the CUMULATIVE SESSION cost, so
+  # emitting it verbatim as this turn's cost would bill turn 1's dollars
+  # again on turn 2, and again on turn 3 -- the same double-count ADR-0034
+  # records for Symphony's `merge_tokens/2`. `:cost` is therefore the delta
+  # against the cumulative anchored at this turn's start, and the
+  # cumulative itself rides as `:session_cost` for display only (pricing
+  # reads `:cost`, never `:session_cost`). This is the deliberate
+  # refinement of ADR-0035's "prefer a provider's own reported cost": the
+  # preference is for the provider's figure, not for its accumulation.
+  # A turn the peer sent no usage_update for reported NOTHING about its
+  # cost, which is not the same claim as "it cost zero": the anchor has not
+  # moved, so there is no evidence either way and no cost key is emitted.
+  # Emitting a 0.0 there would let a missing frame price a real turn at
+  # $0.00 through ADR-0035's provider-reported-cost path.
+  defp put_cost(usage, %{cost_reported: nil}), do: usage
+
+  defp put_cost(usage, %{cost_reported: reported, cost_anchor: anchor}) do
+    usage
+    |> Map.put(:session_cost, reported)
+    |> put_turn_cost(turn_cost(reported, anchor))
+  end
+
+  defp put_turn_cost(usage, nil), do: usage
+  defp put_turn_cost(usage, cost), do: Map.put(usage, :cost, cost)
+
+  # Currency is never coerced (ADR-0035): a delta is only meaningful
+  # between two figures in the SAME currency, so a mid-session currency
+  # change reports no turn cost at all rather than subtracting euros from
+  # dollars. The currency travels with the amount so a consumer can reject
+  # what it cannot price.
+  defp turn_cost(%{amount: amount, currency: currency}, nil),
+    do: %{amount: amount, currency: currency}
+
+  defp turn_cost(
+         %{amount: amount, currency: currency},
+         %{amount: anchored, currency: currency}
+       ) do
+    delta = amount - anchored
+
+    # A cumulative that went DOWN is a broken counterparty figure, not a
+    # refund: reporting no cost falls the turn through to the pricing table
+    # instead of crediting a spend gate with money nobody returned.
+    if delta < 0.0 do
+      nil
+    else
+      %{amount: delta, currency: currency}
+    end
+  end
+
+  defp turn_cost(_latest, _anchor), do: nil
 
   # -- reasoning item lifecycle -------------------------------------------------
   #

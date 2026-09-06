@@ -7,82 +7,27 @@ defmodule Raxol.Agent.Backend.Selector do
   set of default options (provider hint, base URL), which are merged with the
   config's own model/auth/opts.
 
-  Native CLI backends (`:claude_native`, `:codex`, `:cursor`) are reserved for
-  the future "vendor owns the loop" path and currently resolve to an error.
+  Native CLI backends (`:claude_native`, `:grok_native`, `:cursor`) hand the
+  loop to a vendor CLI. `:codex` is reserved -- it speaks a stateful app-server
+  protocol served by `Raxol.Symphony.Runners.Codex` rather than an agent
+  backend -- and resolves to an error.
   """
 
+  alias Raxol.Agent.Backend.Catalog
   alias Raxol.Agent.ExecutorConfig
 
   # backend => {backend_module, default_opts}
-  @backend_table %{
-    anthropic: {Raxol.Agent.Backend.HTTP, [provider: :anthropic]},
-    openai: {Raxol.Agent.Backend.HTTP, [provider: :openai]},
-    kimi: {Raxol.Agent.Backend.HTTP, [provider: :kimi]},
-    ollama: {Raxol.Agent.Backend.HTTP, [provider: :ollama]},
-    # LM Studio serves an OpenAI-compatible /v1/chat/completions endpoint, so
-    # it reuses the :openai request/response/SSE handling in Backend.HTTP.
-    # LM Studio ignores auth; "lm-studio" is its documented placeholder key
-    # (Backend.HTTP requires an :api_key for the :openai provider).
-    lm_studio:
-      {Raxol.Agent.Backend.HTTP,
-       [
-         provider: :openai,
-         base_url: "http://localhost:1234",
-         api_key: "lm-studio"
-       ]},
-    # LLM7 is keyless, so it carries no `:api_key` -- Backend.HTTP omits the
-    # auth header when none is set. Only a SUBSET of its catalogue is free:
-    # most ids (gpt-5.4-mini, deepseek-v4-flash, ...) answer 401 "Missing API
-    # key" without one, so the default names a model that serves keyless
-    # requests. Without it the request inherited the :openai default of
-    # "gpt-4o", which LLM7 does not host at all ("model_unavailable").
-    llm7:
-      {Raxol.Agent.Backend.HTTP,
-       [
-         provider: :openai,
-         base_url: "https://api.llm7.io",
-         model: "gpt-oss:20b"
-       ]},
-    # LongCat (Meituan) is OpenAI-compatible; the base URL stops at "/openai" so
-    # build_request appends "/v1/chat/completions". LongCat's message-object SSE
-    # frames, reasoning_content channel, and "finishreason" key are already
-    # handled by the :openai path in Backend.HTTP.
-    longcat:
-      {Raxol.Agent.Backend.HTTP,
-       [
-         provider: :openai,
-         base_url: "https://api.longcat.chat/openai",
-         model: "LongCat-2.0"
-       ]},
-    openrouter:
-      {Raxol.Agent.Backend.HTTP,
-       [
-         provider: :openai,
-         # The :openai build_request appends "/v1/chat/completions", so the base
-         # URL stops at "/api" (never "/api/v1", which would double the "/v1").
-         base_url: "https://openrouter.ai/api",
-         # OpenRouter serves /api/v1/models PUBLICLY (200 with no key), so the
-         # default auth check would call a revoked credential valid. /v1/key is
-         # the auth-required endpoint: 401 with no key and with a bad one.
-         auth_check_path: "/v1/key",
-         extra_headers: [
-           {"HTTP-Referer", "https://raxol.io"},
-           {"X-OpenRouter-Title", "Raxol"},
-           {"X-OpenRouter-Categories", "cli-agent,personal-agent"}
-         ]
-       ]},
-    lumo: {Raxol.Agent.Backend.Lumo, []},
-    mock: {Raxol.Agent.Backend.Mock, []},
-    grok_native: {Raxol.Agent.Backend.GrokBuild, []},
-    # Native backends: the CLI owns its loop; Raxol tools are injected over MCP.
-    claude_native: {Raxol.Agent.Backend.ClaudeCode, []},
-    cursor: {Raxol.Agent.Backend.Cursor, []}
-  }
+  #
+  # Derived from the catalog rather than declared again: ADR-0034 measured this
+  # table, the resolver's provider list and `ExecutorConfig.backend()`
+  # disagreeing about which backends exist. Only runnable kinds land here;
+  # `:reserved` entries stay out on purpose and fall through to `reason_for/1`.
+  @backend_table Map.new(
+                   Catalog.by_kind([:http, :native, :mock]),
+                   &{&1.id, {&1.module, &1.backend_opts}}
+                 )
 
-  # Codex speaks a stateful `app-server` JSON-RPC protocol (not the stream-json
-  # NDJSON interface the native backends share); it is served by
-  # `Raxol.Symphony.Runners.Codex` rather than an agent backend here.
-  @reserved_backends [:codex]
+  @reserved_backends Enum.map(Catalog.by_kind(:reserved), & &1.id)
 
   @doc """
   Resolve an executor config to `{:ok, backend_module, backend_opts}`.

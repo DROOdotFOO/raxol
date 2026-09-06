@@ -10,9 +10,13 @@ defmodule Raxol.Symphony.Runners.Review do
      workspace. If it succeeds and review is enabled, build a
      `Raxol.Symphony.Review.Contract` (diff of the implementer's changes), pick a
      different-vendor reviewer via `Raxol.Symphony.Review.select_reviewer/3`, and
-     pause `:awaiting_review` carrying the Contract. If no different vendor is
-     available, pause `:awaiting_human` instead. Any non-`:ok` implementer result
-     passes through unchanged.
+     pause `:awaiting_review` carrying the Contract. "Different vendor" means
+     `Raxol.Symphony.Runner.vendor/1` differs, not that the kind string
+     differs, so `raxol_agent` cannot review `raxol_agent_session`. If no
+     second vendor is available, pause `:awaiting_human` carrying
+     `{:insufficient_vendors, details}`, whose `:available_vendors` names what
+     was on the machine. Any non-`:ok` implementer result passes through
+     unchanged.
 
   2. **Review (on resume).** Resolve the reviewer vendor and run it against a
      FRESH isolated workspace with ONLY the Contract -- never the implementer's
@@ -109,12 +113,12 @@ defmodule Raxol.Symphony.Runners.Review do
              implementer_kind: implementer_kind
            }}
 
-        {:error, :insufficient_vendors} ->
+        {:error, {:insufficient_vendors, details}} ->
           {:pause, Review.escalation_reason(),
            %{
              contract: contract,
              implementer_kind: implementer_kind,
-             reason: :insufficient_vendors
+             reason: {:insufficient_vendors, details}
            }}
       end
     else
@@ -233,12 +237,18 @@ defmodule Raxol.Symphony.Runners.Review do
     Keyword.get(opts, :review_vendor_availability, &default_available?/1)
   end
 
-  defp default_available?(kind)
-       when kind in ["raxol_agent", "raxol_agent_session", "noop", "review"],
-       do: true
-
-  defp default_available?("codex"), do: not is_nil(System.find_executable("codex"))
-  defp default_available?(_), do: false
+  # ADR-0034 Gap 5: availability is probed per VENDOR, not per kind, and the
+  # unconditional `true` that used to cover four of the five kinds is gone.
+  # `:raxol` runs in this VM, so there is nothing to probe; `:codex` is an
+  # external binary. A kind with no vendor (`"review"`, `"noop"`) is not a
+  # review participant and reports unavailable rather than pretending.
+  defp default_available?(kind) do
+    case Runner.vendor(kind) do
+      :raxol -> true
+      :codex -> not is_nil(System.find_executable("codex"))
+      _ -> false
+    end
+  end
 
   defp with_isolated_workspace(fun) do
     dir =

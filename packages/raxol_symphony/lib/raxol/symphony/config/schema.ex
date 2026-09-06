@@ -20,8 +20,16 @@ defmodule Raxol.Symphony.Config.Schema do
   alias Raxol.Symphony.Config
 
   @supported_tracker_kinds ~w(linear github memory)
-  @supported_runner_kinds ~w(raxol_agent codex review)
+  # ADR-0034 Gap 4: this MUST equal `Raxol.Symphony.Runner.configurable_kinds/0`
+  # (the runner-kind convention test enforces it). Kept as a literal rather
+  # than derived from `Runner` so this module has no compile-time edge to the
+  # resolver, and so the operator-facing contract reads here. Before, the
+  # resolver handled `raxol_agent_session` and `noop` while this list named
+  # neither, so a workflow naming a real runner failed its own preflight.
+  # `noop` stays absent on purpose: resolvable, not operator-configurable.
+  @supported_runner_kinds ~w(raxol_agent raxol_agent_session codex review)
   # Kinds usable as the implementer or reviewer behind a "review" runner.
+  # A subset of @supported_runner_kinds; the convention test pins that.
   @reviewable_kinds ~w(raxol_agent raxol_agent_session codex)
 
   @type error ::
@@ -61,6 +69,20 @@ defmodule Raxol.Symphony.Config.Schema do
     [:recording],
     [:worker]
   ]
+
+  @doc """
+  Runner kinds accepted in a WORKFLOW.md's `runner.kind`.
+
+  Exposed so the runner-kind convention test can compare it against
+  `Raxol.Symphony.Runner.configurable_kinds/0` instead of the two lists
+  drifting apart unobserved (ADR-0034 Gap 4).
+  """
+  @spec supported_runner_kinds() :: [String.t()]
+  def supported_runner_kinds, do: @supported_runner_kinds
+
+  @doc "Runner kinds usable as the implementer or reviewer behind a review runner."
+  @spec reviewable_kinds() :: [String.t()]
+  def reviewable_kinds, do: @reviewable_kinds
 
   @doc """
   Validates a config struct. Returns `:ok` or `{:error, reason}`.

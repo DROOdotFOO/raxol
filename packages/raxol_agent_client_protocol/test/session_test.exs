@@ -5,6 +5,7 @@ defmodule Raxol.AgentClientProtocol.SessionTest do
   double-checks the IC surface the Session consumes is sufficient).
   """
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   alias Raxol.AgentClientProtocol.Error
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptResponse

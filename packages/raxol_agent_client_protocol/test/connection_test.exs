@@ -67,6 +67,7 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
   # (Inv-20/21, session/cancel routing); both need exclusive scheduling,
   # matching the precedent in `method_table_test.exs`/`session_test.exs`.
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   @moduletag :capture_log
 
@@ -1123,6 +1124,10 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
       assert frame["id"] == "c1|5"
     end
 
+    # Inv-19 exists to drive a second reply on an already-consumed obligation,
+    # so the suppression telemetry is the observable under test. Declared, not
+    # muted: the tag asserts it fires.
+    @tag expect_invariant: [[:raxol, :acp, :dup_reply]]
     test "Inv-19: delegated-reply idempotence across reply/second-reply/adopter-DOWN/cancel interleavings" do
       test_pid = self()
       %{conn: conn, peer: peer} = start_agent_conn()
@@ -1416,6 +1421,9 @@ defmodule Raxol.AgentClientProtocol.ConnectionTest do
       assert frame["error"]["code"] == Raxol.AgentClientProtocol.Error.method_not_found_code()
     end
 
+    # Row 27 hands `reply/3` an obligation the Connection never issued, which is
+    # the same "no live obligation" branch as a double reply.
+    @tag expect_invariant: [[:raxol, :acp, :dup_reply]]
     test "row 27: reply/3 on a totally unknown reply_ref is a suppressed no-op returning :ok" do
       %{conn: conn, peer: peer} = start_agent_conn()
       complete_handshake(peer)

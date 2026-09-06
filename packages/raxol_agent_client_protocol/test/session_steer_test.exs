@@ -15,6 +15,7 @@ defmodule Raxol.AgentClientProtocol.SessionSteerTest do
   of that decision so the tests exercise the SEAM, not re-litigate the core.
   """
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   alias Raxol.AgentClientProtocol.Ext.Schema.SteerRequest
   alias Raxol.AgentClientProtocol.Ext.Schema.SteerResponse
@@ -214,6 +215,11 @@ defmodule Raxol.AgentClientProtocol.SessionSteerTest do
       assert result == {:error, :no_live_turn}
     end
 
+    # This test's whole point is a turn that ends having streamed nothing, so it
+    # legitimately trips the ADR-0030 delivery guard. Declared rather than
+    # muted: the tag asserts the event FIRES, which pins the fact that a
+    # completed non-empty-prompt turn with zero updates is observable here.
+    @tag expect_invariant: [[:raxol, :acp, :zero_updates_turn]]
     test "no_live_turn: after the turn ends, the CAS token is cleared", ctx do
       conn = new_conn()
       {session, _sid} = start_session(ctx, conn, turn_runner: live_runner(self()))

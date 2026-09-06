@@ -206,15 +206,20 @@ atom to a backend:
 | `:anthropic`, `:openai`, `:kimi`, `:ollama`, `:lm_studio`, `:llm7`, `:longcat`, `:openrouter` | `Backend.HTTP` |
 | `:lumo` | `Backend.Lumo` |
 | `:claude_native` | `Backend.ClaudeCode` |
+| `:grok_native` | `Backend.GrokBuild` |
 | `:cursor` | `Backend.Cursor` |
 | `:mock` | `Backend.Mock` |
+
+`Raxol.Agent.Backend.Catalog` is the single declaration this table, the resolver's provider
+registry and `ExecutorConfig.backend()` are all derived from (`Catalog.ids/0` lists every
+backend); see ADR-0034.
 
 A native backend reports `handles_tools_internally?/0` as `true`, which tells the framework
 not to drive the reasoning loop: the CLI runs its own loop and calls Raxol's tools through an
 injected MCP server (`Raxol.Agent.Harness.McpToolConfig` writes the `--mcp-config`). The
 `:codex` harness is reserved (it speaks a stateful app-server protocol served by
 `Raxol.Symphony.Runners.Codex`, not an agent backend), so `select/1` returns
-`{:error, {:harness_not_implemented, :codex}}` for it.
+`{:error, {:backend_not_implemented, :codex}}` for it.
 
 ## Authorization (ALLOW/ASK/DENY)
 

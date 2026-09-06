@@ -46,6 +46,13 @@ defmodule RaxolAgentClientProtocol.MixProject do
 
       # Dev/test only
       {:stream_data, "~> 1.1", only: [:dev, :test]},
+      # Test-only, deliberately NOT a runtime dependency: every emit site in
+      # `lib/` stays `Code.ensure_loaded?(:telemetry)`-guarded so the published
+      # package still has no telemetry requirement. Without it present under
+      # MIX_ENV=test, though, those guards are always false and
+      # `Raxol.AgentClientProtocol.Test.InvariantSentinel` can never observe an
+      # invariant -- the guard would be decorative.
+      {:telemetry, "~> 1.0", only: [:dev, :test]},
       {:ex_json_schema, "~> 0.10", only: [:dev, :test]},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},

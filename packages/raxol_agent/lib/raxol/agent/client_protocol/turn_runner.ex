@@ -383,6 +383,10 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
       opts: opts,
       tool_ids: %{},
       open_tools: %{},
+      # Whether any `agent_message_chunk` has reached the wire this turn. Read
+      # by the {:done, _} arm to decide whether the terminal content still has
+      # to be delivered.
+      streamed_text?: false,
       # What this turn was asked, so the terminal record can be the whole
       # conversation even on the `run/2` path, which reports no message list.
       input_messages: Keyword.get(opts, :messages, []),
@@ -526,9 +530,10 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
     # a backend's empty first delta never produces guard noise.
     if text != "" do
       post(state, {:agent_message_chunk, @content_chunk.new(@content_block.from_string(text))})
+      loop(%{state | streamed_text?: true})
+    else
+      loop(state)
     end
-
-    loop(state)
   end
 
   # `Raxol.Agent.Stream.tool_result/0` carries only `name` — no `id` (the
@@ -584,6 +589,16 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   defp handle_event({:turn_complete, _info}, state), do: loop(state)
 
   defp handle_event({:done, info}, state) do
+    # A turn that streamed nothing still has to deliver its answer. Only a
+    # streaming pump emits {:text_delta, _}; `Stream.react_loop/3` calls
+    # `backend.complete/2` and reports the whole answer once, as
+    # {:done, %{content: ...}}. Since `Serve.turn_opts/1` attaches the toolset
+    # on every ACP turn, that ReAct path is the one every backend takes here,
+    # so without this the client receives a `stopReason` and no content at all
+    # -- which is exactly the "zero session/update notifications" condition
+    # `Session` already warns about. Guarded on `streamed_text?` so a genuinely
+    # streaming turn does not repeat its own deltas as a trailing duplicate.
+    state = maybe_post_terminal_content(state, info)
     stop_pump(state)
     Budget.record(Map.get(info, :usage) || %{})
     {{:stop, :end_turn}, %{messages: turn_messages(info, state)}}
@@ -595,6 +610,19 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunner do
   end
 
   defp handle_event(_other, state), do: loop(state)
+
+  defp maybe_post_terminal_content(%{streamed_text?: true} = state, _info), do: state
+
+  defp maybe_post_terminal_content(state, info) do
+    case Map.get(info, :content) do
+      text when is_binary(text) and text != "" ->
+        post(state, {:agent_message_chunk, @content_chunk.new(@content_block.from_string(text))})
+        %{state | streamed_text?: true}
+
+      _ ->
+        state
+    end
+  end
 
   # What this turn ADDS to the conversation: the prompt, then everything the
   # loop appended answering it -- for `react/2`, the tool calls and their

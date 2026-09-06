@@ -432,10 +432,19 @@ jobs:
         if: matrix.package == 'raxol_symphony'
         run: sudo apt-get update && sudo apt-get install -y inotify-tools
 
+      # `--check-locked` rather than a bare `deps.get`: a plain fetch REWRITES
+      # a stale mix.lock in place and carries on, so a package whose committed
+      # lock does not match what resolution produces builds green in CI and
+      # cannot be reproduced anywhere else. raxol_symphony and raxol_telegram
+      # both drifted that way undetected (symphony would not even compile from
+      # its committed lock on a clean checkout). `Lockstep Deps` does not cover
+      # this -- it checks sibling "~> X.Y" constraints, not lock contents.
+      # Fix a failure here by running `mix deps.get` in that package and
+      # committing the lock.
       - name: Compile package
         working-directory: packages/${{ matrix.package }}
         run: |
-          mix deps.get
+          mix deps.get --check-locked
           mix compile --warnings-as-errors
 
       # The exclusions are stated here rather than left to each package's
@@ -470,6 +479,37 @@ jobs:
             --exclude live_acp_dev \
             --exclude cli_signer \
             --exclude skip_on_ci
+
+      # The loopback is excluded from the default run (`:integration`, see
+      # packages/raxol_agent/test/test_helper.exs) because it boots a real BEAM
+      # peer over stdio, so without this step the ONE test that drives
+      # `bin/raxol-acp` the way an editor does never ran in CI. It is included
+      # by file rather than by tag: the other `:integration` suites in this
+      # package need a live Postgres.
+      #
+      # Same reasoning as the input-protocol canary below. Everything this
+      # catches is invisible to unit tests, because a unit test supplies the
+      # frames instead of a process: non-JSON leaking onto the protocol pipe,
+      # the shim's compile step swallowing the client's first frame, and a turn
+      # that reports a stop reason while delivering no content. All three were
+      # real, all three shipped, and none of them failed a suite.
+      - name: Run ACP stdio loopback (real peer)
+        if: matrix.package == 'raxol_agent'
+        working-directory: packages/raxol_agent
+        run: mix test --include integration test/raxol/agent/acp_loopback_test.exs
+
+      # Same hole, other entrypoints: `bin/raxol` and `bin/raxol-code` are
+      # shell scripts, so nothing in the Elixir suite goes through them -- unit
+      # tests call `Raxol.Agent.P.run/1` directly and never see the process
+      # contract the scripts own. Every defect these two shipped lived there:
+      # Mix's loadpaths pass printing "==> raxol_terminal" / "Compiling N
+      # files" onto the answer channel, and `app.start`'s log banner doing the
+      # same. `:integration` for the BEAM boot, so included by file for the
+      # same reason as the loopback above.
+      - name: Run CLI entrypoint smoke (bin/raxol, bin/raxol-code)
+        if: matrix.package == 'raxol_agent'
+        working-directory: packages/raxol_agent
+        run: mix test --include integration test/raxol/agent/cli_entrypoint_smoke_test.exs
 
       # Kept as a per-package backstop, and kept LAST. The `format` job checks
       # every package now, so this is redundant on the happy path -- but this

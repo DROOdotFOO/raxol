@@ -28,6 +28,7 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
   meant to prove the Ctx <-> Connection <-> Session wiring end to end).
   """
   use ExUnit.Case, async: false
+  use Raxol.AgentClientProtocol.Test.InvariantSentinel
 
   alias Raxol.AgentClientProtocol.Connection
   alias Raxol.AgentClientProtocol.Ctx
@@ -121,6 +122,14 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
     res = Session.begin_prompt(session, req, reply_ref, rx_seq)
     {res, reply_ref}
   end
+
+  # Every turn driven from this file completes without posting a
+  # `session/update`, and `begin/3` above fabricates a `reply_ref` the
+  # Connection never issued -- so the ADR-0030 zero-updates guard and the
+  # no-live-obligation reply guard both trip by construction, not by a defect.
+  # Declared per test with `expect_invariant` (which asserts they FIRE) rather
+  # than muted module-wide.
+  @invariants_by_construction [[:raxol, :acp, :zero_updates_turn], [:raxol, :acp, :dup_reply]]
 
   defp wait_until(fun, timeout \\ 2_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
@@ -276,6 +285,7 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
   # ---------------------------------------------------------------------------
 
   describe "request_permission/3,4" do
+    @tag expect_invariant: @invariants_by_construction
     test "resolves {:ok, {:selected, _}} on a decoded selected client reply", ctx do
       sid = "sess-perm-ok"
       tool_call = ToolCallUpdate.new("tc-1", ToolCallUpdateFields.new())
@@ -300,8 +310,13 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
       })
 
       assert_receive {:perm_result, {:ok, {:selected, %{option_id: "allow-once"}}}}, 1_000
+
+      # Await the turn's own completion rather than racing test teardown: the
+      # finish path is what emits the declared invariants.
+      wait_until(fn -> :sys.get_state(session).turn == :idle end)
     end
 
+    @tag expect_invariant: @invariants_by_construction
     test "fail-closed: no client reply before the (short) permission timeout resolves {:ok, :cancelled}",
          ctx do
       sid = "sess-perm-timeout"
@@ -331,6 +346,7 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
       assert req["method"] == "session/request_permission"
 
       assert_receive {:perm_result, {:ok, :cancelled}}, 1_000
+      wait_until(fn -> :sys.get_state(session).turn == :idle end)
     end
   end
 
@@ -339,6 +355,7 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
   # ---------------------------------------------------------------------------
 
   describe "post_update/2" do
+    @tag expect_invariant: @invariants_by_construction
     test "rejects an empty-text agent_message_chunk: {:error, :empty_chunk}, no wire frame",
          ctx do
       sid = "sess-empty-chunk"
@@ -365,9 +382,17 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
       # turn without a real inbound session/prompt id, so the delegated
       # reply obligation was never registered with Connection — the finish
       # is a suppressed no-op there, independent of this guard).
+
+      # Await the turn's own completion so the declared invariants are emitted
+      # deterministically instead of racing test teardown.
+      wait_until(fn -> :sys.get_state(session).turn == :idle end)
+
       ScriptedPeer.assert_no_frame(ctx.peer, 150)
     end
 
+    # This turn DOES stream an update, so only the fabricated-reply_ref guard
+    # trips here -- the zero-updates guard correctly stays silent.
+    @tag expect_invariant: [[:raxol, :acp, :dup_reply]]
     test "a non-empty agent_message_chunk passes through as session/update", ctx do
       sid = "sess-nonempty-chunk"
       test_pid = self()
@@ -392,8 +417,11 @@ defmodule Raxol.AgentClientProtocol.CtxTest do
       assert frame["method"] == "session/update"
       assert frame["params"]["sessionId"] == sid
       assert frame["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
+
+      wait_until(fn -> :sys.get_state(session).turn == :idle end)
     end
 
+    @tag expect_invariant: @invariants_by_construction
     test "turn-over rejection: post_update after the turn has drained returns {:error, :turn_over}",
          ctx do
       sid = "sess-turn-over"

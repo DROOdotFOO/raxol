@@ -6,20 +6,51 @@ import Config
 # The watchers configuration can be used to run external
 # watchers to your application. For example, we use it
 # with esbuild to bundle .js and .css sources.
+
+# The dev-boot smoke in .github/workflows/web-deploy-check.yml boots THIS
+# environment for real and requires one page to render, because a dev boot is
+# the only place the `listeners: [Phoenix.CodeReloader]` class of breakage is
+# observable -- :test and the prod release both run with the reloader off.
+# Two of the dev defaults below are hostile to an unattended boot, and
+# `mix phx.server` has no flag for either:
+#
+#   * the esbuild and tailwind watchers download their binaries on a cold
+#     build cache, so a gate meant to fail only on OUR bugs would depend on a
+#     GitHub release download;
+#   * port 4000 is normally already taken on a developer machine.
+#
+# Both are decided before the config call rather than in a second one: Config
+# deep merges keyword lists, so a later `watchers: []` merges INTO the list
+# below and leaves both watchers running.
+dev_smoke? = System.get_env("RAXOL_DEV_SMOKE") == "1"
+
+http_port =
+  if dev_smoke? do
+    String.to_integer(System.get_env("PORT") || "4010")
+  else
+    4000
+  end
+
+watchers =
+  if dev_smoke? do
+    []
+  else
+    [
+      esbuild: {Esbuild, :install_and_run, [:default, ~w(--sourcemap=inline --watch)]},
+      tailwind: {Tailwind, :install_and_run, [:default, ~w(--watch)]}
+    ]
+  end
+
 config :raxol_playground, RaxolPlaygroundWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}, port: 4000],
+  http: [ip: {127, 0, 0, 1}, port: http_port],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
   secret_key_base:
     "development-secret-key-base-at-least-64-characters-long-for-security-purposes",
-  watchers: [
-    esbuild:
-      {Esbuild, :install_and_run, [:default, ~w(--sourcemap=inline --watch)]},
-    tailwind: {Tailwind, :install_and_run, [:default, ~w(--watch)]}
-  ]
+  watchers: watchers
 
 # ## SSL Support
 #

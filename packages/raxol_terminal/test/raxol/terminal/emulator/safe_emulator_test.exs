@@ -1,5 +1,30 @@
 defmodule Raxol.Terminal.Emulator.SafeEmulatorTest do
-  use ExUnit.Case, async: true
+  @moduledoc """
+  Behavioural suite for `Raxol.Terminal.Emulator.SafeEmulator`, and the only
+  suite in this package that can reach an event `Raxol.Terminal.Telemetry`
+  classifies as `:invariant` (the three span `:exception` leaves and
+  `[:raxol, :emulator, :recovery, :failed]` are emitted from SafeEmulator
+  alone), so it carries the sentinel.
+
+  Much of what this suite does is feed the emulator garbage -- `\\e[`, a lone
+  `0xFF`, a 15000-column resize, non-binary sequences -- and assert it degrades
+  instead of crashing. That is precisely the ground the sentinel guards: those
+  inputs must come back as `{:error, reason}`, never as a raise.
+
+  The sentinel is not redundant with the crash itself. SafeEmulator's public
+  functions launder a server crash into an ordinary error tuple --
+  `resize/3` through `safe_genserver_call/2` (`{:error, {:genserver_exit,
+  reason}}`) and `process_input/2` through `Task.yield/2` (`{:error, {:exit,
+  reason}}`) -- so a permissive assertion can accept a raise as if it were
+  validation working. The sentinel fails on the event, names it, and carries
+  the exception and stacktrace in its metadata.
+  """
+
+  # async: false is mandatory with the sentinel: `:telemetry` handlers are
+  # global and run in the EMITTING process, so a concurrently-running test
+  # would be blamed for another test's invariant.
+  use ExUnit.Case, async: false
+  use Raxol.Core.Telemetry.InvariantSentinel, registry: Raxol.Terminal.Telemetry
 
   alias Raxol.Terminal.Emulator.SafeEmulator
 

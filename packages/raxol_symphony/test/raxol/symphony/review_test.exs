@@ -22,17 +22,70 @@ defmodule Raxol.Symphony.ReviewTest do
 
     test "escalates when only the implementer is available" do
       avail = fn k -> k == "a" end
-      assert {:error, :insufficient_vendors} = Review.select_reviewer("a", ["a", "b"], avail)
+
+      assert {:error, {:insufficient_vendors, _}} =
+               Review.select_reviewer("a", ["a", "b"], avail)
     end
 
     test "escalates when there is only one candidate" do
-      assert {:error, :insufficient_vendors} =
+      assert {:error, {:insufficient_vendors, _}} =
                Review.select_reviewer("a", ["a"], always_available())
     end
 
     test "escalates when no available candidate differs from the implementer" do
-      assert {:error, :insufficient_vendors} =
+      assert {:error, {:insufficient_vendors, _}} =
                Review.select_reviewer("a", ["a", "a"], always_available())
+    end
+  end
+
+  # ADR-0034 Gap 5. Before vendor identity these kinds were two distinct
+  # candidates and paired happily, so review "passed" with one vendor
+  # reviewing itself.
+  describe "select_reviewer/3 -- vendor distinctness" do
+    test "refuses to pair raxol_agent with raxol_agent_session" do
+      assert {:error, {:insufficient_vendors, details}} =
+               Review.select_reviewer(
+                 "raxol_agent",
+                 ["raxol_agent", "raxol_agent_session"],
+                 always_available()
+               )
+
+      assert details.implementer_vendor == :raxol
+      assert details.available_vendors == [:raxol]
+      assert details.available_kinds == ["raxol_agent", "raxol_agent_session"]
+    end
+
+    test "pairs raxol with codex when both are available" do
+      assert {:ok, "codex"} =
+               Review.select_reviewer(
+                 "raxol_agent",
+                 ["raxol_agent", "raxol_agent_session", "codex"],
+                 always_available()
+               )
+    end
+
+    test "a raxol_agent_session implementer cannot be reviewed by raxol_agent either" do
+      assert {:error, {:insufficient_vendors, details}} =
+               Review.select_reviewer(
+                 "raxol_agent_session",
+                 ["raxol_agent_session", "raxol_agent"],
+                 always_available()
+               )
+
+      assert details.implementer_vendor == :raxol
+    end
+
+    test "vendorless kinds are never candidates even when reported available" do
+      # An inert runner returns :ok for anything, so a "noop" reviewer would
+      # approve every diff; "review" is a decorator, not a vendor.
+      assert {:error, {:insufficient_vendors, details}} =
+               Review.select_reviewer(
+                 "raxol_agent",
+                 ["raxol_agent", "noop", "review"],
+                 always_available()
+               )
+
+      assert details.available_kinds == ["raxol_agent"]
     end
   end
 

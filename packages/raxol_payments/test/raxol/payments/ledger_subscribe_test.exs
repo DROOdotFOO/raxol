@@ -69,7 +69,7 @@ defmodule Raxol.Payments.LedgerSubscribeTest do
 
       :telemetry.attach_many(
         handler_id,
-        Raxol.Payments.Telemetry.events(),
+        Map.keys(Raxol.Payments.Telemetry.events()),
         fn event, measurements, metadata, _ ->
           send(parent, {:telemetry, event, measurements, metadata})
         end,

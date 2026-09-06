@@ -30,9 +30,25 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
        (status `:failed`) whose notification `_meta` carries the
        `"raxol.dev/interrupt"` rider built from the Interrupt outcome, and
        that fence precedes the cancelled reply on the Session's FIFO lane.
+    5. **Non-streaming (ReAct) turn still delivers its answer** — a backend
+       that implements only `complete/2`, reached because a toolset is
+       attached (which `Serve.turn_opts/1` does on EVERY ACP turn), emits
+       exactly one `agent_message_chunk` carrying the terminal content, and
+       does not duplicate it on the streaming path.
+
+  ## Invariant sentinel
+
+  Armed here because this module is where the zero-content turn defect lived.
+  `[:raxol, :agent, :acp_turn_runner, :interrupt_failed]` is classified
+  `:invariant` (`Raxol.Agent.Telemetry`), so any test below that trips it
+  without declaring it fails. `async: false` is a requirement of the
+  sentinel, not a preference: `:telemetry` handlers are global and run in the
+  emitting process, so a concurrent module's event would be misattributed to
+  a test here.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+  use Raxol.Agent.Test.InvariantSentinel
 
   alias Raxol.Agent.ClientProtocol.TurnRunner
   alias Raxol.AgentClientProtocol.Schema.AgentTypes.PromptRequest
@@ -75,6 +91,21 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     end
 
     def complete(_messages, _opts), do: {:error, :stream_only}
+  end
+
+  defmodule CompletingBackend do
+    @moduledoc """
+    Implements only `complete/2`, like every real backend on the ReAct path:
+    `Raxol.Agent.Stream.react_loop/3` never calls `stream/2`, so a turn with a
+    toolset attached reports its whole answer once as `{:done, %{content: _}}`
+    and emits no `{:text_delta, _}` at all. `stream/2` errors here so a
+    regression that silently routes back to streaming fails loudly.
+    """
+    def complete(_messages, opts) do
+      {:ok, %{content: Keyword.fetch!(opts, :answer), tool_calls: [], usage: %{}}}
+    end
+
+    def stream(_messages, _opts), do: {:error, :complete_only}
   end
 
   defmodule CapturingBackend do
@@ -235,6 +266,33 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
     refute_receive {:conn_notify, _, _}, 10
   end
 
+  # -- 1c. the ReAct path delivers content ---------------------------------------
+
+  test "a non-streaming ReAct turn posts its terminal content as one chunk" do
+    runner =
+      TurnRunner.new(
+        backend: CompletingBackend,
+        backend_opts: [answer: "the whole answer"],
+        # Non-empty actions is what routes build_stream/2 to AgentStream.react/2,
+        # and Serve.turn_opts/1 attaches the toolset on every ACP turn -- so this
+        # is the path a real ACP client always takes, for every backend.
+        actions: [EchoAction]
+      )
+
+    {session, session_id} = start_session!(runner)
+    reply_ref = begin_prompt!(session, session_id)
+
+    assert_receive {:conn_notify, "session/update", n}, 2_000
+    assert chunk_text(n) == "the whole answer"
+    assert n.session_id == session_id
+
+    assert_receive {:conn_reply, ^reply_ref, {:ok, %{stop_reason: :end_turn}}}, 2_000
+
+    # One chunk, not two: the {:done, _} arm must not re-post content that
+    # deltas already carried, and must not post twice on its own.
+    refute_receive {:conn_notify, _, _}, 100
+  end
+
   # -- 1b. system prompt threading ----------------------------------------------
 
   test "a system_prompt source spec resolves at wiring time and reaches the backend" do
@@ -369,6 +427,12 @@ defmodule Raxol.Agent.ClientProtocol.TurnRunnerTest do
   end
 
   # -- 3b. interrupt-failure telemetry --------------------------------------------
+
+  # The cancel path's broad rescue/catch is paid for by this event, and this
+  # test is the one that drives it -- so it declares the invariant instead of
+  # merely tolerating it. The declaration is an assertion: if the runner ever
+  # stops reporting a failed interrupt, this test fails on the missing event.
+  @tag expect_invariant: [[:raxol, :agent, :acp_turn_runner, :interrupt_failed]]
 
   test "a failing interrupt still completes the cancel honestly, and fires a distinguishable telemetry event" do
     test_pid = self()

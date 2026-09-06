@@ -28,7 +28,12 @@ cd "$REPO_ROOT/packages/raxol_agent"
 
 # Compile quietly first so build chatter doesn't flash before the UI takes
 # the alternate screen. MAKEFLAGS=-s silences the termbox2 NIF make check.
-MAKEFLAGS=-s mix compile >/dev/null 2>&1 || {
+#
+# `< /dev/null` detaches the compile step from stdin: Mix boots a full VM whose
+# `prim_tty` owns fd 0 and reads ahead, so keystrokes typed while this step
+# runs are consumed and discarded here instead of reaching the UI (the defect
+# fixed in bin/raxol-acp).
+MAKEFLAGS=-s mix compile >/dev/null 2>&1 </dev/null || {
   echo "raxol-code: compile failed; run (cd packages/raxol_agent && mix compile) for details" >&2
   exit 70
 }
@@ -36,4 +41,29 @@ MAKEFLAGS=-s mix compile >/dev/null 2>&1 || {
 # RAXOL_CLI_CWD scopes the fs/shell tools to where the user invoked this.
 # exec hands mix this shell's terminal so isatty(stdout) holds and the TUI
 # initializes.
-exec env MAKEFLAGS=-s RAXOL_CLI_CWD="$CALLER_CWD" mix raxol.code "$@"
+#
+# Precompiling is not sufficient on its own: `mix <task>` must load the project
+# to find the task module, and that loadpaths pass announces dep work on stdout
+# ("==> raxol_terminal", "Compiling N files (.ex)") before the task can install
+# a quiet shell -- elixir_make's NIF check reads as stale on every invocation,
+# so it is not a first-run-only cost. That flashed before the alternate screen,
+# and lands in the middle of the output of the headless paths (--help,
+# --sessions, --replay). `mix run` is built into Mix, so it parses before any
+# project loadpaths and honours --no-deps-check; the task still runs
+# `app.start` itself.
+#
+# No -noinput here, unlike bin/raxol-acp: this process's stdio IS the terminal
+# the UI draws on, and the driver needs fd 0 for keys. Verified interactively
+# through a pty -- the TUI initializes and takes the alternate screen under
+# `mix run` exactly as it did under `mix raxol.code`.
+exec env \
+  MAKEFLAGS=-s \
+  RAXOL_CLI_CWD="$CALLER_CWD" \
+  mix run \
+    --no-start \
+    --no-compile \
+    --no-deps-check \
+    --no-archives-check \
+    --no-elixir-version-check \
+    -e 'Mix.Tasks.Raxol.Code.run(System.argv())' \
+    -- "$@"

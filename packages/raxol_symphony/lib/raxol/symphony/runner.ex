@@ -18,14 +18,22 @@ defmodule Raxol.Symphony.Runner do
     runner is responsible for serializing whatever state it needs into the
     `token` so a fresh process can pick up where the prior one left off.
 
-  Available implementations:
+  Available implementations, declared once in `@kinds` (ADR-0034 Gap 4: the
+  resolver clauses, the operator-configurable set and the vendor identities
+  all derive from that one list, so they cannot drift apart):
 
-  - `Raxol.Symphony.Runners.Noop` -- test-only runner with configurable
-    behaviour.
-  - `Raxol.Symphony.Runners.RaxolAgent` -- DEFAULT; wraps the `raxol_agent`
-    `Stream` API.
-  - `Raxol.Symphony.Runners.Codex` -- Port-based Codex app-server (JSON-RPC
-    2.0 over stdio, mirrors upstream Symphony Elixir).
+  - `"raxol_agent"` -> `Raxol.Symphony.Runners.RaxolAgent` -- DEFAULT; wraps
+    the `raxol_agent` `Stream` API. Vendor `:raxol`.
+  - `"raxol_agent_session"` -> `Raxol.Symphony.Runners.RaxolAgentSession` --
+    the `Session`-based variant. Vendor `:raxol`.
+  - `"codex"` -> `Raxol.Symphony.Runners.Codex` -- Port-based Codex
+    app-server (JSON-RPC 2.0 over stdio, mirrors upstream Symphony Elixir).
+    Vendor `:codex`.
+  - `"review"` -> `Raxol.Symphony.Runners.Review` -- cross-vendor review
+    decorator. Not a vendor of its own; it delegates to two others.
+  - `"noop"` -> `Raxol.Symphony.Runners.Noop` -- test-only runner with
+    directable behaviour. Resolvable but NOT operator-configurable, so it is
+    absent from `Raxol.Symphony.Config.Schema`'s supported set.
 
   ## Workspace
 
@@ -52,6 +60,67 @@ defmodule Raxol.Symphony.Runner do
   """
 
   alias Raxol.Symphony.{Config, Issue}
+
+  # ADR-0034 Gap 4: the one declaration every runner-kind surface derives
+  # from. Before this, `resolve_from_config/1` handled five kinds while
+  # `Config.Schema` declared three, so `raxol_agent_session` and `noop`
+  # resolved and then failed their own preflight.
+  #
+  # `vendor` is the review-relevant identity (ADR-0034 Gap 5): two runner
+  # kinds that share a vendor are the same vendor wearing two hats and cannot
+  # review each other. `nil` means "not a review vendor at all" -- `review`
+  # is a decorator over two other kinds, and `noop` is inert, so a `noop`
+  # reviewer would rubber-stamp every diff.
+  #
+  # `configurable?: false` marks a kind that stays resolvable but is not
+  # valid in a WORKFLOW.md. `noop` reads its per-issue directive from a
+  # named `Raxol.Symphony.Runners.Noop.Director` process that only tests
+  # start, so an operator naming it would get a crash at dispatch rather
+  # than an inert run: declaring it supported config would be a promise the
+  # runner cannot keep. It stays in the resolver because the orchestrator's
+  # own tests drive it through `config.runner.kind` (their preflight runs
+  # with `skip_runner: true` behind a `:runner_module` override).
+  @kinds [
+    %{
+      kind: "raxol_agent",
+      module: Raxol.Symphony.Runners.RaxolAgent,
+      vendor: :raxol,
+      configurable?: true
+    },
+    %{
+      kind: "raxol_agent_session",
+      module: Raxol.Symphony.Runners.RaxolAgentSession,
+      vendor: :raxol,
+      configurable?: true
+    },
+    %{
+      kind: "codex",
+      module: Raxol.Symphony.Runners.Codex,
+      vendor: :codex,
+      configurable?: true
+    },
+    %{
+      kind: "review",
+      module: Raxol.Symphony.Runners.Review,
+      vendor: nil,
+      configurable?: true
+    },
+    %{
+      kind: "noop",
+      module: Raxol.Symphony.Runners.Noop,
+      vendor: nil,
+      configurable?: false
+    }
+  ]
+
+  @typedoc """
+  Review-relevant vendor identity of a runner kind.
+
+  `nil` for kinds that are not vendors (a decorator or an inert runner).
+  `{:unknown, kind}` for a kind absent from `@kinds`: distinctness cannot be
+  proven either way, so each unknown kind counts as its own vendor.
+  """
+  @type vendor :: atom() | nil | {:unknown, String.t()}
 
   @type opts :: [
           parent: pid(),
@@ -87,16 +156,48 @@ defmodule Raxol.Symphony.Runner do
   @optional_callbacks pause_reasons: 0
 
   @doc """
+  Every runner kind `resolve/2` handles, in declaration order.
+
+  This IS the resolver's domain: the `resolve_from_config/1` clauses are
+  generated from the same list, so a kind cannot be resolvable without
+  appearing here.
+  """
+  @spec kinds() :: [String.t()]
+  def kinds, do: Enum.map(@kinds, & &1.kind)
+
+  @doc """
+  The subset of `kinds/0` that is valid in a WORKFLOW.md.
+
+  `Raxol.Symphony.Config.Schema`'s supported set MUST equal this list; the
+  runner-kind convention test enforces that.
+  """
+  @spec configurable_kinds() :: [String.t()]
+  def configurable_kinds do
+    @kinds |> Enum.filter(& &1.configurable?) |> Enum.map(& &1.kind)
+  end
+
+  @doc """
+  Review-relevant vendor identity of a runner kind.
+
+  Returns `nil` for a kind that is not a vendor (`"review"`, `"noop"`) and
+  `{:unknown, kind}` for a kind this module does not declare.
+  """
+  @spec vendor(String.t()) :: vendor()
+  def vendor(kind) when is_binary(kind) do
+    case Enum.find(@kinds, &(&1.kind == kind)) do
+      nil -> {:unknown, kind}
+      entry -> entry.vendor
+    end
+  end
+
+  @doc """
   Resolves the runner module from config, with optional override.
 
   Resolution order:
 
   1. `:runner_module` option (used by tests).
-  2. `config.runner.kind` mapping:
-     - `"raxol_agent"` -> `Raxol.Symphony.Runners.RaxolAgent`
-     - `"raxol_agent_session"` -> `Raxol.Symphony.Runners.RaxolAgentSession`
-     - `"codex"` -> `Raxol.Symphony.Runners.Codex`
-     - `"noop"` -> `Raxol.Symphony.Runners.Noop`
+  2. `config.runner.kind`, mapped through `@kinds` (see the moduledoc for
+     the table and `kinds/0` for the resolvable set).
   """
   @spec resolve(Config.t(), keyword()) :: {:ok, module()} | {:error, term()}
   def resolve(%Config{} = config, opts \\ []) do
@@ -106,20 +207,10 @@ defmodule Raxol.Symphony.Runner do
     end
   end
 
-  defp resolve_from_config(%Config{runner: %{kind: "raxol_agent"}}),
-    do: {:ok, Raxol.Symphony.Runners.RaxolAgent}
-
-  defp resolve_from_config(%Config{runner: %{kind: "raxol_agent_session"}}),
-    do: {:ok, Raxol.Symphony.Runners.RaxolAgentSession}
-
-  defp resolve_from_config(%Config{runner: %{kind: "codex"}}),
-    do: {:ok, Raxol.Symphony.Runners.Codex}
-
-  defp resolve_from_config(%Config{runner: %{kind: "noop"}}),
-    do: {:ok, Raxol.Symphony.Runners.Noop}
-
-  defp resolve_from_config(%Config{runner: %{kind: "review"}}),
-    do: {:ok, Raxol.Symphony.Runners.Review}
+  for %{kind: kind, module: module} <- @kinds do
+    defp resolve_from_config(%Config{runner: %{kind: unquote(kind)}}),
+      do: {:ok, unquote(module)}
+  end
 
   defp resolve_from_config(%Config{runner: %{kind: kind}}),
     do: {:error, {:unsupported_runner_kind, kind}}

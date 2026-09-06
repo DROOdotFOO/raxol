@@ -67,21 +67,44 @@ def reader(stdout, inbox: queue.Queue) -> None:
         inbox.put(msg)
 
 
+USAGE = """usage: acp_probe.py <agent command> [args...]
+
+Drives an ACP agent over stdio and records the wire transcript.
+
+  acp_probe.py bin/raxol-acp --backend mock
+  acp_probe.py packages/raxol_cli/burrito_out/raxol_cli_macos acp
+
+Every argument is passed through to the agent verbatim, so the agent's own
+flags (--backend, --model, ...) are written after the command. This script
+takes no options of its own beyond -h/--help.
+
+Writes acp_transcript.json and acp_stderr.log to the current directory.
+Configure with PROBE_CWD and PROBE_PROMPT."""
+
+
 def main() -> int:
     cmd = sys.argv[1:]
-    if not cmd:
-        print("usage: acp_probe.py <agent command> [args...]", file=sys.stderr)
-        return 64
+    # -h is answered here rather than forwarded. Forwarding it spawned "--help"
+    # as if it were the agent and died with a FileNotFoundError naming a flag,
+    # which reads like a probe bug in the agent.
+    if not cmd or cmd[0] in ("-h", "--help"):
+        print(USAGE, file=sys.stderr)
+        return 0 if cmd else 64
 
     stderr_log = open("acp_stderr.log", "w")
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=stderr_log,
-        text=True,
-        bufsize=1,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr_log,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as err:
+        stderr_log.close()
+        print(f"acp_probe.py: cannot spawn {cmd[0]!r}: {err}", file=sys.stderr)
+        return 127
 
     inbox: queue.Queue = queue.Queue()
     threading.Thread(target=reader, args=(proc.stdout, inbox), daemon=True).start()

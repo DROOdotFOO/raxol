@@ -296,11 +296,14 @@ defmodule Raxol.AgentClientProtocol.Client do
   @doc """
   Tolerant `session/update` payload decode: wraps
   `Raxol.AgentClientProtocol.Schema.SessionUpdate.from_json/1`. On success,
-  `{:ok, SessionUpdate.t()}`; on failure (e.g. an unrecognized
-  `sessionUpdate` discriminator -- the oracle's `usage_update` variant is a
-  real example this package doesn't port yet, see `SessionUpdate`'s
-  moduledoc), logs a warning and returns `{:raw, map}` instead of
-  propagating the error. Never raises.
+  `{:ok, SessionUpdate.t()}`; on failure (an unrecognized `sessionUpdate`
+  discriminator, or a variant payload that fails its own required-field
+  decode), logs a warning and returns `{:raw, map}` instead of propagating
+  the error. Never raises. Every variant the pinned v1.19.0 oracle defines
+  is ported, `usage_update` included (`Schema.UsageUpdate`), so an
+  unrecognized discriminator now means a wire value from outside that
+  schema rather than a known gap -- see `SessionUpdate`'s moduledoc for the
+  variant list.
 
   **Not on the live wire-dispatch path.** `Connection`/`Router` decode
   `session/update` centrally, via `SessionNotification.from_json/1`

@@ -3,6 +3,7 @@ defmodule Raxol.Agent.Code.InspectionTest do
   # file through Resolver.diagnostics/0.
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.Backend.Resolver
   alias Raxol.Agent.Code.Inspection
 
   setup do
@@ -29,8 +30,12 @@ defmodule Raxol.Agent.Code.InspectionTest do
     assert snapshot.hooks.status == :none
     assert snapshot.mcp_servers.status == :none
     assert snapshot.sessions == %{dir: ctx.sessions_dir, count: 0, latest: nil}
-    # All 12 registry providers are always reported, available or not.
-    assert length(snapshot.provider.providers) == 12
+    # Every registry provider is always reported, available or not. Asserted
+    # against the registry rather than a literal count, so registering a new
+    # backend cannot fail this test for the wrong reason -- adding `cursor` to
+    # the catalog did exactly that when the count was hard-coded to 12.
+    reported = Enum.map(snapshot.provider.providers, & &1.harness)
+    assert Enum.sort(reported) == Enum.sort(Enum.map(Resolver.providers(), & &1.harness))
   end
 
   test "config files land in the snapshot with their real contents", ctx do
