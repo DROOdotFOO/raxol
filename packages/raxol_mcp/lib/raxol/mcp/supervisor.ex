@@ -26,6 +26,7 @@ defmodule Raxol.MCP.Supervisor do
     server_name = Keyword.get(opts, :server_name, Raxol.MCP.Server)
     authorizer = Keyword.get(opts, :authorizer)
     read_authorizer = Keyword.get(opts, :read_authorizer)
+    authorizer_source = Keyword.get(opts, :authorizer_source, :configured)
 
     children = [
       {Raxol.MCP.Registry, name: registry_name},
@@ -33,7 +34,8 @@ defmodule Raxol.MCP.Supervisor do
        name: server_name,
        registry: registry_name,
        authorizer: authorizer,
-       read_authorizer: read_authorizer}
+       read_authorizer: read_authorizer,
+       authorizer_source: authorizer_source}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

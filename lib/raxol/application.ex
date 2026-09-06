@@ -284,15 +284,25 @@ defmodule Raxol.Application do
     end
   end
 
-  # Listing methods only. They disclose the names the server already advertises;
-  # `resources/read` and the subscribe pair stream live model state and so are
-  # absent on purpose.
+  # Listing methods, and only listing methods. These return the names the server
+  # already advertises to anyone it talks to, so serving them discloses nothing
+  # the advertisement did not.
+  #
+  # The rest of the read surface (`server.ex` gates eight methods) is absent on
+  # purpose, and each for its own reason rather than by falling off a list:
+  # `resources/read` and the subscribe pair stream live model state;
+  # `prompts/get` returns prompt CONTENT, not names; and `completion/complete`
+  # exists to enumerate valid argument values, which is an enumeration primitive
+  # rather than a disclosure of what is already public.
+  #
+  # This is therefore a denylist by omission of a vocabulary raxol_mcp owns: a
+  # read method added there is denied here until it is named. That is the safe
+  # direction, and `mcp_read_methods_known/0` in the test suite fails when the
+  # two drift so the omission stays deliberate.
   @default_production_read_methods [
     "tools/list",
     "resources/list",
-    "prompts/list",
-    "prompts/get",
-    "completion/complete"
+    "prompts/list"
   ]
 
   # Empty opts meant `authorizer: nil`, and a nil authorizer is ALLOW -- see
@@ -313,9 +323,35 @@ defmodule Raxol.Application do
        [
          authorizer: resolve_mcp_authorizer(:mcp_authorizer, production?),
          read_authorizer:
-           resolve_mcp_authorizer(:mcp_read_authorizer, production?)
+           resolve_mcp_authorizer(:mcp_read_authorizer, production?),
+         authorizer_source: mcp_authorizer_source()
        ]}
     end
+  end
+
+  # Whether the tool authorizer above is an operator's choice or our fallback.
+  # `Raxol.MCP.Server.authorization_configured?/1` reports this, and the SSE boot
+  # gate refuses to expose tools over the network unless it is `:configured`.
+  #
+  # The production fallback is a deny-everything allowlist, which is restrictive
+  # enough to LOOK like a decision. Reporting it as one would let a network
+  # transport boot because raxol picked a default, which is precisely the
+  # accident the gate exists to prevent: SSE previously refused outright here,
+  # and it must keep refusing until somebody says otherwise on purpose.
+  #
+  # Naming either key counts, including `mcp_allowed_tools: []`. An operator who
+  # writes the empty list has decided to expose a transport that serves nothing,
+  # which is a coherent thing to want and is theirs to choose.
+  @doc false
+  @spec mcp_authorizer_source() :: :configured | :default
+  def mcp_authorizer_source do
+    configured? =
+      Enum.any?(
+        [:mcp_authorizer, :mcp_allowed_tools],
+        &(Application.get_env(:raxol, &1) != nil)
+      )
+
+    if configured?, do: :configured, else: :default
   end
 
   @doc false
@@ -378,18 +414,15 @@ defmodule Raxol.Application do
     )
   end
 
-  # The HOST application's environment, deliberately NOT
-  # `Raxol.MCP.Deployment.production?/0`. That one is captured at raxol_mcp's
-  # COMPILE time, and as its own moduledoc says, a path dependency compiles under
-  # :prod regardless of the umbrella's env -- so it reads `true` inside a dev
-  # session. Selecting the default from it handed dev the production allowlist
-  # and denied every tool in `mix mcp.server` and Tidewave, which is the exact
-  # opposite of what the dev default is for.
+  # One predicate, not two. `Raxol.MCP.Deployment.production?/0` used to capture
+  # `Mix.env()` at raxol_mcp's compile time, which reads `:prod` for a path
+  # dependency whatever the umbrella's env is, so it answered `true` inside a dev
+  # session. That is why this once had its own copy. It now reads the same value
+  # at runtime, so the copy would only be a second thing to keep in step.
   #
-  # `mix_env/0` is read at runtime and answers for this application: `:dev` in a
-  # dev session, and `:prod` in a release, where Mix is absent entirely. It is
-  # already what decides whether the dev endpoint starts at all.
-  defp mcp_production?, do: mix_env() not in [:dev, :test]
+  # Reached only from `maybe_add_mcp_supervisor/0`, which has already established
+  # that raxol_mcp is loaded.
+  defp mcp_production?, do: Raxol.MCP.Deployment.production?()
 
   defp maybe_add_performance_monitoring do
     if feature_enabled?(:performance_monitoring) do
