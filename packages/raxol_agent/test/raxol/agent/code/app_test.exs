@@ -1399,6 +1399,54 @@ defmodule Raxol.Agent.Code.AppTest do
       {model, []} = submit(model, "/usage")
       assert model.notice =~ "RAXOL_COST_PER_MTOK"
     end
+
+    test "/usage shows a provider-reported cost the table could never see" do
+      # The ledger prices this turn at the reported figure; /usage used to
+      # price the token total through the flat table and print 'unknown
+      # model' for the same money.
+      model = new_model()
+
+      model =
+        send_ev(
+          model,
+          tev("t1", 1, :turn_completed, %{
+            final: true,
+            model: "mystery-model-9",
+            usage: %{
+              input_tokens: 10,
+              output_tokens: 10,
+              cost: %{amount: 0.37, currency: "USD"}
+            }
+          })
+        )
+
+      {model, []} = submit(model, "/usage")
+      assert model.notice =~ "est. cost: $0.3700"
+      refute model.notice =~ "RAXOL_COST_PER_MTOK"
+    end
+
+    test "/usage prices each turn as billed and counts the ones it could not" do
+      model = connected_model()
+
+      events = [
+        tev("t1", 1, :turn_completed, %{
+          final: true,
+          usage: %{input_tokens: 1_000_000, output_tokens: 0}
+        }),
+        tev("t2", 2, :turn_completed, %{
+          final: true,
+          model: "mystery-model-9",
+          usage: %{input_tokens: 1_000_000, output_tokens: 0}
+        })
+      ]
+
+      model = Enum.reduce(events, model, &send_ev(&2, &1))
+      {model, []} = submit(model, "/usage")
+
+      # Turn 1 is gpt-4o at $2.50/M; turn 2 billed a model no table knows and
+      # is reported as such rather than silently priced at the last model.
+      assert model.notice =~ "est. cost: $2.5000 (1 of 2 turns unpriced"
+    end
   end
 
   describe "/export /transcript /copy /find /logout" do

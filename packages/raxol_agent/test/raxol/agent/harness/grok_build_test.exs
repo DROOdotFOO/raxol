@@ -73,12 +73,12 @@ defmodule Raxol.Agent.Harness.GrokBuildTest do
       refute Map.has_key?(usage, "cost")
     end
 
-    test "a stamped total_cost_usd rides on usage as :cost for the spend plumbing" do
+    test "a stamped total_cost_usd rides on usage as a USD cost for the spend plumbing" do
       line =
         ~s({"type":"end","stopReason":"end_turn","usage":{"input_tokens":1},"total_cost_usd":0.0127})
 
       assert [{:done, %{usage: usage}}] = GrokBuild.parse_line(line)
-      assert usage["cost"] == 0.0127
+      assert usage["cost"] == %{"amount" => 0.0127, "currency" => "USD"}
     end
 
     test "error surfaces its message" do

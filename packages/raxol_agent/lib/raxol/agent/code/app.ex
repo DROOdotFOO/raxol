@@ -1046,6 +1046,7 @@ defmodule Raxol.Agent.Code.App do
   defp meter_usage(model, usage, billed, kind, turn_id) do
     {cost, source} = turn_cost(model, usage, billed)
     tokens = token_counts(usage)
+    billed? = billed?(tokens, usage)
 
     Raxol.Agent.Code.CostLedger.record(
       model.ledger,
@@ -1060,10 +1061,10 @@ defmodule Raxol.Agent.Code.App do
     )
 
     turn = %{kind: kind, turn_id: turn_id, model: billed, source: source}
-    emit_cost(model, tokens, cost, turn)
+    emit_cost(model, tokens, billed?, cost, turn)
 
     model
-    |> flag_unpriced(tokens, billed, cost)
+    |> flag_unpriced(billed?, billed, cost)
     |> enforce_budget(turn)
   end
 
@@ -1076,11 +1077,11 @@ defmodule Raxol.Agent.Code.App do
   # price (a local backend reporting `usage: %{}`) says nothing and emits
   # nothing. Identifiers are correlation attributes, not metric labels: only
   # `backend`, `source` and `kind` are bounded.
-  defp emit_cost(model, tokens, cost, turn) do
+  defp emit_cost(model, tokens, billed?, cost, turn) do
     metadata = cost_metadata(model, turn)
 
     cond do
-      cost == 0.0 and billed?(tokens) ->
+      cost == 0.0 and billed? ->
         :telemetry.execute(
           [:raxol, :agent, :cost, :unpriced],
           tokens,
@@ -1128,13 +1129,13 @@ defmodule Raxol.Agent.Code.App do
   # -- so this halts the NEXT one rather than pretending to prevent the first.
   # With no ledger AND policy wired nothing changes: local single-user sessions
   # keep today's best-effort estimate.
-  defp flag_unpriced(%{ledger: nil} = model, _tokens, _billed, _cost), do: model
+  defp flag_unpriced(%{ledger: nil} = model, _billed?, _billed, _cost), do: model
 
-  defp flag_unpriced(%{spending_policy: nil} = model, _tokens, _billed, _cost),
+  defp flag_unpriced(%{spending_policy: nil} = model, _billed?, _billed, _cost),
     do: model
 
-  defp flag_unpriced(model, tokens, billed, cost) do
-    if cost == 0.0 and billed?(tokens) do
+  defp flag_unpriced(model, billed?, billed, cost) do
+    if cost == 0.0 and billed? do
       %{model | unpriced_model: billed || "(unnamed)"}
     else
       model
@@ -1148,7 +1149,17 @@ defmodule Raxol.Agent.Code.App do
     )
   end
 
-  defp billed?(tokens), do: tokens.input_tokens > 0 or tokens.output_tokens > 0
+  # Did this call cost money? Tokens are the usual evidence. An ACP peer may
+  # report none and still say it did: `AcpStreamAdapter` carries the peer's
+  # cumulative as `session_cost` on every turn the peer priced, and drops the
+  # per-turn `cost` when the cumulative went down or changed currency. A turn
+  # with no tokens, no usable cost, and a `session_cost` is therefore not a
+  # free turn but an unpriceable one, and the gate must see it as such rather
+  # than price it at $0.00 through the table.
+  defp billed?(tokens, usage) do
+    tokens.input_tokens > 0 or tokens.output_tokens > 0 or
+      Map.has_key?(usage, :session_cost) or Map.has_key?(usage, "session_cost")
+  end
 
   # The gate at submit refuses the NEXT prompt; this one stops the turn already
   # running, which can otherwise make up to max_iterations more provider calls
@@ -1234,12 +1245,6 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  # Env rates (RAXOL_COST_PER_MTOK_IN/OUT) win; else the static price
-  # table for the connected model. nil = no estimate possible.
-  defp cost_profile(model, billed) do
-    env_profile() || table_profile(model, billed)
-  end
-
   defp env_profile do
     case Raxol.Agent.BenchmarkProfile.from_env() do
       {:ok, %{cost_per_mtok_in: rin, cost_per_mtok_out: rout} = profile}
@@ -1247,21 +1252,6 @@ defmodule Raxol.Agent.Code.App do
         profile
 
       _ ->
-        nil
-    end
-  end
-
-  defp table_profile(model, billed) do
-    backend = model.executor && model.executor.backend
-
-    case Raxol.Agent.LlmPrices.rates(backend, billed) do
-      {:ok, {rin, rout}} ->
-        %Raxol.Agent.BenchmarkProfile{
-          cost_per_mtok_in: rin,
-          cost_per_mtok_out: rout
-        }
-
-      :unknown ->
         nil
     end
   end
@@ -3041,7 +3031,7 @@ defmodule Raxol.Agent.Code.App do
   end
 
   defp context_text(model) do
-    {_turns, usage, _billed} = fold_usage(model.events)
+    {_turns, usage} = fold_usage(model.events)
 
     "messages: #{length(model.messages)} · events: #{length(model.events)} · " <>
       "tokens: #{usage.input_tokens} in / #{usage.output_tokens} out · " <>
@@ -3051,23 +3041,28 @@ defmodule Raxol.Agent.Code.App do
 
   # Session token totals folded from the turn_completed events the model
   # already holds (the same events the transcript rebuilds from), so /usage
-  # works on a resumed session too. Cost estimates from env rates or the
-  # static price table; a wired Payments ledger adds the shared-budget
-  # totals (LLM + payment spend together).
+  # works on a resumed session too. The cost is the sum of each turn priced
+  # exactly as the ledger priced it; a wired Payments ledger adds the
+  # shared-budget totals (LLM + payment spend together).
   defp usage_text(model) do
-    {turns, usage, billed} = fold_usage(model.events)
+    {turns, usage} = fold_usage(model.events)
+    {cost, unpriced} = session_cost(model, model.events)
 
     base =
       "turns: #{turns} · input tokens: #{usage.input_tokens} · " <>
         "output tokens: #{usage.output_tokens}"
 
     cost_part =
-      case session_cost(model, usage, billed) do
-        nil ->
+      cond do
+        unpriced > 0 and unpriced == turns ->
           " · cost: unknown model — set RAXOL_COST_PER_MTOK_IN/OUT"
 
-        cost ->
-          " · est. cost: $#{:erlang.float_to_binary(cost, decimals: 4)}"
+        unpriced > 0 ->
+          " · est. cost: $#{format_usd(cost)} (#{unpriced} of #{turns} turns " <>
+            "unpriced — set RAXOL_COST_PER_MTOK_IN/OUT)"
+
+        true ->
+          " · est. cost: $#{format_usd(cost)}"
       end
 
     ledger_part =
@@ -3083,26 +3078,38 @@ defmodule Raxol.Agent.Code.App do
     base <> cost_part <> ledger_part
   end
 
-  # Also carries the last model the provider billed, so the summary prices the
-  # same way a turn did rather than falling back to the configured name.
-  defp fold_usage(events) do
-    Enum.reduce(events, {0, %{input_tokens: 0, output_tokens: 0}, nil}, fn
-      %{type: :turn_completed, payload: payload}, {turns, acc, billed} ->
-        usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
-        model = Map.get(payload, :model) || Map.get(payload, "model") || billed
+  defp format_usd(cost), do: :erlang.float_to_binary(cost, decimals: 4)
 
-        {turns + 1, Raxol.Agent.BenchmarkProfile.add_usage(acc, usage), model}
+  defp fold_usage(events) do
+    Enum.reduce(events, {0, %{input_tokens: 0, output_tokens: 0}}, fn
+      %{type: :turn_completed, payload: payload}, {turns, acc} ->
+        usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
+        {turns + 1, Raxol.Agent.BenchmarkProfile.add_usage(acc, usage)}
 
       _event, acc ->
         acc
     end)
   end
 
-  defp session_cost(model, usage, billed) do
-    case cost_profile(model, billed || current_model(model)) do
-      nil -> nil
-      profile -> Raxol.Agent.BenchmarkProfile.cost_usd(profile, usage)
-    end
+  # Each turn priced the way `meter_usage/5` priced it: the same resolver,
+  # on that turn's raw usage map, with the model that turn billed. Summing
+  # the tokens and pricing the total once through the flat table -- what this
+  # did before -- could not see a provider-reported cost or a cache split,
+  # so the panel and the ledger disagreed on the same money by the factor
+  # those two carry. Turns nothing could price are counted, not hidden.
+  defp session_cost(model, events) do
+    Enum.reduce(events, {0.0, 0}, fn
+      %{type: :turn_completed, payload: payload}, {sum, unpriced} ->
+        usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
+
+        case turn_cost(model, usage, billed_model(model, payload)) do
+          {_zero, :unknown} -> {sum, unpriced + 1}
+          {cost, _source} -> {sum + cost, unpriced}
+        end
+
+      _event, acc ->
+        acc
+    end)
   end
 
   defp session_line(session) do

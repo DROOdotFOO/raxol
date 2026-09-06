@@ -18,6 +18,8 @@ defmodule Raxol.Agent.LlmPrices do
   direct vendor's rate.
   """
 
+  import Raxol.Agent.BenchmarkProfile, only: [is_count: 1]
+
   # {prefix, usd_per_mtok_in, usd_per_mtok_out} — longest prefix wins.
   # Family rows sit under their exceptions: Opus dropped to 5/25 with
   # 4.5, and the gpt-5 variants price very differently from the base —
@@ -165,21 +167,26 @@ defmodule Raxol.Agent.LlmPrices do
     end
   end
 
-  # A cost the counterparty reported for THIS turn: `Harness.GrokBuild` stamps
-  # it from `total_cost_usd` (grok_build.ex:98-107) and an ACP peer sends it
-  # as %{amount, currency}. Preferred over any table because whoever billed
+  # A cost the counterparty reported for THIS turn, always `%{amount,
+  # currency}`: `Harness.GrokBuild` stamps it from the CLI's `total_cost_usd`
+  # with the currency the field name asserts, and an ACP peer sends it in
+  # that shape on the wire. Preferred over any table because whoever billed
   # the turn knows its price -- but it is a claim, not an invoice, so currency
   # is never coerced: anything other than USD falls through to the table
   # instead of being converted, since a silently-converted figure in a spend
-  # gate is the failure this whole path exists to prevent (ADR-0035).
+  # gate is the failure this whole path exists to prevent (ADR-0035). A bare
+  # number is not read for the same reason: a figure with no currency is a
+  # unit bug waiting to under-bill (cents, or per-thousand) with nothing on
+  # the wire to catch it.
   #
   # A non-positive amount is indistinguishable from no claim and treated as
-  # one. `:session_cost`, the cumulative figure an ACP peer reports alongside
-  # the per-turn delta, is display-only and deliberately never read here:
-  # summing it with :cost would double-count the whole session every turn.
+  # one, and so is an integer past `BenchmarkProfile.max_count/0`, which a
+  # float cannot carry. `:session_cost`, the cumulative figure an ACP peer
+  # reports alongside the per-turn delta, is display-only and deliberately
+  # never read here: summing it with :cost would double-count the whole
+  # session every turn.
   defp reported_cost_usd(usage) do
     case Map.get(usage, :cost) || Map.get(usage, "cost") do
-      amount when is_number(amount) and amount > 0 -> {:ok, amount / 1}
       %{} = cost -> usd_amount(cost)
       _ -> :unknown
     end
@@ -189,12 +196,15 @@ defmodule Raxol.Agent.LlmPrices do
     amount = Map.get(cost, :amount) || Map.get(cost, "amount")
     currency = Map.get(cost, :currency) || Map.get(cost, "currency")
 
-    if currency == "USD" and is_number(amount) and amount > 0 do
+    if currency == "USD" and amount?(amount) and amount > 0 do
       {:ok, amount / 1}
     else
       :unknown
     end
   end
+
+  defp amount?(amount) when is_float(amount), do: true
+  defp amount?(amount), do: is_count(amount)
 
   defp table_cost(backend, model, usage, now) do
     case scoped_row(backend, model) do
@@ -209,8 +219,14 @@ defmodule Raxol.Agent.LlmPrices do
     end
   end
 
-  # The flat table carries neither dimension, so a hit costs what a miss
-  # costs and the clock is irrelevant. Every existing caller keeps its number.
+  # The flat table carries neither dimension, so the clock is irrelevant and
+  # a cache hit costs what a miss costs. That last part is a change for a
+  # provider that reports cache reads BESIDE its input count (Anthropic's
+  # `cache_read_input_tokens`): `rates/2` callers never billed those tokens
+  # at all, and this path bills them at the input rate, which is above the
+  # real cache-read rate. Upward, on purpose: a spend gate that guesses
+  # errs toward the cap (ADR-0035), and `/usage` prices through this same
+  # function so the figure it shows is the figure the ledger charged.
   defp flat_cost(backend, model, usage) do
     case rates(backend, model) do
       {:ok, {rin, rout}} -> {:ok, price(split_tokens(usage), {rin, rin, rout}), :flat_table}
@@ -314,7 +330,7 @@ defmodule Raxol.Agent.LlmPrices do
 
   defp token_count(usage, key) do
     case Map.get(usage, key) || Map.get(usage, alt_key(key)) do
-      n when is_integer(n) and n >= 0 -> n
+      n when is_count(n) -> n
       _ -> nil
     end
   end

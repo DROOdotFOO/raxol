@@ -275,12 +275,32 @@ defmodule Raxol.Agent.LlmPricesTurnCostTest do
                )
     end
 
-    test "a bare USD number is read too" do
-      # Harness.GrokBuild stamps usage["cost"] from total_cost_usd.
-      usage = %{"cost" => 0.42, "prompt_tokens" => 10, "completion_tokens" => 2}
+    test "GrokBuild's stamped shape carries its currency" do
+      # Harness.GrokBuild stamps usage["cost"] from total_cost_usd as
+      # %{amount, currency}: the field name asserts USD, and the harness
+      # makes that explicit where the name is known.
+      usage = %{
+        "cost" => %{"amount" => 0.42, "currency" => "USD"},
+        "prompt_tokens" => 10,
+        "completion_tokens" => 2
+      }
 
       assert {:ok, 0.42} =
                LlmPrices.turn_cost_usd(:xai, "grok-4", usage, wed(12))
+    end
+
+    test "a bare number is not a cost: a figure with no currency is a unit bug waiting" do
+      usage = %{"cost" => 0.42, "prompt_tokens" => 10, "completion_tokens" => 2}
+      assert :unknown = LlmPrices.turn_cost_usd(:xai, "grok-4", usage, wed(12))
+    end
+
+    test "an amount a float cannot carry reads as no claim" do
+      usage = Map.put(coding_turn(), :cost, %{amount: Integer.pow(10, 400), currency: "USD"})
+
+      assert {:ok, cost} =
+               LlmPrices.turn_cost_usd(:deepseek, "deepseek-v4-flash", usage, wed(12))
+
+      assert_in_delta cost, 0.002335, 1.0e-9
     end
 
     test "a non-USD cost is never coerced" do
@@ -411,6 +431,35 @@ defmodule Raxol.Agent.LlmPricesTurnCostTest do
                LlmPrices.turn_cost_usd(:openai, "gpt-4o", usage, wed(12))
 
       assert_in_delta cost, 3.5, 1.0e-9
+    end
+
+    # A provider's JSON can spell any integer; Jason decodes a 400-digit
+    # literal into a bignum that `/ 1_000_000` raises on. Past the largest
+    # exactly-representable float the figure is garbage and reads as absent.
+    test "a token count a float cannot carry reads as absent, never a crash" do
+      huge = Integer.pow(10, 400)
+
+      assert {:ok, cost} =
+               LlmPrices.turn_cost_usd(
+                 :openai,
+                 "gpt-4o",
+                 %{input_tokens: huge, output_tokens: 100_000},
+                 wed(12)
+               )
+
+      # Only the 100k output tokens at $10/M survive.
+      assert_in_delta cost, 1.0, 1.0e-9
+
+      assert {:ok, cost} =
+               LlmPrices.turn_cost_usd(
+                 :deepseek,
+                 "deepseek-v4-flash",
+                 %{prompt_cache_hit_tokens: huge, prompt_cache_miss_tokens: 1_000_000},
+                 wed(12)
+               )
+
+      # The hit count is absent, the miss count still prices (off-peak miss).
+      assert_in_delta cost, 0.22, 1.0e-9
     end
 
     test "an unknown model and a non-map usage both fail closed" do
