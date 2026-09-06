@@ -39,20 +39,27 @@ defmodule Raxol.Agent.SandboxHook do
   denial's reason names what was refused, and for a shell command that is the
   command line -- a tool argument, the thing a model is most likely to have
   embedded a secret in, and the one class of value the metadata contract
-  forbids (ADR-0036). The emitted reason keeps the shape and the program:
-  `{:shell_denied, mode, command}` becomes `{:shell_denied, mode, program}`
+  forbids (ADR-0036). The emitted reason keeps the shape and, for a simple
+  command (`Raxol.Agent.Sandbox.Shell.simple_command?/1`), the program:
+  `{:shell_denied, mode, "rm -rf x"}` becomes `{:shell_denied, mode, "rm"}`
   with a `command_digest` beside it, so an audit line still says `rm` was
   refused and a known command can be matched, while the arguments never leave
-  the process. A malformed-payload denial carries the whole tool payload and
-  is reduced to its tag. Everything else is passed through
-  `Raxol.Agent.Telemetry.bound/1`. The caller's `{:deny, reason}` is untouched:
-  the operator-facing message is not telemetry.
+  the process. A command the shell would interpret first -- an env-assignment
+  prefix, a pipeline, a substitution -- has no honest first token (`FOO=secret
+  cmd` starts with the secret), so it is emitted as `{:shell_denied, mode,
+  :non_simple}`. The `mode` is passed through `Raxol.Agent.Telemetry.bound/1`,
+  so a predicate becomes `{:redacted, :function}`. A malformed-payload denial
+  carries the whole tool payload and is reduced to its tag. Everything else is
+  passed through `bound/1`. The caller's `{:deny, reason}` is untouched: the
+  operator-facing message is not telemetry.
   """
 
   @behaviour Raxol.Agent.CommandHook
 
   alias Raxol.Agent.Directive.{Async, SendAgent, Shell}
   alias Raxol.Agent.Sandbox.Chain
+  alias Raxol.Agent.Sandbox.Shell, as: ShellSandbox
+  alias Raxol.Agent.Telemetry
 
   @impl true
   def pre_execute(%Shell{command: command, opts: opts}, context) do
@@ -127,8 +134,8 @@ defmodule Raxol.Agent.SandboxHook do
 
   defp telemetry_reason({:shell_denied, mode, command}) when is_binary(command) do
     %{
-      reason: {:shell_denied, mode, program(command)},
-      command_digest: Raxol.Agent.Telemetry.digest(command)
+      reason: {:shell_denied, Telemetry.bound(mode), program(command)},
+      command_digest: Telemetry.digest(command)
     }
   end
 
@@ -136,18 +143,25 @@ defmodule Raxol.Agent.SandboxHook do
        when tag in [:shell_malformed_payload, :send_agent_malformed_payload],
        do: %{reason: tag}
 
-  defp telemetry_reason(reason), do: %{reason: Raxol.Agent.Telemetry.bound(reason)}
+  defp telemetry_reason(reason), do: %{reason: Telemetry.bound(reason)}
 
-  # The first whitespace-delimited token, which is the program for the common
-  # shapes (`rm -rf x`, `git push`); an env-assignment or sudo prefix makes
-  # this the prefix instead, which is still an honest, bounded name of what
-  # was attempted. Capped at the identifier size so a pathological token
-  # cannot ride through as "the program".
+  # The first token names the program only when the command is simple in
+  # `Raxol.Agent.Sandbox.Shell.simple_command?/1`'s sense. Otherwise it is an
+  # arbitrary word the shell would interpret first, and the commonest such word
+  # is an env assignment -- `PGPASSWORD=hunter2 psql` -- which is precisely the
+  # shape a credential rides in, on precisely the commands a list mode always
+  # denies. Those emit a shape tag; the digest still lets a known command be
+  # matched. A simple command's first token is what `sh` would exec, so it is
+  # a program path, but one carrying `=` is refused too rather than reasoned
+  # about (`./deploy?token=...`). `bound/1` caps the name by bytes, the unit
+  # `identifier?/1` measures in, and redacts rather than splits a long one.
   defp program(command) do
-    command
-    |> String.trim_leading()
-    |> String.split(~r/\s/, parts: 2)
-    |> hd()
-    |> String.slice(0, Raxol.Agent.Telemetry.max_identifier_bytes())
+    name = ShellSandbox.binary_name(command)
+
+    if ShellSandbox.simple_command?(command) and not String.contains?(name, "=") do
+      Telemetry.bound(name)
+    else
+      :non_simple
+    end
   end
 end

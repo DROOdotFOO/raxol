@@ -194,9 +194,15 @@ The same pass raised five more against the fix and the tier-1 prototype, all add
   full command line into the `:sandbox_deny` audit entry, and the two `*_malformed_payload`
   reasons carried the whole tool payload. `SandboxHook` now emits `{:shell_denied, mode,
   program}` with a `command_digest` beside it, reduces malformed-payload reasons to their tag,
-  and bounds everything else; the caller's `{:deny, reason}` is untouched. This is the explicit
-  decision the review asked for: an audit line says `rm` was refused and a known command can be
-  matched by digest; the arguments, where a model embeds a secret, never leave the process.
+  bounds `mode` (a predicate becomes `{:redacted, :function}`) and everything else; the
+  caller's `{:deny, reason}` is untouched. `program` is the first token only when the command is
+  simple (`Sandbox.Shell.simple_command?/1`); otherwise it is the tag `:non_simple`. The
+  adversarial pass on the first cut found why: list modes deny every assignment-prefixed
+  command, and `PGPASSWORD=hunter2 psql` has the secret as its first token, so "emit the
+  program" was "emit the credential" on exactly the commands guaranteed to reach this emit.
+  This is the explicit decision the review asked for: an audit line says `rm` was refused and
+  a known command can be matched by digest; the arguments, where a model embeds a secret,
+  never leave the process.
 - **A sub-agent round emitted `turn_id: nil`.** It runs inside its parent's turn, and the ADR's
   own recommended query (sum cost by `turn_id`) would have dropped its spend. It now inherits
   the running turn's id from the model's last folded event, which is sound because
@@ -443,7 +449,7 @@ the tier), **unchanged**.
 | `[:raxol, :agent, :policy, :retry_attempt]` | `%{}` | `policy_kind`, `attempt`, `reason` (bounded), `backoff_ms`, `params_digest`, + caller `metadata:` | operational | **changed in this change** (`reason` bounded); tier 5 |
 | `[:raxol, :agent, :policy, :retry_exhausted]` | `%{}` | `policy_kind`, `attempt`, `reason` (bounded), `params_digest`, + caller `metadata:` | operational | **changed in this change** (`reason` bounded); tier 5 |
 | `[:raxol, :agent, :policy, :timeout]` | `%{}` | `policy_kind`, `wall_ms` | operational | **changed**, tier 4b: `wall_ms` becomes a measurement (breaking); tier 5 |
-| `[:raxol, :agent, :sandbox, :denied]` | `%{}` | `action`, `reason` (shell: `{:shell_denied, mode, program}`; malformed payloads: the tag), `command_digest` | operational | **changed in this change**: the command line and malformed payloads no longer leave the process; tier 4b adds core |
+| `[:raxol, :agent, :sandbox, :denied]` | `%{}` | `action`, `reason` (shell: `{:shell_denied, mode, program}` with `program` the first token of a simple command or `:non_simple`; malformed payloads: the tag), `command_digest` | operational | **changed in this change**: the command line and malformed payloads no longer leave the process; tier 4b adds core |
 | `[:raxol, :agent, :session, :register_timeout]` | `%{count: 1}` | `key`, holder detail | operational | unchanged |
 | `[:raxol, :agent, :snapshot, :persist_redacted_by_heuristic]` | `%{count: 1}` | `path` | operational | unchanged |
 | `[:raxol, :agent, :tool_call_hook, :exit]` | `%{}` | `hook`, `reason` | operational | unchanged; tier 4b adds core |
