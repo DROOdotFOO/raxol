@@ -128,11 +128,14 @@ defmodule RaxolTelegram.MixProject do
     ]
   end
 
+  # Package-scoped tag, not `v#{@version}`: the bare `vX.Y.Z` tags belong to
+  # the root `raxol` version line, and `v0.2.0` there is raxol from 2025. A
+  # bare tag would point every source link in these docs at unrelated code.
   defp docs do
     [
       main: "readme",
       source_url: @source_url,
-      source_ref: "v#{@version}",
+      source_ref: "raxol_telegram-v#{@version}",
       extras: ["README.md"]
     ]
   end

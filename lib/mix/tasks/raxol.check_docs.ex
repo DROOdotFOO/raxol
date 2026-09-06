@@ -4,9 +4,11 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
 
   Two independent checks:
 
-    * **Counts.** Playground demo and category counts quoted in prose are
-      compared against `Raxol.Playground.Catalog`, so a doc cannot claim a
-      number the catalog does not produce.
+    * **Counts.** Demo and category counts quoted in prose are compared
+      against `Raxol.Playground.Catalog`, and widget counts against
+      `Raxol.UI.Registry`, so a doc cannot claim a number neither produces.
+      The two sources are kept apart: a demo is a runnable example, a widget
+      is a declaration type, and the counts are not the same number.
     * **Prose.** Every tracked `.md` is linted by `Raxol.Docs.ProseLint`:
       unicode punctuation, ` -- ` as an em-dash substitute, broken relative
       links and anchors. Title Case headings are opt-in via `--headings`.
@@ -128,8 +130,8 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
 
     case only do
       "prose" -> "Docs OK: prose clean across #{scope}#{warn}"
-      "counts" -> "Docs OK: catalog counts match"
-      _ -> "Docs OK: catalog counts match, prose clean across #{scope}#{warn}"
+      "counts" -> "Docs OK: catalog and registry counts match"
+      _ -> "Docs OK: counts match, prose clean across #{scope}#{warn}"
     end
   end
 
@@ -141,7 +143,7 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
     demos = length(Raxol.Playground.Catalog.list_components())
     categories = length(Raxol.Playground.Catalog.list_categories())
 
-    check_claude_md(demos, categories) ++ check_stale_counts(demos, categories)
+    check_claude_md(demos, categories) ++ stale_counts(count_sources())
   end
 
   defp check_claude_md(demos, categories) do
@@ -158,28 +160,75 @@ defmodule Mix.Tasks.Raxol.CheckDocs do
     end
   end
 
-  # Any "<n> demos" / "<n> categories" claim that disagrees with the catalog.
-  # Derived from the catalog rather than a hand-maintained list of stale
-  # numbers, so it does not need editing when the catalog changes.
+  # Every prose claim that quotes a number the code produces, paired with the
+  # module that produces it. Derived rather than a hand-maintained list of
+  # stale numbers, so it needs no editing when the catalog or the registry
+  # changes.
   #
-  # "widgets" is deliberately not a synonym for "demos": the MCP docs count
-  # Component types that implement `ToolProvider`, which is a different number.
-  defp check_stale_counts(demos, categories) do
-    patterns = [
-      {~r/\b(\d+) (?:interactive |live )?demos\b/i, demos, "demos"},
-      {~r/\b(\d+) categories\b/i, categories, "categories"}
-    ]
+  # Widgets and demos are two different populations, and gating both against
+  # one number would force a doc to be wrong to keep this check green:
+  # `Raxol.UI.Registry` lists declaration types the layout engine dispatches
+  # on, `Raxol.Playground.Catalog` lists runnable examples. Several demos
+  # hand-roll their subject with the View DSL and several registered types
+  # have no demo, so neither count bounds the other.
+  #
+  # The widget rows exist because "23 widgets" shipped in prose while the
+  # registry held no such number: nothing derived the claim, so nothing could
+  # contradict it.
+  @doc false
+  @spec count_sources() :: [
+          {Regex.t(), non_neg_integer(), String.t(), String.t()}
+        ]
+  def count_sources do
+    demos = length(Raxol.Playground.Catalog.list_components())
+    categories = length(Raxol.Playground.Catalog.list_categories())
+    widgets = length(Raxol.UI.Registry.list())
+    tool_providers = length(Raxol.UI.Registry.mcp_types())
 
-    for path <- tracked_markdown(),
-        not String.contains?(path, "node_modules/"),
-        # CHANGELOGs quote the count that was true for that release.
-        not String.ends_with?(path, "CHANGELOG.md"),
-        {:ok, content} <- [File.read(path)],
+    [
+      {~r/\b(\d+) (?:interactive |live |widget )?demos\b/i, demos, "demos",
+       "Raxol.Playground.Catalog"},
+      {~r/\b(\d+) categories\b/i, categories, "categories",
+       "Raxol.Playground.Catalog"},
+      {~r/\b(\d+) (?:first-class |core |registered )?widgets\b/i, widgets,
+       "widgets", "Raxol.UI.Registry"},
+      {~r/\b(\d+) (?:first-class |core |registered )?widget types\b/i, widgets,
+       "widget types", "Raxol.UI.Registry"},
+      {~r/\b(\d+) [Cc]omponent modules implement\b/, tool_providers,
+       "ToolProvider implementations", "Raxol.UI.Registry.mcp_types/0"}
+    ]
+  end
+
+  defp stale_counts(patterns) do
+    tracked_markdown()
+    |> Enum.reject(&skipped_for_counts?/1)
+    |> Enum.flat_map(fn path ->
+      case File.read(path) do
+        {:ok, content} -> [{path, content}]
+        {:error, _} -> []
+      end
+    end)
+    |> scan_counts(patterns)
+  end
+
+  defp skipped_for_counts?(path) do
+    # CHANGELOGs quote the count that was true for that release.
+    String.contains?(path, "node_modules/") or
+      String.ends_with?(path, "CHANGELOG.md")
+  end
+
+  @doc false
+  @spec scan_counts(
+          [{String.t(), String.t()}],
+          [{Regex.t(), non_neg_integer(), String.t(), String.t()}]
+        ) :: [String.t()]
+  def scan_counts(files, patterns) do
+    for {path, content} <- files,
         {line, num} <- Enum.with_index(String.split(content, "\n"), 1),
-        {regex, expected, label} <- patterns,
+        {regex, expected, label, source} <- patterns,
         [_, found] <- [Regex.run(regex, line)],
         String.to_integer(found) != expected do
-      "#{path}:#{num}: says #{found} #{label}, catalog has #{expected}: #{String.trim(line)}"
+      "#{path}:#{num}: says #{found} #{label}, #{source} has #{expected}: #{String.trim(line)}"
     end
   end
 end

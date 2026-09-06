@@ -89,22 +89,29 @@ defmodule RaxolGateway.MixProject do
   defp package do
     [
       name: "raxol_gateway",
-      files: ~w(lib .formatter.exs mix.exs README.md),
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Docs" => "https://hexdocs.pm/raxol_gateway"
+        "Docs" => "https://hexdocs.pm/raxol_gateway",
+        "Changelog" =>
+          "https://github.com/DROOdotFOO/raxol/blob/master/packages/raxol_gateway/CHANGELOG.md",
+        "Website" => "https://raxol.io"
       },
       maintainers: ["Raxol Team"]
     ]
   end
 
+  # Package-scoped tag, not `v#{@version}`: this is a monorepo and the bare
+  # `vX.Y.Z` tags belong to the root `raxol` version line, where v0.1.0 is
+  # raxol from 2025. A bare tag would point every source link in these docs at
+  # unrelated code.
   defp docs do
     [
       main: "readme",
       source_url: @source_url,
-      source_ref: "v#{@version}",
-      extras: ["README.md"]
+      source_ref: "raxol_gateway-v#{@version}",
+      extras: ["README.md", "CHANGELOG.md"]
     ]
   end
 end

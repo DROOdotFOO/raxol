@@ -22,7 +22,10 @@ defmodule Raxol.Recording.Player do
     * `q` / `ESC` - Quit
   """
 
-  alias Raxol.Recording.{Asciicast, Session}
+  alias Raxol.Core.Buffer
+  alias Raxol.Core.Renderer
+  alias Raxol.Recording.{Asciicast, Index, Session}
+  alias Raxol.Terminal.Emulator
   alias Raxol.UI.Components.Input.Scrubber
 
   @default_speed 1.0
@@ -41,6 +44,9 @@ defmodule Raxol.Recording.Player do
     * `:speed` - Playback speed multiplier (default: 1.0). 2.0 = double speed.
     * `:max_delay` - Cap on delay between events in seconds (default: 5.0).
     * `:interactive` - Enable keyboard controls (default: true).
+    * `:index` - A `Raxol.Recording.Index` for the same session. Optional: with
+      no index, seeking replays the recording's prefix from the start, which is
+      O(n) per seek. With one, a seek repaints from the nearest keyframe.
   """
   @spec play(Path.t() | Session.t(), keyword()) :: :ok | {:error, term()}
   def play(path_or_session, opts \\ [])
@@ -116,6 +122,7 @@ defmodule Raxol.Recording.Player do
       paused: false,
       total_us: total_us,
       input_marks: input_marks(events),
+      keyframe_index: Keyword.get(opts, :index),
       session: session
     }
 
@@ -203,7 +210,9 @@ defmodule Raxol.Recording.Player do
     jump_to_us(state, target_us)
   end
 
-  defp jump_to_us(state, target_us) do
+  @doc false
+  @spec jump_to_us(map(), integer()) :: map()
+  def jump_to_us(state, target_us) do
     target_us = Raxol.Core.Utils.Math.clamp(target_us, 0, state.total_us)
 
     idx =
@@ -211,7 +220,14 @@ defmodule Raxol.Recording.Player do
         elapsed_us >= target_us
       end) || state.event_count
 
-    # Replay all output up to idx to reconstruct screen state
+    repaint(state, target_us, idx)
+
+    %{state | index: idx}
+  end
+
+  # No index: nothing to seek from, so clear the screen and rewrite every
+  # output event from the start of the recording. O(n) per seek.
+  defp repaint(%{keyframe_index: nil} = state, _target_us, idx) do
     IO.write("\e[2J\e[H")
 
     state.events
@@ -220,8 +236,43 @@ defmodule Raxol.Recording.Player do
       {_, :output, data} -> IO.write(data)
       _ -> :ok
     end)
+  end
 
-    %{state | index: idx}
+  # With an index, the nearest keyframe replaces the prefix: paint that
+  # keyframe, then write only the recorded bytes between it and the target. The
+  # bytes are the recording's own, so cursor, pending SGR state, and scroll
+  # region past the keyframe are byte-exact rather than reconstructed, and the
+  # emulator never runs during a seek.
+  #
+  # The keyframe itself is painted as a diff from blank, which positions every
+  # row absolutely: raw mode strips the CR from a bare "\n", so a line-joined
+  # paint would stagger down the screen. The cursor is then put where the
+  # recording had it at the keyframe, which matters when the target lands on
+  # the keyframe and no bytes follow to move it.
+  defp repaint(%{keyframe_index: index} = state, target_us, idx) do
+    keyframe = Index.keyframe_before(index, target_us)
+    blank = Buffer.create_blank_buffer(index.width, index.height)
+    {row, col} = Emulator.get_cursor_position(keyframe.emulator)
+
+    paint =
+      blank
+      |> Renderer.render_diff(keyframe.buffer)
+      |> Renderer.apply_diff()
+
+    forward =
+      state.events
+      |> Enum.slice(keyframe.event_index, max(idx - keyframe.event_index, 0))
+      |> Enum.flat_map(fn
+        {_us, :output, data} -> [data]
+        _input -> []
+      end)
+
+    IO.write([
+      "\e[2J\e[H",
+      paint,
+      "\e[0m\e[#{row + 1};#{col + 1}H"
+      | forward
+    ])
   end
 
   # -- Key reading --

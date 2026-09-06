@@ -2599,6 +2599,144 @@ input[type="range"].player-seek:focus-visible {
   border-color: var(--text-dim);
 }
 
+/* The screen on /replay is rendered as one element per row rather than as one
+   string, so a scrub step patches only the rows that changed. `.raxol-terminal`
+   sets `white-space: pre`, which would then render the newlines BETWEEN the row
+   elements as blank lines and double the screen's height; the rows keep it and
+   the container drops it. Mirrors the same pair in
+   packages/raxol_liveview/priv/static/raxol_terminal.css, which the LiveView
+   package ships for consumers that do not have this stylesheet. */
+.raxol-terminal-rows {
+  white-space: normal;
+}
+
+.raxol-terminal-rows > .raxol-row {
+  display: block;
+  white-space: pre;
+}
+
+.replay-screen {
+  overflow: auto;
+  padding: 0.75rem 1rem;
+}
+
+.replay-screen .raxol-terminal,
+.replay-screen .raxol-terminal pre {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.replay-screen .raxol-terminal::-webkit-scrollbar {
+  display: none;
+}
+
+/* Same row as the card players' transport, and the same parts in the same
+   order, because it is the same control: a play toggle, a scrub bar, a clock. */
+.replay-transport {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel-bg-subtle);
+}
+
+/* The client-owned pair inside the row. It exists as its own element only
+   because phx-update="ignore" needs one, so it lays out transparently: the
+   scrub bar still takes the slack the clock leaves. */
+.replay-transport__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 24px minimum box, per WCAG 2.2 target size: `||` alone is a few pixels. */
+.replay-transport__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  cursor: pointer;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.replay-transport__btn:hover,
+.replay-transport__btn:focus-visible {
+  color: var(--pearl-cream);
+  border-color: var(--text-dim);
+}
+
+/* The scrub bar and its keystroke marks share one box, which is what makes a
+   mark line up with the thumb position it seeks to. Positioned inside the
+   transport row's flex, so the bar still takes the slack the clock leaves. */
+.replay-track {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The keystroke marks. A strip under the track rather than an overlay on it,
+   so a pointer aimed at the slider is never intercepted by a 3px tick.
+
+   The 6px inset is half a thumb: a range's thumb centre travels from
+   thumb-width/2 to width minus that, so a strip spanning the full track would
+   put a mark at 100% half a thumb to the right of where the thumb lands.
+
+   The visible tick is 3px wide but the button is 14px: a tick sized to what it
+   looks like would be an unhittable target, and WCAG 2.2 exempts nothing here
+   because these are the page's jump controls. */
+.replay-marks {
+  position: relative;
+  height: 0.9rem;
+  margin: 0 6px;
+}
+
+.replay-mark {
+  position: absolute;
+  top: 0;
+  width: 14px;
+  height: 0.9rem;
+  margin-left: -7px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.replay-mark::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 3px;
+  height: 0.55rem;
+  margin-left: -1.5px;
+  border-radius: 1px;
+  background: var(--text-dim);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.replay-mark:hover::before,
+.replay-mark:focus-visible::before {
+  background: var(--sky);
+  height: 0.9rem;
+}
+
+.replay-mark:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 1px;
+}
+
 /* Demo area */
 .demo-area { display: flex; }
 

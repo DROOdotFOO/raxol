@@ -40,6 +40,29 @@
 }
 
 /* ------------------------------------------------------------------ */
+/* Row-mode container                                                 */
+/* Used when rows come from TerminalBridge.buffer_to_rows/2 and each  */
+/* one is its own element, instead of the newline-separated text that */
+/* buffer_to_html/2 produces.                                         */
+/*                                                                    */
+/* The container must stop preserving whitespace: with the inherited  */
+/* `white-space: pre`, the whitespace a template leaves between the   */
+/* row elements becomes extra line boxes, and every row after the     */
+/* first sits lower than pixel-offset / line-height cell arithmetic   */
+/* expects, so clicks land on the wrong cell. The rows themselves     */
+/* keep `pre` so their leading and interior spaces still position     */
+/* characters, and each one occupies exactly one line box.            */
+/* ------------------------------------------------------------------ */
+.raxol-terminal-rows {
+  white-space: normal;
+}
+
+.raxol-terminal-rows > .raxol-row {
+  display: block;
+  white-space: pre;
+}
+
+/* ------------------------------------------------------------------ */
 /* Cursor styles                                                      */
 /* ------------------------------------------------------------------ */
 .raxol-cursor-block {
