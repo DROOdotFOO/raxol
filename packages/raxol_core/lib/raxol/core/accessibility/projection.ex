@@ -54,7 +54,8 @@ defmodule Raxol.Core.Accessibility.Projection do
               Raxol.UI.Components.Display.Viewport,
               Raxol.UI.Charts.BarChart,
               Raxol.UI.Charts.LineChart,
-              Raxol.UI.Charts.ScatterChart
+              Raxol.UI.Charts.ScatterChart,
+              Raxol.UI.Components.Input.Scrubber
             ]}
 
   @default_type_map %{
@@ -72,12 +73,15 @@ defmodule Raxol.Core.Accessibility.Projection do
     viewport: Raxol.UI.Components.Display.Viewport,
     bar_chart: Raxol.UI.Charts.BarChart,
     line_chart: Raxol.UI.Charts.LineChart,
-    scatter_chart: Raxol.UI.Charts.ScatterChart
+    scatter_chart: Raxol.UI.Charts.ScatterChart,
+    scrubber: Raxol.UI.Components.Input.Scrubber
   }
 
   # State keys whose `false` is meaningful (aria-checked=false differs from
-  # absent); all other keys are dropped when false.
-  @keep_false [:checked?, :selected?, :expanded?, :pressed?]
+  # absent); all other keys are dropped when false. `playing?` belongs here
+  # for the same reason: a paused transport has to say so, and an absent key
+  # reads as "this widget has no transport".
+  @keep_false [:checked?, :selected?, :expanded?, :pressed?, :playing?]
 
   @doc """
   Projects an Element (or list of Elements) into an accessibility node (or list).
@@ -85,7 +89,7 @@ defmodule Raxol.Core.Accessibility.Projection do
   ## Options
 
     * `:type_map` - override the declaration-type -> Component-module map
-      (defaults to the built-in 15-Component map). Mirrors
+      (defaults to the built-in 16-Component map). Mirrors
       `Raxol.MCP.TreeWalker`'s `context.type_map`.
   """
   @spec project(map() | [map()] | nil, keyword()) ::

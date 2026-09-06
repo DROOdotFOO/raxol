@@ -23,11 +23,15 @@ defmodule Raxol.Recording.Player do
   """
 
   alias Raxol.Recording.{Asciicast, Session}
+  alias Raxol.UI.Components.Input.Scrubber
 
   @default_speed 1.0
   @default_max_delay 5.0
   @speed_steps [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
   @seek_step_us 5_000_000
+  @status_hints "space:pause +/-:speed </>:seek q:quit"
+  @min_track 3
+  @max_track 40
 
   @doc """
   Plays a .cast file or session struct.
@@ -111,6 +115,7 @@ defmodule Raxol.Recording.Player do
       max_delay: max_delay,
       paused: false,
       total_us: total_us,
+      input_marks: input_marks(events),
       session: session
     }
 
@@ -301,36 +306,72 @@ defmodule Raxol.Recording.Player do
   end
 
   # -- Status bar --
+  #
+  # The clock, track, transport glyph, and speed all come from
+  # `Raxol.UI.Components.Input.Scrubber`, the widget the time-travel debugger
+  # and the web replay also render. Only the key hints below are the
+  # player's own. The transport glyph replaces the old " [PAUSED]" text and
+  # the track replaces the old "(33%)": both said the same thing twice.
 
   defp show_status_bar(state) do
-    height = state.session.height
-    current_us = current_elapsed_us(state)
-    current_s = Float.round(current_us / 1_000_000, 1)
-    total_s = Float.round(state.total_us / 1_000_000, 1)
-
-    pct =
-      if state.total_us > 0,
-        do: round(current_us / state.total_us * 100),
-        else: 0
-
-    speed_label = format_speed(state.speed)
-    pause_label = if state.paused, do: " [PAUSED]", else: ""
-
-    bar =
-      " #{current_s}s/#{total_s}s (#{pct}%) | #{speed_label}#{pause_label} | " <>
-        "space:pause +/-:speed </>:seek q:quit"
-
-    # Truncate to width
-    bar = String.slice(bar, 0, state.session.width)
-
-    # Save cursor, move to status line, write inverted, restore cursor
     IO.write(
-      "\e7\e[#{height};1H\e[7m#{String.pad_trailing(bar, state.session.width)}\e[0m\e8"
+      "\e7\e[#{state.session.height};1H\e[7m#{status_bar(state)}\e[0m\e8"
     )
   end
 
-  defp format_speed(speed) when speed == round(speed), do: "#{round(speed)}x"
-  defp format_speed(speed), do: "#{speed}x"
+  @doc false
+  @spec status_bar(map()) :: String.t()
+  def status_bar(state) do
+    width = state.session.width
+    props = scrubber_props(state)
+
+    # The chrome around the track is not a constant: the clock widens with
+    # the recording's length and the speed label disappears at 1x. Render
+    # once at the minimum track width to measure it, then spend whatever
+    # columns are left on the track itself.
+    chrome =
+      String.length(Scrubber.line(props)) - @min_track +
+        String.length(@status_hints) + 4
+
+    track_width =
+      Raxol.Core.Utils.Math.clamp(width - chrome, @min_track, @max_track)
+
+    bar =
+      " " <>
+        Scrubber.line(%{props | width: track_width}) <>
+        " | " <> @status_hints
+
+    bar |> String.slice(0, width) |> String.pad_trailing(width)
+  end
+
+  defp scrubber_props(state) do
+    %{
+      min: 0,
+      max: max(state.event_count - 1, 0),
+      position: state.index,
+      playing?: not state.paused,
+      speed: state.speed,
+      elapsed_ms: div(current_elapsed_us(state), 1_000),
+      duration_ms: div(state.total_us, 1_000),
+      marks: state.input_marks,
+      width: @min_track
+    }
+  end
+
+  # `:input` events are the moments a human typed. In a recording those are
+  # the natural jump targets -- the boundaries between "someone is showing
+  # you something" and "output is scrolling past" -- so they are what the
+  # track ticks. Computed once per playback, not per status-bar repaint.
+  @doc false
+  @spec input_marks([Session.event()]) :: [non_neg_integer()]
+  def input_marks(events) do
+    events
+    |> Enum.with_index()
+    |> Enum.flat_map(fn
+      {{_us, :input, _data}, index} -> [index]
+      _other -> []
+    end)
+  end
 
   # -- Event helpers --
 

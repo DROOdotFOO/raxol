@@ -60,7 +60,7 @@ defmodule Raxol.MCP.TreeWalker do
               Raxol.UI.Charts.BarChart,
               Raxol.UI.Charts.LineChart,
               Raxol.UI.Charts.ScatterChart,
-              Raxol.UI.Components.Harness.ApprovalPrompt
+              Raxol.UI.Components.Input.Scrubber
             ]}
 
   @default_type_map %{
@@ -79,13 +79,24 @@ defmodule Raxol.MCP.TreeWalker do
     bar_chart: Raxol.UI.Charts.BarChart,
     line_chart: Raxol.UI.Charts.LineChart,
     scatter_chart: Raxol.UI.Charts.ScatterChart,
-    approval_prompt: Raxol.UI.Components.Harness.ApprovalPrompt
+    scrubber: Raxol.UI.Components.Input.Scrubber
   }
 
   @type context :: %{
           dispatcher_pid: pid() | nil,
           type_map: %{atom() => module()}
         }
+
+  @doc """
+  The built-in declaration-type -> Component-module map used when `context`
+  carries no `:type_map`.
+
+  Exposed so the main app can assert it against `Raxol.UI.Registry`; this
+  package cannot derive the map from that registry (main raxol is not a
+  dependency), so conformance is a test, not a compile-time guarantee.
+  """
+  @spec default_type_map() :: %{atom() => module()}
+  def default_type_map, do: @default_type_map
 
   @doc """
   Derives MCP tool definitions from a view element tree.

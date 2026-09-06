@@ -15,13 +15,21 @@
       #
       name: "default",
       #
-      # These are the files included in the analysis:
+      # These are the files included in the analysis.
+      #
+      # `packages/` is in scope: the 18 extracted packages are ~58% of the
+      # source tree, and leaving them out meant every package-local
+      # regression was invisible to the gate. The `/deps/` and `/_build/`
+      # exclusions below already cover the per-package checkouts that a
+      # package-local `mix` run leaves behind (e.g.
+      # packages/raxol_payments/deps/raxol_terminal).
+      #
       files: %{
         #
         # You can give explicit globs or simply directories.
         # In the latter case `**/*.{ex,exs}` will be used.
         #
-        included: ["lib/", "src/", "test/", "web/", "apps/"],
+        included: ["lib/", "src/", "test/", "web/", "apps/", "packages/"],
         excluded: [~r"/_build/", ~r"/deps/", ~r"/node_modules/", ~r"stdin"]
       },
       #

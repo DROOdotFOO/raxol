@@ -144,6 +144,46 @@ defmodule Raxol.Debug.DebuggerAppTest do
     end
   end
 
+  describe "wrapped ring" do
+    # The domain bug this guards: snapshot indices are absolute and keep
+    # climbing, while the ring only keeps `max_snapshots` of them. Sizing the
+    # transport from occupancy (3) instead of the kept index range (7..9)
+    # produces a debugger whose every seek target has already been evicted.
+    test "addresses kept indices, not ring occupancy" do
+      tt =
+        start_supervised!(
+          {TimeTravel, name: nil, max_snapshots: 3},
+          id: :wrapped_ring
+        )
+
+      Enum.each(0..9, fn n ->
+        TimeTravel.record(tt, {:tick, n}, %{count: n}, %{count: n + 1})
+      end)
+
+      # record/4 is a cast; any call drains the mailbox ahead of it.
+      assert TimeTravel.count(tt) == 3
+
+      Application.put_env(:raxol, :debugger_tt_ref, tt)
+      model = DebuggerApp.init(nil)
+
+      assert Enum.map(model.entries, & &1.index) == [7, 8, 9]
+      assert {model.scrubber.min, model.scrubber.max} == {7, 9}
+      assert model.scrubber.position == 9
+
+      {back, []} = DebuggerApp.update(key_event("h"), model)
+      assert back.cursor_index == 8
+
+      {back, []} = DebuggerApp.update(key_event("h"), back)
+      assert back.cursor_index == 7
+      assert back.current_snapshot.index == 7
+
+      # Clamped at the oldest kept snapshot, not silently walking into
+      # evicted indices.
+      {clamped, []} = DebuggerApp.update(key_event("h"), back)
+      assert clamped.cursor_index == 7
+    end
+  end
+
   describe "view/1" do
     test "returns a view tree" do
       model = DebuggerApp.init(nil)

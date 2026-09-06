@@ -635,18 +635,27 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   attr(:example, :string, required: true)
 
   def hero_demo(assigns) do
+    frames = RecordedFrames.hero_frames(assigns.example)
+    ssh_frames = RecordedFrames.hero_ssh_frames(assigns.example)
+
     assigns =
       assign(assigns,
         source: example_code(assigns.example),
         source_grid: example_grid(assigns.example),
         title: example_title(assigns.example),
         blurb: example_blurb(assigns.example),
-        frames: RecordedFrames.hero_frames(assigns.example),
+        frames: frames,
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
         frame_ms: RecordedFrames.hero_frame_interval(assigns.example),
+        # What the scrub bar addresses: the DISTINCT frame indices the panes
+        # carry, which is the longer of the two sequences. The terminal and
+        # browser panes step `frames` while the SSH pane steps its own ANSI
+        # capture of the same run, and one index drives all three, so the
+        # element count is a multiple of the addressable range.
+        frame_count: max(length(frames), length(ssh_frames)),
         next: next_example(assigns.example),
         module: example_module(assigns.example),
-        ssh_frames: RecordedFrames.hero_ssh_frames(assigns.example),
+        ssh_frames: ssh_frames,
         out_mcp: RecordedFrames.hero_surface(assigns.example, :mcp),
         ssh_grid: RecordedFrames.hero_ssh_grid(assigns.example),
         mcp_lines: RecordedFrames.hero_surface_lines(assigns.example, :mcp)
@@ -714,12 +723,13 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <span class="hd-title" data-role="title">rendering to the terminal</span>
 
         <%!-- Ruled off from the captions beside them. The bar reads left to
-             right as one run of small mono text, so the two things that are
-             actually clickable were indistinguishable from the sentence that
-             ends just before them. The transport is a glyph now (`||` and the
+             right as one run of small mono text, so the things that are
+             actually operable were indistinguishable from the sentence that
+             ends just before them. The transport is a glyph (`||` and the
              pipe, which the mono stack always has, where a media glyph would
-             be a font gamble) and the switcher wears a border, so the bar has
-             one label, one icon and one button rather than four phrases. --%>
+             be a font gamble), the scrub bar is a slider, and the switcher
+             wears a border, so the right side of the bar reads as controls
+             rather than as four more phrases. --%>
         <div class="hd-controls">
           <button
             type="button"
@@ -728,6 +738,38 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             aria-label="Pause the demo"
             title="Pause the demo"
           >||</button>
+          <%!-- A native range, not a div wearing the role: the arrows, Home,
+               End and PageUp already move it, it announces as a slider with a
+               value, and it is one element instead of a pointer-events
+               reimplementation of one. `aria-valuetext` carries the readable
+               frame because the raw value is an array offset.
+
+               Seeking is client-only and stays that way. Every frame is
+               already on the page as a hidden sibling of the visible one, so
+               revealing one is a `hidden` toggle; a phx-change here would
+               spend a round trip, a diff and a patch to show markup the
+               browser is already holding. --%>
+          <input
+            :if={@frame_count > 1}
+            type="range"
+            class="player-seek"
+            data-role="player-seek"
+            min="0"
+            max={@frame_count - 1}
+            step="1"
+            value="0"
+            aria-label={"Scrub the #{@title} recording"}
+            aria-valuetext={"frame 1 of #{@frame_count}"}
+            title="Space plays and pauses. Left and right step one frame. Home and End jump to the ends. 0 to 9 jump by tenths."
+          />
+          <%!-- Decoration: the slider beside it already announces the frame it
+               is on, and a second live number would be read out twice. --%>
+          <span
+            :if={@frame_count > 1}
+            class="player-clock"
+            data-role="player-clock"
+            aria-hidden="true"
+          >1/{@frame_count}</span>
           <button
             type="button"
             phx-click="next_example"

@@ -192,37 +192,186 @@ Hooks.RaxolTerminal = {
   }
 }
 
-// Gallery card playback: the lean sibling of HeroDemo below. A card's
-// frames are server-rendered hidden siblings; this hook only toggles
-// `hidden` on a fixed-timestep rAF accumulator at the demo's own tick
-// (data-frame-ms, written beside the frames by the generator). Reduced
-// motion holds frame zero, with a live change listener, same as the hero.
+// The transport the two prerecorded players share. Both mirror the terminal
+// widget they exist beside, `Raxol.UI.Components.Input.Scrubber`: space plays
+// and pauses, the arrows step one frame, Home and End are the ends, and 0-9
+// jump to 0%-90%. One table rather than two per player, because a reader who
+// learns the keymap in the TUI should find the same one on the site and two
+// copies are free to drift.
+//
+// Seeking never leaves the page. Every frame is already server-rendered as a
+// hidden sibling of the visible one, so a seek is a `hidden` toggle over nodes
+// the browser is already holding: routing it through the LiveView would add a
+// round trip, a diff and a morphdom patch to reveal markup that is on the page.
+const Transport = {
+  // Distinct indices, not element count: a player may carry the same sequence
+  // in more than one pane (the hero's terminal and browser panes do), so the
+  // element count is a multiple of the real frame count and stepping by it
+  // walks past every index and blanks every pane.
+  //
+  // Indices are filtered rather than trusted: one unparseable `data-frame`
+  // makes `Math.max` NaN, then no element's index equals the current frame, so
+  // every pane hides and the player goes blank and stays blank.
+  count(nodes) {
+    const indices = Array.from(nodes, (f) => parseInt(f.dataset.frame, 10)).filter(
+      (n) => Number.isInteger(n) && n >= 0
+    )
+    return indices.length ? 1 + Math.max(...indices) : 0
+  },
+
+  show(nodes, i) {
+    nodes.forEach((f) => {
+      f.hidden = parseInt(f.dataset.frame, 10) !== i
+    })
+  },
+
+  clamp(i, count) {
+    return Math.max(0, Math.min(count - 1, i))
+  },
+
+  // The listener sits on the player container, so it only ever sees keys
+  // pressed inside it. The one thing in there that owns its own keys is the
+  // scrub input; anything else that takes typing must keep it.
+  owns(el, seekEl) {
+    if (!el || el === seekEl) return true
+    const tag = el.tagName
+    return !(
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      el.isContentEditable
+    )
+  },
+
+  // `fromRange` is set when the key was pressed on the scrub input itself.
+  // Space and the digits are still ours there, because a range does nothing
+  // with them; the stepping keys are not, because the input's own arrow, Home,
+  // End and PageUp handling already moves the value and fires `input`, and
+  // intercepting them would step twice per press.
+  intent(e, {count, index, fromRange}) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return null
+    const last = count - 1
+
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      // A focused button already turns Space into a click, and toggling here
+      // as well would undo it within the same keystroke.
+      return e.target.closest('button') ? null : {type: 'toggle'}
+    }
+
+    if (e.key.length === 1 && e.key >= '0' && e.key <= '9') {
+      return {type: 'seek', index: Math.round((last * Number(e.key)) / 10)}
+    }
+
+    // `,` and `.` step too, as they do in the widget: on a keyboard where the
+    // arrows are a reach they are the pair that is not.
+    if (e.key === ',' || e.key === '<') return {type: 'seek', index: index - 1}
+    if (e.key === '.' || e.key === '>') return {type: 'seek', index: index + 1}
+
+    if (fromRange) return null
+
+    switch (e.key) {
+      case 'ArrowLeft':
+        return {type: 'seek', index: index - 1}
+      case 'ArrowRight':
+        return {type: 'seek', index: index + 1}
+      case 'Home':
+        return {type: 'seek', index: 0}
+      case 'End':
+        return {type: 'seek', index: last}
+      default:
+        return null
+    }
+  },
+
+  // The slider's value is an array offset, and nobody counts frames from zero
+  // out loud, so `aria-valuetext` replaces the raw number with the sentence and
+  // the visible clock is 1-based to match what is announced.
+  readout(root, i, count) {
+    const seek = root.querySelector('[data-role="player-seek"]')
+    if (seek) {
+      seek.value = String(i)
+      seek.setAttribute('aria-valuetext', `frame ${i + 1} of ${count}`)
+    }
+    const clock = root.querySelector('[data-role="player-clock"]')
+    if (clock) clock.textContent = `${i + 1}/${count}`
+  }
+}
+
+// Gallery card playback: the lean sibling of HeroDemo below. A card's frames
+// are server-rendered hidden siblings; this hook toggles `hidden` on a
+// fixed-timestep rAF accumulator at the demo's own tick (data-frame-ms,
+// written beside the frames by the generator) and drives the scrub bar and
+// play button in the row underneath from the same index.
+//
+// Reduced motion holds AUTO-ADVANCE, and only that. A drag or an arrow key is
+// an explicit interaction rather than an animation, so a seek still moves the
+// frame while the query matches: refusing it would leave a visible transport
+// dead for exactly the readers most likely to want to step a recording by hand.
 Hooks.CardLoop = {
   mounted() {
-    this.frames = Array.from(this.el.querySelectorAll("[data-frame]"))
-    if (this.frames.length < 2) return
+    this.frames = Array.from(this.el.querySelectorAll('[data-frame]'))
+    this.count = Transport.count(this.frames)
+    if (this.count < 2) return
     this.ms = parseInt(this.el.dataset.frameMs, 10) || 200
     this.i = 0
     this.acc = 0
     this.last = null
-    this.reduced = window.matchMedia("(prefers-reduced-motion: reduce)")
+    this.paused = false
+    this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
+    this.seekEl = this.el.querySelector('[data-role="player-seek"]')
+
+    // `input`, not `change`: dragging the thumb has to move the frame as it
+    // drags, which is the whole reason to prefer a range over two step buttons.
+    this.onInput = (e) => {
+      if (e.target === this.seekEl) this.seek(parseInt(this.seekEl.value, 10))
+    }
+    this.el.addEventListener('input', this.onInput)
+
+    this.onClick = (e) => {
+      if (e.target.closest('[data-role="player-toggle"]')) {
+        this.setPaused(!this.paused)
+      }
+    }
+    this.el.addEventListener('click', this.onClick)
+
+    this.onKeydown = (e) => {
+      if (!Transport.owns(e.target, this.seekEl)) return
+      const act = Transport.intent(e, {
+        count: this.count,
+        index: this.i,
+        fromRange: e.target === this.seekEl
+      })
+      if (!act) return
+      e.preventDefault()
+      if (act.type === 'toggle') this.setPaused(!this.paused)
+      else this.seek(act.index)
+    }
+    this.el.addEventListener('keydown', this.onKeydown)
+
+    this.onMql = () => this.syncToggle()
+    this.reduced.addEventListener('change', this.onMql)
+
+    this.syncToggle()
+    Transport.readout(this.el, this.i, this.count)
 
     const step = (t) => {
       this.raf = requestAnimationFrame(step)
-      if (this.reduced.matches) {
+      if (!this.advancing()) {
         this.last = t
         return
       }
       if (this.last == null) this.last = t
+      // Clamp dt: rAF suspends in a background tab, and an unclamped
+      // accumulator would fast-forward the whole hidden interval on return.
       this.acc += Math.min(t - this.last, 1000)
       this.last = t
       let moved = false
       while (this.acc >= this.ms) {
         this.acc -= this.ms
-        this.i = (this.i + 1) % this.frames.length
+        this.i = (this.i + 1) % this.count
         moved = true
       }
-      if (moved) this.frames.forEach((f, j) => (f.hidden = j !== this.i))
+      if (moved) this.showFrame(this.i)
     }
 
     this.raf = requestAnimationFrame(step)
@@ -230,15 +379,63 @@ Hooks.CardLoop = {
 
   destroyed() {
     if (this.raf) cancelAnimationFrame(this.raf)
+    if (!this.onKeydown) return
+    this.el.removeEventListener('input', this.onInput)
+    this.el.removeEventListener('click', this.onClick)
+    this.el.removeEventListener('keydown', this.onKeydown)
+    this.reduced.removeEventListener('change', this.onMql)
   },
+
+  advancing() {
+    return !this.paused && !this.reduced.matches
+  },
+
+  showFrame(i) {
+    this.i = i
+    Transport.show(this.frames, i)
+    Transport.readout(this.el, i, this.count)
+  },
+
+  // Seeking pauses the auto-advance. It is the rule the hero already applies
+  // when you click a surface tab: the reader has taken the wheel, and a loop
+  // that resumed underneath them would move the frame they just chose.
+  seek(n) {
+    if (!Number.isInteger(n)) return
+    this.setPaused(true)
+    this.showFrame(Transport.clamp(n, this.count))
+  },
+
+  setPaused(v) {
+    this.paused = v
+    this.acc = 0
+    this.syncToggle()
+  },
+
+  // Glyph for sight, word for everything else: `||` and `|>` carry no meaning
+  // to a screen reader. Reduced motion reports as paused because that is what
+  // it is, and this button is the override that starts it.
+  syncToggle() {
+    const btn = this.el.querySelector('[data-role="player-toggle"]')
+    if (!btn) return
+    const running = this.advancing()
+    const label = `${running ? 'Pause' : 'Play'} the ${btn.dataset.name} recording`
+    btn.textContent = running ? '||' : '|>'
+    btn.setAttribute('aria-label', label)
+    btn.setAttribute('title', label)
+  }
 }
 
 // Hero surface-tabbed demo. All content is server-rendered; this hook only
 // toggles hidden/aria-selected: it auto-advances the surface tabs and steps
 // the recorded terminal frames on a fixed-timestep rAF accumulator
 // (while-loop catch-up keeps wall-clock lockstep on any refresh rate).
-// Clicking a tab stops the auto-advance. Reduced motion pauses everything,
-// with a live change listener; the pause button is the manual override.
+// Clicking a tab stops the auto-advance, and so does scrubbing. The scrub
+// bar, the pause button and the keymap come from `Transport` above, shared
+// with the gallery cards.
+//
+// Reduced motion pauses the AUTO-ADVANCE, with a live change listener; the
+// pause button is the manual override. It does not disable seeking: dragging
+// the scrub bar or pressing an arrow is an interaction, not an animation.
 // When the server swaps in the live session (data-live), the player stops.
 Hooks.HeroDemo = {
   // Fallback only. The real rate comes from the recording via data-frame-ms:
@@ -280,8 +477,19 @@ Hooks.HeroDemo = {
 
     // Delegated for the same reason the clicks are: LiveView patches the tabs
     // out from under a listener bound to them.
-    this.onKeydown = (e) => this.onTabKey(e)
+    this.onKeydown = (e) => {
+      if (this.onTabKey(e)) return
+      this.onTransportKey(e)
+    }
     this.el.addEventListener('keydown', this.onKeydown)
+
+    // `input`, not `change`: dragging the thumb has to move the frame as it
+    // drags rather than on release.
+    this.onInput = (e) => {
+      const seek = e.target.closest('[data-role="player-seek"]')
+      if (seek && this.el.contains(seek)) this.seek(parseInt(seek.value, 10))
+    }
+    this.el.addEventListener('input', this.onInput)
 
     this.syncPauseLabel()
     this.sync()
@@ -294,6 +502,7 @@ Hooks.HeroDemo = {
     this.tab = sel ? parseInt(sel.dataset.i, 10) : 0
     const vis = this.el.querySelector('.hero-frames [data-frame]:not([hidden])')
     this.frame = vis ? parseInt(vis.dataset.frame, 10) : 0
+    Transport.readout(this.el, this.frame, Transport.count(this.frameNodes()))
     this.syncPauseLabel()
     this.sync()
   },
@@ -303,6 +512,7 @@ Hooks.HeroDemo = {
     this.mql.removeEventListener('change', this.onMql)
     this.el.removeEventListener('click', this.onClick)
     this.el.removeEventListener('keydown', this.onKeydown)
+    this.el.removeEventListener('input', this.onInput)
   },
 
   live() { return this.el.dataset.live === 'true' },
@@ -368,28 +578,37 @@ Hooks.HeroDemo = {
     return this.el.querySelectorAll('.hero-tab').length
   },
 
+  frameNodes() {
+    return this.el.querySelectorAll('.hero-frames [data-frame]')
+  },
+
   nextFrame() {
-    const frames = this.el.querySelectorAll('.hero-frames [data-frame]')
-    if (frames.length < 2) return
-    // Count DISTINCT indices, not elements: two panes now carry the same
-    // sequence (the terminal frame and the ANSI the SSH pane paints), so
-    // element count is a multiple of the real frame count and using it would
-    // step past every index and blank both panes.
-    //
-    // Indices are filtered rather than trusted: one unparseable `data-frame`
-    // makes `Math.max` NaN, `% NaN` NaN, and then no element's index equals
-    // `this.frame`, so every pane hides and the hero goes blank and stays
-    // blank. Falling back to the element count animates something wrong; the
-    // frames themselves are still on the page either way.
-    const indices = Array.from(frames, (f) => parseInt(f.dataset.frame, 10)).filter(
-      (n) => Number.isInteger(n) && n >= 0
-    )
-    if (indices.length < 2) return
-    const count = 1 + Math.max(...indices)
+    const frames = this.frameNodes()
+    const count = Transport.count(frames)
+    if (count < 2) return
     this.frame = (this.frame + 1) % count
-    frames.forEach((f) => {
-      f.hidden = parseInt(f.dataset.frame, 10) !== this.frame
-    })
+    Transport.show(frames, this.frame)
+    Transport.readout(this.el, this.frame, count)
+  },
+
+  // Seeking stops the auto-advance, the rule clicking a tab already follows:
+  // the reader has taken the wheel, and a loop that resumed underneath them
+  // would move the frame they just chose.
+  //
+  // Independent of reduced motion by design. The query governs animation, and
+  // a drag or an arrow press is not one, so the frame moves either way; the
+  // player merely never moves it on its own.
+  seek(n) {
+    const frames = this.frameNodes()
+    const count = Transport.count(frames)
+    if (count < 2 || !Number.isInteger(n)) return
+    this.userPaused = true
+    this.frame = Transport.clamp(n, count)
+    Transport.show(frames, this.frame)
+    Transport.readout(this.el, this.frame, count)
+    this.acc.frame = 0
+    this.syncPauseLabel()
+    this.sync()
   },
 
   showTab(n) {
@@ -419,9 +638,12 @@ Hooks.HeroDemo = {
   // Moving by arrow stops the auto-advance for the same reason clicking does:
   // the reader has taken the wheel, and a rotation that resumed underneath
   // them would move the selection they just chose.
+  //
+  // Returns whether it handled the key, so the container's one keydown
+  // listener can offer the event to the transport next.
   onTabKey(e) {
     const tab = e.target.closest('.hero-tab')
-    if (!tab || !this.el.contains(tab)) return
+    if (!tab || !this.el.contains(tab)) return false
     const last = this.tabCount() - 1
     const i = parseInt(tab.dataset.i, 10)
     const to = {
@@ -432,11 +654,33 @@ Hooks.HeroDemo = {
       Home: 0,
       End: last
     }[e.key]
-    if (to === undefined) return
+    if (to === undefined) return false
     e.preventDefault()
     this.autoTabs = false
     this.showTab(to)
     this.el.querySelectorAll('.hero-tab')[to].focus()
+    return true
+  },
+
+  // Delegated from the demo container so the bindings reach wherever focus
+  // sits inside the hero: a tabpanel, the scrub bar, the transport buttons.
+  // The tablist is excluded because it owns those same keys under the ARIA
+  // tabs pattern, and Space there has to select the tab it is on.
+  onTransportKey(e) {
+    if (e.target.closest('.hero-tab')) return
+    const seekEl = this.el.querySelector('[data-role="player-seek"]')
+    if (!Transport.owns(e.target, seekEl)) return
+    const count = Transport.count(this.frameNodes())
+    if (count < 2) return
+    const act = Transport.intent(e, {
+      count,
+      index: this.frame,
+      fromRange: e.target === seekEl
+    })
+    if (!act) return
+    e.preventDefault()
+    if (act.type === 'toggle') this.setPaused(!this.userPaused)
+    else this.seek(act.index)
   }
 }
 

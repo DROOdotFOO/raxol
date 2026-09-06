@@ -128,6 +128,26 @@ defmodule Raxol.Playground.Catalog do
       complexity: :basic,
       tags: ["input", "form", "password", "security"]
     },
+    %{
+      name: "Scrubber",
+      featured: true,
+      module: Demos.ScrubberDemo,
+      category: :input,
+      description:
+        "Transport control over an ordered position: track, playhead, marks, " <>
+          "clock, play/pause and a speed ladder. One widget for asciicast " <>
+          "recordings, time-travel snapshots, and recorded web frames",
+      complexity: :intermediate,
+      tags: [
+        "input",
+        "transport",
+        "scrubber",
+        "timeline",
+        "seek",
+        "replay",
+        "slider"
+      ]
+    },
     # --- Display widgets ---
     %{
       name: "Text",
