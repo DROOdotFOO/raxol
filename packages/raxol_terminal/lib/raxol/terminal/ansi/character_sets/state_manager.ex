@@ -159,17 +159,42 @@ defmodule Raxol.Terminal.ANSI.CharacterSets.StateManager do
     %{state | active: resolve_charset_name(active_charset)}
   end
 
-  @doc false
-  def resolve_charset_name(charset) when is_atom(charset) do
-    case Code.ensure_loaded(charset) do
-      {:module, _} ->
-        if function_exported?(charset, :name, 0),
-          do: charset.name(),
-          else: charset
+  # The closed set this resolves. `charset_code_to_module/1` produces exactly
+  # these three, and they are the only modules in the package defining `name/0`.
+  @charset_module_names %{
+    Raxol.Terminal.ANSI.CharacterSets.ASCII => :us_ascii,
+    Raxol.Terminal.ANSI.CharacterSets.DEC => :dec_special_graphics,
+    Raxol.Terminal.ANSI.CharacterSets.UK => :uk
+  }
 
-      _ ->
-        charset
-    end
+  @doc false
+  # Runs up to three times per TRANSLATED CHARACTER: `CharacterSets.translate_char/2`
+  # resolves the active set and the single shift, then `Translator.translate_char/3`
+  # resolves once more.
+  #
+  # It used to do that with `Code.ensure_loaded/1`, a synchronous call into the
+  # single global `:code_server`. For a module already loaded that is merely
+  # wasteful, but the two commonest arguments on this path are `nil` (no single
+  # shift) and an already-resolved short name like `:us_ascii` -- neither of
+  # which is a module, so each call was a guaranteed load MISS. The code server
+  # does not cache misses, so every character re-walked the whole code path on
+  # disk: measured at ~0.32ms for `:us_ascii` and ~0.17ms for `nil`, against
+  # ~94ns for a loaded module. Roughly half a millisecond per character, and
+  # serialized through one process, so parallel tests queued behind each other
+  # and ANSI-heavy suites timed out.
+  #
+  # A table lookup answers the real question. The fallback keeps the old dynamic
+  # contract for a charset module this table does not know, but reaches it with
+  # `module_loaded/1`, which is a lookup rather than a code-server call and so
+  # costs nothing for an atom that is not a module.
+  def resolve_charset_name(charset)
+      when is_map_key(@charset_module_names, charset),
+      do: :erlang.map_get(charset, @charset_module_names)
+
+  def resolve_charset_name(charset) when is_atom(charset) do
+    if :erlang.module_loaded(charset) and function_exported?(charset, :name, 0),
+      do: charset.name(),
+      else: charset
   end
 
   def resolve_charset_name(charset), do: charset
