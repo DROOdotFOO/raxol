@@ -39,11 +39,10 @@ defmodule Raxol.Symphony.Review do
   @doc """
   Pick a reviewer whose VENDOR differs from the implementer's.
 
-  Candidates whose vendor is `nil` are rejected outright. Of the rest, requires
-  at least two distinct available vendors and at least one available candidate
-  from a vendor other than the implementer's. Returns the first such reviewer, or
-  `{:error, {:insufficient_vendors, insufficiency()}}` when the cross-vendor
-  invariant cannot be satisfied (the caller should escalate to a human).
+  Candidates whose vendor is `nil` are rejected outright. Of the rest, the
+  first available candidate from a vendor other than the implementer's is the
+  reviewer. Returns `{:error, {:insufficient_vendors, insufficiency()}}` when
+  there is none (the caller should escalate to a human).
   """
   @spec select_reviewer(String.t(), [String.t()], (String.t() -> boolean())) ::
           {:ok, String.t()} | {:error, {:insufficient_vendors, insufficiency()}}
@@ -56,23 +55,24 @@ defmodule Raxol.Symphony.Review do
       |> Enum.filter(available?)
 
     implementer_vendor = Runner.vendor(implementer)
-    vendors = available |> Enum.map(&Runner.vendor/1) |> Enum.uniq()
-    reviewers = Enum.reject(available, &(Runner.vendor(&1) == implementer_vendor))
 
-    # Two conditions, not one: two distinct available vendors AND one of them
-    # other than the implementer's. An implementer absent from `candidates`
-    # would otherwise let a single available vendor look like a valid pair.
-    if length(vendors) >= 2 and reviewers != [] do
-      {:ok, hd(reviewers)}
-    else
-      {:error,
-       {:insufficient_vendors,
-        %{
-          implementer_kind: implementer,
-          implementer_vendor: implementer_vendor,
-          available_kinds: available,
-          available_vendors: vendors
-        }}}
+    # One condition, because the filter is by vendor: a non-empty `reviewers`
+    # already proves a second vendor is available. Requiring two distinct
+    # vendors among the candidates on top of that escalated a valid pair
+    # whenever `candidate_kinds` omitted the implementer's own kind.
+    case Enum.reject(available, &(Runner.vendor(&1) == implementer_vendor)) do
+      [reviewer | _] ->
+        {:ok, reviewer}
+
+      [] ->
+        {:error,
+         {:insufficient_vendors,
+          %{
+            implementer_kind: implementer,
+            implementer_vendor: implementer_vendor,
+            available_kinds: available,
+            available_vendors: available |> Enum.map(&Runner.vendor/1) |> Enum.uniq()
+          }}}
     end
   end
 

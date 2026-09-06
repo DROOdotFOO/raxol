@@ -18,6 +18,7 @@ defmodule Raxol.Symphony.Config.Schema do
   import Raxol.Symphony.Util, only: [blank?: 1]
 
   alias Raxol.Symphony.Config
+  alias Raxol.Symphony.Runner
 
   @supported_tracker_kinds ~w(linear github memory)
   # ADR-0034 Gap 4: this MUST equal `Raxol.Symphony.Runner.configurable_kinds/0`
@@ -40,7 +41,7 @@ defmodule Raxol.Symphony.Config.Schema do
           | :missing_codex_command
           | {:unsupported_runner_kind, binary()}
           | :missing_reviewer_kind
-          | :reviewer_kind_must_differ
+          | {:reviewer_vendor_must_differ, Runner.vendor()}
           | {:invalid_ssh_host, term()}
           | {:invalid_value, atom(), term()}
           | {:workflow_section_not_a_map, [atom()]}
@@ -101,7 +102,7 @@ defmodule Raxol.Symphony.Config.Schema do
          :ok <- validate_workspace(config.workspace),
          :ok <- validate_hooks(config.hooks),
          :ok <- validate_agent(config.agent),
-         :ok <- validate_review(config.review),
+         :ok <- validate_review(config.review, config.runner),
          :ok <- validate_worker(config.worker),
          :ok <- validate_codex_auth(config.codex) do
       if Keyword.get(opts, :skip_runner, false) do
@@ -245,20 +246,48 @@ defmodule Raxol.Symphony.Config.Schema do
 
   # -- Review -----------------------------------------------------------------
 
-  defp validate_review(%{enabled: true} = review) do
+  # Preflight must refuse exactly what dispatch cannot run. Two things are live:
+  #
+  # The implementer runs whenever `runner.kind` is "review", enabled or not --
+  # `Runners.Review.implement_phase/3` resolves `implementer_kind` through the
+  # full resolver before it ever reads `enabled` -- so a disabled review naming
+  # `noop` (crashes at dispatch) or `review` (recurses into itself) must fail
+  # here, where `runner.kind` alone would have been caught.
+  #
+  # The reviewer pair is live only when review is enabled, and then it must be
+  # exactly what `Raxol.Symphony.Review.select_reviewer/3` can satisfy, or a
+  # workflow validates and then parks every issue as `:awaiting_human` after the
+  # implementer has already run. The runtime rule is vendor distinctness
+  # (`Runner.vendor/1`), of which "the same kind twice" is the degenerate case:
+  # `raxol_agent` reviewed by `raxol_agent_session` is one vendor wearing two
+  # hats and is refused here for the same reason it is refused there.
+  # `Runner.vendor/1` is a runtime call, so this adds no compile-time edge to
+  # the resolver.
+  defp validate_review(%{enabled: true} = review, _runner) do
     implementer = review.implementer_kind
     reviewer = review.reviewer_kind
 
     cond do
       blank?(reviewer) -> {:error, :missing_reviewer_kind}
-      reviewer == implementer -> {:error, :reviewer_kind_must_differ}
       implementer not in @reviewable_kinds -> {:error, {:unsupported_runner_kind, implementer}}
       reviewer not in @reviewable_kinds -> {:error, {:unsupported_runner_kind, reviewer}}
-      true -> :ok
+      true -> validate_review_vendors(implementer, reviewer)
     end
   end
 
-  defp validate_review(_review), do: :ok
+  defp validate_review(%{implementer_kind: implementer}, %{kind: "review"})
+       when implementer not in @reviewable_kinds,
+       do: {:error, {:unsupported_runner_kind, implementer}}
+
+  defp validate_review(_review, _runner), do: :ok
+
+  defp validate_review_vendors(implementer, reviewer) do
+    vendor = Runner.vendor(implementer)
+
+    if Runner.vendor(reviewer) == vendor,
+      do: {:error, {:reviewer_vendor_must_differ, vendor}},
+      else: :ok
+  end
 
   # -- Worker (issue #742) ----------------------------------------------------
 

@@ -36,6 +36,12 @@ defmodule Raxol.Symphony.ReviewTest do
       assert {:error, {:insufficient_vendors, _}} =
                Review.select_reviewer("a", ["a", "a"], always_available())
     end
+
+    test "one available candidate of another vendor suffices" do
+      # `candidate_kinds` need not list the implementer; the pair is the
+      # implementer plus the reviewer, so a single foreign candidate is enough.
+      assert {:ok, "b"} = Review.select_reviewer("a", ["b"], always_available())
+    end
   end
 
   # ADR-0034 Gap 5. Before vendor identity these kinds were two distinct
@@ -86,6 +92,16 @@ defmodule Raxol.Symphony.ReviewTest do
                )
 
       assert details.available_kinds == ["raxol_agent"]
+    end
+
+    test "a candidate list naming only the other vendor pairs" do
+      # `review.candidate_kinds: [codex]` is a reasonable WORKFLOW.md; it used to
+      # escalate because two distinct vendors were required among the candidates.
+      assert {:ok, "codex"} = Review.select_reviewer("raxol_agent", ["codex"], always_available())
+
+      # And a vendorless entry beside it is dropped, not counted against it.
+      assert {:ok, "codex"} =
+               Review.select_reviewer("raxol_agent", ["codex", "noop"], always_available())
     end
   end
 
