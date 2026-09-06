@@ -109,6 +109,33 @@ defmodule Raxol.Agent.Actions.ShellTest do
     end
   end
 
+  describe "pty" do
+    test "the command sees a terminal, and says so in the result" do
+      command = "if [ -t 1 ]; then echo TTY; else echo PIPE; fi"
+
+      case Shell.run(%{command: command, pty: true, timeout_ms: 10_000}, %{}) do
+        {:ok, result} ->
+          assert result.pty == true
+          assert result.exit_code == 0
+          assert result.output =~ "TTY"
+          # A terminal, not a pipe: the line discipline translates NL to CR-LF.
+          assert result.output =~ "\r\n"
+
+        {:error, :pty_unavailable} ->
+          refute Raxol.Agent.Shell.Pty.available?(System.find_executable("sh") || "/bin/sh"),
+                 "pty was refused on a host where Pty.available?/1 says yes"
+      end
+    end
+
+    test "without pty the command gets pipes, and says so" do
+      command = "if [ -t 1 ]; then echo TTY; else echo PIPE; fi"
+
+      assert {:ok, result} = Shell.run(%{command: command}, %{})
+      assert result.pty == false
+      assert result.output == "PIPE\n"
+    end
+  end
+
   # -- helpers -----------------------------------------------------------
 
   defp read_marker_pid(marker, budget_ms \\ 1_000)
