@@ -8,7 +8,8 @@ defmodule Raxol.Debug.DebuggerApp do
   ## Layout
 
       +===================================================================+
-      | RAXOL DEBUGGER          Recording   Cursor: 42/156   +12.3s      |
+      | RAXOL DEBUGGER   Recording   Cursor: 42 of 40..42 (3 kept)        |
+      | ||  42/42  ━━━━━━━━━━━┃━━━━━━━●───────                           |
       +===================================================================+
       | TIMELINE            | DIFF (Snapshot #42)                         |
       | > #42 :tick (2)     |   count  41 -> 42                          |
@@ -29,8 +30,16 @@ defmodule Raxol.Debug.DebuggerApp do
   use Raxol.Core.Runtime.Application
 
   alias Raxol.Debug.{DiffFormatter, Inspector, Snapshot, TimeTravel}
+  alias Raxol.UI.Components.Input.Scrubber
 
   @refresh_active 500
+  @track_width 32
+
+  # Keys handed straight to `Scrubber.handle_event/3`. Listed as data rather
+  # than as eight identical `key_match` branches, so adding one is a list
+  # edit and the widget stays the only thing that knows what they mean.
+  @scrub_chars ["h", "l", "[", "]"]
+  @scrub_keys [:left, :right, :home, :end]
 
   @impl true
   def init(_context) do
@@ -39,6 +48,13 @@ defmodule Raxol.Debug.DebuggerApp do
     connected = tt_ref_alive?(tt_ref)
     entries = if connected, do: safe_list_entries(tt_ref), else: []
     count = length(entries)
+
+    {:ok, scrubber} =
+      Scrubber.init(
+        id: "debugger-timeline",
+        aria_label: "Snapshot timeline",
+        width: @track_width
+      )
 
     model = %{
       tt_ref: tt_ref,
@@ -55,15 +71,26 @@ defmodule Raxol.Debug.DebuggerApp do
       inspector_offset: 0,
       inspector_lines: [],
       paused: false,
+      scrubber: scrubber,
       jump_mode: false,
       jump_buffer: ""
     }
 
-    load_current_snapshot(model)
+    model |> sync_scrubber() |> load_current_snapshot()
   end
 
   @impl true
   def update(:refresh, model), do: {refresh(model), []}
+
+  # The MCP `seek`/`play`/`pause` tools the scrubber node advertises land
+  # here. `play`/`pause` mean recording, not playback: this timeline has no
+  # rate, it either follows the live tail or it does not.
+  def update({:scrubber_seek, _id, position}, model),
+    do: {seek_to(model, position), []}
+
+  def update({:scrubber_play, _id}, model), do: {set_paused(model, false), []}
+
+  def update({:scrubber_pause, _id}, model), do: {set_paused(model, true), []}
 
   def update(message, model) do
     if model.jump_mode do
@@ -107,13 +134,32 @@ defmodule Raxol.Debug.DebuggerApp do
     end
   end
 
-  defp handle_navigation_keys(message, model) do
-    case message do
-      key_match("h") -> step(model, :back)
-      key_match("l") -> step(model, :forward)
-      key_match(:left) -> step(model, :back)
-      key_match(:right) -> step(model, :forward)
-      _ -> nil
+  # Every position key is the widget's: `h`/`l` and the arrows keep stepping
+  # one snapshot, `[`/`]` and `home`/`end` are new. Routing them through
+  # `Scrubber.handle_event/3` leaves one implementation of "what does `l`
+  # do" instead of two that can drift. `space` and the speed ladder are
+  # deliberately NOT routed: `space` already toggles recording here, and a
+  # snapshot ring has no playback rate.
+  defp handle_navigation_keys(
+         %Raxol.Core.Events.Event{type: :key, data: data} = message,
+         model
+       ) do
+    if data[:char] in @scrub_chars or data[:key] in @scrub_keys do
+      scrub(model, message)
+    end
+  end
+
+  defp handle_navigation_keys(_message, _model), do: nil
+
+  # A step clamped at either end leaves the position untouched, so holding
+  # `h` at the oldest kept snapshot stays silent instead of re-jumping.
+  defp scrub(model, event) do
+    {scrubber, _commands} = Scrubber.handle_event(event, model.scrubber, %{})
+
+    if scrubber.position == model.scrubber.position do
+      {model, []}
+    else
+      {seek_to(model, scrubber.position), []}
     end
   end
 
@@ -160,6 +206,7 @@ defmodule Raxol.Debug.DebuggerApp do
     column style: %{gap: 0} do
       [
         header_bar(model),
+        Scrubber.to_node(model.scrubber),
         divider(),
         row style: %{gap: 0} do
           [
@@ -191,9 +238,14 @@ defmodule Raxol.Debug.DebuggerApp do
     status = if model.paused, do: "Paused", else: "Recording"
     connection = if model.connected, do: "", else: " [DISCONNECTED]"
 
+    # "42/3" was nonsense: the numerator is an absolute snapshot index and
+    # the denominator was ring OCCUPANCY. Once the ring wraps they live in
+    # different spaces, so show the addressable index range and label the
+    # occupancy for what it is.
     cursor_str =
       if model.cursor_index,
-        do: "Cursor: #{model.cursor_index}/#{model.count}",
+        do:
+          "Cursor: #{model.cursor_index} of #{model.scrubber.min}..#{model.scrubber.max} (#{model.count} kept)",
         else: "Empty"
 
     jump_str = if model.jump_mode, do: "  JUMP: #{model.jump_buffer}_", else: ""
@@ -297,7 +349,7 @@ defmodule Raxol.Debug.DebuggerApp do
       [
         text("[#{panel_name}]", style: [:bold]),
         text(
-          "[h/l] step  [j/k] scroll  [Tab] panel  [Space] pause  [r] restore  [g] jump  [q] quit",
+          "[h/l] step  [[/]] changed  [j/k] scroll  [Tab] panel  [Space] pause  [r] restore  [g] jump  [q] quit",
           style: [:dim]
         )
       ]
@@ -317,6 +369,7 @@ defmodule Raxol.Debug.DebuggerApp do
 
       %{model | entries: entries, count: count}
       |> maybe_advance_cursor()
+      |> sync_scrubber()
       |> load_current_snapshot()
     else
       connected = tt_ref_alive?(model.tt_ref)
@@ -357,31 +410,60 @@ defmodule Raxol.Debug.DebuggerApp do
     end
   end
 
-  defp step(model, direction) do
-    result =
-      case direction do
-        :back -> TimeTravel.step_back(model.tt_ref)
-        :forward -> TimeTravel.step_forward(model.tt_ref)
-      end
-
-    case result do
-      {:ok, snap} ->
-        changes = DiffFormatter.format_snapshot_diff(snap)
-        lines = Inspector.flatten(snap.model_after, model.expanded_paths)
-
-        {%{
-           model
-           | cursor_index: snap.index,
-             current_snapshot: snap,
-             diff_changes: changes,
-             diff_offset: 0,
-             inspector_lines: lines
-         }, []}
-
-      {:error, _} ->
-        {model, []}
+  defp seek_to(model, index) do
+    case TimeTravel.jump_to(model.tt_ref, index) do
+      {:ok, snap} -> apply_snapshot(model, snap)
+      {:error, _} -> model
     end
   end
+
+  defp apply_snapshot(model, snap) do
+    %{
+      model
+      | cursor_index: snap.index,
+        current_snapshot: snap,
+        diff_changes: DiffFormatter.format_snapshot_diff(snap),
+        diff_offset: 0,
+        inspector_lines:
+          Inspector.flatten(snap.model_after, model.expanded_paths)
+    }
+    |> sync_scrubber()
+  end
+
+  defp sync_scrubber(model) do
+    {min, max} = index_bounds(model.entries)
+
+    {scrubber, _commands} =
+      Scrubber.update(
+        %{
+          min: min,
+          max: max,
+          position: model.cursor_index || min,
+          marks: changed_marks(model.entries),
+          playing?: not model.paused
+        },
+        model.scrubber
+      )
+
+    %{model | scrubber: scrubber}
+  end
+
+  # The addressable range is the first and last INDEX kept, never
+  # `TimeTravel.count/1`. Indices are absolute and survive the ring
+  # wrapping: `max_snapshots: 3` after ten records holds three entries
+  # indexed 7..9, and a 0..2 scrubber would seek to snapshots that were
+  # evicted an hour ago.
+  defp index_bounds([]), do: {0, 0}
+
+  defp index_bounds(entries),
+    do: {List.first(entries).index, List.last(entries).index}
+
+  # Marks are the snapshots that DID change the model, inverted from the
+  # obvious reading: `[`/`]` exist to skip the no-op `update/2` cycles, so
+  # the interesting entries are the jump targets and the quiet ones are the
+  # noise being skipped.
+  defp changed_marks(entries),
+    do: for(%{changed: true} = entry <- entries, do: entry.index)
 
   defp scroll_panel(model, delta) do
     case model.panel do
@@ -421,16 +503,18 @@ defmodule Raxol.Debug.DebuggerApp do
     %{model | panel: next}
   end
 
-  defp toggle_pause(model) do
-    new_paused = not model.paused
+  defp toggle_pause(model), do: set_paused(model, not model.paused)
 
+  # The scrubber's `playing?` IS "recording is live": when it is, the cursor
+  # rides the tail, which is exactly what a transport that is playing does.
+  defp set_paused(model, paused) do
     if model.connected do
-      if new_paused,
+      if paused,
         do: TimeTravel.pause(model.tt_ref),
         else: TimeTravel.resume(model.tt_ref)
     end
 
-    %{model | paused: new_paused}
+    sync_scrubber(%{model | paused: paused})
   end
 
   defp restore(model) do
@@ -445,30 +529,12 @@ defmodule Raxol.Debug.DebuggerApp do
   end
 
   defp jump_to(model) do
-    case Integer.parse(model.jump_buffer) do
-      {idx, ""} ->
-        case TimeTravel.jump_to(model.tt_ref, idx) do
-          {:ok, snap} ->
-            changes = DiffFormatter.format_snapshot_diff(snap)
-            lines = Inspector.flatten(snap.model_after, model.expanded_paths)
+    parsed = Integer.parse(model.jump_buffer)
+    model = %{model | jump_mode: false, jump_buffer: ""}
 
-            %{
-              model
-              | cursor_index: idx,
-                current_snapshot: snap,
-                diff_changes: changes,
-                diff_offset: 0,
-                inspector_lines: lines,
-                jump_mode: false,
-                jump_buffer: ""
-            }
-
-          {:error, _} ->
-            %{model | jump_mode: false, jump_buffer: ""}
-        end
-
-      _ ->
-        %{model | jump_mode: false, jump_buffer: ""}
+    case parsed do
+      {idx, ""} -> seek_to(model, idx)
+      _ -> model
     end
   end
 
