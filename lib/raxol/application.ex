@@ -62,6 +62,9 @@ defmodule Raxol.Application do
     # Register headless tools with MCP registry (all environments)
     maybe_register_mcp_tools()
 
+    # Put those same tools in front of a Tidewave client, gated the same way.
+    maybe_inject_tidewave_tools()
+
     # Record startup metrics
     record_startup_metrics(start_time, mode, result)
 
@@ -375,13 +378,18 @@ defmodule Raxol.Application do
     )
   end
 
-  defp mcp_production? do
-    if Code.ensure_loaded?(Raxol.MCP.Deployment) do
-      Raxol.MCP.Deployment.production?()
-    else
-      mix_env() not in [:dev, :test]
-    end
-  end
+  # The HOST application's environment, deliberately NOT
+  # `Raxol.MCP.Deployment.production?/0`. That one is captured at raxol_mcp's
+  # COMPILE time, and as its own moduledoc says, a path dependency compiles under
+  # :prod regardless of the umbrella's env -- so it reads `true` inside a dev
+  # session. Selecting the default from it handed dev the production allowlist
+  # and denied every tool in `mix mcp.server` and Tidewave, which is the exact
+  # opposite of what the dev default is for.
+  #
+  # `mix_env/0` is read at runtime and answers for this application: `:dev` in a
+  # dev session, and `:prod` in a release, where Mix is absent entirely. It is
+  # already what decides whether the dev endpoint starts at all.
+  defp mcp_production?, do: mix_env() not in [:dev, :test]
 
   defp maybe_add_performance_monitoring do
     if feature_enabled?(:performance_monitoring) do
@@ -988,6 +996,44 @@ defmodule Raxol.Application do
     end
 
     :ok
+  end
+
+  # Tidewave dispatches out of its own map, so without this its client sees
+  # Tidewave's tools and none of ours. `inject_into_tidewave/1` supplies closures
+  # that re-enter through `Raxol.MCP.Server`, so what lands there answers to the
+  # same authorizer as every other MCP surface.
+  #
+  # Dev-scoped by construction rather than by a check here: `:tidewave` is an
+  # `only: :dev` dependency, so outside dev the module does not exist and this is
+  # false. `Raxol.Endpoint`, which mounts it, is likewise dev-only.
+  #
+  # Set `config :raxol, inject_tidewave_tools: false` to opt out.
+  defp maybe_inject_tidewave_tools do
+    if Code.ensure_loaded?(Tidewave) and
+         Code.ensure_loaded?(Raxol.Headless.McpTools) and
+         Application.get_env(:raxol, :inject_tidewave_tools, true) do
+      inject_tidewave_tools()
+    end
+
+    :ok
+  end
+
+  # A convenience, not a boot requirement: Tidewave refuses to start without Mix
+  # running, and a release has no Tidewave at all, so "not started" is an
+  # ordinary outcome rather than a failure worth taking the application down for.
+  defp inject_tidewave_tools do
+    case Raxol.Headless.McpTools.inject_into_tidewave() do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Log.debug(
+          "Raxol tools were not injected into Tidewave (#{inspect(reason)}); " <>
+            "Tidewave's own tools are unaffected."
+        )
+
+        :ok
+    end
   end
 
   defp mix_env, do: if(Code.ensure_loaded?(Mix), do: Mix.env(), else: :prod)

@@ -205,5 +205,32 @@ defmodule Raxol.ApplicationTest do
                    "authorizer; every tool would run unguarded"
       end
     end
+
+    # Configured-and-usable are different claims, and only this one catches the
+    # environment being misread. Selecting the default from
+    # `Raxol.MCP.Deployment.production?/0` looked right and passed every unit
+    # case above, but that value is captured at raxol_mcp's COMPILE time and a
+    # path dep compiles under :prod -- so a dev session silently got the
+    # production allowlist and `mix mcp.server` denied every tool. Asserting a
+    # non-nil authorizer could not see it; asserting a call SUCCEEDS can.
+    test "a tool actually runs outside production" do
+      case Process.whereis(Raxol.MCP.Server) do
+        nil ->
+          :ok
+
+        server ->
+          assert {:reply, %{result: result}} =
+                   Raxol.MCP.Server.handle_message(server, %{
+                     jsonrpc: "2.0",
+                     id: System.unique_integer([:positive]),
+                     method: "tools/call",
+                     params: %{"name" => "raxol_list", "arguments" => %{}}
+                   })
+
+          refute Map.get(result, :isError) == true,
+                 "the dev/test default denied a read tool, so this environment " <>
+                   "resolved the production allowlist: #{inspect(result)}"
+      end
+    end
   end
 end
