@@ -382,8 +382,24 @@ defmodule Raxol.Headless.McpTools do
     end
   end
 
+  # Its OWN connection id, never the shared default.
+  #
+  # `Raxol.MCP.Server.handle_message/2` attributes a call to the `:default`
+  # connection, which is also what `Transport.Stdio` subscribes as. Sharing it
+  # crossed two clients: an `{:ask, _}` decision on a call that arrived here sent
+  # the prompt to the STDIO client and let that client's answer resolve THIS
+  # call, while Tidewave -- whose request had parked -- got back the server's
+  # `nil` placeholder rendered as the string `"{:reply, nil}"`.
+  #
+  # A distinct id settles it by making the truth checkable. `elicitation_capable?`
+  # requires the connection to be subscribed, and Tidewave never subscribes: it
+  # dispatches synchronously and has no channel to be asked on. So ASK resolves
+  # to a machine-readable deny here, which is the right answer for a caller that
+  # cannot be prompted, and no other client is involved.
+  @tidewave_conn :tidewave
+
   defp safe_handle_message(server, message) do
-    Raxol.MCP.Server.handle_message(server, message)
+    Raxol.MCP.Server.handle_message(server, message, @tidewave_conn)
   catch
     :exit, _reason ->
       {:error,

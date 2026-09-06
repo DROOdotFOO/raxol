@@ -650,6 +650,53 @@ defmodule Raxol.Headless.McpToolsTest do
       assert message =~ "cannot be authorized"
     end
 
+    # Tidewave dispatches synchronously and has no channel to be prompted on, so
+    # an ASK decision must resolve to a deny for it and involve nobody else.
+    #
+    # It used to involve somebody else. `handle_message/2` attributes a call to
+    # the `:default` connection, which is what `Transport.Stdio` subscribes as,
+    # so an ASK on a Tidewave-dispatched call sent the prompt to the STDIO client
+    # and let that client's answer resolve this call. This test stands in as that
+    # stdio client: it subscribes as `:default`, advertises elicitation, and must
+    # be left entirely alone.
+    test "an ask decision denies here without prompting the stdio client" do
+      {:ok, owner} = start_supervised(TidewaveTableOwner)
+      GenServer.call(owner, :create_table)
+
+      registry = registry!()
+      :ok = McpTools.register(registry)
+
+      {:ok, server} =
+        Raxol.MCP.Server.start_link(
+          name: :"srv_#{System.unique_integer([:positive])}",
+          registry: registry,
+          authorizer: fn _tool, _args, _ctx -> {:ask, "may I?"} end
+        )
+
+      # Become the elicitation-capable client on the default connection.
+      :ok = Raxol.MCP.Server.subscribe(server, self())
+
+      {:reply, _} =
+        Raxol.MCP.Server.handle_message(server, %{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{"capabilities" => %{"elicitation" => %{}}}
+        })
+
+      assert :ok = McpTools.inject_into_tidewave(server: server)
+
+      [{:tools, {_tools, dispatch, _bt, _bd}}] =
+        :ets.lookup(:tidewave_tools, :tools)
+
+      assert {:error, message} = dispatch["raxol_list"].(%{})
+      assert message =~ "authorization_required"
+
+      # The prompt must never have been addressed to us. Under the shared
+      # connection id this arrived as an `elicitation/create` notification.
+      refute_receive {:mcp_notification, _}, 200
+    end
+
     test "is idempotent: a second inject does not duplicate our tools" do
       {:ok, owner} = start_supervised(TidewaveTableOwner)
       GenServer.call(owner, :create_table)
