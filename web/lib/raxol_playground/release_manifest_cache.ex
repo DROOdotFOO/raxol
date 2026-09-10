@@ -35,45 +35,69 @@ defmodule RaxolPlayground.ReleaseManifestCache do
   end
 
   defp refresh(opts, stale, now, stale_limit_ms) do
-    headers =
-      case stale do
-        {:ok, %{etag: etag}, _fetched_at} -> [{"if-none-match", etag}]
-        :miss -> []
-      end
-
     request_options =
-      [
-        url: @url,
-        headers: headers,
-        retry: false,
-        decode_body: false,
-        receive_timeout: 5_000,
-        connect_options: [timeout: 3_000]
-      ]
-      |> Keyword.merge(Keyword.get(opts, :req_options, []))
+      opts
+      |> request_options(stale)
+      |> Req.new()
 
-    case Req.get(request_options) do
-      {:ok, %Req.Response{status: 304}} ->
-        refresh_stale(stale, now)
+    request_options
+    |> Req.get()
+    |> handle_response(stale, now, stale_limit_ms)
+  end
 
-      {:ok, %Req.Response{status: 200, body: body} = response} when is_binary(body) ->
-        case ReleaseManifest.validate(body) do
-          :ok ->
-            etag = response.headers |> Map.get("etag", []) |> List.first() || etag(body)
-            entry = %{body: body, etag: etag}
-            store(entry, now)
-            {:ok, Map.put(entry, :stale?, false)}
+  defp request_options(opts, stale) do
+    base = [
+      url: @url,
+      headers: conditional_headers(stale),
+      retry: false,
+      decode_body: false,
+      receive_timeout: 5_000,
+      connect_options: [timeout: 3_000]
+    ]
 
-          {:error, reason} ->
-            stale_or_error(stale, now, stale_limit_ms, reason)
-        end
+    Keyword.merge(base, Keyword.get(opts, :req_options, []))
+  end
 
-      {:ok, %Req.Response{status: status}} ->
-        stale_or_error(stale, now, stale_limit_ms, {:http_status, status})
+  defp conditional_headers({:ok, %{etag: etag}, _fetched_at}),
+    do: [{"if-none-match", etag}]
 
-      {:error, reason} ->
-        stale_or_error(stale, now, stale_limit_ms, reason)
+  defp conditional_headers(:miss), do: []
+
+  defp handle_response({:ok, %Req.Response{status: 304}}, stale, now, _stale_limit_ms) do
+    refresh_stale(stale, now)
+  end
+
+  defp handle_response(
+         {:ok, %Req.Response{status: 200, body: body} = response},
+         stale,
+         now,
+         stale_limit_ms
+       )
+       when is_binary(body) do
+    case ReleaseManifest.validate(body) do
+      :ok -> store_response(response, body, now)
+      {:error, reason} -> stale_or_error(stale, now, stale_limit_ms, reason)
     end
+  end
+
+  defp handle_response(
+         {:ok, %Req.Response{status: status}},
+         stale,
+         now,
+         stale_limit_ms
+       ) do
+    stale_or_error(stale, now, stale_limit_ms, {:http_status, status})
+  end
+
+  defp handle_response({:error, reason}, stale, now, stale_limit_ms) do
+    stale_or_error(stale, now, stale_limit_ms, reason)
+  end
+
+  defp store_response(response, body, now) do
+    etag = response.headers |> Map.get("etag", []) |> List.first() || etag(body)
+    entry = %{body: body, etag: etag}
+    store(entry, now)
+    {:ok, Map.put(entry, :stale?, false)}
   end
 
   defp refresh_stale({:ok, entry, _fetched_at}, now) do

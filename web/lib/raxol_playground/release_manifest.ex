@@ -12,7 +12,18 @@ defmodule RaxolPlayground.ReleaseManifest do
 
   @spec validate(binary()) :: :ok | {:error, :invalid_manifest}
   def validate(body) when is_binary(body) do
-    with {:ok, manifest} <- Jason.decode(body),
+    case Jason.decode(body) do
+      {:ok, manifest} ->
+        if valid_manifest?(manifest), do: :ok, else: {:error, :invalid_manifest}
+
+      {:error, _reason} ->
+        {:error, :invalid_manifest}
+    end
+  end
+
+  def validate(_body), do: {:error, :invalid_manifest}
+
+  defp valid_manifest?(
          %{
            "schema_version" => 1,
            "version" => version,
@@ -21,21 +32,21 @@ defmodule RaxolPlayground.ReleaseManifest do
            "repository" => @repository,
            "signer_workflow" => @signer_workflow,
            "assets" => assets
-         } <- manifest,
-         true <- map_size(manifest) == 7,
-         true <- is_binary(version),
-         true <- is_binary(published_at),
-         true <- Regex.match?(~r/^\d+\.\d+\.\d+$/, version),
-         true <- tag == "raxol-cli-v#{version}",
-         {:ok, _, _} <- DateTime.from_iso8601(published_at),
-         true <- valid_assets?(assets, tag) do
-      :ok
-    else
-      _ -> {:error, :invalid_manifest}
-    end
+         } = manifest
+       )
+       when is_binary(version) and is_binary(tag) and is_binary(published_at) do
+    map_size(manifest) == 7 and
+      Regex.match?(~r/^\d+\.\d+\.\d+$/, version) and
+      tag == "raxol-cli-v#{version}" and
+      valid_timestamp?(published_at) and
+      valid_assets?(assets, tag)
   end
 
-  def validate(_body), do: {:error, :invalid_manifest}
+  defp valid_manifest?(_manifest), do: false
+
+  defp valid_timestamp?(published_at) do
+    match?({:ok, _, _}, DateTime.from_iso8601(published_at))
+  end
 
   defp valid_assets?(assets, tag) when is_map(assets) do
     MapSet.new(Map.keys(assets)) == MapSet.new(Map.keys(@assets)) and
