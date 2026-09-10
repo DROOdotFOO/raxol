@@ -20,7 +20,7 @@ window, and an npm version cannot be reused.
 | `raxol_watch` | Hex | 0.2.1 |
 | `raxol_payments` | Hex | 0.2.1 |
 | `raxol_telegram` | Hex | 0.2.1 |
-| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.7 |
+| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.8 |
 
 The following projects remain outside the public Hex train:
 `raxol_agent_client_protocol`, `raxol_gateway`, `raxol_earn`,
