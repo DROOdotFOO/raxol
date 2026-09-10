@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raxol.io/schemas/cli-release-manifest-v1.json",
+  "title": "Raxol CLI release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "version",
+    "tag",
+    "published_at",
+    "repository",
+    "signer_workflow",
+    "assets"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "tag": {"type": "string", "pattern": "^raxol-cli-v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "published_at": {"type": "string", "format": "date-time"},
+    "repository": {"const": "DROOdotFOO/raxol"},
+    "signer_workflow": {
+      "const": "DROOdotFOO/raxol/.github/workflows/release-raxol-cli.yml"
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["darwin-arm64", "linux-x64", "linux-arm64", "win32-x64"],
+      "properties": {
+        "darwin-arm64": {"$ref": "#/$defs/asset"},
+        "linux-x64": {"$ref": "#/$defs/asset"},
+        "linux-arm64": {"$ref": "#/$defs/asset"},
+        "win32-x64": {"$ref": "#/$defs/asset"}
+      }
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "url", "sha256", "attestation_url"],
+      "properties": {
+        "name": {"type": "string"},
+        "url": {"type": "string", "format": "uri", "pattern": "^https://github\\.com/"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "attestation_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://github\\.com/"
+        }
+      }
+    }
+  }
+}

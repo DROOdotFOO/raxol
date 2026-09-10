@@ -13,12 +13,12 @@ defmodule RaxolPlayground.Application do
       [
         RaxolPlaygroundWeb.Telemetry,
         {DNSCluster,
-         query:
-           Application.get_env(:raxol_playground, :dns_cluster_query) || :ignore},
+         query: Application.get_env(:raxol_playground, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: RaxolPlayground.PubSub}
       ] ++
         maybe_raxol_pubsub() ++
         [
+          RaxolPlayground.ReleaseManifestCache,
           RaxolPlaygroundWeb.Presence,
           RaxolPlaygroundWeb.Endpoint
         ]
@@ -70,14 +70,12 @@ defmodule RaxolPlayground.Application do
             # the public internet on one env var.
             app_module: Raxol.Playground.App,
             port: ssh_port(),
-            host_keys_dir:
-              System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys",
+            host_keys_dir: System.get_env("RAXOL_SSH_HOST_KEYS_DIR") || "/app/ssh_keys",
             allow_anonymous: true,
             max_connections: ssh_max_connections(),
             max_per_ip: env_int("RAXOL_SSH_MAX_PER_IP", 10),
             idle_timeout: :timer.seconds(env_int("RAXOL_SSH_IDLE_SECONDS", 300)),
-            max_session_duration:
-              :timer.seconds(env_int("RAXOL_SSH_MAX_SESSION_SECONDS", 3600))
+            max_session_duration: :timer.seconds(env_int("RAXOL_SSH_MAX_SESSION_SECONDS", 3600))
           },
           restart: :temporary
         )

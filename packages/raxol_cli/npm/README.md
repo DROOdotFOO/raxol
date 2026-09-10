@@ -20,6 +20,13 @@ curl -fsSL https://raxol.io/install | bash
 brew install droodotfoo/tap/raxol
 ```
 
+To require GitHub Actions provenance as well as the mandatory SHA-256 check,
+install the GitHub CLI first, then run:
+
+```bash
+curl -fsSL https://raxol.io/install | bash -s -- --verify-provenance
+```
+
 ## Connecting a provider
 
 Without a provider the agent replies with mock output. Connect one:
