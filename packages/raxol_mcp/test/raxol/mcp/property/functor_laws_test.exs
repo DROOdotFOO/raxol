@@ -81,9 +81,8 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
     end
   end
 
-  defp button_gen do
+  defp button_gen(id) do
     gen all(
-          id <- widget_id_gen(),
           label <- string(:printable, min_length: 1, max_length: 20),
           disabled <- boolean()
         ) do
@@ -91,20 +90,30 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
     end
   end
 
-  defp input_gen do
-    gen all(
-          id <- widget_id_gen(),
-          value <- string(:printable, max_length: 30)
-        ) do
+  defp input_gen(id) do
+    gen all(value <- string(:printable, max_length: 30)) do
       %{type: :text_input, id: id, attrs: %{value: value}, children: []}
     end
   end
 
-  defp widget_gen do
+  defp widget_gen(id) do
     frequency([
-      {3, button_gen()},
-      {2, input_gen()}
+      {3, button_gen(id)},
+      {2, input_gen(id)}
     ])
+  end
+
+  defp widget_list_gen(min_length, max_length) do
+    gen all(
+          ids <-
+            uniq_list_of(widget_id_gen(),
+              min_length: min_length,
+              max_length: max_length
+            ),
+          widgets <- fixed_list(Enum.map(ids, &widget_gen/1))
+        ) do
+      widgets
+    end
   end
 
   defp container_type_gen do
@@ -112,7 +121,7 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
   end
 
   defp flat_tree_gen do
-    gen all(widgets <- list_of(widget_gen(), min_length: 1, max_length: 6)) do
+    gen all(widgets <- widget_list_gen(1, 6)) do
       %{type: :column, children: widgets}
     end
   end
@@ -282,7 +291,7 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
 
     property "removing a widget removes exactly its tools" do
       check all(
-              widgets <- list_of(widget_gen(), min_length: 2, max_length: 6),
+              widgets <- widget_list_gen(2, 6),
               max_runs: 300
             ) do
         tree = %{type: :column, children: widgets}
@@ -299,15 +308,9 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
           |> Enum.map(& &1.name)
           |> MapSet.new()
 
-        # The removed tools should not be in the reduced set
-        # (unless another widget has the same ID, which is possible with generated IDs)
-        remaining_ids = MapSet.new(remaining, & &1[:id])
-
-        if removed[:id] not in remaining_ids do
-          for tool_name <- removed_widget_tools do
-            refute MapSet.member?(reduced_tools, tool_name),
-                   "Tool '#{tool_name}' from removed widget still present"
-          end
+        for tool_name <- removed_widget_tools do
+          refute MapSet.member?(reduced_tools, tool_name),
+                 "Tool '#{tool_name}' from removed widget still present"
         end
 
         # Remaining tools should still be present
@@ -322,7 +325,7 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
   describe "determinism" do
     property "reordering children produces same tool set (as a set)" do
       check all(
-              widgets <- list_of(widget_gen(), min_length: 2, max_length: 6),
+              widgets <- widget_list_gen(2, 6),
               max_runs: 300
             ) do
         tree = %{type: :column, children: widgets}
@@ -338,7 +341,7 @@ defmodule Raxol.MCP.Property.FunctorLawsTest do
 
     property "tool count equals sum of per-widget tool counts" do
       check all(
-              widgets <- list_of(widget_gen(), min_length: 1, max_length: 6),
+              widgets <- widget_list_gen(1, 6),
               max_runs: 300
             ) do
         tree = %{type: :column, children: widgets}

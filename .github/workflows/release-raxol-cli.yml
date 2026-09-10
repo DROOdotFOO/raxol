@@ -8,8 +8,8 @@ name: Release @raxol/cli npm package
 #
 # Manual runs build downloadable tarballs only. A matching `raxol-cli-v*` tag
 # builds and smokes every native binary, waits for release-environment approval,
-# publishes the npm packages, then attaches the same binaries and checksums to a
-# GitHub Release.
+# publishes the npm packages, proves a fresh registry install, attests the
+# binaries, then publishes immutable release assets and the latest manifest.
 
 on:
   push:
@@ -308,21 +308,62 @@ jobs:
             wait_until_visible "$dir"
           done
           publish_package "."
+          wait_until_visible "."
 
-  # A `raxol-cli-v*` tag attaches the per-arch binaries to a GitHub Release, so
-  # they have stable unauthenticated download URLs. Actions artifacts cannot
-  # serve this: they need a token to fetch and expire after 90 days, and the
-  # T-Bench install script curls them from inside an arbitrary task container.
-  # The root `release.yml` does not cover these tags -- its filter is `v*`,
-  # which does not match `raxol-cli-v*`.
+          version="$(node -p 'require("./package.json").version')"
+          packages=(
+            "@raxol/cli"
+            "@raxol/cli-darwin-arm64"
+            "@raxol/cli-linux-x64"
+            "@raxol/cli-linux-arm64"
+            "@raxol/cli-win32-x64"
+          )
+
+          for package in "${packages[@]}"; do
+            published_version="$(npm view "$package@$version" version)"
+            [[ "$published_version" == "$version" ]] || {
+              echo "::error::$package resolved $published_version instead of $version"
+              exit 1
+            }
+
+            predicate="$(npm view "$package@$version" dist.attestations.provenance.predicateType)"
+            [[ "$predicate" == "https://slsa.dev/provenance/v1" ]] || {
+              echo "::error::$package@$version has no SLSA provenance"
+              exit 1
+            }
+          done
+
+          smoke="$(mktemp -d)"
+          cache="$(mktemp -d)"
+          trap 'rm -rf "$smoke" "$cache"' EXIT
+          printf '{"private":true}\n' > "$smoke/package.json"
+          npm install --prefix "$smoke" --cache "$cache" --include=optional \
+            --prefer-online --no-audit --no-fund "@raxol/cli@$version"
+
+          installed_version="$("$smoke/node_modules/.bin/raxol" --version)"
+          [[ "$installed_version" == "raxol $version+"* ]] || {
+            echo "::error::fresh install reported $installed_version"
+            exit 1
+          }
+
+          (cd "$smoke" && npm audit signatures)
+
+  # Versioned release assets have stable unauthenticated URLs. Actions
+  # artifacts cannot serve installers because they require a token and expire.
+  # The root release workflow does not match the `raxol-cli-v*` tag family.
   release:
-    name: attach release assets
+    name: attach attested release assets
     needs: [linux-build, macos-build, windows-build, publish]
     if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Download built binaries
         uses: actions/download-artifact@v4
         with:
@@ -337,12 +378,83 @@ jobs:
           sha256sum raxol_cli_* > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Create release
+      - name: Attest release binaries
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Save and verify attestation bundle
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp "$ATTESTATION_BUNDLE" dist/raxol-cli-attestation.sigstore.json
+
+          for binary in dist/raxol_cli_*; do
+            gh attestation verify "$binary" \
+              --bundle dist/raxol-cli-attestation.sigstore.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-raxol-cli.yml" \
+              --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners
+          done
+
+      - name: Build release manifest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#raxol-cli-v}"
+          RAXOL_RELEASED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            node scripts/build_cli_release_manifest.mjs \
+              "$version" dist/SHA256SUMS dist/raxol-cli-manifest.json
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1]))' \
+            dist/raxol-cli-manifest.json
+
+      - name: Create immutable release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
             dist/raxol_cli_*
             dist/SHA256SUMS
+            dist/raxol-cli-attestation.sigstore.json
+            dist/raxol-cli-manifest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  channel:
+    name: update latest CLI manifest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish latest manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir channel
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern raxol-cli-manifest.json \
+            --dir channel
+          mv channel/raxol-cli-manifest.json channel/latest.json
+
+          if ! gh release view raxol-cli-channel --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create raxol-cli-channel \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Raxol CLI release channel" \
+              --notes "Mutable latest-release metadata. Versioned assets remain immutable." \
+              --prerelease
+          fi
+
+          gh release upload raxol-cli-channel channel/latest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

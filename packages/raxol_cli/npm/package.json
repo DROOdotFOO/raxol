@@ -1,6 +1,6 @@
 {
   "name": "@raxol/cli",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Interactive AI agent and TUI toolkit in your terminal. A self-contained binary (via Burrito), so `npm i -g @raxol/cli` puts `raxol` on your PATH -- no Erlang or Elixir required.",
   "bin": {
     "raxol": "bin/launcher.js"
@@ -12,10 +12,10 @@
     "bin/"
   ],
   "optionalDependencies": {
-    "@raxol/cli-darwin-arm64": "0.2.8",
-    "@raxol/cli-linux-x64": "0.2.8",
-    "@raxol/cli-linux-arm64": "0.2.8",
-    "@raxol/cli-win32-x64": "0.2.8"
+    "@raxol/cli-darwin-arm64": "0.2.9",
+    "@raxol/cli-linux-x64": "0.2.9",
+    "@raxol/cli-linux-arm64": "0.2.9",
+    "@raxol/cli-win32-x64": "0.2.9"
   },
   "keywords": [
     "raxol",

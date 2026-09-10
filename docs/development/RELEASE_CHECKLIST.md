@@ -20,7 +20,7 @@ window, and an npm version cannot be reused.
 | `raxol_watch` | Hex | 0.2.1 |
 | `raxol_payments` | Hex | 0.2.1 |
 | `raxol_telegram` | Hex | 0.2.1 |
-| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.8 |
+| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.9 |
 
 The following projects remain outside the public Hex train:
 `raxol_agent_client_protocol`, `raxol_gateway`, `raxol_earn`,
@@ -39,6 +39,12 @@ manual resumes from `master`.
   All five packages trust `release-raxol-cli.yml` with environment `release`.
 - Every publisher checks the registry first, so a failed train can resume
   without trying to overwrite versions that already exist.
+
+The active `Immutable release tags` repository ruleset blocks updates and
+deletions for `v*` and `raxol-cli-v*` tags, with no bypass actor. It deliberately
+does not block creation. Emergency recovery requires temporarily disabling the
+ruleset in repository settings, performing the audited repair, and immediately
+reactivating it. Never move a published version tag as routine recovery.
 
 ## Prepare the release commit
 
@@ -93,8 +99,10 @@ git push origin v2.8.0
 3. runs `mix raxol.release.check`;
 4. waits for `release` environment approval;
 5. publishes `Raxol.Release.PackageCheck.public_packages/0` in dependency
-   order, skipping versions already on Hex; and
-6. creates the GitHub Release only after publication succeeds.
+   order, skipping versions already on Hex;
+6. verifies every package through the public Hex API, waits for newly published
+   HexDocs, and compiles a clean consumer against the released root package; and
+7. creates the GitHub Release only after consumer verification succeeds.
 
 Validate or resume an existing tag manually:
 
@@ -112,18 +120,21 @@ The npm version in `packages/raxol_cli/npm/package.json` and the CLI Mix project
 version must already agree. Create the matching tag:
 
 ```bash
-git tag -a raxol-cli-v0.2.8 -m "raxol CLI 0.2.8"
-git push origin raxol-cli-v0.2.8
+git tag -a raxol-cli-v0.2.9 -m "raxol CLI 0.2.9"
+git push origin raxol-cli-v0.2.9
 ```
 
 `.github/workflows/release-raxol-cli.yml` rejects a mismatched tag before doing
 native builds. It builds and smokes Linux x64, Linux arm64, macOS arm64, and
 Windows x64; assembles the npm tarballs; waits for `release` approval; publishes
-each platform package and waits for registry visibility before publishing
-`@raxol/cli`; and creates the CLI GitHub Release only after npm succeeds.
+the four platform packages and wrapper; and then proves a fresh, isolated npm
+install with signature auditing. The workflow attests the four binaries, uploads
+the checksums, Sigstore bundle, and release manifest to the immutable GitHub
+Release, then updates the separate `raxol-cli-channel` manifest.
 
 A manual workflow run builds tarball artifacts but does not publish. Re-run a
-failed tag job to resume publication.
+failed tag job to resume publication; already-published npm versions are skipped
+but the registry smoke still runs.
 
 ## Registry verification
 
@@ -131,20 +142,35 @@ After approval and completion:
 
 ```bash
 mix hex.info raxol 2.8.0
-npm view @raxol/cli@0.2.8 version dist.integrity
+npm view @raxol/cli@0.2.9 version dist.integrity
 
 tmp="$(mktemp -d)"
-npm install --prefix "$tmp" @raxol/cli@0.2.8
+npm install --prefix "$tmp" @raxol/cli@0.2.9
 "$tmp/node_modules/.bin/raxol" --version
+(cd "$tmp" && npm audit signatures)
+
+curl -fsSL https://raxol.io/releases/latest.json
 
 install_dir="$(mktemp -d)"
 curl -fsSL https://raxol.io/install |
   RAXOL_INSTALL_DIR="$install_dir" bash
 "$install_dir/raxol" --version
+
+verified_dir="$(mktemp -d)"
+curl -fsSL https://raxol.io/install |
+  RAXOL_INSTALL_DIR="$verified_dir" \
+  RAXOL_VERIFY_PROVENANCE=1 bash
+"$verified_dir/raxol" --version
 ```
 
-Check each Hex package on HexDocs and each npm platform package in the registry.
-The curl installer must report `checksum ok` before installing.
+The default installer always checks SHA-256. Provenance mode additionally
+requires `gh` and verifies the GitHub repository, release workflow, exact tag
+ref, OIDC issuer, and hosted runner before installation.
+
+To roll latest discovery back without changing a version tag, download
+`raxol-cli-manifest.json` from the prior immutable release, rename it
+`latest.json`, and upload it to `raxol-cli-channel` with `gh release upload
+raxol-cli-channel latest.json --clobber`.
 
 ## Package-specific manual gates
 

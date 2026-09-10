@@ -17,27 +17,14 @@ defmodule Raxol.InstallScriptTest do
     end
   end
 
-  test "refuses to install when the release checksum file is unavailable" do
+  test "refuses to install when the release manifest is unavailable" do
     fake_bin = tmp_dir("fake-bin")
     install_dir = tmp_dir("install")
     curl = Path.join(fake_bin, "curl")
 
     File.write!(curl, """
     #!/usr/bin/env bash
-    set -euo pipefail
-    output=""
-    url=""
-    while [[ $# -gt 0 ]]; do
-      case "$1" in
-        -o) output="$2"; shift 2 ;;
-        http*) url="$1"; shift ;;
-        *) shift ;;
-      esac
-    done
-    if [[ "$url" == *SHA256SUMS ]]; then
-      exit 22
-    fi
-    printf 'fake binary' > "$output"
+    exit 22
     """)
 
     File.chmod!(curl, 0o755)
@@ -53,8 +40,19 @@ defmodule Raxol.InstallScriptTest do
       )
 
     assert status == 1
-    assert output =~ "refusing an unverified install"
+    assert output =~ "release manifest unavailable"
     refute File.exists?(Path.join(install_dir, "raxol"))
+  end
+
+  test "provenance environment accepts only explicit boolean values" do
+    {output, status} =
+      System.cmd("bash", [@script],
+        env: [{"RAXOL_VERIFY_PROVENANCE", "sometimes"}],
+        stderr_to_stdout: true
+      )
+
+    assert status == 64
+    assert output =~ "RAXOL_VERIFY_PROVENANCE must be 0 or 1"
   end
 
   defp tmp_dir(label) do

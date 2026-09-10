@@ -159,6 +159,7 @@ jobs:
       # PackageCheck owns the public train and its topological order. A failed
       # run is resumable: versions already visible on Hex are skipped.
       - name: Publish packages in dependency order
+        id: publish
         run: |
           set -euo pipefail
 
@@ -191,4 +192,112 @@ jobs:
                 IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
               end)
             ' | sed -n 's/^RAXOL_PACKAGE\t//p'
+          )
+
+  verify:
+    name: Verify public Hex release
+    needs: publish
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+      RAXOL_DEV_PORT: "4000"
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_ref }}
+          fetch-depth: 0
+
+      - name: Set up Erlang and Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      - name: Cache release dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            packages/*/deps
+            packages/*/_build
+          key: hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
+
+      - name: Install release tooling
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --check-locked
+
+      - name: Verify registry and documentation
+        run: |
+          set -euo pipefail
+
+          while IFS=$'\t' read -r package path; do
+            pushd "$path" >/dev/null
+            version="$(HEX_BUILD=1 mix run --no-start --no-compile --no-deps-check \
+              -e 'IO.write(Mix.Project.config()[:version])')"
+            popd >/dev/null
+
+            curl --fail --silent --show-error --output /dev/null \
+              "https://hex.pm/api/packages/$package/releases/$version"
+            echo "$package $version is visible on Hex"
+
+            docs_url="https://hexdocs.pm/$package/$version/"
+            for attempt in {1..60}; do
+              if curl --fail --silent --output /dev/null "$docs_url"; then
+                echo "$package $version documentation is visible"
+                break
+              fi
+              if [[ "$attempt" == "60" ]]; then
+                echo "::error::$package $version documentation is unavailable after 10 minutes"
+                exit 1
+              fi
+              echo "Waiting for $package $version documentation ($attempt/60)"
+              sleep 10
+            done
+          done < <(
+            mix run --no-start -e '
+              Raxol.Release.PackageCheck.public_packages()
+              |> Enum.each(fn %{app: app, path: path} ->
+                IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
+              end)
+            ' | sed -n 's/^RAXOL_PACKAGE\t//p'
+          )
+
+      - name: Compile a fresh Hex consumer
+        run: |
+          set -euo pipefail
+          version="$(mix run --no-start --no-compile --no-deps-check \
+            -e 'IO.write(Mix.Project.config()[:version])')"
+          consumer="$(mktemp -d)"
+          trap 'rm -rf "$consumer"' EXIT
+
+          cat > "$consumer/mix.exs" <<EOF
+          defmodule RaxolReleaseConsumer.MixProject do
+            use Mix.Project
+            def project do
+              [
+                app: :raxol_release_consumer,
+                version: "0.0.0",
+                elixir: "~> 1.17",
+                deps: [{:raxol, "== $version"}]
+              ]
+            end
+            def application, do: [extra_applications: [:logger]]
+          end
+          EOF
+
+          (
+            cd "$consumer"
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" mix local.hex --force
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" mix local.rebar --force
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" mix deps.get
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" \
+              mix compile --warnings-as-errors
           )
