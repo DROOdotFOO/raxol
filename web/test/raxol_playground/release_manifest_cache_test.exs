@@ -1,62 +1,45 @@
 defmodule RaxolPlayground.ReleaseManifestCacheTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias RaxolPlayground.ReleaseManifestCache
 
+  setup do
+    ReleaseManifestCache.reset()
+    on_exit(fn -> ReleaseManifestCache.reset() end)
+    :ok
+  end
+
   test "revalidates upstream and serves a bounded stale manifest on failure" do
     body = Jason.encode!(manifest())
-    {url, server} = serve_responses([{200, body, ~s("fixture")}, {503, "", nil}])
-    cache = Module.concat(__MODULE__, "Cache#{System.unique_integer([:positive])}")
-
-    start_supervised!(
-      {ReleaseManifestCache, name: cache, url: url, fresh_ms: 0, stale_ms: :timer.minutes(5)}
-    )
 
     assert {:ok, %{body: ^body, etag: ~s("fixture"), stale?: false}} =
-             ReleaseManifestCache.get(cache)
+             ReleaseManifestCache.get(
+               fresh_ms: 0,
+               req_options: [plug: response_plug(200, body, ~s("fixture"))]
+             )
 
     assert {:ok, %{body: ^body, etag: ~s("fixture"), stale?: true}} =
-             ReleaseManifestCache.get(cache)
+             ReleaseManifestCache.get(
+               fresh_ms: 0,
+               req_options: [plug: response_plug(503, "", nil)]
+             )
 
-    refute Process.alive?(server)
+    assert {:error, {:http_status, 503}} =
+             ReleaseManifestCache.get(
+               fresh_ms: 0,
+               stale_ms: -1,
+               req_options: [plug: response_plug(503, "", nil)]
+             )
   end
 
-  defp serve_responses(responses) do
-    {:ok, listener} =
-      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+  defp response_plug(status, body, etag) do
+    fn conn ->
+      conn = if etag, do: Plug.Conn.put_resp_header(conn, "etag", etag), else: conn
 
-    {:ok, {_address, port}} = :inet.sockname(listener)
-
-    server =
-      spawn_link(fn ->
-        Enum.each(responses, fn {status, body, etag} ->
-          {:ok, socket} = :gen_tcp.accept(listener)
-          {:ok, _request} = :gen_tcp.recv(socket, 0, 2_000)
-          :ok = :gen_tcp.send(socket, response(status, body, etag))
-          :gen_tcp.close(socket)
-        end)
-
-        :gen_tcp.close(listener)
-      end)
-
-    on_exit(fn ->
-      if Process.alive?(server), do: Process.exit(server, :kill)
-      :gen_tcp.close(listener)
-    end)
-
-    {"http://127.0.0.1:#{port}/latest.json", server}
-  end
-
-  defp response(status, body, etag) do
-    reason = if status == 200, do: "OK", else: "Service Unavailable"
-    etag_header = if etag, do: "ETag: #{etag}\r\n", else: ""
-
-    "HTTP/1.1 #{status} #{reason}\r\n" <>
-      "Content-Type: application/json\r\n" <>
-      etag_header <>
-      "Content-Length: #{byte_size(body)}\r\n" <>
-      "Connection: close\r\n\r\n" <>
-      body
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(status, body)
+    end
   end
 
   defp manifest do

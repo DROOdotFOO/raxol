@@ -18,7 +18,6 @@ defmodule RaxolPlayground.Application do
       ] ++
         maybe_raxol_pubsub() ++
         [
-          RaxolPlayground.ReleaseManifestCache,
           RaxolPlaygroundWeb.Presence,
           RaxolPlaygroundWeb.Endpoint
         ]
