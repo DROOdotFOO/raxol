@@ -341,7 +341,9 @@ jobs:
             --prefer-online --no-audit --no-fund "@raxol/cli@$version"
 
           installed_version="$("$smoke/node_modules/.bin/raxol" --version)"
-          [[ "$installed_version" == "raxol $version+"* ]] || {
+          expected_version="raxol $version"
+          [[ "$installed_version" == "$expected_version" ||
+            "$installed_version" == "$expected_version+"* ]] || {
             echo "::error::fresh install reported $installed_version"
             exit 1
           }
