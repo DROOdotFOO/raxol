@@ -173,19 +173,19 @@ Extend `.github/workflows/release-hex.yml` so GitHub Release creation depends on
 - Preserve dependency-order publication and skip-if-present resume behavior.
 - After publication, query the Hex API for every public package/version expected by the release train.
 - Build a fresh temporary Mix consumer that resolves the released root package from Hex with no umbrella path dependencies.
-- Poll HexDocs only for newly published package versions, with a bounded timeout and an error naming the package whose docs are unavailable.
+- Poll HexDocs for every package/version in the release train, with a bounded timeout and an error naming the package whose docs are unavailable. Checking the complete train keeps resumed partial releases safe.
 - Make the root GitHub Release depend on this verification result.
 
 ### User-Visible Outcome
 
-An automated Hex run is successful only when consumers can resolve the release from Hex and the newly published documentation is reachable.
+An automated Hex run is successful only when consumers can resolve the release from Hex and the complete train's documentation is reachable.
 
 ### Acceptance Criteria
 
 - [ ] Dry-run mode performs all preflight checks without publishing or entering registry verification.
 - [ ] Publish mode verifies every expected package/version through the public Hex API.
 - [ ] A fresh external Mix project resolves and compiles against the released root package.
-- [ ] Newly published package documentation becomes reachable before the GitHub Release is created.
+- [ ] Every package's versioned documentation is reachable before the GitHub Release is created.
 - [ ] Re-running a partially completed train skips existing versions and verifies the complete final registry state.
 
 ## Phase 7: Ship the First Automated Hex Release

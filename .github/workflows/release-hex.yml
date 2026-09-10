@@ -113,8 +113,6 @@ jobs:
     if: inputs.publish == true
     environment: release
     runs-on: ubuntu-latest
-    outputs:
-      published_packages: ${{ steps.publish.outputs.published_packages }}
     env:
       MIX_ENV: dev
       RAXOL_DEV_PORT: "4000"
@@ -164,7 +162,6 @@ jobs:
         id: publish
         run: |
           set -euo pipefail
-          new_releases=()
 
           while IFS=$'\t' read -r package path; do
             pushd "$path" >/dev/null
@@ -185,7 +182,6 @@ jobs:
             HEX_BUILD=1 mix hex.publish --yes
             curl --fail --silent --show-error --output /dev/null \
               --retry 12 --retry-all-errors --retry-delay 5 "$release_url"
-            new_releases+=("$package@$version")
             echo "::endgroup::"
 
             popd >/dev/null
@@ -198,11 +194,6 @@ jobs:
             ' | sed -n 's/^RAXOL_PACKAGE\t//p'
           )
 
-          (
-            IFS=,
-            echo "published_packages=${new_releases[*]}" >> "$GITHUB_OUTPUT"
-          )
-
   verify:
     name: Verify public Hex release
     needs: publish
@@ -211,7 +202,6 @@ jobs:
     env:
       MIX_ENV: dev
       RAXOL_DEV_PORT: "4000"
-      PUBLISHED_PACKAGES: ${{ needs.publish.outputs.published_packages }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v7
@@ -257,6 +247,20 @@ jobs:
             curl --fail --silent --show-error --output /dev/null \
               "https://hex.pm/api/packages/$package/releases/$version"
             echo "$package $version is visible on Hex"
+
+            docs_url="https://hexdocs.pm/$package/$version/"
+            for attempt in {1..60}; do
+              if curl --fail --silent --output /dev/null "$docs_url"; then
+                echo "$package $version documentation is visible"
+                break
+              fi
+              if [[ "$attempt" == "60" ]]; then
+                echo "::error::$package $version documentation is unavailable after 10 minutes"
+                exit 1
+              fi
+              echo "Waiting for $package $version documentation ($attempt/60)"
+              sleep 10
+            done
           done < <(
             mix run --no-start -e '
               Raxol.Release.PackageCheck.public_packages()
@@ -265,28 +269,6 @@ jobs:
               end)
             ' | sed -n 's/^RAXOL_PACKAGE\t//p'
           )
-
-          if [[ -n "$PUBLISHED_PACKAGES" ]]; then
-            IFS=',' read -ra releases <<< "$PUBLISHED_PACKAGES"
-            for release in "${releases[@]}"; do
-              package="${release%@*}"
-              version="${release#*@}"
-              docs_url="https://hexdocs.pm/$package/$version/"
-
-              for attempt in {1..60}; do
-                if curl --fail --silent --output /dev/null "$docs_url"; then
-                  echo "$package $version documentation is visible"
-                  break
-                fi
-                if [[ "$attempt" == "60" ]]; then
-                  echo "::error::$package $version documentation is unavailable after 10 minutes"
-                  exit 1
-                fi
-                echo "Waiting for $package $version documentation ($attempt/60)"
-                sleep 10
-              done
-            done
-          fi
 
       - name: Compile a fresh Hex consumer
         run: |
