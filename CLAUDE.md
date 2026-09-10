@@ -525,8 +525,8 @@ Publishing is tag-authorized and resumable:
   `.github/workflows/release-raxol-cli.yml`. It verifies the npm manifest
   version, builds and smokes every native binary, waits for the same environment
   approval, publishes the platform packages and `@raxol/cli`, then attaches the
-  binaries and checksums to the GitHub Release. npm trusted publishing uses OIDC
-  and emits provenance; `NPM_TOKEN` remains a migration fallback only.
+  binaries and checksums to the GitHub Release. npm publishing uses OIDC-only
+  trusted publishing and emits provenance.
 - Re-running either publisher skips versions already visible in the registry.
 
 Validate a Hex tag without publishing:

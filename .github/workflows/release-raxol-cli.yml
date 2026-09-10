@@ -229,8 +229,7 @@ jobs:
 
   # Publishing is a separate job so validation and native builds finish before
   # the protected release environment asks for approval. npm CLI 11.5.1+ uses
-  # OIDC when trusted publishers are configured, then falls back to NPM_TOKEN
-  # during the migration. Provenance is emitted on either path.
+  # the configured trusted publishers and emits provenance.
   publish:
     name: publish npm packages
     needs: package
@@ -265,8 +264,6 @@ jobs:
       # failed run is resumable because published versions are skipped.
       - name: Publish to npm
         working-directory: packages/raxol_cli/npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -285,8 +282,30 @@ jobs:
             fi
           }
 
+          wait_until_visible() {
+            local directory="$1"
+            local manifest="$directory/package.json"
+            local name
+            local version
+            name="$(node -p "require(require('node:path').resolve(process.argv[1])).name" "$manifest")"
+            version="$(node -p "require(require('node:path').resolve(process.argv[1])).version" "$manifest")"
+
+            for attempt in {1..60}; do
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "$name@$version is visible in the registry"
+                return 0
+              fi
+              echo "Waiting for $name@$version to become visible ($attempt/60)"
+              sleep 5
+            done
+
+            echo "::error::$name@$version was published but is not visible after 5 minutes"
+            return 1
+          }
+
           for dir in platforms/*/; do
             publish_package "$dir"
+            wait_until_visible "$dir"
           done
           publish_package "."
 
