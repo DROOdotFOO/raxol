@@ -35,9 +35,8 @@ That environment accepts the root `v*` tags, `raxol-cli-v*` tags, and approved
 manual resumes from `master`.
 
 - Hex uses the repository `HEX_API_KEY`; keep it scoped to API write.
-- npm uses GitHub Actions OIDC trusted publishing and emits provenance.
-  `NPM_TOKEN` is a migration fallback and should be removed after all five npm
-  packages trust `release-raxol-cli.yml`.
+- npm uses OIDC-only GitHub Actions trusted publishing and emits provenance.
+  All five packages trust `release-raxol-cli.yml` with environment `release`.
 - Every publisher checks the registry first, so a failed train can resume
   without trying to overwrite versions that already exist.
 
@@ -120,8 +119,8 @@ git push origin raxol-cli-v0.2.8
 `.github/workflows/release-raxol-cli.yml` rejects a mismatched tag before doing
 native builds. It builds and smokes Linux x64, Linux arm64, macOS arm64, and
 Windows x64; assembles the npm tarballs; waits for `release` approval; publishes
-the four platform packages before `@raxol/cli`; and creates the CLI GitHub
-Release only after npm succeeds.
+each platform package and waits for registry visibility before publishing
+`@raxol/cli`; and creates the CLI GitHub Release only after npm succeeds.
 
 A manual workflow run builds tarball artifacts but does not publish. Re-run a
 failed tag job to resume publication.
