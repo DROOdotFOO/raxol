@@ -2,7 +2,7 @@
 # install.sh -- install the `raxol` CLI from an immutable GitHub Release.
 #
 #   curl -fsSL https://raxol.io/install | bash
-#   curl -fsSL https://raxol.io/install | bash -s -- --version 0.2.9
+#   curl -fsSL https://raxol.io/install | bash -s -- --version 0.2.10
 #   curl -fsSL https://raxol.io/install | bash -s -- --verify-provenance
 #
 # The binary is self-contained (Burrito wraps its own ERTS), so this installs

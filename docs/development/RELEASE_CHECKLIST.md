@@ -20,7 +20,7 @@ window, and an npm version cannot be reused.
 | `raxol_watch` | Hex | 0.2.1 |
 | `raxol_payments` | Hex | 0.2.1 |
 | `raxol_telegram` | Hex | 0.2.1 |
-| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.9 |
+| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.10 |
 
 The following projects remain outside the public Hex train:
 `raxol_agent_client_protocol`, `raxol_gateway`, `raxol_earn`,
@@ -120,8 +120,8 @@ The npm version in `packages/raxol_cli/npm/package.json` and the CLI Mix project
 version must already agree. Create the matching tag:
 
 ```bash
-git tag -a raxol-cli-v0.2.9 -m "raxol CLI 0.2.9"
-git push origin raxol-cli-v0.2.9
+git tag -a raxol-cli-v0.2.10 -m "raxol CLI 0.2.10"
+git push origin raxol-cli-v0.2.10
 ```
 
 `.github/workflows/release-raxol-cli.yml` rejects a mismatched tag before doing
@@ -142,10 +142,10 @@ After approval and completion:
 
 ```bash
 mix hex.info raxol 2.8.0
-npm view @raxol/cli@0.2.9 version dist.integrity
+npm view @raxol/cli@0.2.10 version dist.integrity
 
 tmp="$(mktemp -d)"
-npm install --prefix "$tmp" @raxol/cli@0.2.9
+npm install --prefix "$tmp" @raxol/cli@0.2.10
 "$tmp/node_modules/.bin/raxol" --version
 (cd "$tmp" && npm audit signatures)
 
