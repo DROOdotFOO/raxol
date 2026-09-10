@@ -290,16 +290,16 @@ jobs:
             name="$(node -p "require(require('node:path').resolve(process.argv[1])).name" "$manifest")"
             version="$(node -p "require(require('node:path').resolve(process.argv[1])).version" "$manifest")"
 
-            for attempt in {1..60}; do
+            for attempt in {1..180}; do
               if npm view "$name@$version" version >/dev/null 2>&1; then
                 echo "$name@$version is visible in the registry"
                 return 0
               fi
-              echo "Waiting for $name@$version to become visible ($attempt/60)"
+              echo "Waiting for $name@$version to become visible ($attempt/180)"
               sleep 5
             done
 
-            echo "::error::$name@$version was published but is not visible after 5 minutes"
+            echo "::error::$name@$version was published but is not visible after 15 minutes"
             return 1
           }
 
