@@ -57,25 +57,38 @@
         "same run reports 232 instead of 1182, because packages/ is ~58% of the",
         "source tree. A narrowed scope makes the gate report a false improvement",
         "and, on --update, bakes the narrower coverage in permanently.",
-        "One pass takes ~50 min repo-wide and cannot be sharded: mix credo <path>",
-        "analyzes nothing against this config. Run nightly, not per-PR."
+        "CANNOT BE SHARDED: mix credo <path> analyzes nothing against this",
+        "config, so the repo-wide count must come from one pass.",
+        "The 2991s in runtime_seconds above is NOT the cost of the analysis.",
+        "One full --strict pass measured 95.4s of analysis in CI (73 checks,",
+        "3405 files, run 34168895863) and 161s locally including the compile,",
+        "so 2991 covers a cold umbrella compile, not the scan. This gate is",
+        "blocking per-PR on that basis; re-measure before demoting it.",
+        "DO NOT swap this gate for `credo diff`. Its issue identity is not",
+        "stable across the two revisions it compares, so it invents both",
+        "halves of a delta: on a PR touching only YAML and JSON it reported",
+        "209 new refactoring, 108 new readability and 138 new design findings",
+        "while also claiming 659 refactoring and 49 readability were fixed.",
+        "The absolute count here has no such ambiguity, and is the same number",
+        "nightly measures."
       ]
     },
     "dialyzer": {
-      "count": 91,
+      "count": 118,
       "command": "mix dialyzer --format short",
       "counts_lines_matching": "Total errors minus Skipped, from dialyxir's summary line",
-      "measured_at": "2026-09-07T00:21:55Z",
-      "measured_at_sha": "acd840ba1",
+      "measured_at": "2026-09-09T17:01:47Z",
+      "measured_at_sha": "818ef4bce",
       "scope": "root app beams only; packages/ contribute zero findings",
       "notes": [
-        "91 = Total errors (107) minus Skipped (16), i.e. the findings dialyzer",
-        "actually reports after .dialyzer_ignore.exs.",
+        "118 = Total errors (134) minus Skipped (16), i.e. the findings dialyzer",
+        "actually reports after .dialyzer_ignore.exs on the reference toolchain.",
+        "The previous 91 baseline came from a warm PLT and was not reproducible:",
+        "fresh reference-toolchain runs report 118 both locally and in PR CI, while",
+        "nightly's obsolete Elixir 1.19/OTP 27 literals reported 111. The baseline",
+        "was reset with --allow-regression only after nightly moved to mise.toml.",
         "Do NOT baseline the raw 'Total errors:' number: it is the count BEFORE the",
         "ignore file, so a landed suppression leaves it unchanged and is invisible.",
-        "History: 122 emitted at scan start; 106 after the a11y_node callback fix",
-        "removed 16 callback_type_mismatch; 97 after 11 documented palette.ex",
-        "contract_supertype suppressions; 91 after the border/hex consolidation.",
         "PLT TRAP 1 -- staleness. dialyxir keys its deps PLT off the DEPS hash,",
         "which a path dependency does not move, so editing or adding a module under",
         "packages/ leaves the PLT describing the old code. A fix removing 16 errors",
@@ -91,7 +104,7 @@
         ".plt.hash. Analysing against it gave 2055 findings, 1845 of them",
         "unknown_function -- a fabricated regression. Discard the PLT and let the",
         "analysis run rebuild it. The ratchet refuses to report a count when",
-        "unknown_function exceeds a quarter of the findings (healthy: 3 of 91)."
+        "unknown_function exceeds a quarter of the findings (healthy: 3 of 118)."
       ]
     }
   }

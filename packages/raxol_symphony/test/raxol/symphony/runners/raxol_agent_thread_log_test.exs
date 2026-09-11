@@ -20,6 +20,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
   alias Raxol.Symphony.{Config, Issue}
   alias Raxol.Symphony.Runners.RaxolAgent
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.Trackers.Memory
 
   # The orchestrator allocates a per-issue workspace and the runner requires
@@ -33,7 +34,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentThreadLogTest do
 
   defp ets_thread_log do
     table = :"sym_runner_thread_log_test_#{:erlang.unique_integer([:positive])}"
-    on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+    on_exit(fn -> EtsTables.drop([table, :"#{table}_seq"]) end)
     {Raxol.Agent.ThreadLog.Ets, %{table: table}}
   end
 

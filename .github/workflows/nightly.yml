@@ -63,6 +63,7 @@ jobs:
       - name: Setup OS dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
           sudo apt-get update
           sudo apt-get install -y build-essential autoconf m4 libncurses5-dev \
             libssl-dev libgl1-mesa-dev libglu1-mesa-dev libpng-dev openssl \
@@ -267,20 +268,35 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-  dialyzer-full:
-    name: Full Dialyzer Check
+  # Populates the Dialyzer PLT once, on a schedule, and publishes it under a
+  # key both the enforcing nightly ratchet and the per-PR advisory job restore.
+  #
+  # Both jobs use mise.toml, the repository's reference toolchain. The old
+  # 1.19/OTP 27 literals made nightly report 111 findings while PR CI and a
+  # clean local run on the reference 1.20/OTP 29 toolchain reported 118. One
+  # baseline cannot ratchet measurements from different analyzers.
+  #
+  # The prebuilt key deliberately omits packages/ sources and keys only on the
+  # resolved toolchain and mix.lock, so it is stable across PRs. Staleness with
+  # respect to packages/ is not this key's job: check-quality-ratchet.sh
+  # detects it by content hash and discards the deps PLT when necessary.
+  #
+  # The PLT is populated by a real analysis run, never `mix dialyzer --plt`;
+  # see the prohibition in priv/quality_baseline.json. `|| true` is correct
+  # here: findings are expected and this job only publishes the populated PLT.
+  plt-prebuild:
+    name: Prebuild Dialyzer PLT
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Setup Elixir
+        id: beam
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.19.0"
-          otp-version: "27.2"
-          install-hex: true
-          install-rebar: true
+          version-file: mise.toml
+          version-type: strict
 
       - name: Cache dependencies and PLTs
         uses: actions/cache@v6
@@ -289,9 +305,44 @@ jobs:
             deps
             _build
             priv/plts
-          key: plt-${{ runner.os }}-27.2-1.19.0-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          key: plt-prebuilt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
+
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          mix deps.compile
+
+      - name: Populate the PLT via a full analysis run
+        run: mix dialyzer --format short || true
+        timeout-minutes: 90
+
+  dialyzer-full:
+    name: Full Dialyzer Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      # Keyed the same way `plt-prebuild` saves, so the enforcing run analyses
+      # against the PLT that job populated rather than building its own.
+      - name: Cache dependencies and PLTs
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            priv/plts
+          key: plt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            plt-${{ runner.os }}-27.2-1.19.0-${{ hashFiles('**/mix.exs') }}-
+            plt-prebuilt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
+            plt-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
 
       - name: Install dependencies
         run: |
@@ -299,15 +350,23 @@ jobs:
           mix deps.get
           mix deps.compile
 
-      - name: Build PLTs
-        run: |
-          mix dialyzer --plt
-        timeout-minutes: 20
-        continue-on-error: true
-
+      # No `mix dialyzer --plt` step. priv/quality_baseline.json and
+      # ci-unified's dialyzer job both prohibit that call, and this job was
+      # the last place still making it: it produces a deps PLT the size of
+      # core.plt with none of the dependency apps in it, after which dialyxir
+      # reports "PLT is up to date!" permanently because freshness comes from
+      # a 20-byte .plt.hash. Analysing against it yielded 2055 findings, 1845
+      # of them unknown_function. This job enforces the healthy reference
+      # count.
+      #
+      # It was `continue-on-error: true` as well, so that corruption was
+      # silent. The ratchet builds what it needs correctly on its own and
+      # refuses to report a count when unknown_function dominates.
+      #
       # Enforced against priv/quality_baseline.json. Counts may only go down.
       - name: Dialyzer ratchet
         run: ./scripts/check-quality-ratchet.sh --gate dialyzer
+        timeout-minutes: 90
 
   # Credo is enforced here rather than in ci-unified because the scan cannot
   # be sharded: `mix credo <path>` analyzes nothing against the root

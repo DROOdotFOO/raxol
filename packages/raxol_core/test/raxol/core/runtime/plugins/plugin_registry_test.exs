@@ -2,6 +2,7 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRegistryTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Core.Runtime.Plugins.PluginRegistry
+  alias Raxol.Test.TestUtils
 
   # Fixture modules
   defmodule PluginWithCommands do
@@ -24,13 +25,10 @@ defmodule Raxol.Core.Runtime.Plugins.PluginRegistryTest do
     PluginRegistry.init()
 
     on_exit(fn ->
-      if :ets.whereis(:raxol_plugin_registry) != :undefined do
-        :ets.delete_all_objects(:raxol_plugin_registry)
-      end
-
-      if :ets.whereis(:raxol_plugin_commands) != :undefined do
-        :ets.delete_all_objects(:raxol_plugin_commands)
-      end
+      TestUtils.clear_ets_tables([
+        :raxol_plugin_registry,
+        :raxol_plugin_commands
+      ])
     end)
 
     :ok

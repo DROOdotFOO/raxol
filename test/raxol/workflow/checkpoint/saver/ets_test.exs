@@ -1,6 +1,8 @@
 defmodule Raxol.Workflow.Checkpoint.Saver.EtsTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Test.TestUtils
+
   alias Raxol.Workflow.Checkpoint
   alias Raxol.Workflow.Checkpoint.Saver.Ets
 
@@ -8,7 +10,7 @@ defmodule Raxol.Workflow.Checkpoint.Saver.EtsTest do
     table = :"ets_test_#{:erlang.unique_integer([:positive])}"
 
     on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      TestUtils.drop_ets_tables(table)
     end)
 
     {:ok, config: %{table: table}}

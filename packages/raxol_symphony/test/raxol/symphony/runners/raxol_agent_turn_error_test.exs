@@ -40,6 +40,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
   alias Raxol.Agent.Policy
   alias Raxol.Symphony.{Config, Issue}
   alias Raxol.Symphony.Runners.RaxolAgent
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.TestSupport.DenyTurnSandbox
   alias Raxol.Symphony.Trackers.Memory
 
@@ -224,7 +225,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
       table = :"sym_test_policy_cache_#{:erlang.unique_integer([:positive])}"
 
       on_exit(fn ->
-        if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+        EtsTables.drop(table)
       end)
 
       policy =
@@ -292,8 +293,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTurnErrorTest do
         :"sym_test_threadlog_error_#{:erlang.unique_integer([:positive])}"
 
       on_exit(fn ->
-        if :ets.whereis(thread_log_table) != :undefined,
-          do: :ets.delete(thread_log_table)
+        EtsTables.drop([thread_log_table, :"#{thread_log_table}_seq"])
       end)
 
       adapter = {Raxol.Agent.ThreadLog.Ets, %{table: thread_log_table}}

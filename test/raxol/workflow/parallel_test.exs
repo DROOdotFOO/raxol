@@ -16,6 +16,8 @@ defmodule Raxol.Workflow.ParallelTest do
 
   use ExUnit.Case, async: false
 
+  alias Raxol.Test.TestUtils
+
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Graph
 
@@ -26,12 +28,15 @@ defmodule Raxol.Workflow.ParallelTest do
         |> Graph.add_channel(:findings, into: :findings, with: &Map.merge/2)
 
       assert Map.has_key?(graph.channels, :findings)
-      assert %Raxol.Workflow.Channel{into: :findings} = graph.channels[:findings]
+
+      assert %Raxol.Workflow.Channel{into: :findings} =
+               graph.channels[:findings]
     end
 
     test "add_channel/3 rejects non-2-arity reducer" do
       assert_raise ArgumentError, ~r/:with must be a 2-arity/, fn ->
-        Graph.new(:c2) |> Graph.add_channel(:f, into: :f, with: fn _ -> :nope end)
+        Graph.new(:c2)
+        |> Graph.add_channel(:f, into: :f, with: fn _ -> :nope end)
       end
     end
 
@@ -108,7 +113,10 @@ defmodule Raxol.Workflow.ParallelTest do
       assert {:ok, %Compiled{} = compiled} = Graph.compile(graph)
 
       assert Map.has_key?(compiled.channels, :findings)
-      assert %Raxol.Workflow.Edge.JoinEdge{upstream: [:a, :b]} = compiled.joins_by_node[:report]
+
+      assert %Raxol.Workflow.Edge.JoinEdge{upstream: [:a, :b]} =
+               compiled.joins_by_node[:report]
+
       assert compiled.joins_by_upstream[:a].target == :report
       assert compiled.joins_by_upstream[:b].target == :report
     end
@@ -147,9 +155,15 @@ defmodule Raxol.Workflow.ParallelTest do
       graph =
         Graph.new(:fan3)
         |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
-        |> Graph.add_node(:partial_x, fn s -> {:ok, Map.put(s, :counts, %{x: 1})} end)
-        |> Graph.add_node(:partial_y, fn s -> {:ok, Map.put(s, :counts, %{y: 2})} end)
-        |> Graph.add_node(:partial_z, fn s -> {:ok, Map.put(s, :counts, %{z: 3})} end)
+        |> Graph.add_node(:partial_x, fn s ->
+          {:ok, Map.put(s, :counts, %{x: 1})}
+        end)
+        |> Graph.add_node(:partial_y, fn s ->
+          {:ok, Map.put(s, :counts, %{y: 2})}
+        end)
+        |> Graph.add_node(:partial_z, fn s ->
+          {:ok, Map.put(s, :counts, %{z: 3})}
+        end)
         |> Graph.add_node(:report, fn s ->
           {:ok, Map.put(s, :total, Enum.sum(Map.values(s.counts)))}
         end)
@@ -189,7 +203,9 @@ defmodule Raxol.Workflow.ParallelTest do
       graph =
         Graph.new(:chan)
         |> Graph.add_channel(:findings, into: :findings, with: &Map.merge/2)
-        |> Graph.add_node(:fan_out, fn s -> {:ok, Map.put(s, :findings, %{})} end)
+        |> Graph.add_node(:fan_out, fn s ->
+          {:ok, Map.put(s, :findings, %{})}
+        end)
         |> Graph.add_node(:scout_a, fn s ->
           {:ok, Map.put(s, :findings, Map.put(s.findings, :a, 1))}
         end)
@@ -223,7 +239,7 @@ defmodule Raxol.Workflow.ParallelTest do
   describe "branch_id in checkpoint metadata" do
     test "per-branch checkpoints carry branch_id; sequential ones carry nil" do
       table = :"branch_id_ckpt_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       graph =
@@ -245,10 +261,16 @@ defmodule Raxol.Workflow.ParallelTest do
       {:ok, _final, meta} = Compiled.invoke(compiled, %{})
 
       {:ok, checkpoints} =
-        Raxol.Workflow.Checkpoint.Saver.Ets.list(%{table: table}, meta.run_id, 50)
+        Raxol.Workflow.Checkpoint.Saver.Ets.list(
+          %{table: table},
+          meta.run_id,
+          50
+        )
 
       by_node =
-        Map.new(checkpoints, fn ck -> {ck.metadata.node_id, ck.metadata.branch_id} end)
+        Map.new(checkpoints, fn ck ->
+          {ck.metadata.node_id, ck.metadata.branch_id}
+        end)
 
       # Branch nodes carry {join_target, branch_index}.
       assert by_node[:scout_a] == {:report, 0}
@@ -287,7 +309,9 @@ defmodule Raxol.Workflow.ParallelTest do
         |> Graph.add_node(:b2, fn s -> {:ok, Map.put(s, :b2, true)} end)
         |> Graph.add_node(:merge, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :gate)
-        |> Graph.add_conditional_edge(:gate, [:b0, :b1, :b2], fn _ -> [:b0, :b1, :b2] end)
+        |> Graph.add_conditional_edge(:gate, [:b0, :b1, :b2], fn _ ->
+          [:b0, :b1, :b2]
+        end)
         |> Graph.add_edge(:b0, :merge)
         |> Graph.add_edge(:b1, :merge)
         |> Graph.add_edge(:b2, :merge)
@@ -326,9 +350,13 @@ defmodule Raxol.Workflow.ParallelTest do
         Graph.new(:multi2)
         |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
         |> Graph.add_node(:scout_a, fn s -> {:ok, Map.put(s, :a, 1)} end)
-        |> Graph.add_node(:scout_a_squared, fn s -> {:ok, Map.put(s, :a, s.a * s.a)} end)
+        |> Graph.add_node(:scout_a_squared, fn s ->
+          {:ok, Map.put(s, :a, s.a * s.a)}
+        end)
         |> Graph.add_node(:scout_b, fn s -> {:ok, Map.put(s, :b, 10)} end)
-        |> Graph.add_node(:scout_b_doubled, fn s -> {:ok, Map.put(s, :b, s.b * 2)} end)
+        |> Graph.add_node(:scout_b_doubled, fn s ->
+          {:ok, Map.put(s, :b, s.b * 2)}
+        end)
         |> Graph.add_node(:report, fn s ->
           {:ok, Map.put(s, :total, s.a + s.b)}
         end)
@@ -366,9 +394,13 @@ defmodule Raxol.Workflow.ParallelTest do
         |> Graph.add_node(:long_3, fn s -> {:ok, Map.put(s, :l3, true)} end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :fan_out)
-        |> Graph.add_conditional_edge(:fan_out, [:short, :medium_1, :long_1], fn _ ->
-          [:short, :medium_1, :long_1]
-        end)
+        |> Graph.add_conditional_edge(
+          :fan_out,
+          [:short, :medium_1, :long_1],
+          fn _ ->
+            [:short, :medium_1, :long_1]
+          end
+        )
         |> Graph.add_edge(:short, :join)
         |> Graph.add_edge(:medium_1, :medium_2)
         |> Graph.add_edge(:medium_2, :join)
@@ -391,7 +423,7 @@ defmodule Raxol.Workflow.ParallelTest do
 
     test "every node in a multi-node branch carries the same branch_id in checkpoint metadata" do
       table = :"multi_bid_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       graph =
@@ -415,10 +447,16 @@ defmodule Raxol.Workflow.ParallelTest do
       {:ok, _final, meta} = Compiled.invoke(compiled, %{})
 
       {:ok, checkpoints} =
-        Raxol.Workflow.Checkpoint.Saver.Ets.list(%{table: table}, meta.run_id, 50)
+        Raxol.Workflow.Checkpoint.Saver.Ets.list(
+          %{table: table},
+          meta.run_id,
+          50
+        )
 
       by_node =
-        Map.new(checkpoints, fn ck -> {ck.metadata.node_id, ck.metadata.branch_id} end)
+        Map.new(checkpoints, fn ck ->
+          {ck.metadata.node_id, ck.metadata.branch_id}
+        end)
 
       # Branch A: both a1 and a2 share {:join, 0}.
       assert by_node[:a1] == {:join, 0}
@@ -458,7 +496,9 @@ defmodule Raxol.Workflow.ParallelTest do
         Graph.new(:branch_pause)
         |> Graph.add_node(:gate, fn s -> {:ok, s} end)
         |> Graph.add_node(:a1, fn s -> {:ok, Map.put(s, :a1, true)} end)
-        |> Graph.add_node(:a2_pause, fn _s -> Raxol.Workflow.interrupt(:awaiting_review) end)
+        |> Graph.add_node(:a2_pause, fn _s ->
+          Raxol.Workflow.interrupt(:awaiting_review)
+        end)
         |> Graph.add_node(:b1, fn s -> {:ok, Map.put(s, :b1, true)} end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :gate)
@@ -526,7 +566,7 @@ defmodule Raxol.Workflow.ParallelTest do
   describe "per-branch pause + resume" do
     test "Compiled.resume completes a paused branch and merges with siblings" do
       table = :"pb_pause_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       graph =
@@ -565,17 +605,21 @@ defmodule Raxol.Workflow.ParallelTest do
 
     test "branch_id is set on the pause checkpoint's metadata" do
       table = :"pb_meta_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       graph =
         Graph.new(:pb2)
         |> Graph.add_node(:gate, fn s -> {:ok, s} end)
         |> Graph.add_node(:a, fn s -> {:ok, Map.put(s, :a, true)} end)
-        |> Graph.add_node(:b_pause, fn _s -> Raxol.Workflow.interrupt(:awaiting_b) end)
+        |> Graph.add_node(:b_pause, fn _s ->
+          Raxol.Workflow.interrupt(:awaiting_b)
+        end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :gate)
-        |> Graph.add_conditional_edge(:gate, [:a, :b_pause], fn _ -> [:a, :b_pause] end)
+        |> Graph.add_conditional_edge(:gate, [:a, :b_pause], fn _ ->
+          [:a, :b_pause]
+        end)
         |> Graph.add_edge(:a, :join)
         |> Graph.add_edge(:b_pause, :join)
         |> Graph.add_join(:join, [:a, :b_pause])
@@ -596,7 +640,7 @@ defmodule Raxol.Workflow.ParallelTest do
 
     test "two paused branches resume one at a time" do
       table = :"pb_two_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       graph =
@@ -624,7 +668,8 @@ defmodule Raxol.Workflow.ParallelTest do
 
       # First run: both branches pause. Surfaces the FIRST paused
       # branch (index 0, :a_pause, reason :awaiting_a).
-      assert {:interrupted, run_id, _state, :awaiting_a} = Compiled.invoke(compiled, %{})
+      assert {:interrupted, run_id, _state, :awaiting_a} =
+               Compiled.invoke(compiled, %{})
 
       # Resume :a_pause with :approved_a. Branch B is still paused, so
       # the resume itself interrupts again -- this time for :b_pause.
@@ -633,7 +678,8 @@ defmodule Raxol.Workflow.ParallelTest do
 
       # Resume :b_pause with :approved_b. Both branches now complete;
       # the join body runs and the run finishes.
-      assert {:ok, final, _meta} = Compiled.resume(compiled, run_id, :approved_b)
+      assert {:ok, final, _meta} =
+               Compiled.resume(compiled, run_id, :approved_b)
 
       assert final.a_decision == :approved_a
       assert final.b_decision == :approved_b
@@ -666,9 +712,13 @@ defmodule Raxol.Workflow.ParallelTest do
         end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :fan_out)
-        |> Graph.add_conditional_edge(:fan_out, [:slow_a, :slow_b, :slow_c], fn _ ->
-          [:slow_a, :slow_b, :slow_c]
-        end)
+        |> Graph.add_conditional_edge(
+          :fan_out,
+          [:slow_a, :slow_b, :slow_c],
+          fn _ ->
+            [:slow_a, :slow_b, :slow_c]
+          end
+        )
         |> Graph.add_edge(:slow_a, :join)
         |> Graph.add_edge(:slow_b, :join)
         |> Graph.add_edge(:slow_c, :join)
@@ -707,10 +757,13 @@ defmodule Raxol.Workflow.ParallelTest do
           write_concurrency: true
         ])
 
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
 
       log = fn idx ->
-        :ets.insert(table, {:erlang.unique_integer([:monotonic, :positive]), idx})
+        :ets.insert(
+          table,
+          {:erlang.unique_integer([:monotonic, :positive]), idx}
+        )
       end
 
       graph =
@@ -769,9 +822,13 @@ defmodule Raxol.Workflow.ParallelTest do
         |> Graph.add_node(:scout_c, fn s -> {:ok, Map.put(s, :c, true)} end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :fan_out)
-        |> Graph.add_conditional_edge(:fan_out, [:scout_a, :scout_b, :scout_c], fn _ ->
-          [:scout_a, :scout_b, :scout_c]
-        end)
+        |> Graph.add_conditional_edge(
+          :fan_out,
+          [:scout_a, :scout_b, :scout_c],
+          fn _ ->
+            [:scout_a, :scout_b, :scout_c]
+          end
+        )
         |> Graph.add_edge(:scout_a, :join)
         |> Graph.add_edge(:scout_b, :join)
         |> Graph.add_edge(:scout_c, :join)
@@ -782,8 +839,12 @@ defmodule Raxol.Workflow.ParallelTest do
       {:ok, _final, _meta} = Compiled.invoke(compiled, %{})
 
       events = drain_started([])
-      branch_events = Enum.filter(events, &(&1.node_id in [:scout_a, :scout_b, :scout_c]))
-      sequential_events = Enum.filter(events, &(&1.node_id in [:fan_out, :join]))
+
+      branch_events =
+        Enum.filter(events, &(&1.node_id in [:scout_a, :scout_b, :scout_c]))
+
+      sequential_events =
+        Enum.filter(events, &(&1.node_id in [:fan_out, :join]))
 
       trace_ids = branch_events |> Enum.map(& &1[:trace_id]) |> Enum.uniq()
       assert length(trace_ids) == 1
@@ -803,7 +864,8 @@ defmodule Raxol.Workflow.ParallelTest do
 
       # Sequential nodes' parent spans are the run-level span, not any
       # branch span.
-      sequential_parents = sequential_events |> Enum.map(& &1[:parent_span_id]) |> Enum.uniq()
+      sequential_parents =
+        sequential_events |> Enum.map(& &1[:parent_span_id]) |> Enum.uniq()
 
       refute branch_parents[:scout_a] in sequential_parents
       refute branch_parents[:scout_b] in sequential_parents
@@ -830,10 +892,13 @@ defmodule Raxol.Workflow.ParallelTest do
           write_concurrency: true
         ])
 
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
 
       log = fn tag ->
-        :ets.insert(table, {:erlang.unique_integer([:monotonic, :positive]), tag})
+        :ets.insert(
+          table,
+          {:erlang.unique_integer([:monotonic, :positive]), tag}
+        )
       end
 
       graph =
@@ -857,9 +922,13 @@ defmodule Raxol.Workflow.ParallelTest do
         end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :fan_out)
-        |> Graph.add_conditional_edge(:fan_out, [:fast_fail, :slow_a, :slow_b], fn _ ->
-          [:fast_fail, :slow_a, :slow_b]
-        end)
+        |> Graph.add_conditional_edge(
+          :fan_out,
+          [:fast_fail, :slow_a, :slow_b],
+          fn _ ->
+            [:fast_fail, :slow_a, :slow_b]
+          end
+        )
         |> Graph.add_edge(:fast_fail, :join)
         |> Graph.add_edge(:slow_a, :join)
         |> Graph.add_edge(:slow_b, :join)
@@ -891,7 +960,9 @@ defmodule Raxol.Workflow.ParallelTest do
         |> Graph.add_node(:b_bomb, fn _s -> {:error, :b_boom} end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :gate)
-        |> Graph.add_conditional_edge(:gate, [:a, :b_bomb], fn _ -> [:a, :b_bomb] end)
+        |> Graph.add_conditional_edge(:gate, [:a, :b_bomb], fn _ ->
+          [:a, :b_bomb]
+        end)
         |> Graph.add_edge(:a, :join)
         |> Graph.add_edge(:b_bomb, :join)
         |> Graph.add_join(:join, [:a, :b_bomb], parallelism: 1)
@@ -906,7 +977,9 @@ defmodule Raxol.Workflow.ParallelTest do
         Graph.new(:serial_pause)
         |> Graph.add_node(:gate, fn s -> {:ok, s} end)
         |> Graph.add_node(:a, fn s -> {:ok, Map.put(s, :a, true)} end)
-        |> Graph.add_node(:b_pause, fn _s -> Raxol.Workflow.interrupt(:need_b) end)
+        |> Graph.add_node(:b_pause, fn _s ->
+          Raxol.Workflow.interrupt(:need_b)
+        end)
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :gate)
         |> Graph.add_conditional_edge(:gate, [:a, :b_pause], fn _ ->

@@ -1,223 +1,194 @@
 # Release checklist
 
-The ordered sequence for publishing a Raxol package to Hex. Written for someone
-who holds the Hex credentials and the wallet, and who has no other context on
-this repo.
+Release process for the public Hex train and the `@raxol/cli` npm package.
+Publishing is close to irreversible: a new Hex version has a one-hour update
+window, and an npm version cannot be reused.
 
-Everything here is copy-pasteable and runs from the repository root unless a
-step says otherwise. Steps marked **OPERATOR** need a credential, a live
-network, or a chain transaction, and cannot be automated or rehearsed offline.
+## Published surfaces
 
-Publishing is close to irreversible. A brand new package can be reverted within
-24 hours of its first publish; a new version of an existing package only within
-one hour (`mix hex.publish --revert VERSION`). After that the version is
-permanent. Read the whole of the section for the package you are publishing
-before you run anything.
+| Package | Registry | Current version |
+| --- | --- | --- |
+| `raxol` | Hex | 2.7.0 |
+| `raxol_core` | Hex | 2.7.0 |
+| `raxol_sensor` | Hex | 2.7.0 |
+| `raxol_terminal` | Hex | 2.7.0 |
+| `raxol_mcp` | Hex | 2.7.0 |
+| `raxol_liveview` | Hex | 2.7.0 |
+| `raxol_plugin` | Hex | 2.7.0 |
+| `raxol_agent` | Hex | 2.7.0 |
+| `raxol_speech` | Hex | 0.2.1 |
+| `raxol_watch` | Hex | 0.2.1 |
+| `raxol_payments` | Hex | 0.2.1 |
+| `raxol_telegram` | Hex | 0.2.1 |
+| `@raxol/cli` and four `@raxol/cli-*` binaries | npm | 0.2.10 |
 
-## What is published today
+The following projects remain outside the public Hex train:
+`raxol_agent_client_protocol`, `raxol_gateway`, `raxol_earn`,
+`raxol_symphony`, `raxol_cli`, and `raxol_console`. Package-specific gates for
+the candidates closest to publication remain below.
 
-Twelve packages are on Hex. Six are not. Verified against `mix.exs` in the tree
-and the Hex API, not against prose.
+## Authorization model
 
-| Package                        | In tree      | On Hex | State                                |
-| ------------------------------ | ------------ | ------ | ------------------------------------ |
-| `raxol`                        | 2.6.1        | 2.6.1  | published, current                   |
-| `raxol_core`                   | 2.6.0        | 2.6.0  | published, current                   |
-| `raxol_terminal`               | 2.6.1        | 2.6.1  | published, current                   |
-| `raxol_agent`                  | 2.6.0        | 2.6.0  | published, current                   |
-| `raxol_mcp`                    | 2.6.0        | 2.6.0  | published, current                   |
-| `raxol_liveview`               | 2.6.0        | 2.6.0  | published, current                   |
-| `raxol_plugin`                 | 2.6.0        | 2.6.0  | published, current                   |
-| `raxol_sensor`                 | 2.6.0        | 2.6.0  | published, current                   |
-| `raxol_payments`               | 0.2.0        | 0.2.0  | published, current                   |
-| `raxol_speech`                 | 0.2.0        | 0.1.0  | published, 0.2.0 pending             |
-| `raxol_telegram`               | 0.2.0        | 0.1.0  | published, 0.2.0 pending             |
-| `raxol_watch`                  | 0.2.0        | 0.1.0  | published, 0.2.0 pending             |
-| `raxol_gateway`                | 0.1.0        | none   | unpublished, ready                   |
-| `raxol_symphony`               | 0.2.0        | none   | unpublished, blocked on a live run   |
-| `raxol_earn`                   | 0.2.0        | none   | unpublished, blocked on Base mainnet |
-| `raxol_cli`                    | 0.2.6        | none   | unpublished, not scheduled           |
-| `raxol_console`                | 0.1.0        | none   | unpublished, not scheduled           |
-| `raxol_agent_client_protocol`  | 0.1.0-rc.0   | none   | unpublished, not scheduled           |
+The release commit and immutable version tag define what can ship. Registry
+jobs run only after approval in the protected GitHub `release` environment.
+That environment accepts the root `v*` tags, `raxol-cli-v*` tags, and approved
+manual resumes from `master`.
 
-Two version lines run in parallel: the framework packages on 2.6.x, and the
-payment and surface packages on independent 0.x lines. They are not released
-together, so a 0.x publish does not require touching the 2.6.x line.
+- Hex uses the repository `HEX_API_KEY`; keep it scoped to API write.
+- npm uses OIDC-only GitHub Actions trusted publishing and emits provenance.
+  All five packages trust `release-raxol-cli.yml` with environment `release`.
+- Every publisher checks the registry first, so a failed train can resume
+  without trying to overwrite versions that already exist.
 
-## Publish order is a hard gate, not advice
+The active `Immutable release tags` repository ruleset blocks updates and
+deletions for `v*` and `raxol-cli-v*` tags, with no bypass actor. It deliberately
+does not block creation. Emergency recovery requires temporarily disabling the
+ruleset in repository settings, performing the audited repair, and immediately
+reactivating it. Never move a published version tag as routine recovery.
 
-Read this before you publish anything. Order is forced by inter-package
-requirements. Three of the packages below name a version of a sibling that Hex
-does not carry yet, so publishing out of order does not degrade gracefully: the
-publish aborts, because `HEX_BUILD=1 mix deps.get` cannot resolve the
-requirement.
+## Prepare the release commit
 
-**The three blocking prerequisites.** `raxol_speech`, `raxol_telegram`, and
-`raxol_watch` are all 0.2.0 in this tree and 0.1.0 on Hex. Two packages
-graduating now declare them at `"~> 0.2"`:
-
-| Publishing        | Requires on Hex first                    | Declared in `mix.exs`                            | If you skip it                              |
-| ----------------- | ---------------------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| `raxol_gateway`   | `raxol_speech` 0.2.0                     | `raxol_speech "~> 0.2"`, optional                | `HEX_BUILD=1 mix deps.get` cannot resolve   |
-| `raxol_symphony`  | `raxol_telegram` 0.2.0, `raxol_watch` 0.2.0 | both `"~> 0.2"`, optional                     | `HEX_BUILD=1 mix deps.get` cannot resolve   |
-
-Optional does not help here. An optional requirement still has to name a
-version that exists in the registry.
-
-**The order, top to bottom.** Do not reorder it.
-
-1. **`raxol_speech` 0.2.0**. Prerequisite for `raxol_gateway`. Requires only
-   `raxol_core "~> 2.6"`, already on Hex.
-2. **`raxol_watch` 0.2.0** and **`raxol_telegram` 0.2.0**. Prerequisites for
-   `raxol_symphony`. Independent of each other.
-3. **`raxol_gateway` 0.1.0**. Nothing external blocks it once step 1 is done.
-4. **`raxol_symphony` 0.2.0**, after step 2 and after its live run
-   (see [`raxol_symphony` 0.2.0](#raxol_symphony-020)).
-5. **`raxol_earn` 0.2.0**, after its Base mainnet offering
-   (see [`raxol_earn` 0.2.0](#raxol_earn-020)). Independent of the other four:
-   its only published requirements are `raxol_payments "~> 0.2"`,
-   `raxol_core "~> 2.6"`, and `raxol_mcp "~> 2.6"`, all already on Hex at
-   satisfying versions. It can go out at any point in this sequence.
-
-**Framework line.** The authoritative order for the 2.6.x packages is the
-`@public_packages` list in
-[`lib/raxol/release/package_check.ex`](../../lib/raxol/release/package_check.ex):
-`raxol_core`, `raxol_sensor`, `raxol_terminal`, `raxol_mcp`, `raxol_liveview`,
-`raxol_plugin`, `raxol_speech`, `raxol_watch`, `raxol`, `raxol_agent`,
-`raxol_payments`, `raxol_telegram`. `raxol_core` and `raxol_sensor` go first
-because they have no raxol requirements. Nothing on that line needs republishing
-for this release; every 2.6.x package in the tree matches what is on Hex.
-
-**One requirement is dropped rather than ordered.** `raxol_telegram` also
-declares `raxol_gateway`, but its `gateway_dep/0` returns `[]` under
-`HEX_BUILD`, so the requirement never reaches the tarball and `raxol_telegram`
-does not wait on `raxol_gateway`. That drop becomes unnecessary once
-`raxol_gateway` is on Hex; see [after publishing](#after-publishing).
-
-## Gates that must be green first
-
-Run these once, from the repository root, on the commit you intend to publish.
-
-```bash
-mix compile --warnings-as-errors
-mix format --check-formatted
-mix credo
-mix raxol.check_docs
-mix raxol.release.check --all
-SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test
-```
-
-`mix raxol.release.check --all` is the release-specific gate. It validates
-package metadata, confirms every file a tarball would ship is tracked by git,
-and builds each tarball with `HEX_BUILD=1 mix hex.build --unpack` to compare the
-generated `hex_metadata.config` against the source project config. It must be
-run on a clean tree: `mix hex.build` packages the working tree rather than the
-commit, so a green run on a dirty tree says nothing about what would ship. Do
-not pass `--allow-untracked` here, which is exactly the check it relaxes.
-
-Two warnings are expected and are not failures:
-
-- `raxol_agent` drops `raxol_agent_client_protocol` from its tarball.
-- `raxol_telegram` drops `raxol_gateway` from its tarball.
-
-Both are unpublished packages that cannot appear as a requirement in a public
-tarball. The second clears once `raxol_gateway` is on Hex.
-
-Never set `HEX_BUILD` in your shell. The release check refuses to run with an
-ambient `HEX_BUILD`, because it sets the variable per subprocess itself, and an
-ambient one makes the project config publish-shaped on both sides of its
-dependency audit, so the audit compares the tarball against itself and reports
-nothing.
-
-## Per-release bookkeeping
-
-For each package you are about to publish, in its directory:
-
-1. **Date the CHANGELOG entry.** An unreleased entry is headed
-   `## [X.Y.Z] - unreleased`. Replace `unreleased` with the publish date in
-   `YYYY-MM-DD`. This is deliberate: a dated heading for a version that was
-   never pushed is a false claim, so the date is written at publish time. If an
-   entry already carries a date from an earlier packaging pass and was never
-   published, that date is wrong too; replace it.
-2. **Tag the commit.** Tags are package-scoped, because the bare `vX.Y.Z` tags
-   belong to the root `raxol` version line. `v0.2.0` already exists there and
-   points at raxol from 2025. Six packages set `:source_ref` to
-   `<package>-v<version>` in their `docs` config and expect that tag:
-   `raxol_speech`, `raxol_telegram`, `raxol_watch`, `raxol_gateway`,
-   `raxol_earn`, `raxol_symphony`.
+1. Bump the package versions that are changing.
+2. Date each released package's changelog entry.
+3. Run the release gates from a clean tree:
 
    ```bash
-   git tag -a raxol_gateway-v0.1.0 -m "raxol_gateway 0.1.0"
-   git push origin raxol_gateway-v0.1.0
+   mix compile --warnings-as-errors
+   mix format --check-formatted
+   mix credo
+   mix raxol.check_docs
+   mix raxol.release.check
+   SKIP_TERMBOX2_TESTS=true MIX_ENV=test mix test
    ```
 
-   Tag before publishing. The published docs link every module back to this
-   tag, and a tag pushed afterwards leaves those links broken in between.
-
-   **Known defect, already shipped.** `raxol_payments` 0.2.0 was published with
-   `source_ref: "v0.2.0"`, so every source link in
-   `https://raxol-payments.hexdocs.pm/0.2.0` points at the root `raxol` v0.2.0
-   tag from 2025 instead of at the payments code. The version itself cannot be
-   changed, but Hex documentation has no update window, so the docs are
-   repairable: correct `:source_ref` in `packages/raxol_payments/mix.exs`, push
-   a `raxol_payments-v0.2.0` tag, then `HEX_BUILD=1 mix hex.publish docs`. It is
-   recorded here so nobody re-diagnoses it. The 2.6.x packages share the
-   pattern without the symptom: their bare tags (`v2.6.0`, `v2.6.1`) are real
-   commits on the same release line as the code they document.
-3. **Confirm the docs build.** `mix hex.publish` runs `mix docs` and uploads the
-   result, so a docs failure aborts a publish halfway:
+   `mix raxol.release.check` validates the public train, proves every packaged
+   file is tracked, runs each `HEX_BUILD=1 mix hex.build --unpack`, and compares
+   the generated package metadata with the source project configuration.
+4. Push package-scoped documentation tags for changed independent-version
+   packages. They must point at the release commit:
 
    ```bash
-   cd packages/<package>
-   HEX_BUILD=1 mix deps.get
-   HEX_BUILD=1 mix docs
+   git tag -a raxol_speech-v0.2.2 -m "raxol_speech 0.2.2"
+   git tag -a raxol_watch-v0.2.2 -m "raxol_watch 0.2.2"
+   git tag -a raxol_payments-v0.2.2 -m "raxol_payments 0.2.2"
+   git tag -a raxol_telegram-v0.2.2 -m "raxol_telegram 0.2.2"
+   git push origin raxol_speech-v0.2.2 raxol_watch-v0.2.2 \
+     raxol_payments-v0.2.2 raxol_telegram-v0.2.2
    ```
 
-## Publishing one package
+   Create only the tags for packages whose version changed. Framework packages
+   use the root `vMAJOR.MINOR.PATCH` source ref.
 
-**OPERATOR.** Authenticate once per machine with `mix hex.user auth`, or export
-`HEX_API_KEY`. Then, from the package directory:
+Never export `HEX_BUILD` globally. The release check and publisher set it only
+for package subprocesses; an ambient value strips root path dependencies before
+the checker can compare development and publish configurations.
 
-```bash
-cd packages/<package>
-HEX_BUILD=1 mix deps.get
-HEX_BUILD=1 mix hex.publish --dry-run
-HEX_BUILD=1 mix hex.publish
-```
+## Publish the public Hex train
 
-`HEX_BUILD=1` is required for every one of those commands. Each package's
-`mix.exs` resolves its sibling raxol dependencies as local `path:` deps by
-default; `HEX_BUILD=1` switches them to Hex requirements, which is what a
-consumer will actually resolve. Without it you publish a tarball whose
-requirements point at directories that exist only in this repo.
-
-Inspect what you are about to ship before the real publish:
+Create and push the root tag after the release commit is on `master`:
 
 ```bash
-HEX_BUILD=1 mix hex.build --unpack
+git tag -a v2.8.0 -m "Raxol 2.8.0"
+git push origin v2.8.0
 ```
 
-That writes the unpacked tarball next to the package and touches no network.
+`.github/workflows/release.yml` then:
+
+1. calls the reusable `release-hex.yml` preflight on the exact tag;
+2. verifies `v2.8.0` matches the root Mix project version;
+3. runs `mix raxol.release.check`;
+4. waits for `release` environment approval;
+5. publishes `Raxol.Release.PackageCheck.public_packages/0` in dependency
+   order, skipping versions already on Hex;
+6. verifies every package through the public Hex API, waits for newly published
+   HexDocs, and compiles a clean consumer against the released root package; and
+7. creates the GitHub Release only after consumer verification succeeds.
+
+Validate or resume an existing tag manually:
+
+```bash
+gh workflow run release-hex.yml \
+  -f release_ref=v2.8.0 \
+  -f publish=false
+
+# Set publish=true only to resume a failed train. Approval is still required.
+```
+
+## Publish the npm CLI
+
+The npm version in `packages/raxol_cli/npm/package.json` and the CLI Mix project
+version must already agree. Create the matching tag:
+
+```bash
+git tag -a raxol-cli-v0.2.10 -m "raxol CLI 0.2.10"
+git push origin raxol-cli-v0.2.10
+```
+
+`.github/workflows/release-raxol-cli.yml` rejects a mismatched tag before doing
+native builds. It builds and smokes Linux x64, Linux arm64, macOS arm64, and
+Windows x64; assembles the npm tarballs; waits for `release` approval; publishes
+the four platform packages and wrapper; and then proves a fresh, isolated npm
+install with signature auditing. The workflow attests the four binaries, uploads
+the checksums, Sigstore bundle, and release manifest to the immutable GitHub
+Release, then updates the separate `raxol-cli-channel` manifest.
+
+A manual workflow run builds tarball artifacts but does not publish. Re-run a
+failed tag job to resume publication; already-published npm versions are skipped
+but the registry smoke still runs.
+
+## Registry verification
+
+After approval and completion:
+
+```bash
+mix hex.info raxol 2.8.0
+npm view @raxol/cli@0.2.10 version dist.integrity
+
+tmp="$(mktemp -d)"
+npm install --prefix "$tmp" @raxol/cli@0.2.10
+"$tmp/node_modules/.bin/raxol" --version
+(cd "$tmp" && npm audit signatures)
+
+curl -fsSL https://raxol.io/releases/latest.json
+
+install_dir="$(mktemp -d)"
+curl -fsSL https://raxol.io/install |
+  RAXOL_INSTALL_DIR="$install_dir" bash
+"$install_dir/raxol" --version
+
+verified_dir="$(mktemp -d)"
+curl -fsSL https://raxol.io/install |
+  RAXOL_INSTALL_DIR="$verified_dir" \
+  RAXOL_VERIFY_PROVENANCE=1 bash
+"$verified_dir/raxol" --version
+```
+
+The default installer always checks SHA-256. Provenance mode additionally
+requires `gh` and verifies the GitHub repository, release workflow, exact tag
+ref, OIDC issuer, and hosted runner before installation.
+
+To roll latest discovery back without changing a version tag, download
+`raxol-cli-manifest.json` from the prior immutable release, rename it
+`latest.json`, and upload it to `raxol-cli-channel` with `gh release upload
+raxol-cli-channel latest.json --clobber`.
 
 ## Package-specific manual gates
 
-### `raxol_gateway` 0.1.0
+### `raxol_gateway` 0.1.1
 
-Nothing external blocks it. It needs `raxol_speech` 0.2.0 on Hex first (see
-[publish order is a hard gate](#publish-order-is-a-hard-gate-not-advice)), then
-the generic sequence above.
+Nothing external blocks it. `raxol_speech` 0.2.1 and the 2.7 framework line are
+already on Hex, so its registry requirements resolve.
 
-Metadata, license, changelog, docs entry point, and the tarball are all in
-place: `HEX_BUILD=1 mix hex.build` produces `raxol_gateway-0.1.0.tar` carrying
-`lib/`, `.formatter.exs`, `mix.exs`, `README.md`, `LICENSE.md`, and
-`CHANGELOG.md`.
+Metadata, license, changelog, docs entry point, and the tarball are in place:
+`HEX_BUILD=1 mix hex.build` produces `raxol_gateway-0.1.1.tar` carrying `lib/`,
+`.formatter.exs`, `mix.exs`, `README.md`, `LICENSE.md`, and `CHANGELOG.md`.
 
-Its only required dependencies are `raxol_core "~> 2.6"`, `telemetry`, and
+Its only required dependencies are `raxol_core "~> 2.7"`, `telemetry`, and
 `jason`. Everything else (`raxol`, `raxol_agent`, `raxol_speech`, `gen_smtp`,
 `mint_web_socket`, `req`) is optional and gated at runtime, so a consumer who
 wants only the Telegram or in-memory adapter pulls nothing extra.
 
-### `raxol_symphony` 0.2.0
+### `raxol_symphony` 0.2.1
 
 **OPERATOR.** Blocked on driving at least one real tracker issue to a pull
 request and capturing the evidence. The full procedure is
@@ -243,7 +214,7 @@ test suite covers all of it. What only a live run can pin is the tracker's real
 field names and phase encoding, and that a paused run resumes against a real
 repository rather than a fixture.
 
-### `raxol_earn` 0.2.0
+### `raxol_earn` 0.2.1
 
 **OPERATOR.** Blocked on a live offering on Base mainnet. The full procedure is
 [`packages/raxol_earn/RUNBOOK.md`](../../packages/raxol_earn/RUNBOOK.md), which
@@ -296,8 +267,7 @@ planes.
 
 Before publishing, confirm the version claims in
 `packages/raxol_earn/README.md` still agree with `mix.exs`: the status line
-should read `0.2.0` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
-Both previously described a release candidate that was never cut.
+should read `0.2.1` and the installation snippet `{:raxol_earn, "~> 0.2"}`.
 
 ## After publishing
 

@@ -5,7 +5,7 @@
 # (`mise exec -- env BURRITO_TARGET=<t> MIX_ENV=prod mix release`), from any dir.
 #
 # Each platform gets its own package (@raxol/cli-<platform>-<arch>) carrying one
-# binary and declaring `os`/`cpu`. The `raxol` wrapper lists all four as
+# binary and declaring `os`/`cpu`. The `@raxol/cli` wrapper lists all four as
 # optionalDependencies, so npm installs only the one matching the host: an
 # install pulls ~68MB rather than ~270MB. This is the esbuild arrangement.
 #

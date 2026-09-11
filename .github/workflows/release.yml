@@ -1,9 +1,8 @@
 name: Release
 
-# Creates a GitHub Release with auto-generated notes when a version tag is
-# pushed. Hex publishing is done manually in dependency order (see CLAUDE.md);
-# the raxol_earn sidecar image has its own workflow (release-raxol-earn.yml); the
-# web app deploys via docker/Dockerfile.web. There is no root binary release.
+# A root v* tag is the release authorization boundary. The reusable Hex
+# workflow validates the immutable tag, waits for release-environment approval,
+# and publishes the dependency-ordered train before the GitHub Release appears.
 
 permissions:
   contents: write
@@ -14,8 +13,17 @@ on:
       - "v*"
 
 jobs:
+  publish-hex:
+    name: Publish Hex packages
+    uses: ./.github/workflows/release-hex.yml
+    with:
+      release_ref: ${{ github.ref_name }}
+      publish: true
+    secrets: inherit
+
   release:
     name: Create GitHub Release
+    needs: publish-hex
     runs-on: ubuntu-latest
     steps:
       - name: Create GitHub Release

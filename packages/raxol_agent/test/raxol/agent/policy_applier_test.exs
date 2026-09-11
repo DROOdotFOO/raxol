@@ -3,12 +3,13 @@ defmodule Raxol.Agent.PolicyApplierTest do
 
   alias Raxol.Agent.Policy.{Cache, Retry, Timeout}
   alias Raxol.Agent.PolicyApplier
+  alias Raxol.Agent.Test.EtsTables
 
   setup do
     table = :"applier_test_#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      EtsTables.drop(table)
     end)
 
     {:ok, table: table}

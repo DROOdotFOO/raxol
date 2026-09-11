@@ -2,12 +2,13 @@ defmodule Raxol.Agent.Cache.EtsTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Agent.Cache.Ets
+  alias Raxol.Agent.Test.EtsTables
 
   setup do
     table = :"cache_ets_test_#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      EtsTables.drop(table)
     end)
 
     {:ok, config: %{table: table}}
@@ -85,8 +86,7 @@ defmodule Raxol.Agent.Cache.EtsTest do
       b = %{table: :"cache_iso_b_#{System.unique_integer([:positive])}"}
 
       on_exit(fn ->
-        if :ets.whereis(a.table) != :undefined, do: :ets.delete(a.table)
-        if :ets.whereis(b.table) != :undefined, do: :ets.delete(b.table)
+        EtsTables.drop([a.table, b.table])
       end)
 
       :ok = Ets.put(a, :shared, :value_a, 60_000)

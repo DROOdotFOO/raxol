@@ -3,6 +3,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
 
   alias Raxol.Symphony.{Config, Issue}
   alias Raxol.Symphony.Runners.RaxolAgentSession
+  alias Raxol.Symphony.Test.EtsTables
 
   alias Raxol.Symphony.TestSupport.{
     SessionAgentErrors,
@@ -236,7 +237,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionTest do
   describe "prompt cache bounding" do
     setup do
       table = :"prompt_cache_test_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> EtsTables.drop(table) end)
       %{table: table, cache: {Raxol.Agent.Cache.Ets, %{table: table}}}
     end
 

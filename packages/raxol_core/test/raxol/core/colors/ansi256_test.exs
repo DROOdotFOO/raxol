@@ -45,7 +45,7 @@ defmodule Raxol.Core.Colors.Ansi256Test do
       assert Ansi256.cube_rgb(16 + 36 * 5) == {255, 0, 0}
       assert Ansi256.cube_rgb(16 + 6 * 5) == {0, 255, 0}
       assert Ansi256.cube_rgb(16 + 5) == {0, 0, 255}
-      assert Ansi256.cube_rgb(16 + 36 * 1 + 6 * 2 + 3) == {95, 135, 175}
+      assert Ansi256.cube_rgb(16 + 36 + 6 * 2 + 3) == {95, 135, 175}
     end
 
     test "every channel of every cube color is a legal xterm level" do

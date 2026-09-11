@@ -4,6 +4,7 @@ defmodule Raxol.Terminal.EventHandler do
   This module is responsible for processing and responding to user interactions.
   """
 
+  alias Raxol.Terminal.ANSI.Mouse
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ANSI.Mouse
 

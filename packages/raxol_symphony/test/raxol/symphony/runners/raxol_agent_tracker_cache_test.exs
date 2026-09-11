@@ -22,6 +22,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
 
   alias Raxol.Symphony.{Config, Issue}
   alias Raxol.Symphony.Runners.RaxolAgent
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.Trackers.Memory
 
   # The orchestrator allocates a per-issue workspace and the runner requires
@@ -35,7 +36,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentTrackerCacheTest do
 
   defp ets_cache_adapter do
     table = :"sym_runner_tracker_cache_test_#{:erlang.unique_integer([:positive])}"
-    on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+    on_exit(fn -> EtsTables.drop(table) end)
     {Raxol.Agent.Cache.Ets, %{table: table}}
   end
 

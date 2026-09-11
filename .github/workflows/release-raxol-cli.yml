@@ -1,27 +1,21 @@
-name: Release raxol npm package
+name: Release @raxol/cli npm package
 
-# Builds the self-contained `raxol` command binaries and assembles the `raxol`
-# npm package, so `npm i -g raxol` puts `raxol` on the PATH (no Erlang/Elixir).
+# Builds the self-contained `raxol` command binaries and assembles the
+# `@raxol/cli` npm package, so `npm i -g @raxol/cli` puts `raxol` on the PATH.
 # Every binary is built natively for its arch: Linux amd64/arm64 via Docker on
 # their own runners, macOS arm64 on a macOS runner (native builds avoid the
 # termbox NIF cross-compile hazard -- see docker/Dockerfile.raxol-cli).
 #
-# The npm tarball is always produced as an artifact. The two ship paths are
-# independent: a `raxol-cli-v*` tag attaches the binaries + checksums to a
-# GitHub Release (stable public URLs for the T-Bench installer), while npm
-# publishing happens only on a manual run with `publish: true` and an
-# `NPM_TOKEN`.
+# Manual runs build downloadable tarballs only. A matching `raxol-cli-v*` tag
+# builds and smokes every native binary, waits for release-environment approval,
+# publishes the npm packages, proves a fresh registry install, attests the
+# binaries, then publishes immutable release assets and the latest manifest.
 
 on:
   push:
     tags:
       - 'raxol-cli-v*'
   workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish to npm (off = build the tarball artifact only)'
-        type: boolean
-        default: false
 
 concurrency:
   group: release-raxol-cli-${{ github.ref }}
@@ -31,8 +25,30 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    name: validate release ref
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Match package version to tag
+        if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./packages/raxol_cli/npm/package.json").version')"
+          expected_tag="raxol-cli-v$version"
+
+          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "::error::$RELEASE_TAG does not match npm package version $version"
+            exit 1
+          fi
+
   linux-build:
     name: linux-${{ matrix.arch }}
+    needs: validate
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -86,6 +102,7 @@ jobs:
 
   macos-build:
     name: macos-arm64
+    needs: validate
     runs-on: macos-14
     steps:
       - name: Checkout
@@ -124,6 +141,7 @@ jobs:
 
   windows-build:
     name: windows-x86_64
+    needs: validate
     runs-on: windows-2022
     steps:
       - name: Checkout
@@ -187,7 +205,7 @@ jobs:
           path: packages/raxol_cli/burrito_out
 
       # Builds one @raxol/cli-<platform>-<arch> package per binary, each
-      # declaring os/cpu. The `raxol` wrapper lists them as optionalDependencies
+      # declaring os/cpu. The `@raxol/cli` wrapper lists them as optionalDependencies
       # so npm downloads only the matching one (~68MB, not ~270MB).
       - name: Build platform packages
         run: packages/raxol_cli/npm/scripts/pack.sh
@@ -208,43 +226,146 @@ jobs:
           path: packages/raxol_cli/npm/*.tgz
           if-no-files-found: error
 
-      # npm publish is deliberately NOT wired to the tag. A `raxol-cli-v*` tag
-      # ships the release binaries (see the `release` job); claiming the `raxol`
-      # name on npm is a separate, deliberate act. Publish with a manual run:
-      #   gh workflow run release-raxol-cli.yml -f publish=true
-      #
-      # Order matters: the platform packages go first. The wrapper pins them by
-      # exact version, so publishing it against a registry that does not yet
-      # have them leaves a window where `npm i -g raxol` resolves nothing.
+
+  # Publishing is a separate job so validation and native builds finish before
+  # the protected release environment asks for approval. npm CLI 11.5.1+ uses
+  # the configured trusted publishers and emits provenance.
+  publish:
+    name: publish npm packages
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Download built binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: packages/raxol_cli/burrito_out
+
+      - name: Build platform packages
+        run: packages/raxol_cli/npm/scripts/pack.sh
+
+      # Order matters: the wrapper pins every platform package exactly. A
+      # failed run is resumable because published versions are skipped.
       - name: Publish to npm
-        if: inputs.publish == true
         working-directory: packages/raxol_cli/npm
         run: |
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::publish=true but the NPM_TOKEN secret is unset or empty." >&2
-            exit 1
-          fi
-          for dir in platforms/*/; do
-            (cd "$dir" && npm publish --access public)
-          done
-          npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          set -euo pipefail
 
-  # A `raxol-cli-v*` tag attaches the per-arch binaries to a GitHub Release, so
-  # they have stable unauthenticated download URLs. Actions artifacts cannot
-  # serve this: they need a token to fetch and expire after 90 days, and the
-  # T-Bench install script curls them from inside an arbitrary task container.
-  # The root `release.yml` does not cover these tags -- its filter is `v*`,
-  # which does not match `raxol-cli-v*`.
+          publish_package() {
+            local directory="$1"
+            local manifest="$directory/package.json"
+            local name
+            local version
+            name="$(node -p "require(require('node:path').resolve(process.argv[1])).name" "$manifest")"
+            version="$(node -p "require(require('node:path').resolve(process.argv[1])).version" "$manifest")"
+
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published; skipping"
+            else
+              (cd "$directory" && npm publish --provenance --access public)
+            fi
+          }
+
+          wait_until_visible() {
+            local directory="$1"
+            local manifest="$directory/package.json"
+            local name
+            local version
+            name="$(node -p "require(require('node:path').resolve(process.argv[1])).name" "$manifest")"
+            version="$(node -p "require(require('node:path').resolve(process.argv[1])).version" "$manifest")"
+
+            for attempt in {1..180}; do
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "$name@$version is visible in the registry"
+                return 0
+              fi
+              echo "Waiting for $name@$version to become visible ($attempt/180)"
+              sleep 5
+            done
+
+            echo "::error::$name@$version was published but is not visible after 15 minutes"
+            return 1
+          }
+
+          for dir in platforms/*/; do
+            publish_package "$dir"
+            wait_until_visible "$dir"
+          done
+          publish_package "."
+          wait_until_visible "."
+
+          version="$(node -p 'require("./package.json").version')"
+          packages=(
+            "@raxol/cli"
+            "@raxol/cli-darwin-arm64"
+            "@raxol/cli-linux-x64"
+            "@raxol/cli-linux-arm64"
+            "@raxol/cli-win32-x64"
+          )
+
+          for package in "${packages[@]}"; do
+            published_version="$(npm view "$package@$version" version)"
+            [[ "$published_version" == "$version" ]] || {
+              echo "::error::$package resolved $published_version instead of $version"
+              exit 1
+            }
+
+            predicate="$(npm view "$package@$version" dist.attestations.provenance.predicateType)"
+            [[ "$predicate" == "https://slsa.dev/provenance/v1" ]] || {
+              echo "::error::$package@$version has no SLSA provenance"
+              exit 1
+            }
+          done
+
+          smoke="$(mktemp -d)"
+          cache="$(mktemp -d)"
+          trap 'rm -rf "$smoke" "$cache"' EXIT
+          printf '{"private":true}\n' > "$smoke/package.json"
+          npm install --prefix "$smoke" --cache "$cache" --include=optional \
+            --prefer-online --no-audit --no-fund "@raxol/cli@$version"
+
+          installed_version="$("$smoke/node_modules/.bin/raxol" --version)"
+          expected_version="raxol $version"
+          [[ "$installed_version" == "$expected_version" ||
+            "$installed_version" == "$expected_version+"* ]] || {
+            echo "::error::fresh install reported $installed_version"
+            exit 1
+          }
+
+          (cd "$smoke" && npm audit signatures)
+
+  # Versioned release assets have stable unauthenticated URLs. Actions
+  # artifacts cannot serve installers because they require a token and expire.
+  # The root release workflow does not match the `raxol-cli-v*` tag family.
   release:
-    name: attach release assets
-    needs: [linux-build, macos-build, windows-build]
+    name: attach attested release assets
+    needs: [linux-build, macos-build, windows-build, publish]
     if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Download built binaries
         uses: actions/download-artifact@v4
         with:
@@ -259,12 +380,83 @@ jobs:
           sha256sum raxol_cli_* > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Create release
+      - name: Attest release binaries
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Save and verify attestation bundle
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp "$ATTESTATION_BUNDLE" dist/raxol-cli-attestation.sigstore.json
+
+          for binary in dist/raxol_cli_*; do
+            gh attestation verify "$binary" \
+              --bundle dist/raxol-cli-attestation.sigstore.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-raxol-cli.yml" \
+              --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners
+          done
+
+      - name: Build release manifest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#raxol-cli-v}"
+          RAXOL_RELEASED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            node scripts/build_cli_release_manifest.mjs \
+              "$version" dist/SHA256SUMS dist/raxol-cli-manifest.json
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1]))' \
+            dist/raxol-cli-manifest.json
+
+      - name: Create immutable release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
             dist/raxol_cli_*
             dist/SHA256SUMS
+            dist/raxol-cli-attestation.sigstore.json
+            dist/raxol-cli-manifest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  channel:
+    name: update latest CLI manifest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/raxol-cli-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish latest manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir channel
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern raxol-cli-manifest.json \
+            --dir channel
+          mv channel/raxol-cli-manifest.json channel/latest.json
+
+          if ! gh release view raxol-cli-channel --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create raxol-cli-channel \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Raxol CLI release channel" \
+              --notes "Mutable latest-release metadata. Versioned assets remain immutable." \
+              --prerelease
+          fi
+
+          gh release upload raxol-cli-channel channel/latest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

@@ -35,9 +35,15 @@ defmodule Raxol.Earn.TestSupport.WorkflowSetup do
     on_exit(fn ->
       Application.delete_env(:raxol_earn, :job_workflow_saver)
 
-      case :ets.whereis(table) do
-        :undefined -> :ok
-        _ref -> :ets.delete(table)
+      # Act then verify, not check then act: ERTS reaps the exiting test
+      # process's tables concurrently with on_exit, so a resolved `whereis`
+      # can be stale by the time the delete lands.
+      try do
+        :ets.delete(table)
+      rescue
+        error in ArgumentError ->
+          if :ets.whereis(table) != :undefined,
+            do: reraise(error, __STACKTRACE__)
       end
     end)
 

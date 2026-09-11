@@ -22,15 +22,30 @@ defmodule RaxolPlayground.SettlementSandboxTest do
     assert receipt.status == "completed"
     assert receipt.settlement_type == "stealth"
 
-    totals = Ledger.get_totals(run.context.ledger, run.context.agent_id, run.context.policy)
+    totals =
+      Ledger.get_totals(
+        run.context.ledger,
+        run.context.agent_id,
+        run.context.policy
+      )
+
     assert Decimal.equal?(totals.session, Decimal.new("25.00"))
 
     assert {:error, %Failure{reason: :over_budget, retryable?: false} = denied} =
-             ExecuteXochiIntent.call(%{run.payment | amount: "75.00"}, run.context)
+             ExecuteXochiIntent.call(
+               %{run.payment | amount: "75.00"},
+               run.context
+             )
 
     assert SettlementSandbox.Wallet.signatures() == 1
 
-    unchanged = Ledger.get_totals(run.context.ledger, run.context.agent_id, run.context.policy)
+    unchanged =
+      Ledger.get_totals(
+        run.context.ledger,
+        run.context.agent_id,
+        run.context.policy
+      )
+
     assert Decimal.equal?(unchanged.session, Decimal.new("25.00"))
 
     lines =
@@ -44,7 +59,12 @@ defmodule RaxolPlayground.SettlementSandboxTest do
       })
 
     assert "XOCHI SANDBOX REPLAY · NO FUNDS" in lines
-    assert Enum.any?(lines, &(&1 =~ "Base → Arbitrum One · 25.00 USDC · stealth"))
+
+    assert Enum.any?(
+             lines,
+             &(&1 =~ "Base → Arbitrum One · 25.00 USDC · stealth")
+           )
+
     assert Enum.any?(lines, &(&1 =~ "fee 0.0475 USDC (19 bps)"))
     assert Enum.any?(lines, &(&1 =~ "24.9525 USDC · demo_intent_4812"))
     assert Enum.any?(lines, &(&1 =~ "75.00 denied · no signature"))

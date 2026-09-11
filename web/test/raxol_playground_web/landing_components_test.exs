@@ -28,7 +28,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # this covers all four of it.
   test "each hero program matches the one the frames record" do
     script =
-      File.read!(Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__))
+      File.read!(
+        Path.expand("../../../scripts/gen_landing_frames.exs", __DIR__)
+      )
 
     for name <- LandingComponents.hero_example_names() do
       shown = String.trim(LandingComponents.example_source(name))
@@ -41,8 +43,8 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
         end
 
       # The shown program is hand-wrapped to fit the terminal pane while the
-      # recorder is formatter-owned. Compare their parsed programs so layout
-      # cannot create drift noise while every behavioral change still differs.
+      # recorder is formatter-owned. Strip parser metadata so line wrapping and
+      # blank lines cannot create drift noise while behavior still compares.
       normalize = fn text ->
         text
         |> Code.string_to_quoted!()
@@ -593,7 +595,9 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
       )
 
     [sub] =
-      Regex.run(~r/<p class="screen-sub">(.*?)<\/p>/s, hero, capture: :all_but_first)
+      Regex.run(~r/<p class="screen-sub">(.*?)<\/p>/s, hero,
+        capture: :all_but_first
+      )
 
     for chain <- [
           "Ethereum",

@@ -115,11 +115,18 @@ defmodule RaxolPlayground.SettlementSandbox do
       }) do
     payment = demo.payment
     score = payment.trust_score
-    fee_bps = score |> FeeSchedule.tier_for_score() |> FeeSchedule.headline_bps(:stable)
+
+    fee_bps =
+      score |> FeeSchedule.tier_for_score() |> FeeSchedule.headline_bps(:stable)
+
     at = rem(tick, 5)
 
     totals =
-      Ledger.get_totals(demo.context.ledger, demo.context.agent_id, demo.context.policy)
+      Ledger.get_totals(
+        demo.context.ledger,
+        demo.context.agent_id,
+        demo.context.policy
+      )
 
     head = [
       "XOCHI SANDBOX REPLAY · NO FUNDS",
@@ -198,7 +205,10 @@ defmodule RaxolPlayground.SettlementSandbox do
     })
   end
 
-  defp respond(%Plug.Conn{request_path: "/api/intent/" <> @intent_id <> "/status"} = conn) do
+  defp respond(
+         %Plug.Conn{request_path: "/api/intent/" <> @intent_id <> "/status"} =
+           conn
+       ) do
     json(conn, %{
       "intentId" => @intent_id,
       "status" => "completed",

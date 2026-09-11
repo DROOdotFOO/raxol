@@ -1,6 +1,8 @@
 defmodule Raxol.Workflow.RetryTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Test.TestUtils
+
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Graph
 
@@ -200,7 +202,7 @@ defmodule Raxol.Workflow.RetryTest do
       ets_table = :"retry_ckpt_#{:erlang.unique_integer([:positive])}"
 
       on_exit(fn ->
-        if :ets.whereis(ets_table) != :undefined, do: :ets.delete(ets_table)
+        TestUtils.drop_ets_tables(ets_table)
       end)
 
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: ets_table}}

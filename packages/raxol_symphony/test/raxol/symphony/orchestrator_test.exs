@@ -3,6 +3,7 @@ defmodule Raxol.Symphony.OrchestratorTest do
 
   alias Raxol.Symphony.{Config, Issue, Orchestrator}
   alias Raxol.Symphony.Runners.Noop
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.Trackers.Memory
 
   setup do
@@ -56,7 +57,7 @@ defmodule Raxol.Symphony.OrchestratorTest do
     table = :"orch_prompt_cache_test_#{:erlang.unique_integer([:positive])}"
 
     on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      EtsTables.drop(table)
     end)
 
     {Raxol.Agent.Cache.Ets, %{table: table}}

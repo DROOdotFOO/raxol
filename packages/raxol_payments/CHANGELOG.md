@@ -5,7 +5,28 @@ All notable changes to `raxol_payments` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.1] - 2026-09-09
+
+### Added
+
+- Accounting, fee-schedule, settlement-ledger, and rebalance-policy primitives
+  for tracking and managing agent payment rails.
+- Runnable agent-payment and privacy-mode examples.
+
+### Changed
+
+- Separated stealth recipient routing from shielded settlement semantics.
+- Updated the `raxol_core` and `raxol_agent` requirements to the 2.7 release
+  line.
+
+### Fixed
+
+- Bound Xochi quote signatures to the served EIP-712 domain fields.
+- Corrected paymaster policy selection and tightened on-chain read boundaries.
+
+### Security
+
+- Bounded and redacted payment telemetry before durable persistence.
 
 ## [0.2.0] - 2026-07-11
 

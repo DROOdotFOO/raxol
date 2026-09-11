@@ -3,6 +3,7 @@ defmodule Raxol.Symphony.Orchestrator.PausedSaverTest do
 
   alias Raxol.Symphony.Orchestrator.PausedSaver
   alias Raxol.Symphony.Orchestrator.PausedSaver.{Dets, Memory}
+  alias Raxol.Symphony.Test.EtsTables
 
   defp paused_entry(issue_id) do
     %{
@@ -30,7 +31,7 @@ defmodule Raxol.Symphony.Orchestrator.PausedSaverTest do
   describe "Memory adapter" do
     setup do
       table = :"symphony_paused_test_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> EtsTables.drop(table) end)
       {:ok, saver: {Memory, %{table: table}}}
     end
 

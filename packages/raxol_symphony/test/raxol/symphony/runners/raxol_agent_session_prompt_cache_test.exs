@@ -25,6 +25,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
 
   alias Raxol.Symphony.{Config, Issue}
   alias Raxol.Symphony.Runners.RaxolAgentSession
+  alias Raxol.Symphony.Test.EtsTables
 
   alias Raxol.Symphony.TestSupport.{
     SessionAgentEcho,
@@ -49,7 +50,7 @@ defmodule Raxol.Symphony.Runners.RaxolAgentSessionPromptCacheTest do
       :"sym_session_prompt_cache_test_#{:erlang.unique_integer([:positive])}"
 
     on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      EtsTables.drop(table)
     end)
 
     {Raxol.Agent.Cache.Ets, %{table: table}}

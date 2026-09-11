@@ -9,7 +9,10 @@ This directory contains GitHub Actions workflows for CI, testing, and releases.
 - **`security.yml`**: Comprehensive security scanning (dependencies, secrets, SAST)
 - **`nightly.yml`**: Nightly regression testing with full test matrix
 - **`regression-testing.yml`**: Unified performance and memory regression testing
-- **`release.yml`**: Automated release creation and publishing
+- **`release.yml`**: Tag-authorized Hex train plus GitHub release for `v*` tags
+- **`release-hex.yml`**: Reusable, approval-gated, dependency-ordered Hex publication
+- **`release-raxol-cli.yml`**: Native CLI builds, approval-gated npm
+  publication with provenance, and CLI GitHub releases
 
 ### Supporting Workflows
 - **`performance-tracking.yml`**: Performance benchmarking and tracking

@@ -22,6 +22,7 @@ defmodule Raxol.Symphony.OrchestratorPausedGcTest do
   alias Raxol.Symphony.{Config, Issue, Orchestrator, Workspace}
   alias Raxol.Symphony.Orchestrator.PausedSaver.Memory, as: MemorySaver
   alias Raxol.Symphony.Runners.Noop
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.Trackers.Memory, as: MemoryTracker
 
   setup do
@@ -54,7 +55,7 @@ defmodule Raxol.Symphony.OrchestratorPausedGcTest do
       })
 
     table = :"symphony_gc_paused_#{:erlang.unique_integer([:positive])}"
-    on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+    on_exit(fn -> EtsTables.drop(table) end)
 
     %{config: config, saver: {MemorySaver, %{table: table}}, workspace_root: workspace_root}
   end
@@ -145,7 +146,7 @@ defmodule Raxol.Symphony.OrchestratorPausedGcTest do
       cache_table = :"symphony_gc_prompt_#{:erlang.unique_integer([:positive])}"
 
       on_exit(fn ->
-        if :ets.whereis(cache_table) != :undefined, do: :ets.delete(cache_table)
+        EtsTables.drop(cache_table)
       end)
 
       cache = {Raxol.Agent.Cache.Ets, %{table: cache_table}}

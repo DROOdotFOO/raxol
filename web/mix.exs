@@ -5,7 +5,7 @@ defmodule RaxolPlayground.MixProject do
     [
       app: :raxol_playground,
       version: "0.1.0",
-      elixir: "~> 1.16 or ~> 1.17",
+      elixir: "~> 1.17 or ~> 1.18 or ~> 1.19 or ~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: releases(),
@@ -38,11 +38,9 @@ defmodule RaxolPlayground.MixProject do
       # coding agent cannot start at all, whatever else is configured.
       {:raxol_payments, path: "../packages/raxol_payments"},
 
-      # The harness hero executes the real Virtuals ACP job state machine.
-      # Seller and buyer runtimes remain opt-in; the dependency boots only the
-      # local registries and per-job supervisor used by the recording.
-      {:raxol_earn, path: "../packages/raxol_earn"},
-
+      # Frame generation runs in dev; production serves only the committed
+      # recordings and must not boot the commerce supervision tree.
+      {:raxol_earn, path: "../packages/raxol_earn", only: :dev},
       # The HTTP client behind every remote provider. raxol_agent declares it
       # optional and optional deps do not propagate, so a release depending on
       # raxol_agent gets no HTTP client: Backend.HTTP would answer

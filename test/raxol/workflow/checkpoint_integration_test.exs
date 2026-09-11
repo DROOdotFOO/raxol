@@ -1,6 +1,8 @@
 defmodule Raxol.Workflow.CheckpointIntegrationTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Test.TestUtils
+
   alias Raxol.Workflow.Checkpoint
   alias Raxol.Workflow.Checkpoint.Saver.Ets
   alias Raxol.Workflow.Compiled
@@ -10,7 +12,7 @@ defmodule Raxol.Workflow.CheckpointIntegrationTest do
     table = :"integration_#{:erlang.unique_integer([:positive])}"
 
     on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+      TestUtils.drop_ets_tables(table)
     end)
 
     {:ok, config: %{table: table}, saver: {Ets, %{table: table}}}

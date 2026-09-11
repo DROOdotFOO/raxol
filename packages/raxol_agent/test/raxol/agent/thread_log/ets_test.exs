@@ -1,6 +1,7 @@
 defmodule Raxol.Agent.ThreadLog.EtsTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Agent.Test.EtsTables
   alias Raxol.Agent.ThreadEvent
   alias Raxol.Agent.ThreadLog.Ets
 
@@ -10,8 +11,7 @@ defmodule Raxol.Agent.ThreadLog.EtsTest do
     seq_table = :"#{table}_seq"
 
     on_exit(fn ->
-      if :ets.whereis(table) != :undefined, do: :ets.delete(table)
-      if :ets.whereis(seq_table) != :undefined, do: :ets.delete(seq_table)
+      EtsTables.drop([table, seq_table])
     end)
 
     {:ok, config: %{table: table}}

@@ -4,6 +4,7 @@ defmodule Raxol.Symphony.OrchestratorPausedSaverIntegrationTest do
   alias Raxol.Symphony.{Config, Issue, Orchestrator}
   alias Raxol.Symphony.Orchestrator.PausedSaver.Memory, as: MemorySaver
   alias Raxol.Symphony.Runners.Noop
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.Trackers.Memory, as: MemoryTracker
 
   setup do
@@ -29,7 +30,7 @@ defmodule Raxol.Symphony.OrchestratorPausedSaverIntegrationTest do
       })
 
     table = :"symphony_test_paused_#{:erlang.unique_integer([:positive])}"
-    on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+    on_exit(fn -> EtsTables.drop(table) end)
 
     %{config: config, saver: {MemorySaver, %{table: table}}}
   end

@@ -147,13 +147,42 @@ defmodule Raxol.Test.TestUtils do
   end
 
   @doc """
-  Cleans up an ETS table.
+  Empties an ETS table, tolerating one that is already gone.
+
+  Act-then-verify, not check-then-act: `:ets.whereis/1` followed by a mutation
+  is a race whenever the owner is exiting, because ERTS reaps an owner's tables
+  concurrently with `on_exit`, which ExUnit runs in its own process after the
+  test process is already down. `whereis` resolves, the reaper frees the table,
+  and the mutation raises `ArgumentError` with every assertion having passed.
   """
-  def cleanup_ets_table(table) do
-    case :ets.whereis(table) do
-      :undefined -> :ok
-      _ -> :ets.delete_all_objects(table)
-    end
+  def cleanup_ets_table(table) when is_atom(table) do
+    :ets.delete_all_objects(table)
+    :ok
+  rescue
+    error in ArgumentError ->
+      if :ets.whereis(table) == :undefined,
+        do: :ok,
+        else: reraise(error, __STACKTRACE__)
+  end
+
+  @doc """
+  Deletes ETS `tables`, tolerating any that are already gone.
+
+  Named tables only; see `cleanup_ets_table/1` for why this acts first and
+  checks afterwards. A table that is still live and still refuses the delete is
+  a real badarg and is reraised.
+  """
+  def drop_ets_tables(tables) when is_list(tables),
+    do: Enum.each(tables, &drop_ets_tables/1)
+
+  def drop_ets_tables(table) when is_atom(table) do
+    :ets.delete(table)
+    :ok
+  rescue
+    error in ArgumentError ->
+      if :ets.whereis(table) == :undefined,
+        do: :ok,
+        else: reraise(error, __STACKTRACE__)
   end
 
   @doc """

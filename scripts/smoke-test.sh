@@ -29,7 +29,7 @@ printf "Smoke testing %s\n\n" "$HOST"
 check "/health"
 check "/"
 check "/playground"
-check "/demos"
+check "/demos" "301"
 check "/gallery"
 
 printf "\nResults: %d passed, %d failed\n" "$pass" "$fail"

@@ -38,6 +38,12 @@ defmodule Raxol.CLI do
   def main(["update" | rest]), do: Raxol.CLI.Update.run(rest)
   def main(["playground" | _rest]), do: run_playground()
   def main(["new" | rest]), do: Raxol.CLI.New.run(rest)
+
+  def main(["--version"]) do
+    IO.puts("raxol #{version()}")
+    0
+  end
+
   def main([help]) when help in ~w(help --help -h), do: help()
 
   def main([unknown | _]) do
@@ -353,6 +359,10 @@ defmodule Raxol.CLI do
       playground    Browse the interactive component catalog
       new [name]    Scaffold an Elixir/Mix Raxol application
       help          Show this help
+
+    Options:
+      --version     Show the installed Raxol version
+      -h, --help    Show this help
 
     Run `raxol` with no command to start the agent.
     """)

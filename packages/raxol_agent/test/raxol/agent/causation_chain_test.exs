@@ -102,12 +102,21 @@ defmodule Raxol.Agent.CausationChainTest do
   # chain id into the process dictionary BEFORE start_link returns, and
   # have a tiny init-shim ChainAgent reads.
 
+  # Created here, not in `setup`, so the owner is the setup_all process, which
+  # ExUnit keeps alive for the whole module. Owned by a test process it would
+  # die with each test and ERTS would reap it asynchronously, so the next
+  # `setup` could resolve it with `:ets.whereis` and then have
+  # `:ets.delete_all_objects` raise on a table that had gone in between -- the
+  # check-then-act race that took `Raxol.Agent.ThreadLogRouterTest` red.
+  setup_all do
+    :ets.new(@config_table, [:named_table, :public, read_concurrency: true])
+    :ok
+  end
+
   setup do
-    if :ets.whereis(@config_table) == :undefined do
-      :ets.new(@config_table, [:named_table, :public, read_concurrency: true])
-    else
-      :ets.delete_all_objects(@config_table)
-    end
+    # The owner outlives every test in this module, so the table is always
+    # there and clearing it needs no existence guard.
+    :ets.delete_all_objects(@config_table)
 
     start_supervised!({Registry, keys: :unique, name: Raxol.Agent.Registry})
 

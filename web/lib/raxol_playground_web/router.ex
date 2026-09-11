@@ -14,6 +14,7 @@ defmodule RaxolPlaygroundWeb.Router do
   scope "/", RaxolPlaygroundWeb do
     get("/health", HealthController, :check)
     get("/install", InstallController, :show)
+    get("/releases/latest.json", ReleaseManifestController, :show)
     get("/skill.md", SkillController, :show)
     # The landing hero's four examples, as files that run. The whole segment
     # is the param because Phoenix allows no suffix after one; the controller

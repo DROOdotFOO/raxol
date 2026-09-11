@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "version": "0.3.0",
+  "tag": "raxol-cli-v0.3.0",
+  "published_at": "2026-09-10T12:00:00Z",
+  "repository": "DROOdotFOO/raxol",
+  "signer_workflow": "DROOdotFOO/raxol/.github/workflows/release-raxol-cli.yml",
+  "assets": {
+    "darwin-arm64": {
+      "name": "raxol_cli_macos",
+      "url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol_cli_macos",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "attestation_url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol-cli-attestation.sigstore.json"
+    },
+    "linux-x64": {
+      "name": "raxol_cli_linux",
+      "url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol_cli_linux",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "attestation_url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol-cli-attestation.sigstore.json"
+    },
+    "linux-arm64": {
+      "name": "raxol_cli_linux_arm",
+      "url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol_cli_linux_arm",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "attestation_url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol-cli-attestation.sigstore.json"
+    },
+    "win32-x64": {
+      "name": "raxol_cli_windows.exe",
+      "url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol_cli_windows.exe",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "attestation_url": "https://github.com/DROOdotFOO/raxol/releases/download/raxol-cli-v0.3.0/raxol-cli-attestation.sigstore.json"
+    }
+  }
+}

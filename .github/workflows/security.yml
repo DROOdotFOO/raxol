@@ -187,23 +187,42 @@ jobs:
       # check", and narrowing the scan at the same commit it became
       # authoritative would hide that difference silently. The second run
       # below keeps unverified hits on the record without gating on them.
+      # Incremental events must compare two distinct revisions. On a push to
+      # the default branch, using the branch name as the base resolves to HEAD
+      # after checkout and TruffleHog aborts without scanning anything.
       - name: TruffleHog OSS (verified only, blocking)
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
+          base: ${{ github.event_name == 'push' && github.event.before || github.event.repository.default_branch }}
           head: HEAD
           extra_args: --only-verified
 
-      - name: TruffleHog OSS (all findings, advisory)
+      - name: TruffleHog OSS (verified only, full history)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
+          extra_args: --only-verified
+
+      - name: TruffleHog OSS (all findings, advisory)
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event_name == 'push' && github.event.before || github.event.repository.default_branch }}
           head: HEAD
           extra_args: --results=verified,unknown
         continue-on-error: true
 
+      - name: TruffleHog OSS (all findings, full history)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --results=verified,unknown
+        continue-on-error: true
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v3
         env:

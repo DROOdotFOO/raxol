@@ -2014,7 +2014,7 @@ html {
   content: "";
   /* Declared on each pseudo-element, not inherited from the button. Registered
      custom properties do not inherit, and resolving this gradient on the
-     parent froze its angle even while the pseudo's angle kept animating. */
+     parent freezes its angle even while the pseudo's angle keeps animating. */
   --hd-border-beam:
     conic-gradient(
       from var(--hd-border-beam-angle),
@@ -2047,7 +2047,6 @@ html {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
-
 .hd-control--next:hover,
 .hd-control--next:focus-visible {
   color: var(--obsidian);

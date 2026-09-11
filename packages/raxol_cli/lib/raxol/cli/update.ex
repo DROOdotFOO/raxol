@@ -396,7 +396,7 @@ defmodule Raxol.CLI.Update do
     else
       _ ->
         {:error,
-         "not running as a Burrito binary; reinstall with `npm i -g raxol` or download the latest release"}
+         "not running as a Burrito binary; reinstall with `npm i -g @raxol/cli` or download the latest release"}
     end
   end
 

@@ -1,0 +1,303 @@
+name: Publish Hex release train
+
+on:
+  workflow_call:
+    inputs:
+      release_ref:
+        description: "Existing v* tag whose exact commit will be published"
+        required: true
+        type: string
+      publish:
+        description: "Publish after preflight"
+        required: true
+        type: boolean
+    secrets:
+      HEX_API_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: "Existing v* tag whose exact commit will be published"
+        required: true
+        type: string
+      publish:
+        description: "Publish after preflight (off = validate only)"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-hex-${{ inputs.release_ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate public package train
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+      RAXOL_DEV_PORT: "4000"
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_ref }}
+          fetch-depth: 0
+
+      - name: Validate immutable release ref
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release_ref must be a vMAJOR.MINOR.PATCH tag"
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse "$RELEASE_REF^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "$tag_commit" != "$head_commit" ]]; then
+            echo "::error::$RELEASE_REF does not resolve to the checked-out commit"
+            exit 1
+          fi
+
+      - name: Set up Erlang and Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      - name: Cache release dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            packages/*/deps
+            packages/*/_build
+          key: hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
+
+      - name: Install release tooling
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --check-locked
+
+      - name: Validate public release train
+        run: mix raxol.release.check
+
+      - name: Match root package version to tag
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          set -euo pipefail
+          version="$(mix run --no-start --no-compile --no-deps-check \
+            -e 'IO.write(Mix.Project.config()[:version])')"
+          expected_ref="v$version"
+
+          if [[ "$RELEASE_REF" != "$expected_ref" ]]; then
+            echo "::error::$RELEASE_REF does not match root package version $version"
+            exit 1
+          fi
+
+  publish:
+    name: Publish public packages
+    needs: validate
+    if: inputs.publish == true
+    environment: release
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+      RAXOL_DEV_PORT: "4000"
+      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_ref }}
+          fetch-depth: 0
+
+      - name: Set up Erlang and Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      - name: Cache release dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            packages/*/deps
+            packages/*/_build
+          key: hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
+
+      - name: Install release tooling
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --check-locked
+
+      - name: Require noninteractive publishing key
+        run: |
+          if [[ -z "${HEX_API_KEY:-}" ]]; then
+            echo "::error::HEX_API_KEY is unset or empty."
+            exit 1
+          fi
+
+      # PackageCheck owns the public train and its topological order. A failed
+      # run is resumable: versions already visible on Hex are skipped.
+      - name: Publish packages in dependency order
+        id: publish
+        run: |
+          set -euo pipefail
+
+          while IFS=$'\t' read -r package path; do
+            pushd "$path" >/dev/null
+
+            HEX_BUILD=1 mix deps.get
+            version="$(HEX_BUILD=1 mix run --no-start --no-compile --no-deps-check \
+              -e 'IO.write(Mix.Project.config()[:version])')"
+            release_url="https://hex.pm/api/packages/$package/releases/$version"
+
+            if curl --fail --silent --output /dev/null "$release_url"; then
+              echo "$package $version is already published; skipping"
+              popd >/dev/null
+              continue
+            fi
+
+            echo "::group::Publishing $package $version"
+            HEX_BUILD=1 mix hex.publish --dry-run
+            HEX_BUILD=1 mix hex.publish --yes
+            curl --fail --silent --show-error --output /dev/null \
+              --retry 12 --retry-all-errors --retry-delay 5 "$release_url"
+            echo "::endgroup::"
+
+            popd >/dev/null
+          done < <(
+            mix run --no-start -e '
+              Raxol.Release.PackageCheck.public_packages()
+              |> Enum.each(fn %{app: app, path: path} ->
+                IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
+              end)
+            ' | sed -n 's/^RAXOL_PACKAGE\t//p'
+          )
+
+  verify:
+    name: Verify public Hex release
+    needs: publish
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+      RAXOL_DEV_PORT: "4000"
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_ref }}
+          fetch-depth: 0
+
+      - name: Set up Erlang and Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: mise.toml
+          version-type: strict
+
+      - name: Cache release dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            packages/*/deps
+            packages/*/_build
+          key: hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            hex-release-${{ runner.os }}-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.exs') }}-
+
+      - name: Install release tooling
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --check-locked
+
+      - name: Verify registry and documentation
+        run: |
+          set -euo pipefail
+
+          while IFS=$'\t' read -r package path; do
+            pushd "$path" >/dev/null
+            version="$(HEX_BUILD=1 mix run --no-start --no-compile --no-deps-check \
+              -e 'IO.write(Mix.Project.config()[:version])')"
+            popd >/dev/null
+
+            curl --fail --silent --show-error --output /dev/null \
+              "https://hex.pm/api/packages/$package/releases/$version"
+            echo "$package $version is visible on Hex"
+
+            docs_url="https://hexdocs.pm/$package/$version/"
+            for attempt in {1..60}; do
+              if curl --fail --silent --output /dev/null "$docs_url"; then
+                echo "$package $version documentation is visible"
+                break
+              fi
+              if [[ "$attempt" == "60" ]]; then
+                echo "::error::$package $version documentation is unavailable after 10 minutes"
+                exit 1
+              fi
+              echo "Waiting for $package $version documentation ($attempt/60)"
+              sleep 10
+            done
+          done < <(
+            mix run --no-start -e '
+              Raxol.Release.PackageCheck.public_packages()
+              |> Enum.each(fn %{app: app, path: path} ->
+                IO.puts("RAXOL_PACKAGE\t#{app}\t#{path}")
+              end)
+            ' | sed -n 's/^RAXOL_PACKAGE\t//p'
+          )
+
+      - name: Compile a fresh Hex consumer
+        run: |
+          set -euo pipefail
+          version="$(mix run --no-start --no-compile --no-deps-check \
+            -e 'IO.write(Mix.Project.config()[:version])')"
+          consumer="$(mktemp -d)"
+          trap 'rm -rf "$consumer"' EXIT
+
+          cat > "$consumer/mix.exs" <<EOF
+          defmodule RaxolReleaseConsumer.MixProject do
+            use Mix.Project
+            def project do
+              [
+                app: :raxol_release_consumer,
+                version: "0.0.0",
+                elixir: "~> 1.17",
+                deps: [{:raxol, "== $version"}]
+              ]
+            end
+            def application, do: [extra_applications: [:logger]]
+          end
+          EOF
+
+          (
+            cd "$consumer"
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" mix local.hex --force
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" mix local.rebar --force
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" mix deps.get
+            MIX_HOME="$consumer/.mix" HEX_HOME="$consumer/.hex" \
+              mix compile --warnings-as-errors
+          )

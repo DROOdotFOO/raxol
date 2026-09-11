@@ -1,6 +1,8 @@
 defmodule Raxol.Workflow.RuntimeTest do
   use ExUnit.Case, async: false
 
+  alias Raxol.Test.TestUtils
+
   alias Raxol.Workflow.Compiled
   alias Raxol.Workflow.Graph
 
@@ -330,7 +332,7 @@ defmodule Raxol.Workflow.RuntimeTest do
       table = :"runtime_telemetry_paused_#{:erlang.unique_integer([:positive])}"
 
       on_exit(fn ->
-        if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+        TestUtils.drop_ets_tables(table)
       end)
 
       {:ok, compiled} =
@@ -357,7 +359,7 @@ defmodule Raxol.Workflow.RuntimeTest do
         :"runtime_telemetry_resumed_#{:erlang.unique_integer([:positive])}"
 
       on_exit(fn ->
-        if :ets.whereis(table) != :undefined, do: :ets.delete(table)
+        TestUtils.drop_ets_tables(table)
       end)
 
       {:ok, compiled} =

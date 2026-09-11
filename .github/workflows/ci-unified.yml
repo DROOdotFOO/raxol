@@ -446,7 +446,10 @@ jobs:
       # package needs it, so only this package pays for it.
       - name: Install inotify-tools
         if: matrix.package == 'raxol_symphony'
-        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
+          sudo apt-get update
+          sudo apt-get install -y inotify-tools
 
       # `--check-locked` rather than a bare `deps.get`: a plain fetch REWRITES
       # a stale mix.lock in place and carries on, so a package whose committed
@@ -551,6 +554,7 @@ jobs:
 
       - name: Install pty drivers + NIF build deps
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
           sudo apt-get update
           sudo apt-get install -y tmux expect build-essential autoconf m4 \
             libncurses5-dev libssl-dev
@@ -698,29 +702,22 @@ jobs:
   # ========================================
   # Code Quality Checks
   # ========================================
-  # Advisory ONLY. nightly.yml's `credo-ratchet` job is what actually fails on
-  # a regression, against priv/quality_baseline.json.
+  # BLOCKING. Runs the same ratchet nightly runs, against the same
+  # priv/quality_baseline.json: the repo-wide count may not go UP.
   #
-  # `credo diff`, not `credo --strict`. A repo-wide pass takes ~50 min and
-  # cannot be sharded by path (`mix credo <path>` analyzes nothing against the
-  # root .credo.exs), so running one here spent most of an hour per PR on a
-  # result nothing reads and that nobody waits for -- which is not feedback,
-  # it is a queue. `diff` reports only what this branch introduced against its
-  # merge base, which is both the fast answer and the only one an author can
-  # act on: the other 1,182 findings are not theirs.
+  # Deliberately the absolute count and not a per-branch delta -- see the note
+  # on the step below for why `credo diff` cannot do this job. The cost of
+  # running the full pass twice (here and nightly) is the price of a number
+  # both places agree on.
   credo:
     name: Credo Analysis (advisory)
     needs: [setup, compile]
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 20
-
     steps:
-      # `credo diff` resolves a merge base, which needs real history; the
-      # default shallow clone has none and the command cannot run.
+      # No `fetch-depth: 0`: that was for `credo diff`'s merge-base
+      # resolution. The ratchet reads one working tree and needs no history.
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -743,17 +740,34 @@ jobs:
       - name: Fetch dependencies
         run: mix deps.get
 
-      # No `|| true`: `continue-on-error` above already makes this advisory,
-      # and stacking both hid the count from the job's own exit status too.
+      # No `|| true` and no `continue-on-error`: a nonzero exit means the
+      # repo-wide count went UP, and that now fails the run. `ci-status` reads
+      # this job's result -- listing it in `needs` without reading it is the
+      # exact trap that made the old gate decorative.
       #
-      # Against the merge base with the PR's own base branch, not a hardcoded
-      # master: this repo stacks PRs (a branch's base is often another branch),
-      # and diffing a stacked branch against master would report the parent
-      # PR's findings as this one's.
-      - name: Run Credo (new findings only)
-        run: |
-          base="${{ github.event.pull_request.base.ref || 'master' }}"
-          mix credo diff --strict --from-git-merge-base "origin/${base}"
+      # The ratchet, NOT `credo diff`. `diff` is the obvious per-PR shape and
+      # it does not work: its issue identity is not stable across the two
+      # revisions it compares, so it invents both halves of a delta. Measured
+      # on PR #985, which changes only YAML and JSON and not one Elixir file,
+      # `credo diff --strict --from-git-merge-base` reported "added 209 new
+      # refactoring opportunities, 108 new code readability issues, 138 new
+      # software design suggestions" alongside "fixed 659 refactoring
+      # opportunities, 49 code readability issues" -- against a diff with no
+      # Elixir in it at all. A gate that fabricates ~455 findings on an empty
+      # change is unmergeable by construction.
+      #
+      # The absolute count against priv/quality_baseline.json has none of that
+      # ambiguity: one number, one comparison, and the same script and
+      # measurement nightly runs -- so PR-time and nightly agree by
+      # construction rather than by hope. That is the property the dialyzer
+      # gate is still missing.
+      #
+      # Affordable, which was the original objection. The claim was ~50 min;
+      # measured cost of one full `--strict` pass is 95.4s of analysis in CI
+      # (73 checks, 3405 files) and 161s locally including the compile.
+      # Re-measure before demoting this again rather than inferring the cost.
+      - name: Credo ratchet
+        run: ./scripts/check-quality-ratchet.sh --gate credo
 
   dialyzer:
     name: Dialyzer (advisory)
@@ -810,6 +824,7 @@ jobs:
           key: plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}-${{ hashFiles('packages/*/lib/**/*.ex') }}
           restore-keys: |
             plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}-
+            plt-prebuilt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
             plt-${{ runner.os }}-${{ needs.setup.outputs.otp-version }}-${{ needs.setup.outputs.elixir-version }}-
 
       # No separate `mix dialyzer --plt` step: that call produces a deps PLT
@@ -821,26 +836,17 @@ jobs:
       # deps PLT and lets the analysis run rebuild it correctly, and refuses
       # to report a count when `unknown_function` dominates.
       #
-      # Advisory, and nightly.yml's ratchet is what fails on a regression --
-      # the same split this workflow already applies to credo, for a related
-      # reason.
+      # Advisory in pull requests; nightly.yml enforces the same ratchet.
       #
-      # The count is not reproducible across environments yet, so it cannot be
-      # a merge gate. A warm local PLT reports 91 (matching the baseline) while
-      # CI reported 100 on the same tree, and the cause is upstream of the
-      # ratchet: the cache key above includes
-      # `hashFiles('packages/*/lib/**/*.ex')`, so any PR touching packages/ --
-      # most of them -- misses the exact key, restores through restore-keys,
-      # and then has its deps PLT discarded as stale. Cold and warm PLTs
-      # disagree by 9 findings, and blocking a merge on which one CI happened
-      # to get is a gate that fails for environmental reasons rather than code
-      # reasons. That is how a gate gets routinely overridden, which is worse
-      # than an advisory one nobody can dismiss silently.
+      # Both workflows now read the reference toolchain from mise.toml and
+      # restore PLTs keyed by the versions setup-beam actually resolved. The
+      # former split -- 1.20/OTP 29 here, 1.19/OTP 27 nightly -- produced
+      # different counts against one baseline and made the nightly verdict
+      # unrelated to this feedback.
       #
-      # Nightly runs the identical ratchet with no PR to block and time to
-      # build a cold PLT properly, which is where the number means something.
-      # Make this blocking again once a PR-time run reproduces the nightly
-      # count -- prebuilding the PLT on a schedule is the obvious way.
+      # check-quality-ratchet.sh still validates the PLT against package source
+      # content before measuring, so a loose cache restore cannot make a stale
+      # package contract look current.
       - name: Dialyzer ratchet
         run: ./scripts/check-quality-ratchet.sh --gate dialyzer
         timeout-minutes: 90
@@ -1079,13 +1085,12 @@ jobs:
   # ========================================
   ci-status:
     name: CI Status
-    # Neither `credo` nor `dialyzer` is listed: both are advisory (see their
-    # job comments) and both are enforced by nightly.yml's ratchet jobs.
+    # `dialyzer` is deliberately absent: pull requests get advisory feedback,
+    # while nightly.yml enforces the same ratchet on the reference toolchain.
     #
     # Listing a job here without reading its `result` is the trap this comment
-    # exists to prevent -- `credo` was declared and never read, so it looked
-    # gated and was not. If either becomes blocking again, add it to `needs`
-    # AND add a case that reads its result.
+    # exists to prevent -- `credo` was once declared and never read, so it
+    # looked gated and was not. Any job added to `needs` gets a case below.
     needs:
       [
         format,
@@ -1094,6 +1099,7 @@ jobs:
         test-unit,
         package-tests,
         input-canary,
+        credo,
         security
       ]
     runs-on: ubuntu-latest
@@ -1133,10 +1139,16 @@ jobs:
             exit 1
           fi
 
-          # Dialyzer is deliberately absent: it is advisory until a PR-time run
-          # reproduces the nightly count (see its job comment). nightly.yml's
-          # `dialyzer` ratchet is what fails on a regression.
+          if [ "${{ needs.credo.result }}" != "success" ]; then
+            echo "❌ Credo count rose above the baseline"
+            echo "   Reproduce: ./scripts/check-quality-ratchet.sh --gate credo"
+            echo "   Lowered it instead? Re-run with --update to lock it in."
+            exit 1
+          fi
 
+          # Dialyzer is deliberately absent: nightly.yml enforces that ratchet;
+          # this workflow exposes the same reference-toolchain result without
+          # making the expensive job part of the aggregate PR status.
           if [ "${{ needs.security.result }}" != "success" ]; then
             echo "⚠️ Security scan found issues (non-blocking)"
           fi

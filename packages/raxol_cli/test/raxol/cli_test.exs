@@ -14,6 +14,12 @@ defmodule Raxol.CLITest do
       assert out =~ "playground"
     end
 
+    test "--version prints the CLI version and returns 0" do
+      out = capture_io(fn -> assert CLI.main(["--version"]) == 0 end)
+
+      assert out == "raxol #{CLI.version()}\n"
+    end
+
     test "help lists acp, and it is a declared command" do
       out = capture_io(fn -> assert CLI.main(["help"]) == 0 end)
 

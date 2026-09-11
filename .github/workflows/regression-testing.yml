@@ -106,6 +106,7 @@ jobs:
 
     - name: Install system dependencies
       run: |
+        sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
         sudo apt-get update
         sudo apt-get install -y build-essential gcc make
         echo "TMPDIR=/tmp" >> $GITHUB_ENV
@@ -284,6 +285,7 @@ jobs:
 
     - name: Install system dependencies
       run: |
+        sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
         sudo apt-get update
         sudo apt-get install -y build-essential gcc make valgrind
         echo "TMPDIR=/tmp" >> $GITHUB_ENV
@@ -673,6 +675,7 @@ jobs:
 
     - name: Install system dependencies
       run: |
+        sudo rm -f /etc/apt/sources.list.d/google-chrome.{list,sources}
         sudo apt-get update
         sudo apt-get install -y build-essential gcc make
         echo "TMPDIR=/tmp" >> $GITHUB_ENV

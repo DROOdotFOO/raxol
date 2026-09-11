@@ -3,6 +3,7 @@ defmodule Raxol.Agent.ThreadLogRouterTest do
 
   alias Raxol.Agent.Policy.{Cache, Retry, Timeout}
   alias Raxol.Agent.PolicyApplier
+  alias Raxol.Agent.Test.EtsTables
   alias Raxol.Agent.ThreadLog
   alias Raxol.Agent.ThreadLog.Ets, as: EtsLog
   alias Raxol.Agent.ThreadLogRouter
@@ -16,7 +17,7 @@ defmodule Raxol.Agent.ThreadLogRouterTest do
 
     on_exit(fn ->
       ThreadLogRouter.detach(handler_id)
-      Enum.each([cache_table, log_table, log_seq], &drop_table/1)
+      EtsTables.drop([cache_table, log_table, log_seq])
     end)
 
     {:ok,
@@ -24,22 +25,6 @@ defmodule Raxol.Agent.ThreadLogRouterTest do
      log_table: log_table,
      handler_id: handler_id,
      adapter: {EtsLog, %{table: log_table}}}
-  end
-
-  # The tables are named and owned by the test process, so ERTS reaps them as
-  # that process exits -- concurrently with this callback, which ExUnit runs in
-  # its own on_exit process. Guarding the delete with a `whereis` therefore
-  # races: the reaper can free the table between the two calls and the delete
-  # raises. "Already gone" is the goal state here, so tolerate exactly that;
-  # any other ArgumentError is a real one and must not be swallowed.
-  defp drop_table(table) do
-    :ets.delete(table)
-    :ok
-  rescue
-    error in ArgumentError ->
-      if :ets.whereis(table) == :undefined,
-        do: :ok,
-        else: reraise(error, __STACKTRACE__)
   end
 
   describe "attach/3" do

@@ -4,6 +4,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
   alias Raxol.Symphony.Config
   alias Raxol.Symphony.Issue
   alias Raxol.Symphony.Runners.Noop
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.Trackers.Memory
   alias Raxol.Symphony.Workflow.GraphAdapter
   alias Raxol.Workflow.Compiled
@@ -62,7 +63,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
 
     test "compile honors :saver opt", _ctx do
       table = :"adapter_test_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> EtsTables.drop(table) end)
 
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
@@ -145,7 +146,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       )
 
       table = :"adapter_pause_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> EtsTables.drop(table) end)
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       {:ok, compiled} = GraphAdapter.from_workflow(saver: saver)
@@ -185,7 +186,7 @@ defmodule Raxol.Symphony.Workflow.GraphAdapterTest do
       Noop.Director.set("MT-3", {:succeed_after, 0})
 
       table = :"adapter_int_#{:erlang.unique_integer([:positive])}"
-      on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+      on_exit(fn -> EtsTables.drop(table) end)
       saver = {Raxol.Workflow.Checkpoint.Saver.Ets, %{table: table}}
 
       {:ok, compiled} = GraphAdapter.from_workflow(saver: saver)

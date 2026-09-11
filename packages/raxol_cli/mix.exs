@@ -1,7 +1,7 @@
 defmodule RaxolCli.MixProject do
   use Mix.Project
 
-  @version "0.2.7"
+  @version "0.2.10"
   @source_url "https://github.com/DROOdotFOO/raxol"
 
   def project do
@@ -33,7 +33,7 @@ defmodule RaxolCli.MixProject do
   end
 
   # The `raxol` command. Burrito wraps the release into a self-contained
-  # executable per target; the `raxol` npm package (npm/) ships those binaries.
+  # executable per target; the `@raxol/cli` npm package (npm/) ships those binaries.
   # Build one target with `BURRITO_TARGET=<name> MIX_ENV=prod mix release`.
   defp releases do
     [

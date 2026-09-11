@@ -2,6 +2,7 @@
 # Fingerprints bind each exception to one commit, path, rule, and line; a new
 # key-shaped value in the same test tree is not exempt.
 
+056f6d50a85391e71022c4ebd56fad04d200af98:priv/static/assets/vendor/xterm/xterm.min.js:generic-api-key:7
 0e7791d96519e5fa999c31ee91c0c1261f45ede8:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:566
 0e7791d96519e5fa999c31ee91c0c1261f45ede8:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:567
 0fd7f96f888022cd9880e6c840cdd6dd58305f62:packages/raxol_payments/test/raxol/payments/eip712_golden_test.exs:generic-api-key:55
@@ -19,6 +20,9 @@
 196bb0ccc22c3c20f40c856359b8aabe3ec53065:packages/raxol_payments/test/raxol/payments/xochi/live_xochi_test.exs:generic-api-key:81
 1be84a0f499bf80ec7eb0083bdbc48e8012d8b21:test/raxol/core/runtime/debug_test.exs:generic-api-key:18
 1ea47e574e94cff4a2f9d71938bc4b3a1d4643eb:packages/raxol_payments/lib/raxol/payments/wallets/env.ex:generic-api-key:11
+2daeead650088f8d11194fde22d91954cb1e76fe:packages/raxol_acp/test/raxol/acp/asset_token_test.exs:generic-api-key:13
+316b71bd26c342173dc90f4f5683e254f6eddbcd:scripts/run_live_gates.sh:generic-api-key:338
+316b71bd26c342173dc90f4f5683e254f6eddbcd:scripts/run_live_gates.sh:generic-api-key:339
 444b8ac9ce642d840c063b5e1afe7a59e58c7660:packages/raxol_payments/test/raxol/payments/xochi/live_xochi_test.exs:generic-api-key:110
 444b8ac9ce642d840c063b5e1afe7a59e58c7660:packages/raxol_payments/test/raxol/payments/xochi/live_xochi_test.exs:generic-api-key:112
 4dbd11fa0b8388beefb51279257803f45a9b8ee2:packages/raxol_earn/test/raxol/earn/xochi/pull_preflight_test.exs:generic-api-key:112
@@ -41,10 +45,13 @@
 644e52cb8206223910c7eff177e864d1eb64487a:packages/raxol_payments/test/raxol/payments/eip712_test.exs:generic-api-key:315
 644e52cb8206223910c7eff177e864d1eb64487a:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:182
 644e52cb8206223910c7eff177e864d1eb64487a:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:183
+67abb0909d97d3229e3ee5ba89831445368b5924:packages/raxol_acp/examples/buyer_signed_intent.exs:generic-api-key:34
 67abb0909d97d3229e3ee5ba89831445368b5924:packages/raxol_acp/examples/buyer_signed_intent.exs:generic-api-key:35
 68e1456b1dd58e252fc25955600395e7809ec608:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:680
 68e1456b1dd58e252fc25955600395e7809ec608:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:681
+845ac374ab5b47a5af14fde1462ae8669b5ef1a9:packages/raxol_acp/examples/buyer_signed_intent.exs:generic-api-key:50
 845ac374ab5b47a5af14fde1462ae8669b5ef1a9:packages/raxol_acp/examples/buyer_signed_intent.exs:generic-api-key:51
+845ac374ab5b47a5af14fde1462ae8669b5ef1a9:packages/raxol_acp/examples/buyer_signed_intent.exs:generic-api-key:69
 845ac374ab5b47a5af14fde1462ae8669b5ef1a9:packages/raxol_acp/examples/buyer_signed_intent.exs:generic-api-key:70
 8f7ffc296c5b66d9671539e50829474ab7d387eb:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:316
 8f7ffc296c5b66d9671539e50829474ab7d387eb:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:317
@@ -89,6 +96,7 @@ c5a3ec150a72d8e5bce9f0023807ccbf49f3a4bc:packages/raxol_payments/test/raxol/paym
 c5a3ec150a72d8e5bce9f0023807ccbf49f3a4bc:packages/raxol_payments/test/raxol/payments/protocols/xochi_test.exs:generic-api-key:644
 d21e6c2c18e185c578f68a8d95599d388b44b682:packages/raxol_acp/test/fixtures/xochi/quote_fillable.json:generic-api-key:14
 d21e6c2c18e185c578f68a8d95599d388b44b682:packages/raxol_acp/test/fixtures/xochi/quote_fillable.json:generic-api-key:21
+d21e6c2c18e185c578f68a8d95599d388b44b682:packages/raxol_acp/test/raxol/acp/xochi/fixture_parity_test.exs:generic-api-key:22
 d21e6c2c18e185c578f68a8d95599d388b44b682:packages/raxol_acp/test/raxol/acp/xochi/fixture_parity_test.exs:generic-api-key:23
 d9873dd67426707c977c1bcf1ee3d55d4557d4e1:packages/raxol_agent/test/raxol/agent/sandbox_hook_test.exs:generic-api-key:168
 dfa45d5041c2de2f5865306683319efae5d633cb:packages/raxol_payments/test/raxol/payments/accounting_wiring_test.exs:generic-api-key:54

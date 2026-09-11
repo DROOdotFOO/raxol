@@ -1,4 +1,4 @@
-## [Unreleased]
+## [2.7.0] - 2026-09-09
 
 ### Added
 
@@ -48,6 +48,10 @@ These are public modules of published packages, so their removal is breaking and
 - **`raxol_terminal`: `Renderer.get_content/2`'s pid clause.** The clause matching a buffer-manager pid and returning `{:error, :deprecated_buffer_manager}` is gone with no catch-all behind it, so an external caller still passing a pid now gets a `FunctionClauseError` rather than the error tuple. Match on the buffer directly.
 
 ### Fixed
+
+- **`raxol --version` is a real top-level flag**. The packaged CLI now prints
+  its release version and build stamp, then exits successfully instead of
+  treating `--version` as an unknown command.
 
 - **A new `raxol_core` module shipped under a constraint that resolved without it.** `Raxol.Core.Colors.Ansi256` was added to `raxol_core`, but `raxol`, `raxol_terminal` and `raxol_liveview` all depended on `raxol_core "~> 2.6"`, which Hex resolves to the published 2.6.0, a version without the module. A consumer installing from Hex would have hit `UndefinedFunctionError` on any 256-color render (`Formats.ansi_to_rgb/1`, `SixelPalette`, `TerminalBridge.color_256_to_rgb/1`). Adding public API is a minor bump, so the framework family moves to 2.7.0 and the constraints to `"~> 2.7"`, which cannot resolve a `raxol_core` without the module. Neither guard could have caught this: `scripts/check-lockstep-deps.sh` compares only `X.Y`, and `Raxol.Release.PackageCheck` requires the constraint to be exactly `"~> major.minor"` of the sibling, so a patch-level API addition is invisible to both by construction.
 - **The 2.6.x family was split across two patch versions** (`raxol` and `raxol_terminal` at 2.6.1, the rest at 2.6.0), which is what allowed a dependent to resolve a sibling older than the code it was built against. The framework line (`raxol`, `raxol_core`, `raxol_terminal`, `raxol_agent`, `raxol_mcp`, `raxol_liveview`, `raxol_plugin`, `raxol_sensor`) is unified at 2.7.0.

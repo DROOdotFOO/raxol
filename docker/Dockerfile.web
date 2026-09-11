@@ -3,7 +3,7 @@
 
 ARG ELIXIR_VERSION=1.17.1
 ARG OTP_VERSION=27.0
-ARG DEBIAN_VERSION=bullseye-20240701-slim
+ARG DEBIAN_VERSION=bookworm-20240701-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
@@ -53,7 +53,7 @@ RUN mix release --overwrite
 FROM ${RUNNER_IMAGE} AS runner
 
 RUN apt-get update -y && \
-  apt-get install -y libstdc++6 openssl libncurses5 locales ca-certificates \
+  apt-get install -y libstdc++6 openssl libncurses6 locales ca-certificates \
   && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 # Set the locale

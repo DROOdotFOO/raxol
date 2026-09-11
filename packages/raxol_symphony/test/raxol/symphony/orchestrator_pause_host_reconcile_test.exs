@@ -16,6 +16,7 @@ defmodule Raxol.Symphony.OrchestratorPauseHostReconcileTest do
   alias Raxol.Symphony.{Config, Issue, Orchestrator}
   alias Raxol.Symphony.Orchestrator.PausedSaver.Memory, as: MemorySaver
   alias Raxol.Symphony.Runners.Noop
+  alias Raxol.Symphony.Test.EtsTables
   alias Raxol.Symphony.Test.FakeSsh
   alias Raxol.Symphony.Trackers.Memory, as: MemoryTracker
   alias Raxol.Symphony.Worker.HostSpec
@@ -35,7 +36,7 @@ defmodule Raxol.Symphony.OrchestratorPauseHostReconcileTest do
     table = :"sym_phr_paused_#{:erlang.unique_integer([:positive])}"
     saver = {MemorySaver, %{table: table}}
     MemorySaver.ensure_table(%{table: table})
-    on_exit(fn -> if :ets.whereis(table) != :undefined, do: :ets.delete(table) end)
+    on_exit(fn -> EtsTables.drop(table) end)
 
     %{workspace_root: workspace_root, saver: saver}
   end

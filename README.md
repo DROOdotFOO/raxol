@@ -185,6 +185,8 @@ them. In sandboxes where `HOME` is read-only, point `MIX_HOME` and
 
 Raxol started as two converging ideas: a terminal for AGI, where AI agents interact with a real terminal emulator the same way humans do; and an interface for the cockpit of a Gundam Wing Suit, where fault isolation, real-time responsiveness, and sensor fusion are survival-critical. The Gundam thing sounds like a joke. Then you look at the constraint set and it's exactly what OTP was built for: systems that can't go down, can't lose state, and have to hot-swap components while running.
 
+The longer vision is [Raxol: The Terminal For My Gundam](https://droo.foo/posts/raxol-terminal-for-the-gundam).
+
 ## Built with Raxol
 
 **[Xochi](https://xochi.fi)** is a private cross-chain DEX (intent-based swaps across 6 chains, sub-3s settlement, stealth addresses by default, ZKSAR compliance proofs) whose entire trading surface is raxol. One Component tree projects four ways: an SSH trader terminal, a LiveView web UI, a solver-agent surface for Riddler's sub-2ms solver, and an ops cockpit running sensor fusion on solver health. The solver executes behind a dedicated fail-closed stack (buyer-pre-signed intents, ledger-enforced spend gates, deployment guards that refuse to run unconfigured), kept deliberately off the MCP surface, so no fund-moving action is reachable as a generic tool call.

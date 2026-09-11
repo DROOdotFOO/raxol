@@ -94,7 +94,6 @@ end
 
 defmodule Harness do
   use Raxol.Core.Runtime.Application
-
   alias Raxol.Earn.{AssetToken, JobSession}
 
   @mark [
@@ -104,47 +103,42 @@ defmodule Harness do
     "     ▀██▀      "
   ]
   @states ~w(open budget_set funded submitted completed)a
+  @r Map.new(Enum.with_index(@states))
+  # :recorded events represent chain/SSE observations.
   @actions [
-    set_budget: [AssetToken.usdc(40, 8453)],
-    apply_event: [:funded],
-    submit: [%{patch: "gate.ex"}],
-    apply_event: [:completed]
+    {:call, :set_budget, [AssetToken.usdc(40, 8453)]},
+    {:recorded, :funded},
+    {:call, :submit, [%{patch: "gate"}]},
+    {:recorded, :completed}
   ]
-
+  @info ["RECORDED ACP #4812", "gate.ex · 40 USDC", "raxol_earn", ""]
   def init(_) do
-    {:ok, job} =
+    {:ok, j} =
       JobSession.Supervisor.start_session(
         chain_id: 8453,
         job_id: 4812,
         role: :provider
       )
 
-    %{job: job, at: 0}
+    %{j: j, a: 0, s: JobSession.status(j)}
   end
 
-  def update(:tick, %{at: at} = m) when at < 4 do
-    {fun, args} = Enum.at(@actions, at)
-    {:ok, _} = apply(JobSession, fun, [m.job | args])
-    {%{m | at: at + 1}, []}
+  def update(:tick, %{j: j, a: a} = m) when a < 4 do
+    {:ok, s} = run(j, Enum.at(@actions, a))
+    {%{m | a: a + 1, s: s}, []}
   end
 
   def update(_, m), do: {m, []}
   def subscribe(_), do: [subscribe_interval(200, :tick)]
+  def view(%{s: s}), do: column(do: head() ++ [text(" ")] ++ rows(s))
+  defp head, do: Enum.zip_with(@mark, @info, &text(&1 <> " " <> &2))
+  defp rows(t), do: Enum.map(@states, &r(&1, t))
+  defp run(j, {:call, f, a}), do: apply(JobSession, f, [j | a])
 
-  def view(m) do
-    info = [
-      "VIRTUALS ACP · BASE · JOB #4812",
-      "fix_spend_gate · 40 USDC",
-      "raxol_earn",
-      ""
-    ]
+  defp run(j, {:recorded, s}),
+    do: JobSession.apply_event(j, s, %{source: :recorded_demo})
 
-    head = Enum.zip_with(@mark, info, &text(&1 <> " " <> &2))
-    rows = Enum.with_index(@states, &row(&1, &2, m.at))
-    column(do: head ++ [text(" ")] ++ rows)
-  end
-
-  defp row(s, i, a), do: text("#{if(i <= a, do: "✓", else: "○")} #{s}")
+  defp r(s, t), do: text(if @r[s] <= @r[t], do: "✓ #{s}", else: "○ #{s}")
 end
 
 defmodule Settle do
@@ -346,7 +340,8 @@ defmodule GenLandingFrames do
     File.rm_rf!(scratch)
 
     if skipped != [],
-      do: IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
+      do:
+        IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
 
     case drifted do
       [] ->
@@ -354,7 +349,9 @@ defmodule GenLandingFrames do
         :ok
 
       names ->
-        IO.puts("STALE, re-record with `mix run ../scripts/gen_landing_frames.exs`:")
+        IO.puts(
+          "STALE, re-record with `mix run ../scripts/gen_landing_frames.exs`:"
+        )
 
         Enum.each(names, &IO.puts("  #{&1}"))
         System.halt(1)
@@ -376,10 +373,24 @@ defmodule GenLandingFrames do
   # `start_tick` pins each poster frame to module state: charts start populated,
   # settle starts completed, and harness starts at the newly opened job.
   #
-  # The frame count is chosen so the loop closes where the ANIMATION closes.
-  # `harness` records every ACP state once: open, budget_set, funded, submitted,
-  # completed. Each later frame is produced only after the real JobSession call
-  # changes the model.
+  # The frame count is chosen so the loop closes where the ANIMATION closes,
+  # which is the only thing that stops a recording snapping back in the middle
+  # of a motion. Six frames at 850ms was a slideshow; twenty-four was smooth
+  # but cut a sine wave off at 76% of its cycle, so it visibly reset.
+  #
+  #   pulse  wave(t) has period 2*pi/0.2 = 31.416 ticks. 63 frames is two
+  #          periods to within 0.17 of a tick -- 5.7s, and the seam lands
+  #          inside the rounding.
+  #   halo   the face cycles every 24 ticks (four glyphs, six ticks each), so
+  #          48 is two full cycles. Its drift field is seeded on absolute t and
+  #          never repeats, so nothing divides it; the face is what an eye
+  #          tracks, and the field reads as noise either way.
+  #   harness
+  #          records every ACP state once: open, budget_set, funded, submitted,
+  #          completed. Each later frame is produced only after the real
+  #          JobSession call changes the model.
+  #   settle five sandbox replay stages; the action results are fixed while the
+  #          cursor moves through request, execution, receipt, and denial.
   @examples [
     {"pulse", Pulse, {62, 13}, 90, 63, 4},
     {"halo", Halo, {70, 14}, 110, 48, 4},
@@ -694,7 +705,9 @@ defmodule GenLandingFrames do
           to_string(interval_ms)
         )
 
-        IO.puts("card  #{frames_dir} (#{@preview_frames} frames @ #{interval_ms}ms)")
+        IO.puts(
+          "card  #{frames_dir} (#{@preview_frames} frames @ #{interval_ms}ms)"
+        )
     end
   end
 

@@ -1,10 +1,10 @@
-# raxol
+# @raxol/cli
 
 Interactive AI agent and TUI toolkit in your terminal, as a self-contained
 binary. No Erlang, Elixir, or Node runtime needed at run time.
 
 ```bash
-npm install -g raxol
+npm install -g @raxol/cli
 raxol            # interactive AI agent
 raxol doctor     # what this install resolves: build, providers, config
 raxol update     # replace this binary with the latest verified release
@@ -18,6 +18,13 @@ Not a Node user? The binary does not need one:
 ```bash
 curl -fsSL https://raxol.io/install | bash
 brew install droodotfoo/tap/raxol
+```
+
+To require GitHub Actions provenance as well as the mandatory SHA-256 check,
+install the GitHub CLI first, then run:
+
+```bash
+curl -fsSL https://raxol.io/install | bash -s -- --verify-provenance
 ```
 
 ## Connecting a provider
