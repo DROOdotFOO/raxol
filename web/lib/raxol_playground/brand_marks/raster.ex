@@ -229,16 +229,23 @@ defmodule RaxolPlayground.BrandMarks.Raster do
 
   defp lowercase?(<<c>>), do: c in ?a..?z
 
-  defp cubic({x0, y0}, {x1, y1}, {x2, y2}, {x3, y3}) do
-    for s <- 1..@flatten do
-      t = s / @flatten
-      u = 1 - t
-      a = u * u * u
-      b = 3 * u * u * t
-      c = 3 * u * t * t
-      d = t * t * t
-      {a * x0 + b * x1 + c * x2 + d * x3, a * y0 + b * y1 + c * y2 + d * y3}
+  defp cubic(from, control_1, control_2, to) do
+    for step <- 1..@flatten do
+      cubic_point(from, control_1, control_2, to, step / @flatten)
     end
+  end
+
+  defp cubic_point({x0, y0}, {x1, y1}, {x2, y2}, {x3, y3}, t) do
+    u = 1 - t
+    u2 = u * u
+    t2 = t * t
+    weights = {u2 * u, 3 * u2 * t, 3 * u * t2, t2 * t}
+
+    {weighted(x0, x1, x2, x3, weights), weighted(y0, y1, y2, y3, weights)}
+  end
+
+  defp weighted(v0, v1, v2, v3, {a, b, c, d}) do
+    a * v0 + b * v1 + c * v2 + d * v3
   end
 
   defp close(%{cur: []} = state), do: state
@@ -269,17 +276,33 @@ defmodule RaxolPlayground.BrandMarks.Raster do
   # the rendered mark square with the original.
   defp coverage(subpaths, width, height, rule) do
     {x0, y0, x1, y1} = bbox(subpaths)
-    sx = width / (x1 - x0)
-    sy = height / (y1 - y0)
+    scale = {width / (x1 - x0), height / (y1 - y0)}
+    edges = Enum.flat_map(subpaths, &scaled_edges(&1, {x0, y0}, scale))
 
-    edges =
-      for subpath <- subpaths,
-          points =
-            Enum.map(subpath, fn {x, y} -> {(x - x0) * sx, (y - y0) * sy} end),
-          {{ax, ay}, {bx, by}} <- Enum.zip(points, tl(points) ++ [hd(points)]),
-          ay != by,
-          do: {ax, ay, bx, by}
+    coverage_grid(edges, width, height, rule)
+  end
 
+  defp scaled_edges(subpath, {x0, y0}, {scale_x, scale_y}) do
+    subpath
+    |> Enum.map(fn {x, y} -> {(x - x0) * scale_x, (y - y0) * scale_y} end)
+    |> polygon_edges()
+  end
+
+  defp polygon_edges([]), do: []
+  defp polygon_edges([first | rest]), do: polygon_edges(rest, first, first, [])
+
+  defp polygon_edges([], first, previous, edges) do
+    add_edge(previous, first, edges)
+  end
+
+  defp polygon_edges([point | rest], first, previous, edges) do
+    polygon_edges(rest, first, point, add_edge(previous, point, edges))
+  end
+
+  defp add_edge({_, y}, {_, y}, edges), do: edges
+  defp add_edge({ax, ay}, {bx, by}, edges), do: [{ax, ay, bx, by} | edges]
+
+  defp coverage_grid(edges, width, height, rule) do
     for row <- 0..(height - 1),
         {col, covered} <- row_coverage(edges, row, width, rule),
         into: %{},
@@ -299,11 +322,15 @@ defmodule RaxolPlayground.BrandMarks.Raster do
   end
 
   defp crossings(edges, y) do
-    for {ax, ay, bx, by} <- edges,
-        (ay <= y and y < by) or (by <= y and y < ay),
-        do:
-          {ax + (y - ay) / (by - ay) * (bx - ax), if(by > ay, do: 1, else: -1)}
+    Enum.flat_map(edges, &crossing(&1, y))
   end
+
+  defp crossing({ax, ay, bx, by}, y)
+       when (ay <= y and y < by) or (by <= y and y < ay) do
+    [{ax + (y - ay) / (by - ay) * (bx - ax), if(by > ay, do: 1, else: -1)}]
+  end
+
+  defp crossing(_edge, _y), do: []
 
   defp spans(crossings, :evenodd) do
     crossings
@@ -314,16 +341,25 @@ defmodule RaxolPlayground.BrandMarks.Raster do
 
   defp spans(crossings, :nonzero) do
     {_winding, _open, spans} =
-      Enum.reduce(crossings, {0, nil, []}, fn {x, direction},
-                                              {winding, open, spans} ->
-        case {winding, winding + direction} do
-          {0, next} when next != 0 -> {next, x, spans}
-          {_, 0} -> {0, nil, [{open, x} | spans]}
-          {_, next} -> {next, open, spans}
-        end
-      end)
+      Enum.reduce(crossings, {0, nil, []}, &advance_winding/2)
 
     Enum.reverse(spans)
+  end
+
+  defp advance_winding({x, direction}, {winding, open, spans}) do
+    winding_transition(x, winding, winding + direction, open, spans)
+  end
+
+  defp winding_transition(x, 0, next, _open, spans) when next != 0 do
+    {next, x, spans}
+  end
+
+  defp winding_transition(x, _winding, 0, open, spans) do
+    {0, nil, [{open, x} | spans]}
+  end
+
+  defp winding_transition(_x, _winding, next, open, spans) do
+    {next, open, spans}
   end
 
   defp span(acc, {from, to}, width) do
@@ -351,16 +387,7 @@ defmodule RaxolPlayground.BrandMarks.Raster do
   defp pack(grid, :braille, cols, rows, threshold) do
     for row <- 0..(rows - 1) do
       for col <- 0..(cols - 1), into: "" do
-        bits =
-          Enum.reduce(@braille_bits, 0, fn {{dx, dy}, bit}, bits ->
-            key = {col * @dot_cols + dx, row * @dot_rows + dy}
-
-            if Map.get(grid, key, 0.0) >= threshold,
-              do: bits ||| bit,
-              else: bits
-          end)
-
-        <<@braille_blank + bits::utf8>>
+        braille_char(grid, col, row, threshold)
       end
     end
   end
@@ -373,6 +400,19 @@ defmodule RaxolPlayground.BrandMarks.Raster do
         Map.fetch!(@half, {top, bottom})
       end
     end
+  end
+
+  defp braille_char(grid, col, row, threshold) do
+    bits =
+      Enum.reduce(@braille_bits, 0, fn {{dx, dy}, bit}, bits ->
+        key = {col * @dot_cols + dx, row * @dot_rows + dy}
+
+        if Map.get(grid, key, 0.0) >= threshold,
+          do: bits ||| bit,
+          else: bits
+      end)
+
+    <<@braille_blank + bits::utf8>>
   end
 
   defp set?(grid, x, y, threshold) do

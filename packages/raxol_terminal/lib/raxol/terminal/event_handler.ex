@@ -6,7 +6,6 @@ defmodule Raxol.Terminal.EventHandler do
 
   alias Raxol.Terminal.ANSI.Mouse
   alias Raxol.Terminal.Emulator
-  alias Raxol.Terminal.ANSI.Mouse
 
   @doc """
   Processes a mouse event.

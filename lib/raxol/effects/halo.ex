@@ -77,26 +77,42 @@ defmodule Raxol.Effects.Halo do
   """
   @spec field(glyph(), keyword()) :: [String.t()]
   def field(glyph, opts \\ []) when is_list(glyph) do
-    {width, height} = Keyword.get(opts, :size, @default_size)
-    frame = Keyword.get(opts, :frame, 0)
-    floor = Keyword.get(opts, :floor, @default_floor)
-    ramp = Keyword.get(opts, :ramp, @ramp)
-    {pad_x, pad_y} = Keyword.get(opts, :keep_out, @default_keep_out)
-
     rows = Enum.map(glyph, &String.graphemes/1)
-    glyph_h = length(rows)
-    glyph_w = rows |> Enum.map(&length/1) |> Enum.max(fn -> 0 end)
-    origin = {div(width - glyph_w, 2), div(height - glyph_h, 2)}
+    {width, height} = Keyword.get(opts, :size, @default_size)
+    glyph_size = {widest_row(rows), length(rows)}
+    origin = origin({width, height}, glyph_size)
+    keep_out = Keyword.get(opts, :keep_out, @default_keep_out)
 
-    for y <- 0..(height - 1) do
-      for x <- 0..(width - 1), into: "" do
-        cell(rows, {x, y}, origin, {glyph_w, glyph_h}, {pad_x, pad_y}, %{
-          width: width,
-          height: height,
-          frame: frame,
-          floor: floor,
-          ramp: ramp
-        })
+    render_field(
+      rows,
+      origin,
+      glyph_size,
+      keep_out,
+      texture_config(opts, width, height)
+    )
+  end
+
+  defp widest_row(rows),
+    do: rows |> Enum.map(&length/1) |> Enum.max(fn -> 0 end)
+
+  defp origin({width, height}, {glyph_width, glyph_height}) do
+    {div(width - glyph_width, 2), div(height - glyph_height, 2)}
+  end
+
+  defp texture_config(opts, width, height) do
+    %{
+      width: width,
+      height: height,
+      frame: Keyword.get(opts, :frame, 0),
+      floor: Keyword.get(opts, :floor, @default_floor),
+      ramp: Keyword.get(opts, :ramp, @ramp)
+    }
+  end
+
+  defp render_field(rows, origin, glyph_size, keep_out, field) do
+    for y <- 0..(field.height - 1) do
+      for x <- 0..(field.width - 1), into: "" do
+        cell(rows, {x, y}, origin, glyph_size, keep_out, field)
       end
     end
   end
@@ -170,17 +186,27 @@ defmodule Raxol.Effects.Halo do
       gy < glyph_h + pad_y
   end
 
-  defp texture(x, y, %{width: w, height: h, frame: t, floor: floor, ramp: ramp}) do
-    p = x + div(t, 2)
-    q = y - div(t, 3)
-    n = rem(abs((p * @a + q * @b) * (p + q * 7 + 1)), @modulus)
+  defp texture(x, y, %{width: width, height: height, frame: frame} = field) do
+    weight = texture_weight(x, y, width, height, frame)
 
-    cx = w / 2
-    cy = h / 2
-    weight = n / @modulus * min(1.0, abs(x - cx) / cx + abs(y - cy) / cy)
-
-    if weight < floor,
+    if weight < field.floor,
       do: " ",
-      else: Enum.at(ramp, trunc(weight * (length(ramp) - 1)))
+      else: Enum.at(field.ramp, trunc(weight * (length(field.ramp) - 1)))
+  end
+
+  defp texture_weight(x, y, width, height, frame) do
+    noise(x, y, frame) * edge_fade(x, y, width, height)
+  end
+
+  defp noise(x, y, frame) do
+    p = x + div(frame, 2)
+    q = y - div(frame, 3)
+    rem(abs((p * @a + q * @b) * (p + q * 7 + 1)), @modulus) / @modulus
+  end
+
+  defp edge_fade(x, y, width, height) do
+    center_x = width / 2
+    center_y = height / 2
+    min(1.0, abs(x - center_x) / center_x + abs(y - center_y) / center_y)
   end
 end
