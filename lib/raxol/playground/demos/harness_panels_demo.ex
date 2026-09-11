@@ -90,7 +90,6 @@ defmodule Raxol.Playground.Demos.HarnessPanelsDemo do
     column style: %{gap: 1} do
       [
         text("Harness Panels Demo", style: [:bold]),
-        divider(),
         panel(WorktracksPanel, id: "demo-worktracks", lanes: @lanes),
         row style: %{gap: 2} do
           [

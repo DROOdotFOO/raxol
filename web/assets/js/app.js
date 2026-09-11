@@ -463,17 +463,13 @@ Hooks.CardLoop = {
 }
 
 // Hero surface-tabbed demo. All content is server-rendered; this hook only
-// toggles hidden/aria-selected: it auto-advances the surface tabs and steps
+// toggles hidden/aria-selected. It auto-advances the surface tabs and steps
 // the recorded terminal frames on a fixed-timestep rAF accumulator
 // (while-loop catch-up keeps wall-clock lockstep on any refresh rate).
-// Clicking a tab stops the auto-advance, and so does scrubbing. The scrub
-// bar, the pause button and the keymap come from `Transport` above, shared
-// with the gallery cards.
-//
-// Reduced motion pauses the AUTO-ADVANCE, with a live change listener; the
-// pause button is the manual override. It does not disable seeking: dragging
-// the scrub bar or pressing an arrow is an interaction, not an animation.
-// When the server swaps in the live session (data-live), the player stops.
+// Clicking a tab stops automatic surface switching but leaves the recording
+// running. Reduced motion pauses all auto-advance through a live media-query
+// listener. When the server swaps in the live session (data-live), playback
+// stops.
 Hooks.HeroDemo = {
   // Fallback only. The real rate comes from the recording via data-frame-ms:
   // the generator samples each example at its module's own tick and writes
@@ -493,42 +489,24 @@ Hooks.HeroDemo = {
     this.raf = null
 
     this.mql = window.matchMedia('(prefers-reduced-motion: reduce)')
-    this.userPaused = this.mql.matches
+    this.paused = this.mql.matches
     this.onMql = (e) => this.setPaused(e.matches)
     this.mql.addEventListener('change', this.onMql)
 
-    // Delegated clicks survive LiveView patches of the children.
+    // Delegated clicks survive LiveView patches of the tabs.
     this.onClick = (e) => {
       const tabBtn = e.target.closest('.hero-tab')
       if (tabBtn && this.el.contains(tabBtn)) {
         this.autoTabs = false
         this.showTab(parseInt(tabBtn.dataset.i, 10))
-        return
-      }
-      const pauseBtn = e.target.closest('[data-role="player-pause"]')
-      if (pauseBtn && this.el.contains(pauseBtn)) {
-        this.setPaused(!this.userPaused)
       }
     }
     this.el.addEventListener('click', this.onClick)
 
-    // Delegated for the same reason the clicks are: LiveView patches the tabs
-    // out from under a listener bound to them.
-    this.onKeydown = (e) => {
-      if (this.onTabKey(e)) return
-      this.onTransportKey(e)
-    }
+    // Delegated because LiveView patches the tabs beneath the listener.
+    this.onKeydown = (e) => this.onTabKey(e)
     this.el.addEventListener('keydown', this.onKeydown)
 
-    // `input`, not `change`: dragging the thumb has to move the frame as it
-    // drags rather than on release.
-    this.onInput = (e) => {
-      const seek = e.target.closest('[data-role="player-seek"]')
-      if (seek && this.el.contains(seek)) this.seek(parseInt(seek.value, 10))
-    }
-    this.el.addEventListener('input', this.onInput)
-
-    this.syncPauseLabel()
     this.sync()
   },
 
@@ -540,7 +518,6 @@ Hooks.HeroDemo = {
     const vis = this.el.querySelector('.hero-frames [data-frame]:not([hidden])')
     this.frame = vis ? parseInt(vis.dataset.frame, 10) : 0
     Transport.readout(this.el, this.frame, Transport.count(this.frameNodes()))
-    this.syncPauseLabel()
     this.sync()
   },
 
@@ -553,25 +530,13 @@ Hooks.HeroDemo = {
   },
 
   live() { return this.el.dataset.live === 'true' },
-  playing() { return !this.live() && !this.userPaused },
+  playing() { return !this.live() && !this.paused },
 
   setPaused(v) {
-    this.userPaused = v
-    this.syncPauseLabel()
+    this.paused = v
     this.sync()
   },
 
-  // Glyph for sight, label for everything else: `||` and `|>` carry no meaning
-  // to a screen reader, so the accessible name is the word and is kept in step
-  // with the glyph here rather than left on the markup's initial value.
-  syncPauseLabel() {
-    const btn = this.el.querySelector('[data-role="player-pause"]')
-    if (!btn) return
-    const label = this.userPaused ? 'Play the demo' : 'Pause the demo'
-    btn.textContent = this.userPaused ? '|>' : '||'
-    btn.setAttribute('aria-label', label)
-    btn.setAttribute('title', label)
-  },
 
   sync() {
     if (this.playing()) this.startLoop()
@@ -628,25 +593,6 @@ Hooks.HeroDemo = {
     Transport.readout(this.el, this.frame, count)
   },
 
-  // Seeking stops the auto-advance, the rule clicking a tab already follows:
-  // the reader has taken the wheel, and a loop that resumed underneath them
-  // would move the frame they just chose.
-  //
-  // Independent of reduced motion by design. The query governs animation, and
-  // a drag or an arrow press is not one, so the frame moves either way; the
-  // player merely never moves it on its own.
-  seek(n) {
-    const frames = this.frameNodes()
-    const count = Transport.count(frames)
-    if (count < 2 || !Number.isInteger(n)) return
-    this.userPaused = true
-    this.frame = Transport.clamp(n, count)
-    Transport.show(frames, this.frame)
-    Transport.readout(this.el, this.frame, count)
-    this.acc.frame = 0
-    this.syncPauseLabel()
-    this.sync()
-  },
 
   showTab(n) {
     this.tab = n
@@ -676,8 +622,7 @@ Hooks.HeroDemo = {
   // the reader has taken the wheel, and a rotation that resumed underneath
   // them would move the selection they just chose.
   //
-  // Returns whether it handled the key, so the container's one keydown
-  // listener can offer the event to the transport next.
+  // Returns whether it handled the key.
   onTabKey(e) {
     const tab = e.target.closest('.hero-tab')
     if (!tab || !this.el.contains(tab)) return false
@@ -699,37 +644,6 @@ Hooks.HeroDemo = {
     return true
   },
 
-  // Delegated from the demo container so the bindings reach wherever focus
-  // sits inside the hero: a tabpanel, the scrub bar, the transport buttons.
-  // The tablist is excluded because it owns those same keys under the ARIA
-  // tabs pattern, and Space there has to select the tab it is on.
-  //
-  // The hero is most of the viewport, so "focus is inside it" is close to "the
-  // page has focus" and is far too wide a claim for the keys the browser
-  // already owns. Arrows, Home and End are honoured only inside the transport
-  // cluster; otherwise `End` on one of the hero's links stopped scrolling the
-  // page and stepped a frame instead. Space and the digits stay wide: nothing
-  // else in the hero does anything with them, and a focused button keeps Space
-  // through the guard in `Transport.intent`.
-  onTransportKey(e) {
-    if (e.target.closest('.hero-tab')) return
-    const seekEl = this.el.querySelector('[data-role="player-seek"]')
-    if (!Transport.owns(e.target, seekEl)) return
-    if (!e.target.closest('.hd-controls') && NAVIGATION_KEYS.has(e.key)) return
-    const count = Transport.count(this.frameNodes())
-    if (count < 2) return
-    const act = Transport.intent(e, {
-      count,
-      index: this.frame,
-      fromRange: e.target === seekEl
-    })
-    if (!act) return
-    // No preventDefault: the range still has to do its own stepping.
-    if (act.type === 'grab') return this.setPaused(true)
-    e.preventDefault()
-    if (act.type === 'toggle') this.setPaused(!this.userPaused)
-    else this.seek(act.index)
-  }
 }
 
 // The /replay transport. Same keymap and the same native range as the two

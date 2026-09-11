@@ -5,59 +5,75 @@
     "children": [
       {
         "id": null,
-        "label": "XOCHI RECEIPT",
+        "label": "XOCHI SANDBOX REPLAY · NO FUNDS",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "XOCHI RECEIPT"
+        "content": "XOCHI SANDBOX REPLAY · NO FUNDS"
       },
       {
         "id": null,
-        "label": "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002",
+        "label": "Base → Arbitrum One · 25.00 USDC · stealth",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002"
+        "content": "Base → Arbitrum One · 25.00 USDC · stealth"
       },
       {
         "id": null,
-        "label": "  [OK] spend gate before signature",
+        "label": "trust 25/100 · fee 0.0475 USDC (19 bps)",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "  [OK] spend gate before signature"
+        "content": "trust 25/100 · fee 0.0475 USDC (19 bps)"
       },
       {
         "id": null,
-        "label": "  [OK] intent     EIP-712 quote signed",
+        "label": "cap 50.00 · spent 25.00 · min 24.9000",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "  [OK] intent     EIP-712 quote signed"
+        "content": "cap 50.00 · spent 25.00 · min 24.9000"
       },
       {
         "id": null,
-        "label": "  [OK] execution  submitted to solver",
+        "label": " ",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "  [OK] execution  submitted to solver"
+        "content": " "
       },
       {
         "id": null,
-        "label": "  [OK] source tx  base-sepolia.blockscout.com/tx",
+        "label": "✓ request  slippage 50 bps",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "  [OK] source tx  base-sepolia.blockscout.com/tx"
+        "content": "✓ request  slippage 50 bps"
       },
       {
         "id": null,
-        "label": "> [OK] dest tx    testnet.arcscan.app/tx",
+        "label": "✓ execute  24.9525 USDC · demo_intent_4812",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "> [OK] dest tx    testnet.arcscan.app/tx"
+        "content": "✓ execute  24.9525 USDC · demo_intent_4812"
+      },
+      {
+        "id": null,
+        "label": "✓ receipt  completed · stealth",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "✓ receipt  completed · stealth"
+      },
+      {
+        "id": null,
+        "label": "✓ guard    75.00 denied · no signature",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "✓ guard    75.00 denied · no signature"
       }
     ],
     "role": "group"

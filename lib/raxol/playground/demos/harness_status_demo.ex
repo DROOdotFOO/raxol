@@ -132,14 +132,11 @@ defmodule Raxol.Playground.Demos.HarnessStatusDemo do
     column style: %{gap: 1} do
       [
         text("Harness Status Demo", style: [:bold]),
-        divider(),
         harness_status_bar(model),
         context_meter(model),
         spend_meter(model),
         activity_row(model),
-        divider(),
         advisory_feed(),
-        divider(),
         drift_indicator(model),
         toast_row(model),
         text("[w] working  [i] idle  [h] simulate hung", style: [:dim])

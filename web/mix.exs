@@ -29,10 +29,7 @@ defmodule RaxolPlayground.MixProject do
       {:raxol, path: ".."},
       # The hosted coding agent over SSH (RAXOL_SSH_CODE) needs the agent
       # framework on the release code path. Main raxol keeps raxol_agent
-      # optional (no dependency edge), so the deploy app opts in here; without
-      # it, Raxol.Application.maybe_add_ssh_code/0 logs and skips. The ACP
-      # sibling package rides along as a source-build transitive dep and is
-      # harmless (nothing auto-serves it in the web release).
+      # optional (no dependency edge), so the deploy app opts in here.
       {:raxol_agent, path: "../packages/raxol_agent"},
 
       # The hosted agent's spend gate. Raxol.Application refuses to serve
@@ -40,6 +37,11 @@ defmodule RaxolPlayground.MixProject do
       # credential), and the ledger lives here -- so without this dep the
       # coding agent cannot start at all, whatever else is configured.
       {:raxol_payments, path: "../packages/raxol_payments"},
+
+      # The harness hero executes the real Virtuals ACP job state machine.
+      # Seller and buyer runtimes remain opt-in; the dependency boots only the
+      # local registries and per-job supervisor used by the recording.
+      {:raxol_earn, path: "../packages/raxol_earn"},
 
       # The HTTP client behind every remote provider. raxol_agent declares it
       # optional and optional deps do not propagate, so a release depending on

@@ -76,9 +76,11 @@ those produce:
 | Kimi        | `kimi.svg`            |                                       |
 | OpenRouter  | `openrouter.svg`      |                                       |
 | LongCat     | `longcat.svg`         | Vendor-published source, above        |
+| DeepSeek    | `deepseek.svg`        |                                       |
 | Proton Lumo | `proton.svg`          | Lumo has no mark of its own; this is Proton's, the vendor's |
 | Ollama      | `ollama.svg`          |                                       |
 | LM Studio   | `lmstudio.svg`        |                                       |
+| Cursor      | `cursor.svg`          | A provider here, not an editor: raxol drives it through its CLI |
 | Zed         | `zedindustries.svg`   |                                       |
 | JetBrains   | `jetbrains.svg`       |                                       |
 | neovim      | `neovim.svg`          |                                       |

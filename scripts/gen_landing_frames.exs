@@ -24,9 +24,9 @@
 #   cd web && mix run ../scripts/gen_landing_frames.exs
 #
 # The paths above resolve from __DIR__, so the working directory only decides
-# which project's deps are loadable. It has to be web/: `settle` renders the
-# real fee schedule and the real USDC deployment table, and raxol_payments is
-# a dep of web/ rather than of root raxol (root would fail to compile it).
+# which project's deps are loadable. It has to be web/: `settle` reads live
+# package constants from raxol_payments, while `harness` executes a supervised
+# ACP lifecycle from raxol_earn.
 #
 # Frames are committed; rerun when a hero example or a demo's first render
 # changes. A demo that fails to start headless is skipped with a warning (its
@@ -36,8 +36,8 @@ alias Raxol.LiveView.TerminalBridge
 
 # The modules the hero displays. web/'s landing hero (@pulse_source,
 # @halo_source, @harness_source and @settle_source in landing_components.ex)
-# shows these exact sources; keep each pair byte-identical (the whole point of
-# recording is that the pane and the frames are the same program).
+# carries the same parsed programs in a compact layout that fits its source
+# pane; landing_components_test.exs rejects semantic drift between the copies.
 defmodule Pulse do
   use Raxol.Core.Runtime.Application
 
@@ -94,71 +94,109 @@ end
 
 defmodule Harness do
   use Raxol.Core.Runtime.Application
-  alias Raxol.UI.Components.Harness.ToolCallBlock, as: T
 
-  @calls [
-    {"read", "spend_gate.ex"},
-    {"edit", "spend_gate.ex:42"},
-    {"shell", "mix test"}
+  alias Raxol.Earn.{AssetToken, JobSession}
+
+  @mark [
+    "     ▄█▀█▄     ",
+    "▀▀█▄▄█▄▄▄█▄▄  ▀",
+    "    ▀█▄███     ",
+    "     ▀██▀      "
   ]
-  @ladder [0, 0, 1, 1, 1, 1, 1, 2, 2, 3]
-  def init(_), do: %{t: 0}
-  def update(:tick, m), do: {%{m | t: m.t + 1}, []}
+  @states ~w(open budget_set funded submitted completed)a
+  @actions [
+    set_budget: [AssetToken.usdc(40, 8453)],
+    apply_event: [:funded],
+    submit: [%{patch: "gate.ex"}],
+    apply_event: [:completed]
+  ]
+
+  def init(_) do
+    {:ok, job} =
+      JobSession.Supervisor.start_session(
+        chain_id: 8453,
+        job_id: 4812,
+        role: :provider
+      )
+
+    %{job: job, at: 0}
+  end
+
+  def update(:tick, %{at: at} = m) when at < 4 do
+    {fun, args} = Enum.at(@actions, at)
+    {:ok, _} = apply(JobSession, fun, [m.job | args])
+    {%{m | at: at + 1}, []}
+  end
+
   def update(_, m), do: {m, []}
   def subscribe(_), do: [subscribe_interval(200, :tick)]
 
   def view(m) do
-    at = Enum.at(@ladder, rem(m.t, length(@ladder)))
+    info = [
+      "VIRTUALS ACP · BASE · JOB #4812",
+      "fix_spend_gate · 40 USDC",
+      "raxol_earn",
+      ""
+    ]
 
-    column style: %{gap: 1} do
-      [
-        text("virtuals acp  bugfix  40.00 USDC", fg: :cyan),
-        column(do: Enum.with_index(@calls, &call(&1, &2, at, m.t)))
-      ]
-    end
+    head = Enum.zip_with(@mark, info, &text(&1 <> " " <> &2))
+    rows = Enum.with_index(@states, &row(&1, &2, m.at))
+    column(do: head ++ [text(" ")] ++ rows)
   end
 
-  defp call({n, a}, i, x, t) do
-    {:ok, s} = T.init(name: n, args: a, status: st(i, x), frame: t)
-    T.render(s, %{})
-  end
-
-  defp st(i, x) when i < x, do: :done
-  defp st(i, i), do: :running
-  defp st(_, _), do: :pending
+  defp row(s, i, a), do: text("#{if(i <= a, do: "✓", else: "○")} #{s}")
 end
 
 defmodule Settle do
   use Raxol.Core.Runtime.Application
+  alias Raxol.Payments.Actions.Payments, as: P
+  alias RaxolPlayground.SettlementSandbox, as: Sandbox
 
-  @route "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002"
-  @steps [
-    {"spend gate", "before signature"},
-    {"intent", "EIP-712 quote signed"},
-    {"execution", "submitted to solver"},
-    {"source tx", "base-sepolia.blockscout.com/tx"},
-    {"dest tx", "testnet.arcscan.app/tx"}
-  ]
-  def init(_), do: %{t: 0}
+  @payment %{
+    amount: "25.00",
+    from_chain_id: 8453,
+    to_chain_id: 42_161,
+    settlement: "stealth",
+    trust_score: 25,
+    slippage_bps: 50,
+    min_to_amount: "24900000"
+  }
+  def init(_) do
+    {:ok, demo} = Sandbox.start(@payment)
+
+    {:ok, intent} =
+      P.ExecuteXochiIntent.call(demo.payment, demo.context)
+
+    {:ok, receipt} =
+      P.PollXochiStatus.call(
+        %{intent_id: intent.intent_id},
+        demo.context
+      )
+
+    signed = Sandbox.Wallet.signatures()
+
+    {:error, denied} =
+      P.ExecuteXochiIntent.call(
+        %{demo.payment | amount: "75.00"},
+        demo.context
+      )
+
+    %{
+      demo: demo,
+      intent: intent,
+      receipt: receipt,
+      denied: denied,
+      safe?: Sandbox.Wallet.signatures() == signed,
+      t: 0
+    }
+  end
+
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
-  def subscribe(_), do: [subscribe_interval(200, :tick)]
+  def update(_, m), do: {m, []}
+  def subscribe(_), do: [subscribe_interval(400, :tick)]
 
-  def view(m) do
-    at = rem(m.t, length(@steps))
-
-    head = [
-      text("XOCHI RECEIPT", style: [:bold]),
-      text(@route, fg: :magenta)
-    ]
-
-    column(do: head ++ Enum.with_index(@steps, &step(&1, &2, at)))
-  end
-
-  defp step({k, v}, i, at) do
-    mark = if(i == at, do: ">", else: " ")
-    key = String.pad_trailing(k, 10)
-    text("#{mark} [OK] #{key} #{v}", fg: :cyan)
-  end
+  def view(m),
+    do: column(do: Enum.map(Sandbox.lines(m), &text/1))
 end
 
 defmodule GenLandingFrames do
@@ -216,9 +254,7 @@ defmodule GenLandingFrames do
   # app's own interval message explicitly, so a recording is a fold of demo
   # state rather than a sample of scheduler timing.
   #
-  # The tick frame zero is taken at. Not zero: the first couple of renders of a
-  # chart are a half-drawn axis, and the hero should open on a real picture.
-  @hero_start_tick 4
+  # Each hero declares its own deterministic poster-frame tick below.
   @hero_distinct_tick_limit 64
 
   # The previews boot with subscriptions unarmed and are DRIVEN: each demo's
@@ -310,8 +346,7 @@ defmodule GenLandingFrames do
     File.rm_rf!(scratch)
 
     if skipped != [],
-      do:
-        IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
+      do: IO.puts("skipped (renders live VM state): #{Enum.join(skipped, ", ")}")
 
     case drifted do
       [] ->
@@ -319,9 +354,7 @@ defmodule GenLandingFrames do
         :ok
 
       names ->
-        IO.puts(
-          "STALE, re-record with `mix run ../scripts/gen_landing_frames.exs`:"
-        )
+        IO.puts("STALE, re-record with `mix run ../scripts/gen_landing_frames.exs`:")
 
         Enum.each(names, &IO.puts("  #{&1}"))
         System.halt(1)
@@ -335,42 +368,27 @@ defmodule GenLandingFrames do
     end
   end
 
-  # `{name, module, {w, h}, tick_ms, frames}`.
+  # `{name, module, {w, h}, tick_ms, frames, start_tick}`.
   #
   # The tick is the module's own `subscribe_interval`, and it is what the page
   # plays the recording back at -- written beside the frames so the player does
   # not carry a constant that has to be kept in step with this list by hand.
+  # `start_tick` pins each poster frame to module state: charts start populated,
+  # settle starts completed, and harness starts at the newly opened job.
   #
-  # The frame count is chosen so the loop closes where the ANIMATION closes,
-  # which is the only thing that stops a recording snapping back in the middle
-  # of a motion. Six frames at 850ms was a slideshow; twenty-four was smooth
-  # but cut a sine wave off at 76% of its cycle, so it visibly reset.
-  #
-  #   pulse  wave(t) has period 2*pi/0.2 = 31.416 ticks. 63 frames is two
-  #          periods to within 0.17 of a tick -- 5.7s, and the seam lands
-  #          inside the rounding.
-  #   halo   the face cycles every 24 ticks (four glyphs, six ticks each), so
-  #          48 is two full cycles. Its drift field is seeded on absolute t and
-  #          never repeats, so nothing divides it; the face is what an eye
-  #          tracks, and the field reads as noise either way.
-  #   harness
-  #          `@ladder` is the dwell, one entry per frame, so the ten frames it
-  #          holds are the loop. The dwell is uneven on purpose: `edit` sits
-  #          for five of them because it is the call a reader wants to watch,
-  #          and one call per tick went by too fast to follow. All-done gets a
-  #          single frame -- it is the one state with no spinner, so a second
-  #          frame of it would be identical to the first.
-  #   settle five receipt steps; route facts are fixed, while the cursor moves
-  #          through real receipt stages without inventing transaction hashes.
+  # The frame count is chosen so the loop closes where the ANIMATION closes.
+  # `harness` records every ACP state once: open, budget_set, funded, submitted,
+  # completed. Each later frame is produced only after the real JobSession call
+  # changes the model.
   @examples [
-    {"pulse", Pulse, {62, 13}, 90, 63},
-    {"halo", Halo, {70, 14}, 110, 48},
-    {"harness", Harness, {36, 5}, 200, 10},
-    {"settle", Settle, {56, 7}, 200, 5}
+    {"pulse", Pulse, {62, 13}, 90, 63, 4},
+    {"halo", Halo, {70, 14}, 110, 48, 4},
+    {"harness", Harness, {56, 11}, 200, 5, 0},
+    {"settle", Settle, {54, 9}, 400, 5, 4}
   ]
 
   defp hero(base \\ @hero_dir) do
-    for {name, module, {w, h}, tick_ms, frame_count} <- @examples do
+    for {name, module, {w, h}, tick_ms, frame_count, start_tick} <- @examples do
       dir = Path.join(base, name)
       File.mkdir_p!(dir)
 
@@ -394,7 +412,7 @@ defmodule GenLandingFrames do
 
       try do
         messages = hero_messages!(id, module, name)
-        drive_ticks!(id, messages, @hero_start_tick)
+        drive_ticks!(id, messages, start_tick)
 
         Enum.reduce(0..(frame_count - 1), nil, fn n, previous ->
           buffer =
@@ -530,43 +548,21 @@ defmodule GenLandingFrames do
   end
 
   # What the MCP surface serves: the structured content behind
-  # `raxol_screenshot`, taken from the view tree, which is that tool's input.
-  # Folded from `init/1` rather than read off the running session. The MCP
-  # artifact is the one thing here that does NOT come from a buffer, so it was
-  # reading the dispatcher's model -- which is a moving target, and churned on
-  # every run even while the frames beside it were stable. These modules are
-  # pure, so the model at tick `t` is a fold and nothing has to be sampled.
-  defp mcp(module, _id) do
-    # Component ids are per-process counters. Reset them so this fold mints
-    # the ids a fresh boot would, whatever folded in this process before it:
-    # without this, the harness tree's ids depend on recording order.
+  # `raxol_screenshot`, taken from the same pinned frame-zero model as the
+  # terminal buffer. Subscriptions are disabled and ticks are driven above, so
+  # this model cannot move between the buffer and tree projections. Reading it
+  # also matters for stateful examples: folding `init/1` a second time would
+  # create a second ACP JobSession instead of projecting the recorded one.
+  defp mcp(module, id) do
+    # Component ids are per-process counters. Reset them so this projection
+    # mints the ids a fresh boot would, regardless of recording order.
     Raxol.Core.ID.reset()
-
-    model = drive_model(module, @hero_start_tick)
+    {:ok, model} = Raxol.Headless.get_model(id)
 
     model
     |> module.view()
     |> Raxol.MCP.StructuredScreenshot.from_view_tree()
     |> Raxol.MCP.StructuredScreenshot.to_json()
-  end
-
-  defp drive_model(module, ticks) when ticks <= 0, do: module.init(nil)
-
-  defp drive_model(module, ticks) do
-    model = module.init(nil)
-
-    messages =
-      case interval_messages(model, module) do
-        [{_interval_ms, msgs} | _] -> msgs
-        [] -> []
-      end
-
-    Enum.reduce(1..ticks, model, fn _tick, acc ->
-      Enum.reduce(messages, acc, fn msg, m ->
-        {m, _cmds} = module.update(msg, m)
-        m
-      end)
-    end)
   end
 
   defp previews(dir \\ @preview_dir) do
@@ -698,9 +694,7 @@ defmodule GenLandingFrames do
           to_string(interval_ms)
         )
 
-        IO.puts(
-          "card  #{frames_dir} (#{@preview_frames} frames @ #{interval_ms}ms)"
-        )
+        IO.puts("card  #{frames_dir} (#{@preview_frames} frames @ #{interval_ms}ms)")
     end
   end
 

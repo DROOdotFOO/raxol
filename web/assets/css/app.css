@@ -63,7 +63,11 @@
 
   /* Subtle link (for demo back-links etc) */
   .subtle-link {
-    @apply font-mono transition-colors;
+    @apply font-mono inline-flex items-center transition-colors;
+    /* Was a bare inline anchor, so its hit area was the text box itself --
+       45x18 for "<- Back", the smallest target on a demo page. */
+    padding: 0.5rem 0.4rem;
+    margin: -0.5rem -0.4rem;
     color: var(--text-dim);
   }
   .subtle-link:hover { color: #e8e4dc; }
@@ -166,8 +170,11 @@
   }
 
   /* --- Toggle buttons (code, users, etc) --- */
+  /* Vertical padding is the hit area here, not decoration: at `py-1` these
+     were 28px tall, which is a small target for a menu that is the primary
+     way through the catalog. */
   .toggle-btn {
-    @apply font-mono px-3 py-1 rounded transition-colors;
+    @apply font-mono px-3 py-2 rounded transition-colors;
     font-size: 0.7rem;
     border: 1px solid var(--panel-border);
     color: var(--text-dim);
@@ -216,7 +223,7 @@
   }
 
   .view-toggle-btn {
-    @apply font-mono px-3 py-1 rounded transition-colors;
+    @apply font-mono px-3 py-2 rounded transition-colors;
     font-size: 0.75rem;
     color: var(--text-dim);
   }
@@ -750,7 +757,7 @@ html {
   font-size: var(--text-xs);
   color: var(--text-ghost);
   border: 1px solid var(--panel-border);
-  padding: 0.2rem 0.5rem;
+  padding: 0.4rem 0.6rem;
   border-radius: 3px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -1905,16 +1912,11 @@ html {
   white-space: nowrap;
 }
 
-/* The example's name, and the link to the file that runs it. Carries the
-   underline only on hover so the bar still reads as a title bar at rest. */
+/* The example's name within the title bar. */
 .hd-file {
   color: var(--axol-coral);
   font-weight: 600;
-  text-decoration: none;
 }
-
-.hd-file:hover,
-.hd-file:focus-visible { text-decoration: underline; }
 
 /* Dropped rather than ellipsed once the bar is narrow. Same threshold and same
    reasoning as .hd-title below it. */
@@ -1942,10 +1944,8 @@ html {
   }
 }
 
-/* Ruled off from the captions. Everything in this bar is small mono text, so
-   without the divider the surface caption ran straight into the transport and
-   the switcher and the whole right side read as one sentence -- the two things
-   you can actually click did not look clickable. */
+/* Ruled off from the captions so the frame readout and next-example action
+   remain distinct from the small mono title text. */
 .hd-controls {
   display: flex;
   align-items: center;
@@ -1977,21 +1977,6 @@ html {
   color: var(--pearl-cream);
 }
 
-/* Square, and the one control that is a glyph rather than a word. The box is
-   the WCAG target floor; `||` and `|>` are narrow enough that the text alone
-   would be a few pixels wide. */
-.hd-control--icon {
-  justify-content: center;
-  min-width: 1.5rem;
-  border: 1px solid var(--panel-border);
-  border-radius: 3px;
-  letter-spacing: 0;
-}
-
-.hd-control--icon:hover,
-.hd-control--icon:focus-visible {
-  border-color: var(--text-dim);
-}
 
 /* Filled, because this control is how the visitor learns there are more examples. */
 .hd-control--next {
@@ -2005,11 +1990,76 @@ html {
   font-weight: 700;
 }
 
+@property --hd-border-beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes hd-border-beam {
+  to { --hd-border-beam-angle: 360deg; }
+}
+
+/* The same three-layer treatment as Raxol.Effects.BorderBeam: a traveling
+   stroke, a tight inner glow, and a soft bloom outside the control. */
+.hd-control--next {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+  box-shadow: inset 0 0 0.65rem var(--coral-25);
+}
+
+.hd-control--next::before,
+.hd-control--next::after {
+  content: "";
+  /* Declared on each pseudo-element, not inherited from the button. Registered
+     custom properties do not inherit, and resolving this gradient on the
+     parent froze its angle even while the pseudo's angle kept animating. */
+  --hd-border-beam:
+    conic-gradient(
+      from var(--hd-border-beam-angle),
+      transparent 0deg 250deg,
+      var(--sky) 282deg,
+      var(--axol-coral) 318deg,
+      var(--pearl-cream) 342deg,
+      transparent 360deg
+    );
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: hd-border-beam 4s linear infinite;
+}
+
+.hd-control--next::before {
+  z-index: -1;
+  inset: -0.3rem;
+  background: var(--hd-border-beam);
+  filter: blur(0.35rem);
+  opacity: 0.55;
+}
+
+.hd-control--next::after {
+  z-index: 1;
+  inset: -2px;
+  padding: 2px;
+  background: var(--hd-border-beam);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
 .hd-control--next:hover,
 .hd-control--next:focus-visible {
   color: var(--obsidian);
   border-color: var(--pearl-cream);
   background: var(--pearl-cream);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hd-control--next::before,
+  .hd-control--next::after {
+    animation: none;
+  }
 }
 
 .hero-tabs {
@@ -2053,7 +2103,7 @@ html {
 
 .hero-panes {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
 }
 
 .hero-pane {
@@ -2231,6 +2281,28 @@ html {
   overflow: hidden;
 }
 
+.gallery-card__link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.gallery-card__link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.gallery-card__link:focus-visible {
+  outline: none;
+}
+
+.gallery-card__link:focus-visible::after {
+  border-radius: inherit;
+  outline: 2px solid var(--axol-coral);
+  outline-offset: -2px;
+}
+
 /* 8.5px is deliberate and is not a violation of the type floor above: this is
    a thumbnail of a terminal, sized so 60 columns fit the card, not text anyone
    is asked to read. The card states what the demo is in body copy underneath. */
@@ -2331,7 +2403,18 @@ html {
 .pg-cx-intermediate { color: var(--gold); }
 .pg-cx-advanced { color: var(--coral-red); }
 
+/* Takes the leftover height under the demo, which is what the shell above it
+   already assumes: that element is content-sized precisely so the slack falls
+   through to here. Neither of them claimed it, so on a short demo the slack
+   became a band of page background between the code and the status bar --
+   155px of it on a LineChart at 941px tall.
+   `min-height: 0` because a flex child will not shrink below its content
+   without it, and `overflow: auto` so a snippet longer than the panel scrolls
+   inside instead of being clipped by the `overflow-hidden` wrapper. */
 .pg-code {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   border-top: 1px solid var(--panel-border);
   background: var(--panel-bg-subtle);
   padding: 0.55rem 1rem 0.75rem;
@@ -2567,6 +2650,8 @@ input[type="range"].player-seek:focus-visible {
    overlay on it: the preview is a 60 column terminal shrunk to card width, and
    a control floating over it would cover the output the card exists to show. */
 .card-transport {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -2830,6 +2915,35 @@ input[type="range"].player-seek:focus-visible {
   letter-spacing: 0.03em;
 }
 
+/* The token has one explicit header action rather than hiding among footer
+   metadata. It stays compact enough to share the mobile row with the menu. */
+.screen-token-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 1.75rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--coral-40);
+  border-radius: 4px;
+  color: var(--axol-coral);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.screen-token-link:hover,
+.screen-token-link:focus-visible {
+  color: var(--pearl-cream);
+  border-color: var(--pearl-cream);
+  background: var(--coral-10);
+}
+
 .screen-menu-btn {
   font-family: var(--font-mono);
   font-size: 0.8rem;
@@ -2968,7 +3082,7 @@ input[type="range"].player-seek:focus-visible {
 .integrations-track {
   display: flex;
   width: max-content;
-  animation: integrations-scroll 45s linear infinite;
+  animation: integrations-scroll 60s linear infinite;
 }
 
 /* Half the track is exactly one run, so the seam never shows. */
@@ -3362,4 +3476,3 @@ input[type="range"].player-seek:focus-visible {
   );
   line-height: 1.5;
 }
-

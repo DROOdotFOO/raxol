@@ -5,111 +5,83 @@
     "children": [
       {
         "id": null,
-        "label": "virtuals acp  bugfix  40.00 USDC",
+        "label": "     ▄█▀█▄      VIRTUALS ACP · BASE · JOB #4812",
         "type": "text",
         "children": [],
         "role": "text",
-        "content": "virtuals acp  bugfix  40.00 USDC"
+        "content": "     ▄█▀█▄      VIRTUALS ACP · BASE · JOB #4812"
       },
       {
         "id": null,
-        "type": "flex",
-        "children": [
-          {
-            "id": null,
-            "type": "row",
-            "children": [
-              {
-                "id": "tool-call-1-glyph",
-                "label": "✓",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "✓"
-              },
-              {
-                "id": "tool-call-1-name",
-                "label": "read",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "read"
-              },
-              {
-                "id": "tool-call-1-args",
-                "label": "spend_gate.ex",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "spend_gate.ex"
-              }
-            ],
-            "role": "group"
-          },
-          {
-            "id": null,
-            "type": "row",
-            "children": [
-              {
-                "id": "tool-call-2-glyph",
-                "label": "⠼",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "⠼"
-              },
-              {
-                "id": "tool-call-2-name",
-                "label": "edit",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "edit"
-              },
-              {
-                "id": "tool-call-2-args",
-                "label": "spend_gate.ex:42",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "spend_gate.ex:42"
-              }
-            ],
-            "role": "group"
-          },
-          {
-            "id": null,
-            "type": "row",
-            "children": [
-              {
-                "id": "tool-call-3-glyph",
-                "label": "○",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "○"
-              },
-              {
-                "id": "tool-call-3-name",
-                "label": "shell",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "shell"
-              },
-              {
-                "id": "tool-call-3-args",
-                "label": "mix test",
-                "type": "text",
-                "children": [],
-                "role": "text",
-                "content": "mix test"
-              }
-            ],
-            "role": "group"
-          }
-        ],
-        "role": "group"
+        "label": "▀▀█▄▄█▄▄▄█▄▄  ▀ fix_spend_gate · 40 USDC",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "▀▀█▄▄█▄▄▄█▄▄  ▀ fix_spend_gate · 40 USDC"
+      },
+      {
+        "id": null,
+        "label": "    ▀█▄███      raxol_earn",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "    ▀█▄███      raxol_earn"
+      },
+      {
+        "id": null,
+        "label": "     ▀██▀       ",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "     ▀██▀       "
+      },
+      {
+        "id": null,
+        "label": " ",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": " "
+      },
+      {
+        "id": null,
+        "label": "✓ open",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "✓ open"
+      },
+      {
+        "id": null,
+        "label": "○ budget_set",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "○ budget_set"
+      },
+      {
+        "id": null,
+        "label": "○ funded",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "○ funded"
+      },
+      {
+        "id": null,
+        "label": "○ submitted",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "○ submitted"
+      },
+      {
+        "id": null,
+        "label": "○ completed",
+        "type": "text",
+        "children": [],
+        "role": "text",
+        "content": "○ completed"
       }
     ],
     "role": "group"

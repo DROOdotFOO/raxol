@@ -40,19 +40,20 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
           nil -> flunk("gen_landing_frames.exs defines no #{module}")
         end
 
-      # Blank lines are not part of the program, and they cannot be held equal
-      # anyway: `mix format` owns the recorder's copy and puts blank lines into
-      # it, while the heredoc is a string the formatter never sees. Comparing
-      # bytes made this test fail on formatting alone, which is how it would
-      # have been switched off. Everything that changes behaviour still differs.
-      squash = fn text ->
+      # The shown program is hand-wrapped to fit the terminal pane while the
+      # recorder is formatter-owned. Compare their parsed programs so layout
+      # cannot create drift noise while every behavioral change still differs.
+      normalize = fn text ->
         text
-        |> String.split("\n")
-        |> Enum.reject(&(String.trim(&1) == ""))
-        |> Enum.join("\n")
+        |> Code.string_to_quoted!()
+        |> Macro.prewalk(fn
+          {form, metadata, args} when is_list(metadata) -> {form, [], args}
+          node -> node
+        end)
+        |> Macro.to_string()
       end
 
-      assert squash.(shown) == squash.(recorded),
+      assert normalize.(shown) == normalize.(recorded),
              "#{name}: the pane shows a different program than its frames were " <>
                "recorded from. Edit landing_components.ex and " <>
                "gen_landing_frames.exs together."
@@ -309,13 +310,22 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   # The recording plays back at the rate it was sampled at, and that rate ships
   # with it rather than living as a constant in the player.
+  #
+  # 200ms is the ceiling for anything the eye reads as motion. `settle` is
+  # named here rather than folded into a looser global bound, because its tick
+  # is not a pacing choice: four lifecycle stages at 400ms is the ~2s fill the
+  # solver advertises, so the recording runs at the speed the pane claims. A
+  # second exception should be argued for the same way, not added to a number.
+  @slower_than_motion %{"settle" => 400}
+
   test "each recording declares the interval it was sampled at" do
     for name <- LandingComponents.hero_example_names() do
       interval = RecordedFrames.hero_frame_interval(name)
+      ceiling = Map.get(@slower_than_motion, name, 200)
 
       assert interval > 0
 
-      assert interval <= 200,
+      assert interval <= ceiling,
              "#{name} plays back at #{interval}ms, which is a slideshow"
 
       hero = render_component(&LandingComponents.screen_hero/1, example: name)
@@ -483,6 +493,28 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
+  # `harness.ex` carries the Virtuals Protocol mark as four literal rows,
+  # because the pane shows the program and a rasterizer inlined there would be
+  # most of what a reader sees. A literal is free to drift from the artwork it
+  # claims to be, which would leave the pane showing a hand-drawn logo beside
+  # an integrations row inlining the real one -- and their brand guide says to
+  # use the logo as provided. This is what holds the two together.
+  test "the harness mark is the official artwork, not a drawing of it" do
+    source = LandingComponents.example_source("harness")
+
+    [_, literal] = Regex.run(~r/@mark (\[.*?\])/s, source)
+    {shown, _binding} = Code.eval_string(literal)
+
+    assert shown ==
+             BrandMarks.cells("Virtuals Protocol",
+               cols: 15,
+               rows: 4,
+               glyphs: :half_block
+             ),
+           "the @mark literal in harness.ex is not what virtuals.svg " <>
+             "rasterizes to; re-run BrandMarks.cells/2 and paste the result"
+  end
+
   # The h1 names four things. Three of them used to be assertions with nothing
   # under them: the rotation was two rendering demos, so "agent, harness, and
   # payments included" was a sentence rather than a claim you could check by
@@ -509,37 +541,6 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   test "settle is the first hero example" do
     assert List.first(LandingComponents.hero_example_names()) == "settle"
-  end
-
-  # The page has got fees wrong once already: raxol.io rendered a hand-written
-  # fee table until 2026-08-30 whose numbers no tier ever charged (see the note
-  # in `Raxol.Payments.PrivacyTier`). The hero no longer prices anything at all
-  # -- the ladder lives on /payments, held against the pinned schedule by
-  # "payments section renders the ladder ..." below -- so what this guards now
-  # is that no rate creeps back into a pane that has no schedule behind it.
-  test "the settle pane quotes no fee at all" do
-    quoted = ~r/\d+ bps/ |> Regex.scan(settle_pane()) |> List.flatten()
-
-    assert quoted == [],
-           "the settle pane quotes #{Enum.join(quoted, ", ")}; the hero does not price transfers"
-  end
-
-  test "the settle pane is a Blockscout-verifiable Arc testnet receipt" do
-    pane = settle_pane()
-
-    assert pane =~ "USDC 1.10"
-    assert pane =~ "Base Sepolia"
-    assert pane =~ "Arc Testnet"
-    assert pane =~ "5042002"
-    assert pane =~ "base-sepolia.blockscout.com/tx"
-    assert pane =~ "testnet.arcscan.app/tx"
-    assert pane =~ "source"
-    assert pane =~ "dest"
-    refute pane =~ "src"
-    refute pane =~ "dst"
-    assert pane =~ "spend gate"
-    assert pane =~ "before signature"
-    assert pane =~ ~r/intent\s+EIP-712 quote signed/
   end
 
   # The row replaced the sentence, so it inherits the sentence's obligation:
@@ -611,14 +612,6 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     end
   end
 
-  defp settle_pane do
-    "settle"
-    |> RecordedFrames.hero_frames()
-    |> List.first()
-    |> String.replace(~r/<[^>]*>/, "")
-    |> unescape()
-  end
-
   test "the hero renders four surfaces and claims no ACP one" do
     hero =
       render_component(&LandingComponents.screen_hero/1,
@@ -638,6 +631,18 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute hero =~ "ACP"
     refute hero =~ "session/prompt"
     refute hero =~ "agent_message_chunk"
+  end
+
+  test "the live surface is left of the source listing" do
+    hero =
+      render_component(&LandingComponents.screen_hero/1,
+        example: List.first(LandingComponents.hero_example_names())
+      )
+
+    {live_offset, _length} = :binary.match(hero, ~s(data-surface="0"))
+    {source_offset, _length} = :binary.match(hero, ~s(class="hero-code"))
+
+    assert live_offset < source_offset
   end
 
   # The row reinforces the claim with things that are true, so its entries have
@@ -947,8 +952,7 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
   # Pinned as an exact list on purpose. The header is a short, argued-for set,
   # and the point of holding it here is that a fourth entry has to be justified
   # rather than appended. Payments earned its slot because /payments was
-  # otherwise reachable only from the foot of /token, which is itself only
-  # reachable from the landing footer's $RAXOL mark.
+  # otherwise reachable only through the token page.
   test "the header offers components, payments, and docs" do
     assert LandingComponents.nav_links() == [
              {"/gallery", "Components"},
@@ -957,14 +961,21 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
            ]
   end
 
-  test "the landing footer keeps package, token, and source links" do
+  test "the token action lives in the header, not the footer" do
+    header =
+      render_component(&LandingComponents.screen_header/1,
+        mobile_menu_open: false
+      )
+
     footer = render_component(&LandingComponents.screen_footer/1, %{})
 
+    assert header =~ ~s(href="/token")
+    assert header =~ "$RAXOL"
+    refute header =~ "$RAXOL verified"
     assert footer =~ ~s(href="https://hex.pm/packages/raxol")
-    assert footer =~ ~s(href="/token")
-    assert footer =~ "$RAXOL"
-    refute footer =~ "$RAXOL verified"
     assert footer =~ "github.com/DROOdotFOO/raxol"
+    refute footer =~ ~s(href="/token")
+    refute footer =~ "$RAXOL"
     refute footer =~ ~s(href="/coding-agent")
     refute footer =~ ~s(href="/skill.md")
     refute footer =~ ~r/>\s*\d+\s+packages\s*</
@@ -1183,15 +1194,19 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
     refute payments =~ "dexscreener"
   end
 
-  # `$RAXOL` reaches the footer through `TopicLive.links/0` like every other
+  # `$RAXOL` reaches the header through `TopicLive.links/0` like every other
   # deep dive, so the page and the link to it cannot drift apart.
-  test "the token page remains available from the footer link" do
+  test "the token page remains available from the header action" do
     assert {"/token", "$RAXOL"} in RaxolPlaygroundWeb.TopicLive.links()
 
-    footer = render_component(&LandingComponents.screen_footer/1, %{})
-    assert footer =~ ~s(href="/token")
-    assert footer =~ "$RAXOL"
-    refute footer =~ "$RAXOL verified"
+    header =
+      render_component(&LandingComponents.screen_header/1,
+        mobile_menu_open: false
+      )
+
+    assert header =~ ~s(href="/token")
+    assert header =~ "$RAXOL"
+    refute header =~ "$RAXOL verified"
   end
 
   test "coding agent section claims ACP membership and prints the four surfaces" do

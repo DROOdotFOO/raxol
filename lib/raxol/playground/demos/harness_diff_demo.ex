@@ -261,9 +261,7 @@ defmodule Raxol.Playground.Demos.HarnessDiffDemo do
     column style: %{gap: 1} do
       [
         text("Harness Diff Viewer Demo (Pierre-style)", style: [:bold]),
-        divider(),
         DiffViewer.render(diff_state, %{}),
-        divider(),
         text(
           "#{model.sample + 1}/#{length(@samples)} #{sample.name} | " <>
             "#{model.mode}->#{effective} | w#{model.width} fold #{model.context}",

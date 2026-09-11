@@ -98,19 +98,20 @@ defmodule Raxol.Playground.Demos.HarnessToolBlocksDemo do
     context = render_context()
 
     # snippet:start
+    # The dimmed section labels already separate the three blocks, so the
+    # rules between them were a second separator paying a third row each
+    # (`gap: 1` puts a blank line either side of every child). This demo is a
+    # gallery card before it is anything else, and the card's row sets the
+    # height of every card beside it.
     column style: %{gap: 1} do
       [
         text("Harness Tool Blocks Demo", style: [:bold]),
-        divider(),
         text("Tool call (running -> done):", style: [:dim]),
         ToolCallBlock.render(model.call, context),
-        divider(),
         text("Tool result (trusted):", style: [:dim]),
         ToolResultBlock.render(model.result, context),
-        divider(),
         text("Tool result (tainted, collapsible):", style: [:dim]),
         ToolResultBlock.render(model.tainted, context),
-        divider(),
         text("[space] tainted result   [r] replay call", style: [:dim])
       ]
     end

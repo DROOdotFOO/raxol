@@ -107,96 +107,82 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
   """
 
-  # The coding agent, as the harness's own components render it: the rows are
-  # `ToolCallBlock`, the module `mix raxol.code` draws a tool call with, rather
-  # than a picture of one -- so the glyph, the spinner and the layout are the
-  # product's. What is authored is the turn (which tools, in what state), the
-  # way `pulse` authors a wave.
-  #
-  # The job line above the turn is the other half of the story raxol_earn
-  # tells: agents do not only spend, they sell services on the Virtuals Agent
-  # Commerce Protocol and get paid for them, and the harness is how the work
-  # a job was funded for actually gets done. It stays authored text rather
-  # than a call into `Raxol.Earn`, because the web app does not depend on
-  # raxol_earn and `RaxolEarn.Application` self-starts outside `:test` -- a
-  # dependency edge added for one line of a hero pane would start a seller
-  # supervision tree in the deployed site.
-  #
-  # The turn finishes rather than sitting on `edit` forever with only the
-  # spinner moving, which read as a hang once `settle` beside it started
-  # completing. `@ladder` is the dwell per frame, uneven so `edit` holds long
-  # enough to read. The statuses come from the tick, so `@calls` carries name
-  # and args only and `st/2` decides done, running or pending -- that, and the
-  # shorter alias, is what fits: the pane clips at thirty lines and sixty-seven
-  # columns.
-  #
-  # The job is a paid coding job, not `usdc_transfer`. A pane that announced a
-  # transfer offering and then edited `router.ex` described no one's work: the
-  # harness earns by doing the thing it is good at, so the job is a bugfix at a
-  # price, and the calls are that bugfix.
+  # A coding agent accepts and completes a paid Virtuals ACP job through the
+  # real raxol_earn state machine. The frame generator runs these calls against
+  # a supervised JobSession; only the external Virtuals events (funding and
+  # approval) use apply_event/3.
   @harness_source ~S"""
   defmodule Harness do
     use Raxol.Core.Runtime.Application
-    alias Raxol.UI.Components.Harness.ToolCallBlock, as: T
-    @calls [
-      {"read", "spend_gate.ex"},
-      {"edit", "spend_gate.ex:42"},
-      {"shell", "mix test"}
-    ]
-    @ladder [0, 0, 1, 1, 1, 1, 1, 2, 2, 3]
-    def init(_), do: %{t: 0}
-    def update(:tick, m), do: {%{m | t: m.t + 1}, []}
+    alias Raxol.Earn.{AssetToken, JobSession}
+    @mark ["     ▄█▀█▄     ", "▀▀█▄▄█▄▄▄█▄▄  ▀",
+           "    ▀█▄███     ", "     ▀██▀      "]
+    @states ~w(open budget_set funded submitted completed)a
+    @actions [set_budget: [AssetToken.usdc(40, 8453)],
+              apply_event: [:funded], submit: [%{patch: "gate.ex"}],
+              apply_event: [:completed]]
+    def init(_) do
+      {:ok, job} = JobSession.Supervisor.start_session(
+        chain_id: 8453, job_id: 4812, role: :provider)
+      %{job: job, at: 0}
+    end
+    def update(:tick, %{at: at} = m) when at < 4 do
+      {fun, args} = Enum.at(@actions, at)
+      {:ok, _} = apply(JobSession, fun, [m.job | args])
+      {%{m | at: at + 1}, []}
+    end
     def update(_, m), do: {m, []}
     def subscribe(_), do: [subscribe_interval(200, :tick)]
     def view(m) do
-      at = Enum.at(@ladder, rem(m.t, length(@ladder)))
-      column style: %{gap: 1} do
-        [
-          text("virtuals acp  bugfix  40.00 USDC", fg: :cyan),
-          column(do: Enum.with_index(@calls, &call(&1, &2, at, m.t)))
-        ]
-      end
+      info = ["VIRTUALS ACP · BASE · JOB #4812",
+              "fix_spend_gate · 40 USDC", "raxol_earn", ""]
+      head = Enum.zip_with(@mark, info, &text(&1 <> " " <> &2))
+      rows = Enum.with_index(@states, &row(&1, &2, m.at))
+      column(do: head ++ [text(" ")] ++ rows)
     end
-    defp call({n, a}, i, x, t) do
-      {:ok, s} = T.init(name: n, args: a, status: st(i, x), frame: t)
-      T.render(s, %{})
-    end
-    defp st(i, x) when i < x, do: :done
-    defp st(i, i), do: :running
-    defp st(_, _), do: :pending
+    defp row(s,i,a),do: text("#{if i<=a,do: "✓",else: "○"} #{s}")
   end
   """
 
-  # Payments as an operator receipt, not a toy progress list. The Arc corridor
-  # is testnet-only until Xochi publishes it in capabilities, so this pane names
-  # the funded-run shape and the Blockscout chains without inventing tx hashes.
+  # One real, deterministic payment path rather than a hand-authored mode
+  # matrix. The sandbox replaces only the external Xochi service and signing
+  # key; quote validation, the spend gate, signing boundary, submission,
+  # polling and ledger accounting run through the production Actions.
+  #
+  # The actions finish once in init and the interval replays those observed
+  # results for the prerecorded hero. The pane says REPLAY and NO FUNDS rather
+  # than presenting the animation as a live mainnet settlement. The final
+  # over-limit request also checks that the wallet was not asked to sign.
   @settle_source ~S"""
   defmodule Settle do
     use Raxol.Core.Runtime.Application
-    @route "USDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002"
-    @steps [
-      {"spend gate", "before signature"},
-      {"intent", "EIP-712 quote signed"},
-      {"execution", "submitted to solver"},
-      {"source tx", "base-sepolia.blockscout.com/tx"},
-      {"dest tx", "testnet.arcscan.app/tx"}
-    ]
-    def init(_), do: %{t: 0}
+    alias Raxol.Payments.Actions.Payments, as: P
+    alias RaxolPlayground.SettlementSandbox, as: Sandbox
+    @payment %{
+      amount: "25.00", from_chain_id: 8453,
+      to_chain_id: 42_161, settlement: "stealth",
+      trust_score: 25, slippage_bps: 50,
+      min_to_amount: "24900000"
+    }
+    def init(_) do
+      {:ok, demo} = Sandbox.start(@payment)
+      {:ok, intent} =
+        P.ExecuteXochiIntent.call(demo.payment, demo.context)
+      {:ok, receipt} = P.PollXochiStatus.call(
+        %{intent_id: intent.intent_id}, demo.context)
+      signed = Sandbox.Wallet.signatures()
+      {:error, denied} = P.ExecuteXochiIntent.call(
+        %{demo.payment | amount: "75.00"}, demo.context)
+      %{demo: demo, intent: intent, receipt: receipt,
+        denied: denied,
+        safe?: Sandbox.Wallet.signatures() == signed,
+        t: 0}
+    end
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
-    def subscribe(_), do: [subscribe_interval(200, :tick)]
-    def view(m) do
-      at = rem(m.t, length(@steps))
-      head = [
-        text("XOCHI RECEIPT", style: [:bold]),
-        text(@route, fg: :magenta)
-      ]
-      column(do: head ++ Enum.with_index(@steps, &step(&1, &2, at)))
-    end
-    defp step({k, v}, i, at) do
-      mark = if(i == at, do: ">", else: " ")
-      key = String.pad_trailing(k, 10)
-      text("#{mark} [OK] #{key} #{v}", fg: :cyan)
-    end
+    def update(_, m), do: {m, []}
+    def subscribe(_), do: [subscribe_interval(400, :tick)]
+    def view(m),
+      do: column(do: Enum.map(Sandbox.lines(m), &text/1))
   end
   """
 
@@ -215,12 +201,12 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   # `settle.ex` cannot be expected to infer which noun it is answering, so each
   # example says so in the title bar.
   @hero_examples (for {name, file, blurb, source} <- [
-                        {"settle", "settle.ex", "gate, EIP-712, solver, explorers",
+                        {"settle", "settle.ex", "quote, gate, sign, poll -- no funds",
                          @settle_source},
                         {"pulse", "pulse.exs", "one module, four surfaces", @pulse_source},
                         {"halo", "halo.exs", "the mark, as a program", @halo_source},
-                        {"harness", "harness.ex",
-                         "a Virtuals ACP job, worked by the coding agent", @harness_source}
+                        {"harness", "harness.ex", "a Virtuals ACP job, run by raxol_earn",
+                         @harness_source}
                       ] do
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
 
@@ -235,8 +221,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @agent_code Makeup.highlight_inner_html(@agent_source)
 
-  # Named once: the footer reaches for it as a mark, as a link to the package
-  # directory behind the count beside it, and it used to be a nav entry too.
+  # Named once: the footer reaches for it as the source mark beside Hex, and
+  # it used to be a nav entry too.
   @repo_url "https://github.com/DROOdotFOO/raxol"
 
   @install_command "curl -fsSL https://raxol.io/install | bash"
@@ -278,6 +264,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         <nav class="screen-nav" aria-label="Main navigation">
           <a :for={{href, label} <- nav_links()} href={href} class="nav-link">{label}</a>
         </nav>
+        <a href="/token" class="screen-token-link">$RAXOL</a>
 
         <button
           type="button"
@@ -309,7 +296,10 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   def screen_hero(assigns) do
     assigns =
-      assign(assigns, halo_faces: @halo_faces, install_command: @install_command)
+      assign(assigns,
+        halo_faces: @halo_faces,
+        install_command: @install_command
+      )
 
     ~H"""
     <%!-- The brand mark beside the claim rather than above it: an upright box
@@ -499,14 +489,11 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   end
 
   def screen_footer(assigns) do
-    assigns = assign(assigns, :repo_url, @repo_url)
-
     ~H"""
     <footer class="screen-footer" role="contentinfo">
       <div class="screen-bar">
         <span class="screen-meta">
           <a href="https://hex.pm/packages/raxol" class="subtle-link">Hex</a>
-          <a href="/token" class="subtle-link">$RAXOL</a>
           <.github_mark />
         </span>
       </div>
@@ -541,9 +528,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
   #
   # The other topic pages sit on the hero and demo path, so listing them here
   # would restate that path rather than add to it. /payments is the exception.
-  # Its only inbound link was the line at the foot of /token, and /token is
-  # itself only reachable from the landing footer's $RAXOL mark, which left the
-  # payment rails two hops deep behind the token page -- the one adjacency the
+  # Its only inbound link was the line at the foot of /token, and /token was
+  # itself reachable only from the landing footer's former $RAXOL mark. That
+  # left the payment rails two hops deep behind the token page -- the one adjacency the
   # copy on both pages exists to deny. The header slot is the fix; /token keeps
   # pointing here, now as a cross-reference rather than the only way in.
   @nav_links [
@@ -647,11 +634,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         frames: frames,
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
         frame_ms: RecordedFrames.hero_frame_interval(assigns.example),
-        # What the scrub bar addresses: the DISTINCT frame indices the panes
-        # carry, which is the longer of the two sequences. The terminal and
-        # browser panes step `frames` while the SSH pane steps its own ANSI
-        # capture of the same run, and one index drives all three, so the
-        # element count is a multiple of the addressable range.
+        # The distinct frame range shared by terminal, browser and SSH panes.
+        # The terminal and browser panes step `frames` while SSH steps its own
+        # ANSI capture; one index drives all three and the clock beside them.
         frame_count: max(length(frames), length(ssh_frames)),
         next: next_example(assigns.example),
         module: example_module(assigns.example),
@@ -706,64 +691,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              one string it ellipsed at ~12 characters, spending a row of the
              bar to render "one ..." -- the filename is the part that has to
              survive, and .hd-title already drops itself on the same grounds. --%>
-        <%!-- The filename is the link to the file. The pane tells you to
-             `mix run pulse.exs`; this is where pulse.exs comes from, and
-             hanging it on the name costs the bar no width. `download` because
-             the click's job is to put that file on disk, not to open a page
-             of source; the arrow says so at rest, where an underline only
-             appears on hover. A line of its own below the demo would say it
-             better, but the one-screen budget has no row to give and this
-             box's overflow clips anything appended to it. --%>
-        <span class="hd-name"><a
-            href={"/examples/#{@title}"}
-            class="hd-file"
-            download={@title}
-            title={"Download #{@title}, then: mix run #{@title}"}
-          >{@title} <span aria-hidden="true">&darr;</span></a><span class="hd-blurb"> &middot; {@blurb}</span></span>
+        <%!-- The filename identifies the program rendered below. It is plain
+             text: the hero demonstrates the examples in place rather than
+             offering a download action from its title bar. --%>
+        <span class="hd-name"><span class="hd-file">{@title}</span><span class="hd-blurb"> &middot; {@blurb}</span></span>
         <span class="hd-title" data-role="title">rendering to the terminal</span>
 
-        <%!-- Ruled off from the captions beside them. The bar reads left to
-             right as one run of small mono text, so the things that are
-             actually operable were indistinguishable from the sentence that
-             ends just before them. The transport is a glyph (`||` and the
-             pipe, which the mono stack always has, where a media glyph would
-             be a font gamble), the scrub bar is a slider, and the switcher
-             wears a border, so the right side of the bar reads as controls
-             rather than as four more phrases. --%>
+        <%!-- Ruled off from the captions beside it. The right side keeps the
+             passive frame readout and the action that advances to the next
+             example; playback itself remains automatic. --%>
         <div class="hd-controls">
-          <button
-            type="button"
-            data-role="player-pause"
-            class="hd-control hd-control--icon"
-            aria-label="Pause the demo"
-            title="Pause the demo"
-          >||</button>
-          <%!-- A native range, not a div wearing the role: the arrows, Home,
-               End and PageUp already move it, it announces as a slider with a
-               value, and it is one element instead of a pointer-events
-               reimplementation of one. `aria-valuetext` carries the readable
-               frame because the raw value is an array offset.
-
-               Seeking is client-only and stays that way. Every frame is
-               already on the page as a hidden sibling of the visible one, so
-               revealing one is a `hidden` toggle; a phx-change here would
-               spend a round trip, a diff and a patch to show markup the
-               browser is already holding. --%>
-          <input
-            :if={@frame_count > 1}
-            type="range"
-            class="player-seek"
-            data-role="player-seek"
-            min="0"
-            max={@frame_count - 1}
-            step="1"
-            value="0"
-            aria-label={"Scrub the #{@title} recording"}
-            aria-valuetext={"frame 1 of #{@frame_count}"}
-            title="Space plays and pauses. Left and right step one frame. Home and End jump to the ends. 0 to 9 jump by tenths."
-          />
-          <%!-- Decoration: the slider beside it already announces the frame it
-               is on, and a second live number would be read out twice. --%>
+          <%!-- Decorative current/total readout for the automatic playback. --%>
           <span
             :if={@frame_count > 1}
             class="player-clock"
@@ -806,13 +744,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="hero-panes">
-        <div class="hero-pane">
-          <%!-- The examples differ in length, and the pane is a fixed slice
-               of one screen, so the type size follows the line count rather
-               than being tuned per example. --%>
-          <pre class="hero-code" style={"--hero-lines: #{@source_grid.lines}; --hero-cols: #{@source_grid.cols}"}><code class="syntax-elixir">{raw(@source)}</code></pre>
-        </div>
-
         <div class="hero-pane">
           <%!-- `tabindex=0` on each panel is what gives the keyboard somewhere
                to land after the arrows pick a tab. The frames inside are
@@ -911,9 +842,15 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
             <pre class="hero-pre hero-src" style={"--src-lines: #{@mcp_lines}"}>{raw(@out_mcp)}</pre>
           </div>
         </div>
-      </div>
+        <div class="hero-pane">
+          <%!-- The examples differ in length, and the pane is a fixed slice
+               of one screen, so the type size follows the line count rather
+               than being tuned per example. --%>
+          <pre class="hero-code" style={"--hero-lines: #{@source_grid.lines}; --hero-cols: #{@source_grid.cols}"}><code class="syntax-elixir">{raw(@source)}</code></pre>
+        </div>
 
       </div>
+    </div>
     </div>
     """
   end

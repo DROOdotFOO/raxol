@@ -1,7 +1,9 @@
-[37m[1mXOCHI RECEIPT[0m                                           
-[35mUSDC 1.10  Base Sepolia 84532 -> Arc Testnet 5042002[0m    
-[36m> [OK] spend gate before signature[0m                      
-[36m  [OK] intent     EIP-712 quote signed[0m                  
-[36m  [OK] execution  submitted to solver[0m                   
-[36m  [OK] source tx  base-sepolia.blockscout.com/tx[0m        
-[36m  [OK] dest tx    testnet.arcscan.app/tx[0m                
+[37mXOCHI SANDBOX REPLAY · NO FUNDS[0m                       
+[37mBase → Arbitrum One · 25.00 USDC · stealth[0m            
+[37mtrust 25/100 · fee 0.0475 USDC (19 bps)[0m               
+[37mcap 50.00 · spent 25.00 · min 24.9000[0m                 
+[37m [0m                                                     
+[37m⠙ request  slippage 50 bps[0m                            
+[37m○ execute  24.9525 USDC · demo_intent_4812[0m            
+[37m○ receipt  completed · stealth[0m                        
+[37m○ guard    75.00 denied · no signature[0m                

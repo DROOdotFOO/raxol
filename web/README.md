@@ -4,8 +4,8 @@ The Phoenix app behind [raxol.io](https://raxol.io): Raxol's browser surface,
 serving the same `Raxol.Playground.Catalog` the terminal playground serves.
 
 It depends on the working tree, not on Hex (`{:raxol, path: ".."}` plus
-`raxol_agent` and `raxol_payments` from `../packages/`), so a change in the
-framework shows up here on the next compile. Deployment lives in
+`raxol_agent`, `raxol_payments`, and `raxol_earn` from `../packages/`), so a
+framework or commerce change shows up here on the next compile. Deployment lives in
 [../docs/deployment/FLY_IO.md](../docs/deployment/FLY_IO.md).
 
 ## Routes
