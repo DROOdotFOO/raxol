@@ -270,4 +270,36 @@ defmodule Raxol.Payments.PrivacyTierTest do
       refute PrivacyTier.shielded?(tier)
     end
   end
+
+  describe "settlement_unlock_scores/0" do
+    test "every settlement mode has a score that reaches it" do
+      scores = PrivacyTier.settlement_unlock_scores()
+
+      assert Map.keys(scores) |> Enum.sort() == [:public, :shielded, :stealth]
+    end
+
+    test "public costs nothing and the deeper modes cost more, in order" do
+      %{public: public, stealth: stealth, shielded: shielded} =
+        PrivacyTier.settlement_unlock_scores()
+
+      assert public == 0
+      assert public < stealth
+      assert stealth < shielded
+    end
+
+    # The point of deriving rather than listing: each score is the FIRST that
+    # reaches its mode, so one below it must still resolve to a shallower one.
+    # A listed table would pass a shape check like the ones above while naming
+    # a boundary the tiers do not have.
+    test "each score is the first that reaches its mode" do
+      for {mode, score} <- PrivacyTier.settlement_unlock_scores() do
+        assert PrivacyTier.from_trust_score(score).settlement == mode
+
+        if score > 0 do
+          refute PrivacyTier.from_trust_score(score - 1).settlement == mode,
+                 "#{mode} is reported at #{score} but #{score - 1} reaches it"
+        end
+      end
+    end
+  end
 end

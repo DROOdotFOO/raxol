@@ -710,11 +710,10 @@ jobs:
   # running the full pass twice (here and nightly) is the price of a number
   # both places agree on.
   credo:
-    name: Credo Analysis
+    name: Credo Analysis (advisory)
     needs: [setup, compile]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
       # No `fetch-depth: 0`: that was for `credo diff`'s merge-base
       # resolution. The ratchet reads one working tree and needs no history.
@@ -1150,7 +1149,6 @@ jobs:
           # Dialyzer is deliberately absent: nightly.yml enforces that ratchet;
           # this workflow exposes the same reference-toolchain result without
           # making the expensive job part of the aggregate PR status.
-
           if [ "${{ needs.security.result }}" != "success" ]; then
             echo "⚠️ Security scan found issues (non-blocking)"
           fi

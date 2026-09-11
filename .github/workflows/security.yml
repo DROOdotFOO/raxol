@@ -223,7 +223,6 @@ jobs:
           path: ./
           extra_args: --results=verified,unknown
         continue-on-error: true
-
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v3
         env:

@@ -72,7 +72,10 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   def handle_event("filter_category", %{"category" => category}, socket) do
-    {:noreply, refilter(assign(socket, :active_category, String.to_existing_atom(category)))}
+    {:noreply,
+     refilter(
+       assign(socket, :active_category, String.to_existing_atom(category))
+     )}
   rescue
     ArgumentError -> {:noreply, socket}
   end
@@ -90,7 +93,10 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
   end
 
   def handle_event("filter_complexity", %{"level" => level}, socket) do
-    {:noreply, refilter(assign(socket, :complexity_filter, String.to_existing_atom(level)))}
+    {:noreply,
+     refilter(
+       assign(socket, :complexity_filter, String.to_existing_atom(level))
+     )}
   rescue
     ArgumentError -> {:noreply, socket}
   end
@@ -290,37 +296,32 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
       )
 
     ~H"""
-    <div class="panel panel--glow transition-all duration-200 overflow-hidden flex flex-col">
+    <div class="panel panel--glow gallery-card transition-all duration-200 overflow-hidden flex flex-col">
       <%!-- Real rendered frames of the demo (committed under
            priv/demo_previews/), not a screenshot or a GIF. An animated
            demo's card plays its recording back at the demo's own tick via
            the CardLoop hook and gets a transport row under the picture; a
            static demo is one frame, no hook and no controls.
 
-           The hook sits on this wrapper rather than on the link, because the
-           transport is a sibling of the picture and not part of it: the link
-           is `inert` so that a pointer cannot fall through the thumbnail into
-           a control, and an inert scrub bar would not move at all. --%>
+           The hook sits on this wrapper rather than on the thumbnail because
+           the transport is its interactive sibling. The title's stretched
+           link covers the card below this transport, which stays independently
+           operable above it. --%>
       <div
         :if={@preview}
         id={"preview-#{RecordedFrames.slug(@component.name)}"}
         phx-hook={if @frame_count > 1, do: "CardLoop"}
         data-frame-ms={@preview.interval_ms}
       >
-        <%!-- The link is a pointer shortcut duplicating "try live" below, so
-             it stays out of the tab order and the accessibility tree. --%>
-        <a
-          href={"/demos/#{@component.name}"}
+        <div
           class="gallery-preview bg-synthwave-bg"
           data-theme="synthwave84"
           aria-hidden="true"
-          tabindex="-1"
-          inert
         ><%= if @frame_count > 1 do %><div
             :for={{frame, i} <- Enum.with_index(@preview.frames)}
             data-frame={i}
             hidden={i != 0}
-          ><%= raw(frame) %></div><% else %><%= raw(hd(@preview.frames)) %><% end %></a>
+          ><%= raw(frame) %></div><% else %><%= raw(hd(@preview.frames)) %><% end %></div>
         <%!-- A native range rather than a div wearing the role: the arrows,
              Home, End and PageUp already move it and it announces as a
              slider with a value. `aria-valuetext` carries the readable frame,
@@ -358,8 +359,12 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
         </div>
       </div>
       <div class="p-3 flex flex-col flex-1">
+        <%!-- One semantic link per card. Its pseudo-element stretches across
+             the card while the recording transport remains above it. --%>
         <div class="flex items-baseline justify-between gap-2 mb-1">
-          <h2 class="font-mono font-semibold name-sky text-sm truncate"><%= @component.name %></h2>
+          <h2 class="font-mono font-semibold name-sky text-sm truncate">
+            <a href={"/demos/#{@component.name}"} class="gallery-card__link"><%= @component.name %></a>
+          </h2>
           <span class="gallery-badge"><%= Helpers.complexity_label(@component.complexity) %></span>
         </div>
         <%!-- What the snippet demonstrates, where the card name is
@@ -369,30 +374,12 @@ defmodule RaxolPlaygroundWeb.GalleryLive do
              other thirty-one stay quiet. --%>
         <p :if={@component.shows} class="detail-text mb-1"><%= @component.shows %></p>
         <p class="font-mono detail-text gallery-desc mb-2"><%= @component.description %></p>
-        <%!-- Tags and links on separate rows. They shared one line, with the
-             tags clipped by `overflow-hidden` to whatever the links left over
-             -- which was fine only while the tags were 8.8px. Above the
-             legibility floor they no longer fit, and cards rendered "PROGRES"
-             and "SELEC" cut mid-word butted against "TRY LIVE".
-
-             Trimming to two tags did not fix it either: a dozen cards still
-             clipped at desktop, because "visualization" and "keyboard" are
-             just wide words. Wrapping is the answer that holds for any tag
-             set, at the cost of about 18px per card. --%>
-        <div class="mt-auto">
-          <div class="flex flex-wrap gap-1 mb-2">
-            <%= for tag <- Enum.take(@component.tags, 3) do %>
-              <span class="category-tag category-tag--sm"><%= tag %></span>
-            <% end %>
-          </div>
-          <div class="flex gap-2.5 justify-end">
-            <%!-- One link. "try live" and "code" were two labels for the same
-                 destination, and splitting them implied a choice that should
-                 not exist: seeing a component run and being able to lift its
-                 code are both what the page is for, so it shows both and this
-                 says so once. --%>
-            <a href={"/demos/#{@component.name}"} class="gallery-link">open &rarr;</a>
-          </div>
+        <%!-- Tags wrap instead of being clipped to whatever width a separate
+             action link left behind. The card itself is now the action. --%>
+        <div class="flex flex-wrap gap-1">
+          <%= for tag <- Enum.take(@component.tags, 3) do %>
+            <span class="category-tag category-tag--sm"><%= tag %></span>
+          <% end %>
         </div>
       </div>
     </div>

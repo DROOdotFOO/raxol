@@ -180,7 +180,7 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
     end
     def update(:tick, m), do: {%{m | t: m.t + 1}, []}
     def update(_, m), do: {m, []}
-    def subscribe(_), do: [subscribe_interval(200, :tick)]
+    def subscribe(_), do: [subscribe_interval(400, :tick)]
     def view(m),
       do: column(do: Enum.map(Sandbox.lines(m), &text/1))
   end
@@ -207,7 +207,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                          @pulse_source},
                         {"halo", "halo.exs", "the mark, as a program",
                          @halo_source},
-                        {"harness", "harness.ex", "a Virtuals ACP job, run by raxol_earn",
+                        {"harness", "harness.ex",
+                         "a Virtuals ACP job, run by raxol_earn",
                          @harness_source}
                       ] do
                     [_, module] = Regex.run(~r/defmodule (\w+)/, source)
@@ -224,8 +225,8 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
 
   @agent_code Makeup.highlight_inner_html(@agent_source)
 
-  # Named once: the footer reaches for it as a mark, as a link to the package
-  # directory behind the count beside it, and it used to be a nav entry too.
+  # Named once: the footer reaches for it as the source mark beside Hex, and
+  # it used to be a nav entry too.
   @repo_url "https://github.com/DROOdotFOO/raxol"
 
   @install_command "curl -fsSL https://raxol.io/install | bash"
@@ -638,11 +639,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
         frames: frames,
         frame_grid: RecordedFrames.hero_frame_grid(assigns.example),
         frame_ms: RecordedFrames.hero_frame_interval(assigns.example),
-        # What the scrub bar addresses: the DISTINCT frame indices the panes
-        # carry, which is the longer of the two sequences. The terminal and
-        # browser panes step `frames` while the SSH pane steps its own ANSI
-        # capture of the same run, and one index drives all three, so the
-        # element count is a multiple of the addressable range.
+        # The distinct frame range shared by terminal, browser and SSH panes.
+        # The terminal and browser panes step `frames` while SSH steps its own
+        # ANSI capture; one index drives all three and the clock beside them.
         frame_count: max(length(frames), length(ssh_frames)),
         next: next_example(assigns.example),
         module: example_module(assigns.example),
@@ -697,64 +696,17 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
              one string it ellipsed at ~12 characters, spending a row of the
              bar to render "one ..." -- the filename is the part that has to
              survive, and .hd-title already drops itself on the same grounds. --%>
-        <%!-- The filename is the link to the file. The pane tells you to
-             `mix run pulse.exs`; this is where pulse.exs comes from, and
-             hanging it on the name costs the bar no width. `download` because
-             the click's job is to put that file on disk, not to open a page
-             of source; the arrow says so at rest, where an underline only
-             appears on hover. A line of its own below the demo would say it
-             better, but the one-screen budget has no row to give and this
-             box's overflow clips anything appended to it. --%>
-        <span class="hd-name"><a
-            href={"/examples/#{@title}"}
-            class="hd-file"
-            download={@title}
-            title={"Download #{@title}, then: mix run #{@title}"}
-          >{@title} <span aria-hidden="true">&darr;</span></a><span class="hd-blurb"> &middot; {@blurb}</span></span>
+        <%!-- The filename identifies the program rendered below. It is plain
+             text: the hero demonstrates the examples in place rather than
+             offering a download action from its title bar. --%>
+        <span class="hd-name"><span class="hd-file">{@title}</span><span class="hd-blurb"> &middot; {@blurb}</span></span>
         <span class="hd-title" data-role="title">rendering to the terminal</span>
 
-        <%!-- Ruled off from the captions beside them. The bar reads left to
-             right as one run of small mono text, so the things that are
-             actually operable were indistinguishable from the sentence that
-             ends just before them. The transport is a glyph (`||` and the
-             pipe, which the mono stack always has, where a media glyph would
-             be a font gamble), the scrub bar is a slider, and the switcher
-             wears a border, so the right side of the bar reads as controls
-             rather than as four more phrases. --%>
+        <%!-- Ruled off from the captions beside it. The right side keeps the
+             passive frame readout and the action that advances to the next
+             example; playback itself remains automatic. --%>
         <div class="hd-controls">
-          <button
-            type="button"
-            data-role="player-pause"
-            class="hd-control hd-control--icon"
-            aria-label="Pause the demo"
-            title="Pause the demo"
-          >||</button>
-          <%!-- A native range, not a div wearing the role: the arrows, Home,
-               End and PageUp already move it, it announces as a slider with a
-               value, and it is one element instead of a pointer-events
-               reimplementation of one. `aria-valuetext` carries the readable
-               frame because the raw value is an array offset.
-
-               Seeking is client-only and stays that way. Every frame is
-               already on the page as a hidden sibling of the visible one, so
-               revealing one is a `hidden` toggle; a phx-change here would
-               spend a round trip, a diff and a patch to show markup the
-               browser is already holding. --%>
-          <input
-            :if={@frame_count > 1}
-            type="range"
-            class="player-seek"
-            data-role="player-seek"
-            min="0"
-            max={@frame_count - 1}
-            step="1"
-            value="0"
-            aria-label={"Scrub the #{@title} recording"}
-            aria-valuetext={"frame 1 of #{@frame_count}"}
-            title="Space plays and pauses. Left and right step one frame. Home and End jump to the ends. 0 to 9 jump by tenths."
-          />
-          <%!-- Decoration: the slider beside it already announces the frame it
-               is on, and a second live number would be read out twice. --%>
+          <%!-- Decorative current/total readout for the automatic playback. --%>
           <span
             :if={@frame_count > 1}
             class="player-clock"
@@ -797,7 +749,6 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
       </div>
 
       <div class="hero-panes">
-
         <div class="hero-pane">
           <%!-- `tabindex=0` on each panel is what gives the keyboard somewhere
                to land after the arrows pick a tab. The frames inside are
@@ -902,9 +853,9 @@ defmodule RaxolPlaygroundWeb.LandingComponents do
                than being tuned per example. --%>
           <pre class="hero-code" style={"--hero-lines: #{@source_grid.lines}; --hero-cols: #{@source_grid.cols}"}><code class="syntax-elixir">{raw(@source)}</code></pre>
         </div>
-      </div>
 
       </div>
+    </div>
     </div>
     """
   end

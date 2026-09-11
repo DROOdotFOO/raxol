@@ -17,6 +17,8 @@ defmodule RaxolPlayground.BrandMarks do
   entries and catch a mark that outlives the thing it names.
   """
 
+  alias RaxolPlayground.BrandMarks.Raster
+
   @dir Path.expand("../../priv/brand_marks", __DIR__)
 
   # Display name => file. Two entries wear their vendor's mark rather than
@@ -39,6 +41,8 @@ defmodule RaxolPlayground.BrandMarks do
     "Kimi" => "kimi.svg",
     "OpenRouter" => "openrouter.svg",
     "LongCat" => "longcat.svg",
+    "DeepSeek" => "deepseek.svg",
+    "Cursor" => "cursor.svg",
     "Proton Lumo" => "proton.svg",
     "Ollama" => "ollama.svg",
     "LM Studio" => "lmstudio.svg",
@@ -137,4 +141,39 @@ defmodule RaxolPlayground.BrandMarks do
   """
   @spec site_path(String.t()) :: String.t() | nil
   def site_path(name) when is_binary(name), do: Map.get(@site_marks, name)
+
+  @doc """
+  `name`'s mark as rows of braille cells, or `nil` when it has no mark.
+
+  The row renders a mark as SVG, which only a browser can do. A terminal
+  surface has cells, so a mark that has to appear there is resampled onto a
+  grid of them by `RaxolPlayground.BrandMarks.Raster`, from this module's own
+  extracted path and with this module's own `fill_rule/1` -- the same artwork
+  the page inlines, at the resolution a terminal has.
+
+  Takes `:cols` and `:rows`; see the raster module on choosing a pair that
+  keeps the mark's proportions. `aspect/1` is here so a caller can compute one
+  rather than guess it.
+  """
+  @spec cells(String.t(), keyword()) :: Raster.cells() | nil
+  def cells(name, opts) when is_binary(name) do
+    case path(name) do
+      nil -> nil
+      d -> Raster.cells(d, Keyword.put(opts, :fill_rule, fill_rule(name)))
+    end
+  end
+
+  @doc """
+  Width over height of `name`'s artwork, or `nil` when it has no mark.
+
+  Measured on the mark itself rather than on its canvas: every file here is a
+  square viewBox, and not every mark inside one is square.
+  """
+  @spec aspect(String.t()) :: float() | nil
+  def aspect(name) when is_binary(name) do
+    case path(name) do
+      nil -> nil
+      d -> Raster.aspect(d)
+    end
+  end
 end

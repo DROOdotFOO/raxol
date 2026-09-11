@@ -62,12 +62,10 @@ defmodule Raxol.Playground.Demos.TextDemo do
     column style: %{gap: 1} do
       [
         text("Text Demo", style: [:bold]),
-        divider(),
         text("Current: #{current.label}", style: [:bold]),
         box style: %{border: :single, padding: 1, width: 44} do
           sample_for(current)
         end,
-        divider(),
         text("All variants:", style: [:underline]),
         column style: %{gap: 0} do
           variant_list

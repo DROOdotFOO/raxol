@@ -1,9 +1,9 @@
 defmodule RaxolPlaygroundWeb.FrameTransportTest do
   @moduledoc """
-  The prerecorded players ship a transport, and the transport has to address
-  the recording it sits under: a slider whose `max` is off by one silently
-  makes the last frame unreachable, and a slider on a single-frame still is a
-  control that cannot do anything.
+  The prerecorded gallery cards ship a transport, and each transport has to
+  address the recording it sits under: a slider whose `max` is off by one
+  silently makes the last frame unreachable, and a slider on a single-frame
+  still is a control that cannot do anything.
 
   Asserted against the rendered document rather than the markup source,
   because the range is emitted conditionally and it is the emitted `max` that
@@ -12,11 +12,9 @@ defmodule RaxolPlaygroundWeb.FrameTransportTest do
   use ExUnit.Case, async: true
 
   import Phoenix.ConnTest
-  import Phoenix.LiveViewTest, only: [render_component: 2]
 
   alias Raxol.Playground.Catalog
   alias RaxolPlayground.RecordedFrames
-  alias RaxolPlaygroundWeb.LandingComponents
 
   @endpoint RaxolPlaygroundWeb.Endpoint
 
@@ -80,25 +78,16 @@ defmodule RaxolPlaygroundWeb.FrameTransportTest do
     refute card =~ "card-transport"
   end
 
-  test "each hero example's scrub bar addresses its own recording" do
-    for example <- LandingComponents.hero_example_names() do
-      # The panes carry the same run twice, as terminal frames and as the ANSI
-      # the SSH pane paints, and one index drives both: the addressable range
-      # is the longer sequence, not the number of frame elements on the page.
-      count =
-        max(
-          length(RecordedFrames.hero_frames(example)),
-          length(RecordedFrames.hero_ssh_frames(example))
-        )
+  test "each gallery card exposes one card-wide demo link" do
+    html = gallery_html()
 
-      html = render_component(&LandingComponents.hero_demo/1, example: example)
+    for component <- Catalog.list_components() do
+      destination = ~s(href="/demos/#{component.name}")
 
-      assert html =~ ~s(data-role="player-seek")
-
-      assert html =~ ~s(max="#{count - 1}"),
-             "#{example}: scrub bar does not reach frame #{count - 1}"
-
-      assert html =~ ~s(aria-valuetext="frame 1 of #{count}")
+      assert length(:binary.matches(html, destination)) == 1,
+             "#{component.name} should expose one demo link across its card"
     end
+
+    refute html =~ ">open →</a>"
   end
 end

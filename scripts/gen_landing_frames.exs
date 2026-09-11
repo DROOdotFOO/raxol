@@ -24,8 +24,8 @@
 #   cd web && mix run ../scripts/gen_landing_frames.exs
 #
 # The paths above resolve from __DIR__, so the working directory only decides
-# which project's deps are loadable. It has to be web/: `settle` renders the
-# real fee schedule from raxol_payments, while `harness` executes a supervised
+# which project's deps are loadable. It has to be web/: `settle` reads live
+# package constants from raxol_payments, while `harness` executes a supervised
 # ACP lifecycle from raxol_earn.
 #
 # Frames are committed; rerun when a hero example or a demo's first render
@@ -34,9 +34,10 @@
 
 alias Raxol.LiveView.TerminalBridge
 
-# The modules the hero displays. web/'s landing hero carries the same parsed
-# programs in a compact layout that fits its source pane;
-# landing_components_test.exs rejects semantic drift between the copies.
+# The modules the hero displays. web/'s landing hero (@pulse_source,
+# @halo_source, @harness_source and @settle_source in landing_components.ex)
+# carries the same parsed programs in a compact layout that fits its source
+# pane; landing_components_test.exs rejects semantic drift between the copies.
 defmodule Pulse do
   use Raxol.Core.Runtime.Application
 
@@ -94,32 +95,50 @@ end
 defmodule Harness do
   use Raxol.Core.Runtime.Application
   alias Raxol.Earn.{AssetToken, JobSession}
-  @mark ["     ▄█▀█▄     ", "▀▀█▄▄█▄▄▄█▄▄  ▀",
-         "    ▀█▄███     ", "     ▀██▀      "]
+
+  @mark [
+    "     ▄█▀█▄     ",
+    "▀▀█▄▄█▄▄▄█▄▄  ▀",
+    "    ▀█▄███     ",
+    "     ▀██▀      "
+  ]
   @states ~w(open budget_set funded submitted completed)a
   @r Map.new(Enum.with_index(@states))
   # :recorded events represent chain/SSE observations.
-  @actions [{:call,:set_budget,[AssetToken.usdc(40,8453)]},
-            {:recorded,:funded},{:call,:submit,[%{patch: "gate"}]},
-            {:recorded,:completed}]
-  @info ["RECORDED ACP #4812","gate.ex · 40 USDC","raxol_earn",""]
+  @actions [
+    {:call, :set_budget, [AssetToken.usdc(40, 8453)]},
+    {:recorded, :funded},
+    {:call, :submit, [%{patch: "gate"}]},
+    {:recorded, :completed}
+  ]
+  @info ["RECORDED ACP #4812", "gate.ex · 40 USDC", "raxol_earn", ""]
   def init(_) do
-    {:ok,j}=JobSession.Supervisor.start_session(chain_id: 8453,
-    job_id: 4812,role: :provider)
-    %{j: j,a: 0,s: JobSession.status(j)}
+    {:ok, j} =
+      JobSession.Supervisor.start_session(
+        chain_id: 8453,
+        job_id: 4812,
+        role: :provider
+      )
+
+    %{j: j, a: 0, s: JobSession.status(j)}
   end
-  def update(:tick,%{j: j,a: a}=m) when a<4 do
-    {:ok,s}=run(j,Enum.at(@actions,a)); {%{m|a: a+1,s: s},[]}
+
+  def update(:tick, %{j: j, a: a} = m) when a < 4 do
+    {:ok, s} = run(j, Enum.at(@actions, a))
+    {%{m | a: a + 1, s: s}, []}
   end
-  def update(_,m),do: {m,[]}
-  def subscribe(_),do: [subscribe_interval(200,:tick)]
-  def view(%{s: s}),do: column(do: head()++[text(" ")]++rows(s))
-  defp head,do: Enum.zip_with(@mark,@info,&text(&1<>" "<>&2))
-  defp rows(t),do: Enum.map(@states,&r(&1,t))
-  defp run(j,{:call,f,a}),do: apply(JobSession,f,[j|a])
-  defp run(j,{:recorded,s}),
-    do: JobSession.apply_event(j,s,%{source: :recorded_demo})
-  defp r(s,t),do: text(if @r[s]<=@r[t],do: "✓ #{s}",else: "○ #{s}")
+
+  def update(_, m), do: {m, []}
+  def subscribe(_), do: [subscribe_interval(200, :tick)]
+  def view(%{s: s}), do: column(do: head() ++ [text(" ")] ++ rows(s))
+  defp head, do: Enum.zip_with(@mark, @info, &text(&1 <> " " <> &2))
+  defp rows(t), do: Enum.map(@states, &r(&1, t))
+  defp run(j, {:call, f, a}), do: apply(JobSession, f, [j | a])
+
+  defp run(j, {:recorded, s}),
+    do: JobSession.apply_event(j, s, %{source: :recorded_demo})
+
+  defp r(s, t), do: text(if @r[s] <= @r[t], do: "✓ #{s}", else: "○ #{s}")
 end
 
 defmodule Settle do
@@ -136,7 +155,6 @@ defmodule Settle do
     slippage_bps: 50,
     min_to_amount: "24900000"
   }
-
   def init(_) do
     {:ok, demo} = Sandbox.start(@payment)
 
@@ -169,7 +187,7 @@ defmodule Settle do
 
   def update(:tick, m), do: {%{m | t: m.t + 1}, []}
   def update(_, m), do: {m, []}
-  def subscribe(_), do: [subscribe_interval(200, :tick)]
+  def subscribe(_), do: [subscribe_interval(400, :tick)]
 
   def view(m),
     do: column(do: Enum.map(Sandbox.lines(m), &text/1))
@@ -377,7 +395,7 @@ defmodule GenLandingFrames do
     {"pulse", Pulse, {62, 13}, 90, 63, 4},
     {"halo", Halo, {70, 14}, 110, 48, 4},
     {"harness", Harness, {56, 11}, 200, 5, 0},
-    {"settle", Settle, {54, 9}, 200, 5, 4}
+    {"settle", Settle, {54, 9}, 400, 5, 4}
   ]
 
   defp hero(base \\ @hero_dir) do

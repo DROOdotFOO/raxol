@@ -126,7 +126,7 @@ defmodule RaxolPlaygroundWeb.PlaygroundComponents do
       <select
         name="theme"
         aria-label="Terminal color theme"
-        class="font-mono px-3 py-1 text-sm rounded bg-panel border border-subtle text-pearl"
+        class="font-mono px-3 py-2 text-sm rounded bg-panel border border-subtle text-pearl"
       >
         <%= for {key, label, _bg} <- @themes do %>
           <option value={key} selected={@theme == key}><%= label %></option>

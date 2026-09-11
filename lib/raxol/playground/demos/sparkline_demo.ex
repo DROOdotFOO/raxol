@@ -7,7 +7,11 @@ defmodule Raxol.Playground.Demos.SparklineDemo do
 
   @data_points 40
   @default_spark_width 40
-  @spark_height 5
+  # Three at five rows made this the tallest card in its gallery row, and a
+  # sparkline is a glanceable trend rather than a chart: braille packs four
+  # sub-rows into each cell, so three rows still carry twelve vertical pixels
+  # of wave.
+  @spark_height 3
   @tick_interval_ms 200
 
   # {baseline, amplitude, frequency} for each metric
@@ -56,7 +60,6 @@ defmodule Raxol.Playground.Demos.SparklineDemo do
     column style: %{gap: 1} do
       [
         text("Sparkline Demo", style: [:bold]),
-        divider(),
         text("CPU Usage:", style: [:dim]),
         # snippet:start
         sparkline(

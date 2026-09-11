@@ -312,13 +312,22 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
 
   # The recording plays back at the rate it was sampled at, and that rate ships
   # with it rather than living as a constant in the player.
+  #
+  # 200ms is the ceiling for anything the eye reads as motion. `settle` is
+  # named here rather than folded into a looser global bound, because its tick
+  # is not a pacing choice: four lifecycle stages at 400ms is the ~2s fill the
+  # solver advertises, so the recording runs at the speed the pane claims. A
+  # second exception should be argued for the same way, not added to a number.
+  @slower_than_motion %{"settle" => 400}
+
   test "each recording declares the interval it was sampled at" do
     for name <- LandingComponents.hero_example_names() do
       interval = RecordedFrames.hero_frame_interval(name)
+      ceiling = Map.get(@slower_than_motion, name, 200)
 
       assert interval > 0
 
-      assert interval <= 200,
+      assert interval <= ceiling,
              "#{name} plays back at #{interval}ms, which is a slideshow"
 
       hero = render_component(&LandingComponents.screen_hero/1, example: name)
@@ -484,6 +493,28 @@ defmodule RaxolPlaygroundWeb.LandingComponentsTest do
              "#{name}.ex is #{cols} columns wide; the pane holds #{@max_example_cols} " <>
                "at 768px, the narrowest one-screen viewport"
     end
+  end
+
+  # `harness.ex` carries the Virtuals Protocol mark as four literal rows,
+  # because the pane shows the program and a rasterizer inlined there would be
+  # most of what a reader sees. A literal is free to drift from the artwork it
+  # claims to be, which would leave the pane showing a hand-drawn logo beside
+  # an integrations row inlining the real one -- and their brand guide says to
+  # use the logo as provided. This is what holds the two together.
+  test "the harness mark is the official artwork, not a drawing of it" do
+    source = LandingComponents.example_source("harness")
+
+    [_, literal] = Regex.run(~r/@mark (\[.*?\])/s, source)
+    {shown, _binding} = Code.eval_string(literal)
+
+    assert shown ==
+             BrandMarks.cells("Virtuals Protocol",
+               cols: 15,
+               rows: 4,
+               glyphs: :half_block
+             ),
+           "the @mark literal in harness.ex is not what virtuals.svg " <>
+             "rasterizes to; re-run BrandMarks.cells/2 and paste the result"
   end
 
   # The h1 names four things. Three of them used to be assertions with nothing

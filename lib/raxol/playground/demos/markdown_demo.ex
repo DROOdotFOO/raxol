@@ -226,7 +226,6 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
           " fenced code → CodeBlock/SyntaxHighlighter · [r] raw source",
           style: [:dim]
         ),
-        text(""),
         row style: %{gap: 2} do
           [
             text(doc.title, style: [:bold]),
@@ -243,7 +242,6 @@ defmodule Raxol.Playground.Demos.MarkdownDemo do
             body
           end
         end,
-        text(""),
         text("[n] next  [p] previous  [r] toggle raw/rendered", style: [:dim])
       ]
     end

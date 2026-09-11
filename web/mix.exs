@@ -41,7 +41,6 @@ defmodule RaxolPlayground.MixProject do
       # Frame generation runs in dev; production serves only the committed
       # recordings and must not boot the commerce supervision tree.
       {:raxol_earn, path: "../packages/raxol_earn", only: :dev},
-
       # The HTTP client behind every remote provider. raxol_agent declares it
       # optional and optional deps do not propagate, so a release depending on
       # raxol_agent gets no HTTP client: Backend.HTTP would answer

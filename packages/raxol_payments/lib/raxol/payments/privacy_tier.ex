@@ -109,6 +109,30 @@ defmodule Raxol.Payments.PrivacyTier do
     |> Enum.map(&build/1)
   end
 
+  @doc """
+  The lowest trust score that reaches each settlement mode.
+
+  Derived by walking `from_trust_score/2` rather than listed, so it cannot say
+  something the tier boundaries do not. A caller that wants to tell a user what
+  deeper privacy costs them in trust has one place to read it, instead of
+  typing `25` beside a boundary that could move.
+
+  Attestation gating is deliberately not applied: this answers "what score
+  unlocks this mode", and the proofs a tier additionally requires are
+  `attestation_requirements/1`.
+
+  The walk runs to 100 because that is the top of the trust score, the same
+  ceiling `Raxol.Payments.FeeSchedule` tops out at and the one the solver
+  renders (`0/100`). `Map.put_new/3` keeps the first score to reach a mode, so
+  a mode that no score reaches is absent rather than reported at a wrong one.
+  """
+  @spec settlement_unlock_scores() :: %{settlement() => non_neg_integer()}
+  def settlement_unlock_scores do
+    Enum.reduce(0..100, %{}, fn score, acc ->
+      Map.put_new(acc, from_trust_score(score).settlement, score)
+    end)
+  end
+
   @doc "Check if a settlement type requires PXE bridge."
   @spec shielded?(t()) :: boolean()
   def shielded?(%{settlement: :shielded}), do: true
