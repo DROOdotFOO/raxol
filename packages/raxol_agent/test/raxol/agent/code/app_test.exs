@@ -2,6 +2,7 @@ defmodule Raxol.Agent.Code.AppTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Agent.Code.App
+  alias Raxol.Agent.Code.App.Commands
   alias Raxol.Agent.Contract
   alias Raxol.Core.Events.Event
 
@@ -279,12 +280,12 @@ defmodule Raxol.Agent.Code.AppTest do
     end
 
     test "auth_rejected?/1 recognizes both the structured and streaming shapes" do
-      assert App.auth_rejected?({:http_error, 401, ""})
-      assert App.auth_rejected?({:http_error, 403, "body"})
-      assert App.auth_rejected?("HTTP 401")
-      refute App.auth_rejected?({:http_error, 500, ""})
-      refute App.auth_rejected?("HTTP 500")
-      refute App.auth_rejected?(:boom)
+      assert Commands.auth_rejected?({:http_error, 401, ""})
+      assert Commands.auth_rejected?({:http_error, 403, "body"})
+      assert Commands.auth_rejected?("HTTP 401")
+      refute Commands.auth_rejected?({:http_error, 500, ""})
+      refute Commands.auth_rejected?("HTTP 500")
+      refute Commands.auth_rejected?(:boom)
     end
 
     test "malformed contract events are dropped, not folded" do
@@ -1967,7 +1968,7 @@ defmodule Raxol.Agent.Code.AppTest do
       ref = make_ref()
       model = new_model()
 
-      App.default_inspection_fetcher(model.cwd, model.sessions_dir, ref, self())
+      Commands.default_inspection_fetcher(model.cwd, model.sessions_dir, ref, self())
 
       assert_receive {:command_result, {:inspection_result, ^ref, text}}, 10_000
       assert text =~ "inspecting: #{model.cwd}"

@@ -3,6 +3,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
   alias Raxol.Agent.Backend.Credentials
   alias Raxol.Agent.Code.App
+  alias Raxol.Agent.Code.App.Commands
   alias Raxol.Core.Events.Event
 
   @managed_env ~w(
@@ -390,29 +391,29 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
   describe "interpret_ping/1" do
     test "a 2xx completion is valid" do
-      assert App.interpret_ping({:ok, %{content: "ok"}}) == :valid
+      assert Commands.interpret_ping({:ok, %{content: "ok"}}) == :valid
     end
 
     test "401/403 mean the key was rejected" do
-      assert App.interpret_ping({:error, {:http_error, 401, "no"}}) ==
+      assert Commands.interpret_ping({:error, {:http_error, 401, "no"}}) ==
                {:rejected, 401}
 
-      assert App.interpret_ping({:error, {:http_error, 403, "no"}}) ==
+      assert Commands.interpret_ping({:error, {:http_error, 403, "no"}}) ==
                {:rejected, 403}
     end
 
     test "a transport failure is unreachable" do
-      assert App.interpret_ping({:error, {:request_failed, :econnrefused}}) ==
+      assert Commands.interpret_ping({:error, {:request_failed, :econnrefused}}) ==
                :unreachable
     end
 
     test "another HTTP status is reachable-but-errored" do
-      assert App.interpret_ping({:error, {:http_error, 500, ""}}) ==
+      assert Commands.interpret_ping({:error, {:http_error, 500, ""}}) ==
                {:reachable_error, 500}
     end
 
     test "a content-level marker still means the key is valid (auth succeeded)" do
-      assert App.interpret_ping({:error, "⚠ response truncated"}) == :valid
+      assert Commands.interpret_ping({:error, "⚠ response truncated"}) == :valid
     end
   end
 end
