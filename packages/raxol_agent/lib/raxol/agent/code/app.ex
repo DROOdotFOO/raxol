@@ -173,11 +173,7 @@ defmodule Raxol.Agent.Code.App do
         model
 
       model.jail == true ->
-        notice(
-          model,
-          "no provider connected; credential management is disabled in a " <>
-            "hosted session (host must pre-wire a provider)"
-        )
+        notice(model, Wizard.provider_setup_hint(model))
 
       true ->
         Wizard.open_browse(model)

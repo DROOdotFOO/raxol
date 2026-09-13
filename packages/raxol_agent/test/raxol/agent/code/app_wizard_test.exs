@@ -70,6 +70,18 @@ defmodule Raxol.Agent.Code.AppWizardTest do
     App.init(%{options: options})
   end
 
+  # Everything `App.view/1` would put on screen, as one string: the panels
+  # only assert `%{} = App.view(...)` otherwise, so wording changes in a
+  # rendered panel are invisible to the suite.
+  defp view_text(model), do: model |> App.view() |> node_text() |> Enum.join("\n")
+
+  defp node_text(%{type: :text, content: content}) when is_binary(content),
+    do: [content]
+
+  defp node_text(%{children: children}), do: node_text(children)
+  defp node_text(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &node_text/1)
+  defp node_text(_other), do: []
+
   defp tmp(tag),
     do:
       Path.join(
@@ -305,6 +317,35 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       assert model.notice =~ "credential management is disabled in a hosted session"
       assert Credentials.fetch(:openai) == :none
       refute_received {:op_saver_called, _, _}
+    end
+
+    # The unconnected-provider panel is the first thing a hosted tenant sees.
+    # It used to render the full "Connect a provider with /login:" cheatsheet
+    # in a session where /login refuses and init opens no wizard.
+    test "the hint panel does not advertise /login in a hosted session" do
+      jailed = view_text(new_model(jail: true))
+
+      assert jailed =~ "credential management is disabled in a hosted session"
+      refute jailed =~ "/login"
+      refute jailed =~ "connect a provider to begin"
+
+      # Unjailed, the cheatsheet is still the whole point of the panel (it
+      # shows once the browse wizard init opens is dismissed).
+      open = view_text(press(new_model(), :escape))
+      assert open =~ "Connect a provider with /login:"
+      assert open =~ "connect a provider to begin"
+    end
+
+    test "a prompt sent with no provider says the same thing in a jail" do
+      {model, []} =
+        App.update(Event.key_event(:enter, :pressed, []), %{
+          new_model(jail: true)
+          | input: "hello"
+        })
+
+      assert model.notice =~ "credential management is disabled in a hosted session"
+      refute model.notice =~ "/login"
+      refute model.running?
     end
   end
 
