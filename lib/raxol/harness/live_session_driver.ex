@@ -223,16 +223,32 @@ defmodule Raxol.Harness.LiveSessionDriver do
   @type lane :: {module(), Raxol.Harness.SessionLane.session()}
 
   @doc """
-  Spawns a linked driver process and enters its loop. Returns immediately
-  with `{:ok, pid}`; the process builds its own state (Surface, cadence,
-  forwarder, monitor) INSIDE itself, so the `:command_sink` closure
-  `Surface.new/2` receives captures the driver's own `self()`, not the
-  caller's.
+  Spawns a linked driver process and enters its loop. Returns `{:ok, pid}`
+  once the driver is attached: its state is built and the forwarder's
+  `subscribe/1` call has completed (or been refused and noted). Events
+  sent to the session after this returns therefore have a listener. The
+  process builds its own state (Surface, cadence, forwarder, monitor)
+  INSIDE itself, so the `:command_sink` closure `Surface.new/2` receives
+  captures the driver's own `self()`, not the caller's.
+
+  If the driver crashes while building, the crash is returned as
+  `{:error, reason}` rather than left for the caller to discover through
+  the link.
   """
-  @spec start_link(keyword()) :: {:ok, pid()}
+  @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
-    pid = spawn_link(__MODULE__, :run, [opts])
-    {:ok, pid}
+    ref = make_ref()
+    pid = spawn_link(__MODULE__, :run, [opts, {self(), ref}])
+    monitor = Process.monitor(pid)
+
+    receive do
+      {^ref, :attached} ->
+        Process.demonitor(monitor, [:flush])
+        {:ok, pid}
+
+      {:DOWN, ^monitor, :process, ^pid, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -243,7 +259,16 @@ defmodule Raxol.Harness.LiveSessionDriver do
   @spec run(keyword()) :: :ok
   def run(opts) do
     Process.flag(:trap_exit, true)
-    opts |> build() |> loop()
+    opts |> build() |> await_attached() |> loop()
+  end
+
+  @doc false
+  @spec run(keyword(), {pid(), reference()}) :: :ok
+  def run(opts, {parent, ref}) do
+    Process.flag(:trap_exit, true)
+    state = opts |> build() |> await_attached()
+    send(parent, {ref, :attached})
+    loop(state)
   end
 
   @doc "Ends the driver's loop. Sends `:halt`; never blocks."
@@ -353,18 +378,38 @@ defmodule Raxol.Harness.LiveSessionDriver do
   # SessionLane behaviour requires it be called from the process that
   # wants to receive events), then re-shapes every `{:session_event, ...}`
   # into a StreamCadence ingest call through the EventBoundary security
-  # seam. A subscribe failure is reported to the driver and the forwarder
-  # exits normally (nothing left for it to do).
+  # seam. Success is acknowledged to the driver so `start_link/1` can
+  # return only once a listener exists; a subscribe failure is reported
+  # instead and the forwarder exits normally (nothing left for it to do).
   defp start_forwarder(lane_mod, session, driver_pid, cadence) do
     spawn_link(fn ->
       case lane_mod.subscribe(session) do
         :ok ->
+          send(driver_pid, {:forwarder_attached, self()})
           forwarder_loop(cadence)
 
         {:error, reason} ->
           send(driver_pid, {:lane_error, {:subscribe, reason}})
       end
     end)
+  end
+
+  # The startup barrier. Exactly one of these arrives from the forwarder:
+  # its ack, its subscribe refusal, or (trapped) its exit. The last two are
+  # handled here exactly as the loop would, so a driver that could not
+  # attach still starts -- with the honest footer notice -- rather than
+  # hanging its caller.
+  defp await_attached(%{forwarder: forwarder} = state) do
+    receive do
+      {:forwarder_attached, ^forwarder} ->
+        state
+
+      {:lane_error, {:subscribe, reason}} ->
+        handle_lane_error(state, reason)
+
+      {:EXIT, ^forwarder, reason} ->
+        handle_exit(state, forwarder, reason)
+    end
   end
 
   defp forwarder_loop(cadence) do
@@ -428,9 +473,6 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
           :tick ->
             state |> handle_tick() |> loop()
-
-          {:lane_error, {:subscribe, reason}} ->
-            state |> handle_lane_error(reason) |> loop()
 
           {:EXIT, pid, reason} ->
             state |> handle_exit(pid, reason) |> loop()
