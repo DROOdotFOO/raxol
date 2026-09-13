@@ -99,7 +99,6 @@ defmodule Raxol.Terminal.Emulator do
             mode_manager_pid: nil,
             style_manager: nil,
             damage_tracker: nil,
-            mode_state: %{},
             style: nil,
             cursor_style: :block,
             bracketed_paste_active: false,
@@ -183,7 +182,6 @@ defmodule Raxol.Terminal.Emulator do
           mode_manager_pid: any(),
           style_manager: any(),
           damage_tracker: any(),
-          mode_state: map(),
           style: any(),
           cursor_style: atom(),
           bracketed_paste_active: boolean(),
@@ -496,19 +494,6 @@ defmodule Raxol.Terminal.Emulator do
   @doc "Validates terminal dimensions."
   def validate_dimensions(width, height),
     do: Coordinator.validate_dimensions(width, height)
-
-  # Mode update functions
-  @doc "Updates insert mode state."
-  def update_insert_mode(emulator, enabled) do
-    mode_state = Map.put(emulator.mode_state, :insert_mode, enabled)
-    {:ok, %{emulator | mode_state: mode_state}}
-  end
-
-  @doc "Updates auto wrap mode state."
-  def update_auto_wrap_mode(emulator, enabled) do
-    mode_state = Map.put(emulator.mode_state, :auto_wrap, enabled)
-    {:ok, %{emulator | mode_state: mode_state}}
-  end
 
   # Screen buffer accessor
   @doc "Gets the active screen buffer."

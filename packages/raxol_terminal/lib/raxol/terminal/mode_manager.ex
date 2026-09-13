@@ -139,7 +139,11 @@ defmodule Raxol.Terminal.ModeManager do
       deccolm_80: state.column_width_mode == :normal,
       dec_alt_screen: state.alternate_buffer_active,
       dec_alt_screen_save: state.alternate_buffer_active,
-      alt_screen_buffer: state.alternate_buffer_active
+      alt_screen_buffer: state.alternate_buffer_active,
+      focus_events: state.focus_events_enabled,
+      mouse_report_x10: state.mouse_report_mode == :x10,
+      mouse_report_cell_motion: state.mouse_report_mode == :cell_motion,
+      mouse_encoding_sgr: state.mouse_encoding == :sgr
     }
 
     Map.get(mode_mapping, mode, false)
@@ -267,55 +271,6 @@ defmodule Raxol.Terminal.ModeManager do
   """
   def new do
     %__MODULE__{}
-  end
-
-  @doc """
-  Gets the mode manager.
-  """
-  def get_manager(_state) do
-    %{}
-  end
-
-  @doc """
-  Updates the mode manager.
-  """
-  def update_manager(state, _modes) do
-    state
-  end
-
-  @doc """
-  Checks if the given mode is set.
-  """
-  def mode_set?(_state, _mode) do
-    false
-  end
-
-  @doc """
-  Gets the set modes.
-  """
-  def get_set_modes(_state) do
-    []
-  end
-
-  @doc """
-  Resets all modes.
-  """
-  def reset_all_modes(state) do
-    state
-  end
-
-  @doc """
-  Saves the current modes.
-  """
-  def save_modes(state) do
-    state
-  end
-
-  @doc """
-  Restores the saved modes.
-  """
-  def restore_modes(state) do
-    state
   end
 
   @doc """

@@ -49,7 +49,6 @@ defmodule Raxol.Terminal.EmulatorLite do
 
     # Mode management
     :mode_manager,
-    :mode_state,
 
     # Command history (optional, can be nil for performance)
     :command_history,
@@ -86,7 +85,6 @@ defmodule Raxol.Terminal.EmulatorLite do
           scrollback_buffer: list(),
           scrollback_limit: non_neg_integer(),
           mode_manager: ModeManager.t(),
-          mode_state: map(),
           command_history: list() | nil,
           current_command_buffer: String.t() | nil,
           max_command_history: non_neg_integer(),
@@ -138,7 +136,6 @@ defmodule Raxol.Terminal.EmulatorLite do
       scrollback_buffer: [],
       scrollback_limit: scrollback_limit,
       mode_manager: %ModeManager{},
-      mode_state: %{},
       command_history:
         case enable_history do
           true -> []
