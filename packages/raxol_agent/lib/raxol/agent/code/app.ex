@@ -30,6 +30,12 @@ defmodule Raxol.Agent.Code.App do
   Writer to the caller, and the fetchers Commands arms capture `self()` as
   the reply address their `{:command_result, ...}` message is sent to.
 
+  `notice/2` and `put_status/2` are the two verbatim-rendered fields, and
+  some callers interpolate untrusted text into them (`/find` echoes
+  transcript content, `/inspect` a disk snapshot), so both strip control
+  bytes at the setter -- callers need not pre-sanitize, and no callsite can
+  forget to.
+
   ## The loop
 
   On submit, `update/2` spawns a worker that subscribes to a
@@ -84,6 +90,7 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.Agent.SessionStreamer
   alias Raxol.Harness.EventBoundary
   alias Raxol.Harness.Projection
+  alias Raxol.Harness.Surface.ViewText
   alias Raxol.UI.Components.Harness.AxolFace
   alias Raxol.UI.Components.Harness.Block
   alias Raxol.UI.Harness.InputEvent
@@ -1871,10 +1878,28 @@ defmodule Raxol.Agent.Code.App do
   # -- helpers ----------------------------------------------------------------
 
   @doc false
-  def notice(model, text), do: %{model | notice: text}
+  # The notice line(s). Content reaches `notice_block/1` verbatim, and some
+  # callers interpolate UNTRUSTED text into it -- `/find` echoes an excerpt of
+  # a projected transcript block (assistant and tool output), `/inspect` a
+  # rendered disk snapshot -- so the control bytes are stripped here, at the
+  # field that renders them, rather than at each of the ~60 callsites. This is
+  # `Raxol.Harness.Surface.ViewText.sanitize_line/1`, the one control-byte
+  # boundary in the tree, applied per line because `notice_block/1` splits the
+  # notice on "\n".
+  def notice(model, text) when is_binary(text),
+    do: %{model | notice: sanitize_display(text)}
 
   @doc false
-  def put_status(model, text), do: %{model | status_line: text}
+  # The status line is a single row in `status_strip/1`, so a newline would
+  # break the strip: it is flattened, then sanitized like `notice/2`.
+  def put_status(model, text) when is_binary(text),
+    do: %{model | status_line: text |> String.replace("\n", " ") |> sanitize_display()}
+
+  defp sanitize_display(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map_join("\n", &ViewText.sanitize_line/1)
+  end
 
   defp ensure_streamer! do
     case SessionStreamer.start_link([]) do

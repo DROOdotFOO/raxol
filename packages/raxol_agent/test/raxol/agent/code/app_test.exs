@@ -1642,6 +1642,43 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "usage: /find"
     end
 
+    # `/find` echoes an excerpt of a projected block: assistant and tool
+    # output, i.e. content this app does not author. `notice_block/1` renders
+    # the notice verbatim, so an escape sequence in that content would reach
+    # the terminal and could clear the screen or forge the app's own chrome.
+    test "/find strips control bytes out of the transcript content it echoes" do
+      poison = "needle \e[2J\e[31mPWNED\e[0m\a"
+
+      model =
+        new_model()
+        |> submit("ask")
+        |> elem(0)
+        |> then(fn m ->
+          Enum.reduce(message_turn("t1", poison), m, &send_ev(&2, &1))
+        end)
+
+      {model, []} = submit(model, "/find needle")
+
+      assert model.notice =~ "needle"
+      assert model.notice =~ "PWNED"
+      refute model.notice =~ "\e"
+      refute model.notice =~ "\a"
+    end
+
+    # The status line is one row; a notice may be several. Neither may carry
+    # a control code point (the sequence INTRODUCER is what makes bytes
+    # executable; the remaining "[31m" is inert text), and the notice's own
+    # line structure must survive.
+    test "put_status flattens newlines and both setters strip control bytes" do
+      model = new_model()
+
+      statused = App.put_status(model, "line one\nline \e[31mtwo\x7f")
+      assert statused.status_line == "line one line [31mtwo"
+
+      noticed = App.notice(model, "first\nsec\e[2Jond")
+      assert noticed.notice == "first\nsec[2Jond"
+    end
+
     test "/logout disconnects the provider and reopens the setup panel" do
       model = connected_model()
       {model, []} = submit(model, "/logout")
