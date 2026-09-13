@@ -299,6 +299,31 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
       assert back.cursor.position == {4, 9}
       assert back.active_buffer_type == :main
     end
+
+    # `restore_cursor_only/1` hands `apply_restored_data/3` the `nil` that
+    # `restore_state([])` returns. That is survivable for exactly one reason:
+    # the `:cursor` clause's `is_map(restored_state.cursor)` is a GUARD, so the
+    # BadMapError on `nil.cursor` fails the clause instead of the call. The
+    # same call with an unguarded field in the list (`:scroll_region`,
+    # `:cursor_style`) does raise, so this pins the no-op end to end rather
+    # than trusting the field list to stay as it is.
+    test "CSI ? 1048 l on an empty state stack is a no-op, not a crash", %{
+      emulator: emulator
+    } do
+      out = feed(emulator, "\e[5;10H\e[?1048l")
+
+      assert out.state_stack == []
+      assert out.cursor.position == {4, 9}
+      assert out.mode_manager == emulator.mode_manager
+      assert row0(out) == "hello"
+    end
+
+    test "CSI ? 1048 h then l restores the saved cursor", %{emulator: emulator} do
+      out = feed(emulator, "\e[5;10H\e[?1048h\e[1;1H\e[?1048l")
+
+      assert out.cursor.position == {4, 9}
+      assert out.state_stack == []
+    end
   end
 
   describe "property: CSI h/l never raises" do
