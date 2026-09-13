@@ -221,7 +221,10 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
       # nil is what the parser yields for an empty slot, a nested list for a
       # colon subparameter group, and a string may arrive from older callers.
       assert ModeProcessor.handle_h_or_l(emulator, [nil], "?", ?h) == emulator
-      assert ModeProcessor.handle_h_or_l(emulator, [[4, 3]], "?", ?h) == emulator
+
+      assert ModeProcessor.handle_h_or_l(emulator, [[4, 3]], "?", ?h) ==
+               emulator
+
       assert ModeProcessor.handle_h_or_l(emulator, ["x"], "?", ?h) == emulator
       assert ModeProcessor.handle_h_or_l(emulator, ["7x"], "?", ?h) == emulator
 
@@ -261,7 +264,10 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
         out = feed(emulator, input)
         assert row0(out) == "hello", inspect(input)
         assert out.width == 80, inspect(input)
-        assert ScreenBuffer.get_width(out.main_screen_buffer) == 80, inspect(input)
+
+        assert ScreenBuffer.get_width(out.main_screen_buffer) == 80,
+               inspect(input)
+
         assert out.mode_manager.column_width_mode == :normal, inspect(input)
       end
     end
@@ -293,5 +299,125 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
       assert back.cursor.position == {4, 9}
       assert back.active_buffer_type == :main
     end
+  end
+
+  describe "property: CSI h/l never raises" do
+    # Seeded :rand instead of StreamData (not a raxol_terminal dependency;
+    # see test/property/). Every failure names the iteration to replay.
+    @runs 300
+    @calls_per_run 12
+
+    @registered_codes [
+      1,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      12,
+      20,
+      25,
+      47,
+      1000,
+      1002,
+      1004,
+      1006,
+      1047,
+      1048,
+      1049,
+      2004
+    ]
+
+    # Numbers a real terminal sends, plus the shapes CommandsParser can yield
+    # for malformed input and the shapes an older caller might pass.
+    @malformed_binaries [
+      "",
+      "7x",
+      "x",
+      " 7",
+      "7 ",
+      "-",
+      "+1",
+      "0x1F",
+      "1.5",
+      "1e3"
+    ]
+    @unicode_binaries ["é", "٣", "７", "\u0000", "\e[?1h", "ﬁ"]
+    @non_numbers [nil, [], [nil], [[4, 3]], {4, 3}, :atom, 1.5, %{}, true]
+
+    defp seed(i), do: :rand.seed(:exsss, {1012, 3, i})
+
+    defp gen_param(depth) do
+      case :rand.uniform(7) do
+        1 -> gen_integer()
+        2 -> Enum.random(@registered_codes)
+        3 -> Integer.to_string(Enum.random(@registered_codes))
+        4 -> Enum.random(@malformed_binaries)
+        5 -> Enum.random(@unicode_binaries)
+        6 -> Enum.random(@non_numbers)
+        7 -> gen_nested(depth)
+      end
+    end
+
+    defp gen_integer,
+      do:
+        Enum.random([
+          0,
+          -:rand.uniform(5000),
+          :rand.uniform(3000),
+          :rand.uniform(10 ** 12)
+        ])
+
+    defp gen_nested(depth) when depth >= 2, do: Enum.random(@non_numbers)
+
+    defp gen_nested(depth),
+      do: for(_ <- 1..:rand.uniform(3), do: gen_param(depth + 1))
+
+    defp gen_params, do: for(_ <- 0..:rand.uniform(6), do: gen_param(0))
+
+    test "random parameter shapes through both tables, set and reset, always return an emulator" do
+      for i <- 1..@runs do
+        seed(i)
+
+        Enum.reduce(1..@calls_per_run, Emulator.new(80, 24), fn call, emulator ->
+          assert_totality(
+            emulator,
+            gen_params(),
+            Enum.random(["?", ""]),
+            Enum.random([?h, ?l]),
+            "iteration #{i} call #{call}"
+          )
+        end)
+      end
+    end
+
+    # An %Emulator{} back, whatever went in. Anything else -- a raise or some
+    # other term -- fails with the shape that caused it, so a case replays.
+    defp assert_totality(emulator, params, intermediates, final_byte, where) do
+      result =
+        ModeProcessor.handle_h_or_l(emulator, params, intermediates, final_byte)
+
+      assert match?(%Emulator{}, result),
+             "#{describe(where, params, intermediates, final_byte)} returned " <>
+               inspect(result, limit: 5)
+
+      result
+    rescue
+      e in ExUnit.AssertionError ->
+        reraise e, __STACKTRACE__
+
+      e ->
+        flunk(
+          "#{describe(where, params, intermediates, final_byte)} raised " <>
+            Exception.format(:error, e, __STACKTRACE__)
+        )
+    end
+
+    # Arguments, not body-bound variables: those are what a `rescue` clause
+    # can still see.
+    defp describe(where, params, intermediates, final_byte),
+      do: "#{where}: #{inspect(params)} #{inspect(intermediates)} #{<<final_byte>>}"
   end
 end
