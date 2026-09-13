@@ -234,12 +234,10 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       cat = System.find_executable("cat")
       assert cat, "cat is required for this test"
 
-      started = System.monotonic_time(:millisecond)
-      result = Credentials.run_executable(cat, [], 5_000)
-      elapsed = System.monotonic_time(:millisecond) - started
-
-      assert {"", 0} = result
-      assert elapsed < 4_000, "cat blocked on stdin for #{elapsed}ms"
+      # `{"", 0}` IS the discriminator: a child still blocked on an open
+      # stdin pipe is killed at the 5s deadline and comes back as a timeout
+      # error, never as a clean exit. No elapsed-time assertion needed.
+      assert {"", 0} = Credentials.run_executable(cat, [], 5_000)
     end
 
     @tag :unix_only

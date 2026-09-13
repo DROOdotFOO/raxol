@@ -246,6 +246,10 @@ defmodule Raxol.Core.ProcessGroupTest do
   end
 
   describe "await_gone/3" do
+    # ExUnit's per-test timeout (60s default) is well under the 300s budget
+    # handed to `await_gone/2`, so a version that waited the budget out
+    # instead of detecting the exit cannot pass this test -- no elapsed-time
+    # assertion needed, and nothing to flake when a runner is loaded.
     test "returns as soon as the group drains, without spending the budget" do
       port = open_child("echo ready; cat > /dev/null")
       pid = os_pid(port)
@@ -253,13 +257,7 @@ defmodule Raxol.Core.ProcessGroupTest do
 
       Port.close(port)
 
-      started = System.monotonic_time(:millisecond)
-      assert :ok = ProcessGroup.await_gone(target, 30_000)
-      elapsed = System.monotonic_time(:millisecond) - started
-
-      # Bounded well under the budget: the point is that a clean exit is
-      # detected rather than waited out. Generous enough not to be a race.
-      assert elapsed < 10_000
+      assert :ok = ProcessGroup.await_gone(target, 300_000)
     end
 
     test ":timeout is a distinct answer from an error" do

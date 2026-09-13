@@ -81,6 +81,21 @@ defmodule Raxol.Recording.Player do
     :ok
   end
 
+  @doc false
+  # The per-frame sleep: the inter-event gap in microseconds, divided by the
+  # speed multiplier, clamped into `0..max_delay` seconds. The one place the
+  # multiplier is applied, shared by simple and interactive playback --
+  # public because the only honest way to test "speed 100 turns a 5s gap
+  # into 50ms" is on the computed delay, not on the test's own wall clock.
+  @spec frame_delay_ms(integer(), float(), number()) :: non_neg_integer()
+  def frame_delay_ms(delay_us, speed, max_delay) do
+    Raxol.Core.Utils.Math.clamp(
+      round(delay_us / 1_000 / speed),
+      0,
+      round(max_delay * 1_000)
+    )
+  end
+
   defp play_events_simple([], _prev_us, _speed, _max_delay), do: :ok
 
   defp play_events_simple(
@@ -89,12 +104,10 @@ defmodule Raxol.Recording.Player do
          speed,
          max_delay
        ) do
-    delay_us = elapsed_us - prev_us
-    delay_ms = round(delay_us / 1_000 / speed)
-    max_delay_ms = round(max_delay * 1_000)
+    delay_ms = frame_delay_ms(elapsed_us - prev_us, speed, max_delay)
 
     if delay_ms > 0 do
-      Process.sleep(min(delay_ms, max_delay_ms))
+      Process.sleep(delay_ms)
     end
 
     IO.write(data)
@@ -158,10 +171,8 @@ defmodule Raxol.Recording.Player do
     {elapsed_us, kind, data} = current_event(state)
     prev_us = prev_elapsed_us(state)
 
-    delay_us = elapsed_us - prev_us
-    delay_ms = round(delay_us / 1_000 / state.speed)
-    max_delay_ms = round(state.max_delay * 1_000)
-    actual_delay = Raxol.Core.Utils.Math.clamp(delay_ms, 0, max_delay_ms)
+    actual_delay =
+      frame_delay_ms(elapsed_us - prev_us, state.speed, state.max_delay)
 
     case wait_with_input(actual_delay) do
       :timeout ->

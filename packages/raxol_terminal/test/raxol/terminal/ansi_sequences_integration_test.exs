@@ -395,17 +395,14 @@ defmodule Raxol.Terminal.ANSISequencesIntegrationTest do
     end
 
     test "handles large formatted text efficiently", %{emulator: emulator} do
+      # A 60-second ceiling on a sub-second parse asserted nothing; the
+      # parser's real budget (<3us/char) lives in `bench/` and the
+      # regression workflow. What the suite pins is that 10,000 formatted
+      # numbers go through the emulator and leave it in a usable state.
       stress = ANSISequences.stress_sequences()
 
-      {time, {state, _}} =
-        :timer.tc(fn ->
-          Emulator.process_input(emulator, stress.large_formatted)
-        end)
+      {state, _} = Emulator.process_input(emulator, stress.large_formatted)
 
-      # Should handle 10000 formatted numbers in reasonable time
-      # Note: Debug logging and parallel test load can make this slower
-      # 60 seconds - generous for CI/debug/parallel load
-      assert time < 60_000_000
       assert state != nil
     end
   end

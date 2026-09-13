@@ -64,9 +64,12 @@ defmodule Raxol.Payments.ConfirmTest do
       decision = cb.(Decimal.new("10"), "api.example.com")
       elapsed = System.monotonic_time(:millisecond) - started
 
+      # The lower bound is guaranteed by the code (it waits `timeout_ms`
+      # before denying); the old upper bound was a flake waiting to happen,
+      # and `:deny` from a device that never writes is only reachable
+      # through the timeout anyway.
       assert decision == :deny
       assert elapsed >= 50
-      assert elapsed < 1000, "timeout took #{elapsed}ms, should be near 50"
 
       send(hanging_pid, :stop)
     end

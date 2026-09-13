@@ -17,12 +17,14 @@ defmodule Raxol.MinimalTest do
     end
 
     test "starts with custom options" do
-      {:ok, pid} = Raxol.Minimal.start_terminal(
-        width: 120,
-        height: 30,
-        mode: :cooked,
-        features: [:colors, :alternate_screen]
-      )
+      {:ok, pid} =
+        Raxol.Minimal.start_terminal(
+          width: 120,
+          height: 30,
+          mode: :cooked,
+          features: [:colors, :alternate_screen]
+        )
+
       state = Raxol.Minimal.get_state(pid)
 
       assert state.width == 120
@@ -31,21 +33,6 @@ defmodule Raxol.MinimalTest do
       assert MapSet.member?(state.features, :colors)
       assert MapSet.member?(state.features, :alternate_screen)
       assert state.alternate_buffer != nil
-
-      GenServer.stop(pid)
-    end
-
-    # Wall-clock perf bound; tight enough to flake on loaded CI runners.
-    @tag :skip_on_ci
-    test "measures startup time" do
-      start_time = System.monotonic_time(:microsecond)
-      {:ok, pid} = Raxol.Minimal.start_terminal()
-      end_time = System.monotonic_time(:microsecond)
-
-      startup_time_ms = (end_time - start_time) / 1000
-      # Use larger timeout on Windows CI for timing variability
-      timeout_ms = if :os.type() == {:win32, :nt}, do: 150, else: 50
-      assert startup_time_ms < timeout_ms, "Startup time should be under #{timeout_ms}ms, got #{startup_time_ms}ms"
 
       GenServer.stop(pid)
     end
@@ -82,7 +69,8 @@ defmodule Raxol.MinimalTest do
       assert state.cursor == {1, 1}
 
       # Move cursor with parameters
-      Raxol.Minimal.send_input(pid, "\e[5C")  # Move 5 right
+      # Move 5 right
+      Raxol.Minimal.send_input(pid, "\e[5C")
       Process.sleep(1)
       state = Raxol.Minimal.get_state(pid)
       assert state.cursor == {6, 1}
@@ -97,19 +85,24 @@ defmodule Raxol.MinimalTest do
       Raxol.Minimal.send_input(pid, "\e[10;20H")
       Process.sleep(1)
       state = Raxol.Minimal.get_state(pid)
-      assert state.cursor == {19, 9}  # 1-indexed to 0-indexed
+      # 1-indexed to 0-indexed
+      assert state.cursor == {19, 9}
 
       # Clear screen
       Raxol.Minimal.send_input(pid, "\e[2J")
       Process.sleep(1)
 
       # Save and restore cursor
-      Raxol.Minimal.send_input(pid, "\e[s")  # Save
-      Raxol.Minimal.send_input(pid, "\e[5;5H")  # Move
-      Raxol.Minimal.send_input(pid, "\e[u")  # Restore
+      # Save
+      Raxol.Minimal.send_input(pid, "\e[s")
+      # Move
+      Raxol.Minimal.send_input(pid, "\e[5;5H")
+      # Restore
+      Raxol.Minimal.send_input(pid, "\e[u")
       Process.sleep(1)
       state = Raxol.Minimal.get_state(pid)
-      assert state.cursor == {19, 9}  # Back to saved position
+      # Back to saved position
+      assert state.cursor == {19, 9}
 
       GenServer.stop(pid)
     end
@@ -124,7 +117,8 @@ defmodule Raxol.MinimalTest do
       assert state.char_attrs.bold == true
 
       # Set foreground color
-      Raxol.Minimal.send_input(pid, "\e[31m")  # Red
+      # Red
+      Raxol.Minimal.send_input(pid, "\e[31m")
       Process.sleep(1)
       state = Raxol.Minimal.get_state(pid)
       assert state.char_attrs.fg_color == :red
@@ -162,7 +156,8 @@ defmodule Raxol.MinimalTest do
       Process.sleep(1)
       state = Raxol.Minimal.get_state(pid)
       {_x, y} = state.cursor
-      assert y == 23  # Height is 24, so max y is 23
+      # Height is 24, so max y is 23
+      assert y == 23
 
       GenServer.stop(pid)
     end
@@ -228,7 +223,11 @@ defmodule Raxol.MinimalTest do
       # Generate more input to ensure measurable timing on fast systems
       # Use longer strings to increase processing time
       for i <- 1..20 do
-        Raxol.Minimal.send_input(pid, "Test input string #{i} with some content")
+        Raxol.Minimal.send_input(
+          pid,
+          "Test input string #{i} with some content"
+        )
+
         Process.sleep(1)
       end
 

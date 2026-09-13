@@ -276,17 +276,15 @@ defmodule Raxol.UI.TextLayout.PrettyTest do
       # ~2000 ideographs, single paragraph, no spaces at all -- well above
       # `@max_dp_breaks` (600), so this exercises the O(m) greedy path.
       # Before the ceiling existed this shape of input drove `run_dp`'s
-      # O(m^2) cost into the billions of iterations for realistic
-      # streamed-markdown sizes (~85k graphemes); 2000 is already enough
-      # to time out the O(m^2) DP in a test run, so a generous wall-clock
-      # bound here is a real regression guard, not a tautology.
+      # O(m^2) cost into the billions of iterations: 2000 ideographs alone
+      # runs for minutes, so ExUnit's own per-test timeout is the regression
+      # guard. No elapsed-time assertion: a measured bound either sits so
+      # far above the real cost (~ms) that it proves nothing, or close
+      # enough to flake on a loaded runner.
       text = String.duplicate("日", 2000)
       width = 40
 
-      {elapsed_us, lines} = :timer.tc(fn -> Pretty.wrap(text, width) end)
-
-      assert elapsed_us < 2_000_000,
-             "greedy fallback took #{elapsed_us}us, expected well under 2s"
+      lines = Pretty.wrap(text, width)
 
       assert Enum.all?(lines, &(TextMeasure.display_width(&1) <= width))
       assert Enum.join(lines) == text

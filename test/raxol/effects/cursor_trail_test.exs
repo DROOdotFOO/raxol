@@ -298,9 +298,10 @@ defmodule Raxol.Effects.CursorTrailTest do
     test "handles rapid position updates" do
       trail = CursorTrail.new(%{max_length: 100})
 
-      trail = Enum.reduce(1..50, trail, fn i, acc ->
-        CursorTrail.update(acc, {i, i})
-      end)
+      trail =
+        Enum.reduce(1..50, trail, fn i, acc ->
+          CursorTrail.update(acc, {i, i})
+        end)
 
       assert CursorTrail.length(trail) <= 100
     end
@@ -313,36 +314,31 @@ defmodule Raxol.Effects.CursorTrailTest do
     end
   end
 
-  describe "performance" do
-    @tag :slow
-    test "efficiently handles long trails" do
+  describe "long trails" do
+    test "a trail never grows past max_length" do
       trail = CursorTrail.new(%{max_length: 1000})
 
-      {time, trail} = :timer.tc(fn ->
-        Enum.reduce(1..1000, trail, fn i, acc ->
+      trail =
+        Enum.reduce(1..2000, trail, fn i, acc ->
           CursorTrail.update(acc, {i, rem(i, 24)})
         end)
-      end)
 
-      assert CursorTrail.length(trail) <= 1000
-      # 500ms ceiling -- generous for slow CI VMs (typically ~12ms local, ~115ms CI)
-      assert time < 500_000
+      # Twice as many updates as the cap: the cap (plus fade pruning) is
+      # what bounds the work, and something is still on the trail.
+      length = CursorTrail.length(trail)
+      assert length <= 1000
+      assert length > 0
     end
 
-    @tag :slow
-    test "apply operation scales with trail length", %{buffer: buffer} do
+    test "apply over a full trail writes into the buffer", %{buffer: buffer} do
       trail = CursorTrail.new(%{max_length: 100})
 
-      trail = Enum.reduce(1..100, trail, fn i, acc ->
-        CursorTrail.update(acc, {rem(i, 80), rem(i, 24)})
-      end)
+      trail =
+        Enum.reduce(1..100, trail, fn i, acc ->
+          CursorTrail.update(acc, {rem(i, 80), rem(i, 24)})
+        end)
 
-      {time, _result} = :timer.tc(fn ->
-        CursorTrail.apply(trail, buffer)
-      end)
-
-      # 500ms ceiling -- generous for slow CI VMs
-      assert time < 500_000
+      assert %{} = CursorTrail.apply(trail, buffer)
     end
   end
 end

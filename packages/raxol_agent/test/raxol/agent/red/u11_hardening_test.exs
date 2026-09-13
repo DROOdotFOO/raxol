@@ -309,16 +309,16 @@ defmodule Raxol.Agent.Red.U11HardeningTest do
     # test TIMES OUT pre-fix (the failure the saboteur predicted — a
     # legitimate multi-parent speculation journal hangs replay / taint audit).
     # Post-fix each node is computed once; the fold returns in microseconds.
+    # The `timeout` above is the whole assertion: pre-fix this fold takes
+    # minutes at depth 40, post-fix microseconds, and no elapsed-time
+    # ceiling in between discriminates the two better than failing to
+    # finish (a measured bound only adds a way to flake on a loaded runner).
     @tag timeout: 30_000
     test "a 40-deep all-trusted Fibonacci-shaped multi-parent journal folds in bounded time" do
       %{records: records, meta_offsets: offsets} =
         Gen.fibonacci_dag(40, leaf_trust: :trusted)
 
-      {us, derived} = :timer.tc(fn -> Meta.derive_taint(records) end)
-
-      assert us < 5_000_000,
-             "derive_taint took #{us}us on a 40-deep multi-parent DAG — the " <>
-               "fold is not memoized (exponential recursion)"
+      derived = Meta.derive_taint(records)
 
       for off <- offsets do
         assert derived[off] == :trusted,

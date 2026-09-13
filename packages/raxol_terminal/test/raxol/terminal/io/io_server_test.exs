@@ -145,38 +145,27 @@ defmodule Raxol.Terminal.IO.IOServerTest do
     end
   end
 
-  describe "performance" do
-    test "handles rapid input events efficiently", %{pid: pid} do
-      # Generate a sequence of input events
+  # Throughput budgets live in `bench/` (and the regression workflow's
+  # parser/render targets), not here: the old `:timer.tc` ceilings of 1ms
+  # per key event and 10ms per 1000 lines measured a loaded runner more
+  # than the server. What the suite pins is that every event in a long run
+  # is accepted and answered.
+  describe "bulk input and output" do
+    test "accepts a thousand input events in order", %{pid: pid} do
       events =
         for i <- 1..1000 do
           %{type: :key, key: "a#{i}"}
         end
 
-      # Measure processing time
-      {time, _} =
-        :timer.tc(fn ->
-          Enum.each(events, fn event ->
-            {:ok, _} = IOServer.process_input(event, pid)
-          end)
-        end)
-
-      # Assert performance requirements (1ms per event)
-      assert time < 1_000_000
+      for event <- events do
+        assert {:ok, _} = IOServer.process_input(event, pid)
+      end
     end
 
-    test "handles large output efficiently", %{pid: pid} do
-      # Generate large output
+    test "accepts a thousand lines of output in one write", %{pid: pid} do
       large_output = String.duplicate("Hello, World!\n", 1000)
 
-      # Measure processing time
-      {time, _} =
-        :timer.tc(fn ->
-          {:ok, _} = IOServer.process_output(large_output, pid)
-        end)
-
-      # Assert performance requirements (10ms for 1000 lines)
-      assert time < 10_000_000
+      assert {:ok, _} = IOServer.process_output(large_output, pid)
     end
   end
 end
