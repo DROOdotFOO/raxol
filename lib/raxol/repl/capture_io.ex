@@ -30,6 +30,15 @@ defmodule Raxol.REPL.CaptureIO do
   @doc """
   Start a capture server holding at most `limit` bytes, owned by the caller.
 
+  `:mfa_timeout` bounds the MFA form of `put_chars` (see `put_mfa/4`): the
+  expansion runs in a throwaway process, and the monitor that watches it only
+  covers an expander that DIES. One that neither answers nor dies wedges this
+  server for good, so the wait is bounded. There is no timeout of its own to
+  invent: the evaluation this capture belongs to already has one, and
+  `Raxol.REPL.Evaluator` passes it -- an expansion cannot usefully outlive the
+  evaluation that asked for it. It defaults to the same
+  `Raxol.Core.Defaults.timeout_ms/0` the evaluator's own default comes from.
+
   Unlinked on purpose: the caller sets it as its own group leader and closes it
   in an `after` block, and a link would turn a killed evaluation into a crash
   report for a process that is simply no longer needed.
@@ -42,9 +51,12 @@ defmodule Raxol.REPL.CaptureIO do
   to `limit` bytes, forever, on a surface served anonymously over SSH. Stopping
   on `:DOWN` is a normal exit, so it still produces no crash report.
   """
-  @spec start(pos_integer()) :: {:ok, pid()}
-  def start(limit) when is_integer(limit) and limit > 0 do
-    GenServer.start(__MODULE__, {limit, self()})
+  @spec start(pos_integer(), keyword()) :: {:ok, pid()}
+  def start(limit, opts \\ []) when is_integer(limit) and limit > 0 do
+    mfa_timeout =
+      Keyword.get(opts, :mfa_timeout, Raxol.Core.Defaults.timeout_ms())
+
+    GenServer.start(__MODULE__, {limit, self(), mfa_timeout})
   end
 
   @doc """
@@ -62,9 +74,18 @@ defmodule Raxol.REPL.CaptureIO do
   end
 
   @impl GenServer
-  def init({limit, owner}) do
+  def init({limit, owner, mfa_timeout}) do
     Process.monitor(owner)
-    {:ok, %{buffer: [], size: 0, limit: limit, truncated?: false, owner: owner}}
+
+    {:ok,
+     %{
+       buffer: [],
+       size: 0,
+       limit: limit,
+       truncated?: false,
+       owner: owner,
+       mfa_timeout: mfa_timeout
+     }}
   end
 
   @impl GenServer
@@ -151,31 +172,48 @@ defmodule Raxol.REPL.CaptureIO do
   # could still accept. A breach kills that process and the write is refused;
   # nothing else is affected, and the evaluation is told its write failed
   # rather than the node dying.
+  #
+  # The monitor covers an expander that DIES. One that neither answers nor
+  # dies -- `Process.sleep(:infinity)` inside the formatter, a NIF that never
+  # returns -- wedged this server in a receive with no `after`, and because
+  # the wedge also swallows the owner's `:DOWN`, killing the evaluation did
+  # not reclaim it: one capture server plus its expander leaked per wedge, on
+  # an anonymous SSH surface. The wait is bounded by `:mfa_timeout` (the
+  # evaluation's own timeout; see `start/2`) and expiry is the `:DOWN` case:
+  # kill the expander, mark truncated, refuse the write.
   defp put_mfa(mod, fun, args, state) do
-    remaining = max(state.limit - state.size, 0) + 1
-    words = div(remaining + word_size(), word_size()) + @mfa_heap_slack_words
-
-    parent = self()
     ref = make_ref()
 
     {pid, monitor} =
-      :erlang.spawn_opt(
-        fn ->
-          result =
-            try do
-              {:ok, IO.iodata_to_binary(apply(mod, fun, args))}
-            catch
-              _kind, _reason -> :error
-            end
+      spawn_expander({mod, fun, args}, ref, expansion_words(state))
 
-          send(parent, {ref, result})
-        end,
-        [
-          :monitor,
-          max_heap_size: %{size: words, kill: true, error_logger: false}
-        ]
-      )
+    await_expansion(pid, monitor, ref, state)
+  end
 
+  defp expansion_words(state) do
+    remaining = max(state.limit - state.size, 0) + 1
+    div(remaining + word_size(), word_size()) + @mfa_heap_slack_words
+  end
+
+  defp spawn_expander({mod, fun, args}, ref, words) do
+    parent = self()
+
+    :erlang.spawn_opt(
+      fn ->
+        result =
+          try do
+            {:ok, IO.iodata_to_binary(apply(mod, fun, args))}
+          catch
+            _kind, _reason -> :error
+          end
+
+        send(parent, {ref, result})
+      end,
+      [:monitor, max_heap_size: %{size: words, kill: true, error_logger: false}]
+    )
+  end
+
+  defp await_expansion(pid, monitor, ref, state) do
     receive do
       {^ref, {:ok, data}} ->
         Process.demonitor(monitor, [:flush])
@@ -189,6 +227,26 @@ defmodule Raxol.REPL.CaptureIO do
         # Over the cap (or a crash while expanding). Recorded as truncated so
         # the caller can say the output was cut rather than silently short.
         {:ok, %{state | truncated?: true}}
+    after
+      state.mfa_timeout ->
+        # Neither answered nor died. Same outcome as the :DOWN above, plus the
+        # kill that branch got for free.
+        Process.exit(pid, :kill)
+        Process.demonitor(monitor, [:flush])
+        flush_expansion(ref)
+        {:ok, %{state | truncated?: true}}
+    end
+  end
+
+  # An expansion that answered while the kill was in flight must not sit in
+  # the mailbox: the next `put_mfa/4` waits on its own fresh ref, so a stale
+  # reply is never matched, but it would grow this server's mailbox for the
+  # life of the evaluation.
+  defp flush_expansion(ref) do
+    receive do
+      {^ref, _result} -> :ok
+    after
+      0 -> :ok
     end
   end
 

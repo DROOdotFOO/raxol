@@ -2,6 +2,7 @@ defmodule Raxol.REPL.EvaluatorTest do
   use ExUnit.Case, async: true
 
   alias Raxol.REPL.Evaluator
+  alias Raxol.REPL.CaptureIO
 
   describe "new/0" do
     test "creates evaluator with empty state" do
@@ -302,6 +303,65 @@ defmodule Raxol.REPL.EvaluatorTest do
 
       assert result.output =~ "hello"
       assert result.value == :ok
+    end
+
+    # The monitor on the expansion process covers one that DIES. One that
+    # neither answers nor dies left the capture server parked in a receive
+    # with no `after` -- and since the wedge also swallowed the owner's
+    # `:DOWN`, killing the evaluation on timeout did not reclaim it: one
+    # capture server (holding up to the output limit) plus its expander
+    # leaked per wedge, on a surface served anonymously over SSH.
+    #
+    # Driven through `CaptureIO` directly with the IO protocol, because no
+    # Elixir expression makes `io_lib` hang: the wedge is a property of the
+    # expander, and the request shape is what `:io.format/2` sends.
+    test "an expander that never answers does not wedge the capture server" do
+      before = capture_server_count()
+      test_pid = self()
+
+      owner =
+        spawn(fn ->
+          {:ok, capture} = CaptureIO.start(4_096, mfa_timeout: 50)
+          send(test_pid, {:capture, capture})
+          reply_as = make_ref()
+
+          send(
+            capture,
+            {:io_request, self(), reply_as,
+             {:put_chars, :unicode, __MODULE__, :never_answers, [:x]}}
+          )
+
+          receive do
+            {:io_reply, ^reply_as, reply} -> send(test_pid, {:io_reply, reply})
+          end
+
+          # Stay alive so the server's exit can only come from the owner's
+          # :DOWN below, never from this process ending early.
+          receive do
+            :done -> :ok
+          end
+        end)
+
+      assert_receive {:capture, capture}
+
+      # The write is answered rather than hanging, and it is refused: the
+      # unexpanded text is not in the buffer, and the capture says so.
+      assert_receive {:io_reply, :ok}
+      assert CaptureIO.contents(capture) == {"", true}
+
+      # And the server is still a server: it answers, and it still goes when
+      # its owner does.
+      ref = Process.monitor(capture)
+      Process.exit(owner, :brutal_kill)
+      assert_receive {:DOWN, ^ref, :process, ^capture, :normal}
+      assert capture_server_count() == before
+    end
+
+    # Public because the capture applies it by module/function/arguments.
+    def never_answers(_arg) do
+      receive do
+        :never -> :never
+      end
     end
   end
 end
