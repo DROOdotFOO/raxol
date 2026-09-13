@@ -59,6 +59,14 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       refusal
     end
 
+    # A wedged lane at startup: `subscribe/1` neither returns nor crashes.
+    # The driver's attach-timeout backstop is what makes `start_link/1`
+    # return at all here.
+    def subscribe(%{test: test_pid, subscribe_reply: :hang}) do
+      send(test_pid, {:subscribe_hung, self()})
+      Process.sleep(:infinity)
+    end
+
     def subscribe(%{test: test_pid}) do
       send(test_pid, {:subscribed, self()})
       :ok
@@ -899,6 +907,40 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       # The refusal was reported before start_link returned; the driver is
       # alive and already carries the honest notice.
       assert_received {:subscribe_refused, _forwarder}
+      assert Process.alive?(driver)
+      eventually(fn -> strip_ansi(raw(device)) =~ "could not attach" end)
+    end
+
+    test "a lane whose subscribe/1 hangs is killed at attach_timeout_ms and the driver starts" do
+      {:ok, device} = StringIO.open("")
+      fake_session_pid = start_fake_session()
+
+      {:ok, driver} =
+        LiveSessionDriver.start_link(
+          lane:
+            {FakeLane,
+             %{
+               session_id: "s1",
+               pid: fake_session_pid,
+               test: self(),
+               steer_reply: {:error, :unused},
+               subscribe_reply: :hang
+             }},
+          device: device,
+          width: @width,
+          rows: @rows,
+          footer_rows: @footer_rows,
+          mode: :inline_log,
+          attach_timeout_ms: 50,
+          cadence_opts: [flush_interval_ms: 0]
+        )
+
+      on_exit(fn -> LiveSessionDriver.halt(driver) end)
+
+      # start_link returned, so the barrier expired; the wedged forwarder
+      # was killed and the footer says the stream never attached.
+      assert_received {:subscribe_hung, forwarder}
+      refute Process.alive?(forwarder)
       assert Process.alive?(driver)
       eventually(fn -> strip_ansi(raw(device)) =~ "could not attach" end)
     end

@@ -146,6 +146,9 @@ defmodule Raxol.Harness.LiveSessionDriver do
   bound: a lane call that neither replies nor crashes is killed after
   `steer_timeout_ms` and the guard released with an honest notice, so a
   wedged steer can never permanently disable steering (`handle_steer_timeout/2`).
+  The startup barrier carries the same bound: a `subscribe/1` that neither
+  returns nor crashes within `attach_timeout_ms` is killed and noted, so a
+  wedged lane cannot hang `start_link/1` (`await_attached/1`).
 
   ## Lifecycle honesty
 
@@ -225,15 +228,16 @@ defmodule Raxol.Harness.LiveSessionDriver do
   @doc """
   Spawns a linked driver process and enters its loop. Returns `{:ok, pid}`
   once the driver is attached: its state is built and the forwarder's
-  `subscribe/1` call has completed (or been refused and noted). Events
-  sent to the session after this returns therefore have a listener. The
-  process builds its own state (Surface, cadence, forwarder, monitor)
-  INSIDE itself, so the `:command_sink` closure `Surface.new/2` receives
-  captures the driver's own `self()`, not the caller's.
+  `subscribe/1` call has completed (or been refused, or timed out after
+  `attach_timeout_ms` -- both noted in the footer). Events sent to the
+  session after this returns therefore have a listener, or the footer says
+  why not. The process builds its own state (Surface, cadence, forwarder,
+  monitor) INSIDE itself, so the `:command_sink` closure `Surface.new/2`
+  receives captures the driver's own `self()`, not the caller's.
 
-  If the driver crashes while building, the crash is returned as
-  `{:error, reason}` rather than left for the caller to discover through
-  the link.
+  A crash while building propagates through the link, as for any
+  `start_link`. A caller that traps exits receives `{:error, reason}`
+  instead of waiting on an ack that will never come.
   """
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
@@ -247,6 +251,15 @@ defmodule Raxol.Harness.LiveSessionDriver do
         {:ok, pid}
 
       {:DOWN, ^monitor, :process, ^pid, reason} ->
+        # Only reachable when the caller traps exits; drop the trapped
+        # link signal so a process we reported as failed leaves no stray
+        # `:EXIT` behind.
+        receive do
+          {:EXIT, ^pid, _} -> :ok
+        after
+          0 -> :ok
+        end
+
         {:error, reason}
     end
   end
@@ -255,19 +268,21 @@ defmodule Raxol.Harness.LiveSessionDriver do
   Blocking convenience form: builds the driver state and runs the loop in
   the CALLING process (no spawn). Returns `:ok` once the loop exits (on
   `:halt` or the `q`-while-composer-empty quit key).
-  """
-  @spec run(keyword()) :: :ok
-  def run(opts) do
-    Process.flag(:trap_exit, true)
-    opts |> build() |> await_attached() |> loop()
-  end
 
-  @doc false
-  @spec run(keyword(), {pid(), reference()}) :: :ok
-  def run(opts, {parent, ref}) do
+  `start_link/1` runs this same sequence in the spawned process with an
+  `{parent, ref}` ack address; the ack is sent once the startup barrier
+  has passed, immediately before the loop.
+  """
+  @spec run(keyword(), {pid(), reference()} | nil) :: :ok
+  def run(opts, ack \\ nil) do
     Process.flag(:trap_exit, true)
-    state = opts |> build() |> await_attached()
-    send(parent, {ref, :attached})
+    state = opts |> build() |> await_attached() |> start_ticking()
+
+    case ack do
+      {parent, ref} -> send(parent, {ref, :attached})
+      nil -> :ok
+    end
+
     loop(state)
   end
 
@@ -340,8 +355,6 @@ defmodule Raxol.Harness.LiveSessionDriver do
     tick_ms = Keyword.get(opts, :tick_ms, 1_000)
     detector = StallDetector.new(Keyword.get(opts, :stall_opts, []))
 
-    Process.send_after(driver_pid, :tick, tick_ms)
-
     %{
       model: model,
       lane: {lane_mod, session},
@@ -357,6 +370,9 @@ defmodule Raxol.Harness.LiveSessionDriver do
       # nor crashes -- a genuinely wedged lane call -- must not hold the
       # single-in-flight guard forever. See `handle_steer_timeout/2`.
       steer_timeout_ms: Keyword.get(opts, :steer_timeout_ms, 5_000),
+      # Liveness bound on the startup barrier (`await_attached/1`): the
+      # forwarder's `subscribe/1` must ack, refuse, or crash within this.
+      attach_timeout_ms: Keyword.get(opts, :attach_timeout_ms, 5_000),
       clock: clock,
       tick_ms: tick_ms,
       notify: Keyword.get(opts, :notify)
@@ -394,11 +410,14 @@ defmodule Raxol.Harness.LiveSessionDriver do
     end)
   end
 
-  # The startup barrier. Exactly one of these arrives from the forwarder:
-  # its ack, its subscribe refusal, or (trapped) its exit. The last two are
-  # handled here exactly as the loop would, so a driver that could not
-  # attach still starts -- with the honest footer notice -- rather than
-  # hanging its caller.
+  # The startup barrier. One of these arrives from the forwarder: its ack,
+  # its subscribe refusal, or (trapped) its exit. The last two are handled
+  # here exactly as the loop would, so a driver that could not attach still
+  # starts -- with the honest footer notice -- rather than hanging its
+  # caller. A `subscribe/1` that does neither within `attach_timeout_ms` is
+  # the same wedged-lane case `steer_timeout_ms` guards: the forwarder is
+  # killed (unlinked first, so no `:EXIT` follows) and noted, and the
+  # driver starts without a listener rather than never.
   defp await_attached(%{forwarder: forwarder} = state) do
     receive do
       {:forwarder_attached, ^forwarder} ->
@@ -409,7 +428,20 @@ defmodule Raxol.Harness.LiveSessionDriver do
 
       {:EXIT, ^forwarder, reason} ->
         handle_exit(state, forwarder, reason)
+    after
+      state.attach_timeout_ms ->
+        Process.unlink(forwarder)
+        Process.exit(forwarder, :kill)
+        handle_lane_error(state, {:timeout, state.attach_timeout_ms})
     end
+  end
+
+  # The first tick is armed only once the barrier has passed: a slow
+  # `subscribe/1` must not bank one tick per `tick_ms` to burst through the
+  # stall detector and renderer the moment the loop starts.
+  defp start_ticking(state) do
+    Process.send_after(self(), :tick, state.tick_ms)
+    state
   end
 
   defp forwarder_loop(cadence) do
