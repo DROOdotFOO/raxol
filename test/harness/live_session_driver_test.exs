@@ -54,6 +54,19 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     @behaviour Raxol.Harness.SessionLane
 
     @impl true
+    def subscribe(%{test: test_pid, subscribe_reply: {:error, _} = refusal}) do
+      send(test_pid, {:subscribe_refused, self()})
+      refusal
+    end
+
+    # A wedged lane at startup: `subscribe/1` neither returns nor crashes.
+    # The driver's attach-timeout backstop is what makes `start_link/1`
+    # return at all here.
+    def subscribe(%{test: test_pid, subscribe_reply: :hang}) do
+      send(test_pid, {:subscribe_hung, self()})
+      Process.sleep(:infinity)
+    end
+
     def subscribe(%{test: test_pid}) do
       send(test_pid, {:subscribed, self()})
       :ok
@@ -311,10 +324,11 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
     {:ok, driver} =
       LiveSessionDriver.start_link(Keyword.merge(base_opts, driver_overrides))
 
-    # Synchronize on the forwarder having subscribed before the test drives
-    # any events -- otherwise a session_event sent too early has no
-    # registered forwarder to receive it.
-    assert_receive {:subscribed, forwarder_pid}, 2_000
+    # `start_link/1` returns only after the forwarder's `subscribe/1` has
+    # completed, and the forwarder announced itself to this process before
+    # acknowledging the driver -- so the announcement is already here. No
+    # wait, no clock: the barrier is the handshake.
+    assert_received {:subscribed, forwarder_pid}
 
     on_exit(fn -> LiveSessionDriver.halt(driver) end)
 
@@ -857,6 +871,78 @@ defmodule Raxol.Harness.LiveSessionDriverTest do
       Agent.update(clock_agent, fn _ -> 1_000 end)
 
       eventually(fn -> strip_ansi(raw(device)) =~ "ALERT" end, 5_000)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # 13. startup is a handshake, and a refused subscription still starts
+  # ---------------------------------------------------------------------
+
+  describe "13. start_link/1 returns once the driver is attached" do
+    test "a lane that refuses subscribe/1 yields a running driver with the notice, not a hang" do
+      {:ok, device} = StringIO.open("")
+      fake_session_pid = start_fake_session()
+
+      {:ok, driver} =
+        LiveSessionDriver.start_link(
+          lane:
+            {FakeLane,
+             %{
+               session_id: "s1",
+               pid: fake_session_pid,
+               test: self(),
+               steer_reply: {:error, :unused},
+               subscribe_reply: {:error, :lane_down}
+             }},
+          device: device,
+          width: @width,
+          rows: @rows,
+          footer_rows: @footer_rows,
+          mode: :inline_log,
+          cadence_opts: [flush_interval_ms: 0]
+        )
+
+      on_exit(fn -> LiveSessionDriver.halt(driver) end)
+
+      # The refusal was reported before start_link returned; the driver is
+      # alive and already carries the honest notice.
+      assert_received {:subscribe_refused, _forwarder}
+      assert Process.alive?(driver)
+      eventually(fn -> strip_ansi(raw(device)) =~ "could not attach" end)
+    end
+
+    test "a lane whose subscribe/1 hangs is killed at attach_timeout_ms and the driver starts" do
+      {:ok, device} = StringIO.open("")
+      fake_session_pid = start_fake_session()
+
+      {:ok, driver} =
+        LiveSessionDriver.start_link(
+          lane:
+            {FakeLane,
+             %{
+               session_id: "s1",
+               pid: fake_session_pid,
+               test: self(),
+               steer_reply: {:error, :unused},
+               subscribe_reply: :hang
+             }},
+          device: device,
+          width: @width,
+          rows: @rows,
+          footer_rows: @footer_rows,
+          mode: :inline_log,
+          attach_timeout_ms: 50,
+          cadence_opts: [flush_interval_ms: 0]
+        )
+
+      on_exit(fn -> LiveSessionDriver.halt(driver) end)
+
+      # start_link returned, so the barrier expired; the wedged forwarder
+      # was killed and the footer says the stream never attached.
+      assert_received {:subscribe_hung, forwarder}
+      refute Process.alive?(forwarder)
+      assert Process.alive?(driver)
+      eventually(fn -> strip_ansi(raw(device)) =~ "could not attach" end)
     end
   end
 end
