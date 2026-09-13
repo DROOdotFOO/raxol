@@ -128,7 +128,17 @@ mix docs                      # Generate documentation
 ./scripts/dev.sh setup           # Environment setup
 ./scripts/check_toolchain.sh     # Verify the active Elixir/OTP matches mise.toml
 ./scripts/acp_probe.py CMD ARGS  # Drive an ACP agent over stdio, record the wire
+./scripts/worktree.sh add BRANCH # Parallel worktree, deps/_build cloned from here
 ```
+
+`worktree.sh add` exists because a bare `git worktree add` starts cold: it
+fetches and compiles every dependency again (~2m14s at the root here, and a
+full deps build per package suite you touch). It clones `_build` and `deps`
+from this checkout instead (copy-on-write on APFS/reflink filesystems), so
+the first root compile is ~22s and a package suite runs without a `deps.get`
+at all. The app's own beams DO recompile (Mix manifests are keyed by absolute
+source path, which is also why a `MIX_BUILD_PATH` shared between worktrees
+recompiles anyway, and would have two worktrees writing the same manifests).
 
 ### Install paths
 

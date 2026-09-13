@@ -34,6 +34,7 @@ subdirectories hold narrower tooling.
 | `check_journal_goldens.exs` | Harness journal golden check |
 | `check_domains.sh` | Domain and DNS checks |
 | `install.sh` | The `curl \| bash` installer served from raxol.io |
+| `worktree.sh` | Adds a parallel git worktree with `deps`/`_build` cloned from this checkout (no cold dependency build) |
 | `gen_homebrew_formula.sh` | Emits the Homebrew tap formula |
 | `run_live_gates.sh` | The stablecoin cross-chain go-live matrix |
 | `smoke-test.sh` | Post-deploy smoke test |
