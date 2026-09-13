@@ -1,7 +1,7 @@
 defmodule Raxol.REPL.EvaluatorTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.REPL.Evaluator
+  alias Raxol.REPL.{CaptureIO, Evaluator}
 
   describe "new/0" do
     test "creates evaluator with empty state" do
@@ -250,10 +250,37 @@ defmodule Raxol.REPL.EvaluatorTest do
   # cap and the capture's byte cap: `~1000000000c` allocated a gigabyte before
   # anything counted it.
   describe "output built by the group leader is bounded too" do
-    test "an expansion far over the cap does not allocate it" do
-      eval = Evaluator.new()
+    test "an expansion far over the cap is killed by a heap cap, not built" do
+      # Proof is the VM's own `gc_max_heap_size` event from the process doing
+      # the expansion. A VM-wide `:erlang.memory/1` delta cannot tell this
+      # apart from other async tests allocating at the same time.
+      {:ok, capture} = CaptureIO.start(4_096)
 
-      before = :erlang.memory(:total)
+      :erlang.trace(capture, true, [
+        :procs,
+        :set_on_spawn,
+        :garbage_collection
+      ])
+
+      ref = make_ref()
+
+      send(
+        capture,
+        {:io_request, self(), ref,
+         {:put_chars, :unicode, :io_lib, :format, ["~100000000c", [?x]]}}
+      )
+
+      assert_receive {:io_reply, ^ref, :ok}, 15_000
+      assert_receive {:trace, expander, :gc_max_heap_size, _info}, 15_000
+      assert expander != capture
+
+      :erlang.trace(capture, false, [:all])
+      assert {"", true} = CaptureIO.contents(capture)
+      CaptureIO.close(capture)
+    end
+
+    test "the evaluation survives it and reports the cut" do
+      eval = Evaluator.new()
 
       assert {:ok, result, _eval} =
                Evaluator.eval(
@@ -265,13 +292,7 @@ defmodule Raxol.REPL.EvaluatorTest do
                )
 
       assert result.value == :done
-
-      # 100M characters. Anything close to that reaching the VM means the
-      # expansion ran unbounded somewhere.
-      growth = :erlang.memory(:total) - before
-
-      assert growth < 50_000_000,
-             "the group leader allocated #{growth} bytes for a capped write"
+      assert result.output =~ "[output truncated at 4096 bytes]"
     end
 
     test "output within the cap still arrives" do
