@@ -1,15 +1,15 @@
 defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
   @moduledoc """
-  ModeProcessor is the live DEC private mode path: `CSIHandler` dispatches
-  `h`/`l` here. Its `private_mode_name/1` allow-list is therefore the set of
-  modes the emulator actually honours -- anything absent resolves to `nil` and
-  is silently discarded.
+  ModeProcessor is the live `CSI h` / `CSI l` path: `CSIHandler` dispatches
+  both final bytes here, and `ModeTypes` is the only table a mode number is
+  resolved against. A number absent from the registry, a registered mode
+  without a handler, or a parameter that is not a well-formed integer is
+  silently dropped; the rest of the sequence still applies.
 
-  These assertions exist because SGR mouse encoding (`CSI ? 1006 h`) was
-  implemented below the live `ModeProcessor` allow-list but never reached.
-  Reporting modes and encoding modes are independent: the driver enables
-  press/release reporting with 1000 and extended coordinate encoding with
-  1006.
+  The mouse assertions exist because SGR mouse encoding (`CSI ? 1006 h`) was
+  once implemented below the live dispatch but never reached. Reporting modes
+  and encoding modes are independent: the driver enables press/release
+  reporting with 1000 and extended coordinate encoding with 1006.
   """
   use ExUnit.Case, async: true
 
@@ -23,6 +23,18 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
 
   defp reset_private(emulator, code) do
     ModeProcessor.handle_h_or_l(emulator, [code], "?", ?l)
+  end
+
+  defp feed(emulator, input) do
+    {emulator, _} = Emulator.process_input(emulator, input)
+    emulator
+  end
+
+  defp row0(emulator) do
+    emulator.main_screen_buffer
+    |> ScreenBuffer.get_line(0)
+    |> Enum.map_join(& &1.char)
+    |> String.trim_trailing()
   end
 
   describe "mouse reporting modes" do
@@ -176,10 +188,18 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
     test "an unmodelled private mode is ignored rather than crashing", %{
       emulator: emulator
     } do
-      # 1005 (UTF-8 mouse) has no ModeTypes entry and no handler, so it is
-      # deliberately not in the allow-list. It must be a no-op, not a crash.
+      # 1005 (UTF-8 mouse) has no ModeTypes entry and no handler. It must be
+      # a no-op, not a crash.
       assert set_private(emulator, 1005).mode_manager.mouse_report_mode ==
                :none
+    end
+
+    test "a registered mode with no handler is dropped the same way", %{
+      emulator: emulator
+    } do
+      # ?12 resolves to :att_blink, which no handler implements.
+      assert set_private(emulator, 12) == emulator
+      assert reset_private(emulator, 12) == emulator
     end
 
     test "empty parameter list is a no-op", %{emulator: emulator} do
@@ -193,6 +213,85 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
     test "an unknown standard mode is a no-op", %{emulator: emulator} do
       assert ModeProcessor.handle_h_or_l(emulator, [999], "", ?h).mode_manager ==
                emulator.mode_manager
+    end
+
+    test "non-integer parameters are skipped, not raised on", %{
+      emulator: emulator
+    } do
+      # nil is what the parser yields for an empty slot, a nested list for a
+      # colon subparameter group, and a string may arrive from older callers.
+      assert ModeProcessor.handle_h_or_l(emulator, [nil], "?", ?h) == emulator
+      assert ModeProcessor.handle_h_or_l(emulator, [[4, 3]], "?", ?h) == emulator
+      assert ModeProcessor.handle_h_or_l(emulator, ["x"], "?", ?h) == emulator
+      assert ModeProcessor.handle_h_or_l(emulator, ["7x"], "?", ?h) == emulator
+
+      assert ModeProcessor.handle_h_or_l(emulator, ["7"], "?", ?h).mode_manager.auto_wrap ==
+               true
+    end
+  end
+
+  describe "through the parser" do
+    setup do
+      {emulator, _} = Emulator.process_input(Emulator.new(80, 24), "hello")
+      %{emulator: emulator}
+    end
+
+    test "a malformed parameter is dropped and the rest still applies", %{
+      emulator: emulator
+    } do
+      # `?1;` parses to [1, nil]: ?1 applies, the empty slot is ignored.
+      partial = feed(emulator, "\e[?1;h")
+      assert partial.mode_manager.cursor_keys_mode == :application
+      assert row0(partial) == "hello"
+
+      # `?4:3` parses to [[4, 3]]: nothing to apply.
+      subparam = feed(emulator, "\e[?4:3h")
+      assert subparam.mode_manager == emulator.mode_manager
+      assert subparam.cursor.position == emulator.cursor.position
+      assert row0(subparam) == "hello"
+    end
+
+    test "CSI 132 h, CSI 80 h and CSI ? 80 h are not column-width modes", %{
+      emulator: emulator
+    } do
+      # Only DECCOLM (CSI ? 3) switches column width. DEC-private 80 is DECSDM
+      # in xterm and standard 80/132 do not exist; all three once replaced the
+      # screen buffers with empty ones.
+      for input <- ["\e[132h", "\e[80h", "\e[?80h"] do
+        out = feed(emulator, input)
+        assert row0(out) == "hello", inspect(input)
+        assert out.width == 80, inspect(input)
+        assert ScreenBuffer.get_width(out.main_screen_buffer) == 80, inspect(input)
+        assert out.mode_manager.column_width_mode == :normal, inspect(input)
+      end
+    end
+
+    test "CSI ? 3 h is DECCOLM: 132 columns, emulator width included", %{
+      emulator: emulator
+    } do
+      wide = feed(emulator, "\e[?3h")
+      assert wide.width == 132
+      assert ScreenBuffer.get_width(wide.main_screen_buffer) == 132
+      assert wide.mode_manager.column_width_mode == :wide
+
+      narrow = feed(wide, "\e[?3l")
+      assert narrow.width == 80
+      assert ScreenBuffer.get_width(narrow.main_screen_buffer) == 80
+      assert narrow.mode_manager.column_width_mode == :normal
+    end
+
+    test "CSI ? 1049 h saves the cursor as DECSC, so CSI u restores it", %{
+      emulator: emulator
+    } do
+      # xterm: 1049 = save cursor as DECSC, switch to alt screen, clear it.
+      assert feed(emulator, "\e[5;10H\e[?1049h\e[1;1H\e[u").cursor.position ==
+               {4, 9}
+    end
+
+    test "CSI ? 1049 l restores the cursor as DECRC", %{emulator: emulator} do
+      back = feed(emulator, "\e[5;10H\e[?1049h\e[1;1H\e[?1049l")
+      assert back.cursor.position == {4, 9}
+      assert back.active_buffer_type == :main
     end
   end
 end

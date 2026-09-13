@@ -100,7 +100,6 @@ defmodule Raxol.Terminal.Emulator.Factory do
       scrollback_limit: scrollback_limit,
       output_buffer: "",
       current_command_buffer: current_command_buffer,
-      mode_state: %{},
       bracketed_paste_active: false,
       bracketed_paste_buffer: "",
       scroll_region: nil,

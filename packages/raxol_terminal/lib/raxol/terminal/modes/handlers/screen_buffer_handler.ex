@@ -5,6 +5,7 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
   """
 
   alias Raxol.Terminal.ANSI.TextFormatting
+  alias Raxol.Terminal.Commands.CursorUtils
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ModeManager
   alias Raxol.Terminal.Modes.Types.ModeTypes
@@ -125,7 +126,11 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
   end
 
   defp handle_alt_screen_with_clear(true, emulator) do
-    # Mode 1049: Alt screen with save/restore and clear
+    # Mode 1049: Alt screen with save/restore and clear. xterm defines the
+    # save as DECSC, so it also fills the `CSI s` / `CSI u` / ESC 7 / ESC 8
+    # slot (`emulator.saved_cursor`), not only the state stack.
+    emulator = CursorUtils.save_cursor_position(emulator)
+
     with {:ok, alt_buffer} <- create_or_get_alt_buffer(emulator),
          {:ok, emulator_with_saved_state} <- save_terminal_state(emulator) do
       # Clear the alternate buffer
@@ -157,8 +162,12 @@ defmodule Raxol.Terminal.Modes.Handlers.ScreenBufferHandler do
   end
 
   defp handle_alt_screen_with_clear(false, emulator) do
-    # Switch back to main buffer, restore state, and clear alt buffer
+    # Switch back to main buffer, restore state (DECRC included), and clear
+    # the alt buffer
     with {:ok, emulator_with_restored_state} <- restore_terminal_state(emulator) do
+      emulator_with_restored_state =
+        CursorUtils.restore_cursor_position(emulator_with_restored_state)
+
       # Clear the alternate buffer before switching away
       case emulator_with_restored_state.alternate_screen_buffer do
         nil ->
