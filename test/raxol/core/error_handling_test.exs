@@ -236,27 +236,29 @@ defmodule Raxol.Core.ErrorHandlingTest do
   end
 
   describe "retry behavior" do
-    @tag timeout: 120_000
-    test "respects max delay" do
+    test "honors retry_delay between attempts" do
+      # `base_delay`/`max_delay` are not options here; the only knob is
+      # `:retry_delay`, which defaults to 1000ms. The retry itself is proved
+      # by the attempt count. The timing bounds only need to separate 50ms
+      # from the 1000ms default -- a tighter upper bound measured a loaded
+      # macOS runner instead (455ms observed in the nightly).
+      parent = self()
       start_time = System.monotonic_time(:millisecond)
 
       _result =
-        execute_with_handling(
-          :test,
-          [retry: 1, base_delay: 1000, max_delay: 50, retry_delay: 50],
-          fn ->
-            raise "Force retry"
-          end
-        )
+        execute_with_handling(:test, [retry: 1, retry_delay: 50], fn ->
+          send(parent, :attempt)
+          raise "Force retry"
+        end)
 
-      end_time = System.monotonic_time(:millisecond)
-      elapsed = end_time - start_time
+      elapsed = System.monotonic_time(:millisecond) - start_time
 
-      # Should complete in roughly 50ms (one retry with 50ms delay)
-      # Allow some variance
+      assert_received :attempt
+      assert_received :attempt
+      refute_received :attempt
+
       assert elapsed >= 40
-      # Allow for timing variations and system load (increased tolerance for test environments)
-      assert elapsed <= 300
+      assert elapsed < 1000
     end
   end
 end
