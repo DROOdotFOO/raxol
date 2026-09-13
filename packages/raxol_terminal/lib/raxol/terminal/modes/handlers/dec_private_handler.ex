@@ -11,7 +11,6 @@ defmodule Raxol.Terminal.Modes.Handlers.DECPrivateHandler do
   @mode_handlers %{
     decckm: &__MODULE__.handle_cursor_keys_mode/2,
     deccolm_132: &__MODULE__.handle_column_width_mode_wide/2,
-    deccolm_80: &__MODULE__.handle_column_width_mode_normal/2,
     decscnm: &__MODULE__.handle_screen_mode/2,
     decom: &__MODULE__.handle_origin_mode/2,
     decawm: &__MODULE__.handle_auto_wrap_mode/2,
@@ -102,12 +101,18 @@ defmodule Raxol.Terminal.Modes.Handlers.DECPrivateHandler do
     Map.fetch(@mode_handlers, mode_name)
   end
 
+  # DECCOLM (CSI ? 3): set is 132 columns, reset is 80. There is no separate
+  # 80-column mode number; `:deccolm_80` only names the reset state.
   def handle_column_width_mode_wide(value, emulator) do
-    handle_column_width_mode(value, emulator, :wide)
-  end
+    {target_width, column_mode} = if value, do: {132, :wide}, else: {80, :normal}
 
-  def handle_column_width_mode_normal(value, emulator) do
-    handle_column_width_mode(value, emulator, :normal)
+    emulator = resize_emulator_buffers(emulator, target_width)
+    emulator = update_column_width_mode(emulator, column_mode)
+
+    # VT100 spec: DECCOLM clears the screen and homes the cursor
+    emulator = clear_screen_and_home_cursor(emulator)
+
+    {:ok, emulator}
   end
 
   def handle_cursor_keys_mode(value, emulator) do
@@ -123,26 +128,6 @@ defmodule Raxol.Terminal.Modes.Handlers.DECPrivateHandler do
        | mode_manager: %{emulator.mode_manager | cursor_keys_mode: cursor_mode}
      }}
   end
-
-  def handle_column_width_mode(value, emulator, width_mode) do
-    target_width = calculate_target_width(width_mode, value)
-    new_column_mode = calculate_column_width_mode(width_mode, value)
-
-    emulator = resize_emulator_buffers(emulator, target_width)
-    emulator = update_column_width_mode(emulator, new_column_mode)
-
-    # VT100 spec: DECCOLM clears the screen and homes the cursor
-    emulator = clear_screen_and_home_cursor(emulator)
-
-    {:ok, emulator}
-  end
-
-  defp calculate_target_width(:wide, true), do: 132
-  defp calculate_target_width(:wide, false), do: 80
-  defp calculate_target_width(:normal, _), do: 80
-
-  defp calculate_column_width_mode(:wide, true), do: :wide
-  defp calculate_column_width_mode(_, _), do: :normal
 
   defp resize_emulator_buffers(emulator, target_width) do
     main_buffer = resize_buffer(emulator.main_screen_buffer, target_width)

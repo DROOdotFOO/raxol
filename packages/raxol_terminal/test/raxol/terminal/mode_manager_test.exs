@@ -82,14 +82,21 @@ defmodule Raxol.Terminal.ModeManagerTest do
     test "looks up valid standard mode codes" do
       assert ModeManager.lookup_standard(4) == :irm
       assert ModeManager.lookup_standard(20) == :lnm
-      assert ModeManager.lookup_standard(132) == :deccolm_132
-      assert ModeManager.lookup_standard(80) == :deccolm_80
     end
 
     test "returns nil for invalid mode codes" do
       assert ModeManager.lookup_standard(999) == nil
       assert ModeManager.lookup_standard(0) == nil
       assert ModeManager.lookup_standard(-1) == nil
+    end
+
+    test "column width has no standard or DEC 80 code, only DECCOLM (?3)" do
+      # `CSI 132 h`, `CSI 80 h` and `CSI ? 80 h` (DECSDM in xterm) are not
+      # column-width modes; registering them wiped the screen on real input.
+      assert ModeManager.lookup_standard(132) == nil
+      assert ModeManager.lookup_standard(80) == nil
+      assert ModeManager.lookup_private(80) == nil
+      assert ModeManager.lookup_private(3) == :deccolm_132
     end
   end
 end

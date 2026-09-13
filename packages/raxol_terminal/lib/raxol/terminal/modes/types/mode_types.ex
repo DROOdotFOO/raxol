@@ -34,7 +34,8 @@ defmodule Raxol.Terminal.Modes.Types.ModeTypes do
       dependencies: [],
       conflicts: []
     },
-    # 132 Column Mode
+    # 132 Column Mode (DECCOLM). `:deccolm_80` is only a state name: it is the
+    # reset side of this mode and has no CSI number of its own.
     3 => %{
       category: :dec_private,
       code: 3,
@@ -42,15 +43,6 @@ defmodule Raxol.Terminal.Modes.Types.ModeTypes do
       default_value: false,
       dependencies: [],
       conflicts: [:deccolm_80]
-    },
-    # 80 Column Mode
-    80 => %{
-      category: :dec_private,
-      code: 80,
-      name: :deccolm_80,
-      default_value: true,
-      dependencies: [],
-      conflicts: [:deccolm_132]
     },
     # Screen Mode (reverse)
     5 => %{
@@ -213,24 +205,6 @@ defmodule Raxol.Terminal.Modes.Types.ModeTypes do
       default_value: false,
       dependencies: [],
       conflicts: []
-    },
-    # Column Width Mode (132 columns) - alternative code
-    132 => %{
-      category: :standard,
-      code: 132,
-      name: :deccolm_132,
-      default_value: false,
-      dependencies: [],
-      conflicts: [:deccolm_80]
-    },
-    # Column Width Mode (80 columns)
-    80 => %{
-      category: :standard,
-      code: 80,
-      name: :deccolm_80,
-      default_value: true,
-      dependencies: [],
-      conflicts: [:deccolm_132]
     }
   }
 
