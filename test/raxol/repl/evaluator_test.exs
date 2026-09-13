@@ -1,7 +1,7 @@
 defmodule Raxol.REPL.EvaluatorTest do
   use ExUnit.Case, async: true
 
-  alias Raxol.REPL.{CaptureIO, Evaluator}
+  alias Raxol.REPL.Evaluator
 
   describe "new/0" do
     test "creates evaluator with empty state" do
@@ -251,35 +251,16 @@ defmodule Raxol.REPL.EvaluatorTest do
   # anything counted it.
   describe "output built by the group leader is bounded too" do
     test "an expansion far over the cap is killed by a heap cap, not built" do
-      # Proof is the VM's own `gc_max_heap_size` event from the process doing
-      # the expansion. A VM-wide `:erlang.memory/1` delta cannot tell this
-      # apart from other async tests allocating at the same time.
-      {:ok, capture} = CaptureIO.start(4_096)
+      # Proof is the VM's own `gc_max_heap_size` event, observed through the
+      # evaluator's real wiring: `set_on_spawn` on this process propagates the
+      # trace flag to the evaluation, its capture server, and whatever the
+      # capture spawns to expand the format. A VM-wide `:erlang.memory/1`
+      # delta cannot tell this apart from other async tests allocating at the
+      # same time; a bare truncation note cannot tell "killed at the cap"
+      # from "built 100 MB, then dropped".
+      max_heap_bytes = 8 * 1024 * 1024
+      :erlang.trace(self(), true, [:set_on_spawn, :garbage_collection])
 
-      :erlang.trace(capture, true, [
-        :procs,
-        :set_on_spawn,
-        :garbage_collection
-      ])
-
-      ref = make_ref()
-
-      send(
-        capture,
-        {:io_request, self(), ref,
-         {:put_chars, :unicode, :io_lib, :format, ["~100000000c", [?x]]}}
-      )
-
-      assert_receive {:io_reply, ^ref, :ok}, 15_000
-      assert_receive {:trace, expander, :gc_max_heap_size, _info}, 15_000
-      assert expander != capture
-
-      :erlang.trace(capture, false, [:all])
-      assert {"", true} = CaptureIO.contents(capture)
-      CaptureIO.close(capture)
-    end
-
-    test "the evaluation survives it and reports the cut" do
       eval = Evaluator.new()
 
       assert {:ok, result, _eval} =
@@ -288,11 +269,27 @@ defmodule Raxol.REPL.EvaluatorTest do
                  ~S|:io.format("~100000000c", [?x]); :done|,
                  timeout: 15_000,
                  max_result_bytes: 4_096,
-                 max_heap_bytes: 8 * 1024 * 1024
+                 max_heap_bytes: max_heap_bytes
                )
 
+      :erlang.trace(self(), false, [:all])
+
+      # The evaluation itself survived, so the process the VM killed for its
+      # heap cap is the one working on its behalf -- and that cap is the
+      # small one CaptureIO sets from the byte limit, not the evaluation's.
       assert result.value == :done
       assert result.output =~ "[output truncated at 4096 bytes]"
+
+      assert_received {:trace, expander, :gc_max_heap_size, info}
+      assert expander != self()
+
+      words_at_kill =
+        Keyword.fetch!(info, :heap_block_size) +
+          Keyword.fetch!(info, :old_heap_block_size) +
+          Keyword.fetch!(info, :mbuf_size)
+
+      assert words_at_kill * :erlang.system_info(:wordsize) < max_heap_bytes,
+             "expansion reached #{words_at_kill} words before the cap fired"
     end
 
     test "output within the cap still arrives" do
