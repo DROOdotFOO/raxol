@@ -10,8 +10,14 @@
 # checkout you already have warm: `_build` and `deps`, at the root and in
 # every `packages/*`. On APFS (and Btrfs/XFS with reflink) the copy is a
 # copy-on-write clone, so it costs neither time nor disk for the shared
-# blocks. Mix then finds its manifests where it expects them, notices only
-# the files that actually differ on the new branch, and compiles those.
+# blocks.
+#
+# What that buys and what it does not: the dependency FETCH and the
+# dependency BUILD disappear (measured at the root: 2m14s cold, 22s seeded,
+# and no network), and a package suite runs without its own `deps.get`. The
+# app's own modules still recompile, because Mix manifests are keyed by
+# absolute source path and a second source root invalidates them -- the
+# seeded root compile is still `Compiling 697 files`. Nothing can avoid that.
 #
 # Why not a SHARED build directory (`MIX_BUILD_PATH` pointing several
 # worktrees at one `_build`):
