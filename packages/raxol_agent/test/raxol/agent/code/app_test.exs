@@ -2,6 +2,7 @@ defmodule Raxol.Agent.Code.AppTest do
   use ExUnit.Case, async: false
 
   alias Raxol.Agent.Code.App
+  alias Raxol.Agent.Code.App.Commands
   alias Raxol.Agent.Contract
   alias Raxol.Core.Events.Event
 
@@ -279,12 +280,12 @@ defmodule Raxol.Agent.Code.AppTest do
     end
 
     test "auth_rejected?/1 recognizes both the structured and streaming shapes" do
-      assert App.auth_rejected?({:http_error, 401, ""})
-      assert App.auth_rejected?({:http_error, 403, "body"})
-      assert App.auth_rejected?("HTTP 401")
-      refute App.auth_rejected?({:http_error, 500, ""})
-      refute App.auth_rejected?("HTTP 500")
-      refute App.auth_rejected?(:boom)
+      assert Commands.auth_rejected?({:http_error, 401, ""})
+      assert Commands.auth_rejected?({:http_error, 403, "body"})
+      assert Commands.auth_rejected?("HTTP 401")
+      refute Commands.auth_rejected?({:http_error, 500, ""})
+      refute Commands.auth_rejected?("HTTP 500")
+      refute Commands.auth_rejected?(:boom)
     end
 
     test "malformed contract events are dropped, not folded" do
@@ -446,6 +447,23 @@ defmodule Raxol.Agent.Code.AppTest do
 
       # the stale ref did not open a picker
       assert model.wizard == nil
+    end
+
+    test "a models_list result does not clobber a modal wizard step" do
+      model = connected_model()
+      {model, []} = slash(model, "/model")
+      ref = model.models_ref
+
+      # Half-typed secret entry owns the screen while the fetch is in flight.
+      typing = %{step: :credential, harness: :openai, buffer: "sk-half"}
+      model = %{model | wizard: typing}
+
+      {model, []} =
+        App.update({:command_result, {:models_list, ref, {:ok, ["a", "b"]}}}, model)
+
+      assert model.wizard == typing
+      assert model.models_ref == nil
+      assert model.status_line == nil
     end
   end
 
@@ -1967,7 +1985,7 @@ defmodule Raxol.Agent.Code.AppTest do
       ref = make_ref()
       model = new_model()
 
-      App.default_inspection_fetcher(model.cwd, model.sessions_dir, ref, self())
+      Commands.default_inspection_fetcher(model.cwd, model.sessions_dir, ref, self())
 
       assert_receive {:command_result, {:inspection_result, ^ref, text}}, 10_000
       assert text =~ "inspecting: #{model.cwd}"

@@ -10,6 +10,26 @@ defmodule Raxol.Agent.Code.App do
   `Raxol.UI.Components.Harness.Block` renders them; the face comes from
   `Raxol.UI.Components.Harness.AxolFace`.
 
+  ## Where the code lives
+
+  This module is the TEA shell: `init/1`, `update/2`, `view/1`, and the
+  contract-event fold. Two sub-applications live beside it, so the shell folds
+  events and nothing else:
+
+    * `Raxol.Agent.Code.App.Commands` -- the slash-command surface and the
+      async fetchers those commands arm.
+    * `Raxol.Agent.Code.App.Wizard` -- the onboarding overlay, including the
+      modal steps that own the keyboard while a credential is typed.
+
+  Both call back into this module's `@doc false` helpers (`notice/2`,
+  `put_status/2`, `persist/1`, `provider_ready?/1`, `maybe_toggle_plan_mode/1`,
+  `ensure_journal/1`, `journal_append/2`, `close_journal/1`,
+  `mint_session_key/0`, `renumber_events/1`, `billed_model/2`, `turn_cost/3`).
+  Those helpers are the internal Commands/Wizard contract, not an API, and
+  they MUST run in the App process: `ensure_journal/1` links the journal
+  Writer to the caller, and the fetchers Commands arms capture `self()` as
+  the reply address their `{:command_result, ...}` message is sent to.
+
   ## The loop
 
   On submit, `update/2` spawns a worker that subscribes to a
@@ -56,6 +76,8 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.Agent.Authorization.Engine
   alias Raxol.Agent.Authorization.Policy
   alias Raxol.Agent.Authorization.Verdict
+  alias Raxol.Agent.Code.App.Commands
+  alias Raxol.Agent.Code.App.Wizard
   alias Raxol.Agent.Code.ProjectContext
   alias Raxol.Agent.Contract
   alias Raxol.Agent.Journal.FileStore
@@ -65,6 +87,9 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.UI.Components.Harness.AxolFace
   alias Raxol.UI.Components.Harness.Block
   alias Raxol.UI.Harness.InputEvent
+
+  # The wizard's step guards (`is_selectable_step/1`, `is_modal_step/1`).
+  require Wizard
 
   @approval_timeout_ms 300_000
 
@@ -89,6 +114,10 @@ defmodule Raxol.Agent.Code.App do
     # tenant run arbitrary code as the server uid — around the cwd jail, the
     # `:jail` shell gate, and the approval chain alike. A jailed session
     # loads neither.
+    #
+    # Multi-tenant hosts set :jail (any truthy value — a tenant id is common).
+    # It is normalized to a boolean HERE, once, so every gate downstream can
+    # match `%{jail: true}` instead of re-deciding what counts as jailed.
     jail? = Keyword.get(options, :jail, false) not in [nil, false]
     {hooks, hooks_note} = load_hooks(cwd, jail?)
     {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
@@ -116,6 +145,7 @@ defmodule Raxol.Agent.Code.App do
       title: session.title,
       parent: session.parent,
       cwd: cwd,
+      jail: jail?,
       hooks: hooks,
       mcp_servers: mcp_servers,
       lsp_pool: lsp_pool,
@@ -126,9 +156,25 @@ defmodule Raxol.Agent.Code.App do
   end
 
   # No provider connected at boot -> open the onboarding wizard on its
-  # selectable provider list.
+  # selectable provider list. Not in a jail: the wizard ends in
+  # `Commands.connect/4` / `Wizard.save_key_to_op/1`, both of which write the
+  # HOST-GLOBAL credential store, so a tenant gets a notice instead and the
+  # host pre-wires the provider via app_opts.
   defp maybe_open_initial_wizard(model) do
-    if provider_ready?(model), do: model, else: open_browse(model)
+    cond do
+      provider_ready?(model) ->
+        model
+
+      model.jail == true ->
+        notice(
+          model,
+          "no provider connected; credential management is disabled in a " <>
+            "hosted session (host must pre-wire a provider)"
+        )
+
+      true ->
+        Wizard.open_browse(model)
+    end
   end
 
   # A provider connected at boot (auto-detected or --harness) -> validate it on
@@ -174,7 +220,7 @@ defmodule Raxol.Agent.Code.App do
         Keyword.get(
           options,
           :login_validator,
-          &__MODULE__.default_login_validator/3
+          &Commands.default_login_validator/3
         ),
       # `/login <provider> browser` runs the provider's OAuth sign-in off the
       # app process — it waits on a human in a browser, which must never block
@@ -185,7 +231,7 @@ defmodule Raxol.Agent.Code.App do
         Keyword.get(
           options,
           :signin_runner,
-          &__MODULE__.default_browser_signin/3
+          &Commands.default_browser_signin/3
         ),
       # `/model` with no arg fetches the connected provider's model list off
       # the app process; the result rides back as a `:models_list` message
@@ -196,7 +242,7 @@ defmodule Raxol.Agent.Code.App do
         Keyword.get(
           options,
           :models_fetcher,
-          &__MODULE__.default_models_fetcher/3
+          &Commands.default_models_fetcher/3
         ),
       # `/resume` with no arg lists saved sessions off the app process
       # (Store.list reads every session file); the result rides back as a
@@ -208,7 +254,7 @@ defmodule Raxol.Agent.Code.App do
         Keyword.get(
           options,
           :sessions_fetcher,
-          &__MODULE__.default_sessions_fetcher/3
+          &Commands.default_sessions_fetcher/3
         ),
       # Unsaved-changes flag: set when the conversation or transcript
       # moves, cleared by persist. Guards the departing persist on a
@@ -224,7 +270,7 @@ defmodule Raxol.Agent.Code.App do
         Keyword.get(
           options,
           :inspection_fetcher,
-          &__MODULE__.default_inspection_fetcher/4
+          &Commands.default_inspection_fetcher/4
         ),
       # `.mcp.json` servers bridge into the toolset asynchronously: armed at
       # init, launched on the first update (the dispatcher process, where the
@@ -243,10 +289,10 @@ defmodule Raxol.Agent.Code.App do
       pending_validation: nil,
       # Injectable so the save-to-1Password flow is testable without mutating a
       # real vault; the default shells out to `op item create`.
-      op_saver: Keyword.get(options, :op_saver, &__MODULE__.default_op_saver/2),
+      op_saver: Keyword.get(options, :op_saver, &Wizard.default_op_saver/2),
       # `/copy` and `/logout <provider>` reach system state (clipboard,
       # the stored-credentials file); injectable so tests stay hermetic.
-      clipboard: Keyword.get(options, :clipboard, &__MODULE__.default_clipboard/1),
+      clipboard: Keyword.get(options, :clipboard, &Commands.default_clipboard/1),
       credential_remover: Keyword.get(options, :credential_remover, &Raxol.Agent.Setup.remove/1),
       # The durable journal handle, opened lazily on the first durable
       # event so idle sessions never spawn a Writer. `:journal_opts` is
@@ -262,16 +308,12 @@ defmodule Raxol.Agent.Code.App do
       # budget wired that is a hole in the cap, so it fails closed.
       unpriced_model: nil,
       ledger_agent_id: Keyword.get(options, :agent_id, "raxol-code"),
-      # Multi-tenant hosts set :jail — the keyboard principal is not the
-      # server owner, so operator-typed paths (/export) confine to the
-      # workspace like tool paths do.
-      jail: Keyword.get(options, :jail, false),
       # `/share` mints signed read-only tokens for this session; without
       # a secret there is nothing safe to mint. A blank or too-short secret
       # is treated as unconfigured (an empty HMAC key is offline-forgeable).
       # The base URL turns the notice into a pasteable link.
       share_secret:
-        normalize_share_secret(
+        Commands.normalize_share_secret(
           Keyword.get(options, :share_secret) ||
             System.get_env("RAXOL_SHARE_SECRET")
         ),
@@ -357,22 +399,24 @@ defmodule Raxol.Agent.Code.App do
     }
   end
 
+  @doc false
   # Stored ids are whatever the producer stamped at the time (historically
   # per-turn pump counters, which collide across turns) and the durable-only
   # filter leaves gaps; both make the projection's id recovery drop or
   # diagnose resumed events on every render. Ids only order the projection
   # fold, so a resumed log is renumbered into the dense session space the
   # live fold continues from.
-  defp renumber_events(events) do
+  def renumber_events(events) do
     events
     |> Enum.with_index(1)
     |> Enum.map(fn {event, index} -> %{event | id: index} end)
   end
 
+  @doc false
   # The format lives in `Raxol.Agent.SessionKey`, not here: the ACP surface
   # mints these too, and a key minted there has to resolve to the same journal
   # directory this one does.
-  defp mint_session_key, do: Raxol.Agent.SessionKey.mint()
+  def mint_session_key, do: Raxol.Agent.SessionKey.mint()
 
   # Announced, not silent: a tenant whose hooks never fire should see why
   # rather than conclude the feature is broken.
@@ -470,8 +514,8 @@ defmodule Raxol.Agent.Code.App do
     cond do
       # The credential/save steps are modal: they own the keyboard so a pasted
       # key never leaks into the prompt buffer or a slash command.
-      modal_wizard?(model) ->
-        handle_wizard(norm, model)
+      Wizard.modal_wizard?(model) ->
+        Wizard.handle_wizard(norm, model)
 
       InputEvent.shortcut?(norm) ->
         handle_shortcut(norm, model)
@@ -537,7 +581,7 @@ defmodule Raxol.Agent.Code.App do
     if ref == model.login_ref do
       {%{
          model
-         | status_line: validation_status(harness, result),
+         | status_line: Commands.validation_status(harness, result),
            login_ref: nil
        }, []}
     else
@@ -552,7 +596,7 @@ defmodule Raxol.Agent.Code.App do
         model
       ) do
     if ref == model.signin_ref do
-      {apply_signin(%{model | signin_ref: nil}, harness, result), []}
+      {Commands.apply_signin(%{model | signin_ref: nil}, harness, result), []}
     else
       {model, []}
     end
@@ -575,7 +619,7 @@ defmodule Raxol.Agent.Code.App do
 
   def update({:command_result, {:sessions_list, ref, sessions}}, model) do
     if ref == model.sessions_ref do
-      {apply_sessions_result(model, sessions), []}
+      {Commands.apply_sessions_result(model, sessions), []}
     else
       {model, []}
     end
@@ -583,7 +627,7 @@ defmodule Raxol.Agent.Code.App do
 
   def update({:command_result, {:models_list, ref, result}}, model) do
     if ref == model.models_ref,
-      do: {apply_models_result(model, result), []},
+      do: {Commands.apply_models_result(model, result), []},
       else: {model, []}
   end
 
@@ -617,6 +661,8 @@ defmodule Raxol.Agent.Code.App do
   end
 
   def update(_message, model), do: {model, []}
+
+  # -- update: async messages from the worker / authorizer --------------------
 
   # Fire the armed `.mcp.json` bundle load on the first update (the
   # dispatcher process, where the `:mcp_loaded` result must land). Loading
@@ -661,7 +707,7 @@ defmodule Raxol.Agent.Code.App do
   defp maybe_launch_validation(%{pending_validation: nil} = model), do: model
 
   defp maybe_launch_validation(%{pending_validation: executor} = model) do
-    ref = start_login_validation(model, executor)
+    ref = Commands.start_login_validation(model, executor)
 
     %{
       model
@@ -670,11 +716,6 @@ defmodule Raxol.Agent.Code.App do
         status_line: "validating #{executor.backend} credential…"
     }
   end
-
-  defp modal_wizard?(%{wizard: %{step: step}})
-       when step in [:credential, :confirm_save], do: true
-
-  defp modal_wizard?(_model), do: false
 
   # -- key handlers -----------------------------------------------------------
 
@@ -726,24 +767,24 @@ defmodule Raxol.Agent.Code.App do
   # selects it. A typed prompt or slash command still takes precedence (so the
   # `/login <provider> ...` text path stays reachable alongside the wizard).
   defp handle_key(:up, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models, :sessions],
-       do: {wizard_move(model, -1), []}
+       when Wizard.is_selectable_step(step),
+       do: {Wizard.wizard_move(model, -1), []}
 
   defp handle_key(:down, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models, :sessions],
-       do: {wizard_move(model, +1), []}
+       when Wizard.is_selectable_step(step),
+       do: {Wizard.wizard_move(model, +1), []}
 
   # The sessions picker owns Enter outright — unlike :browse (which must
   # keep `/login <provider> ...` typeable), nothing in it needs the
   # prompt path, and a stray typed character must not turn Enter into a
   # paid LLM turn under the picker. Typed input survives the switch.
   defp handle_key(:enter, %{wizard: %{step: :sessions}} = model),
-    do: {maybe_wizard_select(model), []}
+    do: {Wizard.maybe_wizard_select(model), []}
 
   defp handle_key(:enter, model) do
     case String.trim(model.input) do
-      "" -> {maybe_wizard_select(model), []}
-      "/" <> _ = command -> dispatch_slash(%{model | input: ""}, command)
+      "" -> {Wizard.maybe_wizard_select(model), []}
+      "/" <> _ = command -> Commands.dispatch_slash(%{model | input: ""}, command)
       prompt -> {submit_prompt(model, prompt), []}
     end
   end
@@ -763,10 +804,10 @@ defmodule Raxol.Agent.Code.App do
     do: {interrupt(model), []}
 
   # Esc closes the browse/model list (reopen with /login or /model); the modal
-  # steps handle their own Esc in handle_wizard/2.
+  # steps handle their own Esc in `Wizard.handle_wizard/2`.
   defp handle_key(:escape, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models, :sessions],
-       do: {close_wizard(model), []}
+       when Wizard.is_selectable_step(step),
+       do: {Wizard.close_wizard(model), []}
 
   defp handle_key(_key, model), do: {model, []}
 
@@ -783,7 +824,7 @@ defmodule Raxol.Agent.Code.App do
         {:over, limit} -> notice(model, budget_notice(limit))
       end
     else
-      notice(model, provider_setup_hint(model))
+      notice(model, Wizard.provider_setup_hint(model))
     end
   end
 
@@ -812,19 +853,21 @@ defmodule Raxol.Agent.Code.App do
   defp budget_notice(limit),
     do: "spending budget exhausted (#{limit}) — adjust the policy to continue"
 
-  defp provider_ready?(%{provider_status: :ready}), do: true
+  @doc false
+  def provider_ready?(%{provider_status: :ready}), do: true
 
-  defp provider_ready?(%{provider_status: {:ready, _harness, _source}}),
+  def provider_ready?(%{provider_status: {:ready, _harness, _source}}),
     do: true
 
-  defp provider_ready?(_model), do: false
+  def provider_ready?(_model), do: false
 
+  @doc false
   # Plan mode only toggles when idle — flipping it mid-turn or mid-approval
   # would be surprising (the toolset/prompt are fixed at turn start).
-  defp maybe_toggle_plan_mode(%{running?: true} = model), do: model
-  defp maybe_toggle_plan_mode(%{pending_approval: %{}} = model), do: model
+  def maybe_toggle_plan_mode(%{running?: true} = model), do: model
+  def maybe_toggle_plan_mode(%{pending_approval: %{}} = model), do: model
 
-  defp maybe_toggle_plan_mode(model),
+  def maybe_toggle_plan_mode(model),
     do: %{model | plan_mode: not model.plan_mode}
 
   # -- turn lifecycle ---------------------------------------------------------
@@ -1276,15 +1319,17 @@ defmodule Raxol.Agent.Code.App do
       "spending halted: no price for #{name} — set " <>
         "RAXOL_COST_PER_MTOK_IN/OUT or /model a priced one"
 
+  @doc false
   # What the provider actually CHARGED for, which is what has to be priced:
   # with no :model configured the backend substitutes its own hosted default.
   # A resumed session's payload is string-keyed. A backend that reports none
   # leaves the configured model as the only estimate available.
-  defp billed_model(model, payload) do
+  def billed_model(model, payload) do
     Map.get(payload, :model) || Map.get(payload, "model") ||
       current_model(model)
   end
 
+  @doc false
   # ADR-0035: price the provider-raw usage map FIRST -- the cache split and a
   # provider-reported cost both live there, and add_usage/2 destroys both --
   # and collapse to two fields only on the env-rate path. Env rates still win
@@ -1293,7 +1338,7 @@ defmodule Raxol.Agent.Code.App do
   # imposed on them. :unknown must keep returning 0.0, because that zero is
   # the signal flag_unpriced/4 reads to arm the fail-closed halt above. The
   # source rides along so the cost event can say which step priced the turn.
-  defp turn_cost(model, usage, billed) do
+  def turn_cost(model, usage, billed) do
     case env_profile() do
       %Raxol.Agent.BenchmarkProfile{} = profile ->
         {Raxol.Agent.BenchmarkProfile.cost_usd(profile, token_counts(usage)), :env}
@@ -1334,10 +1379,11 @@ defmodule Raxol.Agent.Code.App do
 
   defp journal_durable(model, _ephemeral), do: {model, nil}
 
+  @doc false
   # Ensure + append with a single writer-down retry: a lost Writer (a
   # sharing owner closed it, or it crashed) reopens once so the record
   # is not silently missing from the journal. Returns {model, warning}.
-  defp journal_append(model, record) do
+  def journal_append(model, record) do
     case ensure_journal(model) do
       {:ok, model} ->
         case FileStore.append(model.journal, record) do
@@ -1372,9 +1418,12 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp ensure_journal(%{journal: %FileStore{}} = model), do: {:ok, model}
+  @doc false
+  # Opens the journal in the CALLING process: `FileStore.open/2` links the
+  # Writer to it, so this must run in the App process (see the moduledoc).
+  def ensure_journal(%{journal: %FileStore{}} = model), do: {:ok, model}
 
-  defp ensure_journal(model) do
+  def ensure_journal(model) do
     opts = Keyword.merge([cwd: model.cwd], model.journal_opts)
 
     empty_before? =
@@ -1449,7 +1498,8 @@ defmodule Raxol.Agent.Code.App do
     }
   end
 
-  defp close_journal(%FileStore{} = journal) do
+  @doc false
+  def close_journal(%FileStore{} = journal) do
     FileStore.close(journal)
   catch
     # A close-time flush can exit if the Writer is already dying; losing
@@ -1457,141 +1507,9 @@ defmodule Raxol.Agent.Code.App do
     :exit, _reason -> :ok
   end
 
-  defp close_journal(_none), do: :ok
+  def close_journal(_none), do: :ok
 
-  # -- /rewind ----------------------------------------------------------------
-
-  # Drops the last turn from the transcript and the conversation in
-  # lockstep. The journal is append-only, so the drop is recorded there as
-  # a meta `:rewind` marker — replay applies markers in offset order and
-  # so converges with the live session; the JSON store just persists the
-  # truncated state.
-  defp rewind(%{running?: true} = model),
-    do: notice(model, "cannot rewind while a turn is running")
-
-  defp rewind(model) do
-    cond do
-      orphan_prompt?(model) ->
-        # An aborted turn (Esc before its first event, or an eagerly
-        # crashed worker) left the user prompt in the conversation but
-        # no events; the trailing EVENTS belong to the previous turn.
-        # Rewinding must undo the abort, not destroy the prior turn.
-        [_orphan | rest] = Enum.reverse(model.messages)
-
-        %{model | messages: Enum.reverse(rest)}
-        |> persist()
-        |> notice("rewound — removed the un-run prompt")
-
-      model.events == [] ->
-        notice(model, "nothing to rewind")
-
-      true ->
-        rewind_last_turn(model)
-    end
-  end
-
-  defp rewind_last_turn(model) do
-    {kept, dropped} = split_trailing_turn(model.events)
-    turn_id = List.last(model.events).turn_id
-    {messages, dropped_messages} = drop_turn_messages(model.messages)
-    {model, marker_warning} = journal_rewind_marker(model, turn_id)
-
-    model =
-      persist(%{
-        model
-        | events: kept,
-          next_event_id: next_id_after(kept),
-          messages: messages,
-          turn_answer: "",
-          face_state: :idle
-      })
-
-    note =
-      "rewound — dropped #{length(dropped)} events, " <>
-        "#{dropped_messages} messages"
-
-    notice(model, join_notes(note, marker_warning))
-  end
-
-  # Turn ids are only unique within one VM run (`Contract.pump` mints
-  # them from `System.unique_integer`), so a session grown across
-  # restarts can hold the same turn_id twice. Rewinding therefore drops
-  # only the CONTIGUOUS trailing run of the last turn's events — never a
-  # global match over the whole session — and the replay marker applies
-  # the same trailing-run rule.
-  defp split_trailing_turn([]), do: {[], []}
-
-  defp split_trailing_turn(events) do
-    turn_id = List.last(events).turn_id
-
-    {dropped_rev, kept_rev} =
-      events
-      |> Enum.reverse()
-      |> Enum.split_while(&(&1.turn_id == turn_id))
-
-    {Enum.reverse(kept_rev), Enum.reverse(dropped_rev)}
-  end
-
-  defp next_id_after([]), do: 1
-  defp next_id_after(kept), do: List.last(kept).id + 1
-
-  # The abort signature: the conversation ends in a user prompt that no
-  # event belongs to — the trailing events (if any) are a COMPLETED
-  # turn, so the prompt was appended by a turn that never emitted.
-  defp orphan_prompt?(model) do
-    trailing_user? = match?([%{role: :user} | _], Enum.reverse(model.messages))
-
-    completed_tail? =
-      case List.last(model.events) do
-        nil -> true
-        %{type: :turn_completed} -> true
-        _other -> false
-      end
-
-    trailing_user? and completed_tail?
-  end
-
-  defp join_notes(note, nil), do: note
-  defp join_notes(note, warning), do: note <> " · " <> warning
-
-  # The rewound turn's conversation tail is at most one user prompt plus
-  # one assistant reply (an errored or interrupted turn appends no reply).
-  defp drop_turn_messages(messages) do
-    case Enum.reverse(messages) do
-      [%{role: :assistant}, %{role: :user} | rest] ->
-        {Enum.reverse(rest), 2}
-
-      [%{role: :assistant} | rest] ->
-        {Enum.reverse(rest), 1}
-
-      [%{role: :user} | rest] ->
-        {Enum.reverse(rest), 1}
-
-      _other ->
-        {messages, 0}
-    end
-  end
-
-  defp journal_rewind_marker(model, turn_id) do
-    record = %{
-      v: 0,
-      session_id: model.session_key,
-      turn_id: nil,
-      ts: System.system_time(:microsecond),
-      family: :meta,
-      type: :rewind,
-      tier: :durable,
-      payload: %{"dropped_turn" => turn_id}
-    }
-
-    case journal_append(model, record) do
-      {model, nil} ->
-        {model, nil}
-
-      {model, _warning} ->
-        {model, "journal marker failed — --replay may still show it"}
-    end
-  end
+  # -- turn boundary ----------------------------------------------------------
 
   # A completed message item is assistant answer text — accumulate it so the
   # conversation memory gets the reply when the turn closes.
@@ -1630,7 +1548,7 @@ defmodule Raxol.Agent.Code.App do
     # onboarding instead of leaving the bare error face. The conversation is
     # preserved (messages are untouched here), so `/login` reconnects and the
     # user continues where they left off.
-    if auth_rejected?(error_reason(event)),
+    if Commands.auth_rejected?(error_reason(event)),
       do: to_reauth(model),
       else: model
   end
@@ -1677,7 +1595,8 @@ defmodule Raxol.Agent.Code.App do
   defp payload_content(payload),
     do: Map.get(payload, :content) || Map.get(payload, "content") || ""
 
-  defp persist(model) do
+  @doc false
+  def persist(model) do
     case Raxol.Agent.Code.Store.save(model.sessions_dir, model.session_key, %{
            messages: model.messages,
            events: durable_events(model.events),
@@ -1836,1415 +1755,6 @@ defmodule Raxol.Agent.Code.App do
 
   defp reply_pending(_model, _verdict), do: :ok
 
-  # -- slash commands ---------------------------------------------------------
-
-  defp dispatch_slash(model, command) do
-    {name, arg} = parse_command(command)
-    apply_command(name, arg, model)
-  end
-
-  defp apply_command("help", _arg, model), do: {notice(model, help_text()), []}
-
-  # In a jailed (multi-tenant) session the keyboard principal is a tenant, not
-  # the host owner. /login and /logout mutate the HOST-GLOBAL credential store
-  # (`Credentials.put`/`delete`, one file for the whole node), so a tenant must
-  # not reach them: the host pre-wires the provider via server app_opts.
-  defp apply_command(cmd, _arg, %{jail: true} = model)
-       when cmd in ["login", "logout"] do
-    {notice(model, "credential management is disabled in a hosted session"), []}
-  end
-
-  defp apply_command("login", arg, model), do: {login(model, arg), []}
-  defp apply_command("clear", _arg, model), do: {clear_session(model), []}
-
-  defp apply_command("plan", _arg, model),
-    do: {maybe_toggle_plan_mode(model), []}
-
-  defp apply_command("model", arg, model), do: {set_model(model, arg), []}
-
-  defp apply_command("context", _arg, model),
-    do: {notice(model, context_text(model)), []}
-
-  defp apply_command("usage", _arg, model),
-    do: {notice(model, usage_text(model)), []}
-
-  defp apply_command("compact", _arg, model), do: {compact(model), []}
-
-  defp apply_command("rewind", _arg, model), do: {rewind(model), []}
-
-  defp apply_command("rename", arg, model),
-    do: {rename(model, String.trim(arg)), []}
-
-  defp apply_command("resume", arg, model) do
-    case String.trim(arg) do
-      "" -> {open_session_picker(model), []}
-      key -> {switch_session(model, key), []}
-    end
-  end
-
-  defp apply_command("fork", arg, model),
-    do: {fork_session(model, String.trim(arg)), []}
-
-  defp apply_command("export", arg, model),
-    do: {export_session(model, String.trim(arg)), []}
-
-  defp apply_command("transcript", _arg, model),
-    do: {write_transcript(model), []}
-
-  # /copy drives the HOST clipboard — unavailable to a jailed tenant.
-  defp apply_command("copy", _arg, %{jail: true} = model),
-    do: {notice(model, "clipboard is unavailable in a hosted session"), []}
-
-  defp apply_command("copy", _arg, model), do: {copy_last_answer(model), []}
-
-  defp apply_command("find", arg, model),
-    do: {find_in_transcript(model, String.trim(arg)), []}
-
-  defp apply_command("logout", arg, model),
-    do: {logout(model, String.trim(arg)), []}
-
-  defp apply_command("share", _arg, model), do: {share_session(model), []}
-
-  # Listing reads (and fully decodes) every session file, so it runs off
-  # the app process like the /resume picker — one fetcher, two modes.
-  defp apply_command("sessions", _arg, model),
-    do: {arm_sessions_fetch(model, :list), []}
-
-  defp apply_command("mcp", _arg, model),
-    do: {notice(model, mcp_text(model)), []}
-
-  defp apply_command("hooks", _arg, model),
-    do: {notice(model, hooks_text(model)), []}
-
-  defp apply_command("inspect", _arg, model) do
-    ref = make_ref()
-    model.inspection_fetcher.(model.cwd, model.sessions_dir, ref, self())
-    {%{model | inspection_ref: ref} |> put_status("inspecting…"), []}
-  end
-
-  defp apply_command(other, _arg, model),
-    do: {notice(model, "unknown command: /#{other} — try /help"), []}
-
-  @doc false
-  # Default fetcher: gather + render the snapshot off the app process (a
-  # fresh disk read, the same snapshot `mix raxol.inspect` prints); the
-  # result rides back as an `:inspection_result` message `update/2` folds.
-  def default_inspection_fetcher(cwd, sessions_dir, ref, app) do
-    spawn(fn ->
-      text =
-        cwd
-        |> Raxol.Agent.Code.Inspection.gather(sessions_dir: sessions_dir)
-        |> Raxol.Agent.Code.Inspection.render()
-
-      send(app, {:command_result, {:inspection_result, ref, text}})
-    end)
-  end
-
-  # A jailed session reads no `.mcp.json` at all, so "none configured" would
-  # misdescribe it: the file may well be there, and the operator should know
-  # it was refused rather than go looking for a config bug.
-  defp mcp_text(%{mcp_servers: [], jail: jail}) when jail not in [nil, false],
-    do: "MCP servers are disabled in a jailed session"
-
-  defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
-
-  defp mcp_text(%{mcp_servers: servers} = model) do
-    Enum.map_join(servers, "\n", fn s ->
-      "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
-        "#{s.command} #{Enum.join(s.args, " ")}"
-    end)
-  end
-
-  defp server_mark(:loading, _name), do: "…"
-  defp server_mark(nil, _name), do: "○"
-
-  defp server_mark(%{connected: connected, failed: failed}, name) do
-    atom = String.to_existing_atom(name)
-
-    cond do
-      atom in connected -> "●"
-      Enum.any?(failed, fn {n, _reason} -> n == atom end) -> "✗"
-      true -> "○"
-    end
-  rescue
-    ArgumentError -> "○"
-  end
-
-  defp hooks_text(%{hooks: nil}), do: "no hooks configured (.raxol/hooks.json)"
-
-  defp hooks_text(%{hooks: config}) do
-    "pre_tool_use: #{length(config.pre)} · post_tool_use: #{length(config.post)} · " <>
-      "stop: #{length(config.stop)}"
-  end
-
-  # -- /login: connect a provider --------------------------------------------
-
-  # `/login`                         -> status + usage
-  # `/login <provider>`              -> connect via op/env (or keyless local)
-  # `/login <provider> op://ref`     -> store the 1Password reference + connect
-  # `/login <provider> <key>`        -> session-only key (never persisted)
-  # a trailing token is taken as a model override.
-  defp login(model, arg) do
-    case String.split(String.trim(arg), ~r/\s+/, trim: true) do
-      [] ->
-        open_browse(model)
-
-      [provider] ->
-        login_provider(model, provider, nil, nil)
-
-      # Spelled out rather than inferred: `/login <provider>` already means
-      # "resolve from op/env", and a browser opening on its own would be a
-      # surprise.
-      [provider, "browser"] ->
-        login_browser(model, provider)
-
-      [provider, secret] ->
-        login_provider(model, provider, secret, nil)
-
-      [provider, secret, model_name | _] ->
-        login_provider(model, provider, secret, model_name)
-    end
-  end
-
-  defp login_browser(model, provider_str) do
-    case Raxol.Agent.Backend.Resolver.harness_from_string(provider_str) do
-      {:ok, harness} ->
-        start_browser_signin(model, harness)
-
-      :error ->
-        notice(
-          model,
-          "unknown provider: #{provider_str}\n\n" <> login_status_text()
-        )
-    end
-  end
-
-  defp start_browser_signin(model, harness) do
-    if Raxol.Agent.Auth.Flow.supported?(harness) do
-      ref = make_ref()
-      model.signin_runner.(harness, ref, self())
-
-      %{model | signin_ref: ref}
-      |> notice("opening a browser to sign in to #{harness}...")
-      |> put_status("waiting for #{harness} sign-in...")
-    else
-      notice(
-        model,
-        "#{harness} has no browser sign-in. Connect it with an api key or an " <>
-          "op:// reference:\n  /login #{harness} <api-key>"
-      )
-    end
-  end
-
-  defp apply_signin(model, harness, {:ok, _result}) do
-    resolve_and_connect(model, harness, [], "browser sign-in")
-  end
-
-  defp apply_signin(model, harness, {:error, reason}) do
-    notice(
-      model,
-      "#{harness} sign-in failed: #{Raxol.Agent.Auth.Flow.describe(reason)}"
-    )
-  end
-
-  defp login_provider(model, provider_str, secret, model_name) do
-    case Raxol.Agent.Backend.Resolver.harness_from_string(provider_str) do
-      {:ok, harness} ->
-        connect(model, harness, secret, model_name)
-
-      :error ->
-        notice(
-          model,
-          "unknown provider: #{provider_str}\n\n" <> login_status_text()
-        )
-    end
-  end
-
-  # An op:// reference is stored (so it survives relaunch) then resolved; a raw
-  # key stays in memory for this session only; no secret connects via op/env.
-  defp connect(model, harness, "op://" <> _ = ref, model_name) do
-    case Raxol.Agent.Backend.Credentials.put(
-           harness,
-           put_model([op_ref: ref], model_name)
-         ) do
-      :ok ->
-        resolve_and_connect(model, harness, [], "op reference stored")
-
-      {:error, reason} ->
-        notice(model, "could not store reference: #{inspect(reason)}")
-    end
-  end
-
-  defp connect(model, harness, secret, model_name) when is_binary(secret) do
-    resolve_and_connect(
-      model,
-      harness,
-      put_model([api_key: secret], model_name),
-      "session key — not persisted"
-    )
-  end
-
-  defp connect(model, harness, nil, model_name) do
-    resolve_and_connect(model, harness, put_model([], model_name), nil)
-  end
-
-  defp resolve_and_connect(model, harness, extra_opts, note) do
-    opts = Keyword.put(extra_opts, :harness, harness)
-
-    case Raxol.Agent.Backend.Resolver.resolve(opts) do
-      {:ok, executor, source} ->
-        # Fire a cheap, async validation ping; its result arrives as a
-        # `{:login_validation, ...}` message and updates the status line. The
-        # connection is marked ready immediately either way — validation only
-        # annotates it, so a slow or offline check never blocks the TUI.
-        ref = start_login_validation(model, executor)
-
-        %{
-          model
-          | executor: executor,
-            provider_status: {:ready, harness, source},
-            model_override: executor.model || model.model_override,
-            login_ref: ref,
-            wizard: nil
-        }
-        |> notice(connect_note(harness, source, note))
-        |> put_status("connected to #{harness} — validating credential…")
-
-      {:no_key, ^harness} ->
-        notice(
-          model,
-          "no credential found for #{harness}. Supply one:\n" <>
-            "  /login #{harness} op://Vault/Item/field   (1Password)\n" <>
-            "  /login #{harness} <api-key>               (this session only)"
-        )
-
-      :no_provider ->
-        notice(model, "could not resolve a provider for #{harness}")
-    end
-  end
-
-  defp put_model(opts, nil), do: opts
-  defp put_model(opts, ""), do: opts
-  defp put_model(opts, model_name), do: Keyword.put(opts, :model, model_name)
-
-  defp connect_note(harness, source, nil),
-    do: "connected to #{harness} (via #{source})"
-
-  defp connect_note(harness, source, note),
-    do: "connected to #{harness} (via #{source}) — #{note}"
-
-  defp put_status(model, text), do: %{model | status_line: text}
-
-  # Kick off the injectable validator, returning the ref that stamps its
-  # result. `self()` here is the app process, so the ping's reply message lands
-  # where `update/2` can fold it.
-  @doc false
-  # The default sign-in runner: the whole OAuth flow off the app process, so a
-  # user who wanders off mid-approval cannot wedge the TUI. The outcome rides
-  # back as a `:browser_signin` message, mirroring the validation ping.
-  def default_browser_signin(harness, ref, app) do
-    spawn(fn ->
-      result =
-        try do
-          Raxol.Agent.Auth.Flow.run(harness)
-        rescue
-          error -> {:error, error}
-        catch
-          _kind, reason -> {:error, reason}
-        end
-
-      send(app, {:command_result, {:browser_signin, ref, harness, result}})
-    end)
-  end
-
-  defp start_login_validation(model, executor) do
-    ref = make_ref()
-    model.login_validator.(executor, ref, self())
-    ref
-  end
-
-  @doc false
-  # The default validator: a cheap, single-token completion against the freshly
-  # resolved backend, off the app process so a hung endpoint never blocks the
-  # TUI. The normalized outcome rides back as a `:login_validation` message.
-  def default_login_validator(executor, ref, app) do
-    spawn(fn ->
-      result =
-        try do
-          do_validate_ping(executor)
-        rescue
-          _ -> :unreachable
-        catch
-          _, _ -> :unreachable
-        end
-
-      send(
-        app,
-        {:command_result, {:login_validation, ref, executor.backend, result}}
-      )
-    end)
-
-    :ok
-  end
-
-  defp do_validate_ping(executor) do
-    case Raxol.Agent.Backend.Selector.select(executor) do
-      {:ok, backend, opts} -> validate_backend(backend, opts)
-      {:error, reason} -> {:select_error, reason}
-    end
-  end
-
-  # Prefer the token-free model-list auth check for the HTTP backend; only an
-  # ambiguous result (unsupported endpoint, or reachable-but-odd-status) falls
-  # back to the authoritative single-token completion ping.
-  defp validate_backend(Raxol.Agent.Backend.HTTP = backend, opts) do
-    case Raxol.Agent.Backend.HTTP.check_auth(opts) do
-      :unsupported -> ping_completion(backend, opts)
-      {:reachable_error, _status} -> ping_completion(backend, opts)
-      verdict -> verdict
-    end
-  end
-
-  defp validate_backend(backend, opts), do: ping_completion(backend, opts)
-
-  defp ping_completion(backend, opts) do
-    ping_opts =
-      opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
-
-    interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
-  end
-
-  @doc false
-  # Classify a backend `complete/2` return by what it says about the credential.
-  # Auth is the question: a 401/403 rejects; a reachable endpoint that answered
-  # (even a truncated/unparseable body) authorized the request, so it is valid.
-  def interpret_ping({:ok, _response}), do: :valid
-
-  def interpret_ping({:error, {:http_error, status, _body} = reason}) do
-    if auth_rejected?(reason),
-      do: {:rejected, status},
-      else: {:reachable_error, status}
-  end
-
-  def interpret_ping({:error, {:request_failed, _reason}}), do: :unreachable
-  def interpret_ping({:error, :req_not_available}), do: :req_unavailable
-  def interpret_ping({:error, _marker}), do: :valid
-
-  @doc false
-  # Shared credential-rejection classifier for a backend error term — used by
-  # both the `/login` ping (interpret_ping/1) and the mid-turn error fold
-  # (finalize_turn on a contract `:error` event). Recognizes the structured
-  # `complete/2` shape (`{:http_error, 401|403, _}`) and the streaming shape
-  # (the "HTTP 401"/"HTTP 403" string `Backend.HTTP.stream/2` surfaces as its
-  # error element).
-  def auth_rejected?({:http_error, status, _body}) when status in [401, 403],
-    do: true
-
-  def auth_rejected?(reason) when is_binary(reason),
-    do: reason =~ ~r/\bHTTP (401|403)\b/
-
-  def auth_rejected?(_reason), do: false
-
-  defp validation_status(harness, :valid),
-    do: "#{harness} credential validated ●"
-
-  defp validation_status(harness, {:rejected, status}),
-    do: "#{harness} key rejected (HTTP #{status}) — check /login"
-
-  defp validation_status(harness, :unreachable),
-    do: "#{harness} endpoint unreachable — is it running?"
-
-  defp validation_status(harness, {:reachable_error, status}),
-    do: "#{harness} reachable but returned HTTP #{status}"
-
-  defp validation_status(harness, {:select_error, reason}),
-    do: "#{harness} cannot validate: #{inspect(reason)}"
-
-  defp validation_status(harness, :req_unavailable),
-    do: "#{harness} connected (Req unavailable, validation skipped)"
-
-  defp validation_status(harness, _other), do: "#{harness} connected"
-
-  # -- onboarding wizard ------------------------------------------------------
-
-  defp open_browse(model) do
-    entries = browse_entries()
-    cursor = default_cursor(entries)
-
-    %{
-      model
-      | wizard: %{step: :browse, cursor: cursor, entries: entries},
-        notice: nil
-    }
-  end
-
-  # Provider rows for the list, carrying the diagnostics so the panel can show
-  # availability + an actionable note per provider.
-  defp browse_entries, do: Raxol.Agent.Backend.Resolver.diagnostics().providers
-
-  # Start the cursor on the first available provider, else the top.
-  defp default_cursor(entries) do
-    case Enum.find_index(entries, & &1.available?) do
-      nil -> 0
-      idx -> idx
-    end
-  end
-
-  defp wizard_move(
-         %{wizard: %{entries: entries, cursor: cursor} = wizard} = model,
-         delta
-       ) do
-    max = max(length(entries) - 1, 0)
-    next = min(max, max(0, cursor + delta))
-    %{model | wizard: %{wizard | cursor: next}}
-  end
-
-  defp maybe_wizard_select(%{wizard: %{step: :browse, entries: entries, cursor: cursor}} = model) do
-    case Enum.at(entries, cursor) do
-      nil -> model
-      entry -> select_provider(model, entry.harness, entry.keyless?)
-    end
-  end
-
-  defp maybe_wizard_select(
-         %{wizard: %{step: :sessions, entries: entries, cursor: cursor}} = model
-       ) do
-    case Enum.at(entries, cursor) do
-      nil -> model
-      entry -> switch_session(%{model | wizard: nil}, entry.id)
-    end
-  end
-
-  defp maybe_wizard_select(%{wizard: %{step: :models, entries: entries, cursor: cursor}} = model) do
-    case Enum.at(entries, cursor) do
-      nil ->
-        model
-
-      entry ->
-        notice(
-          %{model | model_override: entry.model, wizard: nil},
-          "model set to #{entry.model}"
-        )
-    end
-  end
-
-  defp maybe_wizard_select(model), do: model
-
-  # A keyless provider connects immediately; a keyed one opens masked entry.
-  defp select_provider(model, harness, true) do
-    model |> connect(harness, nil, nil) |> close_wizard_if_ready()
-  end
-
-  defp select_provider(model, harness, false) do
-    %{
-      model
-      | wizard: %{step: :credential, harness: harness, buffer: ""},
-        notice:
-          "#{harness}: paste an op:// reference (saved) or an API key (Enter to submit, Esc to cancel)"
-    }
-  end
-
-  defp close_wizard(model), do: %{model | wizard: nil}
-
-  defp close_wizard_if_ready(model) do
-    if provider_ready?(model), do: close_wizard(model), else: model
-  end
-
-  # -- wizard: modal steps (own the keyboard) ---------------------------------
-
-  defp handle_wizard(norm, %{wizard: %{step: :credential}} = model) do
-    cond do
-      InputEvent.text?(norm) ->
-        {append_credential(model, InputEvent.printable_char(norm)), []}
-
-      InputEvent.key(norm) == :enter ->
-        {submit_credential(model), []}
-
-      InputEvent.key(norm) == :backspace ->
-        {backspace_credential(model), []}
-
-      InputEvent.key(norm) == :escape ->
-        {open_browse(model), []}
-
-      true ->
-        {model, []}
-    end
-  end
-
-  defp handle_wizard(norm, %{wizard: %{step: :confirm_save}} = model) do
-    cond do
-      InputEvent.printable_char(norm) in ["y", "Y"] ->
-        {save_key_to_op(model), []}
-
-      InputEvent.printable_char(norm) in ["n", "N"] ->
-        {decline_save(model), []}
-
-      InputEvent.key(norm) == :escape ->
-        {decline_save(model), []}
-
-      true ->
-        {model, []}
-    end
-  end
-
-  defp append_credential(%{wizard: wizard} = model, char),
-    do: %{model | wizard: %{wizard | buffer: wizard.buffer <> char}}
-
-  defp backspace_credential(%{wizard: %{buffer: buffer} = wizard} = model),
-    do: %{model | wizard: %{wizard | buffer: String.slice(buffer, 0..-2//1)}}
-
-  # An op:// reference stores + connects; a raw key connects for this session
-  # and (if op is available) offers to save it to 1Password.
-  defp submit_credential(%{wizard: %{harness: harness, buffer: buffer}} = model) do
-    trimmed = String.trim(buffer)
-
-    cond do
-      trimmed == "" ->
-        model
-
-      String.starts_with?(trimmed, "op://") ->
-        model |> connect(harness, trimmed, nil) |> close_wizard_if_ready()
-
-      true ->
-        model
-        |> connect(harness, trimmed, nil)
-        |> maybe_offer_save(harness, trimmed)
-    end
-  end
-
-  defp maybe_offer_save(model, harness, key) do
-    if Raxol.Agent.Backend.Credentials.op_available?() do
-      %{
-        model
-        | wizard: %{step: :confirm_save, harness: harness, key: key},
-          notice: "Save this #{harness} key to 1Password?  [y] yes   [n] keep for this session"
-      }
-    else
-      close_wizard(model)
-    end
-  end
-
-  defp save_key_to_op(%{wizard: %{harness: harness, key: key}} = model) do
-    case model.op_saver.(harness, key) do
-      {:ok, ref} ->
-        _ = Raxol.Agent.Backend.Credentials.put(harness, op_ref: ref)
-
-        model
-        |> close_wizard()
-        |> notice("saved #{harness} key to 1Password (#{ref})")
-
-      {:error, reason} ->
-        model
-        |> close_wizard()
-        |> notice("could not save to 1Password: #{inspect(reason)} — key kept for this session")
-    end
-  end
-
-  defp decline_save(%{wizard: %{harness: harness}} = model),
-    do:
-      model
-      |> close_wizard()
-      |> notice("#{harness} key kept for this session only")
-
-  @doc false
-  def default_op_saver(harness, key),
-    do: Raxol.Agent.Backend.Credentials.create_item(harness, key)
-
-  defp login_status_text do
-    rows =
-      Raxol.Agent.Backend.Resolver.status()
-      |> Enum.map_join("\n", fn s ->
-        mark = if s.available?, do: "●", else: "○"
-        src = if s.source, do: " (#{s.source})", else: ""
-        "  #{mark} #{s.harness}#{src}"
-      end)
-
-    """
-    Connect a provider with /login:
-      /login anthropic op://Vault/Anthropic/key   1Password reference (persisted)
-      /login openai sk-...                         session key (not saved)
-      /login openrouter browser                    sign in via browser (persisted)
-      /login lm_studio                             local server (no key)
-
-    ● connected  ○ not connected
-    #{rows}
-    """
-    |> String.trim_trailing()
-  end
-
-  # Shown on the setup panel and as the hint when a prompt is sent with no
-  # provider connected.
-  defp provider_setup_hint(%{provider_status: {:no_key, harness}}) do
-    "harness #{harness} was selected but no key resolved.\n\n" <>
-      login_status_text()
-  end
-
-  defp provider_setup_hint(_model) do
-    "No LLM provider connected.\n\n" <> login_status_text()
-  end
-
-  defp parse_command("/" <> rest) do
-    case String.split(String.trim(rest), " ", parts: 2) do
-      [name] -> {name, ""}
-      [name, arg] -> {name, String.trim(arg)}
-    end
-  end
-
-  defp notice(model, text), do: %{model | notice: text}
-
-  # A fresh session preserves the old file on disk and starts a new key, so
-  # clearing is never destructive to a prior conversation. The old journal
-  # closes (flushing its Writer); the new session lazily opens its own.
-  # Approval grants and plan mode are per-session, so they reset too.
-  defp clear_session(model) do
-    close_journal(model.journal)
-
-    %{
-      model
-      | messages: [],
-        events: [],
-        journal: nil,
-        next_event_id: 1,
-        dirty: false,
-        turn_answer: "",
-        face_state: :idle,
-        face_frame: 0,
-        session_key: mint_session_key(),
-        title: "",
-        parent: nil,
-        plan_mode: false,
-        always_allow: MapSet.new(),
-        auth_state: Engine.new(),
-        notice: "cleared — new session"
-    }
-  end
-
-  # `/rename` titles the session; the title shows in `/sessions` and the
-  # `/resume` picker, and persists with the session file.
-  defp rename(model, ""), do: notice(model, "usage: /rename <title>")
-
-  defp rename(model, title),
-    do: %{model | title: title} |> persist() |> notice(~s(renamed to "#{title}"))
-
-  # -- /resume + /fork --------------------------------------------------------
-
-  defp open_session_picker(model), do: arm_sessions_fetch(model, :picker)
-
-  defp arm_sessions_fetch(model, mode) do
-    ref = make_ref()
-    model.sessions_fetcher.(model.sessions_dir, ref, self())
-
-    %{model | sessions_ref: ref, sessions_mode: mode}
-    |> put_status("listing sessions…")
-  end
-
-  @doc false
-  # Lists sessions off the app process (Store.list reads every session
-  # file); the result rides back as a `:sessions_list` message.
-  def default_sessions_fetcher(dir, ref, app) do
-    spawn(fn ->
-      send(
-        app,
-        {:command_result, {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}}
-      )
-    end)
-  end
-
-  defp apply_sessions_result(model, []) do
-    %{model | sessions_ref: nil, status_line: nil}
-    |> notice("no saved sessions")
-  end
-
-  defp apply_sessions_result(%{sessions_mode: :list} = model, sessions) do
-    text =
-      sessions
-      |> Enum.take(10)
-      |> Enum.map_join("\n", &session_line/1)
-
-    %{model | sessions_ref: nil, status_line: nil} |> notice(text)
-  end
-
-  defp apply_sessions_result(model, sessions) do
-    if modal_wizard?(model) do
-      # A modal step (masked credential entry) owns the screen; opening
-      # the picker over it would discard half-typed secret input.
-      %{model | sessions_ref: nil, status_line: nil}
-    else
-      entries =
-        sessions
-        |> Enum.take(20)
-        |> Enum.map(&%{id: &1.id, label: session_line(&1)})
-
-      cursor = Enum.find_index(entries, &(&1.id == model.session_key)) || 0
-
-      %{
-        model
-        | sessions_ref: nil,
-          status_line: nil,
-          wizard: %{step: :sessions, entries: entries, cursor: cursor}
-      }
-    end
-  end
-
-  # Switching persists the departing session first (nothing is lost),
-  # closes its journal, and rebuilds transcript + conversation from the
-  # target — the in-place version of `--resume`.
-  defp switch_session(%{running?: true} = model, _key),
-    do: notice(model, "cannot switch sessions while a turn is running")
-
-  defp switch_session(%{session_key: key} = model, key),
-    do: notice(model, "already in session #{key}")
-
-  # A session key is a FILENAME: it reaches Path.join unescaped in
-  # /transcript and names the journal directory. Store.load only basenames it
-  # for its own lookup, so a traversal would survive the load and land in the
-  # model. Reject it here, where it enters, rather than at each use.
-  defp switch_session(model, key) do
-    case Raxol.Agent.Code.ShareToken.valid_session_id?(key) do
-      true -> enter_session(model, key)
-      false -> notice(model, "not a session id: #{inspect(key)}")
-    end
-  end
-
-  defp enter_session(model, key) do
-    case Raxol.Agent.Code.Store.load(model.sessions_dir, key) do
-      {:ok, saved} ->
-        # Persist the departing session only when it holds unsaved
-        # changes — a save always bumps updated_at, and merely peeking
-        # at a session must not make it the --continue target.
-        model = if model.dirty, do: persist(model), else: model
-        close_journal(model.journal)
-        events = renumber_events(saved.events)
-
-        %{
-          model
-          | session_key: key,
-            messages: saved.messages,
-            events: events,
-            next_event_id: length(events) + 1,
-            dirty: false,
-            journal: nil,
-            title: saved.title,
-            parent: saved.parent,
-            turn_answer: "",
-            face_state: :idle,
-            # Approval grants and plan mode are per-session.
-            plan_mode: false,
-            always_allow: MapSet.new(),
-            auth_state: Engine.new(),
-            wizard: nil
-        }
-        |> notice("resumed #{key} (#{length(saved.messages)} messages)")
-
-      {:error, :not_found} ->
-        notice(model, "session #{key} not found — try /sessions")
-    end
-  end
-
-  defp session_dirty?(model), do: model.messages != [] or model.events != []
-
-  # Copy-fork: the conversation and transcript continue under a fresh key
-  # whose store entry names its parent; the original session file stays
-  # intact. The fork's journal starts fresh on its next durable event.
-  defp fork_session(%{running?: true} = model, _title),
-    do: notice(model, "cannot fork while a turn is running")
-
-  defp fork_session(model, title) do
-    if session_dirty?(model) do
-      parent = model.session_key
-      model = persist(model)
-      close_journal(model.journal)
-      new_key = mint_session_key()
-
-      %{
-        model
-        | session_key: new_key,
-          parent: parent,
-          title: if(title == "", do: model.title, else: title),
-          journal: nil
-      }
-      |> persist()
-      |> notice("forked to #{new_key} (from #{parent})")
-    else
-      notice(model, "nothing to fork yet")
-    end
-  end
-
-  # -- /export /transcript /copy /find /logout --------------------------------
-
-  # `/export [path]` writes the transcript as plain text; the default
-  # lands beside the work as `<session_key>.txt` in the cwd. A jailed
-  # session confines the destination to the workspace — same containment
-  # decision the tools make.
-  defp export_session(model, path_arg) do
-    requested =
-      case path_arg do
-        "" -> "#{model.session_key}.txt"
-        given -> given
-      end
-
-    case export_path(model, requested) do
-      {:ok, path} ->
-        write_transcript_file(model, path, &File.write/2, "exported to #{path}")
-
-      {:error, :outside_cwd} ->
-        notice(
-          model,
-          "export refused: the path escapes this session's workspace"
-        )
-    end
-  end
-
-  defp export_path(%{jail: true} = model, requested),
-    do: Raxol.Agent.Actions.Fs.resolve(requested, %{cwd: model.cwd})
-
-  defp export_path(model, requested),
-    do: {:ok, Path.expand(requested, model.cwd)}
-
-  # `/transcript` writes to a temp file and points a pager at it. The TUI
-  # cannot suspend the terminal to host `$PAGER` itself (the driver owns
-  # the tty), so the hint is the honest version. The file is created
-  # exclusively with a fresh name and tightened to 0600 while still
-  # empty: /tmp is shared on Linux, transcripts are conversations, and a
-  # reused predictable path invites symlink games.
-  defp write_transcript(model) do
-    # A jailed session writes into its own workspace — the server's /tmp
-    # is unreachable through jailed tools, so a path there would be
-    # useless to the tenant.
-    base = if model.jail, do: model.cwd, else: System.tmp_dir!()
-
-    name =
-      "#{model.session_key}-transcript-" <>
-        "#{System.unique_integer([:positive])}.txt"
-
-    case transcript_path(model, base, name) do
-      {:ok, path} ->
-        write_transcript_file(
-          model,
-          path,
-          &write_private/2,
-          "transcript written — view with: ${PAGER:-less} #{path}"
-        )
-
-      {:error, :outside_cwd} ->
-        notice(model, "transcript refused: path escapes the workspace")
-    end
-  end
-
-  # The filename embeds session_key, which both /resume and --resume take from
-  # the user. They validate it on the way in; this is the check at the write
-  # itself, so any future path into session_key cannot turn /transcript into a
-  # file drop outside the jail. Mirrors what export_path/2 does for /export.
-  defp transcript_path(%{jail: true} = model, base, name),
-    do: Raxol.Agent.Actions.Fs.resolve(Path.join(base, name), %{cwd: model.cwd})
-
-  defp transcript_path(_model, base, name), do: {:ok, Path.join(base, name)}
-
-  defp write_transcript_file(model, path, writer, success_note) do
-    text = Raxol.Agent.Code.Replay.transcript_text(model.events)
-
-    case writer.(path, text <> "\n") do
-      :ok -> notice(model, success_note)
-      {:error, reason} -> notice(model, "write failed: #{inspect(reason)}")
-    end
-  end
-
-  defp write_private(path, text) do
-    case File.open(path, [:write, :exclusive]) do
-      {:ok, io} ->
-        File.chmod(path, 0o600)
-        result = IO.binwrite(io, text)
-        File.close(io)
-        result
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  @doc false
-  # Write-and-close: clipboard tools (pbcopy/xclip/clip) commit on stdin
-  # EOF. `Raxol.System.Clipboard` waits for an exit status its port can
-  # never deliver (it closes the port before collecting), freezing the
-  # update loop for its full timeout — so this seam feeds the tool
-  # directly and treats a completed write as success.
-  def default_clipboard(text) do
-    case clipboard_command() do
-      {:ok, {executable, args}} ->
-        port = Port.open({:spawn_executable, executable}, [:binary, args: args])
-        Port.command(port, text)
-        Port.close(port)
-        :ok
-
-      {:error, _} = error ->
-        error
-    end
-  rescue
-    error -> {:error, error}
-  end
-
-  @doc false
-  def clipboard_command do
-    {command, args} =
-      case :os.type() do
-        {:unix, :darwin} -> {"pbcopy", []}
-        {:unix, _} -> {"xclip", ["-selection", "clipboard"]}
-        {:win32, _} -> {"clip", []}
-      end
-
-    case System.find_executable(command) do
-      nil -> {:error, {:clipboard_tool_missing, command}}
-      path -> {:ok, {path, args}}
-    end
-  end
-
-  defp copy_last_answer(model) do
-    case model.messages
-         |> Enum.reverse()
-         |> Enum.find(&(&1.role == :assistant)) do
-      nil ->
-        notice(model, "no assistant reply to copy yet")
-
-      %{content: content} ->
-        case model.clipboard.(content) do
-          :ok ->
-            notice(model, "copied last reply (#{byte_size(content)} bytes)")
-
-          {:error, reason} ->
-            notice(model, "copy failed: #{inspect(reason)}")
-        end
-    end
-  end
-
-  @find_match_cap 8
-
-  defp find_in_transcript(model, ""), do: notice(model, "usage: /find <text>")
-
-  defp find_in_transcript(model, needle) do
-    down_needle = String.downcase(needle)
-
-    matches =
-      Projection.project(model.events).blocks
-      |> Enum.with_index(1)
-      |> Enum.filter(fn {block, _index} ->
-        block
-        |> Block.search_text()
-        |> String.downcase()
-        |> String.contains?(down_needle)
-      end)
-
-    case matches do
-      [] ->
-        notice(model, "no matches for \"#{needle}\"")
-
-      matches ->
-        lines =
-          matches
-          |> Enum.take(@find_match_cap)
-          |> Enum.map(fn {block, index} ->
-            "#{index}. [#{block.kind}] " <>
-              excerpt(Block.search_text(block), needle)
-          end)
-
-        header = "#{length(matches)} match(es) for \"#{needle}\":"
-        notice(model, Enum.join([header | lines], "\n"))
-    end
-  end
-
-  # A one-line window around the first hit, newlines flattened. The
-  # caseless regex yields a BYTE offset that is a codepoint boundary in
-  # the ORIGINAL string (a byte offset into a downcased copy is neither,
-  # and grapheme-slicing with it shifts or empties the window on any
-  # multibyte text — em dashes are everywhere in LLM replies).
-  defp excerpt(text, needle) do
-    flat = text |> String.replace(~r/\s+/u, " ") |> String.trim()
-
-    with {:ok, pattern} <- Regex.compile(Regex.escape(needle), "iu"),
-         [{byte_start, _len}] <- Regex.run(pattern, flat, return: :index) do
-      lead =
-        flat
-        |> binary_part(0, byte_start)
-        |> String.graphemes()
-        |> Enum.take(-20)
-
-      rest = binary_part(flat, byte_start, byte_size(flat) - byte_start)
-      ellipsis = if byte_start > 0 and length(lead) == 20, do: "…", else: ""
-      ellipsis <> Enum.join(lead) <> String.slice(rest, 0, 70)
-    else
-      _no_match -> String.slice(flat, 0, 70)
-    end
-  end
-
-  # Treat a blank or too-short share secret as unconfigured (nil): a
-  # declared-but-empty RAXOL_SHARE_SECRET is "" (truthy), and an empty/short
-  # HMAC key is offline-forgeable, so /share must fall back to "not configured"
-  # rather than mint a weak token. Length threshold lives in ShareToken.
-  defp normalize_share_secret(secret) do
-    if Raxol.Agent.Code.ShareToken.secret_ok?(secret), do: secret, else: nil
-  end
-
-  # `/share` mints a signed, expiring read-only token for THIS session.
-  # The journal is what the viewer replays, so it is ensured (and
-  # backfilled) here — a share of a never-journaled session would
-  # otherwise open empty.
-  defp share_session(%{share_secret: nil} = model) do
-    notice(
-      model,
-      "sharing not configured — set RAXOL_SHARE_SECRET (>= 32 bytes) on the " <>
-        "host (and mount Raxol.Agent.Code.ShareLive in a web app)"
-    )
-  end
-
-  defp share_session(model) do
-    if Raxol.Agent.Code.ShareToken.valid_session_id?(model.session_key) and
-         Raxol.Agent.Code.ShareToken.valid_scope?(model.share_scope) do
-      mint_share(model)
-    else
-      # A session_key with a `:` or other non-id character (e.g. a colon-laden
-      # /resume argument) would mint a token that can never verify. Refuse at
-      # the source with an actionable message rather than print a dead link.
-      notice(
-        model,
-        "this session's id can't be shared — resume or fork it under a " <>
-          "plain id (letters, digits, . _ -) first"
-      )
-    end
-  end
-
-  defp mint_share(model) do
-    model =
-      case ensure_journal(model) do
-        {:ok, journaled} -> journaled
-        {:error, _reason} -> model
-      end
-
-    token =
-      Raxol.Agent.Code.ShareToken.sign(model.session_key, model.share_secret,
-        scope: model.share_scope
-      )
-
-    # "follows this session live" is the part that surprises: the viewer
-    # attaches at the high-watermark and keeps receiving, so the link shares
-    # everything typed for the next 24h, not a snapshot of the scrollback.
-    case model.share_base_url do
-      nil ->
-        notice(
-          model,
-          "share token (read-only, follows this session live for 24h): #{token}"
-        )
-
-      base ->
-        notice(
-          model,
-          "read-only link (follows this session live for 24h): " <>
-            "#{String.trim_trailing(base, "/")}/#{token}"
-        )
-    end
-  end
-
-  # `/logout` disconnects the session's provider (the setup panel
-  # reopens); `/logout <provider>` additionally deletes that provider's
-  # stored credential reference.
-  defp logout(%{executor: nil} = model, ""),
-    do: notice(model, "no provider connected")
-
-  defp logout(model, "") do
-    %{model | executor: nil, provider_status: :no_provider}
-    |> open_browse()
-    |> notice("logged out — /login reconnects")
-  end
-
-  defp logout(model, provider) do
-    case model.credential_remover.(provider) do
-      {:ok, harness} ->
-        # The remover is idempotent (it cannot tell whether a reference
-        # was stored), and env-var keys are out of its reach entirely.
-        model
-        |> disconnect_if_current(harness)
-        |> notice(
-          "forgot stored credential for #{harness} " <>
-            "(env keys, if any, persist until unset)"
-        )
-
-      {:error, reason} ->
-        notice(model, "logout failed: #{inspect(reason)}")
-    end
-  end
-
-  defp disconnect_if_current(%{executor: %{backend: harness}} = model, harness) do
-    %{model | executor: nil, provider_status: :no_provider} |> open_browse()
-  end
-
-  defp disconnect_if_current(model, _harness), do: model
-
-  # `/model` with no arg on a connected provider fetches its model list and
-  # opens a selectable picker; otherwise it just shows the current model.
-  defp set_model(%{executor: %{}} = model, "") do
-    if provider_ready?(model),
-      do: open_model_picker(model),
-      else: model_usage(model)
-  end
-
-  defp set_model(model, ""), do: model_usage(model)
-
-  defp set_model(model, name) do
-    # Clears any unpriced-model halt: naming a model is one of the two fixes
-    # the halt notice points at, so it has to actually unblock the session.
-    notice(
-      %{model | model_override: name, unpriced_model: nil},
-      "model set to #{name}"
-    )
-  end
-
-  defp model_usage(model),
-    do:
-      notice(
-        model,
-        "usage: /model <name>  (current: #{model.model_override || "default"})"
-      )
-
-  defp open_model_picker(model) do
-    ref = make_ref()
-    model.models_fetcher.(models_fetch_opts(model), ref, self())
-    %{model | models_ref: ref} |> put_status("fetching models…")
-  end
-
-  # The connected executor's backend opts, with `:provider` pinned so the
-  # model-list endpoint is chosen by the actual backend, not a URL guess.
-  defp models_fetch_opts(%{executor: executor}) do
-    executor
-    |> Raxol.Agent.ExecutorConfig.to_backend_opts()
-    |> Keyword.put(:provider, executor.backend)
-  end
-
-  @doc false
-  # Default fetcher: list the provider's models off the app process (so a slow
-  # endpoint never blocks the TUI); the outcome rides back as a `:models_list`
-  # message `update/2` folds.
-  def default_models_fetcher(opts, ref, app) do
-    spawn(fn ->
-      result = Raxol.Agent.Backend.HTTP.list_models(opts)
-      send(app, {:command_result, {:models_list, ref, result}})
-    end)
-  end
-
-  defp apply_models_result(model, {:ok, [_ | _] = ids}) do
-    entries = Enum.map(ids, &%{model: &1, label: &1})
-
-    %{
-      model
-      | models_ref: nil,
-        status_line: nil,
-        wizard: %{
-          step: :models,
-          entries: entries,
-          cursor: model_cursor(entries, model.model_override)
-        }
-    }
-  end
-
-  defp apply_models_result(model, {:ok, []}),
-    do:
-      notice(
-        %{model | models_ref: nil, status_line: nil},
-        "no models returned — usage: /model <name>"
-      )
-
-  defp apply_models_result(model, :unsupported),
-    do:
-      notice(
-        %{model | models_ref: nil, status_line: nil},
-        "model listing unavailable for this provider — usage: /model <name>"
-      )
-
-  defp apply_models_result(model, {:error, _reason}),
-    do:
-      notice(
-        %{model | models_ref: nil, status_line: nil},
-        "couldn't fetch models — usage: /model <name>"
-      )
-
-  # Start the cursor on the current model when it's in the list, else the top.
-  defp model_cursor(entries, current) do
-    case Enum.find_index(entries, &(&1.model == current)) do
-      nil -> 0
-      index -> index
-    end
-  end
-
-  # Heuristic context shrink: keep the last few exchanges, replace the rest
-  # with a marker. Not a semantic summary — an honest size reducer.
-  defp compact(model) do
-    keep = 6
-    count = length(model.messages)
-
-    if count <= keep do
-      notice(model, "nothing to compact (#{count} messages)")
-    else
-      {older, recent} = Enum.split(model.messages, count - keep)
-
-      marker = %{
-        role: :system,
-        content: "[#{length(older)} earlier messages compacted]"
-      }
-
-      model = persist(%{model | messages: [marker | recent]})
-      notice(model, "compacted #{length(older)} messages")
-    end
-  end
-
-  defp context_text(model) do
-    {_turns, usage} = fold_usage(model.events)
-
-    "messages: #{length(model.messages)} · events: #{length(model.events)} · " <>
-      "tokens: #{usage.input_tokens} in / #{usage.output_tokens} out · " <>
-      "plan: #{if model.plan_mode, do: "on", else: "off"} · " <>
-      "model: #{model.model_override || "default"} · session: #{model.session_key}"
-  end
-
-  # Session token totals folded from the turn_completed events the model
-  # already holds (the same events the transcript rebuilds from), so /usage
-  # works on a resumed session too. The cost is the sum of each turn priced
-  # exactly as the ledger priced it; a wired Payments ledger adds the
-  # shared-budget totals (LLM + payment spend together).
-  defp usage_text(model) do
-    {turns, usage} = fold_usage(model.events)
-    {cost, unpriced} = session_cost(model, model.events)
-
-    base =
-      "turns: #{turns} · input tokens: #{usage.input_tokens} · " <>
-        "output tokens: #{usage.output_tokens}"
-
-    cost_part =
-      cond do
-        unpriced > 0 and unpriced == turns ->
-          " · cost: unknown model — set RAXOL_COST_PER_MTOK_IN/OUT"
-
-        unpriced > 0 ->
-          " · est. cost: $#{format_usd(cost)} (#{unpriced} of #{turns} turns " <>
-            "unpriced — set RAXOL_COST_PER_MTOK_IN/OUT)"
-
-        true ->
-          " · est. cost: $#{format_usd(cost)}"
-      end
-
-    ledger_part =
-      case Raxol.Agent.Code.CostLedger.totals_text(
-             model.ledger,
-             model.ledger_agent_id,
-             model.spending_policy
-           ) do
-        nil -> ""
-        text -> " · " <> text
-      end
-
-    base <> cost_part <> ledger_part
-  end
-
-  defp format_usd(cost), do: :erlang.float_to_binary(cost, decimals: 4)
-
-  defp fold_usage(events) do
-    Enum.reduce(events, {0, %{input_tokens: 0, output_tokens: 0}}, fn
-      %{type: :turn_completed, payload: payload}, {turns, acc} ->
-        usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
-        {turns + 1, Raxol.Agent.BenchmarkProfile.add_usage(acc, usage)}
-
-      _event, acc ->
-        acc
-    end)
-  end
-
-  # Each turn priced the way `meter_usage/5` priced it: the same resolver,
-  # on that turn's raw usage map, with the model that turn billed. Summing
-  # the tokens and pricing the total once through the flat table -- what this
-  # did before -- could not see a provider-reported cost or a cache split,
-  # so the panel and the ledger disagreed on the same money by the factor
-  # those two carry. Turns nothing could price are counted, not hidden.
-  defp session_cost(model, events) do
-    Enum.reduce(events, {0.0, 0}, fn
-      %{type: :turn_completed, payload: payload}, {sum, unpriced} ->
-        usage = Map.get(payload, :usage) || Map.get(payload, "usage") || %{}
-
-        case turn_cost(model, usage, billed_model(model, payload)) do
-          {_zero, :unknown} -> {sum, unpriced + 1}
-          {cost, _source} -> {sum + cost, unpriced}
-        end
-
-      _event, acc ->
-        acc
-    end)
-  end
-
-  defp session_line(session) do
-    details =
-      [
-        title_note(session),
-        "#{session.message_count} msgs",
-        format_age(session.updated_at),
-        shorten_home(session.cwd)
-      ]
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.join(" · ")
-
-    "#{session.id}  (#{details})"
-  end
-
-  defp title_note(%{title: title}) when is_binary(title) and title != "",
-    do: ~s("#{title}")
-
-  defp title_note(_session), do: nil
-
-  defp format_age(updated_at)
-       when is_integer(updated_at) and updated_at > 0 do
-    diff = System.system_time(:second) - updated_at
-
-    cond do
-      diff < 60 -> "just now"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      diff < 86_400 -> "#{div(diff, 3600)}h ago"
-      true -> "#{div(diff, 86_400)}d ago"
-    end
-  end
-
-  defp format_age(_updated_at), do: nil
-
-  defp shorten_home(cwd) when is_binary(cwd) and cwd != "" do
-    case System.user_home() do
-      nil -> cwd
-      home -> String.replace_prefix(cwd, home, "~")
-    end
-  end
-
-  defp shorten_home(_cwd), do: nil
-
-  defp help_text do
-    """
-    /help              this help
-    /login [provider]  connect an LLM provider (op ref, key, or local)
-    /clear             start a fresh session
-    /model [name]      switch model (no name = pick from the provider's list)
-    /plan              toggle plan mode
-    /compact           shrink the conversation history
-    /rewind            drop the last turn (transcript + conversation)
-    /context           session stats
-    /usage             session token and cost totals
-    /sessions          list saved sessions
-    /resume [id]       switch session (no id = pick from a list)
-    /fork [title]      branch a copy of this session and continue there
-    /rename <title>    title this session (shown in /sessions)
-    /export [path]     write the transcript to a file (default: cwd)
-    /transcript        write the transcript to a temp file for paging
-    /copy              copy the last reply to the clipboard
-    /find <text>       search the transcript blocks
-    /logout [provider] disconnect (with a name: forget its credential)
-    /share             mint a read-only share link for this session
-    /mcp               list configured MCP servers
-    /hooks             show configured lifecycle hooks
-    /inspect           show every config source in use (providers, pin, hooks, MCP, skills, sessions)
-    """
-    |> String.trim_trailing()
-  end
-
   # -- view -------------------------------------------------------------------
 
   @impl true
@@ -3263,133 +1773,15 @@ defmodule Raxol.Agent.Code.App do
 
   # The onboarding panel: the wizard when one is open, else a static hint when
   # unconnected, else nothing. Keeps the TUI on "connect a provider" instead of
-  # failing an invisible request.
-  defp setup_block(%{wizard: %{step: :browse} = wizard}),
-    do: browse_panel(wizard)
-
-  defp setup_block(%{wizard: %{step: :credential} = wizard}),
-    do: credential_panel(wizard)
-
-  defp setup_block(%{wizard: %{step: :confirm_save} = wizard}),
-    do: confirm_save_panel(wizard)
-
-  defp setup_block(%{wizard: %{step: :sessions} = wizard}),
-    do: sessions_panel(wizard)
-
-  defp setup_block(%{wizard: %{step: :models} = wizard}),
-    do: models_panel(wizard)
+  # failing an invisible request. Which panel a step draws is
+  # `Raxol.Agent.Code.App.Wizard`'s call, not the view's: the guard is the
+  # wizard's own step vocabulary, so the view names no step.
+  defp setup_block(%{wizard: %{step: step} = wizard})
+       when Wizard.is_selectable_step(step) or Wizard.is_modal_step(step),
+       do: Wizard.step_panel(wizard)
 
   defp setup_block(model) do
-    if provider_ready?(model), do: nil, else: hint_panel(model)
-  end
-
-  defp models_panel(%{entries: entries, cursor: cursor}) do
-    rows =
-      entries
-      |> Enum.with_index()
-      |> Enum.map(fn {entry, index} -> model_row(entry, index == cursor) end)
-
-    box style: %{border: :single, padding: 0} do
-      column style: %{gap: 0} do
-        [
-          text("pick a model  (↑↓ move · Enter select · Esc cancel)",
-            fg: :yellow,
-            style: [:bold]
-          )
-        ] ++ rows
-      end
-    end
-  end
-
-  defp model_row(entry, selected?) do
-    marker = if selected?, do: "▸", else: " "
-    fg = if selected?, do: :cyan, else: :white
-    style = if selected?, do: [:bold], else: []
-    text("#{marker} #{entry.label}", fg: fg, style: style)
-  end
-
-  defp sessions_panel(%{entries: entries, cursor: cursor}) do
-    rows =
-      entries
-      |> Enum.with_index()
-      |> Enum.map(fn {entry, index} -> model_row(entry, index == cursor) end)
-
-    box style: %{border: :single, padding: 0} do
-      column style: %{gap: 0} do
-        [
-          text("resume a session  (↑↓ move · Enter resume · Esc cancel)",
-            fg: :yellow,
-            style: [:bold]
-          )
-        ] ++ rows
-      end
-    end
-  end
-
-  defp browse_panel(%{entries: entries, cursor: cursor}) do
-    rows =
-      entries
-      |> Enum.with_index()
-      |> Enum.map(fn {entry, index} -> provider_row(entry, index == cursor) end)
-
-    box style: %{border: :single, padding: 0} do
-      column style: %{gap: 0} do
-        [
-          text("connect a provider  (↑↓ move · Enter connect · Esc cancel)",
-            fg: :yellow,
-            style: [:bold]
-          )
-        ] ++ rows
-      end
-    end
-  end
-
-  defp provider_row(entry, selected?) do
-    marker = if selected?, do: "▸", else: " "
-    avail = if entry.available?, do: "●", else: "○"
-    note = if entry.note, do: "  #{entry.note}", else: ""
-    fg = if selected?, do: :cyan, else: :white
-    style = if selected?, do: [:bold], else: []
-    text("#{marker} #{avail} #{entry.label}#{note}", fg: fg, style: style)
-  end
-
-  defp credential_panel(%{harness: harness, buffer: buffer}) do
-    shown =
-      if String.starts_with?(buffer, "op://"),
-        do: buffer,
-        else: String.duplicate("•", String.length(buffer))
-
-    box style: %{border: :single, padding: 0} do
-      column style: %{gap: 0} do
-        [
-          text("connect #{harness}", fg: :yellow, style: [:bold]),
-          text("credential: #{shown}▌", fg: :cyan),
-          text("op:// reference is stored; a raw key can be saved to 1Password",
-            style: [:dim]
-          )
-        ]
-      end
-    end
-  end
-
-  defp confirm_save_panel(%{harness: harness}) do
-    box style: %{border: :single, padding: 0} do
-      text(
-        "Save #{harness} key to 1Password?  [y] yes   [n] keep for this session",
-        fg: :yellow
-      )
-    end
-  end
-
-  defp hint_panel(model) do
-    lines = String.split(provider_setup_hint(model), "\n")
-
-    box style: %{border: :single, padding: 0} do
-      column style: %{gap: 0} do
-        [text("connect a provider to begin", fg: :yellow, style: [:bold])] ++
-          Enum.map(lines, &text(&1, fg: :cyan))
-      end
-    end
+    if provider_ready?(model), do: nil, else: Wizard.hint_panel(model)
   end
 
   defp notice_block(%{notice: notice}) when is_binary(notice) do
@@ -3476,6 +1868,12 @@ defmodule Raxol.Agent.Code.App do
   defp cursor(_model), do: "▌"
 
   # -- helpers ----------------------------------------------------------------
+
+  @doc false
+  def notice(model, text), do: %{model | notice: text}
+
+  @doc false
+  def put_status(model, text), do: %{model | status_line: text}
 
   defp ensure_streamer! do
     case SessionStreamer.start_link([]) do

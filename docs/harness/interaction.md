@@ -95,15 +95,19 @@ every call and re-wraps, so a resize cannot leave a stale wrap behind.
   same path a keypress takes, so there is no second execution mechanism a
   palette pick could diverge on.
 - **Slash commands** are a separate vocabulary, owned by the coding TUI rather
-  than by the keymap. `Raxol.Agent.Code.App` routes any submitted line
-  starting with `/` into per-command function clauses: `/help`, `/login`,
+  than by the keymap. `Raxol.Agent.Code.App` hands any submitted line starting
+  with `/` to `Raxol.Agent.Code.App.Commands`, which routes it into
+  per-command function clauses: `/help`, `/login`,
   `/logout`, `/model`, `/plan`, `/clear`, `/compact`, `/rewind`, `/context`,
   `/usage`, `/sessions`, `/resume`, `/fork`, `/rename`, `/export`,
   `/transcript`, `/copy`, `/find`, `/share`, `/mcp`, `/hooks`, `/inspect`. An
   unmatched name answers with an `unknown command` notice pointing at
   `/help`. In a jailed multi-tenant session `/login`, `/logout`, and `/copy`
   refuse, because they reach host-global state the keyboard principal does not
-  own.
+  own. During the onboarding wizard's `:credential` and `:confirm_save` modal
+  steps `Raxol.Agent.Code.App.Wizard` owns the keyboard outright: Esc cancels,
+  Enter submits, and shortcuts such as Ctrl+P are swallowed rather than
+  dispatched, so a pasted key never leaks into the prompt or a slash command.
 
 ## The approval footer
 

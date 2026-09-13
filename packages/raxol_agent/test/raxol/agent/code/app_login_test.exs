@@ -3,6 +3,7 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
   alias Raxol.Agent.Backend.Credentials
   alias Raxol.Agent.Code.App
+  alias Raxol.Agent.Code.App.Commands
   alias Raxol.Core.Events.Event
 
   @managed_env ~w(
@@ -140,6 +141,19 @@ defmodule Raxol.Agent.Code.AppLoginTest do
     test "/copy is unavailable in a jailed session" do
       model = new_model(:no_provider, jail: true) |> type("/copy")
       assert model.notice =~ "unavailable in a hosted session"
+    end
+
+    # Hosts pass whatever marks the tenant (an id is common). init/1 folds it
+    # to a boolean so every `%{jail: true}` gate matches; before, a string
+    # disabled hooks/MCP/LSP but left /login and /logout open.
+    test "a non-boolean jail marker still gates credential commands" do
+      model = new_model(:no_provider, jail: "tenant-a")
+      assert model.jail == true
+
+      model = type(model, "/login anthropic op://Vault/Anthropic/key")
+
+      assert model.notice =~ "disabled in a hosted session"
+      assert Credentials.fetch(:anthropic) == :none
     end
   end
 
@@ -390,29 +404,29 @@ defmodule Raxol.Agent.Code.AppLoginTest do
 
   describe "interpret_ping/1" do
     test "a 2xx completion is valid" do
-      assert App.interpret_ping({:ok, %{content: "ok"}}) == :valid
+      assert Commands.interpret_ping({:ok, %{content: "ok"}}) == :valid
     end
 
     test "401/403 mean the key was rejected" do
-      assert App.interpret_ping({:error, {:http_error, 401, "no"}}) ==
+      assert Commands.interpret_ping({:error, {:http_error, 401, "no"}}) ==
                {:rejected, 401}
 
-      assert App.interpret_ping({:error, {:http_error, 403, "no"}}) ==
+      assert Commands.interpret_ping({:error, {:http_error, 403, "no"}}) ==
                {:rejected, 403}
     end
 
     test "a transport failure is unreachable" do
-      assert App.interpret_ping({:error, {:request_failed, :econnrefused}}) ==
+      assert Commands.interpret_ping({:error, {:request_failed, :econnrefused}}) ==
                :unreachable
     end
 
     test "another HTTP status is reachable-but-errored" do
-      assert App.interpret_ping({:error, {:http_error, 500, ""}}) ==
+      assert Commands.interpret_ping({:error, {:http_error, 500, ""}}) ==
                {:reachable_error, 500}
     end
 
     test "a content-level marker still means the key is valid (auth succeeded)" do
-      assert App.interpret_ping({:error, "⚠ response truncated"}) == :valid
+      assert Commands.interpret_ping({:error, "⚠ response truncated"}) == :valid
     end
   end
 end

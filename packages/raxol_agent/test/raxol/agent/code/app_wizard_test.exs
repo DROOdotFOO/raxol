@@ -3,6 +3,7 @@ defmodule Raxol.Agent.Code.AppWizardTest do
 
   alias Raxol.Agent.Backend.Credentials
   alias Raxol.Agent.Code.App
+  alias Raxol.Agent.Code.App.Commands
   alias Raxol.Agent.ExecutorConfig
   alias Raxol.Core.Events.Event
 
@@ -229,6 +230,81 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       assert model.wizard == nil
       assert model.notice =~ "kept for this session only"
       assert Credentials.fetch(:openai) == :none
+    end
+  end
+
+  describe "hosted (jailed) session" do
+    # The wizard ends in the HOST-GLOBAL credential store (`Credentials.put`
+    # via connect/4, plus a 1Password item via the op saver). A tenant on a
+    # multi-tenant host must not reach either, from any entry point.
+    test "init does not open the wizard and says why" do
+      model = new_model(jail: true)
+
+      assert model.wizard == nil
+      assert model.notice =~ "credential management is disabled in a hosted session"
+      assert model.provider_status == :no_provider
+    end
+
+    test "init still skips the wizard when the host pre-wired a provider" do
+      model = new_model(jail: true, provider_status: {:ready, :lm_studio, :explicit})
+
+      assert model.wizard == nil
+      assert model.notice == nil
+    end
+
+    test "connect/4 refuses an op:// reference without touching the store" do
+      model = new_model(jail: true)
+
+      model = Commands.connect(model, :anthropic, "op://Vault/Anthropic/key", nil)
+
+      assert model.notice =~ "credential management is disabled in a hosted session"
+      assert model.provider_status == :no_provider
+      assert model.login_ref == nil
+      assert Credentials.fetch(:anthropic) == :none
+    end
+
+    test "connect/4 refuses a raw key too" do
+      model = Commands.connect(new_model(jail: true), :openai, "sk-raw", nil)
+
+      assert model.notice =~ "credential management is disabled in a hosted session"
+      assert model.provider_status == :no_provider
+      assert model.executor == nil
+    end
+
+    test "a credential-step submit closes the wizard with the refusal, storing nothing" do
+      model =
+        %{
+          new_model(jail: true)
+          | wizard: %{step: :credential, harness: :openai, buffer: "sk-raw"}
+        }
+        |> press(:enter)
+
+      assert model.wizard == nil
+      assert model.notice =~ "credential management is disabled in a hosted session"
+      assert model.provider_status == :no_provider
+      assert Credentials.fetch(:openai) == :none
+    end
+
+    test "the 1Password save is refused at the resource" do
+      test_pid = self()
+
+      model =
+        new_model(
+          jail: true,
+          op_saver: fn harness, key ->
+            send(test_pid, {:op_saver_called, harness, key})
+            {:ok, "op://Vault/OpenAI/credential"}
+          end
+        )
+
+      model =
+        %{model | wizard: %{step: :confirm_save, harness: :openai, key: "sk-raw"}}
+        |> press("y")
+
+      assert model.wizard == nil
+      assert model.notice =~ "credential management is disabled in a hosted session"
+      assert Credentials.fetch(:openai) == :none
+      refute_received {:op_saver_called, _, _}
     end
   end
 
