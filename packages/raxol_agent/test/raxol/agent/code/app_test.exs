@@ -1993,6 +1993,113 @@ defmodule Raxol.Agent.Code.AppTest do
       assert text =~ "sessions: #{model.sessions_dir}"
     end
 
+    # The default fetchers used to be bare spawns: a raise inside one meant
+    # no `{:command_result, ...}` ever came back, so the armed `*_ref` and
+    # the "fetching…" status line were stuck for the life of the session.
+    # Each fetcher is driven through its injectable seam with arguments its
+    # work function raises on; the message must still arrive and the fold
+    # must clear the ref.
+    @tag :capture_log
+    test "a crashing default /inspect fetcher still answers, and the fold clears the ref" do
+      model =
+        new_model(
+          inspection_fetcher: fn _cwd, _dir, ref, app ->
+            Commands.default_inspection_fetcher(nil, nil, ref, app)
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+      ref = model.inspection_ref
+      assert model.status_line == "inspecting…"
+
+      assert_receive {:command_result,
+                      {:inspection_result, ^ref, {:error, {:crashed, _}}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.inspection_ref == nil
+      assert model.status_line == nil
+      assert model.notice =~ "inspection failed: crashed"
+    end
+
+    @tag :capture_log
+    test "a crashing default sessions fetcher still answers, and the fold clears the ref" do
+      model =
+        new_model(
+          sessions_fetcher: fn _dir, ref, app ->
+            Commands.default_sessions_fetcher(nil, ref, app)
+          end
+        )
+
+      {model, []} = submit(model, "/resume")
+      ref = model.sessions_ref
+      assert model.status_line == "listing sessions…"
+
+      assert_receive {:command_result, {:sessions_list, ^ref, {:error, {:crashed, _}}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.sessions_ref == nil
+      assert model.status_line == nil
+      assert model.wizard == nil
+      assert model.notice =~ "couldn't list sessions: crashed"
+    end
+
+    @tag :capture_log
+    test "a crashing default models fetcher still answers, and the fold clears the ref" do
+      model =
+        connected_model(
+          models_fetcher: fn _opts, ref, app ->
+            Commands.default_models_fetcher(:not_a_keyword_list, ref, app)
+          end
+        )
+
+      {model, []} = slash(model, "/model")
+      ref = model.models_ref
+      assert model.status_line == "fetching models…"
+
+      assert_receive {:command_result, {:models_list, ^ref, {:error, {:crashed, _}}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.models_ref == nil
+      assert model.status_line == nil
+      assert model.wizard == nil
+      assert model.notice =~ "couldn't fetch models"
+    end
+
+    @tag :capture_log
+    test "a fetch that overruns its bound answers with :timeout instead of never" do
+      # The work blocks on a message nobody sends; only the bound can end it.
+      model =
+        new_model(
+          inspection_fetcher: fn _cwd, _dir, ref, app ->
+            Commands.fetch_async(
+              app,
+              :inspection_result,
+              ref,
+              fn ->
+                receive do
+                  _ -> :never
+                end
+              end,
+              10
+            )
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+      ref = model.inspection_ref
+
+      assert_receive {:command_result, {:inspection_result, ^ref, {:error, :timeout}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.inspection_ref == nil
+      assert model.status_line == nil
+      assert model.notice == "inspection failed: timed out"
+    end
+
     test "/usage folds token totals across provider vocabularies" do
       model =
         new_model()

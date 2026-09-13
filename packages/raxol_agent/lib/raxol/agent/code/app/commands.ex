@@ -26,11 +26,18 @@ defmodule Raxol.Agent.Code.App.Commands do
   moduledoc for the helper contract it calls back into).
   """
 
+  require Logger
+
   alias Raxol.Agent.Authorization.Engine
   alias Raxol.Agent.Code.App
   alias Raxol.Agent.Code.App.Wizard
   alias Raxol.Harness.Projection
   alias Raxol.UI.Components.Harness.Block
+
+  # Every async fetch answers within this budget -- the one `/login`'s
+  # validation ping already puts on its HTTP call -- so an armed `*_ref`
+  # always has a `{:command_result, ...}` coming to clear it.
+  @fetch_timeout_ms 10_000
 
   # -- dispatch ---------------------------------------------------------------
 
@@ -171,15 +178,78 @@ defmodule Raxol.Agent.Code.App.Commands do
   # result rides back as an `:inspection_result` message `App.update/2` folds.
   # The spawned process is unlinked; `app` must be the App process.
   def default_inspection_fetcher(cwd, sessions_dir, ref, app) do
-    spawn(fn ->
-      text =
-        cwd
-        |> Raxol.Agent.Code.Inspection.gather(sessions_dir: sessions_dir)
-        |> Raxol.Agent.Code.Inspection.render()
-
-      send(app, {:command_result, {:inspection_result, ref, text}})
+    fetch_async(app, :inspection_result, ref, fn ->
+      cwd
+      |> Raxol.Agent.Code.Inspection.gather(sessions_dir: sessions_dir)
+      |> Raxol.Agent.Code.Inspection.render()
     end)
   end
+
+  @doc false
+  def apply_inspection_result(model, {:error, reason}) do
+    %{model | inspection_ref: nil, status_line: nil}
+    |> App.notice("inspection failed: #{fetch_failure(reason)}")
+  end
+
+  def apply_inspection_result(model, text) when is_binary(text),
+    do: App.notice(%{model | inspection_ref: nil, status_line: nil}, text)
+
+  @doc false
+  # The one shape every default fetcher runs through: `work` executes off
+  # the App process and its value rides back as `{:command_result, {tag, ref,
+  # value}}`. A raise, exit, or throw inside `work` becomes `{:error,
+  # {:crashed, class}}` and an overrun becomes `{:error, :timeout}`, so the
+  # message always arrives and the fold clears the `_ref` that armed it. The
+  # notice only ever sees the class (an exception module or `:exit`/`:throw`)
+  # -- the detail is logged here, never rendered. The spawned process is
+  # unlinked; `app` must be the App process.
+  def fetch_async(app, tag, ref, work, timeout \\ @fetch_timeout_ms) do
+    spawn(fn ->
+      send(app, {:command_result, {tag, ref, bounded(tag, work, timeout)}})
+    end)
+  end
+
+  defp bounded(tag, work, timeout) do
+    task =
+      Task.async(fn ->
+        try do
+          {:ok, work.()}
+        rescue
+          error ->
+            Logger.warning(
+              "#{tag} fetch crashed: #{Exception.format(:error, error, __STACKTRACE__)}"
+            )
+
+            {:error, {:crashed, error.__struct__}}
+        catch
+          kind, reason ->
+            Logger.warning(
+              "#{tag} fetch crashed: #{Exception.format(kind, reason, __STACKTRACE__)}"
+            )
+
+            {:error, {:crashed, kind}}
+        end
+      end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, value}} ->
+        value
+
+      {:ok, {:error, _} = error} ->
+        error
+
+      {:exit, reason} ->
+        Logger.warning("#{tag} fetch exited: #{inspect(reason)}")
+        {:error, {:crashed, :exit}}
+
+      nil ->
+        Logger.warning("#{tag} fetch timed out after #{timeout}ms")
+        {:error, :timeout}
+    end
+  end
+
+  defp fetch_failure(:timeout), do: "timed out"
+  defp fetch_failure({:crashed, class}), do: "crashed (#{inspect(class)})"
 
   # A jailed session reads no `.mcp.json` at all, so "none configured" would
   # misdescribe it: the file may well be there, and the operator should know
@@ -462,7 +532,7 @@ defmodule Raxol.Agent.Code.App.Commands do
 
   defp ping_completion(backend, opts) do
     ping_opts =
-      opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, 10_000)
+      opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, @fetch_timeout_ms)
 
     interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
   end
@@ -743,15 +813,15 @@ defmodule Raxol.Agent.Code.App.Commands do
   # file); the result rides back as a `:sessions_list` message. The spawned
   # process is unlinked; `app` must be the App process.
   def default_sessions_fetcher(dir, ref, app) do
-    spawn(fn ->
-      send(
-        app,
-        {:command_result, {:sessions_list, ref, Raxol.Agent.Code.Store.list(dir)}}
-      )
-    end)
+    fetch_async(app, :sessions_list, ref, fn -> Raxol.Agent.Code.Store.list(dir) end)
   end
 
   @doc false
+  def apply_sessions_result(model, {:error, reason}) do
+    %{model | sessions_ref: nil, status_line: nil}
+    |> App.notice("couldn't list sessions: #{fetch_failure(reason)}")
+  end
+
   def apply_sessions_result(model, []) do
     %{model | sessions_ref: nil, status_line: nil}
     |> App.notice("no saved sessions")
@@ -1238,9 +1308,8 @@ defmodule Raxol.Agent.Code.App.Commands do
   # message `App.update/2` folds. The spawned process is unlinked; `app` must
   # be the App process.
   def default_models_fetcher(opts, ref, app) do
-    spawn(fn ->
-      result = Raxol.Agent.Backend.HTTP.list_models(opts)
-      send(app, {:command_result, {:models_list, ref, result}})
+    fetch_async(app, :models_list, ref, fn ->
+      Raxol.Agent.Backend.HTTP.list_models(opts)
     end)
   end
 

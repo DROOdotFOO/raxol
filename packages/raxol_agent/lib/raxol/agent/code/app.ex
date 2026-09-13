@@ -631,10 +631,11 @@ defmodule Raxol.Agent.Code.App do
       else: {model, []}
   end
 
-  # An async `/inspect` snapshot. Same ref discipline as `:models_list`.
-  def update({:command_result, {:inspection_result, ref, text}}, model) do
+  # An async `/inspect` snapshot (or the fetcher's failure). Same ref
+  # discipline as `:models_list`.
+  def update({:command_result, {:inspection_result, ref, result}}, model) do
     if ref == model.inspection_ref,
-      do: {notice(%{model | inspection_ref: nil, status_line: nil}, text), []},
+      do: {Commands.apply_inspection_result(model, result), []},
       else: {model, []}
   end
 
