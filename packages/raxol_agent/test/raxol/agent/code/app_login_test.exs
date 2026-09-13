@@ -142,6 +142,19 @@ defmodule Raxol.Agent.Code.AppLoginTest do
       model = new_model(:no_provider, jail: true) |> type("/copy")
       assert model.notice =~ "unavailable in a hosted session"
     end
+
+    # Hosts pass whatever marks the tenant (an id is common). init/1 folds it
+    # to a boolean so every `%{jail: true}` gate matches; before, a string
+    # disabled hooks/MCP/LSP but left /login and /logout open.
+    test "a non-boolean jail marker still gates credential commands" do
+      model = new_model(:no_provider, jail: "tenant-a")
+      assert model.jail == true
+
+      model = type(model, "/login anthropic op://Vault/Anthropic/key")
+
+      assert model.notice =~ "disabled in a hosted session"
+      assert Credentials.fetch(:anthropic) == :none
+    end
   end
 
   describe "/login" do

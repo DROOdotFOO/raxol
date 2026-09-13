@@ -448,6 +448,23 @@ defmodule Raxol.Agent.Code.AppTest do
       # the stale ref did not open a picker
       assert model.wizard == nil
     end
+
+    test "a models_list result does not clobber a modal wizard step" do
+      model = connected_model()
+      {model, []} = slash(model, "/model")
+      ref = model.models_ref
+
+      # Half-typed secret entry owns the screen while the fetch is in flight.
+      typing = %{step: :credential, harness: :openai, buffer: "sk-half"}
+      model = %{model | wizard: typing}
+
+      {model, []} =
+        App.update({:command_result, {:models_list, ref, {:ok, ["a", "b"]}}}, model)
+
+      assert model.wizard == typing
+      assert model.models_ref == nil
+      assert model.status_line == nil
+    end
   end
 
   defp request(model, name) do

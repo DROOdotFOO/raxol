@@ -3,19 +3,29 @@ defmodule Raxol.Agent.Code.App.Wizard do
   Onboarding wizard for `Raxol.Agent.Code.App`: the overlay that owns the
   keyboard while a provider is being connected.
 
-  Every function takes and returns the App model, so the TEA contract is
-  unchanged -- `App.update/2` routes keys here and folds the result. Three
-  responsibilities:
+  `App.update/2` routes keys here and folds the result, so the TEA contract
+  is unchanged. Three shapes come back, by role:
 
-    * **Selectable steps** (`:browse`, `:models`, `:sessions`) -- arrow keys
-      move a cursor, Enter picks. `App.update/2` keeps ownership of those keys
+    * `handle_wizard/2` returns `{model, commands}`, the `App.update/2` shape.
+    * `open_browse/1`, `wizard_move/2`, `maybe_wizard_select/1`, and
+      `close_wizard/1` return the bare model.
+    * `step_panel/1` and `hint_panel/1` return view elements.
+
+  Three responsibilities:
+
+    * **Selectable steps** (`is_selectable_step/1`) -- arrow keys move a
+      cursor, Enter picks. `App.update/2` keeps ownership of those keys
       because a typed prompt or slash command still takes precedence.
-    * **Modal steps** (`:credential`, `:confirm_save`) -- masked key entry and
-      the save-to-1Password prompt. These OWN the keyboard: `handle_wizard/2`
+    * **Modal steps** (`is_modal_step/1`) -- masked key entry and the
+      save-to-1Password prompt. These OWN the keyboard: `handle_wizard/2`
       sees every normalized event, so half-typed secret input is never
       discarded by a stray shortcut (`modal_wizard?/1` is the test).
-    * **Rendering** -- `panel/1` draws the active step's overlay and
+    * **Rendering** -- `step_panel/1` draws the active step's overlay and
       `hint_panel/1` the "no provider connected" panel.
+
+  Every function here runs in the App process: the credential paths end in
+  `Commands.connect/4`, whose validation ping captures `self()` as its reply
+  address.
   """
 
   import Raxol.Core.Renderer.View, except: [view: 1]
@@ -26,10 +36,20 @@ defmodule Raxol.Agent.Code.App.Wizard do
 
   # -- wizard steps -----------------------------------------------------------
 
-  @doc false
-  def modal_wizard?(%{wizard: %{step: step}})
-      when step in [:credential, :confirm_save], do: true
+  # The step vocabulary, stated once. A new step joins exactly one list and
+  # adds one `step_panel/1` clause; `App` branches on the guards, never on a
+  # step name.
+  @selectable_steps [:browse, :models, :sessions]
+  @modal_steps [:credential, :confirm_save]
 
+  @doc false
+  defguard is_selectable_step(step) when step in @selectable_steps
+
+  @doc false
+  defguard is_modal_step(step) when step in @modal_steps
+
+  @doc false
+  def modal_wizard?(%{wizard: %{step: step}}) when is_modal_step(step), do: true
   def modal_wizard?(_model), do: false
 
   @doc false
@@ -180,6 +200,12 @@ defmodule Raxol.Agent.Code.App.Wizard do
     end
   end
 
+  # A jailed tenant never reaches this step through the UI (init and /login
+  # refuse the wizard), but the raw-key path must not offer a host-global
+  # save either: connect/4 already refused, so keep that notice and close.
+  defp maybe_offer_save(%{jail: true} = model, _harness, _key),
+    do: close_wizard(model)
+
   defp maybe_offer_save(model, harness, key) do
     if Raxol.Agent.Backend.Credentials.op_available?() do
       %{
@@ -191,6 +217,11 @@ defmodule Raxol.Agent.Code.App.Wizard do
       close_wizard(model)
     end
   end
+
+  # Writes a 1Password item AND the host-global credential store, so a jailed
+  # tenant is refused at the resource, whatever state got it here.
+  defp save_key_to_op(%{jail: true} = model),
+    do: model |> close_wizard() |> Commands.refuse_hosted_credentials()
 
   defp save_key_to_op(%{wizard: %{harness: harness, key: key}} = model) do
     case model.op_saver.(harness, key) do
@@ -262,12 +293,12 @@ defmodule Raxol.Agent.Code.App.Wizard do
   @doc false
   # The active step's overlay. `App.view/1` decides WHEN a panel shows; the
   # step decides WHICH one, so a new step adds one clause here and nowhere in
-  # the view.
-  def panel(%{step: :browse} = wizard), do: browse_panel(wizard)
-  def panel(%{step: :credential} = wizard), do: credential_panel(wizard)
-  def panel(%{step: :confirm_save} = wizard), do: confirm_save_panel(wizard)
-  def panel(%{step: :sessions} = wizard), do: sessions_panel(wizard)
-  def panel(%{step: :models} = wizard), do: models_panel(wizard)
+  # the view. Named `step_panel` because `View.panel/1` is imported above.
+  def step_panel(%{step: :browse} = wizard), do: browse_panel(wizard)
+  def step_panel(%{step: :credential} = wizard), do: credential_panel(wizard)
+  def step_panel(%{step: :confirm_save} = wizard), do: confirm_save_panel(wizard)
+  def step_panel(%{step: :sessions} = wizard), do: sessions_panel(wizard)
+  def step_panel(%{step: :models} = wizard), do: models_panel(wizard)
 
   defp models_panel(%{entries: entries, cursor: cursor}) do
     rows =

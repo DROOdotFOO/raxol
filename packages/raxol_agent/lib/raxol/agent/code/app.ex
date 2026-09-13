@@ -13,13 +13,22 @@ defmodule Raxol.Agent.Code.App do
   ## Where the code lives
 
   This module is the TEA shell: `init/1`, `update/2`, `view/1`, and the
-  contract-event fold. Two sub-applications live beside it, each taking and
-  returning this model, so the shell folds events and nothing else:
+  contract-event fold. Two sub-applications live beside it, so the shell folds
+  events and nothing else:
 
     * `Raxol.Agent.Code.App.Commands` -- the slash-command surface and the
       async fetchers those commands arm.
     * `Raxol.Agent.Code.App.Wizard` -- the onboarding overlay, including the
       modal steps that own the keyboard while a credential is typed.
+
+  Both call back into this module's `@doc false` helpers (`notice/2`,
+  `put_status/2`, `persist/1`, `provider_ready?/1`, `maybe_toggle_plan_mode/1`,
+  `ensure_journal/1`, `journal_append/2`, `close_journal/1`,
+  `mint_session_key/0`, `renumber_events/1`, `billed_model/2`, `turn_cost/3`).
+  Those helpers are the internal Commands/Wizard contract, not an API, and
+  they MUST run in the App process: `ensure_journal/1` links the journal
+  Writer to the caller, and the fetchers Commands arms capture `self()` as
+  the reply address their `{:command_result, ...}` message is sent to.
 
   ## The loop
 
@@ -79,6 +88,9 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.UI.Components.Harness.Block
   alias Raxol.UI.Harness.InputEvent
 
+  # The wizard's step guards (`is_selectable_step/1`, `is_modal_step/1`).
+  require Wizard
+
   @approval_timeout_ms 300_000
 
   # The BUILT-IN tools that read from outside the workspace. Not the whole
@@ -102,6 +114,10 @@ defmodule Raxol.Agent.Code.App do
     # tenant run arbitrary code as the server uid — around the cwd jail, the
     # `:jail` shell gate, and the approval chain alike. A jailed session
     # loads neither.
+    #
+    # Multi-tenant hosts set :jail (any truthy value — a tenant id is common).
+    # It is normalized to a boolean HERE, once, so every gate downstream can
+    # match `%{jail: true}` instead of re-deciding what counts as jailed.
     jail? = Keyword.get(options, :jail, false) not in [nil, false]
     {hooks, hooks_note} = load_hooks(cwd, jail?)
     {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
@@ -129,6 +145,7 @@ defmodule Raxol.Agent.Code.App do
       title: session.title,
       parent: session.parent,
       cwd: cwd,
+      jail: jail?,
       hooks: hooks,
       mcp_servers: mcp_servers,
       lsp_pool: lsp_pool,
@@ -139,9 +156,25 @@ defmodule Raxol.Agent.Code.App do
   end
 
   # No provider connected at boot -> open the onboarding wizard on its
-  # selectable provider list.
+  # selectable provider list. Not in a jail: the wizard ends in
+  # `Commands.connect/4` / `Wizard.save_key_to_op/1`, both of which write the
+  # HOST-GLOBAL credential store, so a tenant gets a notice instead and the
+  # host pre-wires the provider via app_opts.
   defp maybe_open_initial_wizard(model) do
-    if provider_ready?(model), do: model, else: Wizard.open_browse(model)
+    cond do
+      provider_ready?(model) ->
+        model
+
+      model.jail == true ->
+        notice(
+          model,
+          "no provider connected; credential management is disabled in a " <>
+            "hosted session (host must pre-wire a provider)"
+        )
+
+      true ->
+        Wizard.open_browse(model)
+    end
   end
 
   # A provider connected at boot (auto-detected or --harness) -> validate it on
@@ -275,10 +308,6 @@ defmodule Raxol.Agent.Code.App do
       # budget wired that is a hole in the cap, so it fails closed.
       unpriced_model: nil,
       ledger_agent_id: Keyword.get(options, :agent_id, "raxol-code"),
-      # Multi-tenant hosts set :jail — the keyboard principal is not the
-      # server owner, so operator-typed paths (/export) confine to the
-      # workspace like tool paths do.
-      jail: Keyword.get(options, :jail, false),
       # `/share` mints signed read-only tokens for this session; without
       # a secret there is nothing safe to mint. A blank or too-short secret
       # is treated as unconfigured (an empty HMAC key is offline-forgeable).
@@ -738,11 +767,11 @@ defmodule Raxol.Agent.Code.App do
   # selects it. A typed prompt or slash command still takes precedence (so the
   # `/login <provider> ...` text path stays reachable alongside the wizard).
   defp handle_key(:up, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models, :sessions],
+       when Wizard.is_selectable_step(step),
        do: {Wizard.wizard_move(model, -1), []}
 
   defp handle_key(:down, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models, :sessions],
+       when Wizard.is_selectable_step(step),
        do: {Wizard.wizard_move(model, +1), []}
 
   # The sessions picker owns Enter outright — unlike :browse (which must
@@ -777,7 +806,7 @@ defmodule Raxol.Agent.Code.App do
   # Esc closes the browse/model list (reopen with /login or /model); the modal
   # steps handle their own Esc in `Wizard.handle_wizard/2`.
   defp handle_key(:escape, %{wizard: %{step: step}} = model)
-       when step in [:browse, :models, :sessions],
+       when Wizard.is_selectable_step(step),
        do: {Wizard.close_wizard(model), []}
 
   defp handle_key(_key, model), do: {model, []}
@@ -1390,6 +1419,8 @@ defmodule Raxol.Agent.Code.App do
   end
 
   @doc false
+  # Opens the journal in the CALLING process: `FileStore.open/2` links the
+  # Writer to it, so this must run in the App process (see the moduledoc).
   def ensure_journal(%{journal: %FileStore{}} = model), do: {:ok, model}
 
   def ensure_journal(model) do
@@ -1743,10 +1774,11 @@ defmodule Raxol.Agent.Code.App do
   # The onboarding panel: the wizard when one is open, else a static hint when
   # unconnected, else nothing. Keeps the TUI on "connect a provider" instead of
   # failing an invisible request. Which panel a step draws is
-  # `Raxol.Agent.Code.App.Wizard`'s call, not the view's.
+  # `Raxol.Agent.Code.App.Wizard`'s call, not the view's: the guard is the
+  # wizard's own step vocabulary, so the view names no step.
   defp setup_block(%{wizard: %{step: step} = wizard})
-       when step in [:browse, :credential, :confirm_save, :sessions, :models],
-       do: Wizard.panel(wizard)
+       when Wizard.is_selectable_step(step) or Wizard.is_modal_step(step),
+       do: Wizard.step_panel(wizard)
 
   defp setup_block(model) do
     if provider_ready?(model), do: nil, else: Wizard.hint_panel(model)

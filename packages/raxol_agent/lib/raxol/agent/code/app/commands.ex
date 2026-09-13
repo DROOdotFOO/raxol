@@ -3,10 +3,15 @@ defmodule Raxol.Agent.Code.App.Commands do
   Slash-command surface for `Raxol.Agent.Code.App`.
 
   `dispatch_slash/2` parses a `/command arg` line and routes it to one body per
-  command. Every body takes and returns the App model (some also arm an async
-  fetch and return the model with a `_ref` set), so the TEA contract is
-  unchanged: `App.update/2` folds whatever comes back, and the matching
-  `{:command_result, ...}` message lands in `App.update/2` too.
+  command. Three shapes come back, by role, so the TEA contract is unchanged:
+
+    * `dispatch_slash/2` returns `{model, commands}`, the `App.update/2` shape.
+    * `connect/4`, `switch_session/2`, `apply_signin/3`, and the
+      `apply_*_result/2` folds return the bare model (some with a `_ref` set,
+      because they armed an async fetch whose `{:command_result, ...}` message
+      lands in `App.update/2` too).
+    * `validation_status/2`, `interpret_ping/1`, `auth_rejected?/1`, and
+      `normalize_share_secret/1` are pure helpers on plain values.
 
   Adding a command means one `apply_command/3` clause plus its body here, and
   one `help_text/0` line -- not four edits spread across the state machine. A
@@ -16,7 +21,9 @@ defmodule Raxol.Agent.Code.App.Commands do
   The async commands (`/resume`, `/sessions`, `/model`, `/inspect`, `/login`)
   each ship an injectable default fetcher (`default_sessions_fetcher/3` and
   friends) that runs off the app process; `App.config/2` wires them, and tests
-  replace them.
+  replace them. Everything that ARMS a fetch captures `self()` as the reply
+  address, so this module must run in the App process (see the `App`
+  moduledoc for the helper contract it calls back into).
   """
 
   alias Raxol.Agent.Authorization.Engine
@@ -41,7 +48,7 @@ defmodule Raxol.Agent.Code.App.Commands do
   # not reach them: the host pre-wires the provider via server app_opts.
   defp apply_command(cmd, _arg, %{jail: true} = model)
        when cmd in ["login", "logout"] do
-    {App.notice(model, "credential management is disabled in a hosted session"), []}
+    {refuse_hosted_credentials(model), []}
   end
 
   defp apply_command("login", arg, model), do: {login(model, arg), []}
@@ -153,9 +160,16 @@ defmodule Raxol.Agent.Code.App.Commands do
   # -- /help /mcp /hooks /inspect ---------------------------------------------
 
   @doc false
+  # The one notice every host-global credential gate answers with: the
+  # /login and /logout commands, `connect/4`, and the wizard's 1Password save.
+  def refuse_hosted_credentials(model),
+    do: App.notice(model, "credential management is disabled in a hosted session")
+
+  @doc false
   # Default fetcher: gather + render the snapshot off the app process (a
   # fresh disk read, the same snapshot `mix raxol.inspect` prints); the
   # result rides back as an `:inspection_result` message `App.update/2` folds.
+  # The spawned process is unlinked; `app` must be the App process.
   def default_inspection_fetcher(cwd, sessions_dir, ref, app) do
     spawn(fn ->
       text =
@@ -170,7 +184,7 @@ defmodule Raxol.Agent.Code.App.Commands do
   # A jailed session reads no `.mcp.json` at all, so "none configured" would
   # misdescribe it: the file may well be there, and the operator should know
   # it was refused rather than go looking for a config bug.
-  defp mcp_text(%{mcp_servers: [], jail: jail}) when jail not in [nil, false],
+  defp mcp_text(%{mcp_servers: [], jail: true}),
     do: "MCP servers are disabled in a jailed session"
 
   defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
@@ -291,6 +305,14 @@ defmodule Raxol.Agent.Code.App.Commands do
   @doc false
   # An op:// reference is stored (so it survives relaunch) then resolved; a raw
   # key stays in memory for this session only; no secret connects via op/env.
+  #
+  # The op:// path writes the HOST-GLOBAL credential store, and every path
+  # arms a validation ping addressed to `self()`. A jailed tenant is refused
+  # here, at the resource, so no caller (the /login text path, the wizard) can
+  # reach the store around the command gate.
+  def connect(%{jail: true} = model, _harness, _secret, _model_name),
+    do: refuse_hosted_credentials(model)
+
   def connect(model, harness, "op://" <> _ = ref, model_name) do
     case Raxol.Agent.Backend.Credentials.put(
            harness,
@@ -365,7 +387,8 @@ defmodule Raxol.Agent.Code.App.Commands do
   @doc false
   # The default sign-in runner: the whole OAuth flow off the app process, so a
   # user who wanders off mid-approval cannot wedge the TUI. The outcome rides
-  # back as a `:browser_signin` message, mirroring the validation ping.
+  # back as a `:browser_signin` message, mirroring the validation ping. The
+  # spawned process is unlinked; `app` must be the App process.
   def default_browser_signin(harness, ref, app) do
     spawn(fn ->
       result =
@@ -384,7 +407,8 @@ defmodule Raxol.Agent.Code.App.Commands do
   @doc false
   # Kick off the injectable validator, returning the ref that stamps its
   # result. `self()` here is the app process, so the ping's reply message lands
-  # where `App.update/2` can fold it.
+  # where `App.update/2` can fold it -- calling this from any other process
+  # loses the result.
   def start_login_validation(model, executor) do
     ref = make_ref()
     model.login_validator.(executor, ref, self())
@@ -395,6 +419,7 @@ defmodule Raxol.Agent.Code.App.Commands do
   # The default validator: a cheap, single-token completion against the freshly
   # resolved backend, off the app process so a hung endpoint never blocks the
   # TUI. The normalized outcome rides back as a `:login_validation` message.
+  # The spawned process is unlinked; `app` must be the App process.
   def default_login_validator(executor, ref, app) do
     spawn(fn ->
       result =
@@ -715,7 +740,8 @@ defmodule Raxol.Agent.Code.App.Commands do
 
   @doc false
   # Lists sessions off the app process (Store.list reads every session
-  # file); the result rides back as a `:sessions_list` message.
+  # file); the result rides back as a `:sessions_list` message. The spawned
+  # process is unlinked; `app` must be the App process.
   def default_sessions_fetcher(dir, ref, app) do
     spawn(fn ->
       send(
@@ -930,7 +956,7 @@ defmodule Raxol.Agent.Code.App.Commands do
     # A jailed session writes into its own workspace — the server's /tmp
     # is unreachable through jailed tools, so a path there would be
     # useless to the tenant.
-    base = if model.jail, do: model.cwd, else: System.tmp_dir!()
+    base = if model.jail == true, do: model.cwd, else: System.tmp_dir!()
 
     name =
       "#{model.session_key}-transcript-" <>
@@ -1209,7 +1235,8 @@ defmodule Raxol.Agent.Code.App.Commands do
   @doc false
   # Default fetcher: list the provider's models off the app process (so a slow
   # endpoint never blocks the TUI); the outcome rides back as a `:models_list`
-  # message `App.update/2` folds.
+  # message `App.update/2` folds. The spawned process is unlinked; `app` must
+  # be the App process.
   def default_models_fetcher(opts, ref, app) do
     spawn(fn ->
       result = Raxol.Agent.Backend.HTTP.list_models(opts)
@@ -1219,18 +1246,25 @@ defmodule Raxol.Agent.Code.App.Commands do
 
   @doc false
   def apply_models_result(model, {:ok, [_ | _] = ids}) do
-    entries = Enum.map(ids, &%{model: &1, label: &1})
+    if Wizard.modal_wizard?(model) do
+      # A modal step (masked credential entry) owns the screen; opening
+      # the picker over it would discard half-typed secret input. Same rule
+      # as apply_sessions_result/2.
+      %{model | models_ref: nil, status_line: nil}
+    else
+      entries = Enum.map(ids, &%{model: &1, label: &1})
 
-    %{
-      model
-      | models_ref: nil,
-        status_line: nil,
-        wizard: %{
-          step: :models,
-          entries: entries,
-          cursor: model_cursor(entries, model.model_override)
-        }
-    }
+      %{
+        model
+        | models_ref: nil,
+          status_line: nil,
+          wizard: %{
+            step: :models,
+            entries: entries,
+            cursor: model_cursor(entries, model.model_override)
+          }
+      }
+    end
   end
 
   def apply_models_result(model, {:ok, []}),
