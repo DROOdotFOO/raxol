@@ -1,3 +1,15 @@
+## [Unreleased]
+
+### Fixed
+
+- **`raxol_terminal`: `CSI ? 80 h`, `CSI 80 h` and `CSI 132 h` wiped the screen.** `Raxol.Terminal.Modes.Types.ModeTypes` registered DEC-private 80 and standard 80/132 as column-width modes, and once `ModeProcessor` started dispatching from the registry every one of them reached a handler that replaced both screen buffers with empty ones. None is a real mode (`CSI ? 80` is DECSDM in xterm; standard 80/132 do not exist). The three rows are removed, so `ModeTypes.lookup_private(80)`, `lookup_standard(80)` and `lookup_standard(132)` return `nil` and the sequences are ignored. `CSI ? 3 h/l` (DECCOLM) remains the only column-width switch; `:deccolm_80` survives only as the name of its reset state.
+- **`raxol_terminal`: a malformed `CSI h`/`CSI l` parameter raised.** `\e[?1;h` (empty slot) and `\e[?4:3h` (colon subparameter) reached `String.to_integer/1` and crashed the emulator. Non-integer parameters are now skipped and the well-formed ones still apply.
+- **`raxol_terminal`: `CSI ? 1049 h` no longer filled the `CSI s`/`CSI u` slot.** xterm defines 1049 as save-as-DECSC / restore-as-DECRC; the save and restore now live in `Raxol.Terminal.Modes.Handlers.ScreenBufferHandler`, so `\e[5;10H\e[?1049h\e[1;1H\e[u` returns the cursor to row 5, column 10 again.
+
+### Removed
+
+- **`raxol_terminal` mode plumbing that duplicated `ModeManager` / `ModeTypes`.** Modules `Raxol.Terminal.ModeState`, `Raxol.Terminal.ModeHandler`, `Raxol.Terminal.Commands.ModeHandler` and `Raxol.Terminal.Modes.Handlers.MouseHandler`; `Raxol.Terminal.ModeManager.get_manager/1`, `update_manager/2`, `mode_set?/2`, `get_set_modes/1`, `reset_all_modes/1`, `save_modes/1` and `restore_modes/1` (all were no-op stubs); the `Raxol.Terminal.Emulator.mode_state` field (also on `EmulatorLite`) and `Emulator.update_insert_mode/2` / `update_auto_wrap_mode/2`, which wrote to it and were never read; and the `ModeTypes` rows for DEC-private 80 and standard 80/132 described above.
+
 ## [2.7.0] - 2026-09-09
 
 ### Added
