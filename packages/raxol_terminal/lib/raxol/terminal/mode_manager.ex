@@ -123,31 +123,34 @@ defmodule Raxol.Terminal.ModeManager do
     end)
   end
 
-  def mode_enabled?(state, mode) do
-    mode_mapping = %{
-      irm: state.insert_mode,
-      lnm: state.line_feed_mode,
-      decom: state.origin_mode,
-      decawm: state.auto_wrap,
-      dectcem: state.cursor_visible,
-      decscnm: state.screen_mode_reverse,
-      decarm: state.auto_repeat_mode,
-      decinlm: state.interlacing_mode,
-      bracketed_paste: state.bracketed_paste_mode,
-      decckm: state.cursor_keys_mode == :application,
-      deccolm_132: state.column_width_mode == :wide,
-      deccolm_80: state.column_width_mode == :normal,
-      dec_alt_screen: state.alternate_buffer_active,
-      dec_alt_screen_save: state.alternate_buffer_active,
-      alt_screen_buffer: state.alternate_buffer_active,
-      focus_events: state.focus_events_enabled,
-      mouse_report_x10: state.mouse_report_mode == :x10,
-      mouse_report_cell_motion: state.mouse_report_mode == :cell_motion,
-      mouse_encoding_sgr: state.mouse_encoding == :sgr
-    }
+  @doc """
+  Whether `mode` is currently enabled in the given mode manager state.
+  Unknown modes are reported as disabled.
+  """
+  @spec mode_enabled?(t(), mode()) :: boolean()
+  def mode_enabled?(state, :irm), do: state.insert_mode
+  def mode_enabled?(state, :lnm), do: state.line_feed_mode
+  def mode_enabled?(state, :decom), do: state.origin_mode
+  def mode_enabled?(state, :decawm), do: state.auto_wrap
+  def mode_enabled?(state, :dectcem), do: state.cursor_visible
+  def mode_enabled?(state, :decscnm), do: state.screen_mode_reverse
+  def mode_enabled?(state, :decarm), do: state.auto_repeat_mode
+  def mode_enabled?(state, :decinlm), do: state.interlacing_mode
+  def mode_enabled?(state, :bracketed_paste), do: state.bracketed_paste_mode
+  def mode_enabled?(state, :decckm), do: state.cursor_keys_mode == :application
+  def mode_enabled?(state, :deccolm_132), do: state.column_width_mode == :wide
+  def mode_enabled?(state, :deccolm_80), do: state.column_width_mode == :normal
+  def mode_enabled?(state, :dec_alt_screen), do: state.alternate_buffer_active
+  def mode_enabled?(state, :dec_alt_screen_save), do: state.alternate_buffer_active
+  def mode_enabled?(state, :alt_screen_buffer), do: state.alternate_buffer_active
+  def mode_enabled?(state, :focus_events), do: state.focus_events_enabled
+  def mode_enabled?(state, :mouse_report_x10), do: state.mouse_report_mode == :x10
 
-    Map.get(mode_mapping, mode, false)
-  end
+  def mode_enabled?(state, :mouse_report_cell_motion),
+    do: state.mouse_report_mode == :cell_motion
+
+  def mode_enabled?(state, :mouse_encoding_sgr), do: state.mouse_encoding == :sgr
+  def mode_enabled?(_state, _mode), do: false
 
   @doc """
   Saves the current terminal state.
