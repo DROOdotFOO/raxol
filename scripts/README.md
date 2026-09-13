@@ -31,6 +31,7 @@ subdirectories hold narrower tooling.
 | `check_package_formatting.sh` | Runs each package's own `mix format` gate |
 | `check-lockstep-deps.sh` | Catches sibling-package version drift |
 | `check_formatter_loaders.exs` | Verifies `.formatter.exs` subdirectory delegation |
+| `check_refactor_move.exs` | Mechanical proof for move/split PRs: `defp -> def` widenings and normalized-body drift against a base ref |
 | `check_journal_goldens.exs` | Harness journal golden check |
 | `check_domains.sh` | Domain and DNS checks |
 | `install.sh` | The `curl \| bash` installer served from raxol.io |
