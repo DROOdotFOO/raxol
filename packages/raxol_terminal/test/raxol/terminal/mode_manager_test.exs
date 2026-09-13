@@ -1,7 +1,9 @@
 defmodule Raxol.Terminal.ModeManagerTest do
   use ExUnit.Case, async: true
 
+  alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ModeManager
+  alias Raxol.Terminal.Modes.Types.ModeTypes
 
   describe "new/0" do
     test "creates a new mode manager with default values" do
@@ -97,6 +99,41 @@ defmodule Raxol.Terminal.ModeManagerTest do
       assert ModeManager.lookup_standard(80) == nil
       assert ModeManager.lookup_private(80) == nil
       assert ModeManager.lookup_private(3) == :deccolm_132
+    end
+  end
+
+  describe "every registered mode has a handler" do
+    # Registered in ModeTypes but deliberately not implemented. A row here is
+    # dropped by ModeProcessor exactly like an unregistered number; remove it
+    # from this list when a handler lands, and the test will hold you to it.
+    @unhandled [
+      # DEC 12 (AT&T 610 blink): cursor blink is owned by Cursor.Manager, not
+      # the mode table; a handler would have to be wired there first.
+      :att_blink
+    ]
+
+    test "set and reset reach a handler, or the mode is allow-listed" do
+      emulator = Emulator.new(80, 24)
+
+      for %{name: name, category: category, code: code} <-
+            Map.values(ModeTypes.get_all_modes()) do
+        set = ModeManager.set_mode(emulator, [name], category)
+        reset = ModeManager.reset_mode(emulator, [name], category)
+
+        if name in @unhandled do
+          assert set == {:error, :unsupported_mode},
+                 "#{inspect(name)} (#{category} #{code}) is allow-listed as unhandled but set_mode returned #{inspect(set)}"
+
+          assert reset == {:error, :unsupported_mode},
+                 "#{inspect(name)} (#{category} #{code}) is allow-listed as unhandled but reset_mode returned #{inspect(reset)}"
+        else
+          assert match?({:ok, %Emulator{}}, set),
+                 "#{inspect(name)} (#{category} #{code}) is registered in ModeTypes but set_mode returned #{inspect(set)}; add a handler or allow-list it"
+
+          assert match?({:ok, %Emulator{}}, reset),
+                 "#{inspect(name)} (#{category} #{code}) is registered in ModeTypes but reset_mode returned #{inspect(reset)}; add a handler or allow-list it"
+        end
+      end
     end
   end
 end
