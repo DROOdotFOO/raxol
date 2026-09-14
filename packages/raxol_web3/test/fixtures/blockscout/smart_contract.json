@@ -1,0 +1,40 @@
+{
+  "abi": [
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "name",
+      "outputs": [
+        {
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "name": "_upgradedAddress",
+          "type": "address"
+        }
+      ],
+      "name": "deprecate",
+      "outputs": [],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "name": "TetherToken",
+  "is_verified": true,
+  "compiler_version": "v0.4.18+commit.9cf6e910",
+  "optimization_enabled": false,
+  "language": "solidity",
+  "verified_twin_address_hash": null,
+  "proxy_type": null,
+  "implementations": []
+}

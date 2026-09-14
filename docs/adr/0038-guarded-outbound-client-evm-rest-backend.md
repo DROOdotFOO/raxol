@@ -2,7 +2,17 @@
 
 ## Status
 
-Proposed, 2026-09-13. Nothing is implemented; `packages/raxol_web3` does not exist.
+Accepted, 2026-09-13. **Implemented 2026-09-14**: `packages/raxol_web3` carries the guarded
+client, the pinned dial, the bounded read, the cursor codec, the router and the EVM backend,
+plus five more backends under ADR-0039. Two decisions moved under contact with the code and are
+recorded where they were decided rather than here: the required callback set is two rather than
+six (ADR-0039), and `token_balances` takes a cursor (ADR-0039 decision 6). One thing this ADR
+specified that is no longer only this package's: the bounded read loop decision 4 describes is
+`Raxol.MCP.BoundedExchange` and its accumulator is `Raxol.Core.Outbound.Response`, shared with
+ADR-0037's transport rather than written twice. The pinned dial and this package's error
+taxonomy stay here. `Raxol.Web3.HTTP` is still the only module in this package permitted to
+open a socket, and `Raxol.Web3.Supervisor` refuses to boot if the shared read is not loadable,
+because `mint` is optional in `raxol_mcp` and required here.
 
 This implements ADR-0033 decisions 3, 5, 6 and its §7, and it is the concrete answer to the
 plan that ADR-0033 killed: forking Blockscout's MCP server is unavailable on licence grounds,
