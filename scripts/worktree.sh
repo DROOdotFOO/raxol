@@ -31,14 +31,38 @@
 #
 # So: one private cache per worktree, cheaply cloned. No shared mutable state.
 #
+# TRUST BOUNDARY. The seed is a COPY of whatever is in the source checkout,
+# not a fetch: the seeded worktree never runs `deps.get`, so Hex's checksum
+# verification never happens there. One hand-patched or stale artifact under
+# this checkout's `deps`/`_build` propagates into every worktree created
+# afterwards -- including a worktree created to review someone else's
+# branch, where the reviewer's assumption is that they are running that
+# branch against its locked dependencies.
+#
+# What IS checked is cheap and offline: `mix.lock` (root and every
+# `packages/*/mix.lock`) must match between source and target, because a
+# differing lock is exactly the case where the seeded artifacts do not
+# describe the branch's dependencies. That is a staleness check, not an
+# integrity one -- it says the two checkouts agree on what the dependencies
+# should be, not that the copied bytes are what Hex published.
+#
+# So this is a single-user workstation helper. It is NOT for a shared box or
+# a CI runner, where every worktree must fetch and verify its own
+# dependencies: use `--fresh` there, or do not use this script.
+#
 # Usage:
-#   scripts/worktree.sh add <branch> [path] [--from <ref>]
+#   scripts/worktree.sh add <branch> [path] [--from <ref>] [--fresh]
 #   scripts/worktree.sh sync <path>
 #   scripts/worktree.sh rm <path>
 #   scripts/worktree.sh list
 #
 # `add` creates the branch if it does not exist (from --from, default HEAD;
 # --from is refused when the branch already exists, rather than ignored).
+# `--fresh` skips seeding entirely -- a plain cold `git worktree add`, whose
+# first compile pays the full dependency fetch and build, and whose
+# dependencies are therefore fetched and checksum-verified for that branch.
+# That is the way to proceed when a seed is refused, and the way to use this
+# script anywhere the trust boundary in this file's header does not hold.
 # Default path: /tmp/raxol-<branch with / and non-word chars as ->.
 #
 # `sync <path>` re-seeds an EXISTING worktree of this repository -- after a
@@ -49,7 +73,10 @@
 #
 # Exit codes: 0 ok, 1 a usage error or a refused target, 2 the source
 # checkout has no warm cache to clone (run `mix deps.get && mix compile` in
-# it first). A failing `git` surfaces git's own status.
+# it first), 3 `mix.lock` differs between the source checkout and the
+# target, so the seed would describe the wrong dependencies (re-run with
+# `--fresh`, or bring this checkout to that lock first). A failing `git`
+# surfaces git's own status.
 # ---8<---
 
 set -euo pipefail
@@ -151,6 +178,43 @@ assert_seedable() {
   SEED_TARGET="$resolved"
 }
 
+# The one provenance check this script can make offline and for free: the
+# seeded caches are the dependencies the SOURCE checkout resolved, so if the
+# target's `mix.lock` says something else, the seed describes the wrong
+# dependencies -- and Mix will not notice, because it never re-fetches what
+# it already considers built. Refusing is the honest answer; `--fresh` is
+# how the caller proceeds.
+#
+# Root lock plus every package's, on BOTH sides: a package that exists in
+# only one of the two checkouts is itself a lock difference. `cmp` rather
+# than a checksum -- same answer, one process, and it stops at the first
+# differing byte.
+assert_locks_match() {
+  local target="$1"
+  local rels=(mix.lock) mismatched=() rel lock
+
+  shopt -s nullglob
+  for lock in "$repo_root"/packages/*/mix.lock "$target"/packages/*/mix.lock; do
+    rel="packages/$(basename "$(dirname "$lock")")/mix.lock"
+    [[ " ${rels[*]} " == *" $rel "* ]] || rels+=("$rel")
+  done
+  shopt -u nullglob
+
+  for rel in "${rels[@]}"; do
+    # Absent on both sides is not a difference (a package that vendors no
+    # dependencies has no lock); absent on ONE side is.
+    [[ -f "$repo_root/$rel" || -f "$target/$rel" ]] || continue
+
+    if [[ ! -f "$repo_root/$rel" || ! -f "$target/$rel" ]] ||
+      ! cmp -s "$repo_root/$rel" "$target/$rel"; then
+      mismatched+=("$rel")
+    fi
+  done
+
+  ((${#mismatched[@]} == 0)) ||
+    die "mix.lock differs between $repo_root and $target (${mismatched[*]}); the caches here are not that branch's dependencies. Use 'add --fresh' for an unseeded worktree, or bring this checkout to that lock first." 3
+}
+
 # Root caches plus every package's own (`packages/*/deps` and
 # `packages/*/_build` are separate Mix projects and separately warm).
 #
@@ -163,6 +227,8 @@ assert_seedable() {
 seed_caches() {
   local target="$1"
   local missing=()
+
+  assert_locks_match "$target"
 
   for name in _build deps; do
     [[ -d "$repo_root/$name" ]] || missing+=("$name")
@@ -211,7 +277,7 @@ slug() {
 cmd_add() {
   local branch="${1:-}"
   shift || true
-  local path="" from="HEAD" from_given=0
+  local path="" from="HEAD" from_given=0 fresh=0
 
   while (($# > 0)); do
     case "$1" in
@@ -220,6 +286,10 @@ cmd_add() {
         [[ -n "$from" ]] || usage
         from_given=1
         shift 2
+        ;;
+      --fresh)
+        fresh=1
+        shift
         ;;
       -*)
         die "unknown option: $1"
@@ -261,13 +331,20 @@ cmd_add() {
   # supposed to prevent. Run in a subshell, because `seed_caches` reports
   # failure by exiting (`die`) -- calling it directly would take this shell
   # down with it and skip the unwind.
-  local status=0
-  (seed_caches "$path") || status=$?
+  #
+  # Which of the two a caller got is reported, because it decides both what
+  # the first compile costs and where the dependencies in there came from.
+  if ((fresh == 1)); then
+    printf 'fresh %s (nothing seeded; its own deps.get fetches and verifies)\n' "$path"
+  else
+    local status=0
+    (seed_caches "$path") || status=$?
 
-  if ((status != 0)); then
-    git worktree remove --force "$path" >/dev/null 2>&1 || true
-    ((created_branch == 0)) || git branch -D "$branch" >/dev/null 2>&1 || true
-    die "seeding failed; removed $path (and its new branch) again" "$status"
+    if ((status != 0)); then
+      git worktree remove --force "$path" >/dev/null 2>&1 || true
+      ((created_branch == 0)) || git branch -D "$branch" >/dev/null 2>&1 || true
+      die "seeding failed; removed $path (and its new branch) again" "$status"
+    fi
   fi
 
   printf 'cd %s\n' "$path"

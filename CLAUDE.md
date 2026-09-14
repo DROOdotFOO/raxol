@@ -140,6 +140,17 @@ at all. The app's own beams DO recompile (Mix manifests are keyed by absolute
 source path, which is also why a `MIX_BUILD_PATH` shared between worktrees
 recompiles anyway, and would have two worktrees writing the same manifests).
 
+That speed is bought with trust: the seed is a COPY of this checkout's
+`deps`/`_build`, the new worktree never runs `deps.get`, so Hex checksum
+verification never happens there and one hand-patched dependency here
+propagates into every worktree made afterwards. It is a single-user
+workstation helper, not something for a shared box or a CI runner, where
+every worktree must fetch and verify its own dependencies. `worktree.sh add
+BRANCH --fresh` skips seeding for exactly that case, and `add` refuses to
+seed at all when `mix.lock` (root or any `packages/*/mix.lock`) differs
+between this checkout and the branch, since then the caches describe some
+other set of dependencies (exit 3).
+
 ### Install paths
 
 The packaged CLI is self-contained (Burrito wraps its own ERTS), so none of
