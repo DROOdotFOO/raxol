@@ -430,7 +430,8 @@ defmodule Raxol.Harness.EditorSessionTest do
       0
     end
 
-    {:ok, _} = EditorSession.run("secret draft", base_opts(device, tmp_dir, spawn_fun))
+    {:ok, _} =
+      EditorSession.run("secret draft", base_opts(device, tmp_dir, spawn_fun))
 
     {:perms, file_perms, dir_perms, draft_dir} =
       Enum.find(events(), &match?({:perms, _, _, _}, &1))
@@ -491,7 +492,10 @@ defmodule Raxol.Harness.EditorSessionTest do
 
     # REAL default spawn (no :spawn_fun injected): "sleep 3" plays the
     # wedged editor; the 300ms bound must kill the wait long before the
-    # 3s exit would deliver a status.
+    # 3s exit would deliver a status. No elapsed-time assertion: the
+    # `:editor_timeout` reason IS the discriminator -- waiting the editor
+    # out returns its exit status instead -- and a wait that never ends is
+    # caught by ExUnit's own per-test timeout.
     opts =
       base_opts(device, tmp_dir, nil)
       |> Keyword.delete(:spawn_fun)
@@ -500,12 +504,7 @@ defmodule Raxol.Harness.EditorSessionTest do
         editor_timeout_ms: 300
       )
 
-    started = System.monotonic_time(:millisecond)
-    result = EditorSession.run("draft", opts)
-    elapsed = System.monotonic_time(:millisecond) - started
-
-    assert {:kept, :editor_timeout, %{}} = result
-    assert elapsed < 2_000
+    assert {:kept, :editor_timeout, %{}} = EditorSession.run("draft", opts)
 
     # the resume bracket still ran
     assert :stty_raw in event_names()

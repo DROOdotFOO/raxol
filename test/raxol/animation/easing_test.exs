@@ -211,69 +211,10 @@ defmodule Raxol.Animation.EasingTest do
     end
   end
 
-  describe "Performance" do
-    # Wall-clock bound (1ms for 5 calls); a single scheduler preemption
-    # busts it on loaded CI runners.
-    @tag :skip_on_ci
-    test ~c"easing functions meet performance requirements" do
-      # Test all easing functions
-      easing_functions = [
-        :linear,
-        :ease_in_quad,
-        :ease_out_quad,
-        :ease_in_out_quad,
-        :ease_in_cubic,
-        :ease_out_cubic,
-        :ease_in_out_cubic,
-        :ease_in_quart,
-        :ease_out_quart,
-        :ease_in_out_quart,
-        :ease_in_quint,
-        :ease_out_quint,
-        :ease_in_out_quint,
-        :ease_in_sine,
-        :ease_out_sine,
-        :ease_in_out_sine,
-        :ease_in_expo,
-        :ease_out_expo,
-        :ease_in_out_expo,
-        :ease_in_circ,
-        :ease_out_circ,
-        :ease_in_out_circ,
-        :ease_in_back,
-        :ease_out_back,
-        :ease_in_out_back,
-        :ease_in_elastic,
-        :ease_out_elastic,
-        :ease_in_out_elastic,
-        :ease_in_bounce,
-        :ease_out_bounce,
-        :ease_in_out_bounce
-      ]
-
-      # Test each function with multiple inputs
-      test_inputs = [0.0, 0.25, 0.5, 0.75, 1.0]
-
-      # Warmup: ensure module is loaded and JIT-compiled before timing
-      for function <- easing_functions, input <- test_inputs do
-        apply(Easing, function, [input])
-      end
-
-      for function <- easing_functions do
-        start_time = System.monotonic_time(:microsecond)
-
-        for input <- test_inputs do
-          apply(Easing, function, [input])
-        end
-
-        end_time = System.monotonic_time(:microsecond)
-
-        duration = end_time - start_time
-
-        # Each function should complete 5 calls well under 1ms
-        assert duration < 1000,
-               "Easing function #{function} too slow: #{duration}μs"
-      end
-    end
-  end
+  # Deleted describe "Performance": "easing functions meet performance
+  # requirements" timed five arithmetic calls per function against a 1ms
+  # ceiling -- microseconds of work measured with a bound a single
+  # scheduler hiccup breaks. Easing is pure arithmetic; `bench/` owns any
+  # budget for it, and the value assertions above already pin every
+  # function's output for all five inputs.
 end

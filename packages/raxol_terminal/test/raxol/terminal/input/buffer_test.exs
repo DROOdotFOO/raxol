@@ -1,5 +1,14 @@
 defmodule Raxol.Terminal.Input.BufferTest do
   use ExUnit.Case, async: true
+
+  # Every test here waits for the buffer process to finish by monitoring it.
+  # ExUnit's DEFAULT `assert_receive` bound is 100ms, which on a loaded
+  # runner is a coin flip for "a GenServer processed one keystroke and
+  # exited": this file's "handles callback errors gracefully" test was seen
+  # failing with "no matching message after 100ms" once in ten runs. The
+  # message still has to ARRIVE -- this is a receive bound, not a ceiling on
+  # how long the work may take -- so it is set generously and explicitly.
+  @down_timeout_ms 5_000
   alias Raxol.Terminal.Input.Buffer
 
   setup do
@@ -24,7 +33,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
       end)
 
       Buffer.feed_input(pid, "a")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       # Get events from ETS after process termination
       collected_events =
@@ -47,7 +56,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
 
       # Feed partial escape sequence
       Buffer.feed_input(pid, "\e[")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       # Should not have processed the partial sequence
       collected_events =
@@ -69,7 +78,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
       # Feed multiple sequences: "b" + mouse event + "a"
       input = "b\e[0;0;10;20Ma"
       Buffer.feed_input(pid, input)
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       collected_events =
         :ets.tab2list(events) |> Enum.map(fn {_, event} -> event end)
@@ -107,7 +116,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
       end)
 
       Buffer.feed_input(pid, "abc")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       collected_events =
         :ets.tab2list(events) |> Enum.map(fn {_, event} -> event end)
@@ -133,7 +142,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
 
       # Should not crash the buffer
       Buffer.feed_input(pid, "a")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       # No events should be stored due to callback error
       collected_events =
@@ -151,7 +160,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
       end)
 
       Buffer.clear_buffer(pid)
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       # Buffer should be cleared
       collected_events =
@@ -172,7 +181,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
 
       # Feed partial sequence and wait for timeout
       Buffer.feed_input(pid, "\e")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       # Should not have processed the partial sequence
       collected_events =
@@ -191,7 +200,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
 
       # Ctrl+Shift+A
       Buffer.feed_input(pid, "\e[1;2;5A")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       collected_events =
         :ets.tab2list(events) |> Enum.map(fn {_, event} -> event end)
@@ -213,7 +222,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
 
       # Left mouse press at (10,20)
       Buffer.feed_input(pid, "\e[0;0;10;20M")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       collected_events =
         :ets.tab2list(events) |> Enum.map(fn {_, event} -> event end)
@@ -236,7 +245,7 @@ defmodule Raxol.Terminal.Input.BufferTest do
       end)
 
       Buffer.feed_input(pid, "\e[invalid")
-      assert_receive {:DOWN, _, :process, ^pid, :normal}
+      assert_receive {:DOWN, _, :process, ^pid, :normal}, @down_timeout_ms
 
       # Should not process invalid sequences
       collected_events =

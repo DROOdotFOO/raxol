@@ -480,14 +480,10 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
         String.duplicate("```\n", 50) <>
           String.duplicate("**", 200) <> String.duplicate("* item\n", 200)
 
-      {elapsed_us, rendered} =
-        :timer.tc(fn ->
-          MarkdownBody.render(pathological, %{mode: :streaming, width: 80})
-        end)
+      rendered =
+        MarkdownBody.render(pathological, %{mode: :streaming, width: 80})
 
       assert %{type: :column} = unwrap_law(rendered)
-      # generous bound -- the point is "doesn't hang", not a perf budget
-      assert elapsed_us < 2_000_000
     end
 
     test "deeply nested emphasis never raises" do
@@ -502,24 +498,24 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
   # --- N-MDFUZZ-05: large-input performance (the O(n^2)/O(n^3) regression
   # lock). Provisional close is single-pass O(n): one scan builds the
   # open-construct stack, one tail-walk resolves it -- no re-scan loop, no
-  # per-char full-stack sweep. These would time out under the old
-  # rescan-per-strip + mark_content-per-char design. ---
+  # per-char full-stack sweep. Every test below hangs for minutes under the
+  # old rescan-per-strip + mark_content-per-char design, which is what the
+  # per-test `timeout` catches. Nothing asserts on elapsed time: the real
+  # cost is milliseconds, so any measured bound is either a tautology or a
+  # flake on a loaded runner, and neither detects the regression better
+  # than failing to finish at all. ---
 
   describe "N-MDFUZZ-05 — large opener runs stay bounded (single-pass O(n))" do
-    @perf_bound_us 30_000_000
+    # An order of magnitude over the observed cost of the whole describe,
+    # and two orders under the pre-fix cost of any single test in it.
+    @describetag timeout: 30_000
 
-    test "20k unclosed brackets render well under the never-hang bound" do
+    test "20k unclosed brackets render without hanging" do
       doc = String.duplicate("[", 20_000)
 
-      {elapsed_us, rendered} =
-        :timer.tc(fn ->
-          MarkdownBody.render(doc, %{mode: :streaming, width: 80})
-        end)
+      rendered = MarkdownBody.render(doc, %{mode: :streaming, width: 80})
 
       assert %{type: :column} = unwrap_law(rendered)
-
-      assert elapsed_us < @perf_bound_us,
-             "20k-bracket render took #{elapsed_us}us (bound #{@perf_bound_us})"
 
       # all openers are content-free -> stripped away, no marker leak
       refute rendered |> flat_texts() |> Enum.join("\n") =~ "["
@@ -528,15 +524,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
     test "50k unclosed brackets still bounded" do
       doc = String.duplicate("[", 50_000)
 
-      {elapsed_us, rendered} =
-        :timer.tc(fn ->
-          MarkdownBody.render(doc, %{mode: :streaming, width: 80})
-        end)
+      rendered = MarkdownBody.render(doc, %{mode: :streaming, width: 80})
 
       assert %{type: :column} = unwrap_law(rendered)
-
-      assert elapsed_us < @perf_bound_us,
-             "50k-bracket render took #{elapsed_us}us (bound #{@perf_bound_us})"
     end
 
     test "mixed 10k brackets + 5k bold openers stays bounded" do
@@ -544,19 +534,14 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
       # the 10k "[" -- those brackets get closed as literal "[...]" rather
       # than stripped. Degenerate pure-marker runs like this render
       # literally (empty "[]"/"**" spans have no styled form); the
-      # invariant under test here is the O(n) TIME bound, not the (moot)
-      # leak shape of an all-marker input.
+      # invariant under test here is that the single-pass scan terminates
+      # (the describe's `timeout` is the budget), not the (moot) leak shape
+      # of an all-marker input.
       doc = String.duplicate("[", 10_000) <> String.duplicate("**", 5_000)
 
-      {elapsed_us, rendered} =
-        :timer.tc(fn ->
-          MarkdownBody.render(doc, %{mode: :streaming, width: 80})
-        end)
+      rendered = MarkdownBody.render(doc, %{mode: :streaming, width: 80})
 
       assert %{type: :column} = unwrap_law(rendered)
-
-      assert elapsed_us < @perf_bound_us,
-             "mixed-opener render took #{elapsed_us}us (bound #{@perf_bound_us})"
     end
 
     test "cumulative streaming: provisional_close on every prefix 1..n of a large opener run stays bounded" do
@@ -564,31 +549,25 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
       # in, and the projection re-renders at EVERY delta. The sum of
       # per-prefix work is the Theta(n^3) case pre-fix (each of n prefixes
       # cost Theta(n^2)); single-pass makes each prefix O(k), so the sum is
-      # Theta(n^2) -- comfortably bounded here.
+      # Theta(n^2) -- which finishes inside the timeout above.
       n = 2_000
       openers = String.duplicate("[", n)
       prefixes = for k <- 1..n, do: binary_part(openers, 0, k)
 
-      {elapsed_us, _results} =
-        :timer.tc(fn ->
-          Enum.each(prefixes, &MarkdownBody.provisional_close/1)
-        end)
-
-      assert elapsed_us < @perf_bound_us,
-             "cumulative #{n}-prefix stream took #{elapsed_us}us (bound #{@perf_bound_us})"
+      # Content-free opener runs strip to nothing, so the per-step claim is
+      # totality, not length: every prefix resolves to a binary rather than
+      # hanging or raising.
+      for prefix <- prefixes do
+        assert is_binary(MarkdownBody.provisional_close(prefix))
+      end
     end
 
     test "the >256KB degradation ceiling returns the text unchanged (no scan)" do
       # Above the cap, provisional_close is skipped entirely -- a pure
-      # safety belt (the single-pass O(n) scan is the actual fix). Verify
-      # the degradation path is a fast identity return.
+      # safety belt (the single-pass O(n) scan is the actual fix).
       huge = String.duplicate("[", 300 * 1024)
 
-      {elapsed_us, result} =
-        :timer.tc(fn -> MarkdownBody.provisional_close(huge) end)
-
-      assert result == huge
-      assert elapsed_us < @perf_bound_us
+      assert MarkdownBody.provisional_close(huge) == huge
     end
   end
 
@@ -1120,8 +1099,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
   # the cap -> un-parsed plain-text fallback; below it -> the parser
   # runs), never a wall-clock bound -- a timing assertion in the default
   # suite passes locally but flakes on a slow/contended CI runner. The
-  # wall-clock perf check lives in the `:slow`-tagged test below, excluded
-  # from the default CI run.
+  # per-delta re-parse cost is bounded by the cap, not by a measured
+  # budget: the `:slow` timing test that used to sit below was deleted, so
+  # nothing here measures time at all.
   describe "review round (Drew), MEDIUM — render path is byte-capped like provisional_close" do
     @cap_bytes 256 * 1024
 
@@ -1167,30 +1147,6 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
       refute full_text(rendered) =~ "*"
       assert full_text(rendered) =~ "bold"
       assert full_text(rendered) =~ "italic"
-    end
-
-    # Timing belongs in bench, never the default suite -- `:slow` is
-    # excluded by the repo's default `mix test` run. This is a documented
-    # perf guard (the render cap keeps per-delta re-parse work bounded
-    # even as an operator watches a large message stream in), not a CI
-    # gate.
-    @tag :slow
-    test "N streaming prefixes of a large document stay within budget" do
-      doc = String.duplicate("some **bold** text and *italic* text.\n", 8_000)
-
-      prefixes =
-        for k <- 1..20, do: binary_part(doc, 0, div(byte_size(doc) * k, 20))
-
-      {elapsed_us, _results} =
-        :timer.tc(fn ->
-          Enum.each(
-            prefixes,
-            &MarkdownBody.render(&1, %{mode: :streaming, width: 80})
-          )
-        end)
-
-      assert elapsed_us < 2_000_000,
-             "20 per-prefix large-doc streaming renders took #{elapsed_us}us"
     end
   end
 

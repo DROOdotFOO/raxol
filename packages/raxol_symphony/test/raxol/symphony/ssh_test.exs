@@ -95,25 +95,20 @@ defmodule Raxol.Symphony.SshTest do
       assert status == 0
     end
 
+    # The watcher polls on a 5s interval; a correct wrapper returns in tens
+    # of ms. A 3s per-test timeout therefore fails if the interval leaks
+    # into the command's runtime -- either by polling inline, or by letting
+    # the watcher inherit stdout so the reader waits for EOF on a pipe the
+    # lingering `sleep` still holds open. Both have bitten; neither needs an
+    # elapsed-time assertion to detect.
+    @tag timeout: 3_000
     test "a short command returns as soon as it exits, not a poll interval later" do
-      # The watcher polls on a multi-second interval. Two ways that interval
-      # can leak into a fast command's runtime, both of which have bitten:
-      # polling inline (so `wait` is unreachable until the sleep elapses), and
-      # letting the watcher inherit stdout (so the reader waits for EOF on a
-      # pipe the lingering `sleep` still holds open).
       wrapped = Ssh.reap_on_disconnect("echo done")
 
-      {elapsed_us, {output, status}} =
-        :timer.tc(fn -> System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true) end)
+      {output, status} = System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true)
 
       assert status == 0
       assert output =~ "done"
-
-      # The bound sits in the gap between correct (tens of ms) and either
-      # regression (a full 5s poll interval), with room for a loaded CI runner
-      # on both sides. Tightening it to what the happy path actually costs
-      # would buy no extra detection and would flake.
-      assert elapsed_us < 3_000_000, "took #{div(elapsed_us, 1000)}ms, expected well under 5s"
     end
 
     test "the command's real exit status survives the wrapper" do
@@ -132,23 +127,22 @@ defmodule Raxol.Symphony.SshTest do
       assert output =~ "start"
     end
 
+    # 6s command, 1s deadline, and a 4s per-test timeout: killing only the
+    # subshell leaves `sleep` holding the inherited stdout pipe, so the read
+    # blocks for the full 6s and this test cannot finish. The timeout is the
+    # discrimination the old `elapsed_us < 4_500_000` provided, without
+    # measuring the test's own clock.
+    @tag timeout: 4_000
     test "a deadline kills the command AND its children, then returns at once" do
       marker = Path.join(System.tmp_dir!(), "rx_deadline_#{:erlang.unique_integer([:positive])}")
       on_exit(fn -> File.rm(marker) end)
 
       wrapped = Ssh.reap_on_disconnect("sleep 6\ntouch #{marker}\n", deadline_seconds: 1)
 
-      {elapsed_us, {_out, status}} =
-        :timer.tc(fn -> System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true) end)
+      {_out, status} = System.cmd("bash", ["-lc", wrapped], stderr_to_stdout: true)
 
       refute status == 0
       refute File.exists?(marker), "the hook kept running past its deadline"
-
-      # Killing only the subshell would leave `sleep` holding the inherited
-      # stdout pipe, so the read would block for the command's full 6s even
-      # though it was "killed". The group kill is what makes this prompt. The
-      # bound discriminates 1s from 6s with headroom for a loaded runner.
-      assert elapsed_us < 4_500_000, "took #{div(elapsed_us, 1000)}ms, expected ~1s"
     end
 
     test "a command inside its deadline is left alone" do

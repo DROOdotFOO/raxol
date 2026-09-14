@@ -1,4 +1,3 @@
-
 defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
   use ExUnit.Case, async: false
   import Raxol.Test.TestUtils, only: [create_test_component: 2]
@@ -233,27 +232,17 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
     end
   end
 
-  describe "Performance Edge Cases" do
+  describe "Large Data Set Edge Cases" do
     test "handles large data sets" do
       component = create_test_component(HeavyComponent, %{})
 
-      # Measure performance with large data set
-      {time_ms, _result} =
-        measure_time(fn ->
-          {updated, _} =
-            Unit.simulate_event(
-              component,
-              Raxol.Core.Events.Event.new(:add_data, %{})
-            )
+      {updated, _} =
+        Unit.simulate_event(
+          component,
+          Raxol.Core.Events.Event.new(:add_data, %{})
+        )
 
-          assert length(updated.state.data) == 1000
-        end)
-
-      # Verify performance metrics
-      # Less than 1 second for the operation
-      assert time_ms < 1000
-
-      # (If you want to check total time for multiple iterations, use measure_average_time)
+      assert length(updated.state.data) == 1000
     end
 
     test "handles rapid state updates" do
@@ -265,24 +254,10 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
 
       updated = simulate_event_sequence(component, events)
 
-      # Verify component remains stable
+      # The data set is capped, however many events arrive, and the
+      # component's own accumulated computation_time keeps advancing.
       assert length(updated.state.data) == 1000
       assert updated.state.computation_time > 0
-    end
-
-    test "handles memory usage" do
-      component = create_test_component(HeavyComponent, %{})
-
-      # Simulate memory-intensive operations
-      events =
-        Enum.map(1..10, fn _ -> Raxol.Core.Events.Event.new(:add_data, %{}) end)
-
-      updated = simulate_event_sequence(component, events)
-
-      # Verify memory usage is reasonable
-      assert length(updated.state.data) == 1000
-      # Less than 5 seconds
-      assert updated.state.computation_time < 5000
     end
   end
 

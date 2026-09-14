@@ -252,16 +252,24 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicyTest do
     assert {:denied, :policy_crash} = authorize(Stubs.Exits, ctx(), sup)
   end
 
+  # 2s tag against the caller-supplied `timeout_ms: 80`. Without it nothing
+  # pinned that the OPTION is the bound that fired: a regression ignoring it
+  # and falling back to `@default_timeout_ms 5_000`, or config pushing
+  # `:attach_policy_timeout_ms` to 30s, still answers `:policy_timeout` and
+  # still passed under the 60s default. The bound is an availability control
+  # -- a hostile attach policy must not hold the bus -- so it gets pinned.
+  @tag timeout: 2_000
   test "hung policy denies :policy_timeout and the task is brutally killed (T-4)",
        %{sup: sup} do
     ctx = ctx(%{probe: self()})
-    t0 = System.monotonic_time(:millisecond)
-    assert {:denied, :policy_timeout} = authorize(Stubs.Hangs, ctx, sup, timeout_ms: 80)
-    elapsed = System.monotonic_time(:millisecond) - t0
 
-    # The policy ran (it announced), yet we returned promptly near the bound.
+    # `:policy_timeout` is only reachable through the bound expiring, and the
+    # policy announced itself first, so the pair proves "ran, then was cut
+    # off" without measuring the test's own elapsed time.
+    assert {:denied, :policy_timeout} =
+             authorize(Stubs.Hangs, ctx, sup, timeout_ms: 80)
+
     assert_received :hang_started
-    assert elapsed < 2_000
 
     # No children linger under the supervisor — the hung task was killed.
     assert Task.Supervisor.children(sup) == []

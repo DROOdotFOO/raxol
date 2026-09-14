@@ -688,28 +688,51 @@ defmodule Raxol.Workflow.ParallelTest do
   end
 
   describe "concurrent branches" do
-    # Wall-clock assertion: workflow orchestration overhead is comparable to
-    # the branch sleep durations, so shared CI runners overshoot the ceiling.
-    # Parallelism correctness is covered by the non-timing tests above.
-    @tag :skip_on_ci
-    test "three branches with sleeps complete in roughly the slowest, not the sum" do
-      # Each branch sleeps a known duration; under concurrent execution
-      # the run finishes near max(d_a, d_b, d_c), not d_a + d_b + d_c.
+    # Ordering-based, so it runs everywhere: the old wall-clock ceiling was
+    # `:skip_on_ci` because orchestration overhead is comparable to the
+    # branch sleeps on a shared runner.
+    test "three branches with sleeps overlap instead of running one after another" do
+      # The old version timed the whole invoke and asserted `elapsed < 130ms`
+      # against a 150ms serial sum -- a 1.9x ceiling that a busy runner
+      # breaks. Concurrency is an ORDERING claim, so it is proven by
+      # ordering: every branch records when it enters and when it leaves, and
+      # the run is concurrent iff all three had entered before any had left.
+      # Serial execution cannot produce that interleaving at any speed.
+      table = :"par_overlap_#{:erlang.unique_integer([:positive])}"
+
+      _ =
+        :ets.new(table, [
+          :ordered_set,
+          :public,
+          :named_table,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
+
+      on_exit(fn -> TestUtils.drop_ets_tables(table) end)
+
+      mark = fn phase, branch ->
+        :ets.insert(
+          table,
+          {:erlang.unique_integer([:monotonic, :positive]), phase, branch}
+        )
+      end
+
+      branch = fn name, sleep_ms ->
+        fn state ->
+          mark.(:enter, name)
+          Process.sleep(sleep_ms)
+          mark.(:leave, name)
+          {:ok, Map.put(state, name, true)}
+        end
+      end
+
       graph =
         Graph.new(:speedup)
         |> Graph.add_node(:fan_out, fn s -> {:ok, s} end)
-        |> Graph.add_node(:slow_a, fn s ->
-          Process.sleep(70)
-          {:ok, Map.put(s, :a, true)}
-        end)
-        |> Graph.add_node(:slow_b, fn s ->
-          Process.sleep(50)
-          {:ok, Map.put(s, :b, true)}
-        end)
-        |> Graph.add_node(:slow_c, fn s ->
-          Process.sleep(30)
-          {:ok, Map.put(s, :c, true)}
-        end)
+        |> Graph.add_node(:slow_a, branch.(:a, 70))
+        |> Graph.add_node(:slow_b, branch.(:b, 50))
+        |> Graph.add_node(:slow_c, branch.(:c, 30))
         |> Graph.add_node(:join, fn s -> {:ok, s} end)
         |> Graph.add_edge(:__start__, :fan_out)
         |> Graph.add_conditional_edge(
@@ -727,16 +750,20 @@ defmodule Raxol.Workflow.ParallelTest do
 
       {:ok, compiled} = Graph.compile(graph)
 
-      started_us = System.monotonic_time(:microsecond)
-      assert {:ok, _final, _meta} = Compiled.invoke(compiled, %{})
-      elapsed_us = System.monotonic_time(:microsecond) - started_us
-      elapsed_ms = div(elapsed_us, 1_000)
+      assert {:ok, final, _meta} = Compiled.invoke(compiled, %{})
+      assert final[:a] && final[:b] && final[:c]
 
-      # Strict serial would be 70 + 50 + 30 = 150 ms. Concurrent should
-      # be ~70 ms (the slowest branch); give a generous 130 ms ceiling
-      # to avoid flakiness on busy CI runners.
-      assert elapsed_ms < 130,
-             "expected concurrent fan-out to take < 130 ms, took #{elapsed_ms} ms"
+      phases =
+        table
+        |> :ets.tab2list()
+        |> Enum.map(fn {_seq, phase, _branch} -> phase end)
+
+      assert Enum.count(phases, &(&1 == :enter)) == 3
+      assert Enum.count(phases, &(&1 == :leave)) == 3
+
+      # All three entries precede the first exit.
+      assert Enum.take(phases, 3) == [:enter, :enter, :enter],
+             "branches did not overlap; phase order was #{inspect(phases)}"
     end
 
     test "parallelism: 1 falls back to serial ordering" do

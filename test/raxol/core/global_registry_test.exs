@@ -530,41 +530,22 @@ defmodule Raxol.Core.GlobalRegistryTest do
     end
   end
 
-  describe "performance and scalability" do
-    # Wall-clock bounds (10ms single lookup / 1s bulk); flake on loaded
-    # CI runners.
-    @tag :skip_on_ci
-    test "handles large numbers of entries efficiently" do
-      # Register many entries to test performance
+  describe "bulk registration and search at scale" do
+    test "bulk registration registers every entry and each is retrievable" do
       entries =
         1..100
         |> Enum.map(fn i ->
           {"entry_#{i}", %{index: i, data: "test_data_#{i}"}}
         end)
 
-      start_time = System.monotonic_time(:millisecond)
       assert {:ok, 100} = GlobalRegistry.bulk_register(:components, entries)
-      end_time = System.monotonic_time(:millisecond)
-
-      # Should complete reasonably quickly (less than 1 second)
-      assert end_time - start_time < 1000
-
-      # Verify all entries are registered
       assert 100 = GlobalRegistry.count(:components)
 
-      # Test lookup performance
-      start_time = System.monotonic_time(:millisecond)
-      {:ok, _} = GlobalRegistry.lookup(:components, "entry_50")
-      end_time = System.monotonic_time(:millisecond)
-
-      # Lookups should be very fast (less than 10ms)
-      assert end_time - start_time < 10
+      assert {:ok, %{index: 50}} =
+               GlobalRegistry.lookup(:components, "entry_50")
     end
 
-    # Wall-clock bound (100ms search); flakes on loaded CI runners.
-    @tag :skip_on_ci
-    test "search performance is acceptable" do
-      # Register entries with searchable content
+    test "search returns every matching entry" do
       1..50
       |> Enum.each(fn i ->
         GlobalRegistry.register(:commands, "test_command_#{i}", %{
@@ -572,15 +553,9 @@ defmodule Raxol.Core.GlobalRegistryTest do
         })
       end)
 
-      start_time = System.monotonic_time(:millisecond)
       results = GlobalRegistry.search(:commands, "command")
-      end_time = System.monotonic_time(:millisecond)
 
-      # Should find all entries
       assert length(results) == 50
-
-      # Search should complete quickly (less than 100ms)
-      assert end_time - start_time < 100
     end
   end
 

@@ -89,13 +89,70 @@ defmodule Raxol.Recording.PlayerTest do
         ]
       }
 
-      # At 100x speed, 5s delay becomes 50ms. If the multiplier were ignored,
-      # this would take ~5s. Threshold leaves headroom for slow CI runners
-      # (macOS GitHub runners can add ~1s of ExUnit/JIT overhead).
-      {time_us, :ok} =
-        :timer.tc(fn -> Player.play(session, [speed: 100.0] ++ @play_opts) end)
+      assert :ok = Player.play(session, [speed: 100.0] ++ @play_opts)
+    end
 
-      assert time_us < 2_500_000
+    # `frame_delay_ms/3` computing the right number proves nothing about the
+    # CALL SITE passing the right speed: mutating `play_events_simple/3` to
+    # pass `1.0` left the suite green, the run just took 5 seconds longer.
+    # With the sleep injected, the requested durations are the assertion.
+    test "the speed multiplier reaches the playback path, not just the helper" do
+      session = %Session{
+        width: 80,
+        height: 24,
+        started_at: DateTime.utc_now(),
+        events: [
+          {0, :output, "a"},
+          {5_000_000, :output, "b"},
+          {5_200_000, :output, "c"}
+        ]
+      }
+
+      test_pid = self()
+      record = fn ms -> send(test_pid, {:slept, ms}) end
+
+      assert :ok =
+               Player.play(
+                 session,
+                 [speed: 100.0, sleep: record, max_delay: 10.0] ++ @play_opts
+               )
+
+      # 5s gap at 100x = 50ms; the 200ms gap that follows = 2ms.
+      assert_received {:slept, 50}
+      assert_received {:slept, 2}
+      refute_received {:slept, _}
+
+      # And at 1x the same session asks for the real gaps.
+      assert :ok =
+               Player.play(
+                 session,
+                 [speed: 1.0, sleep: record, max_delay: 10.0] ++ @play_opts
+               )
+
+      assert_received {:slept, 5_000}
+      assert_received {:slept, 200}
+    end
+  end
+
+  # The multiplier used to be checked by timing `play/2`: at 100x a 5s gap
+  # becomes 50ms, so "ignored multiplier" showed up as a ~5s run and the test
+  # asserted `elapsed < 2.5s`. That is a wall-clock ceiling standing in for
+  # an arithmetic claim. `frame_delay_ms/3` is the arithmetic, so the claim
+  # is now checked directly -- and it covers the interactive path too, which
+  # the timed test never reached.
+  describe "frame_delay_ms/3" do
+    test "the speed multiplier divides the inter-event gap" do
+      assert Player.frame_delay_ms(5_000_000, 1.0, 10.0) == 5_000
+      assert Player.frame_delay_ms(5_000_000, 100.0, 10.0) == 50
+      assert Player.frame_delay_ms(5_000_000, 0.5, 20.0) == 10_000
+    end
+
+    test "max_delay caps the wait, and a backwards gap never sleeps" do
+      # A 5s gap at 1x, capped at 3s.
+      assert Player.frame_delay_ms(5_000_000, 1.0, 3.0) == 3_000
+
+      # Out-of-order timestamps must not produce a negative sleep.
+      assert Player.frame_delay_ms(-1_000_000, 1.0, 5.0) == 0
     end
   end
 end

@@ -384,7 +384,7 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     end
   end
 
-  describe "performance and edge cases" do
+  describe "batching edge cases" do
     setup do
       batcher_name = :"test_perf_#{System.unique_integer([:positive])}"
       start_supervised!({RenderBatcher, name: batcher_name})
@@ -493,25 +493,14 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
       assert stats.updates_batched == 1
     end
 
-    # Wall-clock bound (100ms submit+flush); flakes on loaded CI runners.
-    @tag :skip_on_ci
-    test "handles timing calculations correctly", %{batcher: batcher} do
-      # Test timing-related arithmetic
-      start_time = System.monotonic_time(:millisecond)
-
+    test "a submitted update is flushed as exactly one batch", %{
+      batcher: batcher
+    } do
       tree = %{type: :container}
       diff = {:update, [], %{type: :content}}
 
-      # Submit update and measure processing time
       :ok = RenderBatcher.submit_update(tree, diff, :medium, batcher)
       :ok = RenderBatcher.force_flush(batcher)
-
-      end_time = System.monotonic_time(:millisecond)
-      processing_time = end_time - start_time
-
-      # Should complete quickly
-      # Less than 100ms
-      assert processing_time < 100
 
       stats = RenderBatcher.get_stats(batcher)
       assert stats.batches_processed == 1

@@ -669,7 +669,7 @@ defmodule Raxol.Core.Runtime.Plugins.CommandsTest do
       end
     end
 
-    test "handles command execution timing", %{
+    test "executes a registered command and returns updated plugin states", %{
       command_table: table,
       manager_state: state
     } do
@@ -692,9 +692,6 @@ defmodule Raxol.Core.Runtime.Plugins.CommandsTest do
           table
         )
 
-      # Execute command and measure time
-      start_time = System.monotonic_time()
-
       assert {:ok, _updated_states} =
                CommandHelper.handle_command(
                  table,
@@ -703,14 +700,6 @@ defmodule Raxol.Core.Runtime.Plugins.CommandsTest do
                  ["arg"],
                  manager_state
                )
-
-      end_time = System.monotonic_time()
-
-      # Verify execution time is reasonable (less than 100ms)
-      execution_time =
-        System.convert_time_unit(end_time - start_time, :native, :millisecond)
-
-      assert execution_time < 100, "Command execution took #{execution_time}ms"
     end
 
     test "handles command cancellation", %{

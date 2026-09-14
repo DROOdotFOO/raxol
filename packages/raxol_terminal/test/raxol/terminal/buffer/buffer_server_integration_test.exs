@@ -379,36 +379,21 @@ defmodule Raxol.Terminal.Buffer.BufferServerRefactoredIntegrationTest do
     end
   end
 
-  describe "performance characteristics" do
-    test "handles large batch operations efficiently", %{buffer_pid: pid} do
-      # Create a large batch of operations
+  describe "batched writes" do
+    test "a batch of writes is visible after one flush", %{buffer_pid: pid} do
       operations =
         for x <- 0..9, y <- 0..4 do
           cell = Cell.new("#{x}#{y}", TextFormatting.new())
           {:set_cell, x, y, cell}
         end
 
-      # Time the operation
-      start_time = System.monotonic_time(:microsecond)
       :ok = BufferServer.batch_operations(pid, operations)
       :ok = BufferServer.flush(pid)
-      end_time = System.monotonic_time(:microsecond)
 
-      duration = end_time - start_time
-
-      # Verify all operations completed
       for x <- 0..9, y <- 0..4 do
         {:ok, cell} = BufferServer.get_cell(pid, x, y)
         assert Cell.get_char(cell) == "#{x}#{y}"
       end
-
-      # Log performance for analysis
-      IO.puts(
-        "Large batch operation took #{duration} microseconds for #{length(operations)} operations"
-      )
-
-      # Should complete in less than 1 second
-      assert duration < 1_000_000
     end
   end
 end

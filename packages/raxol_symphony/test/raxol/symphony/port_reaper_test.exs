@@ -197,22 +197,21 @@ defmodule Raxol.Symphony.PortReaperTest do
       assert wait_until(fn -> not alive?("-#{pgid}") end)
     end
 
+    # A 30s tag against a 300s grace: waiting the grace out cannot pass, and
+    # unlike ExUnit's default the tag survives `--trace` (which sets the
+    # default to `:infinity`) and a `--timeout 300000` lane.
+    @tag timeout: 30_000
     test "returns as soon as a well-behaved child exits, without spending the grace" do
       port = open_child("echo ready; cat > /dev/null")
       {:group, pgid} = target = PortReaper.capture(port)
 
       close(port)
 
-      elapsed =
-        wall_ms(fn ->
-          assert :ok = PortReaper.await_exit(target, 30_000)
-        end)
-
+      # 300s grace, ExUnit per-test timeout 60s: a version that waited the
+      # grace out instead of detecting the exit cannot reach the assertions
+      # below, so no elapsed-time ceiling is needed.
+      assert :ok = PortReaper.await_exit(target, 300_000)
       assert wait_until(fn -> not alive?("-#{pgid}") end)
-
-      # Bounded well under the grace: the point is that a clean exit is detected
-      # rather than waited out. Generous enough not to be a timing race.
-      assert elapsed < 10_000
     end
 
     test "is a no-op for :none" do
@@ -330,9 +329,7 @@ defmodule Raxol.Symphony.PortReaperTest do
     end
   end
 
-  defp wall_ms(fun) do
-    started = System.monotonic_time(:millisecond)
-    fun.()
-    System.monotonic_time(:millisecond) - started
-  end
+  # `wall_ms/1` is gone with the elapsed-time assertion it fed: a clean
+  # exit being DETECTED rather than waited out is proven by handing
+  # `await_exit/2` a grace far longer than ExUnit's own per-test timeout.
 end

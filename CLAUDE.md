@@ -423,6 +423,23 @@ Key rules:
 - MockDB used instead of Ecto sandbox
 - Mox mocks defined in `test/test_helper.exs` for core runtime behaviours
 
+**Timing in tests**:
+
+- Never assert on measured elapsed time. A ceiling set close to the real
+  cost flakes on a loaded runner; one set far above it proves nothing.
+- Prove causality instead: by message (`assert_receive`, a monitor `:DOWN`),
+  by ordering (timestamps written from each participant), or by the returned
+  value when only one branch can produce it (`{:kept, :editor_timeout, _}`,
+  `{:denied, :policy_timeout}`).
+- Keep a lower bound only where the code guarantees it (`Process.sleep(50)`
+  => `assert elapsed >= 50`).
+- When the failure mode is a hang or a superlinear blow-up, the budget is
+  the test's own `@tag timeout:` (or `@describetag`), set an order of
+  magnitude above the observed cost. ExUnit reports it as a failure with a
+  stack, and nothing has to be measured.
+- Throughput and allocation budgets live in `bench/` and the
+  regression-testing workflow, never in the suite.
+
 ### Naming conventions
 
 - Module files: `<domain>_<function>.ex` (e.g., `cursor_manager.ex`, `buffer_server.ex`)
