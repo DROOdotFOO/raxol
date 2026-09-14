@@ -1,0 +1,1 @@
+{"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"{\n  \"error\": \"account_required\",\n  \"message\": \"Create a free ccscan account (or use an API key) to query the API. Browsing ccscan.xyz needs no account.\"\n}","type":"text"}],"isError":true}}
