@@ -221,6 +221,16 @@ defmodule Raxol.Harness.Surface.ViewText do
   dropped rather than passed through. `\\n` needs no exception -- `add_lines/3`
   already consumed every `\\n` as the line-split delimiter before this runs.
 
+  Also stripped: the bidi and zero-width FORMAT characters, which need no
+  control byte to lie about what a line says. U+202A-202E and U+2066-2069
+  reorder rendered text (Trojan Source, CWE-451), so
+  `"disabled in a hosted session"` can be made to read as its opposite with
+  nothing an ESC filter would catch; U+200B, U+200E-200F, U+00AD,
+  U+2028-2029 and U+FEFF hide or re-break content the reader is being asked
+  to trust. ZWJ (U+200D) and ZWNJ (U+200C) are kept: they join emoji
+  sequences and carry meaning in Indic and Perso-Arabic scripts, and they
+  reorder nothing.
+
   Public: this is the ONE sanitize implementation every caller of untrusted
   single-line content shares -- `add_lines/3` above, and
   `Raxol.Harness.DiffExpansion`'s own per-row renderer, which needs this exact
@@ -238,12 +248,28 @@ defmodule Raxol.Harness.Surface.ViewText do
     do: sanitize(rest, <<acc::binary, @c0_exception>>)
 
   defp sanitize(<<cp::utf8, rest::binary>>, acc) do
-    if cp < 0x20 or cp == 0x7F or (cp >= 0x80 and cp <= 0x9F),
+    if strip?(cp),
       do: sanitize(rest, acc),
       else: sanitize(rest, <<acc::binary, cp::utf8>>)
   end
 
   defp sanitize(<<_byte, rest::binary>>, acc), do: sanitize(rest, acc)
+
+  # C0 (minus tab, handled above), DEL, C1, then the format characters that
+  # can misrepresent a line: soft hyphen, zero-width space, LRM/RLM, the
+  # LRE/RLE/PDF/LRO/RLO embedding-override block, LS/PS, the LRI/RLI/FSI/PDI
+  # isolates, and BOM-as-ZWNBSP.
+  #
+  # ZWJ (U+200D) and ZWNJ (U+200C) are deliberately KEPT: they are ordinary
+  # content, not formatting -- ZWJ joins emoji sequences and both carry
+  # meaning in Indic and Perso-Arabic scripts -- so stripping them would
+  # corrupt legitimate text to no security end. They reorder nothing.
+  defp strip?(cp) do
+    cp < 0x20 or cp == 0x7F or (cp >= 0x80 and cp <= 0x9F) or cp == 0x00AD or
+      cp == 0x200B or cp == 0x200E or cp == 0x200F or
+      (cp >= 0x2028 and cp <= 0x202E) or (cp >= 0x2066 and cp <= 0x2069) or
+      cp == 0xFEFF
+  end
 
   # -- width truncation (plain content only, before any styling) ---------
 

@@ -66,4 +66,56 @@ defmodule Raxol.Harness.C1SanitizerTest do
       assert plain(<<0xC3, 0xA9>>) == <<0xC3, 0xA9>>
     end
   end
+
+  # Trojan Source (CWE-451): a bidi override needs no control byte to make a
+  # rendered line say the opposite of what it contains, so a filter that only
+  # removes C0/C1/DEL leaves the deception intact. Every caller of
+  # `sanitize_line/1` is rendering text it did not author.
+  describe "ViewText.sanitize_line/1 strips bidi and zero-width format characters" do
+    test "the bidi overrides and isolates are removed" do
+      for cp <- [
+            0x202A,
+            0x202B,
+            0x202C,
+            0x202D,
+            0x202E,
+            0x2066,
+            0x2067,
+            0x2068,
+            0x2069
+          ] do
+        out = ViewText.sanitize_line("a" <> <<cp::utf8>> <> "b")
+
+        assert out == "ab",
+               "U+#{Integer.to_string(cp, 16)} survived: #{inspect(out)}"
+      end
+    end
+
+    test "zero-width space, soft hyphen, marks, separators and BOM are removed" do
+      for cp <- [0x00AD, 0x200B, 0x200E, 0x200F, 0x2028, 0x2029, 0xFEFF] do
+        out = ViewText.sanitize_line("a" <> <<cp::utf8>> <> "b")
+
+        assert out == "ab",
+               "U+#{Integer.to_string(cp, 16)} survived: #{inspect(out)}"
+      end
+    end
+
+    test "a hosted-session notice cannot be reversed by an RLO" do
+      forged = "disabled" <> <<0x202E::utf8>> <> "delbane"
+
+      assert ViewText.sanitize_line(forged) == "disableddelbane"
+    end
+
+    test "joiners and ordinary text are kept" do
+      # ZWJ/ZWNJ are content, not formatting: stripping them would split
+      # emoji families and corrupt Indic and Perso-Arabic text.
+      assert ViewText.sanitize_line("a\tb") == "a\tb"
+      assert ViewText.sanitize_line("日本語") == "日本語"
+      assert ViewText.sanitize_line("مرحبا") == "مرحبا"
+      assert ViewText.sanitize_line("👨‍👩‍👧") == "👨‍👩‍👧"
+
+      assert ViewText.sanitize_line("क्" <> <<0x200C::utf8>> <> "ष") ==
+               "क्" <> <<0x200C::utf8>> <> "ष"
+    end
+  end
 end

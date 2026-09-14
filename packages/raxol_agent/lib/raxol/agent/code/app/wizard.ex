@@ -278,7 +278,20 @@ defmodule Raxol.Agent.Code.App.Wizard do
 
   @doc false
   # Shown on the setup panel and as the hint when a prompt is sent with no
-  # provider connected.
+  # provider connected. A jailed (hosted) session must not be told to run
+  # /login: the command refuses there, and `init/1` opens no wizard -- the
+  # host pre-wires the provider.
+  #
+  # The jail clause does NOT swallow the reason. A hosted session whose host
+  # pre-wired a harness but whose key did not resolve is the operator's
+  # problem to fix, and answering it with "credential management is
+  # disabled" hides the diagnosis behind the policy: the jailed variant says
+  # both, minus the /login cheatsheet the tenant cannot act on.
+  def provider_setup_hint(%{jail: true, provider_status: {:no_key, harness}}),
+    do: "harness #{harness} was selected but no key resolved.\n\n" <> hosted_note()
+
+  def provider_setup_hint(%{jail: true}), do: hosted_note()
+
   def provider_setup_hint(%{provider_status: {:no_key, harness}}) do
     "harness #{harness} was selected but no key resolved.\n\n" <>
       login_status_text()
@@ -287,6 +300,12 @@ defmodule Raxol.Agent.Code.App.Wizard do
   def provider_setup_hint(_model) do
     "No LLM provider connected.\n\n" <> login_status_text()
   end
+
+  # The heading already says "no provider connected", and `init/1`'s boot
+  # notice says the whole sentence, so the panel body does not repeat the
+  # first half a third time on the same screen.
+  defp hosted_note,
+    do: "credential management is disabled in a hosted session (host must pre-wire a provider)"
 
   # -- panels -----------------------------------------------------------------
 
@@ -404,9 +423,13 @@ defmodule Raxol.Agent.Code.App.Wizard do
 
     box style: %{border: :single, padding: 0} do
       column style: %{gap: 0} do
-        [text("connect a provider to begin", fg: :yellow, style: [:bold])] ++
+        [text(hint_heading(model), fg: :yellow, style: [:bold])] ++
           Enum.map(lines, &text(&1, fg: :cyan))
       end
     end
   end
+
+  # A tenant cannot connect anything, so the jailed heading does not ask.
+  defp hint_heading(%{jail: true}), do: "no provider connected"
+  defp hint_heading(_model), do: "connect a provider to begin"
 end

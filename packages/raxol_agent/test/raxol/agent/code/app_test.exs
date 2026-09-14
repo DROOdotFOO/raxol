@@ -1642,6 +1642,93 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "usage: /find"
     end
 
+    # `/find` echoes an excerpt of a projected block: assistant and tool
+    # output, i.e. content this app does not author. `notice_block/1` renders
+    # the notice verbatim, so an escape sequence in that content would reach
+    # the terminal and could clear the screen or forge the app's own chrome.
+    test "/find strips control bytes out of the transcript content it echoes" do
+      poison = "needle \e[2J\e[31mPWNED\e[0m\a"
+
+      model =
+        new_model()
+        |> submit("ask")
+        |> elem(0)
+        |> then(fn m ->
+          Enum.reduce(message_turn("t1", poison), m, &send_ev(&2, &1))
+        end)
+
+      {model, []} = submit(model, "/find needle")
+
+      assert model.notice =~ "needle"
+      assert model.notice =~ "PWNED"
+      refute model.notice =~ "\e"
+      refute model.notice =~ "\a"
+    end
+
+    # The status line is one row; a notice may be several. Neither may carry
+    # a control code point (the sequence INTRODUCER is what makes bytes
+    # executable; the remaining "[31m" is inert text), and the notice's own
+    # line structure must survive.
+    test "put_status flattens newlines and both setters strip control bytes" do
+      model = new_model()
+
+      statused = App.put_status(model, "line one\nline \e[31mtwo\x7f")
+      assert statused.status_line == "line one line [31mtwo"
+
+      noticed = App.notice(model, "first\nsec\e[2Jond")
+      assert noticed.notice == "first\nsec[2Jond"
+    end
+
+    # Everything `App.view/1` would put on screen, as one string.
+    defp view_text(model) do
+      model |> App.view() |> node_text() |> Enum.join("\n")
+    end
+
+    defp node_text(%{type: :text, content: content}) when is_binary(content), do: [content]
+    defp node_text(%{children: children}), do: node_text(children)
+    defp node_text(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &node_text/1)
+    defp node_text(_other), do: []
+
+    # The setters are not the only writers: a dozen call sites assign
+    # `notice:` and `status_line:` by direct struct update (a resumed
+    # session's notice, a backend's validation string, the denied-tool
+    # status), so the check also has to sit on the last thing before
+    # `text/2`.
+    test "a status_line written by direct struct update is still sanitized at the renderer" do
+      model = %{new_model() | status_line: "denied in plan mode: read\e[2K\rfake"}
+
+      screen = view_text(model)
+
+      assert screen =~ "denied in plan mode: read"
+      refute screen =~ "\e"
+      refute screen =~ "\r"
+    end
+
+    # `pending_approval.name` is a tool name, and for an `mcp__*` tool it
+    # comes from an external MCP server. Rendered raw, it forges the
+    # authorization prompt the operator is about to answer.
+    test "a hostile tool name cannot forge the approval prompt" do
+      {_ref, model} =
+        request(%{new_model() | running?: true}, "read_file\e[2K\rAllow read_file?")
+
+      screen = view_text(model)
+
+      refute screen =~ "\e"
+      refute screen =~ "\r"
+      assert screen =~ "Allow read_file"
+    end
+
+    test "a bidi override cannot reverse a notice" do
+      noticed = App.notice(new_model(), "disabled" <> <<0x202E::utf8>> <> "delbane")
+
+      assert noticed.notice == "disableddelbane"
+    end
+
+    test "iodata is accepted where the view used to tolerate it" do
+      assert App.notice(new_model(), ["a", ["b", "c"]]).notice == "abc"
+      assert App.put_status(new_model(), ["x", "y"]).status_line == "xy"
+    end
+
     test "/logout disconnects the provider and reopens the setup panel" do
       model = connected_model()
       {model, []} = submit(model, "/logout")
@@ -1991,6 +2078,192 @@ defmodule Raxol.Agent.Code.AppTest do
       assert text =~ "inspecting: #{model.cwd}"
       assert text =~ "providers (op CLI:"
       assert text =~ "sessions: #{model.sessions_dir}"
+    end
+
+    # The default fetchers used to be bare spawns: a raise inside one meant
+    # no `{:command_result, ...}` ever came back, so the armed `*_ref` and
+    # the "fetching…" status line were stuck for the life of the session.
+    # Each fetcher is driven through its injectable seam with arguments its
+    # work function raises on; the message must still arrive and the fold
+    # must clear the ref.
+    @tag :capture_log
+    test "a crashing default /inspect fetcher still answers, and the fold clears the ref" do
+      model =
+        new_model(
+          inspection_fetcher: fn _cwd, _dir, ref, app ->
+            Commands.default_inspection_fetcher(nil, nil, ref, app)
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+      ref = model.inspection_ref
+      assert model.status_line == "inspecting…"
+
+      assert_receive {:command_result,
+                      {:inspection_result, ^ref, {:error, {:crashed, _}}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.inspection_ref == nil
+      assert model.status_line == nil
+      assert model.notice =~ "inspection failed: crashed"
+    end
+
+    @tag :capture_log
+    test "a crashing default sessions fetcher still answers, and the fold clears the ref" do
+      model =
+        new_model(
+          sessions_fetcher: fn _dir, ref, app ->
+            Commands.default_sessions_fetcher(nil, ref, app)
+          end
+        )
+
+      {model, []} = submit(model, "/resume")
+      ref = model.sessions_ref
+      assert model.status_line == "listing sessions…"
+
+      assert_receive {:command_result, {:sessions_list, ^ref, {:error, {:crashed, _}}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.sessions_ref == nil
+      assert model.status_line == nil
+      assert model.wizard == nil
+      assert model.notice =~ "couldn't list sessions: crashed"
+    end
+
+    @tag :capture_log
+    test "a crashing default models fetcher still answers, and the fold clears the ref" do
+      model =
+        connected_model(
+          models_fetcher: fn _opts, ref, app ->
+            Commands.default_models_fetcher(:not_a_keyword_list, ref, app)
+          end
+        )
+
+      {model, []} = slash(model, "/model")
+      ref = model.models_ref
+      assert model.status_line == "fetching models…"
+
+      assert_receive {:command_result, {:models_list, ^ref, {:error, {:crashed, _}}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.models_ref == nil
+      assert model.status_line == nil
+      assert model.wizard == nil
+      assert model.notice =~ "couldn't fetch models"
+    end
+
+    @tag :capture_log
+    test "a fetch that overruns its bound answers with :timeout instead of never" do
+      # The work blocks on a message nobody sends; only the bound can end it.
+      model =
+        new_model(
+          inspection_fetcher: fn _cwd, _dir, ref, app ->
+            Commands.fetch_async(
+              app,
+              :inspection_result,
+              ref,
+              fn ->
+                receive do
+                  _ -> :never
+                end
+              end,
+              10
+            )
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+      ref = model.inspection_ref
+
+      assert_receive {:command_result, {:inspection_result, ^ref, {:error, :timeout}} = result},
+                     10_000
+
+      {model, []} = App.update({:command_result, result}, model)
+      assert model.inspection_ref == nil
+      assert model.status_line == nil
+      assert model.notice == "inspection failed: timed out"
+    end
+
+    # `Task.async/1` LINKS. A task death the inner `try` cannot intercept --
+    # an exit signal arriving through a link the work function itself created
+    # (an HTTP client's pool helper), a heap kill, an external `:kill` -- used
+    # to take the reporting process down with it, so no `{:command_result,
+    # ...}` was sent and the armed ref stayed armed for the life of the
+    # session: exactly the wedge the bound was added to remove, from the one
+    # direction the earlier tests did not drive.
+    @tag :capture_log
+    test "a fetch whose work dies through a link still answers" do
+      ref = make_ref()
+
+      Commands.fetch_async(self(), :models_list, ref, fn ->
+        spawn_link(fn -> exit(:helper_died) end)
+        Process.sleep(:infinity)
+      end)
+
+      assert_receive {:command_result, {:models_list, ^ref, {:error, {:crashed, :exit}}}}, 10_000
+    end
+
+    @tag :capture_log
+    test "an error reason the bound never mints is folded, not raised" do
+      # `bounded/3` passes a work function's OWN return value through, so a
+      # fetcher over `File.read/1` can hand the fold `{:error, :enoent}`.
+      # Every fold clause accepts any `{:error, reason}`, so the failure
+      # renderer has to as well.
+      model = new_model(sessions_fetcher: fn _dir, _ref, _app -> :ok end)
+      {model, []} = submit(model, "/resume")
+      ref = model.sessions_ref
+
+      {model, []} =
+        App.update({:command_result, {:sessions_list, ref, {:error, :enoent}}}, model)
+
+      assert model.sessions_ref == nil
+      assert model.status_line == nil
+      assert model.notice =~ "couldn't list sessions: failed (:enoent)"
+    end
+
+    test "a second /inspect while one is in flight does not arm a second fetch" do
+      test_pid = self()
+
+      model =
+        new_model(
+          inspection_fetcher: fn _cwd, _dir, ref, _app ->
+            send(test_pid, {:armed, ref})
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+      assert_received {:armed, first}
+      assert model.inspection_ref == first
+
+      {model, []} = submit(model, "/inspect")
+      refute_received {:armed, _}
+      assert model.inspection_ref == first
+      assert model.status_line == "already inspecting…"
+    end
+
+    test "/inspect is refused in a hosted session" do
+      test_pid = self()
+
+      model =
+        new_model(
+          jail: true,
+          inspection_fetcher: fn _cwd, _dir, ref, _app ->
+            send(test_pid, {:armed, ref})
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+
+      # The snapshot reports host provider topology (which providers are
+      # wired, from `op://` or env, whether the vault is unlocked) and
+      # gathering it performs a real 1Password read on the operator's
+      # machine. A tenant reaches neither.
+      refute_received {:armed, _}
+      assert model.inspection_ref == nil
+      assert model.notice == "inspection is disabled in a hosted session"
     end
 
     test "/usage folds token totals across provider vocabularies" do

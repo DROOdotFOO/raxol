@@ -70,6 +70,18 @@ defmodule Raxol.Agent.Code.AppWizardTest do
     App.init(%{options: options})
   end
 
+  # Everything `App.view/1` would put on screen, as one string: the panels
+  # only assert `%{} = App.view(...)` otherwise, so wording changes in a
+  # rendered panel are invisible to the suite.
+  defp view_text(model), do: model |> App.view() |> node_text() |> Enum.join("\n")
+
+  defp node_text(%{type: :text, content: content}) when is_binary(content),
+    do: [content]
+
+  defp node_text(%{children: children}), do: node_text(children)
+  defp node_text(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &node_text/1)
+  defp node_text(_other), do: []
+
   defp tmp(tag),
     do:
       Path.join(
@@ -241,8 +253,12 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       model = new_model(jail: true)
 
       assert model.wizard == nil
-      assert model.notice =~ "credential management is disabled in a hosted session"
       assert model.provider_status == :no_provider
+
+      # Asserted on the rendered surface rather than on `notice`: the reason
+      # lives in the persistent hint panel now, because a notice is replaced
+      # by the next command while "no provider is connected" stays true.
+      assert view_text(model) =~ "credential management is disabled in a hosted session"
     end
 
     test "init still skips the wizard when the host pre-wired a provider" do
@@ -305,6 +321,61 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       assert model.notice =~ "credential management is disabled in a hosted session"
       assert Credentials.fetch(:openai) == :none
       refute_received {:op_saver_called, _, _}
+    end
+
+    # The unconnected-provider panel is the first thing a hosted tenant sees.
+    # It used to render the full "Connect a provider with /login:" cheatsheet
+    # in a session where /login refuses and init opens no wizard.
+    test "the hint panel does not advertise /login in a hosted session" do
+      jailed = view_text(new_model(jail: true))
+
+      assert jailed =~ "credential management is disabled in a hosted session"
+      refute jailed =~ "/login"
+      refute jailed =~ "connect a provider to begin"
+
+      # Unjailed, the cheatsheet is still the whole point of the panel (it
+      # shows once the browse wizard init opens is dismissed).
+      open = view_text(press(new_model(), :escape))
+      assert open =~ "Connect a provider with /login:"
+      assert open =~ "connect a provider to begin"
+    end
+
+    # The jail clause used to sit ahead of the `{:no_key, harness}` one, so a
+    # hosted session whose host DID pre-wire a provider but whose key failed
+    # to resolve was told "credential management is disabled" -- the policy,
+    # not the diagnosis. The operator needs both.
+    test "a jailed session with an unresolved key still names the harness" do
+      jailed = view_text(new_model(jail: true, provider_status: {:no_key, :anthropic}))
+
+      assert jailed =~ "harness anthropic was selected but no key resolved"
+      assert jailed =~ "credential management is disabled in a hosted session"
+      refute jailed =~ "/login"
+    end
+
+    # Panel heading, panel body and a boot notice used to render the same
+    # sentence on three consecutive lines of a hosted tenant's first screen.
+    # The panel is the durable copy (it persists while no provider is
+    # connected); the notice was transient and is gone.
+    test "the jailed first screen does not repeat itself" do
+      screen = view_text(new_model(jail: true))
+
+      assert count_of(screen, "no provider connected") == 1
+      assert count_of(screen, "credential management is disabled in a hosted session") == 1
+    end
+
+    defp count_of(haystack, needle),
+      do: haystack |> String.split(needle) |> length() |> Kernel.-(1)
+
+    test "a prompt sent with no provider says the same thing in a jail" do
+      {model, []} =
+        App.update(Event.key_event(:enter, :pressed, []), %{
+          new_model(jail: true)
+          | input: "hello"
+        })
+
+      assert model.notice =~ "credential management is disabled in a hosted session"
+      refute model.notice =~ "/login"
+      refute model.running?
     end
   end
 
