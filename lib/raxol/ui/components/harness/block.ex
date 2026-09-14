@@ -92,6 +92,13 @@ defmodule Raxol.UI.Components.Harness.Block do
   and `cost` are all `nil`; otherwise it renders only the fields that are
   present.
 
+  `render/2` is a trust boundary: every text node it emits is control-byte
+  stripped, because block content comes from an LLM, a tool, or an
+  external MCP server and the view map goes to a pipeline that does not
+  pass through `Raxol.Harness.Surface.ViewText.lines/3`. See `render/2`'s
+  own @doc. `search_text/2` is NOT sanitized -- it is the raw match
+  corpus, not display output (see its @doc).
+
   ## The completion row (design creed: evidence, never a success toast)
 
   `content[:completion]` -- set by `Raxol.Harness.Projection.BlockBuilder.
@@ -165,6 +172,7 @@ defmodule Raxol.UI.Components.Harness.Block do
   branch, so a multi-line body never re-runs the solver per line.
   """
 
+  alias Raxol.Harness.Surface.ViewText
   alias Raxol.UI.Components.Harness.MarkdownBody
   alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextLayout
@@ -418,17 +426,27 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   Never raises: any unexpected internal shape falls back to a one-line
   placeholder rather than crashing the caller.
+
+  Every text node in the returned tree is control-byte stripped
+  (`Raxol.Harness.Surface.ViewText.sanitize_line/1`, applied per
+  newline-delimited line so the body's own line structure survives). A
+  block's content is produced by an LLM, a tool, or an external MCP
+  server, and this view map goes to the normal `Preparer ->
+  LayoutEngine -> UIRenderer` pipeline, which does not pass through
+  `ViewText.lines/3` -- so the strip has to happen here for every
+  consumer on every surface. Style maps are untouched, so SGR and
+  prominence styling are unaffected.
   """
   @spec render(t(), map()) :: map()
   def render(block, context \\ %{})
 
   def render(%__MODULE__{} = block, context) do
     width = Map.get(context, :width, Raxol.Core.Defaults.terminal_width())
-    build_render(block, width, context)
+    sanitize_view(build_render(block, width, context))
   rescue
     e ->
       emit_recovered(block.kind, e)
-      render_fallback(block)
+      sanitize_view(render_fallback(block))
   end
 
   defp build_render(block, width, context) do
@@ -616,10 +634,15 @@ defmodule Raxol.UI.Components.Harness.Block do
     * `:diff` -- `content.old` and `content.new` (`summary/1` already
       carries the path).
 
-  No sanitization happens here: `Raxol.Harness.Surface.ViewText.lines/3`
-  is the ONE trust boundary for control-byte stripping and display-width
-  truncation (see that module's moduledoc). Pure; never raises,
-  regardless of `content`'s shape.
+  No sanitization happens here, deliberately: this is the RAW corpus, for
+  matching, not for display. `render/2` sanitizes the text nodes IT
+  emits (see its @doc), and
+  `Raxol.Harness.Surface.ViewText.lines/3` sanitizes again on the
+  paint-authority path; a caller that puts a `search_text/2` result on
+  screen (an excerpt in a notice, a picker label) owns the strip at its
+  own render, because a match offset into a sanitized string would not
+  point at the same grapheme. Pure; never raises, regardless of
+  `content`'s shape.
 
   ## Bounding the work (`max_graphemes`)
 
@@ -814,6 +837,38 @@ defmodule Raxol.UI.Components.Harness.Block do
     do: %{node | children: Enum.map(children, &fade_view(&1, fg))}
 
   defp fade_view(node, _fg), do: node
+
+  # The trust boundary for this component's own output (see `render/2`'s
+  # @doc). Every string a Block renders can come from a producer this
+  # process does not control -- an LLM's streamed message, a tool result,
+  # an `mcp__*` tool name supplied by an external server. The view map
+  # `render/2` returns goes to the normal `Preparer -> LayoutEngine ->
+  # UIRenderer` pipeline, which never passes through
+  # `ViewText.lines/3` (that seam feeds the append-path/footer-viewport
+  # authorities only), so an ESC left in `content` reaches the terminal
+  # intact on every other surface. Stripping once here, at the end of the
+  # render, covers every consumer of this component instead of every
+  # consumer having to remember to wrap it.
+  #
+  # Embedded newlines are preserved: `sanitize_line/1` strips `\n` as a
+  # C0 byte, so a multi-line node's content is split, sanitized per line,
+  # and re-joined -- silently welding two lines into one here would be a
+  # rendering bug. Style maps are never touched, so prominence/SGR
+  # styling is unaffected.
+  defp sanitize_view(%{type: :text, content: content} = node)
+       when is_binary(content),
+       do: %{node | content: sanitize_content(content)}
+
+  defp sanitize_view(%{children: children} = node) when is_list(children),
+    do: %{node | children: Enum.map(children, &sanitize_view/1)}
+
+  defp sanitize_view(node), do: node
+
+  defp sanitize_content(content) do
+    content
+    |> String.split("\n")
+    |> Enum.map_join("\n", &ViewText.sanitize_line/1)
+  end
 
   defp plain_content_lines(block, fg) do
     block
