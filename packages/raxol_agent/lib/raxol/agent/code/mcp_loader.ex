@@ -107,29 +107,75 @@ defmodule Raxol.Agent.Code.McpLoader do
     {named, unnamed} =
       Enum.split_with(servers, &valid_server_name?(Map.get(&1, :name)))
 
-    {accepted, over_cap} = Enum.split(named, @max_servers)
+    {unique, duplicate} = dedupe(named)
+    {accepted, over_cap} = Enum.split(unique, @max_servers)
 
     rejected =
       Enum.map(unnamed, &{Map.get(&1, :name), :invalid_server_name}) ++
+        Enum.map(duplicate, &{Map.get(&1, :name), :duplicate_server_name}) ++
         Enum.map(over_cap, &{Map.get(&1, :name), :server_limit_exceeded})
 
     {accepted, rejected}
   end
 
+  # One server per name, first occurrence wins. The caller lists user-level
+  # servers before workspace ones, so a workspace `.mcp.json` cannot shadow an
+  # operator's server by reusing its name with a url of its own -- which would
+  # otherwise inherit that name's allowlisted header references.
+  defp dedupe(servers) do
+    {tagged, _seen} =
+      Enum.map_reduce(servers, MapSet.new(), fn server, seen ->
+        name = Map.get(server, :name)
+        {{MapSet.member?(seen, name), server}, MapSet.put(seen, name)}
+      end)
+
+    {duplicate, unique} = Enum.split_with(tagged, &elem(&1, 0))
+    {Enum.map(unique, &elem(&1, 1)), Enum.map(duplicate, &elem(&1, 1))}
+  end
+
   defp valid_server_name?(name),
     do: is_binary(name) and Regex.match?(@server_name_re, name)
 
-  # McpConfig servers carry string names and an env MAP; the bundle spec
-  # wants an atom name and an env LIST. `admit/1` has already bounded both
-  # the count and the shape of the names interned here.
+  # McpConfig servers carry string names and an env MAP; the bundle spec wants
+  # an atom name and an env LIST. `admit/1` has already bounded both the count
+  # and the shape of the names interned here. A remote server's keys are
+  # carried across as they were parsed, including `:source`, which is what
+  # decides whether its header references may resolve; a spec that somehow
+  # carries both transports keeps both keys so `McpBundle` refuses it by name
+  # rather than this function picking one.
   defp to_spec(server) do
-    %{
-      name: String.to_atom(server.name),
-      command: server.command,
+    %{name: String.to_atom(server.name), source: Map.get(server, :source, :workspace)}
+    |> put_stdio(server)
+    |> put_remote(server)
+  end
+
+  defp put_stdio(spec, %{command: command} = server) do
+    Map.merge(spec, %{
+      command: command,
       args: Map.get(server, :args, []),
       env: server |> Map.get(:env, %{}) |> Map.to_list()
-    }
+    })
   end
+
+  defp put_stdio(spec, _server), do: spec
+
+  defp put_remote(spec, %{url: url} = server) do
+    spec
+    |> Map.merge(%{
+      url: url,
+      headers: Map.get(server, :headers, []),
+      metered: Map.get(server, :metered, false),
+      prices: Map.get(server, :prices, %{})
+    })
+    |> put_concurrency(server)
+  end
+
+  defp put_remote(spec, _server), do: spec
+
+  defp put_concurrency(spec, %{concurrency: policy}),
+    do: Map.put(spec, :concurrency, policy)
+
+  defp put_concurrency(spec, _server), do: spec
 
   defmodule Janitor do
     @moduledoc false

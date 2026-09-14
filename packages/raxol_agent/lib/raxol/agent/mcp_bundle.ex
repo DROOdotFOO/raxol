@@ -16,12 +16,30 @@ defmodule Raxol.Agent.McpBundle do
 
   Discovered tools are `sensitive: true` unless a spec says otherwise, so the
   default `ToolPolicy.deny_sensitive` authorizer gates a bundled tool until an
-  operator opts in. See `default_servers/1` for the per-server posture.
+  operator opts in. See `default_servers/1` for the per-server posture. A tool
+  whose spec declares a per-call price cannot opt out of that: it is stamped
+  `sensitive: true` regardless, plus the price and the metered origin that
+  `Raxol.Agent.McpSpendHook` reserves against.
+
+  ## Two transports, one spec shape
+
+  A spec carries `:command` (a local stdio subprocess) XOR `:url` (a remote
+  HTTP server, ADR-0037). Both keys, or neither, is
+  `{:error, {:invalid_spec, _}}` rather than a silent preference for one, and
+  the refusal names the server and what was wrong with it -- never the spec
+  itself, whose `:env` and `:headers` hold secrets.
+
+  A remote spec's header values are resolved at connect time by
+  `Raxol.Agent.McpHeaders`, which is where the provenance rule lives: a
+  workspace-sourced spec cannot resolve an `${env:}` or `op://` reference
+  unless the operator allowlisted it outside the workspace. A refused
+  resolution skips that server like any other load failure.
   """
 
   require Logger
 
   alias Raxol.Agent.Action.Dynamic
+  alias Raxol.Agent.McpHeaders
 
   # An MCP client reports `{:not_ready, :initializing}` until its initialize
   # handshake round-trips; without waiting, a freshly started server lists zero
@@ -33,9 +51,15 @@ defmodule Raxol.Agent.McpBundle do
 
   @type server_spec :: %{
           required(:name) => atom(),
-          required(:command) => String.t(),
+          optional(:command) => String.t(),
           optional(:args) => [String.t()],
           optional(:env) => [{String.t(), String.t()}],
+          optional(:url) => String.t(),
+          optional(:headers) => [{String.t(), String.t()}],
+          optional(:source) => :workspace | :user,
+          optional(:metered) => boolean(),
+          optional(:prices) => %{optional(String.t()) => pos_integer()},
+          optional(:concurrency) => :stateless | :pooled | :serialized,
           optional(:sensitive) => boolean()
         }
 
@@ -108,18 +132,87 @@ defmodule Raxol.Agent.McpBundle do
     )
   end
 
-  defp spec_name(spec), do: Map.get(spec, :name, spec)
+  # Never `Map.get(spec, :name, spec)`: a nameless spec would then ride into a
+  # log line and a `failed` entry carrying its own `:env`/`:headers` values.
+  defp spec_name(spec) when is_map(spec), do: Map.get(spec, :name) || :unnamed
+  defp spec_name(_spec), do: :unnamed
 
-  defp start_client(%{name: name, command: command} = spec, start) do
-    start.(
-      name: name,
-      command: command,
-      args: Map.get(spec, :args, []),
-      env: Map.get(spec, :env, [])
-    )
+  defp start_client(spec, start) do
+    case transport(spec) do
+      :stdio ->
+        guarded(start,
+          name: spec_name(spec),
+          command: Map.fetch!(spec, :command),
+          args: Map.get(spec, :args, []),
+          env: Map.get(spec, :env, [])
+        )
+
+      :remote ->
+        start_remote(spec, start)
+
+      {:invalid, why} ->
+        {:error, {:invalid_spec, %{name: spec_name(spec), reason: why}}}
+    end
   end
 
-  defp start_client(spec, _start), do: {:error, {:invalid_spec, spec}}
+  # A client that RAISES or EXITS rather than returning an error puts the opts
+  # it was handed inside the reason, and those opts carry resolved header
+  # values and env values. Keep the kind and the exception module, drop the
+  # message: no credential may ride the `failed` entry or the log line `load/2`
+  # writes from it. Containing it here also keeps the fail-open per server,
+  # where an escaping exit would have taken the whole bundle's load with it.
+  defp guarded(start, opts) do
+    start.(opts)
+  rescue
+    error -> {:error, {:start_raised, error.__struct__}}
+  catch
+    kind, _reason -> {:error, {:start_raised, kind}}
+  end
+
+  # `:command` XOR `:url`. Both is ambiguous and neither is not a server, and
+  # guessing either way would start something the operator did not declare.
+  defp transport(spec) when is_map(spec) do
+    case {is_binary(Map.get(spec, :command)), is_binary(Map.get(spec, :url))} do
+      {true, false} -> :stdio
+      {false, true} -> :remote
+      {true, true} -> {:invalid, :command_and_url}
+      {false, false} -> {:invalid, :no_command_or_url}
+    end
+  end
+
+  defp transport(_spec), do: {:invalid, :not_a_spec}
+
+  # Headers are resolved HERE, once, at connect time: the client never sees a
+  # reference and never resolves one. A refusal carries the header name and a
+  # classified reason, never a resolved value.
+  defp start_remote(spec, start) do
+    name = spec_name(spec)
+    headers = Map.get(spec, :headers, [])
+
+    case McpHeaders.resolve(headers, source: Map.get(spec, :source, :workspace), server: name) do
+      {:ok, resolved} -> guarded(start, remote_opts(spec, name, resolved))
+      {:error, _reason} = err -> err
+    end
+  end
+
+  # `:metered` and `:prices` travel to the transport as well as onto the tools:
+  # the hook makes the reservation and the transport enforces it, and a
+  # transport that never learned the prices cannot refuse an unmetered call on
+  # the path that bypasses the hook.
+  defp remote_opts(spec, name, headers) do
+    opts = [
+      name: name,
+      url: Map.fetch!(spec, :url),
+      headers: headers,
+      metered: Map.get(spec, :metered, false),
+      prices: Map.get(spec, :prices, %{})
+    ]
+
+    case Map.get(spec, :concurrency) do
+      nil -> opts
+      policy -> Keyword.put(opts, :concurrency, policy)
+    end
+  end
 
   defp resolve({:ok, server}, name, deadline, interval, spec) do
     case poll_tools(server, name, deadline, interval, spec) do
@@ -139,7 +232,7 @@ defmodule Raxol.Agent.McpBundle do
 
     case list_tools(server, name, sensitive) do
       {:ok, tools} ->
-        {:ok, tools}
+        {:ok, meter(tools, spec)}
 
       # Only `:starting`/`:initializing` are transient; a `:closed` server has
       # exited and will never become ready, so fail open at once rather than
@@ -166,6 +259,49 @@ defmodule Raxol.Agent.McpBundle do
     Dynamic.from_client(server, name, sensitive: sensitive)
   catch
     :exit, reason -> {:error, {:client_down, reason}}
+  end
+
+  # Stamp the declared per-call price and the metered origin onto each tool.
+  # A tool with a price is sensitive whatever the spec said: an operator can
+  # waive the capability gate on a free server, not on one that bills.
+  defp meter(tools, spec) do
+    prices = Map.get(spec, :prices, %{})
+    origin = if Map.get(spec, :metered, false), do: origin(spec), else: nil
+
+    if prices == %{} and is_nil(origin) do
+      tools
+    else
+      Enum.map(tools, &priced(&1, prices, origin))
+    end
+  end
+
+  defp priced(%Dynamic{} = tool, prices, origin) do
+    price = Map.get(prices, raw_name(tool.name))
+
+    %{tool | price: price, origin: origin, sensitive: tool.sensitive or not is_nil(price)}
+  end
+
+  # `scheme://host` only. The path and query of a per-account URL are the
+  # credential, and this string is built to be logged.
+  defp origin(spec) do
+    case URI.parse(Map.get(spec, :url, "")) do
+      %URI{scheme: scheme, host: host} when is_binary(scheme) and is_binary(host) ->
+        "#{scheme}://#{host}"
+
+      _unparsable ->
+        # Still metered, so it must still deny an unpriced tool: name the
+        # server rather than fall back to nil, which would read as free.
+        "server #{spec_name(spec)}"
+    end
+  end
+
+  # Prices are declared under the server's own tool names; a bundled tool
+  # carries the namespaced one.
+  defp raw_name(name) do
+    case Raxol.MCP.Client.parse_tool_name(name) do
+      {:ok, {_server, tool}} -> tool
+      :error -> name
+    end
   end
 
   # Exact versions for the default catalog. `npx`/`uvx` otherwise resolve

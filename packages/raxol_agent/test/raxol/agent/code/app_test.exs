@@ -2480,7 +2480,10 @@ defmodule Raxol.Agent.Code.AppTest do
       assert_receive {:opts, opts}
       context = Keyword.fetch!(opts, :context)
       assert Map.has_key?(context, :subagent)
-      assert context.tool_call_hooks == [Raxol.Agent.Code.Hooks]
+      # The spend gate is registered unconditionally and runs LAST, so an
+      # earlier hook's capability veto happens before any money is reserved.
+      assert context.tool_call_hooks ==
+               [Raxol.Agent.Code.Hooks, Raxol.Agent.McpSpendHook]
 
       names =
         Enum.map(Keyword.fetch!(opts, :actions), & &1.__action_meta__().name)
