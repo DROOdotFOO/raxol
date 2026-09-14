@@ -1,6 +1,6 @@
 # REPL
 
-Interactive Elixir REPL with AST-based sandboxing. Three safety levels: wide open for local use, locked down for SSH. Bindings persist between evaluations, IO gets captured, and runaway code hits a timeout.
+Interactive Elixir REPL with an AST-based safety check in front of it. Three levels: wide open for local use, whitelist-only for SSH. Bindings persist between evaluations, IO gets captured, and runaway code hits a timeout. The check is the only thing standing between typed code and the node, so read [Trust boundary](#trust-boundary) before exposing any of this.
 
 ## Quick start
 
@@ -44,6 +44,12 @@ evaluator = Evaluator.reset_bindings(evaluator)  # clears bindings, keeps histor
 evaluator = Evaluator.clear_history(evaluator)    # clears history, keeps bindings
 ```
 
+### Trust boundary
+
+`Evaluator` applies no restriction of its own. `Code.eval_string/3` gets an unrestricted `Macro.Env`, no AST is inspected, and `File`, `:os.cmd/1`, ports, `Node.connect/1` and `:erlang.halt/0` are all reachable from typed code. The caps (`:timeout`, `:max_heap_bytes`, `:max_result_bytes`, and the capture's output limit) bound the one evaluation process; they bound nothing it spawns, and on timeout only that one pid is signalled. Code evaluated here runs with the full authority of the node's OS user.
+
+`Sandbox.check/2` is a separate call the caller makes first. Callers that expose the REPL do (the playground demo gates on `:strict`); `Evaluator` does not call it for you. Real confinement between untrusted principals wants separate OS uids or containers: this is one BEAM, one uid. Tracked in [#1033](https://github.com/DROOdotFOO/raxol/issues/1033).
+
 ## Sandbox levels
 
 `Raxol.REPL.Sandbox` walks the AST with `Macro.prewalk` and rejects code that calls blocked modules or functions, before it ever runs.
@@ -73,7 +79,7 @@ The playground serves a REPL demo over SSH:
 mix raxol.playground --ssh
 ```
 
-Use `:strict` sandbox for anything exposed to the network.
+`:strict` is the minimum for anything exposed to the network, and it is a mitigation rather than a boundary: a gap in the allowlist reaches the node's OS user. Prefer not evaluating untrusted code on a network surface at all.
 
 ## Playground demo
 
