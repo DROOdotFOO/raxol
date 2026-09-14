@@ -34,10 +34,19 @@ defmodule Raxol.Agent.Code.App.Commands do
   alias Raxol.Harness.Projection
   alias Raxol.UI.Components.Harness.Block
 
-  # Every async fetch answers within this budget -- the one `/login`'s
-  # validation ping already puts on its HTTP call -- so an armed `*_ref`
-  # always has a `{:command_result, ...}` coming to clear it.
-  @fetch_timeout_ms 10_000
+  # The wall bound on every async fetch: the UI must get an answer, so this
+  # deliberately preempts a backend's own longer socket timeout, and
+  # `models_fetch_opts/1` threads it into the HTTP opts so the inner timeout
+  # is not dead configuration that can never fire. Sized above `/inspect`'s
+  # own worst case (`Resolver.op_status/0` is documented at "under 7s", plus
+  # one 1.5s reference read), because a snapshot is most useful precisely
+  # when the vault is locked and slow.
+  @fetch_timeout_ms 20_000
+
+  # `/login`'s validation ping is a single-token completion, not a fetch: it
+  # has its own, tighter budget so that changing the fetch bound cannot
+  # silently change a credential check's socket timeout.
+  @ping_timeout_ms 10_000
 
   # -- dispatch ---------------------------------------------------------------
 
@@ -120,6 +129,22 @@ defmodule Raxol.Agent.Code.App.Commands do
   defp apply_command("hooks", _arg, model),
     do: {App.notice(model, hooks_text(model)), []}
 
+  # `/inspect` renders the host's provider topology (`Resolver.diagnostics/0`
+  # reports per-provider `source`, whether an `op://` reference is stored,
+  # and whether the vault is unlocked), the host's skills and session roots,
+  # and which language servers are installed -- and gathering it performs a
+  # real 1Password read, so a tenant keystroke can raise an authorization
+  # prompt on the operator's own machine. That is host state, not session
+  # state: a jailed tenant is refused here for the same reason `/login` is,
+  # rather than being shown the credential topology item 6 just stopped
+  # advertising on the same screen.
+  defp apply_command("inspect", _arg, %{jail: true} = model),
+    do: {App.notice(model, "inspection is disabled in a hosted session"), []}
+
+  defp apply_command("inspect", _arg, %{inspection_ref: ref} = model)
+       when is_reference(ref),
+       do: {App.put_status(model, "already inspecting…"), []}
+
   defp apply_command("inspect", _arg, model) do
     ref = make_ref()
     model.inspection_fetcher.(model.cwd, model.sessions_dir, ref, self())
@@ -191,7 +216,11 @@ defmodule Raxol.Agent.Code.App.Commands do
     |> App.notice("inspection failed: #{fetch_failure(reason)}")
   end
 
-  def apply_inspection_result(model, text) when is_binary(text),
+  # `Inspection.render/1` returns a binary, but the fetcher is an injectable
+  # seam: an iolist is what a `render/1` refactor naturally produces, and
+  # the view tolerated one long before this fold existed, so converting is
+  # cheaper than a `FunctionClauseError` inside `App.update/2`.
+  def apply_inspection_result(model, text) when is_binary(text) or is_list(text),
     do: App.notice(%{model | inspection_ref: nil, status_line: nil}, text)
 
   @doc false
@@ -199,12 +228,24 @@ defmodule Raxol.Agent.Code.App.Commands do
   # the App process and its value rides back as `{:command_result, {tag, ref,
   # value}}`. A raise, exit, or throw inside `work` becomes `{:error,
   # {:crashed, class}}` and an overrun becomes `{:error, :timeout}`, so the
-  # message always arrives and the fold clears the `_ref` that armed it. The
-  # notice only ever sees the class (an exception module or `:exit`/`:throw`)
-  # -- the detail is logged here, never rendered. The spawned process is
-  # unlinked; `app` must be the App process.
+  # message always arrives and the fold clears the `_ref` that armed it.
+  #
+  # The reporter TRAPS EXITS, and that is load-bearing rather than
+  # decorative: `Task.async/1` links as well as monitors, so a task death the
+  # inner `try` cannot intercept -- a `max_heap_size` kill, an external
+  # `Process.exit(task, :kill)`, an exit signal arriving through a link the
+  # work function itself created (an HTTP client's pool helper, say) -- would
+  # otherwise kill this process through that link BEFORE `Task.yield/2`
+  # returns. No message would be sent, the `*_ref` would stay armed and the
+  # status line would stay wedged for the life of the session, which is the
+  # exact bug this function exists to remove. Trapping turns that signal into
+  # the `{:exit, reason}` `Task.yield/2` reports.
+  #
+  # The spawned process is unlinked from the App; `app` must be the App
+  # process.
   def fetch_async(app, tag, ref, work, timeout \\ @fetch_timeout_ms) do
     spawn(fn ->
+      Process.flag(:trap_exit, true)
       send(app, {:command_result, {tag, ref, bounded(tag, work, timeout)}})
     end)
   end
@@ -215,19 +256,9 @@ defmodule Raxol.Agent.Code.App.Commands do
         try do
           {:ok, work.()}
         rescue
-          error ->
-            Logger.warning(
-              "#{tag} fetch crashed: #{Exception.format(:error, error, __STACKTRACE__)}"
-            )
-
-            {:error, {:crashed, error.__struct__}}
+          error -> {:error, {:crashed, error.__struct__}, describe(:error, error)}
         catch
-          kind, reason ->
-            Logger.warning(
-              "#{tag} fetch crashed: #{Exception.format(kind, reason, __STACKTRACE__)}"
-            )
-
-            {:error, {:crashed, kind}}
+          kind, reason -> {:error, {:crashed, kind}, describe(kind, reason)}
         end
       end)
 
@@ -235,11 +266,12 @@ defmodule Raxol.Agent.Code.App.Commands do
       {:ok, {:ok, value}} ->
         value
 
-      {:ok, {:error, _} = error} ->
-        error
+      {:ok, {:error, class, detail}} ->
+        Logger.warning("#{tag} fetch crashed: #{detail}")
+        {:error, class}
 
       {:exit, reason} ->
-        Logger.warning("#{tag} fetch exited: #{inspect(reason)}")
+        Logger.warning("#{tag} fetch exited: #{describe_exit(reason)}")
         {:error, {:crashed, :exit}}
 
       nil ->
@@ -248,8 +280,29 @@ defmodule Raxol.Agent.Code.App.Commands do
     end
   end
 
+  # Banner and location only, never the stacktrace's ARGUMENTS. A VM-raised
+  # error (`function_clause`, `undef`, `badarg`) carries the call's arguments
+  # in its top frame, and `Exception.format/3` renders them with `inspect/1`
+  # -- for the models fetcher those arguments are the backend opts, which
+  # hold `:api_key`. Logging the formatted exception put the provider key in
+  # the host log (CWE-532).
+  defp describe(kind, reason), do: Exception.format_banner(kind, reason)
+
+  defp describe_exit({reason, _stacktrace}) when is_tuple(reason) or is_atom(reason),
+    do: inspect(reason, limit: 3)
+
+  defp describe_exit(reason), do: inspect(reason, limit: 3)
+
   defp fetch_failure(:timeout), do: "timed out"
+  defp fetch_failure({:crashed, :exit}), do: "the worker exited"
   defp fetch_failure({:crashed, class}), do: "crashed (#{inspect(class)})"
+
+  # Every other `{:error, reason}` a fetcher's own work function can return
+  # (`File.read/1`'s `:enoent`, an HTTP client's own error term). Without
+  # this clause the folds -- which accept ANY `{:error, reason}` -- crashed
+  # the App process on a shape `bounded/3` never mints but `work` can return
+  # straight through, reintroducing the wedge class from the other side.
+  defp fetch_failure(other), do: "failed (#{inspect(other, limit: 3)})"
 
   # A jailed session reads no `.mcp.json` at all, so "none configured" would
   # misdescribe it: the file may well be there, and the operator should know
@@ -532,7 +585,7 @@ defmodule Raxol.Agent.Code.App.Commands do
 
   defp ping_completion(backend, opts) do
     ping_opts =
-      opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, @fetch_timeout_ms)
+      opts |> Keyword.put(:max_tokens, 1) |> Keyword.put(:timeout, @ping_timeout_ms)
 
     interpret_ping(backend.complete([%{role: :user, content: "ping"}], ping_opts))
   end
@@ -799,6 +852,13 @@ defmodule Raxol.Agent.Code.App.Commands do
   # -- /resume /sessions /fork ------------------------------------------------
 
   defp open_session_picker(model), do: arm_sessions_fetch(model, :picker)
+
+  # A fetch already in flight is not re-armed. Each arm mints a fresh ref
+  # and the fold drops every older reply, so spamming `/sessions` used to
+  # start N concurrent full-disk reads whose results were all discarded but
+  # whose work was not -- trivial for a scripted or ACP client.
+  defp arm_sessions_fetch(%{sessions_ref: ref} = model, _mode) when is_reference(ref),
+    do: App.put_status(model, "already listing sessions…")
 
   defp arm_sessions_fetch(model, mode) do
     ref = make_ref()
@@ -1288,6 +1348,9 @@ defmodule Raxol.Agent.Code.App.Commands do
         "usage: /model <name>  (current: #{model.model_override || "default"})"
       )
 
+  defp open_model_picker(%{models_ref: ref} = model) when is_reference(ref),
+    do: App.put_status(model, "already fetching models…")
+
   defp open_model_picker(model) do
     ref = make_ref()
     model.models_fetcher.(models_fetch_opts(model), ref, self())
@@ -1295,11 +1358,16 @@ defmodule Raxol.Agent.Code.App.Commands do
   end
 
   # The connected executor's backend opts, with `:provider` pinned so the
-  # model-list endpoint is chosen by the actual backend, not a URL guess.
+  # model-list endpoint is chosen by the actual backend, not a URL guess, and
+  # `:receive_timeout` pinned to the same wall bound `bounded/3` applies.
+  # Without that the backend's own default (30s) sat above the outer bound,
+  # so the outer one always fired first and the inner one was configuration
+  # that could never take effect.
   defp models_fetch_opts(%{executor: executor}) do
     executor
     |> Raxol.Agent.ExecutorConfig.to_backend_opts()
     |> Keyword.put(:provider, executor.backend)
+    |> Keyword.put(:receive_timeout, @fetch_timeout_ms)
   end
 
   @doc false
@@ -1350,11 +1418,11 @@ defmodule Raxol.Agent.Code.App.Commands do
         "model listing unavailable for this provider — usage: /model <name>"
       )
 
-  def apply_models_result(model, {:error, _reason}),
+  def apply_models_result(model, {:error, reason}),
     do:
       App.notice(
         %{model | models_ref: nil, status_line: nil},
-        "couldn't fetch models — usage: /model <name>"
+        "couldn't fetch models: #{fetch_failure(reason)} — usage: /model <name>"
       )
 
   # Start the cursor on the current model when it's in the list, else the top.

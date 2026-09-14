@@ -1679,6 +1679,56 @@ defmodule Raxol.Agent.Code.AppTest do
       assert noticed.notice == "first\nsec[2Jond"
     end
 
+    # Everything `App.view/1` would put on screen, as one string.
+    defp view_text(model) do
+      model |> App.view() |> node_text() |> Enum.join("\n")
+    end
+
+    defp node_text(%{type: :text, content: content}) when is_binary(content), do: [content]
+    defp node_text(%{children: children}), do: node_text(children)
+    defp node_text(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &node_text/1)
+    defp node_text(_other), do: []
+
+    # The setters are not the only writers: a dozen call sites assign
+    # `notice:` and `status_line:` by direct struct update (a resumed
+    # session's notice, a backend's validation string, the denied-tool
+    # status), so the check also has to sit on the last thing before
+    # `text/2`.
+    test "a status_line written by direct struct update is still sanitized at the renderer" do
+      model = %{new_model() | status_line: "denied in plan mode: read\e[2K\rfake"}
+
+      screen = view_text(model)
+
+      assert screen =~ "denied in plan mode: read"
+      refute screen =~ "\e"
+      refute screen =~ "\r"
+    end
+
+    # `pending_approval.name` is a tool name, and for an `mcp__*` tool it
+    # comes from an external MCP server. Rendered raw, it forges the
+    # authorization prompt the operator is about to answer.
+    test "a hostile tool name cannot forge the approval prompt" do
+      {_ref, model} =
+        request(%{new_model() | running?: true}, "read_file\e[2K\rAllow read_file?")
+
+      screen = view_text(model)
+
+      refute screen =~ "\e"
+      refute screen =~ "\r"
+      assert screen =~ "Allow read_file"
+    end
+
+    test "a bidi override cannot reverse a notice" do
+      noticed = App.notice(new_model(), "disabled" <> <<0x202E::utf8>> <> "delbane")
+
+      assert noticed.notice == "disableddelbane"
+    end
+
+    test "iodata is accepted where the view used to tolerate it" do
+      assert App.notice(new_model(), ["a", ["b", "c"]]).notice == "abc"
+      assert App.put_status(new_model(), ["x", "y"]).status_line == "xy"
+    end
+
     test "/logout disconnects the provider and reopens the setup panel" do
       model = connected_model()
       {model, []} = submit(model, "/logout")
@@ -2135,6 +2185,85 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.inspection_ref == nil
       assert model.status_line == nil
       assert model.notice == "inspection failed: timed out"
+    end
+
+    # `Task.async/1` LINKS. A task death the inner `try` cannot intercept --
+    # an exit signal arriving through a link the work function itself created
+    # (an HTTP client's pool helper), a heap kill, an external `:kill` -- used
+    # to take the reporting process down with it, so no `{:command_result,
+    # ...}` was sent and the armed ref stayed armed for the life of the
+    # session: exactly the wedge the bound was added to remove, from the one
+    # direction the earlier tests did not drive.
+    @tag :capture_log
+    test "a fetch whose work dies through a link still answers" do
+      ref = make_ref()
+
+      Commands.fetch_async(self(), :models_list, ref, fn ->
+        spawn_link(fn -> exit(:helper_died) end)
+        Process.sleep(:infinity)
+      end)
+
+      assert_receive {:command_result, {:models_list, ^ref, {:error, {:crashed, :exit}}}}, 10_000
+    end
+
+    @tag :capture_log
+    test "an error reason the bound never mints is folded, not raised" do
+      # `bounded/3` passes a work function's OWN return value through, so a
+      # fetcher over `File.read/1` can hand the fold `{:error, :enoent}`.
+      # Every fold clause accepts any `{:error, reason}`, so the failure
+      # renderer has to as well.
+      model = new_model(sessions_fetcher: fn _dir, _ref, _app -> :ok end)
+      {model, []} = submit(model, "/resume")
+      ref = model.sessions_ref
+
+      {model, []} =
+        App.update({:command_result, {:sessions_list, ref, {:error, :enoent}}}, model)
+
+      assert model.sessions_ref == nil
+      assert model.status_line == nil
+      assert model.notice =~ "couldn't list sessions: failed (:enoent)"
+    end
+
+    test "a second /inspect while one is in flight does not arm a second fetch" do
+      test_pid = self()
+
+      model =
+        new_model(
+          inspection_fetcher: fn _cwd, _dir, ref, _app ->
+            send(test_pid, {:armed, ref})
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+      assert_received {:armed, first}
+      assert model.inspection_ref == first
+
+      {model, []} = submit(model, "/inspect")
+      refute_received {:armed, _}
+      assert model.inspection_ref == first
+      assert model.status_line == "already inspecting…"
+    end
+
+    test "/inspect is refused in a hosted session" do
+      test_pid = self()
+
+      model =
+        new_model(
+          jail: true,
+          inspection_fetcher: fn _cwd, _dir, ref, _app ->
+            send(test_pid, {:armed, ref})
+          end
+        )
+
+      {model, []} = submit(model, "/inspect")
+
+      # The snapshot reports host provider topology (which providers are
+      # wired, from `op://` or env, whether the vault is unlocked) and
+      # gathering it performs a real 1Password read on the operator's
+      # machine. A tenant reaches neither.
+      refute_received {:armed, _}
+      assert model.inspection_ref == nil
+      assert model.notice == "inspection is disabled in a hosted session"
     end
 
     test "/usage folds token totals across provider vocabularies" do
