@@ -54,6 +54,44 @@ CI gates the same thing in two places, both in the `format` job: the root
 Every package is covered, so `cd packages/<pkg> && mix format` is a no-op on a
 clean tree. If it rewrites files, that is a real diff and not drift.
 
+### Performance gates
+
+```bash
+mix run --no-start bench/core/buffer_gate.exs  # buffer throughput + memory
+```
+
+`bench/core/buffer_gate.exs` is the blocking buffer performance gate. It
+measures `Raxol.Terminal.Buffer` fill (`set_cell/4`), read (`get_cell/3`),
+scroll (`scroll/2`) and per-cell memory at 80x24, 200x100 and 500x500, prints
+a PASS/FAIL table against budgets declared at the top of the file, and calls
+`System.halt(1)` on a breach. It runs as the `buffer-gate` job in
+`.github/workflows/ci-unified.yml` (every push and pull request), and
+`ci-status` reads its result, so a breach blocks the PR. Two properties are
+load-bearing:
+
+- **The budgets say what they can detect.** Throughput carries ~5x headroom
+  over the slowest observed run, because the same code spread 3x-17x across
+  runs on one machine; those rows catch an order-of-magnitude regression and
+  nothing finer. A 10x per-write slowdown was measured to pass them; a 50x
+  one fails all three fill rows. Per-cell memory comes from
+  `:erts_debug.flat_size/1`, which is deterministic to the last decimal, and
+  is gated at 1.5x.
+- **It cannot pass without measuring.** `Buffer.scroll/2` rescues its own
+  failures and returns the buffer unchanged, so a broken scroll would look
+  free; the gate asserts the scrolled buffer differs, reads written cells back
+  at the corners and centre, rejects a 0 us timing or an implausible
+  `flat_size`, and counts its own rows before printing a verdict. Each of
+  those aborts with exit 2, which is not a pass. Same rule as
+  `scripts/check-quality-ratchet.sh`: a gate that can pass when the tool did
+  not run is worse than no gate.
+
+`bench/core/buffer_benchmark.exs` is a Benchee report over the
+`Raxol.Core.Buffer` compatibility shim, not a gate on the real buffer. It used
+to print "Some performance targets not met" and exit 0; it now exits non-zero.
+The `memory-regression` matrix in `.github/workflows/regression-testing.yml`
+has no buffer scenario and renders findings as a `[WARN]` PR comment, so it is
+a report, not a gate.
+
 ### Running examples
 
 ```bash
@@ -451,6 +489,9 @@ Key rules:
   stack, and nothing has to be measured.
 - Throughput and allocation budgets live in `bench/` and the
   regression-testing workflow, never in the suite.
+  `bench/core/buffer_gate.exs` is the worked example: budgets with a stated
+  headroom factor, a non-zero exit, and a blocking CI job. See "Performance
+  gates" above.
 
 ### Naming conventions
 
