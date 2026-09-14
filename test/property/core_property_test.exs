@@ -61,41 +61,22 @@ defmodule Raxol.Property.CoreTest do
       end
     end
 
-    @tag :skip_on_ci
-    property "parser performance scales sub-quadratically" do
-      check all(
-              size <- integer(100..1000),
-              max_runs: 50
-            ) do
-        small_input = String.duplicate("a", 100)
-        large_input = String.duplicate("a", size)
+    # Was a wall-clock RATIO: parse 100 chars, parse `size` chars, assert the
+    # second took less than 20x linear. At sizes of 100..1000 both samples are
+    # microseconds, so the ratio measured the scheduler more than the parser
+    # -- which is why it ended up `@tag :skip_on_ci`, i.e. guarding nothing
+    # anywhere. A quadratic parser is also perfectly fast at 1000 chars, so
+    # the old bound could not have caught one even when it ran.
+    #
+    # Size is the discriminator instead. At the parser's measured ~3.3us/char
+    # a linear parse of 200k chars is well under a second; a quadratic one is
+    # 4e10 character-steps, i.e. hours. The budget is the test's own timeout,
+    # nothing is measured, and it runs on CI.
+    @tag timeout: 30_000
+    test "parsing 200k characters stays linear enough to finish" do
+      input = String.duplicate("a", 200_000)
 
-        # Warm up both paths so JIT/allocation settle before timing.
-        for _ <- 1..5 do
-          _ = Parser.parse(small_input)
-          _ = Parser.parse(large_input)
-        end
-
-        # The ratio's denominator is a tiny measurement (100 parses of a
-        # 100-char string, single-digit microseconds), so one GC/scheduler
-        # spike in either sample used to blow the assertion on loaded CI.
-        # Interference only ADDS time, so the minimum across batches is the
-        # cleanest estimate of each path's true cost -- taking the min of both
-        # sides makes the ratio reflect algorithmic scaling, not a one-off.
-        base_time = min_batch_time(fn -> Parser.parse(small_input) end)
-        scaled_time = min_batch_time(fn -> Parser.parse(large_input) end)
-
-        # If truly quadratic, ratio would be (size/100)^2 -- at these sizes
-        # that is 44x-100x the linear expectation. Allow up to 20x linear for
-        # GC/scheduling variance on loaded runners: still far below quadratic,
-        # but with enough headroom that microsecond-denominator noise (which
-        # blew the old 10x ceiling at ~10.7x) cannot flake the nightly.
-        scale_factor = size / 100
-        max_ratio = scale_factor * 20
-        effective_base = max(base_time, 1)
-        ratio = scaled_time / effective_base
-        assert ratio < max_ratio
-      end
+      assert is_list(Parser.parse(input))
     end
   end
 
@@ -215,18 +196,6 @@ defmodule Raxol.Property.CoreTest do
   end
 
   # Helper functions
-
-  # Minimum wall-clock (microseconds) of 100 invocations, taken across several
-  # batches. Timing interference (GC, scheduling) only adds time, so the
-  # minimum is the sample least polluted by it.
-  defp min_batch_time(fun) do
-    1..5
-    |> Enum.map(fn _ ->
-      {t, _} = :timer.tc(fn -> for _ <- 1..100, do: fun.() end)
-      t
-    end)
-    |> Enum.min()
-  end
 
   defp extract_text(parsed) when is_list(parsed) do
     parsed
