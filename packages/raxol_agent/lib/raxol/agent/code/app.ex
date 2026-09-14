@@ -36,11 +36,14 @@ defmodule Raxol.Agent.Code.App do
   the approval footer -- is control-byte stripped both at the setters
   (`notice/2`, `put_status/2`) and in the view (`display_text/1`), because
   `notice:` and `status_line:` are also written by direct struct update in a
-  dozen places. The TRANSCRIPT is not: `transcript/1` renders projected
-  blocks through `Raxol.UI.Components.Harness.Block.render/2`, which is not
-  wrapped, so assistant and tool output reach the terminal as produced.
-  That is a renderer-level gap for every surface that does not go through
-  `Raxol.Harness.Surface.ViewText.lines/3`.
+  dozen places. The TRANSCRIPT is stripped too, but not here:
+  `Raxol.UI.Components.Harness.Block.render/2` sanitizes every text node
+  it emits, so assistant and tool output are stripped for every consumer
+  of that component on every surface, not just this view. What this
+  module still owns is `tail_lines/1` -- the in-flight streaming chunks,
+  which are joined into a text node here rather than by `Block` -- so
+  that node is stripped with the same `sanitize_display/1` the chrome
+  uses.
 
   ## The loop
 
@@ -1819,11 +1822,19 @@ defmodule Raxol.Agent.Code.App do
   end
 
   # In-flight streaming text (the live tail), one dim line per open item.
+  # These chunks are the provider's raw stream and this text node is built
+  # HERE, not by `Block.render/2` (which strips its own text nodes), so
+  # the strip has to happen here: `sanitize_display/1` applies
+  # `ViewText.sanitize_line/1` per newline-delimited line, so a multi-line
+  # chunk keeps its line structure instead of being welded into one row.
   defp tail_lines(tail) when is_map(tail) do
     tail
     |> Map.values()
     |> Enum.map(fn %{chunks: chunks} ->
-      text(chunks |> Enum.reverse() |> Enum.join(""), style: [:dim])
+      text(
+        chunks |> Enum.reverse() |> Enum.join("") |> sanitize_display(),
+        style: [:dim]
+      )
     end)
   end
 
@@ -1892,13 +1903,11 @@ defmodule Raxol.Agent.Code.App do
   # footer without passing through either -- so the check also sits on the
   # last thing before `text/2`, where nothing can route around it.
   #
-  # The transcript is NOT covered: `transcript/1` renders projected blocks
-  # through `Block.render/2`, which this module does not wrap, so assistant
-  # and tool output still reach the terminal with control bytes intact. That
-  # is a renderer-level gap for every surface that does not go through
-  # `Raxol.Harness.Surface.ViewText.lines/3`, tracked separately; chrome is
-  # fixed here because a forged prompt or status line impersonates the app
-  # itself.
+  # The transcript is covered elsewhere, not here: `Block.render/2` strips
+  # the text nodes it emits, and `tail_lines/1` strips the streaming
+  # chunks it joins itself. Chrome keeps its own strip because a forged
+  # prompt or status line impersonates the app itself, and those strings
+  # never pass through `Block`.
   defp display_text(text) when is_binary(text), do: ViewText.sanitize_line(text)
   defp display_text(other), do: other
 
