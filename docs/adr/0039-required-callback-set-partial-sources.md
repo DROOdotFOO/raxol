@@ -2,12 +2,13 @@
 
 ## Status
 
-Accepted, 2026-09-14. Amends [ADR-0033](0033-web3-data-surface.md) decision 3, whose required
-set of six this replaces with three. Everything else in that decision stands: the
-`{module, state}` handle, `capabilities/1` plus the `function_exported?/3` check, the three
-load-bearing shapes (a height that names its unit, an opaque tagged account reference, opaque
-cursors in both directions), the `raw_request/2` allowlist, and the rule that reference
-implementations ship in `lib/`.
+Accepted, 2026-09-14, and revised the same day: see "The revision" below. Amends
+[ADR-0033](0033-web3-data-surface.md) decision 3, whose required set of six this replaces
+with two. Everything else in that decision stands: the `{module, state}` handle,
+`capabilities/1` plus the `function_exported?/3` check, the three load-bearing shapes (a
+height that names its unit, an opaque tagged account reference, opaque cursors in both
+directions), the `raw_request/2` allowlist, and the rule that reference implementations ship
+in `lib/`.
 
 Accepted rather than Proposed because two backends are blocked on it and cannot be written
 against an undecided contract, and because it lands with its implementation in the same
@@ -15,6 +16,28 @@ change, so the alternative shape is visible in the diff rather than only in this
 
 Upstream claims dated 2026-09-14 were probed on that date with the honest User-Agent ADR-0033
 section 7 mandates. The re-probe commands are in "Validation".
+
+### The revision
+
+This decision was drafted with a required set of **three**, keeping `get_transaction/2`
+alongside `chain_info/1` and `block_height/1`, on the reasoning that a source can answer from
+a chain identity, a height and a transaction id. Writing the Solana backend against it that
+same afternoon measured the third one away: SQD Portal's 31 tools carry no
+transaction-by-signature lookup for Solana at all. `portal_solana_query_transactions` and
+`portal_solana_query_instructions` take a slot or timestamp range, a fee payer, a mentioned
+account and a cursor, with a page limit of 25, and the only id-shaped parameters in the whole
+surface belong to the EVM and Tron families (`sighash`, which is a method selector, and
+`transaction_hash` on the trace tool). Scanning for a signature is not an implementation to
+prefer over a lookup, it is thousands of transactions per slot at 25 rows a page.
+
+So the argument this ADR makes about accounts generalizes to transaction ids: a point lookup
+by id needs an index over ids, and an archive has one only over ranges. The required set is
+two, and the line it draws is cleaner than the one it replaced: what a source knows about the
+**chain**, rather than about anything in it.
+
+The drafting history is kept rather than tidied away because the measurement is the whole
+content of the decision, and a reader who reaches the same "surely a transaction id is
+universal" instinct should find it already answered.
 
 ## Context
 
@@ -55,14 +78,29 @@ measurement rather than on the shape of an API's name.
 cannot answer `list_transactions/3` or `token_balances/2` without an index it does not have.
 
 **Aztecscan** (`api.aztecscan.xyz/v1/temporary-api-key`). `l2/accounts` and
-`l2/accounts/{address}` both answer 404. `l2/contract-instances/{address}` answers 200 for a
-deployed instance, which is contract metadata rather than an account: the record carries an
-address, a deployer, class and salt, and no balance field exists to report. `l2/txs` answers
-200, and each item carries `txHash`, `feePayer` and timestamps, with no sender and no
-recipient, so a per-account transaction list cannot be assembled from it at all. The private
-half was already known to be unobservable; what is new here is that the **public** surface has
-no account resource either, so on this chain `account_info/2` and `list_transactions/3` join
-`token_balances/2` as questions the source cannot be asked.
+`l2/accounts/{address}` both answer 404: there is no account resource. A transaction by hash
+is answerable, from two paths rather than one: `l2/tx-effects/{hash}` answers 200 for a mined
+transaction, and `l2/txs/{hash}` answers 200 while it is still pending and 404 once it is
+mined, since `l2/txs` is the pending pool rather than a mined list.
+
+The two account-shaped refusals here are measured rather than assumed, and each survives a
+near miss, which is what makes them worth recording:
+
+- A per-sender filter **does** exist. Transaction records carry an `initiator` as well as a
+  `feePayer`, and `l2/public-call-requests?senderAddress={address}` returned 47 KB for the
+  initiator of a mainnet transaction. `list_transactions/3` is still declined, because a
+  public-call-requests page omits every private-only transaction of that account, and an
+  incomplete page is exactly the lie decision 3 forbids: a caller cannot tell it from a
+  complete one.
+- A balance resource **does** exist. `l2/contract-instances/{address}/balance` answers (null
+  for the instance probed) and `l2/contract-instances/with-balance` lists contract addresses
+  with balances. `token_balances/2` is still declined, because it is fee juice only and
+  contract instances only, so it answers a different question from the one a caller asking
+  about holdings is asking.
+
+The private half was already known to be unobservable. What is new is that the **public**
+surface cannot be asked an account question either, and that both of the endpoints which look
+like they could answer one turn out to answer something narrower.
 
 **SQD Portal** (`portal.sqd.dev/mcp`). Stateless, keyless, 31 tools today against the survey's
 28 on 2026-08-31, which is drift worth recording rather than a discrepancy to resolve.
@@ -75,6 +113,14 @@ account read is `portal_get_wallet_summary`, and it takes an address plus a look
 `timeframe` and returns activity and fund flow over that window: an archive answers queries
 over ranges, and "the current native balance of this account" is not a range query. So the
 Solana primary cannot answer `account_info/2` while its public-RPC fallback can.
+
+And it cannot answer `get_transaction/2` on Solana either, which is the measurement that
+revised this decision. `portal_solana_query_transactions` takes a network, a timeframe or a
+slot range, timestamps, a `finalized_only` flag, a fee payer, a mentioned account, a page
+limit of 25 and a cursor. `portal_solana_query_instructions` adds a program id and
+discriminator and account-position filters. Neither takes a signature, and the only id-shaped
+parameters in all 31 tools are `sighash` on the EVM and Tron transaction queries, which is a
+method selector rather than a transaction hash, and `transaction_hash` on the EVM trace tool.
 
 One further measurement, recorded here because it bears on ADR-0037's era probe rather than on
 this decision: SQD's `tools/list` result carries no `ttlMs` and no `cacheScope`, which the
@@ -89,20 +135,22 @@ is a stub with a behaviour attached and is what the repository's rules forbid.
 
 ## Decision
 
-### 1. The required set is three
+### 1. The required set is two
 
-Required: `chain_info/1`, `block_height/1`, `get_transaction/2`.
+Required: `chain_info/1`, `block_height/1`.
 
 Optional, declared through `capabilities/1` and checked by `Backend.supports?/2`:
-`account_info/2`, `list_transactions/3`, `token_balances/2`, plus the eight ADR-0033 already
-makes optional. Eleven optional, three required, fourteen callbacks unchanged.
+`get_transaction/2`, `account_info/2`, `list_transactions/3`, `token_balances/2`, plus the
+eight ADR-0033 already makes optional. Twelve optional, two required, fourteen callbacks
+unchanged.
 
-The three are the measured intersection, and they have a property in common that is worth
-naming because it predicts the next source too: each is answerable from a chain identity, a
-height, and a transaction id, which is the least a thing can know and still be a source of
-chain data. Every question that has to be asked *about an account* needs an index over
-accounts, and an index is exactly what a node does not have and what an archive has only over
-ranges.
+The two are the measured intersection, and the line between them and the rest is worth naming
+because it predicts the next source too. The required pair is what a source knows about the
+**chain**: which chain this is, and how far it has got. Everything else is a question about a
+thing on the chain, and a question about a thing needs an index over things of that kind: over
+accounts for three of the four, over transaction ids for `get_transaction/2`. A node has no
+such index, and an archive has one only over block ranges, which is why SQD's Solana surface
+can filter transactions by slot range and fee payer and cannot look one up by signature.
 
 `Backend.required/0` remains the dispatch rule: a required callback is always dispatched,
 an optional one is dispatched only when the handle declares and exports it. That is unchanged
@@ -121,7 +169,7 @@ backend that declares a capability it did not implement.
 
 `Raxol.Web3.Router` already selects candidates **per callback and not per backend**
 (`router.ex:116-122`, `answers?/2`), so this decision needs no router change beyond
-enumerating the three demoted names in `callbacks/0` so `coverage/2` keeps reporting all
+enumerating the four demoted names in `callbacks/0` so `coverage/2` keeps reporting all
 fourteen. A second contract would need the router to know which contract a handle satisfies
 before it could ask whether the handle answers a callback, which is a dispatch branch added to
 the one module whose whole content is failover classification.
@@ -150,10 +198,10 @@ visible, and it already reports the live breaker state rather than a static decl
 ### 4. Chain 4663 gets a routable fallback
 
 `Raxol.Web3.Backend.JSONRPC` is the first partial source: a backend over `Raxol.Web3.RPC`,
-answering the three required callbacks plus `account_info/2`, `get_block/2`, `get_logs/3`,
-`read_contract/2` and `raw_request/2`, and declining `list_transactions/3`,
-`token_balances/2`, `list_token_transfers/3`, `list_nfts/2`, `contract_metadata/2` and
-`resolve_name/2`.
+answering the two required callbacks plus `get_transaction/2`, `account_info/2`,
+`get_block/2`, `get_logs/3`, `read_contract/2` and `raw_request/2`, and declining
+`list_transactions/3`, `token_balances/3`, `list_token_transfers/3`, `list_nfts/3`,
+`contract_metadata/2` and `resolve_name/2`.
 
 Partial is not the same as minimal, and this is the case that shows it: an RPC node answers
 `eth_call` and `eth_getLogs`, which are two callbacks a challenge-gated explorer cannot serve
@@ -162,6 +210,38 @@ the rest. That is the shape `coverage/2` exists to report.
 
 This closes the third of the three live consequences above, and it means ADR-0033's answer for
 4663 is a configured RPC URL rather than self-hosting an explorer.
+
+### 5. A handle names its source, not only its module
+
+`backend/1` is a new optional callback beside `backend/0`, and `Backend.name/1` prefers it.
+`Router.coverage/2` and the failover log report it.
+
+Two backends reached this independently while being written. One module can carry several
+upstreams: the Tron backend carries TronGrid, SQD Portal and TronScan, and the Solana backend
+carries an archive and a node, so `coverage/2` answered
+`%{chain_info: [:tron, :tron, :tron], get_transaction: [:tron, :tron], list_transactions:
+[:tron]}`. An operator could read how many sources survived and not which one dropped out,
+and decision 3 has just made that map the only place a chain's real shape is visible. A
+report that cannot name what it is reporting on does not answer the question it exists for.
+
+A single-source backend declines the callback and is named by its module, so ADR-0033
+decision 3's `platform/0` precedent is unchanged for every backend that does not need this.
+The alternative was splitting each multi-source backend into one module per upstream, which
+would duplicate that backend's normalization three times to fix a label.
+
+### 6. `token_balances` takes a cursor
+
+`token_balances/3` rather than `/2`, with the same `list_opts` as every other list callback.
+
+It returned a `page()` while taking no options, so a backend could MINT a `next` cursor that
+no caller could hand back. `Raxol.Web3.Backend.Blockscout` did exactly that for
+`/api/v2/addresses/{hash}/tokens`, whose four-key cursor was measured and allowlisted and
+unusable, and on Canton the holdings page is the only paginated party-scoped read the chain
+offers, which had already forced a parallel public three-arity function beside the callback.
+
+A cursor nobody can feed back is the same class of dishonesty this decision is otherwise
+about: a shape that says an answer is available when it is not. Fixing the contract also
+deletes the workaround, rather than leaving a second paginated path in one backend.
 
 ## Consequences
 
@@ -172,31 +252,31 @@ This closes the third of the three live consequences above, and it means ADR-003
 - Aztec can be honest. A structurally unobservable read is an absent capability rather than an
   empty page, which is the one outcome that could have produced a wrong balance decision.
 - No second behaviour, no second dispatch path in the router, and no new error variant.
-- Three of the fourteen callbacks now have the property that every source answers them, which
+- Two of the fourteen callbacks now have the property that every source answers them, which
   is what makes a health-ordered failover chain meaningful: a chain with two sources has two
-  candidates for the three, whatever else differs.
+  candidates for both, whatever else differs.
 
 ### Negative
 
-- A caller of `account_info/2`, `list_transactions/3` or `token_balances/2` must handle
-  `{:error, {:unsupported, _}}`. This was already true of eight of the fourteen callbacks, and
-  the MCP and Action surfaces already render it, but it is now true of the three reads a
-  caller is most likely to reach for first.
+- A caller of `get_transaction/2`, `account_info/2`, `list_transactions/3` or
+  `token_balances/2` must handle `{:error, {:unsupported, _}}`. This was already true of eight
+  of the fourteen callbacks, and the MCP and Action surfaces already render it, but it is now
+  true of the four reads a caller is most likely to reach for first.
 - `coverage/2` moves from informational to load-bearing. An operator who does not consult it
   learns a chain's shape from a stream of per-call errors.
 - A backend that simply forgot to declare `account_info/2` is indistinguishable at the
   contract level from a source that cannot answer it.
-- The required set is now smaller than the set most chains can answer, so the contract
-  understates a full source. `capabilities/1` is what recovers that, and it is a declaration
-  rather than a probe.
+- The required set is now much smaller than the set most chains can answer, so the contract
+  understates a full source badly: an explorer answers all fourteen and promises two.
+  `capabilities/1` is what recovers that, and it is a declaration rather than a probe.
 
 ### Mitigation
 
 - Every backend in the package asserts its own declared capability set in its tests, so a
   forgotten declaration is a red test in the backend that forgot rather than a silent
   degradation at the router. `Raxol.Web3.Backend.Blockscout` continues to declare and answer
-  all six of the previously required callbacks, so nothing that was answerable stopped being
-  answerable in this change.
+  all six of ADR-0033's originally required callbacks, so nothing that was answerable stopped
+  being answerable in this change.
 - `Raxol.Web3.Router.coverage/2` keeps enumerating all fourteen callbacks, so a demoted
   callback appears there exactly as an optional one always has.
 - ADR-0033's section 5 note that a challenge response degrades the served surface is now
@@ -210,6 +290,16 @@ This closes the third of the three live consequences above, and it means ADR-003
   reports itself rather than to the required set.
 - Which optional callbacks each remaining backend declares. That lands with each backend, as
   ADR-0033 says of the `raw_request/2` allowlist.
+- Whether `Backend.list_opts()` grows a time or range window. It is `[cursor: _]` only, and a
+  range-only source cannot be asked an account question without one: measured 2026-09-14,
+  `portal_solana_query_transactions` with a network and a mentioned account and no window
+  answers 200 carrying `error.code "invalid_request"`, `origin "client_input"` and "Provide
+  timeframe, from_block, or from_timestamp/to_timestamp to define the query window". A window
+  chosen by the backend would be its own invention, and an empty page from a too-narrow one is
+  indistinguishable from an account with no activity. So the Solana archive source declares
+  `list_transactions/3` nowhere, on measurement rather than on taste, and whether the contract
+  should let a caller widen the question is a separate decision with its own cursor
+  consequences.
 - Anything about the `Raxol.Payments.ChainReader` migration in ADR-0033 decision 2's move
   table. `Raxol.Web3.RPC` is still the destination it collapses onto, and
   `Raxol.Web3.Backend.JSONRPC` is a consumer of that module rather than a step in that
@@ -219,8 +309,8 @@ This closes the third of the three live consequences above, and it means ADR-003
 
 ### Keep six required, and let a partial source lie
 
-Rejected. It is the current state, and it produces an empty `token_balances/2` page on Aztec,
-which is the one failure mode in this package that could be read as a fact about money.
+Rejected. It is the state this amends, and it produces an empty `token_balances/2` page on
+Aztec, which is the one failure mode in this package that could be read as a fact about money.
 
 ### Keep six required, and give a partial source its own behaviour
 
@@ -228,19 +318,25 @@ Rejected in decision 2, on the grounds that the distinction it draws at the modu
 already drawn per handle by `capabilities/1`, and that it adds a dispatch branch to the
 router's failover classification.
 
-### Shrink to four, keeping `account_info/2` required
+### Shrink to four, keeping `account_info/2` and `get_transaction/2` required
 
-This was the leading candidate until the probe. A raw JSON-RPC node answers `account_info/2`,
-so the argument for keeping it was that a source which cannot name an account cannot be asked
-anything account-shaped and is barely a source. Two measurements killed it: Aztecscan has no
-account resource at all (`l2/accounts` is a 404, 2026-09-14), and SQD Portal's nearest tool
-summarizes activity over a look-back window rather than reporting a current balance. Requiring
-it would have forced the Solana primary and the Aztec backend to fake exactly the field a
-caller would use for a balance decision.
+This was the leading candidate until the probes. A raw JSON-RPC node answers both, so the
+argument was that a source which can name neither an account nor a transaction is barely a
+source. Three measurements killed it, all 2026-09-14: Aztecscan has no account resource
+(`l2/accounts` is a 404), SQD Portal's nearest account tool summarizes activity over a
+look-back window rather than reporting a current balance, and SQD has no
+transaction-by-signature lookup for Solana at all. Requiring either would have forced the
+Solana primary to fake exactly the fields a caller would use for a balance decision.
+
+### Shrink to three, keeping `get_transaction/2` required
+
+This is what this ADR said when it was first accepted, hours earlier. See "The revision".
 
 ## Validation
 
-The demotions rest on four claims, and each one is reproducible.
+The demotions rest on five measurements, and each one is reproducible. The `tools/list` probe
+below carries three of them, because all three are readable in the returned schemas: the
+absent signature parameter, the look-back `timeframe` on the wallet tool, and the tool count.
 
 ```sh
 # Aztecscan has no account resource, and its transactions carry no counterparties.
@@ -257,12 +353,15 @@ curl -s -X POST -H 'content-type: application/json' \
 
 In the suite rather than at a shell:
 
-- Every backend shipped in this package answers the three required callbacks, and the router
+- Every backend shipped in this package answers the two required callbacks, and the router
   dispatches them whatever `capabilities/1` says.
-- A chain whose only source is partial reports the truth through `coverage/2`: the three
+- A chain whose only source is partial reports the truth through `coverage/2`: the two
   required callbacks plus whatever that source declares, and nothing else.
-- `Raxol.Web3.Backend.JSONRPC` answers `account_info/2` from a balance and a code read, and
-  declines `list_transactions/3` and `token_balances/2` rather than returning an empty page.
+- `Raxol.Web3.Backend.JSONRPC` answers `get_transaction/2` and `account_info/2` from node
+  reads, and declines `list_transactions/3` and `token_balances/2` rather than returning an
+  empty page.
+- The Solana SQD source declares neither `get_transaction/2` nor `account_info/2`, its
+  public-RPC sibling declares both, and a router of the two answers both from the fallback.
 - Chain 4663 routes: a Blockscout primary whose origin is breakered open orders behind a
   JSONRPC fallback for the callbacks both declare, and the fallback answers.
 

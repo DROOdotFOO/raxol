@@ -204,6 +204,16 @@ Four modules move down, unchanged in behaviour, with deprecated delegating shims
 
 ### 3. The backend contract
 
+**Amended by [ADR-0039](0039-required-callback-set-partial-sources.md), 2026-09-14.** The
+required set below is two rather than six: `get_transaction/2`, `account_info/2`,
+`list_transactions/3` and `token_balances/2` are optional. The set here was derived from what
+chains can answer, and the contract binds sources. A raw JSON-RPC node has no method that
+lists by account; probes on 2026-09-14 found no account resource at all on Aztec's public
+surface; and SQD Portal, the Solana and Tron primary, answers queries over block ranges, so
+it reports no current balance and cannot look a Solana transaction up by signature. What
+survives as required is what a source knows about the chain rather than about anything in it:
+which chain this is, and how far it has got. Everything else in this decision stands.
+
 `Raxol.Web3.Backend` follows the repo's established adapter shape: a `{module, state}` handle
 as in `ChainReader`, a capability-declaring callback as in `Raxol.Earn.ProviderAdapter`'s
 `supported_chain_ids/1`, and a self-identifying zero-arity callback as in
