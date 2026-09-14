@@ -250,7 +250,9 @@ defmodule Raxol.REPL.Evaluator do
   # it accepts and stops at the cap. See its moduledoc for why measuring the
   # process from outside does not work.
   defp capture_io(fun, output_limit, timeout) do
-    {:ok, capture} = CaptureIO.start(output_limit, mfa_timeout: timeout)
+    {:ok, capture} =
+      CaptureIO.start(output_limit, mfa_timeout: mfa_bound(timeout))
+
     original_gl = Process.group_leader()
     Process.group_leader(self(), capture)
 
@@ -263,6 +265,16 @@ defmodule Raxol.REPL.Evaluator do
       CaptureIO.close(capture)
     end
   end
+
+  # `eval/3`'s `:timeout` is a `timeout()`, so a caller who wants a long
+  # interactive evaluation can pass `:infinity` -- which, handed on as the
+  # MFA bound, would turn the capture server's bounded receive back into an
+  # unbounded one and reinstate the wedge it exists to prevent. An expansion
+  # the group leader performs on the evaluation's behalf gets a finite budget
+  # regardless: the evaluation may run forever, one `io_lib` call on its
+  # behalf may not.
+  defp mfa_bound(:infinity), do: @default_timeout
+  defp mfa_bound(timeout) when is_integer(timeout) and timeout > 0, do: timeout
 
   defp maybe_note_truncation(captured, false, _limit), do: captured
 

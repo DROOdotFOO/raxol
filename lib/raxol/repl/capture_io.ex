@@ -56,19 +56,41 @@ defmodule Raxol.REPL.CaptureIO do
     mfa_timeout =
       Keyword.get(opts, :mfa_timeout, Raxol.Core.Defaults.timeout_ms())
 
+    # Validated rather than trusted: `:infinity` is a legitimate value for an
+    # evaluation timeout and is exactly the value that turns the bounded
+    # receive below back into master's unbounded one, silently reinstating the
+    # wedge this option exists to prevent. `Evaluator` resolves `:infinity` to
+    # a finite bound before it gets here; anything else is a caller bug and
+    # says so.
+    unless is_integer(mfa_timeout) and mfa_timeout > 0 do
+      raise ArgumentError,
+            ":mfa_timeout must be a positive integer in milliseconds, got: " <>
+              inspect(mfa_timeout)
+    end
+
     GenServer.start(__MODULE__, {limit, self(), mfa_timeout})
   end
 
   @doc """
   Return the captured output and whether it was truncated at the limit.
+
+  Unbounded on purpose. The server legitimately blocks for up to
+  `:mfa_timeout` while an MFA expansion runs (see `put_mfa/4`), so the
+  implicit 5 000 ms `GenServer.call/2` default could expire while the server
+  was doing exactly what it was told to -- turning "the output was cut" into
+  `{:timeout, {GenServer, :call, ...}}` inside the evaluation, which the
+  evaluator then reports as a crash with the captured output discarded. The
+  caller is the evaluation process, which is itself bounded and brutally
+  killed by `Raxol.REPL.Evaluator` on its own deadline, so this call cannot
+  outlive that.
   """
   @spec contents(pid()) :: {binary(), boolean()}
-  def contents(pid), do: GenServer.call(pid, :contents)
+  def contents(pid), do: GenServer.call(pid, :contents, :infinity)
 
   @doc "Stop the capture server."
   @spec close(pid()) :: :ok
   def close(pid) do
-    GenServer.stop(pid, :normal)
+    GenServer.stop(pid, :normal, :infinity)
   catch
     :exit, _ -> :ok
   end
@@ -182,12 +204,24 @@ defmodule Raxol.REPL.CaptureIO do
   # evaluation's own timeout; see `start/2`) and expiry is the `:DOWN` case:
   # kill the expander, mark truncated, refuse the write.
   defp put_mfa(mod, fun, args, state) do
-    ref = make_ref()
+    if state.truncated? do
+      # Nothing this expansion returns can be recorded, so there is nothing
+      # to wait for. Skipping is what bounds the TOTAL cost: an expander that
+      # wedges sets `truncated?`, so evaluated code that queues a hundred
+      # wedging writes (`{put_chars, unicode, :timer, :sleep, [:infinity]}`
+      # from a helper it spawned, which the evaluator's kill does not reach)
+      # pays one `:mfa_timeout` for the server's whole life instead of one
+      # each. Before this check that arithmetic was N x 5s of a retained
+      # capture server and a starved owner `:DOWN`, N attacker-chosen.
+      {:ok, state}
+    else
+      ref = make_ref()
 
-    {pid, monitor} =
-      spawn_expander({mod, fun, args}, ref, expansion_words(state))
+      {pid, monitor} =
+        spawn_expander({mod, fun, args}, ref, expansion_words(state))
 
-    await_expansion(pid, monitor, ref, state)
+      await_expansion(pid, monitor, ref, state)
+    end
   end
 
   defp expansion_words(state) do
@@ -229,24 +263,14 @@ defmodule Raxol.REPL.CaptureIO do
         {:ok, %{state | truncated?: true}}
     after
       state.mfa_timeout ->
-        # Neither answered nor died. Same outcome as the :DOWN above, plus the
-        # kill that branch got for free.
+        # Neither answered nor died. Same outcome as the `:DOWN` above, plus
+        # the kill that branch got for free. A reply that raced the kill needs
+        # no flushing: `handle_info/2`'s catch-all drops it on the next loop,
+        # and the next `put_mfa/4` waits on its own fresh ref, so a stale one
+        # can never be matched.
         Process.exit(pid, :kill)
         Process.demonitor(monitor, [:flush])
-        flush_expansion(ref)
         {:ok, %{state | truncated?: true}}
-    end
-  end
-
-  # An expansion that answered while the kill was in flight must not sit in
-  # the mailbox: the next `put_mfa/4` waits on its own fresh ref, so a stale
-  # reply is never matched, but it would grow this server's mailbox for the
-  # life of the evaluation.
-  defp flush_expansion(ref) do
-    receive do
-      {^ref, _result} -> :ok
-    after
-      0 -> :ok
     end
   end
 
@@ -255,6 +279,15 @@ defmodule Raxol.REPL.CaptureIO do
   # Accepting past the limit is what the whole module exists to prevent, so the
   # write is dropped rather than partially kept: a half-written line spliced
   # onto the next one reads as output the program never produced.
+  #
+  # `truncated?` is a LATCH, and deliberately so: once a write has been
+  # dropped, every later write is dropped too, because appending after a hole
+  # is the splicing this function refuses. It is worth knowing that the latch
+  # is set by three things, not one -- the byte cap here, an expander killed
+  # over its heap cap, and an expander that wedged past `:mfa_timeout` -- so
+  # a single wedged `:io.format/2` blinds the capture for the rest of the
+  # evaluation. That is why `put_mfa/4` refuses to wait once the latch is
+  # set: after the first one there is nothing left to capture anyway.
   defp put(chars, state) do
     data = IO.iodata_to_binary(chars)
     size = byte_size(data)

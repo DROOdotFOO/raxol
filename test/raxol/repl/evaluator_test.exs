@@ -357,6 +357,80 @@ defmodule Raxol.REPL.EvaluatorTest do
       assert capture_server_count() == before
     end
 
+    # Bounding ONE wedge is not enough. Evaluated code can read the capture
+    # server's pid (it is the group leader) and hand it to a process the
+    # evaluator's kill never reaches, then queue as many wedging MFA writes
+    # as it likes. At one `:mfa_timeout` each, N writes held the server --
+    # and starved the owner's `:DOWN` behind them -- for N x the bound,
+    # with N attacker-chosen. After the first wedge the capture is latched
+    # truncated, so there is nothing left to record and nothing to wait for.
+    test "a second wedged write costs nothing: the bound is per server, not per write" do
+      {:ok, capture} = CaptureIO.start(4_096, mfa_timeout: 200)
+
+      elapsed_for = fn ->
+        reply_as = make_ref()
+
+        send(
+          capture,
+          {:io_request, self(), reply_as,
+           {:put_chars, :unicode, __MODULE__, :never_answers, [:x]}}
+        )
+
+        {us, :ok} =
+          :timer.tc(fn ->
+            receive do
+              {:io_reply, ^reply_as, reply} -> reply
+            end
+          end)
+
+        us
+      end
+
+      first = elapsed_for.()
+      second = elapsed_for.()
+      third = elapsed_for.()
+
+      # The first write pays the bound (it is the one that discovers the
+      # wedge); the two after it are refused without spawning an expander at
+      # all, so they cannot each pay it again. Compared to the code's OWN
+      # bound rather than to a wall-clock constant: the claim is "these did
+      # not wait", and 200_000us is what waiting costs here.
+      assert first >= 200_000
+      assert second < 200_000
+      assert third < 200_000
+
+      assert CaptureIO.contents(capture) == {"", true}
+      CaptureIO.close(capture)
+    end
+
+    # `:infinity` is a legitimate evaluation timeout, and the two halves of
+    # this fix have to agree about it: `start/2` now REFUSES a non-integer
+    # bound, so an evaluator that forwarded `:infinity` verbatim would fail
+    # every evaluation outright. This pins that it resolves it instead.
+    test "an infinite evaluation timeout still bounds the expansion" do
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(eval, ~S|:io.format("~s", ["hi"]); :ok|,
+                 timeout: :infinity,
+                 max_result_bytes: 4_096
+               )
+
+      assert result.output =~ "hi"
+    end
+
+    test "a non-integer :mfa_timeout is refused rather than silently unbounded" do
+      assert_raise ArgumentError,
+                   ~r/:mfa_timeout must be a positive integer/,
+                   fn ->
+                     CaptureIO.start(4_096, mfa_timeout: :infinity)
+                   end
+
+      assert_raise ArgumentError, fn ->
+        CaptureIO.start(4_096, mfa_timeout: 0)
+      end
+    end
+
     # Public because the capture applies it by module/function/arguments.
     def never_answers(_arg) do
       receive do
