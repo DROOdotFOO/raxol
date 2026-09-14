@@ -71,11 +71,20 @@ defmodule Raxol.Recording.Player do
   # -- Simple (non-interactive) playback --
 
   defp play_simple(%Session{} = session, opts) do
-    speed = Keyword.get(opts, :speed, @default_speed)
-    max_delay = Keyword.get(opts, :max_delay, @default_max_delay)
+    cfg = %{
+      speed: Keyword.get(opts, :speed, @default_speed),
+      max_delay: Keyword.get(opts, :max_delay, @default_max_delay),
+      # `:sleep` exists so a test can pin that the multiplier reaches the
+      # PLAY PATH, not just that `frame_delay_ms/3` computes it: with the
+      # sleep injected, "speed 100 turns a 5s gap into one 50ms wait" is an
+      # assertion about the requested durations rather than about the test's
+      # own elapsed time. The timed test this replaced could not tell a
+      # correct call site from one that passed `1.0`.
+      sleep: Keyword.get(opts, :sleep, &Process.sleep/1)
+    }
 
     enter_alt_screen(session)
-    play_events_simple(session.events, 0, speed, max_delay)
+    play_events_simple(session.events, 0, cfg)
     leave_alt_screen()
 
     :ok
@@ -96,26 +105,21 @@ defmodule Raxol.Recording.Player do
     )
   end
 
-  defp play_events_simple([], _prev_us, _speed, _max_delay), do: :ok
+  defp play_events_simple([], _prev_us, _cfg), do: :ok
 
-  defp play_events_simple(
-         [{elapsed_us, :output, data} | rest],
-         prev_us,
-         speed,
-         max_delay
-       ) do
-    delay_ms = frame_delay_ms(elapsed_us - prev_us, speed, max_delay)
+  defp play_events_simple([{elapsed_us, :output, data} | rest], prev_us, cfg) do
+    delay_ms = frame_delay_ms(elapsed_us - prev_us, cfg.speed, cfg.max_delay)
 
     if delay_ms > 0 do
-      Process.sleep(delay_ms)
+      cfg.sleep.(delay_ms)
     end
 
     IO.write(data)
-    play_events_simple(rest, elapsed_us, speed, max_delay)
+    play_events_simple(rest, elapsed_us, cfg)
   end
 
-  defp play_events_simple([_ | rest], prev_us, speed, max_delay) do
-    play_events_simple(rest, prev_us, speed, max_delay)
+  defp play_events_simple([_ | rest], prev_us, cfg) do
+    play_events_simple(rest, prev_us, cfg)
   end
 
   # -- Interactive playback --

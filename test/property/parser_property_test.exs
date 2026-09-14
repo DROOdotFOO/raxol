@@ -6,10 +6,8 @@ defmodule Raxol.Property.ParserTest do
 
   describe "parser property tests" do
     property "parse handles all valid CSI sequences" do
-      check all(
-              sequence <- csi_sequence_generator(),
-              max_runs: 500
-            ) do
+      check all sequence <- csi_sequence_generator(),
+                max_runs: 500 do
         result = Parser.parse(sequence)
 
         # Should return a list of sequences
@@ -23,10 +21,8 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "parser never crashes on random input" do
-      check all(
-              input <- string(:printable, min_length: 1, max_length: 100),
-              max_runs: 1000
-            ) do
+      check all input <- string(:printable, min_length: 1, max_length: 100),
+                max_runs: 1000 do
         # Parser should handle any input without crashing
         result = Parser.parse(input)
         assert is_list(result)
@@ -34,10 +30,8 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "parser preserves text content" do
-      check all(
-              text <- string(:alphanumeric, min_length: 1, max_length: 50),
-              max_runs: 500
-            ) do
+      check all text <- string(:alphanumeric, min_length: 1, max_length: 50),
+                max_runs: 500 do
         # Pure text should be preserved
         parsed = Parser.parse(text)
 
@@ -48,10 +42,8 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "escape sequences are idempotent" do
-      check all(
-              sequence <- simple_escape_sequence(),
-              max_runs: 500
-            ) do
+      check all sequence <- simple_escape_sequence(),
+                max_runs: 500 do
         # Parsing twice should give same result
         parsed1 = Parser.parse(sequence)
         parsed2 = Parser.parse(sequence)
@@ -61,11 +53,9 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "cursor movement sequences maintain bounds" do
-      check all(
-              row <- integer(1..9999),
-              col <- integer(1..9999),
-              max_runs: 500
-            ) do
+      check all row <- integer(1..9999),
+                col <- integer(1..9999),
+                max_runs: 500 do
         sequence = "\e[#{row};#{col}H"
         parsed = Parser.parse(sequence)
 
@@ -76,12 +66,10 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "color sequences produce valid RGB values" do
-      check all(
-              r <- integer(0..255),
-              g <- integer(0..255),
-              b <- integer(0..255),
-              max_runs: 500
-            ) do
+      check all r <- integer(0..255),
+                g <- integer(0..255),
+                b <- integer(0..255),
+                max_runs: 500 do
         # 24-bit color sequence
         sequence = "\e[38;2;#{r};#{g};#{b}m"
         parsed = Parser.parse(sequence)
@@ -93,14 +81,8 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "parser handles mixed content correctly" do
-      check all(
-              segments <-
-                list_of(mixed_content_generator(),
-                  min_length: 1,
-                  max_length: 10
-                ),
-              max_runs: 500
-            ) do
+      check all segments <- list_of(mixed_content_generator(), min_length: 1, max_length: 10),
+                max_runs: 500 do
         input = Enum.join(segments)
 
         # Should parse without error
@@ -112,10 +94,8 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "SGR parameters are parsed correctly" do
-      check all(
-              params <- list_of(integer(0..107), min_length: 1, max_length: 5),
-              max_runs: 500
-            ) do
+      check all params <- list_of(integer(0..107), min_length: 1, max_length: 5),
+                max_runs: 500 do
         sequence = "\e[" <> Enum.join(params, ";") <> "m"
         parsed = Parser.parse(sequence)
 
@@ -126,10 +106,8 @@ defmodule Raxol.Property.ParserTest do
     end
 
     property "invalid sequences are handled gracefully" do
-      check all(
-              garbage <- binary(min_length: 1, max_length: 50),
-              max_runs: 500
-            ) do
+      check all garbage <- binary(min_length: 1, max_length: 50),
+                max_runs: 500 do
         # Add escape to make it look like sequence
         input = "\e" <> garbage
 
@@ -139,23 +117,35 @@ defmodule Raxol.Property.ParserTest do
       end
     end
 
-    # Deleted property "parser performance scales linearly": it timed
-    # `Parser.parse/1` against `50ms + 1ms/char`, a slope 300x the real
-    # ~3.3us/char cost, so it could only ever fail on a scheduler pause. A
-    # superlinear blowup on inputs of 10..1000 bytes shows up as the
-    # property's own run never finishing, which ExUnit's per-test timeout
-    # already reports; `bench/` owns the parser's actual budget
-    # (`<3us/char`, enforced by the regression workflow).
+    property "parser performance scales linearly" do
+      check all size <- integer(10..1000),
+                max_runs: 100 do
+        # Generate input of specific size
+        input = String.duplicate("a", size)
+
+        # Measure parsing time
+        {time, result} = :timer.tc(fn -> Parser.parse(input) end)
+
+        # Should complete and return a list
+        assert is_list(result)
+
+        # Time should scale roughly linearly. Real cost is ~3.3us/char, so the
+        # 1ms/char slope is already generous; this guards against superlinear
+        # blowups rather than enforcing a tight budget. The fixed base absorbs a
+        # one-off GC or scheduler pause on a loaded runner, which otherwise
+        # dominates the small absolute budget for tiny inputs.
+        base_overhead = 50_000
+        expected_max = base_overhead + size * 1000
+        assert time < expected_max
+      end
+    end
   end
 
   # Generator helpers
 
   defp csi_sequence_generator do
-    gen all(
-          cmd <-
-            member_of(["A", "B", "C", "D", "H", "J", "K", "m", "n", "s", "u"]),
-          params <- list_of(integer(0..100), max_length: 3)
-        ) do
+    gen all cmd <- member_of(["A", "B", "C", "D", "H", "J", "K", "m", "n", "s", "u"]),
+            params <- list_of(integer(0..100), max_length: 3) do
       if params == [] do
         "\e[#{cmd}"
       else
@@ -165,9 +155,7 @@ defmodule Raxol.Property.ParserTest do
   end
 
   defp simple_escape_sequence do
-    gen all(
-          type <- member_of([:cursor_up, :cursor_down, :clear_screen, :reset])
-        ) do
+    gen all type <- member_of([:cursor_up, :cursor_down, :clear_screen, :reset]) do
       case type do
         :cursor_up -> "\e[A"
         :cursor_down -> "\e[B"
@@ -196,7 +184,6 @@ defmodule Raxol.Property.ParserTest do
       _ -> ""
     end)
   end
-
   defp extract_text(text) when is_binary(text), do: text
   defp extract_text(_), do: ""
 end

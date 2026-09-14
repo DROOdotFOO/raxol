@@ -91,6 +91,47 @@ defmodule Raxol.Recording.PlayerTest do
 
       assert :ok = Player.play(session, [speed: 100.0] ++ @play_opts)
     end
+
+    # `frame_delay_ms/3` computing the right number proves nothing about the
+    # CALL SITE passing the right speed: mutating `play_events_simple/3` to
+    # pass `1.0` left the suite green, the run just took 5 seconds longer.
+    # With the sleep injected, the requested durations are the assertion.
+    test "the speed multiplier reaches the playback path, not just the helper" do
+      session = %Session{
+        width: 80,
+        height: 24,
+        started_at: DateTime.utc_now(),
+        events: [
+          {0, :output, "a"},
+          {5_000_000, :output, "b"},
+          {5_200_000, :output, "c"}
+        ]
+      }
+
+      test_pid = self()
+      record = fn ms -> send(test_pid, {:slept, ms}) end
+
+      assert :ok =
+               Player.play(
+                 session,
+                 [speed: 100.0, sleep: record, max_delay: 10.0] ++ @play_opts
+               )
+
+      # 5s gap at 100x = 50ms; the 200ms gap that follows = 2ms.
+      assert_received {:slept, 50}
+      assert_received {:slept, 2}
+      refute_received {:slept, _}
+
+      # And at 1x the same session asks for the real gaps.
+      assert :ok =
+               Player.play(
+                 session,
+                 [speed: 1.0, sleep: record, max_delay: 10.0] ++ @play_opts
+               )
+
+      assert_received {:slept, 5_000}
+      assert_received {:slept, 200}
+    end
   end
 
   # The multiplier used to be checked by timing `play/2`: at 100x a 5s gap
