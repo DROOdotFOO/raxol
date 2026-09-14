@@ -30,11 +30,17 @@ defmodule Raxol.Agent.Code.App do
   Writer to the caller, and the fetchers Commands arms capture `self()` as
   the reply address their `{:command_result, ...}` message is sent to.
 
-  `notice/2` and `put_status/2` are the two verbatim-rendered fields, and
-  some callers interpolate untrusted text into them (`/find` echoes
-  transcript content, `/inspect` a disk snapshot), so both strip control
-  bytes at the setter -- callers need not pre-sanitize, and no callsite can
-  forget to.
+  Some of what this app renders is untrusted: `/find` echoes transcript
+  content, `/inspect` a disk snapshot, and an `mcp__*` tool name comes from
+  an external server. The app's CHROME -- the notice box, the status strip,
+  the approval footer -- is control-byte stripped both at the setters
+  (`notice/2`, `put_status/2`) and in the view (`display_text/1`), because
+  `notice:` and `status_line:` are also written by direct struct update in a
+  dozen places. The TRANSCRIPT is not: `transcript/1` renders projected
+  blocks through `Raxol.UI.Components.Harness.Block.render/2`, which is not
+  wrapped, so assistant and tool output reach the terminal as produced.
+  That is a renderer-level gap for every surface that does not go through
+  `Raxol.Harness.Surface.ViewText.lines/3`.
 
   ## The loop
 
@@ -165,18 +171,19 @@ defmodule Raxol.Agent.Code.App do
   # No provider connected at boot -> open the onboarding wizard on its
   # selectable provider list. Not in a jail: the wizard ends in
   # `Commands.connect/4` / `Wizard.save_key_to_op/1`, both of which write the
-  # HOST-GLOBAL credential store, so a tenant gets a notice instead and the
-  # host pre-wires the provider via app_opts.
+  # HOST-GLOBAL credential store, so a tenant gets no wizard and the host
+  # pre-wires the provider via app_opts.
+  #
+  # No boot notice either. `Wizard.hint_panel/1` already renders the reason
+  # and keeps rendering it for as long as no provider is connected, whereas
+  # a notice is transient and the next command replaces it: setting both put
+  # the same sentence on two adjacent lines of the first screen. The panel is
+  # the durable copy, so it is the only one.
   defp maybe_open_initial_wizard(model) do
     cond do
-      provider_ready?(model) ->
-        model
-
-      model.jail == true ->
-        notice(model, Wizard.provider_setup_hint(model))
-
-      true ->
-        Wizard.open_browse(model)
+      provider_ready?(model) -> model
+      model.jail == true -> model
+      true -> Wizard.open_browse(model)
     end
   end
 
@@ -1793,7 +1800,7 @@ defmodule Raxol.Agent.Code.App do
 
     box style: %{border: :single, padding: 0} do
       column style: %{gap: 0} do
-        Enum.map(lines, &text(&1, fg: :cyan))
+        Enum.map(lines, &text(display_text(&1), fg: :cyan))
       end
     end
   end
@@ -1827,7 +1834,7 @@ defmodule Raxol.Agent.Code.App do
         style: [:bold]
       )
 
-    status = text(status_label(model), style: [:dim])
+    status = text(display_text(status_label(model)), style: [:dim])
 
     row style: %{gap: 1} do
       [face, plan_chip(model), status] |> Enum.reject(&is_nil/1)
@@ -1854,9 +1861,16 @@ defmodule Raxol.Agent.Code.App do
   defp status_label(%{plan_mode: true}), do: "plan mode — read-only"
   defp status_label(_model), do: "ready"
 
+  # `pending_approval.name` is a TOOL NAME, and for an `mcp__*` tool it is
+  # supplied by an external MCP server. Rendered raw, a tool named
+  # "read_file\e[2K\rAllow read_file?" forges the authorization prompt the
+  # operator is about to answer -- an authorization-UI spoof, not a cosmetic
+  # one. Every chrome string this module renders goes through
+  # `display_text/1` for that reason.
   defp footer(%{pending_approval: %{name: name}}) do
     box style: %{border: :single, padding: 0} do
-      text("Allow #{name}?  [a]llow once · [s]always · [d]eny  ·  Esc denies",
+      text(
+        display_text("Allow #{name}?  [a]llow once · [s]always · [d]eny  ·  Esc denies"),
         fg: :yellow
       )
     end
@@ -1871,25 +1885,53 @@ defmodule Raxol.Agent.Code.App do
   defp cursor(%{running?: true}), do: ""
   defp cursor(_model), do: "▌"
 
+  # The renderer-side control-byte boundary for this app's CHROME (the
+  # notice box, the status strip, the approval footer). `notice/2` and
+  # `put_status/2` sanitize too, but a dozen call sites write `notice:` and
+  # `status_line:` by direct struct update, and a tool name reaches the
+  # footer without passing through either -- so the check also sits on the
+  # last thing before `text/2`, where nothing can route around it.
+  #
+  # The transcript is NOT covered: `transcript/1` renders projected blocks
+  # through `Block.render/2`, which this module does not wrap, so assistant
+  # and tool output still reach the terminal with control bytes intact. That
+  # is a renderer-level gap for every surface that does not go through
+  # `Raxol.Harness.Surface.ViewText.lines/3`, tracked separately; chrome is
+  # fixed here because a forged prompt or status line impersonates the app
+  # itself.
+  defp display_text(text) when is_binary(text), do: ViewText.sanitize_line(text)
+  defp display_text(other), do: other
+
   # -- helpers ----------------------------------------------------------------
 
   @doc false
-  # The notice line(s). Content reaches `notice_block/1` verbatim, and some
-  # callers interpolate UNTRUSTED text into it -- `/find` echoes an excerpt of
-  # a projected transcript block (assistant and tool output), `/inspect` a
-  # rendered disk snapshot -- so the control bytes are stripped here, at the
-  # field that renders them, rather than at each of the ~60 callsites. This is
-  # `Raxol.Harness.Surface.ViewText.sanitize_line/1`, the one control-byte
-  # boundary in the tree, applied per line because `notice_block/1` splits the
-  # notice on "\n".
-  def notice(model, text) when is_binary(text),
-    do: %{model | notice: sanitize_display(text)}
+  # The notice line(s). Some callers interpolate UNTRUSTED text -- `/find`
+  # echoes an excerpt of a projected transcript block (assistant and tool
+  # output), `/inspect` a rendered disk snapshot -- so control bytes are
+  # stripped here as well as at the renderer. Setter AND renderer, not
+  # setter alone: `notice` and `status_line` are also written by direct
+  # struct update in a dozen places (a resumed session's notice, a backend's
+  # validation string, the denied-tool status), and a boundary a caller can
+  # route around by writing the field directly is a convention, not a
+  # boundary. `display_text/1` in the view is the one that cannot be
+  # bypassed; this is where the newline structure is fixed.
+  #
+  # Iodata is accepted because the view tolerated it (`notice_block/1`
+  # guarded on `is_binary` and fell through), and turning that into a
+  # `FunctionClauseError` inside `update/2` would trade a blank notice for a
+  # dead session.
+  def notice(model, text) when is_binary(text) or is_list(text),
+    do: %{model | notice: text |> IO.iodata_to_binary() |> sanitize_display()}
 
   @doc false
   # The status line is a single row in `status_strip/1`, so a newline would
   # break the strip: it is flattened, then sanitized like `notice/2`.
-  def put_status(model, text) when is_binary(text),
-    do: %{model | status_line: text |> String.replace("\n", " ") |> sanitize_display()}
+  def put_status(model, text) when is_binary(text) or is_list(text),
+    do: %{
+      model
+      | status_line:
+          text |> IO.iodata_to_binary() |> String.replace("\n", " ") |> sanitize_display()
+    }
 
   defp sanitize_display(text) do
     text

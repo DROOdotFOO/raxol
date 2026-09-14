@@ -253,8 +253,12 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       model = new_model(jail: true)
 
       assert model.wizard == nil
-      assert model.notice =~ "credential management is disabled in a hosted session"
       assert model.provider_status == :no_provider
+
+      # Asserted on the rendered surface rather than on `notice`: the reason
+      # lives in the persistent hint panel now, because a notice is replaced
+      # by the next command while "no provider is connected" stays true.
+      assert view_text(model) =~ "credential management is disabled in a hosted session"
     end
 
     test "init still skips the wizard when the host pre-wired a provider" do
@@ -335,6 +339,32 @@ defmodule Raxol.Agent.Code.AppWizardTest do
       assert open =~ "Connect a provider with /login:"
       assert open =~ "connect a provider to begin"
     end
+
+    # The jail clause used to sit ahead of the `{:no_key, harness}` one, so a
+    # hosted session whose host DID pre-wire a provider but whose key failed
+    # to resolve was told "credential management is disabled" -- the policy,
+    # not the diagnosis. The operator needs both.
+    test "a jailed session with an unresolved key still names the harness" do
+      jailed = view_text(new_model(jail: true, provider_status: {:no_key, :anthropic}))
+
+      assert jailed =~ "harness anthropic was selected but no key resolved"
+      assert jailed =~ "credential management is disabled in a hosted session"
+      refute jailed =~ "/login"
+    end
+
+    # Panel heading, panel body and a boot notice used to render the same
+    # sentence on three consecutive lines of a hosted tenant's first screen.
+    # The panel is the durable copy (it persists while no provider is
+    # connected); the notice was transient and is gone.
+    test "the jailed first screen does not repeat itself" do
+      screen = view_text(new_model(jail: true))
+
+      assert count_of(screen, "no provider connected") == 1
+      assert count_of(screen, "credential management is disabled in a hosted session") == 1
+    end
+
+    defp count_of(haystack, needle),
+      do: haystack |> String.split(needle) |> length() |> Kernel.-(1)
 
     test "a prompt sent with no provider says the same thing in a jail" do
       {model, []} =
