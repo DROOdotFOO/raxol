@@ -591,6 +591,56 @@ jobs:
           mix test test/raxol/terminal/input_protocol_canary_test.exs \
             --only input_protocol_canary
 
+  # Buffer fill/read/scroll throughput and per-cell memory. This is the only
+  # blocking buffer performance check in the repo: the `memory-regression`
+  # matrix in regression-testing.yml has no buffer scenario and renders its
+  # findings as a `[WARN]` PR comment, which is a report, not a gate.
+  #
+  # `mix run` propagates the script's exit status, and the script calls
+  # System.halt(1) on a breached budget (2 when it could not measure at all),
+  # so a regression fails this job and `ci-status` below reads the result.
+  # ~4 s of measurement; the 500x500 fill is most of it.
+  buffer-gate:
+    name: Buffer performance gate
+    needs: [setup, compile]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ needs.setup.outputs.elixir-version }}
+          otp-version: ${{ needs.setup.outputs.otp-version }}
+          version-type: strict
+
+      - name: Restore cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+            .raxol_cache
+          key: ${{ needs.setup.outputs.cache-key }}
+
+      - name: Install hex and rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      # Self-heal a cache that disagrees with the checked-out lock; see the
+      # note on setup's deps.get fallback. No-op when the cache is healthy.
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      # --no-start: the gate measures a pure data structure, and booting the
+      # application puts a supervision tree, the endpoint and telemetry
+      # handlers on the same schedulers.
+      - name: Run buffer performance gate
+        run: mix run --no-start bench/core/buffer_gate.exs
+
   test-integration:
     name: Integration Tests
     needs: [setup, compile]
@@ -1099,6 +1149,7 @@ jobs:
         test-unit,
         package-tests,
         input-canary,
+        buffer-gate,
         credo,
         security
       ]
@@ -1136,6 +1187,13 @@ jobs:
 
           if [ "${{ needs.input-canary.result }}" != "success" ]; then
             echo "❌ Input protocol canary failed"
+            exit 1
+          fi
+
+          if [ "${{ needs.buffer-gate.result }}" != "success" ]; then
+            echo "❌ Buffer performance gate failed"
+            echo "   Reproduce: mix run --no-start bench/core/buffer_gate.exs"
+            echo "   Budgets and their headroom are declared at the top of that file."
             exit 1
           fi
 
