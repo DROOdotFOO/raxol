@@ -2,14 +2,18 @@ defmodule Raxol.MCP.Supervisor do
   @moduledoc """
   Supervision tree for the MCP subsystem.
 
-  Starts the Registry and Server. The stdio transport is NOT started
-  automatically (it takes over stdin/stdout) -- use `mix mcp.server`
-  or start it explicitly.
+  Starts the client's shared table owner, the Registry and the Server. The
+  stdio transport is NOT started automatically (it takes over stdin/stdout) --
+  use `mix mcp.server` or start it explicitly.
 
   ## Children (rest_for_one)
 
-  1. `Raxol.MCP.Registry` -- ETS-backed tool/resource store
-  2. `Raxol.MCP.Server` -- transport-agnostic message router
+  1. `Raxol.MCP.Client.Tables` -- the per-origin era verdicts and circuit
+     breakers the HTTP client transport shares between clients. First, so that
+     a Registry or Server restart does not discard state that belongs to
+     neither of them (ADR-0037 decision 2).
+  2. `Raxol.MCP.Registry` -- ETS-backed tool/resource store
+  3. `Raxol.MCP.Server` -- transport-agnostic message router
   """
 
   use Supervisor
@@ -36,6 +40,7 @@ defmodule Raxol.MCP.Supervisor do
     authorizer_source = Keyword.get(opts, :authorizer_source, :default)
 
     children = [
+      Raxol.MCP.Client.Tables,
       {Raxol.MCP.Registry, name: registry_name},
       {Raxol.MCP.Server,
        name: server_name,

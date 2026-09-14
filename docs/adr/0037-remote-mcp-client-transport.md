@@ -2,9 +2,47 @@
 
 ## Status
 
-Proposed, 2026-09-13. Nothing is implemented. All wire-level claims about the upstream
-servers below are either cited to ADR-0033's probe of 2026-08-31 or to vendor documentation
-read on 2026-09-13.
+Accepted, 2026-09-13. **Implemented 2026-09-14** in `raxol_mcp` (the transport, the era probe,
+the parser, the concurrency policy and the transport-side metering gate) and in `raxol_agent`
+(the remote `.mcp.json` admission, the provenance rule and the spend-gate reservation). All
+wire-level claims about the upstream servers below are either cited to ADR-0033's probe of
+2026-08-31 or to vendor documentation read on 2026-09-13.
+
+Four things changed under contact with the code, and each is recorded here rather than only in
+a commit message because three of them would otherwise read as an implementation that ignored
+its own decision:
+
+1. **Decision 2's demotion set gains HTTP 400, and a JSON-RPC code is read from any status.**
+   Measured 2026-09-14: `mcp.trongrid.io/mcp` answers a `server/discover` probe with HTTP 400
+   and `{"code": -32601, "message": "Session ID required in mcp-session-id header"}`, with the
+   code at the top level rather than inside a JSON-RPC envelope, and `mcp.tronscan.org/mcp`
+   answers 400 with a Java stack trace carrying no code at all. Both are unambiguously legacy,
+   and the rule as written left both of ADR-0033's measured legacy origins permanently
+   unreachable. A 400 to a FIXED probe is deterministic rather than the transient refusal the
+   health list exists to tolerate, and a wrong verdict still expires on the TTL. The 401, 403,
+   408, 429 and 5xx carve-out is untouched, which is the part the wedge test defends.
+2. **The probe carries what both eras require.** A 2025-06-18 server refuses a request with no
+   `MCP-Protocol-Version`, with a 400, reproduced against the legacy reference server before
+   the upstream measurement arrived. So the probe sends `Mcp-Method`, `Mcp-Name` and
+   `MCP-Protocol-Version` together and a modern server ignores the extra header.
+3. **`send/3` carries `%{method:, params:, reservation:}` rather than `iodata()`.** Decision 2
+   requires `Mcp-Method` and `Mcp-Name` on every modern post, which a transport handed opaque
+   bytes cannot set without re-parsing what it was just given, and decision 7's gate needs the
+   tool name and the reservation from the same call. Encoding belongs to the transport, which
+   already owns framing. A new `session/1` returns `{:handshake | :ready, %{version:,
+   concurrency:}}`, because the client has to know whether to send `initialize` BEFORE it sends
+   anything: a modern server is specified not to answer it, so a client that guessed would sit
+   in `:initializing` forever.
+4. **Per-request capability discovery is not implemented.** Nothing in `Raxol.MCP.Client`
+   consumes capabilities, so a `server/discover` per request would double every round trip for
+   data no caller reads. The probe's own discover result is what the verdict is taken from, and
+   tools still come from `tools/list`.
+
+One correction to the decision-6 timer: it applies to caller-facing requests only. The
+handshake entry has no timer, because there is exactly one per client so it cannot grow
+`pending` (the leak decision 6 closes), nobody is waiting on it, and timing it out would make
+readiness depend on how fast a server process boots. The readiness deadline that matters is
+`Raxol.Agent.McpBundle`'s, which already exists.
 
 This is a **prerequisite for ADR-0033**, not an extension of it. That ADR's decision 6 lists
 `Raxol.MCP.Client` under "what is reused" and routes Tron through TronGrid MCP and Canton
@@ -210,9 +248,21 @@ deliberate differences:
    one rewritten response into a single unbounded partial frame that never completes. Stated
    here rather than discovered.
 
-Copying rather than depending is forced by the package graph: `raxol_earn` sits above
-`raxol_payments`, and `raxol_mcp` depends only on `raxol_core` and `jason`. The duplication is
-small, pure, and directly testable.
+Copying the EARN parser rather than depending on it is forced by the package graph:
+`raxol_earn` sits above `raxol_payments`, and `raxol_mcp` depends only on `raxol_core` and
+`jason`. That duplication is small, pure, and directly testable.
+
+**Amended 2026-09-14, on implementation.** The same sentence does NOT excuse duplication
+downward. `raxol_web3` depends on `raxol_mcp` by ADR-0033 decision 2, so anything pure that
+both need has a home, and two things turned out to: the SSE frame parser (`raxol_web3` reached
+for one to call SQD Portal's stateless MCP endpoint) and the bounded read loop this ADR's
+decision 5 and ADR-0038's decision 4 each specified separately. Both were written twice and
+then collapsed in the same change: the parser lives here and `Raxol.Web3.MCPCall` calls it, the
+pure response accumulator lives in `raxol_core` beside `Raxol.Core.Outbound`, and the
+Mint-touching send-read-close lives here because `raxol_core` must gain no dependency. Each
+package keeps its own dial, its own connect-side error taxonomy and its own name for the stage.
+"One design in two packages" was the right instinct and one implementation is the better end
+of it.
 
 ### 4. Auth headers are resolved from references, and only where the configuration is trusted
 
@@ -224,7 +274,9 @@ server.
 
 **Resolution depends on where the spec came from, and that is the load-bearing half of this
 decision.** `.mcp.json` is read from the workspace working directory
-(`mcp_config.ex:42-43`, called as `McpConfig.load(cwd)` at `app.ex:389-398`), so it is
+(`mcp_config.ex:42-43`, called as `McpConfig.load(cwd)` from `load_mcp/2` at
+`app.ex:445-452` in the pre-change numbering; the `app.ex:389-398` this ADR first cited is
+`load_session/2`), so it is
 repository content: a file a clone can carry. Today nothing resolves from it, because
 `parse_server/1` drops every remote spec (`mcp_config.ex:80-90`), which is the defect gap 2
 exists to fix. Admitting remote specs and resolving references in the same change would turn a
@@ -241,7 +293,8 @@ legitimate public address, and rule 2 exists to stop us reaching inward, not out
 - A **user-level** spec (`~/.raxol/`, or an explicit operator flag) resolves references
   normally. That is the path an operator who configures a hosted server actually uses.
 
-A jailed session already declines to read `.mcp.json` at all (`app.ex:389`), so this rule is
+A jailed session already declines to read `.mcp.json` at all (`load_mcp(_cwd, true)`, at
+`app.ex:443` before this change), so this rule is
 for the single-tenant workspace that `McpLoader`'s own bounds describe as "merely careless
 rather than hostile" (`mcp_loader.ex:23-31`). Reference resolution is what changes that
 calculus, so the rule arrives with the capability rather than after it.
@@ -266,7 +319,12 @@ and the `Host` header, and Req refuses that combination outright: it raises
 (`deps/req/lib/req/finch.ex:546-548`), and without a named instance it starts an unreaped Finch
 per pool option set (`:587-597`). ADR-0038 decision 3 reaches the same conclusion from the REST
 side and records the mechanism in full; this transport takes the same shape so that rule 3 is
-one design in two packages rather than two.
+one design rather than two. **Amended 2026-09-14:** it is now one design in ONE place for the
+part that can be shared. The dial stays per package, because each has its own connect-side
+error taxonomy and `raxol_mcp`'s mint is optional where `raxol_web3`'s is required, but the
+bounded read is `Raxol.MCP.BoundedExchange` and the pure response accumulator is
+`Raxol.Core.Outbound.Response`, both called from both packages. Two byte-identical read loops
+is what the earlier wording licensed and it was not the intent.
 
 The redirect rule carries extra weight here that it does not in ADR-0033: this transport sends
 an `Authorization` header, so following a 3xx would replay a bearer token at an
@@ -303,7 +361,8 @@ A remote tool therefore carries a declared `:price`, and:
 
 - a non-nil price forces `sensitive: true` on the derived tool and reserves through
   `Raxol.Agent.SpendGate.around/4` at the existing `Raxol.Agent.ToolCall.Hook` seam
-  (`hook.ex:44-59`, registered under `:tool_call_hooks`);
+  (the `:tool_call_hooks` context key at `hook.ex:181`, read by `from_context/1` at `:185`;
+  `hook.ex:44-59` is the moduledoc that describes the seam rather than the code);
 - an unknown price on a metered origin is **denied by default**, which is the rule ADR-0033 §6
   already adopts by analogy from `Raxol.Agent.Backend.Resolver`: a free endpoint may be chosen
   automatically, a metered one only when explicitly configured.
@@ -370,8 +429,15 @@ is the smallest client that can satisfy rule 3.
 
 - `Raxol.MCP.Client` gains a behaviour and two adapters where it had one inlined path: more
   modules for a package whose virtue is being small.
-- A second SSE parser exists in the tree, deliberately, until something lands in `raxol_core`.
-  This mirrors the `Raxol.Web3.Cache` duplication ADR-0033 already accepts.
+- A second SSE parser exists in the tree relative to `raxol_earn`'s, deliberately, until
+  something lands in `raxol_core`. This mirrors the `Raxol.Web3.Cache` duplication ADR-0033
+  already accepts. There is NOT a third: `raxol_web3` calls this one, because the graph lets it
+  (see the amendment in decision 3).
+- `raxol_mcp` now hosts a bounded send-read-close that `raxol_web3`'s guarded client depends
+  on, which couples the read path of a package that must open TLS connections to a module
+  behind an OPTIONAL `mint`. A build of `raxol_mcp` without mint therefore has to fail
+  `raxol_web3` at boot rather than on its first request, which is an assertion rather than a
+  type.
 - Dual-era support means the protocol layer is a probe with a cached verdict rather than a
   constant. The verdict now carries a TTL and a narrow demotion rule, which bounds how wrong it
   can stay, at the cost of an occasional re-probe.
