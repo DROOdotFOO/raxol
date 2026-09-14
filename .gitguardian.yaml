@@ -18,3 +18,13 @@ secret:
     # The high-entropy base58 form trips the generic detector; ignore the value.
     - name: Tron USDT public contract address
       match: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+    # Solana SPL mint pubkey, asserted by value in the Solana backend test: the
+    # token a real mainnet account holds. Public on-chain identifier tied to no
+    # wallet, and base58 trips the generic detector on entropy alone.
+    - name: Solana SPL mint public address
+      match: NkfbyG7feH9aJhdnSs4d7D7kWCEnxrmNUbM7dbpC6MM
+    # Tron TRC-20 contract address, asserted by value in the Tron backend test
+    # to prove a TRC-20 balance is distinguishable from a TRC-10 one. Same
+    # class as the USDT entry above: a published contract address.
+    - name: Tron TRC-20 public contract address
+      match: TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq
