@@ -1718,6 +1718,51 @@ defmodule Raxol.Agent.Code.AppTest do
       assert screen =~ "Allow read_file"
     end
 
+    # The transcript, not the chrome: an assistant message is rendered by
+    # `Block.render/2` straight into the view map, and `App.view/1` goes to
+    # the Preparer -> LayoutEngine -> UIRenderer pipeline, which never
+    # passes through `ViewText.lines/3`. A screen clear, an alt-screen
+    # switch and an OSC 52 clipboard write in that message would all reach
+    # the terminal. The visible text is asserted too, so a future "strip
+    # everything" regression fails here rather than shipping.
+    test "a hostile assistant message cannot reach the terminal through the transcript" do
+      poison = "hello \e[2J\e[?1049h\e]52;c;cHduZWQ=\a world"
+
+      model =
+        Enum.reduce(message_turn("t1", poison), new_model(), &send_ev(&2, &1))
+
+      screen = view_text(model)
+
+      assert screen =~ "hello"
+      assert screen =~ "world"
+      refute screen =~ "\e"
+      refute screen =~ "\a"
+    end
+
+    # The streaming tail is the same content one frame earlier: an item
+    # that started and is still receiving deltas has no block yet, so its
+    # chunks are joined into a text node by `tail_lines/1` itself.
+    test "the streaming tail cannot reach the terminal unsanitized" do
+      poison = "streaming \e[2J\e]0;PWNED\a on"
+
+      model =
+        Enum.reduce(
+          [
+            tev("t1", 1, :turn_started, %{prompt: "ask"}),
+            tev("t1", 2, :item_started, %{item_id: "i1", item_type: :message}),
+            tev("t1", 3, :item_delta, %{item_id: "i1", chunk: poison})
+          ],
+          new_model(),
+          &send_ev(&2, &1)
+        )
+
+      screen = view_text(model)
+
+      assert screen =~ "streaming"
+      refute screen =~ "\e"
+      refute screen =~ "\a"
+    end
+
     test "a bidi override cannot reverse a notice" do
       noticed = App.notice(new_model(), "disabled" <> <<0x202E::utf8>> <> "delbane")
 
