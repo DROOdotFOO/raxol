@@ -9,6 +9,43 @@ defmodule Raxol.REPL.Evaluator do
       {:ok, result, evaluator} = Evaluator.eval(evaluator, "x = 1 + 2")
       {:ok, result, evaluator} = Evaluator.eval(evaluator, "x * 10")
       result.value  #=> 30
+
+  ## Trust boundary
+
+  There is none here. `eval/3` hands the code to `Code.eval_string/3` with
+  `base_env/0`, which is `__ENV__` with `:file` and `:line` overridden: an
+  unrestricted `Macro.Env`. No AST is inspected and no module is denied.
+  `Raxol.REPL.Sandbox` is a separate check a caller makes BEFORE calling
+  `eval/3` -- the anonymously served playground demo does
+  (`Raxol.Playground.Demos.ReplDemo` gates on `Sandbox.check(code, :strict)`)
+  -- and nothing this module does contributes to it.
+
+  The caps bound one process's resource use:
+
+    * `:timeout` -- how long the single evaluation process may run
+    * `:max_heap_bytes` -- that process's heap, via `:max_heap_size` with
+      `kill: true`
+    * `:max_result_bytes` -- the value plus bindings plus output it may hand back
+    * `Raxol.REPL.CaptureIO`'s limit -- bytes of captured output retained, and
+      the wait on an `io_lib` expansion run on the evaluation's behalf
+
+  They bound nothing the evaluation creates or reaches. Filesystem reads and
+  writes, `:os.cmd/1`, `Port.open/2`, `Node.connect/1` and `:erlang.halt/0`
+  resolve exactly as any other call does. On timeout `stop_eval/3` signals ONE
+  pid: a process the evaluation `spawn`ed is not linked to it and keeps running
+  with full node authority after `eval/3` has returned
+  `{:error, "Evaluation timed out after ...", evaluator}`. The signal's reason
+  is `:brutal_kill` rather than `:kill`, so an evaluation that sets
+  `Process.flag(:trap_exit, true)` receives it as a message and survives its
+  own timeout too. Only the `max_heap_size` breach is enforced by the VM.
+
+  So code handed to this evaluator runs with the full authority of the node's
+  OS user. Expose the surface only to a principal already trusted with that
+  uid. An AST allowlist standing in front of it is the whole of the boundary
+  on an anonymous surface, and a gap in the allowlist is an escape; real
+  confinement wants separate OS uids or containers, and this is one BEAM, one
+  uid. The open design question -- stop evaluating untrusted code on the
+  exposed surfaces, or add per-tenant OS isolation -- is issue #1033.
   """
 
   alias Raxol.REPL.CaptureIO
