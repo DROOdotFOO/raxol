@@ -15,6 +15,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
 
   alias Raxol.Terminal.Commands.CSIHandler.ModeProcessor
   alias Raxol.Terminal.Emulator
+  alias Raxol.Terminal.Modes.Types.ModeTypes
   alias Raxol.Terminal.ScreenBuffer
 
   defp set_private(emulator, code) do
@@ -327,33 +328,22 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
   end
 
   describe "property: CSI h/l never raises" do
-    # Seeded :rand instead of StreamData (not a raxol_terminal dependency;
-    # see test/property/). Every failure names the iteration to replay.
+    # Seeded `:rand` instead of StreamData (not a raxol_terminal dependency;
+    # see test/property/). The corpus is therefore FIXED: same 300 x 12 cases
+    # on every run, which is what makes a reported failure replayable, and
+    # also means no new shape is ever discovered after the first green run.
+    # It is a regression lock, not a fuzzer.
     @runs 300
     @calls_per_run 12
 
-    @registered_codes [
-      1,
-      3,
-      4,
-      5,
-      6,
-      7,
-      8,
-      9,
-      12,
-      20,
-      25,
-      47,
-      1000,
-      1002,
-      1004,
-      1006,
-      1047,
-      1048,
-      1049,
-      2004
-    ]
+    # Derived from the registry, never hand-copied: a hard-coded list is the
+    # same drift this PR's registry-coverage test exists to prevent, one file
+    # over -- a newly registered mode would silently never be fuzzed.
+    @registered_codes ModeTypes.get_all_modes()
+                      |> Map.values()
+                      |> Enum.map(& &1.code)
+                      |> Enum.uniq()
+                      |> Enum.sort()
 
     # Numbers a real terminal sends, plus the shapes CommandsParser can yield
     # for malformed input and the shapes an older caller might pass.
@@ -400,7 +390,18 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
     defp gen_nested(depth),
       do: for(_ <- 1..:rand.uniform(3), do: gen_param(depth + 1))
 
-    defp gen_params, do: for(_ <- 0..:rand.uniform(6), do: gen_param(0))
+    # `0..rand(6)` never yields fewer than two elements, so the empty list and
+    # the single-parameter list -- `\e[?1h`, the commonest CSI h/l a real
+    # terminal sends -- were the two shapes this never fuzzed.
+    defp gen_params, do: for(_ <- 1..:rand.uniform(7)//1, do: gen_param(0)) |> drop_sometimes()
+
+    defp drop_sometimes(params) do
+      case :rand.uniform(8) do
+        1 -> []
+        2 -> Enum.take(params, 1)
+        _ -> params
+      end
+    end
 
     test "random parameter shapes through both tables, set and reset, always return an emulator" do
       for i <- 1..@runs do
@@ -417,6 +418,64 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
         end)
       end
     end
+
+    # Totality is the weaker half. The generator deliberately feeds `" 7"`,
+    # `"0x1F"`, `"1049 "` and friends, and the POINT of those is that they
+    # are dropped: a regression that made parsing lenient (`Integer.parse/1`
+    # in place of the strict check) would let `" 3"` trigger DECCOLM's
+    # 80<->132 buffer reallocation, or `"1049 "` switch to the alternate
+    # screen, and every "an emulator came back" assertion would still pass.
+    # So a call whose parameters contain no well-formed registered code must
+    # leave the emulator's mode state, geometry and buffers alone.
+    test "parameters that are not well-formed registered codes have no effect" do
+      for i <- 1..@runs do
+        seed(i)
+
+        Enum.each(1..@calls_per_run, fn call ->
+          params = Enum.reject(gen_params(), &well_formed_code?/1)
+          intermediates = Enum.random(["?", ""])
+          final_byte = Enum.random([?h, ?l])
+          emulator = Emulator.new(80, 24)
+
+          result =
+            ModeProcessor.handle_h_or_l(emulator, params, intermediates, final_byte)
+
+          where = "iteration #{i} call #{call}"
+
+          assert result.mode_manager == emulator.mode_manager,
+                 "#{describe(where, params, intermediates, final_byte)} changed mode state"
+
+          assert result.width == emulator.width,
+                 "#{describe(where, params, intermediates, final_byte)} resized the emulator"
+
+          assert result.active_buffer_type == emulator.active_buffer_type,
+                 "#{describe(where, params, intermediates, final_byte)} switched buffers"
+
+          assert result.state_stack == emulator.state_stack,
+                 "#{describe(where, params, intermediates, final_byte)} touched the state stack"
+        end)
+      end
+    end
+
+    # A parameter reaches `ModeManager` only as an exact decimal integer in
+    # the table for its intermediates. Mirrors `ModeProcessor.mode_code/1`
+    # deliberately rather than calling it: a lenient rewrite of that function
+    # is the regression this test exists to catch, so sharing it would make
+    # the test agree with the bug.
+    defp well_formed_code?(param) when is_integer(param),
+      do: registered?(param)
+
+    defp well_formed_code?(param) when is_binary(param) do
+      case Integer.parse(param) do
+        {code, ""} -> registered?(code)
+        _ -> false
+      end
+    end
+
+    defp well_formed_code?(_param), do: false
+
+    defp registered?(code),
+      do: ModeTypes.lookup_private(code) != nil or ModeTypes.lookup_standard(code) != nil
 
     # An %Emulator{} back, whatever went in. Anything else -- a raise or some
     # other term -- fails with the shape that caused it, so a case replays.
@@ -437,6 +496,15 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
         flunk(
           "#{describe(where, params, intermediates, final_byte)} raised " <>
             Exception.format(:error, e, __STACKTRACE__)
+        )
+    catch
+      # A `throw` or an `exit` from a handler escaped with no iteration, no
+      # parameter list and no sequence shape, so the failure could not be
+      # replayed -- the one thing the report promises.
+      kind, reason ->
+        flunk(
+          "#{describe(where, params, intermediates, final_byte)} threw " <>
+            Exception.format(kind, reason, __STACKTRACE__)
         )
     end
 
