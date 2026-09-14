@@ -136,4 +136,56 @@ defmodule Raxol.Terminal.ModeManagerTest do
       end
     end
   end
+
+  describe "debug logging on the write path" do
+    # `Raxol.Core.Runtime.Log.debug/1` is a function, not a macro: it hands its
+    # argument to `Logger.bare_log/2`, which checks the level only after the
+    # argument has been built. An interpolated `inspect/1` therefore runs on
+    # every `CSI ? Ps h`, at every level. A zero-arity fun is the fix, so what
+    # the write path must never hand Logger is an already-built message.
+    setup do
+      on_exit(fn ->
+        :erlang.trace_pattern({Logger, :bare_log, :_}, false, [:local])
+      end)
+    end
+
+    test "set_mode/3 builds no debug message before the level is checked" do
+      emulator = Emulator.new(80, 24)
+
+      messages =
+        trace_logged_messages(fn -> ModeManager.set_mode(emulator, [:mode_log_probe]) end)
+
+      built =
+        Enum.filter(messages, &(is_binary(&1) and String.contains?(&1, "mode_log_probe")))
+
+      assert built == [],
+             "the write path built #{length(built)} debug message(s) before the level check: #{inspect(built)}"
+
+      assert Enum.any?(messages, &is_function(&1, 0)),
+             "expected the write path to hand Logger a zero-arity fun; got #{inspect(messages)}"
+    end
+
+    # Runs `fun` in a traced process and returns every message argument it
+    # handed `Logger.bare_log/2`, unevaluated.
+    defp trace_logged_messages(fun) do
+      task = Task.async(fn -> receive(do: (:go -> fun.())) end)
+
+      :erlang.trace(task.pid, true, [:call, {:tracer, self()}])
+      :erlang.trace_pattern({Logger, :bare_log, :_}, true, [:local])
+
+      send(task.pid, :go)
+      Task.await(task)
+
+      drain_traced_messages([])
+    end
+
+    defp drain_traced_messages(acc) do
+      receive do
+        {:trace, _pid, :call, {Logger, :bare_log, [_level, message | _]}} ->
+          drain_traced_messages([message | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+  end
 end
