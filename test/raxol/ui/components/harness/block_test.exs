@@ -16,6 +16,30 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
   defp flat_texts(_), do: []
 
+  # `flat_texts/1` only descends :row/:column; a MarkdownBody body can
+  # carry other node types, so the sanitize assertions walk anything with
+  # children.
+  defp deep_texts(%{type: :text, content: content}) when is_binary(content),
+    do: [content]
+
+  defp deep_texts(%{children: children}) when is_list(children),
+    do: Enum.flat_map(children, &deep_texts/1)
+
+  defp deep_texts(nodes) when is_list(nodes),
+    do: Enum.flat_map(nodes, &deep_texts/1)
+
+  defp deep_texts(_node), do: []
+
+  defp deep_styles(%{type: :text} = node), do: [Map.get(node, :style)]
+
+  defp deep_styles(%{children: children}) when is_list(children),
+    do: Enum.flat_map(children, &deep_styles/1)
+
+  defp deep_styles(nodes) when is_list(nodes),
+    do: Enum.flat_map(nodes, &deep_styles/1)
+
+  defp deep_styles(_node), do: []
+
   # Structural gap assert: flat_texts can't see the unset-gap footgun
   # (unset gap defaults to 1 in the layout engine), so walk the tree and
   # require every :column/:row container to carry an explicit gap of 0.
@@ -531,6 +555,45 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       rendered = Block.render(block, %{width: 6})
       assert %{type: :column} = rendered
+    end
+  end
+
+  describe "render/2 — text nodes are control-byte stripped" do
+    @poison "hello \e[2J\e[?1049h\e]52;c;cHduZWQ=\a\e]0;PWNED\a world"
+
+    defp render_message(content, context) do
+      :message
+      |> Block.from_events(message_events(content), fold: :expanded)
+      |> Block.render(context)
+    end
+
+    # Block content comes from an LLM, a tool, or an external MCP server,
+    # and render/2's view map goes to the Preparer -> LayoutEngine ->
+    # UIRenderer pipeline, which never reaches ViewText.lines/3. An ESC
+    # left in content is executed by the terminal: ED clears the screen,
+    # the alt-screen switch takes it over, OSC 52 writes the clipboard.
+    # The style maps are compared against a clean render of the same
+    # shape, because the strip must rewrite :content and nothing else --
+    # prominence/SGR styling has to survive it.
+    test "a hostile message body renders with no ESC byte, styles intact" do
+      rendered = render_message(@poison, %{width: 200})
+      clean = render_message("hello world", %{width: 200})
+      texts = deep_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "hello"))
+      assert Enum.any?(texts, &(&1 =~ "world"))
+      refute Enum.any?(texts, &String.contains?(&1, "\e"))
+      refute Enum.any?(texts, &String.contains?(&1, "\a"))
+      assert deep_styles(rendered) == deep_styles(clean)
+    end
+
+    test "the Markdown body is stripped on the same path" do
+      rendered = render_message(@poison, %{width: 200, markdown: true})
+      texts = deep_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "hello"))
+      refute Enum.any?(texts, &String.contains?(&1, "\e"))
+      refute Enum.any?(texts, &String.contains?(&1, "\a"))
     end
   end
 
