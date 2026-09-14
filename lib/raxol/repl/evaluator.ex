@@ -98,7 +98,8 @@ defmodule Raxol.REPL.Evaluator do
               full_code,
               evaluator.bindings,
               evaluator.env,
-              max_result_bytes
+              max_result_bytes,
+              timeout
             )
 
           send(
@@ -217,12 +218,13 @@ defmodule Raxol.REPL.Evaluator do
           String.t(),
           keyword(),
           Macro.Env.t() | nil,
-          pos_integer()
+          pos_integer(),
+          timeout()
         ) ::
           {:ok, term(), keyword(), String.t()} | {:error, String.t()}
-  defp eval_with_capture(code, bindings, env, output_limit) do
+  defp eval_with_capture(code, bindings, env, output_limit, timeout) do
     {output, result} =
-      capture_io(fn -> do_eval(code, bindings, env) end, output_limit)
+      capture_io(fn -> do_eval(code, bindings, env) end, output_limit, timeout)
 
     case result do
       {:ok, value, new_bindings} -> {:ok, value, new_bindings, output}
@@ -247,8 +249,10 @@ defmodule Raxol.REPL.Evaluator do
   # capture is a hole straight through the memory limit. CaptureIO counts what
   # it accepts and stops at the cap. See its moduledoc for why measuring the
   # process from outside does not work.
-  defp capture_io(fun, output_limit) do
-    {:ok, capture} = CaptureIO.start(output_limit)
+  defp capture_io(fun, output_limit, timeout) do
+    {:ok, capture} =
+      CaptureIO.start(output_limit, mfa_timeout: mfa_bound(timeout))
+
     original_gl = Process.group_leader()
     Process.group_leader(self(), capture)
 
@@ -261,6 +265,16 @@ defmodule Raxol.REPL.Evaluator do
       CaptureIO.close(capture)
     end
   end
+
+  # `eval/3`'s `:timeout` is a `timeout()`, so a caller who wants a long
+  # interactive evaluation can pass `:infinity` -- which, handed on as the
+  # MFA bound, would turn the capture server's bounded receive back into an
+  # unbounded one and reinstate the wedge it exists to prevent. An expansion
+  # the group leader performs on the evaluation's behalf gets a finite budget
+  # regardless: the evaluation may run forever, one `io_lib` call on its
+  # behalf may not.
+  defp mfa_bound(:infinity), do: @default_timeout
+  defp mfa_bound(timeout) when is_integer(timeout) and timeout > 0, do: timeout
 
   defp maybe_note_truncation(captured, false, _limit), do: captured
 

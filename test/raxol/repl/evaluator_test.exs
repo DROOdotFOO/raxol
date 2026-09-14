@@ -2,6 +2,7 @@ defmodule Raxol.REPL.EvaluatorTest do
   use ExUnit.Case, async: true
 
   alias Raxol.REPL.Evaluator
+  alias Raxol.REPL.CaptureIO
 
   describe "new/0" do
     test "creates evaluator with empty state" do
@@ -302,6 +303,139 @@ defmodule Raxol.REPL.EvaluatorTest do
 
       assert result.output =~ "hello"
       assert result.value == :ok
+    end
+
+    # The monitor on the expansion process covers one that DIES. One that
+    # neither answers nor dies left the capture server parked in a receive
+    # with no `after` -- and since the wedge also swallowed the owner's
+    # `:DOWN`, killing the evaluation on timeout did not reclaim it: one
+    # capture server (holding up to the output limit) plus its expander
+    # leaked per wedge, on a surface served anonymously over SSH.
+    #
+    # Driven through `CaptureIO` directly with the IO protocol, because no
+    # Elixir expression makes `io_lib` hang: the wedge is a property of the
+    # expander, and the request shape is what `:io.format/2` sends.
+    test "an expander that never answers does not wedge the capture server" do
+      before = capture_server_count()
+      test_pid = self()
+
+      owner =
+        spawn(fn ->
+          {:ok, capture} = CaptureIO.start(4_096, mfa_timeout: 50)
+          send(test_pid, {:capture, capture})
+          reply_as = make_ref()
+
+          send(
+            capture,
+            {:io_request, self(), reply_as,
+             {:put_chars, :unicode, __MODULE__, :never_answers, [:x]}}
+          )
+
+          receive do
+            {:io_reply, ^reply_as, reply} -> send(test_pid, {:io_reply, reply})
+          end
+
+          # Stay alive so the server's exit can only come from the owner's
+          # :DOWN below, never from this process ending early.
+          receive do
+            :done -> :ok
+          end
+        end)
+
+      assert_receive {:capture, capture}
+
+      # The write is answered rather than hanging, and it is refused: the
+      # unexpanded text is not in the buffer, and the capture says so.
+      assert_receive {:io_reply, :ok}
+      assert CaptureIO.contents(capture) == {"", true}
+
+      # And the server is still a server: it answers, and it still goes when
+      # its owner does.
+      ref = Process.monitor(capture)
+      Process.exit(owner, :brutal_kill)
+      assert_receive {:DOWN, ^ref, :process, ^capture, :normal}
+      assert capture_server_count() == before
+    end
+
+    # Bounding ONE wedge is not enough. Evaluated code can read the capture
+    # server's pid (it is the group leader) and hand it to a process the
+    # evaluator's kill never reaches, then queue as many wedging MFA writes
+    # as it likes. At one `:mfa_timeout` each, N writes held the server --
+    # and starved the owner's `:DOWN` behind them -- for N x the bound,
+    # with N attacker-chosen. After the first wedge the capture is latched
+    # truncated, so there is nothing left to record and nothing to wait for.
+    test "a second wedged write costs nothing: the bound is per server, not per write" do
+      {:ok, capture} = CaptureIO.start(4_096, mfa_timeout: 200)
+
+      elapsed_for = fn ->
+        reply_as = make_ref()
+
+        send(
+          capture,
+          {:io_request, self(), reply_as,
+           {:put_chars, :unicode, __MODULE__, :never_answers, [:x]}}
+        )
+
+        {us, :ok} =
+          :timer.tc(fn ->
+            receive do
+              {:io_reply, ^reply_as, reply} -> reply
+            end
+          end)
+
+        us
+      end
+
+      first = elapsed_for.()
+      second = elapsed_for.()
+      third = elapsed_for.()
+
+      # The first write pays the bound (it is the one that discovers the
+      # wedge); the two after it are refused without spawning an expander at
+      # all, so they cannot each pay it again. Compared to the code's OWN
+      # bound rather than to a wall-clock constant: the claim is "these did
+      # not wait", and 200_000us is what waiting costs here.
+      assert first >= 200_000
+      assert second < 200_000
+      assert third < 200_000
+
+      assert CaptureIO.contents(capture) == {"", true}
+      CaptureIO.close(capture)
+    end
+
+    # `:infinity` is a legitimate evaluation timeout, and the two halves of
+    # this fix have to agree about it: `start/2` now REFUSES a non-integer
+    # bound, so an evaluator that forwarded `:infinity` verbatim would fail
+    # every evaluation outright. This pins that it resolves it instead.
+    test "an infinite evaluation timeout still bounds the expansion" do
+      eval = Evaluator.new()
+
+      assert {:ok, result, _eval} =
+               Evaluator.eval(eval, ~S|:io.format("~s", ["hi"]); :ok|,
+                 timeout: :infinity,
+                 max_result_bytes: 4_096
+               )
+
+      assert result.output =~ "hi"
+    end
+
+    test "a non-integer :mfa_timeout is refused rather than silently unbounded" do
+      assert_raise ArgumentError,
+                   ~r/:mfa_timeout must be a positive integer/,
+                   fn ->
+                     CaptureIO.start(4_096, mfa_timeout: :infinity)
+                   end
+
+      assert_raise ArgumentError, fn ->
+        CaptureIO.start(4_096, mfa_timeout: 0)
+      end
+    end
+
+    # Public because the capture applies it by module/function/arguments.
+    def never_answers(_arg) do
+      receive do
+        :never -> :never
+      end
     end
   end
 end

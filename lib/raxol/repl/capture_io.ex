@@ -30,6 +30,15 @@ defmodule Raxol.REPL.CaptureIO do
   @doc """
   Start a capture server holding at most `limit` bytes, owned by the caller.
 
+  `:mfa_timeout` bounds the MFA form of `put_chars` (see `put_mfa/4`): the
+  expansion runs in a throwaway process, and the monitor that watches it only
+  covers an expander that DIES. One that neither answers nor dies wedges this
+  server for good, so the wait is bounded. There is no timeout of its own to
+  invent: the evaluation this capture belongs to already has one, and
+  `Raxol.REPL.Evaluator` passes it -- an expansion cannot usefully outlive the
+  evaluation that asked for it. It defaults to the same
+  `Raxol.Core.Defaults.timeout_ms/0` the evaluator's own default comes from.
+
   Unlinked on purpose: the caller sets it as its own group leader and closes it
   in an `after` block, and a link would turn a killed evaluation into a crash
   report for a process that is simply no longer needed.
@@ -42,29 +51,63 @@ defmodule Raxol.REPL.CaptureIO do
   to `limit` bytes, forever, on a surface served anonymously over SSH. Stopping
   on `:DOWN` is a normal exit, so it still produces no crash report.
   """
-  @spec start(pos_integer()) :: {:ok, pid()}
-  def start(limit) when is_integer(limit) and limit > 0 do
-    GenServer.start(__MODULE__, {limit, self()})
+  @spec start(pos_integer(), keyword()) :: {:ok, pid()}
+  def start(limit, opts \\ []) when is_integer(limit) and limit > 0 do
+    mfa_timeout =
+      Keyword.get(opts, :mfa_timeout, Raxol.Core.Defaults.timeout_ms())
+
+    # Validated rather than trusted: `:infinity` is a legitimate value for an
+    # evaluation timeout and is exactly the value that turns the bounded
+    # receive below back into master's unbounded one, silently reinstating the
+    # wedge this option exists to prevent. `Evaluator` resolves `:infinity` to
+    # a finite bound before it gets here; anything else is a caller bug and
+    # says so.
+    unless is_integer(mfa_timeout) and mfa_timeout > 0 do
+      raise ArgumentError,
+            ":mfa_timeout must be a positive integer in milliseconds, got: " <>
+              inspect(mfa_timeout)
+    end
+
+    GenServer.start(__MODULE__, {limit, self(), mfa_timeout})
   end
 
   @doc """
   Return the captured output and whether it was truncated at the limit.
+
+  Unbounded on purpose. The server legitimately blocks for up to
+  `:mfa_timeout` while an MFA expansion runs (see `put_mfa/4`), so the
+  implicit 5 000 ms `GenServer.call/2` default could expire while the server
+  was doing exactly what it was told to -- turning "the output was cut" into
+  `{:timeout, {GenServer, :call, ...}}` inside the evaluation, which the
+  evaluator then reports as a crash with the captured output discarded. The
+  caller is the evaluation process, which is itself bounded and brutally
+  killed by `Raxol.REPL.Evaluator` on its own deadline, so this call cannot
+  outlive that.
   """
   @spec contents(pid()) :: {binary(), boolean()}
-  def contents(pid), do: GenServer.call(pid, :contents)
+  def contents(pid), do: GenServer.call(pid, :contents, :infinity)
 
   @doc "Stop the capture server."
   @spec close(pid()) :: :ok
   def close(pid) do
-    GenServer.stop(pid, :normal)
+    GenServer.stop(pid, :normal, :infinity)
   catch
     :exit, _ -> :ok
   end
 
   @impl GenServer
-  def init({limit, owner}) do
+  def init({limit, owner, mfa_timeout}) do
     Process.monitor(owner)
-    {:ok, %{buffer: [], size: 0, limit: limit, truncated?: false, owner: owner}}
+
+    {:ok,
+     %{
+       buffer: [],
+       size: 0,
+       limit: limit,
+       truncated?: false,
+       owner: owner,
+       mfa_timeout: mfa_timeout
+     }}
   end
 
   @impl GenServer
@@ -151,31 +194,60 @@ defmodule Raxol.REPL.CaptureIO do
   # could still accept. A breach kills that process and the write is refused;
   # nothing else is affected, and the evaluation is told its write failed
   # rather than the node dying.
+  #
+  # The monitor covers an expander that DIES. One that neither answers nor
+  # dies -- `Process.sleep(:infinity)` inside the formatter, a NIF that never
+  # returns -- wedged this server in a receive with no `after`, and because
+  # the wedge also swallows the owner's `:DOWN`, killing the evaluation did
+  # not reclaim it: one capture server plus its expander leaked per wedge, on
+  # an anonymous SSH surface. The wait is bounded by `:mfa_timeout` (the
+  # evaluation's own timeout; see `start/2`) and expiry is the `:DOWN` case:
+  # kill the expander, mark truncated, refuse the write.
   defp put_mfa(mod, fun, args, state) do
+    if state.truncated? do
+      # Nothing this expansion returns can be recorded, so there is nothing
+      # to wait for. Skipping is what bounds the TOTAL cost: an expander that
+      # wedges sets `truncated?`, so evaluated code that queues a hundred
+      # wedging writes (`{put_chars, unicode, :timer, :sleep, [:infinity]}`
+      # from a helper it spawned, which the evaluator's kill does not reach)
+      # pays one `:mfa_timeout` for the server's whole life instead of one
+      # each. Before this check that arithmetic was N x 5s of a retained
+      # capture server and a starved owner `:DOWN`, N attacker-chosen.
+      {:ok, state}
+    else
+      ref = make_ref()
+
+      {pid, monitor} =
+        spawn_expander({mod, fun, args}, ref, expansion_words(state))
+
+      await_expansion(pid, monitor, ref, state)
+    end
+  end
+
+  defp expansion_words(state) do
     remaining = max(state.limit - state.size, 0) + 1
-    words = div(remaining + word_size(), word_size()) + @mfa_heap_slack_words
+    div(remaining + word_size(), word_size()) + @mfa_heap_slack_words
+  end
 
+  defp spawn_expander({mod, fun, args}, ref, words) do
     parent = self()
-    ref = make_ref()
 
-    {pid, monitor} =
-      :erlang.spawn_opt(
-        fn ->
-          result =
-            try do
-              {:ok, IO.iodata_to_binary(apply(mod, fun, args))}
-            catch
-              _kind, _reason -> :error
-            end
+    :erlang.spawn_opt(
+      fn ->
+        result =
+          try do
+            {:ok, IO.iodata_to_binary(apply(mod, fun, args))}
+          catch
+            _kind, _reason -> :error
+          end
 
-          send(parent, {ref, result})
-        end,
-        [
-          :monitor,
-          max_heap_size: %{size: words, kill: true, error_logger: false}
-        ]
-      )
+        send(parent, {ref, result})
+      end,
+      [:monitor, max_heap_size: %{size: words, kill: true, error_logger: false}]
+    )
+  end
 
+  defp await_expansion(pid, monitor, ref, state) do
     receive do
       {^ref, {:ok, data}} ->
         Process.demonitor(monitor, [:flush])
@@ -189,6 +261,16 @@ defmodule Raxol.REPL.CaptureIO do
         # Over the cap (or a crash while expanding). Recorded as truncated so
         # the caller can say the output was cut rather than silently short.
         {:ok, %{state | truncated?: true}}
+    after
+      state.mfa_timeout ->
+        # Neither answered nor died. Same outcome as the `:DOWN` above, plus
+        # the kill that branch got for free. A reply that raced the kill needs
+        # no flushing: `handle_info/2`'s catch-all drops it on the next loop,
+        # and the next `put_mfa/4` waits on its own fresh ref, so a stale one
+        # can never be matched.
+        Process.exit(pid, :kill)
+        Process.demonitor(monitor, [:flush])
+        {:ok, %{state | truncated?: true}}
     end
   end
 
@@ -197,6 +279,15 @@ defmodule Raxol.REPL.CaptureIO do
   # Accepting past the limit is what the whole module exists to prevent, so the
   # write is dropped rather than partially kept: a half-written line spliced
   # onto the next one reads as output the program never produced.
+  #
+  # `truncated?` is a LATCH, and deliberately so: once a write has been
+  # dropped, every later write is dropped too, because appending after a hole
+  # is the splicing this function refuses. It is worth knowing that the latch
+  # is set by three things, not one -- the byte cap here, an expander killed
+  # over its heap cap, and an expander that wedged past `:mfa_timeout` -- so
+  # a single wedged `:io.format/2` blinds the capture for the rest of the
+  # evaluation. That is why `put_mfa/4` refuses to wait once the latch is
+  # set: after the first one there is nothing left to capture anyway.
   defp put(chars, state) do
     data = IO.iodata_to_binary(chars)
     size = byte_size(data)
