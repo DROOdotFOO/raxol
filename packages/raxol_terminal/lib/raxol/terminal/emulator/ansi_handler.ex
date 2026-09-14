@@ -186,13 +186,11 @@ defmodule Raxol.Terminal.Emulator.ANSIHandler do
          {:cursor_horizontal_absolute, col, remaining},
          emulator
        ) do
-    Raxol.Core.Runtime.Log.debug(
+    Raxol.Core.Runtime.Log.debug(fn ->
       "handle_sequence_type cursor_horizontal_absolute col=#{inspect(col)}"
-    )
+    end)
 
     result = CursorHandler.handle_cha(emulator, [col + 1])
-
-    Raxol.Core.Runtime.Log.debug("CursorHandler.handle_cha result: #{inspect(result)}")
 
     case result do
       {:ok, updated_emulator} -> {updated_emulator, remaining}

@@ -97,18 +97,18 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
 
   # Sixel Graphics support
   defp handle_sixel(emulator, data) do
-    Log.debug("DCSHandlers: handle_sixel called with data: #{inspect(data)}")
+    Log.debug(fn -> "DCSHandlers: handle_sixel called with data: #{inspect(data)}" end)
 
     # Initialize sixel state if not present
     sixel_state =
       emulator.sixel_state || Raxol.Terminal.ANSI.SixelGraphics.new()
 
-    Log.debug("DCSHandlers: sixel_state before processing: #{inspect(sixel_state)}")
+    Log.debug(fn -> "DCSHandlers: sixel_state before processing: #{inspect(sixel_state)}" end)
 
     # Construct the full DCS sequence for the sixel parser
     full_dcs_sequence = "\ePq#{data}\e\\"
 
-    Log.debug("DCSHandlers: Full DCS sequence: #{inspect(full_dcs_sequence)}")
+    Log.debug(fn -> "DCSHandlers: Full DCS sequence: #{inspect(full_dcs_sequence)}" end)
 
     # Process sixel data using the proper SixelGraphics module
     case Raxol.Terminal.ANSI.SixelGraphics.process_sequence(
@@ -119,10 +119,6 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         Log.debug(
           "DCSHandlers: sixel processing successful, updated_state: #{inspect(updated_sixel_state)}"
         )
-
-        Log.debug("DCSHandlers: pixel_buffer: #{inspect(updated_sixel_state.pixel_buffer)}")
-
-        Log.debug("DCSHandlers: palette: #{inspect(updated_sixel_state.palette)}")
 
         # Successfully processed, update emulator with new sixel state
         # and blit the graphics to the screen buffer
@@ -135,7 +131,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         {:ok, emulator_with_blit}
 
       {_sixel_state, {:error, reason}} ->
-        Log.debug("DCSHandlers: sixel processing failed: #{inspect(reason)}")
+        Log.debug(fn -> "DCSHandlers: sixel processing failed: #{inspect(reason)}" end)
 
         # Processing failed, log the error but still update the sixel_state
         Log.warning("Sixel processing failed: #{inspect(reason)}")
@@ -181,7 +177,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
       "Blitting Sixel graphics: pixel_buffer=#{inspect(pixel_buffer)}, palette=#{inspect(palette)}"
     )
 
-    Log.debug("Cursor position: {#{cursor_x}, #{cursor_y}}")
+    Log.debug(fn -> "Cursor position: {#{cursor_x}, #{cursor_y}}" end)
   end
 
   defp blit_pixels_to_buffer(buffer, pixel_buffer, palette, cursor_x, cursor_y) do
@@ -216,7 +212,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
 
     case Map.get(palette, color_index) do
       {r, g, b} ->
-        Log.debug("Found color {#{r}, #{g}, #{b}} for index #{color_index}")
+        Log.debug(fn -> "Found color {#{r}, #{g}, #{b}} for index #{color_index}" end)
 
         # Create a proper TextFormatting struct with the background color
         style =
@@ -236,7 +232,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         )
 
       nil ->
-        Log.debug("No color found for index #{color_index}")
+        Log.debug(fn -> "No color found for index #{color_index}" end)
         buffer
     end
   end

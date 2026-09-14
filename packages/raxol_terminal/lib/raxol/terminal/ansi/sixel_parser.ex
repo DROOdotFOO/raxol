@@ -254,11 +254,13 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
       "SixelParser: [handle_data_character] BEFORE pixel gen, palette color 1 is #{inspect(Map.get(state.palette, 1, :not_found))}"
     )
 
-    Log.debug("SixelParser: Processing character byte: #{char_byte} ('#{<<char_byte>>}')")
+    Log.debug(fn ->
+      "SixelParser: Processing character byte: #{char_byte} ('#{<<char_byte>>}')"
+    end)
 
     case SixelPatternMap.get_pattern(char_byte) do
       pattern_int when is_integer(pattern_int) ->
-        Log.debug("SixelParser: Got pattern #{pattern_int} for character #{char_byte}")
+        Log.debug(fn -> "SixelParser: Got pattern #{pattern_int} for character #{char_byte}" end)
 
         {final_buffer, final_x, final_max_x} =
           generate_repeated_pixels(
@@ -271,13 +273,13 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
             state.max_x
           )
 
-        Log.debug("SixelParser: Generated pixels, buffer size: #{map_size(final_buffer)}")
+        Log.debug(fn ->
+          "SixelParser: Generated pixels, buffer size: #{map_size(final_buffer)}"
+        end)
 
-        Log.debug("SixelParser: Final buffer: #{inspect(final_buffer)}")
-
-        Log.debug(
+        Log.debug(fn ->
           "SixelParser: [handle_data_character] AFTER pixel gen, palette color 1 is #{inspect(Map.get(state.palette, 1, :not_found))}"
-        )
+        end)
 
         parse(remaining_data, %{
           state
@@ -289,7 +291,7 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
         })
 
       nil ->
-        Log.debug("SixelParser: No pattern found for character #{char_byte}")
+        Log.debug(fn -> "SixelParser: No pattern found for character #{char_byte}" end)
 
         case remaining_data do
           <<"\e\\", _::binary>> ->

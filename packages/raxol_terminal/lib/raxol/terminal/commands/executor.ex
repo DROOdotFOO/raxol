@@ -208,7 +208,7 @@ defmodule Raxol.Terminal.Commands.Executor do
 
   @spec execute_osc_command(Emulator.t(), String.t()) :: Emulator.t()
   def execute_osc_command(emulator, command_string) do
-    Raxol.Core.Runtime.Log.debug("Executing OSC command: #{inspect(command_string)}")
+    Raxol.Core.Runtime.Log.debug(fn -> "Executing OSC command: #{inspect(command_string)}" end)
 
     # handle_osc_command returns {:ok, emulator} or {:error, reason, emulator}
     case handle_osc_command(emulator, command_string) do
@@ -278,7 +278,7 @@ defmodule Raxol.Terminal.Commands.Executor do
         intermediates_buffer,
         data_string
       ) do
-    Raxol.Core.Runtime.Log.debug("Executing DCS command: #{inspect(data_string)}")
+    Raxol.Core.Runtime.Log.debug(fn -> "Executing DCS command: #{inspect(data_string)}" end)
 
     handle_dcs_command(
       emulator,

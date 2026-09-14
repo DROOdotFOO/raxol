@@ -96,9 +96,9 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   end
 
   defp handle_final_byte(emulator, parser_state, byte, rest) do
-    Raxol.Core.Runtime.Log.debug(
+    Raxol.Core.Runtime.Log.debug(fn ->
       "DCSEntryState: Found final byte #{byte}, transitioning to dcs_passthrough with rest=#{inspect(rest)}"
-    )
+    end)
 
     next_state = %{
       parser_state
@@ -117,7 +117,7 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   end
 
   defp handle_ignored_byte(emulator, parser_state, byte, rest) do
-    Raxol.Core.Runtime.Log.debug("Ignoring C0/DEL byte #{byte} in DCS Entry")
+    Raxol.Core.Runtime.Log.debug(fn -> "Ignoring C0/DEL byte #{byte} in DCS Entry" end)
     {:continue, emulator, parser_state, rest}
   end
 

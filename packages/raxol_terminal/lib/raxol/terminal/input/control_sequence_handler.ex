@@ -58,7 +58,9 @@ defmodule Raxol.Terminal.Input.ControlSequenceHandler do
   """
   def handle_pm_sequence(emulator, command, data) do
     # PM sequences are typically ignored by terminals
-    Raxol.Core.Runtime.Log.debug("Ignoring PM sequence: #{command} with data: #{inspect(data)}")
+    Raxol.Core.Runtime.Log.debug(fn ->
+      "Ignoring PM sequence: #{command} with data: #{inspect(data)}"
+    end)
 
     emulator
   end
