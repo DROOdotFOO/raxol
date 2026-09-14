@@ -260,7 +260,7 @@ defmodule Raxol.Terminal.ANSI.KittyGraphics do
   """
   @impl true
   def process_sequence(state, data) when is_binary(data) do
-    Log.debug("[KittyGraphics] Processing sequence: #{inspect(truncate_for_log(data))}")
+    Log.debug(fn -> "[KittyGraphics] Processing sequence: #{inspect(truncate_for_log(data))}" end)
 
     parser_state = %KittyParser.ParserState{
       width: state.width,

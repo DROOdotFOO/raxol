@@ -15,7 +15,9 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   Handles GenServer call for getting cursor position.
   """
   def handle_get_position(state) do
-    Raxol.Core.Runtime.Log.debug("Getting cursor position: {#{state.row}, #{state.col}}")
+    Raxol.Core.Runtime.Log.debug(fn ->
+      "Getting cursor position: {#{state.row}, #{state.col}}"
+    end)
 
     {state.position, state}
   end

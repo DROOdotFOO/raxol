@@ -52,7 +52,9 @@ defmodule Raxol.Terminal.Commands.Screen do
       "[Screen.clear_line] CALLED with mode: #{mode}, cursor_x: #{cursor_x}, cursor_y from emulator: #{cursor_y}"
     )
 
-    Raxol.Core.Runtime.Log.debug("[Screen.clear_line] Buffer type: #{inspect(buffer.__struct__)}")
+    Raxol.Core.Runtime.Log.debug(fn ->
+      "[Screen.clear_line] Buffer type: #{inspect(buffer.__struct__)}"
+    end)
 
     _default_style = emulator.style
 
@@ -160,7 +162,9 @@ defmodule Raxol.Terminal.Commands.Screen do
 
   def scroll_up_screen_command(emulator, count)
       when is_integer(count) and count > 0 do
-    Raxol.Core.Runtime.Log.debug("[Screen.scroll_up_screen_command] CALLED with count: #{count}")
+    Raxol.Core.Runtime.Log.debug(fn ->
+      "[Screen.scroll_up_screen_command] CALLED with count: #{count}"
+    end)
 
     scrollback = Emulator.get_scrollback(emulator)
     buffer = emulator.main_screen_buffer
@@ -178,7 +182,7 @@ defmodule Raxol.Terminal.Commands.Screen do
   end
 
   def scroll_down(emulator, count) when is_integer(count) and count > 0 do
-    Raxol.Core.Runtime.Log.debug("[Screen.scroll_down] CALLED with count: #{count}")
+    Raxol.Core.Runtime.Log.debug(fn -> "[Screen.scroll_down] CALLED with count: #{count}" end)
 
     buffer = Emulator.get_screen_buffer(emulator)
     {top, bottom} = effective_scroll_region(emulator, buffer)
@@ -189,7 +193,7 @@ defmodule Raxol.Terminal.Commands.Screen do
   end
 
   def scroll_up(emulator, lines) when is_integer(lines) and lines > 0 do
-    Raxol.Core.Runtime.Log.debug("[Screen.scroll_up] CALLED with lines: #{lines}")
+    Raxol.Core.Runtime.Log.debug(fn -> "[Screen.scroll_up] CALLED with lines: #{lines}" end)
 
     buffer = Emulator.get_screen_buffer(emulator)
     {top, bottom} = effective_scroll_region(emulator, buffer)

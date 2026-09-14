@@ -68,9 +68,9 @@ defmodule Raxol.Terminal.Parser.States.EscapeState do
   end
 
   defp dispatch_escape_input(<<"P", rest::binary>>, emulator, parser_state) do
-    Raxol.Core.Runtime.Log.debug(
+    Raxol.Core.Runtime.Log.debug(fn ->
       "EscapeState: Found DCS final byte 'P', transitioning to dcs_entry with rest=#{inspect(rest)}"
-    )
+    end)
 
     # Found DCS final byte 'P', transitioning to dcs_entry
 
