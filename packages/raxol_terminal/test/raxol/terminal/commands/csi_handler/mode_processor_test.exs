@@ -15,6 +15,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
 
   alias Raxol.Terminal.Commands.CSIHandler.ModeProcessor
   alias Raxol.Terminal.Emulator
+  alias Raxol.Terminal.Modes.Types.ModeTypes
   alias Raxol.Terminal.ScreenBuffer
 
   defp set_private(emulator, code) do
@@ -221,7 +222,10 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
       # nil is what the parser yields for an empty slot, a nested list for a
       # colon subparameter group, and a string may arrive from older callers.
       assert ModeProcessor.handle_h_or_l(emulator, [nil], "?", ?h) == emulator
-      assert ModeProcessor.handle_h_or_l(emulator, [[4, 3]], "?", ?h) == emulator
+
+      assert ModeProcessor.handle_h_or_l(emulator, [[4, 3]], "?", ?h) ==
+               emulator
+
       assert ModeProcessor.handle_h_or_l(emulator, ["x"], "?", ?h) == emulator
       assert ModeProcessor.handle_h_or_l(emulator, ["7x"], "?", ?h) == emulator
 
@@ -261,7 +265,10 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
         out = feed(emulator, input)
         assert row0(out) == "hello", inspect(input)
         assert out.width == 80, inspect(input)
-        assert ScreenBuffer.get_width(out.main_screen_buffer) == 80, inspect(input)
+
+        assert ScreenBuffer.get_width(out.main_screen_buffer) == 80,
+               inspect(input)
+
         assert out.mode_manager.column_width_mode == :normal, inspect(input)
       end
     end
@@ -293,5 +300,217 @@ defmodule Raxol.Terminal.Commands.CSIHandler.ModeProcessorTest do
       assert back.cursor.position == {4, 9}
       assert back.active_buffer_type == :main
     end
+
+    # `restore_cursor_only/1` hands `apply_restored_data/3` the `nil` that
+    # `restore_state([])` returns. That is survivable for exactly one reason:
+    # the `:cursor` clause's `is_map(restored_state.cursor)` is a GUARD, so the
+    # BadMapError on `nil.cursor` fails the clause instead of the call. The
+    # same call with an unguarded field in the list (`:scroll_region`,
+    # `:cursor_style`) does raise, so this pins the no-op end to end rather
+    # than trusting the field list to stay as it is.
+    test "CSI ? 1048 l on an empty state stack is a no-op, not a crash", %{
+      emulator: emulator
+    } do
+      out = feed(emulator, "\e[5;10H\e[?1048l")
+
+      assert out.state_stack == []
+      assert out.cursor.position == {4, 9}
+      assert out.mode_manager == emulator.mode_manager
+      assert row0(out) == "hello"
+    end
+
+    test "CSI ? 1048 h then l restores the saved cursor", %{emulator: emulator} do
+      out = feed(emulator, "\e[5;10H\e[?1048h\e[1;1H\e[?1048l")
+
+      assert out.cursor.position == {4, 9}
+      assert out.state_stack == []
+    end
+  end
+
+  describe "property: CSI h/l never raises" do
+    # Seeded `:rand` instead of StreamData (not a raxol_terminal dependency;
+    # see test/property/). The corpus is therefore FIXED: same 300 x 12 cases
+    # on every run, which is what makes a reported failure replayable, and
+    # also means no new shape is ever discovered after the first green run.
+    # It is a regression lock, not a fuzzer.
+    @runs 300
+    @calls_per_run 12
+
+    # Derived from the registry, never hand-copied: a hard-coded list is the
+    # same drift this PR's registry-coverage test exists to prevent, one file
+    # over -- a newly registered mode would silently never be fuzzed.
+    @registered_codes ModeTypes.get_all_modes()
+                      |> Map.values()
+                      |> Enum.map(& &1.code)
+                      |> Enum.uniq()
+                      |> Enum.sort()
+
+    # Numbers a real terminal sends, plus the shapes CommandsParser can yield
+    # for malformed input and the shapes an older caller might pass.
+    @malformed_binaries [
+      "",
+      "7x",
+      "x",
+      " 7",
+      "7 ",
+      "-",
+      "+1",
+      "0x1F",
+      "1.5",
+      "1e3"
+    ]
+    @unicode_binaries ["é", "٣", "７", "\u0000", "\e[?1h", "ﬁ"]
+    @non_numbers [nil, [], [nil], [[4, 3]], {4, 3}, :atom, 1.5, %{}, true]
+
+    defp seed(i), do: :rand.seed(:exsss, {1012, 3, i})
+
+    defp gen_param(depth) do
+      case :rand.uniform(7) do
+        1 -> gen_integer()
+        2 -> Enum.random(@registered_codes)
+        3 -> Integer.to_string(Enum.random(@registered_codes))
+        4 -> Enum.random(@malformed_binaries)
+        5 -> Enum.random(@unicode_binaries)
+        6 -> Enum.random(@non_numbers)
+        7 -> gen_nested(depth)
+      end
+    end
+
+    defp gen_integer,
+      do:
+        Enum.random([
+          0,
+          -:rand.uniform(5000),
+          :rand.uniform(3000),
+          :rand.uniform(10 ** 12)
+        ])
+
+    defp gen_nested(depth) when depth >= 2, do: Enum.random(@non_numbers)
+
+    defp gen_nested(depth),
+      do: for(_ <- 1..:rand.uniform(3), do: gen_param(depth + 1))
+
+    # `0..rand(6)` never yields fewer than two elements, so the empty list and
+    # the single-parameter list -- `\e[?1h`, the commonest CSI h/l a real
+    # terminal sends -- were the two shapes this never fuzzed.
+    defp gen_params, do: for(_ <- 1..:rand.uniform(7)//1, do: gen_param(0)) |> drop_sometimes()
+
+    defp drop_sometimes(params) do
+      case :rand.uniform(8) do
+        1 -> []
+        2 -> Enum.take(params, 1)
+        _ -> params
+      end
+    end
+
+    test "random parameter shapes through both tables, set and reset, always return an emulator" do
+      for i <- 1..@runs do
+        seed(i)
+
+        Enum.reduce(1..@calls_per_run, Emulator.new(80, 24), fn call, emulator ->
+          assert_totality(
+            emulator,
+            gen_params(),
+            Enum.random(["?", ""]),
+            Enum.random([?h, ?l]),
+            "iteration #{i} call #{call}"
+          )
+        end)
+      end
+    end
+
+    # Totality is the weaker half. The generator deliberately feeds `" 7"`,
+    # `"0x1F"`, `"1049 "` and friends, and the POINT of those is that they
+    # are dropped: a regression that made parsing lenient (`Integer.parse/1`
+    # in place of the strict check) would let `" 3"` trigger DECCOLM's
+    # 80<->132 buffer reallocation, or `"1049 "` switch to the alternate
+    # screen, and every "an emulator came back" assertion would still pass.
+    # So a call whose parameters contain no well-formed registered code must
+    # leave the emulator's mode state, geometry and buffers alone.
+    test "parameters that are not well-formed registered codes have no effect" do
+      for i <- 1..@runs do
+        seed(i)
+
+        Enum.each(1..@calls_per_run, fn call ->
+          params = Enum.reject(gen_params(), &well_formed_code?/1)
+          intermediates = Enum.random(["?", ""])
+          final_byte = Enum.random([?h, ?l])
+          emulator = Emulator.new(80, 24)
+
+          result =
+            ModeProcessor.handle_h_or_l(emulator, params, intermediates, final_byte)
+
+          where = "iteration #{i} call #{call}"
+
+          assert result.mode_manager == emulator.mode_manager,
+                 "#{describe(where, params, intermediates, final_byte)} changed mode state"
+
+          assert result.width == emulator.width,
+                 "#{describe(where, params, intermediates, final_byte)} resized the emulator"
+
+          assert result.active_buffer_type == emulator.active_buffer_type,
+                 "#{describe(where, params, intermediates, final_byte)} switched buffers"
+
+          assert result.state_stack == emulator.state_stack,
+                 "#{describe(where, params, intermediates, final_byte)} touched the state stack"
+        end)
+      end
+    end
+
+    # A parameter reaches `ModeManager` only as an exact decimal integer in
+    # the table for its intermediates. Mirrors `ModeProcessor.mode_code/1`
+    # deliberately rather than calling it: a lenient rewrite of that function
+    # is the regression this test exists to catch, so sharing it would make
+    # the test agree with the bug.
+    defp well_formed_code?(param) when is_integer(param),
+      do: registered?(param)
+
+    defp well_formed_code?(param) when is_binary(param) do
+      case Integer.parse(param) do
+        {code, ""} -> registered?(code)
+        _ -> false
+      end
+    end
+
+    defp well_formed_code?(_param), do: false
+
+    defp registered?(code),
+      do: ModeTypes.lookup_private(code) != nil or ModeTypes.lookup_standard(code) != nil
+
+    # An %Emulator{} back, whatever went in. Anything else -- a raise or some
+    # other term -- fails with the shape that caused it, so a case replays.
+    defp assert_totality(emulator, params, intermediates, final_byte, where) do
+      result =
+        ModeProcessor.handle_h_or_l(emulator, params, intermediates, final_byte)
+
+      assert match?(%Emulator{}, result),
+             "#{describe(where, params, intermediates, final_byte)} returned " <>
+               inspect(result, limit: 5)
+
+      result
+    rescue
+      e in ExUnit.AssertionError ->
+        reraise e, __STACKTRACE__
+
+      e ->
+        flunk(
+          "#{describe(where, params, intermediates, final_byte)} raised " <>
+            Exception.format(:error, e, __STACKTRACE__)
+        )
+    catch
+      # A `throw` or an `exit` from a handler escaped with no iteration, no
+      # parameter list and no sequence shape, so the failure could not be
+      # replayed -- the one thing the report promises.
+      kind, reason ->
+        flunk(
+          "#{describe(where, params, intermediates, final_byte)} threw " <>
+            Exception.format(kind, reason, __STACKTRACE__)
+        )
+    end
+
+    # Arguments, not body-bound variables: those are what a `rescue` clause
+    # can still see.
+    defp describe(where, params, intermediates, final_byte),
+      do: "#{where}: #{inspect(params)} #{inspect(intermediates)} #{<<final_byte>>}"
   end
 end
