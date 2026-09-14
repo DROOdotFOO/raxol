@@ -58,3 +58,12 @@ packages/raxol_agent/lib/raxol/agent/shell/jobs.ex
 packages/raxol_agent/lib/raxol/agent/probe/runner/pool.ex
 packages/raxol_agent/lib/raxol/agent/spend_gate/reservations.ex
 packages/raxol_symphony/lib/raxol/symphony/prompt_builder/memo.ex
+
+# `Raxol.MCP.Client.Tables` owns the era-verdict table and the client-side
+# origin breaker table, and it is named on purpose. ADR-0037 decision 2 needs
+# the dual-era verdict to be per ORIGIN: an :ets table belongs to the process
+# that created it, so a table created by a client would make the verdict per
+# client and cache nothing useful, and one created by a transient process
+# raises ArgumentError in whoever still holds the reference. Accepting
+# [name: nil] would hand each caller its own cache, which is the defect.
+packages/raxol_mcp/lib/raxol/mcp/client/tables.ex
