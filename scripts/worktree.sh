@@ -63,7 +63,13 @@
 # dependencies are therefore fetched and checksum-verified for that branch.
 # That is the way to proceed when a seed is refused, and the way to use this
 # script anywhere the trust boundary in this file's header does not hold.
-# Default path: /tmp/raxol-<branch with / and non-word chars as ->.
+# Default path: `mktemp -d "${TMPDIR:-/tmp}/raxol-<slug>.XXXXXXXX"`, i.e. a
+# directory that already exists and is already 0700 by the time this script
+# has a name for it. The old fixed `/tmp/raxol-<slug>` was derivable from a
+# branch name that is public on the PR, and on a shared box a predictable
+# name under a world-writable sticky directory belongs to whoever creates
+# it first (CWE-377). An explicit path argument is used exactly as given,
+# and is still refused if anything is already there.
 #
 # `sync <path>` re-seeds an EXISTING worktree of this repository -- after a
 # dependency bump in this checkout, say. It refuses the source checkout
@@ -277,7 +283,7 @@ slug() {
 cmd_add() {
   local branch="${1:-}"
   shift || true
-  local path="" from="HEAD" from_given=0 fresh=0
+  local path="" from="HEAD" from_given=0 fresh=0 created_path=0
 
   while (($# > 0)); do
     case "$1" in
@@ -303,26 +309,46 @@ cmd_add() {
   done
 
   [[ -n "$branch" ]] || usage
-  path="${path:-/tmp/raxol-$(slug "$branch")}"
 
-  # `-e` follows symlinks, so a dangling link planted at a predictable
-  # `/tmp/raxol-<slug>` would test false and `git worktree add` would then
-  # materialise the checkout at whatever the link points at -- after which
-  # this script's copies run there. `-L` is the case `-e` misses.
-  [[ -e "$path" || -L "$path" ]] && die "$path already exists"
+  if [[ -z "$path" ]]; then
+    # `mktemp -d` names AND creates in one step, so there is no window in
+    # which the name is known and the directory is not yet ours, and 0700
+    # keeps it that way afterwards. `git worktree add` refuses a non-empty
+    # directory but accepts an existing EMPTY one (checked against git
+    # 2.50), which is exactly what mktemp leaves -- so the checkout lands
+    # inside the directory mktemp owns, rather than beside it.
+    local tmpdir="${TMPDIR:-/tmp}"
+    path="$(mktemp -d "${tmpdir%/}/raxol-$(slug "$branch").XXXXXXXX")"
+    created_path=1
+  else
+    # `-e` follows symlinks, so a dangling link planted at a path an
+    # attacker can guess would test false and `git worktree add` would then
+    # materialise the checkout at whatever the link points at -- after
+    # which this script's copies run there. `-L` is the case `-e` misses.
+    [[ ! -e "$path" && ! -L "$path" ]] || die "$path already exists"
+  fi
 
   cd "$repo_root"
 
-  local created_branch=0
+  local created_branch=0 status=0
 
+  # A `git worktree add` that fails must not leave the directory this
+  # command created behind: `rmdir` (never `rm -rf`) because the only
+  # directory this branch may remove is the empty one mktemp just made.
+  # git's own exit status is still what the caller sees.
   if git show-ref --verify --quiet "refs/heads/$branch"; then
     ((from_given == 0)) ||
       die "$branch already exists; --from $from would be ignored. Drop --from, or pick a new branch name."
 
-    git worktree add "$path" "$branch"
+    git worktree add "$path" "$branch" || status=$?
   else
-    git worktree add -b "$branch" "$path" "$from"
-    created_branch=1
+    git worktree add -b "$branch" "$path" "$from" || status=$?
+    ((status != 0)) || created_branch=1
+  fi
+
+  if ((status != 0)); then
+    ((created_path == 0)) || rmdir "$path" 2>/dev/null || true
+    exit "$status"
   fi
 
   # Seeding is the reason this command exists, so a failed seed is a failed
@@ -337,7 +363,6 @@ cmd_add() {
   if ((fresh == 1)); then
     printf 'fresh %s (nothing seeded; its own deps.get fetches and verifies)\n' "$path"
   else
-    local status=0
     (seed_caches "$path") || status=$?
 
     if ((status != 0)); then

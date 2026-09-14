@@ -151,6 +151,12 @@ seed at all when `mix.lock` (root or any `packages/*/mix.lock`) differs
 between this checkout and the branch, since then the caches describe some
 other set of dependencies (exit 3).
 
+With no path argument the worktree lands in `mktemp -d
+"${TMPDIR:-/tmp}/raxol-<slug>.XXXXXXXX"`, printed as the `cd` line: a fixed
+`/tmp/raxol-<slug>` is derivable from a branch name that is public on the
+PR, and a predictable name under a world-writable directory is whoever
+creates it first's (CWE-377). An explicit path argument is used as given.
+
 ### Install paths
 
 The packaged CLI is self-contained (Burrito wraps its own ERTS), so none of
