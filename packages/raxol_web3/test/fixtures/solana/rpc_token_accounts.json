@@ -1,0 +1,70 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": {
+      "slot": 446952712,
+      "apiVersion": "4.2.1"
+    },
+    "value": [
+      {
+        "pubkey": "C9VyXs6MPM8RgwouCH8qXih423VnraZBgzCNUepvC3xA",
+        "account": {
+          "lamports": 2039280,
+          "data": {
+            "program": "spl-token",
+            "parsed": {
+              "info": {
+                "isNative": false,
+                "mint": "NkfbyG7feH9aJhdnSs4d7D7kWCEnxrmNUbM7dbpC6MM",
+                "owner": "9RAufBfjGQjDfrwxeyKmZWPADHSb8HcoqCdrmpqvCr1g",
+                "state": "initialized",
+                "tokenAmount": {
+                  "amount": "85000221",
+                  "decimals": 0,
+                  "uiAmount": 85000221.0,
+                  "uiAmountString": "85000221"
+                }
+              },
+              "type": "account"
+            },
+            "space": 165
+          },
+          "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "executable": false,
+          "rentEpoch": 18446744073709551615,
+          "space": 165
+        }
+      },
+      {
+        "pubkey": "FU1ra3TEJDn1TBJs1BYr4FZjE2aKPnCZJ3tcp8j92W5c",
+        "account": {
+          "lamports": 2039280,
+          "data": {
+            "program": "spl-token",
+            "parsed": {
+              "info": {
+                "isNative": false,
+                "mint": "PhiLR4JDZB9z92rYT5xBXKCxmq4pGB1LYjtybii7aiS",
+                "owner": "9RAufBfjGQjDfrwxeyKmZWPADHSb8HcoqCdrmpqvCr1g",
+                "state": "initialized",
+                "tokenAmount": {
+                  "amount": "13000000",
+                  "decimals": 5,
+                  "uiAmount": 130.0,
+                  "uiAmountString": "130"
+                }
+              },
+              "type": "account"
+            },
+            "space": 165
+          },
+          "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "executable": false,
+          "rentEpoch": 18446744073709551615,
+          "space": 165
+        }
+      }
+    ]
+  },
+  "id": 1
+}

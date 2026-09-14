@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32009,
+    "message": "Slot 446800612 was skipped, or missing in long-term storage"
+  },
+  "id": 1
+}

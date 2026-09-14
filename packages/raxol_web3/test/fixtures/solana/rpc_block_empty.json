@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "blockHeight": 424843204,
+    "blockTime": 1789333364,
+    "blockhash": "8kLEYsgop9R6kx6P6gHDTG4Zm83468Vjnyx4hsExyLbX",
+    "parentSlot": 446800610,
+    "previousBlockhash": "Dr3zUnVbJTyhQ9HdNDesq4z4Tj1bdP42g6o3tApQGp93",
+    "signatures": []
+  },
+  "id": 1
+}
