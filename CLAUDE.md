@@ -381,6 +381,8 @@ lib/raxol/
 
 **Phoenix as library only**: No active web server in core. Ecto.Repo is disabled at runtime. MCP is served via `mix mcp.server` (stdio), not through Phoenix.
 
+**Guard at the resource**: authorization and input validation sit on the function that performs the side effect, not on the routing clause that reaches it; a dispatch-level check is UX only. The `%{jail: true}` gate is the worked example: `/login` refusing at `apply_command/3` still left `Commands.connect/4` writing the host-global credential store from the onboarding wizard, so the refusal moved into `connect/4` and `Wizard.save_key_to_op/1` (#1011). Same shape elsewhere: the mode allow-list belongs with the handlers that apply a mode, and a startup barrier cannot trust the lane to report its own readiness.
+
 ### Buffer/Renderer API
 
 The `Raxol.Core.Renderer` API:
