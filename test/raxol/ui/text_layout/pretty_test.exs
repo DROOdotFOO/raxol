@@ -272,15 +272,15 @@ defmodule Raxol.UI.TextLayout.PrettyTest do
   # ---------------------------------------------------------------------
 
   describe "above-ceiling paragraphs (greedy fallback)" do
+    # 2000 ideographs on the pre-ceiling O(m^2) DP ran for minutes, so a
+    # budget is the regression guard and no elapsed time needs measuring. The
+    # budget is a TAG rather than ExUnit's default, because `mix test
+    # --trace` sets the default to `:infinity` and two CI lanes raise it to
+    # 120-180s: the guard has to belong to the test, not to the invocation.
+    @tag timeout: 30_000
     test "a very long newline-free CJK line completes fast and respects width" do
       # ~2000 ideographs, single paragraph, no spaces at all -- well above
       # `@max_dp_breaks` (600), so this exercises the O(m) greedy path.
-      # Before the ceiling existed this shape of input drove `run_dp`'s
-      # O(m^2) cost into the billions of iterations: 2000 ideographs alone
-      # runs for minutes, so ExUnit's own per-test timeout is the regression
-      # guard. No elapsed-time assertion: a measured bound either sits so
-      # far above the real cost (~ms) that it proves nothing, or close
-      # enough to flake on a loaded runner.
       text = String.duplicate("日", 2000)
       width = 40
 

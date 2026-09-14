@@ -151,7 +151,7 @@ defmodule Raxol.Terminal.IO.IOServerTest do
   # than the server. What the suite pins is that every event in a long run
   # is accepted and answered.
   describe "bulk input and output" do
-    test "accepts a thousand input events in order", %{pid: pid} do
+    test "answers every one of a thousand input events", %{pid: pid} do
       events =
         for i <- 1..1000 do
           %{type: :key, key: "a#{i}"}

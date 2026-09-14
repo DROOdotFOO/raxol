@@ -510,7 +510,7 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
     # and two orders under the pre-fix cost of any single test in it.
     @describetag timeout: 30_000
 
-    test "20k unclosed brackets render well under the never-hang bound" do
+    test "20k unclosed brackets render without hanging" do
       doc = String.duplicate("[", 20_000)
 
       rendered = MarkdownBody.render(doc, %{mode: :streaming, width: 80})
@@ -534,8 +534,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
       # the 10k "[" -- those brackets get closed as literal "[...]" rather
       # than stripped. Degenerate pure-marker runs like this render
       # literally (empty "[]"/"**" spans have no styled form); the
-      # invariant under test here is the O(n) TIME bound, not the (moot)
-      # leak shape of an all-marker input.
+      # invariant under test here is that the single-pass scan terminates
+      # (the describe's `timeout` is the budget), not the (moot) leak shape
+      # of an all-marker input.
       doc = String.duplicate("[", 10_000) <> String.duplicate("**", 5_000)
 
       rendered = MarkdownBody.render(doc, %{mode: :streaming, width: 80})
@@ -1098,8 +1099,9 @@ defmodule Raxol.UI.Components.Harness.MarkdownBodyTest do
   # the cap -> un-parsed plain-text fallback; below it -> the parser
   # runs), never a wall-clock bound -- a timing assertion in the default
   # suite passes locally but flakes on a slow/contended CI runner. The
-  # wall-clock perf check lives in the `:slow`-tagged test below, excluded
-  # from the default CI run.
+  # per-delta re-parse cost is bounded by the cap, not by a measured
+  # budget: the `:slow` timing test that used to sit below was deleted, so
+  # nothing here measures time at all.
   describe "review round (Drew), MEDIUM — render path is byte-capped like provisional_close" do
     @cap_bytes 256 * 1024
 

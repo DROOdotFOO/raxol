@@ -252,6 +252,13 @@ defmodule Raxol.AgentClientProtocol.Ext.AttachPolicyTest do
     assert {:denied, :policy_crash} = authorize(Stubs.Exits, ctx(), sup)
   end
 
+  # 2s tag against the caller-supplied `timeout_ms: 80`. Without it nothing
+  # pinned that the OPTION is the bound that fired: a regression ignoring it
+  # and falling back to `@default_timeout_ms 5_000`, or config pushing
+  # `:attach_policy_timeout_ms` to 30s, still answers `:policy_timeout` and
+  # still passed under the 60s default. The bound is an availability control
+  # -- a hostile attach policy must not hold the bus -- so it gets pinned.
+  @tag timeout: 2_000
   test "hung policy denies :policy_timeout and the task is brutally killed (T-4)",
        %{sup: sup} do
     ctx = ctx(%{probe: self()})

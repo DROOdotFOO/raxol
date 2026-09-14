@@ -232,7 +232,7 @@ defmodule Raxol.UI.Components.EdgeCases.ComponentEdgeCasesTest do
     end
   end
 
-  describe "Performance Edge Cases" do
+  describe "Large Data Set Edge Cases" do
     test "handles large data sets" do
       component = create_test_component(HeavyComponent, %{})
 

@@ -338,7 +338,12 @@ defmodule Raxol.Effects.CursorTrailTest do
           CursorTrail.update(acc, {rem(i, 80), rem(i, 24)})
         end)
 
-      assert %{} = CursorTrail.apply(trail, buffer)
+      result = CursorTrail.apply(trail, buffer)
+
+      # `assert %{} = result` matched any map, and `apply/2` has two clauses
+      # that return the buffer VERBATIM (disabled, or no points) -- so a
+      # regression that dropped every point passed. The change is the claim.
+      refute result == buffer
     end
   end
 end

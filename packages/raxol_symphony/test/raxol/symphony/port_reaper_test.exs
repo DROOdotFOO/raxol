@@ -197,6 +197,10 @@ defmodule Raxol.Symphony.PortReaperTest do
       assert wait_until(fn -> not alive?("-#{pgid}") end)
     end
 
+    # A 30s tag against a 300s grace: waiting the grace out cannot pass, and
+    # unlike ExUnit's default the tag survives `--trace` (which sets the
+    # default to `:infinity`) and a `--timeout 300000` lane.
+    @tag timeout: 30_000
     test "returns as soon as a well-behaved child exits, without spending the grace" do
       port = open_child("echo ready; cat > /dev/null")
       {:group, pgid} = target = PortReaper.capture(port)

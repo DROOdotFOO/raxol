@@ -246,10 +246,14 @@ defmodule Raxol.Core.ProcessGroupTest do
   end
 
   describe "await_gone/3" do
-    # ExUnit's per-test timeout (60s default) is well under the 300s budget
-    # handed to `await_gone/2`, so a version that waited the budget out
-    # instead of detecting the exit cannot pass this test -- no elapsed-time
-    # assertion needed, and nothing to flake when a runner is loaded.
+    # A version that waited the 300s budget out instead of detecting the exit
+    # cannot finish inside this test's own 30s budget, so the discrimination
+    # needs no elapsed-time assertion and nothing flakes when a runner is
+    # loaded. The budget is a TAG, not ExUnit's default: `mix test --trace`
+    # sets the default to `:infinity` and two CI lanes pass `--timeout
+    # 300000`, either of which would leave this test hanging five minutes
+    # and then passing.
+    @tag timeout: 30_000
     test "returns as soon as the group drains, without spending the budget" do
       port = open_child("echo ready; cat > /dev/null")
       pid = os_pid(port)

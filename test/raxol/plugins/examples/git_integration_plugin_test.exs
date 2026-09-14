@@ -434,15 +434,33 @@ defmodule Raxol.Plugins.Examples.GitIntegrationPluginTest do
           Enum.map(1..5, &%{status: "??", path: "untracked#{&1}.txt"})
       }
 
-      # The invariant is that a panel this size renders at all, with every
-      # section present. Rendering it 100 times under a wall-clock ceiling
-      # measured nothing a benchmark does not: `mix raxol.bench` owns
-      # render budgets.
+      # The claim is that a panel this size renders with its sections in it.
+      # `is_binary or is_map or is_list` was a guess about the return type
+      # (only the list arm is reachable for `:status`) and would have passed
+      # on an empty list; rendering it 100 times under a wall-clock ceiling
+      # measured nothing `mix raxol.bench` does not.
       panel = GitIntegrationPlugin.render_panel(state, 80, 24)
 
-      assert is_binary(panel) or is_map(panel) or is_list(panel)
+      rendered =
+        panel
+        |> List.flatten()
+        |> Enum.map_join("\n", fn
+          %{text: text} -> text
+          line when is_binary(line) -> line
+        end)
 
-      safe_stop(plugin)
+      lines = String.split(rendered, "\n")
+
+      assert rendered =~ "Git Status"
+      assert rendered =~ "main"
+      assert rendered =~ "Staged Changes"
+      assert rendered =~ "file1.txt"
+
+      # 50 branches, 100 commits and 35 changed files do not overflow the
+      # 24-row viewport they were asked to render into -- which is what
+      # "renders at size" has to mean for a fixed-height panel.
+      assert length(lines) <= 24
+      assert Enum.all?(lines, &(String.length(&1) <= 80))
     end
 
     # Deleted: "git command execution performance" ran ten `get_status/0`

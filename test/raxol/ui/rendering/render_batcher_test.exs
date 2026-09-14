@@ -384,7 +384,7 @@ defmodule Raxol.UI.Rendering.RenderBatcherTest do
     end
   end
 
-  describe "performance and edge cases" do
+  describe "batching edge cases" do
     setup do
       batcher_name = :"test_perf_#{System.unique_integer([:positive])}"
       start_supervised!({RenderBatcher, name: batcher_name})

@@ -376,7 +376,7 @@ defmodule Raxol.Terminal.ANSISequencesIntegrationTest do
     end
   end
 
-  describe "performance characteristics" do
+  describe "large and adversarial input" do
     setup do
       emulator = Emulator.new(80, 24)
       {:ok, emulator: emulator}
