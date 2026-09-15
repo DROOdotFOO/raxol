@@ -45,7 +45,7 @@ defmodule Raxol.REPL.CaptureIO do
 
   Unlinked is not unattached. The caller is MONITORED, and the server stops
   when it goes: an `after` block does not run when the evaluation is killed by
-  `Process.exit(pid, :brutal_kill)` on timeout, or by the VM on a
+  `Process.exit(pid, :kill)` on timeout, or by the VM on a
   `max_heap_size` breach -- which are the two paths hostile input is meant to
   take. Without the monitor each of them orphaned one capture server holding up
   to `limit` bytes, forever, on the anonymously served playground demo.

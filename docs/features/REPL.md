@@ -46,7 +46,7 @@ evaluator = Evaluator.clear_history(evaluator)    # clears history, keeps bindin
 
 ### Trust boundary
 
-`Evaluator` applies no restriction of its own. `Code.eval_string/3` gets an unrestricted `Macro.Env`, no AST is inspected, and `File`, `:os.cmd/1`, ports, `Node.connect/1` and `:erlang.halt/0` are all reachable from typed code. The caps (`:timeout`, `:max_heap_bytes`, `:max_result_bytes`, and the capture's output limit) bound the one evaluation process; they bound nothing it spawns, and on timeout only that one pid is signalled. Code evaluated here runs with the full authority of the node's OS user.
+`Evaluator` applies no restriction of its own. `Code.eval_string/3` gets an unrestricted `Macro.Env`, no AST is inspected, and `File`, `:os.cmd/1`, ports, `Node.connect/1` and `:erlang.halt/0` are all reachable from typed code. The caps (`:timeout`, `:max_heap_bytes`, `:max_result_bytes`, and the capture's output limit) bound the one evaluation process: the timeout kill uses `:kill`, which `Process.flag(:trap_exit, true)` cannot intercept, so an evaluation cannot outlive its own timeout. They bound nothing it spawns, though, and on timeout only that one pid is signalled. Code evaluated here runs with the full authority of the node's OS user.
 
 `Sandbox.check/2` is a separate call the caller makes first. Callers that expose the REPL do (the playground demo gates on `:strict`); `Evaluator` does not call it for you. Real confinement between untrusted principals wants separate OS uids or containers: this is one BEAM, one uid. Tracked in [#1033](https://github.com/DROOdotFOO/raxol/issues/1033).
 
