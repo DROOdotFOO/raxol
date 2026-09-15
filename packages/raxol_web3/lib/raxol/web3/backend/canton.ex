@@ -490,11 +490,15 @@ defmodule Raxol.Web3.Backend.Canton do
   end
 
   # A path parameter rather than a table row, so it composes the path itself.
-  # `URI.encode/1` is applied even though a Canton id needs no escaping, because
-  # the id reaches here from a caller.
+  # The id reaches here from a caller, so it is percent-encoded against the
+  # unreserved set rather than with `URI.encode/1`'s default predicate: that
+  # predicate leaves `/`, `?` and `#` alone, so it is not a defence at all --
+  # `URI.encode("../../v0/admin?x=1")` is its own input, and an id shaped like
+  # that would walk off `/updates/` on a credentialed host and pick its own
+  # path and query.
   defp get_update(state, update_id) do
     state
-    |> url("/updates/#{URI.encode(update_id)}", %{})
+    |> url("/updates/#{URI.encode(update_id, &URI.char_unreserved?/1)}", %{})
     |> HTTP.get(scan_opts(state, "/updates", %{"id" => update_id}, :transaction))
     |> decode()
   end

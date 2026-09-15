@@ -576,6 +576,22 @@ defmodule Raxol.Web3.Backend.CantonTest do
 
       assert {:error, {:http, 404}} = Backend.call(handle, :get_transaction, ["1220nope"])
     end
+
+    test "an update id cannot escape the /updates/ prefix or add a query" do
+      # `URI.encode/1`'s default predicate leaves `/`, `?` and `#` unescaped, so
+      # it encoded this id to itself and the composed path was
+      # `/v0/updates/../../v0/admin?x=1#y`: an arbitrary path, with a query of
+      # the caller's choosing, on a credentialed host. The id arrives from a
+      # model -- it is the `hash` argument of `web3_get_transaction`.
+      handle = handle(scan_routes())
+
+      assert {:error, {:http, 404}} =
+               Backend.call(handle, :get_transaction, ["../../v0/admin?x=1#y"])
+
+      assert [requested] = requested_paths()
+      assert "/v0/updates/" <> encoded = requested
+      refute String.contains?(encoded, ["/", "?", "#"])
+    end
   end
 
   describe "the ccscan account requirement" do
