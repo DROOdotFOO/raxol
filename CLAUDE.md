@@ -66,9 +66,13 @@ scroll (`scroll/2`) and per-cell memory at 80x24, 200x100 and 500x500, prints
 a PASS/FAIL table against budgets declared at the top of the file, and calls
 `System.halt(1)` on a breach. It runs as the `buffer-gate` job in
 `.github/workflows/ci-unified.yml` (every push and pull request), the job
-fails on a breach, and `ci-status` reports it as a failure. That is the
-extent of it: `master` has no branch protection and no required status
-checks, so `ci-status` is advisory and nothing mechanically blocks a merge.
+fails on a breach, and `ci-status` reports it as a failure. `CI Status` is a
+required status check on `master` (`strict: false`, so a branch need not be
+up to date), and `ci-status` aggregates `buffer-gate`, so a breach does block
+the merge. `enforce_admins` is off, so an admin can still merge past it --
+deliberately, because two infrastructure flakes were observed in one day (a
+Hex registry 500, and an `:enoent` from `Port.open` under fork contention)
+and a required check with no escape hatch would wedge the repo on those.
 Two properties are load-bearing:
 
 - **The budgets say what they can detect.** Throughput carries ~5x headroom
