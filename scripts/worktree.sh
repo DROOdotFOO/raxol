@@ -285,6 +285,17 @@ cmd_add() {
   shift || true
   local path="" from="HEAD" from_given=0 fresh=0 created_path=0
 
+  # `branch` is positional and first, but a boolean flag is naturally
+  # written first too, so `add --fresh feature/x` means branch `--fresh` at
+  # path `feature/x` -- and git's own complaint about it is `git branch`
+  # usage, which names neither argument. Refused here instead.
+  case "$branch" in
+    -h | --help) usage 0 ;;
+    -*)
+      die "the first argument is the branch name, and '$branch' is an option; options come after it -- 'add <branch> [path] [--from <ref>] [--fresh]'"
+      ;;
+  esac
+
   while (($# > 0)); do
     case "$1" in
       --from)
@@ -377,6 +388,12 @@ cmd_add() {
 
 cmd_sync() {
   local path="${1:-}"
+
+  case "$path" in
+    -h | --help) usage 0 ;;
+    -*) die "unknown option: $path" ;;
+  esac
+
   [[ -n "$path" ]] || usage
 
   assert_seedable "$path"
@@ -412,6 +429,9 @@ case "${1:-}" in
   list)
     shift
     cmd_list "$@"
+    ;;
+  -h | --help | help)
+    usage 0
     ;;
   *) usage ;;
 esac
