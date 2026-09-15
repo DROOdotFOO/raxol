@@ -152,21 +152,31 @@ defmodule Raxol.Terminal.ModeManagerTest do
     test "set_mode/3 builds no debug message before the level is checked" do
       emulator = Emulator.new(80, 24)
 
-      messages =
+      logged =
         trace_logged_messages(fn -> ModeManager.set_mode(emulator, [:mode_log_probe]) end)
 
+      # Any already-built debug message is a regression, whatever it says: the
+      # two most expensive messages this path used to build (the emulator's
+      # `mode_manager` struct and the whole `{:ok, emulator}` result) named no
+      # mode, so matching on a probe name would not have caught them coming
+      # back. Non-debug levels are left alone - they are not per-byte.
       built =
-        Enum.filter(messages, &(is_binary(&1) and String.contains?(&1, "mode_log_probe")))
+        for {:debug, message} <- logged, not is_function(message, 0), do: message
 
       assert built == [],
              "the write path built #{length(built)} debug message(s) before the level check: #{inspect(built)}"
 
-      assert Enum.any?(messages, &is_function(&1, 0)),
-             "expected the write path to hand Logger a zero-arity fun; got #{inspect(messages)}"
+      assert Enum.any?(logged, fn {level, message} ->
+               level == :debug and is_function(message, 0)
+             end),
+             "expected the write path to hand Logger a zero-arity fun; got #{inspect(logged)}"
     end
 
-    # Runs `fun` in a traced process and returns every message argument it
-    # handed `Logger.bare_log/2`, unevaluated.
+    # Runs `fun` in a traced process and returns every `{level, message}` pair
+    # it handed `Logger.bare_log/2`, with the message unevaluated. The arity is
+    # a wildcard so a direct `bare_log/3` caller cannot slip past; that also
+    # means one `bare_log/2` call shows up twice, since it delegates to
+    # `bare_log/3`.
     defp trace_logged_messages(fun) do
       task = Task.async(fn -> receive(do: (:go -> fun.())) end)
 
@@ -176,13 +186,24 @@ defmodule Raxol.Terminal.ModeManagerTest do
       send(task.pid, :go)
       Task.await(task)
 
+      # Trace messages are not ordered against the task's reply, so draining
+      # straight after `Task.await/2` can see a prefix of them - or none, which
+      # would pass an empty `built` list. `trace_delivered/1` is the fence: its
+      # reply arrives only after every trace message the tracee has already
+      # generated has reached this process.
+      ref = :erlang.trace_delivered(task.pid)
+
+      receive do
+        {:trace_delivered, _tracee, ^ref} -> :ok
+      end
+
       drain_traced_messages([])
     end
 
     defp drain_traced_messages(acc) do
       receive do
-        {:trace, _pid, :call, {Logger, :bare_log, [_level, message | _]}} ->
-          drain_traced_messages([message | acc])
+        {:trace, _pid, :call, {Logger, :bare_log, [level, message | _]}} ->
+          drain_traced_messages([{level, message} | acc])
       after
         0 -> Enum.reverse(acc)
       end
