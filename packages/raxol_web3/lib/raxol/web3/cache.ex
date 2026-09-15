@@ -156,9 +156,9 @@ defmodule Raxol.Web3.Cache do
     end
   end
 
-  # The `member?` check is what keeps a hot key cheap: overwriting a row that
-  # is already there does not grow the table, so refreshing one entry at the
-  # cap must not cost an eighth of the cache.
+  # The `:ets.member/2` check is what keeps a hot key cheap: overwriting a row
+  # that is already there does not grow the table, so refreshing one entry at
+  # the cap must not cost an eighth of the cache.
   defp insert_bounded(key, value, expires_at) do
     table = Tables.cache()
 
