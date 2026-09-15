@@ -257,9 +257,9 @@ defmodule Raxol.Terminal.Commands.Executor do
         final_byte,
         data_string
       ) do
-    Raxol.Core.Runtime.Log.debug(
+    Raxol.Core.Runtime.Log.debug(fn ->
       "Executing DCS command: #{inspect(data_string)} with final_byte: #{final_byte}"
-    )
+    end)
 
     handle_dcs_command(
       emulator,
