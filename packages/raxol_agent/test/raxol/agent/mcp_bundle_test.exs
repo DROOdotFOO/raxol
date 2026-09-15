@@ -2,7 +2,7 @@ defmodule Raxol.Agent.McpBundleTest.FakeServer do
   @moduledoc """
   A real GenServer standing in for an external MCP stdio server at the process
   boundary: it answers the exact `GenServer.call`s `Raxol.MCP.Client` makes
-  (`:list_tools`, `{:call_tool, name, args}`), so the bundle -> Dynamic ->
+  (`:list_tools`, `{:call_tool, name, args, opts}`), so the bundle -> Dynamic ->
   ToolConverter chain is exercised for real without spawning npx/uvx.
   """
   use GenServer
@@ -22,8 +22,8 @@ defmodule Raxol.Agent.McpBundleTest.FakeServer do
   def handle_call(:list_tools, _from, state),
     do: {:reply, {:ok, state.tools}, state}
 
-  def handle_call({:call_tool, name, args}, _from, state) do
-    if state.test_pid, do: send(state.test_pid, {:fake_called, name, args})
+  def handle_call({:call_tool, name, args, opts}, _from, state) do
+    if state.test_pid, do: send(state.test_pid, {:fake_called, name, args, opts})
 
     {:reply, {:ok, %{"content" => [%{"type" => "text", "text" => "ok:#{name}"}]}}, state}
   end
@@ -166,7 +166,7 @@ defmodule Raxol.Agent.McpBundleTest do
 
       # The server receives the ORIGINAL tool name, not the namespaced one, with
       # string-keyed args.
-      assert_receive {:fake_called, "status", %{"path" => "."}}
+      assert_receive {:fake_called, "status", %{"path" => "."}, _opts}
     end
 
     test "bundled tools are sensitive by default and gated; a sensitive:false spec is callable" do

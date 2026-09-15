@@ -1,47 +1,127 @@
 defmodule Raxol.Agent.Code.McpConfig do
   @moduledoc """
-  Loader for `.mcp.json` external MCP server config (the Claude Code
-  format) used by `mix raxol.code`.
+  Loader for external MCP server config in the Claude Code format, used by
+  `mix raxol.code`.
 
-  Reads `<dir>/.mcp.json`:
+  Two files, two provenances. `<dir>/.mcp.json` is the workspace's own:
 
       {
         "mcpServers": {
           "filesystem": {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+          },
+          "intel": {
+            "url": "https://mcp.example.com/v1",
+            "headers": {"Authorization": "Bearer ..."},
+            "metered": true,
+            "prices": {"lookup": 150}
           }
         }
       }
 
-  and returns the declared servers. The surface uses this to discover and
-  list configured servers (`/mcp`).
+  and `~/.raxol/mcp.json` (override with `$RAXOL_MCP_CONFIG`) is the
+  operator's own, read by `load_user/0` in the same format.
+
+  Both forms of an entry are parsed. A `command` entry is a local stdio
+  subprocess; a `url` entry is a remote HTTP server (ADR-0037). An entry
+  carrying both keys, or neither, is still returned and is refused later, with
+  a named reason, by `Raxol.Agent.McpBundle`: the reason to parse it at all is
+  that an operator then sees a refusal in `/mcp` instead of a server that
+  silently vanished. Nothing here is dropped except an entry whose name is not
+  a string or whose body is not an object, neither of which names a server.
+
+  ## Provenance is part of the parse
+
+  Every server carries `:source` -- `:workspace` for `<dir>/.mcp.json`,
+  `:user` for the operator's file. The two are not equally trusted, because
+  `.mcp.json` is repository content that a clone can carry, and an
+  `${env:VAR}` or `op://` header value is an instruction to read a named
+  secret. `Raxol.Agent.McpHeaders` resolves such a reference only for a
+  `:user` spec, or for a workspace spec whose header the operator has
+  allowlisted outside the workspace; see that module for the full reasoning.
+  Losing `:source` between here and there would silently widen that gate, so
+  it travels with the spec rather than being re-derived.
+
+  ## Remote fields
+
+    * `url` -- the MCP endpoint. `https` only is enforced at the transport.
+    * `headers` -- a name/value list, sorted for determinism. Values may be
+      literals or references (`${env:VAR}`, `${op://...}`, `op://...`);
+      whether a reference resolves depends on `:source`.
+    * `metered` -- the origin bills per call. Implied by a non-empty `prices`,
+      since declaring prices is declaring that calls cost money.
+    * `prices` -- per-tool declared price, in whatever unit the run budget
+      counts. Only positive integers are kept: a malformed price is not a
+      price, which leaves the tool unpriced on a metered origin, and
+      `Raxol.Agent.McpSpendHook` denies that by default rather than guessing
+      it free.
+    * `concurrency` -- `"stateless" | "pooled" | "serialized"`, matched
+      against that fixed set (never `String.to_atom/1` on file input).
+      Absent means the transport picks its own per-era default.
 
   ## Scope
 
-  This loads the config; `Raxol.Agent.Code.McpLoader` bridges the servers
-  into the live toolset (started under the agent DynamicSupervisor via
-  `Raxol.Agent.McpBundle`, tools wrapped as `Raxol.Agent.Action.Dynamic`
-  and dispatched through the same authorizer and hook chain as any Action).
+  This loads the config; `Raxol.Agent.Code.McpLoader` bridges the servers into
+  the live toolset (started under the agent DynamicSupervisor via
+  `Raxol.Agent.McpBundle`, tools wrapped as `Raxol.Agent.Action.Dynamic` and
+  dispatched through the same authorizer and hook chain as any Action).
   """
 
+  @env_path "RAXOL_MCP_CONFIG"
+  @user_filename "mcp.json"
+  @workspace_filename ".mcp.json"
+
+  @type source :: :workspace | :user
+
   @type server :: %{
-          name: String.t(),
-          command: String.t(),
-          args: [String.t()],
-          env: map()
+          required(:name) => String.t(),
+          required(:source) => source(),
+          optional(:command) => String.t(),
+          optional(:args) => [String.t()],
+          optional(:env) => map(),
+          optional(:url) => String.t(),
+          optional(:headers) => [{String.t(), String.t()}],
+          optional(:metered) => boolean(),
+          optional(:prices) => %{optional(String.t()) => pos_integer()},
+          optional(:concurrency) => :stateless | :pooled | :serialized
         }
 
   @doc """
-  Load MCP servers from `<dir>/.mcp.json`.
+  Load MCP servers from `<dir>/.mcp.json`, tagged `source: :workspace`.
 
   Returns `{:ok, servers}` (possibly empty), `:none` when there is no file,
   or `{:error, reason}` for an unreadable/invalid file.
   """
   @spec load(String.t()) :: {:ok, [server()]} | :none | {:error, term()}
   def load(dir) do
-    path = Path.join(dir, ".mcp.json")
+    read_config(Path.join(dir, @workspace_filename), :workspace)
+  end
 
+  @doc """
+  Load the operator's own MCP servers, tagged `source: :user`.
+
+  Same format and same return shape as `load/1`, read from `user_path/0`.
+  This is the file whose header references resolve, so it lives outside every
+  workspace by construction.
+  """
+  @spec load_user() :: {:ok, [server()]} | :none | {:error, term()}
+  def load_user do
+    read_config(user_path(), :user)
+  end
+
+  @doc "The user-level config path (`$RAXOL_MCP_CONFIG` or `~/.raxol/mcp.json`)."
+  @spec user_path() :: String.t()
+  def user_path do
+    case System.get_env(@env_path) do
+      p when is_binary(p) and p != "" -> p
+      _ -> Path.join([home_base(), ".raxol", @user_filename])
+    end
+  end
+
+  defp home_base, do: System.user_home() || System.tmp_dir!()
+
+  defp read_config(path, source) do
     case File.read(path) do
       {:error, :enoent} ->
         :none
@@ -50,15 +130,15 @@ defmodule Raxol.Agent.Code.McpConfig do
         {:error, {:read_failed, reason}}
 
       {:ok, binary} ->
-        decode(binary)
+        decode(binary, source)
     end
   end
 
-  defp decode(binary) do
+  defp decode(binary, source) do
     case Jason.decode(binary) do
       {:ok, json} when is_map(json) ->
         case Map.get(json, "mcpServers") do
-          servers when is_map(servers) -> {:ok, parse(servers)}
+          servers when is_map(servers) -> {:ok, parse(servers, source)}
           _absent -> {:ok, []}
         end
 
@@ -70,24 +150,69 @@ defmodule Raxol.Agent.Code.McpConfig do
     end
   end
 
-  defp parse(servers) do
+  defp parse(servers, source) do
     servers
-    |> Enum.map(&parse_server/1)
+    |> Enum.map(&parse_server(&1, source))
     |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(& &1.name)
   end
 
-  defp parse_server({name, %{"command" => command} = spec})
-       when is_binary(name) and is_binary(command) do
-    %{
-      name: name,
+  # A named object is a server declaration even when its keys are wrong: the
+  # refusal is worth more to the operator than the silence. Only a non-string
+  # name or a non-object body names nothing at all.
+  defp parse_server({name, spec}, source) when is_binary(name) and is_map(spec) do
+    %{name: name, source: source}
+    |> put_stdio(spec)
+    |> put_remote(spec)
+  end
+
+  defp parse_server(_other, _source), do: nil
+
+  defp put_stdio(server, %{"command" => command} = spec) when is_binary(command) do
+    Map.merge(server, %{
       command: command,
       args: string_list(Map.get(spec, "args", [])),
       env: env_map(Map.get(spec, "env", %{}))
-    }
+    })
   end
 
-  defp parse_server(_other), do: nil
+  defp put_stdio(server, _spec), do: server
+
+  defp put_remote(server, %{"url" => url} = spec) when is_binary(url) do
+    prices = prices(Map.get(spec, "prices", %{}))
+
+    server
+    |> Map.merge(%{
+      url: url,
+      headers: headers(Map.get(spec, "headers", %{})),
+      prices: prices,
+      metered: Map.get(spec, "metered") == true or prices != %{}
+    })
+    |> put_concurrency(Map.get(spec, "concurrency"))
+  end
+
+  defp put_remote(server, _spec), do: server
+
+  defp put_concurrency(server, "stateless"), do: Map.put(server, :concurrency, :stateless)
+  defp put_concurrency(server, "pooled"), do: Map.put(server, :concurrency, :pooled)
+  defp put_concurrency(server, "serialized"), do: Map.put(server, :concurrency, :serialized)
+  defp put_concurrency(server, _other), do: server
+
+  defp headers(%{} = headers) do
+    headers
+    |> Enum.filter(fn {name, value} -> is_binary(name) and is_binary(value) end)
+    |> Enum.sort()
+  end
+
+  defp headers(_other), do: []
+
+  defp prices(%{} = prices) do
+    for {tool, price} <- prices, is_binary(tool), is_integer(price), price > 0, into: %{} do
+      {tool, price}
+    end
+  end
+
+  defp prices(_other), do: %{}
 
   defp string_list(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
   defp string_list(_other), do: []

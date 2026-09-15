@@ -22,18 +22,37 @@ defmodule Raxol.Agent.Action.Dynamic do
   marks the server non-sensitive). A caller that knows a tool is read-only can
   pass `sensitive: false` to `from_mcp/4`.
 
+  A remote tool may also carry the price its server declared per call, and the
+  origin that bills it. `Raxol.Agent.McpSpendHook` reads both: a price is
+  reserved before the request, and a metered origin with no price is denied.
+
   Dynamic tools are a framework-react concern: a native (vendor-owns-loop)
   backend reaches its MCP servers directly, so it does not consume these.
   """
 
   @enforce_keys [:name, :invoke]
-  defstruct [:name, :invoke, description: "", input_schema: %{}, sensitive: false]
+  defstruct [
+    :name,
+    :invoke,
+    :price,
+    :origin,
+    description: "",
+    input_schema: %{},
+    sensitive: false
+  ]
 
   @type t :: %__MODULE__{
           name: String.t(),
           description: String.t(),
           input_schema: map(),
           sensitive: boolean(),
+          # Declared per-call price, in the unit the run budget counts; nil
+          # when the tool is free or its price is undeclared.
+          price: pos_integer() | nil,
+          # The metered origin (`scheme://host`, never a path or a query) that
+          # bills this tool; nil when nothing bills it. A non-nil origin with a
+          # nil price is the deny-by-default case.
+          origin: String.t() | nil,
           invoke: (map(), map() -> {:ok, map()} | {:error, term()})
         }
 
@@ -63,9 +82,11 @@ defmodule Raxol.Agent.Action.Dynamic do
 
   `server` is the `Raxol.MCP.Client` GenServer ref, `server_name` the atom used
   to namespace the LLM-facing name (`mcp__<server_name>__<tool>`). Each tool's
-  `invoke` calls `Raxol.MCP.Client.call_tool/3` with the ORIGINAL (un-namespaced)
-  tool name and string-keyed arguments. `tools` is the raw list from
-  `Raxol.MCP.Client.list_tools/1` (string- or atom-keyed maps).
+  `invoke` calls `Raxol.MCP.Client.call_tool/4` with the ORIGINAL
+  (un-namespaced) tool name, string-keyed arguments, and whatever reservation
+  `Raxol.Agent.McpSpendHook` left on the call (`nil` for an unpriced tool; a
+  priced tool's transport refuses a call that carries none). `tools` is the raw
+  list from `Raxol.MCP.Client.list_tools/1` (string- or atom-keyed maps).
 
   `:sensitive` (default `true`) sets every wrapped tool's sensitivity; pass
   `false` only for a server known to be read-only/harmless.
@@ -83,7 +104,9 @@ defmodule Raxol.Agent.Action.Dynamic do
         input_schema: input_schema(tool),
         sensitive: sensitive,
         invoke: fn params, _context ->
-          Raxol.MCP.Client.call_tool(server, raw, stringify(params))
+          Raxol.Agent.McpSpendHook.metered(params, fn args, reservation ->
+            Raxol.MCP.Client.call_tool(server, raw, stringify(args), reservation: reservation)
+          end)
         end
       }
     end)

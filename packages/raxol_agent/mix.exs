@@ -49,7 +49,7 @@ defmodule RaxolAgent.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.0", only: [:dev, :test]}
-    ] ++ acp_dep()
+    ] ++ acp_dep() ++ web3_dep()
   end
 
   # raxol_agent_client_protocol is NOT a published requirement -- it is
@@ -69,6 +69,28 @@ defmodule RaxolAgent.MixProject do
       []
     else
       [{:raxol_agent_client_protocol, path: path, override: true}]
+    end
+  end
+
+  # Same shape as `acp_dep/0`, same reason: `raxol_web3` is unpublished, so
+  # naming it in the Hex package would make raxol_agent unpublishable, and a
+  # Hex install therefore has no `web3` tool (`Raxol.Agent.Actions.Web3` is
+  # compile-gated on the package's presence).
+  #
+  # The edge points this way, from consumer to provider, and that is the whole
+  # reason the tool lives here rather than in `raxol_web3`. ADR-0033 decision 2
+  # places that package BELOW `raxol_payments` precisely so a read layer does
+  # not depend on the agent runtime; a `Raxol.Agent.Action` defined over there
+  # would need `use Raxol.Agent.Action`, which would pull the framework and the
+  # agent runtime underneath a read-only package and invert the graph the ADR
+  # exists to fix.
+  defp web3_dep do
+    path = "../raxol_web3"
+
+    if System.get_env("HEX_BUILD") || !File.dir?(path) do
+      []
+    else
+      [{:raxol_web3, path: path, override: true}]
     end
   end
 

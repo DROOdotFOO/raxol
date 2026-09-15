@@ -1,0 +1,64 @@
+{
+  "items": [
+    {
+      "address_hash": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      "certified": false,
+      "ens_info": {
+        "name": "vitalik.eth",
+        "protocol": {
+          "deployment_blockscout_base_url": "https://eth.blockscout.com/",
+          "description": "The Ethereum Name Service (ENS) is a distributed, open, and extensible naming system based on the Ethereum blockchain.",
+          "docs_url": "https://docs.ens.domains/",
+          "icon_url": "https://i.imgur.com/GOfUwCb.jpeg",
+          "id": "ens",
+          "short_name": "ENS",
+          "title": "Ethereum Name Service",
+          "tld_list": [
+            "eth"
+          ]
+        },
+        "address_hash": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+        "expiry_date": "2048-04-30T00:13:44.000Z",
+        "names_count": 1,
+        "protocol_dapp_logo": null,
+        "protocol_dapp_url": null
+      },
+      "is_smart_contract_address": true,
+      "is_smart_contract_verified": false,
+      "name": null,
+      "priority": 4,
+      "reputation": "ok",
+      "type": "ens_domain",
+      "url": "/address/0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    },
+    {
+      "address_hash": "0xDe521cC0D995187e6eB2ABAE41EfD6B070d0F757",
+      "address_url": "/address/0xDe521cC0D995187e6eB2ABAE41EfD6B070d0F757",
+      "certified": false,
+      "circulating_market_cap": null,
+      "exchange_rate": null,
+      "icon_url": null,
+      "is_smart_contract_address": true,
+      "is_smart_contract_verified": true,
+      "is_verified_via_admin_panel": false,
+      "name": "The Ethereum Bull",
+      "priority": 2,
+      "reputation": "ok",
+      "symbol": "VITALIK",
+      "token_type": "ERC-20",
+      "token_url": "/token/0xDe521cC0D995187e6eB2ABAE41EfD6B070d0F757",
+      "total_supply": "1000000000000000000",
+      "type": "token"
+    }
+  ],
+  "next_page_params": {
+    "next_page_params_type": "search",
+    "q": "vitalik.eth",
+    "token[circulating_market_cap]": null,
+    "token[fiat_value]": null,
+    "token[holder_count]": "42",
+    "token[inserted_at]": "2025-06-06T14:13:04.866445Z",
+    "token[is_verified_via_admin_panel]": "false",
+    "token[name]": "ETH Layer 2 by Vitalik"
+  }
+}

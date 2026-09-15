@@ -1,5 +1,6 @@
 %{
   "bunt": {:hex, :bunt, "1.0.0", "081c2c665f086849e6d57900292b3a161727ab40431219529f13c4ddcf3e7a44", [:mix], [], "hexpm", "dc5f86aa08a5f6fa6b8096f0735c4e76d54ae5c9fa2c143e5a1fc7c1cd9bb6b5"},
+  "castore": {:hex, :castore, "1.0.21", "0a0e8330dc267a40a3b7ad86d39302764bb71758172904e6a59d5ad6443ce307", [:mix], [], "hexpm", "e42e22723e25dbd46876d056a03f685513d6e98f6b5e555dc551321decd76c5c"},
   "circular_buffer": {:hex, :circular_buffer, "1.1.0", "af9332c40d600cc27b160eebd9fad1bf0a8106cd62e9f57d6cc8f028d3cc46d1", [:mix], [], "hexpm", "0daa0a4fcb3a7ffabc8576bdbf64c99adc6d4b37eab1185179140769ba58f571"},
   "clipboard": {:hex, :clipboard, "0.2.1", "d1409d6c94f6f5806c5c224d6396fb750729c6284bf375c08e9428ce9efc6470", [:mix], [], "hexpm", "7d6fa6851e7d6e3f21c6c4c9f903807097e2604f99ffc06354c980838d3b2fda"},
   "cowboy": {:hex, :cowboy, "2.19.0", "78b9d92d25a23e56d7341040b67946c04067cd77de966e2372865f673a8e6f59", [:make, :rebar3], [{:cowlib, ">= 2.20.0 and < 3.0.0", [hex: :cowlib, repo: "hexpm", optional: false]}, {:ranch, ">= 1.8.0 and < 3.0.0", [hex: :ranch, repo: "hexpm", optional: false]}], "hexpm", "986dae81f99fcb78ef2d8efc21d738cee189410840eeaf32eca84ada81dcf6d4"},

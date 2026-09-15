@@ -1,0 +1,50 @@
+{
+  "items": [
+    {
+      "token": {
+        "address_hash": "0x9cdf242Ef7975D8c68D5C1F5B6905801699b1940",
+        "circulating_market_cap": "0",
+        "circulating_supply": null,
+        "decimals": "18",
+        "exchange_rate": "0.00003734",
+        "holders_count": "24858",
+        "icon_url": "https://assets.coingecko.com/coins/images/52513/small/logo_%2827%29.png?1733497755",
+        "name": "WhiteRock",
+        "reputation": "ok",
+        "symbol": "WHITE",
+        "total_supply": "1000000000000000000000000000000",
+        "type": "ERC-20",
+        "volume_24h": "5.797175353245716"
+      },
+      "token_id": null,
+      "token_instance": null,
+      "value": "10000000000000000000000000000"
+    },
+    {
+      "token": {
+        "address_hash": "0x28561B8A2360F463011c16b6Cc0B0cbEF8dbBcad",
+        "circulating_market_cap": "1975141.2343662276",
+        "circulating_supply": null,
+        "decimals": "9",
+        "exchange_rate": "0.0000047",
+        "holders_count": "45073",
+        "icon_url": "https://assets.coingecko.com/coins/images/50348/small/1000000612.jpg?1727248974",
+        "name": "MOO DENG",
+        "reputation": "ok",
+        "symbol": "MOODENG",
+        "total_supply": "420690000000000000000",
+        "type": "ERC-20",
+        "volume_24h": "107938.53410091868"
+      },
+      "token_id": null,
+      "token_instance": null,
+      "value": "30002309167968834506"
+    }
+  ],
+  "next_page_params": {
+    "id": 20406217686,
+    "value": "8032",
+    "fiat_value": "5.0613648000000000",
+    "items_count": 50
+  }
+}

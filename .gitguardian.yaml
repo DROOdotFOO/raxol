@@ -1,4 +1,31 @@
-# GitGuardian configuration.
+# GitGuardian configuration -- for `ggshield` only. It does NOT affect the
+# `GitGuardian Security Checks` check run on a pull request.
+#
+# What reads this file: the ggshield CLI, which looks for `~/.gitguardian.yaml`
+# and then `./.gitguardian.yaml` in the repository root ("Configuration files",
+# docs.gitguardian.com/ggshield-docs/configuration). Nothing in CI runs
+# ggshield; this is for a contributor running `ggshield secret scan` or the
+# pre-commit hook locally.
+#
+# What does not read this file: the check run. That comes from the GitGuardian
+# GitHub App, and "secret scans in the context of GitHub Check Runs will run
+# server-side on the VCS, at the post-receive stage"
+# (docs.gitguardian.com/internal-monitoring/prevent/detect-secrets-in-real-time-in-github)
+# -- from the platform, not from a checkout, so there is no repository file to
+# read. That page's "customizing check runs on a per-repository basis" section
+# lists GitHub custom properties, and labels on GHES < 3.13, as the only
+# repository-level overrides; a committed config file is not among them.
+#
+# So an entry below cannot turn a red check run green. The documented levers
+# are on the other side: close the incident on the dashboard ("if secret
+# incidents are closed on the GitGuardian dashboard, they will no longer be
+# raised by GitHub checkruns", same page), or use one of the check run's own
+# skip actions -- `Skip: false positive`, `Skip: test credential`,
+# `Skip: low risk`.
+#
+# Keys use the documented v2 spelling, with underscores. ggshield accepts the
+# hyphenated form but warns that it is deprecated (`replace_dash_in_keys` and
+# `_warn_about_dash_keys` in ggshield/core/config).
 #
 # The stealth conformance fixture and its generator contain deterministic
 # secp256k1 test vectors (including the well-known ethers/web3 documentation key
@@ -8,13 +35,28 @@
 # vectors do not trip secret detection.
 version: 2
 secret:
-  ignored-paths:
+  ignored_paths:
     - "packages/raxol_payments/test/fixtures/stealth_vectors.json"
     - "packages/raxol_payments/scripts/gen_reverse_stealth_vectors.exs"
-  ignored-matches:
+  ignored_matches:
     # Tron USDT (TRC-20) public contract address. Used as the relay destination
     # in scripts/run_live_gates.sh and as the @usdt_tron constant across the repo.
     # A public on-chain contract address, tied to no wallet -- not a credential.
     # The high-entropy base58 form trips the generic detector; ignore the value.
     - name: Tron USDT public contract address
       match: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+    # Solana SPL mint pubkey, asserted by value in the Solana backend test: the
+    # token a real mainnet account holds. Public on-chain identifier tied to no
+    # wallet, and base58 trips the generic detector on entropy alone. Matched by
+    # value rather than by path because the same pubkey is inside the recorded
+    # fixture test/fixtures/solana/rpc_token_accounts.json, and excluding that
+    # whole file would exclude everything else recorded in it too.
+    - name: Solana SPL mint public address
+      match: NkfbyG7feH9aJhdnSs4d7D7kWCEnxrmNUbM7dbpC6MM
+    # Tron TRC-20 contract address, asserted by value in the Tron backend test
+    # to prove a TRC-20 balance is distinguishable from a TRC-10 one. Same
+    # class as the USDT entry above: a published contract address. Also inside
+    # test/fixtures/tron/tronscan_account_tokens.sse, so matched by value for
+    # the same reason as the mint.
+    - name: Tron TRC-20 public contract address
+      match: TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq

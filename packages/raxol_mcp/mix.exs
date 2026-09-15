@@ -36,6 +36,15 @@ defmodule RaxolMcp.MixProject do
       {:jason, "~> 1.4"},
       {:plug, "~> 1.16", optional: true},
 
+      # The remote MCP client transport (ADR-0037 decision 8). Optional because
+      # this package is a dependency of main raxol, and ADR-0033 decision 2
+      # rejects pushing an HTTP client into every install's footprint. Mint
+      # rather than Req because a pinned dial needs an address tuple with the
+      # hostname carrying identity, which Req refuses outright, and because
+      # mint pulls only hpax where req pulls finch, mime and nimble_options.
+      {:mint, "~> 1.8", optional: true},
+      {:castore, "~> 1.0", optional: true},
+
       # Dev/test only
       {:stream_data, "~> 1.1", only: [:dev, :test]},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},

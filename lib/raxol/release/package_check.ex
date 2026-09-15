@@ -56,7 +56,12 @@ defmodule Raxol.Release.PackageCheck do
     %{app: :raxol_earn, path: "packages/raxol_earn", class: :pre_alpha},
     %{app: :raxol_symphony, path: "packages/raxol_symphony", class: :pre_alpha},
     %{app: :raxol_cli, path: "packages/raxol_cli", class: :pre_alpha},
-    %{app: :raxol_console, path: "packages/raxol_console", class: :pre_alpha}
+    %{app: :raxol_console, path: "packages/raxol_console", class: :pre_alpha},
+    # ADR-0033 leaves publication of `raxol_web3` open, so it starts at 0.1.0,
+    # standalone and outside the root `modular_packages` list. Pre-alpha is
+    # what that means to this catalog: the package exists on disk and is not
+    # on the public Hex train.
+    %{app: :raxol_web3, path: "packages/raxol_web3", class: :pre_alpha}
   ]
 
   @all_packages @public_packages ++ @pre_alpha_packages

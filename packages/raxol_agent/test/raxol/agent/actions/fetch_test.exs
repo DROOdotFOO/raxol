@@ -68,12 +68,30 @@ defmodule Raxol.Agent.Actions.FetchTest do
       end
     end
 
-    test "a public v6 address is still allowed" do
-      # The blocklist must not have become "refuse all IPv6": 6to4 and NAT64
-      # are prefix matches, and an over-broad one would be invisible here
-      # otherwise.
-      refute Fetch.blocked?({0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111})
-      refute Fetch.blocked?({0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 0})
+    test "a public address still reaches the transport" do
+      # The counterpart to the refusals above: the guard must not have become
+      # "refuse everything", which every test in this describe block would
+      # otherwise pass. The reject-set clause table itself is pinned by
+      # `Raxol.Core.OutboundTest`, which is where it lives.
+      transport = respond(200, %{"content-type" => ["text/plain"]}, ["ok"])
+
+      assert {:ok, %{content: "ok", status: 200}} =
+               Fetch.call(%{url: "http://93.184.216.34/"}, %{http_transport: transport})
+    end
+
+    test "still accepts http, which the tool's description promises" do
+      # The lift into `Raxol.Core.Outbound` defaults to https only. This tool
+      # passes `[:http, :https]` explicitly, and that difference is the one
+      # thing about the lift a fetch caller can observe.
+      transport = respond(200, %{"content-type" => ["text/plain"]}, ["ok"])
+
+      assert {:ok, %{url: "http://93.184.216.34/"}} =
+               Fetch.call(%{url: "http://93.184.216.34/"}, %{http_transport: transport})
+
+      assert {:error, :invalid_url} =
+               Fetch.call(%{url: "gopher://93.184.216.34/"}, %{
+                 http_transport: refusing_transport()
+               })
     end
 
     test "refuses a redirect into a private range and names it as a redirect" do

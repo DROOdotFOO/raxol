@@ -17,9 +17,56 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
              McpLoader.load(servers, bundle: bundle)
 
     assert_received {:specs, [spec], opts}
-    assert spec == %{name: :fs, command: "npx", args: ["-y"], env: [{"A", "1"}]}
+    # `:source` travels with the spec: losing it between the parse and the
+    # header resolver would silently widen which specs may resolve a
+    # credential reference.
+    assert spec == %{
+             name: :fs,
+             source: :workspace,
+             command: "npx",
+             args: ["-y"],
+             env: [{"A", "1"}]
+           }
+
     assert is_function(Keyword.fetch!(opts, :start), 1)
     McpLoader.stop(janitor)
+  end
+
+  test "converts a remote config server into a remote bundle spec" do
+    parent = self()
+
+    bundle = fn specs, _opts ->
+      send(parent, {:specs, specs})
+      %{tools: [], servers: [], failed: []}
+    end
+
+    servers = [
+      %{
+        name: "intel",
+        url: "https://mcp.example.com/v1",
+        headers: [{"Authorization", "op://Employee/Intel/token"}],
+        metered: true,
+        prices: %{"lookup" => 150},
+        concurrency: :serialized,
+        source: :user
+      }
+    ]
+
+    result = McpLoader.load(servers, bundle: bundle)
+
+    assert_received {:specs, [spec]}
+
+    assert spec == %{
+             name: :intel,
+             source: :user,
+             url: "https://mcp.example.com/v1",
+             headers: [{"Authorization", "op://Employee/Intel/token"}],
+             metered: true,
+             prices: %{"lookup" => 150},
+             concurrency: :serialized
+           }
+
+    McpLoader.stop(result.janitor)
   end
 
   test "reports connected server names (not pids) from the bundle result" do
@@ -168,6 +215,16 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
 
       assert {"not ok", :invalid_server_name} in result.failed
       McpLoader.stop(result.janitor)
+    end
+
+    test "keeps one server per name, first listed winning" do
+      servers = [
+        %{name: "intel", url: "https://operator/mcp", source: :user},
+        %{name: "intel", url: "https://repo-chose/mcp", source: :workspace}
+      ]
+
+      assert {[kept], [{"intel", :duplicate_server_name}]} = McpLoader.admit(servers)
+      assert kept.source == :user
     end
   end
 end
