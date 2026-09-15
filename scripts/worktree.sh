@@ -31,6 +31,39 @@
 #
 # So: one private cache per worktree, cheaply cloned. No shared mutable state.
 #
+# Usage:
+#   scripts/worktree.sh add <branch> [path] [--from <ref>] [--fresh]
+#   scripts/worktree.sh sync <path>
+#   scripts/worktree.sh rm <path>
+#   scripts/worktree.sh list
+#
+# `add` creates the branch if it does not exist (from --from, default HEAD;
+# --from is refused when the branch already exists, rather than ignored).
+# The branch name is the first argument and may not begin with `-`: a
+# boolean flag is naturally written first, and `add --fresh feature/x`
+# would otherwise bind the branch to `--fresh` and the path to `feature/x`.
+# `--fresh` skips seeding entirely -- a plain cold `git worktree add`, whose
+# first compile pays the full dependency fetch and build, and whose
+# dependencies are therefore fetched and checksum-verified for that branch.
+# That is the way to proceed when a seed is refused, and the way to use this
+# script anywhere the TRUST BOUNDARY below does not hold.
+# Default path: `mktemp -d "${TMPDIR:-/tmp}/raxol-<slug>.XXXXXXXX"`. The
+# property that buys is not an unguessable name -- how much entropy mktemp
+# spends on those eight characters is libc's business, not a guarantee this
+# script can make -- but an ATOMIC EXCLUSIVE CREATE: mktemp names and
+# creates the directory in the same step, and it is 0700 from the moment it
+# exists, so there is no window in which the path is known and unowned. The
+# old fixed `/tmp/raxol-<slug>` had exactly that window, under a
+# world-writable sticky directory, for a name derivable from a branch that
+# is public on the PR (CWE-377). An explicit path argument is used exactly
+# as given, and is still refused if anything is already there.
+#
+# `sync <path>` re-seeds an EXISTING worktree of this repository -- after a
+# dependency bump in this checkout, say. It refuses the source checkout
+# itself and anything that is not a worktree of this repo: the target's
+# caches are replaced, and replacing the source's caches with copies of
+# themselves is never what a caller meant.
+#
 # TRUST BOUNDARY. The seed is a COPY of whatever is in the source checkout,
 # not a fetch: the seeded worktree never runs `deps.get`, so Hex's checksum
 # verification never happens there. One hand-patched or stale artifact under
@@ -40,49 +73,35 @@
 # branch against its locked dependencies.
 #
 # What IS checked is cheap and offline: `mix.lock` (root and every
-# `packages/*/mix.lock`) must match between source and target, because a
+# `packages/*/mix.lock`) is compared between source and target, because a
 # differing lock is exactly the case where the seeded artifacts do not
 # describe the branch's dependencies. That is a staleness check, not an
 # integrity one -- it says the two checkouts agree on what the dependencies
-# should be, not that the copied bytes are what Hex published.
+# should be, not that the copied bytes are what Hex published. Symlinks in
+# the target are REFUSED rather than followed: `-f` and `cmp` both read
+# through a symlink, so a `mix.lock` linked at this checkout's own lock
+# compares byte-identical while the file Mix reads is something else, and a
+# symlinked `packages/<pkg>` routes the copy out of the worktree entirely.
+# The branch under review is what plants either one.
+#
+# `add` refuses the seed on a lock mismatch (exit 3): the worktree does not
+# exist yet, so `--fresh` is a correct and cheap answer. `sync` warns and
+# proceeds, because carrying a NEW lock from this checkout into an existing
+# worktree is what `sync` is for -- refusing it would leave the subcommand
+# with no working use at all.
 #
 # So this is a single-user workstation helper. It is NOT for a shared box or
 # a CI runner, where every worktree must fetch and verify its own
 # dependencies: use `--fresh` there, or do not use this script.
 #
-# Usage:
-#   scripts/worktree.sh add <branch> [path] [--from <ref>] [--fresh]
-#   scripts/worktree.sh sync <path>
-#   scripts/worktree.sh rm <path>
-#   scripts/worktree.sh list
-#
-# `add` creates the branch if it does not exist (from --from, default HEAD;
-# --from is refused when the branch already exists, rather than ignored).
-# `--fresh` skips seeding entirely -- a plain cold `git worktree add`, whose
-# first compile pays the full dependency fetch and build, and whose
-# dependencies are therefore fetched and checksum-verified for that branch.
-# That is the way to proceed when a seed is refused, and the way to use this
-# script anywhere the trust boundary in this file's header does not hold.
-# Default path: `mktemp -d "${TMPDIR:-/tmp}/raxol-<slug>.XXXXXXXX"`, i.e. a
-# directory that already exists and is already 0700 by the time this script
-# has a name for it. The old fixed `/tmp/raxol-<slug>` was derivable from a
-# branch name that is public on the PR, and on a shared box a predictable
-# name under a world-writable sticky directory belongs to whoever creates
-# it first (CWE-377). An explicit path argument is used exactly as given,
-# and is still refused if anything is already there.
-#
-# `sync <path>` re-seeds an EXISTING worktree of this repository -- after a
-# dependency bump in this checkout, say. It refuses the source checkout
-# itself and anything that is not a worktree of this repo: the target's
-# caches are replaced, and replacing the source's caches with copies of
-# themselves is never what a caller meant.
-#
-# Exit codes: 0 ok, 1 a usage error or a refused target, 2 the source
-# checkout has no warm cache to clone (run `mix deps.get && mix compile` in
-# it first), 3 `mix.lock` differs between the source checkout and the
-# target, so the seed would describe the wrong dependencies (re-run with
-# `--fresh`, or bring this checkout to that lock first). A failing `git`
-# surfaces git's own status.
+# Exit codes: 0 ok, 1 a usage error or a refused target (a symlinked lock or
+# package directory included), 2 the source checkout has no warm cache to
+# clone -- run `mix deps.get && mix compile` in it first, and this is
+# checked BEFORE the lock comparison so a cold source reports the blocker
+# that really comes first, 3 `add` refused the seed because `mix.lock`
+# differs between the source checkout and the target (re-run `add --fresh`,
+# or reconcile the locks -- the message says which side moved). A failing
+# `git` surfaces git's own status.
 # ---8<---
 
 set -euo pipefail
