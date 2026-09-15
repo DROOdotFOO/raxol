@@ -19,6 +19,28 @@ defmodule Raxol.Web3.Origin do
   A path is deliberately excluded: rate limits and health belong to the origin,
   not to one of its endpoints, and including a path would mint a bucket per URL
   and spend the upstream's budget N times.
+
+  ## The table only grows with configuration
+
+  `id/1` inserts on every call and nothing ever deletes a row, which reads
+  like a leak and is not one, because the set of origins is closed by
+  construction. A row's key is a hash of `scheme://host:port`, and every host
+  that reaches here comes from a backend handle's state, which comes from that
+  backend's `new/2` at configuration time: the shipped endpoint tables hold
+  fourteen hosts between them, plus whatever `:url`, `:rpc_url` or `:host` an
+  operator overrides. Nothing that crosses the served surface reaches
+  `Raxol.Web3.HTTP`'s `url` argument — an MCP tool argument names a chain, not
+  an endpoint, and `Raxol.Web3.HTTP` documents its whole option list as
+  package-internal. So the row count is the number of distinct upstreams this
+  node is configured to talk to, and a row is a sixteen-character id beside a
+  short origin string: tens of rows, single-digit kilobytes.
+
+  Capping it would also be the wrong trade, which is the other half of the
+  answer. An id travels into log lines, telemetry and stored error terms that
+  outlive the request by weeks, and this table is the only thing that turns
+  one back into a host. Evicting a row breaks `resolve/1` for exactly the old
+  id an operator is investigating, so the table is deliberately
+  append-only and bounded by configuration rather than by a ceiling.
   """
 
   alias Raxol.Web3.Tables
