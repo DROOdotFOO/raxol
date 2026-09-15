@@ -91,7 +91,17 @@ end
 #
 # Widening this back to 0.0.0.0 (to drive the endpoint from a phone, a VM, or a
 # container) re-exposes `project_eval`. Put it behind something first.
+# `adapter:` is pinned rather than inherited. Phoenix defaults an unset adapter
+# to Cowboy purely for backwards compatibility -- see
+# `Phoenix.Endpoint.Supervisor`, whose own comment reads "we continue to use
+# Cowboy as the default if not explicitly specified for backwards
+# compatibility. TODO: Change this to default to Bandit in 2.0". `plug_cowboy`
+# is this project's declared webserver (mix.exs) and `bandit` is in no lock in
+# the repo, so inheriting that default means a Phoenix 2.0 bump silently
+# repoints the endpoint at a dependency that is not there. Naming it here makes
+# the choice visible and turns that upgrade into a deliberate edit.
 config :raxol, Raxol.Endpoint,
+  adapter: Phoenix.Endpoint.Cowboy2Adapter,
   http: [ip: dev_bind_ip, port: resolve_dev_port.()],
   server: true,
   secret_key_base: String.duplicate("dev", 22)
