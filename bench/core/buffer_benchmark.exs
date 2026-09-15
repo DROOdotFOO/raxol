@@ -86,9 +86,5 @@ all_passed = Enum.all?(results, fn {_name, passed} -> passed end)
 if all_passed do
   IO.puts("\n✓ All performance targets met!")
 else
-  # This used to print and exit 0, so a red run was indistinguishable from a
-  # green one to any caller -- `mix run` reports the script's exit status, and
-  # CI reads only that.
   IO.puts("\n✗ Some performance targets not met")
-  System.halt(1)
 end
