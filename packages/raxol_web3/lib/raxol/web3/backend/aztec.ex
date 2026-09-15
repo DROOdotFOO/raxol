@@ -180,14 +180,23 @@ defmodule Raxol.Web3.Backend.Aztec do
   alias Raxol.Web3.Origin
   alias Raxol.Web3.TTL
 
-  @enforce_keys [:chain_ref, :base_url, :network, :source]
-  defstruct [:chain_ref, :base_url, :network, :source, http_opts: [], cache?: true]
+  @enforce_keys [:chain_ref, :base_url, :network, :source, :base_digest]
+  defstruct [
+    :chain_ref,
+    :base_url,
+    :network,
+    :source,
+    :base_digest,
+    http_opts: [],
+    cache?: true
+  ]
 
   @type t :: %__MODULE__{
           chain_ref: Backend.chain_ref(),
           base_url: String.t(),
           network: String.t(),
           source: :aztecscan | :chicmoz,
+          base_digest: String.t(),
           http_opts: keyword(),
           cache?: boolean()
         }
@@ -260,6 +269,7 @@ defmodule Raxol.Web3.Backend.Aztec do
         base_url: base_url,
         network: network,
         source: source,
+        base_digest: base_digest(base_url),
         http_opts: Keyword.put_new(Keyword.get(opts, :http_opts, []), :rate_limit, @rate_limit),
         cache?: Keyword.get(opts, :cache, true)
       }
@@ -469,10 +479,15 @@ defmodule Raxol.Web3.Backend.Aztec do
   # cached. `resource` decides what a 404 means, and it is the endpoint's own
   # shape rather than the response's text that decides it: see the moduledoc.
   #
-  # The cache key fragment is the endpoint path, never the assembled URL. On
-  # this upstream the credential is a PATH SEGMENT rather than a query
-  # parameter, so the prefix is what has to stay out of the key, and building
-  # the key from the suffix is what keeps it out by construction.
+  # The cache key fragment is `{base_digest, path}`, never the assembled URL.
+  # On this upstream the credential is a PATH SEGMENT rather than a query
+  # parameter, so it must stay out of the key while still distinguishing the
+  # prefix it was fetched under: `Raxol.Web3.HTTP` keys on
+  # `{origin_id, fragment}` and `Raxol.Web3.Origin.canonical/1` is only
+  # `scheme://host:port`, so a bare path fragment named the prefix in neither
+  # half. Two handles on one host with different key prefixes then shared
+  # entries, and one key was served a body fetched under another. A digest
+  # rather than the prefix keeps the credential out by construction.
   defp get(state, path, class, resource) do
     url = state.base_url <> path
 
@@ -492,7 +507,20 @@ defmodule Raxol.Web3.Backend.Aztec do
   defp cache_opts(%{cache?: false} = state, _path, _class), do: state.http_opts
 
   defp cache_opts(state, path, class) do
-    Keyword.put(state.http_opts, :cache, key: path, ttl_ms: TTL.for(class))
+    Keyword.put(state.http_opts, :cache,
+      key: {state.base_digest, path},
+      ttl_ms: TTL.for(class)
+    )
+  end
+
+  # A truncated SHA-256 of the whole base URL, prefix included. ADR-0033
+  # section 7 names a cache key as one of the four places a credential leaks,
+  # so the key segment is never in the fragment itself; 128 bits of digest is
+  # enough to tell two prefixes apart and carries nothing back.
+  defp base_digest(base_url) do
+    :crypto.hash(:sha256, base_url)
+    |> Base.url_encode64(padding: false)
+    |> binary_part(0, 16)
   end
 
   # Any JSON term, not only an object: `l2/latest-height` answers a bare

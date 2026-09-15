@@ -409,6 +409,33 @@ defmodule Raxol.Web3.Backend.AztecTest do
 
       assert length(endpoints()) == 2
     end
+
+    test "two key prefixes on one host do not share a cache entry" do
+      # The credential is a path segment on this upstream, and
+      # `Raxol.Web3.HTTP` keys on `{origin_id, fragment}` where an origin id is
+      # only `scheme://host:port`. A fragment that was the endpoint path alone
+      # named the prefix in neither half, so a second or rotated key on the same
+      # host was served the first key's body.
+      host = "https://chicmoz-#{System.unique_integer([:positive])}.example.org"
+      endpoint = "/l2/tx-effects/#{@mined}"
+
+      first =
+        handle(%{endpoint => fixture("tx_effects.json")},
+          cache: true,
+          base_url: host <> "/v1/key-one"
+        )
+
+      second =
+        handle(%{endpoint => patched("tx_effects.json", %{"blockHeight" => 90_001})},
+          cache: true,
+          base_url: host <> "/v1/key-two"
+        )
+
+      assert {:ok, %{block: 83_582}} = Backend.call(first, :get_transaction, [@mined])
+      assert {:ok, %{block: 90_001}} = Backend.call(second, :get_transaction, [@mined])
+
+      assert length(endpoints()) == 2
+    end
   end
 
   describe "get_transaction/2" do
