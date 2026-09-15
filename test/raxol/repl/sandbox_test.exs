@@ -72,6 +72,32 @@ defmodule Raxol.REPL.SandboxTest do
       assert Enum.any?(violations, &String.contains?(&1, ":erlang.halt"))
     end
 
+    # A spawned process is not the evaluation, so `Evaluator`'s timeout (which
+    # signals one pid) and its per-process heap cap do not reach it: it keeps
+    # running with full node authority after the evaluation is reported as
+    # timed out. `Kernel.spawn` was already denied; these reach the same
+    # primitive under another name.
+    test "denies spawning that outlives the evaluation" do
+      for code <- [
+            "Task.async(fn -> :ok end)",
+            "Task.start(fn -> :ok end)",
+            "Task.start_link(fn -> :ok end)",
+            "Agent.start(fn -> 0 end)",
+            "Agent.start_link(fn -> 0 end)",
+            ":proc_lib.spawn(fn -> :ok end)",
+            ":proc_lib.spawn_link(fn -> :ok end)"
+          ] do
+        assert {:error, violations} = Sandbox.check(code, :standard),
+               "#{code} was allowed at :standard"
+
+        assert Enum.any?(violations, fn violation ->
+                 violation =~ "process spawning" or
+                   violation =~ "dangerous erlang module"
+               end),
+               "#{code}: #{inspect(violations)}"
+      end
+    end
+
     test "reports syntax errors" do
       {:error, violations} = Sandbox.check("def +++")
       assert Enum.any?(violations, &String.contains?(&1, "Syntax error"))
