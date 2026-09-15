@@ -40,9 +40,9 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
   @spec parse(binary(), ParserState.t()) ::
           {:ok, ParserState.t()} | {:error, atom()}
   def parse(data, state) when is_binary(data) do
-    Log.debug(
+    Log.debug(fn ->
       "SixelParser: Incoming palette color 1 is #{inspect(Map.get(state.palette, 1, :not_found))}"
-    )
+    end)
 
     case data do
       <<>> ->
@@ -250,9 +250,9 @@ defmodule Raxol.Terminal.ANSI.SixelParser do
   end
 
   defp handle_data_character(char_byte, remaining_data, state) do
-    Log.debug(
+    Log.debug(fn ->
       "SixelParser: [handle_data_character] BEFORE pixel gen, palette color 1 is #{inspect(Map.get(state.palette, 1, :not_found))}"
-    )
+    end)
 
     Log.debug(fn ->
       "SixelParser: Processing character byte: #{char_byte} ('#{<<char_byte>>}')"

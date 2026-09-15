@@ -116,10 +116,6 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
            full_dcs_sequence
          ) do
       {updated_sixel_state, :ok} ->
-        Log.debug(
-          "DCSHandlers: sixel processing successful, updated_state: #{inspect(updated_sixel_state)}"
-        )
-
         # Successfully processed, update emulator with new sixel state
         # and blit the graphics to the screen buffer
         emulator_with_sixel = %{emulator | sixel_state: updated_sixel_state}
@@ -162,7 +158,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
 
     {cursor_x, cursor_y} = cursor_position
 
-    log_sixel_debug_info(pixel_buffer, palette, cursor_x, cursor_y)
+    Log.debug(fn -> "Cursor position: {#{cursor_x}, #{cursor_y}}" end)
 
     buffer = Raxol.Terminal.Emulator.get_screen_buffer(emulator)
 
@@ -170,14 +166,6 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
       blit_pixels_to_buffer(buffer, pixel_buffer, palette, cursor_x, cursor_y)
 
     update_emulator_buffer(emulator, updated_buffer)
-  end
-
-  defp log_sixel_debug_info(pixel_buffer, palette, cursor_x, cursor_y) do
-    Log.debug(
-      "Blitting Sixel graphics: pixel_buffer=#{inspect(pixel_buffer)}, palette=#{inspect(palette)}"
-    )
-
-    Log.debug(fn -> "Cursor position: {#{cursor_x}, #{cursor_y}}" end)
   end
 
   defp blit_pixels_to_buffer(buffer, pixel_buffer, palette, cursor_x, cursor_y) do
@@ -206,9 +194,9 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
     screen_x = cursor_x + sixel_x
     screen_y = cursor_y + sixel_y
 
-    Log.debug(
+    Log.debug(fn ->
       "Blitting pixel at sixel {#{sixel_x}, #{sixel_y}} -> screen {#{screen_x}, #{screen_y}} with color_index #{color_index}"
-    )
+    end)
 
     case Map.get(palette, color_index) do
       {r, g, b} ->
