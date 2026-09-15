@@ -395,7 +395,7 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
   @spec process_sequence(t(), binary()) :: {t(), :ok | {:error, term()}}
   @impl true
   def process_sequence(state, data) when is_binary(data) do
-    Log.debug("SixelGraphics: process_sequence called with data: #{inspect(data)}")
+    Log.debug(fn -> "SixelGraphics: process_sequence called with data: #{inspect(data)}" end)
 
     # Ensure palette is initialized
     state_with_palette =
@@ -408,13 +408,15 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
         state
       end
 
-    Log.debug("SixelGraphics: Initial palette has #{map_size(state_with_palette.palette)} colors")
+    Log.debug(fn ->
+      "SixelGraphics: Initial palette has #{map_size(state_with_palette.palette)} colors"
+    end)
 
-    Log.debug(
+    Log.debug(fn ->
       "SixelGraphics: Color index 1 is #{inspect(Map.get(state_with_palette.palette, 1, :not_found))}"
-    )
+    end)
 
-    Log.debug("SixelGraphics: Calling SixelParser.parse with data: #{inspect(data)}")
+    Log.debug(fn -> "SixelGraphics: Calling SixelParser.parse with data: #{inspect(data)}" end)
 
     case Raxol.Terminal.ANSI.SixelParser.parse(
            data,
@@ -445,11 +447,11 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
             do: state_with_palette.palette,
             else: parser_state.palette
 
-        Log.debug("SixelGraphics: Final palette has #{map_size(final_palette)} colors")
+        Log.debug(fn -> "SixelGraphics: Final palette has #{map_size(final_palette)} colors" end)
 
-        Log.debug(
+        Log.debug(fn ->
           "SixelGraphics: Final color index 1 is #{inspect(Map.get(final_palette, 1, :not_found))}"
-        )
+        end)
 
         updated_state = %{
           state_with_palette
@@ -463,7 +465,7 @@ defmodule Raxol.Terminal.ANSI.SixelGraphics do
         {updated_state, :ok}
 
       {:error, reason} ->
-        Log.debug("SixelGraphics: Parser returned error: #{inspect(reason)}")
+        Log.debug(fn -> "SixelGraphics: Parser returned error: #{inspect(reason)}" end)
 
         # Return unchanged state and error
         {state_with_palette, {:error, reason}}

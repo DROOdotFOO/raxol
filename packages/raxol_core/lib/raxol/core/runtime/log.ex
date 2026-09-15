@@ -25,6 +25,12 @@ defmodule Raxol.Core.Runtime.Log do
       Log.info("Processing request", %{user_id: 123, action: :login})
       Log.error("Validation failed", %{errors: errors, input: input})
 
+      # Lazy message (required on hot paths): a zero-arity fun is only
+      # evaluated when the level is enabled, so the interpolation and the
+      # inspect/1 never run when logging is off.
+      Log.debug(fn -> "Parsed \#{inspect(byte)} in state \#{state}" end)
+      Log.debug(fn -> "Parsed \#{inspect(byte)}" end, %{state: state})
+
       # Performance timing
       Log.time_info("Database query", fn ->
         expensive_operation()
@@ -74,7 +80,23 @@ defmodule Raxol.Core.Runtime.Log do
   end
 
   def info(msg), do: log(:info, msg)
+
+  @doc """
+  Logs a debug message.
+
+  `msg` is either iodata or a zero-arity fun returning iodata. The fun form is
+  evaluated only when the `:debug` level is enabled, so it is the required
+  form on hot paths: `debug/1` is a plain function, so an interpolated
+  `inspect/1` argument is built before any level check and costs the same at
+  `:emergency` as at `:debug`.
+
+      Log.debug("starting up")
+      Log.debug(fn -> "byte \#{inspect(byte)}" end)
+
+  """
+  @spec debug(iodata() | (-> iodata())) :: :ok
   def debug(msg), do: log(:debug, msg)
+
   def warning(msg), do: log(:warn, msg)
   def error(msg), do: log(:error, msg)
 
@@ -84,14 +106,22 @@ defmodule Raxol.Core.Runtime.Log do
   def error(msg, context), do: log(:error, msg, context)
 
   defp log(level, msg, context \\ nil) do
-    message =
-      case context do
-        nil -> msg
-        _ -> "#{msg} | Context: #{inspect(context)}"
-      end
-
     level = if level == :warn, do: :warning, else: level
-    Logger.bare_log(level, message)
+    Logger.bare_log(level, with_context(msg, context))
+  end
+
+  # `msg` may be a zero-arity fun; `Logger.bare_log/2` evaluates it only when
+  # the level is enabled. Interpolating a fun raises `Protocol.UndefinedError`,
+  # and forcing it here would defeat the point, so a context map is folded in
+  # by wrapping the fun instead.
+  defp with_context(msg, nil), do: msg
+
+  defp with_context(msg, context) when is_function(msg, 0) do
+    fn -> "#{msg.()} | Context: #{inspect(context)}" end
+  end
+
+  defp with_context(msg, context) do
+    "#{msg} | Context: #{inspect(context)}"
   end
 
   ## Enhanced Logging Functions

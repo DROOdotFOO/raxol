@@ -136,4 +136,77 @@ defmodule Raxol.Terminal.ModeManagerTest do
       end
     end
   end
+
+  describe "debug logging on the write path" do
+    # `Raxol.Core.Runtime.Log.debug/1` is a function, not a macro: it hands its
+    # argument to `Logger.bare_log/2`, which checks the level only after the
+    # argument has been built. An interpolated `inspect/1` therefore runs on
+    # every `CSI ? Ps h`, at every level. A zero-arity fun is the fix, so what
+    # the write path must never hand Logger is an already-built message.
+    setup do
+      on_exit(fn ->
+        :erlang.trace_pattern({Logger, :bare_log, :_}, false, [:local])
+      end)
+    end
+
+    test "set_mode/3 builds no debug message before the level is checked" do
+      emulator = Emulator.new(80, 24)
+
+      logged =
+        trace_logged_messages(fn -> ModeManager.set_mode(emulator, [:mode_log_probe]) end)
+
+      # Any already-built debug message is a regression, whatever it says: the
+      # two most expensive messages this path used to build (the emulator's
+      # `mode_manager` struct and the whole `{:ok, emulator}` result) named no
+      # mode, so matching on a probe name would not have caught them coming
+      # back. Non-debug levels are left alone - they are not per-byte.
+      built =
+        for {:debug, message} <- logged, not is_function(message, 0), do: message
+
+      assert built == [],
+             "the write path built #{length(built)} debug message(s) before the level check: #{inspect(built)}"
+
+      assert Enum.any?(logged, fn {level, message} ->
+               level == :debug and is_function(message, 0)
+             end),
+             "expected the write path to hand Logger a zero-arity fun; got #{inspect(logged)}"
+    end
+
+    # Runs `fun` in a traced process and returns every `{level, message}` pair
+    # it handed `Logger.bare_log/2`, with the message unevaluated. The arity is
+    # a wildcard so a direct `bare_log/3` caller cannot slip past; that also
+    # means one `bare_log/2` call shows up twice, since it delegates to
+    # `bare_log/3`.
+    defp trace_logged_messages(fun) do
+      task = Task.async(fn -> receive(do: (:go -> fun.())) end)
+
+      :erlang.trace(task.pid, true, [:call, {:tracer, self()}])
+      :erlang.trace_pattern({Logger, :bare_log, :_}, true, [:local])
+
+      send(task.pid, :go)
+      Task.await(task)
+
+      # Trace messages are not ordered against the task's reply, so draining
+      # straight after `Task.await/2` can see a prefix of them - or none, which
+      # would pass an empty `built` list. `trace_delivered/1` is the fence: its
+      # reply arrives only after every trace message the tracee has already
+      # generated has reached this process.
+      ref = :erlang.trace_delivered(task.pid)
+
+      receive do
+        {:trace_delivered, _tracee, ^ref} -> :ok
+      end
+
+      drain_traced_messages([])
+    end
+
+    defp drain_traced_messages(acc) do
+      receive do
+        {:trace, _pid, :call, {Logger, :bare_log, [level, message | _]}} ->
+          drain_traced_messages([{level, message} | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+  end
 end

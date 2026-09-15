@@ -39,7 +39,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
       n when n > 0 ->
         # Use CSIHandler.Cursor functions which handle direct row/col fields
         {:ok, updated_emulator} = Cursor.handle_command(emulator, [n], "A")
-        Log.debug("Cursor moved up by #{n}")
+        Log.debug(fn -> "Cursor moved up by #{n}" end)
         {:ok, updated_emulator}
 
       _ ->
@@ -66,7 +66,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator} =
       Cursor.handle_command(emulator, [move_amount], "B")
 
-    Log.debug("Cursor moved down by #{move_amount}")
+    Log.debug(fn -> "Cursor moved down by #{move_amount}" end)
     {:ok, updated_emulator}
   rescue
     error ->
@@ -85,7 +85,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator} =
       Cursor.handle_command(emulator, [move_amount], "C")
 
-    Log.debug("Cursor moved forward by #{move_amount}")
+    Log.debug(fn -> "Cursor moved forward by #{move_amount}" end)
     {:ok, updated_emulator}
   rescue
     error ->
@@ -104,7 +104,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator} =
       Cursor.handle_command(emulator, [move_amount], "D")
 
-    Log.debug("Cursor moved backward by #{move_amount}")
+    Log.debug(fn -> "Cursor moved backward by #{move_amount}" end)
     {:ok, updated_emulator}
   rescue
     error ->
@@ -171,7 +171,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
 
     updated_emulator = %{emulator | cursor: new_cursor}
 
-    Log.debug("Cursor position set to (#{bounded_col}, #{bounded_row})")
+    Log.debug(fn -> "Cursor position set to (#{bounded_col}, #{bounded_row})" end)
 
     {:ok, updated_emulator}
   rescue

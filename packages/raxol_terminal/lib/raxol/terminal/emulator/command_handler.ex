@@ -597,20 +597,20 @@ defmodule Raxol.Terminal.Emulator.CommandHandler do
   defp extract_emulator(emulator), do: emulator
 
   defp handle_csi_command(final_byte, params, emulator, intermediates) do
-    Raxol.Core.Runtime.Log.debug(
+    Raxol.Core.Runtime.Log.debug(fn ->
       "handle_csi_command: final_byte=#{inspect(final_byte)}, params=#{inspect(params)}"
-    )
+    end)
 
     case csi_handlers()[final_byte] do
       {handler, _arity} ->
-        Raxol.Core.Runtime.Log.debug(
+        Raxol.Core.Runtime.Log.debug(fn ->
           "Found handler for #{inspect(final_byte)}: #{inspect(handler)}"
-        )
+        end)
 
         apply(handler, [params, emulator, intermediates])
 
       nil ->
-        Raxol.Core.Runtime.Log.debug("No handler found for #{inspect(final_byte)}")
+        Raxol.Core.Runtime.Log.debug(fn -> "No handler found for #{inspect(final_byte)}" end)
 
         emulator
     end
