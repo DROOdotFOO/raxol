@@ -12,6 +12,7 @@ defmodule Raxol.Core.Renderer do
       output = Raxol.Core.Renderer.render_to_string(buffer)
   """
 
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Core.Buffer
   alias Raxol.Core.Style
 
@@ -232,13 +233,33 @@ defmodule Raxol.Core.Renderer do
   # Wrap already-styled content in an OSC 8 hyperlink when the cell style
   # carries one (bare form, ST-terminated). Cells with no hyperlink emit
   # exactly as before.
+  #
+  # The URL is confined HERE, at the sink, not at the producers: this line
+  # is where the bytes actually reach the terminal, and a `:hyperlink`
+  # arrives from anywhere -- a Markdown link URL an LLM wrote
+  # (`Raxol.UI.Components.MarkdownRenderer`'s link capture accepts any byte
+  # but `)`), an OSC 8 URL the emulator itself parsed out of untrusted
+  # program output, `Raxol.Plugins.HyperlinkPlugin`, a plain
+  # `text(link: ...)` caller. Unsanitized, `\e]52;c;...\a` inside a URL
+  # closes this OSC 8 and opens an attacker-chosen one (clipboard write,
+  # title set, alt-screen switch). `TermText.sanitize/2` removes ESC and
+  # everything it introduces, plus C0/DEL/C1; `allow: []` keeps even `\n`
+  # and `\t` out, because a URL is one token with no line structure.
+  # Sanitizing BEFORE the emptiness check means a URL that was nothing but
+  # control bytes emits no hyperlink at all rather than a bare `ESC ] 8 ;;`
+  # pair around the content.
   defp maybe_wrap_hyperlink(content, style) when is_map(style) do
     case Map.get(style, :hyperlink) do
-      url when is_binary(url) and url != "" ->
-        "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
+      url when is_binary(url) ->
+        wrap_hyperlink(content, TermText.sanitize(url, allow: []))
 
       _ ->
         content
     end
   end
+
+  defp wrap_hyperlink(content, ""), do: content
+
+  defp wrap_hyperlink(content, url),
+    do: "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
 end

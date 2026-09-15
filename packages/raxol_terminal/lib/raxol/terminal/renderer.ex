@@ -53,6 +53,7 @@ defmodule Raxol.Terminal.Renderer do
   ```
   """
 
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Terminal.ScreenBuffer
 
   @type t :: %__MODULE__{
@@ -255,15 +256,33 @@ defmodule Raxol.Terminal.Renderer do
   # one. Bare form `ESC ] 8 ; ; URL ST  <content>  ESC ] 8 ; ; ST`; clickable in
   # OSC 8-aware terminals (iTerm2, kitty, WezTerm), ignored elsewhere. SGR may
   # vary inside; the link spans the whole run.
+  #
+  # The URL is confined HERE, at the sink, not at whatever set
+  # `style.hyperlink`: this is where the bytes reach the terminal, and the
+  # style is populated by `TextFormatting.set_hyperlink/2` straight from an
+  # OSC 8 sequence the emulator parsed out of untrusted program output. An
+  # OSC body only ends at BEL or ST, so a parsed URL can legitimately carry
+  # CR, DEL and a raw 8-bit CSI (`0x9B`) -- re-emitted verbatim inside our
+  # own OSC 8, those escape the sequence and are executed.
+  # `TermText.sanitize/2` removes ESC and everything it introduces, plus
+  # C0/DEL/C1; `allow: []` keeps even `\n` and `\t` out, because a URL is
+  # one token with no line structure. Sanitizing BEFORE the emptiness
+  # check means an all-control URL emits no hyperlink at all rather than a
+  # bare `ESC ] 8 ;;` pair around the content.
   defp maybe_wrap_hyperlink(content, style) do
     case hyperlink_url(style) do
-      url when is_binary(url) and url != "" ->
-        "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
+      url when is_binary(url) ->
+        wrap_hyperlink(content, TermText.sanitize(url, allow: []))
 
       _ ->
         content
     end
   end
+
+  defp wrap_hyperlink(content, ""), do: content
+
+  defp wrap_hyperlink(content, url),
+    do: "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
 
   defp hyperlink_url(%{__struct__: _} = style), do: Map.get(style, :hyperlink)
   defp hyperlink_url(style) when is_map(style), do: Map.get(style, :hyperlink)
