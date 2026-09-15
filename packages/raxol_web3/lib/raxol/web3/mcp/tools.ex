@@ -50,6 +50,18 @@ defmodule Raxol.Web3.MCP.Tools do
 
   @prefix "web3_"
 
+  # One description for the eight `account` arguments, and the one place to
+  # change when a family lands. `Raxol.Web3.Serialize.account_ref/1` reads an
+  # unprefixed value as EVM, so every other family has to be named here: a
+  # model that sends a bare Solana pubkey gets `{:unsupported_account_ref,
+  # :evm}` and no way to tell from the schema why.
+  @families ~s(An unprefixed value is read as EVM; every other family must ) <>
+              ~s(name itself: "tron:T...", "solana:<pubkey>", ) <>
+              ~s("party:<party-id>", "aztec:0x...".)
+
+  @account_ref "Account reference. " <> @families
+  @contract_ref "Contract account reference. " <> @families
+
   # Every served tool, as {tool suffix, callback, [arg]}, where an arg is
   # {name, type, required?, description}. Data rather than thirteen functions,
   # because the interesting property is that this list and the callback set
@@ -61,36 +73,34 @@ defmodule Raxol.Web3.MCP.Tools do
      "The chain's height and its finalized height, with the unit they are counted in and the indexer's lag."},
     {:get_transaction, :get_transaction, [{"hash", :string, true, "Transaction hash."}],
      "One transaction: status, value, fee and counterparties."},
-    {:account_info, :account_info,
-     [{"account", :string, true, "Account reference, e.g. an address or \"evm:0x...\"."}],
+    {:account_info, :account_info, [{"account", :string, true, @account_ref}],
      "One account: native balance, whether it has code, and its primary name."},
     {:list_transactions, :list_transactions,
      [
-       {"account", :string, true, "Account reference."},
+       {"account", :string, true, @account_ref},
        {"cursor", :string, false, "Opaque cursor from a previous page."}
      ], "A page of an account's transactions, newest first."},
     {:token_balances, :token_balances,
      [
-       {"account", :string, true, "Account reference."},
+       {"account", :string, true, @account_ref},
        {"cursor", :string, false, "Opaque cursor from a previous page."}
      ], "A page of the tokens an account holds, with amounts."},
     {:list_token_transfers, :list_token_transfers,
      [
-       {"account", :string, true, "Account reference."},
+       {"account", :string, true, @account_ref},
        {"cursor", :string, false, "Opaque cursor from a previous page."}
      ], "A page of token transfers involving an account."},
     {:get_logs, :get_logs,
      [
-       {"account", :string, true, "Contract account reference."},
+       {"account", :string, true, @contract_ref},
        {"cursor", :string, false, "Opaque cursor from a previous page."}
      ], "A page of event logs emitted by a contract."},
     {:list_nfts, :list_nfts,
      [
-       {"account", :string, true, "Account reference."},
+       {"account", :string, true, @account_ref},
        {"cursor", :string, false, "Opaque cursor from a previous page."}
      ], "A page of the NFTs an account holds."},
-    {:contract_metadata, :contract_metadata,
-     [{"account", :string, true, "Contract account reference."}],
+    {:contract_metadata, :contract_metadata, [{"account", :string, true, @contract_ref}],
      "A contract's verification state, language, compiler and ABI."},
     {:get_block, :get_block, [{"number", :integer, true, "Block number."}],
      "One block: height, hash, timestamp, transaction count and proposer."},

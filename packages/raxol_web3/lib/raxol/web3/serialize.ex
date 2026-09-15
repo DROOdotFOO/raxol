@@ -31,9 +31,9 @@ defmodule Raxol.Web3.Serialize do
   decision 6 spends its rules on.
   """
 
-  # The families the tagged reference can name. Only `:evm` has a backend, and
-  # the list is here rather than inline so that adding Tron is a one-line
-  # change in one place instead of a grep.
+  # The families the tagged reference can name. Each of the five has a backend
+  # now, and the list is here rather than inline so that adding one is a
+  # one-line change in one place instead of a grep.
   #
   # A compile-time map, not `String.to_existing_atom/1`. That function is the
   # usual guard against atom exhaustion from caller input, and it is the wrong
@@ -94,10 +94,20 @@ defmodule Raxol.Web3.Serialize do
   @doc """
   Parse an account reference a caller sent.
 
-  `"evm:0xabc"` is explicit. A bare `"0xabc"` is `{:evm, "0xabc"}`, which is
-  the right default while EVM is the only family with a backend, and which is
-  the thing to revisit when a second family lands rather than a thing to guess
-  at then.
+  `"evm:0xabc"` is explicit, and so is every other family in `tags/0`:
+  `"tron:"`, `"solana:"`, `"party:"` and `"aztec:"`. A value with no known
+  prefix is `{:evm, value}`.
+
+  That default stays now that four non-EVM families have backends, rather than
+  becoming a guess from the string's shape. A bare string is not evidence of a
+  family: 34 Base58 characters are a Tron address and also a legal Solana
+  pubkey, and `account_ref/1` has no error variant to report the ambiguity in,
+  so a guess would mint a reference in an address space the account was never
+  in -- which is the confusion `Raxol.Web3.Tron.Address` refuses by the same
+  argument. An unprefixed value therefore keeps the one meaning it has always
+  had and every other family names itself, which `Raxol.Web3.MCP.Tools` states
+  in each `account` argument's description because that is where a model reads
+  it.
   """
   @spec account_ref(String.t()) :: {atom(), String.t()}
   def account_ref(value) when is_binary(value) do
