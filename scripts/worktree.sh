@@ -280,6 +280,46 @@ slug() {
   printf '%s' "$1" | tr '/' '-' | tr -c '[:alnum:]._-' '-'
 }
 
+# Undo as much of a failed `add` as this call actually created, and REPORT
+# whatever it could not. A swallowed cleanup failure is worse here than in
+# most places: the residue is a 0700 temp directory, a stale worktree
+# registration and possibly a branch, one set per failure, and the command
+# exits with no `worktree:` line at all, so the caller learns none of it.
+#
+# The branch is decided by `show-ref` rather than by a flag set once git
+# returned successfully, because `git worktree add -b` creates
+# `refs/heads/<branch>` BEFORE it checks the tree out: a failure after that
+# point leaves the ref despite the non-zero status. Left there, the next run
+# takes the "branch already exists" path and dies with "--from would be
+# ignored", a message about the previous failure rather than this command.
+unwind_add() {
+  local path="$1" branch="$2" created_path="$3" branch_existed="$4"
+  local residue=()
+
+  # Registration and directory come off together when the worktree got as
+  # far as being registered; only if that does not apply is the directory
+  # mktemp made this command's own to `rmdir` (never `rm -rf`).
+  if [[ -e "$path" || -L "$path" ]]; then
+    git worktree remove --force "$path" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -e "$path" || -L "$path" ]]; then
+    if ((created_path == 1)); then
+      rmdir "$path" 2>/dev/null || residue+=("directory $path")
+    else
+      residue+=("directory $path")
+    fi
+  fi
+
+  if ((branch_existed == 0)) && git show-ref --verify --quiet "refs/heads/$branch"; then
+    git branch -D "$branch" >/dev/null 2>&1 || residue+=("branch $branch")
+  fi
+
+  ((${#residue[@]} == 0)) ||
+    printf 'worktree: could not finish undoing the failed add; still there: %s\n' "${residue[*]}" >&2
+}
+
+
 cmd_add() {
   local branch="${1:-}"
   shift || true
@@ -321,6 +361,17 @@ cmd_add() {
 
   [[ -n "$branch" ]] || usage
 
+  local branch_existed=0
+
+  # Asked before a path is created, so this refusal cannot leave a freshly
+  # made temp directory behind.
+  if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+    branch_existed=1
+
+    ((from_given == 0)) ||
+      die "$branch already exists; --from $from would be ignored. Drop --from, or pick a new branch name."
+  fi
+
   if [[ -z "$path" ]]; then
     # `mktemp -d` names AND creates in one step, so there is no window in
     # which the name is known and the directory is not yet ours, and 0700
@@ -341,24 +392,19 @@ cmd_add() {
 
   cd "$repo_root"
 
-  local created_branch=0 status=0
+  local status=0
 
-  # A `git worktree add` that fails must not leave the directory this
-  # command created behind: `rmdir` (never `rm -rf`) because the only
-  # directory this branch may remove is the empty one mktemp just made.
-  # git's own exit status is still what the caller sees.
-  if git show-ref --verify --quiet "refs/heads/$branch"; then
-    ((from_given == 0)) ||
-      die "$branch already exists; --from $from would be ignored. Drop --from, or pick a new branch name."
-
+  # A `git worktree add` that fails must not leave residue behind, and
+  # `unwind_add` says so out loud when it cannot help it. git's own exit
+  # status is still what the caller sees.
+  if ((branch_existed == 1)); then
     git worktree add "$path" "$branch" || status=$?
   else
     git worktree add -b "$branch" "$path" "$from" || status=$?
-    ((status != 0)) || created_branch=1
   fi
 
   if ((status != 0)); then
-    ((created_path == 0)) || rmdir "$path" 2>/dev/null || true
+    unwind_add "$path" "$branch" "$created_path" "$branch_existed"
     exit "$status"
   fi
 
@@ -377,9 +423,8 @@ cmd_add() {
     (seed_caches "$path") || status=$?
 
     if ((status != 0)); then
-      git worktree remove --force "$path" >/dev/null 2>&1 || true
-      ((created_branch == 0)) || git branch -D "$branch" >/dev/null 2>&1 || true
-      die "seeding failed; removed $path (and its new branch) again" "$status"
+      unwind_add "$path" "$branch" "$created_path" "$branch_existed"
+      die "seeding failed; undid $path (and the branch, if this call created it)" "$status"
     fi
   fi
 
