@@ -47,6 +47,15 @@ defmodule Raxol.Web3.Tron.Address do
   @payload_bytes 21
   @checksum_bytes 4
 
+  # Base58Check over 25 bytes whose first byte is fixed at `0x41` is always
+  # exactly 34 characters, so the length is one number rather than a range.
+  # It is checked BEFORE `base58_decode/1` because `to_integer/2` is
+  # `number * 58 + value` per character -- O(n^2) bignum work on a string the
+  # caller chose -- and this path is reached from the `web3_account_info`
+  # `account` argument ahead of the rate limiter and the circuit breaker.
+  # `Raxol.Web3.Backend.Solana` bounds its own Base58 the same way.
+  @address_chars 34
+
   @type t :: String.t()
 
   @typedoc "Why an address was refused. One reason, because a caller can act on one."
@@ -55,12 +64,13 @@ defmodule Raxol.Web3.Tron.Address do
   @doc """
   The 21-byte payload behind a Base58Check address.
 
-  Refuses, in order: a value that is not a string, a string that is not Base58,
-  a decoded length that is not payload plus checksum, a payload whose first byte
-  is not the mainnet prefix, and a checksum that does not verify.
+  Refuses, in order: a value that is not a string, a string that is not 34
+  characters long, a string that is not Base58, a decoded length that is not
+  payload plus checksum, a payload whose first byte is not the mainnet prefix,
+  and a checksum that does not verify.
   """
   @spec decode(term()) :: {:ok, binary()} | {:error, reason()}
-  def decode(address) when is_binary(address) do
+  def decode(address) when is_binary(address) and byte_size(address) == @address_chars do
     with {:ok, decoded} <- base58_decode(address),
          <<payload::binary-size(@payload_bytes), checksum::binary-size(@checksum_bytes)>> <-
            decoded,

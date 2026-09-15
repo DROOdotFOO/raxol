@@ -71,6 +71,29 @@ defmodule Raxol.Web3.Tron.AddressTest do
       assert Address.from_hex("0x41zz" <> String.duplicate("ab", 19)) ==
                {:error, :invalid_address}
     end
+
+    test "a length other than 34 is refused, either side of the bound" do
+      <<short::binary-size(33), _last::binary>> = @usdt
+
+      refute Address.valid?(short)
+      refute Address.valid?(@usdt <> "T")
+    end
+
+    test "an over-long address is refused before any decode work" do
+      # `to_integer/2` is `number * 58 + value` per character, so an unbounded
+      # caller string is O(n^2) bignum work on a path the rate limiter and the
+      # circuit breaker sit behind: this is reached from the `web3_account_info`
+      # `account` argument. Reductions rather than elapsed time, because the
+      # property is how much work ran and not how fast the runner is -- the
+      # recursion alone charges one reduction per character.
+      long = String.duplicate("T", 20_000)
+
+      {:reductions, before} = Process.info(self(), :reductions)
+      assert Address.decode(long) == {:error, :invalid_address}
+      {:reductions, after_decode} = Process.info(self(), :reductions)
+
+      assert after_decode - before < 1_000
+    end
   end
 
   describe "canonical/1" do
