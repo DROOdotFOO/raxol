@@ -140,6 +140,34 @@ at all. The app's own beams DO recompile (Mix manifests are keyed by absolute
 source path, which is also why a `MIX_BUILD_PATH` shared between worktrees
 recompiles anyway, and would have two worktrees writing the same manifests).
 
+That speed is bought with trust: the seed is a COPY of this checkout's
+`deps`/`_build`, the new worktree never runs `deps.get`, so Hex checksum
+verification never happens there and one hand-patched dependency here
+propagates into every worktree made afterwards. It is a single-user
+workstation helper, not something for a shared box or a CI runner, where
+every worktree must fetch and verify its own dependencies. `worktree.sh add
+BRANCH --fresh` skips seeding for exactly that case.
+
+`add` also refuses to seed when `mix.lock` (root or any
+`packages/*/mix.lock`) differs between this checkout and the branch, since
+then the caches describe some other set of dependencies (exit 3, and the
+message says which of the two sides moved). `sync` warns and re-seeds
+instead of refusing, because carrying a bumped lock from here into an
+existing worktree is what `sync` is for. Symlinked locks and symlinked
+`packages/*` entries in the target are refused outright rather than read
+through. None of this is an integrity check: it says the two checkouts
+agree on what the dependencies should be, not that the copied bytes are
+what Hex published. Only `--fresh` gets you that.
+
+With no path argument the worktree lands in `mktemp -d
+"${TMPDIR:-/tmp}/raxol-<slug>.XXXXXXXX"`, printed as the `cd` line. The
+point is not an unguessable name, since mktemp's entropy is libc's
+business, but that it creates the directory atomically and 0700, so the
+path is never known-and-unowned. The old fixed `/tmp/raxol-<slug>` was
+exactly that: a name derivable from a branch that is public on the PR,
+under a world-writable directory, belonging to whoever got there first
+(CWE-377). An explicit path argument is used as given.
+
 ### Install paths
 
 The packaged CLI is self-contained (Burrito wraps its own ERTS), so none of

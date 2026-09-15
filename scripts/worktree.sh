@@ -32,14 +32,31 @@
 # So: one private cache per worktree, cheaply cloned. No shared mutable state.
 #
 # Usage:
-#   scripts/worktree.sh add <branch> [path] [--from <ref>]
+#   scripts/worktree.sh add <branch> [path] [--from <ref>] [--fresh]
 #   scripts/worktree.sh sync <path>
 #   scripts/worktree.sh rm <path>
 #   scripts/worktree.sh list
 #
 # `add` creates the branch if it does not exist (from --from, default HEAD;
 # --from is refused when the branch already exists, rather than ignored).
-# Default path: /tmp/raxol-<branch with / and non-word chars as ->.
+# The branch name is the first argument and may not begin with `-`: a
+# boolean flag is naturally written first, and `add --fresh feature/x`
+# would otherwise bind the branch to `--fresh` and the path to `feature/x`.
+# `--fresh` skips seeding entirely -- a plain cold `git worktree add`, whose
+# first compile pays the full dependency fetch and build, and whose
+# dependencies are therefore fetched and checksum-verified for that branch.
+# That is the way to proceed when a seed is refused, and the way to use this
+# script anywhere the TRUST BOUNDARY below does not hold.
+# Default path: `mktemp -d "${TMPDIR:-/tmp}/raxol-<slug>.XXXXXXXX"`. The
+# property that buys is not an unguessable name -- how much entropy mktemp
+# spends on those eight characters is libc's business, not a guarantee this
+# script can make -- but an ATOMIC EXCLUSIVE CREATE: mktemp names and
+# creates the directory in the same step, and it is 0700 from the moment it
+# exists, so there is no window in which the path is known and unowned. The
+# old fixed `/tmp/raxol-<slug>` had exactly that window, under a
+# world-writable sticky directory, for a name derivable from a branch that
+# is public on the PR (CWE-377). An explicit path argument is used exactly
+# as given, and is still refused if anything is already there.
 #
 # `sync <path>` re-seeds an EXISTING worktree of this repository -- after a
 # dependency bump in this checkout, say. It refuses the source checkout
@@ -47,9 +64,44 @@
 # caches are replaced, and replacing the source's caches with copies of
 # themselves is never what a caller meant.
 #
-# Exit codes: 0 ok, 1 a usage error or a refused target, 2 the source
-# checkout has no warm cache to clone (run `mix deps.get && mix compile` in
-# it first). A failing `git` surfaces git's own status.
+# TRUST BOUNDARY. The seed is a COPY of whatever is in the source checkout,
+# not a fetch: the seeded worktree never runs `deps.get`, so Hex's checksum
+# verification never happens there. One hand-patched or stale artifact under
+# this checkout's `deps`/`_build` propagates into every worktree created
+# afterwards -- including a worktree created to review someone else's
+# branch, where the reviewer's assumption is that they are running that
+# branch against its locked dependencies.
+#
+# What IS checked is cheap and offline: `mix.lock` (root and every
+# `packages/*/mix.lock`) is compared between source and target, because a
+# differing lock is exactly the case where the seeded artifacts do not
+# describe the branch's dependencies. That is a staleness check, not an
+# integrity one -- it says the two checkouts agree on what the dependencies
+# should be, not that the copied bytes are what Hex published. Symlinks in
+# the target are REFUSED rather than followed: `-f` and `cmp` both read
+# through a symlink, so a `mix.lock` linked at this checkout's own lock
+# compares byte-identical while the file Mix reads is something else, and a
+# symlinked `packages/<pkg>` routes the copy out of the worktree entirely.
+# The branch under review is what plants either one.
+#
+# `add` refuses the seed on a lock mismatch (exit 3): the worktree does not
+# exist yet, so `--fresh` is a correct and cheap answer. `sync` warns and
+# proceeds, because carrying a NEW lock from this checkout into an existing
+# worktree is what `sync` is for -- refusing it would leave the subcommand
+# with no working use at all.
+#
+# So this is a single-user workstation helper. It is NOT for a shared box or
+# a CI runner, where every worktree must fetch and verify its own
+# dependencies: use `--fresh` there, or do not use this script.
+#
+# Exit codes: 0 ok, 1 a usage error or a refused target (a symlinked lock or
+# package directory included), 2 the source checkout has no warm cache to
+# clone -- run `mix deps.get && mix compile` in it first, and this is
+# checked BEFORE the lock comparison so a cold source reports the blocker
+# that really comes first, 3 `add` refused the seed because `mix.lock`
+# differs between the source checkout and the target (re-run `add --fresh`,
+# or reconcile the locks -- the message says which side moved). A failing
+# `git` surfaces git's own status.
 # ---8<---
 
 set -euo pipefail
@@ -151,6 +203,122 @@ assert_seedable() {
   SEED_TARGET="$resolved"
 }
 
+# Both the lock comparison below and the copy itself read the target through
+# whatever the target's own paths point at, and `-f`, `cmp` and a glob all
+# follow symlinks. Two consequences, both controlled by the branch under
+# review: a `mix.lock` symlinked at THIS checkout's lock compares
+# byte-identical, so the staleness gate passes on a lock Mix never reads;
+# and a symlinked `packages/<pkg>` makes the glob enumerate, and
+# `replace_dir` write, somewhere outside the worktree. Neither is resolved
+# and then judged -- they are refused, which is the only answer that does
+# not depend on where the link happens to point today.
+assert_no_symlinked_locks() {
+  local target="$1" policy="$2" entry offenders=() escape=""
+
+  [[ ! -L "$target/mix.lock" ]] || offenders+=("mix.lock")
+
+  if [[ -L "$target/packages" ]]; then
+    offenders+=("packages")
+  else
+    shopt -s nullglob
+    for entry in "$target"/packages/*; do
+      if [[ -L "$entry" ]]; then
+        offenders+=("packages/$(basename "$entry")")
+      elif [[ -L "$entry/mix.lock" ]]; then
+        offenders+=("packages/$(basename "$entry")/mix.lock")
+      fi
+    done
+    shopt -u nullglob
+  fi
+
+  # `--fresh` is an `add` flag, so it is only offered when `add` is what is
+  # running; a `sync` caller told to re-run with it would find no such
+  # option.
+  [[ "$policy" != refuse ]] ||
+    escape=" Or use 'add --fresh' for an unseeded worktree."
+
+  ((${#offenders[@]} == 0)) ||
+    die "symlink under $target (${offenders[*]}); a symlinked lock compares equal to whatever it points at and a symlinked package directory sends the copy there, so neither is followed. Replace it with a real file.$escape"
+}
+
+# The one provenance check this script can make offline and for free: the
+# seeded caches are the dependencies the SOURCE checkout resolved, so if the
+# target's `mix.lock` says something else, the seed describes the wrong
+# dependencies -- and Mix will not notice, because it never re-fetches what
+# it already considers built.
+#
+# `refuse` (`add`) stops with exit 3, because no worktree exists yet and
+# `add --fresh` is a correct answer. `warn` (`sync`) reports and continues:
+# `sync` exists to carry a new lock and its caches from this checkout into
+# an existing worktree, so the mismatch it would refuse on is its own
+# documented use.
+#
+# Root lock plus every package's, on BOTH sides: a package that exists in
+# only one of the two checkouts is itself a lock difference. `cmp` rather
+# than a checksum -- same answer, one process, and it stops at the first
+# differing byte.
+check_locks() {
+  local target="$1" policy="$2"
+  local rels=(mix.lock) mismatched=() rel lock
+
+  shopt -s nullglob
+  for lock in "$repo_root"/packages/*/mix.lock "$target"/packages/*/mix.lock; do
+    rel="packages/$(basename "$(dirname "$lock")")/mix.lock"
+    [[ " ${rels[*]} " == *" $rel "* ]] || rels+=("$rel")
+  done
+  shopt -u nullglob
+
+  for rel in "${rels[@]}"; do
+    # Absent on both sides is not a difference (a package that vendors no
+    # dependencies has no lock); absent on ONE side is.
+    [[ -f "$repo_root/$rel" || -f "$target/$rel" ]] || continue
+
+    if [[ ! -f "$repo_root/$rel" || ! -f "$target/$rel" ]] ||
+      ! cmp -s "$repo_root/$rel" "$target/$rel"; then
+      mismatched+=("$rel")
+    fi
+  done
+
+  ((${#mismatched[@]} > 0)) || return 0
+
+  # WORKING-TREE files are compared, so the commonest mismatch by far is not
+  # a divergent branch at all: an uncommitted lock in THIS checkout, mid
+  # `mix deps.update` or a bump not yet committed, differs from every
+  # worktree at once. Telling that caller to "bring this checkout to that
+  # lock" is advice to throw the newer lock away, so ask git which side is
+  # the edited one and say so.
+  local edited_here=() differs_there=() detail=() advice=""
+
+  for rel in "${mismatched[@]}"; do
+    if [[ -n "$(git -C "$repo_root" status --porcelain -- "$rel" 2>/dev/null)" ]]; then
+      edited_here+=("$rel")
+    else
+      differs_there+=("$rel")
+    fi
+  done
+
+  if ((${#edited_here[@]} > 0)); then
+    detail+=("uncommitted in this checkout: ${edited_here[*]}")
+    advice+=" This checkout is the side that moved, and its caches are the newer lock's -- commit or stash ${edited_here[*]} here, or carry it into the worktree with 'sync', rather than reverting anything."
+  fi
+
+  if ((${#differs_there[@]} > 0)); then
+    detail+=("committed differently in the target: ${differs_there[*]}")
+    advice+=" The target is the side that moved -- check its lock out here and run 'mix deps.get' so these caches describe it."
+  fi
+
+  local joined="${detail[0]}"
+  ((${#detail[@]} < 2)) || joined="${detail[0]}; ${detail[1]}"
+
+  if [[ "$policy" == warn ]]; then
+    printf 'worktree: mix.lock differs from %s (%s) -- re-seeding anyway, which is what sync is for; run `mix deps.get` there if it keeps a lock of its own.\n' \
+      "$target" "$joined" >&2
+    return 0
+  fi
+
+  die "mix.lock differs between $repo_root and $target ($joined); the caches here are not that branch's dependencies.$advice Or use 'add --fresh' for an unseeded worktree that fetches and verifies its own." 3
+}
+
 # Root caches plus every package's own (`packages/*/deps` and
 # `packages/*/_build` are separate Mix projects and separately warm).
 #
@@ -160,8 +328,14 @@ assert_seedable() {
 # root caches are required, and the per-package count is reported so a
 # partially warm source is visible rather than hidden behind one success
 # line.
+#
+# Checks run cheapest-and-most-blocking first. A source checkout with no
+# `_build`/`deps` cannot seed anything at all, whatever the locks say, so
+# reporting a lock mismatch there (exit 3, "reconcile the locks") sends the
+# caller after the second problem while the first still stands: the accurate
+# answer is exit 2, `mix deps.get && mix compile` here.
 seed_caches() {
-  local target="$1"
+  local target="$1" lock_policy="${2:-refuse}"
   local missing=()
 
   for name in _build deps; do
@@ -171,6 +345,9 @@ seed_caches() {
   if ((${#missing[@]} > 0)); then
     die "no ${missing[*]} in $repo_root to clone; run 'mix deps.get && mix compile' there first" 2
   fi
+
+  assert_no_symlinked_locks "$target" "$lock_policy"
+  check_locks "$target" "$lock_policy"
 
   for name in _build deps; do
     replace_dir "$repo_root/$name" "$target/$name"
@@ -208,10 +385,60 @@ slug() {
   printf '%s' "$1" | tr '/' '-' | tr -c '[:alnum:]._-' '-'
 }
 
+# Undo as much of a failed `add` as this call actually created, and REPORT
+# whatever it could not. A swallowed cleanup failure is worse here than in
+# most places: the residue is a 0700 temp directory, a stale worktree
+# registration and possibly a branch, one set per failure, and the command
+# exits with no `worktree:` line at all, so the caller learns none of it.
+#
+# The branch is decided by `show-ref` rather than by a flag set once git
+# returned successfully, because `git worktree add -b` creates
+# `refs/heads/<branch>` BEFORE it checks the tree out: a failure after that
+# point leaves the ref despite the non-zero status. Left there, the next run
+# takes the "branch already exists" path and dies with "--from would be
+# ignored", a message about the previous failure rather than this command.
+unwind_add() {
+  local path="$1" branch="$2" created_path="$3" branch_existed="$4"
+  local residue=()
+
+  # Registration and directory come off together when the worktree got as
+  # far as being registered; only if that does not apply is the directory
+  # mktemp made this command's own to `rmdir` (never `rm -rf`).
+  if [[ -e "$path" || -L "$path" ]]; then
+    git worktree remove --force "$path" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -e "$path" || -L "$path" ]]; then
+    if ((created_path == 1)); then
+      rmdir "$path" 2>/dev/null || residue+=("directory $path")
+    else
+      residue+=("directory $path")
+    fi
+  fi
+
+  if ((branch_existed == 0)) && git show-ref --verify --quiet "refs/heads/$branch"; then
+    git branch -D "$branch" >/dev/null 2>&1 || residue+=("branch $branch")
+  fi
+
+  ((${#residue[@]} == 0)) ||
+    printf 'worktree: could not finish undoing the failed add; still there: %s\n' "${residue[*]}" >&2
+}
+
 cmd_add() {
   local branch="${1:-}"
   shift || true
-  local path="" from="HEAD" from_given=0
+  local path="" from="HEAD" from_given=0 fresh=0 created_path=0
+
+  # `branch` is positional and first, but a boolean flag is naturally
+  # written first too, so `add --fresh feature/x` means branch `--fresh` at
+  # path `feature/x` -- and git's own complaint about it is `git branch`
+  # usage, which names neither argument. Refused here instead.
+  case "$branch" in
+    -h | --help) usage 0 ;;
+    -*)
+      die "the first argument is the branch name, and '$branch' is an option; options come after it -- 'add <branch> [path] [--from <ref>] [--fresh]'"
+      ;;
+  esac
 
   while (($# > 0)); do
     case "$1" in
@@ -220,6 +447,10 @@ cmd_add() {
         [[ -n "$from" ]] || usage
         from_given=1
         shift 2
+        ;;
+      --fresh)
+        fresh=1
+        shift
         ;;
       -*)
         die "unknown option: $1"
@@ -233,26 +464,52 @@ cmd_add() {
   done
 
   [[ -n "$branch" ]] || usage
-  path="${path:-/tmp/raxol-$(slug "$branch")}"
 
-  # `-e` follows symlinks, so a dangling link planted at a predictable
-  # `/tmp/raxol-<slug>` would test false and `git worktree add` would then
-  # materialise the checkout at whatever the link points at -- after which
-  # this script's copies run there. `-L` is the case `-e` misses.
-  [[ -e "$path" || -L "$path" ]] && die "$path already exists"
+  local branch_existed=0
+
+  # Asked before a path is created, so this refusal cannot leave a freshly
+  # made temp directory behind.
+  if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+    branch_existed=1
+
+    ((from_given == 0)) ||
+      die "$branch already exists; --from $from would be ignored. Drop --from, or pick a new branch name."
+  fi
+
+  if [[ -z "$path" ]]; then
+    # `mktemp -d` names AND creates in one step, so there is no window in
+    # which the name is known and the directory is not yet ours, and 0700
+    # keeps it that way afterwards. `git worktree add` refuses a non-empty
+    # directory but accepts an existing EMPTY one (checked against git
+    # 2.50), which is exactly what mktemp leaves -- so the checkout lands
+    # inside the directory mktemp owns, rather than beside it.
+    local tmpdir="${TMPDIR:-/tmp}"
+    path="$(mktemp -d "${tmpdir%/}/raxol-$(slug "$branch").XXXXXXXX")"
+    created_path=1
+  else
+    # `-e` follows symlinks, so a dangling link planted at a path an
+    # attacker can guess would test false and `git worktree add` would then
+    # materialise the checkout at whatever the link points at -- after
+    # which this script's copies run there. `-L` is the case `-e` misses.
+    [[ ! -e "$path" && ! -L "$path" ]] || die "$path already exists"
+  fi
 
   cd "$repo_root"
 
-  local created_branch=0
+  local status=0
 
-  if git show-ref --verify --quiet "refs/heads/$branch"; then
-    ((from_given == 0)) ||
-      die "$branch already exists; --from $from would be ignored. Drop --from, or pick a new branch name."
-
-    git worktree add "$path" "$branch"
+  # A `git worktree add` that fails must not leave residue behind, and
+  # `unwind_add` says so out loud when it cannot help it. git's own exit
+  # status is still what the caller sees.
+  if ((branch_existed == 1)); then
+    git worktree add "$path" "$branch" || status=$?
   else
-    git worktree add -b "$branch" "$path" "$from"
-    created_branch=1
+    git worktree add -b "$branch" "$path" "$from" || status=$?
+  fi
+
+  if ((status != 0)); then
+    unwind_add "$path" "$branch" "$created_path" "$branch_existed"
+    exit "$status"
   fi
 
   # Seeding is the reason this command exists, so a failed seed is a failed
@@ -261,13 +518,18 @@ cmd_add() {
   # supposed to prevent. Run in a subshell, because `seed_caches` reports
   # failure by exiting (`die`) -- calling it directly would take this shell
   # down with it and skip the unwind.
-  local status=0
-  (seed_caches "$path") || status=$?
+  #
+  # Which of the two a caller got is reported, because it decides both what
+  # the first compile costs and where the dependencies in there came from.
+  if ((fresh == 1)); then
+    printf 'fresh %s (nothing seeded; its own deps.get fetches and verifies)\n' "$path"
+  else
+    (seed_caches "$path" refuse) || status=$?
 
-  if ((status != 0)); then
-    git worktree remove --force "$path" >/dev/null 2>&1 || true
-    ((created_branch == 0)) || git branch -D "$branch" >/dev/null 2>&1 || true
-    die "seeding failed; removed $path (and its new branch) again" "$status"
+    if ((status != 0)); then
+      unwind_add "$path" "$branch" "$created_path" "$branch_existed"
+      die "seeding failed; undid $path (and the branch, if this call created it)" "$status"
+    fi
   fi
 
   printf 'cd %s\n' "$path"
@@ -275,10 +537,20 @@ cmd_add() {
 
 cmd_sync() {
   local path="${1:-}"
+
+  case "$path" in
+    -h | --help) usage 0 ;;
+    -*) die "unknown option: $path" ;;
+  esac
+
   [[ -n "$path" ]] || usage
 
   assert_seedable "$path"
-  seed_caches "$SEED_TARGET"
+
+  # `warn`, not `refuse`: re-seeding after a dependency bump in this
+  # checkout is `sync`'s documented job, and that bump IS a lock mismatch,
+  # so refusing would reject every call it exists to serve.
+  seed_caches "$SEED_TARGET" warn
 }
 
 cmd_rm() {
@@ -310,6 +582,9 @@ case "${1:-}" in
   list)
     shift
     cmd_list "$@"
+    ;;
+  -h | --help | help)
+    usage 0
     ;;
   *) usage ;;
 esac
