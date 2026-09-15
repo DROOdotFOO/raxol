@@ -18,6 +18,7 @@
 /.dialyzer_ignore.exs           @DROOdotFOO
 /.gitleaks.toml                 @DROOdotFOO
 /.credo.exs                     @DROOdotFOO
+/bench/core/buffer_gate.exs     @DROOdotFOO
 
 # Security posture and the documents people act on during an incident.
 /SECURITY.md                    @DROOdotFOO
