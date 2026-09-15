@@ -31,13 +31,13 @@ defmodule Raxol.REPL.Evaluator do
 
   They bound nothing the evaluation creates or reaches. Filesystem reads and
   writes, `:os.cmd/1`, `Port.open/2`, `Node.connect/1` and `:erlang.halt/0`
-  resolve exactly as any other call does. On timeout `stop_eval/3` signals ONE
-  pid: a process the evaluation `spawn`ed is not linked to it and keeps running
-  with full node authority after `eval/3` has returned
-  `{:error, "Evaluation timed out after ...", evaluator}`. The signal's reason
-  is `:brutal_kill` rather than `:kill`, so an evaluation that sets
-  `Process.flag(:trap_exit, true)` receives it as a message and survives its
-  own timeout too. Only the `max_heap_size` breach is enforced by the VM.
+  resolve exactly as any other call does. The timeout and the heap cap are
+  both enforced by the VM: `stop_eval/3` signals `:kill`, the one reason an
+  evaluation that sets `Process.flag(:trap_exit, true)` cannot intercept, so
+  no evaluation outlives its own timeout. It signals ONE pid, though -- a
+  process the evaluation `spawn`ed is not linked to it and keeps running with
+  full node authority after `eval/3` has returned
+  `{:error, "Evaluation timed out after ...", evaluator}`.
 
   So code handed to this evaluator runs with the full authority of the node's
   OS user. Expose the surface only to a principal already trusted with that
@@ -205,7 +205,12 @@ defmodule Raxol.REPL.Evaluator do
 
   defp stop_eval(pid, ref, tag) do
     Process.demonitor(ref, [:flush])
-    Process.exit(pid, :brutal_kill)
+    # `:kill` is the only reason `Process.exit/2` delivers untrappably. Any
+    # other one reaches an evaluation that set `Process.flag(:trap_exit, true)`
+    # as an ordinary message, leaving it running with full node authority after
+    # its timeout has already been reported. (`:brutal_kill` is a supervisor
+    # shutdown spec, not a signal reason, and traps like anything else.)
+    Process.exit(pid, :kill)
 
     # A result that raced the kill would otherwise sit in the mailbox. It can
     # no longer be mistaken for a later evaluation's (the tag is unique), but
