@@ -16,6 +16,69 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
   defp flat_texts(_), do: []
 
+  # `flat_texts/1` only descends :row/:column; a MarkdownBody body can
+  # carry other node types, so the sanitize assertions walk anything with
+  # children.
+  defp deep_texts(%{type: :text, content: content}) when is_binary(content),
+    do: [content]
+
+  defp deep_texts(%{children: children}) when is_list(children),
+    do: Enum.flat_map(children, &deep_texts/1)
+
+  defp deep_texts(nodes) when is_list(nodes),
+    do: Enum.flat_map(nodes, &deep_texts/1)
+
+  defp deep_texts(_node), do: []
+
+  defp deep_styles(%{type: :text} = node), do: [Map.get(node, :style)]
+
+  defp deep_styles(%{children: children}) when is_list(children),
+    do: Enum.flat_map(children, &deep_styles/1)
+
+  defp deep_styles(nodes) when is_list(nodes),
+    do: Enum.flat_map(nodes, &deep_styles/1)
+
+  defp deep_styles(_node), do: []
+
+  @link_style_keys [:link, :hyperlink]
+
+  # Styling-only view of the tree: the SGR/prominence keys, with the two
+  # link-carrying keys dropped. Comparing THIS against a clean render
+  # proves prominence/SGR survived the strip without also asserting that
+  # a hostile `:link` came through verbatim -- which is what comparing
+  # whole style maps would do.
+  defp deep_styles_sans_link(view) do
+    view |> deep_styles() |> Enum.map(&drop_link_keys/1)
+  end
+
+  defp drop_link_keys(style) when is_map(style),
+    do: Map.drop(style, @link_style_keys)
+
+  defp drop_link_keys(style), do: style
+
+  # Every `:link`/`:hyperlink` URL in the tree. These ride into the OSC 8
+  # emitters, so they are display output too and have to be checked
+  # alongside `deep_texts/1`.
+  defp deep_links(%{type: :text} = node) do
+    style = Map.get(node, :style)
+
+    if is_map(style),
+      do:
+        style
+        |> Map.take(@link_style_keys)
+        |> Map.values()
+        |> Enum.filter(&is_binary/1),
+      else: []
+  end
+
+  defp deep_links(%{children: children}) when is_list(children),
+    do: Enum.flat_map(children, &deep_links/1)
+
+  defp deep_links(nodes) when is_list(nodes),
+    do: Enum.flat_map(nodes, &deep_links/1)
+
+  defp deep_links(_node), do: []
+
   # Structural gap assert: flat_texts can't see the unset-gap footgun
   # (unset gap defaults to 1 in the layout engine), so walk the tree and
   # require every :column/:row container to carry an explicit gap of 0.
@@ -531,6 +594,116 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
       rendered = Block.render(block, %{width: 6})
       assert %{type: :column} = rendered
+    end
+  end
+
+  describe "render/2 — text nodes are control-byte stripped" do
+    # One string per injection class ViewText.strip?/1 claims to cover, so
+    # deleting any single clause from it fails this suite:
+    #   * ESC-led 7-bit CSI/OSC: ED, alt-screen switch, OSC 52 clipboard
+    #     write, OSC 0 title set.
+    #   * a UTF-8-encoded C1 (U+009B, 8-bit CSI) -- the only form the
+    #     `cp >= 0x80 and cp <= 0x9F` clause can ever see, since a RAW
+    #     0x9B byte is invalid UTF-8 and is dropped by the invalid-byte
+    #     clause instead (covered separately below).
+    #   * a bare CR, which overwrites the line the reader already read.
+    #   * BS, which does the same one column at a time.
+    #   * DEL.
+    @poison "hello \e[2J\e[?1049h\e]52;c;cHduZWQ=\a\e]0;PWNED\a" <>
+              "\u009B2J\rOVERWRITE\b" <> <<0x7F>> <> " world"
+
+    # Bytes that must never appear in rendered output, with the name of
+    # the class each one stands for.
+    @forbidden [
+      {"ESC", "\e"},
+      {"BEL", "\a"},
+      {"C1 CSI (U+009B)", "\u009B"},
+      {"CR", "\r"},
+      {"BS", "\b"},
+      {"DEL", <<0x7F>>}
+    ]
+
+    defp render_message(content, context) do
+      :message
+      |> Block.from_events(message_events(content), fold: :expanded)
+      |> Block.render(context)
+    end
+
+    # Everything this view map would put on a terminal: node contents AND
+    # the `:link`/`:hyperlink` URLs, which the OSC 8 emitters splice into
+    # an escape sequence.
+    defp assert_no_control_bytes(view) do
+      emitted = deep_texts(view) ++ deep_links(view)
+
+      for {name, byte} <- @forbidden, chunk <- emitted do
+        refute String.contains?(chunk, byte),
+               "#{name} survived into rendered output: #{inspect(chunk)}"
+      end
+    end
+
+    # Block content comes from an LLM, a tool, or an external MCP server.
+    # An ESC left in content is executed by the terminal, not printed: ED
+    # clears the screen, the alt-screen switch takes it over, OSC 52
+    # writes the clipboard.
+    #
+    # Styling is checked against a clean render of the same shape with the
+    # link keys dropped: the strip must leave prominence/SGR alone, but
+    # comparing WHOLE style maps would also assert that a hostile `:link`
+    # arrived verbatim, which is the opposite of what this suite is for.
+    test "a hostile message body renders with no control byte, styles intact" do
+      rendered = render_message(@poison, %{width: 200})
+      clean = render_message("hello world", %{width: 200})
+      texts = deep_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "hello"))
+      assert Enum.any?(texts, &(&1 =~ "world"))
+      assert_no_control_bytes(rendered)
+      assert deep_styles_sans_link(rendered) == deep_styles_sans_link(clean)
+    end
+
+    test "the Markdown body is stripped on the same path" do
+      rendered = render_message(@poison, %{width: 200, markdown: true})
+      texts = deep_texts(rendered)
+
+      assert Enum.any?(texts, &(&1 =~ "hello"))
+      assert_no_control_bytes(rendered)
+    end
+
+    # `MarkdownRenderer`'s link pattern captures the URL as `[^)]+` -- any
+    # byte but `)` -- and hangs it on the text node's style as `:link`,
+    # which `ElementRenderer` lifts onto the cell and the OSC 8 emitters
+    # splice into `ESC ] 8 ;; <url> ST`. A URL is never displayed, so a
+    # strip that rewrites only `:content` leaves it wide open: the ESC
+    # below closes our OSC 8 and opens an OSC 52 clipboard write, and the
+    # CR -- which `TextUtil.sanitize_controls/1`, the filter the Markdown
+    # path applies to its INPUT, deliberately keeps -- survives all the
+    # way to `:link` unless this render strips it.
+    test "a poisoned Markdown link URL carries no control byte" do
+      url = "http://x\rOVERWRITE\e]52;c;cHduZWQ=\a\u009B2J\b" <> <<0x7F>>
+
+      rendered = render_message("[ok](#{url})", %{width: 200, markdown: true})
+
+      # the link itself still renders -- this is a strip, not a drop
+      assert Enum.any?(deep_texts(rendered), &(&1 =~ "ok"))
+      assert [_ | _] = deep_links(rendered)
+      assert_no_control_bytes(rendered)
+    end
+
+    # A raw 0x9B byte is not valid UTF-8, so it never reaches
+    # `strip?/1`'s C1 clause -- `sanitize_line/1`'s invalid-byte clause
+    # drops it first. Rendering invalid UTF-8 currently degrades the block
+    # to its unrenderable placeholder (TextMeasure raises on it); either
+    # way the output must carry no 0x9B, and the render must not raise.
+    test "a raw 8-bit CSI byte never reaches the output" do
+      rendered =
+        render_message("hello " <> <<0x9B>> <> "2J world", %{width: 200})
+
+      assert %{type: :column} = rendered
+
+      refute Enum.any?(
+               deep_texts(rendered) ++ deep_links(rendered),
+               &String.contains?(&1, <<0x9B>>)
+             )
     end
   end
 

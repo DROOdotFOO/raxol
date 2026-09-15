@@ -425,7 +425,11 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   describe "expanded render carries the completion row when the block has one" do
     test "a block with content.completion gets the row appended after the mounted component's own view" do
       block = Block.from_events(:message, events(:message), fold: :expanded)
-      with_completion = %{block | content: Map.put(block.content, :completion, %{evidence: :none})}
+
+      with_completion = %{
+        block
+        | content: Map.put(block.content, :completion, %{evidence: :none})
+      }
 
       rendered = BlockBody.render(with_completion, default_context())
       texts = flat_texts(rendered)
@@ -440,7 +444,9 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
       refute Map.has_key?(block.content, :completion)
 
       {:ok, unwrapped_view} =
-        Raxol.UI.Components.Harness.BodyProvider.mount(block.kind, block.content,
+        Raxol.UI.Components.Harness.BodyProvider.mount(
+          block.kind,
+          block.content,
           context: default_context(),
           outcome: block.outcome,
           seal: block.seal
@@ -476,7 +482,9 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
           seal: with_garbage_completion.seal
         )
 
-      assert strip_ids(BlockBody.render(with_garbage_completion, default_context())) ==
+      assert strip_ids(
+               BlockBody.render(with_garbage_completion, default_context())
+             ) ==
                strip_ids(unwrapped_view),
              "an unrecognized completion shape must never trigger the completion-row wrapping column"
     end
@@ -542,6 +550,80 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
 
       refute Enum.any?(texts, &(&1 =~ "\e"))
       refute Enum.any?(texts, &(&1 =~ "```"))
+    end
+  end
+
+  describe "the expanded mount is control-byte stripped too" do
+    # A mounted BodyProvider component's view REPLACES Block.render/2's
+    # body, so it never reaches that function's strip -- and the mounted
+    # components do not all filter for themselves: ReasoningBlock and
+    # ToolResultBlock hand model-supplied text straight to
+    # `Components.text()`, and MarkdownBody's own filter keeps `\r`. Every
+    # class below reached the terminal through the expanded fold state.
+    @poison "hello \e[2J\e[?1049h\e]52;c;cHduZWQ=\a\u009B2J\rOVERWRITE\b" <>
+              <<0x7F>> <> " world"
+
+    @forbidden [
+      {"ESC", "\e"},
+      {"BEL", "\a"},
+      {"C1 CSI (U+009B)", "\u009B"},
+      {"CR", "\r"},
+      {"BS", "\b"},
+      {"DEL", <<0x7F>>}
+    ]
+
+    defp poisoned_events(:message),
+      do: [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :message, content: @poison}
+        }
+      ]
+
+    defp poisoned_events(:reasoning),
+      do: [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{item_type: :reasoning, content: @poison}
+        }
+      ]
+
+    defp poisoned_events(:tool_call),
+      do: [
+        %{
+          id: 1,
+          type: :item_completed,
+          payload: %{
+            item_type: :tool_use,
+            content: %{name: "Bash", args: %{command: @poison}}
+          }
+        },
+        %{
+          id: 2,
+          type: :item_completed,
+          payload: %{item_type: :tool_result, content: @poison}
+        }
+      ]
+
+    for kind <- [:message, :reasoning, :tool_call] do
+      test "#{kind}: an expanded mount emits no control byte" do
+        rendered =
+          unquote(kind)
+          |> Block.from_events(poisoned_events(unquote(kind)), fold: :expanded)
+          |> BlockBody.render(default_context())
+
+        texts = flat_texts(rendered)
+
+        assert Enum.any?(texts, &(&1 =~ "hello")),
+               "the visible content must survive the strip"
+
+        for {name, byte} <- @forbidden, text <- texts do
+          refute String.contains?(text, byte),
+                 "#{name} survived the expanded mount: #{inspect(text)}"
+        end
+      end
     end
   end
 end

@@ -40,7 +40,7 @@ defmodule Raxol.Harness.Surface.ViewText do
       byte-identical to plain -- neutral by default, matching every
       harness Component's own "absent prominence = zero change" contract.
 
-  ## This module is the trust boundary: sanitize content here, not downstream
+  ## The trust boundary for the paint-authority path
 
   Every string this module flattens can originate from an untrusted
   source -- a fixture's tool-call output, an LLM's streamed response, a
@@ -81,6 +81,18 @@ defmodule Raxol.Harness.Surface.ViewText do
        are left as a visible, garbled fragment, same honest failure mode
        `FlatAuthority` documents: a reader sees something was stripped
        rather than an invisible, silently-swallowed injection.
+
+  This is the boundary for the AUTHORITY path, not the only one in the
+  harness. A view map that goes to the normal `Preparer -> LayoutEngine
+  -> UIRenderer` pipeline is flattened by that pipeline, not by `lines/3`,
+  so `Raxol.UI.Components.Harness.Block.render/2` sanitizes the text nodes
+  IT emits with `sanitize_line/1` before returning them. The two overlap
+  rather than partition: `Raxol.Harness.Surface.render_block_lines/3` and
+  the pending-block footer preview both pipe `BlockBody.render(...)`
+  (which is `Block.render/2` for a folded block) into `lines/3`, so that
+  content is stripped twice. `sanitize_line/1` is idempotent, so the
+  second pass is a no-op; and `lines/3` still sanitizes everything it
+  flattens, including content from callers that never touch `Block`.
 
   **This is complementary to, not a substitute for, `FlatAuthority`'s own
   scrub** (a module-enforced flat scrub). Two

@@ -1679,15 +1679,37 @@ defmodule Raxol.Agent.Code.AppTest do
       assert noticed.notice == "first\nsec[2Jond"
     end
 
-    # Everything `App.view/1` would put on screen, as one string.
+    # Everything `App.view/1` would put on screen, as one string. A text
+    # node's `:link`/`:hyperlink` style value is collected alongside its
+    # content: it is not displayed, but `ElementRenderer` lifts it onto
+    # the cell and the OSC 8 emitters splice it into
+    # `ESC ] 8 ;; <url> ST`, so it reaches the terminal just as directly.
+    # Collecting only `:content` would let the `refute` assertions below
+    # pass over a live hyperlink injection. `transcript/1` renders without
+    # `context[:markdown]` today, so nothing in this app attaches a link
+    # yet -- the strip that keeps a hostile one out is exercised in
+    # `Raxol.UI.Components.Harness.BlockTest`, on the Markdown path that
+    # produces it.
     defp view_text(model) do
       model |> App.view() |> node_text() |> Enum.join("\n")
     end
 
-    defp node_text(%{type: :text, content: content}) when is_binary(content), do: [content]
+    defp node_text(%{type: :text, content: content} = node) when is_binary(content),
+      do: [content | node_links(node)]
+
     defp node_text(%{children: children}), do: node_text(children)
     defp node_text(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &node_text/1)
     defp node_text(_other), do: []
+
+    defp node_links(node) do
+      case Map.get(node, :style) do
+        style when is_map(style) ->
+          style |> Map.take([:link, :hyperlink]) |> Map.values() |> Enum.filter(&is_binary/1)
+
+        _no_style ->
+          []
+      end
+    end
 
     # The setters are not the only writers: a dozen call sites assign
     # `notice:` and `status_line:` by direct struct update (a resumed
@@ -1716,6 +1738,75 @@ defmodule Raxol.Agent.Code.AppTest do
       refute screen =~ "\e"
       refute screen =~ "\r"
       assert screen =~ "Allow read_file"
+    end
+
+    # Every control class the harness strip claims to cover, in one
+    # string, so removing any single clause from `ViewText.strip?/1` fails
+    # here: ESC-led 7-bit CSI/OSC (screen clear, alt-screen switch, OSC 52
+    # clipboard write), a UTF-8-encoded C1 (U+009B, 8-bit CSI -- the only
+    # form a valid-UTF-8 codepoint check can see), a bare CR and BS (line
+    # and column overwrite), and DEL.
+    @view_poison "\e[2J\e[?1049h\e]52;c;cHduZWQ=\a\u009B2J\rOVERWRITE\b" <>
+                   <<0x7F>>
+
+    # Byte / label pairs asserted absent from the rendered screen.
+    @view_forbidden [
+      {"ESC", "\e"},
+      {"BEL", "\a"},
+      {"C1 CSI (U+009B)", "\u009B"},
+      {"CR", "\r"},
+      {"BS", "\b"},
+      {"DEL", <<0x7F>>}
+    ]
+
+    defp refute_control_bytes(screen) do
+      for {name, byte} <- @view_forbidden do
+        refute String.contains?(screen, byte),
+               "#{name} survived onto the rendered screen"
+      end
+    end
+
+    # The transcript, not the chrome: an assistant message is rendered by
+    # `Block.render/2` straight into the view map, and `App.view/1` goes to
+    # the Preparer -> LayoutEngine -> UIRenderer pipeline, which has no
+    # strip of its own. A screen clear, an alt-screen switch and an OSC 52
+    # clipboard write in that message would all reach the terminal. The
+    # visible text is asserted too, so a future "strip everything"
+    # regression fails here rather than shipping.
+    test "a hostile assistant message cannot reach the terminal through the transcript" do
+      poison = "hello " <> @view_poison <> " world"
+
+      model =
+        Enum.reduce(message_turn("t1", poison), new_model(), &send_ev(&2, &1))
+
+      screen = view_text(model)
+
+      assert screen =~ "hello"
+      assert screen =~ "world"
+      refute_control_bytes(screen)
+    end
+
+    # The streaming tail is the same content one frame earlier: an item
+    # that started and is still receiving deltas has no block yet, so its
+    # chunks are joined into a text node by `tail_lines/1` itself.
+    test "the streaming tail cannot reach the terminal unsanitized" do
+      poison = "streaming " <> @view_poison <> " on"
+
+      model =
+        Enum.reduce(
+          [
+            tev("t1", 1, :turn_started, %{prompt: "ask"}),
+            tev("t1", 2, :item_started, %{item_id: "i1", item_type: :message}),
+            tev("t1", 3, :item_delta, %{item_id: "i1", chunk: poison})
+          ],
+          new_model(),
+          &send_ev(&2, &1)
+        )
+
+      screen = view_text(model)
+
+      assert screen =~ "streaming"
+      refute_control_bytes(screen)
     end
 
     test "a bidi override cannot reverse a notice" do

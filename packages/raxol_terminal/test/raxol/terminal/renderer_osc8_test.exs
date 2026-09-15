@@ -97,4 +97,47 @@ defmodule Raxol.Terminal.RendererOSC8Test do
       assert count(output, @osc8_close) == 2
     end
   end
+
+  describe "the emitted URL is confined at this sink" do
+    defp rendered(url), do: url |> linked_buffer() |> Renderer.new() |> Renderer.render()
+
+    # `style.hyperlink` is populated by `TextFormatting.set_hyperlink/2`
+    # straight from an OSC 8 sequence this emulator parsed out of untrusted
+    # program output, and re-emitted verbatim it escapes our own sequence:
+    # the ESC below closes this OSC 8 and opens an OSC 52 clipboard write.
+    # Asserted as an ESC COUNT against a clean render, because a correct
+    # OSC 8 emission is itself made of ESCs.
+    test "a URL cannot smuggle an escape sequence into the OSC 8 open" do
+      out = rendered("http://x\e]52;c;cHduZWQ=\a")
+
+      assert String.contains?(out, osc8_open("http://x"))
+      assert count(out, "\e") == count(rendered("http://x"), "\e")
+    end
+
+    # An OSC body only ends at BEL or ST, so a URL parsed out of real input
+    # can carry CR, BS, DEL and a raw 8-bit CSI (0x9B) with no ESC at all.
+    test "no control byte of any class survives into the emitted URL" do
+      for {name, byte} <- [
+            {"BEL", "\a"},
+            {"CR", "\r"},
+            {"LF", "\n"},
+            {"TAB", "\t"},
+            {"BS", "\b"},
+            {"DEL", <<0x7F>>},
+            {"raw 8-bit CSI", <<0x9B>>},
+            {"C1 CSI (U+009B)", "\u009B"}
+          ] do
+        out = rendered("http://ok" <> byte <> "tail")
+
+        assert out == rendered("http://oktail"), "#{name}: #{inspect(out)}"
+
+        refute String.contains?(out, byte),
+               "#{name} survived into the emitted URL: #{inspect(out)}"
+      end
+    end
+
+    test "a URL that is entirely control bytes emits no hyperlink at all" do
+      refute String.contains?(rendered("\e[2J\r" <> <<0x7F>>), "\e]8")
+    end
+  end
 end

@@ -17,6 +17,20 @@ defmodule Raxol.Core.RendererOSC8Test do
   defp osc8_open(url), do: "\e]8;;" <> url <> "\e\\"
   @osc8_close "\e]8;;\e\\"
 
+  # Counting ESCs is how a smuggled one is caught: a correct OSC 8
+  # emission is itself made of ESCs, so absence is not assertable -- only
+  # a surplus over an equivalent clean render is.
+  defp esc_count(output), do: length(String.split(output, "\e")) - 1
+
+  # `apply_diff/1` output for a one-cell write carrying `url`.
+  defp linked_output(url) do
+    blank = Buffer.create_blank_buffer(10, 1)
+
+    blank
+    |> Buffer.write_at(0, 0, "tx", %{hyperlink: url})
+    |> then(&Renderer.apply_diff(Renderer.render_diff(blank, &1)))
+  end
+
   describe "View DSL link: attribute" do
     test "Text.new/2 carries the link onto the element" do
       el = Text.new("0x7f3a", link: "https://basescan.org/tx/0x7f3a")
@@ -64,6 +78,58 @@ defmodule Raxol.Core.RendererOSC8Test do
       out = Renderer.apply_diff(Renderer.render_diff(blank, empty))
 
       refute String.contains?(out, "\e]8")
+    end
+
+    # The URL is spliced into `ESC ] 8 ;; <url> ST` verbatim, so an ESC in
+    # it closes our sequence and opens an attacker-chosen one -- here an
+    # OSC 52 clipboard write. The emitter is the sink: it has to confine
+    # the URL itself, because a `:hyperlink` arrives from a Markdown link
+    # an LLM wrote, from an OSC 8 sequence the emulator parsed out of
+    # untrusted program output, and from any `text(link: ...)` caller.
+    #
+    # The assertion is on the ESC COUNT against a clean render of the same
+    # shape, not on ESC absence: a correct OSC 8 emission is itself made
+    # of ESCs, so a smuggled one can only show up as a surplus.
+    test "a URL cannot smuggle an escape sequence into the OSC 8 open" do
+      out = linked_output("http://x\e]52;c;cHduZWQ=\a")
+
+      assert String.contains?(out, osc8_open("http://x"))
+      assert String.contains?(out, @osc8_close)
+      assert esc_count(out) == esc_count(linked_output("http://x"))
+    end
+
+    # Every control class an OSC 8 URL can carry, minus ESC (the test
+    # above owns that one, since a correct OSC 8 emission supplies ESCs of
+    # its own). An OSC body only ends at BEL or ST, so a URL the emulator
+    # parsed out of real input can hold CR, BS, DEL and a raw 8-bit CSI
+    # (0x9B) with no ESC at all -- re-emitted inside our own OSC 8, those
+    # are executed.
+    test "no control byte of any class survives into the emitted URL" do
+      for {name, byte} <- [
+            {"BEL", "\a"},
+            {"CR", "\r"},
+            {"LF", "\n"},
+            {"TAB", "\t"},
+            {"BS", "\b"},
+            {"DEL", <<0x7F>>},
+            {"raw 8-bit CSI", <<0x9B>>},
+            {"C1 CSI (U+009B)", "\u009B"}
+          ] do
+        out = linked_output("http://ok" <> byte <> "tail")
+
+        # Dropped in place, so the URL's surrounding text survives and the
+        # emission is byte-identical to the clean one.
+        assert out == linked_output("http://oktail"), "#{name}: #{inspect(out)}"
+
+        refute String.contains?(out, byte),
+               "#{name} survived into the emitted URL: #{inspect(out)}"
+      end
+    end
+
+    # A URL made only of control bytes sanitizes to "", and an empty URL
+    # is already "no link" -- so no bare OSC 8 pair wraps the content.
+    test "a URL that is entirely control bytes emits no hyperlink at all" do
+      refute String.contains?(linked_output("\e[2J\r" <> <<0x7F>>), "\e]8")
     end
   end
 
