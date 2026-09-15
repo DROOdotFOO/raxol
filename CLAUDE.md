@@ -54,6 +54,55 @@ CI gates the same thing in two places, both in the `format` job: the root
 Every package is covered, so `cd packages/<pkg> && mix format` is a no-op on a
 clean tree. If it rewrites files, that is a real diff and not drift.
 
+### Performance gates
+
+```bash
+mix run --no-start bench/core/buffer_gate.exs  # buffer throughput + memory
+```
+
+`bench/core/buffer_gate.exs` is the repo's only buffer performance gate. It
+measures `Raxol.Terminal.Buffer` fill (`set_cell/4`), read (`get_cell/3`),
+scroll (`scroll/2`) and per-cell memory at 80x24, 200x100 and 500x500, prints
+a PASS/FAIL table against budgets declared at the top of the file, and calls
+`System.halt(1)` on a breach. It runs as the `buffer-gate` job in
+`.github/workflows/ci-unified.yml` (every push and pull request), the job
+fails on a breach, and `ci-status` reports it as a failure. `CI Status` is a
+required status check on `master` (`strict: false`, so a branch need not be
+up to date), and `ci-status` aggregates `buffer-gate`, so a breach does block
+the merge. `enforce_admins` is off, so an admin can still merge past it --
+deliberately, because two infrastructure flakes were observed in one day (a
+Hex registry 500, and an `:enoent` from `Port.open` under fork contention)
+and a required check with no escape hatch would wedge the repo on those.
+Two properties are load-bearing:
+
+- **The budgets say what they can detect.** Throughput carries ~5x headroom
+  over the slowest of ten observed runs, because the same code spread 7x-11x
+  across runs on one machine; those rows catch a large regression and nothing
+  finer. Measured against the current budgets, rebuilding the target row 10
+  extra times per `set_cell/4` breaches one fill row and 30 extra times
+  breaches all three. Per-cell memory comes from `:erts_debug.flat_size/1`
+  and `:erts_debug.size_shared/1`, which are pure functions of the term and
+  returned the same value to the last decimal on all ten runs, so they are
+  gated at 1.01x-1.02x, tight enough that adding one field to `%Cell{}`
+  breaches both rows. Do not copy that tightness onto a timing row.
+- **It cannot pass without measuring.** `Buffer.scroll/2` rescues its own
+  failures and returns the buffer unchanged, so a broken scroll would look
+  free; the gate checks the buffer its timed sweep actually produced, and
+  requires that row 0 be the filled buffer's row 20, so a sweep where half
+  the reps no-op aborts. It also reads written cells back at the corners and
+  centre, rejects a 0 ns timing, and rejects a `flat_size` below one whole
+  expanded `Cell` per cell. Each of those aborts with exit 2, which is not a
+  pass. Same rule as `scripts/check-quality-ratchet.sh`: a gate that can
+  pass when the tool did not run is worse than no gate. The corollary is
+  that a check which cannot fire does not belong in the list.
+
+`bench/core/buffer_benchmark.exs` is a Benchee report over the
+`Raxol.Core.Buffer` compatibility shim, not a gate on the real buffer: its
+"targets" are three single-shot un-warmed `:timer.tc` calls against a fixed
+1 ms ceiling, no CI job reads its exit status, and the `memory-regression`
+matrix in `.github/workflows/regression-testing.yml` has no buffer scenario
+and renders findings as a `[WARN]` PR comment. It stays a report.
+
 ### Running examples
 
 ```bash
@@ -451,6 +500,9 @@ Key rules:
   stack, and nothing has to be measured.
 - Throughput and allocation budgets live in `bench/` and the
   regression-testing workflow, never in the suite.
+  `bench/core/buffer_gate.exs` is the worked example: budgets with a stated
+  headroom factor and a provenance block, a non-zero exit, and a CI job that
+  fails on a breach. See "Performance gates" above.
 
 ### Naming conventions
 

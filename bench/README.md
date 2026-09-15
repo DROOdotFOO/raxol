@@ -14,6 +14,21 @@ mix run bench/suites/core/performance_summary.exs              # system-wide
 mix run bench/suites/comparison/framework_comparison.exs       # the README table
 ```
 
+## Gates
+
+Most scripts here are reports: they print numbers and exit 0. One is a gate.
+
+```bash
+mix run --no-start bench/core/buffer_gate.exs   # exits 1 on a breached budget
+```
+
+`core/buffer_gate.exs` measures `Raxol.Terminal.Buffer` fill/read/scroll
+throughput and per-cell memory against budgets declared at the top of the
+file, and runs as the `buffer-gate` job in
+`.github/workflows/ci-unified.yml`, which fails when a budget is breached.
+What each budget can and cannot detect is written down next to it, along with
+the runs the numbers came from; read that before changing one.
+
 ## Suites
 
 | Directory | Contents |
@@ -41,4 +56,5 @@ Two standalone scripts sit directly in `suites/`:
 | `results/` | Benchee run output (`.benchee`, JSON) |
 | `output/` | HTML reports and their static assets |
 | `scripts/` | Benchmark utilities |
-| `core/`, `features/`, `memory/`, `live_view/`, `liveview/` | Older per-area scripts kept for reference |
+| `core/` | `buffer_gate.exs`, the gate above, plus older per-area scripts |
+| `features/`, `memory/`, `live_view/`, `liveview/` | Older per-area scripts kept for reference |
