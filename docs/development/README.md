@@ -93,7 +93,7 @@ regenerate the references with `mix raxol.rate --gen` and commit them.
 ### Development
 ```bash
 mix raxol.playground   # Component playground (42 demos)
-mix raxol.repl         # Interactive REPL with sandboxing
+mix raxol.repl         # Interactive REPL with an AST safety check
 iex -S mix            # Interactive shell
 ```
 
