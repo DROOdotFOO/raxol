@@ -592,14 +592,16 @@ jobs:
             --only input_protocol_canary
 
   # Buffer fill/read/scroll throughput and per-cell memory. This is the only
-  # blocking buffer performance check in the repo: the `memory-regression`
-  # matrix in regression-testing.yml has no buffer scenario and renders its
-  # findings as a `[WARN]` PR comment, which is a report, not a gate.
+  # buffer performance check in the repo that fails a job: the
+  # `memory-regression` matrix in regression-testing.yml has no buffer
+  # scenario and renders its findings as a `[WARN]` PR comment, which is a
+  # report, not a gate.
   #
   # `mix run` propagates the script's exit status, and the script calls
   # System.halt(1) on a breached budget (2 when it could not measure at all),
-  # so a regression fails this job and `ci-status` below reads the result.
-  # ~4 s of measurement; the 500x500 fill is most of it.
+  # so a regression fails this job and `ci-status` below reports it. Note
+  # that `ci-status` is advisory: master has no required status checks.
+  # ~10 s of measurement on an 8-core box; the 500x500 fill is most of it.
   buffer-gate:
     name: Buffer performance gate
     needs: [setup, compile]
