@@ -345,7 +345,7 @@ defmodule Raxol.Playground.Catalog do
       name: "REPL",
       module: Demos.ReplDemo,
       category: :input,
-      description: "Interactive Elixir REPL with sandboxed evaluation",
+      description: "Interactive Elixir REPL, AST-checked with resource caps",
       complexity: :advanced,
       tags: ["input", "repl", "eval", "elixir", "interactive"]
     },

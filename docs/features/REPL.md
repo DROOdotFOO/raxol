@@ -83,4 +83,4 @@ mix raxol.playground --ssh
 
 ## Playground demo
 
-The REPL is one of the playground demos (`mix raxol.playground` -> REPL). It has input history (up/down), formatted output, a bindings panel, and shows the active sandbox level.
+The REPL is one of the playground demos (`mix raxol.playground` -> REPL). It has input history (up/down), formatted output, and a bindings panel. It checks at `:strict`, which is also what it uses when served over SSH; `mix raxol.repl --sandbox` sets the level for a local terminal only.
