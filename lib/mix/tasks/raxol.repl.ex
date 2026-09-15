@@ -5,9 +5,9 @@ defmodule Mix.Tasks.Raxol.Repl do
 
       $ mix raxol.repl
 
-  Evaluates Elixir expressions with persistent bindings, IO capture,
-  and sandboxed execution. Variables defined in one expression are
-  available in subsequent ones.
+  Evaluates Elixir expressions with persistent bindings, IO capture, an AST
+  safety check applied before each evaluation, and per-evaluation resource
+  caps. Variables defined in one expression are available in subsequent ones.
 
   ## Options
 
@@ -36,10 +36,17 @@ defmodule Mix.Tasks.Raxol.Repl do
 
     timeout = Keyword.get(opts, :timeout, Raxol.Core.Defaults.timeout_ms())
 
-    Application.put_env(:raxol, :repl_sandbox, sandbox)
-    Application.put_env(:raxol, :repl_timeout, timeout)
+    # Passed as start options rather than application env: they reach
+    # `ReplDemo.init/1` through the runtime's context map, so they configure
+    # THIS terminal's REPL and nothing else in the VM. `--sandbox none` on a
+    # developer's machine must not lower the level of a playground the same
+    # node may be serving over SSH.
+    {:ok, pid} =
+      Raxol.start_link(Raxol.Playground.Demos.ReplDemo,
+        sandbox: sandbox,
+        timeout: timeout
+      )
 
-    {:ok, pid} = Raxol.start_link(Raxol.Playground.Demos.ReplDemo, [])
     ref = Process.monitor(pid)
 
     receive do
