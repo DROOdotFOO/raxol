@@ -118,6 +118,8 @@ defmodule Raxol.Web3.Backend.Blockscout do
     :list_nfts
   ]
 
+  @hex_digits Enum.concat([?0..?9, ?a..?f, ?A..?F])
+
   @doc """
   Build a handle for a CAIP-2 chain reference.
 
@@ -203,7 +205,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
   @impl Backend
   def get_transaction(%__MODULE__{} = state, hash) when is_binary(hash) do
-    with {:ok, body} <- get(state, "/api/v2/transactions/#{hash}", %{}, :transaction) do
+    with {:ok, body} <- get(state, "/api/v2/transactions/#{segment(hash)}", %{}, :transaction) do
       {:ok, transaction(body)}
     end
   end
@@ -211,7 +213,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @impl Backend
   def account_info(%__MODULE__{} = state, account_ref) do
     with {:ok, address} <- evm_address(account_ref),
-         {:ok, body} <- get(state, "/api/v2/addresses/#{address}", %{}, :account) do
+         {:ok, body} <- get(state, "/api/v2/addresses/#{segment(address)}", %{}, :account) do
       {:ok,
        %{
          ref: {:evm, body["hash"] || address},
@@ -229,7 +231,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
     with {:ok, address} <- evm_address(account_ref) do
       page(
         state,
-        "/api/v2/addresses/#{address}/transactions",
+        "/api/v2/addresses/#{segment(address)}/transactions",
         :address_transactions,
         opts,
         &transaction/1
@@ -242,7 +244,13 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @impl Backend
   def token_balances(%__MODULE__{} = state, account_ref, opts \\ []) do
     with {:ok, address} <- evm_address(account_ref) do
-      page(state, "/api/v2/addresses/#{address}/tokens", :address_tokens, opts, &token_balance/1)
+      page(
+        state,
+        "/api/v2/addresses/#{segment(address)}/tokens",
+        :address_tokens,
+        opts,
+        &token_balance/1
+      )
     end
   end
 
@@ -250,7 +258,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
 
   @impl Backend
   def get_block(%__MODULE__{} = state, number) do
-    with {:ok, body} <- get(state, "/api/v2/blocks/#{number}", %{}, :block) do
+    with {:ok, body} <- get(state, "/api/v2/blocks/#{segment(number)}", %{}, :block) do
       {:ok,
        %{
          height: int(body["height"]),
@@ -267,7 +275,7 @@ defmodule Raxol.Web3.Backend.Blockscout do
     with {:ok, address} <- evm_address(account_ref) do
       page(
         state,
-        "/api/v2/addresses/#{address}/token-transfers",
+        "/api/v2/addresses/#{segment(address)}/token-transfers",
         :address_token_transfers,
         opts,
         &token_transfer/1
@@ -278,21 +286,22 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @impl Backend
   def get_logs(%__MODULE__{} = state, account_ref, opts \\ []) do
     with {:ok, address} <- evm_address(account_ref) do
-      page(state, "/api/v2/addresses/#{address}/logs", :address_logs, opts, &log/1)
+      page(state, "/api/v2/addresses/#{segment(address)}/logs", :address_logs, opts, &log/1)
     end
   end
 
   @impl Backend
   def list_nfts(%__MODULE__{} = state, account_ref, opts \\ []) do
     with {:ok, address} <- evm_address(account_ref) do
-      page(state, "/api/v2/addresses/#{address}/nft", :address_nft, opts, &nft/1)
+      page(state, "/api/v2/addresses/#{segment(address)}/nft", :address_nft, opts, &nft/1)
     end
   end
 
   @impl Backend
   def contract_metadata(%__MODULE__{} = state, account_ref) do
     with {:ok, address} <- evm_address(account_ref),
-         {:ok, body} <- get(state, "/api/v2/smart-contracts/#{address}", %{}, :contract_metadata) do
+         {:ok, body} <-
+           get(state, "/api/v2/smart-contracts/#{segment(address)}", %{}, :contract_metadata) do
       {:ok,
        %{
          name: body["name"],
@@ -352,6 +361,14 @@ defmodule Raxol.Web3.Backend.Blockscout do
   defp url(state, path, query) do
     "https://#{state.host}#{path}?#{URI.encode_query(query)}"
   end
+
+  # Percent-encodes everything outside the unreserved set, so a caller-supplied
+  # hash, address or block identifier cannot carry a `/`, a `?` or a `#` and
+  # reshape the path it is interpolated into. `URI.encode/1`'s default
+  # predicate leaves all three alone and would be no defence at all.
+  # `Raxol.Web3.Backend.Aztec` encodes its own path parameters the same way.
+  defp segment(value) when is_integer(value), do: Integer.to_string(value)
+  defp segment(value) when is_binary(value), do: URI.encode(value, &URI.char_unreserved?/1)
 
   # A non-2xx carries no body onward: a 403 challenge page is HTML written by
   # someone else, and ADR-0038 decision 6 keeps upstream text out of an error
@@ -506,9 +523,38 @@ defmodule Raxol.Web3.Backend.Blockscout do
   defp ok_or({:ok, _value} = ok, _reason), do: ok
   defp ok_or(:error, reason), do: {:error, reason}
 
-  defp evm_address({:evm, address}) when is_binary(address), do: {:ok, address}
+  # The one place a caller's account reference becomes a path segment, so the
+  # FORMAT is checked here rather than at the tool boundary: validation sits on
+  # the function that performs the side effect. `is_binary/1` alone was not a
+  # check -- `Raxol.Web3.Serialize.account_ref/1` builds `{:evm, value}` out of
+  # anything a tool argument prefixes with `"evm:"`, so `"evm:../../admin?x=1"`
+  # reached an arbitrary path and query on this host and handed the body back
+  # to the model.
+  #
+  # Rejecting beats encoding for this one: this upstream has exactly one
+  # address shape, and a percent-encoded traversal is a 404 a caller cannot act
+  # on. `segment/1` still wraps every interpolation, so a path parameter added
+  # later cannot reopen the hole.
+  #
+  # Case is carried through rather than normalized: an EIP-55 checksum is the
+  # caller's own typo protection, and downcasing it would throw that away.
+  defp evm_address({:evm, address}) when is_binary(address) do
+    if evm_address?(address),
+      do: {:ok, address},
+      else: {:error, {:unsupported_account_ref, :not_an_address}}
+  end
+
   defp evm_address({tag, _value}), do: {:error, {:unsupported_account_ref, tag}}
   defp evm_address(_other), do: {:error, {:unsupported_account_ref, :unknown}}
+
+  # `0x` plus twenty bytes of hex, either case. A charlist walk rather than a
+  # regex: the check runs on every read and a compiled pattern buys nothing at
+  # 42 characters.
+  defp evm_address?("0x" <> hex) when byte_size(hex) == 40 do
+    hex |> to_charlist() |> Enum.all?(&(&1 in @hex_digits))
+  end
+
+  defp evm_address?(_other), do: false
 
   defp int(nil), do: nil
   defp int(value) when is_integer(value), do: value

@@ -384,9 +384,10 @@ defmodule Raxol.Web3.Backend.BlockscoutTest do
     end
 
     test "the last page has no cursor" do
-      handle = handle(%{"/api/v2/addresses/x/tokens" => ~s({"items":[],"next_page_params":null})})
+      path = "/api/v2/addresses/#{elem(@vitalik, 1)}/tokens"
+      handle = handle(%{path => ~s({"items":[],"next_page_params":null})})
 
-      assert {:ok, %{items: [], next: nil}} = Backend.call(handle, :token_balances, [{:evm, "x"}])
+      assert {:ok, %{items: [], next: nil}} = Backend.call(handle, :token_balances, [@vitalik])
     end
   end
 
@@ -508,6 +509,62 @@ defmodule Raxol.Web3.Backend.BlockscoutTest do
                Backend.call(handle, :account_info, [{:party, "Alice::1220abcd"}])
 
       assert [] == requested_paths()
+    end
+
+    test "an account reference that is not an address is refused before any request" do
+      # `is_binary/1` was the only check, and `Serialize.account_ref/1` builds
+      # `{:evm, value}` out of anything a tool argument prefixes with `"evm:"`,
+      # so this value reached `/api/v2/addresses/../../admin?x=1` -- an
+      # arbitrary path and query on this host, with the body handed back to the
+      # model. Refused at the function that makes the request, not at the tool
+      # boundary.
+      handle = handle(%{})
+
+      for refused <- [
+            "../../admin?x=1",
+            "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA960",
+            "d8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA960zz",
+            ""
+          ] do
+        assert {:error, {:unsupported_account_ref, :not_an_address}} =
+                 Backend.call(handle, :account_info, [{:evm, refused}])
+      end
+
+      assert [] == requested_paths()
+    end
+
+    test "a checksummed address is passed through unchanged" do
+      # EIP-55 mixed case is the caller's own typo protection, so the format
+      # check must not normalize it away.
+      handle = handle(%{"/api/v2/addresses/#{elem(@vitalik, 1)}" => fixture("address")})
+
+      assert {:ok, %{ref: @vitalik}} = Backend.call(handle, :account_info, [@vitalik])
+    end
+
+    test "a transaction hash cannot escape the /transactions/ prefix" do
+      # The hash arrives from a model as the `web3_get_transaction` argument
+      # and has no single format to validate against, so encoding is what
+      # holds: `URI.encode/1`'s default predicate leaves `/`, `?` and `#`
+      # alone and was not a defence anywhere in this package.
+      handle = handle(%{})
+
+      assert {:error, {:http, 404}} =
+               Backend.call(handle, :get_transaction, ["../../v2/admin?x=1#y"])
+
+      assert [requested] = requested_paths()
+      assert "/api/v2/transactions/" <> encoded = requested
+      refute String.contains?(encoded, ["/", "?", "#"])
+    end
+
+    test "a block identifier cannot escape the /blocks/ prefix" do
+      handle = handle(%{})
+
+      assert {:error, {:http, 404}} = Backend.call(handle, :get_block, ["../../v2/admin"])
+
+      assert [requested] = requested_paths()
+      assert "/api/v2/blocks/" <> encoded = requested
+      refute String.contains?(encoded, "/")
     end
 
     test "a non-2xx becomes a status, carrying no upstream body" do
