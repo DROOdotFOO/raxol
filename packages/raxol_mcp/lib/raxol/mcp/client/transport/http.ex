@@ -14,7 +14,9 @@ if Code.ensure_loaded?(Mint.HTTP) do
     is probed with `server/discover` and cached per `{origin, path}`
     (`Raxol.MCP.Client.Era`), and the probe's demotion rule is deliberately
     narrow: a refusal is not an era. The probe runs in the client's process at
-    connect time, once, because nothing can be sent until its answer is known.
+    connect time, once, because nothing can be sent until its answer is known;
+    a LATER probe, the one a rejected session triggers, runs in a monitored
+    task like every other exchange here.
 
     ## Every request is a monitored task
 
@@ -198,8 +200,27 @@ if Code.ensure_loaded?(Mint.HTTP) do
     @impl Raxol.MCP.Client.Transport
     def decode_info(%__MODULE__{} = handle, {:mcp_http, ref, id, outcome}) do
       case Map.get(handle.tasks, ref) do
-        %{id: ^id} -> apply_outcome(drop_task(handle, ref), id, outcome)
+        %{kind: :request, id: ^id} -> apply_outcome(drop_task(handle, ref), id, outcome)
         _unknown -> :ignore
+      end
+    end
+
+    # The re-probe's verdict, applied here because this is where the handle
+    # lives: only the exchange itself ran in the task. A refused probe is not
+    # an era, so the handle keeps the verdict it already had -- `classify/2`
+    # has recorded whatever the response said about the origin's health.
+    def decode_info(%__MODULE__{} = handle, {:mcp_http_probe, ref, result}) do
+      case Map.get(handle.tasks, ref) do
+        %{kind: :probe} ->
+          handle = drop_task(handle, ref)
+
+          case classify(result, handle) do
+            {:ok, handle} -> {:messages, [], handle}
+            {:error, _reason} -> {:messages, [], handle}
+          end
+
+        _unknown ->
+          :ignore
       end
     end
 
@@ -207,6 +228,10 @@ if Code.ensure_loaded?(Mint.HTTP) do
       case Map.pop(handle.tasks, ref) do
         {nil, _tasks} ->
           :ignore
+
+        {%{kind: :probe}, tasks} ->
+          Logger.warning("[MCP.Client.Http] #{handle.name} era re-probe died")
+          {:messages, [], %{handle | tasks: tasks}}
 
         {%{id: id}, tasks} when is_integer(id) ->
           {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
@@ -354,22 +379,58 @@ if Code.ensure_loaded?(Mint.HTTP) do
     defp version(:modern), do: Protocol.modern_version()
     defp version(:legacy), do: Protocol.legacy_version()
 
-    # A session-rejected response re-probes exactly once, then fails. The
-    # in-flight request fails either way: re-establishing a legacy session
-    # means a fresh handshake, which belongs to the client's session machine and
-    # not to a retry hidden inside a transport.
+    # A session-rejected response re-probes exactly once per successful round
+    # trip, then fails. The in-flight request fails either way: re-establishing
+    # a legacy session means a fresh handshake, which belongs to the client's
+    # session machine and not to a retry hidden inside a transport.
+    #
+    # The probe runs in a monitored task, like every other exchange this
+    # module performs, and its verdict arrives as `{:mcp_http_probe, ref,
+    # result}`. Calling `resolve_era/1` from here instead meant a synchronous
+    # connect-and-read inside the client's `handle_manager_info`, which stalled
+    # the whole mailbox -- every queued `call_tool` and every
+    # `{:request_timeout, id}` -- for up to `deadline_ms`.
     defp reprobe(%__MODULE__{reprobed?: true} = handle, id) do
       fail(handle, id, :session_rejected)
     end
 
     defp reprobe(handle, id) do
       Era.forget(handle.tables.eras, handle.key)
-      handle = %{handle | session_id: nil, reprobed?: true, era: nil}
 
-      case resolve_era(handle) do
-        {:ok, handle} -> fail(handle, id, :session_rejected)
-        {:error, reason} -> fail(%{handle | era: :legacy}, id, reason)
+      # The era is kept rather than cleared: a request issued while the probe
+      # is in flight still has to build headers for a known era, and the
+      # rejection established that the SESSION is gone, nothing more.
+      handle = spawn_probe(%{handle | session_id: nil, reprobed?: true})
+
+      fail(handle, id, :session_rejected)
+    end
+
+    # An open breaker means no probe, and the handle keeps `reprobed?` set: the
+    # next successful round trip is what re-arms it.
+    defp spawn_probe(handle) do
+      case breaker(handle) do
+        :ok -> monitored_probe(handle)
+        {:error, _reason} -> handle
       end
+    end
+
+    defp monitored_probe(handle) do
+      request = wire(%{handle | era: :probe, version: Protocol.legacy_version()}, 1, discover())
+      owner = self()
+      exchange = handle.exchange
+      vetted = handle.vetted
+      bounds = handle.bounds
+
+      {pid, ref} =
+        spawn_monitor(fn ->
+          receive do
+            {:monitored, ref} ->
+              Kernel.send(owner, {:mcp_http_probe, ref, exchange.(vetted, request, bounds)})
+          end
+        end)
+
+      Kernel.send(pid, {:monitored, ref})
+      %{handle | tasks: Map.put(handle.tasks, ref, %{id: nil, pid: pid, kind: :probe})}
     end
 
     defp fail(handle, id, reason) when is_integer(id), do: {:failed, id, reason, handle}
@@ -449,7 +510,7 @@ if Code.ensure_loaded?(Mint.HTTP) do
         end)
 
       Kernel.send(pid, {:monitored, ref})
-      {:ok, %{handle | tasks: Map.put(handle.tasks, ref, %{id: id, pid: pid})}}
+      {:ok, %{handle | tasks: Map.put(handle.tasks, ref, %{id: id, pid: pid, kind: :request})}}
     end
 
     defp deliver(context) do

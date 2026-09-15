@@ -210,10 +210,14 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       _handshake = observations()
 
       assert {:error, :session_rejected} = Client.call_tool(client, "echo", %{})
-      assert Enum.count(methods(observations()), &(&1 == "server/discover")) == 1
 
-      # Exactly once: the client now holds no session, so the next 404 is a 404
-      # and not another re-probe.
+      # The re-probe runs in a monitored task, so its observation is awaited
+      # rather than drained: draining would race the task.
+      assert_receive {:reference_server, %{method: "server/discover"}}, 1_000
+      _first_reprobe = observations()
+
+      # Exactly once: the client now holds no session and no round trip has
+      # succeeded since, so the next 404 is a 404 and not another re-probe.
       assert {:error, {:http, 404}} = Client.call_tool(client, "echo", %{})
       refute Enum.any?(methods(observations()), &(&1 == "server/discover"))
     end
@@ -246,6 +250,61 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
       assert {:failed, 4, :session_rejected, _handle} = round_trip(handle, 4, list_tools())
       assert_receive {:reference_server, %{method: "server/discover"}}, 1_000
+    end
+
+    @tag timeout: 10_000
+    test "a re-probe does not block the process that decoded the rejection" do
+      # `reprobe/2` called `resolve_era/1` -> `probe/1` -> the exchange, a
+      # synchronous connect-and-read, and `decode_info/2` runs inside the
+      # client's `handle_manager_info`. One `:session_rejected` therefore
+      # stalled the whole mailbox -- every queued `call_tool` and every
+      # `{:request_timeout, id}` -- for up to `deadline_ms`, which is the
+      # opposite of what this module's moduledoc claims.
+      #
+      # The gate is ordering, not elapsed time: this process is the only one
+      # that can release the probe's exchange, so a synchronous probe deadlocks
+      # and a probe in a task returns here first. The tag bounds that deadlock.
+      tables = tables()
+      state = ReferenceServer.state(:legacy, [])
+      inner = ReferenceServer.seam(Legacy, state)
+      test = self()
+      probes = :counters.new(1, [])
+
+      seam = fn vetted, request, opts ->
+        if String.contains?(IO.iodata_to_binary(request.body), "server/discover") do
+          :counters.add(probes, 1, 1)
+
+          # The connect-time probe runs in this process by design, so only the
+          # re-probe is held open.
+          if :counters.get(probes, 1) > 1 do
+            Kernel.send(test, {:probing, self()})
+            receive do: (:release -> :ok)
+          end
+        end
+
+        inner.(vetted, request, opts)
+      end
+
+      handle = handle!(seam, tables)
+      assert {:messages, _initialized, handle} = round_trip(handle, 1, initialize())
+
+      :ets.delete_all_objects(state.sessions)
+      assert {:ok, handle} = Transport.Http.send(handle, 2, list_tools())
+      assert_receive {:mcp_http, ref, 2, :session_rejected}, 1_000
+
+      # The call that used to run the probe's whole round trip inline.
+      assert {:failed, 2, :session_rejected, handle} =
+               Transport.Http.decode_info(handle, {:mcp_http, ref, 2, :session_rejected})
+
+      assert_receive {:probing, task}, 1_000
+      refute task == self()
+
+      Kernel.send(task, :release)
+      assert_receive {:mcp_http_probe, probe_ref, result}, 1_000
+
+      # And the verdict is applied where the handle lives, not in the task.
+      assert {:messages, [], %{era: :legacy}} =
+               Transport.Http.decode_info(handle, {:mcp_http_probe, probe_ref, result})
     end
 
     test "a probe refused with a 400 classifies legacy, code or no code" do
