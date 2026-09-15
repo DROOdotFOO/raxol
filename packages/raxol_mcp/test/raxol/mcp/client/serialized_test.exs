@@ -74,6 +74,26 @@ defmodule Raxol.MCP.Client.SerializedTest do
     end
   end
 
+  # Blocks until the client's own in-flight bookkeeping reaches `expected`.
+  # That state is what the concurrency policy decides, so it is what the cap
+  # is asserted against: a wall-clock window instead is a false pass on a
+  # loaded runner.
+  defp await_status(client, expected, tries \\ 200) do
+    status = Client.status(client)
+    reached = Map.take(status, Keyword.keys(expected))
+
+    cond do
+      reached == Map.new(expected) ->
+        status
+
+      tries > 0 ->
+        Process.sleep(5) && await_status(client, expected, tries - 1)
+
+      true ->
+        flunk("in-flight state settled at #{inspect(reached)}, wanted #{inspect(expected)}")
+    end
+  end
+
   # A seam that blocks until the test releases it, which is what makes "exactly
   # one at a time" assertable rather than merely likely.
   defp gated_seam(test) do
@@ -117,11 +137,20 @@ defmodule Raxol.MCP.Client.SerializedTest do
           Task.async(fn -> Client.call_tool(client, "echo", %{}, timeout: 10_000) end)
         end
 
-      for _ <- 1..3 do
+      # The gate holds every dispatched request, so the fan-out settles into a
+      # state that can be read: one on the wire, two queued, one refused.
+      await_status(client, pending: 1, queued: 2)
+
+      for queued <- [2, 1, 0] do
         assert_receive {:in_flight, pid}, 2_000
-        # The cap is one, so while this request is held nothing else may reach
-        # the wire.
-        refute_receive {:in_flight, _another}, 30
+
+        # The cap is one, so while this request is held the rest are queued
+        # rather than on the wire. Read off the policy's own bookkeeping
+        # instead of a `refute_receive` window: a loaded runner turns a window
+        # into a false pass, and `Client.status/1` is a call, so it is ordered
+        # behind the dispatch that admitted this request.
+        assert %{pending: 1, queued: ^queued} = Client.status(client)
+
         Kernel.send(pid, :release)
       end
 
@@ -176,61 +205,44 @@ defmodule Raxol.MCP.Client.SerializedTest do
     end
   end
 
-  # Counts concurrent entries into the wire. `notifications/initialized` is
-  # excluded: the in-flight cap governs requests that carry an id and can be
-  # correlated back, and the one notification this client ever sends belongs to
-  # the handshake, before any caller has been admitted.
-  defp counting_seam(counters) do
-    inner = legacy_seam()
-
-    fn vetted, request, opts ->
-      correlated? = not String.contains?(IO.iodata_to_binary(request.body), "notifications/")
-
-      if correlated?, do: enter(counters)
-      Process.sleep(2)
-      result = inner.(vetted, request, opts)
-      if correlated?, do: :atomics.sub(counters, 1, 1)
-      result
-    end
-  end
-
-  defp enter(counters) do
-    in_flight = :atomics.add_get(counters, 1, 1)
-    if in_flight > :atomics.get(counters, 2), do: :atomics.put(counters, 2, in_flight)
-  end
-
   property "a serialized origin neither over-dispatches nor leaks" do
     check all(
             callers <- integer(1..8),
             limit <- integer(1..3),
             max_runs: 12
           ) do
-      counters = :atomics.new(2, [])
-
-      client =
-        start_client!(counting_seam(counters), concurrency: :serialized, queue_limit: limit)
-
+      client = start_client!(gated_seam(self()), concurrency: :serialized, queue_limit: limit)
+      release_handshake()
       await_ready(client)
 
-      results =
-        1..callers
-        |> Enum.map(fn _ ->
+      tasks =
+        for _ <- 1..callers do
           Task.async(fn -> Client.call_tool(client, "echo", %{}, timeout: 10_000) end)
-        end)
-        |> Task.await_many(10_000)
+        end
 
-      assert :atomics.get(counters, 2) == 1,
-             "#{:atomics.get(counters, 2)} requests were in flight at once"
+      # One in flight, the rest of the admitted set queued, the excess refused.
+      admitted = min(callers, limit + 1)
+      await_status(client, pending: 1, queued: admitted - 1)
 
-      # Every caller got an answer, and only the two the policy admits.
-      assert Enum.all?(results, fn
-               {:ok, _result} -> true
-               {:error, :busy} -> true
-               _other -> false
-             end),
-             "unexpected results: #{inspect(results)}"
+      # The cap holds at every step, read off the policy's own bookkeeping
+      # while the gate holds each request. The counting seam this replaces
+      # widened the exchange with `Process.sleep(2)` to make an overlap likely,
+      # which made its reading depend on the runner's load in both directions:
+      # a fan-out dispatched two-at-once passed it whenever the first exchange
+      # finished before the second was scheduled.
+      for queued <- (admitted - 1)..0//-1 do
+        assert_receive {:in_flight, pid}, 2_000
+        assert %{pending: 1, queued: ^queued} = Client.status(client)
+        Kernel.send(pid, :release)
+      end
 
+      results = Task.await_many(tasks, 10_000)
+
+      # Every caller got an answer, and only the ones the policy admits ran.
+      assert Enum.count(results, &match?({:ok, _result}, &1)) == admitted
+      assert Enum.count(results, &(&1 == {:error, :busy})) == callers - admitted
       assert length(results) == callers
+
       await_drained(client)
       stop_quietly(client)
     end
