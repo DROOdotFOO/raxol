@@ -67,7 +67,7 @@ Sandbox.check("System.cmd(\"rm\", [\"-rf\", \"/\"])", :standard)  # => {:error, 
 | `:standard` | Blocks known-dangerous calls | Default for interactive use |
 | `:strict` | Whitelist-only | SSH, web, untrusted input |
 
-**Standard** blocks: `System.cmd`, `System.shell`, `File.rm`, `File.rm_rf`, `File.write`, `Port.open`, `Code.eval_string`, `Code.eval_quoted`, `:os.cmd`, and friends.
+**Standard** blocks: `System.cmd`, `System.shell`, `File.rm`, `File.rm_rf`, `File.write`, `Port.open`, `Code.eval_string`, `Code.eval_quoted`, `:os.cmd`, process spawning (`spawn`, `Task.async`, `Agent.start`, `:proc_lib`), and friends.
 
 **Strict** only allows: `Enum`, `Stream`, `Map`, `Keyword`, `List`, `Tuple`, `MapSet`, `String`, `Integer`, `Float`, `Atom`, `IO`, `Kernel`, `Range`, `Regex`, `Date`, `Time`, `DateTime`, `NaiveDateTime`, `Calendar`, `Access`, `Base`, `URI`, `Jason`, `Inspect`. Everything else gets rejected.
 

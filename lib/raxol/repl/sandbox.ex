@@ -61,6 +61,17 @@ defmodule Raxol.REPL.Sandbox do
     {Kernel, :spawn, "process spawning"},
     {Kernel, :spawn_link, "process spawning"},
     {Kernel, :spawn_monitor, "process spawning"},
+    # A spawned process is not the evaluation, so nothing that bounds the
+    # evaluation bounds it: `Evaluator`'s timeout signals one pid and the heap
+    # cap is per-process. `Kernel.spawn` and friends were already refused; a
+    # `Task`, an `Agent` or `:proc_lib` reaches the same primitive by another
+    # name, and leaves a process running with full node authority after the
+    # evaluation that started it has been reported as timed out.
+    {Task, :start, "process spawning"},
+    {Task, :start_link, "process spawning"},
+    {Task, :async, "process spawning"},
+    {Agent, :start, "process spawning"},
+    {Agent, :start_link, "process spawning"},
     {Kernel, :exit, "process termination"},
     {String, :to_atom, "dynamic atom creation"},
     {List, :to_atom, "dynamic atom creation"},
@@ -121,7 +132,18 @@ defmodule Raxol.REPL.Sandbox do
     Inspect
   ]
 
-  @denied_erlang_modules [:file, :net_adm, :gen_tcp, :gen_udp, :httpc, :ssl]
+  # `:proc_lib` is listed whole rather than by function: `spawn`, `spawn_link`,
+  # `spawn_opt`, `start` and `start_link` all reach the same escape, and a REPL
+  # evaluation has no use for any of them.
+  @denied_erlang_modules [
+    :file,
+    :net_adm,
+    :gen_tcp,
+    :gen_udp,
+    :httpc,
+    :ssl,
+    :proc_lib
+  ]
 
   @doc """
   Checks code for safety violations at the given strictness level.
