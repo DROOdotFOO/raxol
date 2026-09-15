@@ -222,6 +222,17 @@ if Code.ensure_loaded?(Mint.HTTP) do
     defp apply_outcome(handle, id, outcome) do
       case outcome do
         {:ok, messages, session_id} ->
+          # A round trip that succeeded is the path back to a fresh probe.
+          # `reprobed?` was set in `reprobe/2` and reset nowhere at all, so a
+          # legacy origin whose session expired a SECOND time -- routine across
+          # a server restart -- reached the guard clause and then failed every
+          # later request as `:session_rejected` forever.
+          #
+          # Reset here rather than in `decide/2`, because that keeps the other
+          # half of the guard: a burst of concurrent rejections with no
+          # success between them still re-probes exactly once, instead of once
+          # per rejected request.
+          handle = %{handle | reprobed?: false}
           {:messages, messages, remember_session(handle, session_id)}
 
         :session_rejected ->

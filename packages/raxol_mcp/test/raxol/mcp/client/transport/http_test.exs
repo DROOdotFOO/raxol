@@ -83,6 +83,18 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
     handle
   end
 
+  # One real round trip, decoded the way the client decodes it. `send/3`
+  # registers a monitored task and this process is its owner, so the reply
+  # arrives here carrying the reference `decode_info/2` verifies.
+  defp round_trip(handle, id, request) do
+    assert {:ok, handle} = Transport.Http.send(handle, id, request)
+    assert_receive {:mcp_http, ref, ^id, outcome}, 1_000
+    Transport.Http.decode_info(handle, {:mcp_http, ref, id, outcome})
+  end
+
+  defp initialize, do: %{method: "initialize", params: %{}}
+  defp list_tools, do: %{method: "tools/list", params: %{}}
+
   defp await_ready(client, tries \\ 100) do
     case Client.status(client) do
       %{status: :ready} = status -> status
@@ -204,6 +216,36 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       # and not another re-probe.
       assert {:error, {:http, 404}} = Client.call_tool(client, "echo", %{})
       refute Enum.any?(methods(observations()), &(&1 == "server/discover"))
+    end
+
+    test "a successful round trip restores the ability to re-probe" do
+      # `reprobed?` was set in `reprobe/2` and reset nowhere in the module, so a
+      # legacy origin whose session expired a SECOND time -- routine across a
+      # server restart -- failed every later request as `:session_rejected`
+      # forever, with no path back to a fresh probe.
+      tables = tables()
+      state = ReferenceServer.state(:legacy, [])
+      handle = handle!(ReferenceServer.seam(Legacy, state), tables)
+
+      # The handshake the client's session machine performs: it mints the
+      # session, and it is the success this transport counts.
+      assert {:messages, _initialized, handle} = round_trip(handle, 1, initialize())
+      _probe_and_handshake = observations()
+
+      # Expire every session behind the handle's back, which is what a restarted
+      # upstream does. The rejection re-probes.
+      :ets.delete_all_objects(state.sessions)
+      assert {:failed, 2, :session_rejected, handle} = round_trip(handle, 2, list_tools())
+      assert_receive {:reference_server, %{method: "server/discover"}}, 1_000
+      _first_reprobe = observations()
+
+      # Handshake again, expire again: this rejection must re-probe too.
+      assert {:messages, _reinitialized, handle} = round_trip(handle, 3, initialize())
+      :ets.delete_all_objects(state.sessions)
+      _second_handshake = observations()
+
+      assert {:failed, 4, :session_rejected, _handle} = round_trip(handle, 4, list_tools())
+      assert_receive {:reference_server, %{method: "server/discover"}}, 1_000
     end
 
     test "a probe refused with a 400 classifies legacy, code or no code" do
