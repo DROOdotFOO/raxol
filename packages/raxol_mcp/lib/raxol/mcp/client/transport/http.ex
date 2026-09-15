@@ -189,10 +189,37 @@ if Code.ensure_loaded?(Mint.HTTP) do
       :ok
     end
 
+    # The monitor reference identifies the task, so membership is checked
+    # before the outcome is applied. `drop_task/2` hands back the handle
+    # unchanged for a reference it does not know and the outcome was still
+    # applied, so any process on the node could send `{:mcp_http, ref, id,
+    # {:ok, messages, session_id}}` and feed `handle_line/2` forged JSON-RPC
+    # payloads -- or set `mcp-session-id` through `remember_session/2`.
     @impl Raxol.MCP.Client.Transport
     def decode_info(%__MODULE__{} = handle, {:mcp_http, ref, id, outcome}) do
-      handle = drop_task(handle, ref)
+      case Map.get(handle.tasks, ref) do
+        %{id: ^id} -> apply_outcome(drop_task(handle, ref), id, outcome)
+        _unknown -> :ignore
+      end
+    end
 
+    def decode_info(%__MODULE__{} = handle, {:DOWN, ref, :process, _pid, reason}) do
+      case Map.pop(handle.tasks, ref) do
+        {nil, _tasks} ->
+          :ignore
+
+        {%{id: id}, tasks} when is_integer(id) ->
+          {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
+
+        {%{id: nil}, tasks} ->
+          Logger.warning("[MCP.Client.Http] #{handle.name} notification task died")
+          {:messages, [], %{handle | tasks: tasks}}
+      end
+    end
+
+    def decode_info(%__MODULE__{}, _message), do: :ignore
+
+    defp apply_outcome(handle, id, outcome) do
       case outcome do
         {:ok, messages, session_id} ->
           {:messages, messages, remember_session(handle, session_id)}
@@ -213,22 +240,6 @@ if Code.ensure_loaded?(Mint.HTTP) do
           {:messages, [], handle}
       end
     end
-
-    def decode_info(%__MODULE__{} = handle, {:DOWN, ref, :process, _pid, reason}) do
-      case Map.pop(handle.tasks, ref) do
-        {nil, _tasks} ->
-          :ignore
-
-        {%{id: id}, tasks} when is_integer(id) ->
-          {:failed, id, {:task_down, exit_atom(reason)}, %{handle | tasks: tasks}}
-
-        {%{id: nil}, tasks} ->
-          Logger.warning("[MCP.Client.Http] #{handle.name} notification task died")
-          {:messages, [], %{handle | tasks: tasks}}
-      end
-    end
-
-    def decode_info(%__MODULE__{}, _message), do: :ignore
 
     # -- the target policy -------------------------------------------------------
 
