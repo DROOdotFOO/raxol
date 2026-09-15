@@ -184,19 +184,62 @@ assert_seedable() {
   SEED_TARGET="$resolved"
 }
 
+# Both the lock comparison below and the copy itself read the target through
+# whatever the target's own paths point at, and `-f`, `cmp` and a glob all
+# follow symlinks. Two consequences, both controlled by the branch under
+# review: a `mix.lock` symlinked at THIS checkout's lock compares
+# byte-identical, so the staleness gate passes on a lock Mix never reads;
+# and a symlinked `packages/<pkg>` makes the glob enumerate, and
+# `replace_dir` write, somewhere outside the worktree. Neither is resolved
+# and then judged -- they are refused, which is the only answer that does
+# not depend on where the link happens to point today.
+assert_no_symlinked_locks() {
+  local target="$1" policy="$2" entry offenders=() escape=""
+
+  [[ ! -L "$target/mix.lock" ]] || offenders+=("mix.lock")
+
+  if [[ -L "$target/packages" ]]; then
+    offenders+=("packages")
+  else
+    shopt -s nullglob
+    for entry in "$target"/packages/*; do
+      if [[ -L "$entry" ]]; then
+        offenders+=("packages/$(basename "$entry")")
+      elif [[ -L "$entry/mix.lock" ]]; then
+        offenders+=("packages/$(basename "$entry")/mix.lock")
+      fi
+    done
+    shopt -u nullglob
+  fi
+
+  # `--fresh` is an `add` flag, so it is only offered when `add` is what is
+  # running; a `sync` caller told to re-run with it would find no such
+  # option.
+  [[ "$policy" != refuse ]] ||
+    escape=" Or use 'add --fresh' for an unseeded worktree."
+
+  ((${#offenders[@]} == 0)) ||
+    die "symlink under $target (${offenders[*]}); a symlinked lock compares equal to whatever it points at and a symlinked package directory sends the copy there, so neither is followed. Replace it with a real file.$escape"
+}
+
 # The one provenance check this script can make offline and for free: the
 # seeded caches are the dependencies the SOURCE checkout resolved, so if the
 # target's `mix.lock` says something else, the seed describes the wrong
 # dependencies -- and Mix will not notice, because it never re-fetches what
-# it already considers built. Refusing is the honest answer; `--fresh` is
-# how the caller proceeds.
+# it already considers built.
+#
+# `refuse` (`add`) stops with exit 3, because no worktree exists yet and
+# `add --fresh` is a correct answer. `warn` (`sync`) reports and continues:
+# `sync` exists to carry a new lock and its caches from this checkout into
+# an existing worktree, so the mismatch it would refuse on is its own
+# documented use.
 #
 # Root lock plus every package's, on BOTH sides: a package that exists in
 # only one of the two checkouts is itself a lock difference. `cmp` rather
 # than a checksum -- same answer, one process, and it stops at the first
 # differing byte.
-assert_locks_match() {
-  local target="$1"
+check_locks() {
+  local target="$1" policy="$2"
   local rels=(mix.lock) mismatched=() rel lock
 
   shopt -s nullglob
@@ -217,8 +260,44 @@ assert_locks_match() {
     fi
   done
 
-  ((${#mismatched[@]} == 0)) ||
-    die "mix.lock differs between $repo_root and $target (${mismatched[*]}); the caches here are not that branch's dependencies. Use 'add --fresh' for an unseeded worktree, or bring this checkout to that lock first." 3
+  ((${#mismatched[@]} > 0)) || return 0
+
+  # WORKING-TREE files are compared, so the commonest mismatch by far is not
+  # a divergent branch at all: an uncommitted lock in THIS checkout, mid
+  # `mix deps.update` or a bump not yet committed, differs from every
+  # worktree at once. Telling that caller to "bring this checkout to that
+  # lock" is advice to throw the newer lock away, so ask git which side is
+  # the edited one and say so.
+  local edited_here=() differs_there=() detail=() advice=""
+
+  for rel in "${mismatched[@]}"; do
+    if [[ -n "$(git -C "$repo_root" status --porcelain -- "$rel" 2>/dev/null)" ]]; then
+      edited_here+=("$rel")
+    else
+      differs_there+=("$rel")
+    fi
+  done
+
+  if ((${#edited_here[@]} > 0)); then
+    detail+=("uncommitted in this checkout: ${edited_here[*]}")
+    advice+=" This checkout is the side that moved, and its caches are the newer lock's -- commit or stash ${edited_here[*]} here, or carry it into the worktree with 'sync', rather than reverting anything."
+  fi
+
+  if ((${#differs_there[@]} > 0)); then
+    detail+=("committed differently in the target: ${differs_there[*]}")
+    advice+=" The target is the side that moved -- check its lock out here and run 'mix deps.get' so these caches describe it."
+  fi
+
+  local joined="${detail[0]}"
+  ((${#detail[@]} < 2)) || joined="${detail[0]}; ${detail[1]}"
+
+  if [[ "$policy" == warn ]]; then
+    printf 'worktree: mix.lock differs from %s (%s) -- re-seeding anyway, which is what sync is for; run `mix deps.get` there if it keeps a lock of its own.\n' \
+      "$target" "$joined" >&2
+    return 0
+  fi
+
+  die "mix.lock differs between $repo_root and $target ($joined); the caches here are not that branch's dependencies.$advice Or use 'add --fresh' for an unseeded worktree that fetches and verifies its own." 3
 }
 
 # Root caches plus every package's own (`packages/*/deps` and
@@ -230,11 +309,15 @@ assert_locks_match() {
 # root caches are required, and the per-package count is reported so a
 # partially warm source is visible rather than hidden behind one success
 # line.
+#
+# Checks run cheapest-and-most-blocking first. A source checkout with no
+# `_build`/`deps` cannot seed anything at all, whatever the locks say, so
+# reporting a lock mismatch there (exit 3, "reconcile the locks") sends the
+# caller after the second problem while the first still stands: the accurate
+# answer is exit 2, `mix deps.get && mix compile` here.
 seed_caches() {
-  local target="$1"
+  local target="$1" lock_policy="${2:-refuse}"
   local missing=()
-
-  assert_locks_match "$target"
 
   for name in _build deps; do
     [[ -d "$repo_root/$name" ]] || missing+=("$name")
@@ -243,6 +326,9 @@ seed_caches() {
   if ((${#missing[@]} > 0)); then
     die "no ${missing[*]} in $repo_root to clone; run 'mix deps.get && mix compile' there first" 2
   fi
+
+  assert_no_symlinked_locks "$target" "$lock_policy"
+  check_locks "$target" "$lock_policy"
 
   for name in _build deps; do
     replace_dir "$repo_root/$name" "$target/$name"
@@ -318,7 +404,6 @@ unwind_add() {
   ((${#residue[@]} == 0)) ||
     printf 'worktree: could not finish undoing the failed add; still there: %s\n' "${residue[*]}" >&2
 }
-
 
 cmd_add() {
   local branch="${1:-}"
@@ -420,7 +505,7 @@ cmd_add() {
   if ((fresh == 1)); then
     printf 'fresh %s (nothing seeded; its own deps.get fetches and verifies)\n' "$path"
   else
-    (seed_caches "$path") || status=$?
+    (seed_caches "$path" refuse) || status=$?
 
     if ((status != 0)); then
       unwind_add "$path" "$branch" "$created_path" "$branch_existed"
@@ -442,7 +527,11 @@ cmd_sync() {
   [[ -n "$path" ]] || usage
 
   assert_seedable "$path"
-  seed_caches "$SEED_TARGET"
+
+  # `warn`, not `refuse`: re-seeding after a dependency bump in this
+  # checkout is `sync`'s documented job, and that bump IS a lock mismatch,
+  # so refusing would reject every call it exists to serve.
+  seed_caches "$SEED_TARGET" warn
 }
 
 cmd_rm() {
