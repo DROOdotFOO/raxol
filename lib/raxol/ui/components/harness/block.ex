@@ -93,10 +93,11 @@ defmodule Raxol.UI.Components.Harness.Block do
   present.
 
   `render/2` is a trust boundary: every text node it emits is control-byte
-  stripped, because block content comes from an LLM, a tool, or an
-  external MCP server and the view map goes to a pipeline that does not
-  pass through `Raxol.Harness.Surface.ViewText.lines/3`. See `render/2`'s
-  own @doc. `search_text/2` is NOT sanitized -- it is the raw match
+  stripped (content, and the `:link`/`:hyperlink` URL a Markdown body
+  attaches), because block content comes from an LLM, a tool, or an
+  external MCP server. It is not the ONLY boundary and does not cover
+  every consumer -- see `render/2`'s own @doc for which paths it does and
+  does not reach. `search_text/2` is NOT sanitized -- it is the raw match
   corpus, not display output (see its @doc).
 
   ## The completion row (design creed: evidence, never a success toast)
@@ -429,13 +430,35 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   Every text node in the returned tree is control-byte stripped
   (`Raxol.Harness.Surface.ViewText.sanitize_line/1`, applied per
-  newline-delimited line so the body's own line structure survives). A
-  block's content is produced by an LLM, a tool, or an external MCP
-  server, and this view map goes to the normal `Preparer ->
-  LayoutEngine -> UIRenderer` pipeline, which does not pass through
-  `ViewText.lines/3` -- so the strip has to happen here for every
-  consumer on every surface. Style maps are untouched, so SGR and
+  newline-delimited line so the body's own line structure survives), and
+  so is the `:link`/`:hyperlink` URL a Markdown body attaches to a text
+  node's style. A block's content is produced by an LLM, a tool, or an
+  external MCP server, so it is stripped before it can reach any
+  renderer. Every other style key is byte-identical, so SGR and
   prominence styling are unaffected.
+
+  ## What this strip does and does not cover
+
+  Two surfaces consume this view map, and the strip is defence in depth
+  on both rather than the last line:
+
+    * The normal `Preparer -> LayoutEngine -> UIRenderer` pipeline, which
+      has no strip of its own -- here `render/2` really is the only
+      boundary, for the view map it returns.
+    * `Raxol.Harness.Surface`'s seal/append path, which pipes
+      `BlockBody.render(...) |> ViewText.lines(...)`
+      (`render_block_lines/3` and the pending-block footer preview). For
+      a FOLDED block that routes through this function, so the content is
+      stripped twice -- `sanitize_line/1` is idempotent, so the second
+      pass is a no-op.
+
+  It does NOT cover an EXPANDED block on that path:
+  `Raxol.UI.Components.Harness.BlockBody.render/2` mounts a
+  `BodyProvider` component whose view replaces this body outright and
+  never calls `render/2`. `BlockBody` therefore applies
+  `sanitize_view/1` to that mounted view itself -- see its own docs. A
+  new consumer that renders a block body by some third route has to
+  sanitize too; this function only speaks for the tree it returns.
   """
   @spec render(t(), map()) :: map()
   def render(block, context \\ %{})
@@ -838,31 +861,61 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   defp fade_view(node, _fg), do: node
 
-  # The trust boundary for this component's own output (see `render/2`'s
-  # @doc). Every string a Block renders can come from a producer this
-  # process does not control -- an LLM's streamed message, a tool result,
-  # an `mcp__*` tool name supplied by an external server. The view map
-  # `render/2` returns goes to the normal `Preparer -> LayoutEngine ->
-  # UIRenderer` pipeline, which never passes through
-  # `ViewText.lines/3` (that seam feeds the append-path/footer-viewport
-  # authorities only), so an ESC left in `content` reaches the terminal
-  # intact on every other surface. Stripping once here, at the end of the
-  # render, covers every consumer of this component instead of every
-  # consumer having to remember to wrap it.
-  #
-  # Embedded newlines are preserved: `sanitize_line/1` strips `\n` as a
-  # C0 byte, so a multi-line node's content is split, sanitized per line,
-  # and re-joined -- silently welding two lines into one here would be a
-  # rendering bug. Style maps are never touched, so prominence/SGR
-  # styling is unaffected.
-  defp sanitize_view(%{type: :text, content: content} = node)
-       when is_binary(content),
-       do: %{node | content: sanitize_content(content)}
+  @doc """
+  Control-byte strips every text node in `view` -- its `:content`, and the
+  `:link`/`:hyperlink` URL its style may carry. Public so
+  `Raxol.UI.Components.Harness.BlockBody` can apply the same strip to an
+  EXPANDED block's mounted `BodyProvider` view, which replaces this
+  module's body outright and so never passes through `render/2`.
 
-  defp sanitize_view(%{children: children} = node) when is_list(children),
+  Every string a Block renders can come from a producer this process does
+  not control -- an LLM's streamed message, a tool result, an `mcp__*`
+  tool name supplied by an external server -- and an ESC left in it is
+  executed by the terminal, not printed. This is a defence-in-depth
+  strip, not the last line: the OSC 8 emitters
+  (`Raxol.Core.Renderer`/`Raxol.Terminal.Renderer`) confine the URL again
+  at the sink, where the bytes actually go out, because a `:hyperlink`
+  also arrives from producers this module never sees. Stripping here
+  keeps a hostile URL out of the view map in the first place.
+
+  Embedded newlines are preserved: `sanitize_line/1` strips `\\n` as a C0
+  byte, so a multi-line node's content is split, sanitized per line, and
+  re-joined -- silently welding two lines into one here would be a
+  rendering bug. A URL gets no such split: it is one token with no
+  legitimate line structure. Every style key other than `:link` and
+  `:hyperlink` is returned byte-identical, so prominence/SGR styling is
+  unaffected. Idempotent.
+  """
+  @spec sanitize_view(map()) :: map()
+  def sanitize_view(%{type: :text, content: content} = node)
+      when is_binary(content),
+      do:
+        node |> Map.put(:content, sanitize_content(content)) |> sanitize_link()
+
+  def sanitize_view(%{children: children} = node) when is_list(children),
     do: %{node | children: Enum.map(children, &sanitize_view/1)}
 
-  defp sanitize_view(node), do: node
+  def sanitize_view(node), do: node
+
+  @link_style_keys [:link, :hyperlink]
+
+  defp sanitize_link(%{style: style} = node) when is_map(style),
+    do: %{
+      node
+      | style: Enum.reduce(@link_style_keys, style, &sanitize_url_key(&2, &1))
+    }
+
+  defp sanitize_link(node), do: node
+
+  defp sanitize_url_key(style, key) do
+    case Map.fetch(style, key) do
+      {:ok, url} when is_binary(url) ->
+        Map.put(style, key, ViewText.sanitize_line(url))
+
+      _absent_or_non_binary ->
+        style
+    end
+  end
 
   defp sanitize_content(content) do
     content
