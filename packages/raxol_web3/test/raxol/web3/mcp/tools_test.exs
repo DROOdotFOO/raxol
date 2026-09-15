@@ -101,6 +101,22 @@ defmodule Raxol.Web3.MCP.ToolsTest do
                call(router, "web3_get_transaction", %{"chain" => @chain})
     end
 
+    test "no tool raises on an absent argument, whatever interned its name" do
+      # The lookup was `Map.get(arguments, name) ||
+      # Map.get(arguments, String.to_existing_atom(name))`, so EVERY absent
+      # argument evaluated `String.to_existing_atom/1`. No `:chain` literal
+      # exists in `raxol_web3/lib`, so the test above passed only because
+      # `%{chain: @chain}` below interned that atom while this file compiled;
+      # in a release the tool raised `ArgumentError` instead of naming the
+      # missing argument. The names now come from a compile-time table in the
+      # module itself, and this covers every one of them.
+      router = router()
+      refused = {:error, %{code: "missing_argument", detail: "chain"}}
+
+      assert Map.new(Tools.names(), &{&1, call(router, &1, %{})}) ==
+               Map.new(Tools.names(), &{&1, refused})
+    end
+
     test "atom keys and string keys both work" do
       # JSON arrives with string keys; a local Elixir caller writes atoms.
       # Guessing wrong reports a supplied argument as missing.

@@ -106,6 +106,29 @@ defmodule Raxol.Web3.MCP.Tools do
      "A read-only contract call. Never a write: this is eth_call, and the method allowlist admits nothing else."}
   ]
 
+  # The atom form of every argument name, interned at compile time off the
+  # table above plus the chain every tool takes.
+  #
+  # `String.to_existing_atom/1` was the wrong tool here. It does not raise only
+  # when something else already interned the atom, so EVERY absent argument
+  # evaluated it and raised `ArgumentError` instead of being reported missing:
+  # no `:chain` literal exists anywhere in this package's `lib/`, so in a
+  # release `web3_chain_info` with no arguments crashed rather than answering
+  # `{:missing_argument, "chain"}`. A compile-time table cannot create an atom
+  # at runtime and cannot fail to find one, which is the reasoning
+  # `Raxol.Web3.Serialize`'s tag table already records.
+  @atom_keys Map.new(
+               [
+                 "chain"
+                 | for(
+                     {_suffix, _callback, args, _doc} <- @tools,
+                     {name, _type, _required?, _description} <- args,
+                     do: name
+                   )
+               ],
+               &{&1, String.to_atom(&1)}
+             )
+
   @doc "The names of every tool this module serves."
   @spec names() :: [String.t()]
   def names,
@@ -245,7 +268,7 @@ defmodule Raxol.Web3.MCP.Tools do
   end
 
   defp get(arguments, name) when is_map(arguments) do
-    Map.get(arguments, name) || Map.get(arguments, String.to_existing_atom(name))
+    Map.get(arguments, name) || Map.get(arguments, Map.fetch!(@atom_keys, name))
   end
 
   defp get(_arguments, _name), do: nil
