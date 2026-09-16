@@ -92,13 +92,12 @@ defmodule Raxol.UI.Components.Harness.Block do
   and `cost` are all `nil`; otherwise it renders only the fields that are
   present.
 
-  `render/2` is a trust boundary: every text node it emits is control-byte
-  stripped (content, and the `:link`/`:hyperlink` URL a Markdown body
-  attaches), because block content comes from an LLM, a tool, or an
-  external MCP server. It is not the ONLY boundary and does not cover
-  every consumer -- see `render/2`'s own @doc for which paths it does and
-  does not reach. `search_text/2` is NOT sanitized -- it is the raw match
-  corpus, not display output (see its @doc).
+  Terminal confinement is deliberately not implemented by walking this
+  rendered tree. The normal terminal pipeline sanitizes cell text and OSC 8
+  URLs at its emitters, while the append/paint-authority path sanitizes as
+  `Raxol.Harness.Surface.ViewText.lines/3` flattens the tree. Keeping those
+  boundaries at their sinks avoids rebuilding every transcript node on every
+  frame. `search_text/2` remains the raw match corpus (see its @doc).
 
   ## The completion row (design creed: evidence, never a success toast)
 
@@ -173,7 +172,6 @@ defmodule Raxol.UI.Components.Harness.Block do
   branch, so a multi-line body never re-runs the solver per line.
   """
 
-  alias Raxol.Harness.Surface.ViewText
   alias Raxol.UI.Components.Harness.MarkdownBody
   alias Raxol.UI.Harness.Prominence
   alias Raxol.UI.TextLayout
@@ -428,48 +426,23 @@ defmodule Raxol.UI.Components.Harness.Block do
   Never raises: any unexpected internal shape falls back to a one-line
   placeholder rather than crashing the caller.
 
-  Every text node in the returned tree is control-byte stripped
-  (`Raxol.Harness.Surface.ViewText.sanitize_line/1`, applied per
-  newline-delimited line so the body's own line structure survives), and
-  so is the `:link`/`:hyperlink` URL a Markdown body attaches to a text
-  node's style. A block's content is produced by an LLM, a tool, or an
-  external MCP server, so it is stripped before it can reach any
-  renderer. Every other style key is byte-identical, so SGR and
-  prominence styling are unaffected.
-
-  ## What this strip does and does not cover
-
-  Two surfaces consume this view map, and the strip is defence in depth
-  on both rather than the last line:
-
-    * The normal `Preparer -> LayoutEngine -> UIRenderer` pipeline, which
-      has no strip of its own -- here `render/2` really is the only
-      boundary, for the view map it returns.
-    * `Raxol.Harness.Surface`'s seal/append path, which pipes
-      `BlockBody.render(...) |> ViewText.lines(...)`
-      (`render_block_lines/3` and the pending-block footer preview). For
-      a FOLDED block that routes through this function, so the content is
-      stripped twice -- `sanitize_line/1` is idempotent, so the second
-      pass is a no-op.
-
-  It does NOT cover an EXPANDED block on that path:
-  `Raxol.UI.Components.Harness.BlockBody.render/2` mounts a
-  `BodyProvider` component whose view replaces this body outright and
-  never calls `render/2`. `BlockBody` therefore applies
-  `sanitize_view/1` to that mounted view itself -- see its own docs. A
-  new consumer that renders a block body by some third route has to
-  sanitize too; this function only speaks for the tree it returns.
+  Untrusted content is confined at the two output sinks rather than by
+  rebuilding this view tree: the normal terminal renderers pass cell text and
+  OSC 8 URLs through `Raxol.Core.Boundary.TermText`, and
+  `Raxol.Harness.Surface.ViewText.lines/3` sanitizes while flattening the
+  append/paint-authority path. This keeps truncation and styling semantics in
+  this renderer unchanged and avoids a second full-tree copy per frame.
   """
   @spec render(t(), map()) :: map()
   def render(block, context \\ %{})
 
   def render(%__MODULE__{} = block, context) do
     width = Map.get(context, :width, Raxol.Core.Defaults.terminal_width())
-    sanitize_view(build_render(block, width, context))
+    build_render(block, width, context)
   rescue
     e ->
       emit_recovered(block.kind, e)
-      sanitize_view(render_fallback(block))
+      render_fallback(block)
   end
 
   defp build_render(block, width, context) do
@@ -657,15 +630,11 @@ defmodule Raxol.UI.Components.Harness.Block do
     * `:diff` -- `content.old` and `content.new` (`summary/1` already
       carries the path).
 
-  No sanitization happens here, deliberately: this is the RAW corpus, for
-  matching, not for display. `render/2` sanitizes the text nodes IT
-  emits (see its @doc), and
-  `Raxol.Harness.Surface.ViewText.lines/3` sanitizes again on the
-  paint-authority path; a caller that puts a `search_text/2` result on
-  screen (an excerpt in a notice, a picker label) owns the strip at its
-  own render, because a match offset into a sanitized string would not
-  point at the same grapheme. Pure; never raises, regardless of
-  `content`'s shape.
+  No sanitization happens here, deliberately: this is the raw corpus used for
+  matching, not display. A caller that puts a `search_text/2` result on screen
+  owns confinement at its output boundary, because a match offset into a
+  sanitized string would not point at the same grapheme. Pure; never raises,
+  regardless of `content`'s shape.
 
   ## Bounding the work (`max_graphemes`)
 
@@ -860,68 +829,6 @@ defmodule Raxol.UI.Components.Harness.Block do
     do: %{node | children: Enum.map(children, &fade_view(&1, fg))}
 
   defp fade_view(node, _fg), do: node
-
-  @doc """
-  Control-byte strips every text node in `view` -- its `:content`, and the
-  `:link`/`:hyperlink` URL its style may carry. Public so
-  `Raxol.UI.Components.Harness.BlockBody` can apply the same strip to an
-  EXPANDED block's mounted `BodyProvider` view, which replaces this
-  module's body outright and so never passes through `render/2`.
-
-  Every string a Block renders can come from a producer this process does
-  not control -- an LLM's streamed message, a tool result, an `mcp__*`
-  tool name supplied by an external server -- and an ESC left in it is
-  executed by the terminal, not printed. This is a defence-in-depth
-  strip, not the last line: the OSC 8 emitters
-  (`Raxol.Core.Renderer`/`Raxol.Terminal.Renderer`) confine the URL again
-  at the sink, where the bytes actually go out, because a `:hyperlink`
-  also arrives from producers this module never sees. Stripping here
-  keeps a hostile URL out of the view map in the first place.
-
-  Embedded newlines are preserved: `sanitize_line/1` strips `\\n` as a C0
-  byte, so a multi-line node's content is split, sanitized per line, and
-  re-joined -- silently welding two lines into one here would be a
-  rendering bug. A URL gets no such split: it is one token with no
-  legitimate line structure. Every style key other than `:link` and
-  `:hyperlink` is returned byte-identical, so prominence/SGR styling is
-  unaffected. Idempotent.
-  """
-  @spec sanitize_view(map()) :: map()
-  def sanitize_view(%{type: :text, content: content} = node)
-      when is_binary(content),
-      do:
-        node |> Map.put(:content, sanitize_content(content)) |> sanitize_link()
-
-  def sanitize_view(%{children: children} = node) when is_list(children),
-    do: %{node | children: Enum.map(children, &sanitize_view/1)}
-
-  def sanitize_view(node), do: node
-
-  @link_style_keys [:link, :hyperlink]
-
-  defp sanitize_link(%{style: style} = node) when is_map(style),
-    do: %{
-      node
-      | style: Enum.reduce(@link_style_keys, style, &sanitize_url_key(&2, &1))
-    }
-
-  defp sanitize_link(node), do: node
-
-  defp sanitize_url_key(style, key) do
-    case Map.fetch(style, key) do
-      {:ok, url} when is_binary(url) ->
-        Map.put(style, key, ViewText.sanitize_line(url))
-
-      _absent_or_non_binary ->
-        style
-    end
-  end
-
-  defp sanitize_content(content) do
-    content
-    |> String.split("\n")
-    |> Enum.map_join("\n", &ViewText.sanitize_line/1)
-  end
 
   defp plain_content_lines(block, fg) do
     block

@@ -108,7 +108,7 @@ defmodule Raxol.Core.Renderer do
     |> chunk_by_style()
     |> Enum.map_join("", fn {style, chars} ->
       ansi_prefix = Style.to_ansi(style)
-      text = chars |> Enum.reverse() |> Enum.join()
+      text = chars |> Enum.reverse() |> Enum.map_join("", &terminal_text/1)
 
       styled =
         case ansi_prefix do
@@ -194,7 +194,7 @@ defmodule Raxol.Core.Renderer do
 
   defp flush_run(ops, run_start, run_chars, y, _cells) do
     reversed_chars = Enum.reverse(run_chars)
-    text = Enum.map_join(reversed_chars, "", & &1.char)
+    text = Enum.map_join(reversed_chars, "", &binary_text(&1.char))
     style = List.first(reversed_chars) |> Map.get(:style, %{})
 
     # ops is built reversed and flipped once at the end; prepend write
@@ -213,6 +213,7 @@ defmodule Raxol.Core.Renderer do
   end
 
   defp operation_to_ansi({:write, text, style}) do
+    text = terminal_text(text)
     ansi_prefix = Style.to_ansi(style)
 
     styled =
@@ -234,20 +235,14 @@ defmodule Raxol.Core.Renderer do
   # carries one (bare form, ST-terminated). Cells with no hyperlink emit
   # exactly as before.
   #
-  # The URL is confined HERE, at the sink, not at the producers: this line
-  # is where the bytes actually reach the terminal, and a `:hyperlink`
-  # arrives from anywhere -- a Markdown link URL an LLM wrote
-  # (`Raxol.UI.Components.MarkdownRenderer`'s link capture accepts any byte
-  # but `)`), an OSC 8 URL the emulator itself parsed out of untrusted
-  # program output, `Raxol.Plugins.HyperlinkPlugin`, a plain
-  # `text(link: ...)` caller. Unsanitized, `\e]52;c;...\a` inside a URL
-  # closes this OSC 8 and opens an attacker-chosen one (clipboard write,
-  # title set, alt-screen switch). `TermText.sanitize/2` removes ESC and
-  # everything it introduces, plus C0/DEL/C1; `allow: []` keeps even `\n`
-  # and `\t` out, because a URL is one token with no line structure.
-  # Sanitizing BEFORE the emptiness check means a URL that was nothing but
-  # control bytes emits no hyperlink at all rather than a bare `ESC ] 8 ;;`
-  # pair around the content.
+  # URL and displayed text are confined at this sink, immediately before
+  # bytes are assembled into OSC 8. `terminal_text/1` runs before SGR is
+  # added, so framework-owned styling remains intact while untrusted cell
+  # content cannot terminate the hyperlink or open another control string.
+  # `allow: []` is deliberate: a cell run and a URL are both single-row
+  # tokens, so no C0 byte is meaningful here. Non-binaries become `""`.
+  defp maybe_wrap_hyperlink("", _style), do: ""
+
   defp maybe_wrap_hyperlink(content, style) when is_map(style) do
     case Map.get(style, :hyperlink) do
       url when is_binary(url) ->
@@ -257,6 +252,10 @@ defmodule Raxol.Core.Renderer do
         content
     end
   end
+
+  defp terminal_text(value), do: TermText.sanitize(value, allow: [])
+  defp binary_text(value) when is_binary(value), do: value
+  defp binary_text(_value), do: ""
 
   defp wrap_hyperlink(content, ""), do: content
 

@@ -5,6 +5,7 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
 
   @behaviour Raxol.Plugins.Plugin
   @behaviour Raxol.Plugins.LifecycleBehaviour
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Plugins.Plugin
 
   # Require Raxol.Core.Runtime.Log for logging macros
@@ -77,7 +78,7 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
 
   @impl Raxol.Plugins.Plugin
   def handle_output(plugin_state, event) do
-    output = extract_output_data(event)
+    output = event |> extract_output_data() |> TermText.sanitize()
 
     # Find URLs using a simple regex (could be more robust)
     url_regex = ~r{(https?://[\w./?=&\-]+)}
@@ -183,9 +184,11 @@ defmodule Raxol.Plugins.HyperlinkPlugin do
   end
 
   defp create_hyperlink(url) do
-    # OSC 8 escape sequence for hyperlinks
-    # Format: \e]8;;URL\e\\text\e]8;;\e\\
-    "\e]8;;#{url}\e\\#{url}\e]8;;\e\\"
+    url = TermText.sanitize(url, allow: [])
+
+    if url == "",
+      do: "",
+      else: "\e]8;;#{url}\e\\#{url}\e]8;;\e\\"
   end
 
   @doc """

@@ -15,6 +15,8 @@ defmodule Raxol.Agent.Code.Replay do
   disturb a live session.
   """
 
+  alias Raxol.Core.Boundary.TermText
+
   alias Raxol.Agent.Code.EventCodec
   alias Raxol.Agent.Code.Store
   alias Raxol.Agent.Journal.FileStore
@@ -150,10 +152,10 @@ defmodule Raxol.Agent.Code.Replay do
   def transcript_text(events) do
     projection = Projection.project(events)
 
-    case transcript(events, projection) do
-      [] -> "(no replayable events)"
-      lines -> lines |> Enum.join("\n") |> String.trim_leading()
-    end
+    events
+    |> transcript(projection)
+    |> transcript_body()
+    |> sanitize_transcript()
   end
 
   # -- rendering --------------------------------------------------------------
@@ -163,10 +165,13 @@ defmodule Raxol.Agent.Code.Replay do
       "session #{session_id} · #{source} · #{length(events)} events" <>
         damaged_note(projection)
 
-    case transcript(events, projection) do
-      [] -> Enum.join([header, "", "(no replayable events)"], "\n")
-      lines -> Enum.join([header | lines], "\n")
-    end
+    body =
+      case transcript(events, projection) do
+        [] -> Enum.join([header, "", "(no replayable events)"], "\n")
+        lines -> Enum.join([header | lines], "\n")
+      end
+
+    sanitize_transcript(body)
   end
 
   defp damaged_note(%Projection{damaged: true}),
@@ -206,7 +211,7 @@ defmodule Raxol.Agent.Code.Replay do
   end
 
   defp prompt_of(%{payload: payload}) when is_map(payload),
-    do: to_string(Map.get(payload, "prompt") || Map.get(payload, :prompt) || "")
+    do: terminal_text(Map.get(payload, "prompt") || Map.get(payload, :prompt))
 
   defp prompt_of(_event), do: ""
 
@@ -223,12 +228,12 @@ defmodule Raxol.Agent.Code.Replay do
     do: ["[reasoning] " <> text_of(block)]
 
   defp block_lines(%Block{kind: :tool_call} = block) do
-    name = to_string(block.content[:name] || "tool")
+    name = terminal_text(block.content[:name] || "tool")
     ["[tool] #{name}#{outcome_note(block.outcome)}"]
   end
 
   defp block_lines(%Block{kind: :approval} = block),
-    do: ["[approval] #{to_string(block.content[:name] || "")}"]
+    do: ["[approval] #{terminal_text(block.content[:name])}"]
 
   defp block_lines(%Block{kind: :diff} = block),
     do: ["[diff] " <> text_of(block)]
@@ -237,7 +242,16 @@ defmodule Raxol.Agent.Code.Replay do
     do: ["[#{inspect(block.raw_kind)}] " <> text_of(block)]
 
   defp text_of(%Block{content: content}),
-    do: to_string(content[:text] || "")
+    do: terminal_text(content[:text])
+
+  defp transcript_body([]), do: "(no replayable events)"
+
+  defp transcript_body(lines),
+    do: lines |> Enum.join("\n") |> String.trim_leading()
+
+  defp sanitize_transcript(text), do: TermText.sanitize(text, allow: [?\n])
+  defp terminal_text(value) when is_binary(value), do: value
+  defp terminal_text(_value), do: ""
 
   defp outcome_note(%{exit_code: nil, duration_ms: nil}), do: ""
 

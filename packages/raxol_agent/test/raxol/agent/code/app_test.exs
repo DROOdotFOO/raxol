@@ -1,3 +1,10 @@
+unless Code.ensure_loaded?(Raxol.Test.CrossTerminal.SequenceScanner) do
+  Code.require_file(
+    "../../../../../../test/support/cross_terminal/sequence_scanner.ex",
+    __DIR__
+  )
+end
+
 defmodule Raxol.Agent.Code.AppTest do
   use ExUnit.Case, async: false
 
@@ -5,6 +12,11 @@ defmodule Raxol.Agent.Code.AppTest do
   alias Raxol.Agent.Code.App.Commands
   alias Raxol.Agent.Contract
   alias Raxol.Core.Events.Event
+  alias Raxol.Core.Runtime.Rendering.Backends
+  alias Raxol.Terminal.Renderer, as: TerminalRenderer
+  alias Raxol.Test.CrossTerminal.SequenceScanner
+  alias Raxol.UI.Layout.Engine, as: LayoutEngine
+  alias Raxol.UI.Renderer, as: UIRenderer
 
   # A runner that does not spawn a real turn: it returns a live, inert pid
   # (so interrupt has something to kill) and never touches the network.
@@ -1679,17 +1691,9 @@ defmodule Raxol.Agent.Code.AppTest do
       assert noticed.notice == "first\nsec[2Jond"
     end
 
-    # Everything `App.view/1` would put on screen, as one string. A text
-    # node's `:link`/`:hyperlink` style value is collected alongside its
-    # content: it is not displayed, but `ElementRenderer` lifts it onto
-    # the cell and the OSC 8 emitters splice it into
-    # `ESC ] 8 ;; <url> ST`, so it reaches the terminal just as directly.
-    # Collecting only `:content` would let the `refute` assertions below
-    # pass over a live hyperlink injection. `transcript/1` renders without
-    # `context[:markdown]` today, so nothing in this app attaches a link
-    # yet -- the strip that keeps a hostile one out is exercised in
-    # `Raxol.UI.Components.Harness.BlockTest`, on the Markdown path that
-    # produces it.
+    # Raw view-tree text is useful for the chrome checks below. Transcript
+    # confinement is asserted separately through the real layout, cell, and
+    # terminal-renderer path.
     defp view_text(model) do
       model |> App.view() |> node_text() |> Enum.join("\n")
     end
@@ -1709,6 +1713,24 @@ defmodule Raxol.Agent.Code.AppTest do
         _no_style ->
           []
       end
+    end
+
+    defp terminal_output(model) do
+      cells =
+        model
+        |> App.view()
+        |> LayoutEngine.apply_layout(%{width: 200, height: 100})
+        |> UIRenderer.render_to_cells()
+
+      buffer = Backends.apply_cells_to_buffer(cells, %{width: 200, height: 100})
+      buffer |> TerminalRenderer.new() |> TerminalRenderer.render()
+    end
+
+    defp visible_terminal_text(output) do
+      output
+      |> SequenceScanner.scan()
+      |> Enum.filter(&match?({:text, _}, &1))
+      |> Enum.map_join("", fn {:text, text} -> text end)
     end
 
     # The setters are not the only writers: a dozen call sites assign
@@ -1740,18 +1762,13 @@ defmodule Raxol.Agent.Code.AppTest do
       assert screen =~ "Allow read_file"
     end
 
-    # Every control class the harness strip claims to cover, in one
-    # string, so removing any single clause from `ViewText.strip?/1` fails
-    # here: ESC-led 7-bit CSI/OSC (screen clear, alt-screen switch, OSC 52
-    # clipboard write), a UTF-8-encoded C1 (U+009B, 8-bit CSI -- the only
-    # form a valid-UTF-8 codepoint check can see), a bare CR and BS (line
-    # and column overwrite), and DEL.
     @view_poison "\e[2J\e[?1049h\e]52;c;cHduZWQ=\a\u009B2J\rOVERWRITE\b" <>
                    <<0x7F>>
 
-    # Byte / label pairs asserted absent from the rendered screen.
-    @view_forbidden [
-      {"ESC", "\e"},
+    @terminal_injections [
+      {"screen clear", "\e[2J"},
+      {"alternate screen", "\e[?1049h"},
+      {"OSC 52", "\e]52"},
       {"BEL", "\a"},
       {"C1 CSI (U+009B)", "\u009B"},
       {"CR", "\r"},
@@ -1759,37 +1776,30 @@ defmodule Raxol.Agent.Code.AppTest do
       {"DEL", <<0x7F>>}
     ]
 
-    defp refute_control_bytes(screen) do
-      for {name, byte} <- @view_forbidden do
-        refute String.contains?(screen, byte),
-               "#{name} survived onto the rendered screen"
+    defp refute_terminal_injections(output) do
+      for {name, bytes} <- @terminal_injections do
+        refute String.contains?(output, bytes),
+               "#{name} survived onto the rendered terminal"
       end
     end
 
-    # The transcript, not the chrome: an assistant message is rendered by
-    # `Block.render/2` straight into the view map, and `App.view/1` goes to
-    # the Preparer -> LayoutEngine -> UIRenderer pipeline, which has no
-    # strip of its own. A screen clear, an alt-screen switch and an OSC 52
-    # clipboard write in that message would all reach the terminal. The
-    # visible text is asserted too, so a future "strip everything"
-    # regression fails here rather than shipping.
+    # Exercise the complete normal frame path. The view tree remains ordinary
+    # component data; the terminal renderer is the narrow trusted sink.
     test "a hostile assistant message cannot reach the terminal through the transcript" do
       poison = "hello " <> @view_poison <> " world"
 
       model =
         Enum.reduce(message_turn("t1", poison), new_model(), &send_ev(&2, &1))
 
-      screen = view_text(model)
+      output = terminal_output(model)
 
-      assert screen =~ "hello"
-      assert screen =~ "world"
-      refute_control_bytes(screen)
+      visible = visible_terminal_text(output)
+      assert visible =~ "hello"
+      assert visible =~ "world"
+      refute_terminal_injections(output)
     end
 
-    # The streaming tail is the same content one frame earlier: an item
-    # that started and is still receiving deltas has no block yet, so its
-    # chunks are joined into a text node by `tail_lines/1` itself.
-    test "the streaming tail cannot reach the terminal unsanitized" do
+    test "the streaming tail is confined by the same terminal sink" do
       poison = "streaming " <> @view_poison <> " on"
 
       model =
@@ -1803,10 +1813,10 @@ defmodule Raxol.Agent.Code.AppTest do
           &send_ev(&2, &1)
         )
 
-      screen = view_text(model)
+      output = terminal_output(model)
 
-      assert screen =~ "streaming"
-      refute_control_bytes(screen)
+      assert visible_terminal_text(output) =~ "streaming"
+      refute_terminal_injections(output)
     end
 
     test "a bidi override cannot reverse a notice" do

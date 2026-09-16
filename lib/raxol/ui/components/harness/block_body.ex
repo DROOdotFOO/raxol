@@ -39,10 +39,8 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   `render/2` wraps the mounted view and the completion row(s) in one
   `Components.column/1` (unfaded -- `%{dim: true}` only, no prominence
   threading through this seam, kept simple per T5's own scope). A block
-  with no `:completion` key mounts and renders exactly as before, no
-  wrapping at all -- structurally identical to the mounted view, modulo
-  the control-byte strip `render/2` applies to every text node (see its
-  own @doc).
+  with no `:completion` key mounts and renders exactly as before, with no
+  wrapping at all.
 
   This unit renders into a plain view map, same as every component in this
   package (`Raxol.View.Components`-shaped, buffer-testable without a real
@@ -62,18 +60,11 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   expanded case also passes `block.outcome` through for `:tool_call`'s
   status derivation (see `BodyProvider.mount/3`'s `:outcome` option).
 
-  Both cases return a control-byte stripped view. The folded case gets it
-  from `Block.render/2`; the expanded case applies
-  `Block.sanitize_view/1` HERE, because a mounted `BodyProvider`
-  component's view replaces `Block.render/2`'s body outright and so never
-  reaches that strip -- `ReasoningBlock` and `ToolResultBlock` in
-  particular hand model-supplied text to `Components.text()` with no
-  control-byte filter of their own, and `MarkdownBody`'s filter keeps
-  `\\r` (line overwrite). The strip also covers `wrap_with_completion/2`'s
-  rows, which come from `Block.completion_rows/2` directly rather than
-  through `Block.render/2`. It rewrites text `:content` and
-  `:link`/`:hyperlink` only, so a mounted component's own styling is
-  byte-identical.
+  Terminal confinement belongs to the output paths that consume this view:
+  `Raxol.Harness.Surface.ViewText.lines/3` for the append/paint-authority
+  path, and the terminal renderers for the normal layout path. Keeping it
+  there preserves every mounted component shape without walking and
+  rebuilding the tree here on every frame.
   """
   @spec render(Block.t(), map()) :: map()
   def render(block, context \\ %{})
@@ -84,7 +75,7 @@ defmodule Raxol.UI.Components.Harness.BlockBody do
   def render(%Block{fold: :expanded} = block, context) do
     case mount_body(block, context) do
       {:ok, view} ->
-        view |> wrap_with_completion(block) |> Block.sanitize_view()
+        wrap_with_completion(view, block)
 
       {:error, reason} ->
         emit_recovered(block.kind, reason)
