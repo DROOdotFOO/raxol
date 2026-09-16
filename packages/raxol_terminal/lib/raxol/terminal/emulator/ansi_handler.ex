@@ -9,6 +9,8 @@ defmodule Raxol.Terminal.Emulator.ANSIHandler do
   - Mode management
   """
 
+  require Logger
+
   alias Raxol.Terminal.{
     ANSI.SequenceHandler,
     ANSI.SGR,
@@ -186,9 +188,7 @@ defmodule Raxol.Terminal.Emulator.ANSIHandler do
          {:cursor_horizontal_absolute, col, remaining},
          emulator
        ) do
-    Raxol.Core.Runtime.Log.debug(fn ->
-      "handle_sequence_type cursor_horizontal_absolute col=#{inspect(col)}"
-    end)
+    Logger.debug("handle_sequence_type cursor_horizontal_absolute col=#{inspect(col)}")
 
     result = CursorHandler.handle_cha(emulator, [col + 1])
 

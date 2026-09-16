@@ -38,6 +38,8 @@ defmodule Raxol.Terminal.ANSI.KittyGraphics do
 
   @behaviour Raxol.Terminal.ANSI.Behaviours.KittyGraphics
 
+  require Logger
+
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.ANSI.KittyParser
 
@@ -260,7 +262,7 @@ defmodule Raxol.Terminal.ANSI.KittyGraphics do
   """
   @impl true
   def process_sequence(state, data) when is_binary(data) do
-    Log.debug(fn -> "[KittyGraphics] Processing sequence: #{inspect(truncate_for_log(data))}" end)
+    Logger.debug("[KittyGraphics] Processing #{byte_size(data)} bytes")
 
     parser_state = %KittyParser.ParserState{
       width: state.width,
@@ -676,11 +678,4 @@ defmodule Raxol.Terminal.ANSI.KittyGraphics do
   defp generate_image_id do
     :erlang.unique_integer([:positive, :monotonic])
   end
-
-  defp truncate_for_log(data) when byte_size(data) > 100 do
-    <<prefix::binary-size(100), _rest::binary>> = data
-    prefix <> "..."
-  end
-
-  defp truncate_for_log(data), do: data
 end

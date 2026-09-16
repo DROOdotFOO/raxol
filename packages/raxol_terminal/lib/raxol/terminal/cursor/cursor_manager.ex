@@ -6,7 +6,8 @@ defmodule Raxol.Terminal.Cursor.Manager do
 
   use Raxol.Core.Behaviours.BaseManager
 
-  alias Raxol.Core.Runtime.Log
+  require Logger
+
   alias Raxol.Terminal.Cursor.{Callbacks, Movement}
   alias Raxol.Terminal.Cursor.CursorState, as: State
   alias Raxol.Terminal.Emulator
@@ -107,11 +108,11 @@ defmodule Raxol.Terminal.Cursor.Manager do
   def get_position(pid \\ __MODULE__)
 
   def get_position(pid) when is_pid(pid) do
-    Raxol.Core.Runtime.Log.debug(fn -> "get_position called with pid: #{inspect(pid)}" end)
+    Logger.debug("get_position called with pid: #{inspect(pid)}")
 
     result = GenServer.call(pid, :get_position)
 
-    Raxol.Core.Runtime.Log.debug(fn -> "get_position(pid) returned: #{inspect(result)}" end)
+    Logger.debug("get_position(pid) returned: #{inspect(result)}")
 
     result
   end

@@ -13,6 +13,8 @@ defmodule Raxol.Terminal.Input.ControlSequenceHandler do
   Where `G` indicates Kitty graphics and control-data contains key=value pairs.
   """
 
+  require Logger
+
   alias Raxol.Terminal.ANSI.KittyGraphics
   alias Raxol.Terminal.Commands.{CSIHandler, OSCHandler}
 
@@ -45,9 +47,7 @@ defmodule Raxol.Terminal.Input.ControlSequenceHandler do
 
       # Unknown DCS command
       _ ->
-        Raxol.Core.Runtime.Log.debug(
-          "Unhandled DCS command: #{command} with data: #{inspect(data)}"
-        )
+        Logger.debug("Unhandled DCS command=#{inspect(command)}, payload=[REDACTED]")
 
         emulator
     end
@@ -58,9 +58,7 @@ defmodule Raxol.Terminal.Input.ControlSequenceHandler do
   """
   def handle_pm_sequence(emulator, command, data) do
     # PM sequences are typically ignored by terminals
-    Raxol.Core.Runtime.Log.debug(fn ->
-      "Ignoring PM sequence: #{command} with data: #{inspect(data)}"
-    end)
+    Logger.debug("Ignoring PM sequence: command=#{inspect(command)}, data=#{inspect(data)}")
 
     emulator
   end
@@ -82,9 +80,7 @@ defmodule Raxol.Terminal.Input.ControlSequenceHandler do
 
       # Unknown APC command
       _ ->
-        Raxol.Core.Runtime.Log.debug(
-          "Unhandled APC sequence: #{command} with data: #{inspect(truncate_data(data))}"
-        )
+        Logger.debug("Unhandled APC command=#{inspect(command)}, payload=[REDACTED]")
 
         emulator
     end
@@ -141,11 +137,4 @@ defmodule Raxol.Terminal.Input.ControlSequenceHandler do
         emulator
     end
   end
-
-  defp truncate_data(data) when is_binary(data) and byte_size(data) > 100 do
-    <<prefix::binary-size(100), _rest::binary>> = data
-    prefix <> "...(#{byte_size(data)} bytes total)"
-  end
-
-  defp truncate_data(data), do: data
 end

@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   Handles GenServer callbacks for the cursor manager.
   Extracted from Raxol.Terminal.Cursor.Manager to reduce file size.
   """
+  require Logger
+
   alias Raxol.Core.Runtime.Log
 
   alias Raxol.Terminal.Cursor.Movement
@@ -15,9 +17,9 @@ defmodule Raxol.Terminal.Cursor.Callbacks do
   Handles GenServer call for getting cursor position.
   """
   def handle_get_position(state) do
-    Raxol.Core.Runtime.Log.debug(fn ->
-      "Getting cursor position: {#{state.row}, #{state.col}}"
-    end)
+    row = state.row
+    col = state.col
+    Logger.debug("Getting cursor position: {#{row}, #{col}}")
 
     {state.position, state}
   end
