@@ -81,35 +81,34 @@ while IFS= read -r file; do
   check_file "$file"
 done < <(git ls-files '*.md')
 
-# Third-party dev/test toolchain drift across the 18 lockfiles.
+# Dependency-graph drift across the 18 lockfiles.
 #
 # The sweep above compares only sibling `:raxol_*, "~> X.Y"` CONSTRAINTS, which
 # is why nothing had ever reported that ex_doc was pinned at four different
 # versions at once (0.40.1 in eleven packages, 0.40.2 in one, 0.40.3 in four
 # and the root) or that mox sat at 1.2.0 in three packages while the root moved
-# to 1.3.1. Every one of those packages publishes to Hex and builds its own
-# docs, and a shared tool resolving differently per package is how "works in
-# raxol_core, fails in raxol_terminal" starts.
+# to 1.3.1. Runtime graph changes are equally important: an Nx/Complex major
+# split or an APNS transport/JWT migration must not disappear inside a broad
+# toolchain bump.
 #
-# Reported, not failed, and it has to be: a package with raxol siblings cannot
-# have its lockfile regenerated at all while the family's new version is
-# unpublished. `mix deps.update mox` in packages/raxol_terminal today fails
-# with "your app depends on raxol_core ~> 2.7 which doesn't match any
-# versions", so the only packages whose locks CAN be converged before a
-# release are the ones with no sibling deps. Failing on drift would make this
-# gate unsatisfiable during exactly the window a release happens in. It exists
-# so the drift is visible at all, which it was not.
-for tool in ex_doc mox credo dialyxir excoveralls sobelow mix_audit; do
+# Reported, not failed, and it has to be: packages intentionally resolve
+# different compatible versions when their constraints differ, and a package
+# with raxol siblings cannot have its lockfile regenerated at all while the
+# family's new version is unpublished. The report makes drift reviewable
+# without making the release window unsatisfiable.
+for dependency in \
+  ex_doc mox credo dialyxir excoveralls sobelow mix_audit \
+  raxol_core nx complex mint finch joken pigeon; do
   versions=$(
     git ls-files 'mix.lock' '*/mix.lock' |
-      xargs grep -ohE "\"$tool\": \{:hex, :$tool, \"[0-9][^\"]*\"" 2>/dev/null |
+      xargs grep -ohE "\"$dependency\": \{:hex, :$dependency, \"[0-9][^\"]*\"" 2>/dev/null |
       sed -E 's/.*"([0-9][^"]*)".*/\1/' | sort -u
   )
   count=$(printf '%s\n' "$versions" | grep -c . || true)
 
   if [[ "$count" -gt 1 ]]; then
     printf 'DRIFT: %s is locked at %s different versions across the lockfiles: %s\n' \
-      "$tool" "$count" "$(printf '%s' "$versions" | tr '\n' ' ')"
+      "$dependency" "$count" "$(printf '%s' "$versions" | tr '\n' ' ')"
   fi
 done
 

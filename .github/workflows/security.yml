@@ -86,11 +86,11 @@ jobs:
       # `mix deps.audit` and `mix hex.audit` read DIFFERENT databases:
       # mix_audit uses the Elixir Security Advisories mirror, hex.audit uses
       # Hex's own OSV-backed data. They disagree today -- deps.audit is clean
-      # while hex.audit reports three advisories against cowlib 2.19.0
+      # while hex.audit reports three advisories against cowlib 2.20.0
       # (EEF-CVE-2026-43966 and -43971 MEDIUM, -43969 LOW), reached
       # transitively through cowboy.
       #
-      # Advisory rather than blocking, and deliberately: 2.19.0 is the LATEST
+      # Advisory rather than blocking, and deliberately: 2.20.0 is the latest
       # cowlib release, so there is no version to move to and a blocking gate
       # here would be permanently red on something nobody can fix. Blocking on
       # an unfixable finding is how a gate gets ignored. Revisit when cowlib
@@ -128,16 +128,12 @@ jobs:
         run: |
           mix deps.clean --unused
           mix deps.get
+          # Sobelow derives Jason.Encoder; compile its runtime prerequisite
+          # before loading the Mix task.
+          mix deps.compile jason sobelow
 
       - name: Run Sobelow
-        run: |
-          # Install Sobelow if not in deps
-          if ! mix help sobelow &>/dev/null; then
-            mix archive.install hex sobelow --force
-          fi
-          
-          mix sobelow --config || mix sobelow --skip
-        continue-on-error: true
+        run: mix sobelow --config
 
   semgrep:
     name: Semgrep Security Scan
