@@ -5,9 +5,9 @@ defmodule Raxol.REPL.Sandbox do
   Scans Elixir code for potentially dangerous operations before evaluation.
   Three strictness levels:
 
-  - `:none` -- allow everything (local terminal use)
-  - `:standard` -- deny destructive system/file/network ops (default)
-  - `:strict` -- whitelist-only (SSH/web use)
+  - `:none` -- allow everything (explicit trusted-local launcher opt-in)
+  - `:standard` -- deny destructive and process-creation operations (`check/1` default)
+  - `:strict` -- whitelist-only (default for every REPL launcher)
 
       iex> Sandbox.check("Enum.map([1,2], & &1 * 2)")
       :ok
@@ -47,20 +47,13 @@ defmodule Raxol.REPL.Sandbox do
     {:erlang, :open_port, "port execution"},
     {:init, :stop, "VM stop"},
     {Process, :exit, "process termination"},
-    {Node, :spawn, "remote code execution"},
-    {Node, :spawn_link, "remote code execution"},
     {Node, :connect, "node connection"},
-    {GenServer, :call, "arbitrary GenServer interaction"},
-    {GenServer, :cast, "arbitrary GenServer interaction"},
     {Kernel, :apply, "dynamic function application"},
     # Message passing / process reach: a sandboxed eval sharing a node with a
     # signing process must not be able to message or look it up. `send` (special
     # form) is handled separately; these close the qualified-call variants and
     # the erlang-atom bypasses that a module whitelist alone would still permit.
     {Kernel, :send, "message sending"},
-    {Kernel, :spawn, "process spawning"},
-    {Kernel, :spawn_link, "process spawning"},
-    {Kernel, :spawn_monitor, "process spawning"},
     {Kernel, :exit, "process termination"},
     {String, :to_atom, "dynamic atom creation"},
     {List, :to_atom, "dynamic atom creation"},
@@ -80,14 +73,12 @@ defmodule Raxol.REPL.Sandbox do
     {Process, :whereis, "process lookup"},
     {Process, :register, "process registration"},
     {:erlang, :send, "message sending"},
+    {:erlang, :send_after, "delayed message sending"},
+    {:erlang, :start_timer, "delayed message sending"},
     {:erlang, :whereis, "process lookup"},
-    {:erlang, :spawn, "process spawning"},
-    {:erlang, :spawn_link, "process spawning"},
     {:erlang, :binary_to_term, "term deserialization"},
     {:erlang, :binary_to_atom, "dynamic atom creation"},
     {:erlang, :list_to_atom, "dynamic atom creation"},
-    {:gen_server, :call, "arbitrary GenServer interaction"},
-    {:gen_server, :cast, "arbitrary GenServer interaction"},
     {:rpc, :call, "remote procedure call"},
     {:rpc, :cast, "remote procedure call"},
     {:global, :whereis_name, "process lookup"}
@@ -120,6 +111,29 @@ defmodule Raxol.REPL.Sandbox do
     Jason,
     Inspect
   ]
+
+  # These APIs create, supervise, or schedule processes. Deny the whole API
+  # rather than chasing individual arities and newly added `start*`/`async*`
+  # variants: an evaluation has no child tree that can be cleaned up when its
+  # own timeout kills it.
+  @denied_process_modules %{
+    Task => "process spawning and task supervision",
+    Task.Supervisor => "process spawning and task supervision",
+    Agent => "process spawning and process interaction",
+    GenServer => "process spawning and process interaction",
+    Supervisor => "process spawning and supervision",
+    DynamicSupervisor => "process spawning and supervision",
+    PartitionSupervisor => "process spawning and supervision",
+    Registry => "process spawning and process registration",
+    :proc_lib => "process spawning",
+    :gen => "process spawning and process interaction",
+    :gen_server => "process spawning and process interaction",
+    :gen_event => "process spawning and process interaction",
+    :gen_statem => "process spawning and process interaction",
+    :supervisor => "process spawning and supervision",
+    :supervisor_bridge => "process spawning and supervision",
+    :timer => "delayed process scheduling"
+  }
 
   @denied_erlang_modules [:file, :net_adm, :gen_tcp, :gen_udp, :httpc, :ssl]
 
@@ -252,9 +266,13 @@ defmodule Raxol.REPL.Sandbox do
     ["send is not allowed (message sending to arbitrary processes)"]
   end
 
-  defp check_node({kind, _, args}, _level)
-       when kind in [:spawn, :spawn_link, :spawn_monitor] and is_list(args) do
-    ["#{kind} is not allowed (process spawning)"]
+  # Module directives can rename or import a denied API before calling it:
+  # `alias Task, as: T; T.async(...)` and `import Task; async(...)` otherwise
+  # bypass a checker that sees only the submitted AST, not the expanded code.
+  defp check_node({directive, _, _args}, level)
+       when level in [:standard, :strict] and
+              directive in [:alias, :import, :require, :use] do
+    ["#{directive} is not allowed (module indirection cannot be checked)"]
   end
 
   defp check_node({:receive, _, _}, _level) do
@@ -264,6 +282,15 @@ defmodule Raxol.REPL.Sandbox do
   defp check_node({kind, _, _}, _level)
        when kind in [:defmodule, :defprotocol, :defimpl] do
     ["#{kind} is not allowed (runtime module definition)"]
+  end
+
+  defp check_node({kind, _, args}, level)
+       when level in [:standard, :strict] and is_atom(kind) and is_list(args) do
+    if spawn_function?(kind) do
+      ["#{kind} is not allowed (process spawning)"]
+    else
+      []
+    end
   end
 
   defp check_node(_node, _level), do: []
@@ -307,6 +334,28 @@ defmodule Raxol.REPL.Sandbox do
   end
 
   defp check_denied_call(module, func) do
+    case Map.fetch(@denied_process_modules, module) do
+      {:ok, reason} ->
+        ["#{inspect(module)}.#{func} is not allowed (#{reason})"]
+
+      :error ->
+        check_denied_function(module, func)
+    end
+  end
+
+  defp check_denied_function(module, func)
+       when module in [Kernel, Node, :erlang] do
+    if spawn_function?(func) do
+      ["#{inspect(module)}.#{func} is not allowed (process spawning)"]
+    else
+      check_denied_standard_function(module, func)
+    end
+  end
+
+  defp check_denied_function(module, func),
+    do: check_denied_standard_function(module, func)
+
+  defp check_denied_standard_function(module, func) do
     case Enum.find(@denied_standard, fn {m, f, _} ->
            m == module and f == func
          end) do
@@ -317,4 +366,7 @@ defmodule Raxol.REPL.Sandbox do
         []
     end
   end
+
+  defp spawn_function?(func),
+    do: func |> Atom.to_string() |> String.starts_with?("spawn")
 end

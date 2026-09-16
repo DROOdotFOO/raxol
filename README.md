@@ -109,7 +109,7 @@ The flagship demo is a live BEAM dashboard with scheduler utilization, memory sp
 mix run examples/demo.exs
 ```
 
-See [examples/README.md](examples/README.md) for the full learning path, including agent examples, swarm demos, and the sandboxed REPL.
+See [examples/README.md](examples/README.md) for the full learning path, including agent examples, swarm demos, and the REPL.
 
 Headless environment (CI, containers, agents)? The whole build-and-test path needs no tty:
 

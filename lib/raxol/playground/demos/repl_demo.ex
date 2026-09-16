@@ -1,5 +1,5 @@
 defmodule Raxol.Playground.Demos.ReplDemo do
-  @moduledoc "Playground demo: interactive Elixir REPL with sandboxed evaluation."
+  @moduledoc "Playground demo: AST-checked interactive Elixir REPL."
   use Raxol.Core.Runtime.Application
 
   alias Raxol.REPL.{Evaluator, Sandbox}
@@ -12,6 +12,11 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   @box_height 16
   @max_history Raxol.Core.Defaults.history_limit()
   @eval_timeout Raxol.Core.Defaults.timeout_ms()
+
+  # The playground serves this demo anonymously over SSH, so the default is
+  # the whitelist-only level -- never `Sandbox`'s own `:standard` blocklist
+  # default. A local launch may lower it (see `context_options/1`).
+  @default_sandbox_level :strict
 
   # Sized for the deployment, not for a developer's laptop. This demo is the
   # only strict-sandbox caller and it is served anonymously over SSH, where the
@@ -26,11 +31,15 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   @inspect_width 30
 
   @impl true
-  def init(_context) do
+  def init(context) do
+    opts = context_options(context)
+
     %{
       input: "",
       cursor: 0,
       evaluator: Evaluator.new(),
+      sandbox_level: sandbox_level(opts),
+      eval_timeout: Keyword.get(opts, :timeout, @eval_timeout),
       output: [
         {"# Raxol REPL -- type Elixir expressions, Enter to eval", :info}
       ],
@@ -38,6 +47,21 @@ defmodule Raxol.Playground.Demos.ReplDemo do
       input_history: [],
       history_index: nil
     }
+  end
+
+  # `mix raxol.repl`'s `--sandbox` and `--timeout` arrive here: options given
+  # to `Raxol.start_link/2` reach `init/1` in the runtime's context map. Read
+  # per instance rather than from application env, because the playground
+  # starts this demo with `init(nil)` -- a level relaxed for one local
+  # terminal must not be able to follow the anonymously served surface.
+  defp context_options(%{options: options}) when is_list(options), do: options
+  defp context_options(_context), do: []
+
+  defp sandbox_level(opts) do
+    case Keyword.get(opts, :sandbox) do
+      level when level in [:none, :standard, :strict] -> level
+      _ -> @default_sandbox_level
+    end
   end
 
   @impl true
@@ -140,9 +164,10 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   defp eval_input(model) do
     code = String.trim(model.input)
 
-    # The playground is served anonymously over SSH, so the REPL demo runs at
-    # the whitelist-only strict level -- never the default standard blocklist.
-    case Sandbox.check(code, :strict) do
+    # The check the model was initialised with: `@default_sandbox_level` for
+    # the anonymously served playground, whatever `mix raxol.repl --sandbox`
+    # asked for on a local terminal.
+    case Sandbox.check(code, model.sandbox_level) do
       :ok ->
         do_eval(model, code)
 
@@ -155,7 +180,7 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   # snippet:start
   defp do_eval(model, code) do
     case Evaluator.eval(model.evaluator, code,
-           timeout: @eval_timeout,
+           timeout: model.eval_timeout,
            max_heap_bytes: @eval_max_heap_bytes,
            max_result_bytes: @eval_max_output_bytes
          ) do

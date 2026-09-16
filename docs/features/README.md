@@ -19,7 +19,7 @@ Use this page to find a feature; each linked page owns its details.
 | Runtime | [Adaptive UI](ADAPTIVE_UI.md) | Behavior-driven layout recommendations |
 | Developer tools | [Recording and replay](RECORDING_REPLAY.md) | Asciinema capture and playback |
 | Developer tools | [Time-travel debugging](TIME_TRAVEL_DEBUGGING.md) | Snapshot, step, and restore |
-| Developer tools | [REPL](REPL.md) | Sandboxed Elixir evaluation |
+| Developer tools | [REPL](REPL.md) | AST-checked Elixir evaluation |
 | Developer tools | [Virtual filesystem](FILESYSTEM.md) | Pure in-memory filesystem and agent actions |
 | Surfaces | [Gateway](GATEWAY.md) | Shared adapter for messaging platforms (pre-alpha) |
 | Surfaces | [Telegram](TELEGRAM.md) | TEA apps as Telegram bots |
