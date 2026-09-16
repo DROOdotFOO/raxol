@@ -605,4 +605,26 @@ defmodule Raxol.Terminal.Commands.ScreenTest do
       assert Enum.map(scrollback, &row_text/1) == ["R3", "R4"]
     end
   end
+
+  describe "logging invariants" do
+    test "invalid buffers raise identically at every Logger level" do
+      emulator = %{Emulator.new(10, 5) | main_screen_buffer: %{}}
+      original_level = Logger.level()
+      on_exit(fn -> Logger.configure(level: original_level) end)
+
+      messages =
+        for level <- [:debug, :error] do
+          Logger.configure(level: level)
+
+          error =
+            assert_raise KeyError, fn ->
+              Screen.clear_line(emulator, 0)
+            end
+
+          Exception.message(error)
+        end
+
+      assert Enum.uniq(messages) |> length() == 1
+    end
+  end
 end

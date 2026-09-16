@@ -1,6 +1,8 @@
 defmodule Raxol.Terminal.Commands.Executor do
   @moduledoc false
 
+  require Logger
+
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Commands.CommandsParser, as: Parser
   alias Raxol.Terminal.Commands.CSIHandler
@@ -208,8 +210,6 @@ defmodule Raxol.Terminal.Commands.Executor do
 
   @spec execute_osc_command(Emulator.t(), String.t()) :: Emulator.t()
   def execute_osc_command(emulator, command_string) do
-    Raxol.Core.Runtime.Log.debug(fn -> "Executing OSC command: #{inspect(command_string)}" end)
-
     # handle_osc_command returns {:ok, emulator} or {:error, reason, emulator}
     case handle_osc_command(emulator, command_string) do
       {:ok, updated_emulator} -> updated_emulator
@@ -227,11 +227,13 @@ defmodule Raxol.Terminal.Commands.Executor do
   defp handle_osc_command(emulator, command_string) do
     with [ps_str, pt] <- String.split(command_string, ";", parts: 2),
          {ps_code, ""} <- Integer.parse(ps_str) do
+      Logger.debug("Executing OSC command code=#{ps_code}, payload=[REDACTED]")
+
       dispatch_osc_command(emulator, ps_code, pt)
     else
       _ ->
         Raxol.Core.Runtime.Log.warning_with_context(
-          "OSC: Unexpected command format: \"#{command_string}\"",
+          "OSC: Unexpected command format (payload redacted)",
           %{}
         )
 
@@ -257,9 +259,9 @@ defmodule Raxol.Terminal.Commands.Executor do
         final_byte,
         data_string
       ) do
-    Raxol.Core.Runtime.Log.debug(fn ->
-      "Executing DCS command: #{inspect(data_string)} with final_byte: #{final_byte}"
-    end)
+    Logger.debug(
+      "Executing DCS command: params=#{inspect(params_buffer)}, intermediates=#{inspect(intermediates_buffer)}, final_byte=#{inspect(final_byte)}, payload=[REDACTED]"
+    )
 
     handle_dcs_command(
       emulator,
@@ -278,7 +280,9 @@ defmodule Raxol.Terminal.Commands.Executor do
         intermediates_buffer,
         data_string
       ) do
-    Raxol.Core.Runtime.Log.debug(fn -> "Executing DCS command: #{inspect(data_string)}" end)
+    Logger.debug(
+      "Executing DCS command: params=#{inspect(params_buffer)}, intermediates=#{inspect(intermediates_buffer)}, payload=[REDACTED]"
+    )
 
     handle_dcs_command(
       emulator,
@@ -346,7 +350,7 @@ defmodule Raxol.Terminal.Commands.Executor do
         case final_byte do
           nil ->
             Raxol.Core.Runtime.Log.warning_with_context(
-              "DCS: No final byte found in params_buffer: \"#{params_buffer}\"",
+              "DCS: No final byte found; params=#{inspect(params_buffer)}",
               %{}
             )
 

@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
   Mode operation functions extracted from the main emulator module.
   Handles terminal mode setting and resetting operations.
   """
+  require Logger
+
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Emulator
 
@@ -13,7 +15,7 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
   """
   @spec set_mode(emulator(), atom()) :: {:ok, emulator()} | {:error, term()}
   def set_mode(emulator, mode) do
-    Log.debug(fn -> "ModeOperations.set_mode called with mode=#{inspect(mode)}" end)
+    Logger.debug("ModeOperations.set_mode called with mode=#{inspect(mode)}")
 
     Log.debug("ModeOperations.set_mode: about to call ModeManager.set_mode")
 
@@ -26,9 +28,9 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
         {:ok, new_emulator}
 
       {:error, reason} ->
-        Log.debug(fn ->
+        Logger.debug(
           "ModeOperations.set_mode: ModeManager.set_mode returned {:error, #{inspect(reason)}}"
-        end)
+        )
 
         {:error, reason}
     end
@@ -39,7 +41,7 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
   """
   @spec reset_mode(emulator(), atom()) :: {:ok, emulator()} | {:error, term()}
   def reset_mode(emulator, mode) do
-    Log.debug(fn -> "ModeOperations.reset_mode called with mode=#{inspect(mode)}" end)
+    Logger.debug("ModeOperations.reset_mode called with mode=#{inspect(mode)}")
 
     Log.debug("ModeOperations.reset_mode: about to call ModeManager.reset_mode")
 
@@ -52,7 +54,7 @@ defmodule Raxol.Terminal.Emulator.ModeOperations do
         {:ok, new_emulator}
 
       {:error, reason} ->
-        Log.debug(fn -> "ModeOperations.reset_mode: returning {:error, #{inspect(reason)}}" end)
+        Logger.debug("ModeOperations.reset_mode: returning {:error, #{inspect(reason)}}")
 
         {:error, reason}
     end

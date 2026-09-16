@@ -3,6 +3,8 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   Handles the :dcs_entry state of the terminal parser.
   """
 
+  require Logger
+
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State
 
@@ -96,9 +98,9 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   end
 
   defp handle_final_byte(emulator, parser_state, byte, rest) do
-    Raxol.Core.Runtime.Log.debug(fn ->
-      "DCSEntryState: Found final byte #{byte}, transitioning to dcs_passthrough with rest=#{inspect(rest)}"
-    end)
+    Logger.debug(
+      "DCSEntryState: Found final byte #{inspect(byte)}, transitioning to dcs_passthrough; payload redacted"
+    )
 
     next_state = %{
       parser_state
@@ -117,7 +119,7 @@ defmodule Raxol.Terminal.Parser.States.DCSEntryState do
   end
 
   defp handle_ignored_byte(emulator, parser_state, byte, rest) do
-    Raxol.Core.Runtime.Log.debug(fn -> "Ignoring C0/DEL byte #{byte} in DCS Entry" end)
+    Logger.debug("Ignoring C0/DEL byte #{byte} in DCS Entry")
     {:continue, emulator, parser_state, rest}
   end
 

@@ -3,7 +3,8 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
   Handles the :csi_param state of the terminal parser.
   """
 
-  alias Raxol.Core.Runtime.Log
+  require Logger
+
   alias Raxol.Terminal.Commands.Executor
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.Parser.ParserState, as: State
@@ -114,9 +115,9 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
   end
 
   defp handle_intermediate(emulator, parser_state, intermediate_byte, rest) do
-    Log.debug(fn ->
+    Logger.debug(
       "CSIParamState.handle_intermediate: byte=#{inspect(<<intermediate_byte>>)}, current_params=#{inspect(parser_state.params_buffer)}, current_intermediates=#{inspect(parser_state.intermediates_buffer)}"
-    end)
+    )
 
     next_parser_state = %{
       parser_state
@@ -125,9 +126,9 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
         state: :csi_intermediate
     }
 
-    Log.debug(fn ->
+    Logger.debug(
       "CSIParamState.handle_intermediate: new_intermediates=#{inspect(next_parser_state.intermediates_buffer)}, new_params=#{inspect(next_parser_state.params_buffer)}, new_state=#{inspect(next_parser_state.state)}"
-    end)
+    )
 
     {:continue, emulator, next_parser_state, rest}
   end
@@ -167,7 +168,7 @@ defmodule Raxol.Terminal.Parser.States.CSIParamState do
   end
 
   defp handle_ignored_byte(emulator, parser_state, ignored_byte, rest) do
-    Raxol.Core.Runtime.Log.debug(fn -> "Ignoring C0/DEL byte #{ignored_byte} in CSI Param" end)
+    Logger.debug("Ignoring C0/DEL byte #{ignored_byte} in CSI Param")
 
     {:continue, emulator, parser_state, rest}
   end

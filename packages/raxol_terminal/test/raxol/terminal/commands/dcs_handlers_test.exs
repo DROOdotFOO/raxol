@@ -2,7 +2,7 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureLog
 
-  alias Raxol.Terminal.Commands.DCSHandler
+  alias Raxol.Terminal.Commands.{DCSHandler, Executor}
   alias Raxol.Terminal.Emulator
   # Only keeping aliases that are actually used
 
@@ -183,10 +183,11 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
           assert updated_emulator == emulator
         end)
 
-      # In test mode with error-level logging, warning messages may not be captured
-      # This is acceptable as long as the functionality works correctly
+      # In test mode with error-level logging, warning messages may not be captured.
+      # When present, the payload must remain redacted.
       if log != "" do
-        assert log =~ "Unhandled DECRQSS request type: \"unknown_request\""
+        assert log =~ "Unhandled DECRQSS request type (payload redacted)"
+        refute log =~ "unknown_request"
       end
     end
   end
@@ -362,6 +363,21 @@ defmodule Raxol.Terminal.Commands.DCSHandlerTest do
         assert log =~ "DECDLD"
         assert log =~ "not yet implemented"
       end
+    end
+  end
+
+  describe "DCS logging" do
+    test "redacts command payloads" do
+      secret = "private-dcs-payload"
+      emulator = new_emulator()
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert Executor.execute_dcs_command(emulator, "", "", ?z, secret) == emulator
+        end)
+
+      assert log =~ "payload=[REDACTED]"
+      refute log =~ secret
     end
   end
 end

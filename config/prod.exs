@@ -16,8 +16,10 @@ config :raxol, :terminal,
   scrollback_lines: 1000,
   enable_ansi: true,
   enable_mouse: true,
-  debug_mode: false,
-  log_level: :info
+  debug_mode: false
+
+# Enforce the production threshold in Logger itself.
+config :logger, level: :info
 
 # Configure web interface settings for production
 config :raxol, :web,

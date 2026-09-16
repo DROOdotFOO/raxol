@@ -1,8 +1,11 @@
 defmodule Raxol.Terminal.Commands.OSCHandlerTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Terminal.Clipboard
-  alias Raxol.Terminal.Commands.OSCHandler
+  alias Raxol.Terminal.Commands.{Executor, OSCHandler}
+  alias Raxol.Terminal.Input.ControlSequenceHandler
 
   defp emulator(overrides \\ %{}) do
     Map.merge(
@@ -126,6 +129,51 @@ defmodule Raxol.Terminal.Commands.OSCHandlerTest do
     test "rejects a malformed command without crashing" do
       assert {:error, :invalid_clipboard_command, _emulator} =
                OSCHandler.handle(emulator(), 52, "bogus")
+    end
+  end
+
+  describe "terminal control logging" do
+    test "redacts OSC 52 clipboard payloads" do
+      encoded_secret = Base.encode64("private clipboard value")
+
+      log =
+        capture_log([level: :debug], fn ->
+          result = Executor.execute_osc_command(emulator(), "52;c;#{encoded_secret}")
+          assert Clipboard.get_content(result.clipboard) == "private clipboard value"
+        end)
+
+      assert log =~ "Executing OSC command code=52, payload=[REDACTED]"
+      refute log =~ encoded_secret
+      refute log =~ "private clipboard value"
+    end
+
+    test "escapes PM control input instead of emitting terminal controls" do
+      command = "\e]52"
+      data = "\e[31mprivate\e[0m"
+
+      log =
+        capture_log([level: :debug], fn ->
+          emulator = emulator()
+          assert ControlSequenceHandler.handle_pm_sequence(emulator, command, data) == emulator
+        end)
+
+      refute log =~ command
+      refute log =~ "\e[31mprivate"
+      assert log =~ ~S(command="\e]52")
+      assert log =~ ~S(data="\e[31mprivate\e[0m")
+    end
+
+    test "escapes unsupported OSC command bytes" do
+      command = "\e]unsupported"
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, :unsupported_command, _emulator} =
+                   OSCHandler.handle(emulator(), command, "ignored")
+        end)
+
+      refute log =~ command
+      assert log =~ ~S(Unsupported OSC command: "\e]unsupported")
     end
   end
 
