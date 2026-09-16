@@ -29,7 +29,7 @@ defmodule RaxolSensor.MixProject do
   defp deps do
     [
       {:circular_buffer, "~> 1.0"},
-      {:nx, "~> 1.0", optional: true},
+      {:nx, "~> 0.9", optional: true},
 
       # Dev/test only
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},

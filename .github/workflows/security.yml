@@ -128,6 +128,9 @@ jobs:
         run: |
           mix deps.clean --unused
           mix deps.get
+          # Sobelow derives Jason.Encoder; compile its runtime prerequisite
+          # before loading the Mix task.
+          mix deps.compile jason sobelow
 
       # Blocking, and no fallback. Both halves of the old command were
       # decorative: `--config` did nothing because no `.sobelow-conf` existed,

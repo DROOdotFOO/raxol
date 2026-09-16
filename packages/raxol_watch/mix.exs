@@ -39,7 +39,9 @@ defmodule RaxolWatch.MixProject do
       {:telemetry, "~> 1.3"},
 
       # Push notifications (optional -- only needed with real APNS/FCM)
-      {:pigeon, "~> 2.0", optional: true},
+      {:pigeon, "~> 2.0.1", optional: true},
+      # Pigeon's transitive Goth/Finch/Mint stack needs a CA bundle for TLS verification.
+      {:castore, "~> 1.0"},
       {:jason, "~> 1.4"},
 
       # Dev/test only
