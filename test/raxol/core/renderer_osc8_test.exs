@@ -151,7 +151,6 @@ defmodule Raxol.Core.RendererOSC8Test do
     end
   end
 
-
   describe "display text confinement" do
     test "display text is confined before OSC 8 assembly" do
       url = "https://example.com"
