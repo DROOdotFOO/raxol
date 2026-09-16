@@ -25,6 +25,27 @@ defmodule Raxol.Playground.Demos.ReplDemoTest do
   end
 
   describe "init/1" do
+    test "defaults all supported contexts to strict" do
+      for context <- [nil, %{}, %{options: []}] do
+        model = ReplDemo.init(context)
+
+        assert model.sandbox_level == :strict
+        assert model.eval_timeout == Raxol.Core.Defaults.timeout_ms()
+      end
+    end
+
+    test "uses explicit per-launch sandbox and timeout options" do
+      for sandbox <- [:none, :standard, :strict] do
+        model =
+          ReplDemo.init(%{
+            options: [sandbox: sandbox, timeout: 250]
+          })
+
+        assert model.sandbox_level == sandbox
+        assert model.eval_timeout == 250
+      end
+    end
+
     test "returns initial model" do
       model = ReplDemo.init(nil)
       assert model.input == ""

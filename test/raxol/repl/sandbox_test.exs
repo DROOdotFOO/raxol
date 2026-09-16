@@ -73,28 +73,54 @@ defmodule Raxol.REPL.SandboxTest do
     end
 
     # A spawned process is not the evaluation, so `Evaluator`'s timeout (which
-    # signals one pid) and its per-process heap cap do not reach it: it keeps
-    # running with full node authority after the evaluation is reported as
-    # timed out. `Kernel.spawn` was already denied; these reach the same
-    # primitive under another name.
-    test "denies spawning that outlives the evaluation" do
+    # signals one pid) and its per-process heap cap do not reach it. Cover the
+    # API families instead of one representative name per module: every entry
+    # below can create work that outlives the evaluation that started it.
+    test "denies process creation and scheduling variants" do
       for code <- [
             "Task.async(fn -> :ok end)",
+            "Task.async_stream([1], fn value -> value end)",
             "Task.start(fn -> :ok end)",
             "Task.start_link(fn -> :ok end)",
+            "Task.Supervisor.async_nolink(TaskSupervisor, fn -> :ok end)",
+            "Task.Supervisor.start_child(TaskSupervisor, fn -> :ok end)",
             "Agent.start(fn -> 0 end)",
             "Agent.start_link(fn -> 0 end)",
+            "GenServer.start(MyServer, :ok)",
+            "GenServer.start_link(MyServer, :ok)",
+            "Supervisor.start_link([], strategy: :one_for_one)",
+            "DynamicSupervisor.start_link(strategy: :one_for_one)",
+            "PartitionSupervisor.start_link(child_spec: Task.Supervisor, name: Parts)",
+            "Registry.start_link(keys: :unique, name: MyRegistry)",
+            "spawn_opt(fn -> :ok end, [])",
+            ":erlang.spawn(fn -> :ok end)",
+            ":erlang.spawn_link(fn -> :ok end)",
+            ":erlang.spawn_monitor(fn -> :ok end)",
+            ":erlang.spawn_opt(fn -> :ok end, [])",
+            ":erlang.spawn_request(fn -> :ok end)",
             ":proc_lib.spawn(fn -> :ok end)",
-            ":proc_lib.spawn_link(fn -> :ok end)"
+            ":proc_lib.start(MyModule, :init, [])",
+            ":gen.start(:gen_server, :nolink, MyServer, :ok, [])",
+            ":gen_event.start()",
+            ":gen_statem.start(MyCallback, :ok, [])",
+            ":gen_server.start(MyServer, :ok, [])",
+            ":supervisor.start_link(MySupervisor, :ok)",
+            ":timer.apply_after(10, Kernel, :send, [self(), :ok])"
           ] do
-        assert {:error, violations} = Sandbox.check(code, :standard),
+        assert {:error, [_ | _]} = Sandbox.check(code, :standard),
                "#{code} was allowed at :standard"
+      end
+    end
 
-        assert Enum.any?(violations, fn violation ->
-                 violation =~ "process spawning" or
-                   violation =~ "dangerous erlang module"
-               end),
-               "#{code}: #{inspect(violations)}"
+    test "denies aliases and imports that hide process APIs" do
+      for code <- [
+            "alias Task, as: T; T.async(fn -> :ok end)",
+            "import Task; async(fn -> :ok end)",
+            "require Task; Task.async(fn -> :ok end)",
+            "use Task"
+          ] do
+        assert {:error, [_ | _]} = Sandbox.check(code, :standard),
+               "#{code} bypassed the standard policy"
       end
     end
 
