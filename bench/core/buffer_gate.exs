@@ -2,255 +2,119 @@
 #
 #   MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs
 #
-# MIX_ENV matters: CI sets `MIX_ENV: test` workflow-wide, so the budgets below
-# are measured in `test` and the command above is the one to reproduce them.
-#
 # Exit codes: 0 = every budget met, 1 = a budget was breached, 2 = the gate
-# could not measure what it claims to measure (see MEASUREMENT INTEGRITY).
-# Exit 2 is NOT a pass.
+# could not measure what it claims to measure. Exit 2 is not a pass.
 #
-# Why this exists: `test/raxol/core/buffer/buffer_performance_test.exs` was a
-# benchmark living in the ExUnit suite (wall-clock `assert`s, `IO.puts`,
-# `:erlang.memory(:total)` deltas) and was deleted for it. Nothing replaced it,
-# so buffer fill/read/scroll cost and per-cell memory were gated nowhere
-# (issue #1034). `bench/core/buffer_benchmark.exs` is a Benchee report for the
-# `Raxol.Core.Buffer` compatibility shim; this gate measures the real
-# `Raxol.Terminal.Buffer` with `Cell` structs and fails its CI job. That job
-# is reported by `ci-status` but is not a required check, so it informs a
-# review rather than mechanically blocking a merge.
+# This replaces the wall-clock assertions and whole-VM memory deltas formerly
+# kept in ExUnit. It measures the real `Raxol.Terminal.Buffer`, not the
+# `Raxol.Core.Buffer` compatibility shim measured by buffer_benchmark.exs.
 #
-# ---------------------------------------------------------------------------
-# WHAT THESE BUDGETS CAN AND CANNOT DETECT
-# ---------------------------------------------------------------------------
-# The throughput budgets carry ~5x headroom over the SLOWEST value observed
-# while setting them, because a shared CI runner is both slower and noisier
-# than a developer box. Across the ten runs in the BUDGETS block below, the
-# same code on one machine spread 8x (80x24 fill), 11x (200x100 read) and 7x
-# (500x500 read), nearly all of it from CPU contention.
+# MERGE ENFORCEMENT
 #
-# State that plainly rather than dressing it up: these rows catch a large
-# regression -- an accidental O(n) -> O(n^2), a per-write whole-grid rebuild,
-# an `inspect/1` or a sleep in a hot path. They do NOT catch a 2x regression.
-# Measured on the budgets below, rebuilding the target row an extra N times
-# inside `set_cell/4` breaches:
+# The `buffer-gate` job fails on either non-zero exit and `ci-status` reads that
+# job's result. `CI Status` is a required status check on `master`
+# (`strict: false`), so a breach blocks an ordinary merge. Branch protection
+# has `enforce_admins` disabled, so an administrator can bypass the check.
 #
-#   N=10  200x100 fill only (36.27 vs 29.00, 1.25x)
-#   N=30  all three fill rows (28.44/1.05x, 81.01/2.79x, 233.36/2.29x)
+# WHAT THE GATE MEASURES
 #
-# A green run means "no blow-up", never "throughput did not change".
+# Fixtures are built before each timed sweep. `Buffer.new/1`, coordinates,
+# characters, and `Cell` structs are not part of a fill timing; a fill row
+# measures only repeated `Buffer.set_cell/4` calls. Read coordinates are also
+# prepared before the timer. Scroll timings contain only `Buffer.scroll/2`.
 #
-# The two memory rows are the sensitive ones, and there are two per size
-# because one number cannot answer both questions:
+# Five passes are taken for every throughput row and the median is reported.
+# A minimum is deliberately not used: choosing the fastest pass can hide a
+# regression, and the former two-pass 500x500 fill did exactly that. Each
+# pass's result is checked and then discarded before the next pass, so the
+# process never retains a list of large result buffers.
 #
-#   `flat bytes/cell` is `:erts_debug.flat_size/1`: the term's shape with
-#   sharing EXPANDED. It is the copy footprint -- what the buffer costs to
-#   send across a process boundary -- and it is a pure function of shape, so
-#   it returned 456.29 / 456.09 / 456.03 across the three sizes on all ten
-#   runs, to the last decimal.
+# Throughput budgets have roughly 5x headroom over the ubuntu-latest evidence
+# below. They are blow-up detectors, not a promise that a 2x regression will
+# fail. The 500x500 read row was removed: `get_cell/3` rebuilds a
+# `ScreenBuffer`, making that row allocation/GC noise rather than a plausible
+# guard on a lookup regression.
 #
-#   `heap bytes/cell` is `:erts_debug.size_shared/1`: the same term with
-#   sharing COUNTED ONCE, i.e. the resident heap. Equally deterministic:
-#   240.25 / 240.08 B/cell on all ten runs, 47% below the flat number,
-#   because every cell's 13-key `attributes` map is a compile-time literal in
-#   `Raxol.Terminal.Buffer.Cell.extract_attributes/1` and all 20000 of them
-#   point at one shared keys tuple.
+# The row-rebuild canary is concrete. Replacing the single pair of
+# `List.update_at/3` calls in `set_cell/4` with ten identical pairs makes the
+# timed operation perform ten target-row rebuilds per write. The 200x100 fill
+# budget is five times the observed single-rebuild cost (1.52 -> 7.60
+# us/cell), so N=10 breaches that row by construction. Fixture work cannot
+# dilute the canary because it is outside the timer.
 #
-# Because both are exact, both are gated tight enough to catch ONE added
-# struct field, which is the smallest regression either can see. Measured by
-# adding one field to `%Cell{}`:
+# Memory has two meanings:
 #
-#   flat 456.29 -> 472.29 B/cell (+2 words: the field plus its slot in the
-#        per-cell keys tuple, which flat_size expands per cell)
-#   heap 240.25 -> 248.25 B/cell (+1 word: the keys tuple is shared, so only
-#        the value slot is paid per cell)
+#   flat bytes/cell  `:erts_debug.flat_size/1`, with sharing expanded
+#   heap bytes/cell  `:erts_debug.size_shared/1`, with sharing counted once
 #
-# Both breach (1.03x and 1.02x of budget) at every size that declares them.
-# The earlier 1.5x / 685.0 budget did not: it needed +229 B/cell, ~28 added
-# fields, so the claim that it "catches a struct growing a field" was wrong
-# by a factor of 28. A tight budget is only safe because these functions do
-# not vary run to run; do not copy that tightness onto a timing row.
+# Both are pure functions of the retained filled buffer. No elapsed-time
+# assertion is involved. The heap row is omitted at 500x500 because the two
+# smaller sizes already cover per-cell sharing. Before sizing, dead timed
+# results are garbage-collected; only the retained fixture is measured.
 #
-# The blind spot the heap row closes, measured rather than asserted: build
-# that same attributes map at runtime instead (`Map.new(keys, ...)` -- an
-# ordinary-looking refactor) and each cell allocates its own keys tuple.
-# Resident heap goes 240.25 -> 352.25 B/cell at 80x24 (+112.00, 1.47x, and
-# 1.44x of budget), while `flat bytes/cell` moves by 0.00 -- it stays 456.29
-# to the last decimal, because sharing is exactly what `flat_size/1` cannot
-# see. A gate with only the flat row would have passed that diff. Sharing
-# changes in the other direction are equally invisible to it.
+# The 460 and 244 B/cell ceilings are independent limits, not formulas derived
+# from the current result. They catch, respectively, an added `%Cell{}` field
+# (456.29 -> 472.29) and loss of sharing in its attributes (240.25 -> 352.25).
+# Do not ratchet either ceiling mechanically when an implementation changes.
 #
-# `:erts_debug.size/1` is the function usually named for this and is NOT
-# used: measured on this buffer it took 612 ms at 1920 cells and 49.5 s at
-# 20000 cells, which is minutes of CI for one row. `size_shared/1` answers
-# the same question -- 240.25 vs 240.72 B/cell at 80x24, 240.08 vs 240.13 at
-# 200x100, a 0.2% gap from literal-pool handling -- in 0.14 ms and 8.8 ms.
-# The heap row is nonetheless declared only at 80x24 and 200x100: those two
-# sizes are where per-cell sharing is worth gating, and 250000 cells adds
-# ~50 ms of walk for a number the smaller sizes already carry.
-#
-# Still outside what either row can see:
-#   - Neither function counts refcounted binary PAYLOADS, only the 6-word
-#     on-heap header. Cell chars here are 1-byte heap binaries, so this does
-#     not bite today; a change that parked a >64-byte binary per cell would
-#     be invisible to both rows.
-#   - Process heap fragmentation and GC behaviour are not measured at all.
-#
-# ---------------------------------------------------------------------------
 # MEASUREMENT INTEGRITY
-# ---------------------------------------------------------------------------
-# A gate that passes when it measured nothing is worse than no gate (the same
-# rule `scripts/check-quality-ratchet.sh` documents at length). Four ways
-# this particular gate could lie, and the check that stops each. A check that
-# cannot fail is not advertised here, it is deleted -- the previous version
-# also claimed to count its own rows before printing a verdict, which was
-# tautological because `measure/2` has one return path, and that claim and
-# its code are gone:
 #
-#   1. `Buffer.scroll/2` has a `rescue` clause that logs and returns the
-#      buffer UNCHANGED, so a broken scroll is fast and reads as a large
-#      improvement -- and the timed sweep is @scroll_reps scrolls, of which
-#      any subset could be rescued no-ops. Checked on the buffer the timed
-#      sweep actually produced, not on a separate throwaway scroll: it must
-#      differ from the filled buffer, keep its height and row widths, blank
-#      its last row, and its row 0 must be term-equal to the filled buffer's
-#      row @scroll_reps -- which only a sweep where every rep moved content
-#      can produce.
-#   2. A `set_cell/4` that silently dropped writes would make `fill` fast.
-#      Checked: cells are read back at four corners and the centre and must
-#      carry the character the fill wrote.
-#   3. A measurement that never ran leaves 0 ns / a too-small term behind,
-#      which beats every budget. Checked: every duration must be > 0 ns, and
-#      `flat_size` must clear one whole expanded `Cell` per cell -- a floor
-#      measured at runtime, 55 words/cell here, which a blank `Buffer.new/1`
-#      grid fails (46150 words against a 105600-word floor at 80x24). The
-#      previous bound was one WORD per cell, which a blank grid clears 24x
-#      over, so it could not fire.
-#   4. A sharing-aware size can never exceed the flat size of the same term,
-#      and can never fall below one unshared `%Cell{}` map per cell. Checked:
-#      `size_shared/1` must land in [22 words/cell, flat_size]. The floor is
-#      the bare struct measured at runtime; cells with different characters
-#      cannot share a map body, while a blank grid shares one cell for the
-#      whole screen and lands at 2.03 words/cell. The ceiling fails loudly if
-#      a future OTP changes either function's meaning, rather than quietly
-#      re-baselining the heap row.
+# A fast no-op must not pass:
 #
-# Each failure aborts with exit 2 and the word ABORT, never a PASS row.
+#   * Every duration must be positive.
+#   * Five written cells are read back after every timed fill.
+#   * Every timed scroll result must preserve shape, move row 20 to row 0, and
+#     blank the last row.
+#   * Flat size must remain above 40 words/cell and sharing-aware size above
+#     16 words/cell and no greater than flat size.
 #
-# ---------------------------------------------------------------------------
-# BUDGETS
-# ---------------------------------------------------------------------------
-# Provenance, because a budget without a machine and a date is a rumour.
-# Stamped like `priv/quality_baseline.json`, with a `measured_at` and a
-# `measured_at_sha`:
+# Those fixed word floors distinguish a populated grid from the shared blank
+# grid (about 24 flat and 2 heap words/cell). They intentionally do not call
+# `Cell.new/2` or size `%Cell{}`: a floor derived from the structure being
+# guarded would move with the regression and cease to be an independent
+# integrity check. Integrity failures print ABORT and stop with status 2.
 #
-#   measured_at      2026-09-15T00:00:00Z
-#   measured_at_sha  ef966e6c3
-#   command          MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs
+# BUDGET PROVENANCE
 #
-#   id      machine
-#   M1-8    Apple M1, 8 schedulers, OTP 29, Elixir 1.20.2, darwin/aarch64,
-#           5 runs, load average 13.8-17.6 (a busy box, not an idle one)
-#   M1-2    same box and commit, `ELIXIR_ERL_OPTIONS='+S 2:2'` plus 4
-#           busy-loop spinners, 5 runs -- a 2-core runner with a noisy
-#           neighbour
+# measured_at      2026-09-15T19:49:36Z
+# measured_at_sha  2f5516477
+# workflow_run     35015431487
+# workflow_job     104539040437
+# runner           ubuntu-latest (Ubuntu 24.04.5, x86_64, 4 schedulers)
+# runtime          OTP 29.0.3, Elixir 1.20.2, MIX_ENV=test
+# command          MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs
 #
-# There is deliberately NO ubuntu-latest column. The `buffer-gate` job runs
-# on `ubuntu-latest`/x86_64 and CI cannot currently produce a number to put
-# here: the repo-wide `Setup & Cache` job fails on `mix hex.audit` and
-# `deps.get --check-locked`, which skips every downstream job (PR #1023 fixes
-# it). M1-2 is the stand-in for a small, contended runner. The first green
-# `buffer-gate` log is the number to reconcile against this table, which is
-# why `print_header/0` prints the architecture, scheduler count, MIX_ENV and
-# commit alongside the measurements.
+# The run log is the review evidence. Each throughput ceiling is five times
+# the observed value, rounded up to one decimal:
 #
-# MIX_ENV: measured in `test`, because `ci-unified.yml` sets `MIX_ENV: test`
-# workflow-wide. A local `mix run` without it measures `dev`, which is a
-# different build.
+#   size      metric             observed   budget   headroom
+#   80x24     fill us/cell           0.81      4.1      5.06x
+#   80x24     read us/get_cell       0.79      4.0      5.06x
+#   80x24     scroll us/op           1.23      6.2      5.04x
+#   200x100   fill us/cell           1.52      7.6      5.00x
+#   200x100   read us/get_cell       1.64      8.2      5.00x
+#   200x100   scroll us/op           3.25     16.3      5.02x
+#   500x500   fill us/cell           4.13     20.7      5.01x
+#   500x500   scroll us/op          11.40     57.0      5.00x
 #
-#   size      metric             M1-8 min-max  M1-2 min-max   budget  x slow
-#   80x24     fill us/cell         0.66-0.74     0.78-5.37      27.0    5.03
-#   80x24     read us/get_cell     0.48-0.60     0.50-1.25       6.5    5.20
-#   80x24     scroll us/op         0.46-0.48     0.47-1.05       5.5    5.24
-#   80x24     flat bytes/cell         456.29        456.29     460.0    1.01
-#   80x24     heap bytes/cell         240.25        240.25     244.0    1.02
-#   200x100   fill us/cell         1.71-2.05     3.31-5.69      29.0    5.10
-#   200x100   read us/get_cell     1.22-1.32    2.47-13.63      69.0    5.06
-#   200x100   scroll us/op         1.18-1.27     1.21-2.34      12.0    5.13
-#   200x100   flat bytes/cell         456.09        456.09     460.0    1.01
-#   200x100   heap bytes/cell         240.08        240.08     244.0    1.02
-#   500x500   fill us/cell         5.75-9.92    9.41-20.19     102.0    5.05
-#   500x500   read us/get_cell   32.96-48.92   39.30-218.28   1100.0    5.04
-#   500x500   scroll us/op        5.00-10.69    4.86-16.84      85.0    5.05
-#   500x500   flat bytes/cell         456.03        456.03     460.0    1.01
+# Memory was 456.29/456.09/456.03 flat B/cell and 240.25/240.08 heap
+# B/cell. Those budgets preserve the independent field-growth and
+# sharing-loss limits above rather than applying the timing multiplier.
 #
-# The headroom column is against the slowest of the ten runs, which for every
-# throughput row is M1-2. Against the M1-8 median the same budgets are
-# 10-55x, which is the number to ignore.
+# The provenance run predates moving fixture construction out of the timed
+# region. Its throughput observations therefore include strictly more work
+# than the rows now measure, making the ceilings conservative. Replace this
+# provenance only with retained ubuntu-latest log evidence from the current
+# harness; never rebaseline by copying one green run into both observation
+# and budget.
 #
-# The memory rows are identical across every run and both configurations, to
-# the last decimal, because both functions are pure functions of the term.
-# Their 1.01x / 1.02x is therefore not optimism: see the added-field
-# measurement above.
+# BUDGET CHANGES
 #
-# The read rows are the weakest of the metrics and should not be read as a
-# tight bound on anything. `get_cell/3` converts the whole buffer to a
-# `ScreenBuffer` per call, so its cost is dominated by allocation and GC
-# state rather than by the lookup: 500x500 read measured 39.30 us on one
-# contended run and 218.28 us on another. They exist to cover the deleted
-# test's read case, not because they are sensitive.
-#
-# Runtime, once compiled: ~10 s wall on this box, ~8 s of it measurement,
-# dominated by the 500x500 fill, because `set_cell/4` rebuilds a list prefix
-# per write -- which is also why 250000 cells is the row that would notice
-# that getting worse. 15-20 s under the contention above.
-#
-# ---------------------------------------------------------------------------
-# CHANGING A BUDGET
-# ---------------------------------------------------------------------------
-# Not "take the printed measured column and keep the headroom" -- that is a
-# rebaseline recipe with no record. A budget change is a diff to the log
-# below, and the log is the review surface: `bench/core/buffer_gate.exs` is in
-# `.github/CODEOWNERS`, so loosening a number here cannot land unreviewed.
-#
-# Every change to a number in the table above or to a sampling constant
-# (`@passes`, `fill_passes`, `@read_samples`, `@scroll_reps`) adds a row:
-#
-#   date        row                     old     new   why
-#   2026-09-14  (initial)                 -       -   issue #1034
-#   2026-09-15  every throughput row      -       -   re-measured over 10
-#                                                     runs; the shipped
-#                                                     numbers disagreed with
-#                                                     their own baseline
-#                                                     probe (200x100 scroll
-#                                                     was 14.0 against a
-#                                                     25.15 observation) and
-#                                                     would have false-failed
-#   2026-09-15  80x24 fill us/cell     30.0    27.0   5x the slowest of 10
-#   2026-09-15  80x24 read us/get_cell 18.0     6.5   same; the old number
-#                                                     was 36x the slowest
-#   2026-09-15  80x24 scroll us/op     18.0     5.5   same
-#   2026-09-15  200x100 fill           58.0    29.0   same
-#   2026-09-15  200x100 read           83.0    69.0   same
-#   2026-09-15  200x100 scroll         51.0    12.0   same
-#   2026-09-15  500x500 fill          285.0   102.0   same
-#   2026-09-15  500x500 read          645.0  1100.0   WIDENED: a contended
-#                                                     run measured 218.28,
-#                                                     4.3x the old budget's
-#                                                     own baseline, so 645.0
-#                                                     was not 5x anything
-#   2026-09-15  500x500 scroll        145.0    85.0   5x the slowest of 10
-#   2026-09-15  flat bytes/cell       685.0   460.0   1.5x could not see an
-#                                                     added struct field
-#                                                     (+16 B/cell); 460.0
-#                                                     does, and the metric
-#                                                     does not vary
-#   2026-09-15  heap bytes/cell       289.0   244.0   same (+8 B/cell)
-#
-# A row that only widens a budget and says "CI was slow" is a red flag, not a
-# justification: say what got slower, or fix it. The 500x500 read row above
-# says what: `get_cell/3` rebuilds a `ScreenBuffer` per call and is
-# allocation-bound, so it is the one row contention can move by 7x.
-
+# 2026-09-14  initial gate for issue #1034
+# 2026-09-15  added sharing-aware memory rows and integrity checks
+# 2026-09-16  replaced M1 stand-ins with run 35015431487; set timing ceilings
+#             to ~5x that ubuntu-latest evidence; removed the inert 500x500
+#             read row; kept memory ceilings independent
 defmodule BufferGate do
   @moduledoc false
 
@@ -258,53 +122,42 @@ defmodule BufferGate do
   alias Raxol.Terminal.Buffer
   alias Raxol.Terminal.Buffer.Cell
 
-  # One entry per size. `fill_passes` scales with the SIZE rather than with
-  # the metric: a 500x500 fill pass costs seconds, so that size settles for
-  # two, and every other row everywhere gets the full @passes. The previous
-  # arrangement gave 80x24 fill two passes -- the shortest, least-averaged
-  # window in the gate -- for no reason except that it was a fill.
-  #
-  # `heap_bytes_per_cell: nil` omits the sharing-aware row for a size.
+  # A missing read budget omits that row. Heap sizing is likewise omitted
+  # when its budget is nil.
   @budgets [
     %{
       size: {80, 24},
-      fill_passes: 5,
-      fill_us_per_cell: 27.0,
-      read_us_per_get_cell: 6.5,
-      scroll_us_per_op: 5.5,
+      fill_us_per_cell: 4.1,
+      read_us_per_get_cell: 4.0,
+      scroll_us_per_op: 6.2,
       flat_bytes_per_cell: 460.0,
       heap_bytes_per_cell: 244.0
     },
     %{
       size: {200, 100},
-      fill_passes: 5,
-      fill_us_per_cell: 29.0,
-      read_us_per_get_cell: 69.0,
-      scroll_us_per_op: 12.0,
+      fill_us_per_cell: 7.6,
+      read_us_per_get_cell: 8.2,
+      scroll_us_per_op: 16.3,
       flat_bytes_per_cell: 460.0,
       heap_bytes_per_cell: 244.0
     },
     %{
       size: {500, 500},
-      fill_passes: 2,
-      fill_us_per_cell: 102.0,
-      read_us_per_get_cell: 1100.0,
-      scroll_us_per_op: 85.0,
+      fill_us_per_cell: 20.7,
+      scroll_us_per_op: 57.0,
       flat_bytes_per_cell: 460.0,
       heap_bytes_per_cell: nil
     }
   ]
 
-  # get_cell/scroll are cheap in aggregate, so they are repeated and the
-  # minimum taken; CPU contention can only ever make a pass slower.
-  # Timings are taken in nanoseconds and divided down: a 10x IMPROVEMENT to
-  # `scroll/2` takes the 80x24 sweep to under 1 us in total, which rounds to
-  # 0 in `:timer.tc/1`'s microseconds and would abort the gate on a win.
   @read_samples 256
   @scroll_reps 20
   @passes 5
+  @flat_words_per_cell_floor 40
+  @heap_words_per_cell_floor 16
 
   @alphabet for c <- ?a..?z, do: <<c>>
+  @scroll_steps Enum.to_list(1..@scroll_reps)
   @wordsize :erlang.system_info(:wordsize)
 
   def run do
@@ -319,11 +172,10 @@ defmodule BufferGate do
     verdict(rows)
   end
 
-  # Loads every module and lets the JIT settle, so the first measured size is
-  # not an outlier. Measured cold, one 80x24 scroll reads as 58000 us instead
-  # of 2 us -- a 29000x artifact of module loading.
+  # Load each target before the first measured pass.
   defp warmup(style) do
-    buffer = fill(Buffer.new({20, 10}), 20, 10, style)
+    blank = Buffer.new({20, 10})
+    buffer = fill(blank, fill_fixture(20, 10, style))
     _ = Buffer.get_cell(buffer, 1, 1)
     _ = Buffer.scroll(buffer, 1)
     _ = :erts_debug.flat_size(buffer)
@@ -358,78 +210,103 @@ defmodule BufferGate do
   end
 
   defp measure(budget, style) do
-    %{size: {width, height}, fill_passes: fill_passes} = budget
+    %{size: {width, height}} = budget
     cells = width * height
     label = "#{width}x#{height}"
 
-    {fill_ns, filled} =
-      min_pass(fill_passes, fn ->
-        fill(Buffer.new({width, height}), width, height, style)
-      end)
-
+    {fill_ns, filled} = measure_fill(width, height, style)
     positive!(fill_ns, "#{label} fill")
-    verify_written!(filled, width, height)
 
-    {read_ns, _} =
-      min_pass(@passes, fn -> read_sweep(filled, width, height) end)
+    read_rows = read_rows(budget, filled, width, height, label)
 
-    positive!(read_ns, "#{label} read")
+    scroll_ns =
+      median_pass(
+        @passes,
+        fn -> scroll_sweep(filled, @scroll_steps) end,
+        &verify_swept!(&1, filled, width, height)
+      )
 
-    {scroll_ns, swept} = min_pass(@passes, fn -> scroll_sweep(filled) end)
     positive!(scroll_ns, "#{label} scroll")
-    verify_swept!(swept, filled, width, height)
 
+    # Timed fill and scroll results have been discarded. Collect them before
+    # walking the retained fixture so large rows do not carry dead buffers
+    # into the memory measurement.
+    :erlang.garbage_collect()
     flat_words = :erts_debug.flat_size(filled)
 
-    # Integrity check 3, memory leg. The floor is one whole expanded `Cell`
-    # per cell, measured at runtime rather than hardcoded: `flat_size/1`
-    # expands sharing, so a grid of `cells` cells cannot weigh less than
-    # `cells` cells. `> cells` (one word per cell) was the previous bound and
-    # a blank `Buffer.new/1` grid clears it -- 24.0 words/cell, since its
-    # cells are identical and cheap. This floor does not: 46150 words against
-    # a 105600-word floor at 80x24.
-    cell_floor = :erts_debug.flat_size(Cell.new("a", style))
-
-    flat_words >= cells * cell_floor ||
+    flat_words >= cells * @flat_words_per_cell_floor ||
       abort(
         "#{label} flat_size is #{flat_words} words, below the " <>
-          "#{cells * cell_floor}-word floor of #{cells} cells at " <>
-          "#{cell_floor} words each; that is not a filled buffer"
+          "#{cells * @flat_words_per_cell_floor}-word fixed floor of " <>
+          "#{cells} cells at #{@flat_words_per_cell_floor} words each; " <>
+          "that is not a filled buffer"
       )
 
     [
-      {label, "fill us/cell", fill_ns / 1000 / cells, budget.fill_us_per_cell},
-      {label, "read us/get_cell", read_ns / 1000 / @read_samples,
-       budget.read_us_per_get_cell},
-      {label, "scroll us/op", scroll_ns / 1000 / @scroll_reps,
-       budget.scroll_us_per_op},
-      {label, "flat bytes/cell", flat_words * @wordsize / cells,
-       budget.flat_bytes_per_cell}
-    ] ++ heap_row(budget, filled, flat_words, label, cells)
+      {label, "fill us/cell", fill_ns / 1000 / cells, budget.fill_us_per_cell}
+    ] ++
+      read_rows ++
+      [
+        {label, "scroll us/op", scroll_ns / 1000 / @scroll_reps,
+         budget.scroll_us_per_op},
+        {label, "flat bytes/cell", flat_words * @wordsize / cells,
+         budget.flat_bytes_per_cell}
+      ] ++ heap_row(budget, filled, flat_words, label, cells)
   end
 
-  # The sharing-aware row. `size_shared/1` and not `size/1`: same answer, and
-  # `size/1` costs 1.6 s at 1920 cells and 62 s at 20000 (see the header).
+  defp measure_fill(width, height, style) do
+    blank = Buffer.new({width, height})
+    fixture = fill_fixture(width, height, style)
+    verify = &verify_written!(&1, width, height)
+
+    fill_ns =
+      median_pass(@passes, fn -> fill(blank, fixture) end, verify)
+
+    # The retained buffer is built outside the timer. Returning from this
+    # function also drops the large fixture list before memory is measured.
+    filled = fill(blank, fixture)
+    verify.(filled)
+    {fill_ns, filled}
+  end
+
+  defp read_rows(
+         %{read_us_per_get_cell: budget},
+         filled,
+         width,
+         height,
+         label
+       ) do
+    coordinates =
+      for i <- 0..(@read_samples - 1) do
+        {rem(i * 37, width), rem(i * 53, height)}
+      end
+
+    read_ns = median_pass(@passes, fn -> read_sweep(filled, coordinates) end)
+    positive!(read_ns, "#{label} read")
+
+    [
+      {label, "read us/get_cell", read_ns / 1000 / @read_samples, budget}
+    ]
+  end
+
+  defp read_rows(_budget, _filled, _width, _height, _label), do: []
+
+  # The sharing-aware row is omitted at sizes where its budget is nil.
   defp heap_row(%{heap_bytes_per_cell: nil}, _filled, _flat, _label, _cells),
     do: []
 
   defp heap_row(budget, filled, flat_words, label, cells) do
     heap_words = :erts_debug.size_shared(filled)
 
-    # Integrity check 4: a sharing-aware size lives in [one unshared %Cell{}
-    # map per cell, flat_size]. The floor is the bare struct measured at
-    # runtime (22 words here): cells carrying different characters cannot
-    # share a map body, so a grid of distinct cells must pay it once per
-    # cell. A blank grid pays it once in total -- 2.03 words/cell -- which is
-    # why `heap_words > cells` was not a check.
-    struct_floor = :erts_debug.flat_size(%Cell{})
-
-    (heap_words >= cells * struct_floor and heap_words <= flat_words) ||
+    (heap_words >= cells * @heap_words_per_cell_floor and
+       heap_words <= flat_words) ||
       abort(
         "#{label} size_shared is #{heap_words} words against flat_size " <>
-          "#{flat_words} and a floor of #{cells * struct_floor} " <>
-          "(#{cells} x #{struct_floor}); either the buffer is not filled or " <>
-          "one of the two functions does not mean what this gate assumes"
+          "#{flat_words} and a fixed floor of " <>
+          "#{cells * @heap_words_per_cell_floor} " <>
+          "(#{cells} x #{@heap_words_per_cell_floor}); either the buffer is " <>
+          "not filled or one of the two functions does not mean what this " <>
+          "gate assumes"
       )
 
     [
@@ -438,47 +315,53 @@ defmodule BufferGate do
     ]
   end
 
-  # Minimum of `passes` timings, with that pass's result: CPU contention can
-  # only make a measurement slower, so the minimum is the least noisy
-  # estimator available without a statistics library.
-  #
-  # A fold and not `Enum.map |> Enum.min_by`: the mapped version holds every
-  # pass's buffer live at once, and a scrolled 500x500 buffer is ~114 MB
-  # flat. This keeps the running minimum and the pass being timed, never the
-  # other three.
-  defp min_pass(passes, fun) do
-    Enum.reduce(1..passes, nil, fn _, best ->
-      {ns, result} = :timer.tc(fun, :nanosecond)
+  # Report the median of an odd pass count. Only durations are retained;
+  # large buffer results are verified, discarded, and collected between
+  # passes instead of accumulating in a list or surviving as a running
+  # minimum.
+  defp median_pass(passes, fun),
+    do: median_pass(passes, fun, fn _result -> :ok end)
 
-      case best do
-        {best_ns, _} when best_ns <= ns -> best
-        _ -> {ns, result}
-      end
-    end)
-  end
-
-  defp fill(buffer, width, height, style) do
-    Enum.reduce(0..(height - 1), buffer, fn y, acc ->
-      Enum.reduce(0..(width - 1), acc, fn x, acc ->
-        Buffer.set_cell(acc, x, y, Cell.new(char_at(x, y), style))
+  defp median_pass(passes, fun, verify) do
+    timings =
+      Enum.map(1..passes, fn _ ->
+        {ns, result} = :timer.tc(fun, :nanosecond)
+        verify.(result)
+        :erlang.garbage_collect()
+        ns
       end)
+
+    timings
+    |> Enum.sort()
+    |> Enum.at(div(passes, 2))
+  end
+
+  defp fill(buffer, fixture) do
+    Enum.reduce(fixture, buffer, fn {x, y, cell}, acc ->
+      Buffer.set_cell(acc, x, y, cell)
     end)
   end
 
-  # Distinct characters per cell, so whole-cell structural sharing cannot hide
-  # per-cell cost from flat_size, and so the read-back check below can tell a
-  # dropped write from a lucky one. The style struct stays shared, which is
-  # what real terminal content looks like.
+  # Coordinates, characters, and cells are fixture data, not target work.
+  # Distinct characters also keep whole-cell sharing from hiding per-cell
+  # memory and let the write integrity check distinguish every sampled cell.
+  defp fill_fixture(width, height, style) do
+    for y <- 0..(height - 1),
+        x <- 0..(width - 1) do
+      {x, y, Cell.new(char_at(x, y), style)}
+    end
+  end
+
   defp char_at(x, y), do: Enum.at(@alphabet, rem(x + y, 26))
 
-  defp read_sweep(buffer, width, height) do
-    Enum.each(0..(@read_samples - 1), fn i ->
-      Buffer.get_cell(buffer, rem(i * 37, width), rem(i * 53, height))
+  defp read_sweep(buffer, coordinates) do
+    Enum.each(coordinates, fn {x, y} ->
+      Buffer.get_cell(buffer, x, y)
     end)
   end
 
-  defp scroll_sweep(buffer) do
-    Enum.reduce(1..@scroll_reps, buffer, fn _, acc -> Buffer.scroll(acc, 1) end)
+  defp scroll_sweep(buffer, steps) do
+    Enum.reduce(steps, buffer, fn _, acc -> Buffer.scroll(acc, 1) end)
   end
 
   # Integrity check 2: the fill actually wrote cells.
@@ -562,17 +445,21 @@ defmodule BufferGate do
     ns > 0 || abort("#{what} measured #{ns} ns; nothing ran")
   end
 
-  # Printed with the table so a CI log can be reconciled against the BUDGETS
-  # provenance block, which records a machine, a MIX_ENV and a SHA.
+  # Printed with the table so a CI log can be reconciled against the
+  # provenance block.
   defp commit do
-    case System.cmd("git", ["rev-parse", "--short", "HEAD"],
-           stderr_to_stdout: true
-         ) do
-      {sha, 0} -> String.trim(sha)
-      _ -> "unknown"
+    case System.find_executable("git") do
+      nil ->
+        "unknown (git unavailable)"
+
+      git ->
+        case System.cmd(git, ["rev-parse", "--short", "HEAD"],
+               stderr_to_stdout: true
+             ) do
+          {sha, 0} -> String.trim(sha)
+          {_output, status} -> "unknown (git exit #{status})"
+        end
     end
-  rescue
-    _ -> "unknown"
   end
 
   defp print_row({label, metric, measured, budget}) do
@@ -611,14 +498,22 @@ defmodule BufferGate do
           "RESULT: FAIL (#{length(breaches)} of #{length(rows)} budgets breached)"
         )
 
-        System.halt(1)
+        stop(1)
     end
   end
 
   defp abort(reason) do
     IO.puts(:stderr, "ABORT: #{reason}")
     IO.puts(:stderr, "The gate measured nothing it can vouch for; not a pass.")
-    System.halt(2)
+    stop(2)
+  end
+
+  # `System.stop/1` initiates an orderly VM shutdown and returns immediately.
+  # Keep the script process from returning into Mix while the code server is
+  # stopping; init terminates this wait after standard IO has been flushed.
+  defp stop(status) do
+    System.stop(status)
+    Process.sleep(:infinity)
   end
 end
 

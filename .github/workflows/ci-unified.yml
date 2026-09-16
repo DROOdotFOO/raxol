@@ -597,11 +597,11 @@ jobs:
   # scenario and renders its findings as a `[WARN]` PR comment, which is a
   # report, not a gate.
   #
-  # `mix run` propagates the script's exit status, and the script calls
-  # System.halt(1) on a breached budget (2 when it could not measure at all),
-  # so a regression fails this job and `ci-status` below reports it. Note
-  # that `ci-status` is advisory: master has no required status checks.
-  # ~10 s of measurement on an 8-core box; the 500x500 fill is most of it.
+  # `mix run` propagates the script's exit status, and its flushing shutdown
+  # uses status 1 for a budget breach and 2 when it could not measure. Either
+  # fails this job. `ci-status` reads this result and is the required
+  # `CI Status` check on master, so a breach blocks ordinary merges; branch
+  # protection does not enforce the check for administrators.
   buffer-gate:
     name: Buffer performance gate
     needs: [setup, compile]
@@ -618,8 +618,10 @@ jobs:
           otp-version: ${{ needs.setup.outputs.otp-version }}
           version-type: strict
 
+      # PR code may consume the setup job's cache but must never publish cache
+      # state under a trusted key.
       - name: Restore cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: |
             deps
@@ -632,10 +634,8 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
-      # Self-heal a cache that disagrees with the checked-out lock; see the
-      # note on setup's deps.get fallback. No-op when the cache is healthy.
-      - name: Fetch dependencies
-        run: mix deps.get
+      - name: Check locked dependencies
+        run: mix deps.get --check-locked
 
       # --no-start: the gate measures a pure data structure, and booting the
       # application puts a supervision tree, the endpoint and telemetry
@@ -1194,7 +1194,7 @@ jobs:
 
           if [ "${{ needs.buffer-gate.result }}" != "success" ]; then
             echo "❌ Buffer performance gate failed"
-            echo "   Reproduce: mix run --no-start bench/core/buffer_gate.exs"
+            echo "   Reproduce: MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs"
             echo "   Budgets and their headroom are declared at the top of that file."
             exit 1
           fi
