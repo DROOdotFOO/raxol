@@ -12,6 +12,7 @@ defmodule Raxol.Core.Renderer do
       output = Raxol.Core.Renderer.render_to_string(buffer)
   """
 
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Core.Buffer
   alias Raxol.Core.Style
 
@@ -107,7 +108,7 @@ defmodule Raxol.Core.Renderer do
     |> chunk_by_style()
     |> Enum.map_join("", fn {style, chars} ->
       ansi_prefix = Style.to_ansi(style)
-      text = chars |> Enum.reverse() |> Enum.join()
+      text = chars |> Enum.reverse() |> Enum.map_join("", &terminal_text/1)
 
       styled =
         case ansi_prefix do
@@ -193,7 +194,7 @@ defmodule Raxol.Core.Renderer do
 
   defp flush_run(ops, run_start, run_chars, y, _cells) do
     reversed_chars = Enum.reverse(run_chars)
-    text = Enum.map_join(reversed_chars, "", & &1.char)
+    text = Enum.map_join(reversed_chars, "", &binary_text(&1.char))
     style = List.first(reversed_chars) |> Map.get(:style, %{})
 
     # ops is built reversed and flipped once at the end; prepend write
@@ -212,6 +213,7 @@ defmodule Raxol.Core.Renderer do
   end
 
   defp operation_to_ansi({:write, text, style}) do
+    text = terminal_text(text)
     ansi_prefix = Style.to_ansi(style)
 
     styled =
@@ -232,13 +234,31 @@ defmodule Raxol.Core.Renderer do
   # Wrap already-styled content in an OSC 8 hyperlink when the cell style
   # carries one (bare form, ST-terminated). Cells with no hyperlink emit
   # exactly as before.
+  #
+  # URL and displayed text are confined at this sink, immediately before
+  # bytes are assembled into OSC 8. `terminal_text/1` runs before SGR is
+  # added, so framework-owned styling remains intact while untrusted cell
+  # content cannot terminate the hyperlink or open another control string.
+  # `allow: []` is deliberate: a cell run and a URL are both single-row
+  # tokens, so no C0 byte is meaningful here. Non-binaries become `""`.
+  defp maybe_wrap_hyperlink("", _style), do: ""
+
   defp maybe_wrap_hyperlink(content, style) when is_map(style) do
     case Map.get(style, :hyperlink) do
-      url when is_binary(url) and url != "" ->
-        "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
+      url when is_binary(url) ->
+        wrap_hyperlink(content, TermText.sanitize(url, allow: []))
 
       _ ->
         content
     end
   end
+
+  defp terminal_text(value), do: TermText.sanitize(value, allow: [])
+  defp binary_text(value) when is_binary(value), do: value
+  defp binary_text(_value), do: ""
+
+  defp wrap_hyperlink(content, ""), do: content
+
+  defp wrap_hyperlink(content, url),
+    do: "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
 end

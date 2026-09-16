@@ -53,6 +53,7 @@ defmodule Raxol.Terminal.Renderer do
   ```
   """
 
+  alias Raxol.Core.Boundary.TermText
   alias Raxol.Terminal.ScreenBuffer
 
   @type t :: %__MODULE__{
@@ -215,14 +216,14 @@ defmodule Raxol.Terminal.Renderer do
     |> Enum.chunk_by(& &1.style)
     |> Enum.map_join("", fn same_style ->
       style = hd(same_style).style
-      chars = Enum.map_join(same_style, "", & &1.char)
+      chars = Enum.map_join(same_style, "", &terminal_text(&1.char))
       apply_sgr(build_ansi_prefix(style, theme), chars)
     end)
   end
 
   defp render_style_runs(cells, theme, _individual) do
     Enum.map_join(cells, "", fn cell ->
-      apply_sgr(build_ansi_prefix(cell.style, theme), cell.char)
+      apply_sgr(build_ansi_prefix(cell.style, theme), terminal_text(cell.char))
     end)
   end
 
@@ -255,15 +256,30 @@ defmodule Raxol.Terminal.Renderer do
   # one. Bare form `ESC ] 8 ; ; URL ST  <content>  ESC ] 8 ; ; ST`; clickable in
   # OSC 8-aware terminals (iTerm2, kitty, WezTerm), ignored elsewhere. SGR may
   # vary inside; the link spans the whole run.
+  #
+  # URL and displayed text are confined at this sink, immediately before
+  # bytes are assembled into OSC 8. Cell text passes through
+  # `terminal_text/1` before framework-owned SGR is added; the URL is
+  # sanitized below. `allow: []` keeps every C0 byte out because both values
+  # are single-row tokens. Non-binary terminal content fails closed as `""`.
+  defp maybe_wrap_hyperlink("", _style), do: ""
+
   defp maybe_wrap_hyperlink(content, style) do
     case hyperlink_url(style) do
-      url when is_binary(url) and url != "" ->
-        "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
+      url when is_binary(url) ->
+        wrap_hyperlink(content, TermText.sanitize(url, allow: []))
 
       _ ->
         content
     end
   end
+
+  defp terminal_text(value), do: TermText.sanitize(value, allow: [])
+
+  defp wrap_hyperlink(content, ""), do: content
+
+  defp wrap_hyperlink(content, url),
+    do: "\e]8;;" <> url <> "\e\\" <> content <> "\e]8;;\e\\"
 
   defp hyperlink_url(%{__struct__: _} = style), do: Map.get(style, :hyperlink)
   defp hyperlink_url(style) when is_map(style), do: Map.get(style, :hyperlink)

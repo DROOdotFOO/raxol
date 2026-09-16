@@ -40,7 +40,7 @@ defmodule Raxol.Harness.Surface.ViewText do
       byte-identical to plain -- neutral by default, matching every
       harness Component's own "absent prominence = zero change" contract.
 
-  ## This module is the trust boundary: sanitize content here, not downstream
+  ## The trust boundary for the paint-authority path
 
   Every string this module flattens can originate from an untrusted
   source -- a fixture's tool-call output, an LLM's streamed response, a
@@ -81,6 +81,13 @@ defmodule Raxol.Harness.Surface.ViewText do
        are left as a visible, garbled fragment, same honest failure mode
        `FlatAuthority` documents: a reader sees something was stripped
        rather than an invisible, silently-swallowed injection.
+
+  This boundary is specific to the authority path. The normal
+  `Preparer -> LayoutEngine -> UIRenderer` pipeline confines cell text and
+  OSC 8 URLs later, in the terminal emitters, through
+  `Raxol.Core.Boundary.TermText`. Keeping each check at the output path that
+  actually emits bytes means component trees are not walked and rebuilt on
+  every frame.
 
   **This is complementary to, not a substitute for, `FlatAuthority`'s own
   scrub** (a module-enforced flat scrub). Two
@@ -132,11 +139,11 @@ defmodule Raxol.Harness.Surface.ViewText do
   same as every other line here -- this module has never supported
   per-segment styling within one line, and `style_line/2` has no
   `:background` handling regardless, so the cursor-highlight run's style
-  is dropped the same way it always would be). Any other `children:` shape
-  (including a MIX of tuples and maps) falls through to the normal
-  recursive walk unchanged.
+  is dropped the same way it always was). Any other `children:` shape is
+  processed recursively; tuple leaves are retained as individual text
+  leaves rather than silently dropped.
   """
-  @spec lines(map() | [map()], non_neg_integer(), mode()) :: [String.t()]
+  @spec lines(term(), non_neg_integer(), mode()) :: [String.t()]
   def lines(view, width, mode \\ :plain) when is_integer(width) do
     view
     |> collect([])
@@ -156,6 +163,12 @@ defmodule Raxol.Harness.Surface.ViewText do
   defp collect(views, acc) when is_list(views) do
     Enum.reduce(views, acc, &collect/2)
   end
+
+  # A tuple outside an all-tuple run (for example in a mixed children list)
+  # is still a valid text leaf. Non-binary content intentionally misses this
+  # clause and contributes no terminal bytes.
+  defp collect({:text, content, style}, acc) when is_binary(content),
+    do: add_lines(acc, content, style)
 
   defp collect(%{type: :text, content: content} = node, acc)
        when is_binary(content) do

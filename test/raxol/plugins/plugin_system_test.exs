@@ -283,6 +283,34 @@ defmodule Raxol.Plugins.PluginSystemTest do
         HyperlinkPlugin.handle_output(updated_plugin, "Hello, World!")
     end
 
+    test "hyperlink paths cannot inject a second OSC sequence" do
+      {:ok, plugin} = HyperlinkPlugin.init()
+
+      {:ok, plugin, input_output} =
+        HyperlinkPlugin.handle_input(
+          plugin,
+          "link https://example.com\e]52;c;payload\a\r\n"
+        )
+
+      assert input_output =~ "\e]8;;https://example.com\e\\"
+      refute input_output =~ "\e]52"
+      refute input_output =~ "\a"
+      refute input_output =~ "\r"
+      refute input_output =~ "\n"
+
+      {:ok, _plugin, terminal_output} =
+        HyperlinkPlugin.handle_output(
+          plugin,
+          "Visit https://example.com\e]52;c;payload\a\r\n"
+        )
+
+      assert terminal_output =~ "\e]8;;https://example.com\e\\"
+      refute terminal_output =~ "\e]52"
+      refute terminal_output =~ "\a"
+      refute terminal_output =~ "\r"
+      assert terminal_output =~ "\n"
+    end
+
     test "Hyperlink Plugin processes output via PluginManager" do
       {:ok, manager_struct} = Raxol.Plugins.Manager.new()
 

@@ -2,6 +2,7 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Harness.Fixture
+  alias Raxol.Harness.Surface.ViewText
   alias Raxol.UI.Components.Harness.{Block, BlockBody}
 
   @markdown_fixture_path "test/fixtures/harness/sessions/markdown-stream.jsonl"
@@ -425,7 +426,11 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   describe "expanded render carries the completion row when the block has one" do
     test "a block with content.completion gets the row appended after the mounted component's own view" do
       block = Block.from_events(:message, events(:message), fold: :expanded)
-      with_completion = %{block | content: Map.put(block.content, :completion, %{evidence: :none})}
+
+      with_completion = %{
+        block
+        | content: Map.put(block.content, :completion, %{evidence: :none})
+      }
 
       rendered = BlockBody.render(with_completion, default_context())
       texts = flat_texts(rendered)
@@ -440,7 +445,9 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
       refute Map.has_key?(block.content, :completion)
 
       {:ok, unwrapped_view} =
-        Raxol.UI.Components.Harness.BodyProvider.mount(block.kind, block.content,
+        Raxol.UI.Components.Harness.BodyProvider.mount(
+          block.kind,
+          block.content,
           context: default_context(),
           outcome: block.outcome,
           seal: block.seal
@@ -476,7 +483,9 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
           seal: with_garbage_completion.seal
         )
 
-      assert strip_ids(BlockBody.render(with_garbage_completion, default_context())) ==
+      assert strip_ids(
+               BlockBody.render(with_garbage_completion, default_context())
+             ) ==
                strip_ids(unwrapped_view),
              "an unrecognized completion shape must never trigger the completion-row wrapping column"
     end
@@ -542,6 +551,50 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
 
       refute Enum.any?(texts, &(&1 =~ "\e"))
       refute Enum.any?(texts, &(&1 =~ "```"))
+    end
+  end
+
+  describe "mounted body views are confined by the paint-authority sink" do
+    @poison " hello \e[2J\e[?1049h\e]52;c;cHduZWQ=\a\u009B2J\rOVERWRITE\b" <>
+              <<0x7F>> <> " world"
+
+    @forbidden [
+      {"ESC", "\e"},
+      {"BEL", "\a"},
+      {"C1 CSI (U+009B)", "\u009B"},
+      {"CR", "\r"},
+      {"BS", "\b"},
+      {"DEL", <<0x7F>>}
+    ]
+
+    defp poison_binaries(value) when is_binary(value), do: value <> @poison
+
+    defp poison_binaries(value) when is_map(value),
+      do: Map.new(value, fn {key, item} -> {key, poison_binaries(item)} end)
+
+    defp poison_binaries(value) when is_list(value),
+      do: Enum.map(value, &poison_binaries/1)
+
+    defp poison_binaries(value), do: value
+
+    for kind <- [:message, :reasoning, :tool_call, :diff, :approval] do
+      test "#{kind}: valid mounted shape renders while terminal controls are stripped" do
+        lines =
+          unquote(kind)
+          |> events()
+          |> poison_binaries()
+          |> then(&Block.from_events(unquote(kind), &1, fold: :expanded))
+          |> BlockBody.render(default_context())
+          |> ViewText.lines(80, :plain)
+
+        assert lines != []
+        assert Enum.any?(lines, &String.contains?(&1, "hello"))
+
+        for {name, byte} <- @forbidden, line <- lines do
+          refute String.contains?(line, byte),
+                 "#{name} survived the #{unquote(kind)} mounted view: #{inspect(line)}"
+        end
+      end
     end
   end
 end

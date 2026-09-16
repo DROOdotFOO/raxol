@@ -14,6 +14,8 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   These features enable rich, interactive terminal applications with modern UX patterns.
   """
 
+  alias Raxol.Core.Boundary.TermText
+
   @type hyperlink_id :: String.t()
   @type url :: String.t()
   @type hyperlink_params :: %{
@@ -46,17 +48,16 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   """
   @spec create_hyperlink(String.t(), url(), hyperlink_params()) :: String.t()
   def create_hyperlink(text, url, options \\ %{}) do
-    # Build OSC 8 parameters
-    params = build_osc8_params(options)
+    text = terminal_text(text)
+    url = terminal_text(url)
+    params = options |> build_osc8_params() |> terminal_text()
 
-    param_string =
-      case params do
-        "" -> ""
-        _ -> "#{params}:"
-      end
-
-    # OSC 8 format: \e]8;params;url\e\text\e]8;;\e\
-    "\e]8;#{param_string}#{url}\e\\#{text}\e]8;;\e\\"
+    if url == "" do
+      text
+    else
+      param_string = if params == "", do: "", else: params <> ":"
+      "\e]8;#{param_string}#{url}\e\\#{text}\e]8;;\e\\"
+    end
   end
 
   @doc """
@@ -123,7 +124,7 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   """
   @spec notify(String.t()) :: String.t()
   def notify(message) do
-    "\e]9;#{message}\e\\"
+    "\e]9;#{terminal_text(message)}\e\\"
   end
 
   @doc """
@@ -143,7 +144,7 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   """
   @spec report_progress(progress_state(), 0..100) :: String.t()
   def report_progress(state, value \\ 0) do
-    "\e]9;4;#{progress_state_code(state)};#{value}\e\\"
+    "\e]9;4;#{progress_state_code(state)};#{progress_value(value)}\e\\"
   end
 
   @doc """
@@ -173,7 +174,7 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   """
   @spec set_pointer_shape(String.t()) :: String.t()
   def set_pointer_shape(shape) do
-    "\e]22;#{shape}\e\\"
+    "\e]22;#{terminal_text(shape)}\e\\"
   end
 
   # Synchronized Output (DEC 2026) Implementation
@@ -359,8 +360,7 @@ defmodule Raxol.Terminal.AdvancedFeatures do
   """
   @spec set_window_title(String.t()) :: :ok
   def set_window_title(title) do
-    # OSC 0 or OSC 2: Set window title
-    IO.write("\e]0;#{title}\e\\")
+    IO.write("\e]0;#{terminal_text(title)}\e\\")
     :ok
   end
 
@@ -390,38 +390,44 @@ defmodule Raxol.Terminal.AdvancedFeatures do
 
   # Private Helper Functions
 
-  defp build_osc8_params(options) do
-    params = []
-
-    params =
-      case Map.get(options, :id) do
-        nil -> params
-        id -> ["id=#{id}" | params]
-      end
-
-    params =
-      case Map.get(options, :tooltip) do
-        nil -> params
-        tooltip -> ["tooltip=#{URI.encode(tooltip)}" | params]
-      end
-
-    # Add custom parameters
-    params =
-      case Map.get(options, :params) do
-        nil ->
-          params
-
-        custom_params when is_map(custom_params) ->
-          Enum.reduce(custom_params, params, fn {key, value}, acc ->
-            ["#{key}=#{URI.encode(to_string(value))}" | acc]
-          end)
-
-        _ ->
-          params
-      end
-
-    Enum.join(params, ":")
+  defp build_osc8_params(options) when is_map(options) do
+    []
+    |> maybe_add_param("id", Map.get(options, :id))
+    |> maybe_add_param("tooltip", Map.get(options, :tooltip))
+    |> add_custom_params(Map.get(options, :params))
+    |> Enum.join(":")
   end
+
+  defp build_osc8_params(_options), do: ""
+
+  defp maybe_add_param(params, key, value) do
+    case terminal_text(value) do
+      "" -> params
+      value -> ["#{key}=#{URI.encode(value)}" | params]
+    end
+  end
+
+  defp add_custom_params(params, custom_params) when is_map(custom_params) do
+    Enum.reduce(custom_params, params, fn {key, value}, acc ->
+      key = terminal_text(key)
+      value = terminal_text(value)
+
+      if key == "" or value == "" do
+        acc
+      else
+        ["#{URI.encode(key)}=#{URI.encode(value)}" | acc]
+      end
+    end)
+  end
+
+  defp add_custom_params(params, _custom_params), do: params
+
+  defp terminal_text(value), do: TermText.sanitize(value, allow: [])
+
+  defp progress_value(value) when is_integer(value) and value in 0..100,
+    do: Integer.to_string(value)
+
+  defp progress_value(_value), do: ""
 
   defp query_hyperlink_support do
     # In a real implementation, this would query terminal capabilities

@@ -92,6 +92,13 @@ defmodule Raxol.UI.Components.Harness.Block do
   and `cost` are all `nil`; otherwise it renders only the fields that are
   present.
 
+  Terminal confinement is deliberately not implemented by walking this
+  rendered tree. The normal terminal pipeline sanitizes cell text and OSC 8
+  URLs at its emitters, while the append/paint-authority path sanitizes as
+  `Raxol.Harness.Surface.ViewText.lines/3` flattens the tree. Keeping those
+  boundaries at their sinks avoids rebuilding every transcript node on every
+  frame. `search_text/2` remains the raw match corpus (see its @doc).
+
   ## The completion row (design creed: evidence, never a success toast)
 
   `content[:completion]` -- set by `Raxol.Harness.Projection.BlockBuilder.
@@ -418,6 +425,13 @@ defmodule Raxol.UI.Components.Harness.Block do
 
   Never raises: any unexpected internal shape falls back to a one-line
   placeholder rather than crashing the caller.
+
+  Untrusted content is confined at the two output sinks rather than by
+  rebuilding this view tree: the normal terminal renderers pass cell text and
+  OSC 8 URLs through `Raxol.Core.Boundary.TermText`, and
+  `Raxol.Harness.Surface.ViewText.lines/3` sanitizes while flattening the
+  append/paint-authority path. This keeps truncation and styling semantics in
+  this renderer unchanged and avoids a second full-tree copy per frame.
   """
   @spec render(t(), map()) :: map()
   def render(block, context \\ %{})
@@ -616,9 +630,10 @@ defmodule Raxol.UI.Components.Harness.Block do
     * `:diff` -- `content.old` and `content.new` (`summary/1` already
       carries the path).
 
-  No sanitization happens here: `Raxol.Harness.Surface.ViewText.lines/3`
-  is the ONE trust boundary for control-byte stripping and display-width
-  truncation (see that module's moduledoc). Pure; never raises,
+  No sanitization happens here, deliberately: this is the raw corpus used for
+  matching, not display. A caller that puts a `search_text/2` result on screen
+  owns confinement at its output boundary, because a match offset into a
+  sanitized string would not point at the same grapheme. Pure; never raises,
   regardless of `content`'s shape.
 
   ## Bounding the work (`max_graphemes`)
