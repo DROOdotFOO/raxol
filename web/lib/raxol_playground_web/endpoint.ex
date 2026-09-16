@@ -8,6 +8,11 @@ defmodule RaxolPlaygroundWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  @request_body_options Application.compile_env!(
+                          :raxol_playground,
+                          [RaxolPlaygroundWeb.Endpoint, :request_body_options]
+                        )
+
   # Redirect www to non-www in production
   if Mix.env() == :prod do
     plug(RaxolPlaygroundWeb.Plugs.WwwRedirect)
@@ -34,10 +39,13 @@ defmodule RaxolPlaygroundWeb.Endpoint do
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
-  plug(Plug.Parsers,
-    parsers: [:urlencoded, :multipart, :json],
-    pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
+  plug(
+    Plug.Parsers,
+    [
+      parsers: [:urlencoded, :multipart, :json],
+      pass: ["*/*"],
+      json_decoder: Phoenix.json_library()
+    ] ++ @request_body_options
   )
 
   plug(Plug.MethodOverride)

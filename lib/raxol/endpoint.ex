@@ -1,22 +1,27 @@
 defmodule Raxol.Endpoint do
   @moduledoc """
-  Dev-only Phoenix endpoint for Tidewave MCP integration.
+  Dev-only Phoenix endpoint for local health checks and Tidewave MCP integration.
 
-  Serves Tidewave at `localhost:4000/tidewave/mcp`, enabling Claude Code
-  and other MCP clients to interact with the running BEAM via `project_eval`
-  and custom Raxol headless session tools.
+  Tidewave is mounted at `/tidewave/mcp` only when the configured development
+  bind is loopback, enabling local MCP clients to use `project_eval` and the
+  custom Raxol headless session tools without exposing evaluation remotely.
   """
 
   use Phoenix.Endpoint, otp_app: :raxol
 
-  # Tidewave must be placed BEFORE request body parsing
-  if Code.ensure_loaded?(Tidewave) do
+  # Tidewave must be placed before request body parsing. The dev configuration
+  # disables this mount entirely when RAXOL_DEV_BIND_IP is non-loopback.
+  if Application.compile_env(:raxol, Raxol.Endpoint, [])[:tidewave_project_eval] &&
+       Code.ensure_loaded?(Tidewave) do
     plug Tidewave
   end
 
   plug Plug.Parsers,
     parsers: [:json],
     pass: ["*/*"],
+    length: 1_000_000,
+    read_length: 64_000,
+    read_timeout: 10_000,
     json_decoder: Jason
 
   plug :health_check
