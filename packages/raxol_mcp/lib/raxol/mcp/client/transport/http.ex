@@ -464,8 +464,8 @@ if Code.ensure_loaded?(Mint.HTTP) do
 
     defp price(%__MODULE__{prices: prices}, tool) do
       case Map.fetch(prices, tool) do
-        {:ok, price} when is_number(price) and price > 0 -> :priced
-        {:ok, price} when is_number(price) -> :free
+        {:ok, price} when is_integer(price) and price > 0 -> :priced
+        {:ok, price} when is_number(price) -> :unknown
         _unknown -> :unknown
       end
     end

@@ -103,21 +103,26 @@ defmodule Raxol.Web3.ExchangeTest do
     end
 
     test "an announced content-length past the ceiling is refused before the body" do
-      # The server sends headers claiming 8 MB and then never sends a byte. A
-      # client that waits for the body blocks until its chunk timeout; this one
-      # refuses on the header, so the elapsed time is the proof.
+      test = self()
+
       {:ok, endpoint} =
         endpoint(fn sock, _req ->
           send_all(sock, "HTTP/1.1 200 OK\r\ncontent-length: 8388608\r\n\r\n")
-          Process.sleep(3_000)
+          send(test, {:headers_sent, self()})
+
+          receive do
+            :send_body -> send_all(sock, "too late")
+          end
         end)
 
-      started = System.monotonic_time(:millisecond)
+      request =
+        Task.async(fn ->
+          exchange(endpoint, max_bytes: 65_536, chunk_timeout_ms: 5_000)
+        end)
 
-      assert {:error, {:too_large, 65_536}} =
-               exchange(endpoint, max_bytes: 65_536, chunk_timeout_ms: 5_000)
-
-      assert System.monotonic_time(:millisecond) - started < 1_000
+      assert_receive {:headers_sent, server}
+      assert {:error, {:too_large, 65_536}} = Task.await(request, 6_000)
+      send(server, :send_body)
     end
   end
 

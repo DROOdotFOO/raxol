@@ -500,6 +500,12 @@ chain, and **carrying a MAC over the whole payload under a per-node key**. A cur
 does not verify is refused before anything is decoded. `items_count` and any offset-like field
 are never exposed.
 
+The node generates a 32-byte key only when `config :raxol_web3, :cursor_key` is
+absent. A fleet configures one shared binary of at least 32 bytes. A present
+short or non-binary value is a boot error; silently replacing malformed
+configuration with a random key would make cross-node cursors fail
+nondeterministically while appearing configured.
+
 The MAC is not belt and braces. Base64url is an encoding, not integrity protection, and the
 decoded map's keys become upstream query parameters, so without it anyone who can hand a cursor
 back can add or rewrite keys and inject attacker-chosen parameters into our next upstream

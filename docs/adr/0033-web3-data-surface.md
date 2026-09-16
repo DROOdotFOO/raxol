@@ -268,36 +268,32 @@ package in which failover silently degrades to retrying a hard-down primary on e
 Reference implementations ship in `lib/`, not `test/`, matching `Adapter.InMemory`,
 `ProviderAdapter.Mock`, and `ChainReader.Stub`. No mocking library is introduced.
 
-### 4. The served surface is read-only by construction
+### 4. The served surface is read-only and authorization-gated
 
 Agent Actions are the primary surface, and MCP `tool_def` maps are written directly. The
 existing `Raxol.MCP.AgentBridge` is not used: it has no caller anywhere in the repo, it drops
 the `sensitive` flag instead of emitting an annotation, and it formats results with
 `inspect/2` rather than JSON.
 
-Every tool in this package is a read, so the server runs under a nil authorizer on stdio. The
-enforcement that makes that safe lives in this package rather than in the server.
-`Raxol.MCP.Server.refuse_unguarded_sensitive_tools!/2` raises at boot only when a registered
-tool is annotated sensitive through `ToolDef.sensitive?/1` and no `:authorizer` is configured,
-and the `tools/call` backstop keys off the same predicate. An unannotated tool passes both
-checks unimpeded, so the annotation records an intent and enforces nothing against a write
-tool that omits it.
+Every served operation is a chain read, but it is still an outbound capability: it discloses
+addresses, names and query intent to an upstream and can consume provider quota. Every Web3
+MCP tool therefore carries both `readOnlyHint: true` and `sensitive: true`. The server MUST
+have an authorizer; `Raxol.MCP.Server.refuse_unguarded_sensitive_tools!/2` refuses to boot
+otherwise, and the `tools/call` backstop enforces the same predicate.
 
-Three things carry the constraint instead:
+Three things carry the read-only constraint:
 
 - Every callback in the backend contract is a read, and `raw_request/2` is bounded by a
   per-backend compile-time allowlist of read methods, so the passthrough is structurally
   incapable of reaching `eth_sendRawTransaction`.
 - The registered tool set is asserted rather than assumed. A test enumerates the registry
-  after `register_all/2` and fails on any tool this package did not declare as a read, which
-  is the check the server does not perform.
+  after `register_all/2` and fails on any tool this package did not declare as a read.
 - Aggregated upstream tools are filtered against a per-backend allowlist before registration,
   since an upstream server's own annotations are untrusted (section 7).
 
-Admitting a write tool later is therefore a deliberate act with a visible cost: it must carry
-the `sensitive` annotation, which forces an `:authorizer` onto the whole server and changes
-the deployment story for every consumer. Writes stay where they already are, behind the
-spend-gated Actions in `raxol_payments`.
+Admitting a write tool later remains a deliberate contract change, not a way to opt into the
+authorization gate: the whole Web3 surface is already sensitive. Writes stay where they
+already are, behind the spend-gated Actions in `raxol_payments`.
 
 ### 5. Chain coverage and data sources
 

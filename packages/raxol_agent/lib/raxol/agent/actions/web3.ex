@@ -42,9 +42,8 @@ if Code.ensure_loaded?(Raxol.Web3.Router) do
     `sensitive: true`, for the reason `Raxol.Agent.Actions.Fetch` gives: a read
     is not free of consequence, because it discloses to a third party what the
     session is working on, and "which address is this user researching" is
-    exactly that. The MCP surface makes the opposite call because the tools
-    there are annotated `readOnlyHint` on a server an operator connected
-    deliberately; here the tool lands beside `bash` in a general toolset.
+    exactly that. The MCP surface applies the same gate while additionally
+    advertising `readOnlyHint` to describe the chain operation accurately.
     """
 
     use Raxol.Agent.Action,

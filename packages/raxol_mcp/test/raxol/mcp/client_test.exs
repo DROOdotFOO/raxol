@@ -98,10 +98,6 @@ defmodule Raxol.MCP.ClientTest do
       # The leak this closes predates the change: an entry was removed only by a
       # reply, a JSON-RPC error or an exit status, so a caller whose call timed
       # out left its entry behind forever.
-      #
-      # `call_timeout` can be this short because the HANDSHAKE carries no timer:
-      # it is one entry per client, nobody is waiting on it, and timing it out
-      # would make readiness depend on how fast a subprocess boots a VM.
       client = start_peer(call_timeout: 300)
       await_ready(client)
 

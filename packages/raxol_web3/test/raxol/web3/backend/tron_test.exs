@@ -96,6 +96,14 @@ defmodule Raxol.Web3.Backend.TronTest do
       {:ok, {:status, status}} ->
         {:ok, %{status: status, headers: [], body: ""}}
 
+      {:ok, {:body, body}} ->
+        {:ok,
+         %{
+           status: 200,
+           headers: [{"content-type", "text/event-stream"}],
+           body: frame(body, id, context.spacer)
+         }}
+
       {:ok, name} when is_binary(name) ->
         {:ok,
          %{
@@ -148,6 +156,28 @@ defmodule Raxol.Web3.Backend.TronTest do
       [_line, data] -> data
       nil -> recorded
     end
+  end
+
+  defp account_fixture_with_balance(value) do
+    envelope = fixture("trongrid_account_info.sse") |> payload() |> Jason.decode!()
+    result = envelope["result"]
+    content = result["content"]
+    inner = content |> hd() |> Map.fetch!("text") |> Jason.decode!()
+
+    changed =
+      Map.update!(inner, "data", fn [account | rest] ->
+        [Map.put(account, "balance", value) | rest]
+      end)
+
+    changed_content =
+      List.update_at(content, 0, &Map.put(&1, "text", Jason.encode!(changed)))
+
+    changed_result =
+      result
+      |> Map.put("content", changed_content)
+      |> Map.put("structuredContent", changed)
+
+    envelope |> Map.put("result", changed_result) |> Jason.encode!()
   end
 
   # -- handles -----------------------------------------------------------------
@@ -507,6 +537,16 @@ defmodule Raxol.Web3.Backend.TronTest do
       # Tron draws no account-kind distinction that changes how `balance` is
       # read, so the optional key is absent rather than nil.
       refute Map.has_key?(account, :kind)
+    end
+
+    test "malformed monetary integers are rejected instead of truncated" do
+      for malformed <- ["12.5", "12sun"] do
+        body = account_fixture_with_balance(malformed)
+        handle = stateful(:trongrid, %{"getAccountInfo" => {:body, body}})
+
+        assert {:error, {:decode_failed, :balance}} =
+                 Tron.account_info(state(handle), {:tron, @base58})
+      end
     end
 
     test "the explorer source answers the same account from its own shape" do

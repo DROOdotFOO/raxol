@@ -109,24 +109,3 @@ dfa45d5041c2de2f5865306683319efae5d633cb:packages/raxol_payments/test/raxol/paym
 e4ae26e4203d613809f625bcf6a7d7750f6f75c1:packages/raxol_earn/test/mix/tasks/raxol_earn.order_test.exs:generic-api-key:20
 e4ae26e4203d613809f625bcf6a7d7750f6f75c1:packages/raxol_earn/test/raxol/earn/order_spend_plan_test.exs:generic-api-key:30
 f04f7271eda237bbf41b2bcdd78f8eedadaf2fc1:packages/raxol_agent/test/raxol/agent/sandbox_hook_test.exs:generic-api-key:168
-
-# Two public on-chain identifiers in the web3 backend tests, 2026-09-14: an SPL
-# mint pubkey and a TRC-20 contract address, each recorded from a mainnet read
-# and resolvable in any block explorer. Neither is a credential; base58 trips
-# generic-api-key on entropy alone. They are asserted BY value because the
-# property under test is that a token is identified correctly.
-#
-# By fingerprint rather than by value in .gitleaks.toml, which is what this
-# repo's policy prefers for a public value, because the action pins gitleaks
-# 8.24.3 and that version does not read `[[allowlists]]` at all. Measured: the
-# by-value block clears both findings on 8.30.1 and neither on 8.24.3, with or
-# without `targetRules`, and the legacy singular `[allowlist]` that 8.24.3 does
-# read is refused outright by 8.30.1 ("it cannot be used alongside
-# [[allowlists]]"). So no single config satisfies both, and the same gap makes
-# the existing `[[allowlists]]` blocks in .gitleaks.toml inert in CI today.
-# Raising GITLEAKS_VERSION is the fix for that, and it is its own change.
-#
-# A fingerprint binds to a commit sha, so rebasing this branch invalidates
-# these two lines and they have to be regenerated from the run output.
-07a66cd817ba48d106eb031003c26519c62bb961:packages/raxol_web3/test/raxol/web3/backend/solana_test.exs:generic-api-key:518
-cb72a86f5442855c1c1ac2793fde72980c631b2d:packages/raxol_web3/test/raxol/web3/backend/tron_test.exs:generic-api-key:567

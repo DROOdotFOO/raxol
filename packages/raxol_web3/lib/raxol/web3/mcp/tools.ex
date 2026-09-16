@@ -8,23 +8,18 @@ defmodule Raxol.Web3.MCP.Tools do
   `sensitive` flag instead of emitting an annotation, and it formats results
   with `inspect/2` rather than JSON.
 
-  ## Read-only by construction, not by annotation
+  ## Read-only does not mean authorization-free
 
-  Every tool here is a read, and the reason that claim holds is structural
-  rather than declared. `raw_request/2` has **no tool**: the contract's one
-  passthrough callback is absent from this module, so there is no served path
-  that takes a method name from a caller. `Raxol.Web3.Backend.Blockscout`
-  declines the callback entirely and `Raxol.Web3.RPC` bounds its own methods to
-  a compile-time allowlist, so the surface is read-only at three layers and
-  annotated at none of them.
+  Every tool here is a chain read: `raw_request/2` has **no tool**, and the RPC
+  backend admits only its compile-time method allowlist. The calls nevertheless
+  disclose an operator's addresses, names and query intent to an upstream
+  service and can consume a paid provider quota. They are therefore annotated
+  both `readOnlyHint: true` and `sensitive: true`.
 
-  That matters because the annotation enforces nothing on its own.
-  `Raxol.MCP.Server.refuse_unguarded_sensitive_tools!/2` raises at boot only
-  when a registered tool is annotated sensitive and no authorizer is
-  configured; an UNannotated write tool passes it unimpeded. So the annotation
-  records an intent, and the absence of a write path is what makes the intent
-  true. `readOnlyHint` is set because it is accurate and useful to a host, not
-  because it is load-bearing.
+  `Raxol.MCP.Server.refuse_unguarded_sensitive_tools!/2` makes that annotation
+  load-bearing: this surface cannot be served without an authorizer. Read-only
+  describes chain state; sensitive describes the external capability exercised
+  to retrieve it.
 
   ## Why thirteen tools and not one
 
@@ -162,7 +157,7 @@ defmodule Raxol.Web3.MCP.Tools do
         name: @prefix <> "#{suffix}",
         description: description,
         inputSchema: schema(args),
-        annotations: %{readOnlyHint: true},
+        annotations: %{readOnlyHint: true, sensitive: true},
         callback: fn arguments -> dispatch(router, callback, args, arguments) end
       }
     end)

@@ -1,5 +1,5 @@
 defmodule Raxol.Web3.CursorTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Raxol.Web3.Cursor
   alias Raxol.Web3.Tables
@@ -16,6 +16,27 @@ defmodule Raxol.Web3.CursorTest do
   }
 
   @origin "a1b2c3d4e5f60708"
+
+  describe "cursor key configuration" do
+    test "a configured short or malformed key is rejected instead of randomized" do
+      previous = Application.fetch_env(:raxol_web3, :cursor_key)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:raxol_web3, :cursor_key, value)
+          :error -> Application.delete_env(:raxol_web3, :cursor_key)
+        end
+      end)
+
+      for invalid <- ["short", String.duplicate("x", 31), nil, 42] do
+        Application.put_env(:raxol_web3, :cursor_key, invalid)
+
+        assert_raise ArgumentError, ~r/must be a binary of at least 32 bytes/, fn ->
+          Tables.init([])
+        end
+      end
+    end
+  end
 
   describe "round trip" do
     test "what the upstream sent comes back, minus the counter" do

@@ -443,14 +443,16 @@ defmodule Raxol.Web3.Backend.Tron do
 
   @impl Backend
   def get_transaction(%__MODULE__{source: :trongrid} = state, hash) when is_binary(hash) do
-    with {:ok, body} <- call(state, "getTransactionById", %{"value" => hash}, :transaction) do
-      {:ok, trongrid_transaction(body)}
+    with {:ok, body} <- call(state, "getTransactionById", %{"value" => hash}, :transaction),
+         {:ok, transaction} <- trongrid_transaction(body) do
+      {:ok, transaction}
     end
   end
 
   def get_transaction(%__MODULE__{source: :tronscan} = state, hash) when is_binary(hash) do
-    with {:ok, body} <- call(state, "getTransactionDetail", %{"hash" => hash}, :transaction) do
-      {:ok, tronscan_transaction(body)}
+    with {:ok, body} <- call(state, "getTransactionDetail", %{"hash" => hash}, :transaction),
+         {:ok, transaction} <- tronscan_transaction(body) do
+      {:ok, transaction}
     end
   end
 
@@ -458,11 +460,12 @@ defmodule Raxol.Web3.Backend.Tron do
   def account_info(%__MODULE__{source: :trongrid} = state, account_ref) do
     with {:ok, address} <- account(account_ref),
          {:ok, body} <- call(state, "getAccountInfo", %{"address" => address}, :account),
-         {:ok, record} <- first_row(body, :account) do
+         {:ok, record} <- first_row(body, :account),
+         {:ok, balance} <- money(record["balance"], :balance) do
       {:ok,
        %{
          ref: {:tron, canonical!(record["address"], address)},
-         balance: int(record["balance"]),
+         balance: balance,
          # Code presence, from the account record's own account type. No
          # `:kind`: Tron draws no distinction that changes how `balance` is
          # read, and `contract?` already answers the only one it draws.
@@ -476,11 +479,12 @@ defmodule Raxol.Web3.Backend.Tron do
 
   def account_info(%__MODULE__{source: :tronscan} = state, account_ref) do
     with {:ok, address} <- account(account_ref),
-         {:ok, body} <- call(state, "getAccountDetail", %{"address" => address}, :account) do
+         {:ok, body} <- call(state, "getAccountDetail", %{"address" => address}, :account),
+         {:ok, balance} <- money(body["balance"], :balance) do
       {:ok,
        %{
          ref: {:tron, canonical!(body["address"], address)},
-         balance: int(body["balance"]),
+         balance: balance,
          contract?: is_map(body["contractInfo"]) or body["accountType"] == 2,
          verified?: false,
          # The explorer's own label for the address, which is data in a result
@@ -512,12 +516,13 @@ defmodule Raxol.Web3.Backend.Tron do
     with :ok <- no_cursor(opts),
          {:ok, address} <- account(account_ref),
          {:ok, body} <- call(state, "getAccountInfo", %{"address" => address}, :account),
-         {:ok, record} <- first_row(body, :account) do
+         {:ok, record} <- first_row(body, :account),
+         {:ok, items} <- trongrid_token_balances(record) do
       # One call and no cursor: the account record is one object rather than a
       # page, so `next` is `nil` because there is no second page and not
       # because paging was declined. Measured 2026-09-14, the widest holder
       # probed returned 493 TRC-20 and 331 TRC-10 entries in 26,795 bytes.
-      {:ok, %{items: trongrid_token_balances(record), next: nil}}
+      {:ok, %{items: items, next: nil}}
     end
   end
 
@@ -741,10 +746,11 @@ defmodule Raxol.Web3.Backend.Tron do
     with {:ok, params} <- cursor_params(state, endpoint, Keyword.get(opts, :cursor)),
          arguments = Map.merge(base, Map.put(params, "limit", @page_limit)),
          {:ok, body} <- call(state, tool, arguments, :list),
-         {:ok, items} <- rows(body, :page) do
+         {:ok, rows} <- rows(body, :page),
+         {:ok, items} <- map_items(rows, mapper) do
       {:ok,
        %{
-         items: Enum.map(items, mapper),
+         items: items,
          next: mint(state, endpoint, next_fingerprint(body))
        }}
     end
@@ -760,10 +766,11 @@ defmodule Raxol.Web3.Backend.Tron do
          :ok <- within_ceiling(start),
          arguments = Map.merge(base, %{"start" => start, "limit" => @page_limit}),
          {:ok, body} <- call(state, tool, arguments, :list),
-         {:ok, items} <- rows(body, :page) do
+         {:ok, rows} <- rows(body, :page),
+         {:ok, items} <- map_items(rows, mapper) do
       {:ok,
        %{
-         items: Enum.map(items, mapper),
+         items: items,
          next: mint(state, endpoint, next_offset(body, start))
        }}
     end
@@ -812,51 +819,61 @@ defmodule Raxol.Web3.Backend.Tron do
   defp trongrid_transaction(body) do
     contract = contract_call(body)
 
-    %{
-      hash: body["txID"],
-      status: contract_status(body),
-      # `getTransactionInfoById` is the tool that carries a block and a fee, and
-      # on 2026-09-14 it answered `isError: true` with its own output-schema
-      # validation failure. The absent numbers are `nil` and TronScan is the
-      # source in the chain that has them.
-      block: nil,
-      timestamp: epoch_ms(get_in(body, ["raw_data", "timestamp"])),
-      from: ref(contract["owner_address"]),
-      to: ref(counterparty(contract)),
-      value: int(contract["amount"] || contract["call_value"]),
-      fee: nil,
-      method: get_in(body, ["raw_data", "contract"]) |> contract_type()
-    }
+    with {:ok, value} <- money(contract["amount"] || contract["call_value"], :value) do
+      {:ok,
+       %{
+         hash: body["txID"],
+         status: contract_status(body),
+         # `getTransactionInfoById` is the tool that carries a block and a fee,
+         # and it currently refuses its own output. TronScan is the source that
+         # answers those fields.
+         block: nil,
+         timestamp: epoch_ms(get_in(body, ["raw_data", "timestamp"])),
+         from: ref(contract["owner_address"]),
+         to: ref(counterparty(contract)),
+         value: value,
+         fee: nil,
+         method: get_in(body, ["raw_data", "contract"]) |> contract_type()
+       }}
+    end
   end
 
   defp trongrid_list_transaction(item) do
     contract = contract_call(item)
+    raw_fee = item |> Map.get("ret", []) |> List.first(%{}) |> Map.get("fee")
 
-    %{
-      hash: item["txID"],
-      status: contract_status(item),
-      block: int(item["blockNumber"]),
-      timestamp: epoch_ms(item["block_timestamp"]),
-      from: ref(contract["owner_address"]),
-      to: ref(counterparty(contract)),
-      value: int(contract["amount"] || contract["call_value"]),
-      fee: item |> Map.get("ret", []) |> List.first(%{}) |> Map.get("fee") |> int(),
-      method: item |> Map.get("raw_data", %{}) |> Map.get("contract") |> contract_type()
-    }
+    with {:ok, value} <- money(contract["amount"] || contract["call_value"], :value),
+         {:ok, fee} <- money(raw_fee, :fee) do
+      {:ok,
+       %{
+         hash: item["txID"],
+         status: contract_status(item),
+         block: int(item["blockNumber"]),
+         timestamp: epoch_ms(item["block_timestamp"]),
+         from: ref(contract["owner_address"]),
+         to: ref(counterparty(contract)),
+         value: value,
+         fee: fee,
+         method: item |> Map.get("raw_data", %{}) |> Map.get("contract") |> contract_type()
+       }}
+    end
   end
 
   defp tronscan_transaction(body) do
-    %{
-      hash: body["hash"],
-      status: ret_status(body["contractRet"]),
-      block: int(body["block"]),
-      timestamp: epoch_ms(body["timestamp"]),
-      from: ref(body["ownerAddress"]),
-      to: ref(body["toAddress"]),
-      value: nil,
-      fee: body |> Map.get("cost", %{}) |> Map.get("fee") |> int(),
-      method: presence(body["contractType"] && to_string(body["contractType"]))
-    }
+    with {:ok, fee} <- money(get_in(body, ["cost", "fee"]), :fee) do
+      {:ok,
+       %{
+         hash: body["hash"],
+         status: ret_status(body["contractRet"]),
+         block: int(body["block"]),
+         timestamp: epoch_ms(body["timestamp"]),
+         from: ref(body["ownerAddress"]),
+         to: ref(body["toAddress"]),
+         value: nil,
+         fee: fee,
+         method: presence(body["contractType"] && to_string(body["contractType"]))
+       }}
+    end
   end
 
   defp trongrid_block(body) do
@@ -878,77 +895,105 @@ defmodule Raxol.Web3.Backend.Tron do
     trc10 =
       record
       |> Map.get("assetV2", [])
-      |> Enum.map(fn %{"key" => id, "value" => amount} ->
-        %{token: token(nil, "TRC-10"), amount: int(amount), token_id: to_string(id)}
-      end)
+      |> Enum.map(fn %{"key" => id, "value" => amount} -> {:trc10, id, amount} end)
 
     trc20 =
       record
       |> Map.get("trc20", [])
       |> Enum.flat_map(fn entry ->
-        Enum.map(entry, fn {contract, amount} ->
-          %{token: token(canonical(contract), "TRC-20"), amount: int(amount), token_id: nil}
-        end)
+        Enum.map(entry, fn {contract, amount} -> {:trc20, contract, amount} end)
       end)
 
-    trc20 ++ trc10
+    map_items(trc20 ++ trc10, fn
+      {:trc10, id, amount} ->
+        with {:ok, parsed} <- money(amount, :amount) do
+          {:ok, %{token: token(nil, "TRC-10"), amount: parsed, token_id: to_string(id)}}
+        end
+
+      {:trc20, contract, amount} ->
+        with {:ok, parsed} <- money(amount, :amount) do
+          {:ok, %{token: token(canonical(contract), "TRC-20"), amount: parsed, token_id: nil}}
+        end
+    end)
   end
 
   defp tronscan_token_balance(item) do
     {address, token_id} = token_identity(item["tokenId"])
 
-    %{
-      token: %{
-        address: address,
-        symbol: presence(item["tokenAbbr"]),
-        name: presence(item["tokenName"]),
-        decimals: int(item["tokenDecimal"]),
-        type: token_type(item["tokenType"], item["tokenId"])
-      },
-      amount: int(item["balance"]),
-      token_id: token_id
-    }
+    with {:ok, amount} <- money(item["balance"], :amount) do
+      {:ok,
+       %{
+         token: %{
+           address: address,
+           symbol: presence(item["tokenAbbr"]),
+           name: presence(item["tokenName"]),
+           decimals: int(item["tokenDecimal"]),
+           type: token_type(item["tokenType"], item["tokenId"])
+         },
+         amount: amount,
+         token_id: token_id
+       }}
+    end
   end
 
   defp trongrid_token_transfer(item) do
     info = Map.get(item, "token_info", %{})
 
-    %{
-      token: %{
-        address: canonical(info["address"]),
-        symbol: presence(info["symbol"]),
-        name: presence(info["name"]),
-        decimals: int(info["decimals"]),
-        type: "TRC-20"
-      },
-      amount: int(item["value"]),
-      from: ref(item["from"]),
-      to: ref(item["to"]),
-      block: nil,
-      timestamp: epoch_ms(item["block_timestamp"]),
-      transaction: item["transaction_id"]
-    }
+    with {:ok, amount} <- money(item["value"], :amount) do
+      {:ok,
+       %{
+         token: %{
+           address: canonical(info["address"]),
+           symbol: presence(info["symbol"]),
+           name: presence(info["name"]),
+           decimals: int(info["decimals"]),
+           type: "TRC-20"
+         },
+         amount: amount,
+         from: ref(item["from"]),
+         to: ref(item["to"]),
+         block: nil,
+         timestamp: epoch_ms(item["block_timestamp"]),
+         transaction: item["transaction_id"]
+       }}
+    end
   end
 
   defp tronscan_token_transfer(item) do
     info = Map.get(item, "tokenInfo", %{})
     {address, _token_id} = token_identity(info["tokenId"])
 
-    %{
-      token: %{
-        address: address,
-        symbol: presence(info["tokenAbbr"]),
-        name: presence(info["tokenName"]),
-        decimals: int(info["tokenDecimal"]),
-        type: token_type(info["tokenType"], info["tokenId"])
-      },
-      amount: int(item["amount"]),
-      from: ref(item["transferFromAddress"]),
-      to: ref(item["transferToAddress"]),
-      block: int(item["block"]),
-      timestamp: epoch_ms(item["timestamp"]),
-      transaction: item["transactionHash"]
-    }
+    with {:ok, amount} <- money(item["amount"], :amount) do
+      {:ok,
+       %{
+         token: %{
+           address: address,
+           symbol: presence(info["tokenAbbr"]),
+           name: presence(info["tokenName"]),
+           decimals: int(info["tokenDecimal"]),
+           type: token_type(info["tokenType"], info["tokenId"])
+         },
+         amount: amount,
+         from: ref(item["transferFromAddress"]),
+         to: ref(item["transferToAddress"]),
+         block: int(item["block"]),
+         timestamp: epoch_ms(item["timestamp"]),
+         transaction: item["transactionHash"]
+       }}
+    end
+  end
+
+  defp map_items(items, mapper) do
+    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
+      case mapper.(item) do
+        {:ok, mapped} -> {:cont, {:ok, [mapped | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, mapped} -> {:ok, Enum.reverse(mapped)}
+      {:error, _reason} = error -> error
+    end
   end
 
   # The native asset has neither an address nor an asset id, a TRC-10 has an id
@@ -1160,13 +1205,25 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp epoch_ms(_other), do: nil
 
+  defp money(nil, _field), do: {:ok, nil}
+  defp money(value, _field) when is_integer(value) and value >= 0, do: {:ok, value}
+
+  defp money(value, field) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number >= 0 -> {:ok, number}
+      _invalid -> {:error, {:decode_failed, field}}
+    end
+  end
+
+  defp money(_value, field), do: {:error, {:decode_failed, field}}
+
   defp int(nil), do: nil
   defp int(value) when is_integer(value), do: value
 
   defp int(value) when is_binary(value) do
     case Integer.parse(value) do
-      {number, _rest} -> number
-      :error -> nil
+      {number, ""} -> number
+      _invalid -> nil
     end
   end
 

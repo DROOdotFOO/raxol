@@ -6,15 +6,14 @@ defmodule Raxol.Agent.Code.McpLoader do
   the bundle result (tools as `Raxol.Agent.Action.Dynamic` values, plus a
   janitor pid that owns every started client).
 
-  Ownership is tied to the session, not to a slash command. `load/2` spawns a
-  janitor that starts each client linked to itself and monitors the session
-  process (`:owner`). When the session ends by ANY path — Ctrl+C, an SSH
-  disconnect, or a crash — the janitor's monitor fires and it exits, taking
-  its linked clients (and their OS subprocesses) with it. A client that
-  crashes is trapped and dropped, never propagating to the session. This
-  needs no external supervisor and cannot leak on a termination path that
-  forgets to call a cleanup function, because there is no such function to
-  forget.
+  Ownership is tied to the session, not to a slash command. `load/2` starts a
+  janitor under `Raxol.Agent.TaskSupervisor`; the janitor starts each client
+  linked to itself and monitors the session process (`:owner`). When the
+  session ends by ANY path — Ctrl+C, an SSH disconnect, or a crash — the
+  janitor's monitor fires and it exits, taking its linked clients (and their OS
+  subprocesses) with it. A client that crashes is trapped and dropped, never
+  propagating to the session. The supervisor makes janitor ownership visible
+  and ensures startup is not an untracked process spawn.
   """
 
   alias Raxol.Agent.McpBundle
@@ -41,14 +40,16 @@ defmodule Raxol.Agent.Code.McpLoader do
   Load the configured servers; never raises or exits.
 
   Options: `:owner` (the session process to monitor; when it dies the clients
-  are terminated — defaults to the caller), `:bundle` (the load function,
-  default `McpBundle.load/2`), and `:client_start` (the raw client starter,
-  default `Raxol.MCP.Client.start_link/1`), the latter two injectable for
-  tests.
+  are terminated — defaults to the caller), `:supervisor` (the TaskSupervisor
+  that owns the janitor, default `Raxol.Agent.TaskSupervisor`), `:bundle` (the
+  load function, default `McpBundle.load/2`), and `:client_start` (the raw
+  client starter, default `Raxol.MCP.Client.start_link/1`). The latter three
+  are injectable for tests and embedders outside the full agent subtree.
   """
   @spec load([map()], keyword()) :: result()
   def load(servers, opts \\ []) do
     owner = Keyword.get(opts, :owner, self())
+    supervisor = Keyword.get(opts, :supervisor, Raxol.Agent.TaskSupervisor)
     bundle = Keyword.get(opts, :bundle, &McpBundle.load/2)
 
     client_start =
@@ -56,7 +57,7 @@ defmodule Raxol.Agent.Code.McpLoader do
 
     {accepted, rejected} = admit(servers)
 
-    janitor = start_janitor(owner, client_start)
+    janitor = start_janitor(supervisor, owner, client_start)
     start = fn client_opts -> Janitor.start_client(janitor, client_opts) end
 
     result = bundle.(Enum.map(accepted, &to_spec/1), start: start)
@@ -93,8 +94,8 @@ defmodule Raxol.Agent.Code.McpLoader do
     :ok
   end
 
-  defp start_janitor(owner, client_start) do
-    Janitor.start(owner, client_start)
+  defp start_janitor(supervisor, owner, client_start) do
+    Janitor.start(supervisor, owner, client_start)
   end
 
   @doc """
@@ -182,13 +183,16 @@ defmodule Raxol.Agent.Code.McpLoader do
     # Owns the MCP client processes for one coding session. Starts each client
     # linked to itself (so it can bring them down together), traps their exits
     # (so a crashing server does not cascade), and monitors the session
-    # process — when the session dies, the janitor exits and its links tear
-    # the clients down. Unlinked from its spawner, so it outlives the
-    # short-lived loader task and is bounded only by the session monitor.
+    # process. It is a TaskSupervisor child, so it outlives the short-lived
+    # loader task while remaining inside the agent supervision tree.
 
-    @spec start(pid(), (keyword() -> {:ok, pid()} | {:error, term()})) :: pid()
-    def start(owner, client_start) do
-      spawn(fn -> init(owner, client_start) end)
+    @spec start(GenServer.server(), pid(), (keyword() -> {:ok, pid()} | {:error, term()})) ::
+            pid()
+    def start(supervisor, owner, client_start) do
+      case Task.Supervisor.start_child(supervisor, fn -> init(owner, client_start) end) do
+        {:ok, pid} -> pid
+        {:error, reason} -> exit({:janitor_start_failed, reason})
+      end
     end
 
     @spec start_client(pid(), keyword()) :: {:ok, pid()} | {:error, term()}
@@ -235,9 +239,16 @@ defmodule Raxol.Agent.Code.McpLoader do
           # links, so termination is explicit.
           terminate_clients(state.clients)
 
-        {:EXIT, pid, _reason} ->
-          # A client crashed (or was stopped): forget it, do not cascade.
-          loop(%{state | clients: List.delete(state.clients, pid)})
+        {:EXIT, pid, reason} ->
+          if pid in state.clients do
+            # A client crashed (or was stopped): forget it, do not cascade.
+            loop(%{state | clients: List.delete(state.clients, pid)})
+          else
+            # Do not trap the TaskSupervisor's shutdown. Its lifecycle owns
+            # this janitor, so first stop the clients and honor the signal.
+            terminate_clients(state.clients)
+            exit(reason)
+          end
 
         :stop ->
           terminate_clients(state.clients)

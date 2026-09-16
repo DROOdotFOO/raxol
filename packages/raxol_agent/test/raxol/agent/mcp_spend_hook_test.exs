@@ -33,6 +33,7 @@ defmodule Raxol.Agent.McpSpendHookTest do
 
   import ExUnit.CaptureLog
 
+  alias Raxol.Agent.Action.Dynamic
   alias Raxol.Agent.Action.ToolConverter
   alias Raxol.Agent.McpBundle
   alias Raxol.Agent.McpSpendHook
@@ -158,6 +159,22 @@ defmodule Raxol.Agent.McpSpendHookTest do
       refute_received {:requested, _name, _args, _opts}
       assert log =~ "mcp__intel__lookup"
       assert log =~ @origin
+    end
+  end
+
+  describe "an invalid declared price" do
+    test "is denied before it can reach the reservation gate" do
+      tool = %Dynamic{
+        name: "mcp__intel__lookup",
+        origin: @origin,
+        price: 0,
+        invoke: fn _params, _context -> flunk("invalid-price tool was invoked") end
+      }
+
+      call = %{action: tool, params: %{}, call_id: "bad-price"}
+
+      assert {:halt, {:invalid_price, "mcp__intel__lookup", @origin}} =
+               McpSpendHook.before_call(call, %{spend_gate: gate(fn _ -> flunk("reserved") end)})
     end
   end
 

@@ -42,9 +42,9 @@ defmodule Raxol.MCP.Client do
   one session, and a TronScan-shaped upstream answers 500 to both
   (`docs/proposals/web3-upstream-survey.md:72-78`). So the window is explicit
   (ADR-0037 decision 6). `:concurrency` is `:stateless`, `:pooled` or
-  `:serialized`; a `:serialized` origin has an in-flight cap of one and holds
-  the excess in a bounded queue that answers `{:error, :busy}` on overflow,
-  rather than admitting work it cannot start.
+  `:serialized`; every policy has a finite in-flight cap, and a `:serialized`
+  origin has a cap of one. Excess work waits in a bounded queue that answers
+  `{:error, :busy}` on overflow rather than admitting work it cannot start.
 
   Every admitted request carries a timer. On expiry the client replies
   `{:error, :timeout}` itself and drops the entry, which is what stops
@@ -93,10 +93,11 @@ defmodule Raxol.MCP.Client do
     next_id: 1,
     status: :starting,
     concurrency: :stateless,
-    in_flight_cap: :infinity,
+    in_flight_cap: 8,
     queue_limit: 8,
     declared_concurrency: nil,
-    call_timeout: 30_000
+    call_timeout: 30_000,
+    init_timeout: 60_000
   ]
 
   @type t :: %__MODULE__{
@@ -108,19 +109,27 @@ defmodule Raxol.MCP.Client do
           registry: atom() | nil,
           version: String.t() | nil,
           error: term() | nil,
-          pending: %{pos_integer() => %{from: GenServer.from() | :init, timer: reference()}},
+          pending: %{
+            pos_integer() => %{
+              from: GenServer.from() | :init,
+              method: String.t(),
+              timer: reference() | nil
+            }
+          },
           queue: :queue.queue() | nil,
           queued: non_neg_integer(),
           next_id: pos_integer(),
           status: :starting | :initializing | :ready | :closed,
           concurrency: Transport.concurrency(),
-          in_flight_cap: pos_integer() | :infinity,
+          in_flight_cap: pos_integer(),
           queue_limit: non_neg_integer(),
           declared_concurrency: Transport.concurrency() | nil,
-          call_timeout: pos_integer()
+          call_timeout: pos_integer(),
+          init_timeout: pos_integer()
         }
 
   @default_call_timeout 30_000
+  @default_init_timeout 60_000
   @default_queue_limit 8
   @default_pool_size 8
 
@@ -213,7 +222,8 @@ defmodule Raxol.MCP.Client do
       status: :starting,
       declared_concurrency: declared_concurrency(config),
       queue_limit: Map.get(config, :queue_limit, @default_queue_limit),
-      call_timeout: Map.get(config, :call_timeout, @default_call_timeout)
+      call_timeout: Map.get(config, :call_timeout, @default_call_timeout),
+      init_timeout: Map.get(config, :init_timeout, @default_init_timeout)
     }
 
     {:ok, state, {:continue, :connect}}
@@ -392,18 +402,12 @@ defmodule Raxol.MCP.Client do
     end
   end
 
-  # The id and the timer are allocated at ADMISSION, not at dispatch, so a
-  # request that waits in the queue and then dispatches is bounded by ONE
-  # `call_timeout` in total rather than one per stage.
-  #
-  # The handshake is the one entry with no timer, and that is not an oversight.
-  # The leak decision 6 closes is `pending` GROWING: one entry per caller whose
-  # `GenServer.call` gave up. There is exactly one handshake per client, so it
-  # cannot grow, nobody is waiting on it (its `from` is `:init`), and the bound
-  # that matters is the caller's readiness deadline, which
-  # `Raxol.Agent.McpBundle` already owns (`mcp_bundle.ex:206-227`). Timing it
-  # out here would also make a client's readiness depend on how fast its server
-  # starts, which for a subprocess is a whole VM boot.
+  # The id and timer are allocated at ADMISSION, not at dispatch, so a request
+  # that waits in the queue and then dispatches is bounded by ONE `call_timeout`
+  # in total rather than one per stage. Initialization has its own, longer
+  # finite timeout: process startup must not inherit an aggressively short
+  # caller-request timeout, but a peer that never completes the handshake still
+  # cannot leave the client stuck forever.
   defp new_call(state, from, method, params, opts) do
     id = state.next_id
 
@@ -413,15 +417,17 @@ defmodule Raxol.MCP.Client do
       method: method,
       params: params,
       opts: opts,
-      timer: timer(state, from, id)
+      timer: timer(state, method, id)
     }
 
     {%{state | next_id: id + 1}, call}
   end
 
-  defp timer(_state, :init, _id), do: nil
+  defp timer(state, "initialize", id) do
+    Process.send_after(self(), {:request_timeout, id}, state.init_timeout)
+  end
 
-  defp timer(state, _from, id) do
+  defp timer(state, _method, id) do
     Process.send_after(self(), {:request_timeout, id}, state.call_timeout)
   end
 
@@ -440,7 +446,12 @@ defmodule Raxol.MCP.Client do
         %{
           state
           | handle: handle,
-            pending: Map.put(state.pending, call.id, %{from: call.from, timer: call.timer})
+            pending:
+              Map.put(state.pending, call.id, %{
+                from: call.from,
+                method: call.method,
+                timer: call.timer
+              })
         }
 
       {:error, reason} ->
@@ -478,14 +489,18 @@ defmodule Raxol.MCP.Client do
     %{state | queue: :queue.new(), queued: 0}
   end
 
-  defp capacity?(%{in_flight_cap: :infinity}), do: true
   defp capacity?(state), do: map_size(state.pending) < state.in_flight_cap
 
   defp in_flight_cap(:serialized, _config), do: 1
-  defp in_flight_cap(:stateless, _config), do: :infinity
+  defp in_flight_cap(:stateless, config), do: configured_cap(config)
 
-  defp in_flight_cap(:pooled, config) do
-    Map.get(config || %{}, :pool_size, @default_pool_size)
+  defp in_flight_cap(:pooled, config), do: configured_cap(config)
+
+  defp configured_cap(config) do
+    case Map.get(config || %{}, :pool_size, @default_pool_size) do
+      cap when is_integer(cap) and cap > 0 -> cap
+      _invalid -> @default_pool_size
+    end
   end
 
   defp declared_concurrency(config) do
@@ -510,14 +525,13 @@ defmodule Raxol.MCP.Client do
 
   defp handle_message(%{id: id, result: result}, state) do
     with_pending(state, id, fn entry, state ->
-      handle_result(result, entry.from, state)
+      handle_result(result, entry.method, entry.from, state)
     end)
   end
 
   defp handle_message(%{id: id, error: error}, state) do
     with_pending(state, id, fn entry, state ->
-      reply(entry.from, {:error, error})
-      state
+      handle_error(error, entry, state)
     end)
   end
 
@@ -548,6 +562,10 @@ defmodule Raxol.MCP.Client do
         Logger.debug("[MCP.Client] Failure for unknown id #{inspect(id)}: #{inspect(reason)}")
         state
 
+      {:ok, %{method: "initialize"}} ->
+        {_entry, state} = pop_pending(state, id)
+        fail_initialization(state, reason)
+
       {:ok, _entry} ->
         {entry, state} = pop_pending(state, id)
         reply(entry.from, {:error, reason})
@@ -557,6 +575,11 @@ defmodule Raxol.MCP.Client do
 
   defp expire(state, id) do
     case Map.fetch(state.pending, id) do
+      {:ok, %{method: "initialize"} = entry} ->
+        state = %{state | pending: Map.delete(state.pending, id)}
+        reply(entry.from, {:error, :timeout})
+        fail_initialization(state, :timeout)
+
       {:ok, entry} ->
         state = %{state | pending: Map.delete(state.pending, id)}
         reply(entry.from, {:error, :timeout})
@@ -578,7 +601,7 @@ defmodule Raxol.MCP.Client do
     end
   end
 
-  defp handle_result(result, _from, %{status: :initializing} = state) do
+  defp handle_result(result, "initialize", _from, state) when is_map(result) do
     server_info = Map.get(result, "serverInfo", %{})
     Logger.info("[MCP.Client] Server #{state.name} initialized: #{inspect(server_info)}")
 
@@ -586,13 +609,13 @@ defmodule Raxol.MCP.Client do
     send_notification(state, "notifications/initialized", %{})
   end
 
-  defp handle_result(%{"tools" => tools}, from, state) do
+  defp handle_result(%{"tools" => tools}, "tools/list", from, state) when is_list(tools) do
     parsed_tools = Enum.map(tools, &parse_tool/1)
     reply(from, {:ok, parsed_tools})
     %{state | tools: parsed_tools}
   end
 
-  defp handle_result(result, from, state) do
+  defp handle_result(result, "tools/call", from, state) when is_map(result) do
     call_result = %{
       content: Map.get(result, "content", []),
       is_error: Map.get(result, "isError", false)
@@ -600,6 +623,31 @@ defmodule Raxol.MCP.Client do
 
     reply(from, {:ok, call_result})
     state
+  end
+
+  defp handle_result(_result, method, from, state) do
+    reply(from, {:error, {:invalid_response, method}})
+    state
+  end
+
+  defp handle_error(error, %{method: "initialize"}, state) do
+    fail_initialization(state, {:jsonrpc, error})
+  end
+
+  defp handle_error(error, entry, state) do
+    reply(entry.from, {:error, error})
+    state
+  end
+
+  defp fail_initialization(state, reason) do
+    Logger.warning("[MCP.Client] Server #{state.name} initialization failed: #{inspect(reason)}")
+
+    if state.handle, do: state.transport.close(state.handle)
+
+    state
+    |> Map.put(:handle, nil)
+    |> flush_queue({:error, {:initialization_failed, reason}})
+    |> then(&%{&1 | status: :closed, error: {:initialization_failed, reason}})
   end
 
   # The per-connection revision. A peer that answers with a revision this

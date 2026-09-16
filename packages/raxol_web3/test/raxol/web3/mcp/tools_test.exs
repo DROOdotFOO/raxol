@@ -2,6 +2,7 @@ defmodule Raxol.Web3.MCP.ToolsTest do
   use ExUnit.Case, async: true
 
   alias Raxol.MCP.Registry
+  alias Raxol.MCP.Server
   alias Raxol.MCP.ToolDef
   alias Raxol.Web3.Backend.Stub
   alias Raxol.Web3.MCP.Tools
@@ -29,11 +30,10 @@ defmodule Raxol.Web3.MCP.ToolsTest do
     name
   end
 
-  describe "the registered surface is read-only by construction" do
+  describe "the registered surface is read-only and authorization-gated" do
     test "no tool takes a method name, because raw_request has no tool at all" do
       # The contract's one passthrough callback is absent from the surface, so
-      # there is no served path that can name an RPC method. This is stronger
-      # than annotating the tools, which enforces nothing on its own.
+      # there is no served path that can name an RPC method.
       refute :raw_request in Tools.callbacks()
       refute Enum.any?(Tools.names(), &String.contains?(&1, "raw"))
 
@@ -54,19 +54,28 @@ defmodule Raxol.Web3.MCP.ToolsTest do
       assert registered == Enum.sort(Tools.names())
     end
 
-    test "no registered tool is sensitive, which is what lets the server run unauthorized" do
-      # `refuse_unguarded_sensitive_tools!/2` raises at boot when a sensitive
-      # tool is registered with no authorizer. Every tool here is a read, so
-      # that boot check passes, and this test is what keeps it true.
+    test "every registered tool is sensitive as well as read-only" do
+      # Reads still disclose query intent and can consume provider quota, so
+      # the MCP server must refuse an unguarded deployment.
       for tool <- Tools.tool_defs(router()) do
-        refute ToolDef.sensitive?(tool), "#{tool.name} is annotated sensitive"
+        assert ToolDef.sensitive?(tool), "#{tool.name} is not authorization-gated"
+        assert tool.annotations == %{readOnlyHint: true, sensitive: true}
       end
     end
 
-    test "every tool declares itself read-only to a host" do
-      for tool <- Tools.tool_defs(router()) do
-        assert tool.annotations == %{readOnlyHint: true}
-      end
+    test "an MCP server refuses this surface without an authorizer" do
+      registry = registry()
+      assert :ok = Tools.register(registry, router())
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: message}, _stack}} =
+               Server.start_link(
+                 name: :"web3_unguarded_#{System.unique_integer([:positive])}",
+                 registry: registry
+               )
+
+      assert message =~ "refuses to boot"
+      assert message =~ "web3_"
     end
 
     test "every tool passes the registry's own shape validation" do

@@ -19,7 +19,7 @@ defmodule Raxol.MCP.Client.Era do
 
   `evidence/1` is the whole demotion rule and it is deliberately narrow. An
   origin is demoted to legacy ONLY by a method-not-found for `server/discover`
-  or by HTTP 404, 405 or 501. A 401, 403, 408, 429 or 5xx is health
+  or by HTTP 404, 405 or 501. A 400, 401, 403, 408, 429 or 5xx is health
   information: it feeds `Raxol.MCP.CircuitBreaker` and leaves the verdict
   untouched.
 
@@ -54,21 +54,13 @@ defmodule Raxol.MCP.Client.Era do
   # `:era_ttl_ms`, or globally with `config :raxol_mcp, :client_era, ttl_ms:`.
   @default_ttl_ms 900_000
 
-  # 400 is in this list on evidence measured on 2026-09-14, not on principle.
-  # Both stateful upstreams answer a `server/discover` probe with a 400: one
-  # with `{"code":-32601,"message":"Session ID required in mcp-session-id
-  # header"}`, the other with a framework stack trace carrying no code at all.
-  # Both are unambiguously legacy -- they issue `Mcp-Session-Id` and negotiate
-  # 2025-06-18 -- so a rule that left 400 as no evidence made both of them
-  # permanently unreachable.
-  #
-  # It belongs with 404/405/501 rather than with the health statuses because a
-  # 400 to a fixed request is DETERMINISTIC: the same probe gets the same
-  # answer, so it cannot be the transient refusal the health list exists to
-  # tolerate. A verdict taken from it and wrong expires on the TTL; a legacy
-  # origin never classified is wrong until someone edits this list.
-  @demoting_statuses [400, 404, 405, 501]
-  @unhealthy_statuses [401, 403, 408, 429]
+  # A generic 400 is not protocol-era evidence. It can be a request validation,
+  # authorization or intermediary refusal, and persisting `:legacy` from it
+  # would make every subsequent connection send a handshake that a modern
+  # server does not implement. Only statuses that specifically say the probe
+  # method or endpoint is absent demote.
+  @demoting_statuses [404, 405, 501]
+  @unhealthy_statuses [400, 401, 403, 408, 429]
 
   @doc """
   The cached verdict for a key, or `:miss` when absent or expired.
@@ -137,13 +129,12 @@ defmodule Raxol.MCP.Client.Era do
 
     * `:demote` - this origin does not implement `server/discover`, so it is
       legacy. A JSON-RPC method-not-found for that call, wherever it is
-      carried, or HTTP 400, 404, 405 or 501.
+      carried, or HTTP 404, 405 or 501.
     * `:health` - the origin refused us. Breaker input, not era input.
     * `:none` - no era information either way.
 
   A JSON-RPC code is the more specific of the two, so a caller holding both
-  asks about the code first: one measured upstream carries `-32601` inside a
-  400, and the code says what the status only implies.
+  asks about the code first.
   """
   @spec evidence({:status, non_neg_integer()} | {:jsonrpc_error, integer()} | term()) ::
           evidence()

@@ -10,22 +10,18 @@ defmodule Raxol.MCP.Client.EraTest do
   defp table, do: :ets.new(:eras, [:set, :public])
 
   describe "what counts as era evidence" do
-    test "a deterministic refusal of the probe demotes an origin" do
-      # 400 is here on a measurement rather than on principle: both stateful
-      # upstreams answer a `server/discover` probe with one (2026-09-14), and a
-      # 400 to a fixed request is deterministic rather than transient, which is
-      # what separates it from the health statuses below.
-      for status <- [400, 404, 405, 501] do
+    test "an absent probe method or endpoint demotes an origin" do
+      for status <- [404, 405, 501] do
         assert Era.evidence({:status, status}) == :demote,
                "#{status} should be era evidence"
       end
     end
 
-    test "a refusal or an outage is health information, never a demotion" do
-      # The wedge: treating a 403 challenge as era evidence would cache
-      # `legacy` forever, after which every call sends an `initialize` that a
-      # modern server is specified not to answer.
-      for status <- [401, 403, 408, 429, 500, 502, 503] do
+    test "a generic refusal or outage is health information, never a demotion" do
+      # The wedge: treating a generic 400 or a 403 challenge as era evidence
+      # would cache `legacy`, after which every call sends an `initialize` that
+      # a modern server is specified not to answer.
+      for status <- [400, 401, 403, 408, 429, 500, 502, 503] do
         assert Era.evidence({:status, status}) == :health,
                "#{status} must not decide an era"
       end
@@ -44,6 +40,7 @@ defmodule Raxol.MCP.Client.EraTest do
     end
 
     test "the breaker's view agrees with the health verdict" do
+      assert Era.unhealthy?(400)
       assert Era.unhealthy?(403)
       assert Era.unhealthy?(503)
       refute Era.unhealthy?(404)

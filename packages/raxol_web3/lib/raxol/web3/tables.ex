@@ -88,18 +88,23 @@ defmodule Raxol.Web3.Tables do
   @doc """
   The key cursors are signed with.
 
-  Random per boot unless `config :raxol_web3, :cursor_key` supplies one. Random
-  is right for one node and wrong for a fleet: a cursor minted on one node does
+  Random per boot when `config :raxol_web3, :cursor_key` is absent. Random is
+  right for one node and wrong for a fleet: a cursor minted on one node does
   not verify on another, so a load-balanced deployment that pages across nodes
-  has to configure a shared key. ADR-0038 records the cost either way, since a
-  rotation invalidates outstanding cursors and a paging caller restarts its
-  walk.
+  has to configure a shared key of at least 32 bytes. A present but malformed
+  key is a boot error rather than a silent random-key fallback. ADR-0038 records
+  the cost either way, since a rotation invalidates outstanding cursors and a
+  paging caller restarts its walk.
   """
   @spec cursor_key() :: binary()
   def cursor_key, do: :persistent_term.get(@cursor_key)
 
   @impl GenServer
   def init(_opts) do
+    # Validate configuration before creating tables or publishing any
+    # persistent terms: a rejected key must leave no half-initialized owner.
+    cursor_key = configured_cursor_key()
+
     :persistent_term.put(@buckets, TokenBucket.new(:raxol_web3_buckets))
     :persistent_term.put(@breakers, CircuitBreaker.new(:raxol_web3_breakers))
 
@@ -118,15 +123,22 @@ defmodule Raxol.Web3.Tables do
       ])
     )
 
-    :persistent_term.put(@cursor_key, configured_cursor_key())
+    :persistent_term.put(@cursor_key, cursor_key)
 
     {:ok, %{}}
   end
 
   defp configured_cursor_key do
-    case Application.get_env(:raxol_web3, :cursor_key) do
-      key when is_binary(key) and byte_size(key) >= 16 -> key
-      _absent -> :crypto.strong_rand_bytes(@cursor_key_bytes)
+    case Application.fetch_env(:raxol_web3, :cursor_key) do
+      :error ->
+        :crypto.strong_rand_bytes(@cursor_key_bytes)
+
+      {:ok, key} when is_binary(key) and byte_size(key) >= @cursor_key_bytes ->
+        key
+
+      {:ok, _invalid} ->
+        raise ArgumentError,
+              "config :raxol_web3, :cursor_key must be a binary of at least #{@cursor_key_bytes} bytes"
     end
   end
 end

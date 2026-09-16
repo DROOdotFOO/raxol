@@ -16,12 +16,13 @@
 # lists GitHub custom properties, and labels on GHES < 3.13, as the only
 # repository-level overrides; a committed config file is not among them.
 #
-# So an entry below cannot turn a red check run green. The documented levers
-# are on the other side: close the incident on the dashboard ("if secret
-# incidents are closed on the GitGuardian dashboard, they will no longer be
-# raised by GitHub checkruns", same page), or use one of the check run's own
-# skip actions -- `Skip: false positive`, `Skip: test credential`,
-# `Skip: low risk`.
+# So an entry below cannot turn a red check run green, and this repository
+# change does not claim to clear any server-side incident. For every existing
+# false-positive incident, a GitGuardian dashboard user must open the incident
+# and close it with the `False positive` resolution. The check run then stops
+# raising it. The check run's own `Skip: false positive` action is the equivalent
+# per-check alternative; `Skip: test credential` and `Skip: low risk` are
+# different classifications and must not be used for these incidents.
 #
 # Keys use the documented v2 spelling, with underscores. ggshield accepts the
 # hyphenated form but warns that it is deprecated (`replace_dash_in_keys` and

@@ -717,10 +717,23 @@ defmodule Raxol.Agent.Code.App do
   def default_mcp_loader(servers, ref, app) do
     # The janitor monitors `app` (the dispatcher/session process), so the
     # started clients are torn down whenever this session ends.
-    spawn(fn ->
-      result = Raxol.Agent.Code.McpLoader.load(servers, owner: app)
-      send(app, {:command_result, {:mcp_loaded, ref, result}})
-    end)
+    case Task.Supervisor.start_child(Raxol.Agent.TaskSupervisor, fn ->
+           result =
+             Raxol.Agent.Code.McpLoader.load(servers,
+               owner: app,
+               supervisor: Raxol.Agent.TaskSupervisor
+             )
+
+           send(app, {:command_result, {:mcp_loaded, ref, result}})
+         end) do
+      {:ok, pid} ->
+        pid
+
+      {:error, reason} ->
+        result = %{tools: [], connected: [], failed: [{:loader, reason}], janitor: nil}
+        send(app, {:command_result, {:mcp_loaded, ref, result}})
+        {:error, reason}
+    end
   end
 
   defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"

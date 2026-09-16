@@ -12,15 +12,15 @@ Four things changed under contact with the code, and each is recorded here rathe
 a commit message because three of them would otherwise read as an implementation that ignored
 its own decision:
 
-1. **Decision 2's demotion set gains HTTP 400, and a JSON-RPC code is read from any status.**
-   Measured 2026-09-14: `mcp.trongrid.io/mcp` answers a `server/discover` probe with HTTP 400
-   and `{"code": -32601, "message": "Session ID required in mcp-session-id header"}`, with the
-   code at the top level rather than inside a JSON-RPC envelope, and `mcp.tronscan.org/mcp`
-   answers 400 with a Java stack trace carrying no code at all. Both are unambiguously legacy,
-   and the rule as written left both of ADR-0033's measured legacy origins permanently
-   unreachable. A 400 to a FIXED probe is deterministic rather than the transient refusal the
-   health list exists to tolerate, and a wrong verdict still expires on the TTL. The 401, 403,
-   408, 429 and 5xx carve-out is untouched, which is the part the wedge test defends.
+1. **A generic HTTP 400 is not era evidence; an explicit JSON-RPC code is.**
+   Measured 2026-09-14: `mcp.trongrid.io/mcp` answers a `server/discover` probe
+   with HTTP 400 and a top-level code `-32601`, while `mcp.tronscan.org/mcp`
+   answers 400 with a Java stack trace and no protocol code. The first response
+   demotes because method-not-found is specific protocol evidence wherever the
+   server carries it. The second does not persist an era verdict: 400 can also
+   mean malformed input, policy or intermediary refusal, so using it alone
+   would poison future connections until the TTL. Only 404, 405 and 501 demote
+   by HTTP status.
 2. **The probe carries what both eras require.** A 2025-06-18 server refuses a request with no
    `MCP-Protocol-Version`, with a 400, reproduced against the legacy reference server before
    the upstream measurement arrived. So the probe sends `Mcp-Method`, `Mcp-Name` and
@@ -38,11 +38,11 @@ its own decision:
    data no caller reads. The probe's own discover result is what the verdict is taken from, and
    tools still come from `tools/list`.
 
-One correction to the decision-6 timer: it applies to caller-facing requests only. The
-handshake entry has no timer, because there is exactly one per client so it cannot grow
-`pending` (the leak decision 6 closes), nobody is waiting on it, and timing it out would make
-readiness depend on how fast a server process boots. The readiness deadline that matters is
-`Raxol.Agent.McpBundle`'s, which already exists.
+The initialization entry has a separate finite `init_timeout`, longer than the
+caller-facing `call_timeout` by default. A short request timeout must not close
+a client while its subprocess is still starting, but an initialization timeout
+or explicit JSON-RPC error flushes the startup queue and moves the client to
+`:closed` with an `{:initialization_failed, reason}` error.
 
 This is a **prerequisite for ADR-0033**, not an extension of it. That ADR's decision 6 lists
 `Raxol.MCP.Client` under "what is reused" and routes Tron through TronGrid MCP and Canton

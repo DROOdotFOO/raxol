@@ -88,8 +88,13 @@ defmodule Raxol.Agent.McpSpendHook do
 
   @impl true
   def before_call(%{action: %Dynamic{price: price} = tool} = call, context)
-      when is_integer(price) do
+      when is_integer(price) and price > 0 do
     reserve(call, tool, price, Map.get(context, :spend_gate))
+  end
+
+  def before_call(%{action: %Dynamic{price: price, name: name, origin: origin}}, _context)
+      when not is_nil(price) do
+    deny(:invalid_price, name, origin)
   end
 
   def before_call(%{action: %Dynamic{price: nil, origin: origin, name: name}}, _context)

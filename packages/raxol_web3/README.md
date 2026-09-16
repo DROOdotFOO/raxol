@@ -172,9 +172,10 @@ cached height read beside a live finalized height is what produces
 
 `Raxol.Web3.MCP.Tools`: thirteen typed MCP read tools over a router.
 `raw_request` has no tool, so no served path takes a method name from a
-caller, which is what makes "read-only" structural rather than annotated.
-Results go through `Raxol.Web3.Serialize` as JSON rather than `inspect/2`,
-which is one of the three reasons ADR-0033 rejects `Raxol.MCP.AgentBridge`.
+caller, which makes the chain operation structurally read-only. The tools are
+nevertheless `sensitive: true` and require a server authorizer because a call
+discloses query intent and may consume provider quota. Results go through
+`Raxol.Web3.Serialize` as JSON rather than `inspect/2`.
 
 The agent Action surface is `Raxol.Agent.Actions.Web3`, and it lives in
 `raxol_agent` rather than here: `use Raxol.Agent.Action` is that package's

@@ -170,10 +170,10 @@ jobs:
       # hit, which also disabled the "Create issue for critical findings"
       # step gated on `needs.secrets-scan.result == 'failure'`.
       #
-      # Blocking is only safe because measured historical false positives are
-      # accepted by exact fingerprint in `.gitleaksignore`. Public values and
-      # vendored assets use narrow allowlists in `.gitleaks.toml`; no test tree
-      # is exempt by path. A new key-shaped value therefore fails this job.
+      # Blocking is only safe because historical test-vector findings remain
+      # bound to exact commit/path/rule/line fingerprints. Published values and
+      # vendored assets use narrow rule-scoped allowlists. The scanner version
+      # is pinned below so that allowlist syntax is part of the enforced gate.
       #
       # `--only-verified` on TruffleHog for the same reason: unverified
       # high-entropy matches in signing test vectors are not credentials, and
@@ -227,6 +227,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.30.1
           # Repo-scoped config; without it this job cannot pass. See above.
           GITLEAKS_CONFIG: .gitleaks.toml
 

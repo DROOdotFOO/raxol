@@ -103,6 +103,36 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
     end
   end
 
+  defp await_status(client, expected, tries \\ 100) do
+    status = Client.status(client)
+
+    if Map.take(status, Map.keys(expected)) == expected do
+      status
+    else
+      if tries > 0 do
+        Process.sleep(10)
+        await_status(client, expected, tries - 1)
+      else
+        flunk("client status settled at #{inspect(status)}, wanted #{inspect(expected)}")
+      end
+    end
+  end
+
+  defp request_method(request) do
+    request.body |> IO.iodata_to_binary() |> Jason.decode!() |> Map.get("method")
+  end
+
+  defp initialization_response(request, response) do
+    id = request.body |> IO.iodata_to_binary() |> Jason.decode!() |> Map.fetch!("id")
+
+    {:ok,
+     %{
+       status: 200,
+       headers: [{"content-type", "application/json"}],
+       body: Jason.encode!(Map.put(response, "id", id))
+     }}
+  end
+
   # Every request the reference servers saw, in order. Called after the calls
   # under test have returned, so the mailbox is complete rather than raced.
   defp observations(acc \\ []) do
@@ -307,26 +337,54 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
                Transport.Http.decode_info(handle, {:mcp_http_probe, probe_ref, result})
     end
 
-    test "a probe refused with a 400 classifies legacy, code or no code" do
-      # Measured 2026-09-14 against both stateful upstreams: one answers the
-      # probe 400 with `{"code":-32601,"message":"Session ID required in
-      # mcp-session-id header"}`, the other 400 with a framework stack trace and
-      # no code at all. Both are unambiguously legacy. A rule that read a body
-      # only for a 2xx, or that treated 400 as no evidence, left both of them
-      # unreachable.
-      for body <- [
-            ~s({"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"no such method"}}),
-            ~s({"code":-32601,"message":"Session ID required in mcp-session-id header"}),
-            "java.lang.IllegalStateException: no session\n\tat io.modelcontextprotocol"
-          ] do
-        tables = tables()
-        client = start_client!(spec(refusing_probe(body), tables))
+    test "a probe refused with HTTP 400 is not persisted as legacy" do
+      tables = tables()
+      client = start_client!(spec(refusing_probe("bad request"), tables))
 
-        assert %{version: "2025-06-18", concurrency: :serialized} = await_ready(client)
-        assert {:ok, [%{name: "echo"}]} = Client.list_tools(client)
-        assert Era.verdict(tables.eras, @key) == {:ok, :legacy}
-        _seen = observations()
+      assert {:error, {:connect_failed, {:http, 400}}} = Client.list_tools(client)
+      assert Era.verdict(tables.eras, @key) == :miss
+      assert %{failures: 1} = CircuitBreaker.status(tables.breakers, {:origin, @origin})
+    end
+
+    test "initialization timeout closes the client instead of leaving it stuck" do
+      inner = legacy()
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "initialize" do
+          receive do: (:release_initialization -> inner.(vetted, request, opts))
+        else
+          inner.(vetted, request, opts)
+        end
       end
+
+      client = start_client!(spec(seam, tables(), init_timeout: 30))
+
+      assert %{status: :closed, pending: 0} =
+               await_status(client, %{status: :closed, pending: 0})
+
+      assert {:error, {:connect_failed, {:initialization_failed, :timeout}}} =
+               Client.list_tools(client)
+    end
+
+    test "an explicit initialization error closes the client with the reason" do
+      inner = legacy()
+      error = %{"code" => -32_603, "message" => "initialization refused"}
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "initialize" do
+          initialization_response(request, %{"jsonrpc" => "2.0", "error" => error})
+        else
+          inner.(vetted, request, opts)
+        end
+      end
+
+      client = start_client!(spec(seam, tables()))
+
+      assert %{status: :closed, pending: 0} =
+               await_status(client, %{status: :closed, pending: 0})
+
+      assert {:error, {:connect_failed, {:initialization_failed, {:jsonrpc, ^error}}}} =
+               Client.list_tools(client)
     end
   end
 
@@ -586,7 +644,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
   describe "metering at the transport" do
     test "a priced tool with no reservation issues no request" do
-      handle = handle!(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 0.01})
+      handle = handle!(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 1})
       # Drained before the refutation: the probe's observation is already in the
       # mailbox and would satisfy a lazy `refute_receive`.
       assert methods(observations()) == ["server/discover"]
@@ -596,8 +654,22 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       refute_receive {:reference_server, _observation}, 50
     end
 
-    test "the same call with a reservation handle is issued" do
+    test "a non-integer price is not treated as either free or reservable" do
       handle = handle!(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 0.01})
+      _probe = observations()
+
+      request = %{
+        method: "tools/call",
+        params: %{name: "paid", arguments: %{}},
+        reservation: "cost-ref-invalid-price"
+      }
+
+      assert {:error, {:unknown_price, "paid"}} = Transport.Http.send(handle, 7, request)
+      refute_receive {:reference_server, _observation}, 50
+    end
+
+    test "the same call with a reservation handle is issued" do
+      handle = handle!(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 1})
       _probe = observations()
 
       request = %{
@@ -616,7 +688,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
     end
 
     test "an unknown price on a metered origin is denied, naming the tool and the origin" do
-      handle = handle!(modern(tools: [tool("mystery")]), tables(), prices: %{"paid" => 0.01})
+      handle = handle!(modern(tools: [tool("mystery")]), tables(), prices: %{"paid" => 1})
       _probe = observations()
 
       request = %{method: "tools/call", params: %{name: "mystery", arguments: %{}}}
@@ -631,26 +703,24 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       refute_receive {:reference_server, _observation}, 50
     end
 
-    test "a declared free tool and an unmetered origin both go through" do
-      free = handle!(modern(tools: [tool("free")]), tables(), prices: %{"free" => 0})
+    test "a zero price is invalid while an unmetered origin goes through" do
+      invalid = handle!(modern(tools: [tool("free")]), tables(), prices: %{"free" => 0})
       unmetered = handle!(modern(tools: [tool("echo")]), tables())
       _probes = observations()
 
-      assert {:ok, _handle} =
-               Transport.Http.send(free, 1, %{
+      assert {:error, {:unknown_price, "free"}} =
+               Transport.Http.send(invalid, 1, %{
                  method: "tools/call",
                  params: %{name: "free", arguments: %{}}
                })
 
-      assert_receive {:mcp_http, _ref, 1, {:ok, [_free_payload], _session}}, 1_000
-
       assert {:ok, _handle} =
-               Transport.Http.send(unmetered, 1, %{
+               Transport.Http.send(unmetered, 2, %{
                  method: "tools/call",
                  params: %{name: "echo", arguments: %{}}
                })
 
-      assert_receive {:mcp_http, _ref, 1, {:ok, [_echo_payload], _session}}, 1_000
+      assert_receive {:mcp_http, _ref, 2, {:ok, [_echo_payload], _session}}, 1_000
     end
 
     test "a priced call through the client, with no hook in the pipeline, is refused" do
@@ -658,7 +728,7 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
       # its own tool loop bypasses the spend-gate seam entirely, so the
       # transport is the only enforcement site left.
       client =
-        start_client!(spec(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 0.01}))
+        start_client!(spec(modern(tools: [tool("paid")]), tables(), prices: %{"paid" => 1}))
 
       assert {:ok, _tools} = Client.list_tools(client)
       _seen = observations()
@@ -668,6 +738,72 @@ defmodule Raxol.MCP.Client.Transport.HttpTest do
 
       assert {:ok, _result} = Client.call_tool(client, "paid", %{}, reservation: "cost-ref-2")
       assert_receive {:reference_server, %{method: "tools/call"}}, 1_000
+    end
+  end
+
+  describe "client dispatch and stateless bounds" do
+    test "a tool-call result cannot impersonate a tools/list reply by its shape" do
+      result = fn
+        "tools/call", _params ->
+          {:ok,
+           %{
+             "tools" => [%{"name" => "peer-chosen"}],
+             "content" => [%{"type" => "text", "text" => "ordinary result"}]
+           }}
+
+        _method, _params ->
+          :default
+      end
+
+      client = start_client!(spec(modern(tools: [tool("echo")], result: result), tables()))
+
+      assert {:ok, [%{name: "echo"}]} = Client.list_tools(client)
+
+      assert {:ok, %{content: [%{"text" => "ordinary result"}]}} =
+               Client.call_tool(client, "echo", %{})
+
+      assert {:ok, [%{name: "echo"}]} = Client.list_tools(client)
+    end
+
+    test "stateless sessions enforce a finite in-flight cap and bounded queue" do
+      test = self()
+      inner = modern(tools: [tool("echo")])
+
+      seam = fn vetted, request, opts ->
+        if request_method(request) == "tools/call" do
+          Kernel.send(test, {:stateless_in_flight, self()})
+          receive do: (:release -> inner.(vetted, request, opts))
+        else
+          inner.(vetted, request, opts)
+        end
+      end
+
+      client =
+        start_client!(spec(seam, tables(), pool_size: 2, queue_limit: 1, call_timeout: 5_000))
+
+      assert {:ok, _tools} = Client.list_tools(client)
+
+      callers =
+        for _ <- 1..4 do
+          Task.async(fn -> Client.call_tool(client, "echo", %{}, timeout: 10_000) end)
+        end
+
+      assert %{pending: 2, queued: 1} =
+               await_status(client, %{pending: 2, queued: 1})
+
+      assert_receive {:stateless_in_flight, first}, 1_000
+      assert_receive {:stateless_in_flight, second}, 1_000
+      Kernel.send(first, :release)
+
+      assert_receive {:stateless_in_flight, third}, 1_000
+      assert %{pending: 2, queued: 0} = await_status(client, %{pending: 2, queued: 0})
+
+      for pid <- [second, third], do: Kernel.send(pid, :release)
+
+      results = Task.await_many(callers, 10_000)
+      assert Enum.count(results, &match?({:ok, _}, &1)) == 3
+      assert Enum.count(results, &(&1 == {:error, :busy})) == 1
+      assert %{pending: 0, queued: 0} = await_status(client, %{pending: 0, queued: 0})
     end
   end
 

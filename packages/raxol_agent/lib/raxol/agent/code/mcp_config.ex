@@ -63,9 +63,10 @@ defmodule Raxol.Agent.Code.McpConfig do
   ## Scope
 
   This loads the config; `Raxol.Agent.Code.McpLoader` bridges the servers into
-  the live toolset (started under the agent DynamicSupervisor via
-  `Raxol.Agent.McpBundle`, tools wrapped as `Raxol.Agent.Action.Dynamic` and
-  dispatched through the same authorizer and hook chain as any Action).
+  the live toolset. Its loader and per-session janitor run under
+  `Raxol.Agent.TaskSupervisor`; the janitor owns the MCP clients and their OS
+  subprocesses. Tools are wrapped as `Raxol.Agent.Action.Dynamic` and dispatched
+  through the same authorizer and hook chain as any Action.
   """
 
   @env_path "RAXOL_MCP_CONFIG"
