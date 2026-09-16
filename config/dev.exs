@@ -37,11 +37,9 @@ config :raxol, Raxol.Repo,
 # binds the same interface with no SO_REUSEADDR as the endpoint itself
 # binds -- a truthful free/busy read, not a false positive.
 # Loopback by default, because Tidewave's `project_eval` evaluates Elixir in
-# the running node and this endpoint mounts it. RAXOL_DEV_BIND_IP exists
-# because a developer in Docker, WSL or a VM otherwise finds the endpoint
-# unreachable with no diagnostic, the only explanation being this comment in a
-# file they have no reason to open. Widening it exposes an eval endpoint on
-# that interface -- pair it with endpoint-level auth.
+# the running node. `RAXOL_DEV_BIND_IP` still lets Docker, WSL, and VM users
+# expose the health endpoint, but Tidewave is not mounted when that address is
+# non-loopback.
 dev_bind_ip =
   case System.get_env("RAXOL_DEV_BIND_IP", "127.0.0.1")
        |> String.to_charlist()
@@ -52,6 +50,13 @@ dev_bind_ip =
     {:error, _} ->
       raise "RAXOL_DEV_BIND_IP must be an IP address, got: " <>
               inspect(System.get_env("RAXOL_DEV_BIND_IP"))
+  end
+
+dev_bind_loopback? =
+  case dev_bind_ip do
+    {127, _, _, _} -> true
+    {0, 0, 0, 0, 0, 0, 0, 1} -> true
+    _ -> false
   end
 
 resolve_dev_port = fn ->
@@ -82,18 +87,30 @@ resolve_dev_port = fn ->
   end
 end
 
-# Loopback, explicitly. Phoenix binds 0.0.0.0 when `ip:` is absent, and this
-# endpoint mounts Tidewave, whose `project_eval` evaluates Elixir in the running
-# BEAM with no authentication in front of it. On 0.0.0.0 that is remote code
-# execution on the developer's machine for anyone who can reach the port, which
-# on a shared or public network is anyone on it. Nothing here needs to be
-# reachable off-host: it is a dev tool for an MCP client running locally.
-#
-# Widening this back to 0.0.0.0 (to drive the endpoint from a phone, a VM, or a
-# container) re-exposes `project_eval`. Put it behind something first.
+# This root endpoint exists only for local development and Tidewave. It pins
+# Cowboy because the root project declares `plug_cowboy`; the separately
+# deployed playground endpoint under `web/` pins and limits its own listener.
+# Tidewave is mounted only for loopback binds, so widening
+# `RAXOL_DEV_BIND_IP` exposes the health endpoint without exposing
+# `project_eval`.
 config :raxol, Raxol.Endpoint,
-  http: [ip: dev_bind_ip, port: resolve_dev_port.()],
+  adapter: Phoenix.Endpoint.Cowboy2Adapter,
+  http: [
+    ip: dev_bind_ip,
+    port: resolve_dev_port.(),
+    transport_options: [num_acceptors: 5, max_connections: 50],
+    protocol_options: [
+      idle_timeout: 30_000,
+      request_timeout: 10_000,
+      max_keepalive: 100,
+      max_request_line_length: 4_096,
+      max_header_name_length: 64,
+      max_header_value_length: 8_192,
+      max_headers: 50
+    ]
+  ],
   server: true,
+  tidewave_project_eval: dev_bind_loopback?,
   secret_key_base: String.duplicate("dev", 22)
 
 # Enable LiveView debug features for Tidewave

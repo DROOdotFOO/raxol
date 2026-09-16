@@ -1,20 +1,34 @@
 import Config
 
-# Configure the endpoint
+# The deployed playground is separate from the root project's dev-only
+# Tidewave endpoint. Both projects declare `plug_cowboy`, so pin Cowboy here
+# and bound the public listener's Ranch transport and Cowboy protocols
+# explicitly rather than inheriting Phoenix defaults.
 config :raxol_playground, RaxolPlaygroundWeb.Endpoint,
+  adapter: Phoenix.Endpoint.Cowboy2Adapter,
   url: [host: "localhost"],
-  # Compress dynamic responses. `Plug.Static`'s `gzip:` covers pre-compressed
-  # assets on disk and nothing else, so every HTML response left here
-  # uncompressed: the landing page alone is hundreds of kilobytes, most of it
-  # the hero's recorded frames, which are braille and repeated spans and so
-  # compress about fortyfold.
-  #
-  # `compress: true` rather than a hand-written `stream_handlers` list under
-  # `protocol_options`: `Plug.Cowboy` reads both as TOP-LEVEL options and
-  # merges its own defaults last, so a nested list is silently overridden and
-  # the page ships uncompressed anyway. This form also keeps
-  # `cowboy_telemetry_h`, which naming the handlers by hand drops.
-  http: [compress: true],
+  request_body_options: [
+    length: 1_000_000,
+    read_length: 64_000,
+    read_timeout: 10_000
+  ],
+  http: [
+    compress: true,
+    transport_options: [num_acceptors: 10, max_connections: 500],
+    protocol_options: [
+      idle_timeout: 30_000,
+      inactivity_timeout: 10_000,
+      request_timeout: 10_000,
+      max_keepalive: 100,
+      max_request_line_length: 8_192,
+      max_header_name_length: 64,
+      max_header_value_length: 8_192,
+      max_headers: 50,
+      max_concurrent_streams: 50,
+      max_received_frame_rate: {1_000, 10_000},
+      max_reset_stream_rate: {100, 10_000}
+    ]
+  ],
   render_errors: [
     formats: [html: RaxolPlaygroundWeb.ErrorHTML, json: RaxolPlaygroundWeb.ErrorJSON],
     layout: false
