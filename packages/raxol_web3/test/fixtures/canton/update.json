@@ -1,0 +1,52 @@
+{
+  "update_id": "1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680",
+  "migration_id": 0,
+  "workflow_id": "",
+  "record_time": "2024-06-24T21:08:34.404896Z",
+  "synchronizer_id": "global-domain::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc",
+  "effective_at": "2024-06-24T21:08:35.469232Z",
+  "offset": "000000000000000001",
+  "root_event_ids": [
+    "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:0",
+    "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:1"
+  ],
+  "events_by_id": {
+    "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:0": {
+      "event_type": "created_event",
+      "event_id": "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:0",
+      "contract_id": "004234af78698904006524570eb719286a5bf315cb0d96ba5932011965d852d14dca101220ad98f22db71c629deb36391bbb555618b6c0a2bc43bb6e33c8e27d5f75c5c2c9",
+      "template_id": "b0ae3cc03e418790305a3c15f761fe495572de5827f8d322fb8b96996b783c13:Splice.DsoBootstrap:DsoBootstrap",
+      "package_name": "splice-dso-governance",
+      "observers": [
+        "Digital-Asset-2::12209b21d512c6a7e2f5d215266fe6568cb732caaef7ff04e308f990a652340d3529"
+      ],
+      "created_at": "2024-06-24T21:08:35.469232Z",
+      "signatories": [
+        "DSO::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc"
+      ]
+    },
+    "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:1": {
+      "event_type": "exercised_event",
+      "event_id": "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:1",
+      "contract_id": "004234af78698904006524570eb719286a5bf315cb0d96ba5932011965d852d14dca101220ad98f22db71c629deb36391bbb555618b6c0a2bc43bb6e33c8e27d5f75c5c2c9",
+      "template_id": "b0ae3cc03e418790305a3c15f761fe495572de5827f8d322fb8b96996b783c13:Splice.DsoBootstrap:DsoBootstrap",
+      "package_name": "splice-dso-governance",
+      "choice": "DsoBootstrap_Bootstrap",
+      "interface_id": null,
+      "child_event_ids": [
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:2",
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:3",
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:4",
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:8",
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:9",
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:10",
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:11",
+        "#1220c7d293ea23275dcc7bfef9d47fa10e76477d26c93db4074ee5dff5e2cd8a5680:12"
+      ],
+      "acting_parties": [
+        "DSO::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc"
+      ],
+      "consuming": true
+    }
+  }
+}

@@ -112,13 +112,18 @@ defmodule Raxol.Agent.Code.Inspection do
     end
   end
 
-  # Env NAMES only: `.mcp.json` env values may hold tokens.
+  # NAMES only, never values: `.mcp.json` env values and header values may
+  # hold tokens, and this output is meant to be read and pasted.
   defp redact_server(server) do
     %{
       name: server.name,
-      command: server.command,
-      args: server.args,
-      env_keys: server |> Map.get(:env, %{}) |> Map.keys() |> Enum.sort()
+      source: Map.get(server, :source, :workspace),
+      command: Map.get(server, :command),
+      args: Map.get(server, :args, []),
+      env_keys: server |> Map.get(:env, %{}) |> Map.keys() |> Enum.sort(),
+      url: Map.get(server, :url),
+      header_names: server |> Map.get(:headers, []) |> Enum.map(&elem(&1, 0)),
+      metered: Map.get(server, :metered, false)
     }
   end
 

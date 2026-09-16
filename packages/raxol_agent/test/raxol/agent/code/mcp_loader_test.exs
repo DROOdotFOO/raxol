@@ -3,7 +3,13 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
 
   alias Raxol.Agent.Code.McpLoader
 
-  test "converts config servers into bundle specs (atom name, env list)" do
+  setup do
+    %{supervisor: start_supervised!(Task.Supervisor)}
+  end
+
+  test "converts config servers into bundle specs (atom name, env list)", %{
+    supervisor: supervisor
+  } do
     parent = self()
 
     bundle = fn specs, opts ->
@@ -14,30 +20,85 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
     servers = [%{name: "fs", command: "npx", args: ["-y"], env: %{"A" => "1"}}]
 
     assert %{connected: [], failed: [], janitor: janitor} =
-             McpLoader.load(servers, bundle: bundle)
+             McpLoader.load(servers, bundle: bundle, supervisor: supervisor)
+
+    assert janitor in Task.Supervisor.children(supervisor)
 
     assert_received {:specs, [spec], opts}
-    assert spec == %{name: :fs, command: "npx", args: ["-y"], env: [{"A", "1"}]}
+    # `:source` travels with the spec: losing it between the parse and the
+    # header resolver would silently widen which specs may resolve a
+    # credential reference.
+    assert spec == %{
+             name: :fs,
+             source: :workspace,
+             command: "npx",
+             args: ["-y"],
+             env: [{"A", "1"}]
+           }
+
     assert is_function(Keyword.fetch!(opts, :start), 1)
     McpLoader.stop(janitor)
   end
 
-  test "reports connected server names (not pids) from the bundle result" do
+  test "converts a remote config server into a remote bundle spec", %{supervisor: supervisor} do
+    parent = self()
+
+    bundle = fn specs, _opts ->
+      send(parent, {:specs, specs})
+      %{tools: [], servers: [], failed: []}
+    end
+
+    servers = [
+      %{
+        name: "intel",
+        url: "https://mcp.example.com/v1",
+        headers: [{"Authorization", "op://Employee/Intel/token"}],
+        metered: true,
+        prices: %{"lookup" => 150},
+        concurrency: :serialized,
+        source: :user
+      }
+    ]
+
+    result = McpLoader.load(servers, bundle: bundle, supervisor: supervisor)
+
+    assert_received {:specs, [spec]}
+
+    assert spec == %{
+             name: :intel,
+             source: :user,
+             url: "https://mcp.example.com/v1",
+             headers: [{"Authorization", "op://Employee/Intel/token"}],
+             metered: true,
+             prices: %{"lookup" => 150},
+             concurrency: :serialized
+           }
+
+    McpLoader.stop(result.janitor)
+  end
+
+  test "reports connected server names (not pids) from the bundle result", %{
+    supervisor: supervisor
+  } do
     bundle = fn _specs, _opts ->
       %{tools: [:tool_a], servers: [{:fs, self()}], failed: [{:ghost, :enoent}]}
     end
 
     assert %{tools: [:tool_a], connected: [:fs], failed: [{:ghost, :enoent}]} =
              result =
-             McpLoader.load([%{name: "fs", command: "c"}], bundle: bundle)
+             McpLoader.load([%{name: "fs", command: "c"}],
+               bundle: bundle,
+               supervisor: supervisor
+             )
 
     McpLoader.stop(result.janitor)
   end
 
-  test "a crashing bundle fails open instead of raising" do
+  test "a crashing bundle fails open instead of raising", %{supervisor: supervisor} do
     result =
       McpLoader.load([%{name: "x", command: "c"}],
-        bundle: fn _specs, _opts -> exit(:boom) end
+        bundle: fn _specs, _opts -> exit(:boom) end,
+        supervisor: supervisor
       )
 
     assert result.tools == []
@@ -45,7 +106,7 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
     assert [{:bundle, {:exit, :boom}}] = result.failed
   end
 
-  test "the janitor stops its clients when the owner process dies" do
+  test "the janitor stops its clients when the owner process dies", %{supervisor: supervisor} do
     parent = self()
 
     # A fake client is a plain process the janitor start-links and tracks.
@@ -67,7 +128,8 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
     McpLoader.load([%{name: "fs", command: "c"}],
       owner: owner,
       bundle: bundle,
-      client_start: client_start
+      client_start: client_start,
+      supervisor: supervisor
     )
 
     assert_received {:started, client_pid}
@@ -79,7 +141,7 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
     assert_receive {:DOWN, ^ref, :process, ^client_pid, _reason}, 2_000
   end
 
-  test "stop/1 terminates the janitor's clients on demand" do
+  test "stop/1 terminates the janitor's clients on demand", %{supervisor: supervisor} do
     parent = self()
 
     client_start = fn _opts ->
@@ -100,7 +162,8 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
       McpLoader.load([%{name: "fs", command: "c"}],
         owner: owner,
         bundle: bundle,
-        client_start: client_start
+        client_start: client_start,
+        supervisor: supervisor
       )
 
     assert_received {:started, client_pid}
@@ -153,7 +216,9 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
       assert {^servers, []} = McpLoader.admit(servers)
     end
 
-    test "load/2 reports refusals through :failed rather than dropping them" do
+    test "load/2 reports refusals through :failed rather than dropping them", %{
+      supervisor: supervisor
+    } do
       owner = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> if Process.alive?(owner), do: Process.exit(owner, :kill) end)
 
@@ -163,11 +228,22 @@ defmodule Raxol.Agent.Code.McpLoaderTest do
         McpLoader.load(
           [%{name: "ok", command: "true"}, %{name: "not ok", command: "true"}],
           owner: owner,
-          bundle: bundle
+          bundle: bundle,
+          supervisor: supervisor
         )
 
       assert {"not ok", :invalid_server_name} in result.failed
       McpLoader.stop(result.janitor)
+    end
+
+    test "keeps one server per name, first listed winning" do
+      servers = [
+        %{name: "intel", url: "https://operator/mcp", source: :user},
+        %{name: "intel", url: "https://repo-chose/mcp", source: :workspace}
+      ]
+
+      assert {[kept], [{"intel", :duplicate_server_name}]} = McpLoader.admit(servers)
+      assert kept.source == :user
     end
   end
 end

@@ -90,6 +90,7 @@ defmodule Raxol.Agent.Code.App do
   alias Raxol.Agent.Authorization.Verdict
   alias Raxol.Agent.Code.App.Commands
   alias Raxol.Agent.Code.App.Wizard
+  alias Raxol.Agent.Code.McpConfig
   alias Raxol.Agent.Code.ProjectContext
   alias Raxol.Agent.Contract
   alias Raxol.Agent.Journal.FileStore
@@ -440,14 +441,35 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
+  # A jailed session gets neither file: the workspace one names a command to
+  # execute, and the user-level one holds the HOST operator's credentials,
+  # which a tenant has no claim on.
   defp load_mcp(_cwd, true), do: {[], "mcp servers disabled (jailed session)"}
 
+  # User-level servers FIRST: `McpLoader.admit/1` keeps the first server of
+  # each name, so a workspace `.mcp.json` cannot shadow one of the operator's
+  # own by reusing its name.
   defp load_mcp(cwd, _jail?) do
-    case Raxol.Agent.Code.McpConfig.load(cwd) do
-      {:ok, []} -> {[], nil}
-      {:ok, servers} -> {servers, "#{length(servers)} MCP servers"}
+    {user, user_note} = mcp_source(&McpConfig.load_user/0, "user")
+    {workspace, workspace_note} = mcp_source(fn -> McpConfig.load(cwd) end, "workspace")
+    servers = user ++ workspace
+
+    note =
+      [user_note, workspace_note]
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> if servers == [], do: nil, else: "#{length(servers)} MCP servers"
+        errors -> Enum.join(errors, "; ")
+      end
+
+    {servers, note}
+  end
+
+  defp mcp_source(load, label) do
+    case load.() do
+      {:ok, servers} -> {servers, nil}
       :none -> {[], nil}
-      {:error, reason} -> {[], "mcp config error: #{inspect(reason)}"}
+      {:error, reason} -> {[], "#{label} mcp config error: #{inspect(reason)}"}
     end
   end
 
@@ -695,10 +717,23 @@ defmodule Raxol.Agent.Code.App do
   def default_mcp_loader(servers, ref, app) do
     # The janitor monitors `app` (the dispatcher/session process), so the
     # started clients are torn down whenever this session ends.
-    spawn(fn ->
-      result = Raxol.Agent.Code.McpLoader.load(servers, owner: app)
-      send(app, {:command_result, {:mcp_loaded, ref, result}})
-    end)
+    case Task.Supervisor.start_child(Raxol.Agent.TaskSupervisor, fn ->
+           result =
+             Raxol.Agent.Code.McpLoader.load(servers,
+               owner: app,
+               supervisor: Raxol.Agent.TaskSupervisor
+             )
+
+           send(app, {:command_result, {:mcp_loaded, ref, result}})
+         end) do
+      {:ok, pid} ->
+        pid
+
+      {:error, reason} ->
+        result = %{tools: [], connected: [], failed: [{:loader, reason}], janitor: nil}
+        send(app, {:command_result, {:mcp_loaded, ref, result}})
+        {:error, reason}
+    end
   end
 
   defp mcp_loaded_line(%{tools: [], failed: []}), do: "mcp: no tools discovered"
@@ -1002,7 +1037,23 @@ defmodule Raxol.Agent.Code.App do
     }
     |> maybe_add_skills()
     |> maybe_add_hooks(model)
+    |> add_spend_hook()
     |> maybe_add_lsp(model)
+  end
+
+  # Last in the chain, so an earlier hook's capability veto happens before any
+  # money is reserved. Registered unconditionally: it is the deny-by-default
+  # gate for a per-call-priced MCP tool, and a session with no priced tools
+  # never reaches past its fast path. No `:spend_gate` is wired here, so a
+  # priced tool is denied until an operator wires a real budget seam -- a
+  # default budget would be a fake one.
+  defp add_spend_hook(context) do
+    hooks =
+      context
+      |> Map.get(:tool_call_hooks, [])
+      |> List.insert_at(-1, Raxol.Agent.McpSpendHook)
+
+    Map.put(context, :tool_call_hooks, hooks)
   end
 
   defp maybe_add_lsp(context, %{lsp_pool: pool}) when is_pid(pool),

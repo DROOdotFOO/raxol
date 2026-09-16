@@ -6,19 +6,18 @@ defmodule Raxol.Agent.Code.McpLoader do
   the bundle result (tools as `Raxol.Agent.Action.Dynamic` values, plus a
   janitor pid that owns every started client).
 
-  Ownership is tied to the session, not to a slash command. `load/2` spawns a
-  janitor that starts each client linked to itself and monitors the session
-  process (`:owner`). When the session ends by ANY path — Ctrl+C, an SSH
-  disconnect, or a crash — the janitor's monitor fires and it exits, taking
-  its linked clients (and their OS subprocesses) with it. A client that
-  crashes is trapped and dropped, never propagating to the session. This
-  needs no external supervisor and cannot leak on a termination path that
-  forgets to call a cleanup function, because there is no such function to
-  forget.
+  Ownership is tied to the session, not to a slash command. `load/2` starts a
+  janitor under `Raxol.Agent.TaskSupervisor`; the janitor starts each client
+  linked to itself and monitors the session process (`:owner`). When the
+  session ends by ANY path — Ctrl+C, an SSH disconnect, or a crash — the
+  janitor's monitor fires and it exits, taking its linked clients (and their OS
+  subprocesses) with it. A client that crashes is trapped and dropped, never
+  propagating to the session. The supervisor makes janitor ownership visible
+  and ensures startup is not an untracked process spawn.
   """
 
-  alias Raxol.Agent.McpBundle
   alias __MODULE__.Janitor
+  alias Raxol.Agent.McpBundle
 
   # Each accepted server mints an atom (the bundle spec's name) and spawns an
   # OS subprocess, and atoms are never collected. `.mcp.json` is a workspace
@@ -41,26 +40,44 @@ defmodule Raxol.Agent.Code.McpLoader do
   Load the configured servers; never raises or exits.
 
   Options: `:owner` (the session process to monitor; when it dies the clients
-  are terminated — defaults to the caller), `:bundle` (the load function,
-  default `McpBundle.load/2`), and `:client_start` (the raw client starter,
-  default `Raxol.MCP.Client.start_link/1`), the latter two injectable for
-  tests.
+  are terminated — defaults to the caller), `:supervisor` (the TaskSupervisor
+  that owns the janitor, default `Raxol.Agent.TaskSupervisor`), `:bundle` (the
+  load function, default `McpBundle.load/2`), and `:client_start` (the raw
+  client starter, default `Raxol.MCP.Client.start_link/1`). The latter three
+  are injectable for tests and embedders outside the full agent subtree.
   """
   @spec load([map()], keyword()) :: result()
   def load(servers, opts \\ []) do
-    owner = Keyword.get(opts, :owner, self())
-    bundle = Keyword.get(opts, :bundle, &McpBundle.load/2)
-
-    client_start =
-      Keyword.get(opts, :client_start, &Raxol.MCP.Client.start_link/1)
-
+    {owner, supervisor, bundle, client_start} = loader_options(opts)
     {accepted, rejected} = admit(servers)
+    load_accepted(accepted, rejected, owner, supervisor, bundle, client_start)
+  catch
+    kind, reason ->
+      %{
+        tools: [],
+        connected: [],
+        failed: [{:bundle, {kind, reason}}],
+        janitor: nil
+      }
+  end
 
-    janitor = start_janitor(owner, client_start)
+  defp loader_options(opts) do
+    {
+      Keyword.get(opts, :owner, self()),
+      Keyword.get(opts, :supervisor, Raxol.Agent.TaskSupervisor),
+      Keyword.get(opts, :bundle, &McpBundle.load/2),
+      Keyword.get(opts, :client_start, &Raxol.MCP.Client.start_link/1)
+    }
+  end
+
+  defp load_accepted(accepted, rejected, owner, supervisor, bundle, client_start) do
+    janitor = start_janitor(supervisor, owner, client_start)
     start = fn client_opts -> Janitor.start_client(janitor, client_opts) end
-
     result = bundle.(Enum.map(accepted, &to_spec/1), start: start)
+    build_result(result, rejected, janitor)
+  end
 
+  defp build_result(result, rejected, janitor) do
     # Report connected server NAMES only; the janitor owns the client pids so
     # nothing else can outlive the session by holding one.
     connected =
@@ -74,14 +91,6 @@ defmodule Raxol.Agent.Code.McpLoader do
       failed: Map.get(result, :failed, []) ++ rejected,
       janitor: janitor
     }
-  catch
-    kind, reason ->
-      %{
-        tools: [],
-        connected: [],
-        failed: [{:bundle, {kind, reason}}],
-        janitor: nil
-      }
   end
 
   @doc "Stop the janitor (and its clients). A nil janitor or dead pid is a no-op."
@@ -93,8 +102,8 @@ defmodule Raxol.Agent.Code.McpLoader do
     :ok
   end
 
-  defp start_janitor(owner, client_start) do
-    Janitor.start(owner, client_start)
+  defp start_janitor(supervisor, owner, client_start) do
+    Janitor.start(supervisor, owner, client_start)
   end
 
   @doc """
@@ -107,42 +116,91 @@ defmodule Raxol.Agent.Code.McpLoader do
     {named, unnamed} =
       Enum.split_with(servers, &valid_server_name?(Map.get(&1, :name)))
 
-    {accepted, over_cap} = Enum.split(named, @max_servers)
+    {unique, duplicate} = dedupe(named)
+    {accepted, over_cap} = Enum.split(unique, @max_servers)
 
     rejected =
       Enum.map(unnamed, &{Map.get(&1, :name), :invalid_server_name}) ++
+        Enum.map(duplicate, &{Map.get(&1, :name), :duplicate_server_name}) ++
         Enum.map(over_cap, &{Map.get(&1, :name), :server_limit_exceeded})
 
     {accepted, rejected}
   end
 
+  # One server per name, first occurrence wins. The caller lists user-level
+  # servers before workspace ones, so a workspace `.mcp.json` cannot shadow an
+  # operator's server by reusing its name with a url of its own -- which would
+  # otherwise inherit that name's allowlisted header references.
+  defp dedupe(servers) do
+    {tagged, _seen} =
+      Enum.map_reduce(servers, MapSet.new(), fn server, seen ->
+        name = Map.get(server, :name)
+        {{MapSet.member?(seen, name), server}, MapSet.put(seen, name)}
+      end)
+
+    {duplicate, unique} = Enum.split_with(tagged, &elem(&1, 0))
+    {Enum.map(unique, &elem(&1, 1)), Enum.map(duplicate, &elem(&1, 1))}
+  end
+
   defp valid_server_name?(name),
     do: is_binary(name) and Regex.match?(@server_name_re, name)
 
-  # McpConfig servers carry string names and an env MAP; the bundle spec
-  # wants an atom name and an env LIST. `admit/1` has already bounded both
-  # the count and the shape of the names interned here.
+  # McpConfig servers carry string names and an env MAP; the bundle spec wants
+  # an atom name and an env LIST. `admit/1` has already bounded both the count
+  # and the shape of the names interned here. A remote server's keys are
+  # carried across as they were parsed, including `:source`, which is what
+  # decides whether its header references may resolve; a spec that somehow
+  # carries both transports keeps both keys so `McpBundle` refuses it by name
+  # rather than this function picking one.
   defp to_spec(server) do
-    %{
-      name: String.to_atom(server.name),
-      command: server.command,
+    %{name: String.to_atom(server.name), source: Map.get(server, :source, :workspace)}
+    |> put_stdio(server)
+    |> put_remote(server)
+  end
+
+  defp put_stdio(spec, %{command: command} = server) do
+    Map.merge(spec, %{
+      command: command,
       args: Map.get(server, :args, []),
       env: server |> Map.get(:env, %{}) |> Map.to_list()
-    }
+    })
   end
+
+  defp put_stdio(spec, _server), do: spec
+
+  defp put_remote(spec, %{url: url} = server) do
+    spec
+    |> Map.merge(%{
+      url: url,
+      headers: Map.get(server, :headers, []),
+      metered: Map.get(server, :metered, false),
+      prices: Map.get(server, :prices, %{})
+    })
+    |> put_concurrency(server)
+  end
+
+  defp put_remote(spec, _server), do: spec
+
+  defp put_concurrency(spec, %{concurrency: policy}),
+    do: Map.put(spec, :concurrency, policy)
+
+  defp put_concurrency(spec, _server), do: spec
 
   defmodule Janitor do
     @moduledoc false
     # Owns the MCP client processes for one coding session. Starts each client
     # linked to itself (so it can bring them down together), traps their exits
     # (so a crashing server does not cascade), and monitors the session
-    # process — when the session dies, the janitor exits and its links tear
-    # the clients down. Unlinked from its spawner, so it outlives the
-    # short-lived loader task and is bounded only by the session monitor.
+    # process. It is a TaskSupervisor child, so it outlives the short-lived
+    # loader task while remaining inside the agent supervision tree.
 
-    @spec start(pid(), (keyword() -> {:ok, pid()} | {:error, term()})) :: pid()
-    def start(owner, client_start) do
-      spawn(fn -> init(owner, client_start) end)
+    @spec start(GenServer.server(), pid(), (keyword() -> {:ok, pid()} | {:error, term()})) ::
+            pid()
+    def start(supervisor, owner, client_start) do
+      case Task.Supervisor.start_child(supervisor, fn -> init(owner, client_start) end) do
+        {:ok, pid} -> pid
+        {:error, reason} -> exit({:janitor_start_failed, reason})
+      end
     end
 
     @spec start_client(pid(), keyword()) :: {:ok, pid()} | {:error, term()}
@@ -171,35 +229,44 @@ defmodule Raxol.Agent.Code.McpLoader do
 
     defp loop(state) do
       receive do
-        {:start_client, from, ref, client_opts} ->
-          reply = state.client_start.(client_opts)
-
-          state =
-            case reply do
-              {:ok, pid} -> %{state | clients: [pid | state.clients]}
-              _error -> state
-            end
-
-          send(from, {ref, reply})
-          loop(state)
-
-        {:DOWN, mon, :process, _pid, _reason} when mon == state.owner_mon ->
-          # The session ended: stop every client (and its OS subprocess),
-          # then exit. A :normal janitor exit would not cascade over the
-          # links, so termination is explicit.
-          terminate_clients(state.clients)
-
-        {:EXIT, pid, _reason} ->
-          # A client crashed (or was stopped): forget it, do not cascade.
-          loop(%{state | clients: List.delete(state.clients, pid)})
-
-        :stop ->
-          terminate_clients(state.clients)
-
-        _other ->
-          loop(state)
+        message -> handle_message(message, state)
       end
     end
+
+    defp handle_message({:start_client, from, ref, client_opts}, state) do
+      reply = state.client_start.(client_opts)
+
+      state =
+        case reply do
+          {:ok, pid} -> %{state | clients: [pid | state.clients]}
+          _error -> state
+        end
+
+      send(from, {ref, reply})
+      loop(state)
+    end
+
+    defp handle_message({:DOWN, mon, :process, _pid, _reason}, %{owner_mon: mon} = state) do
+      # The session ended: stop every client (and its OS subprocess),
+      # then exit. A :normal janitor exit would not cascade over the
+      # links, so termination is explicit.
+      terminate_clients(state.clients)
+    end
+
+    defp handle_message({:EXIT, pid, reason}, state) do
+      if pid in state.clients do
+        # A client crashed (or was stopped): forget it, do not cascade.
+        loop(%{state | clients: List.delete(state.clients, pid)})
+      else
+        # Do not trap the TaskSupervisor's shutdown. Its lifecycle owns
+        # this janitor, so first stop the clients and honor the signal.
+        terminate_clients(state.clients)
+        exit(reason)
+      end
+    end
+
+    defp handle_message(:stop, state), do: terminate_clients(state.clients)
+    defp handle_message(_other, state), do: loop(state)
 
     defp terminate_clients(clients) do
       # A `:shutdown` exit signal, the same one a supervisor sends: it kills a

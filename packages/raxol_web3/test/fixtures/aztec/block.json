@@ -1,0 +1,58 @@
+{
+  "hash": "0x104fcc7b43c69f0f63b465740b8d0b412b57a46e899caed25727b3de3e745027",
+  "height": "83582",
+  "nativeStatus": "proven",
+  "archive": {
+    "root": "0x13ebcbad9b0d1a049a9a1aaee01d3051c0493c329e3cb4d5f58ad0c6fa59d806",
+    "nextAvailableLeafIndex": 83583
+  },
+  "header": {
+    "lastArchive": {
+      "root": "0x0a19508f6b46571cc5f24a4f9408d83469e29b0a40c14ba155c494081f3a8c6a",
+      "nextAvailableLeafIndex": 83582
+    },
+    "spongeBlobHash": "0x1f8768181a41c6f16e3ad41af0f5af498c05783167a62a01baac553a41bdd69f",
+    "state": {
+      "l1ToL2MessageTree": {
+        "root": "0x137595ec56c8f83828307aa4fe6eb55ef097b56f261523d1ffe0693bb7cac367",
+        "nextAvailableLeafIndex": 72743936
+      },
+      "partial": {
+        "noteHashTree": {
+          "root": "0x087e12cc7757e9d9508b0063101800018c921600ca4c0fff98b94aba212c133c",
+          "nextAvailableLeafIndex": 2359488
+        },
+        "nullifierTree": {
+          "root": "0x1ec9fa6bc94b98fdc57cd5c0339a41b0934672c3da8c8b5a184660f64b74ebf5",
+          "nextAvailableLeafIndex": 2359616
+        },
+        "publicDataTree": {
+          "root": "0x0c231eb0c1fdd37cc3e5326c545124f4f3f5c6724ce39197b67e135ec566788d",
+          "nextAvailableLeafIndex": 148734
+        }
+      }
+    },
+    "globalVariables": {
+      "chainId": 1,
+      "version": 4248422647,
+      "blockNumber": 83582,
+      "slotNumber": 91350,
+      "timestamp": 1789380527000,
+      "coinbase": "0x06a8eecfba446ca78704fd1ed002cb13cec12bff",
+      "feeRecipient": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "gasFees": {
+        "feePerDaGas": "0",
+        "feePerL2Gas": "2435272519340"
+      }
+    },
+    "totalFees": "6466668918033303460",
+    "totalManaUsed": "2655419"
+  },
+  "body": {
+    "txEffects": [
+      {
+        "txHash": "0x0a13cfae47782debfb1e7dbe15e7e033fc65a3eb0edf2377b32ea533a6c912f1"
+      }
+    ]
+  }
+}

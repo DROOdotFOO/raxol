@@ -10,6 +10,12 @@ defmodule Raxol.MCP.Protocol do
   @jsonrpc_version "2.0"
   @mcp_protocol_version "2024-11-05"
 
+  # Newest first. `negotiate/1` accepts membership, not order, but the order is
+  # what a future "offer the best we both know" caller needs.
+  @modern_version "2026-07-28"
+  @legacy_version "2025-06-18"
+  @supported_versions [@modern_version, @legacy_version, @mcp_protocol_version]
+
   # Standard JSON-RPC error codes
   @parse_error -32_700
   @invalid_request -32_600
@@ -64,9 +70,51 @@ defmodule Raxol.MCP.Protocol do
   @spec internal_error() :: integer()
   def internal_error, do: @internal_error
 
-  @doc "MCP protocol version string."
+  @doc """
+  The protocol version this package's SERVER advertises.
+
+  Unchanged at `2024-11-05`, deliberately. ADR-0037 negotiates a version per
+  client CONNECTION and lists what the raxol server advertises under what it
+  does not decide, so the two move independently.
+  """
   @spec mcp_protocol_version() :: String.t()
   def mcp_protocol_version, do: @mcp_protocol_version
+
+  @doc """
+  Every revision the client side can speak, newest first.
+
+  Three revisions rather than one because the upstreams disagree: the current
+  specification (2026-07-28) is stateless, with no `initialize` and no
+  `Mcp-Session-Id`, while the servers ADR-0033 measured on 2026-08-31 are
+  stateful. A client that speaks only one of the two fails against the other,
+  which is why `Raxol.MCP.Client.Transport.Http` probes an origin's era rather
+  than assuming it.
+  """
+  @spec supported_versions() :: [String.t()]
+  def supported_versions, do: @supported_versions
+
+  @doc "The stateless revision: no handshake, no session, `server/discover` required."
+  @spec modern_version() :: String.t()
+  def modern_version, do: @modern_version
+
+  @doc "The newest stateful revision, offered to a legacy-era origin."
+  @spec legacy_version() :: String.t()
+  def legacy_version, do: @legacy_version
+
+  @doc """
+  Accept a peer's protocol revision, or name it as unsupported.
+
+  The per-connection half of ADR-0037 decision 2: the revision in force is
+  whatever the peer answered `initialize` with, not a module constant.
+  """
+  @spec negotiate(term()) :: {:ok, String.t()} | {:error, {:unsupported_version, term()}}
+  def negotiate(version) when is_binary(version) do
+    if version in @supported_versions,
+      do: {:ok, version},
+      else: {:error, {:unsupported_version, version}}
+  end
+
+  def negotiate(other), do: {:error, {:unsupported_version, other}}
 
   # -- Client-side builders ----------------------------------------------------
 

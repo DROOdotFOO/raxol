@@ -1,0 +1,4 @@
+id: 2579779c-fe1f-4171-814a-37e9061a6ae5
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Error: Missing required argument: blockNum"}],"isError":true}}
+

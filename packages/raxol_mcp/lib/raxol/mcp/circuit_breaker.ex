@@ -9,7 +9,19 @@ defmodule Raxol.MCP.CircuitBreaker do
   - **half_open** -- recovery probe allowed after cooldown; success resets, failure re-opens
 
   No GenServer -- all state lives in a public ETS table with atomic counter
-  updates. The table is created by the owning process (typically `MCP.Registry`).
+  updates. The table is created by the owning process (typically `MCP.Registry`),
+  and it lives exactly as long as that process: a caller that creates its own
+  gets a breaker nobody else can see, which for a failover gate means failover
+  never trips.
+
+  ## Keys
+
+  A key names what is being guarded. `{:tool, _}`, `{:resource, _}` and
+  `{:prompt, _}` are MCP callbacks; `{:origin, _}` is an outbound upstream,
+  used by `raxol_web3`'s guarded client so a challenge-serving or hard-down
+  explorer is not retried on every call. Nothing here is MCP-specific but the
+  module's home, which is why the type widened rather than a second breaker
+  being written.
 
   ## Configuration
 
@@ -21,7 +33,11 @@ defmodule Raxol.MCP.CircuitBreaker do
   """
 
   @type state :: :closed | :open | :half_open
-  @type key :: {:tool, String.t()} | {:resource, String.t()} | {:prompt, String.t()}
+  @type key ::
+          {:tool, String.t()}
+          | {:resource, String.t()}
+          | {:prompt, String.t()}
+          | {:origin, String.t()}
 
   @default_failure_threshold 5
   @default_recovery_ms 30_000
