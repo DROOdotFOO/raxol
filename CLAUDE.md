@@ -148,25 +148,26 @@ workstation helper, not something for a shared box or a CI runner, where
 every worktree must fetch and verify its own dependencies. `worktree.sh add
 BRANCH --fresh` skips seeding for exactly that case.
 
-`add` also refuses to seed when `mix.lock` (root or any
-`packages/*/mix.lock`) differs between this checkout and the branch, since
-then the caches describe some other set of dependencies (exit 3, and the
-message says which of the two sides moved). `sync` warns and re-seeds
-instead of refusing, because carrying a bumped lock from here into an
-existing worktree is what `sync` is for. Symlinked locks and symlinked
-`packages/*` entries in the target are refused outright rather than read
-through. None of this is an integrity check: it says the two checkouts
-agree on what the dependencies should be, not that the copied bytes are
-what Hex published. Only `--fresh` gets you that.
+`add` refuses to seed when dependency manifests differ between this checkout
+and the branch: `mix.lock` covers fetched dependencies, while root and package
+`mix.exs` files also catch path-dependency changes that do not move a lock
+(exit 3, and the message says which side moved). `sync` warns and re-seeds
+instead of refusing, because carrying bumped manifests from here into an
+existing worktree is what `sync` is for. Symlinked manifest read paths,
+package directories, and `_build`/`deps` replacement destinations in the
+target are refused rather than followed. None of this is an integrity check:
+it says the two checkouts agree on dependency manifests, not that the copied
+bytes are what Hex published. Only `--fresh` gets you that.
 
-With no path argument the worktree lands in `mktemp -d
-"${TMPDIR:-/tmp}/raxol-<slug>.XXXXXXXX"`, printed as the `cd` line. The
-point is not an unguessable name, since mktemp's entropy is libc's
-business, but that it creates the directory atomically and 0700, so the
-path is never known-and-unowned. The old fixed `/tmp/raxol-<slug>` was
-exactly that: a name derivable from a branch that is public on the PR,
-under a world-writable directory, belonging to whoever got there first
-(CWE-377). An explicit path argument is used as given.
+With no path argument the worktree lands in an atomic `mktemp -d` directory
+under `TMPDIR`. Empty or unresolvable values, and values resolving to `/`,
+fall back to `/tmp`; the printed `cd` line identifies the chosen path. The
+point is not an unguessable name, since
+mktemp's entropy is libc's business, but that the directory is 0700 from the
+moment it exists. Explicit paths get the same invariant: one `mkdir -m 700`
+both refuses an existing file or symlink and claims the path atomically.
+`sync` serializes seeds per target and retains every replaced cache until the
+whole seed commits, so errors and handled signals roll back partial changes.
 
 ### Install paths
 
