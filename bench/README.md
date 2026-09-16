@@ -19,15 +19,16 @@ mix run bench/suites/comparison/framework_comparison.exs       # the README tabl
 Most scripts here are reports: they print numbers and exit 0. One is a gate.
 
 ```bash
-mix run --no-start bench/core/buffer_gate.exs   # exits 1 on a breached budget
+MIX_ENV=test mix run --no-start bench/core/buffer_gate.exs
 ```
 
-`core/buffer_gate.exs` measures `Raxol.Terminal.Buffer` fill/read/scroll
-throughput and per-cell memory against budgets declared at the top of the
-file, and runs as the `buffer-gate` job in
-`.github/workflows/ci-unified.yml`, which fails when a budget is breached.
-What each budget can and cannot detect is written down next to it, along with
-the runs the numbers came from; read that before changing one.
+`core/buffer_gate.exs` measures target-only `Raxol.Terminal.Buffer`
+fill/read/scroll throughput and per-cell memory against the budgets and
+ubuntu-latest provenance declared at the top of the file. It stops with
+status 1 on a breach and status 2 on an invalid measurement. The
+`buffer-gate` job feeds the required `CI Status` check on `master`, so either
+status blocks an ordinary merge; administrators can bypass that check.
+Read the gate's sensitivity and budget-change rules before changing a number.
 
 ## Suites
 
