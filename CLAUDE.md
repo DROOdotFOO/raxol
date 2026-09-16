@@ -140,6 +140,35 @@ at all. The app's own beams DO recompile (Mix manifests are keyed by absolute
 source path, which is also why a `MIX_BUILD_PATH` shared between worktrees
 recompiles anyway, and would have two worktrees writing the same manifests).
 
+That speed is bought with trust: the seed is a COPY of this checkout's
+`deps`/`_build`, the new worktree never runs `deps.get`, so Hex checksum
+verification never happens there and one hand-patched dependency here
+propagates into every worktree made afterwards. It is a single-user
+workstation helper, not something for a shared box or a CI runner, where
+every worktree must fetch and verify its own dependencies. `worktree.sh add
+BRANCH --fresh` skips seeding for exactly that case.
+
+`add` refuses to seed when dependency manifests differ between this checkout
+and the branch: `mix.lock` covers fetched dependencies, while root and package
+`mix.exs` files also catch path-dependency changes that do not move a lock
+(exit 3, and the message says which side moved). `sync` warns and re-seeds
+instead of refusing, because carrying bumped manifests from here into an
+existing worktree is what `sync` is for. Symlinked manifest read paths,
+package directories, and `_build`/`deps` replacement destinations in the
+target are refused rather than followed. None of this is an integrity check:
+it says the two checkouts agree on dependency manifests, not that the copied
+bytes are what Hex published. Only `--fresh` gets you that.
+
+With no path argument the worktree lands in an atomic `mktemp -d` directory
+under `TMPDIR`. Empty or unresolvable values, and values resolving to `/`,
+fall back to `/tmp`; the printed `cd` line identifies the chosen path. The
+point is not an unguessable name, since
+mktemp's entropy is libc's business, but that the directory is 0700 from the
+moment it exists. Explicit paths get the same invariant: one `mkdir -m 700`
+both refuses an existing file or symlink and claims the path atomically.
+`sync` serializes seeds per target and retains every replaced cache until the
+whole seed commits, so errors and handled signals roll back partial changes.
+
 ### Install paths
 
 The packaged CLI is self-contained (Burrito wraps its own ERTS), so none of
