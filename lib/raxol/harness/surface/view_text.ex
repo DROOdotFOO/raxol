@@ -82,17 +82,12 @@ defmodule Raxol.Harness.Surface.ViewText do
        `FlatAuthority` documents: a reader sees something was stripped
        rather than an invisible, silently-swallowed injection.
 
-  This is the boundary for the AUTHORITY path, not the only one in the
-  harness. A view map that goes to the normal `Preparer -> LayoutEngine
-  -> UIRenderer` pipeline is flattened by that pipeline, not by `lines/3`,
-  so `Raxol.UI.Components.Harness.Block.render/2` sanitizes the text nodes
-  IT emits with `sanitize_line/1` before returning them. The two overlap
-  rather than partition: `Raxol.Harness.Surface.render_block_lines/3` and
-  the pending-block footer preview both pipe `BlockBody.render(...)`
-  (which is `Block.render/2` for a folded block) into `lines/3`, so that
-  content is stripped twice. `sanitize_line/1` is idempotent, so the
-  second pass is a no-op; and `lines/3` still sanitizes everything it
-  flattens, including content from callers that never touch `Block`.
+  This boundary is specific to the authority path. The normal
+  `Preparer -> LayoutEngine -> UIRenderer` pipeline confines cell text and
+  OSC 8 URLs later, in the terminal emitters, through
+  `Raxol.Core.Boundary.TermText`. Keeping each check at the output path that
+  actually emits bytes means component trees are not walked and rebuilt on
+  every frame.
 
   **This is complementary to, not a substitute for, `FlatAuthority`'s own
   scrub** (a module-enforced flat scrub). Two
@@ -144,11 +139,11 @@ defmodule Raxol.Harness.Surface.ViewText do
   same as every other line here -- this module has never supported
   per-segment styling within one line, and `style_line/2` has no
   `:background` handling regardless, so the cursor-highlight run's style
-  is dropped the same way it always would be). Any other `children:` shape
-  (including a MIX of tuples and maps) falls through to the normal
-  recursive walk unchanged.
+  is dropped the same way it always was). Any other `children:` shape is
+  processed recursively; tuple leaves are retained as individual text
+  leaves rather than silently dropped.
   """
-  @spec lines(map() | [map()], non_neg_integer(), mode()) :: [String.t()]
+  @spec lines(term(), non_neg_integer(), mode()) :: [String.t()]
   def lines(view, width, mode \\ :plain) when is_integer(width) do
     view
     |> collect([])
@@ -168,6 +163,12 @@ defmodule Raxol.Harness.Surface.ViewText do
   defp collect(views, acc) when is_list(views) do
     Enum.reduce(views, acc, &collect/2)
   end
+
+  # A tuple outside an all-tuple run (for example in a mixed children list)
+  # is still a valid text leaf. Non-binary content intentionally misses this
+  # clause and contributes no terminal bytes.
+  defp collect({:text, content, style}, acc) when is_binary(content),
+    do: add_lines(acc, content, style)
 
   defp collect(%{type: :text, content: content} = node, acc)
        when is_binary(content) do

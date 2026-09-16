@@ -73,6 +73,27 @@ defmodule Raxol.Agent.Code.ReplayTest do
     assert text =~ "hello again"
   end
 
+  test "replay and export transcript text strip terminal control sequences" do
+    poison = "safe\e[2J\e]52;c;payload\a\r\n\t tail"
+    base = tmp_dir()
+
+    seed_journal(
+      base,
+      "sess-hostile",
+      message_turn("t1", "prompt " <> poison, "answer " <> poison)
+    )
+
+    {:ok, text} = Replay.run("sess-hostile", base_dir: base)
+
+    assert text =~ "prompt safe"
+    assert text =~ "answer safe"
+    assert text =~ "tail"
+    refute text =~ "\e"
+    refute text =~ "\a"
+    refute text =~ "\r"
+    refute text =~ "\t"
+  end
+
   test "to_offset replays a prefix by journal offset" do
     base = tmp_dir()
 

@@ -12,6 +12,8 @@ defmodule Raxol.Core.RendererOSC8Test do
   alias Raxol.Core.{Buffer, Renderer}
   alias Raxol.Core.Renderer.View
   alias Raxol.Core.Renderer.View.Components.Text
+  alias Raxol.UI.Layout.Engine, as: LayoutEngine
+  alias Raxol.View.Components
 
   # OSC 8 bare form: ESC ] 8 ; ; URL ST  ...  ESC ] 8 ; ; ST  (ST = ESC \)
   defp osc8_open(url), do: "\e]8;;" <> url <> "\e\\"
@@ -44,6 +46,22 @@ defmodule Raxol.Core.RendererOSC8Test do
     test "View.text/2 forwards the link option" do
       assert View.text("x", link: "https://example.com").link ==
                "https://example.com"
+    end
+  end
+
+  describe "layout link propagation" do
+    test "layout sanitizes the top-level link value it propagates" do
+      [positioned] =
+        Components.text(content: "go", link: "https://ok\e]52;c;payload\a\r\n")
+        |> LayoutEngine.apply_layout(%{width: 20, height: 1})
+
+      assert positioned.link == "https://ok"
+
+      [non_binary] =
+        Components.text(content: "go", link: %{unsafe: true})
+        |> LayoutEngine.apply_layout(%{width: 20, height: 1})
+
+      assert non_binary.link == ""
     end
   end
 
@@ -133,6 +151,27 @@ defmodule Raxol.Core.RendererOSC8Test do
     end
   end
 
+
+  describe "display text confinement" do
+    test "display text is confined before OSC 8 assembly" do
+      url = "https://example.com"
+
+      output =
+        Renderer.apply_diff([
+          {:write, "safe\e[2J\e]52;c;payload\a\r\n\t tail", %{hyperlink: url}}
+        ])
+
+      assert output == osc8_open(url) <> "safe tail" <> @osc8_close
+      refute output =~ "\e]52"
+      refute output =~ "\e[2J"
+    end
+
+    test "non-binary display content fails closed" do
+      refute Renderer.apply_diff([
+               {:write, %{unsafe: "\e]52;c;payload\a"}, %{hyperlink: "https://example.com"}}
+             ]) =~ "\e]8"
+    end
+  end
   describe "render_to_ansi/1 OSC 8 emission" do
     test "wraps linked cells and closes the link" do
       url = "https://example.com/x"

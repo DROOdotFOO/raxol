@@ -2,6 +2,7 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
   use ExUnit.Case, async: true
 
   alias Raxol.Harness.Fixture
+  alias Raxol.Harness.Surface.ViewText
   alias Raxol.UI.Components.Harness.{Block, BlockBody}
 
   @markdown_fixture_path "test/fixtures/harness/sessions/markdown-stream.jsonl"
@@ -553,14 +554,8 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
     end
   end
 
-  describe "the expanded mount is control-byte stripped too" do
-    # A mounted BodyProvider component's view REPLACES Block.render/2's
-    # body, so it never reaches that function's strip -- and the mounted
-    # components do not all filter for themselves: ReasoningBlock and
-    # ToolResultBlock hand model-supplied text straight to
-    # `Components.text()`, and MarkdownBody's own filter keeps `\r`. Every
-    # class below reached the terminal through the expanded fold state.
-    @poison "hello \e[2J\e[?1049h\e]52;c;cHduZWQ=\a\u009B2J\rOVERWRITE\b" <>
+  describe "mounted body views are confined by the paint-authority sink" do
+    @poison " hello \e[2J\e[?1049h\e]52;c;cHduZWQ=\a\u009B2J\rOVERWRITE\b" <>
               <<0x7F>> <> " world"
 
     @forbidden [
@@ -572,56 +567,32 @@ defmodule Raxol.UI.Components.Harness.BlockBodyTest do
       {"DEL", <<0x7F>>}
     ]
 
-    defp poisoned_events(:message),
-      do: [
-        %{
-          id: 1,
-          type: :item_completed,
-          payload: %{item_type: :message, content: @poison}
-        }
-      ]
+    defp poison_binaries(value) when is_binary(value), do: value <> @poison
 
-    defp poisoned_events(:reasoning),
-      do: [
-        %{
-          id: 1,
-          type: :item_completed,
-          payload: %{item_type: :reasoning, content: @poison}
-        }
-      ]
+    defp poison_binaries(value) when is_map(value),
+      do: Map.new(value, fn {key, item} -> {key, poison_binaries(item)} end)
 
-    defp poisoned_events(:tool_call),
-      do: [
-        %{
-          id: 1,
-          type: :item_completed,
-          payload: %{
-            item_type: :tool_use,
-            content: %{name: "Bash", args: %{command: @poison}}
-          }
-        },
-        %{
-          id: 2,
-          type: :item_completed,
-          payload: %{item_type: :tool_result, content: @poison}
-        }
-      ]
+    defp poison_binaries(value) when is_list(value),
+      do: Enum.map(value, &poison_binaries/1)
 
-    for kind <- [:message, :reasoning, :tool_call] do
-      test "#{kind}: an expanded mount emits no control byte" do
-        rendered =
+    defp poison_binaries(value), do: value
+
+    for kind <- [:message, :reasoning, :tool_call, :diff, :approval] do
+      test "#{kind}: valid mounted shape renders while terminal controls are stripped" do
+        lines =
           unquote(kind)
-          |> Block.from_events(poisoned_events(unquote(kind)), fold: :expanded)
+          |> events()
+          |> poison_binaries()
+          |> then(&Block.from_events(unquote(kind), &1, fold: :expanded))
           |> BlockBody.render(default_context())
+          |> ViewText.lines(80, :plain)
 
-        texts = flat_texts(rendered)
+        assert lines != []
+        assert Enum.any?(lines, &String.contains?(&1, "hello"))
 
-        assert Enum.any?(texts, &(&1 =~ "hello")),
-               "the visible content must survive the strip"
-
-        for {name, byte} <- @forbidden, text <- texts do
-          refute String.contains?(text, byte),
-                 "#{name} survived the expanded mount: #{inspect(text)}"
+        for {name, byte} <- @forbidden, line <- lines do
+          refute String.contains?(line, byte),
+                 "#{name} survived the #{unquote(kind)} mounted view: #{inspect(line)}"
         end
       end
     end

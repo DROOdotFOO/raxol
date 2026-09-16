@@ -216,14 +216,14 @@ defmodule Raxol.Terminal.Renderer do
     |> Enum.chunk_by(& &1.style)
     |> Enum.map_join("", fn same_style ->
       style = hd(same_style).style
-      chars = Enum.map_join(same_style, "", & &1.char)
+      chars = Enum.map_join(same_style, "", &terminal_text(&1.char))
       apply_sgr(build_ansi_prefix(style, theme), chars)
     end)
   end
 
   defp render_style_runs(cells, theme, _individual) do
     Enum.map_join(cells, "", fn cell ->
-      apply_sgr(build_ansi_prefix(cell.style, theme), cell.char)
+      apply_sgr(build_ansi_prefix(cell.style, theme), terminal_text(cell.char))
     end)
   end
 
@@ -257,18 +257,13 @@ defmodule Raxol.Terminal.Renderer do
   # OSC 8-aware terminals (iTerm2, kitty, WezTerm), ignored elsewhere. SGR may
   # vary inside; the link spans the whole run.
   #
-  # The URL is confined HERE, at the sink, not at whatever set
-  # `style.hyperlink`: this is where the bytes reach the terminal, and the
-  # style is populated by `TextFormatting.set_hyperlink/2` straight from an
-  # OSC 8 sequence the emulator parsed out of untrusted program output. An
-  # OSC body only ends at BEL or ST, so a parsed URL can legitimately carry
-  # CR, DEL and a raw 8-bit CSI (`0x9B`) -- re-emitted verbatim inside our
-  # own OSC 8, those escape the sequence and are executed.
-  # `TermText.sanitize/2` removes ESC and everything it introduces, plus
-  # C0/DEL/C1; `allow: []` keeps even `\n` and `\t` out, because a URL is
-  # one token with no line structure. Sanitizing BEFORE the emptiness
-  # check means an all-control URL emits no hyperlink at all rather than a
-  # bare `ESC ] 8 ;;` pair around the content.
+  # URL and displayed text are confined at this sink, immediately before
+  # bytes are assembled into OSC 8. Cell text passes through
+  # `terminal_text/1` before framework-owned SGR is added; the URL is
+  # sanitized below. `allow: []` keeps every C0 byte out because both values
+  # are single-row tokens. Non-binary terminal content fails closed as `""`.
+  defp maybe_wrap_hyperlink("", _style), do: ""
+
   defp maybe_wrap_hyperlink(content, style) do
     case hyperlink_url(style) do
       url when is_binary(url) ->
@@ -278,6 +273,8 @@ defmodule Raxol.Terminal.Renderer do
         content
     end
   end
+
+  defp terminal_text(value), do: TermText.sanitize(value, allow: [])
 
   defp wrap_hyperlink(content, ""), do: content
 
