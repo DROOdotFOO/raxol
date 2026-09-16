@@ -881,16 +881,15 @@ jobs:
       # Self-heal a cache that disagrees with the checked-out lock; see the
       # note on setup's deps.get fallback. No-op when the cache is healthy.
       - name: Fetch dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          mix deps.compile jason mix_audit sobelow
 
       - name: Check for vulnerable dependencies
-        run: |
-          mix deps.audit || true
-      
+        run: mix deps.audit
+
       - name: Run Sobelow security check
-        run: |
-          mix sobelow --config || true
-        continue-on-error: true
+        run: mix sobelow --config
 
   # ========================================
   # Cross-Platform Testing

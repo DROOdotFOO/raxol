@@ -128,16 +128,12 @@ jobs:
         run: |
           mix deps.clean --unused
           mix deps.get
+          # Sobelow derives Jason.Encoder; compile its runtime prerequisite
+          # before loading the Mix task.
+          mix deps.compile jason sobelow
 
       - name: Run Sobelow
-        run: |
-          # Install Sobelow if not in deps
-          if ! mix help sobelow &>/dev/null; then
-            mix archive.install hex sobelow --force
-          fi
-          
-          mix sobelow --config || mix sobelow --skip
-        continue-on-error: true
+        run: mix sobelow --config
 
   semgrep:
     name: Semgrep Security Scan
