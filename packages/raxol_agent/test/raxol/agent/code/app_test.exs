@@ -2503,7 +2503,12 @@ defmodule Raxol.Agent.Code.AppTest do
 
       model =
         App.init(%{
-          options: [runner: stub_runner(), sessions_dir: tmp_dir(), cwd: dir]
+          options: [
+            runner: stub_runner(),
+            sessions_dir: tmp_dir(),
+            cwd: dir,
+            mcp_loader: fn _servers, _ref, _app -> :ok end
+          ]
         })
 
       {model, []} = submit(model, "/hooks")

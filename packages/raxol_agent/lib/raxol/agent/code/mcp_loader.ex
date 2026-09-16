@@ -16,8 +16,8 @@ defmodule Raxol.Agent.Code.McpLoader do
   and ensures startup is not an untracked process spawn.
   """
 
-  alias Raxol.Agent.McpBundle
   alias __MODULE__.Janitor
+  alias Raxol.Agent.McpBundle
 
   # Each accepted server mints an atom (the bundle spec's name) and spawns an
   # OS subprocess, and atoms are never collected. `.mcp.json` is a workspace
@@ -48,20 +48,36 @@ defmodule Raxol.Agent.Code.McpLoader do
   """
   @spec load([map()], keyword()) :: result()
   def load(servers, opts \\ []) do
-    owner = Keyword.get(opts, :owner, self())
-    supervisor = Keyword.get(opts, :supervisor, Raxol.Agent.TaskSupervisor)
-    bundle = Keyword.get(opts, :bundle, &McpBundle.load/2)
-
-    client_start =
-      Keyword.get(opts, :client_start, &Raxol.MCP.Client.start_link/1)
-
+    {owner, supervisor, bundle, client_start} = loader_options(opts)
     {accepted, rejected} = admit(servers)
+    load_accepted(accepted, rejected, owner, supervisor, bundle, client_start)
+  catch
+    kind, reason ->
+      %{
+        tools: [],
+        connected: [],
+        failed: [{:bundle, {kind, reason}}],
+        janitor: nil
+      }
+  end
 
+  defp loader_options(opts) do
+    {
+      Keyword.get(opts, :owner, self()),
+      Keyword.get(opts, :supervisor, Raxol.Agent.TaskSupervisor),
+      Keyword.get(opts, :bundle, &McpBundle.load/2),
+      Keyword.get(opts, :client_start, &Raxol.MCP.Client.start_link/1)
+    }
+  end
+
+  defp load_accepted(accepted, rejected, owner, supervisor, bundle, client_start) do
     janitor = start_janitor(supervisor, owner, client_start)
     start = fn client_opts -> Janitor.start_client(janitor, client_opts) end
-
     result = bundle.(Enum.map(accepted, &to_spec/1), start: start)
+    build_result(result, rejected, janitor)
+  end
 
+  defp build_result(result, rejected, janitor) do
     # Report connected server NAMES only; the janitor owns the client pids so
     # nothing else can outlive the session by holding one.
     connected =
@@ -75,14 +91,6 @@ defmodule Raxol.Agent.Code.McpLoader do
       failed: Map.get(result, :failed, []) ++ rejected,
       janitor: janitor
     }
-  catch
-    kind, reason ->
-      %{
-        tools: [],
-        connected: [],
-        failed: [{:bundle, {kind, reason}}],
-        janitor: nil
-      }
   end
 
   @doc "Stop the janitor (and its clients). A nil janitor or dead pid is a no-op."
@@ -221,42 +229,44 @@ defmodule Raxol.Agent.Code.McpLoader do
 
     defp loop(state) do
       receive do
-        {:start_client, from, ref, client_opts} ->
-          reply = state.client_start.(client_opts)
-
-          state =
-            case reply do
-              {:ok, pid} -> %{state | clients: [pid | state.clients]}
-              _error -> state
-            end
-
-          send(from, {ref, reply})
-          loop(state)
-
-        {:DOWN, mon, :process, _pid, _reason} when mon == state.owner_mon ->
-          # The session ended: stop every client (and its OS subprocess),
-          # then exit. A :normal janitor exit would not cascade over the
-          # links, so termination is explicit.
-          terminate_clients(state.clients)
-
-        {:EXIT, pid, reason} ->
-          if pid in state.clients do
-            # A client crashed (or was stopped): forget it, do not cascade.
-            loop(%{state | clients: List.delete(state.clients, pid)})
-          else
-            # Do not trap the TaskSupervisor's shutdown. Its lifecycle owns
-            # this janitor, so first stop the clients and honor the signal.
-            terminate_clients(state.clients)
-            exit(reason)
-          end
-
-        :stop ->
-          terminate_clients(state.clients)
-
-        _other ->
-          loop(state)
+        message -> handle_message(message, state)
       end
     end
+
+    defp handle_message({:start_client, from, ref, client_opts}, state) do
+      reply = state.client_start.(client_opts)
+
+      state =
+        case reply do
+          {:ok, pid} -> %{state | clients: [pid | state.clients]}
+          _error -> state
+        end
+
+      send(from, {ref, reply})
+      loop(state)
+    end
+
+    defp handle_message({:DOWN, mon, :process, _pid, _reason}, %{owner_mon: mon} = state) do
+      # The session ended: stop every client (and its OS subprocess),
+      # then exit. A :normal janitor exit would not cascade over the
+      # links, so termination is explicit.
+      terminate_clients(state.clients)
+    end
+
+    defp handle_message({:EXIT, pid, reason}, state) do
+      if pid in state.clients do
+        # A client crashed (or was stopped): forget it, do not cascade.
+        loop(%{state | clients: List.delete(state.clients, pid)})
+      else
+        # Do not trap the TaskSupervisor's shutdown. Its lifecycle owns
+        # this janitor, so first stop the clients and honor the signal.
+        terminate_clients(state.clients)
+        exit(reason)
+      end
+    end
+
+    defp handle_message(:stop, state), do: terminate_clients(state.clients)
+    defp handle_message(_other, state), do: loop(state)
 
     defp terminate_clients(clients) do
       # A `:shutdown` exit signal, the same one a supervisor sends: it kills a
