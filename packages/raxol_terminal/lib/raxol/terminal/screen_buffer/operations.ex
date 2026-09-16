@@ -5,6 +5,8 @@ defmodule Raxol.Terminal.ScreenBuffer.Operations do
   LineOperations, Eraser, Content, Paste functionality.
   """
 
+  require Logger
+
   alias Raxol.Terminal.Cell
   alias Raxol.Terminal.CharacterHandling
   alias Raxol.Terminal.ScreenBuffer.Core
@@ -184,12 +186,13 @@ defmodule Raxol.Terminal.ScreenBuffer.Operations do
   """
   def clear_to_end_of_line(buffer) do
     {x, y} = buffer.cursor_position
+    width = buffer.width
 
-    Raxol.Core.Runtime.Log.debug(
-      "[Operations.clear_to_end_of_line] cursor at (#{x}, #{y}), clearing region (#{x}, #{y}, #{buffer.width - x}, 1)"
+    Logger.debug(
+      "[Operations.clear_to_end_of_line] cursor at (#{x}, #{y}), clearing region (#{x}, #{y}, #{width - x}, 1)"
     )
 
-    result = clear_region(buffer, x, y, buffer.width - x, 1)
+    result = clear_region(buffer, x, y, width - x, 1)
 
     Raxol.Core.Runtime.Log.debug("[Operations.clear_to_end_of_line] operation complete")
 

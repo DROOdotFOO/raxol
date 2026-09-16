@@ -14,6 +14,8 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
   - Horizontal and Vertical Position Absolute (HPA/VPA)
   """
 
+  require Logger
+
   alias Raxol.Core.Runtime.Log
   alias Raxol.Terminal.Commands.CSIHandler.Cursor
   alias Raxol.Terminal.Emulator
@@ -39,7 +41,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
       n when n > 0 ->
         # Use CSIHandler.Cursor functions which handle direct row/col fields
         {:ok, updated_emulator} = Cursor.handle_command(emulator, [n], "A")
-        Log.debug("Cursor moved up by #{n}")
+        Logger.debug("Cursor moved up by #{n}")
         {:ok, updated_emulator}
 
       _ ->
@@ -66,7 +68,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator} =
       Cursor.handle_command(emulator, [move_amount], "B")
 
-    Log.debug("Cursor moved down by #{move_amount}")
+    Logger.debug("Cursor moved down by #{move_amount}")
     {:ok, updated_emulator}
   rescue
     error ->
@@ -85,7 +87,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator} =
       Cursor.handle_command(emulator, [move_amount], "C")
 
-    Log.debug("Cursor moved forward by #{move_amount}")
+    Logger.debug("Cursor moved forward by #{move_amount}")
     {:ok, updated_emulator}
   rescue
     error ->
@@ -104,7 +106,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
     {:ok, updated_emulator} =
       Cursor.handle_command(emulator, [move_amount], "D")
 
-    Log.debug("Cursor moved backward by #{move_amount}")
+    Logger.debug("Cursor moved backward by #{move_amount}")
     {:ok, updated_emulator}
   rescue
     error ->
@@ -171,7 +173,7 @@ defmodule Raxol.Terminal.Commands.CSIHandler.CursorMovementHandler do
 
     updated_emulator = %{emulator | cursor: new_cursor}
 
-    Log.debug("Cursor position set to (#{bounded_col}, #{bounded_row})")
+    Logger.debug("Cursor position set to (#{bounded_col}, #{bounded_row})")
 
     {:ok, updated_emulator}
   rescue

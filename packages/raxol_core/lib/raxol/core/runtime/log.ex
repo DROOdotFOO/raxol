@@ -25,6 +25,12 @@ defmodule Raxol.Core.Runtime.Log do
       Log.info("Processing request", %{user_id: 123, action: :login})
       Log.error("Validation failed", %{errors: errors, input: input})
 
+      # A zero-arity fun defers message rendering until the level is enabled.
+      # In modules that can `require Logger`, prefer the Logger macros on hot
+      # paths so even the callback closure is avoided.
+      Log.debug(fn -> "Parsed \#{inspect(byte)} in state \#{state}" end)
+      Log.debug(fn -> "Parsed \#{inspect(byte)}" end, %{state: state})
+
       # Performance timing
       Log.time_info("Database query", fn ->
         expensive_operation()
@@ -53,28 +59,35 @@ defmodule Raxol.Core.Runtime.Log do
   @doc """
   Logs a warning with context.
   """
-  def warning_with_context(msg, context) do
-    warning("#{msg} | Context: #{inspect(context)}")
-  end
+  def warning_with_context(msg, context), do: warning(msg, context)
 
   def info_with_context(msg) do
     info_with_context(msg, %{})
   end
 
-  def info_with_context(msg, context) do
-    info("#{msg} | Context: #{inspect(context)}")
-  end
+  def info_with_context(msg, context), do: info(msg, context)
 
-  def debug_with_context(msg, context) do
-    debug("#{msg} | Context: #{inspect(context)}")
-  end
+  def debug_with_context(msg, context), do: debug(msg, context)
 
-  def error_with_context(msg, context) do
-    error("#{msg} | Context: #{inspect(context)}")
-  end
+  def error_with_context(msg, context), do: error(msg, context)
 
   def info(msg), do: log(:info, msg)
+
+  @doc """
+  Logs a debug message.
+
+  `msg` is either iodata or a zero-arity fun returning iodata. The fun form is
+  evaluated only when the `:debug` level is enabled. Code that can
+  `require Logger` should prefer `Logger.debug/1` on hot paths; its macro also
+  avoids allocating a callback closure while debug logging is disabled.
+
+      Log.debug("starting up")
+      Log.debug(fn -> "byte \#{inspect(byte)}" end)
+
+  """
+  @spec debug(iodata() | (-> iodata())) :: :ok
   def debug(msg), do: log(:debug, msg)
+
   def warning(msg), do: log(:warn, msg)
   def error(msg), do: log(:error, msg)
 
@@ -84,15 +97,19 @@ defmodule Raxol.Core.Runtime.Log do
   def error(msg, context), do: log(:error, msg, context)
 
   defp log(level, msg, context \\ nil) do
-    message =
-      case context do
-        nil -> msg
-        _ -> "#{msg} | Context: #{inspect(context)}"
-      end
-
     level = if level == :warn, do: :warning, else: level
-    Logger.bare_log(level, message)
+    Logger.bare_log(level, with_context(msg, context))
   end
+
+  # `msg` may be a zero-arity fun; preserve it through formatting so
+  # `Logger.bare_log/2` controls whether it is evaluated.
+  defp with_context(msg, nil), do: msg
+
+  defp with_context(msg, context) when is_function(msg, 0) do
+    fn -> [msg.(), " | Context: ", inspect(context)] end
+  end
+
+  defp with_context(msg, context), do: [msg, " | Context: ", inspect(context)]
 
   ## Enhanced Logging Functions
 
@@ -132,7 +149,7 @@ defmodule Raxol.Core.Runtime.Log do
 
   @doc """
   Console logging for development - replacement for IO.puts.
-  Only logs in development/test environments.
+  Logs at `:info` in development/test environments and at `:debug` otherwise.
   """
   def console(msg, context \\ nil) do
     case Application.get_env(:raxol, :environment, :prod) do
@@ -231,7 +248,7 @@ defmodule Raxol.Core.Runtime.Log do
       performance: true
     }
 
-    formatted_msg = "#{msg} (#{format_duration(duration_us)})"
+    formatted_msg = format_timed_message(msg, duration_us)
     module_log(level, formatted_msg, context)
 
     result
@@ -265,15 +282,35 @@ defmodule Raxol.Core.Runtime.Log do
     })
   end
 
-  defp format_module_message(module, msg) do
+  defp format_module_message(module, msg) when is_function(msg, 0) do
     module_name = module |> Module.split() |> List.last()
-    "[#{module_name}] #{msg}"
+    fn -> ["[", module_name, "] ", msg.()] end
   end
 
-  defp format_console_message(msg, nil), do: "[CONSOLE] #{msg}"
+  defp format_module_message(module, msg) do
+    module_name = module |> Module.split() |> List.last()
+    ["[", module_name, "] ", msg]
+  end
 
-  defp format_console_message(msg, context) do
-    "[CONSOLE] #{msg} | #{inspect(context)}"
+  defp format_console_message(msg, nil) when is_function(msg, 0) do
+    fn -> ["[CONSOLE] ", msg.()] end
+  end
+
+  defp format_console_message(msg, nil), do: ["[CONSOLE] ", msg]
+
+  defp format_console_message(msg, context) when is_function(msg, 0) do
+    fn -> ["[CONSOLE] ", msg.(), " | ", inspect(context)] end
+  end
+
+  defp format_console_message(msg, context),
+    do: ["[CONSOLE] ", msg, " | ", inspect(context)]
+
+  defp format_timed_message(msg, duration_us) when is_function(msg, 0) do
+    fn -> [msg.(), " (", format_duration(duration_us), ")"] end
+  end
+
+  defp format_timed_message(msg, duration_us) do
+    [msg, " (", format_duration(duration_us), ")"]
   end
 
   defp format_duration(microseconds) when microseconds < 1000 do

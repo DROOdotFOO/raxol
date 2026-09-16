@@ -1,6 +1,8 @@
 defmodule Raxol.Terminal.ModeManagerTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Terminal.Emulator
   alias Raxol.Terminal.ModeManager
   alias Raxol.Terminal.Modes.Types.ModeTypes
@@ -134,6 +136,29 @@ defmodule Raxol.Terminal.ModeManagerTest do
                  "#{inspect(name)} (#{category} #{code}) is registered in ModeTypes but reset_mode returned #{inspect(reset)}; add a handler or allow-list it"
         end
       end
+    end
+  end
+
+  describe "debug logging on the write path" do
+    test "set_mode/3 logs a registered mode through the level-gated Logger macro" do
+      emulator = Emulator.new(80, 24)
+
+      Logger.put_process_level(self(), :error)
+      assert {:ok, quiet_result} = ModeManager.set_mode(emulator, [:decckm])
+      assert quiet_result.mode_manager.cursor_keys_mode == :application
+
+      Logger.put_process_level(self(), :debug)
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert {:ok, debug_result} = ModeManager.set_mode(emulator, [:decckm])
+          assert debug_result.mode_manager.cursor_keys_mode == :application
+        end)
+
+      Logger.delete_process_level(self())
+
+      assert log =~
+               "ModeManager.set_mode/2 called with modes=[:decckm], category=nil"
     end
   end
 end

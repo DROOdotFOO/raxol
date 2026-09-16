@@ -11,6 +11,8 @@ defmodule Raxol.Terminal.Commands.CommandServer do
   - `CommandServer.BufferLineOps` -- insert/delete lines with scroll regions
   """
 
+  require Logger
+
   alias Raxol.Terminal.Commands.CommandServer.{
     BufferLineOps,
     CursorOps,
@@ -40,14 +42,14 @@ defmodule Raxol.Terminal.Commands.CommandServer do
   """
   @spec handle_command(Emulator.t(), command_params()) :: command_result()
   def handle_command(emulator, %{type: type, command: command} = cmd_params) do
-    Raxol.Core.Runtime.Log.debug("Processing #{type} command: #{command}")
+    Logger.debug("Processing #{inspect(type)} command: #{inspect(command)}")
 
     case route_command(type, command, cmd_params) do
       {:ok, handler_func} ->
         execute_command(emulator, handler_func, cmd_params)
 
       {:error, :unknown_command} ->
-        Raxol.Core.Runtime.Log.warning("Unknown #{type} command: #{command}")
+        Logger.warning("Unknown #{inspect(type)} command: #{inspect(command)}")
         {:ok, emulator}
     end
   end

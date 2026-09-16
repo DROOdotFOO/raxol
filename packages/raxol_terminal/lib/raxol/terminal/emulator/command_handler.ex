@@ -4,6 +4,8 @@ defmodule Raxol.Terminal.Emulator.CommandHandler do
   Extracted from the main emulator module for clarity and maintainability.
   """
 
+  require Logger
+
   alias Raxol.Terminal.Emulator
 
   # handle_cursor_position/2
@@ -597,20 +599,18 @@ defmodule Raxol.Terminal.Emulator.CommandHandler do
   defp extract_emulator(emulator), do: emulator
 
   defp handle_csi_command(final_byte, params, emulator, intermediates) do
-    Raxol.Core.Runtime.Log.debug(
+    Logger.debug(
       "handle_csi_command: final_byte=#{inspect(final_byte)}, params=#{inspect(params)}"
     )
 
     case csi_handlers()[final_byte] do
       {handler, _arity} ->
-        Raxol.Core.Runtime.Log.debug(
-          "Found handler for #{inspect(final_byte)}: #{inspect(handler)}"
-        )
+        Logger.debug("Found handler for #{inspect(final_byte)}: #{inspect(handler)}")
 
         apply(handler, [params, emulator, intermediates])
 
       nil ->
-        Raxol.Core.Runtime.Log.debug("No handler found for #{inspect(final_byte)}")
+        Logger.debug("No handler found for #{inspect(final_byte)}")
 
         emulator
     end

@@ -1,5 +1,7 @@
 defmodule Raxol.Terminal.Commands.DCSHandler do
   @moduledoc false
+  require Logger
+
   alias Raxol.Core.Runtime.Log
 
   def handle_dcs(emulator, params, data_string) do
@@ -60,8 +62,8 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         {:ok, %{emulator | output_buffer: response}}
 
       # Unknown request type
-      unknown ->
-        Log.warning("Unhandled DECRQSS request type: #{inspect(unknown)}")
+      _unknown ->
+        Log.warning("Unhandled DECRQSS request type (payload redacted)")
 
         {:ok, emulator}
     end
@@ -97,33 +99,22 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
 
   # Sixel Graphics support
   defp handle_sixel(emulator, data) do
-    Log.debug("DCSHandlers: handle_sixel called with data: #{inspect(data)}")
+    Logger.debug("DCSHandlers: handling sixel payload (redacted)")
 
     # Initialize sixel state if not present
     sixel_state =
       emulator.sixel_state || Raxol.Terminal.ANSI.SixelGraphics.new()
 
-    Log.debug("DCSHandlers: sixel_state before processing: #{inspect(sixel_state)}")
+    Logger.debug("DCSHandlers: existing sixel state loaded")
 
     # Construct the full DCS sequence for the sixel parser
     full_dcs_sequence = "\ePq#{data}\e\\"
 
-    Log.debug("DCSHandlers: Full DCS sequence: #{inspect(full_dcs_sequence)}")
-
-    # Process sixel data using the proper SixelGraphics module
     case Raxol.Terminal.ANSI.SixelGraphics.process_sequence(
            sixel_state,
            full_dcs_sequence
          ) do
       {updated_sixel_state, :ok} ->
-        Log.debug(
-          "DCSHandlers: sixel processing successful, updated_state: #{inspect(updated_sixel_state)}"
-        )
-
-        Log.debug("DCSHandlers: pixel_buffer: #{inspect(updated_sixel_state.pixel_buffer)}")
-
-        Log.debug("DCSHandlers: palette: #{inspect(updated_sixel_state.palette)}")
-
         # Successfully processed, update emulator with new sixel state
         # and blit the graphics to the screen buffer
         emulator_with_sixel = %{emulator | sixel_state: updated_sixel_state}
@@ -135,7 +126,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         {:ok, emulator_with_blit}
 
       {_sixel_state, {:error, reason}} ->
-        Log.debug("DCSHandlers: sixel processing failed: #{inspect(reason)}")
+        Logger.debug("DCSHandlers: sixel processing failed: #{inspect(reason)}")
 
         # Processing failed, log the error but still update the sixel_state
         Log.warning("Sixel processing failed: #{inspect(reason)}")
@@ -166,7 +157,7 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
 
     {cursor_x, cursor_y} = cursor_position
 
-    log_sixel_debug_info(pixel_buffer, palette, cursor_x, cursor_y)
+    Logger.debug("Cursor position: {#{cursor_x}, #{cursor_y}}")
 
     buffer = Raxol.Terminal.Emulator.get_screen_buffer(emulator)
 
@@ -174,14 +165,6 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
       blit_pixels_to_buffer(buffer, pixel_buffer, palette, cursor_x, cursor_y)
 
     update_emulator_buffer(emulator, updated_buffer)
-  end
-
-  defp log_sixel_debug_info(pixel_buffer, palette, cursor_x, cursor_y) do
-    Log.debug(
-      "Blitting Sixel graphics: pixel_buffer=#{inspect(pixel_buffer)}, palette=#{inspect(palette)}"
-    )
-
-    Log.debug("Cursor position: {#{cursor_x}, #{cursor_y}}")
   end
 
   defp blit_pixels_to_buffer(buffer, pixel_buffer, palette, cursor_x, cursor_y) do
@@ -210,14 +193,8 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
     screen_x = cursor_x + sixel_x
     screen_y = cursor_y + sixel_y
 
-    Log.debug(
-      "Blitting pixel at sixel {#{sixel_x}, #{sixel_y}} -> screen {#{screen_x}, #{screen_y}} with color_index #{color_index}"
-    )
-
     case Map.get(palette, color_index) do
       {r, g, b} ->
-        Log.debug("Found color {#{r}, #{g}, #{b}} for index #{color_index}")
-
         # Create a proper TextFormatting struct with the background color
         style =
           Raxol.Terminal.ANSI.TextFormatting.new(%{
@@ -236,7 +213,6 @@ defmodule Raxol.Terminal.Commands.DCSHandler do
         )
 
       nil ->
-        Log.debug("No color found for index #{color_index}")
         buffer
     end
   end
