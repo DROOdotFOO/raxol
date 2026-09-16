@@ -16,7 +16,6 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
 
   defp flat_texts(_), do: []
 
-
   # Structural gap assert: flat_texts can't see the unset-gap footgun
   # (unset gap defaults to 1 in the layout engine), so walk the tree and
   # require every :column/:row container to carry an explicit gap of 0.
@@ -534,7 +533,6 @@ defmodule Raxol.UI.Components.Harness.BlockTest do
       assert %{type: :column} = rendered
     end
   end
-
 
   describe "block algebra invariants" do
     # I-SEAL-MONO
