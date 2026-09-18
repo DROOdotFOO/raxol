@@ -133,7 +133,7 @@ defmodule Raxol.Agent.Code.App do
     # match `%{jail: true}` instead of re-deciding what counts as jailed.
     jail? = Keyword.get(options, :jail, false) not in [nil, false]
     {hooks, hooks_note} = load_hooks(cwd, jail?)
-    {mcp_servers, mcp_note} = load_mcp(cwd, jail?)
+    {mcp_servers, mcp_skipped, mcp_note} = load_mcp(cwd, jail?)
     {lsp_pool, lsp_note} = start_lsp(cwd, jail?, options)
     {project_context, project_note} = load_project_context(cwd, jail?)
 
@@ -161,6 +161,7 @@ defmodule Raxol.Agent.Code.App do
       jail: jail?,
       hooks: hooks,
       mcp_servers: mcp_servers,
+      mcp_skipped: mcp_skipped,
       lsp_pool: lsp_pool,
       project_context: project_context
     })
@@ -440,16 +441,25 @@ defmodule Raxol.Agent.Code.App do
     end
   end
 
-  defp load_mcp(_cwd, true), do: {[], "mcp servers disabled (jailed session)"}
+  defp load_mcp(_cwd, true), do: {[], [], "mcp servers disabled (jailed session)"}
 
+  # Entries the bridge cannot run (a `url` server, a broken entry) ride
+  # along as `mcp_skipped`, so `/mcp` lists them with a reason instead of
+  # leaving a server named in the file silently absent.
   defp load_mcp(cwd, _jail?) do
-    case Raxol.Agent.Code.McpConfig.load(cwd) do
-      {:ok, []} -> {[], nil}
-      {:ok, servers} -> {servers, "#{length(servers)} MCP servers"}
-      :none -> {[], nil}
-      {:error, reason} -> {[], "mcp config error: #{inspect(reason)}"}
+    case Raxol.Agent.Code.McpConfig.load_all(cwd) do
+      {:ok, [], []} -> {[], [], nil}
+      {:ok, servers, skipped} -> {servers, skipped, mcp_note(servers, skipped)}
+      :none -> {[], [], nil}
+      {:error, reason} -> {[], [], "mcp config error: #{inspect(reason)}"}
     end
   end
+
+  defp mcp_note(servers, []), do: "#{length(servers)} MCP servers"
+  defp mcp_note([], skipped), do: "#{length(skipped)} MCP servers skipped"
+
+  defp mcp_note(servers, skipped),
+    do: "#{length(servers)} MCP servers · #{length(skipped)} skipped"
 
   # A language server is arbitrary code execution on the workspace, twice
   # over: `.raxol/lsp.json` names the binary, and the binary itself runs
