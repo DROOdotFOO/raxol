@@ -310,14 +310,36 @@ defmodule Raxol.Agent.Code.App.Commands do
   defp mcp_text(%{mcp_servers: [], jail: true}),
     do: "MCP servers are disabled in a jailed session"
 
-  defp mcp_text(%{mcp_servers: []}), do: "no MCP servers configured (.mcp.json)"
+  defp mcp_text(%{mcp_servers: []} = model) do
+    case skipped_rows(model) do
+      [] -> "no MCP servers configured (.mcp.json)"
+      rows -> Enum.join(rows, "\n")
+    end
+  end
 
   defp mcp_text(%{mcp_servers: servers} = model) do
-    Enum.map_join(servers, "\n", fn s ->
-      "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
-        "#{s.command} #{Enum.join(s.args, " ")}"
-    end)
+    rows =
+      Enum.map(servers, fn s ->
+        "#{server_mark(model.mcp_status, s.name)} #{s.name}  →  " <>
+          "#{s.command} #{Enum.join(s.args, " ")}"
+      end)
+
+    Enum.join(rows ++ skipped_rows(model), "\n")
   end
+
+  # Entries `.mcp.json` names that the bridge never started, with the reason,
+  # so the operator sees them here rather than hunting for a config bug.
+  defp skipped_rows(model) do
+    model
+    |> Map.get(:mcp_skipped, [])
+    |> Enum.map(fn {name, reason} -> "✗ #{name}  →  skipped: #{skip_text(reason)}" end)
+  end
+
+  defp skip_text(:unsupported_transport),
+    do: "url servers are not bridged; only stdio commands start"
+
+  defp skip_text(:invalid_spec), do: "entry has no command"
+  defp skip_text(other), do: inspect(other)
 
   defp server_mark(:loading, _name), do: "…"
   defp server_mark(nil, _name), do: "○"
