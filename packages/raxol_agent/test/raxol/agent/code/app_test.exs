@@ -2387,6 +2387,56 @@ defmodule Raxol.Agent.Code.AppTest do
       assert model.notice =~ "✗ ghost"
     end
 
+    test "a url mcp server is reported as skipped, not silently absent" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" =>
+            Jason.encode!(%{
+              "mcpServers" => %{
+                "remote" => %{"type" => "http", "url" => "https://mcp.example/"},
+                "fs" => %{"command" => "npx", "args" => []}
+              }
+            })
+        })
+
+      test_pid = self()
+
+      model =
+        new_model(
+          cwd: dir,
+          mcp_loader: fn servers, ref, app ->
+            send(test_pid, {:mcp_spawned, servers, ref, app})
+          end
+        )
+
+      assert model.mcp_skipped == [{"remote", :unsupported_transport}]
+      assert model.status_line =~ "1 MCP servers · 1 skipped"
+
+      # Only the stdio server reaches the bridge.
+      {model, []} = App.update(key("x"), model)
+      assert_received {:mcp_spawned, [%{name: "fs"}], _ref, _app}
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "fs  →  npx"
+      assert model.notice =~ "✗ remote  →  skipped: url servers are not bridged"
+    end
+
+    test "a .mcp.json with only skipped entries still shows them in /mcp" do
+      dir =
+        config_cwd(%{
+          ".mcp.json" => Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}})
+        })
+
+      model = new_model(cwd: dir, mcp_loader: fn _servers, _ref, _app -> :ok end)
+
+      assert model.mcp_servers == []
+      assert model.status_line =~ "1 MCP servers skipped"
+
+      {model, []} = submit(model, "/mcp")
+      assert model.notice =~ "✗ broken  →  skipped: entry has no command"
+      refute model.notice =~ "no MCP servers configured"
+    end
+
     test "the tool authorizer gates a sensitive Dynamic MCP tool" do
       auth = App.tool_authorizer(self())
 

@@ -49,4 +49,59 @@ defmodule Raxol.Agent.Code.McpConfigTest do
     write(dir, Jason.encode!(%{"mcpServers" => %{"broken" => %{"args" => ["x"]}}}))
     assert {:ok, []} = McpConfig.load(dir)
   end
+
+  describe "load_all/1" do
+    test "reports a url server as skipped with :unsupported_transport", %{dir: dir} do
+      write(
+        dir,
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "remote" => %{"type" => "http", "url" => "https://mcp.example/sse"},
+            "local" => %{"command" => "uvx", "args" => ["a"]}
+          }
+        })
+      )
+
+      assert {:ok, [%{name: "local"}], [{"remote", :unsupported_transport}]} =
+               McpConfig.load_all(dir)
+    end
+
+    test "a typed http or sse entry without a url is still unsupported transport",
+         %{dir: dir} do
+      write(dir, Jason.encode!(%{"mcpServers" => %{"typed" => %{"type" => "sse"}}}))
+      assert {:ok, [], [{"typed", :unsupported_transport}]} = McpConfig.load_all(dir)
+    end
+
+    test "any other entry without a string command is :invalid_spec", %{dir: dir} do
+      write(
+        dir,
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "no-command" => %{"args" => ["x"]},
+            "bad-command" => %{"command" => 42},
+            "not-an-object" => "npx"
+          }
+        })
+      )
+
+      assert {:ok, [],
+              [
+                {"bad-command", :invalid_spec},
+                {"no-command", :invalid_spec},
+                {"not-an-object", :invalid_spec}
+              ]} = McpConfig.load_all(dir)
+    end
+
+    test "nothing skipped is an empty list, and load/1 agrees on the servers", %{dir: dir} do
+      write(dir, Jason.encode!(%{"mcpServers" => %{"fs" => %{"command" => "npx"}}}))
+      assert {:ok, [%{name: "fs"}] = servers, []} = McpConfig.load_all(dir)
+      assert {:ok, ^servers} = McpConfig.load(dir)
+    end
+
+    test "returns :none and errors the same way load/1 does", %{dir: dir} do
+      assert :none = McpConfig.load_all(dir)
+      write(dir, "{bad")
+      assert {:error, :invalid_json} = McpConfig.load_all(dir)
+    end
+  end
 end
