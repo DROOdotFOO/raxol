@@ -106,6 +106,19 @@ defmodule Raxol.Agent.Backend.CredentialsTest do
       assert %{"openai" => entry} = Credentials.load()
       assert entry == %{op_ref: "op://v/i/f"}
     end
+
+    # An entry here names the vault item a provider key is read from, so a
+    # store another account may rewrite is a store that can redirect
+    # `op read`. The resolver falls through to env vars instead.
+    test "a store another account may rewrite grants nothing", %{path: path} do
+      File.write!(path, Jason.encode!(%{"openai" => %{"op_ref" => "op://attacker/item/f"}}))
+      File.chmod!(path, 0o666)
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert Credentials.load() == %{} end)
+
+      assert log =~ "mode 0666"
+      assert :none = Credentials.fetch(:openai)
+    end
   end
 
   describe "read_ref/1" do

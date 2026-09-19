@@ -29,17 +29,22 @@ defmodule Raxol.Agent.McpBundle do
   the refusal names the server and what was wrong with it -- never the spec
   itself, whose `:env` and `:headers` hold secrets.
 
-  A remote spec's header values are resolved at connect time by
-  `Raxol.Agent.McpHeaders`, which is where the provenance rule lives: a
-  workspace-sourced spec cannot resolve an `${env:}` or `op://` reference
-  unless the operator allowlisted it outside the workspace. A refused
-  resolution skips that server like any other load failure.
+  A remote spec is gated twice before a socket exists. `Raxol.Agent.McpHosts`
+  decides whether a WORKSPACE-sourced spec may reach its host at all -- it
+  may not, unless the operator allowlisted the host outside the workspace,
+  because the server's tool list lands in the model's context on connect.
+  `Raxol.Agent.McpHeaders` then resolves the header values, and that is where
+  the reference rule lives: a workspace-sourced spec cannot resolve an
+  `${env:}` or `op://` reference unless the operator allowlisted it, also
+  outside the workspace. Either refusal skips that server like any other load
+  failure.
   """
 
   require Logger
 
   alias Raxol.Agent.Action.Dynamic
   alias Raxol.Agent.McpHeaders
+  alias Raxol.Agent.McpHosts
 
   # An MCP client reports `{:not_ready, :initializing}` until its initialize
   # handshake round-trips; without waiting, a freshly started server lists zero
@@ -182,16 +187,25 @@ defmodule Raxol.Agent.McpBundle do
 
   defp transport(_spec), do: {:invalid, :not_a_spec}
 
-  # Headers are resolved HERE, once, at connect time: the client never sees a
-  # reference and never resolves one. A refusal carries the header name and a
-  # classified reason, never a resolved value.
+  # Two gates, in this order, then the client.
+  #
+  # The HOST gate first, because connecting is itself the damage for a
+  # workspace-declared server: the client's first exchange is `tools/list`,
+  # and every description it returns is rendered into the model's context
+  # before anything is invoked. A host the operator never allowlisted must
+  # therefore not be reached at all, not merely kept from resolving headers.
+  #
+  # Headers are then resolved HERE, once, at connect time: the client never
+  # sees a reference and never resolves one. A refusal carries the header
+  # name and a classified reason, never a resolved value.
   defp start_remote(spec, start) do
     name = spec_name(spec)
+    source = Map.get(spec, :source, :workspace)
     headers = Map.get(spec, :headers, [])
 
-    case McpHeaders.resolve(headers, source: Map.get(spec, :source, :workspace), server: name) do
-      {:ok, resolved} -> guarded(start, remote_opts(spec, name, resolved))
-      {:error, _reason} = err -> err
+    with :ok <- McpHosts.permit(Map.get(spec, :url), source: source, server: name),
+         {:ok, resolved} <- McpHeaders.resolve(headers, source: source, server: name) do
+      guarded(start, remote_opts(spec, name, resolved))
     end
   end
 

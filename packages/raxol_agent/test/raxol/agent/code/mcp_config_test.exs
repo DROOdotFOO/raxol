@@ -2,6 +2,8 @@ defmodule Raxol.Agent.Code.McpConfigTest do
   # `load_user/0` reads `$RAXOL_MCP_CONFIG`, which is process-wide.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Raxol.Agent.Code.McpConfig
 
   setup do
@@ -142,5 +144,74 @@ defmodule Raxol.Agent.Code.McpConfigTest do
     assert McpConfig.user_path() == path
     assert {:ok, [intel]} = McpConfig.load_user()
     assert intel.source == :user
+  end
+
+  # `:user` provenance is the strong one: `Raxol.Agent.McpHeaders` lets such a
+  # spec resolve ANY `${env:}` / `op://` reference, and `Raxol.Agent.McpHosts`
+  # lets it reach any host. Where the file came from is therefore part of the
+  # grant, not a detail of path construction.
+  describe "user-level provenance" do
+    setup %{dir: dir} do
+      previous = %{
+        "HOME" => System.get_env("HOME"),
+        "TMPDIR" => System.get_env("TMPDIR"),
+        "RAXOL_MCP_CONFIG" => System.get_env("RAXOL_MCP_CONFIG")
+      }
+
+      System.delete_env("RAXOL_MCP_CONFIG")
+      # `System.tmp_dir!/0` honours TMPDIR, so this is the directory the old
+      # `System.user_home() || System.tmp_dir!()` fallback would have landed
+      # in, and the file below is what a local user could have planted there.
+      System.put_env("TMPDIR", dir)
+
+      on_exit(fn ->
+        Enum.each(previous, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+      end)
+
+      config = Path.join([dir, ".raxol", "mcp.json"])
+      File.mkdir_p!(Path.dirname(config))
+
+      File.write!(
+        config,
+        Jason.encode!(%{"mcpServers" => %{"intel" => %{"url" => "https://x/mcp"}}})
+      )
+
+      %{config: config}
+    end
+
+    test "a real home with a file this account owns still loads, tagged :user", %{dir: dir} do
+      System.put_env("HOME", dir)
+
+      assert McpConfig.user_path() == Path.join([dir, ".raxol", "mcp.json"])
+      assert {:ok, [intel]} = McpConfig.load_user()
+      assert intel.source == :user
+    end
+
+    test "no home directory reads nothing, whoever planted it under the temp dir" do
+      System.delete_env("HOME")
+
+      log = capture_log(fn -> assert {:error, :no_home} = McpConfig.load_user() end)
+
+      assert McpConfig.user_path() == nil
+      assert log =~ "no home directory"
+    end
+
+    test "a config another account may rewrite is refused, not promoted to :user", %{
+      dir: dir,
+      config: config
+    } do
+      System.put_env("HOME", dir)
+      File.chmod!(config, 0o666)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:group_or_other_writable, 0o666}} = McpConfig.load_user()
+        end)
+
+      assert log =~ "mode 0666"
+    end
   end
 end
