@@ -2114,7 +2114,10 @@ defmodule Raxol.Agent.Code.AppTest do
       model =
         new_model(
           sessions_fetcher: fn _dir, ref, app ->
-            Commands.default_sessions_fetcher(nil, ref, app)
+            # A term that is not a path at all. nil no longer crashes here:
+            # it is the legitimate "this process has no session directory",
+            # which lists empty rather than guessing a world-writable one.
+            Commands.default_sessions_fetcher({:not, :a, :path}, ref, app)
           end
         )
 

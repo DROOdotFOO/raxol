@@ -685,10 +685,35 @@ defmodule Raxol.Web3.Backend.Solana do
       |> Keyword.put_new(:rate_limit, @rpc_rate_limit)
       |> Keyword.put(:headers, [{"content-type", "application/json"}])
       |> cache_opts(state, {method, params}, class)
+      |> classified()
 
     state.url
     |> HTTP.post(body, opts)
     |> rpc_response()
+  end
+
+  # A node announces every refusal inside a 200, so the cache stage cannot
+  # tell an answer from a refusal by status and has to be told. This is the
+  # chain where it bites hardest: `getBlock` on a slot at the head answers
+  # -32004 until the block lands, and the `:block` class would serve that "not
+  # available" for the next minute on a node that already has it.
+  defp classified(opts) do
+    case Keyword.get(opts, :cache) do
+      nil -> opts
+      spec -> Keyword.put(opts, :cache, Keyword.put(spec, :cacheable, &answered?/1))
+    end
+  end
+
+  # -32009 is the exception, and it is the same exception `block_result/2`
+  # makes: a skipped slot is a permanent fact about this chain rather than a
+  # refusal by this source, so it is worth a minute in the table. Every other
+  # error code describes the source or the moment.
+  defp answered?(%{body: body}) do
+    case Jason.decode(body) do
+      {:ok, %{"result" => _value}} -> true
+      {:ok, %{"error" => %{"code" => -32_009}}} -> true
+      _refusal -> false
+    end
   end
 
   defp rpc_response({:ok, %{status: status, body: body}}) when status in 200..299 do
@@ -878,7 +903,7 @@ defmodule Raxol.Web3.Backend.Solana do
   defp canonical(other), do: {:error, {:unsupported_chain, other}}
 
   defp source(source) when source in @sources, do: {:ok, source}
-  defp source(other), do: {:error, {:unknown_source, other}}
+  defp source(other), do: {:error, {:unsupported_source, other}}
 
   defp endpoint(:sqd, chain), do: chain.sqd_url
   defp endpoint(:rpc, chain), do: chain.rpc_url

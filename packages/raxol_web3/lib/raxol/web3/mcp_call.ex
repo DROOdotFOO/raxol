@@ -119,9 +119,28 @@ defmodule Raxol.Web3.MCPCall do
       })
 
     endpoint
-    |> HTTP.post(body, Keyword.put(opts, :headers, headers(opts)))
+    |> HTTP.post(body, opts |> Keyword.put(:headers, headers(opts)) |> classified())
     |> decode()
   end
+
+  # An MCP tool server announces a refusal inside a 200 in two different
+  # shapes -- a JSON-RPC `error` on the envelope and `isError: true` on the
+  # result -- so the cache stage cannot tell an answer from a refusal by
+  # status and has to be told. The measured cost of not telling it: SQD's
+  # `portal_list_networks` is cached under `:catalog` for an hour, so one
+  # transient tool error resolved every read on that source to a refusal for
+  # the rest of the hour while the source was already answering again.
+  defp classified(opts) do
+    case Keyword.get(opts, :cache) do
+      nil -> opts
+      spec -> Keyword.put(opts, :cache, Keyword.put(spec, :cacheable, &answered?/1))
+    end
+  end
+
+  # `decode/1` itself, rather than a second reading of the same body: the two
+  # would have to agree about both refusal shapes forever, and the only way to
+  # guarantee that is to have one of them.
+  defp answered?(response), do: match?({:ok, _payload}, decode({:ok, response}))
 
   defp headers(opts) do
     Enum.reduce(@default_headers, Keyword.get(opts, :headers, []), fn {name, value}, headers ->

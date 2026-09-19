@@ -124,8 +124,12 @@ defmodule Raxol.Web3.Backend.BlockscoutTest do
     end
 
     test "a chain with no instance is refused rather than guessed at" do
-      assert {:error, :unsupported_chain} = Blockscout.new("eip155:999999")
-      assert {:error, {:unsupported_chain, _}} = Blockscout.new("solana:mainnet")
+      # Both branches name the reference they refused. The bare atom this
+      # pinned was the only reason in the package that did not: it reached a
+      # caller as `:unsupported_chain` with no way to tell WHICH chain, and it
+      # sat next to `chain_id/1`'s tupled form in the same `with`.
+      assert {:error, {:unsupported_chain, "eip155:999999"}} = Blockscout.new("eip155:999999")
+      assert {:error, {:unsupported_chain, "solana:mainnet"}} = Blockscout.new("solana:mainnet")
     end
   end
 

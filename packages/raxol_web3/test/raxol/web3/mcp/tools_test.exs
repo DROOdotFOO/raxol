@@ -90,6 +90,49 @@ defmodule Raxol.Web3.MCP.ToolsTest do
       assert length(Tools.names()) == length(Tools.callbacks())
       assert length(Tools.names()) == 13
     end
+
+    test "an answer about the question does not open the tool's breaker" do
+      # `Raxol.MCP.Registry` opens a per-tool breaker after five `{:error, _}`
+      # results, and five is one probe short of a working day's worth of empty
+      # wallets. An unfunded account is `{:upstream_refused, :not_found}`,
+      # which is the answer the caller asked for, and quarantining
+      # `web3_account_info` for it took the tool out on every chain at once.
+      registry = registry()
+      router = router(answers: %{account_info: {:error, {:upstream_refused, :not_found}}})
+
+      assert :ok = Tools.register(registry, router)
+
+      for _probe <- 1..6 do
+        assert {:error, %{code: "upstream_refused", detail: :not_found}} =
+                 Registry.call_tool(registry, "web3_account_info", %{
+                   "chain" => @chain,
+                   "account" => @address
+                 })
+      end
+
+      assert Registry.circuit_status(registry, {:tool, "web3_account_info"}).state == :closed
+    end
+
+    test "a fault of the source does open it, so the classification is a split and not a mute" do
+      registry = registry()
+      router = router(answers: %{account_info: {:error, {:timeout, :deadline}}})
+
+      assert :ok = Tools.register(registry, router)
+
+      for _attempt <- 1..5 do
+        assert {:error, %{code: "timeout"}} =
+                 Registry.call_tool(registry, "web3_account_info", %{
+                   "chain" => @chain,
+                   "account" => @address
+                 })
+      end
+
+      assert {:error, :circuit_open} =
+               Registry.call_tool(registry, "web3_account_info", %{
+                 "chain" => @chain,
+                 "account" => @address
+               })
+    end
   end
 
   describe "arguments" do

@@ -69,9 +69,12 @@ defmodule Raxol.Agent.Code.McpConfig do
   through the same authorizer and hook chain as any Action.
   """
 
+  alias Raxol.Agent.OperatorFile
+
   @env_path "RAXOL_MCP_CONFIG"
   @user_filename "mcp.json"
   @workspace_filename ".mcp.json"
+  @label "user mcp config"
 
   @type source :: :workspace | :user
 
@@ -103,24 +106,29 @@ defmodule Raxol.Agent.Code.McpConfig do
   Load the operator's own MCP servers, tagged `source: :user`.
 
   Same format and same return shape as `load/1`, read from `user_path/0`.
-  This is the file whose header references resolve, so it lives outside every
-  workspace by construction.
+  This is the file whose header references resolve, and whose servers are
+  exempt from the workspace host allowlist, so it must be a file the operator
+  actually wrote: `Raxol.Agent.OperatorFile` refuses one that is not owned by
+  this account or is group/other-writable, and refuses to guess a path at all
+  when the process has no home directory. `{:error, :no_home}` there rather
+  than `~/.raxol` silently becoming `/tmp/.raxol`, where any local user could
+  plant a `:user`-provenance server first.
   """
   @spec load_user() :: {:ok, [server()]} | :none | {:error, term()}
   def load_user do
-    read_config(user_path(), :user)
-  end
-
-  @doc "The user-level config path (`$RAXOL_MCP_CONFIG` or `~/.raxol/mcp.json`)."
-  @spec user_path() :: String.t()
-  def user_path do
-    case System.get_env(@env_path) do
-      p when is_binary(p) and p != "" -> p
-      _ -> Path.join([home_base(), ".raxol", @user_filename])
+    case OperatorFile.read(@env_path, @user_filename, @label) do
+      {:ok, binary} -> decode(binary, :user)
+      :none -> :none
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp home_base, do: System.user_home() || System.tmp_dir!()
+  @doc """
+  The user-level config path (`$RAXOL_MCP_CONFIG` or `~/.raxol/mcp.json`), or
+  nil when there is neither an override nor a home directory.
+  """
+  @spec user_path() :: String.t() | nil
+  def user_path, do: OperatorFile.path(@env_path, @user_filename)
 
   defp read_config(path, source) do
     case File.read(path) do

@@ -36,8 +36,11 @@ defmodule Raxol.Web3.Backend.Aztec do
     * A 404 on a **parameterless** endpoint (`/l2/info`, `/l2/tips`,
       `/l2/stats/*`) cannot mean "that resource is absent", because there is no
       parameter for it to be absent for. Every endpoint under a withdrawn
-      prefix answers 404, so a 404 here is a withdrawn credential:
-      `{:upstream_refused, :auth}`.
+      prefix answers 404, so a 404 here is this source having gone away under
+      us: `{:source_unavailable, :endpoint}`, which fails over. Not
+      `{:upstream_refused, :auth}`, which is what it was: that reason means
+      "this deployment does not hold the credential" everywhere else, and a
+      withdrawn URL prefix is not a credential anyone can hand us.
     * A 404 on an **addressed** endpoint (a block, a transaction hash, a
       contract instance) is an answer: `{:upstream_refused, :not_found}`, which
       must not fail over, because the fallback would answer the same.
@@ -544,10 +547,17 @@ defmodule Raxol.Web3.Backend.Aztec do
   # them has a resource that can be absent, so a 404 on one is the prefix
   # being gone rather than the resource. `:addressed` is the other four, which
   # name a block, a transaction hash twice, or a contract instance, and a 404
-  # there is an answer. Since ADR-0039's amendment the router fails over on
-  # `{:upstream_refused, :auth}` and never on `:not_found`, so this split is a
-  # routing decision rather than a taste one.
-  defp decode({:ok, %{status: 404}}, :fixed), do: {:error, {:upstream_refused, :auth}}
+  # there is an answer.
+  #
+  # `{:source_unavailable, _}` rather than `{:upstream_refused, :auth}`, which
+  # is what this was. Both fail over, which is the routing outcome this split
+  # exists for, but `:auth` means "this deployment does not hold the
+  # credential" everywhere else in the package (`Raxol.Web3.Backend.Canton`
+  # says exactly which key an operator must create), and a withdrawn URL
+  # prefix is not a credential we can be handed. Naming it `:auth` to buy a
+  # failover made the one classification an operator reads during a
+  # revocation say the wrong thing about what to do next.
+  defp decode({:ok, %{status: 404}}, :fixed), do: {:error, {:source_unavailable, :endpoint}}
   defp decode({:ok, %{status: 404}}, :addressed), do: {:error, {:upstream_refused, :not_found}}
   defp decode({:ok, %{status: status}}, _resource), do: {:error, {:http, status}}
   defp decode({:error, _reason} = error, _resource), do: error

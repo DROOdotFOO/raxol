@@ -25,8 +25,11 @@ defmodule Raxol.Agent.Backend.Credentials do
   `String.to_atom/1` on file input).
   """
 
+  alias Raxol.Agent.OperatorFile
+
   @env_path "RAXOL_PROVIDERS"
   @filename "providers.json"
+  @label "provider credential store"
 
   @type ref_entry :: %{
           optional(:op_ref) => String.t(),
@@ -34,16 +37,12 @@ defmodule Raxol.Agent.Backend.Credentials do
           optional(:base_url) => String.t()
         }
 
-  @doc "The reference-store path (`$RAXOL_PROVIDERS` or `~/.raxol/providers.json`)."
-  @spec path() :: String.t()
-  def path do
-    case System.get_env(@env_path) do
-      p when is_binary(p) and p != "" -> p
-      _ -> Path.join(home_base(), Path.join(".raxol", @filename))
-    end
-  end
-
-  defp home_base, do: System.user_home() || System.tmp_dir!()
+  @doc """
+  The reference-store path (`$RAXOL_PROVIDERS` or `~/.raxol/providers.json`),
+  or nil when there is neither an override nor a home directory.
+  """
+  @spec path() :: String.t() | nil
+  def path, do: OperatorFile.path(@env_path, @filename)
 
   @doc """
   Load the reference map keyed by provider-harness string.
@@ -51,10 +50,20 @@ defmodule Raxol.Agent.Backend.Credentials do
   A missing or unreadable file is an empty map, not an error: the resolver
   simply falls through to env vars. A malformed file logs nothing and yields
   `%{}` so a corrupt store never crashes agent boot.
+
+  An entry here names the 1Password item a provider key is read from, so the
+  file is a control: `Raxol.Agent.OperatorFile` refuses (and logs) one this
+  account does not own or that others may write, and there is no store at all
+  without a home directory or an explicit `$RAXOL_PROVIDERS` -- never a guess
+  at `/tmp/.raxol`, where any local account could name the vault item this
+  agent reads. All three cases fall through to env vars, and the last is
+  silent: a container configured entirely by environment never had a store
+  to lose.
   """
   @spec load() :: %{optional(String.t()) => ref_entry()}
   def load do
-    with {:ok, raw} <- File.read(path()),
+    with file when is_binary(file) <- path(),
+         {:ok, raw} <- OperatorFile.read_path(file, @label),
          {:ok, decoded} when is_map(decoded) <- Jason.decode(raw) do
       Enum.reduce(decoded, %{}, &put_sanitized/2)
     else
@@ -124,16 +133,24 @@ defmodule Raxol.Agent.Backend.Credentials do
     load() |> Map.delete(to_string(harness)) |> write()
   end
 
+  # No home and no `$RAXOL_PROVIDERS` is a refusal, not a temp-path write: a
+  # store at `/tmp/.raxol/providers.json` would be readable (and replaceable)
+  # by every local account, and what it holds is where this operator's keys
+  # live.
   defp write(map) do
-    file = path()
+    case path() do
+      nil ->
+        {:error, :no_home}
 
-    with :ok <- File.mkdir_p(Path.dirname(file)),
-         encoded = Jason.encode!(map, pretty: true),
-         :ok <- File.write(file, encoded) do
-      # Owner read/write only: the file holds references, but they still name
-      # a person's vault items and should not be world-readable.
-      _ = File.chmod(file, 0o600)
-      :ok
+      file ->
+        with :ok <- File.mkdir_p(Path.dirname(file)),
+             encoded = Jason.encode!(map, pretty: true),
+             :ok <- File.write(file, encoded) do
+          # Owner read/write only: the file holds references, but they still
+          # name a person's vault items and should not be world-readable.
+          _ = File.chmod(file, 0o600)
+          :ok
+        end
     end
   end
 

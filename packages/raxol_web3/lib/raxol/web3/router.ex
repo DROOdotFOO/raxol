@@ -56,6 +56,10 @@ defmodule Raxol.Web3.Router do
       on a read rather than in a constructor because one upstream's network set
       is resolved at runtime (its own documentation disagrees with itself about
       coverage), so a handle can declare a chain and then learn otherwise.
+    * `{:source_unavailable, _}`, which means the source went away under us:
+      an endpoint it is supposed to serve unconditionally is not there. It is
+      distinct from `:auth` because no credential fixes it, and distinct from
+      a status because the upstream answered a perfectly healthy 404.
 
   Failing over is wrong when the error describes the QUESTION, because asking
   the same question of another source gets the same answer and hides the first:
@@ -207,7 +211,8 @@ defmodule Raxol.Web3.Router do
     :rate_limited,
     :too_large,
     :decode_failed,
-    :unsupported_chain
+    :unsupported_chain,
+    :source_unavailable
   ]
 
   defp failover?({kind, _detail}) when kind in @source_errors, do: true
