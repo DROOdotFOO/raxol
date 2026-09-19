@@ -25,19 +25,54 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   @inspect_limit 5
   @inspect_width 30
 
+  @disabled_message "Evaluation is disabled on this deployment. " <>
+                      "The evaluator runs submitted code with the node's full " <>
+                      "authority, so it is opt-in: set RAXOL_REPL_EXPOSED=true " <>
+                      "(or config :raxol, :repl_exposed, true) on a node that " <>
+                      "holds no keys."
+
+  # Anonymous surfaces route straight to this demo: the playground's HTTP
+  # gallery serves every catalog entry at `/demos/:demo` through the `:browser`
+  # pipeline with no auth, and the SSH playground did the same before it was
+  # suspended in August. Evaluation is therefore opt-in per deployment rather
+  # than on by default (#1045).
+  #
+  # The flag is the one `Raxol.Payments.Deployment.assert_signing_isolated!/0`
+  # already reads: turning this REPL on is exactly the condition that makes a
+  # signing node refuse to boot, so the two halves of that rule can no longer
+  # disagree about whether a deployment exposes an evaluator.
+  @doc """
+  Whether this deployment allows the playground REPL to evaluate code.
+
+  Off unless `RAXOL_REPL_EXPOSED=true` or `config :raxol, :repl_exposed, true`.
+  The demo renders either way; with evaluation off, Enter reports the flag
+  rather than running the input.
+  """
+  @spec evaluation_enabled?() :: boolean()
+  def evaluation_enabled? do
+    System.get_env("RAXOL_REPL_EXPOSED") == "true" or
+      Application.get_env(:raxol, :repl_exposed, false) == true
+  end
+
   @impl true
   def init(_context) do
     %{
       input: "",
       cursor: 0,
       evaluator: Evaluator.new(),
-      output: [
-        {"# Raxol REPL -- type Elixir expressions, Enter to eval", :info}
-      ],
+      output: [{banner(), :info}],
       output_offset: 0,
       input_history: [],
       history_index: nil
     }
+  end
+
+  defp banner do
+    if evaluation_enabled?() do
+      "# Raxol REPL -- type Elixir expressions, Enter to eval"
+    else
+      "# Raxol REPL -- evaluation is disabled on this deployment"
+    end
   end
 
   @impl true
@@ -140,8 +175,16 @@ defmodule Raxol.Playground.Demos.ReplDemo do
   defp eval_input(model) do
     code = String.trim(model.input)
 
-    # The playground is served anonymously over SSH, so the REPL demo runs at
-    # the whitelist-only strict level -- never the default standard blocklist.
+    if evaluation_enabled?() do
+      check_and_eval(model, code)
+    else
+      append_output(model, code, @disabled_message, :error)
+    end
+  end
+
+  defp check_and_eval(model, code) do
+    # An enabled deployment still runs submitted code at the whitelist-only
+    # strict level -- never the default standard blocklist.
     case Sandbox.check(code, :strict) do
       :ok ->
         do_eval(model, code)
