@@ -183,7 +183,10 @@ defmodule Raxol.Web3.Backend.SolanaTest do
     end
 
     test "an unknown source is refused at construction" do
-      assert {:error, {:unknown_source, :helius}} = Solana.new(@mainnet, source: :helius)
+      # `:unsupported_source`, the name `Raxol.Web3.Backend.Tron` already
+      # used for the same fact. Two spellings of one reason is how a caller
+      # ends up matching on one of them.
+      assert {:error, {:unsupported_source, :helius}} = Solana.new(@mainnet, source: :helius)
     end
   end
 
@@ -750,6 +753,74 @@ defmodule Raxol.Web3.Backend.SolanaTest do
       assert {:ok, _second} = Backend.call(handle, :chain_info)
 
       assert Enum.count(requested_tools(), &(&1 == "portal_list_networks")) == 1
+    end
+
+    # The three below share one origin between two handles on purpose: the
+    # cache is keyed by `{origin_id, fragment}` and outlives a handle, so the
+    # second handle reads the first handle's table. That is the only way to
+    # ask "was the first answer stored" without reaching into the table.
+    test "a tool error is not cached, so one bad catalog read does not answer for the hour" do
+      # `resolve/1` runs before every SQD read and `:catalog` holds its answer
+      # for an hour. The refusal arrives as HTTP 200 with `isError: true`, so
+      # a cache that decided by status stored it, and one transient tool error
+      # then answered every SQD read on this chain for the rest of that hour
+      # while the portal was already serving again.
+      url = "https://cache-catalog.sqd.test/mcp"
+      broken = %{"portal_list_networks" => sse_error(%{"error" => %{"code" => "internal_error"}})}
+
+      assert {:error, {:upstream_refused, :unknown}} =
+               Backend.call(sqd(broken, cache: true, url: url), :chain_info)
+
+      recovered =
+        sqd(%{"portal_get_network_info" => fixture("sqd_network_info.sse")},
+          cache: true,
+          url: url
+        )
+
+      assert {:ok, _info} = Backend.call(recovered, :chain_info)
+    end
+
+    test "a slot the node does not have yet is not cached, so the next read sees it land" do
+      # -32004 for a slot at the head is a fact about this moment, and the
+      # `:block` class is a minute. Recorded 2026-09-14.
+      url = "https://cache-unavailable.solana.test/"
+      slot = 999_999_999
+
+      assert {:error, {:upstream_refused, :not_found}} =
+               Backend.call(
+                 rpc(%{"getBlock" => fixture("rpc_block_unavailable.json")},
+                   cache: true,
+                   url: url
+                 ),
+                 :get_block,
+                 [slot]
+               )
+
+      landed = rpc(%{"getBlock" => fixture("rpc_block.json")}, cache: true, url: url)
+
+      assert {:ok, %{height: ^slot}} = Backend.call(landed, :get_block, [slot])
+    end
+
+    test "a skipped slot is cached, because it is permanent rather than a refusal" do
+      # -32009 is the one error code this chain answers that is a fact about
+      # the chain: slot 446,800,612 was skipped and always will have been. It
+      # is a success here, so it is worth a minute in the table, and not
+      # caching it would cost a request per read of every gap in the ledger.
+      url = "https://cache-skipped.solana.test/"
+      slot = 446_800_612
+
+      assert {:ok, %{hash: nil}} =
+               Backend.call(
+                 rpc(%{"getBlock" => fixture("rpc_block_skipped.json")}, cache: true, url: url),
+                 :get_block,
+                 [slot]
+               )
+
+      _ignored = drain()
+      produced = rpc(%{"getBlock" => fixture("rpc_block.json")}, cache: true, url: url)
+
+      assert {:ok, %{hash: nil}} = Backend.call(produced, :get_block, [slot])
+      assert [] == requested_tools()
     end
   end
 

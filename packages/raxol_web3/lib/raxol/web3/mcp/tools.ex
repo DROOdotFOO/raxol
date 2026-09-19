@@ -37,6 +37,14 @@ defmodule Raxol.Web3.MCP.Tools do
   own datum. The taxonomy has no message field to fill, which is the whole
   point of ADR-0038 decision 6, and this is the surface where a leak would be
   worst: an MCP tool result is text a model reads and may act on.
+
+  ## Not every error is evidence against the tool
+
+  `Raxol.MCP.Registry` keeps a breaker per tool and would otherwise count any
+  `{:error, _}` toward it, so a handful of reads of accounts that do not exist
+  would quarantine a tool that is working. `fault?/1` declares which of this
+  package's reasons are faults of the SOURCE and which are answers about the
+  QUESTION, along the same line `Raxol.Web3.Router.failover?/1` draws.
   """
 
   alias Raxol.MCP.Registry
@@ -158,10 +166,57 @@ defmodule Raxol.Web3.MCP.Tools do
         description: description,
         inputSchema: schema(args),
         annotations: %{readOnlyHint: true, sensitive: true},
+        fault?: &__MODULE__.fault?/1,
         callback: fn arguments -> dispatch(router, callback, args, arguments) end
       }
     end)
   end
+
+  # Every reason that is an answer about the question rather than a fault of
+  # the source, as `Raxol.Web3.Serialize.error/1` renders its code.
+  #
+  # `blocked` is the one entry where this split and the router's disagree, and
+  # deliberately. The router fails a blocked ADDRESS over, because a sibling
+  # source has a different host. The breaker does not count it, because no
+  # socket was opened: a refusal decided before the vet costs nothing to
+  # repeat, and quarantining the tool would replace a legible `blocked` with
+  # `:circuit_open` for every chain the tool serves.
+  @answers ~w(
+    unsupported unsupported_chain unsupported_account_ref unsupported_source
+    invalid_cursor missing_argument invalid_argument no_backend blocked
+  )
+
+  @doc """
+  Whether an error this surface returned is evidence against the TOOL.
+
+  `Raxol.MCP.Registry` opens a per-tool circuit breaker on repeated
+  `{:error, _}`, and without this predicate every error counted: five
+  `web3_account_info` probes of unfunded wallets opened `web3_account_info`
+  for the whole recovery window on every chain at once, because an account
+  nobody has funded is `{:upstream_refused, :not_found}` and that is an
+  `{:error, _}`.
+
+  The line is the one `Raxol.Web3.Router.failover?/1` already draws and
+  `Raxol.Web3.Backend`'s taxonomy documents: a reason about the SOURCE is a
+  fault, a reason about the QUESTION is the answer the caller asked for. An
+  answer is not evidence either way, so the registry records neither a
+  failure nor a success for it.
+
+  The argument is the SERIALIZED term, because that is what a callback here
+  returns: `Raxol.Web3.Serialize.error/1` renders `{:upstream_refused,
+  :not_found}` as `%{code: "upstream_refused", detail: :not_found}`, so the
+  one class that splits on its detail is read that way.
+  """
+  @spec fault?(term()) :: boolean()
+  def fault?(%{code: "upstream_refused", detail: detail}),
+    do: detail not in [:not_found, :unknown]
+
+  def fault?(%{code: code}), do: code not in @answers
+
+  # Anything this surface did not shape. Unrecognised counts as a fault, which
+  # is the safe direction: a breaker that opens too eagerly degrades a tool, a
+  # breaker that never opens is not one.
+  def fault?(_unrecognised), do: true
 
   @doc """
   Register every tool with an `Raxol.MCP.Registry`.
@@ -231,7 +286,10 @@ defmodule Raxol.Web3.MCP.Tools do
   end
 
   defp build_args(:get_block, _spec, arguments) do
-    with {:ok, number} <- fetch(arguments, "number"), do: {:ok, [number]}
+    with {:ok, number} <- fetch(arguments, "number"),
+         {:ok, block} <- block_ref(number) do
+      {:ok, [block]}
+    end
   end
 
   defp build_args(:read_contract, _spec, arguments) do
@@ -264,6 +322,36 @@ defmodule Raxol.Web3.MCP.Tools do
       {:ok, [Serialize.account_ref(account), opts]}
     end
   end
+
+  # The schema types `number` as an integer and a model sends a string
+  # anyway, so the coercion is here, at the one boundary every chain crosses,
+  # rather than four times behind it. Uncoerced, the chains disagreed:
+  # `Raxol.Web3.Backend.Solana` and `Raxol.Web3.Backend.Aztec` parse a decimal
+  # string, while `Raxol.Web3.Backend.JSONRPC` reads any non-hash binary as a
+  # block TAG, so `"12345"` went to the node as a tag, came back -32602, and
+  # `Raxol.Web3.RPC`'s classifier turned that into `{:upstream_refused,
+  # :not_found}`: a final, non-failover "no such block" for a block the node
+  # has.
+  #
+  # A tag and a `0x` value still pass through as strings. Both are things a
+  # backend can answer -- a tag names a moving head, a `0x` value is a hash or
+  # a quantity -- and narrowing them here would take away reads that work
+  # today. What is refused is the remainder, which is exactly the set that
+  # reached a backend and came back as a wrong answer.
+  @block_tags ~w(latest earliest pending safe finalized)
+
+  defp block_ref(number) when is_integer(number), do: {:ok, number}
+  defp block_ref(tag) when tag in @block_tags, do: {:ok, tag}
+  defp block_ref("0x" <> _rest = hex), do: {:ok, hex}
+
+  defp block_ref(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number >= 0 -> {:ok, number}
+      _unparseable -> {:error, {:invalid_argument, "number"}}
+    end
+  end
+
+  defp block_ref(_other), do: {:error, {:invalid_argument, "number"}}
 
   defp fetch(arguments, name) do
     case get(arguments, name) do

@@ -134,6 +134,11 @@ defmodule Raxol.Web3.HTTP do
     * `:body` - request body, default none.
     * `:rate_limit` - `[capacity:, refill_per_second:]` for this origin's bucket.
     * `:breaker` - `[failure_threshold:, recovery_ms:]`.
+    * `:cache` - `[key:, ttl_ms:, cacheable:]`. `:key` is the fragment half of
+      the `{origin_id, fragment}` entry key and `:ttl_ms` its lifetime.
+      `:cacheable` is optional, a `(response -> boolean())` predicate that
+      decides whether a 2xx response is a success at the PAYLOAD level; see
+      `store/3`'s comment for why a status is not enough on its own.
     * `:connect_timeout_ms`, `:deadline_ms`, `:chunk_timeout_ms`, `:max_bytes`.
     * `:exchange` - the dial-and-read stage, as
       `(vetted, request, opts -> {:ok, response} | {:error, reason})`. The seam
@@ -198,16 +203,32 @@ defmodule Raxol.Web3.HTTP do
   defp cached(origin_id, opts) do
     case cache_spec(opts) do
       nil -> :miss
-      {fragment, _ttl} -> Cache.get({origin_id, fragment})
+      {fragment, _ttl, _predicate} -> Cache.get({origin_id, fragment})
     end
   end
 
-  # Only a success is stored, and only a 2xx. A 404 is a real answer but a
-  # cheap one to re-ask, and caching a 403 challenge page would outlive the
-  # breaker that is supposed to route around it.
+  # Only a success is stored, and a 2xx is not by itself one. A 404 is a real
+  # answer but a cheap one to re-ask, and caching a 403 challenge page would
+  # outlive the breaker that is supposed to route around it.
+  #
+  # The status rule alone was a bug, because every JSON-RPC node and every MCP
+  # tool server this package talks to delivers its refusals INSIDE a 200:
+  # `error.code -32005` for a rate limit, `-32004` for a block it does not
+  # have, `isError: true` for a tool result. The backend classifies those
+  # after this stage has already written them, and a cached refusal outlives
+  # the condition that produced it by the whole TTL: the `:catalog` class is
+  # an hour, so one transient tool error answered every read on that source
+  # for an hour while the source itself was healthy.
+  #
+  # Which bodies are refusals is the caller's judgement and not this module's
+  # -- ADR-0038 decision 9 puts a body's meaning in the backend -- so the
+  # caller supplies `:cacheable` and this stage consults it. A caller that
+  # supplies none keeps the status rule, which is the right one for a REST
+  # upstream that announces a refusal with a status.
   defp store({:ok, response} = result, origin_id, opts) do
-    with {fragment, ttl} <- cache_spec(opts),
-         true <- response.status in 200..299 do
+    with {fragment, ttl, predicate} <- cache_spec(opts),
+         true <- response.status in 200..299,
+         true <- cacheable?(predicate, response) do
       Cache.put({origin_id, fragment}, Map.delete(response, :origin_id), ttl)
     end
 
@@ -216,13 +237,16 @@ defmodule Raxol.Web3.HTTP do
 
   defp store(result, _origin_id, _opts), do: result
 
+  defp cacheable?(nil, _response), do: true
+  defp cacheable?(predicate, response), do: predicate.(response) == true
+
   defp cache_spec(opts) do
     case Keyword.get(opts, :cache) do
       nil ->
         nil
 
       spec ->
-        {Keyword.fetch!(spec, :key), Keyword.fetch!(spec, :ttl_ms)}
+        {Keyword.fetch!(spec, :key), Keyword.fetch!(spec, :ttl_ms), Keyword.get(spec, :cacheable)}
     end
   end
 

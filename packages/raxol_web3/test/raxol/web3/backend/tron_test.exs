@@ -28,6 +28,16 @@ defmodule Raxol.Web3.Backend.TronTest do
   # tool results, and one of them publishes a schema its own tool violates.
   defp fixture(name), do: File.read!(Path.join(@fixtures, name))
 
+  # SQD Portal is one server behind both this backend and
+  # `Raxol.Web3.Backend.Solana`, and it answers an unknown network the same
+  # way whichever VM asked. The recorded refusal is read from the Solana
+  # directory rather than copied into this one: two copies of one recording
+  # is how the two backends came to classify it differently in the first
+  # place.
+  defp sqd_fixture(name) do
+    @fixtures |> Path.join("../solana") |> Path.join(name) |> File.read!()
+  end
+
   # Both limiters are given room, and the resolver answers without DNS. Every
   # test here talks to one of three real hostnames, so a shared bucket or
   # breaker would couple unrelated tests through it.
@@ -192,6 +202,10 @@ defmodule Raxol.Web3.Backend.TronTest do
       |> Keyword.put(:spacer, if(source == :tronscan, do: "", else: " "))
       |> Keyword.put(:initialize, "#{source}_initialize.json")
 
+    # `:restart` is `:temporary` for the tests that kill the client on
+    # purpose. Under the default the test supervisor restarts it, and the
+    # replacement races teardown of the ETS tables above, which is noise about
+    # the harness rather than about the backend.
     spec =
       Tron.client_spec(source,
         name: :"tron_#{source}_#{System.unique_integer([:positive])}",
@@ -199,6 +213,7 @@ defmodule Raxol.Web3.Backend.TronTest do
         tables: %{eras: eras, breakers: breakers},
         resolver: &stub_resolver/2
       )
+      |> Map.put(:restart, Keyword.get(opts, :restart, :permanent))
 
     client = start_supervised!(spec)
     await_ready(client)
@@ -898,6 +913,61 @@ defmodule Raxol.Web3.Backend.TronTest do
       assert {:error, reason} = Tron.token_balances(state(handle), {:tron, @base58}, [])
       refute inspect(reason) =~ "start + limit"
       refute inspect(reason) =~ "10000"
+    end
+
+    test "the archive's unknown_network is a chain this source does not serve, not a refusal" do
+      # The same portal, the same recorded refusal shape, and until now two
+      # different readings of it: `Raxol.Web3.Backend.Solana` mapped
+      # `unknown_network` to `{:unsupported_chain, _}` and failed over, while
+      # this module classified SQD's codes only on the arm that has no
+      # `isError`, so every recorded refusal from this source -- all of which
+      # carry `isError: true` -- became `{:upstream_refused, :unknown}` and
+      # was final. A Tron read then died on the archive with TronGrid and
+      # TronScan both healthy.
+      handle =
+        sqd(%{"portal_get_network_info" => {:body, sqd_fixture("sqd_unknown_network.sse")}})
+
+      assert {:error, {:unsupported_chain, "tron-mainnet"} = reason} =
+               Tron.block_height(state(handle))
+
+      refute inspect(reason) =~ "nonexistent"
+      refute inspect(reason) =~ "portal_list_networks"
+
+      # And the router does what the classification is for.
+      router = Router.new([handle, stateful(:trongrid, trongrid_height_routes())])
+
+      assert {:ok, %{unit: :block}} = Router.call(router, "tron:0x2b6653dc", :block_height)
+    end
+  end
+
+  describe "a client process that is not there" do
+    test "a dead client is a transport failure the caller can act on, not an exit" do
+      handle = stateful(:trongrid, trongrid_height_routes(), restart: :temporary)
+      client = state(handle).client
+
+      reference = Process.monitor(client)
+      Process.exit(client, :kill)
+      assert_receive {:DOWN, ^reference, :process, ^client, :killed}
+
+      # `Raxol.MCP.Client.call_tool/3` is a `GenServer.call`, and an exit is
+      # not an error tuple: uncaught, this took down whatever process was
+      # reading -- a router walking its candidates, or the MCP server running
+      # a tool callback inline -- so the failover that exists for a dead
+      # source could never run.
+      assert {:error, {:transport, :client_down}} = Tron.block_height(state(handle))
+    end
+
+    test "the router fails over off a dead client to a live source" do
+      dead = stateful(:trongrid, trongrid_height_routes(), restart: :temporary)
+      client = state(dead).client
+
+      reference = Process.monitor(client)
+      Process.exit(client, :kill)
+      assert_receive {:DOWN, ^reference, :process, ^client, :killed}
+
+      router = Router.new([dead, sqd(%{"portal_get_network_info" => "sqd_network_info.sse"})])
+
+      assert {:ok, %{unit: :block}} = Router.call(router, "tron:0x2b6653dc", :block_height)
     end
   end
 

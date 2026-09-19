@@ -135,7 +135,8 @@ defmodule Raxol.Web3.Backend.Blockscout do
   @spec new(Backend.chain_ref(), keyword()) :: {:ok, Backend.t()} | {:error, term()}
   def new(chain_ref, opts \\ []) do
     with {:ok, chain_id} <- chain_id(chain_ref),
-         {:ok, {host, _status}} <- Map.fetch(@hosts, chain_id) |> ok_or(:unsupported_chain) do
+         {:ok, {host, _status}} <-
+           Map.fetch(@hosts, chain_id) |> ok_or({:unsupported_chain, chain_ref}) do
       state = %__MODULE__{
         chain_ref: chain_ref,
         host: host,

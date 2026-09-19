@@ -632,8 +632,8 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp dispatch(%__MODULE__{source: :sqd} = state, tool, arguments, extra) do
     case MCPCall.call(url(state), tool, arguments, http_opts(state, extra)) do
-      {:ok, payload} -> payload_result(payload)
-      {:tool_error, _payload} -> {:error, {:upstream_refused, :unknown}}
+      {:ok, payload} -> sqd_result(state, payload)
+      {:tool_error, payload} -> {:error, sqd_refusal(state, payload)}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -643,11 +643,29 @@ defmodule Raxol.Web3.Backend.Tron do
   end
 
   defp dispatch(%__MODULE__{client: client}, tool, arguments, _extra) do
-    case Client.call_tool(client, tool, arguments) do
+    case call_tool(client, tool, arguments) do
       {:ok, %{content: content, is_error: false}} -> content_payload(content)
       {:ok, %{is_error: true}} -> {:error, {:upstream_refused, :unknown}}
       {:error, reason} -> {:error, client_error(reason)}
     end
+  end
+
+  # `Raxol.MCP.Client.call_tool/3` is a `GenServer.call`, and a `case` does not
+  # catch an exit. A client that died between the handle being built and the
+  # read exits the CALLER with `{:noproc, _}`. A slow exchange exits it with
+  # `{:timeout, _}`: both timers are 30s, but the caller's starts when the
+  # call is issued and the client's own `call_timeout` only when the request
+  # is dispatched, so on a `:serialized` or `:pooled` source anything spent
+  # queueing is time the caller's timer has and the client's has not.
+  # Either way the process that dies is the READER -- a router candidate, or
+  # whatever served the MCP tool call -- so the failover that exists for
+  # exactly this case never runs. Both map onto reasons
+  # `Raxol.Web3.Router.failover?/1` moves on.
+  defp call_tool(client, tool, arguments) do
+    Client.call_tool(client, tool, arguments)
+  catch
+    :exit, {:timeout, _call} -> {:error, {:timeout, :deadline}}
+    :exit, _down -> {:error, {:transport, :client_down}}
   end
 
   defp http_opts(state, extra) do
@@ -668,27 +686,56 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp content_payload(_other), do: {:error, {:decode_failed, :mcp_content}}
 
-  # The one recognised refusal shape inside a successful tool result: a payload
-  # whose `error` is a string and which carries nothing else to read. Measured
-  # 2026-09-14, that is how TronScan announces its pagination ceiling, and the
-  # announcement is prose in a language this repository's own lint would refuse,
-  # so the class is `:unknown` rather than a reading of the words.
+  # The one recognised refusal shape inside a successful tool result from the
+  # two stateful sources: a payload whose `error` is a string and which
+  # carries nothing else to read. Measured 2026-09-14, that is how TronScan
+  # announces its pagination ceiling, and the announcement is prose in a
+  # language this repository's own lint would refuse, so the class is
+  # `:unknown` rather than a reading of the words.
   defp payload_result(%{"error" => reason} = payload) when is_binary(reason) do
     if map_size(payload) == 1, do: {:error, {:upstream_refused, :unknown}}, else: {:ok, payload}
   end
 
-  # SQD announces a refusal as a nested object with a machine-readable code, and
-  # those two we do classify, because the code is a value rather than prose.
-  defp payload_result(%{"error" => %{"code" => code}}) when is_binary(code) do
-    {:error, {:upstream_refused, sqd_class(code)}}
-  end
-
   defp payload_result(payload), do: {:ok, payload}
 
-  defp sqd_class("unauthorized"), do: :auth
-  defp sqd_class("rate_limited"), do: :rate_limit
-  defp sqd_class("unknown_network"), do: :not_found
-  defp sqd_class(_other), do: :unknown
+  # SQD announces a refusal as a nested object with a machine-readable code,
+  # and it puts that object in both places a tool result can carry one: an
+  # `isError: true` result, and a plain result whose payload is the object.
+  # The code is read in both arms because it is the same refusal in both.
+  # Reading it only on the plain arm was the bug: both RECORDED refusals from
+  # this source carry `isError: true`, so every one of them collapsed to
+  # `{:upstream_refused, :unknown}` and became final, while
+  # `Raxol.Web3.Backend.Solana` read the same portal's `unknown_network` as a
+  # chain this source does not serve and failed over.
+  defp sqd_result(state, payload) do
+    case sqd_code(payload) do
+      nil -> payload_result(payload)
+      code -> {:error, sqd_class(state, code)}
+    end
+  end
+
+  # An `isError: true` result is a refusal whatever its payload turns out to
+  # say, so one we cannot read the code off is still an error.
+  defp sqd_refusal(state, payload) do
+    case sqd_code(payload) do
+      nil -> {:upstream_refused, :unknown}
+      code -> sqd_class(state, code)
+    end
+  end
+
+  defp sqd_code(%{"error" => %{"code" => code}}) when is_binary(code), do: code
+  defp sqd_code(_other), do: nil
+
+  # The same codes `Raxol.Web3.Backend.Solana` reads off the same portal,
+  # mapped the same way. `unknown_network` is the load-bearing one: it says
+  # this source does not serve this network, which a sibling source may, so it
+  # is `{:unsupported_chain, _}` and the router moves on to TronGrid or
+  # TronScan. As `{:upstream_refused, :not_found}` it was final, and a read
+  # died on the archive while both other sources were healthy.
+  defp sqd_class(state, "unknown_network"), do: {:unsupported_chain, network_name(state)}
+  defp sqd_class(_state, "unauthorized"), do: {:upstream_refused, :auth}
+  defp sqd_class(_state, "rate_limited"), do: {:upstream_refused, :rate_limit}
+  defp sqd_class(_state, _other), do: {:upstream_refused, :unknown}
 
   # Every reason `Raxol.MCP.Client` produces, mapped onto the closed taxonomy in
   # `Raxol.Web3.Backend`. Nothing upstream travels: a JSON-RPC error contributes
@@ -726,9 +773,9 @@ defmodule Raxol.Web3.Backend.Tron do
 
   defp url(%__MODULE__{source: source}), do: Map.fetch!(@sources, source).url
 
-  defp network(%__MODULE__{source: source}) do
-    %{"network" => Map.fetch!(@sources, source).network}
-  end
+  defp network(%__MODULE__{} = state), do: %{"network" => network_name(state)}
+
+  defp network_name(%__MODULE__{source: source}), do: Map.fetch!(@sources, source).network
 
   # Chain identity, confirmed rather than asserted. The upstream names the
   # network and the VM family it indexed, and a handle that asked for Tron and
